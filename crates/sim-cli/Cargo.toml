@@ -1,0 +1,9 @@
+[package]
+name = "sim-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+machine-single-axis.workspace = true
+machine-t-gantry.workspace = true

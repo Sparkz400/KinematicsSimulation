@@ -1,0 +1,8 @@
+[package]
+name = "machine-single-axis"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
