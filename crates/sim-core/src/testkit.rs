@@ -1,0 +1,169 @@
+//! The standard machine test suite. Every kinematics must pass it unchanged:
+//! transformation round trip, static hold, energy conservation, step-size convergence, determinism.
+
+use crate::{Machine, MachineEntry, Rk4, advance};
+
+pub const DT: f64 = 62.5e-6;
+pub const SUBSTEPS: u32 = 4;
+const PULSE_S: f64 = 0.02;
+
+pub fn run_standard_suite(entry: &MachineEntry) {
+    let default = (entry.build)(&entry.config()).unwrap();
+    round_trip(default.as_ref());
+    static_hold(default.as_ref());
+    determinism(default.as_ref());
+    let configs = (entry.suite_configs)();
+    assert!(!configs.is_empty(), "{}: no loss-free config for the suite", entry.id);
+    for config in &configs {
+        let machine = (entry.build)(config).unwrap();
+        round_trip(machine.as_ref());
+        static_hold(machine.as_ref());
+        energy_conservation(machine.as_ref());
+        step_convergence(machine.as_ref());
+        determinism(machine.as_ref());
+    }
+}
+
+pub fn mid_pose(m: &dyn Machine) -> Vec<f64> {
+    m.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect()
+}
+
+/// Forward of inverse returns the starting pose within 1e-9, on a grid over the whole workspace.
+pub fn round_trip(m: &dyn Machine) {
+    let axes = m.axes();
+    let (mut motors, mut back) = (vec![0.0; m.motors().len()], vec![0.0; axes.len()]);
+    for k in 0..5usize.pow(axes.len() as u32) {
+        let pose: Vec<f64> = axes
+            .iter()
+            .enumerate()
+            .map(|(i, a)| a.min + (a.max - a.min) * ((k / 5usize.pow(i as u32)) % 5) as f64 / 4.0)
+            .collect();
+        m.inverse(&pose, &mut motors);
+        m.forward(&motors, &mut back);
+        for (p, b) in pose.iter().zip(&back) {
+            assert!((p - b).abs() < 1e-9, "round trip at {pose:?} gave {back:?}");
+        }
+    }
+}
+
+/// At the equilibrium state, under the holding torques, nothing moves for one second.
+pub fn static_hold(m: &dyn Machine) {
+    let n = m.axes().len();
+    let pose = mid_pose(m);
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+    m.equilibrium(&pose, &mut state, &mut hold);
+    assert_eq!(state.len(), m.state_len());
+    let mut rk = Rk4::new(state.len());
+    for _ in 0..(1.0 / DT) as usize {
+        advance(m, &mut rk, &mut state, &hold, DT, SUBSTEPS);
+    }
+    let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+    m.tool_state(&state, &mut pos, &mut vel);
+    for i in 0..n {
+        assert!((pos[i] - pose[i]).abs() < 1e-7, "axis {i} moved from {} to {}", pose[i], pos[i]);
+        assert!(vel[i].abs() < 1e-6, "axis {i} has speed {}", vel[i]);
+    }
+}
+
+/// A run that starts at rest, gets one smooth torque pulse and then only the holding torques.
+struct PulseRun<'a> {
+    m: &'a dyn Machine,
+    rk: Rk4,
+    state: Vec<f64>,
+    hold: Vec<f64>,
+    delta: Vec<f64>,
+    motor0: Vec<f64>,
+    step: usize,
+    dt: f64,
+}
+
+impl<'a> PulseRun<'a> {
+    fn new(m: &'a dyn Machine, dt: f64) -> Self {
+        let pose = mid_pose(m);
+        let motors = m.motors().len();
+        let (mut state, mut hold) = (Vec::new(), vec![0.0; motors]);
+        m.equilibrium(&pose, &mut state, &mut hold);
+        // The pulse asks for a tenth of each axis's acceleration limit.
+        let acc: Vec<f64> = m.axes().iter().map(|a| 0.1 * a.max_acc).collect();
+        let (mut with, mut without) = (vec![0.0; motors], vec![0.0; motors]);
+        m.feedforward_torque(&pose, &acc, &mut with);
+        m.feedforward_torque(&pose, &vec![0.0; acc.len()], &mut without);
+        let delta = with.iter().zip(&without).map(|(a, b)| a - b).collect();
+        let mut run = Self { m, rk: Rk4::new(state.len()), state, hold, delta, motor0: vec![0.0; motors], step: 0, dt };
+        run.motor0 = run.motor_pos();
+        run
+    }
+
+    fn motor_pos(&self) -> Vec<f64> {
+        let n = self.m.motors().len();
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        self.m.motor_state(&self.state, &mut pos, &mut vel);
+        pos
+    }
+
+    fn tool_pos(&self) -> Vec<f64> {
+        let n = self.m.axes().len();
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        self.m.tool_state(&self.state, &mut pos, &mut vel);
+        pos
+    }
+
+    fn run(&mut self, seconds: f64, mut each: impl FnMut(&Self)) {
+        for _ in 0..(seconds / self.dt).round() as usize {
+            let t = self.step as f64 * self.dt;
+            let pulse = if t < PULSE_S { (std::f64::consts::PI * t / PULSE_S).sin().powi(2) } else { 0.0 };
+            let torque: Vec<f64> = self.hold.iter().zip(&self.delta).map(|(h, d)| h + d * pulse).collect();
+            advance(self.m, &mut self.rk, &mut self.state, &torque, self.dt, SUBSTEPS);
+            self.step += 1;
+            each(self);
+        }
+    }
+
+    /// Energy minus the work of the constant holding torques: constant once the pulse is over.
+    fn invariant(&self) -> f64 {
+        let work: f64 =
+            self.motor_pos().iter().zip(&self.motor0).zip(&self.hold).map(|((p, p0), h)| h * (p - p0)).sum();
+        self.m.energy(&self.state) - work
+    }
+}
+
+/// With friction and control off, total energy drifts less than 0.1 % over 10 s.
+/// The drift is measured against the energy the pulse put in, which is far stricter than
+/// measuring against the gravitational potential.
+pub fn energy_conservation(m: &dyn Machine) {
+    let mut run = PulseRun::new(m, DT);
+    let before = run.invariant();
+    run.run(PULSE_S, |_| {});
+    let after = run.invariant();
+    let injected = after - before;
+    assert!(injected > 0.0, "the pulse put in no energy ({injected})");
+    let mut worst = 0f64;
+    run.run(10.0, |r| worst = worst.max((r.invariant() - after).abs()));
+    assert!(worst < 1e-3 * injected, "energy drifted by {:.4} % of the {injected} J put in", 100.0 * worst / injected);
+}
+
+/// Halving the time step changes the result by less than 1 %.
+pub fn step_convergence(m: &dyn Machine) {
+    let travel = |dt: f64| {
+        let mut run = PulseRun::new(m, dt);
+        let start = run.tool_pos();
+        run.run(1.0, |_| {});
+        run.tool_pos().iter().zip(&start).map(|(p, s)| p - s).collect::<Vec<f64>>()
+    };
+    let (coarse, fine) = (travel(DT), travel(DT / 2.0));
+    for (c, f) in coarse.iter().zip(&fine) {
+        assert!(f.abs() > 1e-6, "axis did not move, the check would be empty");
+        assert!((c - f).abs() < 0.01 * f.abs(), "step halving changed travel from {c} to {f}");
+    }
+}
+
+/// The same config and the same commands give bit-identical traces.
+pub fn determinism(m: &dyn Machine) {
+    let trace = || {
+        let mut run = PulseRun::new(m, DT);
+        let mut bits = Vec::new();
+        run.run(0.1, |r| bits.extend(r.state.iter().map(|v| v.to_bits())));
+        bits
+    };
+    assert!(trace() == trace(), "two identical runs differ");
+}

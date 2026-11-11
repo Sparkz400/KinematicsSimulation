@@ -1,0 +1,10 @@
+machine-t-gantry = T-gantry
+axis-x = X axis
+axis-z = Z axis
+motor-a = Motor A
+motor-b = Motor B
+group-axis-x = X axis limits
+group-axis-z = Z axis limits
+param-stroke_x_m = Stroke X [m]
+param-stroke_z_m = Stroke Z [m]
+param-z_axis_kg = Z axis mass [kg]

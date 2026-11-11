@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 sim-core.workspace = true
-machine-single-axis.workspace = true
-machine-t-gantry.workspace = true
+sim-components.workspace = true
+sim-machines.workspace = true

@@ -1,0 +1,34 @@
+# Single-axis test machine: one motor, one belt, one carriage. Component checks run on it.
+# Placeholder values; units are in the field names.
+format_version = 1
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+[effects]
+gravity = true
+payload = true
+
+[geometry]
+pulley_radius_m = 0.02
+stroke_m = 1.0
+incline_deg = 0.0
+
+[mass]
+carriage_kg = 4.0
+payload_kg = 2.0
+
+[motor]
+rotor_inertia_kgm2 = 0.3e-4
+
+[gearbox]
+ratio = 5.0
+
+[pulley]
+inertia_kgm2 = 1.0e-4
+
+[axis.x]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 10.0
+max_jerk_m_s3 = 100.0

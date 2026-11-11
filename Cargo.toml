@@ -6,10 +6,18 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 
-# Layers, top to bottom: sim-cli -> machine-* -> sim-components -> sim-core.
-# A crate may only depend on crates below it.
+# Layers, top to bottom: front ends -> sim-machines (registration list) -> machine crates
+# -> sim-components -> sim-core. A crate may only depend on crates below it.
+# Every external version is pinned with "="; upgrades happen deliberately between phases.
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
 sim-components = { path = "crates/sim-components" }
-machine-single-axis = { path = "crates/machine-single-axis" }
-machine-t-gantry = { path = "crates/machine-t-gantry" }
+sim-machines = { path = "crates/sim-machines" }
+toml = "=1.2.1"
+
+# The physics tests integrate millions of steps; unoptimised they take minutes.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

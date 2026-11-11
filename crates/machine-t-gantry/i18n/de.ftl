@@ -1,0 +1,10 @@
+machine-t-gantry = T-Portal
+axis-x = X-Achse
+axis-z = Z-Achse
+motor-a = Motor A
+motor-b = Motor B
+group-axis-x = Grenzwerte X-Achse
+group-axis-z = Grenzwerte Z-Achse
+param-stroke_x_m = Hub X [m]
+param-stroke_z_m = Hub Z [m]
+param-z_axis_kg = Masse Z-Achse [kg]
