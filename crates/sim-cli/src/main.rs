@@ -1,6 +1,7 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
 //! Every message comes from the translation files; see `cli-usage` there for the commands.
 
+use sim_components::analysis::{analyse_cycle, frequency_sweep, log_spaced};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
@@ -76,6 +77,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
             Ok(())
         }
         Some("run") => run(args, tr),
+        Some("analyze") => analyze(args, tr),
+        Some("sweep") => sweep(args),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -116,16 +119,64 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
     Ok(sim)
 }
 
+fn io(e: std::io::Error) -> Failure {
+    Failure("cli-error-io", e.to_string())
+}
+
+/// Where the CSV goes: the file named by `option`, or standard output.
+fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
+    Ok(match args.option(option) {
+        Some(path) => Box::new(std::io::BufWriter::new(std::fs::File::create(path).map_err(io)?)),
+        None => Box::new(std::io::stdout().lock()),
+    })
+}
+
+/// `analyze <machine>`: peak and RMS torque, peak speed and use of the torque-speed curve per motor
+/// over one pass of the cycle. `--points FILE` also writes the operating points.
+fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let mut sim = Sim::new(entry, &cfg)?;
+    let load = analyse_cycle(&mut sim).map_err(|e| Failure(e.key, String::new()))?;
+    let _ = tr;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation").map_err(io)?;
+    for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        writeln!(out, "{},{:.6},{:.6},{:.6},{:.4},{:.4}", motor.id, load.duration, m.peak_torque, m.rms_torque, m.peak_speed, m.utilisation).map_err(io)?;
+    }
+    out.flush().map_err(io)?;
+    if args.option("--points").is_some() {
+        let mut out = output(args, "--points")?;
+        writeln!(out, "motor,speed_rad_s,torque_nm").map_err(io)?;
+        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+            for (speed, torque) in &m.points {
+                writeln!(out, "{},{speed:.6e},{torque:.6e}", motor.id).map_err(io)?;
+            }
+        }
+        out.flush().map_err(io)?;
+    }
+    Ok(())
+}
+
+/// `sweep <machine>`: mechanical frequency response from one motor's torque to its speed.
+fn sweep(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let number = |name: &str, default: f64| args.number(name).map(|v| v.unwrap_or(default));
+    let frequencies = log_spaced(number("--from", 5.0)?, number("--to", 500.0)?, number("--count", 60.0)? as usize);
+    let points = frequency_sweep(entry, &cfg, number("--motor", 0.0)? as usize, &frequencies, number("--amplitude", 0.05)?)?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "frequency_hz,gain_rad_s_per_nm,phase_deg").map_err(io)?;
+    for p in points {
+        writeln!(out, "{:.4},{:.6e},{:.3}", p.frequency, p.gain, p.phase_deg).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
 /// `run <machine>`: simulate a move or the cycle and write every signal as CSV.
 fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut sim = start(args, tr)?;
     let seconds = args.number("--time")?.unwrap_or(2.0);
     let every = args.number("--every")?.unwrap_or(16.0).max(1.0) as u64;
-    let io = |e: std::io::Error| Failure("cli-error-io", e.to_string());
-    let mut out: Box<dyn Write> = match args.option("--out") {
-        Some(path) => Box::new(std::io::BufWriter::new(std::fs::File::create(path).map_err(io)?)),
-        None => Box::new(std::io::stdout().lock()),
-    };
+    let mut out = output(args, "--out")?;
     let header: Vec<String> = sim.signal_infos().iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
     writeln!(out, "{}", header.join(",")).map_err(io)?;
     let mut sample = Vec::new();

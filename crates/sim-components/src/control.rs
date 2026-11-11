@@ -188,6 +188,11 @@ impl Controller {
         self.cycle
     }
 
+    /// The torque the drives can give at a motor speed: (lowest, highest).
+    pub fn torque_curve(&self, speed: f64) -> (f64, f64) {
+        self.params.torque_curve(speed)
+    }
+
     /// One base step: runs whichever loops are due and writes the motor torques.
     pub fn update(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
@@ -275,9 +280,16 @@ impl Controller {
         machine.inverse(&shifted(1.0), &mut ahead);
         machine.inverse(&shifted(-1.0), &mut behind);
         machine.feedforward_torque(&self.set_pos, &self.set_acc, &mut ff);
+        // Motor acceleration setpoints the same way, for the drives' fine interpolation.
+        let (mut acc_ahead, mut acc_behind) = (vec![0.0; motors], vec![0.0; motors]);
+        let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_acc).map(|(p, a)| p + sign * h * a).collect() };
+        machine.inverse(&shifted(1.0), &mut acc_ahead);
+        machine.inverse(&shifted(-1.0), &mut acc_behind);
         for (k, drive) in self.drives.iter_mut().enumerate() {
             drive.pos_set = pos[k];
             drive.vel_set = (ahead[k] - behind[k]) / (2.0 * h);
+            drive.acc_set = (acc_ahead[k] - acc_behind[k]) / (2.0 * h);
+            drive.since_setpoint = 0.0;
             drive.torque_ff = ff[k];
         }
     }

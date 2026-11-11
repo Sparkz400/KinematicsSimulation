@@ -72,3 +72,28 @@ fn mistakes_are_reported_in_the_chosen_language() {
     assert_eq!(bad.status.code(), Some(2));
     assert!(text(&bad.stderr).contains("mass.no_such_value"));
 }
+
+#[test]
+fn analyze_and_sweep_write_csv_for_every_machine() {
+    for entry in MACHINES {
+        let motors = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.motors().len();
+        let points = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-points.csv", entry.id));
+        let out = cli(&["analyze", entry.id, "--points", points.to_str().unwrap()]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let table = text(&out.stdout);
+        assert_eq!(table.lines().next().unwrap(), "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation");
+        let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        assert_eq!(rows.len(), motors);
+        for row in &rows {
+            let (peak, rms, use_): (f64, f64, f64) = (row[2].parse().unwrap(), row[3].parse().unwrap(), row[5].parse().unwrap());
+            assert!(peak > rms && rms > 0.0 && use_ > 0.0 && use_ < 1.0, "{row:?}");
+        }
+        assert!(std::fs::read_to_string(&points).unwrap().lines().count() > 1000 * motors);
+
+        let out = cli(&["sweep", entry.id, "--from", "10", "--to", "100", "--count", "4"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let table = text(&out.stdout);
+        assert_eq!(table.lines().count(), 5);
+        assert!(table.lines().skip(1).all(|l| l.split(',').all(|v| v.parse::<f64>().is_ok_and(f64::is_finite))));
+    }
+}

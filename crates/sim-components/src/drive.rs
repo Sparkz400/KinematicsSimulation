@@ -66,9 +66,11 @@ impl DriveParams {
     /// Torque limits (lowest, highest) at a speed: the current limit everywhere, and in the
     /// direction of rotation the torque-speed curve that the voltage limit leaves.
     pub fn torque_range(&self, speed: f64) -> (f64, f64) {
-        if !self.limit {
-            return (f64::NEG_INFINITY, f64::INFINITY);
-        }
+        if self.limit { self.torque_curve(speed) } else { (f64::NEG_INFINITY, f64::INFINITY) }
+    }
+
+    /// The same limits, whether or not the limit is switched on: what the motor and drive can give.
+    pub fn torque_curve(&self, speed: f64) -> (f64, f64) {
         let fade = ((self.no_load_speed - speed.abs()) / (self.no_load_speed - self.rated_speed)).clamp(0.0, 1.0);
         let (peak, motoring) = (self.peak_torque, self.peak_torque * fade);
         if speed >= 0.0 { (-peak, motoring) } else { (-motoring, peak) }
@@ -87,12 +89,18 @@ fn notch_coefficients(frequency: f64, bandwidth: f64, cycle: f64) -> [f64; 5] {
 #[derive(Debug, Clone, Default)]
 pub struct Drive {
     pub pos_set: f64,
+    /// Speed setpoint at the last profile cycle, and its rate until the next one.
     pub vel_set: f64,
+    pub acc_set: f64,
+    /// Time since the profile generator last wrote the setpoints.
+    pub since_setpoint: f64,
     pub torque_ff: f64,
     pub following_error: f64,
     pub speed_command: f64,
     pub torque_command: f64,
     pub torque: f64,
+    /// Kv times following error, held between position-loop cycles.
+    position_part: f64,
     integral: f64,
     encoder: f64,
     last_encoder: f64,
@@ -123,10 +131,11 @@ impl Drive {
         self.encoder
     }
 
-    /// Position loop: following error times Kv, plus velocity feedforward.
+    /// Position loop: following error times Kv.
     pub fn position_loop(&mut self, p: &DriveParams, pos: f64) {
         self.following_error = self.pos_set - quantise(pos, p.encoder_step);
-        self.speed_command = p.kv * self.following_error + p.velocity_ff * self.vel_set;
+        self.position_part = p.kv * self.following_error;
+        self.speed_command = self.position_part + p.velocity_ff * self.vel_set;
     }
 
     /// Velocity loop: PI on the measured speed, plus torque feedforward, then filters and limits.
@@ -136,6 +145,11 @@ impl Drive {
         let raw = if p.encoder_step > 0.0 { (self.encoder - self.last_encoder) / p.velocity_cycle } else { true_speed };
         self.last_encoder = self.encoder;
         self.speed += p.velocity_filter * (raw - self.speed);
+
+        // Velocity feedforward, interpolated between profile cycles. Holding it for a whole profile
+        // cycle would make the speed command a staircase and the torque a sawtooth.
+        self.speed_command = self.position_part + p.velocity_ff * (self.vel_set + self.acc_set * self.since_setpoint);
+        self.since_setpoint += p.velocity_cycle;
 
         let error = self.speed_command - self.speed;
         let wanted = p.kp * error + self.integral + p.torque_ff * self.torque_ff;
@@ -203,7 +217,7 @@ mod tests {
     fn velocity_loop_is_pi_with_torque_feedforward() {
         let mut p = params();
         p.torque_ff = 1.0;
-        let mut d = Drive { speed_command: 10.0, torque_ff: 0.3, ..Drive::default() };
+        let mut d = Drive { position_part: 10.0, torque_ff: 0.3, ..Drive::default() };
         d.velocity_loop(&p, 0.0, 4.0);
         assert!((d.torque_command - (0.08 * 6.0 + 0.3)).abs() < 1e-12);
         d.velocity_loop(&p, 0.0, 4.0);
@@ -218,16 +232,28 @@ mod tests {
         let (low, high) = p.torque_range(367.0);
         assert!((high - 1.9).abs() < 1e-12 && low == -3.8);
         assert_eq!(p.torque_range(-500.0), (-0.0, 3.8));
-        let mut d = Drive { speed_command: 1000.0, ..Drive::default() };
+        let mut d = Drive { position_part: 1000.0, ..Drive::default() };
         d.velocity_loop(&p, 0.0, 0.0);
         assert_eq!(d.torque_command, 3.8);
         let before = d.integral;
         d.velocity_loop(&p, 0.0, 0.0);
         assert_eq!(d.integral, before, "the integrator winds up at the limit");
         let unlimited = DriveParams { limit: false, ..params() };
-        let mut d = Drive { speed_command: 1000.0, ..Drive::default() };
+        let mut d = Drive { position_part: 1000.0, ..Drive::default() };
         d.velocity_loop(&unlimited, 0.0, 0.0);
         assert!(d.torque_command > 3.8);
+        assert_eq!(unlimited.torque_curve(100.0), (-3.8, 3.8));
+    }
+
+    #[test]
+    fn velocity_feedforward_is_interpolated_between_profile_cycles() {
+        let mut p = params();
+        p.velocity_ff = 1.0;
+        let mut d = Drive { vel_set: 10.0, acc_set: 1000.0, ..Drive::default() };
+        d.velocity_loop(&p, 0.0, 0.0);
+        assert!((d.speed_command - 10.0).abs() < 1e-12);
+        d.velocity_loop(&p, 0.0, 0.0);
+        assert!((d.speed_command - (10.0 + 1000.0 * 125e-6)).abs() < 1e-12);
     }
 
     #[test]

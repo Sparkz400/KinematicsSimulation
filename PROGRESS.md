@@ -9,6 +9,7 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 | 2. Full mechanics | done | Component unit tests in `sim-components/src/mech.rs` (belt, LuGre friction, shaft friction, ripple, tooth meshing, gearbox); friction levels, backlash, belt natural frequency and rigid limit in `machine-single-axis/src/tests.rs`; rigid limit, static hold and the SciPy comparison in `machine-t-gantry/src/tests.rs`; energy and step-size convergence of the elastic models and `every_effect_switch_changes_the_response` in `sim-machines/tests/suite.rs` |
 | 3. Control and profiles | done | `sim-machines/tests/control.rs` (following error at constant speed = v / Kv on every machine, feedforward, pick-and-place cycle with payload switching, external setpoint interpolation, axis-against-motor limit check, determinism, step-size convergence with control and all effects on, every effect switch changes the traces); profile limits and synchronised moves in `sim-components/src/profile.rs`; drive loops, torque-speed limit, encoder and notch in `sim-components/src/drive.rs`; CSV runs in `sim-cli/tests/cli.rs` |
 | 4. App | done (interactive handling not checked by a person, see below) | `sim-app/tests/app.rs`: every machine runs in the same app model with scopes, scene, effect switches and parameters generated from what the machine supplies; every label exists in German and English and the window code holds no text; switching any effect changes the traces within one cycle without a restart, friction within 1 ms; pause, slow motion and real-time pacing of the simulation thread |
+| 5. Analysis | done | `reference_cycle_torque_matches_hand_calculation` (peak and RMS torque, cycle time, peak speed and use of the torque-speed curve against a hand calculation), the over-curve check and the two frequency-sweep checks (pure inertia; belt dip at the hand-calculated frequency) in `machine-single-axis/src/tests.rs`; `analyze` and `sweep` CSV export in `sim-cli/tests/cli.rs` |
 
 ## Assumptions made for the plan's open questions
 
@@ -78,6 +79,12 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
   motor. Belt stretch is shown as a colour shift of the belt spans (red above pretension, blue below).
 - **The controller's setpoint starts at the motor position,** a few micrometres from the configured
   start pose (belt stretch and gear twist under load), so the first step has no jolt.
+- **Speed setpoints are interpolated inside the drive** between profile cycles. Holding them for 1 ms
+  made the torque a sawtooth and the peak torque 14 % too high (found by the hand calculation of phase 5).
+- **Analysis** measures the second pass of the cycle. Utilisation is torque over the torque the
+  torque-speed curve leaves at that speed. The frequency sweep is the open-loop mechanical response
+  from one motor's torque to its own speed, on top of the holding torques. All of it is CLI and CSV;
+  the app does not show analysis results yet.
 - **Phase 0 leftovers:** the phase 0 commit had no translation files, no dependency check and no window.
   The first two are added in phase 1; the window comes with the app in phase 4.
 

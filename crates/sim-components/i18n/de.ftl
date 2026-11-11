@@ -108,3 +108,4 @@ error-busy = Eine Bewegung oder der Zyklus läuft noch.
 error-no-cycle = Die Konfiguration definiert keinen Zyklus.
 limit-motor-speed = Die Achsgrenzwerte verlangen mehr Motordrehzahl, als der Antrieb zulässt: { $arg }
 limit-motor-torque = Die Achsgrenzwerte verlangen mehr Motormoment, als der Antrieb zulässt: { $arg }
+error-cycle-timeout = Der Zyklus hat sich innerhalb von zehn simulierten Minuten nicht wiederholt.

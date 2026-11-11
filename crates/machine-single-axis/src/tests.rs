@@ -3,6 +3,8 @@
 
 use super::*;
 use sim_core::testkit::{DT, PulseRun};
+use sim_components::Sim;
+use sim_components::analysis::{analyse_cycle, frequency_sweep};
 use sim_core::{Rk4, advance};
 
 fn machine(mut cfg: Config, edit: &[&str]) -> SingleAxis {
@@ -183,4 +185,103 @@ fn stiff_belt_converges_to_the_rigid_reference() {
     assert!((stiff - rigid).abs() < 0.01 * rigid, "stiff {stiff} m, rigid {rigid} m");
     // The default belt is visibly softer, otherwise the check above would prove nothing.
     assert!((soft - rigid).abs() > (stiff - rigid).abs(), "soft {soft}, stiff {stiff}, rigid {rigid}");
+}
+
+/// A rigid, loss-free config with an ideal drive: what a hand calculation can follow exactly.
+fn ideal_rigid() -> Config {
+    let mut cfg = lossless_config();
+    for e in [
+        "effects.belt_stretch = false",
+        "effects.belt_mass = false",
+        "effects.payload = false",
+        "effects.encoder_resolution = false",
+        "effects.velocity_filter = false",
+        "effects.torque_filter = false",
+    ] {
+        cfg.set_text(e).unwrap();
+    }
+    cfg
+}
+
+/// Analysis: peak and RMS torque of a reference cycle match a hand calculation.
+#[test]
+fn reference_cycle_torque_matches_hand_calculation() {
+    let mut sim = Sim::new(&ENTRY, &ideal_rigid()).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+
+    // The cycle: 0.8 m there, 0.1 s dwell, 0.8 m back, 0.1 s dwell, at 1 m/s, 10 m/s^2, 100 m/s^3.
+    let (v, a, j, dist, dwell) = (1.0, 10.0, 100.0, 0.8, 0.1);
+    let tj: f64 = a / j;
+    let ta = v / a - tj;
+    let tv = (dist - v * (2.0 * tj + ta)) / v;
+    let duration = 2.0 * (4.0 * tj + 2.0 * ta + tv + dwell);
+    // Each of the four acceleration ramps: a rises over tj, holds for ta, falls over tj.
+    let a_squared = 4.0 * a * a * (ta + 2.0 * tj / 3.0);
+    // Torque per acceleration: carriage plus pulley and rotor inertia, through radius and gear ratio.
+    let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
+    let per_acc = m_total * 0.02 / 5.0;
+    let (peak, rms) = (per_acc * a, per_acc * (a_squared / duration).sqrt());
+
+    assert!((load.duration - duration).abs() < 2e-3, "cycle {} s, by hand {duration} s", load.duration);
+    let m = &load.motors[0];
+    assert!((m.peak_torque - peak).abs() < 0.02 * peak, "peak {} N m, by hand {peak} N m", m.peak_torque);
+    assert!((m.rms_torque - rms).abs() < 0.02 * rms, "RMS {} N m, by hand {rms} N m", m.rms_torque);
+    // Operating points: top speed is v through radius and ratio, and the torque-speed curve
+    // (3.8 N m up to 314 rad/s) is used to peak / 3.8.
+    assert!((m.peak_speed - v * 5.0 / 0.02).abs() < 0.01 * 250.0, "peak speed {}", m.peak_speed);
+    assert!((m.utilisation - peak / 3.8).abs() < 0.02 * peak / 3.8, "utilisation {}", m.utilisation);
+    assert!(m.points.len() as f64 > 0.99 * duration * 1000.0);
+}
+
+#[test]
+fn a_cycle_beyond_the_torque_speed_curve_shows_as_utilisation_above_one() {
+    let mut cfg = ideal_rigid();
+    // A weak drive: 0.25 N m up to 100 rad/s, falling to nothing at 260 rad/s. The cycle needs
+    // 0.245 N m at half speed (125 rad/s), where only 0.25 * 135 / 160 = 0.21 N m is left, and is
+    // still accelerating close to its top speed of 250 rad/s, where almost nothing is left.
+    cfg.set_text("drive.rated_speed_rad_s = 100.0").unwrap();
+    cfg.set_text("drive.no_load_speed_rad_s = 260.0").unwrap();
+    cfg.set_text("drive.peak_torque_nm = 0.25").unwrap();
+    cfg.set_text("effects.torque_limit = false").unwrap();
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+    let utilisation = load.motors[0].utilisation;
+    assert!(utilisation > 0.245 / 0.21, "{utilisation}");
+}
+
+/// Frequency sweep: a rigid machine is a pure inertia, gain 1 / (J w) at -90 degrees.
+#[test]
+fn frequency_sweep_of_the_rigid_machine_is_a_pure_inertia() {
+    let j_motor_side = (6.0 * 0.02 * 0.02 + 1.0e-4) / 25.0 + 0.3e-4;
+    let mut cfg = ideal_rigid();
+    cfg.set_text("effects.payload = true").unwrap();
+    for p in frequency_sweep(&ENTRY, &cfg, 0, &[5.0, 20.0, 80.0, 320.0], 0.05).unwrap() {
+        let expected = 1.0 / (j_motor_side * std::f64::consts::TAU * p.frequency);
+        assert!((p.gain - expected).abs() < 0.01 * expected, "{} Hz: gain {}, by hand {expected}", p.frequency, p.gain);
+        assert!((p.phase_deg + 90.0).abs() < 1.0, "{} Hz: phase {}", p.frequency, p.phase_deg);
+    }
+}
+
+/// Frequency sweep: with a stretching belt the load swings against the motor. Where the load
+/// resonates on the belt with the motor held, the motor hardly moves (a dip in the response).
+#[test]
+fn frequency_sweep_shows_the_belt_resonance() {
+    // A very stiff gearbox without backlash, so that the belt is the only spring (as in the
+    // natural-frequency check); that stiffness needs a finer integration step.
+    let mut cfg = lossless_config();
+    for e in ["gearbox.stiffness_nm_rad = 1.0e7", "effects.gearbox_backlash = false", "sim.substeps = 16"] {
+        cfg.set_text(e).unwrap();
+    }
+    // By hand, at the start pose x = 0.1 m: belt sections of 0.25 m and 2.35 m.
+    let k = 5.0e5 * (1.0 / 0.25 + 1.0 / 2.35);
+    let dip = f64::sqrt(k / 6.0) / std::f64::consts::TAU;
+    let frequencies: Vec<f64> = (0..41).map(|i| dip * (0.8 + 0.01 * i as f64)).collect();
+    let sweep = frequency_sweep(&ENTRY, &cfg, 0, &frequencies, 0.05).unwrap();
+    let lowest = sweep.iter().min_by(|a, b| a.gain.total_cmp(&b.gain)).unwrap();
+    assert!((lowest.frequency - dip).abs() < 0.05 * dip, "dip at {} Hz, by hand {dip} Hz", lowest.frequency);
+    let far_below = frequency_sweep(&ENTRY, &cfg, 0, &[dip / 20.0], 0.05).unwrap()[0];
+    // Far below the dip the machine still looks like its rigid inertia (within the belt's give).
+    let j_motor_side = (6.0 * 0.02 * 0.02 + 1.0e-4 + 0.1 * 2.6 * 0.02 * 0.02) / 25.0 + 0.3e-4;
+    let rigid = 1.0 / (j_motor_side * std::f64::consts::TAU * far_below.frequency);
+    assert!((far_below.gain - rigid).abs() < 0.03 * rigid, "gain {} at {} Hz, rigid {rigid}", far_below.gain, far_below.frequency);
+    assert!(lowest.gain * lowest.frequency < 0.1 * far_below.gain * far_below.frequency, "no clear dip");
 }

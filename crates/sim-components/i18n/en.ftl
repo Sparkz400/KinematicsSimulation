@@ -108,3 +108,4 @@ error-busy = A move or the cycle is still running.
 error-no-cycle = The configuration defines no cycle.
 limit-motor-speed = The axis limits ask for more motor speed than the drive allows: { $arg }
 limit-motor-torque = The axis limits ask for more motor torque than the drive allows: { $arg }
+error-cycle-timeout = The cycle did not repeat within ten simulated minutes.
