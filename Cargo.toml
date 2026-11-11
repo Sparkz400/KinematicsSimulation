@@ -19,6 +19,9 @@ bevy = { version = "=0.20.1", default-features = false, features = ["3d"] }
 bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
 # egui_plot 0.37 is the release that shares egui 0.36 with bevy_egui 0.43.
 egui_plot = "=0.37.0"
+# Only the PLC link may depend on these two.
+async-opcua = "=0.19.0"
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 
 # The physics tests integrate millions of steps; unoptimised they take minutes.
 [profile.dev]

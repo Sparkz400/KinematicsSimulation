@@ -1,0 +1,14 @@
+[package]
+name = "sim-opcua"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
+sim-machines.workspace = true
+async-opcua = { workspace = true, features = ["server"] }
+tokio.workspace = true
+
+[dev-dependencies]
+async-opcua = { workspace = true, features = ["server", "client"] }
