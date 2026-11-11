@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 sim-core.workspace = true
+toml.workspace = true

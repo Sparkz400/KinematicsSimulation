@@ -27,12 +27,12 @@ pub struct SignalInfo {
     pub id: String,
     pub owner_key: String,
     pub quantity_key: String,
-    pub unit: &'static str,
+    pub unit: String,
 }
 
 impl SignalInfo {
-    pub fn new(id: impl Into<String>, owner_key: &str, quantity_key: &str, unit: &'static str) -> Self {
-        Self { id: id.into(), owner_key: owner_key.into(), quantity_key: quantity_key.into(), unit }
+    pub fn new(id: impl Into<String>, owner_key: &str, quantity_key: &str, unit: &str) -> Self {
+        Self { id: id.into(), owner_key: owner_key.into(), quantity_key: quantity_key.into(), unit: unit.into() }
     }
 }
 

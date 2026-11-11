@@ -7,6 +7,7 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 | --- | --- | --- |
 | 1. Base and rigid reference | done | `sim-machines/tests/suite.rs` (round trip, static hold, energy, step-size convergence, determinism, for every registered machine), `sim-machines/tests/architecture.rs` (dependency direction, pinned versions, no machine name outside its crate), `sim-machines/tests/i18n.rs`, constant-torque and Z static-hold tests in the two machine crates |
 | 2. Full mechanics | done | Component unit tests in `sim-components/src/mech.rs` (belt, LuGre friction, shaft friction, ripple, tooth meshing, gearbox); friction levels, backlash, belt natural frequency and rigid limit in `machine-single-axis/src/tests.rs`; rigid limit, static hold and the SciPy comparison in `machine-t-gantry/src/tests.rs`; energy and step-size convergence of the elastic models and `every_effect_switch_changes_the_response` in `sim-machines/tests/suite.rs` |
+| 3. Control and profiles | done | `sim-machines/tests/control.rs` (following error at constant speed = v / Kv on every machine, feedforward, pick-and-place cycle with payload switching, external setpoint interpolation, axis-against-motor limit check, determinism, step-size convergence with control and all effects on, every effect switch changes the traces); profile limits and synchronised moves in `sim-components/src/profile.rs`; drive loops, torque-speed limit, encoder and notch in `sim-components/src/drive.rs`; CSV runs in `sim-cli/tests/cli.rs` |
 
 ## Assumptions made for the plan's open questions
 
@@ -56,6 +57,15 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
   in `reference/requirements.txt`). Agreement is within 0.2 % of the travel.
 - **Placeholder mechanics:** belt EA 5e5 N, pretension 300 N, gearbox backlash 3 arcmin, friction and
   damping values are estimates. See the two `default.toml` files.
+- **Drive placeholders:** Kv 50 1/s, velocity loop Kp 0.08 N m s/rad with Tn 10 ms, current loop as a
+  0.25 ms lag, peak torque 3.8 N m, full torque up to 314 rad/s falling to zero at 420 rad/s, 20-bit
+  encoder. Both motors use the same drive settings. Untuned for any real machine.
+- **Feedforward model:** torque feedforward is the rigid inverse dynamics the machine supplies (inertia
+  and gravity). Friction is not in it, so some following error stays while accelerating.
+- **Stop** finishes the segment under way and then stays; there is no fast stop ramp.
+- **Cycle** is a list of segments in the machine's config (target, dwell, gripper state on arrival);
+  the parameter panel and `--set` cannot edit it, a config file can.
+- **External setpoints** (for the PLC link) are interpolated linearly over `profile.setpoint_interval_s`.
 - **Phase 0 leftovers:** the phase 0 commit had no translation files, no dependency check and no window.
   The first two are added in phase 1; the window comes with the app in phase 4.
 
