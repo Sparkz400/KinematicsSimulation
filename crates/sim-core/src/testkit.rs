@@ -5,7 +5,9 @@ use crate::{Machine, MachineEntry, Rk4, advance};
 
 pub const DT: f64 = 62.5e-6;
 pub const SUBSTEPS: u32 = 4;
+/// The suite's pulse: short enough to ring the belt, smooth enough to leave the gear mode alone.
 const PULSE_S: f64 = 0.02;
+const PULSE_ACC: f64 = 0.1;
 
 pub fn run_standard_suite(entry: &MachineEntry) {
     let default = (entry.build)(&entry.config()).unwrap();
@@ -66,30 +68,33 @@ pub fn static_hold(m: &dyn Machine) {
 }
 
 /// A run that starts at rest, gets one smooth torque pulse and then only the holding torques.
-struct PulseRun<'a> {
+pub struct PulseRun<'a> {
     m: &'a dyn Machine,
     rk: Rk4,
-    state: Vec<f64>,
-    hold: Vec<f64>,
+    pub state: Vec<f64>,
+    pub hold: Vec<f64>,
     delta: Vec<f64>,
     motor0: Vec<f64>,
     step: usize,
     dt: f64,
+    pulse_s: f64,
+    pub substeps: u32,
 }
 
 impl<'a> PulseRun<'a> {
-    fn new(m: &'a dyn Machine, dt: f64) -> Self {
+    /// The pulse is sin^2 shaped, `pulse_s` long, and asks for `acc_fraction` of each axis's
+    /// acceleration limit at its peak.
+    pub fn new(m: &'a dyn Machine, dt: f64, acc_fraction: f64, pulse_s: f64) -> Self {
         let pose = mid_pose(m);
         let motors = m.motors().len();
         let (mut state, mut hold) = (Vec::new(), vec![0.0; motors]);
         m.equilibrium(&pose, &mut state, &mut hold);
-        // The pulse asks for a tenth of each axis's acceleration limit.
-        let acc: Vec<f64> = m.axes().iter().map(|a| 0.1 * a.max_acc).collect();
+        let acc: Vec<f64> = m.axes().iter().map(|a| acc_fraction * a.max_acc).collect();
         let (mut with, mut without) = (vec![0.0; motors], vec![0.0; motors]);
         m.feedforward_torque(&pose, &acc, &mut with);
         m.feedforward_torque(&pose, &vec![0.0; acc.len()], &mut without);
         let delta = with.iter().zip(&without).map(|(a, b)| a - b).collect();
-        let mut run = Self { m, rk: Rk4::new(state.len()), state, hold, delta, motor0: vec![0.0; motors], step: 0, dt };
+        let mut run = Self { m, rk: Rk4::new(state.len()), state, hold, delta, motor0: vec![0.0; motors], step: 0, dt, pulse_s, substeps: SUBSTEPS };
         run.motor0 = run.motor_pos();
         run
     }
@@ -101,19 +106,19 @@ impl<'a> PulseRun<'a> {
         pos
     }
 
-    fn tool_pos(&self) -> Vec<f64> {
+    pub fn tool_pos(&self) -> Vec<f64> {
         let n = self.m.axes().len();
         let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
         self.m.tool_state(&self.state, &mut pos, &mut vel);
         pos
     }
 
-    fn run(&mut self, seconds: f64, mut each: impl FnMut(&Self)) {
+    pub fn run(&mut self, seconds: f64, mut each: impl FnMut(&Self)) {
         for _ in 0..(seconds / self.dt).round() as usize {
             let t = self.step as f64 * self.dt;
-            let pulse = if t < PULSE_S { (std::f64::consts::PI * t / PULSE_S).sin().powi(2) } else { 0.0 };
+            let pulse = if t < self.pulse_s { (std::f64::consts::PI * t / self.pulse_s).sin().powi(2) } else { 0.0 };
             let torque: Vec<f64> = self.hold.iter().zip(&self.delta).map(|(h, d)| h + d * pulse).collect();
-            advance(self.m, &mut self.rk, &mut self.state, &torque, self.dt, SUBSTEPS);
+            advance(self.m, &mut self.rk, &mut self.state, &torque, self.dt, self.substeps);
             self.step += 1;
             each(self);
         }
@@ -131,7 +136,7 @@ impl<'a> PulseRun<'a> {
 /// The drift is measured against the energy the pulse put in, which is far stricter than
 /// measuring against the gravitational potential.
 pub fn energy_conservation(m: &dyn Machine) {
-    let mut run = PulseRun::new(m, DT);
+    let mut run = PulseRun::new(m, DT, PULSE_ACC, PULSE_S);
     let before = run.invariant();
     run.run(PULSE_S, |_| {});
     let after = run.invariant();
@@ -145,7 +150,7 @@ pub fn energy_conservation(m: &dyn Machine) {
 /// Halving the time step changes the result by less than 1 %.
 pub fn step_convergence(m: &dyn Machine) {
     let travel = |dt: f64| {
-        let mut run = PulseRun::new(m, dt);
+        let mut run = PulseRun::new(m, dt, PULSE_ACC, PULSE_S);
         let start = run.tool_pos();
         run.run(1.0, |_| {});
         run.tool_pos().iter().zip(&start).map(|(p, s)| p - s).collect::<Vec<f64>>()
@@ -160,7 +165,7 @@ pub fn step_convergence(m: &dyn Machine) {
 /// The same config and the same commands give bit-identical traces.
 pub fn determinism(m: &dyn Machine) {
     let trace = || {
-        let mut run = PulseRun::new(m, DT);
+        let mut run = PulseRun::new(m, DT, PULSE_ACC, PULSE_S);
         let mut bits = Vec::new();
         run.run(0.1, |r| bits.extend(r.state.iter().map(|v| v.to_bits())));
         bits

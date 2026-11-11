@@ -6,6 +6,7 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 | Phase | Status | Tests that prove it |
 | --- | --- | --- |
 | 1. Base and rigid reference | done | `sim-machines/tests/suite.rs` (round trip, static hold, energy, step-size convergence, determinism, for every registered machine), `sim-machines/tests/architecture.rs` (dependency direction, pinned versions, no machine name outside its crate), `sim-machines/tests/i18n.rs`, constant-torque and Z static-hold tests in the two machine crates |
+| 2. Full mechanics | done | Component unit tests in `sim-components/src/mech.rs` (belt, LuGre friction, shaft friction, ripple, tooth meshing, gearbox); friction levels, backlash, belt natural frequency and rigid limit in `machine-single-axis/src/tests.rs`; rigid limit, static hold and the SciPy comparison in `machine-t-gantry/src/tests.rs`; energy and step-size convergence of the elastic models and `every_effect_switch_changes_the_response` in `sim-machines/tests/suite.rs` |
 
 ## Assumptions made for the plan's open questions
 
@@ -34,5 +35,31 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
   it introduces, so a machine's names stay inside its crate.
 - **Energy check:** drift is measured against the energy a torque pulse puts in, not against the
   gravitational potential. That is roughly a thousand times stricter than the plan's wording requires.
+- **Belt sections, not spans:** idlers are free, so the tension is uniform between two points that hold
+  the belt (a motor pulley or a clamp). The T-gantry has three such sections, each one spring with
+  k = EA / L where L changes with x and z. The single spans appear only in the 3D scene.
+- **Energy-consistent belt:** the pulleys feel the tension times (1 + strain/2), because stretched belt
+  carries its strain energy along. The factor is about 1.0003 and makes the energy check exact. The
+  elastic holding torque therefore differs from m_z g r / 2 by less than 0.1 %; the rigid one is exact.
+- **Pulley radius holds at pretension,** so x = r/2 (a + b) is exact for an evenly tensioned belt.
+- **Guide load for load-dependent friction** uses the X acceleration that the commanded motor torques
+  would give a loss-free rigid machine. The true acceleration would make friction depend on itself, and
+  its absolute value turned belt vibration into extra friction (found by the rigid-limit check).
+- **`effects.belt_stretch = false` selects the rigid reference model.** Belt damping, slack, backlash,
+  gear stiffness and the frame mode need the elastic model and have no effect in the rigid one.
+- **Belt mass** is lumped on the pulleys (half per pulley on the T-gantry), not spread over the load.
+- **Gearbox efficiency** fades out below 0.5 W of transmitted power, so a gearbox at rest has no torque step.
+  Motor shaft Coulomb friction is smoothed with tanh for the same reason.
+- **SciPy reference:** `crates/machine-t-gantry/reference/scipy_reference.py` re-implements the elastic
+  T-gantry and integrates it with LSODA; the trace is committed as `scipy_trace.csv`, so `cargo test`
+  needs no Python. Regenerate it when the model or the default config changes (venv in `.venv`, pinned
+  in `reference/requirements.txt`). Agreement is within 0.2 % of the travel.
+- **Placeholder mechanics:** belt EA 5e5 N, pretension 300 N, gearbox backlash 3 arcmin, friction and
+  damping values are estimates. See the two `default.toml` files.
 - **Phase 0 leftovers:** the phase 0 commit had no translation files, no dependency check and no window.
   The first two are added in phase 1; the window comes with the app in phase 4.
+
+## Not built (named in the plan, outside the phase criteria)
+
+- Low and high bounds on friction and damping parameters, and the sensitivity sweep that would use them.
+- Parts given by name from a component catalogue instead of raw numbers in the config.

@@ -1,33 +1,103 @@
 # T-gantry default configuration. Placeholder values for a mid-size catalogue-style machine;
 # see PROGRESS.md for the assumptions. Units are in the field names.
+# Masses, inertias, backlash and belt stiffness are datasheet-type values. Friction and damping
+# values are estimates and the first candidates for a sensitivity sweep.
 format_version = 1
 
 [sim]
 dt_s = 62.5e-6
 substeps = 4
 
+# One switch per effect. With belt_stretch off the machine falls back to the rigid reference model,
+# in which belt damping, slack, backlash, gear stiffness and the frame mode have no meaning.
 [effects]
 gravity = true
 payload = true
+belt_stretch = true
+belt_damping = true
+belt_slack = true
+belt_mass = true
+guide_friction = true
+load_dependent_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+tooth_meshing = true
+frame_compliance = true
+temperature = false
 
 [geometry]
 pulley_radius_m = 0.02
 stroke_x_m = 1.0
 stroke_z_m = 0.5
+# Shortest free belt span: carriage to motor at the end of X, carriage to the Z ends at the end of Z.
+span_min_m = 0.15
+# Centre of mass of the Z axis below the carriage at z = 0; it rises with z.
+z_com_drop_m = 0.3
+# Distance between the guide blocks that take the tilting moment.
+guide_spacing_m = 0.12
 
 [mass]
 carriage_kg = 4.0
 z_axis_kg = 5.0
 payload_kg = 2.0
 
+[belt]
+stiffness_ea_n = 5.0e5
+pretension_n = 300.0
+damping_n_s_m = 100.0
+mass_kg_m = 0.1
+tooth_pitch_m = 0.005
+tooth_force_n = 2.0
+
+[friction_x]
+coulomb_n = 15.0
+stiction_n = 20.0
+viscous_n_s_m = 20.0
+stribeck_m_s = 0.01
+bristle_stiffness_n_m = 5.0e5
+bristle_damping_n_s_m = 1500.0
+preload_n = 200.0
+
+[friction_z]
+coulomb_n = 10.0
+stiction_n = 14.0
+viscous_n_s_m = 15.0
+stribeck_m_s = 0.01
+bristle_stiffness_n_m = 5.0e5
+bristle_damping_n_s_m = 1500.0
+preload_n = 200.0
+
 [motor]
 rotor_inertia_kgm2 = 0.3e-4
+friction_coulomb_nm = 0.02
+friction_viscous_nm_s_rad = 1.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.01
+cogging_order = 24.0
 
 [gearbox]
 ratio = 5.0
+efficiency = 0.95
+backlash_rad = 8.7e-4
+stiffness_nm_rad = 1.0e4
+damping_nm_s_rad = 0.2
 
 [pulley]
 inertia_kgm2 = 1.0e-4
+
+[frame]
+mass_kg = 30.0
+stiffness_n_m = 7.4e5
+damping_n_s_m = 190.0
+
+# Applied only with effects.temperature on: a cold machine has more friction and a stiffer belt.
+[temperature]
+friction_scale = 1.5
+belt_stiffness_scale = 1.1
 
 [axis.x]
 max_velocity_m_s = 0.8

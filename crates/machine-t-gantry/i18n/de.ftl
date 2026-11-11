@@ -8,3 +8,17 @@ group-axis-z = Grenzwerte Z-Achse
 param-stroke_x_m = Hub X [m]
 param-stroke_z_m = Hub Z [m]
 param-z_axis_kg = Masse Z-Achse [kg]
+group-friction_x = Führungsreibung X
+group-friction_z = Führungsreibung Z
+group-frame = Gestell
+param-span_min_m = Kürzestes freies Riementrum [m]
+param-z_com_drop_m = Schwerpunkt Z unter dem Schlitten bei z = 0 [m]
+param-guide_spacing_m = Abstand der Führungswagen [m]
+param-mass_kg = Masse [kg]
+param-stiffness_n_m = Steifigkeit [N/m]
+effect-frame_compliance = Gestellnachgiebigkeit
+belt-section-1 = Riemen, Klemmung bis Motor A
+belt-section-2 = Riemen, Motor A bis Motor B
+belt-section-3 = Riemen, Motor B bis Klemmung
+frame = Gestell
+quantity-deflection = Auslenkung

@@ -8,3 +8,17 @@ group-axis-z = Z axis limits
 param-stroke_x_m = Stroke X [m]
 param-stroke_z_m = Stroke Z [m]
 param-z_axis_kg = Z axis mass [kg]
+group-friction_x = X guide friction
+group-friction_z = Z guide friction
+group-frame = Frame
+param-span_min_m = Shortest free belt span [m]
+param-z_com_drop_m = Z centre of mass below carriage at z = 0 [m]
+param-guide_spacing_m = Guide block spacing [m]
+param-mass_kg = Mass [kg]
+param-stiffness_n_m = Stiffness [N/m]
+effect-frame_compliance = Frame compliance
+belt-section-1 = Belt, clamp to motor A
+belt-section-2 = Belt, motor A to motor B
+belt-section-3 = Belt, motor B to clamp
+frame = Frame
+quantity-deflection = Deflection

@@ -4,3 +4,7 @@ motor-m = Motor
 group-axis-x = X axis limits
 param-stroke_m = Stroke [m]
 param-incline_deg = Incline [deg]
+group-friction_x = Guide friction
+param-span_min_m = Shortest free belt span [m]
+belt-section-1 = Belt, motor to carriage
+belt-section-2 = Belt, return side

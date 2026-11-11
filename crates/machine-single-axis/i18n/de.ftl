@@ -4,3 +4,7 @@ motor-m = Motor
 group-axis-x = Grenzwerte X-Achse
 param-stroke_m = Hub [m]
 param-incline_deg = Neigung [Grad]
+group-friction_x = Führungsreibung
+param-span_min_m = Kürzestes freies Riementrum [m]
+belt-section-1 = Riemen, Motor bis Schlitten
+belt-section-2 = Riemen, Rücklauf
