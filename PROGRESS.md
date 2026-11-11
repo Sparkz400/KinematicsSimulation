@@ -8,6 +8,7 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 | 1. Base and rigid reference | done | `sim-machines/tests/suite.rs` (round trip, static hold, energy, step-size convergence, determinism, for every registered machine), `sim-machines/tests/architecture.rs` (dependency direction, pinned versions, no machine name outside its crate), `sim-machines/tests/i18n.rs`, constant-torque and Z static-hold tests in the two machine crates |
 | 2. Full mechanics | done | Component unit tests in `sim-components/src/mech.rs` (belt, LuGre friction, shaft friction, ripple, tooth meshing, gearbox); friction levels, backlash, belt natural frequency and rigid limit in `machine-single-axis/src/tests.rs`; rigid limit, static hold and the SciPy comparison in `machine-t-gantry/src/tests.rs`; energy and step-size convergence of the elastic models and `every_effect_switch_changes_the_response` in `sim-machines/tests/suite.rs` |
 | 3. Control and profiles | done | `sim-machines/tests/control.rs` (following error at constant speed = v / Kv on every machine, feedforward, pick-and-place cycle with payload switching, external setpoint interpolation, axis-against-motor limit check, determinism, step-size convergence with control and all effects on, every effect switch changes the traces); profile limits and synchronised moves in `sim-components/src/profile.rs`; drive loops, torque-speed limit, encoder and notch in `sim-components/src/drive.rs`; CSV runs in `sim-cli/tests/cli.rs` |
+| 4. App | done (interactive handling not checked by a person, see below) | `sim-app/tests/app.rs`: every machine runs in the same app model with scopes, scene, effect switches and parameters generated from what the machine supplies; every label exists in German and English and the window code holds no text; switching any effect changes the traces within one cycle without a restart, friction within 1 ms; pause, slow motion and real-time pacing of the simulation thread |
 
 ## Assumptions made for the plan's open questions
 
@@ -66,8 +67,28 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 - **Cycle** is a list of segments in the machine's config (target, dwell, gripper state on arrival);
   the parameter panel and `--set` cannot edit it, a config file can.
 - **External setpoints** (for the PLC link) are interpolated linearly over `profile.setpoint_interval_s`.
+- **App versions:** Bevy 0.20.1, bevy_egui 0.43.1 (egui 0.36) and egui_plot 0.37.0, the plot release
+  that shares egui 0.36. Desktop only.
+- **App structure:** `sim-app` is a library (simulation thread, interface model; no drawing, fully
+  tested) plus the window (`main.rs`, `ui.rs`). The simulation thread sends samples through a channel;
+  the interface keeps the last 10 s as the scope history.
+- **"Within one cycle"** is read as one pass of the pick-and-place cycle. Effects that act all the time
+  are also checked within one position-loop cycle (1 ms).
+- **Scopes:** one plot per quantity (position, following error, torque, ...) with one line per axis or
+  motor. Belt stretch is shown as a colour shift of the belt spans (red above pretension, blue below).
+- **The controller's setpoint starts at the motor position,** a few micrometres from the configured
+  start pose (belt stretch and gear twist under load), so the first step has no jolt.
 - **Phase 0 leftovers:** the phase 0 commit had no translation files, no dependency check and no window.
   The first two are added in phase 1; the window comes with the app in phase 4.
+
+## Blocked or not verifiable here
+
+- **Phase 4, a person at the 3D view:** the window was started twice with the built-in screenshot hook
+  (`SIM_APP_SCREENSHOT=file.png`, optional `SIM_APP_LANG=de`), and both screenshots were inspected: the
+  machine, the panels in English and German and the live scopes render correctly. Not checked by anyone:
+  dragging the orbit camera, the view presets, the parameter and effect panels by mouse, and how the
+  motion looks. Those need a person at the screen. The screenshot run is not part of `cargo test`,
+  because it opens a window.
 
 ## Not built (named in the plan, outside the phase criteria)
 

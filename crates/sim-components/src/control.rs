@@ -98,8 +98,10 @@ impl Controller {
             motor_vel: vec![0.0; motors],
         };
         c.apply_config(cfg, machine)?;
-        machine.tool_state(state, &mut c.set_pos, &mut vec![0.0; axes]);
         machine.motor_state(state, &mut c.motor_pos, &mut c.motor_vel);
+        // The setpoint starts where the motors are. With a stretched belt and a loaded gearbox that
+        // is a few micrometres from the tool pose, and starting there avoids a jolt at the first step.
+        machine.forward(&c.motor_pos, &mut c.set_pos);
         // Start holding the load: the torque that keeps the pose, and the feedforward's share of it.
         let (mut hold, mut ff) = (vec![0.0; motors], vec![0.0; motors]);
         machine.equilibrium(&c.set_pos, &mut Vec::new(), &mut hold);
@@ -109,16 +111,20 @@ impl Controller {
     }
 
     /// Re-reads gains, switches, cycle times and the cycle; keeps the loops' running state.
+    /// A config with a refused value changes nothing.
     pub fn apply_config(&mut self, cfg: &Config, machine: &dyn Machine) -> Result<()> {
         let dt = cfg.positive("sim.dt_s")?;
-        steps(cfg, "drive.current_cycle_s", dt).and_then(|n| if n == 1 { Ok(()) } else { Err(ConfigError::Invalid("drive.current_cycle_s".into())) })?;
-        self.n_velocity = steps(cfg, "drive.velocity_cycle_s", dt)?;
-        self.n_position = steps(cfg, "drive.position_cycle_s", dt)?;
-        self.n_profile = steps(cfg, "profile.cycle_s", dt)?;
-        self.profile_cycle = self.n_profile as f64 * dt;
-        self.setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", self.profile_cycle)?;
-        self.params = DriveParams::from_config(cfg, dt, self.n_velocity as f64 * dt)?;
-        self.segments.clear();
+        if steps(cfg, "drive.current_cycle_s", dt)? != 1 {
+            // The current loop is the base step.
+            return Err(ConfigError::Invalid("drive.current_cycle_s".into()));
+        }
+        let n_velocity = steps(cfg, "drive.velocity_cycle_s", dt)?;
+        let n_position = steps(cfg, "drive.position_cycle_s", dt)?;
+        let n_profile = steps(cfg, "profile.cycle_s", dt)?;
+        let profile_cycle = n_profile as f64 * dt;
+        let setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", profile_cycle)?;
+        let params = DriveParams::from_config(cfg, dt, n_velocity as f64 * dt)?;
+        let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
             let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
@@ -126,12 +132,14 @@ impl Controller {
             if !in_range(machine, &target) {
                 return Err(bad());
             }
-            self.segments.push(Segment {
+            segments.push(Segment {
                 target,
-                dwell_ticks: (segment.get("dwell_s").and_then(number).ok_or_else(bad)? / self.profile_cycle).round() as u64,
+                dwell_ticks: (segment.get("dwell_s").and_then(number).ok_or_else(bad)? / profile_cycle).round() as u64,
                 payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
             });
         }
+        (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
+        (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
         Ok(())
     }
 

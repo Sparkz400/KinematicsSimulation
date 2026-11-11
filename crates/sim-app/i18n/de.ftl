@@ -1,0 +1,23 @@
+ui-window-title = Portal-Physiksimulator
+ui-machine = Maschine
+ui-language = Sprache
+lang-en = English
+lang-de = Deutsch
+ui-pause = Pause
+ui-resume = Weiter
+ui-speed = Geschwindigkeit (1 = Echtzeit)
+ui-view = Ansicht
+ui-view-front = Vorne
+ui-view-side = Seite
+ui-view-top = Oben
+ui-view-iso = Schräg
+ui-motion = Bewegung
+ui-move = Ziel anfahren
+ui-start-cycle = Zyklus starten
+ui-stop = Nach Segment anhalten
+ui-messages = Meldungen
+ui-clear = Leeren
+ui-effects = Effekte
+ui-parameters = Parameter
+ui-scopes = Oszilloskope
+ui-time = Zeit [s]

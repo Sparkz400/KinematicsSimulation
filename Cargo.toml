@@ -14,6 +14,11 @@ sim-core = { path = "crates/sim-core" }
 sim-components = { path = "crates/sim-components" }
 sim-machines = { path = "crates/sim-machines" }
 toml = "=1.2.1"
+# Only the app may depend on these three.
+bevy = { version = "=0.20.1", default-features = false, features = ["3d"] }
+bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
+# egui_plot 0.37 is the release that shares egui 0.36 with bevy_egui 0.43.
+egui_plot = "=0.37.0"
 
 # The physics tests integrate millions of steps; unoptimised they take minutes.
 [profile.dev]

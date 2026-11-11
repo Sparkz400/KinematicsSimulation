@@ -1,0 +1,23 @@
+ui-window-title = Gantry physics simulator
+ui-machine = Machine
+ui-language = Language
+lang-en = English
+lang-de = Deutsch
+ui-pause = Pause
+ui-resume = Resume
+ui-speed = Speed (1 = real time)
+ui-view = View
+ui-view-front = Front
+ui-view-side = Side
+ui-view-top = Top
+ui-view-iso = Angled
+ui-motion = Motion
+ui-move = Move to target
+ui-start-cycle = Start cycle
+ui-stop = Stop after segment
+ui-messages = Messages
+ui-clear = Clear
+ui-effects = Effects
+ui-parameters = Parameters
+ui-scopes = Scopes
+ui-time = Time [s]

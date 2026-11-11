@@ -1,0 +1,13 @@
+[package]
+name = "sim-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
+sim-machines.workspace = true
+toml.workspace = true
+bevy.workspace = true
+bevy_egui.workspace = true
+egui_plot.workspace = true
