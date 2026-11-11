@@ -37,7 +37,9 @@ struct Segment {
 #[derive(Debug, Clone)]
 enum Motion {
     Idle,
-    Moving { mv: Move, start_tick: u64 },
+    /// `tail` is the previous move still finishing while this one has already started (corner
+    /// blending): its remaining distance is added on top.
+    Moving { mv: Move, start_tick: u64, tail: Option<(Move, u64)> },
     Dwell { until_tick: u64 },
     /// Linear interpolation from `from` to `to` between two ticks.
     Following { from: Vec<f64>, to: Vec<f64>, start_tick: u64 },
@@ -51,6 +53,8 @@ pub struct Controller {
     n_profile: u64,
     profile_cycle: f64,
     setpoint_ticks: u64,
+    /// How long before the end of a segment the next one may start; 0 with blending off.
+    blend_time: f64,
     segments: Vec<Segment>,
     motion: Motion,
     /// Index of the cycle segment under way, while the cycle runs.
@@ -63,6 +67,9 @@ pub struct Controller {
     pub set_vel: Vec<f64>,
     pub set_acc: Vec<f64>,
     pub tool_error: Vec<f64>,
+    /// Added to the position setpoint only, not to the feedforward: a test signal for the closed
+    /// loop (step response, frequency response).
+    pub setpoint_offset: Vec<f64>,
     motor_pos: Vec<f64>,
     motor_vel: Vec<f64>,
 }
@@ -84,6 +91,7 @@ impl Controller {
             n_profile: 1,
             profile_cycle: 1.0,
             setpoint_ticks: 1,
+            blend_time: 0.0,
             segments: Vec::new(),
             motion: Motion::Idle,
             cycle: None,
@@ -94,6 +102,7 @@ impl Controller {
             set_vel: vec![0.0; axes],
             set_acc: vec![0.0; axes],
             tool_error: vec![0.0; axes],
+            setpoint_offset: vec![0.0; axes],
             motor_pos: vec![0.0; motors],
             motor_vel: vec![0.0; motors],
         };
@@ -124,6 +133,7 @@ impl Controller {
         let profile_cycle = n_profile as f64 * dt;
         let setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", profile_cycle)?;
         let params = DriveParams::from_config(cfg, dt, n_velocity as f64 * dt)?;
+        let blend_time = if cfg.bool("effects.corner_blending")? { cfg.f64("profile.blend_time_s")?.max(0.0) } else { 0.0 };
         let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
@@ -140,6 +150,7 @@ impl Controller {
         }
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
+        self.blend_time = blend_time;
         Ok(())
     }
 
@@ -153,7 +164,7 @@ impl Controller {
                     return Err(CommandError { key: "error-busy" });
                 }
                 // The tick is filled in when the profile generator picks the move up.
-                self.motion = Motion::Moving { mv: Move::new(&self.set_pos, &target, machine.axes()), start_tick: u64::MAX };
+                self.motion = Motion::Moving { mv: Move::new(&self.set_pos, &target, machine.axes()), start_tick: u64::MAX, tail: None };
             }
             Command::StartCycle => {
                 if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
@@ -216,7 +227,7 @@ impl Controller {
             if step % self.n_velocity == 0 {
                 drive.velocity_loop(&self.params, self.motor_pos[k], self.motor_vel[k]);
             }
-            drive.current_loop(&self.params);
+            drive.current_loop(&self.params, self.motor_vel[k]);
             torque[k] = drive.torque;
         }
     }
@@ -227,53 +238,72 @@ impl Controller {
         if matches!(self.motion, Motion::Idle) {
             self.next_cycle_segment(machine);
         }
-        match &mut self.motion {
+        match std::mem::replace(&mut self.motion, Motion::Idle) {
             Motion::Idle => {
                 self.set_vel.fill(0.0);
                 self.set_acc.fill(0.0);
             }
-            Motion::Moving { mv, start_tick } => {
-                if *start_tick == u64::MAX {
-                    *start_tick = tick;
-                }
-                let t = (tick - *start_tick) as f64 * dt;
+            Motion::Moving { mv, start_tick, mut tail } => {
+                let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
+                let t = (tick - start_tick) as f64 * dt;
                 mv.at(t, &mut self.set_pos, &mut self.set_vel, &mut self.set_acc);
-                if t >= mv.duration() {
-                    self.motion = match self.cycle {
+                if let Some((old, old_start)) = &tail {
+                    // The previous move's remaining way to the corner, on top of the new move.
+                    let n = self.set_pos.len();
+                    let (mut pos, mut vel, mut acc, mut end) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+                    let t_old = (tick - old_start) as f64 * dt;
+                    old.at(t_old, &mut pos, &mut vel, &mut acc);
+                    old.at(f64::INFINITY, &mut end, &mut vec![0.0; n], &mut vec![0.0; n]);
+                    for i in 0..n {
+                        self.set_pos[i] += pos[i] - end[i];
+                        self.set_vel[i] += vel[i];
+                        self.set_acc[i] += acc[i];
+                    }
+                    if t_old >= old.duration() {
+                        tail = None;
+                    }
+                }
+                self.motion = if t >= mv.duration() && tail.is_none() {
+                    match self.cycle {
                         Some(i) => {
                             self.payload_attached = self.segments[i].payload;
                             Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
                         }
                         None => Motion::Idle,
-                    };
-                }
+                    }
+                } else {
+                    match self.blend_into_next(&mv, t, tail.is_some(), machine) {
+                        Some(next) => Motion::Moving { mv: next, start_tick: tick, tail: Some((mv, start_tick)) },
+                        None => Motion::Moving { mv, start_tick, tail },
+                    }
+                };
             }
             Motion::Dwell { until_tick } => {
-                if tick >= *until_tick {
-                    self.motion = Motion::Idle;
+                if tick >= until_tick {
                     self.next_cycle_segment(machine);
+                } else {
+                    self.motion = Motion::Dwell { until_tick };
                 }
             }
             Motion::Following { from, to, start_tick } => {
-                if *start_tick == u64::MAX {
-                    *start_tick = tick;
-                }
+                let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
                 let n = self.setpoint_ticks as f64;
-                let done = ((tick - *start_tick) as f64 / n).min(1.0);
+                let done = ((tick - start_tick) as f64 / n).min(1.0);
                 for i in 0..to.len() {
                     self.set_pos[i] = from[i] + (to[i] - from[i]) * done;
                     self.set_vel[i] = if done < 1.0 { (to[i] - from[i]) / (n * dt) } else { 0.0 };
                 }
                 self.set_acc.fill(0.0);
-                if done >= 1.0 {
-                    self.motion = Motion::Idle;
+                if done < 1.0 {
+                    self.motion = Motion::Following { from, to, start_tick };
                 }
             }
         }
 
         let motors = self.drives.len();
         let (mut pos, mut ahead, mut behind, mut ff) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
-        machine.inverse(&self.set_pos, &mut pos);
+        let offset_pos: Vec<f64> = self.set_pos.iter().zip(&self.setpoint_offset).map(|(p, o)| p + o).collect();
+        machine.inverse(&offset_pos, &mut pos);
         // Motor speed setpoints: the inverse transformation applied a moment ahead and behind.
         let h = 1e-3;
         let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_vel).map(|(p, v)| p + sign * h * v).collect() };
@@ -294,6 +324,31 @@ impl Controller {
         }
     }
 
+    /// Corner blending: the next cycle segment, if it should start now, while `current` still has
+    /// time `t` behind it and its braking ahead. The corner is rounded instead of stopped at.
+    ///
+    /// Only where the machine does not have to stop anyway (no dwell, no gripper action), where no
+    /// axis reverses, and only while both moves are on their ramps, so the speeds add up to no
+    /// more than either cruise speed.
+    fn blend_into_next(&mut self, current: &Move, t: f64, blending_already: bool, machine: &dyn Machine) -> Option<Move> {
+        let i = self.cycle?;
+        let segment = &self.segments[i];
+        if self.blend_time <= 0.0 || self.stopping || blending_already || segment.dwell_ticks > 0 || segment.payload != self.payload_attached {
+            return None;
+        }
+        let next_index = (i + 1) % self.segments.len();
+        let next = Move::new(&segment.target, &self.segments[next_index].target, machine.axes());
+        if current.delta().iter().zip(next.delta()).any(|(a, b)| a * b < 0.0) || next.duration() == 0.0 {
+            return None;
+        }
+        let lead = self.blend_time.min(current.ramp()).min(next.ramp());
+        if t < current.duration() - lead {
+            return None;
+        }
+        self.cycle = Some(next_index);
+        Some(next)
+    }
+
     fn next_cycle_segment(&mut self, machine: &dyn Machine) {
         let Some(last) = self.cycle else { return };
         if self.stopping {
@@ -303,7 +358,7 @@ impl Controller {
         }
         let next = (last + 1) % self.segments.len();
         self.cycle = Some(next);
-        self.motion = Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX };
+        self.motion = Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX, tail: None };
     }
 }
 

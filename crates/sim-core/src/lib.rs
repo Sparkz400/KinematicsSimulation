@@ -11,4 +11,4 @@ pub use config::{Config, ConfigError};
 pub use i18n::Translations;
 pub use integrate::{Rk4, advance};
 pub use machine::{AxisInfo, Machine, MachineEntry, MotorInfo, SignalInfo};
-pub use scene::{Part, Scene, Shape};
+pub use scene::{Label, Part, Scene, Shape};

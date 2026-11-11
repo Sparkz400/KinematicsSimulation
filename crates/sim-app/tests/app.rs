@@ -31,10 +31,17 @@ fn every_machine_runs_in_the_same_app_model() {
         let signals = model.session.signals.len();
         assert!(model.history.iter().all(|row| row.len() == signals));
         // Every signal except time is on exactly one scope.
-        let mut on_scopes: Vec<usize> = model.scopes.iter().flat_map(|s| s.signals.clone()).collect();
+        let mut on_scopes: Vec<usize> = model.scopes.iter().flat_map(|s| s.lines.iter().map(|l| l.signal)).collect();
         on_scopes.sort();
         assert_eq!(on_scopes, (1..signals).collect::<Vec<_>>(), "{}", entry.id);
         assert!(model.scopes.iter().any(|s| s.visible));
+        // Setpoints and commands share a scope with the value they ask for, as dashed references.
+        for (quantity, references) in [("quantity-position", model.session.axes.len()), ("quantity-torque", model.session.motors.len())] {
+            let scope = model.scopes.iter().find(|s| s.quantity_key == quantity).unwrap();
+            assert_eq!(scope.lines.iter().filter(|l| l.reference).count(), references, "{}: {quantity}", entry.id);
+            assert_eq!(scope.lines.iter().filter(|l| !l.reference).count(), references, "{}: {quantity}", entry.id);
+        }
+        assert!(!model.scene.labels.is_empty(), "{}: no live values in the 3D view", entry.id);
         assert_eq!(model.target.len(), model.session.axes.len());
         assert!(model.effects().len() >= 20 && model.param_groups().len() >= 8, "{}", entry.id);
     }
@@ -151,11 +158,23 @@ fn samples(events: &[Event]) -> Vec<&Vec<f64>> {
 }
 
 /// A config in which every effect has something to act on: low pretension so the belt can go
-/// slack, a weak drive so the torque limit is reached.
+/// slack, a weak drive so the torque limit is reached, a low bus voltage so the voltage limit is, a via point so corner blending has a corner.
+/// The machine's default config with one more cycle segment: a pass through the middle of the
+/// workspace without stopping. It gives every machine's cycle a corner that blending can round.
+fn with_via_point(entry: &MachineEntry) -> Config {
+    let cfg = entry.config();
+    let machine = (entry.build)(&cfg).unwrap();
+    let middle: Vec<String> = machine.axes().iter().map(|a| format!("{:?}", 0.5 * (a.min + a.max))).collect();
+    let gripper = cfg.array("cycle.segment").unwrap().last().unwrap().get("payload").unwrap().as_bool().unwrap();
+    let segment = format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
+    Config::parse(&format!("{}{segment}", entry.default_config)).unwrap()
+}
+
 fn demanding(entry: &MachineEntry) -> Config {
-    let mut cfg = entry.config();
+    let mut cfg = with_via_point(entry);
     cfg.set_text("belt.pretension_n = 20.0").unwrap();
     cfg.set_text("drive.peak_torque_nm = 0.3").unwrap();
+    cfg.set_text("drive.bus_voltage_v = 100.0").unwrap();
     cfg
 }
 
@@ -270,4 +289,79 @@ fn the_session_runs_in_real_time_and_can_pause_and_slow_down() {
     session.send(Request::Command(Command::MoveTo(vec![])));
     std::thread::sleep(Duration::from_millis(100));
     assert!(session.drain().iter().any(|e| matches!(e, Event::Refused("error-target-out-of-range", _))));
+}
+
+/// Better traces: a time window, freezing, statistics per trace, readable units and CSV export.
+#[test]
+fn scopes_have_a_window_freeze_statistics_and_export() {
+    use sim_app::model::display_scale;
+    let mut model = Model::new(MACHINES[0], "en");
+    model.command(Command::StartCycle);
+    let start = Instant::now();
+    while model.history.len() < 1500 && start.elapsed() < Duration::from_secs(10) {
+        model.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(model.history.len() >= 1500);
+
+    // The window shows the last second only.
+    model.window_s = 1.0;
+    let rows: Vec<f64> = model.visible_rows().map(|r| r[0]).collect();
+    assert!(rows.len() > 900 && rows.len() <= 1002, "{} rows in a one-second window", rows.len());
+    assert!(rows.last().unwrap() - rows[0] <= 1.0 + 1e-9);
+
+    // Statistics are those of the visible rows.
+    let torque = model.session.signals.iter().position(|s| s.quantity_key == "quantity-torque").unwrap();
+    model.set_frozen(true);
+    let values: Vec<f64> = model.visible_rows().map(|r| r[torque]).collect();
+    let stats = model.stats(torque).unwrap();
+    assert_eq!(stats.min, values.iter().copied().fold(f64::INFINITY, f64::min));
+    assert_eq!(stats.max, values.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    assert!((stats.rms - (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt()).abs() < 1e-12);
+
+    // Frozen traces stay as they are while the simulation runs on.
+    let frozen_end = *rows.last().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    model.poll();
+    assert!(model.visible_rows().last().unwrap()[0] <= frozen_end + 0.2 && model.history.back().unwrap()[0] > model.visible_rows().last().unwrap()[0]);
+
+    // Export writes what the scopes show.
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("traces.csv");
+    model.export_traces(&path);
+    let csv = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(csv.lines().count(), 1 + model.visible_rows().count());
+    assert_eq!(csv.lines().next().unwrap().split(',').count(), model.session.signals.len());
+    assert_eq!(model.messages.last().unwrap().0, "ui-exported");
+    model.set_frozen(false);
+    assert!(model.visible_rows().last().unwrap()[0] > frozen_end);
+
+    // 40 micrometres read as 40 um, not as 0.00004 m.
+    assert_eq!(display_scale(4e-5, "m"), (1e6, "µ"));
+    assert_eq!(display_scale(0.016, "m"), (1e3, "m"));
+    assert_eq!(display_scale(250.0, "rad/s"), (1.0, ""));
+    assert_eq!(display_scale(0.5, ""), (1.0, ""));
+}
+
+/// Tuning help in the app: step and frequency response of an axis, measured in the background
+/// with the parameters as they are, and changing when a gain is changed.
+#[test]
+fn tuning_measures_the_axis_with_the_current_gains() {
+    let mut model = Model::new(MACHINES[0], "en");
+    let measure = |model: &mut Model| {
+        model.run_tuning(0);
+        assert!(model.tuning_running());
+        let start = Instant::now();
+        while model.tuning_running() && start.elapsed() < Duration::from_secs(60) {
+            model.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let tuning = model.tuning.take().expect("the tuning job returned nothing");
+        (tuning.step.rise_time, tuning.bandwidth.unwrap())
+    };
+    let (rise, band) = measure(&mut model);
+    // Kv = 50 1/s: a bandwidth near 8 Hz.
+    assert!(band > 4.0 && band < 16.0 && rise > 0.0, "bandwidth {band} Hz, rise time {rise} s");
+    model.set_param("drive.kv_1_s", toml::Value::Float(100.0));
+    let (faster_rise, wider_band) = measure(&mut model);
+    assert!(faster_rise < 0.8 * rise && wider_band > 1.3 * band, "Kv doubled: {rise} -> {faster_rise} s, {band} -> {wider_band} Hz");
 }

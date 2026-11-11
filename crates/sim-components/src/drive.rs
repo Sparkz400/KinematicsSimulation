@@ -1,5 +1,9 @@
-//! Servo drive: cascaded position (P, the Kv factor), velocity (PI) and current control on the
+//! Servo drive: cascaded position (P, the Kv factor), velocity (PI) and current (PI) control on the
 //! motor's own encoder, with feedforward, measurement effects and torque limits. One switch each.
+//!
+//! The current controller works on the motor winding as a resistance and an inductance with the
+//! back-EMF of the turning rotor: L di/dt = u - R i - ke w, torque = kt i, and |u| limited by the
+//! DC bus. With Kp = L / T and Tn = L / R the current follows its setpoint with time constant T.
 
 use sim_core::{Config, ConfigError};
 use std::f64::consts::TAU;
@@ -14,8 +18,19 @@ pub struct DriveParams {
     /// Feedforward weights; 0 when switched off.
     pub velocity_ff: f64,
     pub torque_ff: f64,
-    /// Fraction of the current error removed per base step (first-order lag).
-    pub current_gain: f64,
+    /// Motor winding: torque per current, resistance, and the share of the current that is left
+    /// after one base step with the terminals shorted, exp(-R dt / L).
+    pub kt: f64,
+    pub resistance: f64,
+    pub winding_decay: f64,
+    /// Back-EMF per speed; 0 when switched off. In SI units it equals the torque constant.
+    pub ke: f64,
+    /// Highest voltage the DC bus allows; infinite when the limit is switched off.
+    pub max_voltage: f64,
+    /// Current controller gains, and its cycle (the base step).
+    pub current_kp: f64,
+    pub current_ki: f64,
+    pub current_cycle: f64,
     pub peak_torque: f64,
     pub rated_speed: f64,
     pub no_load_speed: f64,
@@ -44,13 +59,22 @@ impl DriveParams {
         } else {
             None
         };
+        let (kt, resistance) = (cfg.positive("motor.torque_constant_nm_a")?, cfg.positive("motor.resistance_ohm")?);
+        let current_kp = cfg.positive("drive.current_kp_v_a")?;
         Ok(Self {
+            kt,
+            resistance,
+            winding_decay: (-resistance * dt / cfg.positive("motor.inductance_h")?).exp(),
+            ke: if on("back_emf")? { kt } else { 0.0 },
+            max_voltage: if on("voltage_limit")? { cfg.positive("drive.bus_voltage_v")? } else { f64::INFINITY },
+            current_kp,
+            current_ki: current_kp / cfg.positive("drive.current_tn_s")?,
+            current_cycle: dt,
             kv: cfg.positive("drive.kv_1_s")?,
             kp,
             ki: kp / cfg.positive("drive.velocity_tn_s")?,
             velocity_ff: if on("velocity_feedforward")? { cfg.f64("drive.velocity_feedforward_factor")? } else { 0.0 },
             torque_ff: if on("torque_feedforward")? { cfg.f64("drive.torque_feedforward_factor")? } else { 0.0 },
-            current_gain: 1.0 - (-dt / cfg.positive("drive.current_time_constant_s")?).exp(),
             peak_torque: cfg.positive("drive.peak_torque_nm")?,
             rated_speed: cfg.positive("drive.rated_speed_rad_s")?,
             no_load_speed: cfg.positive("drive.no_load_speed_rad_s")?,
@@ -99,6 +123,10 @@ pub struct Drive {
     pub speed_command: f64,
     pub torque_command: f64,
     pub torque: f64,
+    /// Winding current and the voltage the current controller applies.
+    pub current: f64,
+    pub voltage: f64,
+    current_integral: f64,
     /// Kv times following error, held between position-loop cycles.
     position_part: f64,
     integral: f64,
@@ -118,6 +146,9 @@ impl Drive {
             torque_ff,
             torque_command: torque,
             torque,
+            current: torque / p.kt,
+            voltage: p.resistance * torque / p.kt,
+            current_integral: p.resistance * torque / p.kt,
             integral: torque - p.torque_ff * torque_ff,
             encoder,
             last_encoder: encoder,
@@ -168,9 +199,22 @@ impl Drive {
         }
     }
 
-    /// Current loop as a first-order lag. Runs every base step.
-    pub fn current_loop(&mut self, p: &DriveParams) {
-        self.torque += p.current_gain * (self.torque_command - self.torque);
+    /// Current loop: PI on the winding current, then the winding itself for one base step.
+    pub fn current_loop(&mut self, p: &DriveParams, speed: f64) {
+        let error = self.torque_command / p.kt - self.current;
+        // The drive adds the back-EMF it expects at this speed, as real drives do. Without that the
+        // integrator would have to follow every speed change, at the slow pace of L / R.
+        let wanted = p.current_kp * error + self.current_integral + p.ke * speed;
+        self.voltage = wanted.clamp(-p.max_voltage, p.max_voltage);
+        // Anti-windup: the integrator stops while the bus voltage is used up.
+        if wanted == self.voltage {
+            self.current_integral += p.current_ki * error * p.current_cycle;
+        }
+        // The winding with the voltage held and the back-EMF of the speed at the start of the step:
+        // the current runs towards (u - ke w) / R with the time constant L / R.
+        let settled = (self.voltage - p.ke * speed) / p.resistance;
+        self.current = settled + (self.current - settled) * p.winding_decay;
+        self.torque = p.kt * self.current;
     }
 }
 
@@ -189,7 +233,15 @@ mod tests {
             ki: 8.0,
             velocity_ff: 0.0,
             torque_ff: 0.0,
-            current_gain: 1.0 - (-62.5e-6f64 / 0.25e-3).exp(),
+            kt: 0.45,
+            resistance: 4.0,
+            winding_decay: (-4.0f64 * 62.5e-6 / 0.010).exp(),
+            ke: 0.45,
+            max_voltage: 190.0,
+            // Kp = L / T and Tn = L / R for T = 0.25 ms.
+            current_kp: 40.0,
+            current_ki: 40.0 / 2.5e-3,
+            current_cycle: 62.5e-6,
             peak_torque: 3.8,
             rated_speed: 314.0,
             no_load_speed: 420.0,
@@ -257,14 +309,51 @@ mod tests {
     }
 
     #[test]
-    fn current_loop_is_a_first_order_lag() {
+    fn current_follows_its_setpoint_with_the_tuned_time_constant() {
         let p = params();
-        let mut d = Drive { torque_command: 1.0, ..Drive::default() };
-        // After one time constant (4 steps of 62.5 us at 0.25 ms) the torque is at 63.2 %.
-        for _ in 0..4 {
-            d.current_loop(&p);
+        let mut d = Drive { torque_command: 0.45, ..Drive::default() };
+        // Kp = L / T cancels the winding's own time constant: after T = 0.25 ms (4 steps) the
+        // current is at about 63 % of its 1 A setpoint, and it settles there without overshoot.
+        let mut peak = 0f64;
+        for step in 1..=200 {
+            d.current_loop(&p, 0.0);
+            peak = peak.max(d.current);
+            if step == 4 {
+                assert!((d.current - 0.632).abs() < 0.05, "{} A after one time constant", d.current);
+            }
         }
-        assert!((d.torque - (1.0 - (-1f64).exp())).abs() < 1e-12);
+        assert!((d.current - 1.0).abs() < 1e-4 && peak < 1.01, "ends at {} A, peak {peak} A", d.current);
+        assert!((d.torque - 0.45).abs() < 1e-4 && (d.voltage - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn back_emf_costs_voltage_and_the_bus_limits_torque_at_speed() {
+        let p = params();
+        // At 100 rad/s the same 1 A needs R i + ke w = 4 V + 45 V.
+        let mut d = Drive { torque_command: 0.45, ..Drive::default() };
+        for _ in 0..2000 {
+            d.current_loop(&p, 100.0);
+        }
+        assert!((d.current - 1.0).abs() < 1e-4 && (d.voltage - 49.0).abs() < 1e-3, "{} A, {} V", d.current, d.voltage);
+        // At 400 rad/s the back-EMF is 180 V of the 190 V bus: 10 V / 4 Ohm = 2.5 A is all that is left.
+        let mut d = Drive { torque_command: 3.8, ..Drive::default() };
+        for _ in 0..2000 {
+            d.current_loop(&p, 400.0);
+        }
+        assert!((d.current - 2.5).abs() < 1e-6 && d.voltage == 190.0, "{} A, {} V", d.current, d.voltage);
+        // The integrator did not wind up meanwhile: with the setpoint gone the current is back within 2 ms.
+        d.torque_command = 0.0;
+        for _ in 0..32 {
+            d.current_loop(&p, 400.0);
+        }
+        assert!(d.current.abs() < 0.2, "{} A", d.current);
+        // Without the limit and without back-EMF the full current flows at any speed.
+        let free = DriveParams { ke: 0.0, max_voltage: f64::INFINITY, ..params() };
+        let mut d = Drive { torque_command: 3.8, ..Drive::default() };
+        for _ in 0..2000 {
+            d.current_loop(&free, 400.0);
+        }
+        assert!((d.torque - 3.8).abs() < 1e-6);
     }
 
     #[test]
@@ -308,7 +397,7 @@ mod tests {
         let mut d = Drive::at_rest(&p, 2.0, 0.14, 0.137);
         d.position_loop(&p, 2.0);
         d.velocity_loop(&p, 2.0, 0.0);
-        d.current_loop(&p);
+        d.current_loop(&p, 0.0);
         assert!((d.torque - 0.14).abs() < 1e-12 && (d.torque_command - 0.14).abs() < 1e-12);
     }
 }

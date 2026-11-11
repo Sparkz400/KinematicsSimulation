@@ -3,8 +3,8 @@
 //! translation files; no text for the user is written here.
 
 use bevy_egui::egui::{Color32, ComboBox, DragValue, ScrollArea, Slider, Ui};
-use egui_plot::{Legend, Line, Plot};
-use sim_app::model::Model;
+use egui_plot::{Legend, Line, LineStyle, Plot};
+use sim_app::model::{Model, display_scale};
 use sim_components::Command;
 use sim_core::MachineEntry;
 use sim_machines::{LANGUAGES, MACHINES};
@@ -22,6 +22,13 @@ pub enum Action {
     Command(Command),
     Param(String, Value),
     Scope(usize, bool),
+    /// Seconds of history the scopes show.
+    Window(f64),
+    Freeze(bool),
+    Export,
+    TuningAxis(usize),
+    RunTuning,
+    CloseTuning,
     ClearMessages,
 }
 
@@ -135,9 +142,49 @@ pub fn controls(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     });
 }
 
-/// The scopes: one plot per quantity, one line per axis or motor, all built from the signal list.
+/// One colour per axis or motor, the same in every scope.
+const PALETTE: [Color32; 6] = [
+    Color32::from_rgb(235, 110, 70),
+    Color32::from_rgb(80, 160, 240),
+    Color32::from_rgb(110, 200, 120),
+    Color32::from_rgb(230, 190, 70),
+    Color32::from_rgb(190, 130, 230),
+    Color32::from_rgb(90, 210, 210),
+];
+
+fn number(value: f64) -> String {
+    format!("{value:.4}")
+}
+
+/// The scopes: one plot per quantity with actual values solid and their setpoints dashed, one
+/// colour per axis or motor, a shared time axis and cursor, readable units, and what each trace
+/// did in the window. All of it is built from the signal list.
 pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
+    let signals = &model.session.signals;
+    // Owners in order of first appearance; their place decides the colour.
+    let mut owners: Vec<&str> = Vec::new();
+    for s in signals {
+        if !owners.contains(&s.owner_key.as_str()) {
+            owners.push(&s.owner_key);
+        }
+    }
+    let color = |signal: usize| PALETTE[owners.iter().position(|o| *o == signals[signal].owner_key).unwrap_or(0) % PALETTE.len()];
+
+    ui.horizontal(|ui| {
+        let mut window = model.window_s;
+        if ui.add(DragValue::new(&mut window).speed(0.1).range(0.2..=60.0)).changed() {
+            actions.push(Action::Window(window));
+        }
+        ui.label(tr("ui-window"));
+        let mut frozen = model.frozen.is_some();
+        if ui.checkbox(&mut frozen, tr("ui-freeze")).changed() {
+            actions.push(Action::Freeze(frozen));
+        }
+        if ui.button(tr("ui-export")).clicked() {
+            actions.push(Action::Export);
+        }
+    });
     ScrollArea::vertical().show(ui, |ui| {
         ui.collapsing(tr("ui-scopes"), |ui| {
             for (i, scope) in model.scopes.iter().enumerate() {
@@ -147,16 +194,125 @@ pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 }
             }
         });
-        // At most about two thousand points per line, however long the history is.
-        let stride = (model.history.len() / 2000).max(1);
+        tuning(ui, model, actions);
+
+        let rows: Vec<&Vec<f64>> = model.visible_rows().collect();
+        // At most about three thousand points per line, however long the window is.
+        let stride = (rows.len() / 3000).max(1);
         for scope in model.scopes.iter().filter(|s| s.visible) {
-            ui.label(format!("{} [{}]", tr(&scope.quantity_key), scope.unit));
-            Plot::new((&scope.quantity_key, &scope.unit)).height(150.0).legend(Legend::default()).x_axis_label(tr("ui-time")).show(ui, |plot| {
-                for &signal in &scope.signals {
-                    let points: Vec<[f64; 2]> = model.history.iter().step_by(stride).map(|row| [row[0], row[signal]]).collect();
-                    plot.line(Line::new(tr(&model.session.signals[signal].owner_key), points));
+            let stats: Vec<_> = scope.lines.iter().map(|l| model.stats(l.signal)).collect();
+            let peak = stats.iter().flatten().fold(0f64, |p, s| p.max(s.min.abs()).max(s.max.abs()));
+            let (scale, prefix) = display_scale(peak, &scope.unit);
+            let unit = format!("{prefix}{}", scope.unit);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.strong(format!("{} [{unit}]", tr(&scope.quantity_key)));
+                if scope.lines.iter().any(|l| l.reference) {
+                    ui.weak(tr("ui-dashed"));
                 }
             });
+            Plot::new((&scope.quantity_key, &scope.unit))
+                .height(190.0)
+                .legend(Legend::default())
+                .link_axis("scopes", [true, false])
+                .link_cursor("scopes", [true, false])
+                .x_axis_label(tr("ui-time"))
+                .show(ui, |plot| {
+                    for line in &scope.lines {
+                        let points: Vec<[f64; 2]> = rows.iter().step_by(stride).map(|row| [row[0], row[line.signal] * scale]).collect();
+                        let info = &signals[line.signal];
+                        // A setpoint carries the name of its actual value: one legend entry switches both.
+                        let drawn = Line::new(tr(&info.owner_key), points).color(color(line.signal));
+                        plot.line(if line.reference { drawn.style(LineStyle::dashed_dense()).width(1.2) } else { drawn.width(1.8) });
+                    }
+                });
+            // What each actual trace did in the window.
+            for (line, stats) in scope.lines.iter().zip(&stats).filter(|(l, _)| !l.reference) {
+                let Some(s) = stats else { continue };
+                ui.horizontal(|ui| {
+                    ui.colored_label(color(line.signal), tr(&signals[line.signal].owner_key));
+                    let values = [("ui-stat-min", s.min), ("ui-stat-max", s.max), ("ui-stat-span", s.max - s.min), ("ui-stat-rms", s.rms)];
+                    for (key, value) in values {
+                        ui.weak(tr(key));
+                        ui.monospace(number(value * scale));
+                    }
+                    ui.weak(&unit);
+                });
+            }
         }
     });
+}
+
+/// Tuning help: step response and closed-loop frequency response of one axis's position loop,
+/// measured on a copy of the machine with the parameters as they are now.
+fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    {
+        ui.horizontal(|ui| {
+            ui.label(tr("ui-tuning"));
+            for (i, axis) in model.session.axes.iter().enumerate() {
+                if ui.selectable_label(i == model.tuning_axis, tr(axis.key)).clicked() {
+                    actions.push(Action::TuningAxis(i));
+                }
+            }
+            if model.tuning_running() {
+                ui.spinner();
+            } else if ui.button(tr("ui-tuning-run")).clicked() {
+                actions.push(Action::RunTuning);
+            }
+            if model.tuning.is_some() && ui.button(tr("ui-clear")).clicked() {
+                actions.push(Action::CloseTuning);
+            }
+        });
+        let Some(result) = &model.tuning else { return };
+        let Some(axis) = model.session.axes.get(result.axis) else { return };
+        let (scale, prefix) = display_scale(result.step.size, axis.unit);
+        ui.strong(format!("{} · {} [{prefix}{}]", tr(axis.key), tr("ui-tuning-step"), axis.unit));
+        ui.horizontal(|ui| {
+            let values = [
+                ("ui-tuning-rise", result.step.rise_time * 1e3, tr("unit-ms")),
+                ("ui-tuning-overshoot", result.step.overshoot * 100.0, tr("unit-percent")),
+                ("ui-tuning-settling", result.step.settling_time * 1e3, tr("unit-ms")),
+                ("ui-tuning-bandwidth", result.bandwidth.unwrap_or(f64::NAN), tr("unit-hz")),
+            ];
+            for (key, value, unit) in values {
+                ui.weak(tr(key));
+                ui.monospace(format!("{value:.1} {unit}"));
+            }
+        });
+        Plot::new("tuning-step").height(150.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
+            let size = result.step.size * scale;
+            let end = result.step.trace.last().map_or(0.0, |p| p.0);
+            plot.line(Line::new(tr("quantity-position-setpoint"), vec![[0.0, 0.0], [0.0, size], [end, size]]).style(LineStyle::dashed_dense()).color(Color32::GRAY));
+            let points: Vec<[f64; 2]> = result.step.trace.iter().map(|(t, y)| [*t, y * scale]).collect();
+            plot.line(Line::new(tr("quantity-position"), points).color(PALETTE[1]).width(1.8));
+        });
+        // Frequency on a logarithmic axis: the plot runs over log10(f) and the ticks show f.
+        let hertz = |mark: egui_plot::GridMark, _: &std::ops::RangeInclusive<f64>| format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string();
+        ui.strong(format!("{} · {} [{}]", tr(axis.key), tr("ui-tuning-gain"), tr("unit-db")));
+        Plot::new("tuning-gain").height(130.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            let limit = [result.response.first(), result.response.last()].map(|p| [p.map_or(0.0, |p| p.frequency.log10()), -3.0]);
+            plot.line(Line::new(format!("-3 {}", tr("unit-db")), limit.to_vec()).style(LineStyle::dashed_dense()).color(Color32::GRAY));
+            let points: Vec<[f64; 2]> = result.response.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
+            plot.line(Line::new(tr("ui-tuning-gain"), points).color(PALETTE[0]).width(1.8));
+        });
+        ui.strong(format!("{} · {} [°], {} [{}]", tr(axis.key), tr("ui-tuning-phase"), tr("ui-tuning-frequency"), tr("unit-hz")));
+        Plot::new("tuning-phase").height(110.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            // Unwrapped, so that a lag beyond half a turn does not jump to the top of the plot.
+            let mut last = 0.0;
+            let points: Vec<[f64; 2]> = result
+                .response
+                .iter()
+                .map(|p| {
+                    let mut phase = p.phase_deg;
+                    while phase > last + 180.0 {
+                        phase -= 360.0;
+                    }
+                    last = phase;
+                    [p.frequency.log10(), phase]
+                })
+                .collect();
+            plot.line(Line::new(tr("ui-tuning-phase"), points).color(PALETTE[2]).width(1.8));
+        });
+    }
 }

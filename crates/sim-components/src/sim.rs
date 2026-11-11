@@ -113,6 +113,8 @@ impl Sim {
                 ("speed", "rad/s"),
                 ("torque", "N m"),
                 ("torque-command", "N m"),
+                ("current", "A"),
+                ("voltage", "V"),
                 ("speed-command", "rad/s"),
                 ("following-error", "rad"),
             ] {
@@ -137,7 +139,7 @@ impl Sim {
             out.extend([pos[i], vel[i], c.set_pos[i], c.set_vel[i], c.set_acc[i], c.tool_error[i]]);
         }
         for (k, d) in c.drives.iter().enumerate() {
-            out.extend([angle[k], speed[k], d.torque, d.torque_command, d.speed_command, d.following_error]);
+            out.extend([angle[k], speed[k], d.torque, d.torque_command, d.current, d.voltage, d.speed_command, d.following_error]);
         }
         self.machine.signals(&self.state, &self.torque, out);
     }

@@ -4,7 +4,7 @@
 use super::*;
 use sim_core::testkit::{DT, PulseRun};
 use sim_components::Sim;
-use sim_components::analysis::{analyse_cycle, frequency_sweep};
+use sim_components::analysis::{analyse_cycle, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response};
 use sim_core::{Rk4, advance};
 
 fn machine(mut cfg: Config, edit: &[&str]) -> SingleAxis {
@@ -284,4 +284,44 @@ fn frequency_sweep_shows_the_belt_resonance() {
     let rigid = 1.0 / (j_motor_side * std::f64::consts::TAU * far_below.frequency);
     assert!((far_below.gain - rigid).abs() < 0.03 * rigid, "gain {} at {} Hz, rigid {rigid}", far_below.gain, far_below.frequency);
     assert!(lowest.gain * lowest.frequency < 0.1 * far_below.gain * far_below.frequency, "no clear dip");
+}
+
+/// Tuning: with a fast velocity loop the position loop is a first-order lag with time constant
+/// 1 / Kv. The step response and the frequency response must both say so.
+#[test]
+fn step_and_frequency_response_show_the_position_loop_gain() {
+    // Gains well below the velocity loop's bandwidth, where the first-order picture holds.
+    for kv in [25.0, 50.0] {
+        let mut cfg = ideal_rigid();
+        cfg.set_text(&format!("drive.kv_1_s = {kv:?}")).unwrap();
+        let step = step_response(&ENTRY, &cfg, 0, 0.001, 0.4).unwrap();
+        // By hand: 63.2 % after 1 / Kv, 10 % to 90 % in ln(9) / Kv.
+        let at_tau = step.trace.iter().find(|(t, _)| *t >= 1.0 / kv).unwrap().1 / step.size;
+        assert!((at_tau - 0.632).abs() < 0.05, "Kv {kv}: {at_tau} of the step after 1/Kv");
+        let rise = 9f64.ln() / kv;
+        assert!((step.rise_time - rise).abs() < 0.1 * rise, "Kv {kv}: rise time {} s, by hand {rise} s", step.rise_time);
+        assert!(step.overshoot < 0.05 && step.settling_time < 6.0 / kv, "Kv {kv}: {} overshoot, settled after {} s", step.overshoot, step.settling_time);
+        assert!((step.trace.last().unwrap().1 - step.size).abs() < 1e-3 * step.size);
+
+        // By hand: -3 dB and -45 degrees at Kv / 2 pi; gain 1 far below.
+        let corner = kv / std::f64::consts::TAU;
+        let response = closed_loop_response(&ENTRY, &cfg, 0, &log_spaced(corner / 8.0, corner * 4.0, 25), 0.0005).unwrap();
+        let measured = bandwidth(&response).unwrap();
+        assert!((measured - corner).abs() < 0.1 * corner, "Kv {kv}: bandwidth {measured} Hz, by hand {corner} Hz");
+        assert!((response[0].gain - 1.0).abs() < 0.02, "Kv {kv}: gain {} at {} Hz", response[0].gain, response[0].frequency);
+        let at_corner = closed_loop_response(&ENTRY, &cfg, 0, &[corner], 0.0005).unwrap()[0];
+        assert!((at_corner.phase_deg + 45.0).abs() < 10.0, "Kv {kv}: phase {} at the corner", at_corner.phase_deg);
+    }
+}
+
+#[test]
+fn too_much_gain_shows_as_overshoot_in_the_step_response() {
+    let step = |edit: &str| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(edit).unwrap();
+        step_response(&ENTRY, &cfg, 0, 0.002, 0.4).unwrap()
+    };
+    let (tame, hot) = (step("drive.kv_1_s = 50.0"), step("drive.kv_1_s = 400.0"));
+    assert!(hot.overshoot > tame.overshoot + 0.1, "overshoot {} at Kv 400, {} at Kv 50", hot.overshoot, tame.overshoot);
+    assert!(hot.rise_time < tame.rise_time);
 }

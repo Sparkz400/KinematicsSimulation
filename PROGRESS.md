@@ -60,8 +60,8 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
   in `reference/requirements.txt`). Agreement is within 0.2 % of the travel.
 - **Placeholder mechanics:** belt EA 5e5 N, pretension 300 N, gearbox backlash 3 arcmin, friction and
   damping values are estimates. See the two `default.toml` files.
-- **Drive placeholders:** Kv 50 1/s, velocity loop Kp 0.08 N m s/rad with Tn 10 ms, current loop as a
-  0.25 ms lag, peak torque 3.8 N m, full torque up to 314 rad/s falling to zero at 420 rad/s, 20-bit
+- **Drive placeholders:** Kv 50 1/s, velocity loop Kp 0.08 N m s/rad with Tn 10 ms, current loop tuned
+  to 0.25 ms (see below), peak torque 3.8 N m, full torque up to 314 rad/s falling to zero at 420 rad/s, 20-bit
   encoder. Both motors use the same drive settings. Untuned for any real machine.
 - **Feedforward model:** torque feedforward is the rigid inverse dynamics the machine supplies (inertia
   and gravity). Friction is not in it, so some following error stays while accelerating.
@@ -94,11 +94,34 @@ criterion and its Validation-table checks exist as automated tests and `cargo te
 - **Phase 0 leftovers:** the phase 0 commit had no translation files, no dependency check and no window.
   The first two are added in phase 1; the window comes with the app in phase 4.
 
+## Added after phase 6 (on request)
+
+| Addition | Tests |
+| --- | --- |
+| R-L winding with PI current controller, back-EMF and bus voltage limit, replacing the first-order lag | `current_follows_its_setpoint_with_the_tuned_time_constant`, `back_emf_costs_voltage_and_the_bus_limits_torque_at_speed` in `sim-components/src/drive.rs` |
+| Corner blending in the cycle, as an option (`effects.corner_blending`, off by default) | `corner_blending_shortens_the_cycle_and_still_reaches_every_dwell`, `blended_default_cycles_stay_within_the_axis_limits` in `sim-machines/tests/control.rs` |
+| Tuning help: step response and closed-loop frequency response, in the CLI (`step`, `bode`, `tuning`) and in the app | `step_and_frequency_response_show_the_position_loop_gain`, `too_much_gain_shows_as_overshoot_in_the_step_response` in `machine-single-axis/src/tests.rs`; `tuning_measures_the_axis_with_the_current_gains` in `sim-app/tests/app.rs` |
+| 3D view: pulleys, motor shafts and idlers turn, belt teeth travel around the pulleys, live labels with motor speed in rpm (U/min) and axis position, floor and shadows | `the_scene_shows_pulleys_turning_teeth_travelling_and_motor_speeds` in `sim-machines/tests/suite.rs`; `belt_teeth_keep_their_place_on_the_belt_when_the_path_changes` in `sim-core/src/scene.rs` |
+| Scopes: setpoints dashed in the same plot as the actual value, one colour per axis or motor, shared time axis and cursor, time window up to 60 s, freeze, min/max/span/RMS per trace, automatic mm and µm, CSV export | `scopes_have_a_window_freeze_statistics_and_export` in `sim-app/tests/app.rs` |
+
+- **Winding placeholders:** torque constant 0.45 N m/A, 4 Ohm, 10 mH, bus limit 190 V at the winding. With
+  Kp = L / T = 40 V/A and Tn = L / R = 2.5 ms the current follows its setpoint with T = 0.25 ms, as the
+  old lag did. The drive adds the expected back-EMF to its voltage (as real drives do); the
+  torque-speed curve of the drive settings is kept as a separate limit.
+- **Corner blending** starts the next cycle segment while the current one is still braking and adds the
+  two. It applies only where the machine need not stop (no dwell, no gripper action), where no axis
+  reverses, and only on the ramps. On lift-traverse-lower cycles every axis stays within its limits;
+  for other shapes of cycle the sum of two segments on one axis is not checked against the limits.
+- **Tuning measurements** put the test signal on the position setpoint only, without feedforward, so
+  they show the feedback loops. The step is 1 mm, so with friction on it also shows stiction.
+- **Belt teeth in the 3D view** are drawn every 40 mm for visibility, not at the 5 mm tooth pitch.
+
 ## Blocked or not verifiable here
 
 - **Phase 4, a person at the 3D view:** the window was started twice with the built-in screenshot hook
   (`SIM_APP_SCREENSHOT=file.png`, optional `SIM_APP_LANG=de`), and both screenshots were inspected: the
-  machine, the panels in English and German and the live scopes render correctly. Not checked by anyone:
+  machine, the panels in English and German and the live scopes render correctly. After the rework of
+  the 3D view and the scopes three more screenshots were inspected the same way. Not checked by anyone:
   dragging the orbit camera, the view presets, the parameter and effect panels by mouse, and how the
   motion looks. Those need a person at the screen. The screenshot run is not part of `cargo test`,
   because it opens a window.

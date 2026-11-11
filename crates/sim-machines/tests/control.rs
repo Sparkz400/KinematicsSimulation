@@ -13,6 +13,17 @@ fn config(entry: &MachineEntry, edit: &[&str]) -> Config {
     cfg
 }
 
+/// The machine's default config with one more cycle segment: a pass through the middle of the
+/// workspace without stopping. It gives every machine's cycle a corner that blending can round.
+fn with_via_point(entry: &MachineEntry) -> Config {
+    let cfg = entry.config();
+    let machine = (entry.build)(&cfg).unwrap();
+    let middle: Vec<String> = machine.axes().iter().map(|a| format!("{:?}", 0.5 * (a.min + a.max))).collect();
+    let gripper = cfg.array("cycle.segment").unwrap().last().unwrap().get("payload").unwrap().as_bool().unwrap();
+    let segment = format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
+    Config::parse(&format!("{}{segment}", entry.default_config)).unwrap()
+}
+
 /// A long move of the first axis, the others staying where they start.
 fn long_move(sim: &Sim) -> Vec<f64> {
     let axis = &sim.machine.axes()[0];
@@ -252,18 +263,22 @@ fn loop_cycles_must_be_whole_multiples_of_the_base_step() {
     }
 }
 
-/// One switch per effect, and each one does something: flipping it changes the traces of a move.
+/// One switch per effect, and each one does something: flipping it changes the traces of the cycle.
 #[test]
 fn every_effect_switch_changes_the_traces() {
     for entry in MACHINES {
         // Low pretension, so that accelerating takes a belt section to zero tension and the slack
-        // switch matters; a weak drive, so that the torque limit matters.
-        let base = config(entry, &["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3"]);
+        // switch matters; a weak drive and a low bus voltage, so that the torque and voltage limits
+        // matter; a via point, so that corner blending matters.
+        let mut base = with_via_point(entry);
+        for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 100.0"] {
+            base.set_text(e).unwrap();
+        }
         let traces = |cfg: &Config| {
             let mut sim = Sim::new(entry, cfg).unwrap();
-            sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+            sim.command(Command::StartCycle).unwrap();
             let (mut all, mut sample) = (Vec::new(), Vec::new());
-            sim.run(0.4, |s| {
+            sim.run(4.0, |s| {
                 if s.step % 16 == 0 {
                     s.sample(&mut sample);
                     all.extend(sample.iter().map(|v| v.to_bits()));
@@ -279,5 +294,94 @@ fn every_effect_switch_changes_the_traces() {
             flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
             assert!(traces(&flipped) != reference, "{}: flipping {effect} changed nothing", entry.id);
         }
+    }
+}
+
+/// What one pass of the cycle looks like on the setpoint side.
+struct CyclePass {
+    duration: f64,
+    /// How often every axis setpoint came to rest.
+    stops: u32,
+    /// Highest setpoint speed and acceleration per axis, relative to the axis limit.
+    peak_vel: f64,
+    peak_acc: f64,
+    /// For every segment that dwells: how close the setpoint came to its target.
+    dwell_miss: f64,
+}
+
+fn cycle_pass(entry: &MachineEntry, cfg: &Config) -> CyclePass {
+    let mut sim = Sim::new(entry, cfg).unwrap();
+    let axes = sim.machine.axes().to_vec();
+    let segments: Vec<(Vec<f64>, f64)> = cfg
+        .array("cycle.segment")
+        .unwrap()
+        .iter()
+        .map(|s| (s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect(), s["dwell_s"].as_float().unwrap()))
+        .collect();
+    let mut closest = vec![f64::INFINITY; segments.len()];
+    sim.command(Command::StartCycle).unwrap();
+    let (mut starts, mut last, mut pass) = (Vec::new(), None, CyclePass { duration: 0.0, stops: 0, peak_vel: 0.0, peak_acc: 0.0, dwell_miss: 0.0 });
+    let mut moving = false;
+    while starts.len() < 3 {
+        sim.step();
+        assert!(sim.time() < 60.0, "{}: the cycle does not repeat", entry.id);
+        let now = sim.control.cycle_segment();
+        if now != last && now == Some(0) {
+            starts.push(sim.time());
+        }
+        last = now;
+        if starts.len() != 2 {
+            continue;
+        }
+        let c = &sim.control;
+        let now_moving = c.set_vel.iter().any(|v| *v != 0.0);
+        if moving && !now_moving {
+            pass.stops += 1;
+        }
+        moving = now_moving;
+        for (i, axis) in axes.iter().enumerate() {
+            pass.peak_vel = pass.peak_vel.max(c.set_vel[i].abs() / axis.max_vel);
+            pass.peak_acc = pass.peak_acc.max(c.set_acc[i].abs() / axis.max_acc);
+        }
+        for (k, (target, _)) in segments.iter().enumerate() {
+            let miss = target.iter().zip(&c.set_pos).map(|(t, p)| (t - p).abs()).fold(0.0, f64::max);
+            closest[k] = closest[k].min(miss);
+        }
+    }
+    pass.duration = starts[2] - starts[1];
+    pass.dwell_miss = segments.iter().zip(&closest).filter(|((_, dwell), _)| *dwell > 0.0).map(|(_, c)| *c).fold(0.0, f64::max);
+    pass
+}
+
+/// Corner blending rounds the corners where the machine need not stop: the cycle gets shorter,
+/// the axes stop less often, and the places where it dwells are still reached exactly.
+#[test]
+fn corner_blending_shortens_the_cycle_and_still_reaches_every_dwell() {
+    for entry in MACHINES {
+        let stopping = with_via_point(entry);
+        let mut blending = stopping.clone();
+        blending.set_text("effects.corner_blending = true").unwrap();
+        let (off, on) = (cycle_pass(entry, &stopping), cycle_pass(entry, &blending));
+        assert!(on.duration < off.duration - 0.05, "{}: {} s with blending, {} s without", entry.id, on.duration, off.duration);
+        assert!(on.stops < off.stops, "{}: {} stops with blending, {} without", entry.id, on.stops, off.stops);
+        assert!(off.dwell_miss < 1e-12 && on.dwell_miss < 1e-12, "{}: a dwell position was missed by {} m", entry.id, on.dwell_miss);
+        // A longer lead time than the ramps allow changes nothing more: blending stays on the ramps.
+        let mut greedy = blending.clone();
+        greedy.set_text("profile.blend_time_s = 10.0").unwrap();
+        let greedy = cycle_pass(entry, &greedy);
+        assert!(greedy.dwell_miss < 1e-12 && greedy.duration <= on.duration + 1e-9, "{}", entry.id);
+    }
+}
+
+/// On the machines' own cycles the blended setpoints stay within every axis limit.
+#[test]
+fn blended_default_cycles_stay_within_the_axis_limits() {
+    for entry in MACHINES {
+        let mut cfg = entry.config();
+        cfg.set_text("effects.corner_blending = true").unwrap();
+        cfg.set_text("profile.blend_time_s = 10.0").unwrap();
+        let pass = cycle_pass(entry, &cfg);
+        assert!(pass.peak_vel <= 1.0 + 1e-9 && pass.peak_acc <= 1.0 + 1e-9, "{}: {} of v max, {} of a max", entry.id, pass.peak_vel, pass.peak_acc);
+        assert!(pass.dwell_miss < 1e-12, "{}", entry.id);
     }
 }

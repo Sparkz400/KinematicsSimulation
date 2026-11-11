@@ -97,3 +97,29 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         assert!(table.lines().skip(1).all(|l| l.split(',').all(|v| v.parse::<f64>().is_ok_and(f64::is_finite))));
     }
 }
+
+#[test]
+fn step_bode_and_tuning_write_csv_for_every_machine() {
+    for entry in MACHINES {
+        let axes = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
+        let table = |args: &[&str]| {
+            let out = cli(args);
+            assert!(out.status.success(), "{}", text(&out.stderr));
+            text(&out.stdout)
+        };
+        let step = table(&["step", entry.id, "--time", "0.2"]);
+        assert_eq!(step.lines().next().unwrap(), "time_s,setpoint,response");
+        assert_eq!(step.lines().count(), 2 + 800);
+        let bode = table(&["bode", entry.id, "--from", "2", "--to", "50", "--count", "4"]);
+        assert_eq!(bode.lines().next().unwrap(), "frequency_hz,gain,gain_db,phase_deg");
+        assert_eq!(bode.lines().count(), 5);
+        let tuning = table(&["tuning", entry.id]);
+        assert_eq!(tuning.lines().count(), 1 + axes);
+        for row in tuning.lines().skip(1) {
+            let cells: Vec<&str> = row.split(',').collect();
+            let band: f64 = cells[4].parse().unwrap();
+            // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
+            assert!(band > 4.0 && band < 20.0, "{}: {row}", entry.id);
+        }
+    }
+}

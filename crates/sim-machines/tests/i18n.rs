@@ -15,6 +15,12 @@ fn every_key_has_an_entry_in_every_language() {
         for signal in sim_components::Sim::new(entry, &config).unwrap().signal_infos() {
             keys.extend([signal.owner_key, signal.quantity_key]);
         }
+        let mut scene = sim_core::Scene::default();
+        sim_components::Sim::new(entry, &config).unwrap().scene(&mut scene);
+        assert!(!scene.labels.is_empty(), "{}: the scene shows no live values", entry.id);
+        for label in &scene.labels {
+            keys.extend([label.owner_key.to_string(), label.unit_key.to_string()]);
+        }
         for (path, _) in config.leaves() {
             let (group, leaf) = path.rsplit_once('.').unwrap_or(("", &path));
             keys.push(if group == "effects" { format!("effect-{leaf}") } else { format!("param-{leaf}") });

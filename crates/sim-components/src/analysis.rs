@@ -126,3 +126,93 @@ pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequen
 pub fn log_spaced(from: f64, to: f64, points: usize) -> Vec<f64> {
     (0..points).map(|i| from * (to / from).powf(i as f64 / (points.max(2) - 1) as f64)).collect()
 }
+
+// ---------------------------------------------------------------------------------------------
+// Tuning: how the closed position loop answers a test signal on its setpoint.
+
+/// The answer of one axis to a small step of its position setpoint.
+#[derive(Debug, Clone)]
+pub struct StepResponse {
+    pub size: f64,
+    /// (time since the step, tool position relative to where it was), four times per millisecond.
+    pub trace: Vec<(f64, f64)>,
+    /// Time from 10 % to 90 % of the step.
+    pub rise_time: f64,
+    /// Highest excursion beyond the step, as a fraction of it.
+    pub overshoot: f64,
+    /// After this time the position stays within 2 % of the step.
+    pub settling_time: f64,
+}
+
+/// Tool position of one axis, after letting the machine come to rest at its start pose.
+fn settled(entry: &MachineEntry, cfg: &Config, axis: usize) -> Result<(Sim, f64), ConfigError> {
+    let mut sim = Sim::new(entry, cfg)?;
+    if axis >= sim.machine.axes().len() {
+        return Err(ConfigError::Invalid("axis".into()));
+    }
+    sim.run(0.05, |_| {});
+    let position = tool_position(&sim, axis);
+    Ok((sim, position))
+}
+
+fn tool_position(sim: &Sim, axis: usize) -> f64 {
+    let n = sim.machine.axes().len();
+    let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+    sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+    pos[axis]
+}
+
+/// Steps the position setpoint of one axis by `size` (without feedforward, so only the feedback
+/// loops answer) and records the tool position. With friction on, a small step shows stiction too.
+pub fn step_response(entry: &MachineEntry, cfg: &Config, axis: usize, size: f64, seconds: f64) -> Result<StepResponse, ConfigError> {
+    let (mut sim, start) = settled(entry, cfg, axis)?;
+    sim.control.setpoint_offset[axis] = size;
+    let (t0, every) = (sim.time(), (0.25e-3 / sim.dt).round().max(1.0) as u64);
+    let mut trace = vec![(0.0, 0.0)];
+    sim.run(seconds, |s| {
+        if s.step % every == 0 {
+            trace.push((s.time() - t0, tool_position(s, axis) - start));
+        }
+    });
+    let relative = |fraction: f64| trace.iter().find(|(_, y)| y / size >= fraction).map_or(f64::NAN, |(t, _)| *t);
+    let overshoot = trace.iter().map(|(_, y)| y / size - 1.0).fold(0.0, f64::max);
+    let settling_time = trace.iter().rev().find(|(_, y)| (y / size - 1.0).abs() > 0.02).map_or(0.0, |(t, _)| *t);
+    Ok(StepResponse { size, rise_time: relative(0.9) - relative(0.1), overshoot, settling_time, trace })
+}
+
+/// Closed-loop frequency response of the position loop of one axis: a sine on the position
+/// setpoint, measured at the tool. Gain is tool amplitude over setpoint amplitude.
+pub fn closed_loop_response(entry: &MachineEntry, cfg: &Config, axis: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<SweepPoint>, ConfigError> {
+    let mut out = Vec::new();
+    for &frequency in frequencies {
+        let (mut sim, start) = settled(entry, cfg, axis)?;
+        let (omega, t0, dt) = (std::f64::consts::TAU * frequency, sim.time(), sim.dt);
+        // Whole periods: at least 0.3 s to settle, then at least 0.3 s to measure.
+        let period = 1.0 / frequency;
+        let whole = |seconds: f64| ((seconds / period).ceil().max(4.0) * period / dt).round() as u64;
+        let (settle_steps, measure_steps) = (whole(0.3), whole(0.3));
+        let (mut in_phase, mut quadrature) = (0.0, 0.0);
+        for step in 0..settle_steps + measure_steps {
+            sim.control.setpoint_offset[axis] = amplitude * (omega * (sim.time() - t0)).sin();
+            sim.step();
+            if step >= settle_steps {
+                let (t, y) = (sim.time() - t0, tool_position(&sim, axis) - start);
+                in_phase += y * (omega * t).sin();
+                quadrature += y * (omega * t).cos();
+            }
+        }
+        let (a, b) = (2.0 * in_phase / measure_steps as f64, 2.0 * quadrature / measure_steps as f64);
+        out.push(SweepPoint { frequency, gain: a.hypot(b) / amplitude, phase_deg: b.atan2(a).to_degrees() });
+    }
+    Ok(out)
+}
+
+/// The -3 dB bandwidth of a closed-loop response: where the gain first falls below 1 / sqrt(2),
+/// interpolated between the measured points on the logarithmic frequency axis.
+pub fn bandwidth(points: &[SweepPoint]) -> Option<f64> {
+    let limit = std::f64::consts::FRAC_1_SQRT_2;
+    let below = points.iter().position(|p| p.gain < limit)?;
+    let (a, b) = (points.get(below.checked_sub(1)?)?, &points[below]);
+    let share = (a.gain - limit) / (a.gain - b.gain);
+    Some(a.frequency * (b.frequency / a.frequency).powf(share))
+}

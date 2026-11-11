@@ -20,7 +20,7 @@
 //! Belt forces: Fx = T3 - T1, Fz = 2 T2 - T1 - T3, pulley A: r (T1 - T2), pulley B: r (T2 - T3).
 
 use sim_components::mech::{Belt, Gearbox, Lugre, Ripple, SectionForce, ShaftFriction, ToothMesh};
-use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo};
+use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, Label, MotorInfo, Part, Scene, Shape, SignalInfo};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "t-gantry",
@@ -453,45 +453,87 @@ impl Machine for TGantry {
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {
-        let (x, z) = (s[0], s[1]);
-        let (sx, sz) = (self.axes[0].max, self.axes[1].max);
+        use sim_core::scene::{belt, drive_unit, idler, on_circle};
+        use std::f64::consts::{FRAC_PI_4, TAU};
+        let (x, z, r, ratio) = (s[0], s[1], self.r, self.gearbox.ratio);
+        let (sx, sz, span) = (self.axes[0].max, self.axes[1].max, self.span_min);
+        let (mut rotor, mut rotor_speed) = ([0.0; 2], [0.0; 2]);
+        self.motor_state(s, &mut rotor, &mut rotor_speed);
+        let pulley = if self.elastic { [s[A], s[A + 1]] } else { rotor.map(|p| p / ratio) };
         // Belt colour: tension relative to pretension, per section.
         let tension = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 3] };
         let shade = tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
-        // The carriage runs on the beam at height 0; the Z axis hangs through it and rises with z.
-        let (x0, cw) = (self.span_min, 0.16);
-        let cx = x0 + x + if self.elastic { s[Q] } else { 0.0 };
-        let z_len = sz + 2.0 * self.span_min;
-        let (top, bottom) = (self.span_min + z, z - sz - self.span_min);
-        let belt = [0.1, 0.1, 0.1];
-        let part = |id, shape, pos, color| Part { id, shape, pos, color, highlight: 0.0 };
-        let span = |id, section: usize, from: [f64; 2], to: [f64; 2]| Part {
-            id,
-            shape: Shape::Segment { to: [to[0], -0.05, to[1]], width: 0.025 },
-            pos: [from[0], -0.05, from[1]],
-            color: belt,
-            highlight: shade[section],
-        };
-        let (left, right, end) = (cx - cw / 2.0, cx + cw / 2.0, 2.0 * x0 + sx);
+
+        // The belt runs in one plane in front of the beam; the motors sit behind it at both ends.
+        // The carriage rides on the beam at height 0; the Z axis hangs through it and rises with z.
+        let y = -0.05;
+        let (end, cx, half) = (2.0 * span + sx, span + x, 0.03);
+        let (left, right, top, bottom) = (cx - half, cx + half, span + z, z - sz - span);
+        let floor = -(sz + 2.0 * span + 0.2);
+        let part = Part::new;
+        out.labels.clear();
         out.parts.clear();
         out.parts.extend([
-            part("beam", Shape::Box { size: [end, 0.08, 0.08] }, [end / 2.0, 0.04, 0.0], [0.6, 0.6, 0.65]),
-            part("motor-a", Shape::Cylinder { radius: 0.04, length: 0.12 }, [0.0, 0.0, 0.0], [0.9, 0.45, 0.1]),
-            part("motor-b", Shape::Cylinder { radius: 0.04, length: 0.12 }, [end, 0.0, 0.0], [0.1, 0.45, 0.9]),
-            part("carriage", Shape::Box { size: [cw, 0.06, 0.16] }, [cx, -0.03, 0.0], [0.3, 0.3, 0.35]),
-            part("z-axis", Shape::Box { size: [0.06, 0.06, z_len] }, [cx, -0.09, (top + bottom) / 2.0], [0.75, 0.75, 0.8]),
-            span("belt-1", 0, [left, top], [left, 0.02]),
-            span("belt-2", 0, [left, 0.02], [0.0, 0.02]),
-            span("belt-3", 1, [0.0, -0.02], [left, -0.02]),
-            span("belt-4", 1, [left, -0.02], [left, bottom]),
-            span("belt-5", 1, [right, bottom], [right, -0.02]),
-            span("belt-6", 1, [right, -0.02], [end, -0.02]),
-            span("belt-7", 2, [end, 0.02], [right, 0.02]),
-            span("belt-8", 2, [right, 0.02], [right, top]),
+            part("beam", Shape::Box { size: [end - 0.14, 0.07, 0.09] }, [end / 2.0, 0.045, 0.0], [0.62, 0.64, 0.68]),
+            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
+            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [end - 0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
+            part("carriage", Shape::Box { size: [0.16, 0.02, 0.16] }, [cx, -0.02, 0.0], [0.2, 0.22, 0.26]),
+            part("z-axis", Shape::Box { size: [0.04, 0.03, top - bottom] }, [cx, y, (top + bottom) / 2.0], [0.78, 0.8, 0.84]),
+            part("clamp", Shape::Box { size: [0.09, 0.035, 0.03] }, [cx, y, top + 0.015], [0.85, 0.3, 0.2]),
+            part("flange", Shape::Box { size: [0.07, 0.05, 0.02] }, [cx, y, bottom - half - 0.012], [0.3, 0.3, 0.33]),
         ]);
         if self.payload() > 0.0 {
-            out.parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, -0.09, bottom - 0.05], [0.2, 0.7, 0.3]));
+            out.parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, y, bottom - half - 0.072], [0.2, 0.7, 0.3]));
         }
+        // Positive pulley angles turn clockwise seen from the front (the top of the pulley moves right).
+        drive_unit(&mut out.parts, [0.0, 0.0], y, r, -pulley[0], -rotor[0], [0.9, 0.45, 0.1]);
+        drive_unit(&mut out.parts, [end, 0.0], y, r, -pulley[1], -rotor[1], [0.1, 0.45, 0.9]);
+        // Carriage idlers turn the belt from the beam into the Z axis; the idler at the bottom of
+        // the Z axis turns it around. Each rolls with the belt that passes it.
+        let ri = 0.012;
+        for (side, belt_travel) in [(-1.0, x + z), (1.0, z - x)] {
+            let ix = cx + side * (half + ri);
+            idler(&mut out.parts, [ix, r + ri], y, ri, side * belt_travel / ri);
+            idler(&mut out.parts, [ix, -r - ri], y, ri, side * belt_travel / ri);
+        }
+        idler(&mut out.parts, [cx, bottom], y, half - 0.002, -(x - 2.0 * z) / half);
+
+        // The belt path from the clamp on the left to the clamp on the right. Its length does not
+        // depend on the pose, so teeth at fixed belt length travel around the pulleys by themselves.
+        let (a, b, bend) = ([0.0, 0.0], [end, 0.0], [cx, bottom]);
+        let path = [
+            [left, top],
+            [left, r],
+            [0.0, r],
+            on_circle(a, r, 3.0 * FRAC_PI_4),
+            on_circle(a, r, 4.0 * FRAC_PI_4),
+            on_circle(a, r, 5.0 * FRAC_PI_4),
+            [0.0, -r],
+            [left, -r],
+            [left, bottom],
+            on_circle(bend, half, 5.0 * FRAC_PI_4),
+            on_circle(bend, half, 6.0 * FRAC_PI_4),
+            on_circle(bend, half, 7.0 * FRAC_PI_4),
+            [right, bottom],
+            [right, -r],
+            [end, -r],
+            on_circle(b, r, -FRAC_PI_4),
+            on_circle(b, r, 0.0),
+            on_circle(b, r, FRAC_PI_4),
+            [end, r],
+            [right, r],
+            [right, top],
+        ];
+        // Strips up to the middle of each motor pulley belong to the section before it.
+        belt(&mut out.parts, &path, y, 0.025, 0.04, |i| shade[if i < 4 { 0 } else if i < 16 { 1 } else { 2 }]);
+
+        let rpm = |speed: f64| speed * 60.0 / TAU;
+        out.labels.extend([
+            Label { pos: [0.0, y, 0.11], owner_key: self.motors[0].key, value: rpm(rotor_speed[0]), unit_key: "unit-rpm", decimals: 0 },
+            Label { pos: [end, y, 0.11], owner_key: self.motors[1].key, value: rpm(rotor_speed[1]), unit_key: "unit-rpm", decimals: 0 },
+            Label { pos: [cx, y, top + 0.08], owner_key: self.axes[0].key, value: x, unit_key: "unit-m", decimals: 3 },
+            Label { pos: [cx + 0.12, y, bottom], owner_key: self.axes[1].key, value: z, unit_key: "unit-m", decimals: 3 },
+        ]);
     }
 }
 

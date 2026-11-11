@@ -8,7 +8,7 @@
 //! Belt force on the carriage: T2 - T1. Belt torque on the pulley: r (T1 - T2).
 
 use sim_components::mech::{Belt, Gearbox, Lugre, Ripple, SectionForce, ShaftFriction, ToothMesh};
-use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo};
+use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, Label, MotorInfo, Part, Scene, Shape, SignalInfo};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "single-axis",
@@ -305,31 +305,59 @@ impl Machine for SingleAxis {
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {
-        let (x0, end) = (self.span_min, 2.0 * self.span_min + self.axes[0].max);
-        let cx = x0 + s[0];
+        use sim_core::scene::{belt, drive_unit, idler, on_circle};
+        use std::f64::consts::{FRAC_PI_4, TAU};
+        let (x, r, ratio, span) = (s[0], self.r, self.gearbox.ratio, self.span_min);
+        let (mut rotor, mut rotor_speed) = ([0.0], [0.0]);
+        self.motor_state(s, &mut rotor, &mut rotor_speed);
+        let pulley = if self.elastic { s[1] } else { rotor[0] / ratio };
         let tension = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 2] };
         let shade = tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
-        let part = |id, shape, pos, color| Part { id, shape, pos, color, highlight: 0.0 };
-        let span = |id, section: usize, from: f64, to: f64, z: f64| Part {
-            id,
-            shape: Shape::Segment { to: [to, -0.05, z], width: 0.025 },
-            pos: [from, -0.05, z],
-            color: [0.1, 0.1, 0.1],
-            highlight: shade[section],
-        };
+
+        // The belt loop runs in one plane in front of the beam, the motor sits behind it at the left end.
+        let y = -0.05;
+        let (end, cx, floor) = (2.0 * span + self.axes[0].max, span + x, -0.4);
+        let part = Part::new;
+        out.labels.clear();
         out.parts.clear();
         out.parts.extend([
-            part("beam", Shape::Box { size: [end, 0.08, 0.08] }, [end / 2.0, 0.04, 0.0], [0.6, 0.6, 0.65]),
-            part("motor", Shape::Cylinder { radius: 0.04, length: 0.12 }, [0.0, 0.0, 0.0], [0.9, 0.45, 0.1]),
-            part("idler", Shape::Cylinder { radius: 0.02, length: 0.04 }, [end, -0.05, 0.0], [0.5, 0.5, 0.5]),
-            part("carriage", Shape::Box { size: [0.16, 0.06, 0.1] }, [cx, -0.03, 0.05], [0.3, 0.3, 0.35]),
-            span("belt-1", 0, 0.0, cx, 0.02),
-            span("belt-2", 1, cx, end, 0.02),
-            span("belt-3", 1, end, 0.0, -0.02),
+            part("beam", Shape::Box { size: [end - 0.14, 0.07, 0.09] }, [end / 2.0, 0.045, 0.0], [0.62, 0.64, 0.68]),
+            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
+            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [end - 0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
+            part("carriage", Shape::Box { size: [0.16, 0.05, 0.03] }, [cx, -0.03, 0.06], [0.2, 0.22, 0.26]),
+            part("clamp", Shape::Box { size: [0.06, 0.035, 0.03] }, [cx, y, r + 0.017], [0.85, 0.3, 0.2]),
         ]);
         if self.payload_attached && self.m_payload > 0.0 {
-            out.parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, -0.03, 0.15], [0.2, 0.7, 0.3]));
+            out.parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, -0.03, 0.125], [0.2, 0.7, 0.3]));
         }
+        // A positive pulley angle moves the carriage to the right: the top of the pulley moves
+        // right, which is clockwise seen from the front.
+        drive_unit(&mut out.parts, [0.0, 0.0], y, r, -pulley, -rotor[0], [0.9, 0.45, 0.1]);
+        idler(&mut out.parts, [end, 0.0], y, r, -x / r);
+
+        // The belt loop, starting and ending at the clamp on the carriage.
+        let (a, b) = ([0.0, 0.0], [end, 0.0]);
+        let path = [
+            [cx, r],
+            [0.0, r],
+            on_circle(a, r, 3.0 * FRAC_PI_4),
+            on_circle(a, r, 4.0 * FRAC_PI_4),
+            on_circle(a, r, 5.0 * FRAC_PI_4),
+            [0.0, -r],
+            [end, -r],
+            on_circle(b, r, -FRAC_PI_4),
+            on_circle(b, r, 0.0),
+            on_circle(b, r, FRAC_PI_4),
+            [end, r],
+            [cx, r],
+        ];
+        // Strips up to the middle of the motor pulley belong to the section straight to the carriage.
+        belt(&mut out.parts, &path, y, 0.025, 0.04, |i| shade[if i < 3 { 0 } else { 1 }]);
+
+        out.labels.extend([
+            Label { pos: [0.0, y, 0.11], owner_key: self.motors[0].key, value: rotor_speed[0] * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 },
+            Label { pos: [cx, y, 0.22], owner_key: self.axes[0].key, value: x, unit_key: "unit-m", decimals: 3 },
+        ]);
     }
 }
 

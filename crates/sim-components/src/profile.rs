@@ -45,6 +45,11 @@ impl SCurve {
         4.0 * self.tj + 2.0 * self.ta + self.tv
     }
 
+    /// Time to accelerate to cruise speed, which is also the time to brake from it.
+    pub fn ramp(&self) -> f64 {
+        2.0 * self.tj + self.ta
+    }
+
     /// (position, velocity, acceleration, jerk) at time t.
     pub fn at(&self, t: f64) -> (f64, f64, f64, f64) {
         if t >= self.duration() {
@@ -93,6 +98,14 @@ impl Move {
 
     pub fn duration(&self) -> f64 {
         self.curve.duration()
+    }
+
+    pub fn ramp(&self) -> f64 {
+        self.curve.ramp()
+    }
+
+    pub fn delta(&self) -> &[f64] {
+        &self.delta
     }
 
     pub fn at(&self, t: f64, pos: &mut [f64], vel: &mut [f64], acc: &mut [f64]) {

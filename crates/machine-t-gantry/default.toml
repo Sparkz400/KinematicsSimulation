@@ -33,6 +33,9 @@ velocity_filter = true
 torque_filter = true
 notch_filter = false
 torque_limit = true
+corner_blending = false
+back_emf = true
+voltage_limit = true
 
 [geometry]
 pulley_radius_m = 0.02
@@ -85,6 +88,10 @@ ripple_fraction = 0.02
 ripple_order = 24.0
 cogging_nm = 0.01
 cogging_order = 24.0
+# Winding, as seen by the current controller. The back-EMF constant equals the torque constant.
+torque_constant_nm_a = 0.45
+resistance_ohm = 4.0
+inductance_h = 0.010
 
 [gearbox]
 ratio = 5.0
@@ -126,7 +133,11 @@ velocity_kp_nm_s_rad = 0.08
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
-current_time_constant_s = 0.25e-3
+# Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
+current_kp_v_a = 40.0
+current_tn_s = 2.5e-3
+# Highest voltage the DC bus allows at the winding.
+bus_voltage_v = 190.0
 peak_torque_nm = 3.8
 # Full torque up to the rated speed, falling to zero at the no-load speed (voltage limit).
 rated_speed_rad_s = 314.0
@@ -141,6 +152,9 @@ notch_bandwidth_hz = 20.0
 cycle_s = 1.0e-3
 # Setpoints from the PLC are interpolated over this interval.
 setpoint_interval_s = 10.0e-3
+# With effects.corner_blending on: how long before the end of a cycle segment the next one may
+# start. Applies where the machine need not stop: no dwell, no gripper action, no axis reversing.
+blend_time_s = 0.15
 
 [start]
 pose = [0.1, 0.35]

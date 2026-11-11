@@ -1,7 +1,7 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
 //! Every message comes from the translation files; see `cli-usage` there for the commands.
 
-use sim_components::analysis::{analyse_cycle, frequency_sweep, log_spaced};
+use sim_components::analysis::{analyse_cycle, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
@@ -79,6 +79,9 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("run") => run(args, tr),
         Some("analyze") => analyze(args, tr),
         Some("sweep") => sweep(args),
+        Some("step") => step(args),
+        Some("bode") => bode(args),
+        Some("tuning") => tuning(args),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -167,6 +170,50 @@ fn sweep(args: &Args) -> Result<(), Failure> {
     writeln!(out, "frequency_hz,gain_rad_s_per_nm,phase_deg").map_err(io)?;
     for p in points {
         writeln!(out, "{:.4},{:.6e},{:.3}", p.frequency, p.gain, p.phase_deg).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+fn number(args: &Args, name: &str, default: f64) -> Result<f64, Failure> {
+    args.number(name).map(|v| v.unwrap_or(default))
+}
+
+/// `step <machine>`: the answer of one axis to a small step of its position setpoint.
+fn step(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let response = step_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "time_s,setpoint,response").map_err(io)?;
+    for (t, y) in &response.trace {
+        writeln!(out, "{t:.6},{:.9e},{y:.9e}", response.size).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `bode <machine>`: closed-loop frequency response of the position loop of one axis.
+fn bode(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let frequencies = log_spaced(number(args, "--from", 1.0)?, number(args, "--to", 200.0)?, number(args, "--count", 40.0)? as usize);
+    let points = closed_loop_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "frequency_hz,gain,gain_db,phase_deg").map_err(io)?;
+    for p in points {
+        writeln!(out, "{:.4},{:.6e},{:.3},{:.3}", p.frequency, p.gain, 20.0 * p.gain.log10(), p.phase_deg).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `tuning <machine>`: one line per axis with what the step and frequency responses say.
+fn tuning(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let axes: Vec<&str> = (entry.build)(&cfg)?.axes().iter().map(|a| a.id).collect();
+    let mut out = output(args, "--out")?;
+    writeln!(out, "axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz").map_err(io)?;
+    for (i, axis) in axes.iter().enumerate() {
+        let step = step_response(entry, &cfg, i, number(args, "--size", 0.001)?, 0.5)?;
+        let response = closed_loop_response(entry, &cfg, i, &log_spaced(1.0, 200.0, 30), number(args, "--amplitude", 0.0005)?)?;
+        let band = bandwidth(&response).map_or(String::new(), |f| format!("{f:.3}"));
+        writeln!(out, "{axis},{:.5},{:.4},{:.5},{band}", step.rise_time, step.overshoot, step.settling_time).map_err(io)?;
     }
     out.flush().map_err(io)
 }
