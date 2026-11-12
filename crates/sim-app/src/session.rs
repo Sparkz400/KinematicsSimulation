@@ -116,8 +116,9 @@ impl Runner {
                 match self.sim.command(command) {
                     Err(e) => events.push(Event::Refused(e.key, String::new())),
                     Ok(()) if path || cycle => self.start_trail(if path { self.sim.tool_point() } else { None }, events),
-                    // Any other command ends the path: what the machine does next is not part of it.
-                    Ok(()) => self.recording = false,
+                    // Another command ends the path only if it ends the trajectory (drives off). A stop after the
+                    // segment or an enable is taken while it runs and leaves it running.
+                    Ok(()) => self.recording &= self.sim.control.busy(),
                 }
             }
             Request::Reconfigure(cfg) => {

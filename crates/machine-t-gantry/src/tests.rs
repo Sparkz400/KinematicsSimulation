@@ -642,7 +642,8 @@ fn the_fit_tells_the_two_axes_apart() {
     }
 }
 
-/// The circle of `path_error_on_a_circle_matches_the_hand_calculation`, given as two full turns and timed by
+/// The circle of `path_error_on_a_circle_matches_the_hand_calculation`, given as two full turns (after a `line`
+/// to the start, which a full turn as the first piece needs) and timed by
 /// the path planner instead of by hand. With both axes limited to 0.25 m/s the planner runs the circle of
 /// radius 50 mm at that speed, which is the 5 rad/s of the hand calculation, so the path error and the
 /// distance behind the setpoint are the same as there.
@@ -663,7 +664,7 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
         cfg.set_text(e).unwrap();
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
-    let turns = sim_components::path::parse("arc,0.55,0.25,0.5,0.25,ccw\narc,0.55,0.25,0.5,0.25,ccw").unwrap();
+    let turns = sim_components::path::parse("line,0.55,0.25\narc,0.55,0.25,0.5,0.25,ccw\narc,0.55,0.25,0.5,0.25,ccw").unwrap();
     let points = sim.plan_path(&turns, false).unwrap();
     // Two turns at 0.25 m/s take 2.51 s; the planner adds the two ramps, and every pose is on the circle.
     let (radius, w) = (0.05, 0.25 / 0.05);

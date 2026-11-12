@@ -11,8 +11,8 @@
 //! ```
 //!
 //! `cw` and `ccw` are seen with the first axis to the right and the second upwards. An arc that ends on the end
-//! of the piece before it is a full turn; as the first piece, one that ends within 0.1 mm of where the machine
-//! stands (see `ARC_SLACK`). Spline pieces that follow one another form one curve through all their points (see
+//! of the piece before it is a full turn. As the first piece an arc has to end at least 1 mm from where the
+//! machine stands (see `FIRST_ARC`). Spline pieces that follow one another form one curve through all their points (see
 //! `spline`); it leaves the line or arc before it in that piece's direction and ends in the direction the
 //! line or arc after it starts with. Arcs and splines need a machine with two axes. Empty lines and lines
 //! starting with `#` are skipped.
@@ -245,13 +245,17 @@ pub fn deviation(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: 
     Ok(geometry(axes, start, pieces, tolerance)?.1)
 }
 
-/// For an arc that is the first piece: how far its end may be off the circle through its start, and how near
-/// its start an end counts as a full turn. A path starts at the setpoint of the machine at rest, which is where
-/// the motors stand: under belt stretch and gear twist up to 0.1 mm from the pose the file was written for (the
-/// controller's `SETPOINT_SLACK`; 12 and 46 um on a gantry holding its Z axis against gravity). So a first arc
-/// shorter than this cannot be told from a full turn and is run as one; a file that means the short arc
-/// states its start with a `line` to it first, after which the arc is no longer the first piece.
+/// For an arc that is the first piece: how far its end may be off the circle through its start. A path starts
+/// at the setpoint of the machine at rest, which is where the motors stand: under belt stretch and gear twist up
+/// to 0.1 mm from the pose the file was written for (the controller's `SETPOINT_SLACK`; 12 and 46 um on a gantry
+/// holding its Z axis against gravity).
 const ARC_SLACK: f64 = 1e-4;
+/// A first arc has to end at least this far from where the machine stands. Nearer, a full turn (whose end is
+/// up to `ARC_SLACK` from there) cannot be told from a short arc (a 130 um arc ran as a full turn), so neither
+/// is guessed: the path is refused, and the file states the start with a `line` to it first, after which the
+/// arc is no longer the first piece. With a margin over `ARC_SLACK`, so that a first arc that is run is at
+/// most a tenth longer or shorter than the one the file means.
+const FIRST_ARC: f64 = 1e-3;
 /// For every later arc: how far the stated end may be off the circle through the stated end before it.
 const ARC_TOLERANCE: f64 = 1e-5;
 
@@ -314,14 +318,17 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
                 // The arc starts where the path stands and takes its radius from there. What it is, a full turn
                 // or by which angle it turns, is told from the points the file states: the end stated before
                 // it and its own. Only a first piece has none before it and is told from where the machine
-                // stands, with the slack that needs.
-                let (from, slack, same) = match stated { Some(p) => (&p[..], ARC_TOLERANCE, 1e-9), None => (&here[..], ARC_SLACK, ARC_SLACK) };
+                // stands, with the slack that needs; too near to there it is not told at all (`FIRST_ARC`).
+                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], ARC_SLACK) };
                 if !(radius > 1e-6 && (distance(to, centre) - distance(from, centre)).abs() < slack) {
                     return bad;
                 }
+                if stated.is_none() && distance(to, from) < FIRST_ARC {
+                    return Err(CommandError { key: "error-path-first-arc" });
+                }
                 let angle = |p: &[f64]| (p[1] - centre[1]).atan2(p[0] - centre[0]);
                 let turn = if *clockwise { -1.0 } else { 1.0 };
-                let full = distance(to, from) < same;
+                let full = distance(to, from) < 1e-9;
                 let sweep = if full { std::f64::consts::TAU } else { (turn * (angle(to) - angle(from))).rem_euclid(std::f64::consts::TAU) };
                 Geo::Arc { centre: [centre[0], centre[1]], radius, from_angle: angle(&here), turn, length: sweep * radius }
             }
@@ -769,12 +776,10 @@ mod tests {
         // wrong number of positions cannot be laid out.
         let refused = |start: &[f64], text: &str| plan(&axes()[..start.len()], start, &parse(text).unwrap(), 1e-3, 0.0).unwrap_err().key;
         assert_eq!(refused(&[0.5, 0.35], "arc,0.6,0.26,0.5,0.25,cw"), "error-path");
-        // A start up to 0.1 mm off the circle (the setpoint of a machine at rest) is run, as an arc or as a full
-        // turn, whichever way it is off; one a millimetre off is not.
-        for (text, length) in [("arc,0.3,0.35,0.2,0.35,cw", std::f64::consts::PI * 0.1), ("arc,0.1,0.35,0.2,0.35,cw", std::f64::consts::TAU * 0.1), ("arc,0.1,0.35,0.2,0.35,ccw", std::f64::consts::TAU * 0.1)] {
-            let geo = given(&[0.0999876, 0.3500458], &parse(text).unwrap()).unwrap().0;
-            assert!((geo[0].length() - length).abs() < 1e-4, "{text}: {} m", geo[0].length());
-        }
+        // A start up to 0.1 mm off the circle (the setpoint of a machine at rest) is run; one a millimetre off
+        // is not.
+        let geo = given(&[0.0999876, 0.3500458], &parse("arc,0.3,0.35,0.2,0.35,cw").unwrap()).unwrap().0;
+        assert!((geo[0].length() - std::f64::consts::PI * 0.1).abs() < 1e-4, "{} m", geo[0].length());
         assert_eq!(refused(&[0.101, 0.35], "arc,0.3,0.35,0.2,0.35,cw"), "error-path");
         assert_eq!(refused(&[0.5], "arc,0.6,0.25,0.5,0.25,cw"), "error-path");
         assert_eq!(refused(&[0.5, 0.35], "line,0.6"), "error-path");
@@ -788,10 +793,15 @@ mod tests {
     /// that only the machine's rest setpoint needs. Around (0.3, 0.25) with r = 0.1 m, from the top:
     /// (a) after a line, an arc of 0.8 mrad (chord 80 um) is 80 um long and the path stays above z = 0.3499
     /// (it went down to 0.15); an arc back to the line's end is still a full turn, 0.6283 m.
-    /// (b) As the first piece an arc of 0.5 mrad from where the machine stands is a full turn by the stated
-    /// rule; with its start stated by a line first it is the 50 um arc, also from a setpoint 47 um off.
+    /// (b) As the first piece an arc that ends within 1 mm of where the machine stands is refused, because a
+    /// full turn cannot be told from a short arc there: a 130 um arc written from the start pose (0.1, 0.35)
+    /// ran as a full turn from the rest setpoint 47 um off it. So are the full turn and an arc of 0.5 mrad; a
+    /// first arc of 2 mm is run as that. With its start stated by a line first, each is what the file says:
+    /// the arc of 130 um or 50 um, also from a setpoint 47 um off, and the full turn.
     /// (c) A later arc whose end is 90 um off its circle is refused (it ended 90 um short, unsaid); one 8 um
-    /// off is run and the 8 um are reported, on their own and on top of what transition curves take.
+    /// off is run and the 8 um are reported, on their own and on top of what transition curves take. Four
+    /// quarter turns around one centre, each stated 9 um further out than the one before, end 36 um off: every
+    /// arc keeps the radius the path has, so the offsets add up, and the sum is what is reported.
     #[test]
     fn a_short_arc_is_not_a_full_turn_and_an_arc_off_its_end_is_reported() {
         let (axes, top) = (axes(), vec![0.3, 0.35]);
@@ -804,7 +814,16 @@ mod tests {
         assert_eq!(deviation(&axes, &[0.1, 0.35], &short, 0.0).unwrap(), 0.0);
         assert!((lengths(&[0.1, 0.35], &[Piece::Line(top.clone()), arc(0.0, 0.1)])[1] - std::f64::consts::TAU * 0.1).abs() < 1e-12);
 
-        assert!((lengths(&top, &[arc(5e-4, 0.1)])[0] - std::f64::consts::TAU * 0.1).abs() < 1e-12);
+        let (pose, rest) = (vec![0.1, 0.35], [0.0999876, 0.3500458]);
+        let up = |by: f64| Piece::Arc { to: vec![0.2 - 0.1 * by.cos(), 0.35 + 0.1 * by.sin()], centre: vec![0.2, 0.35], clockwise: true };
+        for (start, first) in [(&rest[..], up(1.3e-3)), (&rest[..], up(0.0)), (&pose[..], up(0.0)), (&top[..], arc(5e-4, 0.1)), (&top[..], arc(9.9e-3, 0.1))] {
+            assert_eq!(deviation(&axes, start, &[first.clone()], 0.0).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
+        }
+        assert!((lengths(&rest, &[up(0.02)])[0] - 2e-3).abs() < 1e-4);
+        for (by, length) in [(1.3e-3, 1.3e-4), (0.0, std::f64::consts::TAU * 0.1)] {
+            let stated = lengths(&rest, &[Piece::Line(pose.clone()), up(by)]);
+            assert!(stated.len() == 2 && (stated[1] - length).abs() < 1e-7, "{stated:?}");
+        }
         assert!((lengths(&top, &[Piece::Line(top.clone()), arc(5e-4, 0.1)])[0] - 5e-5).abs() < 1e-12);
         let sagged = lengths(&[0.300012, 0.350046], &[Piece::Line(top.clone()), arc(5e-4, 0.1)]);
         assert!(sagged.len() == 2 && (sagged[1] - 5e-5).abs() < 1e-12, "{sagged:?}");
@@ -813,6 +832,9 @@ mod tests {
         assert_eq!(deviation(&axes, &[0.1, 0.35], &off_by(-9e-5), 0.0).unwrap_err().key, "error-path");
         let reported = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 0.0).unwrap();
         assert!((reported - 8e-6).abs() < 1e-12, "{reported} m reported");
+        let spiral: Vec<Piece> = std::iter::once(Piece::Line(top.clone())).chain((1..=4).map(|k| arc(k as f64 * std::f64::consts::FRAC_PI_2, 0.1 + 9e-6 * k as f64))).collect();
+        let added = deviation(&axes, &[0.1, 0.35], &spiral, 0.0).unwrap();
+        assert!((added - 3.6e-5).abs() < 1e-12, "{added} m reported");
         let blended = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 1e-4).unwrap();
         assert!((blended - 1.08e-4).abs() < 1e-6,"{blended} m reported with transition curves");
     }

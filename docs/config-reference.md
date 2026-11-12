@@ -332,7 +332,7 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 
 | Key | In | Unit | Meaning | Judged by | Source in the shipped configs |
 | --- | --- | --- | --- | --- | --- |
-| `belt_max_tension_n` | T E S | N | Allowable belt tension. E: 2160 N. Festo does not publish it; from Optibelt's data sheets for 5 mm pitch steel-cord polyurethane belts (72 N per mm of width, at 30 mm) | `belt-tension` | placeholder (T S), estimate (E) |
+| `belt_max_tension_n` | T E S | N | Allowable belt tension. E: 990 N. Festo does not publish it. Festo states the 5 mm pitch, the steel cords and the 30 mm width, not the tooth profile, and belt makers' figures differ by profile: about 72 N per mm of width for AT5 (Optibelt), about 33 N per mm for T5 (Megadyne Megalinear). The weaker class is taken: 33 N/mm x 30 mm. The makers' figures are from search summaries of their data sheets, which were not read | `belt-tension` | placeholder (T S), estimate (E) |
 | `belt_min_tension_n` | T E S | N | Lowest tension allowed. Below it the teeth can jump | `belt-slack` | choice (0) |
 | `settling_tolerance_m` | T E S | m | How far the tool may be from its target in the second half of a dwell | `settling` | choice |
 | `pulley_max_torque_nm` | E | N m | Allowable torque at the pulley. Also caps the peak torque of a motor by name | `pulley-torque` | datasheet (Festo: 12.5 N m) |

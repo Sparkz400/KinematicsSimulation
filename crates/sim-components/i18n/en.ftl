@@ -166,6 +166,7 @@ error-trace-column = The trace has no column { $arg }.
 param-torque_reserve = Time-optimal path: share of the torque-speed curve used
 param-path_tolerance_m = Path: allowed deviation for transition curves [m]
 error-path = The path cannot be laid out: every point needs one position per axis, an arc needs two axes and has to end on the circle through its start, and a spline needs two axes and via points it can pass without turning back on the spot.
+error-path-first-arc = The path starts with an arc that ends less than 1 mm from where the machine stands. There a full turn cannot be told from a short arc. State the start first with a `line` to it; the arc is then judged against that point.
 error-path-range = The path leaves the travel range. An arc or a spline can do so even with all its given points inside: a spline swings past its via points.
 error-path-torque = The motors cannot hold or move the load somewhere on the path within the torque reserve.
 error-trace-row = This line of the trace is not all numbers: { $arg }

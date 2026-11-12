@@ -338,7 +338,7 @@ braking-resistor-peak,a,213.7,3000,ok,185.9,228.6,ok
 dc-link-overvoltage,a,770.0,820.0,ok,708.6,790.0,ok
 ...
 settling,,0.00003505,0.0001000,ok,0.00003164,0.00004055,ok
-belt-tension,,558.4,2160,ok,458.4,658.3,ok
+belt-tension,,558.4,990.0,ok,458.4,658.3,ok
 belt-slack,,239.1,0,ok,139.1,339.1,ok
 gearbox-radial-load,,1005,2000,ok,805.1,1205,ok
 guide-load,,185.3,2000,ok,177.3,286.6,ok
@@ -354,15 +354,15 @@ Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung 
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 check,motor,value,limit,result,low,high,worst_case,pass_share
 motor-peak,a,0.3251,1.000,ok,0.3063,0.3791,ok,1.000
-motor-thermal,a,7.764,100.0,ok,7.303,9.353,ok,1.000
+motor-thermal,a,7.764,100.0,ok,7.310,9.353,ok,1.000
 pulley-torque,a,3.405,12.50,ok,3.170,3.992,ok,1.000
 dc-link-energy,a,9.943,9.943,ok,4.812,29.92,ok,1.000
-braking-resistor-continuous,a,8.859,100.0,ok,0.1610,14.76,ok,1.000
-braking-resistor-peak,a,213.7,3000,ok,22.17,240.7,ok,1.000
-dc-link-overvoltage,a,770.0,820.0,ok,657.4,789.9,ok,1.000
+braking-resistor-continuous,a,8.859,100.0,ok,0.1327,14.76,ok,1.000
+braking-resistor-peak,a,213.7,3000,ok,20.14,240.7,ok,1.000
+dc-link-overvoltage,a,770.0,820.0,ok,658.5,789.9,ok,1.000
 ...
 settling,,0.00003505,0.0001000,ok,0.00002482,0.00005487,ok,1.000
-belt-tension,,558.4,2160,ok,450.8,668.9,ok,1.000
+belt-tension,,558.4,990.0,ok,450.8,668.9,ok,1.000
 belt-slack,,239.1,0,ok,121.6,340.1,ok,1.000
 gearbox-radial-load,,1005,2000,ok,802.3,1215,ok,1.000
 guide-load,,185.3,2000,ok,172.1,324.2,ok,1.000
@@ -430,9 +430,9 @@ line,0.6,0.05
 | `spline,a,b` | Auf einer glatten Kurve durch diesen Punkt. Aufeinanderfolgende Zeilen mit `spline` bilden eine Kurve, ein Stützpunkt je Zeile |
 | leer oder mit `#` beginnend | Wird übersprungen |
 
-Ein Kreisbogen, dessen Ende der Endpunkt des Stücks vor ihm ist (dieselben Zahlen, auf einen Nanometer), ist ein Vollkreis. Jeder andere Kreisbogen dreht von diesem Punkt bis zu seinem eigenen Ende, wie kurz auch immer: Ein Bogen von 80 µm ist ein Bogen von 80 µm. Das angegebene Ende muss auf dem Kreis um den Mittelpunkt durch den Endpunkt des Stücks davor liegen, auf 10 µm genau. Der Kreisbogen wird von dort gelegt, wo die Bahn wirklich steht, und nimmt seinen Radius von dort. Er kann also bis zu so weit neben seinem angegebenen Ende enden; dann ist dieser Abstand Teil der Abweichung, die der Planer meldet (`Die geplante Bahn liegt ...`, siehe unten, und „Geplante Bahn neben der vorgegebenen“ in der App).
+Ein Kreisbogen, dessen Ende der Endpunkt des Stücks vor ihm ist (dieselben Zahlen, auf einen Nanometer), ist ein Vollkreis. Jeder andere Kreisbogen dreht von diesem Punkt bis zu seinem eigenen Ende, wie kurz auch immer: Ein Bogen von 80 µm ist ein Bogen von 80 µm. Das angegebene Ende muss auf dem Kreis um den Mittelpunkt durch den Endpunkt des Stücks davor liegen, auf 10 µm genau. Der Kreisbogen wird von dort gelegt, wo die Bahn wirklich steht, und behält den Radius, den er dort hat. Er endet also um den Unterschied der beiden Radien neben seinem angegebenen Ende. Über Kreisbögen, die um denselben Mittelpunkt aufeinander folgen, summieren sich diese Abstände, wenn jedes angegebene Ende weiter außen liegt als das vorige: Vier Kreisbögen, jeder 9 µm weiter außen, enden 36 µm neben dem letzten angegebenen Ende. Endet die Bahn neben einem angegebenen Ende, ist der größte dieser Abstände Teil der Abweichung, die der Planer meldet (`Die geplante Bahn liegt ...`, siehe unten, und „Geplante Bahn neben der vorgegebenen“ in der App). Die Befehlszeile meldet sie ab 0,05 µm, dem Kleinsten, das sie anzeigen kann.
 
-Das erste Stück hat keinen Punkt vor sich. Eine Bahn beginnt am Sollwert der stehenden Maschine, den Riemendehnung und Getriebeverdrehung einige hundertstel Millimeter neben die Startpose legen. Für einen Kreisbogen als erstes Stück gelten deshalb beide Toleranzen mit 0,1 mm gegen den Ort, an dem die Maschine steht: Sein Ende darf so weit neben dem Kreis liegen, und ein Kreisbogen, der näher als 0,1 mm an diesem Ort endet, ist ein Vollkreis. Ein Kreisbogen kürzer als 0,1 mm kann daher nicht das erste Stück sein. Soll einer gefahren werden, geben Sie seinen Anfang zuerst mit einer `line` zur Startpose an; der Kreisbogen wird dann an diesem Punkt gemessen. Kreisbögen brauchen eine Maschine mit zwei Achsen.
+Das erste Stück hat keinen Punkt vor sich. Eine Bahn beginnt am Sollwert der stehenden Maschine, den Riemendehnung und Getriebeverdrehung bis zu 0,1 mm neben die Startpose legen (einige hundertstel Millimeter beim voreingestellten Portal). Ein Kreisbogen als erstes Stück wird deshalb an dem Ort gemessen, an dem die Maschine steht: Sein Ende darf 0,1 mm neben dem Kreis durch diesen Ort liegen, und es muss mindestens 1 mm von diesem Ort entfernt sein. Näher lässt sich ein Vollkreis nicht von einem kurzen Kreisbogen unterscheiden; deshalb wird keiner von beiden geraten und die Bahn abgelehnt (`Die Bahn beginnt mit einem Kreisbogen, der näher als 1 mm an dem Ort endet, an dem die Maschine steht. ...`). Soll eine Bahn mit einem Vollkreis oder mit einem kürzeren Kreisbogen beginnen, geben Sie den Anfang zuerst mit einer `line` zur Startpose an; der Kreisbogen wird dann an diesem Punkt gemessen. Kreisbögen brauchen eine Maschine mit zwei Achsen.
 
 Ein Spline läuft durch alle seine Stützpunkte, ohne Sprung in Position, Richtung oder Krümmung an einem Stützpunkt (ein kubischer Spline über dem geraden Abstand zwischen den Punkten). Er verlässt die Gerade oder den Kreisbogen vor ihm in der Richtung dieses Stücks und endet in der Richtung, mit der die Gerade oder der Kreisbogen nach ihm beginnt. An einem Ende der Bahn, oder wo keine Gerade und kein Kreisbogen anschließt, endet er ohne Krümmung. Splines brauchen wie Kreisbögen eine Maschine mit zwei Achsen. Stützpunkte und Richtungen, bei denen die Kurve auf der Stelle umkehren müsste, werden abgelehnt (`Die Bahn lässt sich nicht auslegen: ...`).
 

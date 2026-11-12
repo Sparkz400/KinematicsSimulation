@@ -210,8 +210,10 @@ fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, V
     let pieces = sim_components::path::parse(&read(file)?).map_err(|line| unreadable(file, line))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     let deviation = sim.path_deviation(&pieces).map_err(refused)?;
-    if deviation > 0.0 {
-        eprintln!("{}", tr.tr_arg("path-deviation", &format!("{:.4}", deviation * 1e3)));
+    // Not below what the figure can show: an arc with decimally rounded end coordinates is some 10 nm off.
+    let shown = format!("{:.4}", deviation * 1e3);
+    if shown != "0.0000" {
+        eprintln!("{}", tr.tr_arg("path-deviation", &shown));
     }
     sim.plan_path(&pieces, args.flag("--time-optimal")).map(Some).map_err(refused)
 }

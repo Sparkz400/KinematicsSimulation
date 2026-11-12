@@ -464,6 +464,14 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
         let (_, gesagt) = analysed(&[&tolerance[..], &["--lang", "de"]].concat());
         assert!(blended < 0.95 * given, "{}: {blended} s with transition curves, {given} s without", entry.id);
         assert!(silent.is_empty() && said.contains("0.1000 mm") && gesagt.contains("0.1000 mm") && said != gesagt, "{}: {silent:?}, {said:?}, {gesagt:?}", entry.id);
+        // An arc of 30 degrees whose end is rounded to 0.1 um lies some 10 nm off its circle. That is below what
+        // the message can show ("0.0000 mm", which it said), so nothing is said.
+        let rounded = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-rounded-end.csv", entry.id)).to_str().unwrap().to_string();
+        let on_circle = [corner[0] + 0.025 * dx, end[1] - 0.0433013 * dz];
+        std::fs::write(&rounded, format!("line,{},{}\narc,{:.7},{:.7},{},{},{turn}\n", corner[0], corner[1], on_circle[0], on_circle[1], corner[0], end[1])).unwrap();
+        let off = sim.path_deviation(&sim_components::path::parse(&std::fs::read_to_string(&rounded).unwrap()).unwrap()).unwrap();
+        let out = cli(&["analyze", entry.id, "--path", &rounded]);
+        assert!(off > 1e-9 && off < 5e-8 && out.status.success() && text(&out.stderr).is_empty(), "{}: off by {off} m, said {:?}", entry.id, text(&out.stderr));
         // A tolerance below zero is no tolerance.
         let refused = cli(&["analyze", entry.id, "--path", &path, "--set", "profile.path_tolerance_m=-0.001"]);
         assert!(refused.status.code() == Some(2) && text(&refused.stderr).contains("profile.path_tolerance_m"), "{}", text(&refused.stderr));

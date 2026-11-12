@@ -1183,6 +1183,29 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
         events.clear();
         runner.handle(Request::Reconfigure(entry.config()), &mut events);
         assert_eq!(starts(&events), [None], "{}", entry.id);
+
+        // Commands the machine takes while the path runs: a stop after the segment and an enable leave it
+        // running, and the trail grows to the path's end (it stopped at the command). Drives off ends both.
+        for (command, runs_on) in [(Command::Stop, true), (Command::Enable, true), (Command::Disable, false)] {
+            let mut runner = Runner::new(entry, &entry.config()).unwrap();
+            let points = runner.sim.plan_path(&[sim_components::path::Piece::Line(far.clone())], false).unwrap();
+            events.clear();
+            runner.handle(Request::Command(Command::Trajectory(points)), &mut events);
+            runner.advance(0.5 * duration, &mut events);
+            let before = trailed(&events).len();
+            runner.handle(Request::Command(command.clone()), &mut events);
+            // Past the first step, in which a tool that is let go still moves.
+            runner.advance(0.01, &mut events);
+            let at_command = trailed(&events).len();
+            runner.advance(0.5 * duration + 0.3, &mut events);
+            let trail = trailed(&events);
+            assert!(before > 10 && starts(&events).len() == 1, "{}: {command:?}", entry.id);
+            if runs_on {
+                assert!(apart(trail[trail.len() - 1], to) < 1e-3, "{}: the trail ends {} m before the path's end after {command:?}", entry.id, apart(trail[trail.len() - 1], to));
+            } else {
+                assert!(trail.len() == at_command && apart(trail[trail.len() - 1], to) > 0.01, "{}: {} points after {command:?}", entry.id, trail.len() - at_command);
+            }
+        }
         events.clear();
         runner.handle(Request::Command(Command::StartCycle), &mut events);
         runner.advance(0.5, &mut events);

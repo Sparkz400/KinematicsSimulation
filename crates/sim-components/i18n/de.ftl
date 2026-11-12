@@ -166,6 +166,7 @@ error-trace-column = Der Aufzeichnung fehlt die Spalte { $arg }.
 param-torque_reserve = Zeitoptimale Bahn: genutzter Anteil der Drehmoment-Drehzahl-Kennlinie
 param-path_tolerance_m = Bahn: zulässige Abweichung für Übergangsbögen [m]
 error-path = Die Bahn lässt sich nicht auslegen: Jeder Punkt braucht eine Position je Achse, ein Kreisbogen braucht zwei Achsen und muss auf dem Kreis durch seinen Anfang enden, und ein Spline braucht zwei Achsen und Stützpunkte, die er durchlaufen kann, ohne auf der Stelle umzukehren.
+error-path-first-arc = Die Bahn beginnt mit einem Kreisbogen, der näher als 1 mm an dem Ort endet, an dem die Maschine steht. Dort lässt sich ein Vollkreis nicht von einem kurzen Kreisbogen unterscheiden. Geben Sie den Anfang zuerst mit einer `line` dorthin an; der Kreisbogen wird dann an diesem Punkt gemessen.
 error-path-range = Die Bahn verlässt den Verfahrbereich. Ein Kreisbogen oder ein Spline kann das auch, wenn alle angegebenen Punkte darin liegen: Ein Spline schwingt über seine Stützpunkte hinaus.
 error-path-torque = Die Motoren können die Last an einer Stelle der Bahn innerhalb der Momentenreserve nicht halten oder bewegen.
 error-trace-row = Diese Zeile der Aufzeichnung besteht nicht nur aus Zahlen: { $arg }

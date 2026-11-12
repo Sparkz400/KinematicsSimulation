@@ -115,7 +115,7 @@ stiffness_ea_n = 6.667e5
 # about 1215 N at most (belt set 100 N high), inside the lowest shaft rating this file allows for (1500 N).
 # With the 300 N this file had, a belt set to 200 N went slack. The highest tension (558 N, 658 N with the
 # belt set 100 N high, about 670 N at most in the sampled runs) is judged against
-# ratings.belt_max_tension_n, an estimate of 2160 N.
+# ratings.belt_max_tension_n, an estimate of 990 N.
 pretension_n = 450.0
 # [estimate]
 damping_n_s_m = 100.0
@@ -309,13 +309,15 @@ noise_seed = 1
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 # Left out here: the highest gearbox input speed, because there is no gearbox.
 [ratings]
-# The allowable belt tension. Festo publishes none for the EXCT. Its belt is polyurethane with steel cords,
-# 5 mm pitch, 30 mm wide (catalog/festo/exct.toml). Optibelt's data sheets for 5 mm pitch steel-cord
-# polyurethane belts (ALPHA FLEX AT5) list 1800 N allowable at 25 mm width and 2300 N at 32 mm, which is 25 %
-# of the cords' breaking strength. 72 N per mm of width, from the lower figure, gives 2160 N at 30 mm.
-# Whether Festo's belt has cords of that class is not known.
+# The allowable belt tension. Festo publishes none for the EXCT and states only the 5 mm pitch, the steel cords
+# and the 30 mm width of its polyurethane belt (catalog/festo/exct.toml), not the tooth profile. Belt makers'
+# figures for 5 mm pitch steel-cord polyurethane belts differ by profile: about 72 N per mm of width for AT5
+# (Optibelt: 1800 N at 25 mm, 2300 N at 32 mm, 25 % of the cords' breaking strength) and about 33 N per mm
+# for T5 (Megadyne Megalinear T5: 840 N at 25 mm, 1060 N at 32 mm). The limit takes the weaker class:
+# 33 N/mm x 30 mm = 990 N. These figures were taken from search summaries of the makers' data sheets; the
+# sheets themselves could not be downloaded and were not read.
 # [estimate]
-belt_max_tension_n = 2160.0
+belt_max_tension_n = 990.0
 # Below this the teeth can jump.
 belt_min_tension_n = 0.0
 # How far the tool may be from its target in the second half of a dwell, when the gripper acts.

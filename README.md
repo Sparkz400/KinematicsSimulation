@@ -116,7 +116,7 @@ braking-resistor-peak,a,213.7,3000,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ...
 settling,,0.00003505,0.0001000,ok
-belt-tension,,558.4,2160,ok
+belt-tension,,558.4,990.0,ok
 belt-slack,,239.1,0,ok
 gearbox-radial-load,,1005,2000,ok
 guide-load,,185.3,2000,ok

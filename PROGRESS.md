@@ -383,7 +383,7 @@ and its elastic state one more entry; every config has `effects.shared_dc_link`;
 Limits: the sampled bands do not search for the worst corner. A shared link adds the drives' capacitances
 and knows no Line Module. The path lines in the 3D view were not looked at on screen. Festo publishes no
 belt tension rating for the EXCT; the highest tension of the retuned config (558 N, 658 N with the belt
-set 100 N high) is judged against an estimate of 2160 N since the fifth review (below). A spline joins a line or an arc with a step in curvature.
+set 100 N high) is judged against an estimate, 990 N since the sixth review (below). A spline joins a line or an arc with a step in curvature.
 
 ## Fourth review fixes (12 November 2026)
 
@@ -412,12 +412,29 @@ out. `cargo test --workspace`: 243 tests (242 before).
 | 2 an arc off its stated end, unsaid | Later arcs are back at 10 um between the circle through the stated end before and the stated end (`ARC_TOLERANCE`); 0.1 mm holds for the first piece only. What an arc ends off its stated end (above 1 nm) is added to the deviation the planner reports, with or without transition curves; the message `path-deviation` names both causes in both languages | the same test, part (c) |
 | 3 the travelled path went on after the path | The trail stops growing when the trajectory is through or any other command is taken (`Runner::recording` in `session.rs`); the finished trail stays shown until the next path, cycle or reconfigure. A move after a path added 4963 points to it | `the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path` in `sim-app/tests/app.rs` |
 | 4 comment on the pretension in `exct-30.toml` | Rounded figures with the command that gives them (belt held at 450 N by `--set "bounds.belt.pretension_n=[450.0,450.0]"`: about 240 N off, about 110 N left at 350 N), and that seeds move them by a few newtons | none (comment) |
-| 5 a belt tension rating for the EXCT-30 | `ratings.belt_max_tension_n = 2160.0`, an estimate: Festo publishes none; Optibelt lists 1800 N at 25 mm for 5 mm pitch steel-cord polyurethane belts, 72 N per mm, at 30 mm width. The config now has 19 checks. `belt-tension`: 558.4 N as written, 458.4 to 658.3 N one at a time, 450.8 to 668.9 N in 200 samples, every share 1.000; all other rows as before | `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes` in `catalog.rs` |
+| 5 a belt tension rating for the EXCT-30 | `ratings.belt_max_tension_n = 2160.0`, an estimate: Festo publishes none; Optibelt lists 1800 N at 25 mm for 5 mm pitch steel-cord polyurethane belts, 72 N per mm, at 30 mm width. The config now has 19 checks. `belt-tension`: 558.4 N as written, 458.4 to 658.3 N one at a time, 450.8 to 668.9 N in 200 samples, every share 1.000. (The limit is 990 N since the sixth review. "All other rows as before", which stood here, was not true of the guides' sampled table: four `low` values of motor a there were stale, see the sixth review) | `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes` in `catalog.rs` |
 | 6 test counts in `docs/validation.md` | 243, 208 and 35 | none |
 
-Limits: an arc shorter than 0.1 mm as the very first piece is still run as a full turn; that is the stated
-rule, not a refusal. The trail ends when the setpoint trajectory is through, so what the tool settles after
-that is not drawn. Whether Festo's belt has cords of the class the 2160 N assume is not known.
+Limits: an arc shorter than 0.1 mm as the very first piece was still run as a full turn (refused since the
+sixth review). The trail ends when the setpoint trajectory is through, so what the tool settles after
+that is not drawn. Whether Festo's belt has cords of the class the 2160 N assumed is not known (990 N since the sixth review).
+
+## Sixth review fixes (12 November 2026)
+
+A sixth review found the points below. Each code fix has a test that was seen to fail with the fix taken
+out. `cargo test --workspace`: 243 tests, as before (tests were extended, none added).
+
+| Fix | What changed | Test |
+| --- | --- | --- |
+| 1 the travelled path stopped at a stop or an enable | Every accepted command other than a path or a cycle ended the trail, but `Command::Stop` and `Command::Enable` are taken while a trajectory runs and leave it running. `Runner::handle` in `session.rs` now asks the controller (`busy()`): the trail ends with a command only if the trajectory does, which is `Command::Disable` | `the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path` in `sim-app/tests/app.rs` |
+| 2 "off by up to 0.0000 mm" | An arc with decimally rounded end coordinates is 1 to 50 nm off its circle, which the command line reported with a figure that shows as zero. It says nothing where the figure would show 0.0000 (below 0.05 um). The app shows the figure with three significant digits and is unchanged | `a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported` in `sim-cli/tests/cli.rs` |
+| 3 an arc as the first piece | A 130 um arc written from the start pose (0.1, 0.35) ran as a full turn: it ended 85 um from the rest setpoint, which is 47 um off the pose. A full turn (end up to 0.1 mm from the setpoint) cannot be told from a short arc there, so neither is guessed: a first arc that ends less than 1 mm from where the machine stands is refused (`FIRST_ARC` in `path.rs`, message `error-path-first-arc` in both languages), full turns included, and the file states the start with a `line` first. The reviewer's rule kept the full turn within 0.1 mm; that would still have run the 130 um arc as one. Both guides state the rule, and that the offsets of arcs chained around one centre add up and are reported as the deviation (the code is unchanged there: an arc keeps the radius the path has) | `a_short_arc_is_not_a_full_turn_and_an_arc_off_its_end_is_reported` and `a_path_file_is_read_line_by_line` in `path.rs`; `a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error` now states its start |
+| 4 quoted verdict tables | The sampled table of the EXCT-30 in both guides had four stale `low` values of motor a (7.303, 0.1610, 22.17, 657.4; the program gives 7.310, 0.1327, 20.14, 658.5). Both tables in both guides and the one in `README.md` are the program's present output | none (documents) |
+| 5 belt tension limit of the EXCT-30 | `ratings.belt_max_tension_n` from 2160 to 990 N: Festo does not state the tooth profile, and makers' figures for 5 mm pitch steel-cord belts are about 72 N per mm of width for AT5 and about 33 N per mm for T5; the weaker class at 30 mm. All 19 checks pass in both band modes with every share 1.000. `belt-tension`: 558.4 N as written, 458.4 to 658.3 N one at a time, 450.8 to 668.9 N in 200 samples | `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes` in `catalog.rs` |
+
+Limits: a path that starts with a full turn now needs a `line` to the start pose before it. The belt makers'
+figures are from search summaries of their data sheets; the sheets were not read. An arc still ends beside
+its stated end by what its radius is off, and over chained arcs that adds up; it is reported, not prevented.
 
 ## Blocked or not verifiable here
 

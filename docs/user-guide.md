@@ -335,7 +335,7 @@ braking-resistor-peak,a,213.7,3000,ok,185.9,228.6,ok
 dc-link-overvoltage,a,770.0,820.0,ok,708.6,790.0,ok
 ...
 settling,,0.00003505,0.0001000,ok,0.00003164,0.00004055,ok
-belt-tension,,558.4,2160,ok,458.4,658.3,ok
+belt-tension,,558.4,990.0,ok,458.4,658.3,ok
 belt-slack,,239.1,0,ok,139.1,339.1,ok
 gearbox-radial-load,,1005,2000,ok,805.1,1205,ok
 guide-load,,185.3,2000,ok,177.3,286.6,ok
@@ -351,15 +351,15 @@ An earlier state of this config failed here: with 300 N of pretension a belt set
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 check,motor,value,limit,result,low,high,worst_case,pass_share
 motor-peak,a,0.3251,1.000,ok,0.3063,0.3791,ok,1.000
-motor-thermal,a,7.764,100.0,ok,7.303,9.353,ok,1.000
+motor-thermal,a,7.764,100.0,ok,7.310,9.353,ok,1.000
 pulley-torque,a,3.405,12.50,ok,3.170,3.992,ok,1.000
 dc-link-energy,a,9.943,9.943,ok,4.812,29.92,ok,1.000
-braking-resistor-continuous,a,8.859,100.0,ok,0.1610,14.76,ok,1.000
-braking-resistor-peak,a,213.7,3000,ok,22.17,240.7,ok,1.000
-dc-link-overvoltage,a,770.0,820.0,ok,657.4,789.9,ok,1.000
+braking-resistor-continuous,a,8.859,100.0,ok,0.1327,14.76,ok,1.000
+braking-resistor-peak,a,213.7,3000,ok,20.14,240.7,ok,1.000
+dc-link-overvoltage,a,770.0,820.0,ok,658.5,789.9,ok,1.000
 ...
 settling,,0.00003505,0.0001000,ok,0.00002482,0.00005487,ok,1.000
-belt-tension,,558.4,2160,ok,450.8,668.9,ok,1.000
+belt-tension,,558.4,990.0,ok,450.8,668.9,ok,1.000
 belt-slack,,239.1,0,ok,121.6,340.1,ok,1.000
 gearbox-radial-load,,1005,2000,ok,802.3,1215,ok,1.000
 guide-load,,185.3,2000,ok,172.1,324.2,ok,1.000
@@ -427,9 +427,9 @@ line,0.6,0.05
 | `spline,a,b` | On a smooth curve through this point. Lines of `spline` that follow one another form one curve, one via point per line |
 | empty, or starting with `#` | Skipped |
 
-An arc whose end is the end point of the piece before it (the same numbers, to a nanometre) is a full turn. Any other arc turns from that point to its own end, however short: an arc of 80 µm is an arc of 80 µm. The stated end has to lie on the circle around the centre through the end point of the piece before, within 10 µm. The arc is laid from where the path really stands and takes its radius from there, so it can end up to that far beside its stated end; if it does, that distance is part of the deviation the planner reports (`The planned path is off ...`, below, and "Planned path off the given one" in the app).
+An arc whose end is the end point of the piece before it (the same numbers, to a nanometre) is a full turn. Any other arc turns from that point to its own end, however short: an arc of 80 µm is an arc of 80 µm. The stated end has to lie on the circle around the centre through the end point of the piece before, within 10 µm. The arc is laid from where the path really stands and keeps the radius it has there, so it ends beside its stated end by what the two radii differ. Over arcs that follow one another around one centre these offsets add up if every stated end lies further out than the one before: four arcs, each 9 µm further out, end 36 µm beside the last stated end. Where the path ends beside a stated end, the largest such distance is part of the deviation the planner reports (`The planned path is off ...`, below, and "Planned path off the given one" in the app). The command line says it from 0.05 µm, the smallest it can show.
 
-The first piece has no point before it. A path starts at the setpoint of the machine at rest, which belt stretch and gear twist put some hundredths of a millimetre from the start pose. So for an arc as the first piece both tolerances are 0.1 mm, against where the machine stands: its end may be that far off the circle, and an arc that ends within 0.1 mm of where the machine stands is a full turn. An arc shorter than 0.1 mm can therefore not be the first piece. To run one, state its start first with a `line` to the start pose; the arc is then judged against that point. Arcs need a machine with two axes.
+The first piece has no point before it. A path starts at the setpoint of the machine at rest, which belt stretch and gear twist put up to 0.1 mm from the start pose (some hundredths of a millimetre on the default gantry). So an arc as the first piece is judged against where the machine stands: its end may be 0.1 mm off the circle through that place, and it has to end at least 1 mm from that place. Nearer, a full turn cannot be told from a short arc, so neither is guessed and the path is refused (`The path starts with an arc that ends less than 1 mm from where the machine stands. ...`). To start a path with a full turn or with an arc shorter than that, state its start first with a `line` to the start pose; the arc is then judged against that point. Arcs need a machine with two axes.
 
 A spline runs through all its via points with no step in position, direction or curvature at a via point (a cubic spline over the straight distance between the points). It leaves the line or arc before it in that piece's direction and ends in the direction the line or arc after it starts with. At an end of the path, or where there is no line or arc, it ends without curvature. Splines need a machine with two axes, like arcs. Via points and directions that would make the curve turn back on the spot are refused (`The path cannot be laid out: ...`).
 
