@@ -3,4 +3,7 @@ error-config-version = Unsupported configuration format version: { $arg }
 error-config-missing = Configuration value is missing: { $arg }
 error-config-type = Configuration value has the wrong type: { $arg }
 error-config-invalid = Configuration value is out of range: { $arg }
+error-config-unknown = Configuration has a value this machine does not know: { $arg }
+error-config-part-motor = The catalogue has no such part: motor { $arg }
+error-config-part-gearbox = The catalogue has no such part: gearbox { $arg }
 param-format_version = Format version

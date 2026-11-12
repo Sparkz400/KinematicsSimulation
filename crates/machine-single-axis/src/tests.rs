@@ -2,7 +2,9 @@
 //! friction levels, backlash, belt natural frequency.
 
 use super::*;
-use sim_core::testkit::{DT, PulseRun};
+use sim_core::testkit::{DT, Noise, PulseRun};
+use sim_components::identify::{fit_rigid, resonance};
+use sim_components::trace::Trace;
 use sim_components::Sim;
 use sim_components::analysis::{analyse_cycle, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response};
 use sim_core::{Rk4, advance};
@@ -68,7 +70,8 @@ fn belt_mass_adds_to_the_pulley_inertia() {
 /// Friction levels: breakaway force equals the stiction level.
 #[test]
 fn breakaway_force_equals_the_stiction_level() {
-    let m = rigid(&["effects.guide_friction = true"]);
+    // The carriage runs on beyond the stroke here, so the end stops are off.
+    let m = rigid(&["effects.guide_friction = true", "effects.hard_stops = false"]);
     let mut state = vec![0.5, 0.0, 0.0];
     // Push with a force that rises by 5 N/s and watch the friction force until the carriage slides.
     let force_to_torque = 0.02 / 5.0;
@@ -85,7 +88,8 @@ fn breakaway_force_equals_the_stiction_level() {
 /// Friction levels: steady sliding force equals Coulomb plus viscous.
 #[test]
 fn steady_sliding_force_is_coulomb_plus_viscous() {
-    let m = rigid(&["effects.guide_friction = true"]);
+    // The carriage runs on beyond the stroke here, so the end stops are off.
+    let m = rigid(&["effects.guide_friction = true", "effects.hard_stops = false"]);
     for direction in [1.0, -1.0] {
         let mut state = vec![0.5, 0.0, 0.0];
         let torque = direction * 30.0 * 0.02 / 5.0;
@@ -137,11 +141,12 @@ fn lost_motion_on_reversal_equals_the_backlash() {
     assert!((lost - 8.7e-4).abs() < 0.01 * 8.7e-4, "lost motion {lost} rad, backlash 8.7e-4 rad");
 }
 
-/// Belt natural frequency matches the hand calculation from k and m within 5 %.
-#[test]
-fn belt_natural_frequency_matches_hand_calculation() {
+/// The frequency at which the carriage swings against the pulley on the belt, at x = 0.5 m.
+fn belt_frequency(edit: &[&str]) -> f64 {
     // A very stiff gearbox without backlash, so motor and pulley turn as one inertia.
-    let m = machine(lossless_config(), &["gearbox.stiffness_nm_rad = 1.0e7", "effects.gearbox_backlash = false"]);
+    let mut all = vec!["gearbox.stiffness_nm_rad = 1.0e7", "effects.gearbox_backlash = false"];
+    all.extend(edit);
+    let m = machine(lossless_config(), &all);
     let mut run = PulseRun::new(&m, DT, 0.1, 0.004);
     run.substeps = 16;
     run.run(0.004, |_| {});
@@ -155,14 +160,67 @@ fn belt_natural_frequency_matches_hand_calculation() {
         }
         last = rate;
     });
-    let measured = crossings as f64 / 2.0 / seconds;
+    crossings as f64 / 2.0 / seconds
+}
 
-    // Hand calculation at x = 0.5 m: carriage and motor inertia joined by the two belt sections.
-    let k = 5.0e5 * (1.0 / 0.65 + 1.0 / 1.95);
-    let m_load = 6.0;
+/// Hand calculation: carriage (6 kg) and motor inertia joined by a belt of stiffness k.
+fn two_mass_frequency(k: f64) -> f64 {
     let m_motor = (1.0e-4 + 0.1 * 2.6 * 0.02 * 0.02 + 25.0 * 0.3e-4) / (0.02 * 0.02);
-    let expected = f64::sqrt(k * (1.0 / m_load + 1.0 / m_motor)) / std::f64::consts::TAU;
+    f64::sqrt(k * (1.0 / 6.0 + 1.0 / m_motor)) / std::f64::consts::TAU
+}
+
+/// Belt natural frequency matches the hand calculation from k and m within 5 %.
+#[test]
+fn belt_natural_frequency_matches_hand_calculation() {
+    // At x = 0.5 m the two belt sections are 0.65 m and 1.95 m long and act side by side.
+    let (measured, expected) = (belt_frequency(&[]), two_mass_frequency(5.0e5 * (1.0 / 0.65 + 1.0 / 1.95)));
     assert!((measured - expected).abs() < 0.05 * expected, "measured {measured} Hz, hand calculation {expected} Hz");
+}
+
+/// The same with the tooth stiffness: each section ends at the motor pulley once, so each has the
+/// teeth in mesh in series, 1 / k = L / EA + 1 / k_tooth. With 1e6 N/m of tooth stiffness the belt
+/// stiffness falls from 1.03e6 to 0.64e6 N/m and the frequency by a fifth.
+#[test]
+fn belt_natural_frequency_with_tooth_stiffness_matches_hand_calculation() {
+    let measured = belt_frequency(&["effects.belt_tooth_stiffness = true", "belt.tooth_mesh_stiffness_n_m = 1.0e6"]);
+    let k = 1.0 / (0.65 / 5.0e5 + 1.0 / 1.0e6) + 1.0 / (1.95 / 5.0e5 + 1.0 / 1.0e6);
+    let expected = two_mass_frequency(k);
+    assert!((measured - expected).abs() < 0.05 * expected, "measured {measured} Hz, hand calculation {expected} Hz");
+    assert!(expected < 0.85 * two_mass_frequency(5.0e5 * (1.0 / 0.65 + 1.0 / 1.95)));
+}
+
+/// Tooth-jump flag. Moving at 1 m/s takes 15 N of Coulomb and 20 N of viscous friction, accelerating 6 kg
+/// at 10 m/s2 another 60 N. The two belt sections share that force by stiffness, and the short one (0.25 m
+/// at the start, against 2.35 m) takes nine tenths of it. A belt pretensioned to 20 N therefore has a section
+/// without tension for most of the 1 s move; at 300 N the lowest tension stays above 200 N.
+#[test]
+fn a_slack_belt_section_is_counted_and_a_tight_one_is_not() {
+    let slack_time = |pretension: &str| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(pretension).unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+        sim.run(1.5, |_| {});
+        let mut sample = Vec::new();
+        sim.sample(&mut sample);
+        sample[sim.signal_index("belt.slack_time").unwrap()]
+    };
+    let (loose, tight) = (slack_time("belt.pretension_n = 20.0"), slack_time("belt.pretension_n = 300.0"));
+    assert!(loose > 0.5 && loose < 1.0, "{loose} s without tension");
+    assert_eq!(tight, 0.0);
+
+    // The cycle analysis reports the time, and "belt-slack" fails on it. On the way back the long section is
+    // the one that slackens and takes less of the force, so the cycle has less than twice the move's time.
+    let judged = |pretension: &str| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(pretension).unwrap();
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let ok = sim_components::analysis::verdicts(&cfg, &load).unwrap().iter().find(|v| v.check == "belt-slack").unwrap().ok;
+        (load.belt_slack_time.unwrap(), ok)
+    };
+    let (loose_cycle, ok) = judged("belt.pretension_n = 20.0");
+    assert!(loose_cycle > loose && loose_cycle < 2.0 * loose && !ok, "{loose_cycle} s without tension in the cycle");
+    assert_eq!(judged("belt.pretension_n = 300.0"), (0.0, true));
 }
 
 /// Rigid limit: with very high belt stiffness the full model matches the rigid reference within 1 %.
@@ -230,6 +288,19 @@ fn reference_cycle_torque_matches_hand_calculation() {
     // (3.8 N m up to 314 rad/s) is used to peak / 3.8.
     assert!((m.peak_speed - v * 5.0 / 0.02).abs() < 0.01 * 250.0, "peak speed {}", m.peak_speed);
     assert!((m.utilisation - peak / 3.8).abs() < 0.02 * peak / 3.8, "utilisation {}", m.utilisation);
+    // Electrical energy: the cycle starts and ends at rest and this config has no friction, so what the motor
+    // draws and does not feed back is the copper loss, R I^2 over the cycle (R rises by less than 1 % here).
+    let copper = 4.0 * m.rms_current * m.rms_current * load.duration;
+    assert!(m.energy_regenerated > 0.0 && m.largest_regeneration > 0.0 && m.peak_regenerated_power > 0.0);
+    assert!((m.energy_in - m.energy_regenerated - copper).abs() < 0.03 * copper, "{} J in, {} J back, {copper} J of copper loss", m.energy_in, m.energy_regenerated);
+    // Each braking gives back the kinetic energy, less the copper loss on the way: at most 1/2 m_eff v^2.
+    assert!(m.largest_regeneration < 0.5 * m_total * v * v && m.largest_regeneration > 0.3 * 0.5 * m_total * v * v, "{} J", m.largest_regeneration);
+    // The winding settles where the copper loss of the RMS current balances: far below the rated 100 K.
+    let rated_current = 2.822;
+    let q = 100.0 / 1.39 * (m.rms_current / rated_current).powi(2);
+    assert!((m.winding_rise - q / (1.0 - 0.0039 * q)).abs() < 1e-9 && m.winding_rise < 100.0, "{} K", m.winding_rise);
+    // The thermal verdict: RMS torque over the rated torque of the config.
+    assert!((m.thermal_utilisation - m.rms_torque / 1.27).abs() < 1e-12, "thermal utilisation {}", m.thermal_utilisation);
     assert!(m.points.len() as f64 > 0.99 * duration * 1000.0);
 }
 
@@ -324,4 +395,627 @@ fn too_much_gain_shows_as_overshoot_in_the_step_response() {
     let (tame, hot) = (step("drive.kv_1_s = 50.0"), step("drive.kv_1_s = 400.0"));
     assert!(hot.overshoot > tame.overshoot + 0.1, "overshoot {} at Kv 400, {} at Kv 50", hot.overshoot, tame.overshoot);
     assert!(hot.rise_time < tame.rise_time);
+}
+
+/// Verdicts of the reference cycle against a hand calculation, and what happens when a part is too small.
+#[test]
+fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
+    use sim_components::analysis::{Verdict, verdicts};
+    let judged = |edit: &[&str]| -> (sim_components::analysis::CycleLoad, Vec<Verdict>) {
+        let mut cfg = ideal_rigid();
+        // The braking checks as estimated from what the motor feeds back; the simulated DC link has a test of its own.
+        cfg.set_text("effects.dc_link = false").unwrap();
+        for e in edit {
+            cfg.set_text(e).unwrap();
+        }
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let verdicts = verdicts(&cfg, &load).unwrap();
+        (load, verdicts)
+    };
+    let find = |all: &[Verdict], check: &str| all.iter().find(|v| v.check == check).cloned();
+    let (load, all) = judged(&[]);
+    let m = &load.motors[0];
+    assert!(all.iter().all(|v| v.ok), "{all:?}");
+    // The gearbox output turns the pulley and moves the carriage, (m + J_pulley / r^2) r a = 4.25 kg * 0.02 m *
+    // 10 m/s^2 = 0.85 N m, against 40 N m rated and 64 N m maximum. The rotor's own 25 J_rotor / r^2 = 1.875 kg
+    // never pass through it: the motor torque times the ratio of 5 is 1.225 N m.
+    let peak = find(&all, "gearbox-peak").unwrap();
+    assert!((peak.value - 0.85).abs() < 0.02 * 0.85 && peak.limit == 64.0 && (5.0 * m.peak_torque - 1.225).abs() < 0.02 * 1.225, "{} N m", peak.value);
+    // Continuous: the cubic mean of the torque, weighted with the speed. Each of the four ramps is 0.1 s of
+    // rising and 0.1 s of falling acceleration (a = 100 t, v = 50 t^2, and mirrored from v = 1 m/s), so the
+    // integral of a^3 v dt over a ramp is 5e7 t^6 / 6 = 8.33 plus 1e6 u^4 / 4 - 5e7 u^6 / 6 = 16.67, 25 in all,
+    // 100 over the cycle. The integral of v dt is the way, 1.6 m: the cubic mean acceleration is
+    // (100 / 1.6)^(1/3) = 3.969 m/s^2, against an RMS of 3.4. Torque at the gearbox output per acceleration is
+    // (m + J_pulley / r^2) r = 4.25 kg * 0.02 m; the motor's own cubic mean has the rotor in it, 6.125 kg.
+    let continuous = find(&all, "gearbox-continuous").unwrap();
+    let by_hand = 4.25 * 0.02 * (100.0f64 / 1.6).cbrt();
+    assert!((continuous.value - by_hand).abs() < 0.02 * by_hand && continuous.limit == 40.0, "{} N m, by hand {by_hand} N m", continuous.value);
+    assert!(m.gearbox_torque == Some((peak.value, continuous.value)) && (5.0 * m.cubic_mean_torque - by_hand * 6.125 / 4.25).abs() < 0.02 * by_hand && m.cubic_mean_torque > 1.1 * m.rms_torque);
+    // The gearbox input turns at v i / r = 1 * 5 / 0.02 = 250 rad/s = 2387 r/min at most, against 13000 r/min.
+    let speed = find(&all, "gearbox-input-speed").unwrap();
+    assert!((speed.value - 2387.3).abs() < 0.01 * 2387.3 && speed.limit == 13000.0, "{} r/min", speed.value);
+    // The rigid model's belt does not stretch: both sections pull the pulley shaft with the pretension, 2 * 300 N.
+    assert_eq!(find(&all, "gearbox-radial-load").unwrap(), Verdict { check: "gearbox-radial-load", motor: None, value: 600.0, limit: 1500.0, ok: true });
+    // The guide carries the carriage of 4 kg (this config has no payload): 39.23 N, against 2000 N.
+    let guide = find(&all, "guide-load").unwrap();
+    assert!((guide.value - 4.0 * G).abs() < 1e-9 && guide.limit == 2000.0, "{} N", guide.value);
+    assert_eq!(find(&all, "motor-thermal").unwrap(), Verdict { check: "motor-thermal", motor: Some(0), value: m.winding_rise, limit: 100.0, ok: true });
+    // The DC link: 470 uF between 155.13 V and 224.65 V hold C (U2^2 - U1^2) / 2 = 6.2 J, more than one braking gives back.
+    let link = find(&all, "dc-link-energy").unwrap();
+    assert!((link.limit - 6.204).abs() < 1e-3 && link.value == m.largest_regeneration && link.value < link.limit);
+    assert!(find(&all, "braking-resistor-continuous").is_none());
+
+    // A tenth of the capacitance cannot hold a braking: the resistor has to, and is judged on mean and peak power.
+    let (load, all) = judged(&["ratings.dc_link_capacitance_uf = 47.0"]);
+    let m = &load.motors[0];
+    assert!(find(&all, "dc-link-energy").unwrap().value > 0.62 && all.iter().all(|v| v.ok), "{all:?}");
+    assert!((find(&all, "braking-resistor-continuous").unwrap().value - m.energy_regenerated / load.duration).abs() < 1e-12);
+    assert_eq!(find(&all, "braking-resistor-peak").unwrap().value, m.peak_regenerated_power);
+    // A resistor that is too small for the mean power fails; so does a gearbox below the peak torque.
+    let (_, all) = judged(&["ratings.dc_link_capacitance_uf = 47.0", "ratings.braking_resistor_continuous_w = 0.5", "ratings.gearbox_max_torque_nm = 0.8"]);
+    let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+    assert_eq!(failed, ["gearbox-peak", "braking-resistor-continuous"]);
+    // So do a gearbox that may not turn that fast, a shaft and a guide that are too weak.
+    let (_, all) = judged(&["ratings.gearbox_max_input_speed_rpm = 2000.0", "ratings.shaft_max_radial_load_n = 500.0", "ratings.guide_max_load_n = 30.0"]);
+    let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+    assert_eq!(failed, ["gearbox-input-speed", "gearbox-radial-load", "guide-load"]);
+
+    // Guide life. With the payload the guide carries 6 kg on the way out and through the dwell that follows
+    // the way back, and 4 kg for the other half of the cycle: 58.84 N and 39.23 N for the same time each.
+    // The cubic mean is ((58.84^3 + 39.23^3) / 2)^(1/3) = 50.92 N, and with C = 5000 N the life is
+    // (5000 / 50.92)^3 * 50 km = 47.3 million km.
+    let (load, all) = judged(&["effects.payload = true"]);
+    let (peak, mean) = load.guide_load.unwrap();
+    assert!((peak - 6.0 * G).abs() < 1e-9 && find(&all, "guide-load").unwrap().value == peak);
+    assert!((mean - 50.92).abs() < 0.02, "cubic mean {mean} N");
+    let life = sim_components::analysis::guide_life_km(&ideal_rigid(), &load).unwrap();
+    assert!((life - 47.3e6).abs() < 0.01 * 47.3e6, "{life} km");
+}
+
+/// The DC link over a cycle. Each braking feeds back the kinetic energy, 6.125 kg * (1 m/s)^2 / 2 = 3.0625 J,
+/// less the copper loss on the way: the current is 0.0245 N m s^2/m / 0.45 N m/A times the acceleration, whose
+/// square over a ramp integrates to 2 * 100^2 * 0.1^3 / 3 = 6.67 m^2/s^3, so 4 Ohm * 0.0544^2 * 6.67 = 0.079 J.
+/// The capacitors take the 2.983 J and the voltage rises from U1 = 155.13 V to U2 with C (U2^2 - U1^2) / 2 =
+/// energy: with 470 uF to sqrt(155.13^2 + 2 * 2.983 / 470e-6) = 191.7 V, below the 224.65 V at which the
+/// chopper switches on. With 4.7 uF there is room for 4.7 uF (224.65^2 - 155.13^2) / 2 = 0.062 J only, which
+/// the capacitors give back to the next acceleration: of the two brakings of a cycle the resistor burns all but
+/// 2 * 0.062 J, and its mean power is that over the cycle time. A resistor that takes 5 W cannot hold the
+/// voltage against a braking of some 50 W, so the drive trips at 257.6 V.
+#[test]
+fn the_dc_link_takes_braking_energy_the_resistor_the_rest_and_too_small_a_resistor_trips() {
+    use sim_components::analysis::verdicts;
+    let run = |edit: &[&str]| {
+        let mut cfg = ideal_rigid();
+        cfg.set_text("effects.dc_link = true").unwrap();
+        for e in edit {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let load = analyse_cycle(&mut sim).unwrap();
+        let verdicts = verdicts(&cfg, &load).unwrap();
+        (sim, load, verdicts)
+    };
+    let value = |all: &[sim_components::analysis::Verdict], check: &str| all.iter().find(|v| v.check == check).map(|v| v.value);
+
+    let (_, load, all) = run(&[]);
+    let m = &load.motors[0];
+    let stored = 0.5 * 470e-6 * (m.peak_dc_link_voltage.powi(2) - 155.13 * 155.13);
+    assert!((stored - m.largest_regeneration).abs() < 1e-3 && (stored - 2.983).abs() < 0.01, "{stored} J stored, {} J fed back in one braking", m.largest_regeneration);
+    assert!((m.peak_dc_link_voltage - 191.7).abs() < 0.1 && m.resistor_energy == 0.0, "{} V", m.peak_dc_link_voltage);
+    assert!(all.iter().all(|v| v.ok) && (value(&all, "dc-link-energy").unwrap() - stored).abs() < 1e-9 && value(&all, "dc-link-overvoltage") == Some(m.peak_dc_link_voltage));
+    assert!(value(&all, "braking-resistor-continuous").is_none());
+
+    let (_, load, all) = run(&["ratings.dc_link_capacitance_uf = 4.7"]);
+    let m = &load.motors[0];
+    let by_hand = (m.energy_regenerated - 2.0 * 0.062) / load.duration;
+    let mean = m.resistor_energy / load.duration;
+    assert!((mean - by_hand).abs() < 0.01 * by_hand && mean > 1.0, "resistor {mean} W, by hand {by_hand} W");
+    assert!((m.peak_dc_link_voltage - 224.65).abs() < 0.01 && m.peak_resistor_power > 30.0 && m.peak_resistor_power < 62.0, "{} V, {} W", m.peak_dc_link_voltage, m.peak_resistor_power);
+    assert!(all.iter().all(|v| v.ok), "{all:?}");
+    assert_eq!((value(&all, "braking-resistor-continuous"), value(&all, "braking-resistor-peak")), (Some(mean), Some(m.peak_resistor_power)));
+
+    let (mut sim, load, all) = run(&["ratings.dc_link_capacitance_uf = 4.7", "ratings.braking_resistor_peak_w = 5.0"]);
+    sim.step();
+    assert!(sim.control.drives[0].tripped && !sim.control.enabled() && sim.torque[0] == 0.0);
+    assert!(load.motors[0].peak_dc_link_voltage > 257.6 && load.motors[0].peak_dc_link_voltage < 258.6, "{} V", load.motors[0].peak_dc_link_voltage);
+    let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+    assert_eq!(failed, ["dc-link-overvoltage"]);
+    // Tripped drives refuse commands like disabled ones; enabling them starts with the DC link at the bus level.
+    assert_eq!(sim.command(sim_components::Command::StartCycle).unwrap_err().key, "error-disabled");
+    sim.command(sim_components::Command::Enable).unwrap();
+    assert!(sim.control.enabled() && !sim.control.drives[0].tripped && sim.control.drives[0].dc_voltage == 155.13);
+    // A threshold that is not between the bus voltage and the trip level is refused.
+    let mut cfg = ideal_rigid();
+    cfg.set_text("effects.dc_link = true").unwrap();
+    cfg.set_text("drive.bus_voltage_v = 260.0").unwrap();
+    assert!(Sim::new(&ENTRY, &cfg).is_err());
+}
+
+/// Fieldbus delay: the drives get the setpoints three profile cycles of 1 ms late, so with everything
+/// else alike the carriage does at t + 3 ms what it did at t without the delay. At the cruise speed of
+/// 1 m/s that is 3 mm behind.
+#[test]
+fn a_fieldbus_delay_shifts_the_move_by_its_cycles() {
+    let positions = |cycles: usize| {
+        let mut cfg = ideal_rigid();
+        cfg.set_text(&format!("effects.fieldbus_delay = {}", cycles > 0)).unwrap();
+        cfg.set_text(&format!("profile.fieldbus_delay_cycles = {cycles}")).unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+        let mut trace = Vec::new();
+        sim.run(1.5, |s| trace.push(s.state[0]));
+        trace
+    };
+    let (plain, late) = (positions(0), positions(3));
+    let shift = (3.0 * 1e-3 / DT).round() as usize;
+    let off = |shift: usize| plain.iter().zip(&late[shift..]).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+    assert!(off(shift) < 1e-12, "{} m off the shifted trace", off(shift));
+    assert!((off(0) - 3e-3).abs() < 0.01 * 3e-3, "{} m behind", off(0));
+    assert!((plain[plain.len() - 1] - 0.9).abs() < 1e-6 && (late[late.len() - 1] - 0.9).abs() < 1e-6);
+}
+
+/// Radial load on the pulley shaft against a hand calculation. On a vertical axis the 6 kg hang on the long
+/// belt section: T2 - T1 = 58.84 N. The belt as a whole keeps its length, so L1 T1 + L2 T2 stays
+/// (L1 + L2) * 300 N; with L1 = 0.65 m and L2 = 1.95 m at x = 0.5 m that gives T1 = 300 - 58.84 * 0.75 and
+/// T2 = 300 + 58.84 * 0.25. Both pull the shaft the same way: T1 + T2 = 600 - 58.84 * 0.5 = 570.58 N.
+#[test]
+fn radial_load_on_the_pulley_shaft_is_the_sum_of_both_section_tensions() {
+    let m = machine(lossless_config(), &["geometry.incline_deg = 90.0"]);
+    let (mut state, mut hold) = (Vec::new(), [0.0]);
+    m.equilibrium(&[0.5], &mut state, &mut hold);
+    let radial = signal(&m, &state, hold[0], "pulley.m.radial_load");
+    assert!((radial - 570.58).abs() < 0.02, "{radial} N");
+    assert!((signal(&m, &state, hold[0], "belt.2.tension") - 300.0 - 58.84 * 0.25).abs() < 0.02);
+    // Level, nothing hangs on the belt, and the guide carries the weight instead.
+    let level = machine(lossless_config(), &[]);
+    level.equilibrium(&[0.5], &mut state, &mut hold);
+    assert!((signal(&level, &state, hold[0], "pulley.m.radial_load") - 600.0).abs() < 1e-6);
+    assert!((signal(&level, &state, hold[0], "axis.x.guide_load") - 6.0 * G).abs() < 1e-12 && signal(&m, &state, hold[0], "axis.x.guide_load").abs() < 1e-12);
+}
+
+/// Hard stops against a hand calculation. The motor pushes the carriage into the stop at x = 0 with 0.1 N m,
+/// which is 0.1 * 5 / 0.02 = 25 N; a stop of 1e6 N/m gives way by 25 um. The same at the far end. Friction
+/// would hold part of the force, so it is off.
+#[test]
+fn a_carriage_pushed_into_the_hard_stop_rests_at_the_hand_calculated_depth() {
+    let edit = ["effects.guide_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.tooth_meshing = false"];
+    // (how far beyond the end of the stroke, speed) after 2 s of pushing.
+    let pushed = |m: &SingleAxis, end: f64, push: f64| {
+        let (mut state, mut hold) = (Vec::new(), [0.0]);
+        m.equilibrium(&[end], &mut state, &mut hold);
+        simulate(m, &mut state, 2.0, |_| hold[0] + push, |_, _, _| {});
+        (state[0] - end, state[3])
+    };
+    let m = machine(ENTRY.config(), &edit);
+    for (end, push, by_hand) in [(0.0, -0.1, -25e-6), (1.0, 0.1, 25e-6)] {
+        let (beyond, speed) = pushed(&m, end, push);
+        assert!((beyond - by_hand).abs() < 0.01 * by_hand.abs(), "{beyond} m beyond the stroke, by hand {by_hand} m");
+        assert!(speed.abs() < 1e-6, "still moving at {speed} m/s");
+    }
+    // Without stops nothing holds the carriage: in 2 s it is far beyond the end.
+    let mut open = edit.to_vec();
+    open.push("effects.hard_stops = false");
+    assert!(pushed(&machine(ENTRY.config(), &open), 0.0, -0.1).0 < -1.0);
+}
+
+/// Error bands on the verdicts: with a bound on the moved mass, the band on the gearbox's peak torque is the
+/// hand calculation at the low and at the high mass, and a verdict that passes with the config as it is
+/// but not at a bound fails with bands.
+#[test]
+fn a_bound_on_the_moved_mass_gives_the_hand_calculated_band_and_fails_the_verdict_it_reaches() {
+    use sim_components::analysis::{Band, bounds, verdict_bands};
+    let mut cfg = ideal_rigid();
+    let mass = [("mass.carriage_kg".to_string(), 3.0, 6.0)];
+    // Torque is in proportion to the inertia moved. At the gearbox output, at 10 m/s^2:
+    // (m + J_pulley / r^2) r a = 0.2 (m + 0.25) N m, so 0.65, 0.85 and 1.25 N m for 3, 4 and 6 kg.
+    let by_hand = |m: f64| 0.2 * (m + 1.0e-4 / (0.02 * 0.02));
+    let peak = |bands: Vec<Band>| bands.into_iter().find(|b| b.verdict.check == "gearbox-peak").unwrap();
+    let band = peak(verdict_bands(&ENTRY, &cfg, &mass).unwrap());
+    for (value, m) in [(band.low, 3.0), (band.verdict.value, 4.0), (band.high, 6.0)] {
+        assert!((value - by_hand(m)).abs() < 0.02 * by_hand(m), "{value} N m with {m} kg, by hand {} N m", by_hand(m));
+    }
+    assert!(band.verdict.ok && band.ok);
+
+    // A gearbox that allows 1 N m is enough for 4 kg and not for 6 kg.
+    cfg.set_text("ratings.gearbox_max_torque_nm = 1.0").unwrap();
+    let band = peak(verdict_bands(&ENTRY, &cfg, &mass).unwrap());
+    assert!(band.verdict.ok && !band.ok, "{band:?}");
+    // Without bounds the band is the value itself.
+    let alone = peak(verdict_bands(&ENTRY, &cfg, &[]).unwrap());
+    assert!(alone.ok && (alone.low, alone.high) == (alone.verdict.value, alone.verdict.value));
+
+    // The bounds of a config are read from its [bounds]; one on a value the config does not have is refused.
+    assert!(bounds(&ENTRY.config()).unwrap().contains(&("friction_x.coulomb_n".to_string(), 10.0, 20.0)));
+    let typo = Config::parse(&ENTRY.default_config.replace("[bounds]\n", "[bounds]\nmass.cariage_kg = [3.0, 5.0]\n")).unwrap();
+    assert_eq!(bounds(&typo).unwrap_err().detail(), "mass.cariage_kg");
+}
+
+/// The optimiser finds a shorter cycle that still passes every verdict, and refuses a cycle that fails
+/// one to begin with.
+#[test]
+fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
+    use sim_components::analysis::{optimise_cycle, verdicts};
+    let cfg = ENTRY.config();
+    let found = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
+    assert!(found.runs <= 14 && found.after.duration < 0.95 * found.before.duration, "{} s to {} s", found.before.duration, found.after.duration);
+    // The settings it reports give that cycle, and the cycle passes.
+    let mut faster = cfg.clone();
+    for (path, _, after) in &found.changes {
+        faster.set_text(&format!("{path} = {after}")).unwrap();
+    }
+    assert!(!found.changes.is_empty());
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &faster).unwrap()).unwrap();
+    assert!((load.duration - found.after.duration).abs() < 1e-9 && verdicts(&faster, &load).unwrap().iter().all(|v| v.ok));
+    assert!(load.dwell_error_peak <= cfg.f64("ratings.settling_tolerance_m").unwrap());
+
+    // With a tolerance no machine meets, the cycle as configured fails and there is nothing to start from.
+    let mut strict = cfg.clone();
+    strict.set_text("ratings.settling_tolerance_m = 1.0e-9").unwrap();
+    assert!(optimise_cycle(&ENTRY, &strict, 14).is_err());
+}
+
+/// A drive trace of the axis going to the far end and back, one row per millisecond as a run writes it,
+/// with measurement noise on torque (0.005 N m, about 1 % of the peak), speed (0.1 rad/s) and angle.
+fn noisy_trace(cfg: &Config, noise: &mut Noise) -> Trace {
+    let mut sim = Sim::new(&ENTRY, cfg).unwrap();
+    let mut trace = Trace::default();
+    for target in [0.9, 0.1] {
+        sim.command(sim_components::Command::MoveTo(vec![target])).unwrap();
+        for _ in 0..1300 {
+            trace.record(&sim);
+            sim.run(1e-3, |_| {});
+        }
+    }
+    let m = &mut trace.motors[0];
+    for row in 0..m.torque.len() {
+        m.torque[row] += 0.005 * noise.next();
+        m.speed[row] += 0.1 * noise.next();
+        m.angle[row] += 1e-5 * noise.next();
+    }
+    trace
+}
+
+/// Fitting: measurements of a machine that is 1.5 kg heavier than the config, with 1.4 times the Coulomb
+/// friction, 1.3 times the viscous friction and 0.7 times the belt stiffness, with noise on them, are
+/// fitted against the unchanged config. The fit has to find these within its own error bands.
+#[test]
+fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measurements() {
+    let coulomb = ["friction_x.coulomb_n", "friction_x.stiction_n", "motor.friction_coulomb_nm"];
+    let viscous = ["friction_x.viscous_n_s_m", "motor.friction_viscous_nm_s_rad"];
+    let scale = |cfg: &mut Config, paths: &[&str], factor: f64| {
+        for path in paths {
+            cfg.set_text(&format!("{path} = {:?}", cfg.f64(path).unwrap() * factor)).unwrap();
+        }
+    };
+    let mut truth = ENTRY.config();
+    scale(&mut truth, &["mass.carriage_kg", "mass.payload_kg"], 1.25);
+    scale(&mut truth, &coulomb, 1.4);
+    scale(&mut truth, &viscous, 1.3);
+    scale(&mut truth, &["belt.stiffness_ea_n"], 0.7);
+    let trace = noisy_trace(&truth, &mut Noise(1));
+
+    // Stage 1, the rigid values. The lumped mass of the config: 6 kg plus pulley, rotor and belt.
+    let mut cfg = ENTRY.config();
+    let fit = fit_rigid(&ENTRY, &cfg, &trace).unwrap()[0].clone().unwrap();
+    let m_total = 6.0 + (1.0e-4 + 25.0 * 0.3e-4 + 0.1 * 2.6 * 0.02 * 0.02) / (0.02 * 0.02);
+    assert!((fit.config[0] - m_total).abs() < 0.03 * m_total, "config mass {} kg, by hand {m_total} kg", fit.config[0]);
+    let errors = [fit.error[0], fit.error[1] / fit.config[1], fit.error[2] / fit.config[2], fit.error[3]];
+    let found = [fit.fitted[0] - fit.config[0], fit.fitted[1] / fit.config[1], fit.fitted[2] / fit.config[2], fit.fitted[3] - fit.config[3]];
+    // Mass in kg, friction as factors, and no constant force on a level axis.
+    for (q, expected) in [1.5, 1.3, 1.4, 0.0].into_iter().enumerate() {
+        assert!((found[q] - expected).abs() < 3.0 * errors[q], "value {q}: {} ± {}, expected {expected}", found[q], errors[q]);
+    }
+    // The bands are narrow enough to be of use: 1 % of the mass, 2 % of the friction.
+    assert!(errors[0] < 0.01 * fit.fitted[0] && errors[1] < 0.02 && errors[2] < 0.02, "{errors:?}");
+
+    // The changes as the command line advises them, then a second pass. Through the gearbox's losses a
+    // wrong friction looks a little like mass and the other way round; the second pass takes that out.
+    let apply = |cfg: &mut Config, fit: &sim_components::identify::AxisFit| {
+        cfg.set_text(&format!("mass.carriage_kg = {:?}", cfg.f64("mass.carriage_kg").unwrap() + fit.fitted[0] - fit.config[0])).unwrap();
+        scale(cfg, &viscous, fit.fitted[1] / fit.config[1]);
+        scale(cfg, &coulomb, fit.fitted[2] / fit.config[2]);
+    };
+    apply(&mut cfg, &fit);
+    let second = fit_rigid(&ENTRY, &cfg, &trace).unwrap()[0].clone().unwrap();
+    apply(&mut cfg, &second);
+    let (mass, drag, dry) = (cfg.f64("mass.carriage_kg").unwrap() + 2.0, cfg.f64(viscous[0]).unwrap(), cfg.f64(coulomb[0]).unwrap());
+    assert!((mass - 7.5).abs() < errors[0], "carriage and payload {mass} kg, in truth 7.5 kg");
+    assert!((drag / 26.0 - 1.0).abs() < 2.0 * errors[1] && (dry / 21.0 - 1.0).abs() < 2.0 * errors[2], "viscous {drag} N s/m of 26, Coulomb {dry} N of 21");
+
+    // Stage 2, the stiffness, from a frequency sweep of the measured machine with 2 % noise on its gains,
+    // against the sweep of the config with the masses now right. The torque has to be large enough to
+    // break the friction loose; the gearbox's play then lowers the dip, in both sweeps alike.
+    let frequencies = log_spaced(50.0, 130.0, 40);
+    let mut noise = Noise(2);
+    let mut measured = frequency_sweep(&ENTRY, &truth, 0, &frequencies, 1.5).unwrap();
+    measured.iter_mut().for_each(|p| p.gain *= 1.0 + 0.02 * noise.next());
+    let (config, fitted) = (resonance(&frequency_sweep(&ENTRY, &cfg, 0, &frequencies, 1.5).unwrap()).unwrap(), resonance(&measured).unwrap());
+    // By hand for the config: belt sections of 0.25 m and 2.35 m and the gearbox in series, 7.5 kg on them.
+    // The play makes the spring softer than that, so the dip lies lower, but not by much.
+    let k = 1.0 / (1.0 / (5.0e5 * (1.0 / 0.25 + 1.0 / 2.35)) + 0.02 * 0.02 / 1.0e4);
+    let by_hand = f64::sqrt(k / 7.5) / std::f64::consts::TAU;
+    assert!(config.frequency < by_hand && config.frequency > 0.85 * by_hand, "dip at {} Hz, by hand {by_hand} Hz", config.frequency);
+    let stiffness = (fitted.frequency / config.frequency).powi(2);
+    let band = 2.0 * stiffness * fitted.frequency_error / fitted.frequency;
+    // The belt is not the only spring: with the gearbox in series, 0.7 on the belt is 0.72 on the whole.
+    assert!((stiffness - 0.7).abs() < 3.0 * band && band < 0.03, "stiffness factor {stiffness} ± {band}, belt in truth 0.7");
+    assert!(fitted.damping > 0.03 && fitted.damping < 0.3, "damping {}", fitted.damping);
+}
+
+/// Time-optimal timing against a hand calculation: on a straight line the motor gives its share of the peak
+/// torque (0.8 of 0.5 N m) until it turns at its rated speed, and the same to brake. The acceleration a comes
+/// and goes at the jerk limit j, which adds a / j: distance / v + v / a + a / j. With a jerk limit of
+/// 1e5 m/s^3 that is 0.714 s, 0.16 ms more than without one. With the config's 100 m/s^3 a ramp to
+/// v = 1.256 m/s is over before the acceleration reaches the 16.3 m/s^2 the torque allows (that takes a
+/// change of speed of a^2 / j = 2.67 m/s): each ramp takes 2 sqrt(v / j) and reaches sqrt(v j) = 11.2 m/s^2,
+/// so the line takes distance / v + 2 sqrt(v / j) = 0.861 s.
+#[test]
+fn a_time_optimal_line_takes_the_hand_calculated_time() {
+    let mut cfg = ideal_rigid();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    cfg.set_text("axis.x.max_jerk_m_s3 = 1.0e5").unwrap();
+    // Carriage plus pulley and rotor inertia, through radius and gear ratio (as in the reference cycle).
+    let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
+    let (a, v, dist) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, 314.0 * 0.02 / 5.0, 0.8);
+    let by_hand = dist / v + v / a + a / 1e5;
+    let line = [sim_components::path::Piece::Line(vec![0.9])];
+    let duration = |cfg: &Config| {
+        let points = Sim::new(&ENTRY, cfg).unwrap().plan_path(&line, true).unwrap();
+        // To the last bit or the one before it: the end is the start plus the length of the line.
+        assert!((points[points.len() - 1].1[0] - 0.9).abs() < 1e-15, "ends at {:?}", points[points.len() - 1].1);
+        // The top speed and the hardest acceleration of the plan, by differences.
+        let speed = points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]) / 1e-3).fold(0.0, f64::max);
+        let acc = points.windows(3).map(|w| ((w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / 1e-6).abs()).fold(0.0, f64::max);
+        (points[points.len() - 1].0, speed, acc)
+    };
+    let (time, top, hardest) = duration(&cfg);
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    assert!((top - v).abs() < 1e-3 * v && (hardest - a).abs() < 1e-3 * a, "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {a} m/s^2");
+    cfg.set_text("axis.x.max_jerk_m_s3 = 100.0").unwrap();
+    let (by_hand, gentler) = (dist / v + 2.0 * (v / 100.0f64).sqrt(), (v * 100.0f64).sqrt());
+    let (time, top, hardest) = duration(&cfg);
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    // The acceleration peaks for an instant, which differences over a cycle of 1 ms round off by 0.3 %.
+    assert!((top - v).abs() < 1e-3 * v && (hardest - gentler).abs() < 5e-3 * gentler, "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {gentler} m/s^2");
+    // The plan within the axis limits (1 m/s, 10 m/s^2) is slower, and an arc needs two axes.
+    cfg.set_text("drive.peak_torque_nm = 3.8").unwrap();
+    let sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let (fast, slow) = (sim.plan_path(&line, true).unwrap(), sim.plan_path(&line, false).unwrap());
+    assert!(fast[fast.len() - 1].0 < slow[slow.len() - 1].0);
+    let arc = sim_components::path::parse("arc,0.9,0.5,0.5,0.5,cw").unwrap();
+    assert_eq!(sim.plan_path(&arc, false).unwrap_err().key, "error-path");
+}
+
+/// A drive on its torque limit fails "motor-peak". With 120 kg of payload, accelerating at 10 m/s^2 takes
+/// (124 kg + 2.125 kg of pulley and rotor) * 10 m/s^2 * 0.02 m / 5 = 5.05 N m, which the 3.8 N m motor does
+/// not have: the drive sits on its limit and the carriage falls behind. The delivered torque never exceeds
+/// the curve it is clamped to, so judged by it the cycle passed with 0.97; the torque the velocity loop
+/// asks for shows the 5.05 / 3.8 = 1.33 and more. (Without the simulated DC link: braking 124 kg is more than
+/// the placeholder braking resistor takes, and a drive that trips shows nothing of its torque limit.)
+#[test]
+fn a_cycle_on_the_torque_limit_fails_the_peak_verdict() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("mass.payload_kg = 120.0").unwrap();
+    cfg.set_text("effects.dc_link = false").unwrap();
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+    let m = &load.motors[0];
+    assert!(m.peak_torque < 1.03 * 3.8 && load.tracking_error_peak > 0.01, "{} N m, {} m behind", m.peak_torque, load.tracking_error_peak);
+    assert!(m.utilisation > 5.05 / 3.8, "utilisation {}", m.utilisation);
+    let peak = sim_components::analysis::verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "motor-peak").unwrap();
+    assert!(!peak.ok && peak.value == m.utilisation);
+    // The default cycle asks for what it gets: the two ways of counting agree within the lag of the current loop.
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &ENTRY.config()).unwrap()).unwrap();
+    let m = &load.motors[0];
+    assert!((m.utilisation - m.peak_torque / 3.8).abs() < 0.05 * m.utilisation, "utilisation {}, peak {} N m", m.utilisation, m.peak_torque);
+}
+
+/// The gearbox verdicts judge the torque at the gearbox output, not the motor torque times the ratio. On a
+/// vertical axis with a gearbox of 0.9 efficiency the two differ both ways.
+/// (a) Rigid model, 4 kg at a steady 0.5 m/s. The output holds the weight whichever way it moves:
+/// 4 kg * 9.80665 m/s^2 * 0.02 m = 0.7845 N m. Lifting, the motor gives 0.7845 / (5 * 0.9) = 0.1743 N m, and
+/// times the ratio that reads 0.8717 N m. Lowering, the load drives the gearbox back, the motor holds back
+/// with 0.9 * 0.7845 / 5 = 0.1412 N m, and times the ratio that reads 0.7061 N m, a tenth too little.
+/// (b) Elastic model, 6 kg lowered: the gear's spring passes 6 * 9.80665 * 0.02 = 1.1768 N m on to the pulley
+/// while the motor holds back with 0.9 of it.
+/// (c) The cycle of the vertical axis, 0.8 m up and down at 10 m/s^2: the output's peak is weight plus
+/// carriage and pulley, (4 * 9.80665 + 4.25 * 10) N * 0.02 m = 1.6345 N m, reached lifting off and again
+/// braking the fall. The motor's peak is the lift-off: 1.6345 / 0.9 through the gearbox and 25 J_rotor / r^2 =
+/// 1.875 kg of its own rotor, 0.375 N m, together 2.191 N m at the output side, a third more than is there.
+#[test]
+fn the_gearbox_verdicts_judge_the_torque_at_the_gearbox_output() {
+    let lossy = ["geometry.incline_deg = 90.0", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.9"];
+    let m = rigid(&[&lossy[..], &["effects.payload = false", "effects.belt_mass = false"]].concat());
+    let weight = 4.0 * G * 0.02;
+    for (speed, motor) in [(0.5, weight / (5.0 * 0.9)), (-0.5, 0.9 * weight / 5.0)] {
+        let (state, mut d) = ([0.5, speed, 0.0], [0.0; N_RIGID]);
+        m.derivatives(&state, &[motor], &mut d);
+        let output = signal(&m, &state, motor, "gearbox.m.output_torque");
+        assert!(d[1].abs() < 1e-9 && (output - weight).abs() < 1e-9 && (weight - 0.7845).abs() < 1e-4, "at {speed} m/s: {output} N m, {} m/s^2", d[1]);
+        assert!((5.0 * motor / weight - if speed > 0.0 { 1.0 / 0.9 } else { 0.9 }).abs() < 1e-12);
+    }
+
+    let m = machine(lossless_config(), &[&lossy[..], &["effects.belt_damping = true", "gearbox.damping_nm_s_rad = 0.2"]].concat());
+    let (mut state, mut hold) = (Vec::new(), [0.0]);
+    m.equilibrium(&[0.6], &mut state, &mut hold);
+    m.set_tool_velocity(&mut state, &[-0.5]);
+    simulate(&m, &mut state, 0.4, |_| 0.9 * hold[0], |_, _, _| {});
+    let output = signal(&m, &state, 0.9 * hold[0], "gearbox.m.output_torque");
+    assert!((state[3] + 0.5).abs() < 2e-3 && (output - 1.1768).abs() < 0.01 * 1.1768, "{} m/s, {output} N m", state[3]);
+
+    let mut cfg = ideal_rigid();
+    for e in lossy.iter().chain(&["effects.dc_link = false"]) {
+        cfg.set_text(e).unwrap();
+    }
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+    let peak = sim_components::analysis::verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "gearbox-peak").unwrap();
+    let (by_hand, motor) = ((4.0 * G + 4.25 * 10.0) * 0.02, 5.0 * load.motors[0].peak_torque);
+    assert!((peak.value - by_hand).abs() < 0.02 * by_hand, "{} N m at the output, by hand {by_hand} N m", peak.value);
+    assert!((motor - (by_hand / 0.9 + 0.375)).abs() < 0.02 * motor, "{motor} N m by the motor torque");
+    println!("output {} N m, by hand {by_hand} N m; motor torque times ratio {motor} N m", peak.value);
+}
+
+/// Error bands with an interaction: two values that each pass alone at their bound and fail together.
+/// With the payload on, the gearbox output carries (carriage + payload + J_pulley / r^2) r a =
+/// 0.2 (m_c + m_p + 0.25) N m at 10 m/s^2: 1.25 N m for 4 kg and 2 kg. The carriage may weigh up to 6 kg and
+/// the payload up to 4 kg: either alone at its bound gives 0.2 * 8.25 = 1.65 N m, both together 0.2 * 10.25 =
+/// 2.05 N m. A gearbox that allows 1.75 N m passes with each value alone at its bounds and fails as soon as the
+/// two together are more than 2.5 kg over. Spread evenly over 2 kg by 2 kg that is the corner triangle with
+/// sides of 1.5 kg, 1.125 / 4 = 28 % of the runs: 72 % pass.
+#[test]
+fn sampled_bands_find_the_two_masses_that_fail_only_together() {
+    use sim_components::analysis::{Band, verdict_bands, verdict_bands_sampled};
+    let mut cfg = ideal_rigid();
+    cfg.set_text("effects.payload = true").unwrap();
+    cfg.set_text("ratings.gearbox_max_torque_nm = 1.75").unwrap();
+    let masses = [("mass.carriage_kg".to_string(), 4.0, 6.0), ("mass.payload_kg".to_string(), 2.0, 4.0)];
+    let peak = |bands: Vec<Band>| bands.into_iter().find(|b| b.verdict.check == "gearbox-peak").unwrap();
+    let near = |value: f64, by_hand: f64| (value - by_hand).abs() < 0.02 * by_hand;
+
+    let alone = peak(verdict_bands(&ENTRY, &cfg, &masses).unwrap());
+    assert!(alone.ok && alone.share == 1.0 && near(alone.verdict.value, 1.25) && near(alone.low, 1.25) && near(alone.high, 1.65), "{alone:?}");
+
+    let together = peak(verdict_bands_sampled(&ENTRY, &cfg, &masses, 40, 1).unwrap());
+    assert!(together.verdict.ok && !together.ok, "{together:?}");
+    // No run is beyond the corner, and with 40 values spread over each range some come close to it.
+    assert!(together.low > 0.98 * 1.25 && together.high < 1.02 * 2.05 && together.high > 1.85, "{together:?}");
+    assert!((together.share - 0.72).abs() < 0.1, "{} of the runs pass, by hand 0.72", together.share);
+    // The same seed gives the same runs, another seed others.
+    assert_eq!(together, peak(verdict_bands_sampled(&ENTRY, &cfg, &masses, 40, 1).unwrap()));
+    let other = peak(verdict_bands_sampled(&ENTRY, &cfg, &masses, 40, 2).unwrap());
+    assert!(other.high != together.high && !other.ok && (other.share - 0.72).abs() < 0.1, "{other:?}");
+    assert_eq!(verdict_bands_sampled(&ENTRY, &cfg, &masses, 0, 1).unwrap_err().detail(), "samples");
+    println!("alone {:.4} to {:.4} N m; together {:.4} to {:.4} N m, {:.3} pass; seed 2: {:.4} N m, {:.3} pass", alone.low, alone.high, together.low, together.high, together.share, other.high, other.share);
+}
+
+/// Carriage with payload, pulley and rotor as mass at the belt, without belt mass:
+/// 6 kg + (J_pulley + 25 J_rotor) / r^2 = 8.125 kg.
+const M_RIGID: f64 = 6.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
+
+/// Cable chain against a hand calculation at two positions. The chain is fixed at x = 0, so 0.3 m + x / 2
+/// of it moves with the carriage: 0.5 kg/m * 0.35 m = 0.175 kg at x = 0.1 m, 0.5 * 0.75 = 0.375 kg at 0.9 m.
+/// Accelerating at 8 m/s2 takes 1.4 N and 3.0 N more. At 0.5 m/s the chain drags with 3 N, and picking up
+/// 0.25 kg per metre takes another 0.25 * 0.5^2 / 2 N. On an axis inclined by 30 degrees the motor also holds
+/// half the weight of the moving run: 0.175 kg * 9.80665 m/s^2 / 2 = 0.858 N at x = 0.1 m, 1.839 N at 0.9 m.
+#[test]
+fn cable_chain_adds_the_hand_calculated_force_at_two_positions() {
+    let chained = ["effects.cable_chain = true", "cable_chain.drag_n = 3.0", "effects.belt_mass = false"];
+    let (m, plain) = (rigid(&chained), rigid(&["effects.belt_mass = false"]));
+    for (x, chain) in [(0.1, 0.175), (0.9, 0.375)] {
+        let (mut with, mut without) = ([0.0], [0.0]);
+        m.feedforward_torque(&[x], &[8.0], &mut with);
+        plain.feedforward_torque(&[x], &[8.0], &mut without);
+        // Force to motor torque: r / i.
+        let extra_force = (with[0] - without[0]) * 5.0 / 0.02;
+        assert!((extra_force - chain * 8.0).abs() < 1e-9, "x = {x}: {extra_force} N");
+        // The model answers that torque with that acceleration.
+        let mut d = [0.0; N_RIGID];
+        m.derivatives(&[x, 0.0, 0.0], &with, &mut d);
+        assert!((d[1] - 8.0).abs() < 1e-9, "x = {x}: {d:?}");
+        // Coasting, the drag and the chain it picks up brake.
+        m.derivatives(&[x, 0.5, 0.0], &[0.0], &mut d);
+        assert!((d[1] + (3.0 + 0.25 * 0.25 / 2.0) / (M_RIGID + chain)).abs() < 1e-9, "x = {x}: {}", d[1]);
+
+        // The elastic model: the carriage alone (6 kg with payload) carries the chain.
+        let elastic = machine(lossless_config(), &chained);
+        let (mut state, mut hold, mut d) = (Vec::new(), [0.0], [0.0; N_ELASTIC]);
+        elastic.equilibrium(&[x], &mut state, &mut hold);
+        state[3] = 0.5;
+        elastic.derivatives(&state, &hold, &mut d);
+        assert!((d[3] + (3.0 + 0.25 * 0.25 / 2.0) / (6.0 + chain)).abs() < 1e-6, "x = {x}: {}", d[3]);
+
+        // Inclined by 30 degrees, both models hold the moving run's weight along the axis as well.
+        let incline = [&chained[..], &["geometry.incline_deg = 30.0"]].concat();
+        let extra = chain * G * 0.5 * 0.02 / 5.0;
+        for (model, tolerance) in [(rigid(&incline), 1e-12), (machine(lossless_config(), &incline), 2e-6)] {
+            let bare = machine(lossless_config(), &["geometry.incline_deg = 30.0", "effects.belt_mass = false", if model.elastic { "effects.belt_stretch = true" } else { "effects.belt_stretch = false" }]);
+            let (mut with, mut without) = ([0.0], [0.0]);
+            model.equilibrium(&[x], &mut state, &mut with);
+            bare.equilibrium(&[x], &mut state, &mut without);
+            assert!((with[0] - without[0] - extra).abs() < tolerance, "x = {x}: {} N m more to hold, by hand {extra} N m", with[0] - without[0]);
+        }
+    }
+}
+
+/// Process force against a hand calculation. While the cycle dwells the carriage is pushed with 10 N towards
+/// +x. The motor holds against it with r / i * F = 0.004 m * 10 N = 0.04 N m less. Friction would take a share
+/// of a force this small, so it is off.
+#[test]
+fn process_force_changes_the_holding_torque_by_the_hand_calculated_amount() {
+    let dwell_torque = |process: bool| {
+        let mut cfg = Config::parse(&ENTRY.default_config.replace("dwell_s = 0.1", "dwell_s = 1.0")).unwrap();
+        for effect in ["guide_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "tooth_meshing"] {
+            cfg.set_text(&format!("effects.{effect} = false")).unwrap();
+        }
+        cfg.set_text(&format!("effects.process_force = {process}")).unwrap();
+        cfg.set_text("process.force_x_n = 10.0").unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let index = sim.signal_index("motor.m.torque").unwrap();
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        // Mean torque over the second half of the first dwell.
+        let (mut sum, mut n, mut sample) = (0.0, 0.0, Vec::new());
+        loop {
+            sim.step();
+            match sim.control.dwell_progress() {
+                Some(done) if done > 0.5 => {
+                    sim.sample(&mut sample);
+                    (sum, n) = (sum + sample[index], n + 1.0);
+                }
+                None if n > 0.0 => return sum / n,
+                _ => assert!(sim.time() < 10.0, "the cycle never dwells"),
+            }
+        }
+    };
+    let (with, without) = (dwell_torque(true), dwell_torque(false));
+    assert!((with - without + 0.04).abs() < 0.02 * 0.04, "{} N m", with - without);
+}
+
+/// Holding brake against a hand calculation, on the axis set upright. Disabled, the motor has to hold
+/// m g r / i = 6 * 9.80665 * 0.02 / 5 = 0.2354 N m. A brake of 0.26 N m holds the carriage. One of 0.2 N m slips
+/// with its torque: it carries 0.2 * 5 / 0.02 = 50 N of the 58.84 N weight, and the rest accelerates carriage,
+/// pulley and rotor, a = 8.84 N / 8.125 kg = 1.088 m/s2, so it falls 136 mm in half a second.
+#[test]
+fn the_holding_brake_holds_the_upright_axis_when_it_is_strong_enough() {
+    use sim_components::Command;
+    let disabled = |brake_torque: f64| {
+        let mut cfg = lossless_config();
+        for e in ["effects.holding_brake = true", "effects.belt_mass = false", "geometry.incline_deg = 90.0", "start.pose = [0.5]", &format!("motor.brake_torque_nm = {brake_torque:?}")] {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(Command::Disable).unwrap();
+        sim.run(0.5, |_| {});
+        sim
+    };
+    let mut held = disabled(0.26);
+    assert!((held.state[0] - 0.5).abs() < 1e-4 && held.torque[0] == 0.0, "held at {} m", held.state[0]);
+    // Nothing moves a disabled machine; enabled again, the drive holds where it stands.
+    assert_eq!(held.command(Command::MoveTo(vec![0.6])).unwrap_err().key, "error-disabled");
+    held.command(Command::Enable).unwrap();
+    held.run(0.3, |_| {});
+    assert!((held.state[0] - 0.5).abs() < 1e-4 && held.command(Command::MoveTo(vec![0.6])).is_ok());
+
+    let fell = 0.5 - disabled(0.2).state[0];
+    let by_hand = 0.5 * (6.0 * G - 0.2 * 5.0 / 0.02) / M_RIGID * 0.5 * 0.5;
+    assert!((fell - by_hand).abs() < 0.03 * by_hand, "fell {fell} m, by hand {by_hand} m");
+    println!("fell {fell} m, by hand {by_hand} m");
+}
+
+/// The mapping from a tool pose into the scene, for drawing paths there: it is where the scene draws the
+/// carriage. By hand at x = 0.3 m: the beam starts 0.15 m left of x = 0, so 0.45 m across, 0.03 m in front of
+/// the beam and 0.06 m above its middle. Moving the carriage moves the point by as much.
+#[test]
+fn the_scene_point_of_a_tool_pose_is_where_the_scene_draws_the_carriage() {
+    for m in [rigid(&[]), machine(ENTRY.config(), &[])] {
+        assert_eq!(m.scene_point(&[0.3]).unwrap().map(|v| (v * 1e12).round() / 1e12), [0.45, -0.03, 0.06]);
+        for x in [0.0, 0.1, 0.3, 0.5, 1.0] {
+            let (mut state, mut scene) = (Vec::new(), Scene::default());
+            m.equilibrium(&[x], &mut state, &mut [0.0]);
+            m.scene(&state, &mut scene);
+            let carriage = scene.parts.iter().find(|p| p.id == "carriage").unwrap().pos;
+            let (mut tool, mut speed) = ([0.0], [0.0]);
+            m.tool_state(&state, &mut tool, &mut speed);
+            let mapped = m.scene_point(&tool).unwrap();
+            assert!((0..3).all(|i| (mapped[i] - carriage[i]).abs() < 1e-12) && (mapped[0] - 0.15 - x).abs() < 1e-12, "at {x}: mapped {mapped:?}, drawn {carriage:?}");
+        }
+    }
 }

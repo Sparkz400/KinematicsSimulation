@@ -1,0 +1,30 @@
+# Source: Siemens, catalogue D 32, SINAMICS S210 servo drive system, January 2024, "Technical specifications" of the servo converters.
+# Extracted by catalog/tools/extract_siemens_d32.py; the numbers are the catalogue's, the layout is ours.
+# One row per converter. line_current: rated input current. Output currents are RMS; the power unit
+# switches at 8 kHz. rated_power: at the output, for the supply voltage in the column name.
+# Not extracted: DC link and braking resistor data, frame sizes, dimensions, inputs and outputs.
+article,series,supply,line_current_a,power_loss_w,rated_power_1ac_230v_kw,rated_power_3ac_400v_kw,rated_power_3ac_240v_kw,rated_output_current_a,max_output_current_a
+6SL3210-5HB10-1UF0,S210,200 ... 240 V 1 AC,1.4,15.7,0.1,,,0.8,3.1
+6SL3210-5HB10-2UF0,S210,200 ... 240 V 1 AC,2.7,23.2,0.2,,,1.4,4.8
+6SL3210-5HB10-4UF0,S210,200 ... 240 V 1 AC,5,38.5,0.4,,,2.4,8.7
+6SL3210-5HB10-8UF0,S210,200 ... 240 V 1 AC,9.3,71.1,0.75,,,4.4,16
+6SL3210-5HE10-4UF0,S210,200 ... 480 V 3 AC,1.6,69,,0.4,0.24,1.2,4.2
+6SL3210-5HE10-8UF0,S210,200 ... 480 V 3 AC,2.8,81,,0.75,0.45,2.3,7.6
+6SL3210-5HE11-0UF0,S210,200 ... 480 V 3 AC,3.8,94,,1,0.6,3,10.9
+6SL3210-5HE11-5UF0,S210,200 ... 480 V 3 AC,6,114,,1.5,0.9,5,19
+6SL3210-5HE12-0UF0,S210,200 ... 480 V 3 AC,7.5,131,,2,1.2,7,24
+6SL3210-5HE13-5UF0,S210,200 ... 480 V 3 AC,12.5,167,,3.5,2.1,9,33
+6SL3210-5HE15-0UF0,S210,200 ... 480 V 3 AC,15,191,,5,3,12,44
+6SL3210-5HE17-0UF0,S210,200 ... 480 V 3 AC,17.9,204,,7,4.2,15,55
+6SL5310-1BB10-1CF0,S210 (New),200 ... 240 V 1 AC,1.4,15.7,0.1,,,0.8,3.1
+6SL5310-1BB10-2CF0,S210 (New),200 ... 240 V 1 AC,2.7,23.2,0.2,,,1.4,4.8
+6SL5310-1BB10-4CF0,S210 (New),200 ... 240 V 1 AC,5,38.5,0.4,,,2.4,8.7
+6SL5310-1BB10-8CF0,S210 (New),200 ... 240 V 1 AC,9.3,71.1,0.75,,,4.4,16
+6SL5310-1BE10-4DF0,S210 (New),200 ... 480 V 3 AC,1.6,69,,0.4,0.24,1.2,4.2
+6SL5310-1BE10-8DF0,S210 (New),200 ... 480 V 3 AC,2.8,81,,0.75,0.45,2.3,7.6
+6SL5310-1BE11-0DF0,S210 (New),200 ... 480 V 3 AC,3.8,94,,1,0.6,3,10.9
+6SL5310-1BE11-5DF0,S210 (New),200 ... 480 V 3 AC,6,114,,1.5,0.9,5,19
+6SL5310-1BE12-0DF0,S210 (New),200 ... 480 V 3 AC,7.5,131,,2,1.2,7,24
+6SL5310-1BE13-5DF0,S210 (New),200 ... 480 V 3 AC,12.5,167,,3.5,2.1,9,33
+6SL5310-1BE15-0DF0,S210 (New),200 ... 480 V 3 AC,15,191,,5,3,12,44
+6SL5310-1BE17-0DF0,S210 (New),200 ... 480 V 3 AC,17.9,204,,7,4.2,15,55

@@ -22,9 +22,23 @@ from scipy.optimize import brentq
 HERE = Path(__file__).parent
 cfg = tomllib.loads((HERE.parent / "default.toml").read_text(encoding="utf-8"))
 
-# This script models the default switch positions only.
-expected = {name: name != "temperature" for name in cfg["effects"]}
-assert cfg["effects"] == expected, "effects differ from the defaults this reference implements"
+# The effects of the machine that this script models: they have to be switched on.
+MODELLED = {
+    "gravity", "payload", "belt_stretch", "belt_damping", "belt_slack", "belt_mass", "guide_friction",
+    "load_dependent_friction", "motor_friction", "gearbox_backlash", "gearbox_efficiency", "torque_ripple",
+    "tooth_meshing", "frame_compliance",
+}
+# The effects of the machine that it does not model: they have to be switched off, or the Rust test has to
+# switch them off for the comparison, as it does with the leaning Z axis.
+NOT_MODELLED = {"belt_tooth_stiffness", "belt_material_damping", "idlers", "cable_chain", "process_force", "temperature"}
+OFF_IN_THE_RUST_TEST = {"tool_flex"}
+# Every other switch belongs to the drives and the controller, which take no part in a move driven by given
+# torques, or to the hard stops and the holding brakes, which act only beyond the stroke and with the drives
+# disabled.
+effects = cfg["effects"]
+assert MODELLED | NOT_MODELLED | OFF_IN_THE_RUST_TEST <= effects.keys(), "an effect this reference names is gone from the config"
+assert all(effects[name] for name in MODELLED), "an effect this reference implements is switched off"
+assert not any(effects[name] for name in NOT_MODELLED), "an effect this reference does not implement is switched on"
 
 G = 9.80665
 geo_, mass, belt, motor, gear, frame = (cfg[k] for k in ("geometry", "mass", "belt", "motor", "gearbox", "frame"))
@@ -35,7 +49,7 @@ half_backlash, eta = gear["backlash_rad"] / 2, gear["efficiency"]
 m_z = mass["z_axis_kg"] + mass["payload_kg"]
 m_x = mass["carriage_kg"] + m_z
 m_x_nominal = mass["carriage_kg"] + mass["z_axis_kg"]
-j_rotor = motor["rotor_inertia_kgm2"]
+j_rotor = motor["rotor_inertia_kgm2"] + gear["inertia_at_input_kgm2"]
 
 
 def lengths(x, z):

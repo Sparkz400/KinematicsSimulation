@@ -207,12 +207,13 @@ fn axis_limits_are_checked_against_motor_limits() {
     }
 }
 
-/// Determinism: the same config and the same commands give bit-identical traces.
+/// Determinism: the same config and the same commands give bit-identical traces, also with sensor noise,
+/// which is pseudo-random from the seed in the config.
 #[test]
 fn the_same_run_twice_is_bit_identical() {
     for entry in MACHINES {
-        let trace = || {
-            let mut sim = Sim::new(entry, &entry.config()).unwrap();
+        let trace = |edit: &[&str]| {
+            let mut sim = Sim::new(entry, &config(entry, edit)).unwrap();
             sim.command(Command::StartCycle).unwrap();
             let (mut bits, mut sample) = (Vec::new(), Vec::new());
             sim.run(0.5, |s| {
@@ -221,7 +222,10 @@ fn the_same_run_twice_is_bit_identical() {
             });
             bits
         };
-        assert!(trace() == trace(), "{}: two identical runs differ", entry.id);
+        assert!(trace(&[]) == trace(&[]), "{}: two identical runs differ", entry.id);
+        let noisy = trace(&["effects.sensor_noise = true"]);
+        assert!(noisy == trace(&["effects.sensor_noise = true"]), "{}: two identical runs with noise differ", entry.id);
+        assert!(noisy != trace(&["effects.sensor_noise = true", "drive.noise_seed = 2"]), "{}: the seed changes nothing", entry.id);
     }
 }
 
@@ -268,10 +272,10 @@ fn loop_cycles_must_be_whole_multiples_of_the_base_step() {
 fn every_effect_switch_changes_the_traces() {
     for entry in MACHINES {
         // Low pretension, so that accelerating takes a belt section to zero tension and the slack
-        // switch matters; a weak drive and a low bus voltage, so that the torque and voltage limits
-        // matter; a via point, so that corner blending matters.
+        // switch matters; a weak drive and a low bus voltage (100 V at the winding), so that the torque and
+        // voltage limits matter; a via point, so that corner blending matters.
         let mut base = with_via_point(entry);
-        for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 100.0"] {
+        for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 81.65"] {
             base.set_text(e).unwrap();
         }
         let traces = |cfg: &Config| {
@@ -288,6 +292,13 @@ fn every_effect_switch_changes_the_traces() {
         };
         let reference = traces(&base);
         let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
+        // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
+        // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
+        // Their own tests show them working.
+        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose"];
+        // A machine with one drive has nothing to share a DC link with.
+        let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
+        let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link")).collect();
         assert!(effects.len() >= 20, "{}: only {} effect switches", entry.id, effects.len());
         for effect in effects {
             let mut flipped = base.clone();
@@ -383,5 +394,171 @@ fn blended_default_cycles_stay_within_the_axis_limits() {
         let pass = cycle_pass(entry, &cfg);
         assert!(pass.peak_vel <= 1.0 + 1e-9 && pass.peak_acc <= 1.0 + 1e-9, "{}: {} of v max, {} of a max", entry.id, pass.peak_vel, pass.peak_acc);
         assert!(pass.dwell_miss < 1e-12, "{}", entry.id);
+    }
+}
+
+/// `profile.cycle_s` changed while the cycle runs. The controller counts its own profile cycles and
+/// converts what it has stored in them, so the setpoint goes on from where it is: it stays within what an
+/// axis travels in three of the longer cycles of the setpoint of an untouched run (the two generators no
+/// longer tick together), and no single step is larger than one cycle's travel. With the cycle counted from
+/// the step counter, the default T-gantry cycle reconfigured at 2.4 s to 2 ms jumped 0.44 m in X, and a
+/// debug build stopped on a subtraction below zero. With input shaping on, the shaper's stored past is
+/// converted too.
+#[test]
+fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
+    for entry in MACHINES {
+        for (shaping, cycle) in [(false, 2.0e-3), (false, 0.5e-3), (true, 2.0e-3), (true, 0.5e-3)] {
+            let cfg = config(entry, &[&format!("effects.input_shaping = {shaping}")]);
+            let (mut sim, mut plain) = (Sim::new(entry, &cfg).unwrap(), Sim::new(entry, &cfg).unwrap());
+            for s in [&mut sim, &mut plain] {
+                s.command(Command::StartCycle).unwrap();
+                s.run(2.4, |_| {});
+            }
+            // Further on to where an axis moves at more than half its speed limit.
+            let fast = |s: &Sim| s.control.set_vel.iter().zip(s.machine.axes()).any(|(v, a)| v.abs() > 0.5 * a.max_vel);
+            while !fast(&sim) {
+                sim.step();
+                plain.step();
+            }
+            let mut changed = cfg.clone();
+            changed.set_text(&format!("profile.cycle_s = {cycle:?}")).unwrap();
+            sim.reconfigure(entry, &changed).unwrap();
+            let (mut apart, mut step) = (0f64, 0f64);
+            for _ in 0..(0.2 / sim.dt) as usize {
+                let before = sim.control.set_pos.clone();
+                sim.step();
+                plain.step();
+                for (i, axis) in sim.machine.axes().iter().enumerate() {
+                    let per_cycle = axis.max_vel * f64::max(cycle, 1e-3);
+                    apart = apart.max((sim.control.set_pos[i] - plain.control.set_pos[i]).abs() / per_cycle);
+                    step = step.max((sim.control.set_pos[i] - before[i]).abs() / per_cycle);
+                }
+            }
+            assert!(apart < 3.0 && step < 1.01, "{}, shaping {shaping}, to {cycle} s: {apart} cycles of travel from the untouched run, {step} in one step", entry.id);
+            // The cycle goes on to its end with the new profile cycle.
+            let segment = sim.control.cycle_segment();
+            sim.run(3.0, |_| {});
+            assert!(sim.control.cycle_segment().is_some() && (sim.control.cycle_segment() != segment || sim.control.cycle_passes() > 1), "{}", entry.id);
+        }
+    }
+}
+
+/// With input shaping the setpoint arrives one period of the shaper after the plan. The dwell (and with it
+/// the process force) and the gripper wait for the setpoint: while the cycle dwells and whenever the payload
+/// switches, the setpoint is on the target. They used to start with the plan, 40 ms early at 25 Hz, with
+/// the setpoint still half a millimetre away. (On the target to a micrometre, not exactly: where the shaper
+/// follows the pose, the gripper closing lowers the resonance, and the longer period reaches a little
+/// further back into the last crawl of the plan.)
+#[test]
+fn with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived() {
+    for entry in MACHINES {
+        for follows in [false, true] {
+            let cfg = config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
+            let mut sim = Sim::new(entry, &cfg).unwrap();
+            sim.command(Command::StartCycle).unwrap();
+            let on_target = |s: &Sim| s.control.set_pos.iter().zip(s.control.planned_pos()).all(|(set, plan)| (set - plan).abs() < 1e-6);
+            let (mut dwells, mut switches, mut attached, mut dwelling) = (0, 0, sim.control.payload_attached, false);
+            while sim.control.cycle_passes() < 3 {
+                sim.step();
+                let now = sim.control.dwell_progress().is_some();
+                if now || sim.control.payload_attached != attached {
+                    assert!(on_target(&sim), "{} at {} s: setpoint {:?}, plan {:?}", entry.id, sim.time(), sim.control.set_pos, sim.control.planned_pos());
+                }
+                dwells += (now && !dwelling) as usize;
+                switches += (sim.control.payload_attached != attached) as usize;
+                (attached, dwelling) = (sim.control.payload_attached, now);
+                assert!(sim.time() < 60.0, "{}: the cycle does not go on", entry.id);
+            }
+            assert!(dwells >= 4 && switches >= 3, "{}: {dwells} dwells, {switches} gripper actions", entry.id);
+        }
+    }
+}
+
+/// A cycle of a single segment is analysed like any other: go there once, then dwell there every pass, so
+/// one pass lasts the dwell. The segment index never changes in such a cycle, and the analysis that
+/// waited for it to change ran into its 600 s timeout.
+#[test]
+fn a_cycle_of_one_segment_is_analysed() {
+    for entry in MACHINES {
+        let text = entry.default_config;
+        let first = text.find("[[cycle.segment]]").unwrap();
+        let second = first + 1 + text[first + 1..].find("[[cycle.segment]]").unwrap();
+        let cfg = Config::parse(&text[..second]).unwrap();
+        let dwell = cfg.array("cycle.segment").unwrap()[0]["dwell_s"].as_float().unwrap();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
+        assert!(dwell > 0.0 && (load.duration - dwell).abs() < 2.1e-3 && sim.time() < 10.0, "{}: a pass of {} s, analysed after {} s", entry.id, load.duration, sim.time());
+    }
+}
+
+/// Switching between the rigid and the elastic model while an axis moves carries the motion over: the tool
+/// has the speed it had, the drives go on without running into their torque limit, and the tool stays with
+/// its setpoint. The new model used to start at rest under a setpoint that went on moving.
+#[test]
+fn switching_the_model_at_speed_carries_the_motion_over() {
+    for entry in MACHINES {
+        for elastic in [true, false] {
+            let cfg = config(entry, &[&format!("effects.belt_stretch = {elastic}")]);
+            let mut sim = Sim::new(entry, &cfg).unwrap();
+            sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+            let axes = sim.machine.axes().to_vec();
+            while sim.control.set_vel[0] < axes[0].max_vel - 1e-9 {
+                sim.step();
+            }
+            let tool = |s: &Sim| {
+                let (mut pos, mut vel) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
+                s.machine.tool_state(&s.state, &mut pos, &mut vel);
+                (pos, vel)
+            };
+            // At this speed the tool is behind its setpoint by up to what it travels in a profile cycle.
+            let mut behind = 0f64;
+            sim.run(0.05, |s| behind = behind.max((tool(s).0[0] - s.control.set_pos[0]).abs()));
+            let (before, peak) = (tool(&sim), cfg.f64("drive.peak_torque_nm").unwrap());
+            let quiet = sim.control.drives.iter().map(|d| d.torque_command.abs()).fold(0.0, f64::max);
+            let mut other = cfg.clone();
+            other.set_text(&format!("effects.belt_stretch = {}", !elastic)).unwrap();
+            sim.reconfigure(entry, &other).unwrap();
+            let after = tool(&sim);
+            for i in 0..axes.len() {
+                assert!((after.0[i] - before.0[i]).abs() < 1e-12 && (after.1[i] - before.1[i]).abs() < 1e-12, "{}: {before:?} to {after:?}", entry.id);
+            }
+            assert!(before.1[0] > 0.95 * axes[0].max_vel);
+            let (mut torque, mut off) = (0f64, 0f64);
+            sim.run(0.2, |s| {
+                torque = s.control.drives.iter().map(|d| d.torque_command.abs()).fold(torque, f64::max);
+                off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
+            });
+            assert!(torque < 0.5 * peak && off < behind + 2e-4, "{}, from elastic {elastic}: {torque} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)", entry.id);
+        }
+    }
+}
+
+/// A shared DC link on a whole machine: over a cycle every drive reports the same DC link voltage and the
+/// same resistor power at every moment, and the highest voltage is no higher than the highest of the
+/// separate links, because one motor's braking feeds another's driving. Machines with one drive are left out.
+#[test]
+fn a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine() {
+    for entry in MACHINES {
+        let peaks = |shared: bool| {
+            let mut cfg = entry.config();
+            cfg.set_text(&format!("effects.shared_dc_link = {shared}")).unwrap();
+            let mut sim = Sim::new(entry, &cfg).unwrap();
+            sim.command(Command::StartCycle).unwrap();
+            let (mut peak, mut apart) = (0f64, 0f64);
+            sim.run(4.0, |s| {
+                let drives = &s.control.drives;
+                peak = drives.iter().map(|d| d.dc_voltage).fold(peak, f64::max);
+                apart = drives.iter().map(|d| (d.dc_voltage - drives[0].dc_voltage).abs().max((d.resistor_power - drives[0].resistor_power).abs())).fold(apart, f64::max);
+            });
+            (peak, apart, sim.control.drives.len())
+        };
+        let ((separate, apart, drives), (shared, together, _)) = (peaks(false), peaks(true));
+        if drives < 2 {
+            continue;
+        }
+        let bus = entry.config().f64("drive.bus_voltage_v").unwrap();
+        assert!(apart > 1.0 && together == 0.0, "{}: links {apart} V apart when separate, {together} when shared", entry.id);
+        assert!(shared > bus && shared <= separate, "{}: {shared} V shared, {separate} V separate, bus {bus} V", entry.id);
+        println!("{}: highest DC link voltage {separate} V separate, {shared} V shared", entry.id);
     }
 }

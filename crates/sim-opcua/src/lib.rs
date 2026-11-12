@@ -11,8 +11,18 @@
 //! | `command.move`                                | Boolean | write  | true starts the move to the targets       |
 //! | `command.setpoint.<axis id>`                  | Double  | write  | streamed position setpoint, interpolated  |
 //! | `command.cycle`                               | Boolean | write  | true starts the cycle, false stops it     |
+//! | `command.disable`                             | Boolean | write  | true switches the drives off (brakes on)  |
+//! | `command.enable`                              | Boolean | write  | true switches the drives on again         |
 //! | `status.busy`                                 | Boolean | read   | a move or the cycle is under way          |
 //! | `status.refused`                              | String  | read   | key of the last refused command, or empty |
+//!
+//! An axis the PLC does not write stays where it is: `command.target.<axis id>` reads the planned position
+//! until it is written, and again after the move it was written for; `command.setpoint.<axis id>` reads the
+//! setpoint the controller follows, which is the planned position whenever no setpoint is on its way. So a
+//! write to one axis never carries an old value for the others.
+//!
+//! `status.refused` keeps a refusal until a command of the same kind (move, setpoint, cycle start, ...) is
+//! accepted. Accepted commands of another kind, such as a stream of setpoints, do not wipe it.
 
 use opcua::crypto::SecurityPolicy;
 use opcua::server::address_space::{AccessLevel, VariableBuilder};
@@ -42,6 +52,8 @@ enum Input {
     Move,
     Setpoint(usize, f64),
     Cycle(bool),
+    Disable,
+    Enable,
 }
 
 pub struct Link {
@@ -123,6 +135,8 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
         for (name, key, kind, start, writable) in [
             ("command.move", "opcua-move", DataTypeId::Boolean, Variant::from(false), true),
             ("command.cycle", "opcua-cycle", DataTypeId::Boolean, Variant::from(false), true),
+            ("command.disable", "opcua-disable", DataTypeId::Boolean, Variant::from(false), true),
+            ("command.enable", "opcua-enable", DataTypeId::Boolean, Variant::from(false), true),
             ("status.busy", "opcua-busy", DataTypeId::Boolean, Variant::from(false), false),
             ("status.refused", "opcua-refused", DataTypeId::String, Variant::from(""), false),
         ] {
@@ -142,6 +156,8 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
     }
     on_write("command.move".into(), |v, _| flag(v)?.then_some(Input::Move), 0, inputs.clone());
     on_write("command.cycle".into(), |v, _| Some(Input::Cycle(flag(v)?)), 0, inputs.clone());
+    on_write("command.disable".into(), |v, _| flag(v)?.then_some(Input::Disable), 0, inputs.clone());
+    on_write("command.enable".into(), |v, _| flag(v)?.then_some(Input::Enable), 0, inputs.clone());
 
     tokio::spawn(server.run_with(listener));
     tokio::spawn(simulate(SimLoop { sim, inbox, handle: handle.clone(), namespace, axes }));
@@ -162,7 +178,11 @@ async fn simulate(mut s: SimLoop) {
     let node = |name: String| NodeId::new(s.namespace, name);
     let signal_nodes: Vec<NodeId> = s.sim.signal_infos().iter().map(|i| node(format!("signal.{}", i.id))).collect();
     let (mut target, mut setpoint) = (s.sim.control.set_pos.clone(), s.sim.control.set_pos.clone());
-    let (mut refused, mut sample) = ("", Vec::new());
+    // Targets the PLC has written for the move to come.
+    let mut target_written = vec![false; target.len()];
+    // The last refusal: the kind of command and why.
+    let mut refused: Option<(std::mem::Discriminant<Command>, &'static str)> = None;
+    let mut sample = Vec::new();
     let mut tick = tokio::time::interval(Duration::from_millis(10));
     let mut last = Instant::now();
     let mut owed = 0.0;
@@ -172,13 +192,18 @@ async fn simulate(mut s: SimLoop) {
         let mut new_setpoint = false;
         for input in s.inbox.try_iter() {
             match input {
-                Input::Target(i, v) => target[i] = v,
+                Input::Target(i, v) => (target[i], target_written[i]) = (v, true),
                 Input::Setpoint(i, v) => {
                     setpoint[i] = v;
                     new_setpoint = true;
                 }
-                Input::Move => commands.push(Command::MoveTo(target.clone())),
+                Input::Move => {
+                    commands.push(Command::MoveTo(target.clone()));
+                    target_written.fill(false);
+                }
                 Input::Cycle(on) => commands.push(if on { Command::StartCycle } else { Command::Stop }),
+                Input::Disable => commands.push(Command::Disable),
+                Input::Enable => commands.push(Command::Enable),
             }
         }
         // Axes written together arrive together: one setpoint command per tick.
@@ -186,7 +211,14 @@ async fn simulate(mut s: SimLoop) {
             commands.push(Command::Setpoint(setpoint.clone()));
         }
         for command in commands {
-            refused = s.sim.command(command).err().map_or("", |e| e.key);
+            let kind = std::mem::discriminant(&command);
+            match s.sim.command(command) {
+                Err(e) => refused = Some((kind, e.key)),
+                // Only a command of the same kind settles a refusal: a refused move stays to be read while
+                // setpoints stream on.
+                Ok(()) if refused.is_some_and(|(refused_kind, _)| refused_kind == kind) => refused = None,
+                Ok(()) => {}
+            }
         }
         // The wall clock only decides how many steps are due. A slow host falls behind instead of
         // piling up work.
@@ -198,6 +230,15 @@ async fn simulate(mut s: SimLoop) {
             owed -= s.sim.dt;
         }
 
+        // The mirrors follow the controller where the PLC has not written: after a move the axes stand
+        // elsewhere, and a write to one axis would send the others back to a value from before it.
+        for (i, planned) in s.sim.control.planned_pos().iter().enumerate() {
+            if !target_written[i] {
+                target[i] = *planned;
+            }
+        }
+        setpoint.copy_from_slice(s.sim.control.external_setpoint());
+
         s.sim.sample(&mut sample);
         let mut values: Vec<(NodeId, DataValue)> = signal_nodes.iter().cloned().zip(sample.iter().map(|v| DataValue::new_now(*v))).collect();
         for (i, axis) in s.axes.iter().enumerate() {
@@ -205,7 +246,7 @@ async fn simulate(mut s: SimLoop) {
             values.push((node(format!("command.setpoint.{axis}")), DataValue::new_now(setpoint[i])));
         }
         values.push((node("status.busy".into()), DataValue::new_now(s.sim.control.busy())));
-        values.push((node("status.refused".into()), DataValue::new_now(refused)));
+        values.push((node("status.refused".into()), DataValue::new_now(refused.map_or("", |(_, key)| key))));
         let _ = manager.set_values(s.handle.subscriptions(), values.iter().map(|(id, value)| (id, None, value.clone())));
     }
 }
@@ -217,7 +258,7 @@ mod tests {
     fn every_link_message_exists_in_every_language() {
         let sources = [include_str!("lib.rs"), include_str!("main.rs")].concat();
         let keys: Vec<&str> = sources.split('"').filter(|s| s.starts_with("opcua-") && s.len() > 6 && s.chars().all(|c| c.is_ascii_lowercase() || c == '-')).collect();
-        assert!(keys.len() >= 8, "{keys:?}");
+        assert!(keys.len() >= 10, "{keys:?}");
         for (lang, text) in super::I18N {
             let tr = sim_core::Translations::parse(text);
             for key in &keys {

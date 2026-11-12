@@ -3,4 +3,7 @@ error-config-version = Nicht unterstützte Formatversion der Konfiguration: { $a
 error-config-missing = Konfigurationswert fehlt: { $arg }
 error-config-type = Konfigurationswert hat den falschen Typ: { $arg }
 error-config-invalid = Konfigurationswert liegt außerhalb des gültigen Bereichs: { $arg }
+error-config-unknown = Die Konfiguration enthält einen Wert, den diese Maschine nicht kennt: { $arg }
+error-config-part-motor = Der Katalog kennt dieses Bauteil nicht: Motor { $arg }
+error-config-part-gearbox = Der Katalog kennt dieses Bauteil nicht: Getriebe { $arg }
 param-format_version = Formatversion

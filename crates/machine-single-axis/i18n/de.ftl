@@ -8,3 +8,6 @@ group-friction_x = Führungsreibung
 param-span_min_m = Kürzestes freies Riementrum [m]
 belt-section-1 = Riemen, Motor bis Schlitten
 belt-section-2 = Riemen, Rücklauf
+effect-hard_stops = Endanschläge an den Hubenden
+group-hard_stop = Endanschläge
+param-stiffness_n_m = Steifigkeit [N/m]

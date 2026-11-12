@@ -52,6 +52,9 @@ pub struct Label {
 pub struct Scene {
     pub parts: Vec<Part>,
     pub labels: Vec<Label>,
+    /// Where the tool is in the scene right now (`Machine::scene_point` of its pose), for drawing the path
+    /// it travels. Filled in by whoever steps the machine, not by the machine; `None` where there is no mapping.
+    pub tool: Option<[f64; 3]>,
 }
 
 /// A point on a circle, for laying a belt path around a pulley. `turn` is in radians from +x.

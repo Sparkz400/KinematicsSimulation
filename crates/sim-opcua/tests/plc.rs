@@ -179,3 +179,129 @@ async fn streamed_setpoints_from_the_plc_are_followed() {
     assert!((reached - (start + 0.02)).abs() < 2e-4, "at {reached} m after the ramp, wanted {} m", start + 0.02);
     assert_eq!(plc.numbers(&[setpoint]).await[0], start + 0.02, "the setpoint reads back what was written");
 }
+
+/// Disable and Enable from the PLC: disabled, no motor gives torque and a move is refused with the reason;
+/// enabled again, the move runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_plc_disables_and_enables_the_drives() {
+    for entry in MACHINES.iter().copied() {
+        let plc = connect(entry, &format!("enable-{}", entry.id)).await;
+        let sim = Sim::new(entry, &entry.config()).unwrap();
+        let torque: Vec<String> = sim.machine.motors().iter().map(|m| format!("signal.motor.{}.torque", m.id)).collect();
+        let set = |name: &str| vec![(name.to_string(), Variant::Boolean(true))];
+        let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+
+        // Half a second into the cycle the machine is away from its start pose.
+        assert!(plc.write(set("command.cycle")).await[0].is_good());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(plc.busy().await);
+
+        assert!(plc.write(set("command.disable")).await[0].is_good());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(plc.numbers(&torque).await.iter().all(|t| *t == 0.0), "{}: torque while disabled", entry.id);
+        assert!(!plc.busy().await, "{}: the cycle runs on", entry.id);
+        plc.write(set("command.move")).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(refused().await, Variant::from("error-disabled"), "{}", entry.id);
+
+        // Enabled, the move back to the start pose is accepted and runs. The targets are written with it:
+        // unwritten, they are where the axes stand.
+        assert!(plc.write(set("command.enable")).await[0].is_good());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut back: Vec<(String, Variant)> = sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(a, p)| (format!("command.target.{}", a.id), Variant::Double(*p))).collect();
+        back.extend(set("command.move"));
+        plc.write(back).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
+        assert!(plc.busy().await, "{}: no move after enabling", entry.id);
+        assert!(!plc.write(vec![("command.disable".into(), Variant::Double(1.0))]).await[0].is_good(), "a number is not a switch");
+    }
+}
+
+/// Polls until a move that was started is over.
+async fn move_done(plc: &Plc) {
+    let mut was_busy = false;
+    for _ in 0..500 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let busy = plc.busy().await;
+        if was_busy && !busy {
+            return;
+        }
+        was_busy |= busy;
+    }
+    panic!("the move did not start and finish within ten seconds");
+}
+
+/// The setpoint and target variables follow the controller where the PLC does not write them. They used to
+/// keep the start pose: after a move, a setpoint written for one axis sent the other back to where it
+/// started (0.25 m in 10 ms), and a target written for one axis moved the other back as well.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
+    let entry = MACHINES.iter().copied().find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1).expect("no machine with two axes");
+    let plc = connect(entry, "one-axis").await;
+    let sim = Sim::new(entry, &entry.config()).unwrap();
+    let axes = sim.machine.axes();
+    let names = |kind: &str| -> Vec<String> { axes.iter().map(|a| format!("{kind}.{}", a.id)).collect() };
+    let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+    // Every axis moves 0.2 of its range towards the middle.
+    let target: Vec<f64> = axes.iter().zip(&sim.control.set_pos).map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum()).collect();
+    let mut writes: Vec<(String, Variant)> = names("command.target").into_iter().zip(&target).map(|(n, t)| (n, Variant::Double(*t))).collect();
+    writes.push(("command.move".into(), Variant::Boolean(true)));
+    assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
+    move_done(&plc).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Both variables read where the axes now stand.
+    for kind in ["command.setpoint", "command.target"] {
+        let shown = plc.numbers(&names(kind)).await;
+        assert!(shown.iter().zip(&target).all(|(s, t)| (s - t).abs() < 1e-9), "{kind} reads {shown:?} after a move to {target:?}");
+    }
+
+    // A setpoint for the second axis alone: it is followed, and the first axis stays.
+    assert!(plc.write(vec![(names("command.setpoint").remove(1), Variant::Double(target[1] + 0.001))]).await[0].is_good());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(refused().await, Variant::from(""));
+    let positions: Vec<String> = names("signal.axis").iter().map(|n| format!("{n}.position")).collect();
+    let reached = plc.numbers(&positions).await;
+    assert!((reached[0] - target[0]).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4, "at {reached:?} after a setpoint for one axis from {target:?}");
+    assert!((plc.numbers(&names("command.target")).await[1] - target[1] - 0.001).abs() < 1e-9, "the target does not read where the setpoint took the axis");
+
+    // A target for the first axis alone, and a move: the second axis stays where the setpoint took it.
+    plc.write(vec![(names("command.target").remove(0), Variant::Double(target[0] - 0.05)), ("command.move".into(), Variant::Boolean(true))]).await;
+    move_done(&plc).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let reached = plc.numbers(&positions).await;
+    assert!((reached[0] - target[0] + 0.05).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4, "at {reached:?} after a move of one axis from {target:?}");
+    assert_eq!(refused().await, Variant::from(""));
+}
+
+/// A refusal stays readable until a command of the same kind is accepted. It used to be wiped by the next
+/// accepted command of any kind, so a PLC streaming setpoints never saw why its move was refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_stays_until_a_command_of_its_kind_is_accepted() {
+    for entry in MACHINES.iter().copied() {
+        let plc = connect(entry, &format!("refused-{}", entry.id)).await;
+        let sim = Sim::new(entry, &entry.config()).unwrap();
+        let axis = &sim.machine.axes()[0];
+        let (target, setpoint) = (format!("command.target.{}", axis.id), format!("command.setpoint.{}", axis.id));
+        let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+        let go = || ("command.move".to_string(), Variant::Boolean(true));
+
+        plc.write(vec![(target.clone(), Variant::Double(axis.max + 1.0)), go()]).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(refused().await, Variant::from("error-target-out-of-range"), "{}", entry.id);
+        // Accepted commands of other kinds: enabling, and setpoints that are followed.
+        assert!(plc.write(vec![("command.enable".to_string(), Variant::Boolean(true))]).await[0].is_good());
+        for step in 1..=5 {
+            assert!(plc.write(vec![(setpoint.clone(), Variant::Double(sim.control.set_pos[0] + 0.0005 * step as f64))]).await[0].is_good());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let position = plc.numbers(&[format!("signal.axis.{}.position", axis.id)]).await[0];
+        assert!((position - sim.control.set_pos[0] - 0.0025).abs() < 2e-4, "{}: the setpoints were not followed", entry.id);
+        assert_eq!(refused().await, Variant::from("error-target-out-of-range"), "{}: an accepted setpoint wiped the refused move", entry.id);
+        // An accepted move settles it.
+        plc.write(vec![(target.clone(), Variant::Double(sim.control.set_pos[0])), go()]).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
+    }
+}

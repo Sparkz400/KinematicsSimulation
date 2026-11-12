@@ -26,6 +26,24 @@ pub fn run_standard_suite(entry: &MachineEntry) {
     }
 }
 
+/// Repeatable measurement noise from a linear congruential generator: for tests, and for the drives'
+/// sensor noise, which has to be the same in every run.
+#[derive(Debug, Clone, Default)]
+pub struct Noise(pub u64);
+
+impl Noise {
+    /// Evenly spread from 0 up to, but not including, 1.
+    pub fn uniform(&mut self) -> f64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Roughly normal with standard deviation 1: twelve uniform numbers summed.
+    pub fn next(&mut self) -> f64 {
+        (0..12).map(|_| self.uniform()).sum::<f64>() - 6.0
+    }
+}
+
 pub fn mid_pose(m: &dyn Machine) -> Vec<f64> {
     m.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect()
 }

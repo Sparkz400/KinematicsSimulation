@@ -1,0 +1,46 @@
+# Source: Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, 02/2022, A5E46927724B AD, section 5.4.3, Table 5-2 "Dynamic braking for 1FK2".
+# Extracted by catalog/tools/extract_siemens_1fk2_s120.py; the numbers are the manual's, the layout is ours.
+# Armature short-circuit braking: the windings are shorted directly or through external resistors.
+# optimum_resistance: the external resistor the manual dimensions for an optimum braking time. *_with_resistor: with it.
+# braking_torque_rms: the manual's "average braking torque". Currents are RMS.
+# The manual's conditions: braking from the rated speed with an external moment of inertia equal to the
+#   motor's own; calculated from the rated values of the data sheet, without the variance of production and
+#   without iron saturation, which can give higher currents and torques. From a lower speed the braking time
+#   is shorter or the same, but not in proportion. The resistor must be intrinsically safe and temperature-monitored,
+#   and braking from the rated speed is permitted at most every 2 minutes.
+# Kept as printed although it looks like a misprint: braking_current_rms_with_resistor_a of the 1FK2306-2AC (6.5)
+#   is above the current without the resistor (6.1); for every other motor it is about 10 % below.
+article,optimum_resistance_ohm,braking_torque_rms_nm,braking_torque_rms_with_resistor_nm,max_braking_torque_nm,braking_current_rms_a,braking_current_rms_with_resistor_a
+1FK2103-2AH,15,0.47,0.6,0.75,2.1,1.9
+1FK2103-4AH,10,0.9,1.2,1.5,3.9,3.5
+1FK2104-4AF,21,0.75,1.1,1.35,2.2,2
+1FK2104-4AK,5,0.7,1.1,1.35,4.6,4.1
+1FK2104-5AF,12.5,1.35,2.3,2.9,4.3,3.9
+1FK2104-5AK,2.8,1.35,2.3,2.8,9,8
+1FK2104-6AF,8.5,1.75,3.1,3.8,6,5.5
+1FK2105-4AF,6.5,1.7,4,5,8.5,7.5
+1FK2105-6AF,5,2.7,6.5,8,12,11
+1FK2106-3AF,5,2.6,6.5,8.5,15,13.5
+1FK2106-4AF,3.4,3.2,9,11,18.5,16.5
+1FK2106-6AF,3.1,4.7,13.5,16.5,26,24
+1FK2203-2AK,12.5,0.75,1,1.25,3.6,3.3
+1FK2203-4AK,7,1.4,2,2.5,7,6.5
+1FK2204-5AF,6,2.4,3.3,4.1,7,6
+1FK2204-5AK,1.5,2.4,3.3,4.1,13.5,12.5
+1FK2204-6AF,4.6,3.1,4.4,5.5,9.5,8.5
+1FK2205-2AF,3.8,5,6.5,8,11,10
+1FK2205-4AF,2.6,8,10.5,13,18,16.5
+1FK2206-2AF,6.5,2.6,5.4,6.8,9.6,8.6
+1FK2206-4AF,3.85,5.9,12.8,15.9,19.3,17.3
+1FK2208-3AC,4,7.4,16.5,20.5,17.6,15.7
+1FK2208-4AC,2.3,9.7,22.5,28,27,24.5
+1FK2208-5AC,1.74,12.3,28.5,35.5,35.5,31.5
+1FK2210-3AB,4.5,12.2,30.5,38,19.7,17.7
+1FK2210-3AC,1.99,10.2,30.5,38,35,31
+1FK2210-4AB,3.1,15.9,41.5,52,28,25
+1FK2210-4AC,2.6,13.1,41.5,51,35.5,32
+1FK2210-5AC,1.43,16.7,53,66,54,48.5
+1FK2306-2AC,9.8,3.3,5.5,6.9,6.1,6.5
+1FK2306-4AC,7,7.4,12.9,16.1,11.2,10.1
+1FK2308-3AB,4.8,9.5,17.6,22,13.9,12.5
+1FK2308-4AB,3.9,12.6,23.5,29.5,18,16.2

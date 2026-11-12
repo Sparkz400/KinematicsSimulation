@@ -12,6 +12,10 @@ pub enum ConfigError {
     Missing(String),
     Type(String),
     Invalid(String),
+    /// A key that the machine's default config does not have.
+    Unknown(String),
+    /// A part name that the catalogue does not have: the translation key for its kind, and the name.
+    Part(&'static str, String),
 }
 
 impl ConfigError {
@@ -22,11 +26,13 @@ impl ConfigError {
             Self::Missing(_) => "error-config-missing",
             Self::Type(_) => "error-config-type",
             Self::Invalid(_) => "error-config-invalid",
+            Self::Unknown(_) => "error-config-unknown",
+            Self::Part(key, _) => key,
         }
     }
     pub fn detail(&self) -> &str {
         match self {
-            Self::Parse(d) | Self::Version(d) | Self::Missing(d) | Self::Type(d) | Self::Invalid(d) => d,
+            Self::Parse(d) | Self::Version(d) | Self::Missing(d) | Self::Type(d) | Self::Invalid(d) | Self::Unknown(d) | Self::Part(_, d) => d,
         }
     }
 }
@@ -54,8 +60,15 @@ impl Config {
         value.ok_or_else(|| ConfigError::Missing(path.into()))
     }
 
+    /// A number. NaN and infinity are valid TOML and a value of no quantity, so they never pass.
     pub fn f64(&self, path: &str) -> Result<f64> {
-        as_f64(self.get(path)?).ok_or_else(|| ConfigError::Type(path.into()))
+        finite(as_f64(self.get(path)?).ok_or_else(|| ConfigError::Type(path.into()))?, path)
+    }
+
+    /// A value that may be zero but not negative (dampings, frictions, a payload).
+    pub fn non_negative(&self, path: &str) -> Result<f64> {
+        let v = self.f64(path)?;
+        if v >= 0.0 { Ok(v) } else { Err(ConfigError::Invalid(path.into())) }
     }
 
     /// A value that must be strictly positive (masses, radii, stiffnesses, cycle times).
@@ -70,7 +83,29 @@ impl Config {
 
     pub fn f64s(&self, path: &str) -> Result<Vec<f64>> {
         let err = || ConfigError::Type(path.into());
-        self.get(path)?.as_array().ok_or_else(err)?.iter().map(|v| as_f64(v).ok_or_else(err)).collect()
+        self.get(path)?.as_array().ok_or_else(err)?.iter().map(|v| finite(as_f64(v).ok_or_else(err)?, path)).collect()
+    }
+
+    /// Refuses a key that neither `schema` (a machine's default config) nor `optional` has, so that a
+    /// misspelt key in a config file cannot pass silently. `[bounds]` is left out: it has its own check, and
+    /// so are the entries of arrays, which the code that reads them checks.
+    pub fn check_keys(&self, schema: &Config, optional: &[&str]) -> Result<()> {
+        fn walk(prefix: &str, table: &Table, schema: &Config, optional: &[&str]) -> Result<()> {
+            for (key, value) in table {
+                let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                if path == "bounds" {
+                    continue;
+                }
+                if schema.get(&path).is_err() && !optional.contains(&path.as_str()) {
+                    return Err(ConfigError::Unknown(path));
+                }
+                if let Value::Table(t) = value {
+                    walk(&path, t, schema, optional)?;
+                }
+            }
+            Ok(())
+        }
+        walk("", &self.0, schema, optional)
     }
 
     pub fn array(&self, path: &str) -> Result<&Vec<Value>> {
@@ -120,6 +155,10 @@ impl Config {
     }
 }
 
+fn finite(value: f64, path: &str) -> Result<f64> {
+    if value.is_finite() { Ok(value) } else { Err(ConfigError::Invalid(path.into())) }
+}
+
 fn as_f64(value: &Value) -> Option<f64> {
     match value {
         Value::Float(f) => Some(*f),
@@ -160,5 +199,31 @@ mod tests {
         assert!(c.set_text("a.typo = 1").is_err());
         assert!(c.set_text("a.on = 1").is_err());
         assert_eq!(c.leaves().len(), 3);
+    }
+
+    /// NaN and infinity are numbers to TOML and to no component: no read lets them through.
+    #[test]
+    fn numbers_that_are_not_finite_or_negative_are_refused_with_their_key() {
+        let c = Config::parse("format_version = 1\na = nan\nb = -inf\nc = [1.0, nan]\nd = -1.0\ne = 0.0\n").unwrap();
+        for path in ["a", "b"] {
+            assert_eq!(c.f64(path), Err(ConfigError::Invalid(path.into())));
+            assert_eq!(c.positive(path), Err(ConfigError::Invalid(path.into())));
+            assert_eq!(c.non_negative(path), Err(ConfigError::Invalid(path.into())));
+        }
+        assert_eq!(c.f64s("c"), Err(ConfigError::Invalid("c".into())));
+        assert_eq!((c.f64("d"), c.non_negative("d")), (Ok(-1.0), Err(ConfigError::Invalid("d".into()))));
+        assert_eq!(c.non_negative("e"), Ok(0.0));
+    }
+
+    /// The default config is the schema: a key it does not have is refused by name, except under `[bounds]`
+    /// and where it is named as optional.
+    #[test]
+    fn a_key_the_schema_does_not_have_is_refused() {
+        let schema = Config::parse(TEXT).unwrap();
+        let file = |text: &str| Config::parse(&format!("format_version = 1\n{text}")).unwrap().check_keys(&schema, &["a.more_kg"]);
+        assert_eq!(file("[a]\nmass_kg = 3.0\nmore_kg = 1.0\n[bounds]\nanything = [1, 2]\n"), Ok(()));
+        assert_eq!(file("[a]\nmas_kg = 3.0\n"), Err(ConfigError::Unknown("a.mas_kg".into())));
+        assert_eq!(file("[a.b]\nlist = [1]\nmore = 1\n"), Err(ConfigError::Unknown("a.b.more".into())));
+        assert_eq!(file("[typo]\nx = 1\n"), Err(ConfigError::Unknown("typo".into())));
     }
 }

@@ -1,4 +1,5 @@
-//! Mechanical components: belt, guide friction, shaft friction, gearbox, torque ripple, tooth meshing.
+//! Mechanical components: belt, guide friction, shaft friction, gearbox, torque ripple, tooth meshing, hard stops,
+//! cable chain, holding brake.
 //! Each reads its own parameters and its own switch from the config and knows no machine.
 
 use sim_core::{Config, ConfigError};
@@ -22,9 +23,15 @@ fn temperature_scale(cfg: &Config, leaf: &str) -> Result<f64> {
 pub struct Belt {
     pub ea: f64,
     pub damping: f64,
+    /// Material loss: a section damps with its stiffness times this time, so a short section damps more.
+    pub damping_time: f64,
     pub pretension: f64,
     pub slack: bool,
     pub mass_per_m: f64,
+    /// The teeth in mesh on a driven pulley give way like this much more belt: EA / tooth-mesh stiffness.
+    /// A machine adds it to the geometric length of a section once per driven pulley the section ends at.
+    /// `mat` then holds it too, and k = EA / mat is the belt and the teeth in series.
+    pub tooth_length: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -39,12 +46,19 @@ pub struct SectionForce {
 
 impl Belt {
     pub fn from_config(cfg: &Config) -> Result<Self> {
+        let ea = cfg.positive("belt.stiffness_ea_n")? * temperature_scale(cfg, "belt_stiffness_scale")?;
+        let damping = cfg.bool("effects.belt_damping")?;
+        let material = cfg.bool("effects.belt_material_damping")? && damping;
+        let teeth = cfg.bool("effects.belt_tooth_stiffness")?;
         Ok(Self {
-            ea: cfg.positive("belt.stiffness_ea_n")? * temperature_scale(cfg, "belt_stiffness_scale")?,
-            damping: if cfg.bool("effects.belt_damping")? { cfg.f64("belt.damping_n_s_m")? } else { 0.0 },
-            pretension: cfg.f64("belt.pretension_n")?,
+            ea,
+            damping: if damping && !material { cfg.non_negative("belt.damping_n_s_m")? } else { 0.0 },
+            damping_time: if material { cfg.non_negative("belt.damping_time_s")? } else { 0.0 },
+            tooth_length: if teeth { ea / cfg.positive("belt.tooth_mesh_stiffness_n_m")? } else { 0.0 },
+            // Not negative: at minus EA the belt would have no length at rest, and a belt cannot push.
+            pretension: cfg.non_negative("belt.pretension_n")?,
             slack: cfg.bool("effects.belt_slack")?,
-            mass_per_m: if cfg.bool("effects.belt_mass")? { cfg.f64("belt.mass_kg_m")? } else { 0.0 },
+            mass_per_m: if cfg.bool("effects.belt_mass")? { cfg.non_negative("belt.mass_kg_m")? } else { 0.0 },
         })
     }
 
@@ -56,7 +70,7 @@ impl Belt {
     pub fn section(&self, geo: f64, mat: f64, geo_rate: f64, mat_rate: f64) -> SectionForce {
         let e = geo - mat;
         let elastic = self.ea * e / mat;
-        let total = elastic + self.damping * (geo_rate - mat_rate);
+        let total = elastic + (self.damping + self.damping_time * self.ea / mat) * (geo_rate - mat_rate);
         if self.slack && e < 0.0 {
             return SectionForce { tension: total.max(0.0), material: total.max(0.0) };
         }
@@ -86,6 +100,120 @@ impl Belt {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Hard stops
+
+/// End stops of an axis whose stroke runs from 0 to `stroke`: a spring and a damper at both ends that act
+/// only beyond it.
+#[derive(Debug, Clone)]
+pub struct HardStop {
+    pub stiffness: f64,
+    pub damping: f64,
+}
+
+impl HardStop {
+    pub fn from_config(cfg: &Config) -> Result<Self> {
+        let (stiffness, damping) = (cfg.positive("hard_stop.stiffness_n_m")?, cfg.non_negative("hard_stop.damping_n_s_m")?);
+        Ok(if cfg.bool("effects.hard_stops")? { Self { stiffness, damping } } else { Self { stiffness: 0.0, damping: 0.0 } })
+    }
+
+    /// How far a position is beyond the stroke: negative below 0, positive above the stroke.
+    fn beyond(pos: f64, stroke: f64) -> f64 {
+        pos - pos.clamp(0.0, stroke)
+    }
+
+    /// Force of the stops on the axis. They push back, they never hold on.
+    pub fn force(&self, pos: f64, vel: f64, stroke: f64) -> f64 {
+        let beyond = Self::beyond(pos, stroke);
+        let force = -self.stiffness * beyond - self.damping * vel;
+        if force * beyond < 0.0 { force } else { 0.0 }
+    }
+
+    pub fn energy(&self, pos: f64, stroke: f64) -> f64 {
+        0.5 * self.stiffness * Self::beyond(pos, stroke).powi(2)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cable chain
+
+/// A cable chain along an axis, fixed at the x = 0 end: half of every metre the carriage travels joins the
+/// run that moves with it. It drags with a constant force. All zero with the effect off.
+#[derive(Debug, Clone)]
+pub struct CableChain {
+    pub mass_per_m: f64,
+    /// Chain that moves with the carriage at x = 0.
+    pub length0: f64,
+    pub drag: f64,
+}
+
+impl CableChain {
+    pub fn from_config(cfg: &Config) -> Result<Self> {
+        let on = cfg.bool("effects.cable_chain")?;
+        let value = |leaf: &str| cfg.non_negative(&format!("cable_chain.{leaf}"));
+        let (mass_per_m, length0, drag) = (value("mass_kg_m")?, value("length_at_zero_m")?, value("drag_n")?);
+        Ok(Self { mass_per_m: if on { mass_per_m } else { 0.0 }, length0, drag: if on { drag } else { 0.0 } })
+    }
+
+    /// (mass that moves with the carriage at x, its growth per metre). A mass m(x) moving at v takes
+    /// m dv/dt + m' v^2 / 2 of force: the second part is what picking up chain costs.
+    pub fn mass(&self, x: f64) -> (f64, f64) {
+        (self.mass_per_m * (self.length0 + 0.5 * x), 0.5 * self.mass_per_m)
+    }
+
+    /// Drag opposing v; it fades out at rest, below `fade_v`.
+    pub fn drag(&self, v: f64, fade_v: f64) -> f64 {
+        self.drag * (v / fade_v).tanh()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Holding brake
+
+/// A brake at its full torque has given way by this angle.
+const BRAKE_DEFLECTION_RAD: f64 = 1e-3;
+/// A released brake forgets its deflection this fast.
+const BRAKE_RELEASE_S: f64 = 1e-3;
+/// A slipping brake forgets this fast what it is deflected beyond its full torque. Well above the integration
+/// step (a quarter of 62.5 us by default), so that a brake that engages at any speed is stable.
+const BRAKE_SLIP_S: f64 = 5e-5;
+
+/// Holding brake on a motor shaft, engaged while the drives are disabled. A machine keeps one state per
+/// brake, its deflection s.
+#[derive(Debug, Clone)]
+pub struct HoldingBrake {
+    /// (its torque, the damping of the shaft held in it); `None` with the effect off.
+    held: Option<(f64, f64)>,
+}
+
+impl HoldingBrake {
+    /// `j_rotor` is the inertia the brake holds directly: rotor and gearbox input.
+    pub fn from_config(cfg: &Config, j_rotor: f64) -> Result<Self> {
+        if !cfg.bool("effects.holding_brake")? {
+            return Ok(Self { held: None });
+        }
+        let torque = cfg.positive("motor.brake_torque_nm")?;
+        // Critical damping of the rotor on the brake's stiffness, so that it stops without ringing.
+        Ok(Self { held: Some((torque, 2.0 * (torque / BRAKE_DEFLECTION_RAD * j_rotor).sqrt())) })
+    }
+
+    /// (torque opposing the speed, rate of the deflection s).
+    ///
+    /// Held, the shaft sits on a damped spring that reaches the brake torque at `BRAKE_DEFLECTION_RAD`. The
+    /// torque never exceeds the brake torque: beyond it the brake slips, and s stops following the shaft.
+    /// A friction contact with bristle damping (LuGre) gave many times the brake torque when it engaged at
+    /// speed, and its state was too stiff for the step above 178 rad/s.
+    pub fn torque(&self, engaged: bool, speed: f64, s: f64) -> (f64, f64) {
+        match self.held {
+            Some((torque, damping)) if engaged => {
+                let rate = speed - (s - s.clamp(-BRAKE_DEFLECTION_RAD, BRAKE_DEFLECTION_RAD)) / BRAKE_SLIP_S;
+                ((torque / BRAKE_DEFLECTION_RAD * s + damping * rate).clamp(-torque, torque), rate)
+            }
+            _ => (0.0, -s / BRAKE_RELEASE_S),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Guide friction
 
 /// LuGre friction contact: Coulomb, viscous, stiction and the Stribeck drop between them,
@@ -107,14 +235,18 @@ pub struct Lugre {
 impl Lugre {
     pub fn from_config(cfg: &Config, table: &str) -> Result<Self> {
         let scale = temperature_scale(cfg, "friction_scale")?;
-        let get = |leaf: &str| cfg.f64(&format!("{table}.{leaf}"));
+        let get = |leaf: &str| cfg.non_negative(&format!("{table}.{leaf}"));
+        let coulomb = cfg.positive(&format!("{table}.coulomb_n"))? * scale;
         Ok(Self {
             on: cfg.bool("effects.guide_friction")?,
             sigma0: cfg.positive(&format!("{table}.bristle_stiffness_n_m"))?,
             sigma1: get("bristle_damping_n_s_m")?,
             viscous: get("viscous_n_s_m")? * scale,
-            coulomb: cfg.positive(&format!("{table}.coulomb_n"))? * scale,
-            stiction: cfg.positive(&format!("{table}.stiction_n"))? * scale,
+            coulomb,
+            // Breaking away takes at least what sliding takes. A value below the Coulomb level counts as that
+            // level: uncertainty bounds of the two that overlap would otherwise give runs that slide harder
+            // than they break away.
+            stiction: (cfg.positive(&format!("{table}.stiction_n"))? * scale).max(coulomb),
             stribeck_v: cfg.positive(&format!("{table}.stribeck_m_s"))?,
             preload: cfg.positive(&format!("{table}.preload_n"))?,
             load_dependent: cfg.bool("effects.load_dependent_friction")?,
@@ -136,10 +268,25 @@ impl Lugre {
         if !self.on {
             return (0.0, 0.0);
         }
-        let s_dot = v - self.sigma0 * v.abs() * s / self.level(v, load_scale);
-        (self.sigma0 * s + self.sigma1 * s_dot + self.viscous * v, s_dot)
+        let level = self.level(v, load_scale);
+        let rate = self.sigma0 * v.abs() / level;
+        if rate <= BRISTLE_RATE_MAX {
+            let s_dot = v - self.sigma0 * v.abs() * s / level;
+            return (self.sigma0 * s + self.sigma1 * s_dot + self.viscous * v, s_dot);
+        }
+        // shortcut: bristles that would settle faster than `BRISTLE_RATE_MAX` settle at that rate, with their
+        // force scaled so that sliding still takes the level; step the friction state implicitly if what
+        // bristles do within 10 us ever matters.
+        let s_dot = v - BRISTLE_RATE_MAX * s;
+        (self.sigma0 * s * BRISTLE_RATE_MAX / rate + self.sigma1 * s_dot + self.viscous * v, s_dot)
     }
 }
+
+/// The fastest the bristles of a friction contact settle, 1/s. The bristle state settles at the rate
+/// sigma0 |v| / level, which a stiff bristle on a light contact at speed takes beyond what the integrator can
+/// follow (1e6 N/m, 12 N and 2.5 m/s: 2.1e5 1/s, against a limit of 2.8 over the 15.6 us step = 1.8e5 1/s for
+/// RK4): the friction force then grew without bound. No config shipped reaches the cap with its own values.
+const BRISTLE_RATE_MAX: f64 = 1.0e5;
 
 // ---------------------------------------------------------------------------------------------
 // Motor shaft
@@ -157,8 +304,8 @@ impl ShaftFriction {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         let on = cfg.bool("effects.motor_friction")?;
         Ok(Self {
-            coulomb: if on { cfg.f64("motor.friction_coulomb_nm")? } else { 0.0 },
-            viscous: if on { cfg.f64("motor.friction_viscous_nm_s_rad")? } else { 0.0 },
+            coulomb: if on { cfg.non_negative("motor.friction_coulomb_nm")? } else { 0.0 },
+            viscous: if on { cfg.non_negative("motor.friction_viscous_nm_s_rad")? } else { 0.0 },
             smoothing: cfg.positive("motor.friction_smoothing_rad_s")?,
         })
     }
@@ -181,8 +328,13 @@ pub struct Ripple {
 impl Ripple {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         let on = cfg.bool("effects.torque_ripple")?;
+        // Below one: at one the torque would vanish at an angle, and `invert` divide by zero there.
+        let ripple = cfg.non_negative("motor.ripple_fraction")?;
+        if ripple >= 1.0 {
+            return Err(ConfigError::Invalid("motor.ripple_fraction".into()));
+        }
         Ok(Self {
-            ripple: if on { cfg.f64("motor.ripple_fraction")? } else { 0.0 },
+            ripple: if on { ripple } else { 0.0 },
             ripple_order: cfg.f64("motor.ripple_order")?,
             cogging: if on { cfg.f64("motor.cogging_nm")? } else { 0.0 },
             cogging_order: cfg.f64("motor.cogging_order")?,
@@ -248,12 +400,17 @@ const EFFICIENCY_FADE_W: f64 = 0.5;
 
 impl Gearbox {
     pub fn from_config(cfg: &Config) -> Result<Self> {
+        // A negative backlash would turn the dead zone inside out (and `clamp` panics on that).
+        let (backlash, efficiency) = (cfg.non_negative("gearbox.backlash_rad")?, cfg.positive("gearbox.efficiency")?);
+        if efficiency > 1.0 {
+            return Err(ConfigError::Invalid("gearbox.efficiency".into()));
+        }
         Ok(Self {
             ratio: cfg.positive("gearbox.ratio")?,
             stiffness: cfg.positive("gearbox.stiffness_nm_rad")?,
-            damping: cfg.f64("gearbox.damping_nm_s_rad")?,
-            half_backlash: if cfg.bool("effects.gearbox_backlash")? { 0.5 * cfg.f64("gearbox.backlash_rad")? } else { 0.0 },
-            efficiency: if cfg.bool("effects.gearbox_efficiency")? { cfg.positive("gearbox.efficiency")? } else { 1.0 },
+            damping: cfg.non_negative("gearbox.damping_nm_s_rad")?,
+            half_backlash: if cfg.bool("effects.gearbox_backlash")? { 0.5 * backlash } else { 0.0 },
+            efficiency: if cfg.bool("effects.gearbox_efficiency")? { efficiency } else { 1.0 },
         })
     }
 
@@ -273,6 +430,10 @@ impl Gearbox {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
         let torque = self.stiffness * twist + self.damping * (rotor_speed / self.ratio - out_speed);
+        // Tooth flanks can push but not pull: while they separate fast, the damping must not reverse the torque.
+        if self.half_backlash > 0.0 && torque * twist < 0.0 {
+            return GearTorque { output: 0.0, rotor: 0.0 };
+        }
         GearTorque { output: torque * self.loss_factor(torque, out_speed), rotor: torque / self.ratio }
     }
 
@@ -291,7 +452,7 @@ mod tests {
     use super::*;
 
     fn belt() -> Belt {
-        Belt { ea: 5e5, damping: 0.0, pretension: 300.0, slack: true, mass_per_m: 0.0 }
+        Belt { ea: 5e5, damping: 0.0, damping_time: 0.0, pretension: 300.0, slack: true, mass_per_m: 0.0, tooth_length: 0.0 }
     }
 
     #[test]
@@ -320,6 +481,35 @@ mod tests {
         let mat = b.rest_length(1.0);
         let still = b.section(1.0, mat, 0.0, 0.0).tension;
         assert!((b.section(1.0, mat, 0.5, 0.2).tension - still - 100.0 * 0.3).abs() < 1e-9);
+    }
+
+    /// Material damping c = k tau with k = EA / L: 0.5 m of belt is four times as stiff as 2 m and damps
+    /// four times as hard.
+    #[test]
+    fn material_damping_scales_with_the_section_stiffness() {
+        let mut b = belt();
+        b.damping_time = 2e-4;
+        // Stretching at 0.3 m/s. Short: k = 5e5 / 0.5 = 1e6 N/m, c = 200 N s/m, 60 N.
+        // Long: k = 5e5 / 2 = 2.5e5 N/m, c = 50 N s/m, 15 N.
+        for (mat, force) in [(0.5, 60.0), (2.0, 15.0)] {
+            let still = b.section(mat + 0.001, mat, 0.0, 0.0).tension;
+            let moving = b.section(mat + 0.001, mat, 0.5, 0.2).tension;
+            assert!((moving - still - force).abs() < 1e-9, "{mat} m: {} N", moving - still);
+        }
+    }
+
+    /// Tooth stiffness in series: a 1 m section that ends at one driven pulley with 2e6 N/m of tooth
+    /// stiffness has 1 / (1 / 5e5 + 1 / 2e6) = 4e5 N/m, the same as 1.25 m of belt.
+    #[test]
+    fn teeth_in_mesh_are_a_spring_in_series_with_the_section() {
+        let mut b = belt();
+        b.tooth_length = b.ea / 2e6;
+        let geo = 1.0 + b.tooth_length;
+        let mat = b.rest_length(geo);
+        assert!((b.section(geo, mat, 0.0, 0.0).tension - 300.0).abs() < 1e-9);
+        let more = b.section(geo + 1e-4, mat, 0.0, 0.0).tension - 300.0;
+        // The belt is already stretched by the pretension, hence the 0.1 % tolerance.
+        assert!((more - 4e5 * 1e-4).abs() < 1e-3 * 40.0, "{more} N");
     }
 
     #[test]
@@ -370,12 +560,61 @@ mod tests {
         }
     }
 
+    /// Stiff bristles on a light contact at speed. By hand: 1e6 N/m, a level of 12 N and 2.5 m/s make the
+    /// bristle state settle at 1e6 * 2.5 / 12 = 2.1e5 1/s. RK4 with the simulator's 15.625 us is stable up to
+    /// 2.785 / 15.625 us = 1.78e5 1/s: beyond it the friction force grew without bound (seen with these two
+    /// values at their bounds together in a real-machine config). Capped at 1e5 1/s the state settles, and
+    /// sliding takes the level plus the viscous part as before: 12 N + 20 N s/m * 2.5 m/s = 62 N.
+    #[test]
+    fn lugre_with_stiff_bristles_at_speed_stays_stable_and_slides_at_its_level() {
+        let l = Lugre { sigma0: 1e6, coulomb: 12.0, stiction: 20.0, ..lugre() };
+        let (v, h, mut s) = (2.5, 15.625e-6, 0.0);
+        for _ in 0..2000 {
+            let rate = |s: f64| l.eval(v, s, 1.0).1;
+            let (k1, k2) = (rate(s), rate(s + 0.5 * h * rate(s)));
+            let k3 = rate(s + 0.5 * h * k2);
+            s += h / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + rate(s + h * k3));
+        }
+        let (force, s_dot) = l.eval(v, s, 1.0);
+        assert!((force - 62.0).abs() < 1e-6 && s_dot.abs() < 1e-9, "{force} N, bristles moving at {s_dot} m/s");
+        // Below the cap nothing has changed: the force is sigma0 s + sigma1 ds/dt + viscous v with ds/dt = v - rate s.
+        let (slow, s) = (0.1, 1e-5);
+        let s_dot = slow - 1e6 * slow * s / l.level(slow, 1.0);
+        assert_eq!(l.eval(slow, s, 1.0), (1e6 * s + 1500.0 * s_dot + 20.0 * slow, s_dot));
+    }
+
     #[test]
     fn lugre_level_falls_from_stiction_to_coulomb() {
         let f = lugre();
         assert!((f.level(0.0, 1.0) - 20.0).abs() < 1e-12);
         assert!((f.level(1.0, 1.0) - 15.0).abs() < 1e-9);
         assert!(f.level(0.005, 1.0) < 20.0 && f.level(0.005, 1.0) > 15.0);
+    }
+
+    /// A stiction level given below the Coulomb level counts as the Coulomb level: the contact never slides
+    /// harder than it breaks away. A stiction level above it is taken as given.
+    #[test]
+    fn lugre_stiction_is_never_below_coulomb() {
+        let level = |stiction: f64| {
+            let text = format!("format_version = 1
+[effects]
+guide_friction = true
+temperature = false
+load_dependent_friction = false
+[guide]
+bristle_stiffness_n_m = 1e5
+bristle_damping_n_s_m = 300.0
+viscous_n_s_m = 20.0
+coulomb_n = 26.0
+stiction_n = {stiction:?}
+stribeck_m_s = 0.01
+preload_n = 200.0
+");
+            let f = Lugre::from_config(&Config::parse(&text).unwrap(), "guide").unwrap();
+            (f.level(0.0, 1.0), f.level(1.0, 1.0))
+        };
+        assert_eq!(level(20.0), (26.0, 26.0));
+        assert_eq!(level(30.0), (30.0, 26.0));
     }
 
     #[test]
@@ -427,6 +666,20 @@ mod tests {
         assert!((t.output - 1e4 * 1e-4).abs() < 1e-9 && (t.rotor - t.output / 5.0).abs() < 1e-12);
         assert!((g.static_twist(1.0) - (1e-4 + 4e-4)).abs() < 1e-15);
         assert!((g.torque(5.0 * g.static_twist(-2.0), 0.0, 0.0, 0.0).output + 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gearbox_flanks_in_contact_never_pull() {
+        let mut g = gearbox();
+        g.damping = 5.0;
+        // Engaged on the positive side by 1e-4 rad (1 N m of spring torque), output running away at 1 rad/s.
+        let t = g.torque(5.0 * 5e-4, 0.0, 0.0, 1.0);
+        assert_eq!((t.output, t.rotor), (0.0, 0.0));
+        // Closing instead, the damping adds to the spring.
+        assert!((g.torque(5.0 * 5e-4, 0.0, 0.0, -1.0).output - 6.0).abs() < 1e-9);
+        // Without backlash the gearbox is a plain spring and damper, in both directions.
+        g.half_backlash = 0.0;
+        assert!((g.torque(5.0 * 1e-4, 0.0, 0.0, 1.0).output + 4.0).abs() < 1e-9);
     }
 
     #[test]

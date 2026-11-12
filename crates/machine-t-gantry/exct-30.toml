@@ -1,0 +1,473 @@
+# Festo EXCT-30 T-gantry, Y stroke 1000 mm, Z stroke 250 mm, driven directly (no gearbox) by two
+# Siemens SIMOTICS S-1FK2205-4AF motors on SINAMICS S210 converters 6SL3210-5HE11-5UF0 at 400 V.
+# Use with `--config`. The X axis of the simulator is Festo's Y axis.
+#
+# Where a value comes from:
+#   [catalogue]  taken or derived from catalog/festo/exct.toml or catalog/siemens/*.csv; the test
+#                `exct_30_config_agrees_with_the_catalogue` holds these in place
+#   [estimate]   not published; a guess of the right order, with a low and a high bound in [bounds]
+format_version = 1
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/: a motor by its article number, with the supply its data
+# is for ("230v" or "400v"), and a gearbox as size-frame-ratio, e.g. "NRK070-04-5". The catalogue values
+# of a named part replace the numbers this file has for it when the config is loaded. "" names none.
+# The motor values further down are what the catalogue gives for this motor; they document it and
+# are what is used if the name is taken out.
+[parts]
+motor = "1FK2205-4AF"
+motor_supply = "400v"
+gearbox = ""
+
+[effects]
+gravity = true
+payload = true
+belt_stretch = true
+belt_damping = true
+belt_slack = true
+belt_mass = true
+belt_tooth_stiffness = false
+belt_material_damping = false
+guide_friction = true
+load_dependent_friction = true
+motor_friction = true
+# Direct drive: the "gearbox" is the coupling, with ratio 1, no backlash and no loss.
+gearbox_backlash = false
+gearbox_efficiency = false
+torque_ripple = true
+tooth_meshing = true
+frame_compliance = true
+tool_flex = true
+idlers = false
+cable_chain = false
+process_force = false
+hard_stops = true
+holding_brake = true
+temperature = false
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# Both on by choice, see [profile] and [axis.x].
+corner_blending = true
+input_shaping = true
+back_emf = true
+voltage_limit = true
+winding_heating = true
+torque_saturation = true
+drive_delay = true
+# The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.
+# On here, where the DC link values in [ratings] are meant for this drive and its 540 V.
+dc_link = true
+# With dc_link: the drives of the machine share one DC link (one Line Module, as on a SINAMICS S120). What a
+# braking motor feeds back, a motoring one draws. The link has the capacitance of all drives together, one
+# chopper with one braking resistor of the [ratings] powers, and one trip.
+shared_dc_link = false
+# Off by default, so that earlier results stay as they were.
+# The motor setpoints reach the drives some profile cycles late.
+fieldbus_delay = false
+# Noise on the measured position and current.
+sensor_noise = false
+# With input_shaping: the shaper is set to the resonance the machine reports for the planned pose.
+shaper_follows_pose = false
+
+[geometry]
+# [catalogue] half the effective diameter of 31.82 mm
+pulley_radius_m = 0.01591
+# [catalogue] strokes within the EXCT-30 range
+stroke_x_m = 1.0
+stroke_z_m = 0.25
+# [estimate]
+span_min_m = 0.15
+z_com_drop_m = 0.2
+guide_spacing_m = 0.12
+# Tool tip below the carriage at z = 0; it rises with z.
+z_tool_drop_m = 0.45
+
+[mass]
+# [catalogue] Festo's torque formula for 250 mm Z stroke fixes the total: with this carriage, the
+# Z axis below and the pulley and belt inertia, the simulator needs the torque the formula gives.
+carriage_kg = 7.16
+# [catalogue] the mass Festo's formula holds against gravity at 250 mm Z stroke
+z_axis_kg = 4.7
+# [catalogue] rated load at maximum dynamic response
+payload_kg = 3.0
+
+[belt]
+# [catalogue] 0.045 % elongation at 300 N
+stiffness_ea_n = 6.667e5
+# A choice of the designer, set on the machine with a tension meter: [estimate] of how well, +-100 N.
+# 450 N, because the cycle takes about 240 N off a section in the worst case found. With the belt held at
+# 450 N in 200 sampled runs,
+#   sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
+#     --set "bounds.belt.pretension_n=[450.0,450.0]"
+# the row belt-slack says that the slackest section keeps about 210 to 250 N (about 240 N off at worst;
+# about 210 N off and 240 N kept with every value as written here). With the belt set 100 N low, the same
+# command with --set belt.pretension_n=350.0 and both bounds at 350.0, about 110 N are left. Other seeds
+# move these figures by a few newtons. With the pretension sampled along with the rest (the command without
+# --set) the lowest found is about 120 N. And because both sections together then pull a pulley shaft with
+# about 1215 N at most (belt set 100 N high), inside the lowest shaft rating this file allows for (1500 N).
+# With the 300 N this file had, a belt set to 200 N went slack. The highest tension (558 N, 658 N with the
+# belt set 100 N high, about 670 N at most in the sampled runs) is judged against
+# ratings.belt_max_tension_n, an estimate of 2160 N.
+pretension_n = 450.0
+# [estimate]
+damping_n_s_m = 100.0
+mass_kg_m = 0.1
+# [catalogue]
+tooth_pitch_m = 0.005
+# [estimate]
+tooth_force_n = 2.0
+# With effects.belt_tooth_stiffness: the teeth in mesh on a driven pulley give way, in series with the belt.
+# [estimate]
+tooth_mesh_stiffness_n_m = 5.0e6
+# With effects.belt_material_damping: a section damps with its stiffness times this time (so a short
+# section damps more), instead of with damping_n_s_m whatever its length.
+# [estimate]
+damping_time_s = 2.5e-4
+
+# [estimate] Festo gives the friction torque only as a graph over speed.
+[friction_x]
+coulomb_n = 20.0
+stiction_n = 26.0
+viscous_n_s_m = 20.0
+stribeck_m_s = 0.01
+bristle_stiffness_n_m = 5.0e5
+bristle_damping_n_s_m = 1500.0
+preload_n = 200.0
+
+[friction_z]
+coulomb_n = 15.0
+stiction_n = 20.0
+viscous_n_s_m = 15.0
+stribeck_m_s = 0.01
+bristle_stiffness_n_m = 5.0e5
+bristle_damping_n_s_m = 1500.0
+preload_n = 200.0
+
+[motor]
+# [catalogue] 1FK2205-4AF: rotor 5.1 kg cm2
+rotor_inertia_kgm2 = 5.1e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 6 N m over stall current 4.7 A
+torque_constant_nm_a = 1.277
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# [catalogue] 1FK2205-4AF: rated current 3.75 A at 400 V; thermal time constant 31 min; 18 N m at the
+# maximum current of 15.1 A
+# With effects.winding_heating: the winding warms with its copper loss and its resistance rises with it. At
+# the rated current it settles at the rated temperature rise.
+rated_current_a = 3.75
+thermal_time_constant_s = 1860.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+# With effects.torque_saturation: at high current the iron saturates and a motor gives less torque per
+# ampere. The torque constant falls with the square of the current to this value at the maximum current.
+max_current_a = 15.1
+torque_constant_at_max_current_nm_a = 1.192
+# With effects.holding_brake: while the drives are disabled, a brake holds each motor shaft up to this
+# torque and slips with it beyond. Elastic model only.
+# [estimate]
+brake_torque_nm = 8.0
+
+# The coupling between motor shaft and belt pulley.
+[gearbox]
+ratio = 1.0
+efficiency = 1.0
+backlash_rad = 0.0
+# [estimate]
+stiffness_nm_rad = 3.0e3
+damping_nm_s_rad = 0.2
+# The gearbox's own inertia at its input, which turns with the rotor. A gearbox named in [parts] brings it.
+inertia_at_input_kgm2 = 0.0
+
+[pulley]
+# [estimate]
+inertia_kgm2 = 2.0e-5
+
+# [estimate]
+[frame]
+mass_kg = 30.0
+stiffness_n_m = 7.4e5
+damping_n_s_m = 190.0
+
+# With effects.tool_flex: the Z axis leans against the carriage when X accelerates. The guide gives way
+# sideways and in tilt; the tilt counts with the distance of the Z axis's centre of mass from the carriage.
+# [estimate]
+[tool_flex]
+lateral_stiffness_n_m = 2.0e7
+tilt_stiffness_nm_rad = 1.2e4
+damping_n_s_m = 80.0
+
+# With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
+# with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
+# [estimate]
+[idler]
+inertia_kgm2 = 2.0e-6
+radius_m = 0.012
+friction_nm = 0.002
+
+# With effects.cable_chain: the chain is fixed at the x = 0 end, so half of every metre the carriage
+# travels joins the run that moves with it. It drags with a constant force.
+# [estimate]
+[cable_chain]
+mass_kg_m = 0.5
+length_at_zero_m = 0.3
+drag_n = 3.0
+
+# With effects.process_force: a force on the tool while the cycle dwells, e.g. the reaction to pressing a part in.
+# [estimate]
+[process]
+force_x_n = 0.0
+force_z_n = 20.0
+
+# With effects.hard_stops: a spring and damper at both ends of each stroke that act only beyond it.
+# [estimate]
+[hard_stop]
+stiffness_n_m = 1.0e6
+damping_n_s_m = 5.0e3
+
+[temperature]
+friction_scale = 1.5
+belt_stiffness_scale = 1.1
+
+# Below Festo's limits of 5 m/s and 50 m/s2, which hold "under ideal conditions".
+[axis.x]
+max_velocity_m_s = 2.5
+max_acceleration_m_s2 = 25.0
+# A choice, for settling. With 500 m/s3 the tool was up to 0.47 mm off its target in the second half of a
+# dwell when the frame and guide estimates were off together (0.16 mm with one of them at a bound), against
+# a tolerance of 0.1 mm: the traverse left frame and Z axis swinging. 150 m/s3 with the input shaper of
+# [profile] leaves 0.055 mm in the worst case found (`sim-cli verdicts --bands`, and `--samples 200` with
+# seeds 1 to 3). Neither alone is enough: without corner blending, 150 m/s3 without the shaper leaves
+# 0.099 mm and the shaper with 500 m/s3 0.22 mm.
+max_jerk_m_s3 = 150.0
+
+[axis.z]
+max_velocity_m_s = 1.5
+max_acceleration_m_s2 = 15.0
+max_jerk_m_s3 = 500.0
+
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+# With effects.drive_delay: a drive computes during one cycle what acts in the next. Whole cycles of
+# the current loop for the voltage, of the velocity loop for the torque setpoint.
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+# [estimate] untuned for a real machine
+kv_1_s = 50.0
+# The sensitivity run shows the loop going unstable near 1.4 when rotor inertia, belt stiffness or
+# inductance are 20 % off, so the gain stays well below that.
+velocity_kp_nm_s_rad = 0.6
+velocity_tn_s = 0.01
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Kp = L / T and Tn = L / R for a current loop time constant of 0.25 ms.
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# The DC link voltage, here that of a 400 V line. The winding gets sqrt(3/2) times it at most, 661 V: the
+# model's one winding carries the RMS phase current, and its voltage times that current is the power of
+# all three phases.
+bus_voltage_v = 540.0
+# [catalogue] the EXCT-30 allows 12.5 N m at the pulley; the motor could give 18 N m.
+peak_torque_nm = 12.5
+# [catalogue] rated torque of the 1FK2205-4AF at 400 V; the RMS torque of a cycle is judged against it.
+rated_torque_nm = 4.6
+# [catalogue] rated speed 3000 r/min at 400 V; the voltage is used up where the back-EMF meets what the
+# DC link gives the winding, 661 V / 1.277 N m/A.
+rated_speed_rad_s = 314.0
+no_load_speed_rad_s = 518.0
+# [catalogue] 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.2e-3
+torque_filter_s = 0.2e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+# With effects.sensor_noise: standard deviation of the noise on the measured position, in encoder counts,
+# and on the measured current. Pseudo-random from the seed, so every run is the same; each motor has a stream of its own.
+# [estimate]
+encoder_noise_counts = 4.0
+current_noise_a = 0.02
+noise_seed = 1
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+# Left out here: the highest gearbox input speed, because there is no gearbox.
+[ratings]
+# The allowable belt tension. Festo publishes none for the EXCT. Its belt is polyurethane with steel cords,
+# 5 mm pitch, 30 mm wide (catalog/festo/exct.toml). Optibelt's data sheets for 5 mm pitch steel-cord
+# polyurethane belts (ALPHA FLEX AT5) list 1800 N allowable at 25 mm width and 2300 N at 32 mm, which is 25 %
+# of the cords' breaking strength. 72 N per mm of width, from the lower figure, gives 2160 N at 30 mm.
+# Whether Festo's belt has cords of that class is not known.
+# [estimate]
+belt_max_tension_n = 2160.0
+# Below this the teeth can jump.
+belt_min_tension_n = 0.0
+# How far the tool may be from its target in the second half of a dwell, when the gripper acts.
+settling_tolerance_m = 0.0001
+# [catalogue] the EXCT-30 allows 12.5 N m at its pulleys
+pulley_max_torque_nm = 12.5
+# The DC link and the braking resistor of the S210. The catalogue (catalog/siemens/converters_s210.csv) has
+# no DC link data, so these are estimates by the SINAMICS S120 data in catalog/siemens/line_modules_s120.csv
+# and braking_s120.csv: a DC link of 540 V on a 400 V line; about 44 uF per kW of rated power (220 uF at
+# 5 kW, 710 uF at 16 kW), so 66 uF for this 1.5 kW converter; the chopper switching on at 770 V (Braking
+# Module; 774 V in the Basic Line Modules). The resistor's powers and the trip level are in neither file.
+# With effects.dc_link these are also what the simulated DC link is built from.
+# [estimate]
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 3000.0
+dc_link_overvoltage_v = 820.0
+# The radial load the belt may put on a pulley shaft. Festo does not publish it.
+# [estimate]
+shaft_max_radial_load_n = 2000.0
+# The highest load on a guide, and the dynamic load rating C of the life estimate L10 = (C / P)^3 * 50 km.
+# Festo publishes neither for the guides inside the EXCT.
+# [estimate]
+guide_max_load_n = 2000.0
+guide_dynamic_load_rating_n = 8000.0
+
+[profile]
+cycle_s = 1.0e-3
+# With effects.fieldbus_delay: whole profile cycles between the controller computing the motor setpoints
+# (position, speed, torque feedforward) and the drives using them.
+fieldbus_delay_cycles = 1
+setpoint_interval_s = 10.0e-3
+# With effects.corner_blending. On: lifting, traversing and lowering run into one another, which takes back
+# more time than the lower X jerk and the shaper cost (cycle 1.934 s; 2.434 s without blending, 2.136 s with
+# this file's earlier 300 N, 500 m/s3, no shaper and no blending), and passes every check in the worst case.
+blend_time_s = 0.15
+# With effects.input_shaping: every setpoint is spread over three steps half a vibration period apart,
+# so that the swings they start cancel. Tuned to one resonance; each move takes one period longer.
+# On, at one fixed frequency. The tool's response to the setpoint, with the loops closed, peaks at 17.5 Hz
+# and has a notch at 25 Hz. The exact frequency matters little: every check passes in 200 sampled runs with
+# the shaper at 17.5, 25 or 35 Hz (tool off target by 0.050, 0.055 and 0.065 mm at most), and settling
+# fails with it off (0.119 mm, in 3 of the runs). The shaper that follows the pose (effects.shaper_follows_pose) did worse here, 0.079 mm
+# against 0.045 mm without blending: the frequency the machine reports is the Z axis's, and it is the
+# frame's that the estimates move most.
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+# For a path timed as fast as the motors allow: the share of the torque-speed curve the plan may use (the
+# rest is for friction and elasticity, which the plan leaves out).
+torque_reserve = 0.8
+# For a path of lines and arcs: how far the planned path may leave them, so that transition curves
+# (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
+path_tolerance_m = 0.0
+
+# Low and high bound of every [estimate] above, in the tables and units they have there.
+# `sim-cli verdicts --bands` runs the cycle with each at its low and at its high bound, one at a time,
+# and `sim-cli sensitivity` uses the bounds in place of its flat percentage.
+# Not bounded: the ripple and cogging orders (a count of poles and slots, not a quantity that is a little
+# off) and the loop gains (settings, not properties of the machine).
+[bounds]
+geometry.span_min_m = [0.10, 0.20]
+geometry.z_com_drop_m = [0.15, 0.25]
+geometry.guide_spacing_m = [0.09, 0.15]
+geometry.z_tool_drop_m = [0.40, 0.50]
+belt.pretension_n = [350.0, 550.0]
+belt.damping_n_s_m = [50.0, 200.0]
+belt.mass_kg_m = [0.07, 0.13]
+belt.tooth_force_n = [1.0, 4.0]
+belt.tooth_mesh_stiffness_n_m = [2.5e6, 1.0e7]
+belt.damping_time_s = [1.25e-4, 5.0e-4]
+friction_x.coulomb_n = [12.0, 26.0]
+friction_x.stiction_n = [20.0, 36.0]
+friction_x.viscous_n_s_m = [10.0, 40.0]
+friction_x.stribeck_m_s = [0.005, 0.02]
+friction_x.bristle_stiffness_n_m = [2.5e5, 1.0e6]
+friction_x.bristle_damping_n_s_m = [750.0, 3000.0]
+friction_x.preload_n = [100.0, 400.0]
+friction_z.coulomb_n = [9.0, 20.0]
+friction_z.stiction_n = [15.0, 28.0]
+friction_z.viscous_n_s_m = [7.5, 30.0]
+friction_z.stribeck_m_s = [0.005, 0.02]
+friction_z.bristle_stiffness_n_m = [2.5e5, 1.0e6]
+friction_z.bristle_damping_n_s_m = [750.0, 3000.0]
+friction_z.preload_n = [100.0, 400.0]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.friction_smoothing_rad_s = [0.25, 1.0]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.4, 2.6]
+motor.inductance_h = [0.007, 0.013]
+motor.brake_torque_nm = [6.0, 10.0]
+gearbox.stiffness_nm_rad = [1.5e3, 6.0e3]
+gearbox.damping_nm_s_rad = [0.1, 0.4]
+pulley.inertia_kgm2 = [1.0e-5, 4.0e-5]
+frame.mass_kg = [20.0, 45.0]
+frame.stiffness_n_m = [5.0e5, 1.1e6]
+frame.damping_n_s_m = [95.0, 380.0]
+tool_flex.lateral_stiffness_n_m = [1.0e7, 4.0e7]
+tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
+tool_flex.damping_n_s_m = [40.0, 160.0]
+idler.inertia_kgm2 = [1.0e-6, 4.0e-6]
+idler.radius_m = [0.010, 0.015]
+idler.friction_nm = [0.001, 0.004]
+cable_chain.mass_kg_m = [0.3, 0.8]
+cable_chain.length_at_zero_m = [0.2, 0.4]
+cable_chain.drag_n = [1.5, 6.0]
+process.force_x_n = [-10.0, 10.0]
+process.force_z_n = [10.0, 40.0]
+hard_stop.stiffness_n_m = [5.0e5, 2.0e6]
+hard_stop.damping_n_s_m = [2.5e3, 1.0e4]
+drive.encoder_noise_counts = [1.0, 16.0]
+drive.current_noise_a = [0.005, 0.08]
+ratings.dc_link_capacitance_uf = [33.0, 220.0]
+ratings.braking_threshold_v = [750.0, 790.0]
+ratings.braking_resistor_continuous_w = [50.0, 200.0]
+ratings.braking_resistor_peak_w = [1500.0, 6000.0]
+ratings.dc_link_overvoltage_v = [800.0, 840.0]
+ratings.shaft_max_radial_load_n = [1500.0, 3000.0]
+ratings.guide_max_load_n = [1000.0, 4000.0]
+ratings.guide_dynamic_load_rating_n = [4000.0, 16000.0]
+
+[start]
+pose = [0.1, 0.2]
+
+# Pick-and-place cycle: lower, grip, lift, traverse, lower, release, lift, traverse.
+[[cycle.segment]]
+target = [0.1, 0.03]
+dwell_s = 0.1
+payload = true
+
+[[cycle.segment]]
+target = [0.1, 0.2]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [0.9, 0.2]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [0.9, 0.03]
+dwell_s = 0.1
+payload = false
+
+[[cycle.segment]]
+target = [0.9, 0.2]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [0.1, 0.2]
+dwell_s = 0.0
+payload = false

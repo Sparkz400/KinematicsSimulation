@@ -1,10 +1,10 @@
 //! The panels: machine and language pickers, run controls, view presets, motion commands, effect
-//! switches, the parameter panel and the scopes. Everything shown comes from the model and the
+//! switches, the parameter panel, the scopes, the tuning help and the analysis tables. Everything shown comes from the model and the
 //! translation files; no text for the user is written here.
 
-use bevy_egui::egui::{Color32, ComboBox, DragValue, ScrollArea, Slider, Ui};
+use bevy_egui::egui::{Checkbox, CollapsingHeader, Color32, ComboBox, DragValue, Grid, ScrollArea, Slider, TextEdit, Ui};
 use egui_plot::{Legend, Line, LineStyle, Plot};
-use sim_app::model::{Model, display_scale};
+use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale};
 use sim_components::Command;
 use sim_core::MachineEntry;
 use sim_machines::{LANGUAGES, MACHINES};
@@ -29,6 +29,14 @@ pub enum Action {
     TuningAxis(usize),
     RunTuning,
     CloseTuning,
+    /// What the search, path and trace fields hold after an edit.
+    Inputs(Inputs),
+    RunAnalysis(Analysis),
+    ApplyOptimised,
+    /// A row of the motor search goes into the config.
+    UseCandidate(usize),
+    CloseAnalysis,
+    Clear(Analysis),
     ClearMessages,
 }
 
@@ -91,6 +99,15 @@ pub fn controls(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 actions.push(Action::Command(Command::Stop));
             }
         });
+        // Drives off: the holding brakes engage where the machine has them. Until enabled, nothing moves it.
+        ui.horizontal(|ui| {
+            if ui.button(tr("ui-disable")).clicked() {
+                actions.push(Action::Command(Command::Disable));
+            }
+            if ui.button(tr("ui-enable")).clicked() {
+                actions.push(Action::Command(Command::Enable));
+            }
+        });
 
         if !model.messages.is_empty() {
             ui.separator();
@@ -101,7 +118,7 @@ pub fn controls(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 }
             });
             for (key, detail) in &model.messages {
-                ui.colored_label(Color32::from_rgb(230, 150, 40), model.tr.tr_arg(key, detail));
+                ui.colored_label(NOTE, model.tr.tr_arg(key, detail));
             }
         }
 
@@ -141,6 +158,9 @@ pub fn controls(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         });
     });
 }
+
+/// Messages, and the mark on a result that is not of the present config.
+const NOTE: Color32 = Color32::from_rgb(230, 150, 40);
 
 /// One colour per axis or motor, the same in every scope.
 const PALETTE: [Color32; 6] = [
@@ -194,7 +214,17 @@ pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 }
             }
         });
-        tuning(ui, model, actions);
+        // Everything else folds away, so that every part of the panel can be reached at any window size.
+        let has = |kinds: &[Analysis]| kinds.iter().any(|kind| model.has_result(*kind));
+        let mut inputs = model.inputs.clone();
+        section(ui, "ui-analysis", model, has(&[Analysis::Cycle, Analysis::Sensitivity, Analysis::Optimise]), |ui| analysis(ui, model, &mut inputs, actions));
+        section(ui, "ui-search", model, has(&[Analysis::Search]), |ui| search(ui, model, &mut inputs, actions));
+        section(ui, "ui-path", model, has(&[Analysis::Path]), |ui| path(ui, model, &mut inputs, actions));
+        section(ui, "ui-trace", model, has(&[Analysis::Trace]), |ui| trace(ui, model, &mut inputs, actions));
+        section(ui, "ui-tuning", model, model.tuning.is_some(), |ui| tuning(ui, model, actions));
+        if inputs != model.inputs {
+            actions.push(Action::Inputs(inputs));
+        }
 
         let rows: Vec<&Vec<f64>> = model.visible_rows().collect();
         // At most about three thousand points per line, however long the window is.
@@ -243,13 +273,176 @@ pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     });
 }
 
+/// A part of the panel under a heading that folds it away. It opens by itself when its content arrives, so
+/// that a result is seen, and is otherwise as the user left it.
+fn section(ui: &mut Ui, key: &str, model: &Model, filled: bool, body: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(key);
+    let was_filled = ui.data_mut(|data| std::mem::replace(data.get_temp_mut_or(id, false), filled));
+    CollapsingHeader::new(model.tr.tr(key)).id_salt(key).open((filled && !was_filled).then_some(true)).show(ui, body);
+}
+
+/// A table of the model, drawn as it is: the header weak, numbers in digits of one width, words as they
+/// are. Long names wrap, so that the last column stays inside the panel. With `pick`, every row starts with
+/// a button under that label, which reports the row.
+fn table(ui: &mut Ui, id: &str, table: &Table, mut pick: Option<(&str, &mut dyn FnMut(usize))>) {
+    ScrollArea::horizontal().id_salt(id).show(ui, |ui| {
+        // A table with a button has the most columns, and so the narrowest.
+        Grid::new(id).striped(true).max_col_width(if pick.is_some() { 150.0 } else { 230.0 }).show(ui, |ui| {
+            for (i, row) in table.iter().enumerate() {
+                match (&mut pick, i) {
+                    (Some(_), 0) => drop(ui.label("")),
+                    (Some((label, picked)), _) if ui.small_button(*label).clicked() => picked(i - 1),
+                    _ => {}
+                }
+                for (j, cell) in row.iter().enumerate() {
+                    match (i, j, cell.parse::<f64>()) {
+                        (0, _, _) => ui.weak(cell),
+                        (_, 0, _) | (_, _, Err(_)) => ui.label(cell),
+                        _ => ui.monospace(cell),
+                    };
+                }
+                ui.end_row();
+            }
+        });
+    });
+}
+
+/// The heading of a result, marked where the result is of a config that has changed since.
+fn heading(ui: &mut Ui, model: &Model, key: &str, kind: Analysis) {
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(model.tr.tr(key));
+        if model.outdated(kind) {
+            ui.colored_label(NOTE, model.tr.tr("ui-analysis-outdated"));
+        }
+    });
+}
+
+/// The button that starts a computation, or a spinner while it runs.
+fn run_button(ui: &mut Ui, model: &Model, key: &str, kind: Analysis, actions: &mut Vec<Action>) {
+    if model.running(kind) {
+        ui.spinner();
+    } else if ui.button(model.tr.tr(key)).clicked() {
+        actions.push(Action::RunAnalysis(kind));
+    }
+}
+
+/// What the command line computes about the cycle, as tables: the loads and the checks against the
+/// parts' limits, which uncertain values matter most, and a shorter cycle that still passes.
+fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let tables = model.cycle_tables();
+    let (ranking, optimised) = (model.sensitivity_table(), model.optimised_table());
+    ui.horizontal_wrapped(|ui| {
+        run_button(ui, model, "ui-analysis-run-cycle", Analysis::Cycle, actions);
+        ui.checkbox(&mut inputs.bands, tr("ui-analysis-bands"));
+        ui.add_enabled(inputs.bands, DragValue::new(&mut inputs.samples).range(0..=1000)).on_hover_text(tr("ui-analysis-samples-hint"));
+        ui.label(tr("ui-analysis-samples"));
+        run_button(ui, model, "ui-analysis-run-sensitivity", Analysis::Sensitivity, actions);
+        run_button(ui, model, "ui-analysis-run-optimise", Analysis::Optimise, actions);
+        if (!tables.is_empty() || ranking.is_some() || optimised.is_some()) && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::CloseAnalysis);
+        }
+    });
+    let banded = if model.band_samples > 0 { "ui-analysis-sampled" } else { "ui-analysis-banded" };
+    for (rows, key) in tables.iter().zip(["ui-analysis-cycle", "ui-analysis-motors", "ui-analysis-verdicts", banded]) {
+        heading(ui, model, key, Analysis::Cycle);
+        table(ui, key, rows, None);
+    }
+    if let Some(rows) = &ranking {
+        heading(ui, model, "ui-analysis-sensitivity", Analysis::Sensitivity);
+        table(ui, "ui-analysis-sensitivity", rows, None);
+    }
+    if let Some(rows) = &optimised {
+        heading(ui, model, "ui-analysis-optimised", Analysis::Optimise);
+        table(ui, "ui-analysis-optimised", rows, None);
+        if ui.button(tr("ui-analysis-apply")).clicked() {
+            actions.push(Action::ApplyOptimised);
+        }
+    }
+}
+
+/// The motor search: every catalogue motor the fields ask for on the cycle, and a button per motor that
+/// names it in the running config.
+fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let found = model.search_table();
+    ui.horizontal_wrapped(|ui| {
+        ComboBox::from_label(tr("ui-search-supply")).selected_text(&inputs.supply).width(60.0).show_ui(ui, |ui| {
+            for supply in SUPPLIES {
+                ui.selectable_value(&mut inputs.supply, supply.to_string(), supply);
+            }
+        });
+        ui.label(tr("ui-search-series"));
+        ui.add(TextEdit::singleline(&mut inputs.series).desired_width(90.0));
+        ui.label(tr("ui-search-gearboxes"));
+        ui.add(TextEdit::singleline(&mut inputs.gearboxes).desired_width(60.0));
+        run_button(ui, model, "ui-search-run", Analysis::Search, actions);
+        if found.is_some() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::Search));
+        }
+    });
+    if let Some(rows) = &found {
+        heading(ui, model, "ui-search-ranked", Analysis::Search);
+        table(ui, "ui-search-ranked", rows, Some((&tr("ui-search-use"), &mut |row| actions.push(Action::UseCandidate(row)))));
+    }
+}
+
+/// A path from a file: planned, run by the machine and analysed, with the planned path drawn.
+fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let tables = model.path_tables();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-path-file"));
+        ui.add(TextEdit::singleline(&mut inputs.path_file).desired_width(260.0));
+        ui.radio_value(&mut inputs.path_timed, false, tr("ui-path-lines"));
+        ui.radio_value(&mut inputs.path_timed, true, tr("ui-path-timed"));
+        // Poses at times are timed already.
+        ui.add_enabled(!inputs.path_timed, Checkbox::new(&mut inputs.time_optimal, tr("ui-path-time-optimal")));
+        run_button(ui, model, "ui-path-run", Analysis::Path, actions);
+        if !tables.is_empty() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::Path));
+        }
+    });
+    if let Some((across, up, points)) = model.path_plot() {
+        heading(ui, model, "ui-path-planned", Analysis::Path);
+        let plot = Plot::new("path-planned").height(200.0).x_axis_label(across).y_axis_label(up);
+        // Two axes of the machine are drawn to the same scale, so that a circle is one.
+        let plot = if model.session.axes.len() > 1 { plot.data_aspect(1.0) } else { plot };
+        plot.show(ui, |plot| plot.line(Line::new(tr("ui-path-planned"), points).color(PALETTE[1]).width(1.8)));
+    }
+    for (rows, key) in tables.iter().zip(["ui-path-result", "ui-analysis-motors", "ui-analysis-verdicts"]) {
+        heading(ui, model, key, Analysis::Path);
+        table(ui, &format!("path-{key}"), rows, None);
+    }
+}
+
+/// A drive trace from a file, replayed through the simulator, and what it says the config should be.
+fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let tables = model.trace_tables();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-path-file"));
+        ui.add(TextEdit::singleline(&mut inputs.trace_file).desired_width(260.0));
+        run_button(ui, model, "ui-trace-run", Analysis::Trace, actions);
+        if !tables.is_empty() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::Trace));
+        }
+    });
+    for (rows, key) in tables.iter().zip(["ui-trace-replay", "ui-trace-fit"]) {
+        heading(ui, model, key, Analysis::Trace);
+        table(ui, key, rows, None);
+    }
+    for line in model.trace_advice() {
+        ui.label(line);
+    }
+}
+
 /// Tuning help: step response and closed-loop frequency response of one axis's position loop,
 /// measured on a copy of the machine with the parameters as they are now.
 fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     {
-        ui.horizontal(|ui| {
-            ui.label(tr("ui-tuning"));
+        ui.horizontal_wrapped(|ui| {
             for (i, axis) in model.session.axes.iter().enumerate() {
                 if ui.selectable_label(i == model.tuning_axis, tr(axis.key)).clicked() {
                     actions.push(Action::TuningAxis(i));

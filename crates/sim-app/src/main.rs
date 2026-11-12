@@ -11,7 +11,7 @@ use bevy::render::render_resource::BlendState;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{EguiContext, EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
-use sim_app::model::Model;
+use sim_app::model::{Analysis, Model};
 use sim_core::{Label, Part, Shape};
 use sim_machines::{LANGUAGES, MACHINES};
 use ui::Action;
@@ -65,7 +65,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (sync_scene, orbit_camera, developer_hooks).chain())
+        .add_systems(Update, (sync_scene, draw_paths, orbit_camera, developer_hooks).chain())
         .add_systems(EguiPrimaryContextPass, panels)
         .run();
 }
@@ -130,6 +130,16 @@ fn part_color(part: &Part) -> Color {
     Color::srgb(mix(r, toward[0]), mix(g, toward[1]), mix(b, toward[2]))
 }
 
+/// The planned path as a line in the 3D view, and over it the path the tool has really travelled since.
+fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
+    if let Some(run) = &state.model.path_run {
+        gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), Color::srgb(1.0, 0.8, 0.1));
+    }
+    if let Some(trail) = &state.model.trail {
+        gizmos.linestrip(trail.iter().map(|p| to_bevy(*p)), Color::srgb(0.2, 0.9, 1.0));
+    }
+}
+
 /// Takes in new samples and moves the drawn parts to where the machine says they are.
 fn sync_scene(
     mut state: ResMut<State>,
@@ -142,6 +152,10 @@ fn sync_scene(
     state.model.poll();
     let scene = &state.model.scene;
     let ids: Vec<&'static str> = scene.parts.iter().map(|p| p.id).collect();
+    // Nothing is drawn before the panels have been laid out once: the camera is fitted to the view they leave.
+    if state.view_rect[2] <= state.view_rect[0] {
+        return;
+    }
     if ids != state.part_ids {
         // Another machine, or a part came or went (the payload): rebuild the drawn parts.
         for (entity, _) in state.parts.drain(..) {
@@ -227,7 +241,7 @@ fn panels(
     let mut actions = Vec::new();
     let mut root = egui::Ui::new(ctx.clone(), "root".into(), egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()));
     let left = egui::Panel::left("controls").resizable(true).default_size(320.0).show(&mut root, |ui| ui::controls(ui, &state.model, &mut actions)).response.rect;
-    let right = egui::Panel::right("scopes").resizable(true).default_size(560.0).show(&mut root, |ui| ui::scopes(ui, &state.model, &mut actions)).response.rect;
+    let right = egui::Panel::right("scopes").resizable(true).default_size(720.0).show(&mut root, |ui| ui::scopes(ui, &state.model, &mut actions)).response.rect;
 
     // The 3D camera draws into what the panels leave free.
     let scale = window.scale_factor();
@@ -282,27 +296,55 @@ fn panels(
             Action::TuningAxis(axis) => model.tuning_axis = axis,
             Action::RunTuning => model.run_tuning(model.tuning_axis),
             Action::CloseTuning => model.tuning = None,
+            Action::Inputs(inputs) => model.inputs = inputs,
+            Action::RunAnalysis(kind) => model.run_analysis(kind),
+            Action::ApplyOptimised => model.apply_optimised(),
+            Action::UseCandidate(row) => model.use_candidate(row),
+            Action::CloseAnalysis => model.clear_analysis(),
+            Action::Clear(kind) => model.clear(kind),
             Action::ClearMessages => model.messages.clear(),
         }
     }
     Ok(())
 }
 
-/// "Motor A  1250 U/min"
+/// "Motor A  1250 1/min"
 fn label_text(model: &Model, label: &Label) -> String {
     format!("{}  {:.*} {}", model.tr.tr(label.owner_key), label.decimals, label.value, model.tr.tr(label.unit_key))
 }
 
 /// For checking the window without a person in front of it: with SIM_APP_SCREENSHOT=path set, the app
-/// starts the cycle, measures the tuning of the first axis, saves one screenshot after ten seconds and exits.
+/// starts the cycle, measures the tuning of the first axis, runs the three analyses (the cycle with its
+/// error bands), saves one screenshot a second after they are done (after nine seconds at the earliest) and
+/// exits a second later. To get another part of the panel into the picture, one of SIM_APP_SEARCH (how the
+/// article numbers start), SIM_APP_PATH and SIM_APP_TRACE (a file each) runs that part in their place.
 fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: MessageWriter<AppExit>) {
     let Ok(path) = std::env::var("SIM_APP_SCREENSHOT") else { return };
     state.frame += 1;
     match state.frame {
         30 => {
-            state.model.command(sim_components::Command::StartCycle);
-            state.model.run_tuning(0);
+            let model = &mut state.model;
+            let asked = |name: &str| std::env::var(name).ok();
+            let inputs = &mut model.inputs;
+            let parts = [(asked("SIM_APP_SEARCH"), &mut inputs.series, Analysis::Search), (asked("SIM_APP_PATH"), &mut inputs.path_file, Analysis::Path), (asked("SIM_APP_TRACE"), &mut inputs.trace_file, Analysis::Trace)];
+            let mut kinds = Vec::new();
+            for (value, field, kind) in parts {
+                if let Some(value) = value {
+                    *field = value;
+                    kinds.push(kind);
+                }
+            }
+            if kinds.is_empty() {
+                model.command(sim_components::Command::StartCycle);
+                model.run_tuning(0);
+                model.inputs.bands = true;
+                kinds = vec![Analysis::Cycle, Analysis::Sensitivity, Analysis::Optimise];
+            }
+            kinds.into_iter().for_each(|kind| model.run_analysis(kind));
         }
+        // Wait here until the background jobs have answered. The second after that is for the tables' new
+        // letters: they reach the picture a frame after they are first drawn.
+        480 if state.model.tuning_running() || state.model.analysis_running() => state.frame -= 1,
         540 => {
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
         }

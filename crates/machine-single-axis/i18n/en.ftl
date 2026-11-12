@@ -8,3 +8,6 @@ group-friction_x = Guide friction
 param-span_min_m = Shortest free belt span [m]
 belt-section-1 = Belt, motor to carriage
 belt-section-2 = Belt, return side
+effect-hard_stops = Hard stops at the stroke ends
+group-hard_stop = Hard stops
+param-stiffness_n_m = Stiffness [N/m]

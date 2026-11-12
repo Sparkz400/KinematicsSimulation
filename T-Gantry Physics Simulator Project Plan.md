@@ -236,9 +236,77 @@ The first task is phases 0 and 1: the base. That means the workspace, the core a
 
 The rigid model in phase 1 is not what ships. It exists because the full model needs something exact to be tested against.
 
-A possible phase 7 is parameter identification from real drive traces. It is not planned in detail because it depends on access to a machine.
+Parameter identification from real drive traces, once called a possible phase 7, is now stage D in "End goals and the stages that reach them" below.
 
 The first usable result comes after phase 3, as a command-line run that writes traces to CSV. That is the point to check the physics before investing in the interface.
+
+## End goals and the stages that reach them
+
+Added Nov 11, 2026, after phases 0 to 6. The goal at the top of this plan ("good enough to size motors, tune gains and compare motion profiles") describes the first version. The end goals go further. They apply to the T-gantry only for now; further kinematics wait until they are reached.
+
+| End goal | Reached when |
+| --- | --- |
+| 1. A twin that matches one real machine | Simulated torque, following error and tool position overlay measured drive traces within a stated tolerance over a whole cycle. Parameters are identified from traces automatically, and every result carries an error band from the parameter uncertainty. |
+| 2. A sizing tool that gives a verdict | Motor, gearbox, belt, guides and drive are picked from a catalogue and each gets pass or fail with a margin. The inverse works too: payload and cycle time in, cheapest passing combination out. |
+| 3. A path and cycle optimiser | Any path can be run and is judged by the error at the gripper, not at the motor encoder. Cycles are time-optimal inside the real motor and belt limits, and moves are shaped so the tool does not swing after a traverse. |
+
+Two further goals are deferred, not dropped: virtual commissioning of the real PLC program over a real-time fieldbus, and a twin that runs alongside the live machine to detect wear.
+
+**Where the model stands.** The equations are solved correctly (energy, convergence and the SciPy comparison prove that). Four things keep the results from being realistic: every parameter is a placeholder; the analysis reports numbers but no verdicts, and the config holds no continuous ratings; the tool tip is rigid, with the frame in X as the only structural mode; and the drive loops act without computation, PWM or fieldbus delay.
+
+Four stages follow. A, B and C need no hardware. D needs a real axis, and end goal 1 cannot be finished without it. Every step keeps the existing rules: one switch per effect, one test against something known independently, and the standard suite stays green.
+
+**Stage A: complete the physics.** An effect has to be in the model before it can be sized against, optimised around or fitted to a trace.
+
+| Step | Delivers | Done when |
+| --- | --- | --- |
+| A1 | Gearbox contact that cannot pull: once the teeth are engaged the damping term can reverse the torque today | The transmitted torque never opposes the twist |
+| A2 | Tilt and bending of the Z axis as a degree of freedom that changes with Z height; tool-tip position as a signal | The resonance matches a hand calculation at two Z heights |
+| A3 | Computation, PWM and fieldbus delays in the drive; sensor noise | Gains that are stable without delay go unstable at the hand-calculated limit |
+| A4 | Motor thermal model, winding resistance rising with temperature, torque constant falling at peak current, DC link with braking energy | Winding temperature and DC link energy for the reference cycle match a hand calculation |
+| A5 | Belt tooth stiffness in series with the span, damping that scales with span length, a tooth-jump flag when a section goes slack, idler inertia and friction | The belt natural frequency check passes with the tooth stiffness included |
+| A6 | Cable chain, process force at the tool, hard stops at the stroke ends, holding brake on Z | Each has its own switch and its own test |
+
+**Stage B: verdicts and error bands.** This reaches end goal 2.
+
+| Step | Delivers | Done when |
+| --- | --- | --- |
+| B1 | Ratings in the config (rated motor torque over speed, allowable belt tension, gearbox torque and speed limits, guide load) and a pass/fail report with margins, including energy per cycle and braking resistor load | The verdicts for the reference cycle match a hand calculation, and a deliberately undersized motor fails |
+| B2 | Low and high bounds on every uncertain parameter, a sensitivity sweep, and error bands on every verdict | Every verdict is reported as low, nominal and high, and the sweep ranks the parameters by their influence on peak torque, RMS torque and settling time |
+| B3 | Component catalogue: one data file per motor, gearbox, belt and guide, named in the machine config | The default config names its parts and takes its numbers from the part files |
+| B4 | Inverse search: every catalogue combination is screened with the rigid model, the survivors run on the full model and are ranked by cost and margin | On a small test catalogue with a known cheapest passing combination, the search returns it |
+
+**Stage C: paths.** This reaches end goal 3.
+
+| Step | Delivers | Done when |
+| --- | --- | --- |
+| C1 | Paths made of lines, arcs and splines with look-ahead; import of a trajectory from CSV or the PLC | A path with all three stays within the axis limits, and an imported trajectory is reproduced |
+| C2 | Path error at the tool tip, as a signal and as one number per cycle | It matches a hand calculation for an arc at constant speed |
+| C3 | Time-optimal speed along a path inside the motors' torque-speed limits, planned on the rigid model and checked on the full one | At every instant of the move one limit is active, and the full model stays on the torque-speed curve |
+| C4 | Moves shaped to the resonances from A2, so the tool does not swing | Residual vibration at the tool tip after a traverse falls below 10 % of that of the unshaped move |
+| C5 | Cycle optimiser that varies lift heights, blend sizes and limits | The optimised reference cycle is shorter than the S-curve cycle while every B1 verdict passes and the tool is within the settling tolerance at each pick and place |
+
+**Stage D: match a real machine.** This reaches end goal 1. D1 and D3 can be built and tested without hardware, on traces the simulator produces itself.
+
+| Step | Delivers | Done when |
+| --- | --- | --- |
+| D1 | Import of drive traces; the measured setpoints are replayed through the simulator and overlaid on the measurement | A trace exported by the simulator replays onto itself |
+| D2 | A fixed set of test runs on the real axis: constant speeds in both directions (friction), accelerations (inertia), a frequency sweep (belt and frame), a reversal (backlash), a long run (thermal), a tap at the tool tip (Z mode) | Every run is recorded |
+| D3 | Fit in stages: rigid values first, then stiffness and damping, then drive delays | The fit recovers the parameters of a simulated trace with added noise, within its own error band |
+| D4 | Acceptance on a measured cycle that was not used for fitting, as an automated test with the trace committed | The "Real traces" check of the validation table passes |
+
+**Order.** A1 to A3 first, then B1 and B2. The sweep of B2 shows which of A4 to A6 move the results; those that do not can be left out. B3, B4 and stage C follow. D1 and D3 can be built at any time; D2 and D4 start when a real axis is available.
+
+These stages take in several entries of the lists further down: the computed thermal model and tooth contact (A4, A5), the component catalogue (B3), energy and electrical (A4, B1) and lifetime estimates (B1).
+
+Needed from outside the code:
+
+- [ ] A real axis with a drive that records traces. A single belt axis on a bench is enough to start stage D; the full T-gantry is needed to finish it.
+- [ ] The actual motors, gearboxes, belts and guides under consideration, for the catalogue.
+- [ ] What "matches" means in D4. Proposed: RMS torque within 5 % and following error within a fixed band.
+- [ ] A target case, payload and cycle time, for B4 and C5 to solve.
+
+Limits that remain even when all four stages are done: a fitted twin matches one machine in one condition, and temperature and wear move it, which is what the error bands are for. Following error is harder to match than torque, because drive vendors do not document their internal filters and those have to be fitted too. Belt and bearing life come from datasheet formulas and cannot be confirmed short of an endurance test.
 
 ## Validation
 
@@ -259,7 +327,7 @@ Every phase has a test that compares the simulation against something known inde
 | Independent reference | One reference move matches a SciPy implementation of the same equations | 2 |
 | Following error at constant speed, no feedforward | Equals v / Kv | 3 |
 | Profile limits | Velocity, acceleration and jerk never exceed their limits | 3 |
-| Real traces | Simulated torque and following error overlay measured drive traces | 7 |
+| Real traces | Simulated torque and following error overlay measured drive traces | Stage D |
 
 Checks marked "every machine" form the standard suite that a new kinematics must pass unchanged. Component checks such as friction levels and backlash run once on the single-axis machine and then hold for every machine that uses the component.
 
