@@ -751,9 +751,9 @@ fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() 
         assert!(failed.is_empty(), "{mode}: {failed:?}");
         let (slack, settling, radial) = (band(&bands, "belt-slack"), band(&bands, "settling"), band(&bands, "gearbox-radial-load"));
         assert!(slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0, "{mode}: slackest {} N, settling {} m, radial {} N", slack.low, settling.high, radial.high);
-        // The highest belt tension is judged too, against the estimate of 990 N (the weaker class of 5 mm belt), and passes in the worst case.
+        // The highest belt tension is judged too, against the estimate of 2140 N (a 5 mm pitch belt as stiff as Festo's), and passes in the worst case.
         let tension = band(&bands, "belt-tension");
-        assert!(tension.verdict.limit == 990.0 && tension.ok && tension.share == 1.0, "{mode}: {tension:?}");
+        assert!(tension.verdict.limit == 2140.0 && tension.ok && tension.share == 1.0, "{mode}: {tension:?}");
         println!("{mode}: slackest {:.1} N, settling {:.2e} m, radial load {:.0} N, tightest {:.0} N", slack.low, settling.high, radial.high, tension.high);
     }
     let cycle = analyse_cycle(&mut sim_components::Sim::new(&machine_t_gantry::ENTRY, &cfg).unwrap()).unwrap().duration;

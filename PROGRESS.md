@@ -474,3 +474,12 @@ its stated end by what its radius is off, and over chained arcs that adds up; it
   the path slows down as into an arc without tolerance); one set of limits per span.
 - Of the transition curves: one length for all curves of a path; none at an arc that touches a corner or an
   end of the path; their length follows the speeds of the axis limits, also for the time-optimal plan.
+
+## Belt tension limit read from a maker's handbook (12 November)
+
+`ratings.belt_max_tension_n` of the EXCT-30 is 2140 N, no longer 990 N. The sixth review's figure took the weaker
+of two belt classes from search summaries. Megadyne's Megalinear handbook could then be read itself: steel-cord T5
+stretches 4 mm/m at 840 N (25 mm) and 1060 N (32 mm), AT5 at 1805 N and 2275 N. Festo's own stretch figure
+(0.045 % at 300 N at 30 mm) is 667 kN per unit strain, against about 250 kN for T5 and 535 kN for AT5, so the
+belt is of the AT5 class and the limit is the AT5 figure at 30 mm. The highest tension in the worst case is
+669 N. Test: `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes`.

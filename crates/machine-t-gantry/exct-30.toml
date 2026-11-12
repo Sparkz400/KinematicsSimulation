@@ -115,7 +115,7 @@ stiffness_ea_n = 6.667e5
 # about 1215 N at most (belt set 100 N high), inside the lowest shaft rating this file allows for (1500 N).
 # With the 300 N this file had, a belt set to 200 N went slack. The highest tension (558 N, 658 N with the
 # belt set 100 N high, about 670 N at most in the sampled runs) is judged against
-# ratings.belt_max_tension_n, an estimate of 990 N.
+# ratings.belt_max_tension_n, an estimate of 2140 N.
 pretension_n = 450.0
 # [estimate]
 damping_n_s_m = 100.0
@@ -309,15 +309,16 @@ noise_seed = 1
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 # Left out here: the highest gearbox input speed, because there is no gearbox.
 [ratings]
-# The allowable belt tension. Festo publishes none for the EXCT and states only the 5 mm pitch, the steel cords
-# and the 30 mm width of its polyurethane belt (catalog/festo/exct.toml), not the tooth profile. Belt makers'
-# figures for 5 mm pitch steel-cord polyurethane belts differ by profile: about 72 N per mm of width for AT5
-# (Optibelt: 1800 N at 25 mm, 2300 N at 32 mm, 25 % of the cords' breaking strength) and about 33 N per mm
-# for T5 (Megadyne Megalinear T5: 840 N at 25 mm, 1060 N at 32 mm). The limit takes the weaker class:
-# 33 N/mm x 30 mm = 990 N. These figures were taken from search summaries of the makers' data sheets; the
-# sheets themselves could not be downloaded and were not read.
+# The allowable belt tension. Festo publishes no allowable belt tension for the EXCT. It states the 5 mm pitch,
+# the steel cords, the 30 mm width and the stretch of the belt: 0.045 % at 300 N, which is 667 kN per unit
+# strain. Megadyne's Megalinear handbook lists for 5 mm pitch steel-cord polyurethane belts, at 4 mm/m stretch:
+# T5 840 N at 25 mm and 1060 N at 32 mm (about 250 kN per unit strain at 30 mm), AT5 1805 N at 25 mm and 2275 N
+# at 32 mm (about 535 kN). Festo's belt is as stiff as the AT5 class and far stiffer than T5, so the limit is
+# the AT5 figure between the two widths: 2140 N at 30 mm. Read from the handbook itself (megadynegroup.com,
+# md_manu_en_megalinear_web.pdf, pages 30 and 52); that Festo's belt has cords of that class is concluded from
+# the stretch, not stated by Festo.
 # [estimate]
-belt_max_tension_n = 990.0
+belt_max_tension_n = 2140.0
 # Below this the teeth can jump.
 belt_min_tension_n = 0.0
 # How far the tool may be from its target in the second half of a dwell, when the gripper acts.
