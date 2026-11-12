@@ -383,7 +383,7 @@ and its elastic state one more entry; every config has `effects.shared_dc_link`;
 Limits: the sampled bands do not search for the worst corner. A shared link adds the drives' capacitances
 and knows no Line Module. The path lines in the 3D view were not looked at on screen. Festo publishes no
 belt tension rating for the EXCT; the highest tension of the retuned config (558 N, 658 N with the belt
-set 100 N high) is judged against an estimate, 990 N since the sixth review (below). A spline joins a line or an arc with a step in curvature.
+set 100 N high) is judged against an estimate (2140 N now, see the end of this file). A spline joins a line or an arc with a step in curvature.
 
 ## Fourth review fixes (12 November 2026)
 
@@ -417,7 +417,7 @@ out. `cargo test --workspace`: 243 tests (242 before).
 
 Limits: an arc shorter than 0.1 mm as the very first piece was still run as a full turn (refused since the
 sixth review). The trail ends when the setpoint trajectory is through, so what the tool settles after
-that is not drawn. Whether Festo's belt has cords of the class the 2160 N assumed is not known (990 N since the sixth review).
+that is not drawn. Whether Festo's belt has cords of the class the 2160 N assumed is not known (990 N after the sixth review, 2140 N now, see the end of this file).
 
 ## Sixth review fixes (12 November 2026)
 
@@ -480,6 +480,6 @@ its stated end by what its radius is off, and over chained arcs that adds up; it
 `ratings.belt_max_tension_n` of the EXCT-30 is 2140 N, no longer 990 N. The sixth review's figure took the weaker
 of two belt classes from search summaries. Megadyne's Megalinear handbook could then be read itself: steel-cord T5
 stretches 4 mm/m at 840 N (25 mm) and 1060 N (32 mm), AT5 at 1805 N and 2275 N. Festo's own stretch figure
-(0.045 % at 300 N at 30 mm) is 667 kN per unit strain, against about 250 kN for T5 and 535 kN for AT5, so the
+(0.045 % at 300 N at 30 mm) is 667 kN per unit strain, against about 250 kN for T5 and 535 kN for AT5 with standard steel cords, so by its stretch the
 belt is of the AT5 class and the limit is the AT5 figure at 30 mm. The highest tension in the worst case is
 669 N. Test: `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes`.

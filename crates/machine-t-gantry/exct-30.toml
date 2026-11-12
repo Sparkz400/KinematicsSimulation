@@ -313,10 +313,12 @@ noise_seed = 1
 # the steel cords, the 30 mm width and the stretch of the belt: 0.045 % at 300 N, which is 667 kN per unit
 # strain. Megadyne's Megalinear handbook lists for 5 mm pitch steel-cord polyurethane belts, at 4 mm/m stretch:
 # T5 840 N at 25 mm and 1060 N at 32 mm (about 250 kN per unit strain at 30 mm), AT5 1805 N at 25 mm and 2275 N
-# at 32 mm (about 535 kN). Festo's belt is as stiff as the AT5 class and far stiffer than T5, so the limit is
-# the AT5 figure between the two widths: 2140 N at 30 mm. Read from the handbook itself (megadynegroup.com,
-# md_manu_en_megalinear_web.pdf, pages 30 and 52); that Festo's belt has cords of that class is concluded from
-# the stretch, not stated by Festo.
+# at 32 mm (about 535 kN). Festo's belt is somewhat stiffer than AT5 with standard steel cords and far stiffer
+# than T5, so the limit is the AT5 figure between the two widths: 2140 N at 30 mm. Read from the handbook itself
+# (megadynegroup.com, md_manu_en_megalinear_web.pdf, pages 30 and 52; average values for open-ended belts, a
+# quarter of the breaking strength); that Festo's belt has cords of that class is concluded from the stretch,
+# not stated by Festo. This is the cords' limit. The teeth at a pulley give way before the cords do: that is
+# pulley_max_torque_nm below (12.5 N m is 786 N of force difference at the 15.91 mm radius).
 # [estimate]
 belt_max_tension_n = 2140.0
 # Below this the teeth can jump.
