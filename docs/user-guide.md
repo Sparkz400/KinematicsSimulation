@@ -546,36 +546,38 @@ The tool is the platform's centre, x, y and z in metres, z up from the plane of 
 ```text
 $ sim-cli analyze delta-d3
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
-1,0.720000,7.786455,2.644848,120.1085,0.5195,0.5750,,,2.5071,26.35,...
-2,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
-3,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
+1,0.720000,7.639528,2.575488,120.0522,0.5097,0.5599,,,2.4396,24.82,...
+2,0.720000,3.986699,1.586770,64.8998,0.2676,0.3449,,,1.4822,8.63,...
+3,0.720000,3.986699,1.586770,64.8998,0.2676,0.3449,,,1.4822,8.63,...
 ```
 
 The cycle lies along x, so arm 1 (pointing along +x) works hardest, and arms 2 and 3 alike. Its 0.720 s are the S-curves by hand (traverse d/v + v/a + a/j = 0.1817 s, a 25 mm lift 4 (d / 2j)^(1/3) = 0.0684 s, 0.7069 s with the dwells) on the controller's 1 ms profile cycle (`the_adept_cycle_takes_the_hand_calculated_time`). The makers' figures for the same cycle are shorter (ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg): they round the corners instead of stopping, and run faster than the 3 m/s and 50 m/s² this config allows each axis. `sim-cli optimise delta-d3` rounds the corners through via points (splines on three axes) and raises the limits as far as every check allows.
 
 ```text
 $ sim-cli verdicts delta-d3
-motor-peak,1,0.5195,1.000,ok
-motor-thermal,1,26.35,100.0,ok
-drive-current,1,2.507,5.000,ok
-gearbox-continuous,1,68.68,120.0,ok
-gearbox-peak,1,136.6,192.0,ok
-gearbox-life,1,613609,20000,ok
+motor-peak,1,0.5097,1.000,ok
+motor-thermal,1,24.82,100.0,ok
+drive-current,1,2.440,5.000,ok
+gearbox-continuous,1,66.78,120.0,ok
+gearbox-peak,1,133.9,192.0,ok
+gearbox-life,1,671609,20000,ok
 ...
-settling,,0.0006767,0.0005000,FAIL
+settling,,0.0006762,0.0005000,FAIL
 singularity,,2.072,5.000,ok
 ```
 
-With `--bands` every check but `settling` passes at both bounds of every estimate (peak gearbox torque 127 to 146 N m); `settling` fails at all of them (0.624 to 0.736 mm). What to read from them:
+With `--bands` every check but `settling` passes at both bounds of every estimate (peak gearbox torque 125 to 143 N m); `settling` fails at all of them (0.624 to 0.736 mm). What to read from them:
 
-- **Gearbox.** The arm's gearbox carries up to 137 N m of its 192 N m; the cubic mean, 69 N m, is what its 120 N m rating is for.
+- **Gearbox.** The arm's gearbox carries up to 134 N m of its 192 N m; the cubic mean, 67 N m, is what its 120 N m rating is for.
 - **Settling fails: a sizing finding.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it: 0.64 mm at pick and place at rest with the NRB080's catalogue backlash of 9 arcmin, 0.68 mm in the dwell (with the motion before it); up to 2.09 mm at the rim's lower edge. That offset is the same every pass, which repeatability does not see, but it is beyond the class's accuracy: this delta needs a gearbox with less backlash. With 3 arcmin (`--set gearbox.backlash_rad=8.727e-4`, a robot-grade gearbox, not in the catalogue) it passes: 0.29 mm at rest at pick and place, 0.33 mm in the dwell, 0.30 to 0.38 mm over the bounds. The backlash does not make the loops ring: at rest the tool stands still to 2e-8 m with either.
 - **Singularity**: the highest condition number of the Jacobian in the cycle, against `ratings.max_condition_number` (5). Near a singularity a little motor angle moves the platform a lot and the motor torques for a force grow without bound; the working range has up to 3.6, the cycle 2.07.
 - **No belt, pulley or guide checks**: the delta has none.
 
 To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
 
-What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
+The forearms are rigid rods with their mass and rotational inertia (`effects.forearm_inertia`; off, the lumped model of Codourey and Olsson, which puts 2.6 % more RMS torque on motor 1 in this cycle: 2.645 against 2.575 N m, peak 7.786 against 7.640 N m). With `effects.link_elasticity` (off by default; its stiffness is an estimate) the upper arms bend and the platform rings after a move: the cycle's tracking error grows from 4.0 to 5.3 mm and the dwell error from 0.68 to 0.73 mm. The lowest mode with the motors held (the gearboxes' springs, with the switch the arms' bending too) is what `effects.shaper_follows_pose` sets the input shaper to: at the centre with the arms level the platform's sideways mode, 28 Hz on the gearboxes alone, 23 Hz with bending arms (the forearms lumped). The forearm rods are collision bodies: a forearm that runs into an obstacle is a crash.
+
+What the delta does not have: elastic rods and ball joints, the arms' bending out of the plane they turn in, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
 
 ## Run a path and read path error
 
@@ -711,7 +713,7 @@ Run: first contact with an obstacle (name: time, speed of the tool, pose) wall: 
 - `effects.crash` (off by default) makes the obstacles rigid: a part moving into one stops dead at its face, with the drives on or off (a machine coasting or falling with its drives off stops there too), and drives that were on go off. Enabled again, the drives can take the machine out of the obstacle; a move further into it stops it and takes them off again. A PLCopen axis reports such a stop as ErrorID 8. Off, contacts are reported and the machine moves through.
 - `--time-optimal` refuses a path that comes nearer than the clearance; `optimise` takes no setting whose run does.
 - The app draws the obstacles as see-through boxes, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline.
-- The clearance is between boxes: the tool, carriage, Z axis, platform and payload as the 3D view draws them, not their CAD shapes. The delta's forearms are not checked.
+- The clearance is between boxes: the tool, carriage, Z axis, platform and payload as the 3D view draws them, not their CAD shapes. The delta's forearm rods are each ten boxes along the drawn rod, up to a piece's length (95 mm) wider than the rod where it slants; its upper arms are not checked.
 
 ## Tune gains and use input shaping
 

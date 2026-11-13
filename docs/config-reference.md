@@ -462,6 +462,8 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `joint_elasticity` | The gearboxes twist (stiffness, damping, backlash): motor and arm are two bodies per joint. Off: the rigid reference model (the switch that `belt_stretch` is on the belt machines) | true |
+| `forearm_inertia` | Each forearm pair a rigid rod with its mass and rotational inertia (m/6 at each end, 2m/3 at its middle: exact for a slender rod). Off: the lumped model, `mass.forearm_elbow_share` at the elbow, the rest at the platform | true |
+| `link_elasticity` | The upper arms bend in the plane they turn in (`[upper_arm]`): the elbow turns against the arm's root on a spring and damper, and the platform rings after a move. Its stiffness is an estimate | false |
 | `joint_friction` | Friction in the arms' joints at the base, `[joint]` | true |
 | `hard_stops` | The stops at the ends of the arms' angle range, `[joint]` | true |
 | `gravity`, `payload`, `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `holding_brake` | As on the other machines | true |
@@ -495,9 +497,16 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | `upper_arm_inertia_kgm2` | kg m² | Its inertia about the shoulder axis (uniform tube: m L²/3) | 0.048 |
 | `elbow_kg` | kg | The elbow block with its ball studs, at the arm's end | 0.3 |
 | `forearm_pair_kg` | kg | A pair of forearm rods with their ball cups | 0.5 |
-| `forearm_elbow_share` | share | The share of a pair's mass counted at the elbow, the rest at the platform (0 to 1). 2/3 matches the rod's inertia about its end (Codourey, Olsson) | 0.6667 |
+| `forearm_elbow_share` | share | The share of a pair's mass counted at the elbow, the rest at the platform (0 to 1), with `effects.forearm_inertia` off. 2/3 matches the rod's inertia about its end (Codourey, Olsson) | 0.6667 |
 | `platform_kg` | kg | The platform with its flange | 1.2 |
 | `payload_kg` | kg | Payload, with `effects.payload` | 3.0, catalogue (Autonox rated payload) |
+
+`[upper_arm]` (with `effects.link_elasticity`; estimates, bounded)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `bending_stiffness_nm_rad` | N m/rad | The arm's bending as a turn of the elbow about the shoulder: 3 E I / L_a (a cantilever's tip deflection F L³ / (3 E I) over L_a). A carbon tube 50 × 2 mm, E 100 GPa: 65250; bounds 40000 to 100000 | 65000 |
+| `bending_damping_nm_s_rad` | N m s/rad | Its damping, about 2 % of critical at the platform's sideways mode; bounds 2 to 10 | 5.0 |
 
 `[joint]` (read by the rotary joint component; estimates)
 

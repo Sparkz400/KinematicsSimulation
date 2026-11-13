@@ -25,7 +25,21 @@
 //! ```
 //!
 //! exact for that model: the platform's kinetic energy m_nt |J theta'|^2 / 2 is what M holds, and the velocity term is the
-//! platform's m_nt J'theta' through J^T. Each joint is a `RotaryJoint` (gearbox with stiffness, backlash and
+//! platform's m_nt J'theta' through J^T.
+//!
+//! With effects.forearm_inertia each forearm pair is a rigid slender rod instead (the two rods of a pair move alike, the
+//! platform never turning): its kinetic energy (m/6)(|c'|^2 + c'.p' + |p'|^2) is exactly that of m/6 at each end and
+//! 2m/3 at its middle, so the rod is m_fb/6 at the elbow, m_fb/6 at the platform and 2 m_fb/3 at its middle
+//! (c_i + p)/2, whose Jacobian J_m,i = (J + dc_i/dtheta e_i^T)/2 adds m_mid J_m^T J_m to M, its acceleration at no
+//! arm acceleration (J_x^-1 w + c_i'' theta_i'^2)/2 the velocity term and its weight to Q_g. The spin of a rod about its
+//! own axis is left out.
+//!
+//! With effects.link_elasticity each upper arm bends (in the plane it turns in): the elbow turns by delta_i against the
+//! arm's root, on a spring k_b = 3 E I / L_a (a cantilever's tip deflection as a turn about the shoulder) with a damper.
+//! The arm's tube stays with the root (I_arm, m_arm l_cg), the elbow and all beyond move with the elbow angle
+//! theta + delta: I_arm theta'' = tau_gear + g m_arm l_cg cos theta + k_b delta + c_b delta' + tau_joint, and the rest of
+//! the machine as above at the elbow angles with the spring's -k_b delta - c_b delta' in place of the gearbox.
+//! Each joint is a `RotaryJoint` (gearbox with stiffness, backlash and
 //! efficiency, motor with friction, ripple and brake, joint friction, stops). Elastic (effects.joint_elasticity) the
 //! rotors are states of their own behind the gearboxes' springs; rigid, each rotor turns with its arm times the ratio and
 //! its inertia counts at the arm times the ratio squared, the gearbox losing its efficiency on what passes through it.
@@ -77,6 +91,7 @@ pub fn lossless_config() -> Config {
     }
     cfg.set_text("gearbox.damping_nm_s_rad = 0.0").unwrap();
     cfg.set_text("joint.stop_damping_nm_s_rad = 0.0").unwrap();
+    cfg.set_text("upper_arm.bending_damping_nm_s_rad = 0.0").unwrap();
     cfg
 }
 
@@ -262,6 +277,52 @@ impl Legs {
         });
         Some(mul(&inv, w))
     }
+
+    /// The middle of leg i's forearm, (c_i + p) / 2: its Jacobian (J + dc_i/dtheta e_i^T) / 2 from the platform's J, and
+    /// its acceleration at no arm acceleration, (a0 + c_i'' w_i^2) / 2, from the platform's a0 = J' theta' (`velocity_term`)
+    /// at arm speed w_i.
+    pub fn rod_middle(&self, i: usize, t: f64, j: &M3, a0: V3, w: f64) -> (M3, V3) {
+        let [_, d1, d2] = self.elbow(i, t);
+        let jm = std::array::from_fn(|r| std::array::from_fn(|c| 0.5 * (j[r][c] + if c == i { d1[r] } else { 0.0 })));
+        (jm, std::array::from_fn(|r| 0.5 * (a0[r] + d2[r] * w * w)))
+    }
+
+    /// The two rods of leg i's forearm pair, elbow end to platform end, at elbow angle t and platform position p, as
+    /// drawn: `spacing` apart along the elbow's axis, their ends at the base radius (the legs' elbow is at e, `r` the
+    /// platform radius added back) and at the platform's rim.
+    pub fn rods(&self, i: usize, t: f64, p: V3, r: f64, spacing: f64) -> [(V3, V3); 2] {
+        let (c, sn) = self.azimuth[i];
+        let [elbow, ..] = self.elbow(i, t);
+        let half = [-0.5 * spacing * sn, 0.5 * spacing * c, 0.0];
+        let (arm_end, platform_end) = ([elbow[0] + r * c, elbow[1] + r * sn, elbow[2]], [p[0] + r * c, p[1] + r * sn, p[2]]);
+        [-1.0, 1.0].map(|side| (std::array::from_fn(|k| arm_end[k] + side * half[k]), std::array::from_fn(|k| platform_end[k] + side * half[k])))
+    }
+}
+
+/// The lowest mode of the arms with the motors held (by their position loops): per arm the gearbox's spring k_g from
+/// the motor to the arm's root (inertia `root`), the bending spring k_b from the root to the elbow, and the rest of the
+/// machine as the mass matrix `distal` at the elbow angles. `None` for a rigid spring (infinite stiffness: the two ends
+/// one body). Inverse iteration on K x = w^2 M x, with the flexibility per arm K^-1 = [[1/k_g, 1/k_g],
+/// [1/k_g, 1/k_g + 1/k_b]] (root, elbow). Gravity's stiffness (some N m/rad against 1e4) and the stops are left out.
+/// Returns w^2 and the shape (root turns, elbow turns), the elbow's largest 1.
+pub fn lowest_mode(root: f64, distal: &M3, k_gear: Option<f64>, k_bend: Option<f64>) -> (f64, [V3; 2]) {
+    let (fg, fb) = (k_gear.map_or(0.0, |k| 1.0 / k), k_bend.map_or(0.0, |k| 1.0 / k));
+    let (mut rt, mut tip) = ([1.0, 0.31, -0.17], [1.0, 0.31, -0.17]);
+    let mut w2 = 0.0;
+    for _ in 0..200 {
+        // x = M v (the root's own inertia only where it is a body of its own, between two springs).
+        let (xr, xt) = (rt.map(|v| root * v), mul(distal, tip));
+        let xr = if k_gear.is_none() { [0.0; 3] } else { xr };
+        let nr: V3 = std::array::from_fn(|k| fg * (xr[k] + xt[k]));
+        let nt: V3 = std::array::from_fn(|k| nr[k] + fb * xt[k]);
+        // Rayleigh quotient of the new vector: v'^T M v / v'^T M v'.
+        let held = |a: V3| if k_gear.is_none() { 0.0 } else { root * dot(a, a) };
+        let mass = held(nr) + dot(nt, mul(distal, nt));
+        w2 = (dot(nr, xr) + dot(nt, xt)) / mass;
+        let scale = nt.iter().fold(0f64, |m, v| m.max(v.abs()));
+        (rt, tip) = (nr.map(|v| v / scale), nt.map(|v| v / scale));
+    }
+    (w2, [rt, tip])
 }
 
 pub struct Delta {
@@ -272,9 +333,16 @@ pub struct Delta {
     rod_spacing: f64,
     elastic: bool,
     g: f64,
-    /// I_b without the rotor, m_LG, platform mass without and with payload (forearm share included).
-    arm_inertia: f64,
-    arm_moment: f64,
+    /// I_b without the rotor and m_LG, each split into the arm's tube (root, about the joint) and what sits at the
+    /// elbow (tip); the mass at each forearm's middle (effects.forearm_inertia, else 0); platform mass without and with
+    /// payload (forearm share included).
+    root_inertia: f64,
+    root_moment: f64,
+    tip_inertia: f64,
+    tip_moment: f64,
+    m_rod_middle: f64,
+    /// effects.link_elasticity: the upper arms' bending stiffness and damping at the joint, N m/rad and N m s/rad.
+    bending: Option<(f64, f64)>,
     m_platform: f64,
     m_payload: f64,
     payload_attached: bool,
@@ -298,9 +366,10 @@ const N_ELASTIC: usize = 15;
 const N_RIGID: usize = 9;
 
 /// The losses of one moment: per joint its friction, its motor's friction with the brake, its gearbox; the stops and
-/// what the ripple gives off; and per joint the gearbox loss as a torque at the rotor.
+/// what the ripple gives off; the arms' bending damping (effects.link_elasticity); and per joint the gearbox loss as a
+/// torque at the rotor.
 struct Losses {
-    powers: [f64; 11],
+    powers: [f64; 12],
     gear_at_rotor: V3,
 }
 
@@ -328,7 +397,11 @@ impl Delta {
         }
         let (m_arm, cg, i_arm) = (cfg.positive("mass.upper_arm_kg")?, cfg.non_negative("mass.upper_arm_cg_m")?, cfg.positive("mass.upper_arm_inertia_kgm2")?);
         let (m_elbow, m_fb) = (cfg.non_negative("mass.elbow_kg")?, cfg.non_negative("mass.forearm_pair_kg")?);
+        // A rigid rod: a sixth at each end, two thirds at its middle (see the crate's doc).
+        let rods = cfg.bool("effects.forearm_inertia")?;
+        let (share, middle) = if rods { (1.0 / 6.0, 2.0 / 3.0) } else { (share, 0.0) };
         let elbow = m_elbow + share * m_fb;
+        let (k_bend, c_bend) = (cfg.positive("upper_arm.bending_stiffness_nm_rad")?, cfg.non_negative("upper_arm.bending_damping_nm_s_rad")?);
         let (radius, top) = (cfg.positive("workspace.radius_m")?, cfg.f64("workspace.top_z_m")?);
         let (edge, centre) = (cfg.positive("workspace.height_edge_m")?, cfg.positive("workspace.height_centre_m")?);
         if centre < edge {
@@ -362,9 +435,13 @@ impl Delta {
             rod_spacing: cfg.non_negative("geometry.forearm_spacing_m")?,
             elastic: cfg.bool("effects.joint_elasticity")?,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
-            arm_inertia: i_arm + la * la * elbow,
-            arm_moment: m_arm * cg + la * elbow,
-            m_platform: cfg.positive("mass.platform_kg")? + 3.0 * (1.0 - share) * m_fb,
+            root_inertia: i_arm,
+            root_moment: m_arm * cg,
+            tip_inertia: la * la * elbow,
+            tip_moment: la * elbow,
+            m_rod_middle: middle * m_fb,
+            bending: cfg.bool("effects.link_elasticity")?.then_some((k_bend, c_bend)),
+            m_platform: cfg.positive("mass.platform_kg")? + 3.0 * (1.0 - share - middle) * m_fb,
             m_payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
@@ -390,7 +467,7 @@ impl Delta {
     /// gearboxes do not twist.
     fn rest_sag(&self) -> f64 {
         let mut most = 0f64;
-        if !self.elastic {
+        if !self.elastic && self.bending.is_none() {
             return 1e-4;
         }
         let (bottom, top) = (self.axes[2].min, self.top);
@@ -403,15 +480,20 @@ impl Delta {
                 let lowest = if centre.is_finite() { centre - (r * r - rho * rho).max(0.0).sqrt() } else { bottom };
                 let heights = (0..=8).map(|k| lowest + (top - lowest) * k as f64 / 8.0);
                 for p in heights.map(|z| [x, y, z]).filter(|p| self.in_envelope(p, 1e-9)) {
-                    let Some(t) = self.legs.inverse(p) else { continue };
-                    let Some(j) = self.legs.jacobian(t, p) else { continue };
+                    if self.legs.inverse(p).is_none() {
+                        continue;
+                    }
                     for m in [self.m_platform, self.m_platform + self.m_payload] {
+                        // The joints' angles at rest, the arms' bend taken off the elbows'.
+                        let (t, gravity, _) = self.rest_at(p, m);
                         let twist: V3 = std::array::from_fn(|k| {
-                            let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[2][k]) - self.joints[k].output_torque(t[k], 0.0);
-                            held / self.joints[k].gearbox.stiffness
+                            let held = -gravity[k] - self.joints[k].output_torque(t[k], 0.0);
+                            if self.elastic { held / self.joints[k].gearbox.stiffness } else { 0.0 }
                         });
                         for signs in 0..8 {
-                            let half = |k: usize| if signs >> k & 1 == 1 { 1.0 } else { -1.0 } * self.joints[k].gearbox.half_backlash;
+                            // No backlash in the rigid joint model.
+                            let backlash = |k: usize| if self.elastic { self.joints[k].gearbox.half_backlash } else { 0.0 };
+                            let half = |k: usize| if signs >> k & 1 == 1 { 1.0 } else { -1.0 } * backlash(k);
                             if let Some(q) = self.legs.forward(std::array::from_fn(|k| t[k] + twist[k] + half(k))) {
                                 most = most.max(norm(sub(q, p)));
                             }
@@ -438,17 +520,37 @@ impl Delta {
 
     /// The arm's inertia about its joint, elbow share of the forearms included, rotor not.
     pub fn arm_inertia(&self) -> f64 {
-        self.arm_inertia
+        self.root_inertia + self.tip_inertia
     }
 
     /// m_LG: the arm's gravity torque is g m_LG cos(theta).
     pub fn arm_moment(&self) -> f64 {
-        self.arm_moment
+        self.root_moment + self.tip_moment
     }
 
-    /// Arm angles and speeds of a state.
+    /// Arm angles and speeds of a state: at the joints, the gearboxes' output side.
     fn arms(&self, s: &[f64]) -> (V3, V3) {
         ([s[0], s[1], s[2]], [s[3], s[4], s[5]])
+    }
+
+    /// Where the arms' bend sits in the state, after the brakes.
+    fn bend_at(&self) -> usize {
+        if self.elastic { N_ELASTIC } else { N_RIGID }
+    }
+
+    /// The arms' bend (the elbow's turn against the arm's root) and its rate; zero with rigid links.
+    fn bend(&self, s: &[f64]) -> (V3, V3) {
+        if self.bending.is_none() {
+            return ([0.0; 3], [0.0; 3]);
+        }
+        let at = self.bend_at();
+        ([s[at], s[at + 1], s[at + 2]], [s[at + 3], s[at + 4], s[at + 5]])
+    }
+
+    /// The elbow angles and speeds, which the kinematics take: the arms' plus their bend.
+    fn elbows(&self, s: &[f64]) -> (V3, V3) {
+        let ((t, w), (b, r)) = (self.arms(s), self.bend(s));
+        (std::array::from_fn(|k| t[k] + b[k]), std::array::from_fn(|k| w[k] + r[k]))
     }
 
     /// Rotor angles and speeds of a state.
@@ -474,17 +576,89 @@ impl Delta {
         }
     }
 
-    /// The load's mass matrix M, the velocity term m_nt J^T J' theta', and the generalised gravity Q_g at arm angles t
-    /// and speeds w.
+    /// The load's mass matrix M, the velocity term m_nt J^T J' theta' (and the forearms' middles'), and the generalised
+    /// gravity Q_g at arm angles t and speeds w, the links rigid.
     fn load(&self, t: V3, w: V3) -> (M3, V3, V3) {
+        self.load_at(t, w, self.m_nt(), true)
+    }
+
+    /// `load` at elbow angles t and speeds w with the platform's mass m: of everything beyond the gearboxes (`root`), or
+    /// only of what lies beyond the arms' tubes (what the bending springs carry).
+    pub fn load_at(&self, t: V3, w: V3, m: f64, root: bool) -> (M3, V3, V3) {
         let (p, j) = self.pose(t);
         let jt = transpose(&j);
-        let m = self.m_nt();
-        let mass: M3 = std::array::from_fn(|r| std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { self.arm_inertia } else { 0.0 }));
-        let pv = mul(&j, w);
-        let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 3], |a| mul(&jt, a.map(|v| m * v)));
-        let gravity: V3 = std::array::from_fn(|k| self.g * self.arm_moment * t[k].cos() - m * self.g * j[2][k]);
+        let (inertia, moment) = if root { (self.arm_inertia(), self.arm_moment()) } else { (self.tip_inertia, self.tip_moment) };
+        let mut mass: M3 = std::array::from_fn(|r| std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { inertia } else { 0.0 }));
+        let a0 = self.legs.velocity_term(t, p, w, mul(&j, w)).unwrap_or([f64::NAN; 3]);
+        let mut velocity = mul(&jt, a0.map(|v| m * v));
+        let mut gravity: V3 = std::array::from_fn(|k| self.g * moment * t[k].cos() - m * self.g * j[2][k]);
+        let mm = self.m_rod_middle;
+        if mm > 0.0 {
+            for i in 0..3 {
+                let (jm, am) = self.legs.rod_middle(i, t[i], &j, a0, w[i]);
+                let jmt = transpose(&jm);
+                for r in 0..3 {
+                    for c in 0..3 {
+                        mass[r][c] += mm * dot(jmt[r], jmt[c]);
+                    }
+                    velocity[r] += mm * dot(jmt[r], am);
+                    gravity[r] -= mm * self.g * jm[2][r];
+                }
+            }
+        }
         (mass, velocity, gravity)
+    }
+
+    /// At rest with the platform at p and its mass m: the joints' angles, the torque gravity puts on each joint (all of
+    /// it: with bending arms the tube's own and, through the spring, the rest) and the arms' bend, Q_d / k_b.
+    fn rest_at(&self, p: V3, m: f64) -> (V3, V3, V3) {
+        let elbows = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
+        let Some((k, _)) = self.bending else { return (elbows, self.load_at(elbows, [0.0; 3], m, true).2, [0.0; 3]) };
+        let (_, _, tip) = self.load_at(elbows, [0.0; 3], m, false);
+        let bend = tip.map(|q| q / k);
+        let t: V3 = std::array::from_fn(|i| elbows[i] - bend[i]);
+        (t, std::array::from_fn(|i| self.g * self.root_moment * t[i].cos() + tip[i]), bend)
+    }
+
+    /// What the joints carry at state s, as `load` has it: mass matrix, velocity term, gravity. With bending arms only
+    /// the tubes are on the joints, and the springs' torque stands in for the rest: its weight Q_d in the gravity, the
+    /// remainder in the velocity term (so that the torque breakdown shows the weight as gravity).
+    fn joint_load(&self, s: &[f64]) -> (M3, V3, V3) {
+        let (t, w) = self.arms(s);
+        let Some((k, c)) = self.bending else { return self.load(t, w) };
+        let ((elbows, _), (bend, rate)) = (self.elbows(s), self.bend(s));
+        let (_, _, tip) = self.load_at(elbows, [0.0; 3], self.m_nt(), false);
+        let mass = std::array::from_fn(|r| std::array::from_fn(|col| if r == col { self.root_inertia } else { 0.0 }));
+        let gravity = std::array::from_fn(|i| self.g * self.root_moment * t[i].cos() + tip[i]);
+        (mass, std::array::from_fn(|i| tip[i] - k * bend[i] - c * rate[i]), gravity)
+    }
+
+    /// With bending arms, the rates of the bend states into `out`, from the joints' acceleration `acc`: the elbows'
+    /// acceleration from M_d theta_e'' = Q_d - v_d - k_b delta - c_b delta' (`load_at` beyond the tubes).
+    fn bend_rates(&self, s: &[f64], acc: V3, out: &mut [f64]) {
+        let Some((k, c)) = self.bending else { return };
+        let ((elbows, speeds), (bend, rate)) = (self.elbows(s), self.bend(s));
+        let (mass, velocity, gravity) = self.load_at(elbows, speeds, self.m_nt(), false);
+        let rhs: V3 = std::array::from_fn(|i| gravity[i] - velocity[i] - k * bend[i] - c * rate[i]);
+        let elbow_acc = inverse(&mass).map_or([f64::NAN; 3], |inv| mul(&inv, rhs));
+        let at = self.bend_at();
+        out[at..at + 3].copy_from_slice(&rate);
+        for i in 0..3 {
+            out[at + 3 + i] = elbow_acc[i] - acc[i];
+        }
+    }
+
+    /// The lowest mode at a tool pose with the motors held (`lowest_mode`): its frequency in Hz and its shape (the
+    /// joints' turns, the elbows' turns). `None` with rigid gearboxes and rigid arms, or out of reach.
+    fn mode_at(&self, tool: &[f64]) -> Option<(f64, [V3; 2])> {
+        let (k_gear, k_bend) = (self.elastic.then(|| self.joints[0].gearbox.stiffness), self.bending.map(|(k, _)| k));
+        if (k_gear.is_none() && k_bend.is_none()) || tool.len() != 3 {
+            return None;
+        }
+        let elbows = self.legs.inverse([tool[0], tool[1], tool[2]])?;
+        let (distal, ..) = self.load_at(elbows, [0.0; 3], self.m_nt(), false);
+        let (w2, shape) = lowest_mode(self.root_inertia, &distal, k_gear, k_bend);
+        (w2 > 0.0).then(|| (w2.sqrt() / std::f64::consts::TAU, shape))
     }
 
     /// Rigid model: the arms' acceleration, and per joint the torque into its gearbox (after the rotor's own
@@ -493,7 +667,7 @@ impl Delta {
         let (t, w) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let (mass, velocity, gravity) = self.joint_load(s);
         let drive: V3 = std::array::from_fn(|k| self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0);
         let rest: V3 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
         let solve = |loss: V3| -> V3 {
@@ -511,7 +685,7 @@ impl Delta {
     /// The arms' acceleration in either model.
     fn arm_acceleration(&self, s: &[f64], torque: &[f64]) -> V3 {
         if self.elastic {
-            let mut d = [0.0; N_ELASTIC];
+            let mut d = vec![0.0; self.state_len()];
             self.derivatives(s, torque, &mut d);
             [d[3], d[4], d[5]]
         } else {
@@ -530,11 +704,20 @@ impl Delta {
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
         let (t, w) = self.arms(s);
-        let (mass, ..) = self.load(t, w);
-        let mut kinetic = 0.5 * dot(w, mul(&mass, w));
-        let (p, _) = self.pose(t);
-        let potential = self.g * (self.m_nt() * p[2] - self.arm_moment * (t[0].sin() + t[1].sin() + t[2].sin()));
+        let (elbows, speeds) = self.elbows(s);
+        let bending = self.bending.is_some();
+        // Beyond the tubes at the elbows' speeds, the tubes at the joints' (all of it at once with rigid links).
+        let (mass, ..) = self.load_at(elbows, speeds, self.m_nt(), !bending);
+        let mut kinetic = 0.5 * dot(speeds, mul(&mass, speeds)) + if bending { 0.5 * self.root_inertia * dot(w, w) } else { 0.0 };
+        let (p, _) = self.pose(elbows);
+        let middles: f64 = (0..3).map(|i| 0.5 * (self.legs.elbow(i, elbows[i])[0][2] + p[2])).sum();
+        let sines = |a: V3| a[0].sin() + a[1].sin() + a[2].sin();
+        let potential = self.g * (self.m_nt() * p[2] + self.m_rod_middle * middles - self.root_moment * sines(t) - self.tip_moment * sines(elbows));
         let mut elastic: f64 = (0..3).map(|k| self.joints[k].stop_energy(t[k])).sum();
+        if let Some((k, _)) = self.bending {
+            let (bend, _) = self.bend(s);
+            elastic += 0.5 * k * dot(bend, bend);
+        }
         if self.elastic {
             for k in 0..3 {
                 kinetic += 0.5 * self.joints[k].rotor_inertia * s[9 + k] * s[9 + k];
@@ -550,7 +733,7 @@ impl Delta {
         let (t, w) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let mut powers = [0.0; 11];
+        let mut powers = [0.0; 12];
         let mut gear_at_rotor = [0.0; 3];
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque));
         let mut stops = 0.0;
@@ -575,7 +758,16 @@ impl Delta {
         }
         powers[9] = stops;
         powers[10] = other;
+        if let Some((_, c)) = self.bending {
+            let (_, rate) = self.bend(s);
+            powers[11] = c * dot(rate, rate);
+        }
         Losses { powers, gear_at_rotor }
+    }
+
+    /// How many of `Losses::powers` are signals: the arms' bending damping only with effects.link_elasticity.
+    fn loss_count(&self) -> usize {
+        if self.bending.is_some() { 12 } else { 11 }
     }
 
     /// Whether a pose is within the working range (cylinder, top, spherical bottom), widened by `slack`.
@@ -587,10 +779,10 @@ impl Delta {
 
     /// The torque breakdown, loss powers, energies, friction signals of the effect views.
     fn view_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
-        let (t, w) = self.arms(s);
+        let (_, w) = self.arms(s);
         let (_, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let (mass, velocity, gravity) = self.joint_load(s);
         let acc = self.arm_acceleration(s, torque);
         let moving = mul(&mass, acc);
         let losses = self.losses(s, torque);
@@ -606,7 +798,7 @@ impl Delta {
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
         }
-        out.extend(losses.powers);
+        out.extend(&losses.powers[..self.loss_count()]);
         out.extend(self.energy_parts(s));
     }
 
@@ -623,6 +815,9 @@ impl Delta {
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
+        if self.bending.is_some() {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}arm_bending"), "group-upper-arms", "quantity-damping-power", "W"));
+        }
         out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
     }
 }
@@ -649,12 +844,12 @@ impl Machine for Delta {
     }
 
     fn state_len(&self) -> usize {
-        if self.elastic { N_ELASTIC } else { N_RIGID }
+        self.bend_at() + if self.bending.is_some() { 6 } else { 0 }
     }
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
-        let t = self.legs.inverse([tool[0], tool[1], tool[2]]).unwrap_or([f64::NAN; 3]);
-        let (_, _, gravity) = self.load(t, [0.0; 3]);
+        // The elbows at the pose; the joints short of them by the arms' bend under the weight.
+        let (t, gravity, bend) = self.rest_at([tool[0], tool[1], tool[2]], self.m_nt());
         state.clear();
         state.extend(t);
         state.extend([0.0; 3]);
@@ -668,7 +863,11 @@ impl Machine for Delta {
             }
             torque[k] = joint.ripple.invert(out / joint.ratio(), rotor);
         }
-        // Rotor speeds and brakes at rest.
+        // Rotor speeds and brakes at rest; the bend still.
+        state.resize(self.bend_at(), 0.0);
+        if self.bending.is_some() {
+            state.extend(bend);
+        }
         state.resize(self.state_len(), 0.0);
     }
 
@@ -682,10 +881,11 @@ impl Machine for Delta {
             for k in 0..3 {
                 out[6 + k] = self.joints[k].brake.torque(self.brake_engaged, rotor_speed[k], brakes[k]).1;
             }
+            self.bend_rates(s, acc, out);
             return;
         }
         let (t, w) = self.arms(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let (mass, velocity, gravity) = self.joint_load(s);
         let mut rhs = [0.0; 3];
         for k in 0..3 {
             let joint = &self.joints[k];
@@ -698,19 +898,25 @@ impl Machine for Delta {
         let acc = inverse(&mass).map_or([f64::NAN; 3], |inv| mul(&inv, rhs));
         out[..3].copy_from_slice(&s[3..6]);
         out[3..6].copy_from_slice(&acc);
+        self.bend_rates(s, acc, out);
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
-        let (t, w) = self.arms(s);
+        let (t, w) = self.elbows(s);
         let (p, j) = self.pose(t);
         pos[..3].copy_from_slice(&p);
         vel[..3].copy_from_slice(&mul(&j, w));
     }
+    /// The arms turn at the speed, their bend standing still.
     fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {
-        let (t, _) = self.arms(s);
+        let (t, _) = self.elbows(s);
         let (_, j) = self.pose(t);
         let w = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, [vel[0], vel[1], vel[2]]));
         s[3..6].copy_from_slice(&w);
+        if self.bending.is_some() {
+            let at = self.bend_at() + 3;
+            s[at..at + 3].fill(0.0);
+        }
         if self.elastic {
             for k in 0..3 {
                 s[9 + k] = self.joints[k].ratio() * w[k];
@@ -736,22 +942,23 @@ impl Machine for Delta {
         }
     }
 
-    /// With the speed: θ̇ = J⁻¹ ṗ, θ̈ = J⁻¹ (p̈ − J_x⁻¹ w), and at the arm I_b θ̈ + m_nt Jᵀ p̈ − Q_g (which is
-    /// M θ̈ + m_nt Jᵀ J_x⁻¹ w − Q_g), over the ratio, plus the rotor's own J_rotor i θ̈.
+    /// With the speed: θ̇ = J⁻¹ ṗ, θ̈ = J⁻¹ (p̈ − J_x⁻¹ w), and at the arm M θ̈ + v − Q_g (`load`: with the lumped
+    /// forearms that is I_b θ̈ + m_nt Jᵀ p̈ − Q_g; with rods their middles' too), over the ratio, plus the rotor's own
+    /// J_rotor i θ̈. The links rigid.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
         let p = [pos[0], pos[1], pos[2]];
         let t = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
-        let (_, _, gravity) = self.load(t, [0.0; 3]);
         let (_, j) = self.pose(t);
         let inv = inverse(&j).unwrap_or([[f64::NAN; 3]; 3]);
         let (pv, pa) = ([vel[0], vel[1], vel[2]], [acc[0], acc[1], acc[2]]);
         let w = mul(&inv, pv);
         let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 3]);
         let arm_acc = mul(&inv, std::array::from_fn(|i| pa[i] - bend[i]));
-        let force = transpose(&j).map(|column| self.m_nt() * dot(column, pa));
+        let (mass, velocity, gravity) = self.load(t, w);
+        let at_arm = mul(&mass, arm_acc);
         for k in 0..3 {
             let joint = &self.joints[k];
-            out[k] = (self.arm_inertia * arm_acc[k] + force[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
+            out[k] = (at_arm[k] + velocity[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
         }
     }
 
@@ -822,14 +1029,14 @@ impl Machine for Delta {
         for k in 0..3 {
             out.extend([t[k], gear[k]]);
         }
-        let (_, j) = self.pose(t);
+        let (_, j) = self.pose(self.elbows(s).0);
         out.push(condition_number(&j));
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         self.view_signals(s, torque, out);
     }
     fn loss_powers(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
-        out.extend(self.losses(s, torque).powers);
+        out.extend(&self.losses(s, torque).powers[..self.loss_count()]);
     }
 
     // shortcut: the joints' friction is not offered to the friction view, which draws a guide's force over its speed
@@ -849,7 +1056,8 @@ impl Machine for Delta {
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {
-        let (t, _) = self.arms(s);
+        // The arms drawn straight to their elbows, bent or not.
+        let (t, _) = self.elbows(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let (p, _) = self.pose(t);
         out.parts.clear();
@@ -868,12 +1076,8 @@ impl Machine for Delta {
             out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, at(self.base_radius, 0.225), [0.1, 0.1, 0.1]).turned(rotor[k]));
             out.parts.push(Part::new("arm", Shape::Segment { to: arm_end, width: 0.04 }, shoulder, [0.2, 0.22, 0.26]));
             // The two rods of the forearm pair, apart along the elbow's axis (tangential to the base).
-            let half = [-0.5 * self.rod_spacing * sn, 0.5 * self.rod_spacing * c, 0.0];
-            let platform_end = [p[0] + self.platform_radius * c, p[1] + self.platform_radius * sn, p[2]];
-            for side in [-1.0, 1.0] {
-                let from = std::array::from_fn(|i| arm_end[i] + side * half[i]);
-                let to = std::array::from_fn(|i| platform_end[i] + side * half[i]);
-                out.parts.push(Part::new("forearm", Shape::Segment { to, width: 0.012 }, from, [0.15, 0.15, 0.15]));
+            for (from, to) in self.legs.rods(k, t[k], p, self.platform_radius, self.rod_spacing) {
+                out.parts.push(Part::new("forearm", Shape::Segment { to, width: ROD_WIDTH }, from, [0.15, 0.15, 0.15]));
             }
             out.labels.push(Label { pos: at(self.base_radius, 0.3), owner_key: self.motors[k].key, value: rotor_speed[k] * 60.0 / std::f64::consts::TAU, unit_key: "unit-rpm", decimals: 0 });
         }
@@ -886,13 +1090,55 @@ impl Machine for Delta {
         Some([tool_pose[0], tool_pose[1], tool_pose[2]])
     }
 
-    /// The platform and the payload under it, where `scene` draws them, without drawing the rest: the live check asks
-    /// for them every base step. The forearms are left out.
+    /// The platform and the payload under it, and the six forearm rods, where `scene` draws them, without drawing the
+    /// rest: the live check asks for them every base step. Each rod is `ROD_PIECES` boxes along it, each the box around
+    /// its piece of the drawn segment widened by the rod's width.
+    // shortcut: a slanted rod's pieces are boxes along the scene's axes, up to a piece's length (95 mm) wider than the
+    // rod; capsules if a near miss of a forearm ever matters. The upper arms, above the work area, are not bodies.
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
-        let (t, _) = self.arms(s);
-        sim_core::scene::scene_boxes(&self.on_platform(self.pose(t).0), &["platform", "payload"])
+        let (t, _) = self.elbows(s);
+        let p = self.pose(t).0;
+        let mut out = sim_core::scene::scene_boxes(&self.on_platform(p), &["platform", "payload"]);
+        for k in 0..3 {
+            for (from, to) in self.legs.rods(k, t[k], p, self.platform_radius, self.rod_spacing) {
+                out.extend((0..ROD_PIECES).map(|n| {
+                    let at = |f: f64| -> V3 { std::array::from_fn(|i| from[i] + f * (to[i] - from[i])) };
+                    let (a, b) = (at(n as f64 / ROD_PIECES as f64), at((n + 1) as f64 / ROD_PIECES as f64));
+                    sim_core::Aabb { centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])), size: std::array::from_fn(|i| (b[i] - a[i]).abs() + ROD_WIDTH) }
+                }));
+            }
+        }
+        out
+    }
+
+    /// The lowest mode with the motors held (`mode_at`): the gearboxes' springs (effects.joint_elasticity) and the arms'
+    /// bending (effects.link_elasticity), in series where both are on. At the centre the lowest is sideways (twice).
+    fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
+        self.mode_at(tool_pose).map(|(hz, _)| hz)
+    }
+
+    /// The mode of `resonance_hz`: the joints' turns in the arm angles, the bend (elbow less joint) in the bend states,
+    /// rotors still; scaled so that the platform's largest travel along an axis is 1 m.
+    fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
+        let (hz, [root, tip]) = self.mode_at(tool_pose)?;
+        let p = [tool_pose[0], tool_pose[1], tool_pose[2]];
+        let j = self.legs.jacobian(self.legs.inverse(p)?, p)?;
+        let largest = mul(&j, tip).iter().fold(0f64, |m, v| m.max(v.abs()));
+        let mut shape = vec![0.0; self.state_len()];
+        shape[..3].copy_from_slice(&root.map(|v| v / largest));
+        if self.bending.is_some() {
+            let at = self.bend_at();
+            for k in 0..3 {
+                shape[at + k] = (tip[k] - root[k]) / largest;
+            }
+        }
+        Some((hz, shape))
     }
 }
+
+/// The forearm rods' width as drawn and as collision bodies, m, and the pieces a rod's collision boxes cut it into.
+const ROD_WIDTH: f64 = 0.012;
+const ROD_PIECES: usize = 10;
 
 #[cfg(test)]
 mod tests;
