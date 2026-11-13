@@ -18,8 +18,9 @@ impl From<ConfigError> for TraceError {
 }
 
 /// Whether the motors turn by the same angle per travel of each axis everywhere: at 40 % and at 60 % of every range,
-/// 1 mm along each axis, to 1e-9. Replay and fit take the motor angles per axis travel as constant (`identify`), so
-/// they refuse a machine whose transformation is not linear (the delta's arms), which gave numbers without meaning.
+/// 1 mm along each axis, to 1e-9. The fit per axis (`identify::fit_rigid`) takes the motor angles per axis travel as
+/// constant, so it refuses a machine whose transformation is not linear (the delta's arms, a SCARA), which gave numbers
+/// without meaning; those are fitted in the motors' own coordinates (`identify::fit_joints`). Replay works for both.
 pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
     let (axes, motors) = (machine.axes(), machine.motors().len());
     let turned = |pose: &[f64], axis: usize| {
@@ -31,6 +32,28 @@ pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
     };
     let at = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<f64>>();
     (0..axes.len()).all(|axis| turned(&at(0.4), axis).iter().zip(turned(&at(0.6), axis)).all(|(a, b)| (a - b).abs() <= 1e-9 * a.abs().max(1e-6)))
+}
+
+/// Whether the fit per axis (`identify::fit_rigid`) applies: a linear transformation, and a rigid model whose torques
+/// per unit of each axis's acceleration are the same at 35 % and at 60 % of every range (not symmetric about the middle,
+/// where a SCARA's inertia, even in its elbow angle, would agree), to 1e-6 of the largest. A
+/// SCARA's tool pose is its joints, linear, but the inertia an arm turns changes with the pose.
+pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
+    let (axes, motors) = (machine.axes(), machine.motors().len());
+    let at = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<f64>>();
+    let inertia = |pose: &[f64], axis: usize| {
+        let (mut a, mut b) = (vec![0.0; motors], vec![0.0; motors]);
+        let acc: Vec<f64> = (0..axes.len()).map(|i| if i == axis { 1.0 } else { 0.0 }).collect();
+        machine.feedforward_torque(pose, &vec![0.0; axes.len()], &mut a);
+        machine.feedforward_torque(pose, &acc, &mut b);
+        b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
+    };
+    let same = |axis: usize| {
+        let (low, high) = (inertia(&at(0.35), axis), inertia(&at(0.6), axis));
+        let largest = low.iter().fold(0.0, |m: f64, v| m.max(v.abs()));
+        low.iter().zip(&high).all(|(a, b)| (a - b).abs() <= 1e-6 * largest)
+    };
+    linear_transformation(machine) && (0..axes.len()).all(same)
 }
 
 /// One motor's columns of a trace, all at the motor shaft: position setpoint, position, speed, torque.
@@ -115,9 +138,6 @@ impl Trace {
 /// acceleration setpoints are slopes between rows.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     let mut sim = Sim::new(entry, cfg)?;
-    if !linear_transformation(sim.machine.as_ref()) {
-        return Err(TraceError { key: "error-trace-not-linear", detail: String::new() });
-    }
     let rows = trace.time.len();
     // The first row is the start, and carrying on behind the last one (below) takes three more.
     if rows < 4 {

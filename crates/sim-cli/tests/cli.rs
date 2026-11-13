@@ -407,22 +407,14 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
 /// A trace written by `run` replays onto itself: simulated torque and following error stay within 0.5 % (RMS)
 /// and 5 % (peak) of the largest measured value. Fitted against the config that made it, the fit finds the
 /// config's own masses and friction, and in a sweep of the config its own resonance. And a file that is no
-/// trace is refused in the chosen language.
+/// trace is refused in the chosen language. Since 13 November also the machines whose motors do not turn in
+/// proportion to their axes or whose inertia changes with the pose (the delta, the SCARA, the arm), which are
+/// fitted in their motors' coordinates (`identify::fit_joints`).
 #[test]
 fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
     for entry in MACHINES {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-        // Replay and fit take a motor angle per axis travel that is the same everywhere (`identify`): a machine whose
-        // transformation is not linear (the delta) is refused, in the chosen language, whatever the trace.
-        if !sim_components::trace::linear_transformation(sim.machine.as_ref()) {
-            for command in [&["replay", entry.id, "--trace", "any.csv"][..], &["fit", entry.id, "--trace", "any.csv"], &["fit", entry.id, "--sweep", "any.csv"]] {
-                for (lang, start) in [("en", "Trace replay and fit need"), ("de", "Nachfahren und Anpassen einer Aufzeichnung brauchen")] {
-                    let out = cli(&[command, &["--lang", lang][..]].concat());
-                    assert!(!out.status.success() && out.stdout.is_empty() && text(&out.stderr).starts_with(start), "{}: {command:?} {lang}: {}", entry.id, text(&out.stderr));
-                }
-            }
-            continue;
-        }
+        let per_axis = sim_components::trace::per_axis_fit(sim.machine.as_ref());
         let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}.csv", entry.id)).to_str().unwrap().to_string();
         let (trace, overlay) = (file("trace"), file("overlay"));
         let table = |args: &[&str]| -> Vec<Vec<String>> {
@@ -457,8 +449,10 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         }
 
         let fit = table(&[&["fit", entry.id, "--trace", &trace], &no_payload[..]].concat());
-        assert_eq!(fit.len(), 4 * sim.machine.axes().len(), "{}: {fit:?}", entry.id);
-        for row in fit.iter().filter(|r| r[0] == "moved_mass_kg" || r[0] == "coulomb_friction_n") {
+        // Per axis four values; in the motors' coordinates four per motor, and no payload's factor without a payload.
+        let (count, checked) = if per_axis { (sim.machine.axes().len(), ["moved_mass_kg", "coulomb_friction_n"]) } else { (sim.machine.motors().len(), ["coulomb_friction_nm"; 2]) };
+        assert_eq!(fit.len(), 4 * count, "{}: {fit:?}", entry.id);
+        for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let (config, fitted): (f64, f64) = (row[2].parse().unwrap(), row[3].parse().unwrap());
             assert!(config > 0.0 && (fitted / config - 1.0).abs() < 0.02, "{}: {row:?}", entry.id);
         }
@@ -626,6 +620,42 @@ fn fit_without_a_resonance_dip_fails() {
     assert_eq!((en.status.code(), de.status.code()), (Some(2), Some(2)));
     assert!(text(&en.stderr).contains("No stiffness fitted") && text(&de.stderr).contains("Keine Steifigkeit"), "{} / {}", text(&en.stderr), text(&de.stderr));
     assert_eq!(text(&en.stdout).trim(), "quantity,of,config,fitted,standard_error");
+}
+
+/// `fit --stiffness`: the belt's stiffness from a move's own trace, as `identify::fit_move_stiffness` gives it, a row with
+/// the factor and two with the ringing; a trace whose moves do not ring the belt fails with exit code 2 and says so
+/// in the chosen language, after the rest of the table; a config without the key named by `--stiffness-key` too. The
+/// accuracy is `the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused` (sim-machines).
+#[test]
+fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stiffness-{name}.csv")).to_str().unwrap().to_string();
+    let (moved, gentle) = (file("move"), file("gentle"));
+    // A belt of 0.7 times the config's, out to 0.9 m at the config's limits; and 2 mm at 1 m/s³ and 0.2 m/s².
+    let slow = ["--set", "axis.x.max_jerk_m_s3=1", "--set", "axis.x.max_acceleration_m_s2=0.2"];
+    assert!(cli(&["run", entry.id, "--move", "0.9", "--time", "1.4", "--out", &moved, "--set", "belt.stiffness_ea_n=3.5e5"]).status.success());
+    assert!(cli(&[&["run", entry.id, "--move", "0.102", "--time", "1.3", "--out", &gentle, "--set", "belt.stiffness_ea_n=3.5e5"][..], &slow[..]].concat()).status.success());
+
+    let out = cli(&["fit", entry.id, "--trace", &moved, "--stiffness"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let measured = sim_components::trace::Trace::parse(&std::fs::read_to_string(&moved).unwrap(), (entry.build)(&entry.config()).unwrap().motors()).unwrap();
+    let shared = sim_components::identify::fit_move_stiffness(entry, &entry.config(), &measured, "belt.stiffness_ea_n").unwrap();
+    let rows: Vec<String> = text(&out.stdout).lines().filter(|l| l.contains("belt.stiffness_ea_n")).map(String::from).collect();
+    assert_eq!(rows, [
+        format!("stiffness_factor,belt.stiffness_ea_n,1.000000e0,{:.6e},{:.3e}", shared.factor, shared.error),
+        format!("ringing_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.ringing),
+        format!("ringing_left_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.residual),
+    ]);
+    assert!(text(&out.stderr).contains(&format!("× {:.3} ± {:.3}", shared.factor, shared.error)), "{}", text(&out.stderr));
+
+    for (lang, start) in [("en", "No stiffness from this trace"), ("de", "Keine Steifigkeit aus dieser Aufzeichnung")] {
+        let refused = cli(&[&["fit", entry.id, "--trace", &gentle, "--stiffness", "--lang", lang][..], &slow[..]].concat());
+        assert_eq!(refused.status.code(), Some(2), "{lang}");
+        assert!(text(&refused.stderr).lines().last().unwrap().starts_with(start), "{lang}: {}", text(&refused.stderr));
+        assert!(text(&refused.stdout).starts_with("quantity,of,config,fitted,standard_error"), "{lang}");
+        let keyless = cli(&["fit", entry.id, "--trace", &moved, "--stiffness", "--stiffness-key", "belt.no_such_key", "--lang", lang]);
+        assert!(keyless.status.code() == Some(2) && text(&keyless.stderr).contains("belt.no_such_key"), "{lang}: {}", text(&keyless.stderr));
+    }
 }
 
 /// A config file is checked against the machine's default config: a misspelt key was ignored and the

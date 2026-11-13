@@ -424,15 +424,12 @@ fn replay_refuses_a_trace_too_short_to_replay() {
     for entry in MACHINES.iter().copied() {
         let cfg = entry.config();
         let sim = Sim::new(entry, &cfg).unwrap();
-        let linear = sim_components::trace::linear_transformation(sim.machine.as_ref());
         for rows in 0..=4usize {
             let motors = sim.control.drives.iter().map(|d| MotorTrace { setpoint: vec![d.pos_set; rows], angle: vec![d.pos_set; rows], speed: vec![0.0; rows], torque: vec![0.0; rows] });
             let trace = Trace { time: (0..rows).map(|i| i as f64 * 1e-3).collect(), motors: motors.collect() };
             let replayed = replay(entry, &cfg, &trace);
-            if !linear {
-                // Replay refuses a transformation that is not linear (the delta), whatever the trace.
-                assert_eq!(replayed.err().map(|e| e.key), Some("error-trace-not-linear"), "{}", entry.id);
-            } else if rows < 4 {
+            // Since 13 November a transformation that is not linear (the delta, the SCARA) replays as well.
+            if rows < 4 {
                 assert_eq!(replayed.err().map(|e| e.key), Some("error-trace-short"), "{}: {rows} rows", entry.id);
             } else {
                 assert_eq!(replayed.unwrap().time.len(), rows, "{}", entry.id);

@@ -2,7 +2,7 @@
 //! Every message comes from the translation files; see `cli-usage` there for the commands.
 
 use sim_components::analysis::{SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
-use sim_components::identify::{fit_rigid, fit_sweep, parse_sweep};
+use sim_components::identify::{BELT_STIFFNESS_KEY, fit_joints, fit_move_stiffness, fit_rigid, fit_sweep, parse_sweep};
 use sim_components::import::{Imported, Mapping, decode, import};
 use sim_components::motor_fit::{Estimate, Identified, TwoMass, frequency_response, ringing, two_mass, two_mass_from_ringing};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
@@ -40,7 +40,7 @@ struct Args(Vec<String>);
 /// Options every command takes, each with a value.
 const COMMON: [&str; 12] = ["--machine-file", "--config", "--catalog", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
 /// Options without a value.
-const FLAGS: [&str; 6] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal"];
+const FLAGS: [&str; 7] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -127,7 +127,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("margins") => &["--bands"],
         Some("modes") => &["--axis-index", "--points"],
         Some("replay") => &["--trace", "--map"],
-        Some("fit") => &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude"],
+        Some("fit") => &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude", "--stiffness", "--stiffness-key"],
         Some("identify") => &["--trace", "--map", "--from", "--to", "--sweep", "--step-from", "--step-to", "--motor-inertia", "--overlay"],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary", "--fmi"],
@@ -312,9 +312,6 @@ fn read(path: &str) -> Result<String, Failure> {
 fn replay(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
-    if !sim_components::trace::linear_transformation(machine.as_ref()) {
-        return Err(Failure("error-trace-not-linear", String::new()));
-    }
     let motors = machine.motors().to_vec();
     let measured = load_trace(args, &motors)?.trace;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
@@ -333,21 +330,33 @@ fn replay(args: &Args) -> Result<(), Failure> {
 
 /// `fit <machine>`: what a measurement says the config should be, as a table of the config's value, the
 /// fitted one and its standard error, and on the error stream what to change in the config. With
-/// `--trace FILE` the rigid values of each axis; with `--sweep FILE` (a frequency response as `sweep`
-/// writes it, taken on motor `--sweep-motor` with `--amplitude`) the load's resonance on the belt.
+/// `--trace FILE` the rigid values of each axis, or on a machine whose motors do not turn in proportion to its
+/// axes or whose inertia changes with the pose (`trace::per_axis_fit`: the delta, the SCARA, the arm) the payload's
+/// factor and per motor added inertia, friction and constant torque, with the pairs the trace cannot tell apart;
+/// with `--stiffness` also the factor on the stiffness at `--stiffness-key` (the belts' by default) from the trace's
+/// own moves; with `--sweep FILE` (a frequency response as `sweep` writes it, taken on motor `--sweep-motor` with
+/// `--amplitude`) the load's resonance on the belt.
 fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
     }
-    if !sim_components::trace::linear_transformation(machine.as_ref()) {
-        return Err(Failure("error-trace-not-linear", String::new()));
-    }
     let mut out = output(args, "--out")?;
     let (mut advice, mut result) = (Vec::new(), Ok(()));
     writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
-    if args.option("--trace").is_some() {
+    if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
+        let measured = load_trace(args, machine.motors())?.trace;
+        match fit_joints(entry, &cfg, &measured)? {
+            Some(fit) => {
+                for v in &fit.values {
+                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", v.quantity, v.of, v.config, v.fitted, v.error).map_err(io)?;
+                }
+                advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+            }
+            None => advice.push(tr.tr("fit-joints-skipped").to_string()),
+        }
+    } else if args.option("--trace").is_some() {
         let measured = load_trace(args, machine.motors())?.trace;
         for (axis, fit) in machine.axes().iter().zip(fit_rigid(entry, &cfg, &measured)?) {
             let Some(fit) = fit else {
@@ -358,6 +367,21 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q]).map_err(io)?;
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+        }
+    }
+    if args.flag("--stiffness") {
+        let measured = load_trace(args, machine.motors())?.trace;
+        let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
+        match fit_move_stiffness(entry, &cfg, &measured, key) {
+            Ok(fit) => {
+                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e}", 1.0, fit.factor, fit.error).map_err(io)?;
+                writeln!(out, "ringing_rms_nm,{key},,{:.6e},", fit.ringing).map_err(io)?;
+                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},", fit.residual).map_err(io)?;
+                let (key, detail) = fit.advice();
+                advice.push(tr.tr_arg(key, &detail));
+            }
+            // A failure like any other, after what else the trace gave has been written.
+            Err(e) => result = Err(Failure(e.key, e.detail)),
         }
     }
     if let Some(path) = args.option("--sweep") {

@@ -145,6 +145,24 @@ pub trait Machine: Send {
     fn feedforward_torque_moving(&self, tool_pos: &[f64], _tool_vel: &[f64], tool_acc: &[f64], out: &mut [f64]) {
         self.feedforward_torque(tool_pos, tool_acc, out);
     }
+    /// The motor torques of the same rigid, loss-free model at motor angles, speeds and accelerations: what fitting a
+    /// trace in the motors' own coordinates needs (`identify::fit_joints`). By default through the tool: its pose by
+    /// `forward`, its speed and acceleration by central differences along the motors' motion over ±0.1 ms, then
+    /// `feedforward_torque_moving`. A machine whose `feedforward_torque_moving` leaves out the speed terms of a
+    /// kinematics that is not linear overrides this.
+    fn rigid_motor_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], out: &mut [f64]) {
+        let (h, n) = (1e-4, self.axes().len());
+        let at = |s: f64| {
+            let motors: Vec<f64> = (0..angle.len()).map(|k| angle[k] + s * speed[k] + 0.5 * s * s * acc[k]).collect();
+            let mut tool = vec![0.0; n];
+            self.forward(&motors, &mut tool);
+            tool
+        };
+        let (before, pos, after) = (at(-h), at(0.0), at(h));
+        let vel: Vec<f64> = (0..n).map(|i| (after[i] - before[i]) / (2.0 * h)).collect();
+        let tool_acc: Vec<f64> = (0..n).map(|i| (after[i] - 2.0 * pos[i] + before[i]) / (h * h)).collect();
+        self.feedforward_torque_moving(&pos, &vel, &tool_acc, out);
+    }
     /// The tension of each belt section (N, in the order of `belt_sections`) that the loss-free rigid model of
     /// `feedforward_torque` gives at a tool pose and acceleration: what the belt has to pull on the moved masses (not
     /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the

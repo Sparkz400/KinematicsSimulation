@@ -1491,6 +1491,7 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
         ui.add(TextEdit::singleline(&mut inputs.trace_file).desired_width(260.0));
         ui.label(tr("ui-trace-map")).on_hover_text(tr("ui-trace-map-hint"));
         ui.add(TextEdit::singleline(&mut inputs.trace_map).desired_width(200.0));
+        ui.checkbox(&mut inputs.trace_stiffness, tr("ui-trace-stiffness")).on_hover_text(tr("ui-trace-stiffness-hint"));
         run_button(ui, model, "ui-trace-run", Analysis::Trace, actions);
         if !tables.is_empty() && ui.button(tr("ui-clear")).clicked() {
             actions.push(Action::Clear(Analysis::Trace));
