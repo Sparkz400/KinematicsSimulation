@@ -58,6 +58,10 @@ pub struct MotorLoad {
     /// Where the machine reports the gearbox output torque: its peak in each band of `SPEED_BAND` rad/s of the motor's
     /// |speed| (band i from i to i + 1 times it), every step. For the belt's tooth load, whose rating falls with speed.
     pub gearbox_torque_by_speed: Vec<f64>,
+    /// Where the machine reports the gearbox output torque: the gearing's load spectrum, the motor's |speed| in rad/s
+    /// while the output torque was in each band (band i from `torque_band_floor(i)` to `torque_band_floor(i + 1)`),
+    /// summed every step over the steps: what each band adds to `mean_speed`. For `gearbox_gearing_life_h`.
+    pub gearbox_torque_spectrum: Vec<f64>,
     /// Where the machine reports the radial load on this motor's pulley shaft (`pulley.<motor>.radial_load`): its cubic
     /// mean weighted with the speed, the equivalent load P of the bearings' rating life (ISO 281), once per millisecond.
     pub radial_load_equivalent: Option<f64>,
@@ -305,6 +309,8 @@ struct Tally {
     /// Per motor with a gearbox output torque: the sum of |torque|^(10/3) |speed|, and its peak per speed band.
     gear_life: Vec<f64>,
     gear_bands: Vec<Vec<f64>>,
+    /// Per motor with a gearbox output torque: the sum of |speed| per torque band (`MotorLoad::gearbox_torque_spectrum`).
+    gear_spectrum: Vec<Vec<f64>>,
     /// The slack-time counter when the measurement began.
     slack_start: f64,
     /// Per motor: sums of |torque|^3 |speed| and of |speed|.
@@ -436,6 +442,7 @@ impl Tally {
             radial_sums: vec![(0.0, 0.0); motors],
             gear_life: vec![0.0; motors],
             gear_bands: vec![Vec::new(); motors],
+            gear_spectrum: vec![Vec::new(); motors],
             guides,
             slack_start: 0.0,
             cubic: vec![(0.0, 0.0); motors],
@@ -591,6 +598,13 @@ impl Tally {
                 bands.resize(band + 1, 0.0);
             }
             bands[band] = bands[band].max(torque);
+            if torque >= TORQUE_FLOOR && speed > 0.0 {
+                let (spectrum, band) = (&mut self.gear_spectrum[k], (((torque / TORQUE_FLOOR).ln() / TORQUE_BAND.ln()) as usize).min(4000));
+                if spectrum.len() <= band {
+                    spectrum.resize(band + 1, 0.0);
+                }
+                spectrum[band] += speed;
+            }
         }
         for (k, load) in self.loads.iter_mut().enumerate() {
             let torque = sim.control.drives[k].torque;
@@ -652,6 +666,7 @@ impl Tally {
             load.mean_speed = self.cubic[k].1 / steps;
             load.gearbox_life_torque = self.gear[k].map(|_| if self.cubic[k].1 > 0.0 { (self.gear_life[k] / self.cubic[k].1).powf(0.3) } else { 0.0 });
             load.gearbox_torque_by_speed = std::mem::take(&mut self.gear_bands[k]);
+            load.gearbox_torque_spectrum = self.gear_spectrum[k].iter().map(|speed| speed / steps).collect();
             let (cubed, weight) = self.radial_sums[k];
             load.radial_load_equivalent = self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
             load.winding_rise = sim.control.drive_params().settled_rise(load.rms_current);
@@ -863,7 +878,7 @@ pub struct Verdict {
 }
 
 /// Ratings that `verdicts` judges and no default config has: a config file may add them (see `load_config`).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 1] = ["ratings.pulley_max_torque_nm"];
+pub const RATINGS_BEYOND_DEFAULT: [&str; 2] = ["ratings.pulley_max_torque_nm", "ratings.motor_bearing_load_rating_n"];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
     Verdict { check, motor, value, limit, ok: value <= limit }
@@ -875,7 +890,7 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 8] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life", "collision"];
+pub const AT_LEAST: [&str; 10] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "gearbox-gearing-life", "motor-bearing-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life", "collision"];
 
 /// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
 /// Above 1 it fails (but "belt-slack" at exactly 1). A contact ("collision" at no clearance) is infinitely far over.
@@ -909,9 +924,9 @@ pub fn utilisation(v: &Verdict) -> f64 {
 /// "line-module-continuous" and "line-module-peak" judge, with effects.regenerative_supply (and the DC link), the line
 /// module's mean and highest power either way against `ratings.line_module_rated_power_w` and `_max_power_w`.
 ///
-/// "pulley-bearing-life", "gearbox-life" and "guide-life" judge `pulley_bearing_life_h`, `gearbox_life_h` and
-/// `guide_life_h` against `ratings.required_life_h` (they pass at or above it); "belt-tooth-load" judges
-/// `belt_tooth_utilisation` against 1.
+/// "pulley-bearing-life", "gearbox-life", "gearbox-gearing-life", "motor-bearing-life" and "guide-life" judge
+/// `pulley_bearing_life_h`, `gearbox_life_h`, `gearbox_gearing_life_h`, `motor_bearing_life_h` and `guide_life_h` against
+/// `ratings.required_life_h` (they pass at or above it); "belt-tooth-load" judges `belt_tooth_utilisation` against 1.
 ///
 /// "singularity" judges the highest condition number of the kinematics' Jacobian in the cycle
 /// (`CycleLoad::condition_peak`, where the machine reports it) against `ratings.max_condition_number`: near a singularity
@@ -971,12 +986,19 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         if reliability_factor(cfg).is_none() {
             return Err(ConfigError::Invalid("ratings.bearing_reliability_percent".into()));
         }
+        lubrication(cfg)?;
         if let Some(required) = rating("required_life_h") {
             if let Some(life) = pulley_bearing_life_h(cfg, m) {
                 out.push(at_least("pulley-bearing-life", Some(k), life, required));
             }
             if let Some(life) = gearbox_life_h(cfg, m) {
                 out.push(at_least("gearbox-life", Some(k), life, required));
+            }
+            if let Some(life) = gearbox_gearing_life_h(cfg, m) {
+                out.push(at_least("gearbox-gearing-life", Some(k), life, required));
+            }
+            if let Some(life) = motor_bearing_life_h(cfg, m) {
+                out.push(at_least("motor-bearing-life", Some(k), life, required));
             }
         }
         if let Some(utilisation) = belt_tooth_utilisation(cfg, m)? {
@@ -1145,10 +1167,80 @@ fn output_rpm(cfg: &Config, m: &MotorLoad) -> f64 {
 /// The rating life of the bearing that takes the belt's pull on this motor's pulley shaft, in hours, where the machine
 /// reports that radial load and the config has `ratings.pulley_bearing_load_rating_n`: `rating_life_h` with that C, P the
 /// cubic mean of the radial load weighted with the speed (`MotorLoad::radial_load_equivalent`) and the pulley's mean
-/// speed, times the life factor a1 (`reliability_factor`). One bearing, all of the pull on it, no axial load, no a_ISO.
+/// speed, times the life factor a1 (`reliability_factor`) and, where the config has the lubrication (`lubrication`),
+/// the life modification factor a_ISO (`life_modification_factor`): L_nm = a1 · a_ISO · L10. One bearing, all of the
+/// pull on it, no axial load.
 pub fn pulley_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
     let c = cfg.f64("ratings.pulley_bearing_load_rating_n").ok()?;
-    Some(reliability_factor(cfg)? * rating_life_h(c, m.radial_load_equivalent?, output_rpm(cfg, m)))
+    let (p, rpm) = (m.radial_load_equivalent?, output_rpm(cfg, m));
+    Some(reliability_factor(cfg)? * pulley_bearing_a_iso(cfg, p, rpm)? * rating_life_h(c, p, rpm))
+}
+
+/// a_ISO of the pulley shaft bearing at the equivalent load `p` and the mean speed `rpm`: `life_modification_factor` of
+/// κ = ν / ν1 (`reference_viscosity`) and e_C · C_u / P. 1 where the config has no `lubrication`; `None` where it is
+/// invalid. κ is that of the mean speed.
+pub fn pulley_bearing_a_iso(cfg: &Config, p: f64, rpm: f64) -> Option<f64> {
+    Some(match lubrication(cfg).ok()? {
+        Some(l) => life_modification_factor(l.viscosity / reference_viscosity(rpm, l.mean_diameter_mm), l.contamination * l.fatigue_limit / p),
+        None => 1.0,
+    })
+}
+
+/// What a_ISO of the pulley shaft bearing is worked out from: the lubricant's kinematic viscosity at operating
+/// temperature ν (mm²/s), the contamination factor e_C (ISO 281:2007, Table 13, for a mean diameter below 100 mm:
+/// 1 extreme cleanliness, 0.8 to 0.6 high (typical of bearings sealed and greased for life), 0.6 to 0.5 normal, 0.5 to
+/// 0.3 slight, 0.3 to 0.1 typical, 0.1 to 0 severe, 0 very severe contamination), the bearing's fatigue load limit C_u
+/// (N) and its mean diameter D_pw (mm).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lubrication {
+    pub viscosity: f64,
+    pub contamination: f64,
+    pub fatigue_limit: f64,
+    pub mean_diameter_mm: f64,
+}
+
+/// The keys of `Lubrication`, in its order.
+pub const LUBRICATION_KEYS: [&str; 4] =
+    ["ratings.bearing_lubricant_viscosity_mm2_s", "ratings.bearing_contamination_factor", "ratings.pulley_bearing_fatigue_limit_n", "ratings.pulley_bearing_mean_diameter_mm"];
+
+/// The pulley shaft bearing's `Lubrication`, `None` where the config has none of its keys (then a_ISO is 1). A config
+/// with some of them must have all: ν and D_pw above 0, e_C from 0 to 1, C_u not negative.
+pub fn lubrication(cfg: &Config) -> Result<Option<Lubrication>, ConfigError> {
+    if LUBRICATION_KEYS.iter().all(|key| cfg.get(key).is_err()) {
+        return Ok(None);
+    }
+    let contamination = cfg.non_negative(LUBRICATION_KEYS[1])?;
+    if contamination > 1.0 {
+        return Err(ConfigError::Invalid(LUBRICATION_KEYS[1].into()));
+    }
+    let (viscosity, fatigue_limit, mean_diameter_mm) = (cfg.positive(LUBRICATION_KEYS[0])?, cfg.non_negative(LUBRICATION_KEYS[2])?, cfg.positive(LUBRICATION_KEYS[3])?);
+    Ok(Some(Lubrication { viscosity, contamination, fatigue_limit, mean_diameter_mm }))
+}
+
+/// The rated viscosity ν1 of ISO 281:2007 (section 6.3.3.2), mm²/s: what the lubricant needs at operating temperature
+/// for a bearing of mean diameter D_pw (`mean_diameter_mm`) at n (`rpm`, r/min): 45000 · n^-0.83 · D_pw^-0.5 below
+/// 1000 r/min, 4500 · n^-0.5 · D_pw^-0.5 from 1000 r/min. The viscosity ratio is κ = ν / ν1.
+pub fn reference_viscosity(rpm: f64, mean_diameter_mm: f64) -> f64 {
+    if rpm < 1000.0 { 45000.0 * rpm.powf(-0.83) / mean_diameter_mm.sqrt() } else { 4500.0 / rpm.sqrt() / mean_diameter_mm.sqrt() }
+}
+
+/// The life modification factor a_ISO of ISO 281:2007 (section 6.3.3.3, radial ball bearings) for the viscosity ratio κ
+/// and `load_ratio` = e_C · C_u / P: a_ISO = 0.1 · [1 - x · (e_C · C_u / P)^(1/3)]^-9.3, x = (2.5671 - 2.2649 /
+/// κ^0.054381)^0.83 for 0.1 <= κ < 0.4, (2.5671 - 1.9987 / κ^0.19087)^0.83 for 0.4 <= κ < 1 and
+/// (2.5671 - 1.9987 / κ^0.071739)^0.83 for 1 <= κ <= 4; at most 50, as the standard limits it.
+pub fn life_modification_factor(kappa: f64, load_ratio: f64) -> f64 {
+    // shortcut: κ below 0.1, where the standard gives no factor, is taken as 0.1 (a_ISO 0.1); above 4 as 4, as the
+    // standard says. Upgrade if a machine runs its bearings that slowly with that thin a lubricant.
+    let kappa = kappa.clamp(0.1, 4.0);
+    let x = if kappa < 0.4 {
+        2.5671 - 2.2649 / kappa.powf(0.054381)
+    } else if kappa < 1.0 {
+        2.5671 - 1.9987 / kappa.powf(0.19087)
+    } else {
+        2.5671 - 1.9987 / kappa.powf(0.071739)
+    };
+    let inner = 1.0 - x.max(0.0).powf(0.83) * load_ratio.cbrt();
+    if inner <= 0.0 { 50.0 } else { (0.1 * inner.powf(-9.3)).min(50.0) }
 }
 
 /// The life of a planetary gearbox's planet bearings in hours by Siemens' formula (configuration manual "Planetary
@@ -1160,6 +1252,62 @@ pub fn pulley_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 pub fn gearbox_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
     let (rated, reference) = (cfg.f64("ratings.gearbox_rated_torque_nm").ok()?, cfg.f64("ratings.gearbox_reference_speed_rpm").ok()?);
     Some(reliability_factor(cfg)? * 20000.0 * reference / output_rpm(cfg, m) * (rated / m.gearbox_life_torque?).powf(10.0 / 3.0))
+}
+
+/// The lowest torque of `MotorLoad::gearbox_torque_spectrum`, N m, and the ratio of a band's upper torque to its lower:
+/// bands 1 % wide, each judged at its upper torque, which overstates its damage by at most 1.01^k - 1 (9 % at k = 8.7).
+const TORQUE_FLOOR: f64 = 0.1;
+const TORQUE_BAND: f64 = 1.01;
+
+/// The lower torque of band `i` of `MotorLoad::gearbox_torque_spectrum`, N m: 0.1 N m · 1.01^i.
+pub fn torque_band_floor(i: usize) -> f64 {
+    TORQUE_FLOOR * TORQUE_BAND.powi(i as i32)
+}
+
+/// The output revolutions a Siemens planetary gearbox takes at its maximum torque M2max (NRB, NRK, NLC: "for at most
+/// 30 000 output revolutions", equipment manual 04/2025, chapter 6; `catalog/siemens/gearbox_nrb.meta.toml`).
+pub const MAX_TORQUE_REVOLUTIONS: f64 = 30000.0;
+
+/// The life of a gearing in hours by Palmgren and Miner's damage sum over a load spectrum of (output torque, output
+/// revolutions per hour), on a Wöhler line through the maximum torque M2max at `MAX_TORQUE_REVOLUTIONS` with the
+/// exponent k: a torque M above the rated torque M2N allows N = 30000 · (M2max / M)^k revolutions, one at or below M2N
+/// any number (the knee of the line at M2N). The damage per hour is the sum of the revolutions over the allowed ones, the
+/// life its inverse; infinite where no torque is above M2N.
+pub fn gearing_life_h(spectrum: impl IntoIterator<Item = (f64, f64)>, rated: f64, max: f64, exponent: f64) -> f64 {
+    // A fold, not `sum`: an empty sum of f64 is -0.0, whose inverse is -inf.
+    1.0 / spectrum.into_iter().filter(|&(torque, _)| torque > rated).map(|(torque, revolutions)| revolutions / (MAX_TORQUE_REVOLUTIONS * (max / torque).powf(exponent))).fold(0.0, |sum, d| sum + d)
+}
+
+/// The fatigue life of the gearbox's gearing in hours, where the machine reports the output torque and the config has
+/// `ratings.gearbox_rated_torque_nm` (M2N), `ratings.gearbox_max_torque_nm` (M2max) and
+/// `ratings.gearbox_gearing_wohler_exponent` (k): `gearing_life_h` over the cycle's load spectrum
+/// (`MotorLoad::gearbox_torque_spectrum`), each band at its upper torque, with the output's revolutions per hour in it.
+/// Siemens' own damage sum over overload partial cycles is in its gearbox configuration manual, which is not in the
+/// repository; this is the textbook method on Siemens' two figures (M2N continuous, M2max for 30000 revolutions) with an
+/// estimated exponent (the configs' comments say how). Torque at or below M2N does no damage: a cycle that never exceeds
+/// it has no figure (`None`), as a rating left out is not judged; the life would be infinite.
+pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
+    let rating = |key: &str| cfg.f64(&format!("ratings.{key}")).ok();
+    let (rated, max, exponent) = (rating("gearbox_rated_torque_nm")?, rating("gearbox_max_torque_nm")?, rating("gearbox_gearing_wohler_exponent")?);
+    m.gearbox_torque?;
+    let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let life = gearing_life_h(m.gearbox_torque_spectrum.iter().enumerate().map(|(i, speed)| (torque_band_floor(i + 1), speed * per_hour)), rated, max, exponent);
+    life.is_finite().then_some(life)
+}
+
+/// The rating life of the motor's own bearings in hours, where the belt's pulley sits on the motor shaft: where the
+/// config has `ratings.motor_bearing_load_rating_n` and no gearbox (`gearbox.ratio` 1), `rating_life_h` with that C, the
+/// pulley shaft's radial load (`MotorLoad::radial_load_equivalent`) and the motor's mean speed, times a1. Behind a
+/// gearbox the motor's bearings carry no belt pull, the gearbox's output bearing takes it (`pulley_bearing_life_h`), and
+/// there is no figure. Siemens gives no load rating for the 1FK2's bearings, only the radial force they allow for
+/// L10h = 25000 h at a mean speed; C is worked out from that by the same formula (`catalog/siemens/motor_bearings_1fk2.csv`).
+/// No a_ISO: Siemens' 25000 h are for its own grease and seals.
+pub fn motor_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
+    let c = cfg.f64("ratings.motor_bearing_load_rating_n").ok()?;
+    if cfg.f64("gearbox.ratio").unwrap_or(1.0) != 1.0 {
+        return None;
+    }
+    Some(reliability_factor(cfg)? * rating_life_h(c, m.radial_load_equivalent?, output_rpm(cfg, m)))
 }
 
 /// The tooth load of the belt on this motor's pulley against its rating, by the method of Megadyne's MEGALINEAR handbook
@@ -2525,6 +2673,90 @@ mod tests {
         // A life is judged from below: 6944 h against 20000 h is 2.88 times too short, and the search's badness says so.
         let v = at_least("guide-life", None, 6944.444, 20000.0);
         assert!(!v.ok && (utilisation(&v) - 2.88).abs() < 0.001 && (badness(&v) - 13055.556).abs() < 0.001);
+    }
+
+    /// a_ISO of ISO 281:2007 by hand from the standard's formulae (worked out separately in Python). Rated viscosity
+    /// ν1 = 45000 * 100^-0.83 / sqrt(36) = 164.082 mm²/s at 100 r/min and D_pw 36 mm; 4500 / sqrt(1000) / sqrt(36) =
+    /// 23.717 mm²/s at 1000 r/min. With e_C * C_u / P = 0.5 * 150 N / 600 N = 0.125, whose cube root is 0.5: at κ = 1,
+    /// x = (2.5671 - 1.9987)^0.83 = 0.62568, a_ISO = 0.1 * (1 - 0.62568 * 0.5)^-9.3 = 3.27647; at κ = 0.2 (first
+    /// branch) 0.198152, at 0.5 (second) 0.610291, at 2 (third) 6.03577, at 4 and above 11.0606; at κ 0.05, below the
+    /// standard, as at 0.1: 0.100176; with e_C * C_u / P = 2 the bracket is below 0 and a_ISO is capped at 50. The
+    /// pulley bearing of the life test with ν 120 mm²/s at 100 r/min: κ = 120 / 164.082 = 0.731341, a_ISO 1.555262,
+    /// L_nm = 1.555262 * 468696.16 = 728945 h.
+    #[test]
+    fn a_iso_is_the_hand_calculated_one_of_iso_281() {
+        let close = |a: f64, b: f64, what: &str| assert!((a / b - 1.0).abs() < 1e-5, "{what}: {a} against {b} by hand");
+        close(reference_viscosity(100.0, 36.0), 164.082122, "ν1 below 1000 r/min");
+        close(reference_viscosity(1000.0, 36.0), 23.717082, "ν1 from 1000 r/min");
+        for (kappa, a_iso) in [(1.0, 3.276474), (0.2, 0.198152), (0.5, 0.610291), (2.0, 6.035768), (4.0, 11.060568), (8.0, 11.060568), (0.05, 0.100176)] {
+            close(life_modification_factor(kappa, 0.125), a_iso, &format!("a_ISO at κ {kappa}"));
+        }
+        // The three branches meet: the standard's curves are continuous.
+        assert!((life_modification_factor(0.4 - 1e-9, 0.125) / life_modification_factor(0.4, 0.125) - 1.0).abs() < 1e-3);
+        assert!((life_modification_factor(1.0 - 1e-9, 0.125) / life_modification_factor(1.0, 0.125) - 1.0).abs() < 1e-5);
+        assert_eq!(life_modification_factor(4.0, 2.0), 50.0);
+        let text = "format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\nbearing_lubricant_viscosity_mm2_s = 120.0\n\
+                    bearing_contamination_factor = 0.5\npulley_bearing_fatigue_limit_n = 150.0\npulley_bearing_mean_diameter_mm = 36.0\n";
+        let cfg = Config::parse(text).unwrap();
+        let m = MotorLoad { mean_speed: 500.0 * std::f64::consts::PI / 30.0, radial_load_equivalent: Some(600.0), ..MotorLoad::default() };
+        close(pulley_bearing_life_h(&cfg, &m).unwrap(), 728945.29, "pulley bearing with a_ISO");
+        // Some of the four values and not all, or e_C above 1, is refused by name; none of them is a_ISO = 1.
+        let partial = Config::parse(&text.replace("pulley_bearing_mean_diameter_mm = 36.0\n", "")).unwrap();
+        assert!(matches!(lubrication(&partial), Err(ConfigError::Missing(key)) if key == "ratings.pulley_bearing_mean_diameter_mm"));
+        assert_eq!(pulley_bearing_life_h(&partial, &m), None);
+        let mut dirty = cfg.clone();
+        dirty.set_text("ratings.bearing_contamination_factor = 1.5").unwrap();
+        assert!(matches!(lubrication(&dirty), Err(ConfigError::Invalid(key)) if key == "ratings.bearing_contamination_factor"));
+        let bare = Config::parse("format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\n").unwrap();
+        close(pulley_bearing_life_h(&bare, &m).unwrap(), 468696.16, "pulley bearing without a_ISO");
+    }
+
+    /// Palmgren-Miner over a two-level spectrum above the rated torque, by hand: M2N 40 N m, M2max 64 N m for 30000
+    /// revolutions, Wöhler exponent 6. 1000 rev/h at 48 N m, which allows 30000 * (64 / 48)^6 = 30000 * 5.6186557 =
+    /// 168560 rev, and 100 rev/h at 60 N m, 30000 * (64 / 60)^6 = 30000 * 1.4728969 = 44187 rev; 5000 rev/h at 30 N m do no
+    /// damage. Damage 1000 / 168560 + 100 / 44187 = 0.0059326 + 0.0022631 = 0.0081957 per hour, life 122.0147 h. Through
+    /// a cycle's spectrum (ratio 5, so 1000 rev/h of the output are 1000 * 2 pi * 5 / 3600 = 8.72665 rad/s of the motor):
+    /// 48 N m lies in band 620 (ln(480) / ln(1.01) = 620.5), judged at its upper torque 0.1 * 1.01^621 = 48.2584 N m,
+    /// 60 N m in band 642 at 60.0680 N m, 30 N m in band 573 (30.23 N m, below M2N): damage
+    /// 1000 / (30000 * 5.4405290) + 100 / (30000 * 1.4629173) = 0.0061269 + 0.0022786 per hour, life 118.971 h.
+    #[test]
+    fn the_gearing_life_is_the_hand_calculated_damage_sum() {
+        let close = |a: f64, b: f64, what: &str| assert!((a / b - 1.0).abs() < 1e-6, "{what}: {a} against {b} by hand");
+        close(gearing_life_h([(30.0, 5000.0), (48.0, 1000.0), (60.0, 100.0)], 40.0, 64.0, 6.0), 122.014741, "two levels");
+        assert_eq!(gearing_life_h([(30.0, 5000.0), (40.0, 5000.0)], 40.0, 64.0, 6.0), f64::INFINITY);
+        // At M2max the line gives Siemens' 30000 revolutions: 30000 rev/h last one hour.
+        close(gearing_life_h([(64.0, 30000.0)], 40.0, 64.0, 6.0), 1.0, "at M2max");
+        let text = "format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\ngearbox_rated_torque_nm = 40.0\ngearbox_max_torque_nm = 64.0\n\
+                    gearbox_gearing_wohler_exponent = 6.0\n";
+        let cfg = Config::parse(text).unwrap();
+        let rad_s = |rev_h: f64| rev_h * std::f64::consts::TAU * 5.0 / 3600.0;
+        let mut spectrum = vec![0.0; 700];
+        (spectrum[573], spectrum[620], spectrum[642]) = (rad_s(5000.0), rad_s(1000.0), rad_s(100.0));
+        let m = MotorLoad { gearbox_torque: Some((60.0, 40.0)), gearbox_torque_spectrum: spectrum, ..MotorLoad::default() };
+        close(torque_band_floor(621), 48.258422, "band 620's upper torque");
+        close(gearbox_gearing_life_h(&cfg, &m).unwrap(), 118.971035, "through the spectrum");
+        // Never above M2N: no figure, as the life would be infinite.
+        let below = MotorLoad { gearbox_torque_spectrum: m.gearbox_torque_spectrum[..600].to_vec(), ..m.clone() };
+        assert_eq!(gearbox_gearing_life_h(&cfg, &below), None);
+        // No output torque reported, or a key missing: no figure.
+        assert_eq!(gearbox_gearing_life_h(&cfg, &MotorLoad { gearbox_torque: None, ..m.clone() }), None);
+        let without = Config::parse(&text.replace("gearbox_gearing_wohler_exponent = 6.0\n", "")).unwrap();
+        assert_eq!(gearbox_gearing_life_h(&without, &m), None);
+    }
+
+    /// The motor's bearings, by hand from Siemens' figure for the 1FK2205: 1000 N at 1500 r/min for L10h = 25000 h is
+    /// C = 1000 N * (25000 * 60 * 1500 / 10^6)^(1/3) = 1000 N * 2250^(1/3) = 13103.7 N. With the pulley on the shaft, 600 N
+    /// at a mean 1000 r/min: 25000 h * (1000 / 600)^3 * (1500 / 1000) = 173611 h. Behind a gearbox there is no figure.
+    #[test]
+    fn the_motor_bearing_life_is_the_hand_calculated_one() {
+        let cfg = Config::parse("format_version = 1\n[gearbox]\nratio = 1.0\n[ratings]\nmotor_bearing_load_rating_n = 13103.7\n").unwrap();
+        let m = MotorLoad { mean_speed: 1000.0 * std::f64::consts::PI / 30.0, radial_load_equivalent: Some(600.0), ..MotorLoad::default() };
+        let life = motor_bearing_life_h(&cfg, &m).unwrap();
+        assert!((life / 173611.11 - 1.0).abs() < 1e-5, "{life} against 173611 h by hand");
+        let mut geared = cfg.clone();
+        geared.set_text("gearbox.ratio = 5.0").unwrap();
+        assert_eq!(motor_bearing_life_h(&geared, &m), None);
+        assert_eq!(motor_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m }), None);
     }
 
     /// L(jw) = (wc / jw) e^(-jw tau), an integrator with a dead time, by hand: |L| = 1 at wc, where the phase is

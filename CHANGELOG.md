@@ -79,6 +79,20 @@ item are in [PROGRESS.md](PROGRESS.md).
   across the delta's range 0.411 s instead of 0.429 s; the default cycles of the T-gantry, the delta and the arms
   are limited by jerk and speed and plan as before. Planning takes 1 to 21 ms instead of 0.2 to 1 ms.
 
+- Life estimates: the life modification factor a_ISO of ISO 281:2007 on the pulley shaft bearings (keys
+  `ratings.bearing_lubricant_viscosity_mm2_s`, `bearing_contamination_factor`, `pulley_bearing_fatigue_limit_n`,
+  `pulley_bearing_mean_diameter_mm`); the gearing's fatigue above the gearbox's rated torque by Palmgren–Miner on
+  Siemens' M2N and M2max figures (`gearbox-gearing-life`, key `ratings.gearbox_gearing_wohler_exponent`); the motor's
+  own bearings where a pulley sits on its shaft (`motor-bearing-life`, key `ratings.motor_bearing_load_rating_n`, C
+  from Siemens' allowable radial force, `catalog/siemens/motor_bearings_1fk2.csv`). `sim-cli analyze` has the columns
+  `gearbox_gearing_life_h` and `motor_bearing_life_h`.
+
+### Changed
+
+- The pulley shaft bearings' life now includes a_ISO: the shipped configs' lives grow (EXCT-30 31800 h to 325800 h,
+  which now passes in both band modes; it still fails at the worst corner). The delta's first arm fails the new
+  gearing check (about 9000 h against 20000 h).
+
 ## [1.0.0-rc.1] - 2026-11-13
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

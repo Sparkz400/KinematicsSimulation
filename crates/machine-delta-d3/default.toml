@@ -309,6 +309,14 @@ bearing_reliability_percent = 90.0
 # [estimate] the NRB060 ratio 5 figure (175 r/min, Table 7-15 of the manual) scaled with the ratio's slower planets:
 # not printed for the NRB080-05-20.
 gearbox_reference_speed_rpm = 100.0
+# The fatigue of the gearbox's gearing above its rated torque, by Palmgren and Miner's damage sum over the cycle's
+# output torque (Siemens' own method is in its gearbox manual, which is not in this repository), on a Woehler line
+# through Siemens' two figures: gearbox_max_torque_nm (M2max) for at most 30000 output revolutions (equipment manual
+# 04/2025, chapter 6), and no damage at or below gearbox_rated_torque_nm (M2N). A torque M between allows
+# 30000 * (M2max / M)^k output revolutions.
+# [estimate] k = 8.7, the slope of the tooth root's S-N line of case-hardened gears in ISO 6336-3 (life factor 2.5 at
+# 10^3 load cycles, 1 from 3 * 10^6: ln(3000) / ln(2.5)), the root stress in proportion to the torque.
+gearbox_gearing_wohler_exponent = 8.7
 # [catalogue] S210 converter 6SL3210-5HE11-5UF0, which D 32 pairs with the 1FK2105-4AF at 400 V: 5 A rated, 19 A maximum
 drive_rated_current_a = 5.0
 drive_max_current_a = 19.0
@@ -366,6 +374,7 @@ ratings.line_module_efficiency = [0.95, 0.99]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
 
 # Above the place position of the cycle. (Further out, near the edge of the range, one arm carries little of the
 # platform's weight and its velocity loop measures badly in `sim-cli margins`.)

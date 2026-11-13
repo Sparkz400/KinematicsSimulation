@@ -352,10 +352,30 @@ bearing_reliability_percent = 90.0
 # there (C = 1920 N), the NRB080 650 N (C = 3670 N): less than the 600 N the belt's pretension alone puts on
 # the shaft; on this cycle they would last about 2500 h and 17000 h.
 pulley_bearing_load_rating_n = 8469.0
+# The life modification factor a_ISO of ISO 281:2007 on that bearing's life, L_nm = a1 * a_ISO * L10, from the viscosity
+# ratio kappa = nu / nu1 (nu1 from the mean diameter and the pulley's mean speed by the standard's formula), the
+# contamination factor e_C and the fatigue load limit C_u. Without all four a_ISO is 1.
+# [estimate] the lubricant's kinematic viscosity at operating temperature, mm^2/s: a grease of ISO VG 100 base oil at
+# about 50 degC; and e_C of a bearing sealed and greased for life (ISO 281:2007, Table 13: 0.8 to 0.6).
+bearing_lubricant_viscosity_mm2_s = 60.0
+bearing_contamination_factor = 0.7
+# Placeholders that go with the bearing above, taken as a deep-groove ball bearing like a 6004 (20 x 42 mm, C0 / C =
+# 5.0 / 9.95 kN): C0 = 0.5 * 8469 N = 4235 N, the fatigue load limit by the standard's approximation for ball bearings
+# below 100 mm mean diameter C_u = C0 / 22 = 193 N, and the mean diameter (20 + 42) / 2 = 31 mm.
+pulley_bearing_fatigue_limit_n = 193.0
+pulley_bearing_mean_diameter_mm = 31.0
 # The output speed at which the planet bearings last 20000 h at the rated torque, for the gearbox life
 # 20000 h * (n2B / n2) * (M2N / M2eq)^(10/3): 175 r/min for the NRB060 with ratio 5 (Table 7-15 of the manual).
 # A gearbox named in [parts] does not set it.
 gearbox_reference_speed_rpm = 175.0
+# The fatigue of the gearbox's gearing above its rated torque, by Palmgren and Miner's damage sum over the cycle's
+# output torque (Siemens' own method is in its gearbox manual, which is not in this repository), on a Woehler line
+# through Siemens' two figures: gearbox_max_torque_nm (M2max) for at most 30000 output revolutions (equipment manual
+# 04/2025, chapter 6), and no damage at or below gearbox_rated_torque_nm (M2N). A torque M between allows
+# 30000 * (M2max / M)^k output revolutions.
+# [estimate] k = 8.7, the slope of the tooth root's S-N line of case-hardened gears in ISO 6336-3 (life factor 2.5 at
+# 10^3 load cycles, 1 from 3 * 10^6: ln(3000) / ln(2.5)), the root stress in proportion to the torque.
+gearbox_gearing_wohler_exponent = 8.7
 # The belt's teeth, by Megadyne's MEGALINEAR handbook (02.2026, page 9): the effective pull at a pulley times a
 # service factor against the specific tooth load the teeth allow at the pulley's speed, times the width and the
 # teeth in mesh. Placeholders for a 25 mm AT5 steel-cord belt: the handbook's table for open-ended AT5 (page 52,
@@ -447,6 +467,9 @@ thermal.guide_time_constant_s = [1200.0, 4800.0]
 ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
 ratings.line_module_efficiency = [0.95, 0.99]
 ratings.belt_teeth_in_mesh = [6.0, 12.0]
+ratings.bearing_lubricant_viscosity_mm2_s = [30.0, 120.0]
+ratings.bearing_contamination_factor = [0.6, 0.8]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]

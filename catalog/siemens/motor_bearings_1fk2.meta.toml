@@ -1,0 +1,40 @@
+schema_version = 1
+class = "servo_motor"
+table = "bearing_radial_force"
+key = ["frame"]
+default_source = "s210-oi"
+notes = '''
+The radial force the bearings of a 1FK2 allow at the shaft end for a rating life L10h of 25000 h, and a dynamic load
+rating C worked out from it. Siemens publishes no load rating for these bearings (deep-groove ball bearings, lubricated
+for life, about 25000 h at medium load: section 11.1.1 of the operating instructions), only the allowable radial force
+for 25000 h as diagrams per frame size, over the distance from the shaft shoulder and for several mean speeds
+(section 12.1.12; the 1FK2 configuration manual for S120, 02/2022, section 3.6.2, has the same diagrams for the frame
+sizes 1F203 to 1F2210).
+A row is one frame size, read off its diagram at one distance and one speed. Only the 1FK2205 has been read so far: the
+diagrams are images, and no tool here renders them. The others are left out rather than guessed.
+equivalent_load_rating_n: the C of one ball bearing that lasts bearing_life_h at radial_force_n and mean_speed_rad_s,
+  C = F (L10h 60 n / 10^6)^(1/3) with n in r/min: 1000 N (25000 * 60 * 1500 / 10^6)^(1/3) = 13104 N. It stands for the
+  motor's bearings at that point of force only (a force further out loads the front bearing more), and it is an
+  estimate: Siemens' figure may hold a margin or a factor of its own. The simulator reads it from the config
+  (ratings.motor_bearing_load_rating_n), where a belt's pulley sits on the motor shaft (analysis::motor_bearing_life_h);
+  no shipped config has one there.
+'''
+
+[[sources]]
+id = "s210-oi"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 12.1.12, the radial force diagram of the 1FK2205 (about 1000 N at 20 mm from the shaft shoulder at 1500 r/min)"
+method = "manual: read off the diagram"
+
+[[sources]]
+id = "derived-c"
+document = "ISO 281:2007, basic rating life L10h = (C / P)^3 * 10^6 / (60 n), applied to the force of the diagram"
+date = "2007"
+locator = "section 6.2"
+method = "[estimate] C worked out from Siemens' allowable force for 25000 h; see the notes"
+
+[[provenance]]
+rows = ["*"]
+fields = ["equivalent_load_rating_n"]
+source = "derived-c"

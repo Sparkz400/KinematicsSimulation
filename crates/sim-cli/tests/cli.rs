@@ -112,7 +112,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let out = cli(&["analyze", entry.id, "--points", points.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         let table = text(&out.stdout);
-        assert_eq!(table.lines().next().unwrap(), "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation");
+        assert_eq!(table.lines().next().unwrap(), "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h");
         let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
         assert_eq!(rows.len(), motors);
         for row in &rows {
@@ -134,7 +134,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         // The lives and the tooth load, as the library gives them for the same cycle.
         let cfg = entry.config();
         for (row, m) in rows.iter().zip(&load.motors) {
-            let lives = [sim_components::analysis::guide_life_h(&cfg, &load), sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()];
+            let lives = [sim_components::analysis::guide_life_h(&cfg, &load), sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap(), sim_components::analysis::gearbox_gearing_life_h(&cfg, m), sim_components::analysis::motor_bearing_life_h(&cfg, m)];
             // Empty where the machine has no such part (the delta: no guide, pulley or belt).
             for (cell, life) in row[28..].iter().zip(lives) {
                 assert_eq!(*cell, life.map_or(String::new(), |l| format!("{l:.4e}")), "{}: {row:?}", entry.id);
@@ -321,7 +321,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
             assert!(rows.iter().any(|r| r[0] == check), "{}: no {check} in {out}", entry.id);
         }
         // As the library judges the cycle: the belt machines pass every check, the delta's catalogue gearboxes fail
-        // `settling` (a sizing finding).
+        // `settling` (a sizing finding), and its first arm the gearing life (an estimate, see `gearbox_gearing_life_h`).
         let cfg = entry.config();
         let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
         let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();

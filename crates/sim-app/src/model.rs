@@ -5,7 +5,7 @@
 use crate::session::{Event, Request, Session, extend_trail};
 use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict, compare_effect};
 use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, modes_along, step_response};
-use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
+use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_gearing_life_h, gearbox_life_h, guide_life_h, guide_life_km, motor_bearing_life_h, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
 use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
 use sim_components::import::{Mapping, decode, import};
@@ -243,7 +243,8 @@ const MOTOR_KEYS: [&str; 10] = [
     "ui-analysis-mains-energy",
 ];
 /// Rows of the motor table that a machine or a config may lack: the lives in hours and the belt's tooth load.
-const LIFE_KEYS: [&str; 3] = ["ui-analysis-pulley-bearing-life", "ui-analysis-gearbox-life", "ui-analysis-belt-tooth"];
+const LIFE_KEYS: [&str; 5] =
+    ["ui-analysis-pulley-bearing-life", "ui-analysis-gearbox-life", "ui-analysis-gearbox-gearing-life", "ui-analysis-motor-bearing-life", "ui-analysis-belt-tooth"];
 const VERDICT_KEYS: [&str; 5] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-value", "ui-analysis-limit", "ui-analysis-result"];
 const BAND_KEYS: [&str; 6] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-band-low", "ui-analysis-band-high", "ui-analysis-band-worst", "ui-analysis-band-share"];
 const WORST_KEYS: [&str; 7] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-worst-value", "ui-analysis-limit", "ui-analysis-result", "ui-analysis-worst-high", "ui-analysis-worst-low"];
@@ -292,7 +293,7 @@ const SENSITIVITY_KEYS: [&str; 6] =
     ["ui-analysis-parameter", "ui-analysis-low", "ui-analysis-high", "ui-analysis-peak-change", "ui-analysis-rms-change", "ui-analysis-time-change"];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 37] = [
+const CHECKS: [&str; 39] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -314,6 +315,8 @@ const CHECKS: [&str; 37] = [
     "line-module-peak",
     "pulley-bearing-life",
     "gearbox-life",
+    "gearbox-gearing-life",
+    "motor-bearing-life",
     "guide-life",
     "belt-tooth-load",
     "belt-tooth-jump",
@@ -1360,9 +1363,9 @@ impl Model {
             motors.push([vec![tr(key)], load.motors.iter().map(|m| short(values(m)[i])).collect()].concat());
         }
         // In the order of `LIFE_KEYS`; a row only where some motor has the figure.
-        let lives = |m: &MotorLoad| -> [Option<f64>; 3] {
-            let Some(cfg) = &resolved else { return [None; 3] };
-            [pulley_bearing_life_h(cfg, m), gearbox_life_h(cfg, m), belt_tooth_utilisation(cfg, m).ok().flatten()]
+        let lives = |m: &MotorLoad| -> [Option<f64>; 5] {
+            let Some(cfg) = &resolved else { return [None; 5] };
+            [pulley_bearing_life_h(cfg, m), gearbox_life_h(cfg, m), gearbox_gearing_life_h(cfg, m), motor_bearing_life_h(cfg, m), belt_tooth_utilisation(cfg, m).ok().flatten()]
         };
         for (i, key) in LIFE_KEYS.iter().enumerate() {
             let row: Vec<Option<f64>> = load.motors.iter().map(|m| lives(m)[i]).collect();

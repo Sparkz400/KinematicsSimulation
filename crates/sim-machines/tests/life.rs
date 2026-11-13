@@ -1,7 +1,10 @@
 //! The life estimates on every machine: what the analysis adds up for them is what the signals say, and the verdicts
 //! judge the lives against the required life.
 
-use sim_components::analysis::{SPEED_BAND, analyse_trajectory, sensitivity, belt_tooth_utilisation, gearbox_life_h, guide_life_h, pulley_bearing_life_h, verdicts};
+use sim_components::analysis::{
+    SPEED_BAND, analyse_trajectory, belt_tooth_utilisation, gearbox_gearing_life_h, gearbox_life_h, guide_life_h, motor_bearing_life_h, pulley_bearing_life_h, sensitivity,
+    torque_band_floor, verdicts,
+};
 use sim_components::path::Piece;
 use sim_components::{Command, Sim};
 use sim_machines::MACHINES;
@@ -9,7 +12,8 @@ use sim_machines::MACHINES;
 /// A move from the start pose to the middle of every stroke, analysed; then the same move again, its signals added up
 /// here: per motor the mean speed (every step), the cubic mean of the pulley shaft's radial load weighted with the speed
 /// (once per millisecond), the mean of the gearbox output torque with the exponent 10/3 weighted with the speed and its
-/// peak per speed band (every step); per guide the mean speed of its axis (once per millisecond). They agree to 1e-9.
+/// peak per speed band (every step), and its load spectrum: the speed summed per torque band of 1 % from 0.1 N m (every
+/// step); per guide the mean speed of its axis (once per millisecond). They agree to 1e-9.
 #[test]
 fn the_life_loads_are_the_signals_added_up() {
     for entry in MACHINES.iter().copied() {
@@ -34,6 +38,7 @@ fn the_life_loads_are_the_signals_added_up() {
         let every = (1e-3 / sim.dt).round().max(1.0) as u64;
         let n = motors.len();
         let (mut speed_sum, mut cubed, mut weight, mut life, mut bands) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![vec![0.0f64; 4001]; n]);
+        let mut spectra = vec![vec![0.0f64; 4001]; n];
         let (mut guide_cubed, mut guide_speed, mut samples) = (vec![0.0; guides.len()], vec![0.0; guides.len()], 0.0);
         let (mut pos, mut speed, mut values) = (vec![0.0; n], vec![0.0; n], Vec::new());
         let (mut tool, mut rate) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
@@ -48,6 +53,9 @@ fn the_life_loads_are_the_signals_added_up() {
                 life[k] += torque.powf(10.0 / 3.0) * w;
                 let band = ((w / SPEED_BAND) as usize).min(4000);
                 bands[k][band] = bands[k][band].max(torque);
+                if torque >= 0.1 {
+                    spectra[k][(((torque / 0.1).ln() / 1.01f64.ln()) as usize).min(4000)] += w;
+                }
                 if let (0, Some(r)) = (steps % every, radial[k]) {
                     (cubed[k], weight[k]) = (cubed[k] + values[r].powi(3) * w, weight[k] + w);
                 }
@@ -82,6 +90,16 @@ fn the_life_loads_are_the_signals_added_up() {
             for (i, &peak) in peaks.iter().enumerate() {
                 close(peak, bands[k][i], "torque in a speed band");
             }
+            let spectrum = &m.gearbox_torque_spectrum;
+            assert!(spectra[k][spectrum.len()..].iter().all(|&w| w == 0.0), "{}: spectrum", entry.id);
+            for (i, &share) in spectrum.iter().enumerate() {
+                close(share, spectra[k][i] / steps as f64, "speed in a torque band");
+            }
+            // The bands are where `torque_band_floor` puts them: none above the peak torque (which may come at standstill,
+            // where it turns nothing and is not in the spectrum).
+            if let Some(top) = spectrum.iter().rposition(|&w| w > 0.0) {
+                assert!(torque_band_floor(top) <= m.gearbox_torque.unwrap().0 * (1.0 + 1e-12), "{}", entry.id);
+            }
         }
         if let Some(g) = (0..guides.len()).max_by(|&a, &b| guide_cubed[a].total_cmp(&guide_cubed[b])) {
             close(load.guide_load.unwrap().1, (guide_cubed[g] / samples).cbrt(), "guide load");
@@ -110,6 +128,13 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
         for (k, m) in load.motors.iter().enumerate() {
             // The EXCT-30 has no gearbox and no gearbox rating: its gearbox life is not judged.
             assert_eq!(find(&judged, "gearbox-life", Some(k)).map(|v| v.value), gearbox_life_h(&cfg, m), "{}", entry.id);
+            // The gearing where the config has its S-N line and the cycle takes the gearbox above its rated torque (of the
+            // shipped configs only the delta's first arm: about 9000 h, a finding).
+            let gearing = gearbox_gearing_life_h(&cfg, m);
+            assert_eq!(find(&judged, "gearbox-gearing-life", Some(k)).map(|v| v.value), gearing, "{}", entry.id);
+            assert!(gearing.is_none_or(|life| life.is_finite() && life > 0.0), "{}: gearing {gearing:?} h", entry.id);
+            // In no shipped config does a belt pull on a motor shaft: no motor bearing life.
+            assert!(motor_bearing_life_h(&cfg, m).is_none() && find(&judged, "motor-bearing-life", Some(k)).is_none(), "{}", entry.id);
             let Some(bearing) = pulley_bearing_life_h(&cfg, m) else {
                 assert!(find(&judged, "pulley-bearing-life", Some(k)).is_none() && belt_tooth_utilisation(&cfg, m).unwrap().is_none(), "{}", entry.id);
                 // A machine without gearbox ratings (a screw on a coupling, a linear motor) has no gearbox life.
@@ -134,6 +159,12 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
         let mut unreliable = cfg.clone();
         unreliable.set_text("ratings.bearing_reliability_percent = 99.99").unwrap();
         assert_eq!(verdicts(&unreliable, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_reliability_percent".into())), "{}", entry.id);
+        // So is a contamination factor above 1 (ISO 281's e_C), where the config has the lubrication for a_ISO.
+        if cfg.get("ratings.bearing_contamination_factor").is_ok() {
+            let mut dirty = cfg.clone();
+            dirty.set_text("ratings.bearing_contamination_factor = 1.5").unwrap();
+            assert_eq!(verdicts(&dirty, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_contamination_factor".into())), "{}", entry.id);
+        }
         println!("{}: guide {guide:?} h, pulley bearing {:?} h, gearbox {:?} h, tooth load {:?}", entry.id, pulley_bearing_life_h(&cfg, &load.motors[0]), gearbox_life_h(&cfg, &load.motors[0]), belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap());
     }
 }

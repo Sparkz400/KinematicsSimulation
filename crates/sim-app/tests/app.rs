@@ -565,11 +565,19 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         // fed back into the mains (zero without the regenerative supply).
         assert_eq!(motors[0][0], "Figure");
         assert_eq!(motors[0][1..], model.session.motors.iter().map(|info| model.tr.tr(info.key).to_string()).collect::<Vec<_>>());
-        // And the lives in hours and the belt's tooth load, which both belt machines' default configs have; the delta has the
-        // gearbox's life alone, a machine without a rated gearbox (the screw's coupling) none.
+        // And the lives in hours and the belt's tooth load, which both belt machines' default configs have (not the
+        // gearing's, which their cycles never take above its rated torque, nor the motor bearings', as their belts pull on a
+        // gearbox); the delta has the gearbox's lives alone, a machine without a rated gearbox (the screw's coupling) none.
         let lives = {
             let (cfg, m) = (entry.config(), &load.motors[0]);
-            [sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()].iter().filter(|l| l.is_some()).count()
+            let figures = [
+                sim_components::analysis::pulley_bearing_life_h(&cfg, m),
+                sim_components::analysis::gearbox_life_h(&cfg, m),
+                sim_components::analysis::gearbox_gearing_life_h(&cfg, m),
+                sim_components::analysis::motor_bearing_life_h(&cfg, m),
+                sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap(),
+            ];
+            figures.iter().filter(|l| l.is_some()).count()
         };
         assert_eq!(motors.len(), if belted { 14 } else { 11 + lives }, "{}", entry.id);
         assert!(row(motors, "Fed back into the mains [J]").iter().all(|cell| shows(cell, 0.0)), "{motors:?}");
@@ -590,11 +598,13 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             assert!(shows(&row(motors, "Braking resistor, energy [J]")[k], m.resistor_energy) && shows(&row(motors, "Braking resistor, mean power [W]")[k], m.resistor_energy / load.duration));
             let cfg = entry.config();
             let lives = [
-                ("Pulley shaft bearing, rating life [h]", sim_components::analysis::pulley_bearing_life_h(&cfg, m)),
+                ("Pulley shaft bearing, modified rating life [h]", sim_components::analysis::pulley_bearing_life_h(&cfg, m)),
                 ("Gearbox planet bearings, life [h]", sim_components::analysis::gearbox_life_h(&cfg, m)),
+                ("Gearbox gearing, fatigue life above the rated torque [h]", sim_components::analysis::gearbox_gearing_life_h(&cfg, m)),
                 ("Belt tooth load, share of its rating", sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()),
             ];
-            for (label, value) in lives.into_iter().filter(|(_, value)| belted || value.is_some()) {
+            let gearing = lives[2].0;
+            for (label, value) in lives.into_iter().filter(|(label, value)| (belted && *label != gearing) || value.is_some()) {
                 assert!(shows(&row(motors, label)[k], value.unwrap()), "{}: {label} {value:?} in {motors:?}", entry.id);
             }
         }

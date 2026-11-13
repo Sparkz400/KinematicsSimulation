@@ -67,9 +67,9 @@ Der Zyklus ist die Liste der `[[cycle.segment]]` in der Konfiguration: Zielpose,
 
 ```text
 $ sim-cli analyze t-gantry
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation
-a,6.080000,0.559623,0.165360,200.4514,0.1476,0.1302,204.64,334.35,0.3676,1.23,85.026,10.095,28.21,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1252e5,6.7359e9,1.9095e-1
-b,6.080000,0.460106,0.153385,200.4378,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.03,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175176,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1222e5,1.0201e10,1.5154e-1
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h
+a,6.080000,0.559459,0.165360,200.4513,0.1475,0.1302,204.64,334.35,0.3676,1.23,85.025,10.095,28.22,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7222e5,6.7359e9,1.9095e-1,,
+b,6.080000,0.460121,0.153385,200.4381,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.02,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175177,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7127e5,1.0200e10,1.5155e-1,,
 ```
 
 Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und misst den zweiten. Je Motor entsteht eine Zeile. Spalten, die die ganze Maschine beschreiben und nicht einen Motor, wiederholen sich in jeder Zeile.
@@ -102,9 +102,11 @@ Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und m
 | `guide_life_km` | km | L10 = (C / P)³ · 50 km für diese Führung. Leer ohne `ratings.guide_dynamic_load_rating_n` |
 | `mains_energy_j` | J | Mit `effects.regenerative_supply`: Energie, die das Line Module über den Durchlauf ins Netz zurückgespeist hat (nach seinem Wirkungsgrad). Ohne 0 |
 | `guide_life_h` | h | `guide_life_km` geteilt durch die mittlere Geschwindigkeit der Achse dieser Führung. Für die ganze Maschine |
-| `pulley_bearing_life_h` | h | Nominelle Lebensdauer des Lagers, das den Riemenzug an der Scheibenwelle dieses Motors trägt: (C / P)³ · 10⁶ / (60 n), C = `ratings.pulley_bearing_load_rating_n`, P das mit der Drehzahl gewichtete kubische Mittel der Radialkraft, n die mittlere Drehzahl der Scheibe in 1/min |
+| `pulley_bearing_life_h` | h | Nominelle Lebensdauer des Lagers, das den Riemenzug an der Scheibenwelle dieses Motors trägt: (C / P)³ · 10⁶ / (60 n), C = `ratings.pulley_bearing_load_rating_n`, P das mit der Drehzahl gewichtete kubische Mittel der Radialkraft, n die mittlere Drehzahl der Scheibe in 1/min; mal dem a_ISO der ISO 281 für Schmierung und Verschmutzung, wo die Konfiguration die vier Werte dafür hat |
 | `gearbox_life_h` | h | Lebensdauer der Planetenlager des Getriebes nach der Formel von Siemens, 20000 h · (n2B / n2) · (M2N / M2eq)^(10/3). Leer ohne `ratings.gearbox_rated_torque_nm` und `gearbox_reference_speed_rpm` (die EXCT-30 hat kein Getriebe) |
 | `belt_tooth_utilisation` | Anteil | Zahnbelastung des Riemens an der Scheibe dieses Motors geteilt durch das, was seine Zähne bei der Drehzahl der Scheibe zulassen (Verfahren von Megadyne, mit `ratings.belt_service_factor`), das Höchste im Zyklus. Keine Lebensdauer: kein Riemenhersteller veröffentlicht eine |
+| `gearbox_gearing_life_h` | h | Lebensdauer der Verzahnung des Getriebes aus dem Moment über seinem Nennmoment (Palmgren–Miner mit den zwei Momentangaben von Siemens). Leer, wo der Zyklus das Getriebe nie über `ratings.gearbox_rated_torque_nm` bringt |
+| `motor_bearing_life_h` | h | Lebensdauer der Motorlager unter dem Riemenzug. Nur wo die Scheibe auf der Motorwelle sitzt (`ratings.motor_bearing_load_rating_n` gesetzt, kein Getriebe); in keiner mitgelieferten Konfiguration |
 
 Die genauen Definitionen stehen in der [Modellreferenz](../model-reference.md#analysis-quantities).
 
@@ -115,15 +117,15 @@ Danach beurteilen Sie den Zyklus:
 ```text
 $ sim-cli verdicts t-gantry
 check,motor,value,limit,result
-motor-peak,a,0.1476,1.000,ok
+motor-peak,a,0.1475,1.000,ok
 motor-thermal,a,1.227,100.0,ok
 drive-current,a,0.3676,3.000,ok
 drive-peak-current,a,1.246,10.90,ok
 gearbox-continuous,a,0.7955,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
 gearbox-peak,a,2.175,64.00,ok
-pulley-bearing-life,a,212521,20000,ok
-gearbox-life,a,6735878139,20000,ok
+pulley-bearing-life,a,472218,20000,ok
+gearbox-life,a,6735891797,20000,ok
 belt-tooth-load,a,0.1910,1.000,ok
 dc-link-energy,a,5.865,6.205,ok
 dc-link-overvoltage,a,221.4,257.6,ok
@@ -133,7 +135,7 @@ belt-tension,,334.4,1500,ok
 belt-slack,,204.6,0,ok
 gearbox-radial-load,,644.8,1500,ok
 guide-load,,177.8,2000,ok
-guide-life,,4994954,20000,ok
+guide-life,,4994946,20000,ok
 ```
 
 Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wie in der zweiten Spalte angegeben.
@@ -157,6 +159,8 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | `guide-load` | Größte Führungsbelastung | `guide_load_peak_n` | `ratings.guide_max_load_n` | N |
 | `pulley-bearing-life` | Lebensdauer des Lagers der Scheibenwelle | `pulley_bearing_life_h` | `ratings.required_life_h` | h |
 | `gearbox-life` | Lebensdauer der Planetenlager des Getriebes | `gearbox_life_h` | `ratings.required_life_h` | h |
+| `gearbox-gearing-life` | Lebensdauer der Verzahnung des Getriebes | `gearbox_gearing_life_h` (nur wo der Zyklus das Nennmoment überschreitet) | `ratings.required_life_h` | h |
+| `motor-bearing-life` | Lebensdauer der Motorlager | `motor_bearing_life_h` | `ratings.required_life_h` | h |
 | `guide-life` | Lebensdauer der Führung | `guide_life_h` | `ratings.required_life_h` | h |
 | `belt-tooth-load` | Zahnbelastung des Riemens | `belt_tooth_utilisation` | 1 | Anteil |
 | `gearbox-thermal` | Übertemperatur des Getriebes, eingeschwungen | Endwert des wärmsten Getriebes im Zyklus (nur mit `effects.part_heating`; keine bei Direktantrieb) | `thermal.gearbox_max_rise_k` | K |
@@ -169,8 +173,8 @@ Grenzen bei dieser Aufgabe:
 
 - Welcher thermische Start verwendet wurde, steht im Fehlerstrom (`Thermischer Start: kalt` oder `warm`) und in der Zeile `thermal-warm-start`. Mit `effects.thermal_warm_start` (in den mitgelieferten Konfigurationen an) läuft der gemessene Durchlauf mit den Wicklungen und, mit `effects.thermal_feedback`, den Getrieben und Führungen bei den Übertemperaturen, auf die sie bei lange wiederholtem Zyklus einschwingen; sie werden durch Wiederholen des Zyklus gefunden (höchstens 4 Warmdurchläufe, auf 0,1 K). Aus, beginnt die Analyse kalt, und ein Zyklus von Sekunden sieht jedes Bauteil bei Umgebungstemperatur. Mit der Rückwirkung schwingt die X-Führung des EXCT-30 warm gestartet auf 15,9 K ein, kalt beurteilt auf 23,7 K (ihr Öl wird mit der Wärme dünner). `thermal-warm-start` prüft, wie weit die Übertemperaturen am Anfang des gemessenen Durchlaufs von den eingeschwungenen abliegen, gegen 0,1 K. Siehe die [Modellreferenz](../model-reference.md#thermal-warm-start).
 - Ein Grenzwert, den die Konfiguration nicht angibt, wird nicht geprüft. Eine fehlende Zeile heißt nicht „bestanden“. Ebenso werden `gearbox-thermal` und `guide-thermal` bei ausgeschaltetem `effects.part_heating` und `effects.thermal_feedback` nicht geprüft, `belt-tooth-jump` ohne `effects.belt_tooth_jump` und `belt-span-resonance` ohne `effects.belt_span_vibration`. Ist der Effekt an, erreicht die X-Führung des EXCT-30 im eingeschwungenen Zustand 25 K von 40 K und fällt im ungünstigsten Fall von `--bands` durch (51 K an der oberen Grenze ihres Wärmewiderstands); die Wärmewiderstände sind Schätzungen (siehe Konfigurationsreferenz).
-- `belt-slack` und die drei Lebensdauern sind die Prüfungen, bei denen der Wert über der Grenze bleiben muss. `belt-slack` fällt auch dann durch, wenn irgendein Trum irgendwann ohne Riemenkraft war.
-- Die Lebensdauern sind die Formeln der Hersteller mit Tragzahlen, die zum Teil Schätzungen sind; was sie auslassen, steht in der [Modellreferenz](../model-reference.md#analysis-quantities). Die Lager der Motoren selbst werden nicht abgeschätzt: In diesen Konfigurationen zieht der Riemen an keiner Motorwelle.
+- `belt-slack` und die Lebensdauern sind die Prüfungen, bei denen der Wert über der Grenze bleiben muss. `belt-slack` fällt auch dann durch, wenn irgendein Trum irgendwann ohne Riemenkraft war.
+- Die Lebensdauern sind die Formeln der Hersteller mit Tragzahlen, die zum Teil Schätzungen sind; was sie auslassen, steht in der [Modellreferenz](../model-reference.md#analysis-quantities). Die Lager der Motoren selbst haben in diesen Konfigurationen keinen Wert: Der Riemen zieht an keiner Motorwelle.
 - `dc-link-energy` ist immer `ok`, wenn die Konfiguration einen Bremswiderstand hat, der einspringen kann, auch wenn der Wert die Grenze erreicht oder überschreitet. Die beiden Zeilen zum Bremswiderstand erscheinen nur, wenn er gebraucht wird. Alle drei Standardkonfigurationen simulieren den Zwischenkreis (`effects.dc_link = true`); ist er abgeschaltet, sind die Zeilen zum Bremsen Schätzungen aus dem, was der Motor zurückspeist.
 - Eine Einschaltspannung des Bremswiderstands, die nicht über `drive.bus_voltage_v` liegt, wird abgelehnt (`Konfigurationswert liegt außerhalb des gültigen Bereichs: ratings.braking_threshold_v`), ob simuliert oder nicht: Sie ist ein Grenzwert für eine andere Zwischenkreisspannung.
 - Werte werden mit vier signifikanten Stellen und ohne Exponent ausgegeben; deshalb erscheint `settling` als `0.00004588`.
@@ -203,8 +207,8 @@ Eine Konfiguration kann eine reale Maschine mit Werten aus dem Katalog beschreib
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-a,2.048000,3.659797,1.459734,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
-b,2.048000,3.036510,1.391431,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
+a,2.048000,3.659797,1.459735,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
+b,2.048000,3.036505,1.391430,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
 ```
 
 Fünf Werte dieser Konfiguration hat der Konstrukteur so gewählt, dass die Prüfungen auch im ungünstigsten Fall der Fehlerbänder besteht ([unten](#einfluss-unsicherer-parameter-erkennen-und-mit-fehlerbändern-beurteilen)): eine Vorspannung des Riemens von 450 N, einen Ruckgrenzwert in X von 150 m/s³, Input Shaping mit festen 25 Hz und einem zweiten Shaper bei 17,5 Hz und das Überschleifen. Die Gründe stehen in den Kommentaren der Datei.
@@ -214,7 +218,7 @@ Wie die Standardkonfigurationen hat auch diese `effects.dc_link = true`. Die Zei
 ```text
 dc-link-energy,a,9.943,9.943,ok
 braking-resistor-continuous,a,8.303,100.0,ok
-braking-resistor-peak,a,200.5,3000,ok
+braking-resistor-peak,a,200.5,5700,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ```
 
@@ -261,13 +265,13 @@ $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
 Search time on 16: 0.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2886,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2977,41.56
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,pulley-bearing-life,0.6310,3.4296,21.55
-,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,pulley-bearing-life,0.6311,3.3446,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,pulley-bearing-life,0.6311,3.4468,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,pulley-bearing-life,0.6311,3.5158,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,pulley-bearing-life,0.6310,3.6598,6.88
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5297,3.2886,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5294,3.2977,41.56
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4296,21.55
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3446,11.27
+,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4468,12.07
+,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5158,14.67
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6598,6.88
 ...
 ,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6796,3.4378,167.96
 ,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
@@ -275,7 +279,7 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 ,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
 
-An der EXCT-30 hat jeder Motor, der besteht, dieselbe knappste Prüfung, die Lebensdauer der Lager der Scheibenwellen (20000 h gefordert von etwa 31700 h), die kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`.
+An der EXCT-30 kommt kein Motor, der besteht, in die Nähe einer Grenze. Die knappste Prüfung ist bei den leichtesten Motoren das Verweilen (0,53 der Toleranz), beim 1FK2204-5AF der Strom des Antriebs und bei den übrigen der Zug des Riemens an einer Scheibenwelle (1000 N von 2000 N), der kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`. Die Lager der Scheibenwellen halten etwa 325000 h, bei 20000 h gefordert.
 
 Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der für die Netzspannung angeboten wird, jeden mit dem Antrieb, den der Katalog ihm zuordnet, auf allen Prozessorkernen. Zuerst kommen die Motoren, die bestehen, der günstigste voran. Danach folgen die, die nicht bestehen, der knappste voran. Ein Kandidat, dessen Antriebe wegen Überspannung im Zwischenkreis abschalten, steht hinter allen diesen, mit `inf` als `tightest_utilisation`: Seine Werte enden mit dem Abschalten.
 
@@ -325,8 +329,8 @@ $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
 Search time on 16: 0.7 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,18.72
-,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,54.09
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5060,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5060,54.09
 ...
 ```
 
@@ -341,7 +345,7 @@ ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9078,3.9932,25.
 ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9087,3.9946,51.85
 ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,dc-link-energy,0.6367,3.8864,26.96
 ...
-EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,pulley-bearing-life,0.6310,3.2869,20.39
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5299,3.2869,20.39
 ...
 EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7292,5.0201,52.65
 ...
@@ -415,11 +419,11 @@ motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
 drive-current,a,1.145,5.000,ok,1.125,1.198,ok
 drive-peak-current,a,2.874,19.00,ok,2.770,3.091,ok
 pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
-pulley-bearing-life,a,31788,20000,ok,17349,67792,FAIL
+pulley-bearing-life,a,325761,20000,ok,73164,1194834,ok
 belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
 dc-link-energy,a,9.943,9.943,ok,4.971,23.24,ok
 braking-resistor-continuous,a,8.303,100.0,ok,4.537,13.16,ok
-braking-resistor-peak,a,200.5,3000,ok,138.7,218.2,ok
+braking-resistor-peak,a,200.5,5700,ok,138.7,218.2,ok
 dc-link-overvoltage,a,770.0,820.0,ok,709.1,790.0,ok
 ...
 settling,,0.00003947,0.0001000,ok,0.00003446,0.00004434,ok
@@ -427,10 +431,10 @@ belt-tension,,555.0,2140,ok,455.0,655.0,ok
 belt-slack,,257.8,0,ok,157.8,357.8,ok
 gearbox-radial-load,,1000,2000,ok,800.4,1200,ok
 guide-load,,185.0,2000,ok,177.0,276.7,ok
-guide-life,,3024172,20000,ok,378021,24193374,ok
+guide-life,,3024169,20000,ok,378021,24193350,ok
 ```
 
-`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung bis auf eine in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 158 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,044 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1200 N an einer Scheibenwelle. Die Lager der Scheibenwellen fallen durch: 31800 h wie geschrieben, 17300 h mit dem Riemen 100 N zu stramm, bei 20000 h gefordert. Ihre Tragzahl ist eine Schätzung (Festo veröffentlicht keine; siehe den Kommentar in der Konfiguration). Das heißt also, dass nach diesen Lagern bei Festo zu fragen ist, nicht, dass die Achse verschleißt. Dieser Lauf hat 127 Zyklen simuliert (63 Werte mit Grenzen), auf allen Prozessorkernen, und dauerte etwa 2,6 s auf dem Rechner, auf dem dieses Handbuch entstand.
+`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 158 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,044 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1200 N an einer Scheibenwelle. Die Lager der Scheibenwellen halten 325800 h wie geschrieben und mindestens 73200 h, bei 20000 h gefordert. Ihre Tragzahl und die Schmierwerte hinter a_ISO sind Schätzungen (Festo veröffentlicht keine; siehe die Kommentare in der Konfiguration). Dieser Lauf hat 135 Zyklen simuliert (67 Werte mit Grenzen), auf allen Prozessorkernen, und dauerte etwa 2,6 s auf dem Rechner, auf dem dieses Handbuch entstand.
 
 Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung wurde ein auf 200 N eingestellter Riemen schlaff, und am weichen Ende der Grenzen für das Gestell stand das Werkzeug beim Verweilen 0,16 mm neben seinem Ziel, bei einer Toleranz von 0,1 mm (die Werkzeugposition enthält das Schwanken des Gestells). Die Vorspannung wurde auf 450 N erhöht, der Ruckgrenzwert in X von 500 auf 150 m/s³ gesenkt, und Input Shaping und das Überschleifen wurden eingeschaltet; später kam für die ungünstigste Ecke (unten) ein zweiter Shaper bei 17,5 Hz hinzu. Der Zyklus dauert jetzt 2,048 s, vorher 2,136 s.
 
@@ -439,27 +443,27 @@ Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 check,motor,value,limit,result,low,high,worst_case,pass_share
-motor-peak,a,0.2930,1.000,ok,0.2799,0.3435,ok,1.000
-motor-thermal,a,6.882,100.0,ok,6.421,8.347,ok,1.000
+motor-peak,a,0.2930,1.000,ok,0.2799,0.3440,ok,1.000
+motor-thermal,a,6.882,100.0,ok,6.423,8.347,ok,1.000
 drive-current,a,1.145,5.000,ok,1.107,1.257,ok,1.000
-drive-peak-current,a,2.874,19.00,ok,2.743,3.371,ok,1.000
-pulley-torque,a,3.126,12.50,ok,2.959,3.719,ok,1.000
-pulley-bearing-life,a,31788,20000,ok,11887,126380,FAIL,0.860
-belt-tooth-load,a,0.3529,1.000,ok,0.2876,0.5665,ok,1.000
+drive-peak-current,a,2.874,19.00,ok,2.745,3.373,ok,1.000
+pulley-torque,a,3.126,12.50,ok,2.953,3.717,ok,1.000
+pulley-bearing-life,a,325761,20000,ok,33442,4107765,ok,1.000
+belt-tooth-load,a,0.3529,1.000,ok,0.2875,0.5661,ok,1.000
 dc-link-energy,a,9.943,9.943,ok,4.781,28.61,ok,1.000
-braking-resistor-continuous,a,8.303,100.0,ok,0.03481,13.44,ok,1.000
-braking-resistor-peak,a,200.5,3000,ok,6.788,231.5,ok,1.000
+braking-resistor-continuous,a,8.303,100.0,ok,0.03500,13.45,ok,1.000
+braking-resistor-peak,a,200.5,5700,ok,6.773,231.6,ok,1.000
 dc-link-overvoltage,a,770.0,820.0,ok,675.3,789.5,ok,1.000
 ...
-settling,,0.00003947,0.0001000,ok,0.00002569,0.00005131,ok,1.000
-belt-tension,,555.0,2140,ok,445.9,665.0,ok,1.000
-belt-slack,,257.8,0,ok,139.6,357.9,ok,1.000
+settling,,0.00003947,0.0001000,ok,0.00002565,0.00004994,ok,1.000
+belt-tension,,555.0,2140,ok,446.3,665.0,ok,1.000
+belt-slack,,257.8,0,ok,139.6,358.1,ok,1.000
 gearbox-radial-load,,1000,2000,ok,797.3,1209,ok,1.000
-guide-load,,185.0,2000,ok,173.1,308.7,ok,1.000
-guide-life,,3024172,20000,ok,291334,22756879,ok,1.000
+guide-load,,185.0,2000,ok,173.0,308.2,ok,1.000
+guide-life,,3024169,20000,ok,187894,23943944,ok,1.000
 ```
 
-Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (140 N statt 158 N im schlaffsten Trum, 0,051 mm statt 0,044 mm neben dem Ziel beim Verweilen, 1209 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen außer den Lagern der Scheibenwellen, die in 14 % der Läufe keine 20000 h halten (mindestens 11900 h). Das dauerte etwa 4 s.
+Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (140 N statt 158 N im schlaffsten Trum, 0,050 mm statt 0,044 mm neben dem Ziel beim Verweilen, 1209 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen. Die Lager der Scheibenwellen halten mindestens 33400 h. Das dauerte etwa 4 s.
 
 `--samples` ohne `--bands`, 0 Stichproben, eine gebrochene Zahl und `--seed` ohne `--samples` werden abgelehnt (Code 2). Die Läufe beider Arten nutzen alle Prozessorkerne.
 
@@ -467,11 +471,11 @@ Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts 
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --worst
-Cycles simulated in the search for the worst corners: 2428
+Cycles simulated in the search for the worst corners: 2656
 check,motor,worst,limit,worst_case,at_high_bound,at_low_bound
 motor-peak,a,0.4109,1.000,ok,...
 ...
-pulley-bearing-life,a,10258,20000,FAIL,...
+pulley-bearing-life,a,10042,20000,FAIL,...
 ...
 dc-link-energy,a,35.66,36.57,ok,...
 ...
@@ -483,9 +487,9 @@ guide-load,,354.9,1000,ok,...
 guide-life,,115600,20000,ok,...
 ```
 
-Sie beginnt mit den Läufen mit einem Wert allein: Jede Prüfung bekommt die Ecke, an der jeder Wert mit Grenzen an der Grenze steht, die diese Prüfung allein ungünstiger machte. Dann wird bis zu dreimal jeder Wert, der die Prüfung bewegt hat, einzeln an seine andere Grenze gesetzt, und was sie ungünstiger macht, bleibt (alle solchen Wechsel zusammen oder der beste allein, je nachdem, was ungünstiger ist). Die letzten zwei Spalten nennen die Werte an ihrer oberen und an ihrer unteren Grenze, getrennt durch `;`. „Ungünstiger“ wird nach dem Abstand zur Grenze beurteilt, weil manche Grenzwerte selbst Grenzen haben: in dieser Konfiguration Kapazität und Schaltschwelle des Zwischenkreises; die Spalte `limit` zeigt daher den Grenzwert an dieser Ecke. `dc-link-energy` wird stattdessen nach der Energie beurteilt: Die Prüfung fällt nur durch, wo der Bremswiderstand gebraucht wird und keinen Grenzwert hat, und mit Widerstand füllt sich der Zwischenkreis an jeder Ecke mit kräftigem Bremsen bis zu seinem Platz, sodass ihr Abstand nichts aussagt (hier 35,66 J von 36,57 J Platz, die Kapazität an ihrer oberen Grenze; 9,94 J, wie konfiguriert). Die Läufe mit einem Wert allein und die Konfiguration, wie sie ist, zählen ebenfalls, sodass das Ungünstigste nie günstiger ist als die Bänder; ist einer von ihnen der ungünstigste, stehen die Werte, die er lässt, wie sie konfiguriert sind, in keiner der beiden Spalten. Die Suche brauchte hier 2428 Zyklen und 50 s.
+Sie beginnt mit den Läufen mit einem Wert allein: Jede Prüfung bekommt die Ecke, an der jeder Wert mit Grenzen an der Grenze steht, die diese Prüfung allein ungünstiger machte. Dann wird bis zu dreimal jeder Wert, der die Prüfung bewegt hat, einzeln an seine andere Grenze gesetzt, und was sie ungünstiger macht, bleibt (alle solchen Wechsel zusammen oder der beste allein, je nachdem, was ungünstiger ist). Die letzten zwei Spalten nennen die Werte an ihrer oberen und an ihrer unteren Grenze, getrennt durch `;`. „Ungünstiger“ wird nach dem Abstand zur Grenze beurteilt, weil manche Grenzwerte selbst Grenzen haben: in dieser Konfiguration Kapazität und Schaltschwelle des Zwischenkreises; die Spalte `limit` zeigt daher den Grenzwert an dieser Ecke. `dc-link-energy` wird stattdessen nach der Energie beurteilt: Die Prüfung fällt nur durch, wo der Bremswiderstand gebraucht wird und keinen Grenzwert hat, und mit Widerstand füllt sich der Zwischenkreis an jeder Ecke mit kräftigem Bremsen bis zu seinem Platz, sodass ihr Abstand nichts aussagt (hier 35,66 J von 36,57 J Platz, die Kapazität an ihrer oberen Grenze; 9,94 J, wie konfiguriert). Die Läufe mit einem Wert allein und die Konfiguration, wie sie ist, zählen ebenfalls, sodass das Ungünstigste nie günstiger ist als die Bänder; ist einer von ihnen der ungünstigste, stehen die Werte, die er lässt, wie sie konfiguriert sind, in keiner der beiden Spalten. Die Suche brauchte hier 2656 Zyklen.
 
-An der EXCT-30 fand sie, was keine der beiden anderen Arten fand: Mit dem 25-Hz-Shaper allein und allen Werten zugleich an ihrer ungünstigsten Grenze stand das Werkzeug beim Verweilen 0,115 mm neben seinem Ziel, bei 0,1 mm zulässig (0,043 mm mit einem Wert allein, 0,053 mm in 200 Stichproben). Ein zweiter Shaper bei 17,5 Hz, der Spitze im Frequenzgang des Werkzeugs, bringt es auf 0,095 mm (der Kommentar zu `profile.shaper2_frequency_hz` in der Datei nennt, was sonst versucht wurde). Der Riemen behält im schlaffsten Trum 87 N, und die Wellen tragen 1231 N von 1500 N an der unteren Grenze ihres Grenzwerts. Die Lager der Scheibenwellen halten an ihrer ungünstigsten Ecke 10300 h.
+An der EXCT-30 fand sie, was keine der beiden anderen Arten fand: Mit dem 25-Hz-Shaper allein und allen Werten zugleich an ihrer ungünstigsten Grenze stand das Werkzeug beim Verweilen 0,115 mm neben seinem Ziel, bei 0,1 mm zulässig (0,043 mm mit einem Wert allein, 0,053 mm in 200 Stichproben). Ein zweiter Shaper bei 17,5 Hz, der Spitze im Frequenzgang des Werkzeugs, bringt es auf 0,095 mm (der Kommentar zu `profile.shaper2_frequency_hz` in der Datei nennt, was sonst versucht wurde). Der Riemen behält im schlaffsten Trum 87 N, und die Wellen tragen 1231 N von 1500 N an der unteren Grenze ihres Grenzwerts. Die Lager der Scheibenwellen fallen an ihrer ungünstigsten Ecke durch, mit allen Werten zugleich gegen sie: 10000 h von 20000 h. Ihre Tragzahl und Schmierwerte sind Schätzungen; nach diesen Lagern ist also bei Festo zu fragen, das heißt nicht, dass die Achse verschleißt.
 
 `--worst` ohne `--bands` oder mit `--samples` oder `--seed` wird abgelehnt (Code 2). Die App hat es als „ungünstigste Ecke“ neben den Fehlerbändern.
 
@@ -566,14 +570,15 @@ drive-current,1,2.507,5.000,ok
 gearbox-continuous,1,68.68,120.0,ok
 gearbox-peak,1,136.6,192.0,ok
 gearbox-life,1,613609,20000,ok
+gearbox-gearing-life,1,8981,20000,FAIL
 ...
 settling,,0.0006767,0.0005000,FAIL
 singularity,,2.072,5.000,ok
 ```
 
-Mit `--bands` besteht jede Prüfung außer `settling` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 127 bis 146 N m); `settling` scheitert an allen (0,624 bis 0,736 mm). Was sie sagen:
+Mit `--bands` besteht jede Prüfung außer `settling` und `gearbox-gearing-life` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 127 bis 146 N m); `settling` scheitert an allen (0,624 bis 0,736 mm), die Lebensdauer der Verzahnung liegt zwischen 4100 und 24100 h. Was sie sagen:
 
-- **Getriebe.** Das Getriebe des Arms trägt bis zu 137 N m seiner 192 N m; das kubische Mittel, 69 N m, ist das, wofür sein Nennmoment von 120 N m gilt.
+- **Getriebe.** Das Getriebe des Arms trägt bis zu 137 N m seiner 192 N m; das kubische Mittel, 69 N m, ist das, wofür sein Nennmoment von 120 N m gilt. Seine Planetenlager halten 614000 h. Die Spitzen über 120 N m nutzen die Verzahnung ab: Nach der Summe von Miner mit den zwei Momentangaben von Siemens hält sie an Arm 1 etwa 9000 h der geforderten 20000 h (Arm 2 und 3 bleiben unter 120 N m). Der Wert ist eine Schätzung (siehe [Modellreferenz](../model-reference.md#analysis-quantities)); prüfen Sie die Getriebegröße mit Siemens.
 - **Einschwingen scheitert: ein Befund der Auslegung.** Es wird gegen 0,5 mm geprüft, eine Schätzung der Positioniergenauigkeit der Klasse (Festo EXPT: ±0,5 mm), nicht gegen die 0,1 mm Wiederholgenauigkeit der Hersteller. Verdrehung und Spiel der Getriebe unter dem Gewicht der Plattform lassen das Werkzeug neben der Stelle, an die die Geber der Motoren es setzen: 0,64 mm beim Aufnehmen und Ablegen in Ruhe mit dem Katalogspiel des NRB080 von 9 Winkelminuten, 0,68 mm beim Verweilen (mit der Bewegung davor), bis zu 2,09 mm am unteren Rand des Arbeitsraums. Dieser Versatz ist in jedem Durchlauf gleich, die Wiederholgenauigkeit sieht ihn nicht, aber er liegt über der Genauigkeit der Klasse: Dieser Delta braucht ein Getriebe mit weniger Spiel. Mit 3 Winkelminuten (`--set gearbox.backlash_rad=8.727e-4`, ein Robotergetriebe, nicht im Katalog) besteht er: 0,29 mm in Ruhe beim Aufnehmen und Ablegen, 0,33 mm beim Verweilen, 0,30 bis 0,38 mm über die Grenzen. Das Spiel lässt die Regelkreise nicht schwingen: In Ruhe steht das Werkzeug mit beiden auf 2e-8 m still.
 - **Singularität**: die höchste Konditionszahl der Jacobi-Matrix im Zyklus gegen `ratings.max_condition_number` (5). Nahe einer Singularität bewegt ein kleiner Motorwinkel die Plattform weit, und die Motormomente für eine Kraft wachsen unbegrenzt; im Arbeitsraum sind es bis zu 3,6, im Zyklus 2,07.
 - **Keine Prüfungen für Riemen, Riemenscheibe oder Führung**: Der Delta hat keine.

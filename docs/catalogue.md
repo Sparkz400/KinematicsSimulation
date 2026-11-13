@@ -234,6 +234,23 @@ Braking columns: `part_number`, `kind` (`braking_module` or `braking_resistor`),
 
 These two files are where the DC link estimates of `exct-30.toml` come from: 540 V on a 400 V line, about 44 µF per kW of rated power, a chopper threshold of 770 V. The S210 converter of that config is not in them; see [what is missing](#what-is-missing-and-why).
 
+### `siemens/motor_bearings_1fk2.csv`
+
+| | |
+| --- | --- |
+| Source | Siemens, operating instructions "SINAMICS S210 servo drive system with S-1FK2 and S-1FT2", 09/2022, A5E41702836B AL, section 12.1.12 (the 1FK2 configuration manual for S120, 02/2022, section 3.6.2, has the same diagrams) |
+| A row is | One frame size of the 1FK2, read off its radial force diagram at one distance from the shaft shoulder and one mean speed |
+| Extraction | Read off the diagram by hand (`manual:`). Only the 1FK2205 so far: the diagrams are images, and nothing here renders them; the other frame sizes are left out, not guessed |
+
+| Column | Meaning |
+| --- | --- |
+| `frame` | The frame size, e.g. `1FK2205`: every motor of that size |
+| `radial_force_n` | Radial force the bearings allow for `bearing_life_h` at `mean_speed_rad_s`, at `force_distance_m` from the shoulder |
+| `force_distance_m`, `mean_speed_rad_s`, `bearing_life_h` | Where, how fast and for how long: 20 mm, 1500 r/min, 25000 h for the 1FK2205's 1000 N |
+| `equivalent_load_rating_n` | `[estimate]`: the C of one ball bearing that lasts that long at that force and speed, C = F · (L10h · 60 · n / 10⁶)^(1/3) with n in r/min: 13104 N. Siemens gives no load rating; this C stands for the bearings at that point of force only. The configs' `ratings.motor_bearing_load_rating_n` takes it where a pulley sits on the motor shaft (none of the shipped configs) |
+
+No command reads this file; the simulator takes C from the config. It is data for `motor_bearing_life_h`, checked by the validator like every table.
+
 ### `bahr/belt_axes.csv`
 
 | | |
@@ -257,6 +274,7 @@ The life estimates and the belt's tooth load take their figures from the configs
 
 | Figure | Value | Source |
 | --- | --- | --- |
+| Gearbox gearing: maximum torque | M2max for at most 30000 output revolutions; M2N continuous; emergency-off torque at most 1000 times | Siemens, equipment manual "Planetary gearboxes for 1FK2 and 1FT2 servomotors", 04/2025, chapter 6 (the notes of `gearbox_nrb.meta.toml`). `gearbox_gearing_life_h` puts a Wöhler line through M2max at 30000 revolutions with an estimated exponent (8.7, ISO 6336-3's tooth root slope for case-hardened gears) and the knee at M2N, and sums the damage by Palmgren–Miner. Siemens' own damage sum over overload partial cycles (configuration manual 01/2023) is not in the repository |
 | Gearbox planet bearings: life formula | L10h = 20000 h · (n2B / n2) · (M2N / M2eq)^3.33, M2eq = (Σ \|M\|^3.33 · \|n\| · t / Σ \|n\| · t)^0.3 | Siemens, configuration manual "Planetary gearboxes for S-1FK2 and S-1FT2 servomotors", 01/2023, A5E51318133B AC, section 6.3.3 (cache.industry.siemens.com). The 04/2025 equipment manual of the gearbox files could not be downloaded; whether it changed these figures was not checked |
 | Reference speed n2B of the NRB060, ratio 5 | 175 r/min | The same manual, Table 7-15 (page 99). Only this value went into the configs (`gearbox_reference_speed_rpm`); the gearbox files have no such column, so a gearbox by name does not set it |
 | Output bearing of the NRB gearboxes | Average radial force for L10h = 30000 h at 100 r/min, force in the middle of the shaft: NRB040 160 N, NRB060 340 N, NRB080 650 N, NRB120 1500 N, NRB160 4200 N (for 20000 h: 200, 400, 750, 1750, 5000 N); life with another load L10h = 30000 h · (F_R,eq allowed / F_R,eq)³ | The same manual, Table 7-14 (page 95) and section 6.3.4. The default configs' `pulley_bearing_load_rating_n` is the NRB120's, C = 1500 N · (30000 · 60 · 100 / 10⁶)^(1/3) = 8469 N; the 20000 h figure gives 8631 N, 2 % apart |
@@ -264,7 +282,8 @@ The life estimates and the belt's tooth load take their figures from the configs
 | Belt teeth: specific tooth load of open-ended AT5 | 35 N/cm at 0 to 40 r/min, 34 at 60 to 100, 32 at 200, 31, 30, 29 at 300, 400, 500, 27 at 750, 26 at 1000, 24 at 1500, 22 at 2000, 19 at 3000, 18 at 4000, 16 at 5000, 13 at 8000 r/min | The same handbook, page 52 (`belt_tooth_load_rpm`, `belt_tooth_load_n_cm` in all three configs) |
 | Belt teeth: service factor | 1 steady load; 1.4, 1.7, 2 for low, average and high shock loads | The same handbook, Table 4 (page 13). The configs take 1.4 |
 | Belt life | None published | Neither Megadyne's handbook, Gates' "Thermoplastic Polyurethane Belt Program" (catalogue 20166, 2025) nor BRECO's AT5 data sheets give a life in hours or load cycles, or a Wöhler curve, for these belts; they size by tooth load, cord tension and minimum pulley teeth. Optibelt's documents could not be reached (their links redirect). Gates' AT5 figure is of the same size as Megadyne's: an allowable effective force of 1200 N at 25 mm with 12 teeth in mesh is 40 N/cm per tooth at standstill, against Megadyne's 35 |
-| 1FK2 motor bearings | Deep-groove ball bearings, lubricated for life, about 25000 h at medium load (less with continuous running at the highest speed, shock or frequent reversing, by up to half); allowable radial force at the shaft end for L10h = 25000 h, e.g. 1FK2205 about 1000 N at 20 mm from the shoulder at 1500 r/min (read off the diagram) | Siemens, operating instructions "SINAMICS S210 servo drive system with S-1FK2 and S-1FT2", 09/2022, A5E41702836B AL, sections 11.1.1 and 12.1.12. Not used: in no config does the belt pull on a motor shaft |
+| 1FK2 motor bearings | Deep-groove ball bearings, lubricated for life, about 25000 h at medium load (less with continuous running at the highest speed, shock or frequent reversing, by up to half); allowable radial force at the shaft end for L10h = 25000 h, e.g. 1FK2205 about 1000 N at 20 mm from the shoulder at 1500 r/min (read off the diagram), an equivalent C of 13104 N | Siemens, operating instructions "SINAMICS S210 servo drive system with S-1FK2 and S-1FT2", 09/2022, A5E41702836B AL, sections 11.1.1 and 12.1.12; `siemens/motor_bearings_1fk2.csv`. Used by `ratings.motor_bearing_load_rating_n` where a pulley sits on the motor shaft; in no shipped config does the belt pull on one |
+| Life modification factor a_ISO | a_ISO of radial ball bearings from κ = ν / ν1 and e_C · C_u / P; ν1 from n and D_pw; e_C from Table 13; C_u ≈ C0 / 22 below 100 mm mean diameter | ISO 281:2007, sections 6.3.3.2, 6.3.3.3 and Annex B. The configs' viscosity, contamination factor, C_u and D_pw are estimates (no maker of the pulley bearings publishes them) |
 | Rating life of a ball bearing | L10 = (C / P)³ million revolutions, L10h = 10⁶ / (60 n) · L10; for a load that changes, P = cbrt(Σ F³ n t / Σ n t) | ISO 281, as SKF ("Y-bearings and Y-bearing units", 2013) and Schaeffler (TPI 301, and the ball screw catalogue's equivalent load) print it |
 
 ## How the files were extracted and checked
