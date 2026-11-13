@@ -1,7 +1,7 @@
 //! Drives, belts and axes by name, the S120 motors, gearbox masses, and the searches over them: each against the
 //! catalogue rows or a hand calculation.
 
-use sim_components::catalog::{Candidate, apply_belt, apply_drive, apply_motor, gearbox_mass, paired_drive, resolve, search_axes, search_motors};
+use sim_components::catalog::{Candidate, apply_belt, apply_drive, apply_motor, paired_drive, resolve, search_axes, search_motors};
 use sim_core::Config;
 use std::path::Path;
 
@@ -179,13 +179,8 @@ fn a_drive_by_name_judges_the_motor_current_at_the_hand_calculated_share() {
 /// 6SL3120-1TE15-0AD0, 220 / 2 = 110 uF per axis for the Double 6SL3120-2TE13-0AD0.
 #[test]
 fn a_drive_by_name_brings_its_published_dc_link_data() {
-    // Every converter of converters_s210.csv has its braking row, and no other converter has one.
-    let articles = |text: &str| -> Vec<String> { text.lines().filter(|l| l.starts_with("6SL3210")).map(|l| l.split(',').next().unwrap().to_string()).collect() };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/siemens");
-    let read = |name: &str| std::fs::read_to_string(root.join(name)).unwrap();
-    let (mut converters, mut braking) = (articles(&read("converters_s210.csv")), articles(&read("braking_s210.csv")));
-    (converters.sort(), braking.sort());
-    assert_eq!((converters.len(), &converters), (12, &braking));
+    // That every S210 converter has its braking row is checked by the catalogue's validator
+    // (`siemens_s210_braking_rows_are_the_s210_converters` in catalog/tools/cataloglib/checks.py).
     let rating = |cfg: &Config, leaf: &str| cfg.f64(&format!("ratings.{leaf}")).unwrap();
     let exct = resolve(&machine_t_gantry::ENTRY, &exct_30()).unwrap();
     let values = |cfg: &Config| ["braking_resistor_continuous_w", "braking_resistor_peak_w", "dc_link_overvoltage_v", "braking_threshold_v"].map(|leaf| rating(cfg, leaf));
@@ -253,60 +248,11 @@ fn s120_motors_by_name_bring_winding_rated_values_and_their_motor_module() {
     let modules = csv("siemens/motor_modules_s120.csv");
     for article in sim_components::catalog::motor_articles_for("s120") {
         let drive = paired_drive(article, "s120");
-        let module = modules.iter().find(|m| m["article"] == drive).unwrap_or_else(|| panic!("{article}: no Motor Module {drive}"));
+        let module = modules.iter().find(|m| m["part_number"] == drive).unwrap_or_else(|| panic!("{article}: no Motor Module {drive}"));
         let mut probe = exct_30();
         apply_motor(&mut probe, article, "s120").unwrap();
-        let rated: f64 = module["rated_current_a"].parse().unwrap();
+        let rated: f64 = module["rated_output_current_a"].parse().unwrap();
         assert!(rated >= 0.85 * probe.f64("motor.rated_current_a").unwrap(), "{article}: {drive}");
-    }
-}
-
-/// The gearbox masses of the 01/2023 manual: every gearbox of the 04/2025 files has one, and a bigger size of the
-/// same series is heavier at the same ratio and motor frame. NRK070 for frame 04, ratio 5: 1.4 kg (Table 7-33).
-#[test]
-fn every_catalogue_gearbox_has_a_mass_and_bigger_ones_weigh_more() {
-    assert_eq!(gearbox_mass("NRK070-04-5"), Some(1.4));
-    assert_eq!(gearbox_mass("NRB160-08-3"), Some(17.0));
-    assert_eq!(gearbox_mass("NRK070-04-11"), None);
-    let mut rows = Vec::new();
-    for series in ["nrb", "nrk", "nlc"] {
-        for r in csv(&format!("siemens/gearbox_{series}.csv")) {
-            let name = format!("{}-{}-{}", r["size"], r["motor_frame"], r["ratio"]);
-            let mass = gearbox_mass(&name).unwrap_or_else(|| panic!("{name} has no mass"));
-            assert!(mass > 0.2 && mass < 40.0, "{name}: {mass} kg");
-            rows.push((r["size"].clone(), r["motor_frame"].clone(), r["ratio"].clone(), mass));
-        }
-    }
-    for a in &rows {
-        for b in &rows {
-            if a.1 == b.1 && a.2 == b.2 && a.0[..3] == b.0[..3] && a.0 < b.0 {
-                assert!(a.3 < b.3, "{} {} {}: {} kg, {}: {} kg", a.0, a.1, a.2, a.3, b.0, b.3);
-            }
-        }
-    }
-}
-
-/// The Megadyne files: per profile EA per mm of width within a quarter of its mean, breaking strength four times the
-/// allowable pull (10 %), mass growing with the width; the tooth load falling with speed.
-#[test]
-fn megadyne_belts_are_plausible() {
-    let belts = csv("megadyne/belts.csv");
-    let n = |r: &std::collections::HashMap<String, String>, c: &str| -> f64 { r[c].parse().unwrap() };
-    for profile in ["T5", "AT3", "AT5", "AT10", "MTD3", "MTD5", "MTD8"] {
-        let of: Vec<_> = belts.iter().filter(|r| r["profile"] == profile).collect();
-        assert!(of.len() >= 4, "{profile}");
-        let per_mm: Vec<f64> = of.iter().map(|r| n(r, "max_traction_load_n") / (n(r, "elongation_at_mtl_mm_m") * 1e-3) / n(r, "width_mm")).collect();
-        let mean = per_mm.iter().sum::<f64>() / per_mm.len() as f64;
-        for (r, e) in of.iter().zip(&per_mm) {
-            assert!(close(*e, mean, 0.25), "{profile} {}: {e} N per mm against {mean}", r["width_mm"]);
-            // As printed: at 150 mm T5 and AT10 break at 3.5 and 3.43 times their allowable pull (12750 N against
-            // 3640 N, 105000 N against 30600 N).
-            let times = if r["width_mm"] == "150" { 3.5 } else { 4.0 };
-            assert!(close(n(r, "breaking_strength_n"), times * n(r, "max_traction_load_n"), 0.1), "{profile} {}", r["width_mm"]);
-        }
-        assert!(of.windows(2).all(|w| n(w[0], "width_mm") < n(w[1], "width_mm") && n(w[0], "mass_g_m") < n(w[1], "mass_g_m")), "{profile}");
-        let teeth: Vec<f64> = csv("megadyne/belt_tooth_load.csv").iter().filter(|r| r["profile"] == profile).map(|r| n(r, "specific_tooth_load_n_cm")).collect();
-        assert!(teeth.len() == 18 && teeth.windows(2).all(|w| w[0] >= w[1]), "{profile}");
     }
 }
 

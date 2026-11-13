@@ -1,0 +1,19 @@
+schema_version = 1
+class = "drive"
+key = ["part_number"]
+default_source = "d32"
+notes = '''
+Source: Siemens, catalogue D 32, SINAMICS S210 servo drive system, January 2024, "Technical specifications" of the servo converters.
+Extracted by catalog/tools/extract_siemens_d32.py; the numbers are the catalogue's, the layout is ours.
+One row per converter. line_current: rated input current. Output currents are RMS; the power unit
+switches at 8 kHz. rated_power: at the output, for the supply voltage in the column name.
+Not extracted: DC link and braking resistor data, frame sizes, dimensions, inputs and outputs.
+'''
+
+[[sources]]
+id = "d32"
+document = "Siemens, catalogue D 32, SINAMICS S210 servo drive system"
+date = "2024-01"
+locator = "\"Technical specifications\" of the servo converters"
+method = "script:tools/extract_siemens_d32.py"
+url = "https://cache.industry.siemens.com/dl/files/381/109754381/att_1261452/v1/motion-control-drives-D32-complete-English-2024-01.pdf"

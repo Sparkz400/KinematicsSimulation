@@ -1,0 +1,26 @@
+schema_version = 1
+class = "drive"
+key = ["part_number"]
+default_source = "d21-4n"
+notes = '''
+Source: Siemens, Catalog News D 21.4 N, SINAMICS S120 and SIMOTICS, October 2017, chapter 7, "Technical specifications".
+Extracted by catalog/tools/extract_siemens_d21_4n.py; the numbers are the catalogue's, the layout is ours.
+One row per SINAMICS S120 Motor Module in booksize format with internal air cooling, for a DC link of 510 ... 720 V.
+axes: 1 for a Single, 2 for a Double Motor Module; currents, rated power and losses of a Double are per axis
+  as printed ("2 x 9 A"), its DC link capacitance and power loss are for the module.
+type: C (continuous load) or D (discontinuous load, higher maximum current); empty where the catalogue makes no difference.
+Currents are RMS. base_load_current: the current that leaves room for the overload cycles.
+rated_power: the catalogue's type rating based on the rated current, for a standard induction motor at 400 V.
+pulse_frequency: the rated one; the catalogue allows others with derating. Empty for the Double Motor Modules,
+  whose table does not state it.
+Not extracted: currents for S6 duty, DC link current, busbar ratings, derating curves, overload cycles,
+  dimensions, and everything but booksize Motor Modules (Line Modules, chassis and blocksize formats).
+'''
+
+[[sources]]
+id = "d21-4n"
+document = "Siemens, Catalog News D 21.4 N, SINAMICS S120 and SIMOTICS"
+date = "2017-10"
+locator = "chapter 7, \"Technical specifications\""
+method = "script:tools/extract_siemens_d21_4n.py"
+url = "https://cache.industry.siemens.com/dl/files/875/109751875/att_934896/v1/motion-control-drives-D21-4-N-complete-English-2017-10.pdf"

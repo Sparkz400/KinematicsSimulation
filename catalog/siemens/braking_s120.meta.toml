@@ -1,0 +1,30 @@
+schema_version = 1
+class = "braking_resistor"
+key = ["part_number"]
+default_source = "nc82"
+notes = '''
+Source: Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS, February 2020, chapter 4, DC link components, Braking Module and Braking resistors.
+Extracted by catalog/tools/extract_siemens_nc82.py; the numbers are the catalogue's, the layout is ours.
+One row for the SINAMICS S120 Braking Module in booksize format and one per braking resistor, for a DC link of 510 ... 720 V.
+kind: braking_module (the chopper, without a resistor) or braking_resistor.
+for_article: the module the catalogue's ordering data lists the resistor for: the Braking Module, or a Basic Line
+  Module of catalog/siemens/line_modules_s120.csv, which has a chopper of its own.
+rated_power: the continuous braking power PDB. peak_power: Pmax, allowed for load_duration within every cycle_duration.
+load_duration_2/cycle_duration_2: the resistors of the Braking Module have a second duty cycle with a longer load.
+activation_threshold: the DC link voltage at which the Braking Module switches the resistor on; for the resistors of
+  the Basic Line Modules see braking_threshold_v there.
+dc_link_capacitance: of the Braking Module.
+An empty field means the catalogue does not state the value.
+The peak power of the 6SN1113-1AA00-0DA0 (25 kW at 17 ohm) is not U^2/R at the threshold of 770 V, which would be
+  35 kW; for the other three resistors it is. Kept as printed.
+Not extracted: cable lengths, digital inputs and outputs, connections, thermostatic switch, degree of protection,
+  dimensions, weight.
+'''
+
+[[sources]]
+id = "nc82"
+document = "Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS"
+date = "2020-02"
+locator = "chapter 4, DC link components, Braking Module and Braking resistors"
+method = "script:tools/extract_siemens_nc82.py"
+url = "https://cache.industry.siemens.com/dl/files/977/109746977/att_1014595/v1/motion-control-NC82-complete-English-2020-02.pdf"

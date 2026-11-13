@@ -1,0 +1,22 @@
+schema_version = 1
+class = "gearbox"
+table = "mass"
+key = ["size", "motor_frames", "ratio"]
+default_source = "gearbox-config-manual"
+notes = '''
+Source: Siemens, Planetary gearboxes for S-1FK2 and S-1FT2 servomotors, Configuration Manual, 01/2023, A5E51318133B AC, Tables 7-12 (NRB), 7-33 (NRK) and 7-54 (NLC), "Mass mG of ... coaxial planetary gearboxes".
+Extracted by catalog/tools/extract_siemens_gearbox_mass.py; the numbers are the manual's, the layout is ours.
+One row per gearbox size, group of motor frame sizes and ratio. motor_frames: the last two digits of the motor's
+  frame size (1F.2.xx), separated by blanks, that share the column. mass: of the gearbox alone, in kg.
+This edition is older than the equipment manual 04/2025 the other gearbox files come from; the sizes and ratios
+  agree, and catalog tests check that every gearbox of those files has a mass here.
+A ratio the manual marks "-" for a size is left out.
+'''
+
+[[sources]]
+id = "gearbox-config-manual"
+document = "Siemens, Planetary gearboxes for S-1FK2 and S-1FT2 servomotors, Configuration Manual, A5E51318133B AC"
+date = "2023-01"
+locator = "Tables 7-12 (NRB), 7-33 (NRK) and 7-54 (NLC), \"Mass mG of ... coaxial planetary gearboxes\""
+method = "script:tools/extract_siemens_gearbox_mass.py"
+url = "https://cache.industry.siemens.com/dl/files/596/109802596/att_1132680/v2/Plan_gear_for_servo_motors_config_man_0123_en-US.pdf"

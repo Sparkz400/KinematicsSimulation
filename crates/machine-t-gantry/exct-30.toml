@@ -3,7 +3,7 @@
 # Use with `--config`. The X axis of the simulator is Festo's Y axis.
 #
 # Where a value comes from:
-#   [catalogue]  taken or derived from catalog/festo/exct.toml or catalog/siemens/*.csv; the test
+#   [catalogue]  taken or derived from catalog/festo/belt_axes.csv or catalog/siemens/*.csv; the test
 #                `exct_30_config_agrees_with_the_catalogue` holds these in place
 #   [estimate]   not published; a guess of the right order, with a low and a high bound in [bounds]
 format_version = 1

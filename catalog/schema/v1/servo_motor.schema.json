@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:servo_motor",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "servo_motor",
+  "description": "A rotary servo motor: one winding (part number up to the winding code), with the data of one document. Currents RMS, values at standstill marked static, ratings per supply where the document gives them per supply.",
+  "type": "object",
+  "required": [
+    "part_number"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "calculated_power_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "cooling": {
+      "type": "string"
+    },
+    "data_sheet_part_number": {
+      "type": "string"
+    },
+    "efficiency": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "electrical_time_constant_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "mass_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "mass_with_brake_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "max_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "max_speed_inverter_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "max_speed_mechanical_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "max_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "max_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "mechanical_time_constant_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "paired_drive": {
+      "type": "string",
+      "description": "The drive the document pairs with the motor; '.' marks a character the document leaves open."
+    },
+    "paired_drive_230v_1ac": {
+      "type": "string"
+    },
+    "paired_drive_230v_3ac": {
+      "type": "string"
+    },
+    "paired_drive_400v_3ac": {
+      "type": "string"
+    },
+    "paired_drive_new_230v_1ac": {
+      "type": "string"
+    },
+    "paired_drive_new_230v_3ac": {
+      "type": "string"
+    },
+    "paired_drive_new_400v_3ac": {
+      "type": "string"
+    },
+    "paired_drive_rated_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number (order number), as printed."
+    },
+    "phase_inductance_h": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "H"
+    },
+    "phase_resistance_20c_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm"
+    },
+    "pole_pairs": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "poles": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "rated_current_230v_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "rated_current_400v_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "rated_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "rated_power_230v_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_power_400v_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_power_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_speed_230v_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "rated_speed_400v_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "rated_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "rated_torque_230v_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "rated_torque_400v_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "rated_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "rated_values_at_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s"
+    },
+    "rotor_inertia_kgm2": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg m2"
+    },
+    "rotor_inertia_with_brake_kgm2": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg m2"
+    },
+    "series": {
+      "type": "string"
+    },
+    "shaft_height_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "shaft_torsional_stiffness_nm_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/rad"
+    },
+    "stall_current_60k_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "stall_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "static_torque_60k_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "static_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "thermal_time_constant_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "torque_constant_nm_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/A"
+    },
+    "version": {
+      "type": "string"
+    },
+    "voltage_constant_v_s_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V s/rad"
+    }
+  },
+  "$defs": {
+    "dynamic_braking": {
+      "type": "object",
+      "required": [
+        "part_number"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "braking_current_rms_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "braking_current_rms_with_resistor_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "braking_torque_rms_nm": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "N m"
+        },
+        "braking_torque_rms_with_resistor_nm": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "N m"
+        },
+        "max_braking_torque_nm": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "N m"
+        },
+        "optimum_resistance_ohm": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "ohm"
+        },
+        "part_number": {
+          "type": "string",
+          "description": "The maker's part number (order number), as printed."
+        }
+      },
+      "description": "Armature short-circuit braking of a motor: braking from the rated speed with an external inertia equal to the motor's own."
+    }
+  }
+}

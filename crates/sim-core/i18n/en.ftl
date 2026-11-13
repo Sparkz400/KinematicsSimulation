@@ -9,4 +9,6 @@ error-config-part-gearbox = The catalogue has no such part: gearbox { $arg }
 error-config-part-drive = The catalogue has no such part: drive { $arg }
 error-config-part-belt = The catalogue has no such part: belt { $arg }
 error-config-part-axis = The catalogue has no such part: axis { $arg }
+error-catalog-read = The catalogue could not be read: { $arg }
+error-catalog-version = Unsupported catalogue schema version: { $arg }
 param-format_version = Format version

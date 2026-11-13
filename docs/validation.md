@@ -14,7 +14,7 @@ Test files, abbreviated in the tables:
 | mech, drive, profile, path, identify, analysis | [`crates/sim-components/src/`](../crates/sim-components/src) `mech.rs`, `drive.rs`, `profile.rs`, `path.rs`, `identify.rs`, `analysis.rs` |
 | axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
-| suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
+| suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
 | plc | [`crates/sim-opcua/tests/plc.rs`](../crates/sim-opcua/tests/plc.rs) |
 | fmi | [`crates/sim-fmi/tests/fmi.rs`](../crates/sim-fmi/tests/fmi.rs), and `crates/sim-fmi/src/lib.rs` |
@@ -239,11 +239,11 @@ The guide life row checks that the code computes the catalogue formula. It does 
 | What is compared | Against | Tolerance | Test |
 | --- | --- | --- | --- |
 | Motor torque of the EXCT-30 config at 45 degrees travel, from the simulator's rigid model | Festo's torque formula with the catalogue's coefficients, for several accelerations and loads | 2 % | `exct_30_config_agrees_with_the_catalogue`, gantry |
-| The `[catalogue]` values of `exct-30.toml` | `catalog/festo/exct.toml` and `catalog/siemens/motors_s210.csv` | 0.1 % or exact | the same test |
-| Festo's formula coefficients | The T-gantry's own mechanics from the pulley diameter | 1 % to 3 % | `festo_exct_values_agree_with_its_own_geometry`, catalog |
-| 1FK2 data from the S120 configuration manual | The same motors in the S210 catalogue, read by another script | 5 % to 6 % | `siemens_1fk2_data_agrees_between_the_s120_manual_and_the_s210_catalogue`, catalog |
-| 1FT2 data from the S120 configuration manual | The same motors in the S210 catalogue | 5 % to 6 % | `siemens_1ft2_data_agrees_between_the_s120_manual_and_the_s210_catalogue`, catalog |
-| 1FK7 and 1FT7 data sheets | Catalogue D 21.4: pole count; torque constant = static torque / stall current | Exact; 8 % | `siemens_s120_data_sheets_agree_with_the_catalogue`, catalog |
+| The `[catalogue]` values of `exct-30.toml` | `catalog/festo/belt_axes.csv`, `belt_axis_torque_formula.csv` and `catalog/siemens/motors_s210.csv` | 0.1 % or exact | the same test |
+| Festo's formula coefficients | The T-gantry's own mechanics from the pulley diameter | 1 % to 3 % | `festo_exct_values_agree_with_its_own_geometry`, catalogue validator (`catalog/tools/cataloglib/checks.py`) |
+| 1FK2 data from the S120 configuration manual | The same motors in the S210 catalogue, read by another script | 5 % to 6 % | `siemens_1fk2_data_agrees_between_the_s120_manual_and_the_s210_catalogue`, catalogue validator (`catalog/tools/cataloglib/checks.py`) |
+| 1FT2 data from the S120 configuration manual | The same motors in the S210 catalogue | 5 % to 6 % | `siemens_1ft2_data_agrees_between_the_s120_manual_and_the_s210_catalogue`, catalogue validator (`catalog/tools/cataloglib/checks.py`) |
+| 1FK7 and 1FT7 data sheets | Catalogue D 21.4: pole count; torque constant = static torque / stall current | Exact; 8 % | `siemens_s120_data_sheets_agree_with_the_catalogue`, catalogue validator (`catalog/tools/cataloglib/checks.py`) |
 | The data sheets in themselves | Voltage constant against torque constant; L / R against the electrical time constant | 15 % | the same test |
 | All other catalogue files | Their own physics; see [catalogue](catalogue.md#how-the-files-were-extracted-and-checked) | Per test | catalog |
 | A motor and a gearbox by name | The same values put in by hand | Identical machine | `a_motor_by_name_gives_the_values_of_the_hand_written_config`, `a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings`, `parts_named_in_a_config_behave_like_their_numbers`, catalog |

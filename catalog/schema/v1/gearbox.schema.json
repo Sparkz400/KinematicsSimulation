@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:gearbox",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "gearbox",
+  "description": "A gearbox: one size, motor frame and ratio. Torques at the output, stiffness and backlash referred to the output, inertia to the input.",
+  "type": "object",
+  "required": [
+    "size",
+    "motor_frame",
+    "ratio"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "backlash_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad"
+    },
+    "efficiency_full_load": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1",
+      "description": "Efficiency at full load, 0 to 1."
+    },
+    "emergency_stop_output_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "inertia_at_input_kgm2": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg m2"
+    },
+    "max_output_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "motor_frame": {
+      "type": "string",
+      "description": "The motor frame code the gearbox fits, as text (e.g. \"04\")."
+    },
+    "rated_output_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "ratio": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "series": {
+      "type": "string"
+    },
+    "size": {
+      "type": "string"
+    },
+    "stages": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "torsional_stiffness_nm_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/rad"
+    }
+  },
+  "$defs": {
+    "mass": {
+      "type": "object",
+      "required": [
+        "size",
+        "motor_frames",
+        "ratio"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mass_kg": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "kg"
+        },
+        "motor_frames": {
+          "type": "string"
+        },
+        "ratio": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "1"
+        },
+        "series": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        },
+        "stages": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "1"
+        }
+      },
+      "description": "The mass of a gearbox; motor_frames lists the motor frames, separated by blanks, that share it."
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:linear_guide",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "linear_guide",
+  "description": "A profile rail guide: one size and carriage type. No data yet.",
+  "type": "object",
+  "required": [
+    "part_number"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number (order number), as printed."
+    },
+    "series": {
+      "type": "string"
+    },
+    "size": {
+      "type": "string"
+    },
+    "rail_width_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "dynamic_load_rating_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "static_load_rating_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "static_moment_x_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "static_moment_y_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "static_moment_z_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "preload_class": {
+      "type": "string"
+    },
+    "carriage_mass_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "rail_mass_kg_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg/m"
+    },
+    "max_speed_m_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m/s"
+    },
+    "max_acceleration_m_s2": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m/s2"
+    },
+    "friction_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "source": {
+      "type": "string",
+      "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+    }
+  }
+}

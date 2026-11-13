@@ -1,0 +1,22 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number"]
+default_source = "1ft2-s120"
+notes = '''
+Source: Siemens, 1FT2 synchronous motors for SINAMICS S120, Configuration Manual, 02/2022, A5E50645584B AC, chapter "Data sheets and characteristics".
+Extracted by catalog/tools/extract_siemens_1ft2_s120.py; the numbers are the manual's, the layout is ours.
+One row per 1FT2 motor winding as operated on SINAMICS S120 at a line voltage of 380 ... 480 V 3 AC.
+The same motors on SINAMICS S210 are in motors_s210.csv; the manual of 02/2022 covers 36 of them.
+Currents are RMS. max_speed_inverter: what the converter allows. thermal_time_constant: of the winding.
+An empty field: the manual does not state the value.
+Kept as printed although they are misprints: rated_speed_rpm of the 1FT2105-4AH and 1FT2206-4AH (3000) and of
+  the 1FT2208-4AF (2000); the manual's own rated torque and power, and the S210 catalogue, give 4500 and 3000.
+'''
+
+[[sources]]
+id = "1ft2-s120"
+document = "Siemens, 1FT2 synchronous motors for SINAMICS S120, Configuration Manual, A5E50645584B AC"
+date = "2022-02"
+locator = "chapter \"Data sheets and characteristics\""
+method = "script:tools/extract_siemens_1ft2_s120.py"
+url = "https://cache.industry.siemens.com/dl/files/387/109794387/att_1102452/v1/1FT2_S120_config_man_0222_en-US.pdf"

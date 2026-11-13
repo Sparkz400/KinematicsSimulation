@@ -1,0 +1,35 @@
+schema_version = 1
+class = "drive"
+table = "line_module"
+key = ["part_number"]
+default_source = "nc82"
+notes = '''
+Source: Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS, February 2020, chapter 4, Line Modules, "Technical specifications".
+Extracted by catalog/tools/extract_siemens_nc82.py; the numbers are the catalogue's, the layout is ours.
+One row per SINAMICS S120 Line Module in booksize format with internal air cooling, for a line voltage of 380 ... 480 V 3 AC.
+type: smart (unregulated infeed with regenerative feedback), active (regulated DC link, regenerative feedback) or
+  basic (diode infeed without feedback, which needs a braking resistor to brake).
+rated_power: at 380 V 3 AC. s6_power: for S6 duty with 40 % on-time. max_power: the catalogue's Pmax.
+dc_link_current_540v/_600v: the rated DC link current at a DC link voltage of 540 V and of 600 V; the catalogue
+  gives the value at 540 V for the Smart Line Modules only. s6_ and max_dc_link_current: as printed, without a voltage.
+dc_link_capacitance: of the module itself. power_loss: at rated power, with the losses of the 24 V electronics supply.
+braking_*: the braking chopper inside the 20 kW and 40 kW Basic Line Modules for an external resistor: peak and
+  continuous braking power, the DC link voltage at which it switches on, the smallest resistance allowed.
+  Empty for all other modules, which have none.
+An empty field means the catalogue does not state the value.
+max_power of the 6SL3130-7TE25-5AA3 is 91 kW (152 A); the catalogue adds 110 kW (176 A) in brackets for use with the
+  Active Interface Module 6SL3100-0BE25-5AB0, which is not in this file.
+Inconsistent in the catalogue and kept as printed: the 6SL3130-6TE25-5AA3 has 138 A for S6 duty and 178 A maximum
+  at 71 kW and 91 kW, which would be a DC link of about 510 V; every other module, the Active Line Module of the same
+  power included (121 A, 152 A), has power / 600 V in these two rows.
+Not extracted: input currents, 24 V current, busbar ratings, the largest capacitance of a drive line-up, cooling air,
+  connections, cable lengths, dimensions, derating, and the line-side components (reactors, filters, Active Interface Modules).
+'''
+
+[[sources]]
+id = "nc82"
+document = "Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS"
+date = "2020-02"
+locator = "chapter 4, Line Modules, \"Technical specifications\""
+method = "script:tools/extract_siemens_nc82.py"
+url = "https://cache.industry.siemens.com/dl/files/977/109746977/att_1014595/v1/motion-control-NC82-complete-English-2020-02.pdf"

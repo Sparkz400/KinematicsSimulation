@@ -1,35 +1,82 @@
 //! The component catalogue as the simulator uses it: a part named by its article number puts its
 //! catalogue values into a config, and a search tries every motor (and every axis) on a machine's cycle.
 //!
-//! The data files of `catalog/` are compiled in, so a front end needs no path to them.
+//! The tables of `catalog/` (schema 1: SI units, see `catalog/README.md`) are compiled in, so a front end needs no
+//! path to them; `use_directory` reads them from another copy of the catalogue instead (`--catalog DIR`).
 
 use crate::analysis::{CycleLoad, Verdict, analyse_cycle_with, verdicts};
 use crate::sim::Sim;
 use sim_core::{Config, ConfigError, MachineEntry};
 use std::collections::HashMap;
 use std::f64::consts::PI;
+use std::sync::OnceLock;
 
-const MOTORS_S210: &str = include_str!("../../../catalog/siemens/motors_s210.csv");
+/// The catalogue's schema version this simulator reads. A catalogue of another version is refused.
+pub const SCHEMA_VERSION: i64 = 1;
+
+macro_rules! tables {
+    ($($name:literal),* $(,)?) => { [$(($name, include_str!(concat!("../../../catalog/", $name)))),*] };
+}
+
+/// The tables the simulator reads, by their path in the catalogue, with the compiled-in copy.
+const TABLES: [(&str, &str); 19] = tables![
+    "siemens/motors_s210.csv",
+    "siemens/motors_1fk2_s120.csv",
+    "siemens/motors_1ft2_s120.csv",
+    "siemens/motors_s120.csv",
+    "siemens/motors_s120_electrical.csv",
+    "siemens/converters_s210.csv",
+    "siemens/motor_modules_s120.csv",
+    "siemens/braking_s210.csv",
+    "siemens/dc_link_measured.csv",
+    "siemens/gearbox_nrb.csv",
+    "siemens/gearbox_nrk.csv",
+    "siemens/gearbox_nlc.csv",
+    "siemens/gearbox_mass.csv",
+    "megadyne/belts.csv",
+    "megadyne/belt_tooth_load.csv",
+    "festo/belt_axes.csv",
+    "festo/belt_axis_torque_formula.csv",
+    "bahr/belt_axes.csv",
+    "catalog.toml",
+];
+
+/// The tables read from a directory by `use_directory`; unset, the compiled-in ones are used.
+static LOADED: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+
+fn table(name: &str) -> &'static str {
+    let compiled = || TABLES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text).expect("a table of TABLES");
+    LOADED.get().and_then(|t| t.get(name).copied()).unwrap_or_else(compiled)
+}
+
 /// Thermal time constants come from the configuration manuals, which cover most of the same motors.
 /// The same files are the 1FK2 and 1FT2 on a SINAMICS S120.
-const MOTOR_MANUALS: [&str; 2] =
-    [include_str!("../../../catalog/siemens/motors_1fk2_s120.csv"), include_str!("../../../catalog/siemens/motors_1ft2_s120.csv")];
-const MOTORS_S120: &str = include_str!("../../../catalog/siemens/motors_s120.csv");
-const MOTORS_S120_ELECTRICAL: &str = include_str!("../../../catalog/siemens/motors_s120_electrical.csv");
-const CONVERTERS_S210: &str = include_str!("../../../catalog/siemens/converters_s210.csv");
-const MOTOR_MODULES_S120: &str = include_str!("../../../catalog/siemens/motor_modules_s120.csv");
-const BRAKING_S210: &str = include_str!("../../../catalog/siemens/braking_s210.csv");
-const DC_LINK_MEASURED: &str = include_str!("../../../catalog/siemens/dc_link_measured.csv");
-const GEARBOXES: [&str; 3] = [
-    include_str!("../../../catalog/siemens/gearbox_nrb.csv"),
-    include_str!("../../../catalog/siemens/gearbox_nrk.csv"),
-    include_str!("../../../catalog/siemens/gearbox_nlc.csv"),
-];
-const GEARBOX_MASS: &str = include_str!("../../../catalog/siemens/gearbox_mass.csv");
-const BELTS: &str = include_str!("../../../catalog/megadyne/belts.csv");
-const BELT_TEETH: &str = include_str!("../../../catalog/megadyne/belt_tooth_load.csv");
-const FESTO_EXCT: &str = include_str!("../../../catalog/festo/exct.toml");
-const BAHR_AXES: &str = include_str!("../../../catalog/bahr/belt_axes.csv");
+fn motor_manuals() -> [&'static str; 2] {
+    [table("siemens/motors_1fk2_s120.csv"), table("siemens/motors_1ft2_s120.csv")]
+}
+
+fn gearboxes() -> [&'static str; 3] {
+    [table("siemens/gearbox_nrb.csv"), table("siemens/gearbox_nrk.csv"), table("siemens/gearbox_nlc.csv")]
+}
+
+/// Reads the catalogue from a directory in place of the compiled-in one, for the rest of the process: a copy of
+/// `catalog/` (its own repository, or a newer edition of it). Every table the simulator reads must be there, and
+/// `catalog.toml` must have the `schema_version` this simulator reads. Call it before any part is looked up;
+/// a second call is refused.
+pub fn use_directory(dir: &std::path::Path) -> Result<(), ConfigError> {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| ConfigError::Part("error-catalog-read", format!("{}: {e}", dir.join(name).display())));
+    let manifest: toml::Table = read("catalog.toml")?.parse().map_err(|e| ConfigError::Part("error-catalog-read", format!("catalog.toml: {e}")))?;
+    match manifest.get("schema_version").and_then(toml::Value::as_integer) {
+        Some(SCHEMA_VERSION) => {}
+        other => return Err(ConfigError::Part("error-catalog-version", format!("{other:?}, {}", dir.display()))),
+    }
+    let mut loaded = HashMap::new();
+    for (name, _) in TABLES {
+        // Read once and kept for the life of the process, as the compiled-in tables are.
+        loaded.insert(name, &*Box::leak(read(name)?.into_boxed_str()));
+    }
+    LOADED.set(loaded).map_err(|_| ConfigError::Part("error-catalog-read", "the catalogue was already chosen".into()))
+}
 
 /// The supplies a motor can be named for: the S210 data at 230 V or 400 V, or the motor on a SINAMICS S120
 /// (400 V line). "s120" takes the 1FK7 and 1FT7 of `motors_s120.csv` and the 1FK2 and 1FT2 of their S120 manuals.
@@ -60,6 +107,13 @@ fn unknown(what: &str, name: &str) -> ConfigError {
     ConfigError::Part(key, name.into())
 }
 
+/// A catalogue value (SI) in a config's unit, `factor` of them per SI unit, rounded to 12 significant digits: the
+/// catalogue's 0.00022 F is the 220 µF it was printed as, not 219.99999999999997.
+fn in_unit(si: f64, factor: f64) -> f64 {
+    let value = si * factor;
+    format!("{value:.11e}").parse().unwrap_or(value)
+}
+
 fn set(cfg: &mut Config, path: &str, value: f64) -> Result<(), ConfigError> {
     cfg.set_text(&format!("{path} = {value:?}"))
 }
@@ -71,7 +125,7 @@ fn set_if_present(cfg: &mut Config, path: &str, value: f64) -> Result<(), Config
 
 /// Article numbers of the SINAMICS S210 motors, e.g. "1FK2205-4AF".
 pub fn motor_articles() -> Vec<&'static str> {
-    rows(MOTORS_S210).iter().map(|r| r["article"]).collect()
+    rows(table("siemens/motors_s210.csv")).iter().map(|r| r["part_number"]).collect()
 }
 
 /// Article numbers of the motors that can be named for a supply (`SUPPLIES`): the S210 motors for "230v" and
@@ -80,9 +134,9 @@ pub fn motor_articles() -> Vec<&'static str> {
 pub fn motor_articles_for(supply: &str) -> Vec<&'static str> {
     match supply {
         "s120" => {
-            let sheets: Vec<&str> = rows(MOTORS_S120_ELECTRICAL).iter().map(|r| r["article"]).collect();
-            let mut out: Vec<&str> = rows(MOTORS_S120).iter().map(|r| r["article"]).filter(|a| sheets.contains(a)).collect();
-            out.extend(MOTOR_MANUALS.iter().flat_map(|t| rows(t)).filter(|r| number(r, "rotor_inertia_kgcm2").is_some()).map(|r| r["article"]));
+            let sheets: Vec<&str> = rows(table("siemens/motors_s120_electrical.csv")).iter().map(|r| r["part_number"]).collect();
+            let mut out: Vec<&str> = rows(table("siemens/motors_s120.csv")).iter().map(|r| r["part_number"]).filter(|a| sheets.contains(a)).collect();
+            out.extend(motor_manuals().into_iter().flat_map(|t| rows(t)).filter(|r| number(r, "rotor_inertia_kgm2").is_some()).map(|r| r["part_number"]));
             out
         }
         _ => motor_articles(),
@@ -91,15 +145,15 @@ pub fn motor_articles_for(supply: &str) -> Vec<&'static str> {
 
 /// What a motor brings into a config, from whichever catalogue file has it.
 struct MotorData {
-    rotor_kgcm2: f64,
+    rotor_kgm2: f64,
     static_torque: f64,
     stall_current: f64,
     max_torque: f64,
     max_current: f64,
     rated_current: f64,
     rated_torque: f64,
-    rated_speed_rpm: f64,
-    thermal_minutes: Option<f64>,
+    rated_speed: f64,
+    thermal_seconds: Option<f64>,
     /// Phase resistance at 20 °C in ohms and rotating field inductance in henries, where a data sheet prints them.
     winding: Option<(f64, f64)>,
     mass: f64,
@@ -108,53 +162,53 @@ struct MotorData {
 fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
     let missing = || unknown("motor", &format!("{article}, {supply}"));
     if supply == "s120" {
-        if let Some(m) = rows(MOTORS_S120).into_iter().find(|r| r["article"] == article) {
-            let sheet = rows(MOTORS_S120_ELECTRICAL).into_iter().find(|r| r["article"] == article).ok_or_else(missing)?;
+        if let Some(m) = rows(table("siemens/motors_s120.csv")).into_iter().find(|r| r["part_number"] == article) {
+            let sheet = rows(table("siemens/motors_s120_electrical.csv")).into_iter().find(|r| r["part_number"] == article).ok_or_else(missing)?;
             let get = |row: &Row, column: &str| number(row, column).ok_or_else(missing);
             return Ok(MotorData {
-                rotor_kgcm2: get(&m, "rotor_inertia_kgcm2")?,
+                rotor_kgm2: get(&m, "rotor_inertia_kgm2")?,
                 static_torque: get(&m, "static_torque_nm")?,
                 stall_current: get(&m, "stall_current_a")?,
                 max_torque: get(&sheet, "max_torque_nm")?,
                 max_current: get(&sheet, "max_current_a")?,
                 rated_current: get(&m, "rated_current_a")?,
                 rated_torque: get(&m, "rated_torque_nm")?,
-                rated_speed_rpm: get(&m, "rated_speed_rpm")?,
-                thermal_minutes: number(&sheet, "thermal_time_constant_min"),
-                winding: number(&sheet, "winding_resistance_20c_ohm").zip(number(&sheet, "inductance_mh").map(|mh| mh * 1e-3)),
+                rated_speed: get(&m, "rated_speed_rad_s")?,
+                thermal_seconds: number(&sheet, "thermal_time_constant_s"),
+                winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
                 mass: get(&m, "mass_kg")?,
             });
         }
-        let m = MOTOR_MANUALS.iter().flat_map(|t| rows(t)).find(|r| r["article"] == article).ok_or_else(|| unknown("motor", article))?;
+        let m = motor_manuals().into_iter().flat_map(|t| rows(t)).find(|r| r["part_number"] == article).ok_or_else(|| unknown("motor", article))?;
         let get = |column: &str| number(&m, column).ok_or_else(missing);
         return Ok(MotorData {
-            rotor_kgcm2: get("rotor_inertia_kgcm2")?,
+            rotor_kgm2: get("rotor_inertia_kgm2")?,
             static_torque: get("static_torque_nm")?,
             stall_current: get("stall_current_a")?,
             max_torque: get("max_torque_nm")?,
             max_current: get("max_current_a")?,
             rated_current: get("rated_current_a")?,
             rated_torque: get("rated_torque_nm")?,
-            rated_speed_rpm: get("rated_speed_rpm")?,
-            thermal_minutes: number(&m, "thermal_time_constant_min"),
+            rated_speed: get("rated_speed_rad_s")?,
+            thermal_seconds: number(&m, "thermal_time_constant_s"),
             winding: None,
             mass: get("mass_kg")?,
         });
     }
-    let motor = rows(MOTORS_S210).into_iter().find(|r| r["article"] == article).ok_or_else(|| unknown("motor", article))?;
+    let motor = rows(table("siemens/motors_s210.csv")).into_iter().find(|r| r["part_number"] == article).ok_or_else(|| unknown("motor", article))?;
     let get = |column: &str| number(&motor, column).ok_or_else(missing);
     let rated = |quantity: &str, unit: &str| get(&format!("rated_{quantity}_{supply}_{unit}"));
-    let manual = MOTOR_MANUALS.iter().flat_map(|text| rows(text)).find(|r| r["article"] == article);
+    let manual = motor_manuals().into_iter().flat_map(|text| rows(text)).find(|r| r["part_number"] == article);
     Ok(MotorData {
-        rotor_kgcm2: get("rotor_inertia_kgcm2")?,
+        rotor_kgm2: get("rotor_inertia_kgm2")?,
         static_torque: get("static_torque_nm")?,
         stall_current: get("stall_current_a")?,
         max_torque: get("max_torque_nm")?,
         max_current: get("max_current_a")?,
         rated_current: rated("current", "a")?,
         rated_torque: rated("torque", "nm")?,
-        rated_speed_rpm: rated("speed", "rpm")?,
-        thermal_minutes: manual.as_ref().and_then(|r| number(r, "thermal_time_constant_min")),
+        rated_speed: rated("speed", "rad_s")?,
+        thermal_seconds: manual.as_ref().and_then(|r| number(r, "thermal_time_constant_s")),
         winding: None,
         mass: get("mass_kg")?,
     })
@@ -189,8 +243,8 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     let m = motor_data(article, supply)?;
     let kt = m.static_torque / m.stall_current;
-    let rated_speed = m.rated_speed_rpm * PI / 30.0;
-    set(cfg, "motor.rotor_inertia_kgm2", m.rotor_kgcm2 * 1e-4)?;
+    let rated_speed = m.rated_speed;
+    set(cfg, "motor.rotor_inertia_kgm2", m.rotor_kgm2)?;
     set(cfg, "motor.torque_constant_nm_a", kt)?;
     set(cfg, "motor.max_current_a", m.max_current)?;
     // The catalogue's own rated current, up to 18 % above rated torque over the static torque constant.
@@ -198,8 +252,8 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     // is more than 5 % above it, so that is where it stops.
     set(cfg, "motor.rated_current_a", m.rated_current.min(1.05 * m.stall_current))?;
     set(cfg, "motor.torque_constant_at_max_current_nm_a", (m.max_torque / m.max_current).min(kt))?;
-    if let Some(minutes) = m.thermal_minutes {
-        set(cfg, "motor.thermal_time_constant_s", minutes * 60.0)?;
+    if let Some(seconds) = m.thermal_seconds {
+        set(cfg, "motor.thermal_time_constant_s", seconds)?;
     }
     if let Some((phase_resistance, phase_inductance)) = m.winding {
         let time_constant = cfg.positive("motor.inductance_h")? / cfg.positive("drive.current_kp_v_a")?;
@@ -235,25 +289,25 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 pub fn paired_drive(article: &str, supply: &str) -> &'static str {
     match supply {
         "230v" | "400v" => {
-            let Some(motor) = rows(MOTORS_S210).into_iter().find(|r| r["article"] == article) else { return "" };
-            let columns: &[&str] = if supply == "400v" { &["converter_400v_3ac"] } else { &["converter_230v_1ac", "converter_230v_3ac"] };
+            let Some(motor) = rows(table("siemens/motors_s210.csv")).into_iter().find(|r| r["part_number"] == article) else { return "" };
+            let columns: &[&str] = if supply == "400v" { &["paired_drive_400v_3ac"] } else { &["paired_drive_230v_1ac", "paired_drive_230v_3ac"] };
             columns.iter().map(|c| motor[c]).find(|a| !a.is_empty()).unwrap_or("")
         }
         "s120" => {
-            let modules = rows(MOTOR_MODULES_S120);
-            if let Some(motor) = rows(MOTORS_S120).into_iter().find(|r| r["article"] == article) {
+            let modules = rows(table("siemens/motor_modules_s120.csv"));
+            if let Some(motor) = rows(table("siemens/motors_s120.csv")).into_iter().find(|r| r["part_number"] == article) {
                 // "6SL3120-7TE13-0AD.": 7 for Single or Double, the last character open.
-                let pattern = motor["motor_module"].replacen("6SL3120-7", "6SL3120-1", 1);
+                let pattern = motor["paired_drive"].replacen("6SL3120-7", "6SL3120-1", 1);
                 let stem = &pattern[..pattern.len().saturating_sub(1)];
-                if let Some(m) = modules.iter().find(|m| m["article"].starts_with(stem)) {
-                    return m["article"];
+                if let Some(m) = modules.iter().find(|m| m["part_number"].starts_with(stem)) {
+                    return m["part_number"];
                 }
             }
             let stall = motor_data(article, "s120").map_or(f64::INFINITY, |m| m.stall_current);
-            let mut fits: Vec<&Row> = modules.iter().filter(|m| m["axes"] == "1" && number(m, "rated_current_a").is_some_and(|i| i >= stall)).collect();
-            let key = |m: &&Row| (number(m, "rated_current_a").unwrap_or(f64::INFINITY), -number(m, "max_current_a").unwrap_or(0.0));
+            let mut fits: Vec<&Row> = modules.iter().filter(|m| m["axes"] == "1" && number(m, "rated_output_current_a").is_some_and(|i| i >= stall)).collect();
+            let key = |m: &&Row| (number(m, "rated_output_current_a").unwrap_or(f64::INFINITY), -number(m, "max_output_current_a").unwrap_or(0.0));
             fits.sort_by(|a, b| key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal));
-            fits.first().map_or("", |m| m["article"])
+            fits.first().map_or("", |m| m["part_number"])
         }
         _ => "",
     }
@@ -277,8 +331,8 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// `dc_link_measured.csv` has one measured on a real drive of that article. An S120 Motor Module sets
 /// `dc_link_capacitance_uf` from `motor_modules_s120.csv`, half of it per axis for a Double Motor Module.
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
-    let (rated, max) = if let Some(c) = rows(CONVERTERS_S210).into_iter().find(|r| r["article"] == article) {
-        if let Some(b) = rows(BRAKING_S210).into_iter().find(|r| r["article"] == article) {
+    let (rated, max) = if let Some(c) = rows(table("siemens/converters_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
+        if let Some(b) = rows(table("siemens/braking_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
             let trip = number(&b, "dc_link_overvoltage_v").ok_or_else(|| unknown("drive", article))?;
             let line = if b["line"] == "1ac" { 240.0 } else { 480.0 };
             set_if_present(cfg, "ratings.dc_link_overvoltage_v", trip)?;
@@ -286,20 +340,20 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
                 set(cfg, "ratings.braking_threshold_v", (1.1 * line * std::f64::consts::SQRT_2 + trip) / 2.0)?;
             }
             if !(b["line"] == "3ac" && supply == "230v") {
-                let (continuous, peak) = number(&b, "continuous_braking_power_w").zip(number(&b, "peak_braking_power_kw")).ok_or_else(|| unknown("drive", article))?;
+                let (continuous, peak) = number(&b, "continuous_braking_power_w").zip(number(&b, "peak_braking_power_w")).ok_or_else(|| unknown("drive", article))?;
                 set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
-                set_if_present(cfg, "ratings.braking_resistor_peak_w", peak * 1e3)?;
+                set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
             }
         }
         (number(&c, "rated_output_current_a"), number(&c, "max_output_current_a"))
     } else {
-        let m = rows(MOTOR_MODULES_S120).into_iter().find(|r| r["article"] == article).ok_or_else(|| unknown("drive", article))?;
-        if let Some(capacitance) = number(&m, "dc_link_capacitance_uf") {
+        let m = rows(table("siemens/motor_modules_s120.csv")).into_iter().find(|r| r["part_number"] == article).ok_or_else(|| unknown("drive", article))?;
+        if let Some(capacitance) = number(&m, "dc_link_capacitance_f").map(|f| in_unit(f, 1e6)) {
             set_if_present(cfg, "ratings.dc_link_capacitance_uf", if m["axes"] == "2" { capacitance / 2.0 } else { capacitance })?;
         }
-        (number(&m, "rated_current_a"), number(&m, "max_current_a"))
+        (number(&m, "rated_output_current_a"), number(&m, "max_output_current_a"))
     };
-    if let Some(capacitance) = rows(DC_LINK_MEASURED).into_iter().find(|r| r["article"] == article).and_then(|r| number(&r, "capacitance_uf")) {
+    if let Some(capacitance) = rows(table("siemens/dc_link_measured.csv")).into_iter().find(|r| r["part_number"] == article).and_then(|r| number(&r, "dc_link_capacitance_f")).map(|f| in_unit(f, 1e6)) {
         set_if_present(cfg, "ratings.dc_link_capacitance_uf", capacitance)?;
     }
     let (rated, max) = rated.zip(max).ok_or_else(|| unknown("drive", article))?;
@@ -310,7 +364,7 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 /// A gearbox by name, its catalogue row: size, motor frame size and ratio, e.g. "NRK070-04-5".
 fn gearbox_row(name: &str) -> Option<Row> {
     let parts: Vec<&str> = name.split('-').collect();
-    let all: Vec<Row> = GEARBOXES.iter().flat_map(|text| rows(text)).collect();
+    let all: Vec<Row> = gearboxes().into_iter().flat_map(|text| rows(text)).collect();
     all.into_iter().find(|r| parts.len() == 3 && r["size"] == parts[0] && r["motor_frame"] == parts[1] && r["ratio"] == parts[2])
 }
 
@@ -318,7 +372,7 @@ fn gearbox_row(name: &str) -> Option<Row> {
 /// catalogue does not have.
 pub fn gearbox_mass(name: &str) -> Option<f64> {
     let parts: Vec<&str> = name.split('-').collect();
-    let row = rows(GEARBOX_MASS).into_iter().find(|r| parts.len() == 3 && r["size"] == parts[0] && r["motor_frames"].split(' ').any(|f| f == parts[1]) && r["ratio"] == parts[2])?;
+    let row = rows(table("siemens/gearbox_mass.csv")).into_iter().find(|r| parts.len() == 3 && r["size"] == parts[0] && r["motor_frames"].split(' ').any(|f| f == parts[1]) && r["ratio"] == parts[2])?;
     number(&row, "mass_kg")
 }
 
@@ -329,19 +383,18 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     let gearbox = gearbox_row(name).ok_or_else(|| unknown("gearbox", name))?;
     let get = |column: &str| number(&gearbox, column);
     let need = |column: &str| get(column).ok_or_else(|| unknown("gearbox", name));
-    let arcmin = PI / 180.0 / 60.0;
     set(cfg, "gearbox.ratio", need("ratio")?)?;
     set(cfg, "gearbox.efficiency", need("efficiency_full_load")?)?;
-    set(cfg, "gearbox.stiffness_nm_rad", need("torsional_stiffness_nm_arcmin")? / arcmin)?;
+    set(cfg, "gearbox.stiffness_nm_rad", need("torsional_stiffness_nm_rad")?)?;
     // The manual leaves backlash and inertia open for a few gearboxes; the config's values stay then.
-    if let Some(backlash) = get("backlash_arcmin") {
-        set(cfg, "gearbox.backlash_rad", backlash * arcmin)?;
+    if let Some(backlash) = get("backlash_rad") {
+        set(cfg, "gearbox.backlash_rad", backlash)?;
     }
     // Kept apart from the rotor's: added into it, the next motor put into the config would wipe it out.
-    if let Some(inertia) = get("inertia_at_input_kgcm2") {
-        set(cfg, "gearbox.inertia_at_input_kgm2", inertia * 1e-4)?;
+    if let Some(inertia) = get("inertia_at_input_kgm2") {
+        set(cfg, "gearbox.inertia_at_input_kgm2", inertia)?;
     }
-    for (rating, column) in [("gearbox_rated_torque_nm", "rated_torque_nm"), ("gearbox_max_torque_nm", "max_torque_nm")] {
+    for (rating, column) in [("gearbox_rated_torque_nm", "rated_output_torque_nm"), ("gearbox_max_torque_nm", "max_output_torque_nm")] {
         if cfg.f64(&format!("ratings.{rating}")).is_ok() {
             set(cfg, &format!("ratings.{rating}"), need(column)?)?;
         }
@@ -351,13 +404,13 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
 
 /// A belt's values at a width, from the rows of its profile in `belts.csv`: linear between the standard widths,
 /// in proportion to the width below the narrowest and above the widest (the cords and the mass go with the width).
-/// (pitch m, mass kg/m, allowable pull N, EA N)
+/// Width in m; (pitch m, mass kg/m, allowable pull N, EA N)
 fn belt_values(profile: &str, width: f64) -> Option<(f64, f64, f64, f64)> {
-    let all = rows(BELTS);
+    let all = rows(table("megadyne/belts.csv"));
     let of: Vec<&Row> = all.iter().filter(|r| r["profile"] == profile).collect();
     let point = |r: &Row| -> Option<(f64, [f64; 3])> {
-        let pull = number(r, "max_traction_load_n")?;
-        Some((number(r, "width_mm")?, [number(r, "mass_g_m")? * 1e-3, pull, pull / (number(r, "elongation_at_mtl_mm_m")? * 1e-3)]))
+        let pull = number(r, "max_pull_n")?;
+        Some((number(r, "width_m")?, [number(r, "mass_kg_m")?, pull, pull / number(r, "elongation_at_max_pull")?]))
     };
     let points: Vec<(f64, [f64; 3])> = of.iter().map(|r| point(r)).collect::<Option<_>>()?;
     let (first, last) = (points.first()?, points.last()?);
@@ -372,7 +425,7 @@ fn belt_values(profile: &str, width: f64) -> Option<(f64, f64, f64, f64)> {
         let (a, b) = (points[i - 1], points[i]);
         a.1[k] + (b.1[k] - a.1[k]) * (width - a.0) / (b.0 - a.0)
     };
-    Some((number(of[0], "pitch_mm")? * 1e-3, at(0), at(1), at(2)))
+    Some((number(of[0], "pitch_m")?, at(0), at(1), at(2)))
 }
 
 /// Puts a belt into a config by profile and width in mm, e.g. "AT5-25": an open-ended Megadyne MEGALINEAR belt
@@ -383,13 +436,27 @@ fn belt_values(profile: &str, width: f64) -> Option<(f64, f64, f64, f64)> {
 pub fn apply_belt(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     let (profile, width) = name.rsplit_once('-').ok_or_else(|| unknown("belt", name))?;
     let width: f64 = width.parse().ok().filter(|w: &f64| *w > 0.0 && w.is_finite()).ok_or_else(|| unknown("belt", name))?;
-    let (pitch, mass, pull, ea) = belt_values(profile, width).ok_or_else(|| unknown("belt", name))?;
+    apply_belt_at(cfg, profile, width / 1000.0).ok_or_else(|| unknown("belt", name))?
+}
+
+/// `apply_belt` for a width in m; `None` for a profile the catalogue does not have.
+fn apply_belt_at(cfg: &mut Config, profile: &str, width: f64) -> Option<Result<(), ConfigError>> {
+    let (pitch, mass, pull, ea) = belt_values(profile, width)?;
+    let teeth: Vec<(f64, f64)> = rows(table("megadyne/belt_tooth_load.csv"))
+        .iter()
+        .filter(|r| r["profile"] == profile)
+        .filter_map(|r| number(r, "speed_rad_s").map(|w| in_unit(w, 30.0 / PI)).zip(number(r, "specific_tooth_load_n_m").map(|n| in_unit(n, 1e-2))))
+        .collect();
+    Some(set_belt(cfg, (pitch, mass, pull, ea), in_unit(width, 1e3), &teeth))
+}
+
+/// Belt values into a config: (pitch m, mass kg/m, allowable pull N, EA N), width mm, tooth load (r/min, N/cm).
+fn set_belt(cfg: &mut Config, (pitch, mass, pull, ea): (f64, f64, f64, f64), width_mm: f64, teeth: &[(f64, f64)]) -> Result<(), ConfigError> {
     set(cfg, "belt.stiffness_ea_n", ea)?;
     set(cfg, "belt.mass_kg_m", mass)?;
     set(cfg, "belt.tooth_pitch_m", pitch)?;
     set_if_present(cfg, "ratings.belt_max_tension_n", pull)?;
-    set_if_present(cfg, "ratings.belt_width_mm", width)?;
-    let teeth: Vec<(f64, f64)> = rows(BELT_TEETH).iter().filter(|r| r["profile"] == profile).filter_map(|r| number(r, "rpm").zip(number(r, "specific_tooth_load_n_cm"))).collect();
+    set_if_present(cfg, "ratings.belt_width_mm", width_mm)?;
     let list = |values: Vec<f64>| format!("[{}]", values.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(", "));
     if cfg.get("ratings.belt_tooth_load_rpm").is_ok() && cfg.get("ratings.belt_tooth_load_n_cm").is_ok() {
         cfg.set_text(&format!("ratings.belt_tooth_load_rpm = {}", list(teeth.iter().map(|t| t.0).collect())))?;
@@ -426,7 +493,7 @@ struct AxisData {
     /// Bahr: any Z stroke up to the longest; Festo: only the strokes listed.
     z_up_to: bool,
     pulley_radius: f64,
-    /// Megadyne belt that gives the belt's mass, allowable pull and tooth load: profile and width.
+    /// Megadyne belt that gives the belt's mass, allowable pull and tooth load: profile and width in m.
     belt: (String, f64),
     /// EA where the maker states the belt's stretch (Festo), else the belt table's.
     ea: Option<f64>,
@@ -446,62 +513,61 @@ struct AxisData {
     weight: (f64, f64, f64),
 }
 
-fn festo() -> Config {
-    Config::parse(FESTO_EXCT).expect("catalog/festo/exct.toml parses")
-}
-
 /// The axes of the catalogue by name: the Festo EXCT sizes ("EXCT-30") and the Bahr axes and X/Z gantries
 /// ("ELZI-40", "ELZ-60S": series and size). The Bahr XY gantries (no machine of that kind) and the DLZPVI (a gear
 /// unit built in, whose ratio is not extracted) are left out.
 pub fn axis_names() -> Vec<String> {
     let mut out = festo_sizes();
-    out.extend(rows(BAHR_AXES).iter().filter(|r| r["kind"] != "xy_gantry" && r["series"] != "DLZPVI").map(|r| format!("{}-{}", r["series"], r["size"])));
+    out.extend(rows(table("bahr/belt_axes.csv")).iter().filter(|r| r["kind"] != "xy_gantry" && r["series"] != "DLZPVI").map(|r| format!("{}-{}", r["series"], r["size"])));
     out
 }
 
+/// The Festo sizes by name, in the order of their names.
 fn festo_sizes() -> Vec<String> {
-    let text: toml::Table = FESTO_EXCT.parse().expect("catalog/festo/exct.toml parses");
-    text.iter().filter(|(_, v)| v.is_table()).map(|(k, _)| k.clone()).collect()
+    let mut out: Vec<String> = rows(table("festo/belt_axes.csv")).iter().map(|r| format!("{}-{}", r["series"], r["size"])).collect();
+    out.sort();
+    out
 }
 
 fn axis_data(name: &str) -> Option<AxisData> {
-    if festo_sizes().iter().any(|s| s == name) {
-        let f = festo();
-        let get = |leaf: &str| f.f64(&format!("{name}.{leaf}")).ok();
-        let strokes: Vec<f64> = f.f64s(&format!("{name}.strokes_z_mm")).ok()?.iter().map(|s| s / 1000.0).collect();
-        let formula = f.array(&format!("{name}.torque_formula")).ok()?;
-        let n = |t: &toml::Value, key: &str| t.get(key).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)));
-        let festo_formula = formula.iter().map(|t| Some((n(t, "stroke_z_mm")? / 1000.0, n(t, "constant")?, n(t, "motor_inertia_factor")?, n(t, "gravity_mass_kg")?))).collect::<Option<Vec<_>>>()?;
-        let diameter = get("belt.effective_diameter_mm")?;
-        let pitch = get("belt.pitch_mm")?;
+    let festo = rows(table("festo/belt_axes.csv"));
+    if let Some(f) = festo.iter().find(|r| format!("{}-{}", r["series"], r["size"]) == name) {
+        let get = |column: &str| number(f, column);
+        let festo_formula = rows(table("festo/belt_axis_torque_formula.csv"))
+            .iter()
+            .filter(|t| t["series"] == f["series"] && t["size"] == f["size"])
+            .map(|t| Some((number(t, "stroke_z_m")?, number(t, "constant_kg_m")?, number(t, "motor_inertia_factor_1_m")?, number(t, "gravity_mass_kg")?)))
+            .collect::<Option<Vec<_>>>()?;
+        let diameter = get("pulley_effective_diameter_m")?;
+        let pitch = get("belt_pitch_m")?;
         return Some(AxisData {
             kind: Kind::XzGantry,
-            stroke_x: (get("stroke_y_min_mm")? / 1000.0, get("stroke_y_max_mm")? / 1000.0),
-            strokes_z: strokes,
+            stroke_x: (get("stroke_x_min_m")?, get("stroke_x_max_m")?),
+            strokes_z: festo_formula.iter().map(|t| t.0).collect(),
             z_up_to: false,
-            pulley_radius: diameter / 2000.0,
+            pulley_radius: diameter / 2.0,
             // The EXCT belt is steel-cord polyurethane; by its stretch of the AT class (see exct-30.toml).
-            belt: (format!("AT{pitch}"), get("belt.width_mm")?),
-            ea: Some(get("belt.elongation_reference_force_n")? / (get("belt.elongation_percent")? / 100.0)),
+            belt: (format!("AT{}", in_unit(pitch, 1e3)), get("belt_width_m")?),
+            ea: Some(get("belt_elongation_force_n")? / get("belt_elongation")?),
             teeth: (PI * diameter / pitch).round(),
-            pulley_torque: get("max_torque_nm")?,
-            payload_kg: get("rated_load_kg"),
+            pulley_torque: get("max_pulley_torque_nm")?,
+            payload_kg: get("rated_payload_kg"),
             slide_load_n: None,
             max_speed: get("max_speed_m_s")?,
             max_acceleration: get("max_acceleration_m_s2"),
             moved: None,
             festo_formula,
-            weight: (get("weight_at_zero_stroke_kg")?, get("weight_per_100_mm_stroke_y_kg")? * 10.0, get("weight_per_100_mm_stroke_z_kg")? * 10.0),
+            weight: (get("mass_at_zero_stroke_kg")?, get("mass_per_stroke_kg_m")?, get("mass_per_stroke_z_kg_m")?),
         });
     }
-    let all = rows(BAHR_AXES);
+    let all = rows(table("bahr/belt_axes.csv"));
     let r = all.iter().find(|r| format!("{}-{}", r["series"], r["size"]) == name && r["kind"] != "xy_gantry" && r["series"] != "DLZPVI")?;
     let kind = if r["kind"] == "xz_gantry" { Kind::XzGantry } else { Kind::Single };
-    let radius = number(r, "feed_per_rev_mm")? / (2000.0 * PI);
-    let mm = |column: &str| number(r, column).map(|v| v / 1000.0);
+    let radius = number(r, "feed_per_rev_m")? / (2.0 * PI);
+    let m = |column: &str| number(r, column);
     let (stroke_x, strokes_z) = match kind {
-        Kind::XzGantry => (mm("max_length_x_mm")?, vec![mm("max_length_z_mm")?]),
-        Kind::Single => (mm("max_length_one_piece_mm").unwrap_or(f64::INFINITY), Vec::new()),
+        Kind::XzGantry => (m("max_length_x_m")?, vec![m("max_length_z_m")?]),
+        Kind::Single => (m("max_length_one_piece_m").unwrap_or(f64::INFINITY), Vec::new()),
     };
     let moved = match kind {
         Kind::XzGantry => Some((number(r, "moved_mass_x_kg")?, number(r, "moved_mass_z_kg")?)),
@@ -513,7 +579,7 @@ fn axis_data(name: &str) -> Option<AxisData> {
         strokes_z,
         z_up_to: true,
         pulley_radius: radius,
-        belt: (format!("MTD{}", r["belt_pitch_mm"]), number(r, "belt_width_mm")?),
+        belt: (format!("MTD{}", in_unit(number(r, "belt_pitch_m")?, 1e3)), number(r, "belt_width_m")?),
         ea: None,
         teeth: number(r, "pulley_teeth")?,
         pulley_torque: number(r, "feed_force_peak_n")? * radius,
@@ -523,7 +589,7 @@ fn axis_data(name: &str) -> Option<AxisData> {
         max_acceleration: None,
         moved,
         festo_formula: Vec::new(),
-        weight: (number(r, "base_weight_kg")?, number(r, "weight_per_100_mm_kg")? * 10.0, number(r, "weight_per_100_mm_z_kg").unwrap_or(0.0) * 10.0),
+        weight: (number(r, "mass_at_zero_stroke_kg")?, number(r, "mass_per_stroke_kg_m")?, number(r, "mass_per_stroke_z_kg_m").unwrap_or(0.0)),
     })
 }
 
@@ -598,7 +664,7 @@ pub fn apply_axis(cfg: &mut Config, name: &str, entry: Option<&MachineEntry>) ->
         "axis-stroke" => return Err(ConfigError::Invalid(if axis.kind == Kind::XzGantry { "geometry.stroke_x_m" } else { "geometry.stroke_m" }.into())),
         _ => {}
     }
-    apply_belt(cfg, &format!("{}-{}", axis.belt.0, axis.belt.1))?;
+    apply_belt_at(cfg, &axis.belt.0, axis.belt.1).ok_or_else(|| unknown("belt", &axis.belt.0))??;
     if let Some(ea) = axis.ea {
         set(cfg, "belt.stiffness_ea_n", ea)?;
     }
@@ -615,7 +681,7 @@ pub fn apply_axis(cfg: &mut Config, name: &str, entry: Option<&MachineEntry>) ->
         if let Some(&(_, constant, motor_factor, gravity_mass)) = axis.festo_formula.iter().find(|f| (f.0 - z).abs() < 1e-9) {
             set(cfg, "mass.z_axis_kg", gravity_mass)?;
             if let Some(entry) = entry {
-                let carriage = festo_carriage(entry, cfg, (constant + motor_factor * cfg.positive("motor.rotor_inertia_kgm2")? * 1e4) * 1e-3)?;
+                let carriage = festo_carriage(entry, cfg, constant + motor_factor * cfg.positive("motor.rotor_inertia_kgm2")?)?;
                 set(cfg, "mass.carriage_kg", carriage)?;
             }
         }
@@ -838,7 +904,7 @@ pub fn fitting_gearboxes(article: &str, series: &str, ratio: f64) -> Vec<String>
     if article.get(3..4) != Some("2") {
         return Vec::new();
     }
-    let all = GEARBOXES.iter().flat_map(|text| rows(text));
+    let all = gearboxes().into_iter().flat_map(|text| rows(text));
     let fits = |r: &Row| r["size"].starts_with(series) && article.get(5..7) == Some(r["motor_frame"]) && number(r, "ratio").is_some_and(|n| n >= 0.5 * ratio && n <= 2.0 * ratio);
     all.filter(fits).map(|r| format!("{}-{}-{}", r["size"], r["motor_frame"], r["ratio"])).collect()
 }

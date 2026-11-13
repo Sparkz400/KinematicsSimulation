@@ -36,7 +36,7 @@ fn texts(lang: &str, entry: &MachineEntry) -> Translations {
 struct Args(Vec<String>);
 
 /// Options every command takes, each with a value.
-const COMMON: [&str; 10] = ["--config", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
+const COMMON: [&str; 11] = ["--config", "--catalog", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
 /// Options without a value.
 const FLAGS: [&str; 5] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes"];
 /// The ways to say what the machine should do: one at most.
@@ -130,6 +130,9 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         _ => &[],
     };
     args.check(known)?;
+    if let Some(dir) = args.option("--catalog") {
+        sim_components::catalog::use_directory(std::path::Path::new(dir))?;
+    }
     match args.positional(0) {
         Some("list") => {
             let lang = args.option("--lang").unwrap_or("en");

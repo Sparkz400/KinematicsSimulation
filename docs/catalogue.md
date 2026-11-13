@@ -1,6 +1,8 @@
 # Catalogue
 
-[`catalog/`](../catalog) holds vendor data as plain CSV and TOML files. The numbers are the vendors'; the layout and the column names are ours. Units are in the column names. Each file starts with comment lines (`#`) that name its source, explain its columns, and list what was kept as printed although it looks wrong.
+[`catalog/`](../catalog) holds vendor data as CSV tables in one vendor-neutral format, schema 1: SI units named in the column (`_m`, `_kgm2`, `_rad_s`, `_w`, ...), the same column name for the same quantity whatever the maker calls it, and beside each `<table>.csv` a `<table>.meta.toml` with its part class, the source of every value (document, page or table, date, extraction script or `[estimate]`), and the notes: what a row is, the conditions of the values, and what was kept as printed although it looks wrong. The numbers are the vendors'; the layout and the column names are ours. The format, the validator and how to add a vendor are in [`catalog/README.md`](../catalog/README.md) and [`catalog/CONTRIBUTING.md`](../catalog/CONTRIBUTING.md); the folder is laid out to become a repository of its own.
+
+The column names and units below are schema 1's. The documents print other units (r/min, kg cm², arcmin, kW, mm); `catalog/tools/cataloglib/legacy.py` maps each extraction script's columns to the schema's, and checks every converted value against the printed one.
 
 - [What the simulator uses](#what-the-simulator-uses)
 - [Files](#files)
@@ -11,7 +13,7 @@
 
 ## What the simulator uses
 
-These files are read by the simulator itself. They are compiled into `sim-components` ([`catalog.rs`](../crates/sim-components/src/catalog.rs)), so the binaries need no path to them, and a changed file takes effect after a rebuild.
+These files are read by the simulator itself. They are compiled into `sim-components` ([`catalog.rs`](../crates/sim-components/src/catalog.rs)), so the binaries need no path to them, and a changed file takes effect after a rebuild. `--catalog DIR` (on `sim-cli` and `sim-app`) reads them from another copy of the catalogue at run time instead; it must have the same `schema_version`.
 
 | File | Used for |
 | --- | --- |
@@ -22,9 +24,9 @@ These files are read by the simulator itself. They are compiled into `sim-compon
 | `siemens/gearbox_nrb.csv`, `_nrk.csv`, `_nlc.csv` | A gearbox by name (`[parts] gearbox`, `--gearbox`) and the gearbox search |
 | `siemens/gearbox_mass.csv` | The gearbox's mass in the search's `mass_kg` and `cost_kg` |
 | `megadyne/belts.csv`, `megadyne/belt_tooth_load.csv` | A belt by name (`[parts] belt`, `--belt`), and the belt of an axis by name |
-| `festo/exct.toml`, `bahr/belt_axes.csv` | An axis by name (`[parts] axis`, `--axis`) and the axis search (`search --axes`) |
+| `festo/belt_axes.csv`, `festo/belt_axis_torque_formula.csv`, `bahr/belt_axes.csv` | An axis by name (`[parts] axis`, `--axis`) and the axis search (`search --axes`) |
 
-`festo/exct.toml` is also the source of the `[catalogue]` values in [`exct-30.toml`](../crates/machine-t-gantry/exct-30.toml); two tests hold the two together (`exct_30_config_agrees_with_the_catalogue`, and `an_axis_by_name_gives_the_numbers_of_the_hand_written_exct_30` for the axis by name). The line module and braking files are data for the DC link estimates; tests read and check them, but no command uses them.
+`festo/belt_axes.csv` and `festo/belt_axis_torque_formula.csv` are also the source of the `[catalogue]` values in [`exct-30.toml`](../crates/machine-t-gantry/exct-30.toml); two tests hold the two together (`exct_30_config_agrees_with_the_catalogue`, and `an_axis_by_name_gives_the_numbers_of_the_hand_written_exct_30` for the axis by name). The line module and braking files are data for the DC link estimates; the validator checks them, but no command uses them.
 
 ### Pairing a motor with its drive
 
@@ -43,37 +45,38 @@ No file has a price. Siemens' list prices are in its Industry Mall, which refuse
 
 ## Files
 
-### `festo/exct.toml`
+### `festo/belt_axes.csv` and `festo/belt_axis_torque_formula.csv`
 
 | | |
 | --- | --- |
 | Source | Festo catalogue "Linear gantries EXCT", 2023/01 |
-| A table is | One size of the EXCT T-gantry: `EXCT-15`, `EXCT-30`, `EXCT-100` |
-| Extraction | There is no extraction script for this file in `catalog/tools/`. It has three sizes and was written from the catalogue's tables |
+| A row is | One size of the EXCT T-gantry: series `EXCT`, size `15`, `30`, `100`. The formula table: one size and Z stroke |
+| Extraction | There is no extraction script for these files. They have three sizes and were written from the catalogue's tables (until November 2026 as `festo/exct.toml`) |
 
-| Key | Meaning |
+| Column | Meaning |
 | --- | --- |
-| `stroke_y_min_mm`, `stroke_y_max_mm`, `strokes_z_mm` | Stroke range of the horizontal axis (Festo's Y; the simulator's X) and the Z strokes offered |
-| `rated_load_kg` | Tool load plus payload, at maximum dynamic response |
+| `stroke_x_min_m`, `stroke_x_max_m` | Stroke range of the horizontal axis (Festo's Y; the simulator's X). The Z strokes offered are those of the formula table |
+| `rated_payload_kg` | Tool load plus payload, at maximum dynamic response |
 | `max_process_force_z_n` | Highest process force in Z |
-| `max_torque_nm`, `max_no_load_torque_nm` | At the pulley; they also apply to third-party motors. The no-load torque is at 0.2 m/s and travel at 45 degrees |
+| `max_pulley_torque_nm`, `max_no_load_torque_nm` | At the pulley; they also apply to third-party motors. The no-load torque is at 0.2 m/s and travel at 45 degrees |
 | `max_acceleration_m_s2`, `max_speed_m_s` | "Under ideal conditions" |
-| `repetition_accuracy_mm` | |
-| `weight_at_zero_stroke_kg`, `weight_per_100_mm_stroke_y_kg`, `_z_kg` | Without rated load, motors, axial kits and mounting kits |
-| `servo_motor`, `axial_kit`, `coupling`, `coupling_housing_third_party_motor` | Festo part names |
-| `belt.material`, `.pitch_mm`, `.width_mm` | The belt |
-| `belt.elongation_percent`, `.elongation_reference_force_n` | The belt stretches by this much at the reference force. Gives EA |
-| `belt.effective_diameter_mm`, `.feed_constant_mm_rev` | Pulley. The feed constant is "at 45 degrees travel" |
-| `torque_formula` (one per Z stroke): `load_factor`, `motor_inertia_factor`, `constant`, `gravity_factor`, `gravity_mass_kg` | Coefficients of Festo's formula for the required motor torque at 45 degrees travel, the heaviest case |
+| `repeatability_m` | |
+| `mass_at_zero_stroke_kg`, `mass_per_stroke_kg_m`, `mass_per_stroke_z_kg_m` | Without rated load, motors, axial kits and mounting kits |
+| `motor_part_number`, `axial_kit_part_number`, `coupling_part_number`, `coupling_housing_part_number` | Festo part names (the coupling housing for a third-party motor) |
+| `belt_material`, `belt_pitch_m`, `belt_width_m` | The belt |
+| `belt_elongation`, `belt_elongation_force_n` | The belt stretches by this strain at this force. Gives EA |
+| `pulley_effective_diameter_m`, `feed_per_rev_m` | Pulley. The feed per revolution is "at 45 degrees travel" |
+| Formula table: `stroke_z_m`, `load_factor_m`, `motor_inertia_factor_1_m`, `constant_kg_m`, `gravity_factor_nm_kg`, `gravity_mass_kg` | Coefficients of Festo's formula for the required motor torque at 45 degrees travel, the heaviest case, in SI |
 
-Festo's formula, from the file header:
+Festo's formula, in the catalogue's units and in the file's:
 
 ```text
-M = a · (load_factor · m_L + motor_inertia_factor · J_m + constant) · 1e-3 + gravity_factor · (gravity_mass_kg + m_L) + M_R     [N m]
-n = v · 60000 / feed_constant_mm_rev · sqrt(2)                                                                              [1/min]
+M = a · (load_factor · m_L + motor_inertia_factor · J_m + constant) · 1e-3 + gravity_factor · (gravity_mass_kg + m_L) + M_R     [N m], J_m in kg cm²
+M = a · (load_factor_m · m_L + motor_inertia_factor_1_m · J_m + constant_kg_m) + gravity_factor_nm_kg · (gravity_mass_kg + m_L) + M_R   [N m], J_m in kg m²
+n = v · 60 / feed_per_rev_m · sqrt(2)                                                                                            [1/min]
 ```
 
-a: acceleration along the path in m/s², v: speed along the path in m/s, m_L: attachment on the Z axis with payload in kg, J_m: motor inertia in kg cm², M_R: friction torque in N m.
+a: acceleration along the path in m/s², v: speed along the path in m/s, m_L: attachment on the Z axis with payload in kg, M_R: friction torque in N m.
 
 The motors couple directly onto the belt pulleys; the catalogue lists no gear unit.
 
@@ -85,7 +88,7 @@ The motors couple directly onto the belt pulleys; the catalogue lists no gear un
 | A row is | One motor winding: the article number up to the speed letter, e.g. `1FK2104-5AK`. 96 rows: 34 1FK2 and 62 1FT2 |
 | Script | `extract_siemens_d32.py` |
 
-Columns: `article`, `series`, `version`, `shaft_height_mm`, `cooling`, `static_torque_nm`, `stall_current_a`, `max_torque_nm`, `max_current_a`, `max_speed_rpm`, `rotor_inertia_kgcm2`, `rotor_inertia_with_brake_kgcm2`, `mass_with_brake_kg`, `mass_kg`; then per supply (`230v` is 200 to 240 V, 1 AC or 3 AC; `400v` is 380 to 480 V 3 AC) `rated_speed_*_rpm`, `rated_torque_*_nm`, `rated_current_*_a`, `rated_power_*_w`; then the paired converters `converter_230v_1ac`, `converter_230v_3ac`, `converter_400v_3ac` and the same for the "SINAMICS S210 (New)" converters (`converter_new_*`).
+Columns: `part_number`, `series`, `version`, `shaft_height_m`, `cooling`, `static_torque_nm`, `stall_current_a`, `max_torque_nm`, `max_current_a`, `max_speed_rad_s`, `rotor_inertia_kgm2`, `rotor_inertia_with_brake_kgm2`, `mass_with_brake_kg`, `mass_kg`; then per supply (`230v` is 200 to 240 V, 1 AC or 3 AC; `400v` is 380 to 480 V 3 AC) `rated_speed_*_rad_s`, `rated_torque_*_nm`, `rated_current_*_a`, `rated_power_*_w`; then the paired converters `paired_drive_230v_1ac`, `paired_drive_230v_3ac`, `paired_drive_400v_3ac` and the same for the "SINAMICS S210 (New)" converters (`paired_drive_new_*`).
 
 Currents are RMS. Static values are at standstill. An empty field means the catalogue lists no value, mostly because the motor is not offered at that supply: 84 motors have 400 V data, 88 have 230 V data.
 
@@ -97,7 +100,7 @@ Currents are RMS. Static values are at standstill. An empty field means the cata
 | A row is | One converter. 24 rows: 12 S210 and 12 S210 (New) |
 | Script | `extract_siemens_d32.py` |
 
-Columns: `article`, `series`, `supply`, `line_current_a`, `power_loss_w`, `rated_power_1ac_230v_kw`, `rated_power_3ac_400v_kw`, `rated_power_3ac_240v_kw`, `rated_output_current_a`, `max_output_current_a`. Output currents are RMS; the power unit switches at 8 kHz.
+Columns: `part_number`, `series`, `supply`, `line_current_a`, `power_loss_w`, `rated_power_1ac_230v_w`, `rated_power_3ac_400v_w`, `rated_power_3ac_240v_w`, `rated_output_current_a`, `max_output_current_a`. Output currents are RMS; the power unit switches at 8 kHz.
 
 ### `siemens/braking_s210.csv`
 
@@ -107,7 +110,7 @@ Columns: `article`, `series`, `supply`, `line_current_a`, `power_loss_w`, `rated
 | A row is | One S210 (6SL3210) converter. 12 rows, the same converters as `converters_s210.csv` (a test checks it) |
 | Script | None: typed in from the manual, the table checked against the rendered page |
 
-Columns: `article`, `line` (`1ac` or `3ac`), `rated_power_kw`, `continuous_braking_power_w`, `peak_braking_power_kw`, `braking_energy_kj` (the internal braking resistor's), `dc_link_overvoltage_v` (410 V on 1 AC, 820 V on 3 AC). The 100 W converter has no internal resistor (the table's footnote). Not published in any Siemens document found (D 32 07/2021 and 02/2026, these operating instructions 06/2020 and 09/2022, product data sheets, SiePortal): the DC link capacitance and the braking chopper's switch-on threshold.
+Columns: `part_number`, `line` (`1ac` or `3ac`), `rated_power_w`, `continuous_braking_power_w`, `peak_braking_power_w`, `braking_energy_j` (the internal braking resistor's), `dc_link_overvoltage_v` (410 V on 1 AC, 820 V on 3 AC). The 100 W converter has no internal resistor (the table's footnote). Not published in any Siemens document found (D 32 07/2021 and 02/2026, these operating instructions 06/2020 and 09/2022, product data sheets, SiePortal): the DC link capacitance and the braking chopper's switch-on threshold.
 
 ### `siemens/dc_link_measured.csv`
 
@@ -117,7 +120,7 @@ Columns: `article`, `line` (`1ac` or `3ac`), `rated_power_kw`, `continuous_braki
 | A row is | One converter article with a measured DC link. 1 row: a 6SL5310-1BE10-8DF0 (S210, new generation, firmware 6.4) with a 1FK2204-5AF, 13 November 2026 |
 | Script | None: worked out from a Startdrive trace of a quick stop from 3000 rpm |
 
-Columns: `article`, `date`, `firmware`, `capacitance_uf` (139), `capacitance_low_uf` and `_high_uf` (113 and 164: the energy between two ways of integrating it, the winding resistance taken as 3 to 6 ohm), `chopper_above_v` (632: the stop did not reach the chopper), `idle_dc_link_v` (547 on a 400 V line). A drive by name sets `dc_link_capacitance_uf` from it.
+Columns: `part_number`, `date`, `firmware`, `dc_link_capacitance_f` (139 µF), `dc_link_capacitance_low_f` and `_high_f` (113 and 164 µF: the energy between two ways of integrating it, the winding resistance taken as 3 to 6 ohm), `braking_threshold_above_v` (632: the stop did not reach the chopper), `idle_dc_link_v` (547 on a 400 V line). A drive by name sets `dc_link_capacitance_uf` from it.
 
 ### `siemens/motors_1fk2_s120.csv` and `siemens/dynamic_braking_1fk2.csv`
 
@@ -127,9 +130,9 @@ Columns: `article`, `date`, `firmware`, `capacitance_uf` (139), `capacitance_low
 | A row is | One 1FK2 motor winding as operated on S120 at 380 to 480 V 3 AC. 33 rows in each file |
 | Script | `extract_siemens_1fk2_s120.py` |
 
-Motor columns: `article`, `static_torque_nm`, `stall_current_a`, `max_speed_inverter_rpm`, `max_torque_nm`, `max_current_a`, `thermal_time_constant_min`, `rotor_inertia_with_brake_kgcm2`, `rotor_inertia_kgcm2`, `mass_with_brake_kg`, `mass_kg`, `rated_speed_rpm`, `rated_torque_nm`, `rated_current_a`, `rated_power_kw`.
+Motor columns: `part_number`, `static_torque_nm`, `stall_current_a`, `max_speed_inverter_rad_s`, `max_torque_nm`, `max_current_a`, `thermal_time_constant_s`, `rotor_inertia_with_brake_kgm2`, `rotor_inertia_kgm2`, `mass_with_brake_kg`, `mass_kg`, `rated_speed_rad_s`, `rated_torque_nm`, `rated_current_a`, `rated_power_w`.
 
-Braking columns (armature short-circuit braking): `article`, `optimum_resistance_ohm`, `braking_torque_rms_nm`, `braking_torque_rms_with_resistor_nm`, `max_braking_torque_nm`, `braking_current_rms_a`, `braking_current_rms_with_resistor_a`. The manual's conditions: braking from the rated speed with an external inertia equal to the motor's own, calculated from the rated values, without production variance and without iron saturation.
+Braking columns (armature short-circuit braking): `part_number`, `optimum_resistance_ohm`, `braking_torque_rms_nm`, `braking_torque_rms_with_resistor_nm`, `max_braking_torque_nm`, `braking_current_rms_a`, `braking_current_rms_with_resistor_a`. The manual's conditions: braking from the rated speed with an external inertia equal to the motor's own, calculated from the rated values, without production variance and without iron saturation.
 
 28 of the 33 motors are also in `motors_s210.csv`.
 
@@ -151,7 +154,7 @@ Same columns as `motors_1fk2_s120.csv`.
 | A row is | One gearbox size, motor frame size and ratio that the manual lists as available. 329 NRB, 252 NRK and 193 NLC rows: 774 in all |
 | Script | `extract_siemens_gearboxes.py` |
 
-Columns: `series`, `size`, `motor_frame`, `stages`, `ratio`, `rated_torque_nm`, `max_torque_nm`, `emergency_off_torque_nm`, `efficiency_full_load`, `torsional_stiffness_nm_arcmin`, `backlash_arcmin`, `inertia_at_input_kgcm2`.
+Columns: `series`, `size`, `motor_frame`, `stages`, `ratio`, `rated_output_torque_nm`, `max_output_torque_nm`, `emergency_stop_output_torque_nm`, `efficiency_full_load`, `torsional_stiffness_nm_rad`, `backlash_rad`, `inertia_at_input_kgm2`.
 
 - `motor_frame` is the last two digits of the motor's frame size in the article number: 1FK2104 and 1FK2204 have frame `04`.
 - Torques are at the output shaft. Rated: continuous. Max: for at most 30 000 output revolutions. Emergency off: at most 1000 times in the gearbox's life.
@@ -177,7 +180,7 @@ Columns: `series`, `size`, `motor_frames` (the frames that share the manual's co
 | A row is | Belts: one profile and standard width, open-ended, standard steel cords; 43 rows of T5, AT3, AT5, AT10, MTD3, MTD5, MTD8. Tooth load: one profile and speed, 18 speeds per profile |
 | Script | `extract_megadyne.py` |
 
-Belt columns: `profile`, `pitch_mm`, `width_mm`, `mass_g_m`, `max_traction_load_n` (the allowable pull, a quarter of the breaking strength), `breaking_strength_n`, `elongation_at_mtl_mm_m` (4 mm/m for all). Tooth load columns: `profile`, `rpm`, `specific_tooth_load_n_cm` (the "Fp spec" per cm of width and tooth in mesh). MTD is Megadyne's HTD-compatible profile: Bahr's 3M, 5M and 8M belts are taken as MTD3, MTD5, MTD8. A belt is named as profile-width, e.g. `AT5-25`; a width between two standard ones is interpolated linearly, one outside them in proportion to the nearest (Bahr's 5M09, 8M12, 8M48 and 8M70 are not standard widths). These are the same figures the EXCT-30 config's belt tension and tooth table were read from by hand.
+Belt columns: `profile`, `pitch_m`, `width_m`, `mass_kg_m`, `max_pull_n` (the allowable pull, a quarter of the breaking strength), `breaking_strength_n`, `elongation_at_max_pull` (4 mm/m for all). Tooth load columns: `profile`, `speed_rad_s`, `specific_tooth_load_n_m` (the "Fp spec" per cm of width and tooth in mesh). MTD is Megadyne's HTD-compatible profile: Bahr's 3M, 5M and 8M belts are taken as MTD3, MTD5, MTD8. A belt is named as profile-width, e.g. `AT5-25`; a width between two standard ones is interpolated linearly, one outside them in proportion to the nearest (Bahr's 5M09, 8M12, 8M48 and 8M70 are not standard widths). These are the same figures the EXCT-30 config's belt tension and tooth table were read from by hand.
 
 ### `siemens/motors_s120.csv`
 
@@ -187,19 +190,19 @@ Belt columns: `profile`, `pitch_mm`, `width_mm`, `mass_g_m`, `max_traction_load_
 | A row is | One motor winding: the article number up to the DC link code, e.g. `1FK7042-2AF7`. 167 rows: 62 1FK7 and 105 1FT7. All for a DC link of 510 to 720 V |
 | Script | `extract_siemens_d21_4.py` |
 
-Columns: `article`, `series`, `version`, `cooling`, `shaft_height_mm`, `rated_speed_rpm`, `rated_values_at_rpm`, `rated_power_kw`, `static_torque_nm`, `rated_torque_nm`, `rated_current_a`, `pole_pairs`, `rotor_inertia_kgcm2`, `mass_kg`, `efficiency_percent`, `stall_current_a`, `calculated_power_kw`, `motor_module_rated_current_a`, `motor_module`.
+Columns: `part_number`, `series`, `version`, `cooling`, `shaft_height_m`, `rated_speed_rad_s`, `rated_values_at_speed_rad_s`, `rated_power_w`, `static_torque_nm`, `rated_torque_nm`, `rated_current_a`, `pole_pairs`, `rotor_inertia_kgm2`, `mass_kg`, `efficiency`, `stall_current_a`, `calculated_power_w`, `paired_drive_rated_current_a`, `paired_drive`.
 
-Ratings are for a winding temperature rise of 100 K. `rated_values_at_rpm` is filled where a footnote of the catalogue says the rated values refer to another speed. `motor_module` is the booksize Motor Module the catalogue pairs with the motor; the `7` and the `.` in it are placeholders.
+Ratings are for a winding temperature rise of 100 K. `rated_values_at_speed_rad_s` is filled where a footnote of the catalogue says the rated values refer to another speed. `paired_drive` is the booksize Motor Module the catalogue pairs with the motor; the `7` and the `.` in it are placeholders.
 
 ### `siemens/motors_s120_electrical.csv`
 
 | | |
 | --- | --- |
-| Source | The Siemens data sheet of each motor, generated by Siemens' data sheet service for the full article number in the column `data_sheet_article` |
+| Source | The Siemens data sheet of each motor, generated by Siemens' data sheet service for the full article number in the column `data_sheet_part_number` |
 | A row is | One motor of `motors_s120.csv` whose data sheet has been fetched. 166 of the 167 |
 | Script | `fetch_siemens_datasheets.py` |
 
-Columns: `article`, `data_sheet_article`, `poles`, `static_torque_60k_nm`, `stall_current_60k_a`, `max_speed_mechanical_rpm`, `max_speed_inverter_rpm`, `max_torque_nm`, `max_current_a`, `torque_constant_nm_a`, `voltage_constant_v_per_1000rpm`, `winding_resistance_20c_ohm`, `inductance_mh`, `electrical_time_constant_ms`, `mechanical_time_constant_ms`, `thermal_time_constant_min`, `shaft_torsional_stiffness_nm_rad`.
+Columns: `part_number`, `data_sheet_part_number`, `poles`, `static_torque_60k_nm`, `stall_current_60k_a`, `max_speed_mechanical_rad_s`, `max_speed_inverter_rad_s`, `max_torque_nm`, `max_current_a`, `torque_constant_nm_a`, `voltage_constant_v_s_rad`, `phase_resistance_20c_ohm`, `phase_inductance_h`, `electrical_time_constant_s`, `mechanical_time_constant_s`, `thermal_time_constant_s`, `shaft_torsional_stiffness_nm_rad`.
 
 The torque constant is at a winding temperature rise of 100 K. The voltage constant is at 20 °C, line to line, RMS, per 1000 r/min. The resistance is of one phase at 20 °C. The inductance is the rotating field inductance. The options in the full article number (encoder, shaft, brake) do not change these values.
 
@@ -213,9 +216,9 @@ This is the only file with winding resistance and inductance. It covers the 1FK7
 | A row is | One S120 Motor Module in booksize format with internal air cooling, for a DC link of 510 to 720 V. 19 rows |
 | Script | `extract_siemens_d21_4n.py` |
 
-Columns: `article`, `axes`, `type`, `rated_current_a`, `base_load_current_a`, `max_current_a`, `rated_power_kw`, `pulse_frequency_khz`, `dc_link_capacitance_uf`, `power_loss_typical_kw`, `power_loss_max_kw`.
+Columns: `part_number`, `axes`, `duty_type`, `rated_output_current_a`, `base_load_output_current_a`, `max_output_current_a`, `rated_power_w`, `pulse_frequency_hz`, `dc_link_capacitance_f`, `power_loss_typical_w`, `power_loss_max_w`.
 
-`axes` is 1 for a Single and 2 for a Double Motor Module; currents and rated power of a Double are per axis, its DC link capacitance and power loss are for the module. `type` is C (continuous load) or D (discontinuous load, higher maximum current).
+`axes` is 1 for a Single and 2 for a Double Motor Module; currents and rated power of a Double are per axis, its DC link capacitance and power loss are for the module. `duty_type` is C (continuous load) or D (discontinuous load, higher maximum current).
 
 ### `siemens/line_modules_s120.csv` and `siemens/braking_s120.csv`
 
@@ -225,9 +228,9 @@ Columns: `article`, `axes`, `type`, `rated_current_a`, `base_load_current_a`, `m
 | A row is | Line modules: one S120 Line Module in booksize format with internal air cooling, 380 to 480 V 3 AC. 13 rows: 5 Smart, 5 Active, 3 Basic. Braking: the Braking Module and 4 braking resistors |
 | Script | `extract_siemens_nc82.py` |
 
-Line module columns: `article`, `type`, `rated_power_kw`, `s6_power_kw`, `max_power_kw`, `dc_link_current_540v_a`, `dc_link_current_600v_a`, `s6_dc_link_current_a`, `max_dc_link_current_a`, `dc_link_capacitance_uf`, `power_loss_kw`, `braking_power_max_kw`, `braking_power_continuous_kw`, `braking_threshold_v`, `min_braking_resistance_ohm`. The `braking_*` columns are the chopper inside the 20 kW and 40 kW Basic Line Modules; empty for all others.
+Line module columns: `part_number`, `infeed_type`, `continuous_power_w`, `s6_power_w`, `max_power_w`, `dc_link_current_540v_a`, `dc_link_current_600v_a`, `s6_dc_link_current_a`, `max_dc_link_current_a`, `dc_link_capacitance_f`, `power_loss_w`, `max_braking_power_w`, `continuous_braking_power_w`, `braking_threshold_v`, `min_braking_resistance_ohm`. The `braking_*` columns are the chopper inside the 20 kW and 40 kW Basic Line Modules; empty for all others.
 
-Braking columns: `article`, `kind` (`braking_module` or `braking_resistor`), `for_article`, `resistance_ohm`, `rated_power_kw`, `peak_power_kw`, `activation_threshold_v`, `dc_link_capacitance_uf`, `load_duration_s`, `cycle_duration_s`, `load_duration_2_s`, `cycle_duration_2_s`.
+Braking columns: `part_number`, `kind` (`braking_module` or `braking_resistor`), `for_part_number`, `resistance_ohm`, `continuous_power_w`, `peak_power_w`, `activation_threshold_v`, `dc_link_capacitance_f`, `load_duration_s`, `cycle_duration_s`, `load_duration_2_s`, `cycle_duration_2_s`.
 
 These two files are where the DC link estimates of `exct-30.toml` come from: 540 V on a 400 V line, about 44 µF per kW of rated power, a chopper threshold of 770 V. The S210 converter of that config is not in them; see [what is missing](#what-is-missing-and-why).
 
@@ -239,11 +242,11 @@ These two files are where the DC link estimates of `exct-30.toml` come from: 540
 | A row is | One series and size of a linear axis driven by an HTD toothed belt. 69 rows from 15 series: 59 single axes, 7 XY gantries (ELZU), 3 X/Z gantries (ELZI, a T-gantry) |
 | Script | `extract_bahr.py` |
 
-Columns: `series`, `size`, `kind` (`axis`, `xy_gantry`, `xz_gantry`), `belt`, `belt_pitch_mm`, `belt_width_mm`, `feed_per_rev_mm`, `pulley_teeth`, `no_load_torque_nm`, `no_load_torque_times`, `max_speed_m_s`, `feed_force_continuous_n`, `feed_force_peak_n`, `fx_static_n` … `mz_dynamic_nm` (permissible loads on the slide, static and dynamic), `base_weight_kg`, `weight_per_100_mm_kg`, `weight_per_100_mm_z_kg`, `moved_mass_x_kg`, `moved_mass_y_kg`, `moved_mass_z_kg`, `max_length_one_piece_mm`, `max_length_x_mm`, `max_length_y_mm`, `max_length_z_mm`, `sheet`, `edition`, `source_file`.
+Columns: `series`, `size`, `kind` (`axis`, `xy_gantry`, `xz_gantry`), `belt`, `belt_pitch_m`, `belt_width_m`, `feed_per_rev_m`, `pulley_teeth`, `no_load_torque_nm`, `no_load_torque_count`, `max_speed_m_s`, `feed_force_continuous_n`, `feed_force_peak_n`, `fx_static_n` … `mz_dynamic_nm` (permissible loads on the slide, static and dynamic), `mass_at_zero_stroke_kg`, `mass_per_stroke_kg_m`, `mass_per_stroke_z_kg_m`, `moved_mass_x_kg`, `moved_mass_y_kg`, `moved_mass_z_kg`, `max_length_one_piece_m`, `max_length_x_m`, `max_length_y_m`, `max_length_z_m`, `source` (the data sheet the row was read from, a source in the metadata with its sheet number, edition and file).
 
 - `feed_force_*`: belt pull, continuous and for 0.2 s.
 - The sheets want the sum of Fy/Fy_dyn + Fz/Fz_dyn + Mx/Mx_dyn + My/My_dyn + Mz/Mz_dyn to stay at or below 1.
-- `no_load_torque_times` is 2 where the sheet prints "2 x 0,4" (the X/Z gantry); whether that is per motor is not said.
+- `no_load_torque_count` is 2 where the sheet prints "2 x 0,4" (the X/Z gantry); whether that is per motor is not said.
 - `max_speed_m_s`: the sheets give no conditions.
 
 No config uses a Bahr axis yet. These sheets publish what Festo does not for the EXCT: permissible loads and moments on the slide and the belt's pull.
@@ -268,7 +271,7 @@ The life estimates and the belt's tooth load take their figures from the configs
 
 **Extraction.** Each Siemens and Bahr file is written by a script in [`catalog/tools/`](../catalog/tools). The vendor PDF is turned into text with `pdftotext -table` (xpdf 4.x), and the script reads the tables from that text. The scripts are strict: a row that does not have one value per column, a motor printed twice with different values, or a motor with only one of its two rows stops the script, so a changed edition cannot produce shifted values silently. The scripts also write the comment header of each file. The vendor documents are not part of the repository.
 
-**Checks.** Tests read every file and check the numbers against their own physics and against each other. A value that landed in the wrong field or row breaks one of them. They are in [`sim-machines/tests/catalog.rs`](../crates/sim-machines/tests/catalog.rs), [`catalog_1fk2.rs`](../crates/sim-machines/tests/catalog_1fk2.rs) and [`catalog_bahr.rs`](../crates/sim-machines/tests/catalog_bahr.rs):
+**Checks.** The catalogue's validator (`python catalog/tools/catalog.py validate`, run by the CI workflow `catalogue.yml`) checks every table against its JSON Schema (types, units, no unknown column, no negative quantity), every value for its source, the key columns for duplicates, and the numbers against their own physics and against each other. A value that landed in the wrong field or row breaks one of them. The physics checks are the functions of [`checks.py`](../catalog/tools/cataloglib/checks.py), named as in the table (until November 2026 they were Rust tests of `sim-machines`; exact row counts became minimums, so that a contributor can add rows):
 
 | File | Checked how | Test |
 | --- | --- | --- |
@@ -284,12 +287,12 @@ The life estimates and the belt's tooth load take their figures from the configs
 | `motor_modules_s120.csv` | Type rating about 0.54 kW per ampere; the D type has the higher maximum current | `siemens_s120_motor_modules_are_plausible` |
 | `line_modules_s120.csv` | Power = DC link voltage × DC link current; a bigger module has more capacitance; chopper peak power = U² / R at the threshold | `siemens_s120_line_modules_are_plausible` |
 | `braking_s120.csv` | Peak power = U² / R at the threshold; over a duty cycle the peak power averages to no more than the continuous power; each resistor's module exists | `siemens_s120_braking_resistors_fit_their_modules` |
-| `bahr/belt_axes.csv` | Rows unique; belt code agrees with pitch and width; feed per revolution = teeth × pitch; continuous feed force against the static Fx; the gantries state their moved masses and lengths | the four tests in `catalog_bahr.rs` |
-| `gearbox_mass.csv` | Every gearbox of the three gearbox files has a mass; a bigger size of a series is heavier at the same frame and ratio; NRK070, frame 04, ratio 5 is 1.4 kg as in Table 7-33 | `every_catalogue_gearbox_has_a_mass_and_bigger_ones_weigh_more` in `catalog_parts.rs` |
-| `megadyne/*.csv` | Per profile EA per mm of width within 25 % of its mean; breaking strength four times the allowable pull (10 %; 3.5 times at 150 mm, as printed); mass growing with width; tooth load falling with speed | `megadyne_belts_are_plausible` in `catalog_parts.rs` |
-| `motor_modules_s120.csv` against the S120 motors | Every S120 motor's paired Motor Module exists and has at least 85 % of its rated current | `s120_motors_by_name_bring_winding_rated_values_and_their_motor_module` in `catalog_parts.rs` |
+| `bahr/belt_axes.csv` | Rows unique; belt code agrees with pitch and width; feed per revolution = teeth × pitch; continuous feed force against the static Fx; the gantries state their moved masses and lengths | the four `bahr_*` checks |
+| `gearbox_mass.csv` | Every gearbox of the three gearbox files has a mass; a bigger size of a series is heavier at the same frame and ratio; NRK070, frame 04, ratio 5 is 1.4 kg as in Table 7-33 | `every_catalogue_gearbox_has_a_mass_and_bigger_ones_weigh_more` |
+| `megadyne/*.csv` | Per profile EA per mm of width within 25 % of its mean; breaking strength four times the allowable pull (10 %; 3.5 times at 150 mm, as printed); mass growing with width; tooth load falling with speed | `megadyne_belts_are_plausible` |
+| `motor_modules_s120.csv` against the S120 motors | Every S120 motor's paired Motor Module exists and has at least 85 % of its rated current | `s120_motors_by_name_bring_winding_rated_values_and_their_motor_module`, a Rust test in `catalog_parts.rs` |
 
-That the simulator reads the files correctly is checked separately: `a_motor_by_name_gives_the_values_of_the_hand_written_config`, `a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings`, `parts_named_in_a_config_behave_like_their_numbers` and `exct_30_config_agrees_with_the_catalogue`; for drives, belts, axes and the S120 motors the tests of [`catalog_parts.rs`](../crates/sim-machines/tests/catalog_parts.rs).
+That the simulator reads the files correctly is checked by Rust tests. [`catalog_golden.rs`](../crates/sim-machines/tests/catalog_golden.rs) holds every value the simulator takes from the catalogue (every motor at every supply, every drive, gearbox, belt and axis by name, pairings, masses) to a snapshot written before the move to schema 1, and so shows that the move changed no result; [`catalog_dir.rs`](../crates/sim-machines/tests/catalog_dir.rs) checks `--catalog DIR`. Besides them: `a_motor_by_name_gives_the_values_of_the_hand_written_config`, `a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings`, `parts_named_in_a_config_behave_like_their_numbers` and `exct_30_config_agrees_with_the_catalogue`; for drives, belts, axes and the S120 motors the tests of [`catalog_parts.rs`](../crates/sim-machines/tests/catalog_parts.rs).
 
 What these checks cannot find: a number that was misread into another plausible number in a column with no relation to check it against.
 
@@ -343,32 +346,34 @@ Other notes from the headers that are not misprints: three 1FK2 data sheets (1FK
 
 ## Rerun an extraction on a newer edition
 
-The vendor documents are not in the repository. Get the PDF from the vendor, turn it into text, and run the script. All commands are run from `catalog/tools/`. They need Python 3 and `pdftotext` from xpdf 4.x.
+The vendor documents are not in the repository. Get the PDF from the vendor, turn it into text, and run the script through the catalogue's pipeline, which converts its output to schema 1, writes the tables and validates them. All commands are run from `catalog/`. They need Python 3.11, `jsonschema`, and `pdftotext` from xpdf 4.x.
 
 | File | Commands |
 | --- | --- |
-| `motors_s210.csv`, `converters_s210.csv` | `pdftotext -table -enc UTF-8 catalogue.pdf catalogue.txt` then `python extract_siemens_d32.py catalogue.txt ../siemens` |
-| `motors_1fk2_s120.csv`, `dynamic_braking_1fk2.csv` | `pdftotext -table -enc UTF-8 manual.pdf manual.txt` then `python extract_siemens_1fk2_s120.py manual.txt ../siemens` |
-| `motors_1ft2_s120.csv` | the same with `extract_siemens_1ft2_s120.py` |
-| `gearbox_nrb.csv`, `_nrk.csv`, `_nlc.csv` | the same with `extract_siemens_gearboxes.py` |
-| `motors_s120.csv` | the same with `extract_siemens_d21_4.py` |
-| `motor_modules_s120.csv` | the same with `extract_siemens_d21_4n.py` |
-| `line_modules_s120.csv`, `braking_s120.csv` | the same with `extract_siemens_nc82.py` |
-| `siemens/gearbox_mass.csv` | The 01/2023 configuration manual from `https://cache.industry.siemens.com/dl/files/596/109802596/att_1132680/v2/Plan_gear_for_servo_motors_config_man_0123_en-US.pdf`, then `pdftotext -table -enc UTF-8 manual.pdf manual.txt` and `python extract_siemens_gearbox_mass.py manual.txt ../siemens` |
-| `megadyne/belts.csv`, `belt_tooth_load.csv` | The handbook from `https://megadynegroup.com/files/resources/attachments/md_manu_en_megalinear_web.pdf`, then `pdftotext -table -enc UTF-8 md_manu_en_megalinear_web.pdf megalinear.txt` and `python extract_megadyne.py megalinear.txt ../megadyne` |
-| `bahr/belt_axes.csv` | Download one PDF per name in the script's `SHEETS` list from `https://cdn.norgren.com/pdf/<name>.pdf`. `pdftotext -q -table -enc UTF-8 <name>.pdf` once per sheet, then `python extract_bahr.py folder_with_the_txt_files ../bahr` |
-| `motors_s120_electrical.csv` | `python fetch_siemens_datasheets.py ../siemens <folder for the downloaded PDFs>`. It downloads one data sheet per motor of `motors_s120.csv` from Siemens' service. A full run takes hours; downloaded PDFs are kept and not fetched twice. With a third argument `cached` it fetches nothing and writes the file from the PDFs already in the folder |
-| `festo/exct.toml` | By hand, from the catalogue's tables |
+| `motors_s210.csv`, `converters_s210.csv` | `pdftotext -table -enc UTF-8 catalogue.pdf catalogue.txt` then `python tools/catalog.py extract siemens_d32 catalogue.txt` |
+| `motors_1fk2_s120.csv`, `dynamic_braking_1fk2.csv` | `pdftotext -table -enc UTF-8 manual.pdf manual.txt` then `python tools/catalog.py extract siemens_1fk2_s120 manual.txt` |
+| `motors_1ft2_s120.csv` | the same with `siemens_1ft2_s120` |
+| `gearbox_nrb.csv`, `_nrk.csv`, `_nlc.csv` | the same with `siemens_gearboxes` |
+| `motors_s120.csv` | the same with `siemens_d21_4` |
+| `motor_modules_s120.csv` | the same with `siemens_d21_4n` |
+| `line_modules_s120.csv`, `braking_s120.csv` | the same with `siemens_nc82` |
+| `siemens/gearbox_mass.csv` | The 01/2023 configuration manual from `https://cache.industry.siemens.com/dl/files/596/109802596/att_1132680/v2/Plan_gear_for_servo_motors_config_man_0123_en-US.pdf`, then `pdftotext -table -enc UTF-8 manual.pdf manual.txt` and `python tools/catalog.py extract siemens_gearbox_mass manual.txt` |
+| `megadyne/belts.csv`, `belt_tooth_load.csv` | The handbook from `https://megadynegroup.com/files/resources/attachments/md_manu_en_megalinear_web.pdf`, then `pdftotext -table -enc UTF-8 md_manu_en_megalinear_web.pdf megalinear.txt` and `python tools/catalog.py extract megadyne megalinear.txt` |
+| `bahr/belt_axes.csv` | Download one PDF per name in the script's `SHEETS` list from `https://cdn.norgren.com/pdf/<name>.pdf`. `pdftotext -q -table -enc UTF-8 <name>.pdf` once per sheet, then `python tools/catalog.py extract bahr folder_with_the_txt_files`. A new sheet needs a source in `belt_axes.meta.toml` |
+| `motors_s120_electrical.csv` | `python tools/catalog.py extract fetch_siemens_datasheets <folder for the downloaded PDFs>`. It downloads one data sheet per motor of `motors_s120.csv` from Siemens' service. A full run takes hours; downloaded PDFs are kept and not fetched twice. With a further argument `cached` it fetches nothing and writes the file from the PDFs already in the folder |
+| `festo/belt_axes.csv`, `belt_axis_torque_formula.csv` | By hand, from the catalogue's tables |
 
 Then:
 
-1. **If the script stops,** the new edition has a row or table it cannot read. It says which. Fix the script; do not patch the output.
-2. **Review the diff** of the data file. The header of each file, with the document's name and edition, is written by the script from its `SOURCE` line, so update the edition there.
-3. **Run the catalogue tests:**
+1. **If the script stops,** the new edition has a row or table it cannot read. It says which. Fix the script; do not patch the output. If the conversion stops, the script wrote a column the map in `cataloglib/legacy.py` does not know.
+2. **Update the source** in the table's `.meta.toml`: `document`, `date`, `url`, and the notes.
+3. **Review the diff** of the table.
+4. **Validate:** `python tools/catalog.py validate`. A misprint that the new edition has fixed will show as a check that names the old one (for example the check that expects the inertia of the 1FK2308-3AB to be empty says "is readable now, check it"). Remove the exception from the check and the note from the metadata.
+5. **In the simulator:** rebuild (the tables are compiled in) and run
 
    ```sh
-   cargo test -p sim-machines --test catalog --test catalog_1fk2 --test catalog_bahr --test catalog_parts
+   cargo test -p sim-machines --test catalog_golden --test catalog --test catalog_parts
+   cargo test -p machine-t-gantry
    ```
 
-   A misprint that the new edition has fixed will show as a test that names the old one (for example the test that expects the inertia of the 1FK2308-3AB to be empty says "is readable now, check it"). Remove the exception from the test and the note from the script's header.
-4. **Rebuild.** The motor and gearbox files are compiled in. Then run `cargo test -p machine-t-gantry` and the catalogue tests again: `exct_30_config_agrees_with_the_catalogue` holds the EXCT-30 config to the files, and the search tests depend on which motors exist.
+   `catalog_golden` lists every value the simulator takes from the catalogue that changed; when the change is meant, write its snapshot anew with `UPDATE_GOLDEN=1`. `exct_30_config_agrees_with_the_catalogue` holds the EXCT-30 config to the files, and the search tests depend on which motors exist.

@@ -1,22 +1,6 @@
-# Source: Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS, February 2020, chapter 4, DC link components, Braking Module and Braking resistors.
-# Extracted by catalog/tools/extract_siemens_nc82.py; the numbers are the catalogue's, the layout is ours.
-# One row for the SINAMICS S120 Braking Module in booksize format and one per braking resistor, for a DC link of 510 ... 720 V.
-# kind: braking_module (the chopper, without a resistor) or braking_resistor.
-# for_article: the module the catalogue's ordering data lists the resistor for: the Braking Module, or a Basic Line
-#   Module of catalog/siemens/line_modules_s120.csv, which has a chopper of its own.
-# rated_power: the continuous braking power PDB. peak_power: Pmax, allowed for load_duration within every cycle_duration.
-# load_duration_2/cycle_duration_2: the resistors of the Braking Module have a second duty cycle with a longer load.
-# activation_threshold: the DC link voltage at which the Braking Module switches the resistor on; for the resistors of
-#   the Basic Line Modules see braking_threshold_v there.
-# dc_link_capacitance: of the Braking Module.
-# An empty field means the catalogue does not state the value.
-# The peak power of the 6SN1113-1AA00-0DA0 (25 kW at 17 ohm) is not U^2/R at the threshold of 770 V, which would be
-#   35 kW; for the other three resistors it is. Kept as printed.
-# Not extracted: cable lengths, digital inputs and outputs, connections, thermostatic switch, degree of protection,
-#   dimensions, weight.
-article,kind,for_article,resistance_ohm,rated_power_kw,peak_power_kw,activation_threshold_v,dc_link_capacitance_uf,load_duration_s,cycle_duration_s,load_duration_2_s,cycle_duration_2_s
-6SL3100-1AE31-0AB1,braking_module,,,1.5,100,770,110,,,,
-6SN1113-1AA00-0DA0,braking_resistor,6SL3100-1AE31-0AB1,17,0.3,25,,,0.1,11.5,0.4,210
-6SL3100-1BE31-0AA0,braking_resistor,6SL3100-1AE31-0AB1,5.7,1.5,100,,,1,68,2,460
-6SE7023-2ES87-2DC0,braking_resistor,6SL3130-1TE22-0AA0,20,5,30,,,15,90,,
-6SE7028-0ES87-2DC0,braking_resistor,6SL3130-1TE24-0AA0,8,12.5,75,,,15,90,,
+part_number,kind,for_part_number,resistance_ohm,continuous_power_w,peak_power_w,activation_threshold_v,dc_link_capacitance_f,load_duration_s,cycle_duration_s,load_duration_2_s,cycle_duration_2_s
+6SL3100-1AE31-0AB1,braking_module,,,1500,100000,770,0.00011,,,,
+6SN1113-1AA00-0DA0,braking_resistor,6SL3100-1AE31-0AB1,17,300,25000,,,0.1,11.5,0.4,210
+6SL3100-1BE31-0AA0,braking_resistor,6SL3100-1AE31-0AB1,5.7,1500,100000,,,1,68,2,460
+6SE7023-2ES87-2DC0,braking_resistor,6SL3130-1TE22-0AA0,20,5000,30000,,,15,90,,
+6SE7028-0ES87-2DC0,braking_resistor,6SL3130-1TE24-0AA0,8,12500,75000,,,15,90,,

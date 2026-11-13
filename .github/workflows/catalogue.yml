@@ -1,0 +1,26 @@
+name: Catalogue
+
+# The data catalogue in catalog/: schema, provenance, physics and cross-document checks, and the tools' own tests.
+# catalog/.github/workflows/validate.yml is the same job for the catalogue as a repository of its own.
+on:
+  push:
+    paths: ["catalog/**", ".github/workflows/catalogue.yml"]
+  pull_request:
+    paths: ["catalog/**", ".github/workflows/catalogue.yml"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: catalog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema==4.26.0
+      - name: Validate
+        run: python tools/catalog.py validate
+      - name: Tool tests
+        run: python -m unittest discover -s tools/tests -v

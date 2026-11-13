@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:drive",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "drive",
+  "description": "A drive (converter, inverter or motor module) or an infeed (table line_module), with its output currents, DC link and braking data.",
+  "type": "object",
+  "required": [
+    "part_number"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "axes": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1"
+    },
+    "base_load_output_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "dc_link_capacitance_f": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "F"
+    },
+    "duty_type": {
+      "type": "string"
+    },
+    "line_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "max_output_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number (order number), as printed."
+    },
+    "power_loss_max_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "power_loss_typical_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "power_loss_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "pulse_frequency_hz": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "Hz"
+    },
+    "rated_output_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "rated_power_1ac_230v_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_power_3ac_240v_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_power_3ac_400v_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "rated_power_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "series": {
+      "type": "string"
+    },
+    "supply": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "braking": {
+      "type": "object",
+      "required": [
+        "part_number"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "braking_energy_j": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "J"
+        },
+        "continuous_braking_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "dc_link_overvoltage_v": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "V"
+        },
+        "line": {
+          "type": "string"
+        },
+        "part_number": {
+          "type": "string",
+          "description": "The maker's part number (order number), as printed."
+        },
+        "peak_braking_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "rated_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        }
+      },
+      "description": "Braking data of a drive with its internal braking resistor, and the DC link trip level."
+    },
+    "dc_link_measurement": {
+      "type": "object",
+      "required": [
+        "part_number"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "braking_threshold_above_v": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "V"
+        },
+        "date": {
+          "type": "string"
+        },
+        "dc_link_capacitance_f": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "F"
+        },
+        "dc_link_capacitance_high_f": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "F"
+        },
+        "dc_link_capacitance_low_f": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "F"
+        },
+        "firmware": {
+          "type": "string"
+        },
+        "idle_dc_link_v": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "V"
+        },
+        "part_number": {
+          "type": "string",
+          "description": "The maker's part number (order number), as printed."
+        }
+      },
+      "description": "DC link data measured on one real drive: not catalogue data. The metadata's notes give the method."
+    },
+    "line_module": {
+      "type": "object",
+      "required": [
+        "part_number"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "braking_threshold_v": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "V"
+        },
+        "continuous_braking_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "dc_link_capacitance_f": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "F"
+        },
+        "dc_link_current_540v_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "dc_link_current_600v_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "infeed_type": {
+          "type": "string"
+        },
+        "max_braking_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "max_dc_link_current_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "max_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "min_braking_resistance_ohm": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "ohm"
+        },
+        "part_number": {
+          "type": "string",
+          "description": "The maker's part number (order number), as printed."
+        },
+        "power_loss_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "rated_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        },
+        "s6_dc_link_current_a": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "A"
+        },
+        "s6_power_w": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "W"
+        }
+      },
+      "description": "An infeed module: line side and DC link ratings, braking where the module has a chopper."
+    }
+  }
+}

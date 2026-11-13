@@ -138,6 +138,14 @@ struct WorldCamera;
 fn main() {
     let lang = std::env::var("SIM_APP_LANG").ok().and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l)).unwrap_or(LANGUAGES[0]);
     let model = Model::new(MACHINES[0], lang);
+    // `sim-app --catalog DIR`: the catalogue from a directory instead of the compiled-in one.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(dir) = args.windows(2).find(|w| w[0] == "--catalog").map(|w| &w[1]) {
+        if let Err(e) = sim_components::catalog::use_directory(std::path::Path::new(dir)) {
+            eprintln!("{}", model.tr.tr_arg(e.key(), e.detail()));
+            std::process::exit(2);
+        }
+    }
     let window = Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
     App::new()
         .insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))

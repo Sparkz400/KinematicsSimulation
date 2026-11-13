@@ -106,6 +106,18 @@ fn snapshot() -> String {
     out.join("\n") + "\n"
 }
 
+/// Two lines alike but for numbers within 1e-12 of each other: a value the catalogue now holds in SI (0.0000093 kg m2)
+/// is the last bit off what the simulator computed from the printed unit before (0.093 kg cm2 times 1e-4).
+fn same(a: &str, b: &str) -> bool {
+    let words = |s: &str| s.split([' ', ',', '[', ']', ';', '(', ')']).filter(|w| !w.is_empty()).map(String::from).collect::<Vec<_>>();
+    let (a, b) = (words(a), words(b));
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(x, y)| match (x.parse::<f64>(), y.parse::<f64>()) {
+            (Ok(x), Ok(y)) => (x - y).abs() <= 1e-12 * x.abs().max(y.abs()),
+            _ => x == y,
+        })
+}
+
 #[test]
 fn the_catalogue_gives_every_part_the_values_it_gave_before() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/catalog_golden.txt");
@@ -115,6 +127,6 @@ fn the_catalogue_gives_every_part_the_values_it_gave_before() {
         return;
     }
     let before = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
-    let changed: Vec<String> = before.lines().zip(now.lines()).filter(|(a, b)| a != b).take(10).map(|(a, b)| format!("was: {a}\nnow: {b}")).collect();
+    let changed: Vec<String> = before.lines().zip(now.lines()).filter(|(a, b)| !same(a, b)).take(10).map(|(a, b)| format!("was: {a}\nnow: {b}")).collect();
     assert!(changed.is_empty() && before.lines().count() == now.lines().count(), "{} lines before, {} now; first changes:\n{}", before.lines().count(), now.lines().count(), changed.join("\n"));
 }

@@ -1,0 +1,25 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "gearboxes"
+notes = '''
+Source: Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, 04/2025, A5E54515894B AA, chapter 6.
+Extracted by catalog/tools/extract_siemens_gearboxes.py; the numbers are the manual's, the layout is ours.
+One row per gearbox size, motor frame size and ratio that the manual lists as available.
+motor_frame: the last two digits of the motor's frame size in the article number 1F.2.xx
+  (frame 10 is printed in the manual as 1F.2210).
+Torques are at the output shaft. rated: continuous; max: for at most 30 000 output revolutions;
+  emergency_off: at most 1000 times in the gearbox's life.
+torsional_stiffness and backlash are referred to the output; inertia is referred to the input (motor side).
+An empty field: the manual gives no value there.
+Not extracted: mass, radial and axial forces, reference speeds, bending moments, input speed limits,
+  the angled versions (NRBW, NRKW, NLCW) and the precision gearboxes SP+ and TP+.
+'''
+
+[[sources]]
+id = "gearboxes"
+document = "Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, A5E54515894B AA"
+date = "2025-04"
+locator = "chapter 6"
+method = "script:tools/extract_siemens_gearboxes.py"
+url = "https://docs.rs-online.com/f6f5/A700000014746827.pdf"

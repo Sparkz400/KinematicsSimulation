@@ -73,6 +73,20 @@ fn mistakes_are_reported_in_the_chosen_language() {
     assert!(text(&bad.stderr).contains("mass.no_such_value"));
 }
 
+/// `--catalog DIR` reads the catalogue from a directory: the repository's own copy runs a search as the built-in one
+/// does, and a directory without a catalogue is refused in the chosen language.
+#[test]
+fn a_catalogue_directory_is_read_and_a_missing_one_refused() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../catalog");
+    let args = ["run", MACHINES[0].id, "--motor", "1FK2205-4AF", "--time", "0.01"];
+    let (built_in, from_dir) = (cli(&args), cli(&[&args[..], &["--catalog", dir]].concat()));
+    assert_eq!(from_dir.status.code(), Some(0), "{}", text(&from_dir.stderr));
+    assert_eq!(built_in.stdout, from_dir.stdout);
+    let (en, de) = (cli(&[&args[..], &["--catalog", "no-such-dir"]].concat()), cli(&[&args[..], &["--catalog", "no-such-dir", "--lang", "de"]].concat()));
+    assert_eq!(en.status.code(), Some(2));
+    assert!(text(&en.stderr).contains("catalogue could not be read") && text(&de.stderr).contains("Katalog konnte nicht gelesen"), "{}", text(&en.stderr));
+}
+
 #[test]
 fn analyze_and_sweep_write_csv_for_every_machine() {
     for entry in MACHINES {

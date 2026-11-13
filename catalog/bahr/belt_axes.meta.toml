@@ -1,0 +1,162 @@
+schema_version = 1
+class = "belt_axis"
+key = ["series", "size"]
+notes = '''
+Source: Bahr Modultechnik GmbH (IMI Norgren), data sheets "Linearsystem <series>", German editions,
+  https://cdn.norgren.com/pdf/<source_file>.
+Extracted by catalog/tools/extract_bahr.py; the numbers are the data sheets', the layout is ours.
+One row per series and size of a linear axis driven by an HTD toothed belt with steel cords.
+series: the name the sheet is published under (ELZ-W is the sheet "ELZ 60 (S) W"); size: as printed, without the blank ("60 S" is 60S).
+kind: axis; xy_gantry (two X axes and a Y axis); xz_gantry (T-gantry). Both gantries have one circulating belt and
+  two motors.
+belt: HTD code, pitch in mm, "M", width in mm; a blank inside ("5M 25") is dropped. feed_per_rev: travel per turn of the pulley.
+no_load_torque: "Leerlaufdrehmoment", added to the drive torque at the pulley in the sheets' formula. no_load_torque_times: 2 where the sheet prints "2 x 0,4", the X/Z gantry's value
+  for horizontal travel; whether that is per motor is not said. The XY gantry prints one number.
+max_speed: "max"; the sheets give no conditions.
+feed_force: belt pull, continuous and for 0.2 s.
+fx ... mz: permissible loads on the slide, static and dynamic. The sheets want the sum of
+  Fy/Fy_dyn + Fz/Fz_dyn + Mx/Mx_dyn + My/My_dyn + Mz/Mz_dyn to stay at or below 1. The X/Z gantry has no Fy.
+base_weight: at the base length, without travel. weight_per_100_mm: per 100 mm of travel; the X/Z gantry prints
+  two values, X then Z (weight_per_100_mm_z), the XY gantry only one.
+moved_mass: the "bewegte Masse" the gantry sheets give per axis.
+max_length_one_piece: longer axes are joined from pieces. max_length_x/y/z: of the gantries; the XY gantry
+  prints one number for "length and width". Empty where the sheet does not state it in one of these forms
+  (ELSD: "max. Länge 2.000 mm"; DLZPVI: one length per size).
+sheet and edition: from the footer of the first page, "21.30.100 ... 11/25".
+As printed, and not smoothed over:
+  The continuous feed force is the static Fx, except ELZ, ELZ-W, ELSD, ELSZ, ELZD-W, ELZU 60 and 60S and
+  DLVZ and DLZPVI 120 (900 N, Fx 894 N), ELZU 100 (3600 N, Fx 4000 N) and LLZS 60 (1050 N, Fx 1073 N).
+  ELZT 80S has a lower no-load torque (1.2) than ELZT 80 (1.3).
+  ELZZ prints the belt width with a leading zero ("5M09").
+  The footer of the DLZPVI sheet (file de_21_1_133) carries the number of the DSZPVI sheet, 21.1.142; page 2 of
+  the ELZU sheet says 21.20.200.
+DLZPVI has a planetary gear unit built in; its ratio is not extracted and the values are the sheet's as they stand.
+Not extracted: second moments of area, dimensions, base lengths, slide lengths, journal and coupling sizes, order
+  codes, profile names of the gantries, and the second drive version of ELZ and ELVZ on a later page
+  (slide movable to the right and left, with its own weights and belt table).
+Sheets not read, because their tables need special cases: no-load torque with and without cover band (DLZ, DLZS,
+  DLZZ, DSZ, DSZPVI, DSZS, DSZZ, DLZU, DSZU); no feed force rows (ELFZ, ELFZex, DLZS-P, DSZS-P, LLZ, LLN, LSZ,
+  LSN); belt table with a second, effective belt width or none (MLZ, MLN, MLZ-W, MLZD-W, QLZ); belt table names
+  size 60 for the 60S (ELZI-W, ELZU-W); load or torque table laid out differently (ELZex, ELZG, DSSZ, QSZ, QSZT).
+  The rack-and-pinion axes (21.3.x) are no belt axes.
+'''
+
+[[sources]]
+id = "de_21_30_100_ELZI"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZI\", German edition"
+date = "2025-11"
+locator = "sheet 21.30.100 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_30_100_ELZI.pdf"
+
+[[sources]]
+id = "de_21_20_100_ELZU"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZU\", German edition"
+date = "2026-04"
+locator = "sheet 21.20.100 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_20_100_ELZU.pdf"
+
+[[sources]]
+id = "de_21_1_100_ELZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZ\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.100 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_100_ELZ.pdf"
+
+[[sources]]
+id = "de_21_1_103_ELZ-W"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZ-W\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.103 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_103_ELZ-W.pdf"
+
+[[sources]]
+id = "de_21_1_106_ELHZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELHZ\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.106 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_106_ELHZ.pdf"
+
+[[sources]]
+id = "de_21_1_107_ELSD"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELSD\", German edition"
+date = "2026-05"
+locator = "sheet 21.1.107 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_107_ELSD.pdf"
+
+[[sources]]
+id = "de_21_1_109_ELSZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELSZ\", German edition"
+date = "2026-04"
+locator = "sheet 21.1.109 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_109_ELSZ.pdf"
+
+[[sources]]
+id = "de_21_1_111_ELVZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELVZ\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.111 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_111_ELVZ.pdf"
+
+[[sources]]
+id = "de_21_1_112_ELZD-W"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZD-W\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.112 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_112_ELZD-W.pdf"
+
+[[sources]]
+id = "de_21_1_114_ELZT"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZT\", German edition"
+date = "2026-05"
+locator = "sheet 21.1.114 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_114_ELZT.pdf"
+
+[[sources]]
+id = "de_21_1_115_ELZZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem ELZZ\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.115 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_115_ELZZ.pdf"
+
+[[sources]]
+id = "de_21_1_131_DLSZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem DLSZ\", German edition"
+date = "2026-04"
+locator = "sheet 21.1.131 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_131_DLSZ.pdf"
+
+[[sources]]
+id = "de_21_1_132_DLVZ"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem DLVZ\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.132 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_132_DLVZ.pdf"
+
+[[sources]]
+id = "de_21_1_133_DLZPVI"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem DLZPVI\", German edition"
+date = "2026-04"
+locator = "sheet 21.1.142 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_133_DLZPVI.pdf"
+
+[[sources]]
+id = "de_21_1_152_LLZS"
+document = "Bahr Modultechnik GmbH (IMI Norgren), data sheet \"Linearsystem LLZS\", German edition"
+date = "2025-11"
+locator = "sheet 21.1.152 (as its footer prints it)"
+method = "script:tools/extract_bahr.py"
+url = "https://cdn.norgren.com/pdf/de_21_1_152_LLZS.pdf"

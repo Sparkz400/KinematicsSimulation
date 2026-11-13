@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:linear_motor",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "linear_motor",
+  "description": "A linear motor: one coil unit with its magnet track. No data yet.",
+  "type": "object",
+  "required": [
+    "part_number"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number (order number), as printed."
+    },
+    "series": {
+      "type": "string"
+    },
+    "continuous_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "peak_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "force_constant_n_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N/A"
+    },
+    "back_emf_constant_v_s_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V s/m"
+    },
+    "continuous_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "peak_current_a": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "A"
+    },
+    "phase_resistance_20c_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm"
+    },
+    "phase_inductance_h": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "H"
+    },
+    "pole_pitch_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "coil_mass_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "magnet_track_mass_kg_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg/m"
+    },
+    "attraction_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "max_speed_m_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m/s"
+    },
+    "thermal_time_constant_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "source": {
+      "type": "string",
+      "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+    }
+  }
+}
