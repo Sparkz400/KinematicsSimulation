@@ -36,16 +36,18 @@ pub fn nearest(bodies: &[Aabb], obstacles: &[Obstacle]) -> Option<(usize, ([f64;
 }
 
 /// What a path keeps from the obstacles before it runs: the least clearance along it (m, infinite without obstacles),
-/// and the first pose at which a part of the machine touches one (clearance 0 or less).
+/// the first pose at which a part of the machine touches one (clearance 0 or less), and the first pose at the least
+/// clearance (`None` without obstacles).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanCheck {
     pub clearance: f64,
     pub contact: Option<Vec<f64>>,
+    pub nearest: Option<Vec<f64>>,
 }
 
 impl Default for PlanCheck {
     fn default() -> Self {
-        Self { clearance: f64::INFINITY, contact: None }
+        Self { clearance: f64::INFINITY, contact: None, nearest: None }
     }
 }
 
@@ -56,7 +58,9 @@ pub fn check_path(machine: &dyn Machine, obstacles: &[Obstacle], poses: &[Vec<f6
     let mut at = |pose: &[f64]| {
         machine.equilibrium(pose, &mut state, &mut torque);
         let gap = nearest(&machine.collision_bodies(&state), obstacles).map_or(f64::INFINITY, |(_, (_, _, gap))| gap);
-        check.clearance = check.clearance.min(gap);
+        if gap < check.clearance {
+            (check.clearance, check.nearest) = (gap, Some(pose.to_vec()));
+        }
         if gap <= 0.0 && check.contact.is_none() {
             check.contact = Some(pose.to_vec());
         }

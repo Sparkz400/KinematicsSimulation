@@ -3,9 +3,9 @@
 //! this and calls its methods.
 
 use crate::session::{Event, Request, Session, extend_trail};
-use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict, compare_effect};
+use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, OptimiseOptions, Optimised, Sensitivity, Verdict, compare_effect};
 use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
-use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
+use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle_with, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
 use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
 use sim_components::import::{Mapping, decode, import};
@@ -1116,7 +1116,8 @@ impl Model {
                         rows.sort_by(|a, b| b.strength(&nominal).total_cmp(&a.strength(&nominal)));
                         Report::Sensitivity(nominal, rows)
                     }
-                    Analysis::Optimise => Report::Optimised(optimise_cycle(entry, &config, 40).map_err(refused)?),
+                    // With the error bands ticked the result has to pass in them too; the front comes with six cycles more.
+                    Analysis::Optimise => Report::Optimised(optimise_cycle_with(entry, &config, &OptimiseOptions { max_runs: 40, robust: inputs.bands, pareto: true }).map_err(refused)?),
                     Analysis::Search => {
                         let (series, gearboxes) = (inputs.series.trim(), Some(inputs.gearboxes.trim()).filter(|series| !series.is_empty()));
                         let wanted = |article: &str| article.starts_with(series);
@@ -1729,7 +1730,22 @@ impl Model {
                 table.push(vec![self.tr.tr_arg("optimised-via", &segments), String::new(), via.iter().map(|x| short(*x)).collect::<Vec<_>>().join(", ")]);
             }
         }
+        // Judged in the error bands: the fastest setting on the config as written, what it fails there, and what the
+        // cycle as configured fails there already (not judged).
+        if let Some(robust) = &found.robust {
+            let checks = |checks: &[&str]| checks.iter().map(|c| self.tr.tr(&format!("check-{c}")).to_string()).collect::<Vec<_>>().join(", ");
+            table.push(vec![self.tr.tr("optimised-fastest").to_string(), String::new(), short(robust.nominal_duration)]);
+            table.push(vec![self.tr.tr("optimised-fastest-fails").to_string(), String::new(), checks(&robust.nominal_fails)]);
+            table.push(vec![self.tr.tr("optimised-excused").to_string(), String::new(), checks(&robust.excused)]);
+        }
         Some(table)
+    }
+
+    /// The optimiser's front of energy against cycle time (`Optimised::front`): (cycle time, energy per cycle) of each
+    /// point, and the result's cycle time.
+    pub fn optimised_front(&self) -> Option<(Vec<[f64; 2]>, f64)> {
+        let found = self.optimised.as_ref().filter(|found| !found.front.is_empty())?;
+        Some((found.front.iter().map(|p| [p.duration, p.energy]).collect(), found.after.duration))
     }
 
     // ---------------------------------------------------------------------------------------

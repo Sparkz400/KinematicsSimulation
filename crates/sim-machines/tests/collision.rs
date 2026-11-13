@@ -136,6 +136,38 @@ fn a_box_under_the_traverse_is_judged_by_the_collision_check() {
     }
 }
 
+/// The optimiser lifts each traverse of the T-gantry's cycle over a box across it, and no higher. With
+/// `profile.min_clearance_m` = 0.05 m and pick and place at z = 0.05, the lifts go down to 0.05 + 0.05 = 0.1 m without
+/// an obstacle, as before. A box 0.1 m high at x = 0.65 in the view (the middle of the traverse), its top at -0.6: the
+/// lowest body over it is the payload on the way there, its bottom 0.802 m below the tool (centre 0.752 m, half its
+/// 0.1 m), and the flange on the way back, 0.702 m below (centre 0.692 m, half its 0.02 m). So the lifts go to
+/// -0.6 + 0.05 + 0.802 = 0.252 m and -0.6 + 0.05 + 0.702 = 0.152 m. Planned at rest that keeps 0.05 m exactly; the run
+/// sways the payload some 0.05 mm nearer, so the optimiser runs the setting again with the lifts higher by that (three
+/// cycles: the cycle as configured, the lifts on the box, a little higher), within 0.2 mm of the hand values. The
+/// optimised cycle runs with effects.crash on, touches nothing and passes every verdict.
+#[test]
+fn the_optimiser_lifts_each_traverse_over_a_box_across_it_by_hand() {
+    use sim_components::analysis::optimise_cycle;
+    let entry = find("t-gantry").unwrap();
+    let clearance = "profile.min_clearance_m = 0.05";
+    let found = optimise_cycle(entry, &with(entry, &[clearance]), 2).unwrap();
+    assert!(found.lifts.len() == 2 && found.lifts.iter().all(|l| l.before == 0.35 && (l.after - 0.1).abs() < 1e-12), "{:?}", found.lifts);
+    let boxed = r#"obstacles = [{ name = "box", centre_m = [0.65, -0.05, -0.65], size_m = [0.1, 0.2, 0.1] }]"#;
+    let found = optimise_cycle(entry, &with(entry, &[clearance, boxed]), 3).unwrap();
+    assert_eq!(found.lifts.iter().map(|l| l.segments).collect::<Vec<_>>(), [[1, 2, 3], [4, 5, 0]]);
+    for (lift, by_hand) in found.lifts.iter().zip([-0.6 + 0.05 + 0.802, -0.6 + 0.05 + 0.702]) {
+        assert!(lift.after >= by_hand - 1e-12 && lift.after < by_hand + 2e-4 && lift.via.is_none(), "{lift:?}, by hand {by_hand} m");
+    }
+    let mut applied = with(entry, &[clearance, boxed, "effects.crash = true"]);
+    for (path, _, after) in &found.changes {
+        applied.set_text(&format!("{path} = {after}")).unwrap();
+    }
+    let load = analyse_cycle(&mut Sim::new(entry, &applied).unwrap()).unwrap();
+    assert!(load.contact.is_none() && load.clearance.is_some_and(|c| c >= 0.05), "{:?}", load.clearance);
+    assert!(verdicts(&applied, &load).unwrap().iter().all(|v| v.ok));
+    assert!((load.duration - found.after.duration).abs() < 1e-9);
+}
+
 /// The time-optimal plan respects the obstacles: a path that comes nearer than `profile.min_clearance_m` is refused,
 /// the same path within the axis limits is planned (and `check_plan` says how near it comes).
 #[test]

@@ -497,35 +497,56 @@ Limits for this task:
 ```text
 $ sim-cli optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
-cycle_s,2.0480,1.4920
-dwell_error_peak_m,3.947e-5,9.462e-5
+cycle_s,2.0480,1.5900
+dwell_error_peak_m,3.947e-5,5.303e-5
+bands_fastest_cycle_s,,1.4920
+bands_fastest_fails,,belt-slack pulley-bearing-life settling
+bands_steps_back,,1
+bands_excused,,pulley-bearing-life
 axis.x.max_acceleration_m_s2,25.0,53.99999999999999
-axis.x.max_jerk_m_s3,150.0,337.5
+axis.x.max_jerk_m_s3,150.0,225.0
 axis.x.max_velocity_m_s,2.5,3.0
 axis.z.max_acceleration_m_s2,15.0,32.4
-axis.z.max_jerk_m_s3,500.0,1125.0
+axis.z.max_jerk_m_s3,500.0,750.0
 axis.z.max_velocity_m_s,1.5,1.7999999999999998
 effects.input_shaping,true,false
 ```
 
 The optimiser tries corner blending and higher velocity, acceleration and jerk limits (all axes together, in steps of ×1.5 and ×1.2). It keeps a change if the cycle gets shorter and every verdict still passes, among them `settling`, so a faster move that leaves the tool swinging at the pick does not count. Input shaping makes no cycle shorter by itself, because every stop waits one period of the shaper. So it is tried where it can help: a faster setting that fails on `settling` alone is run again with the shaper (and with `effects.shaper_follows_pose` where the machine reports a resonance) and taken if it then passes and is shorter; one that still fails on `settling` alone with the shaper is run again with a second shaper (see [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)). Where the shaper is on already, switching it off is tried too. The first two rows are the cycle time and the dwell error before and after. The other rows are what to change in the config. No config file is edited.
 
-The EXCT-30 config has corner blending and the shaper on already, so here the optimiser raises the limits and switches the shaper off (both shapers): the cycle falls from 2.05 s to 1.49 s, and the tool is 0.095 mm off in the dwell instead of 0.039 mm.
+**In the error bands.** The result also has to pass every check in the error bands of the config's `[bounds]` (one value at a time, as `verdicts --bands`), not only with the config as written. The search itself judges as written; then its fastest setting is judged in the bands, and where it fails there, the steps the search took are gone back, fastest first, until one passes (2n + 1 cycles per step judged, n the bounded values). A check that the cycle as configured fails in its bands already cannot be kept, so it is not judged: it is listed as `bands_excused`. The `bands_*` rows say how fast the search got on the config as written (`bands_fastest_cycle_s`), what that fails in the bands, and how many steps back the result is; the error stream says how many cycles the search and the bands took.
 
-`--runs N` limits the number of cycles simulated (default 40).
+The EXCT-30 config has corner blending and the shaper on already, so here the optimiser raises the limits and switches the shaper off (both shapers). On the config as written that gives 1.49 s, but with the values at their bounds the belt goes slack and the tool is 0.29 mm off in the dwell. One step back, with the jerk of the last step taken back, passes: 2.05 s to 1.59 s, the tool 0.053 mm off in the dwell instead of 0.039 mm. The shipped config fails `pulley-bearing-life` in its bands already (17 349 h at the low bound against 20 000 h). The bands took 363 cycles (three settings at 121 each, 60 bounded values), about 30 s on 16 threads; the search 40. The default T-gantry goes from 6.08 s to 5.36 s (5.34 s as written, which fails `settling` in the bands), with 141 cycles of bands.
 
-**Lift heights and rounded lifts.** The cycle's geometry is a variable too. A lift, traverse and lower (lift straight up from the pick, traverse at that height, lower straight down to the place; the default T-gantry has two) is tried first as low as `profile.min_clearance_m` allows: that far above the higher of pick and place, say the height of an obstacle between them. The shipped T-gantry configs set it to the lifts they have, so nothing changes there. With an obstacle of 0.1 m:
+`--nominal` judges the config as written alone, as before: on the EXCT-30 1.49 s. `--runs N` limits the number of cycles of the search (default 40); the bands come on top.
+
+**Energy against cycle time.** `--pareto FILE` writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, fastest first, as CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (the factors on the axes' limits as configured). They come from the settings the search ran anyway that pass every check as written, and six slower ones from the result (acceleration and jerk, and all three limits, at 0.8, 0.6 and 0.4 times). The energy is what the drives drew less what they fed back, plus what the braking resistor burned; with no resistor (no DC link simulated) braking energy counts as fed back. On the EXCT-30 the front runs from 1.49 s at 268 J and a peak utilisation of 0.52 to 3.65 s at 109 J and 0.17; the result's 1.59 s takes 253 J. A slower acceleration saves the kinetic energy a stop burns in the resistor, ½ m v² where the move does not reach its top speed (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). The app draws the front below the optimiser's table.
+
+**Lift heights and rounded lifts.** The cycle's geometry is a variable too. A lift, traverse and lower (lift straight up from the pick, traverse at that height, lower straight down to the place; the default T-gantry has two) is tried first as low as `profile.min_clearance_m` allows: that far above the higher of pick and place, and where the config has `obstacles`, that far above the obstacles in the way of the traverse, measured from the machine's collision bodies (see below). The shipped T-gantry configs set it to the lifts they have, so nothing changes there. With an obstacle of 0.1 m:
 
 ```text
 $ sim-cli optimise t-gantry --set profile.min_clearance_m=0.1
 setting,before,after
-cycle_s,6.0800,3.3640
+cycle_s,6.0800,3.4420
 ...
 cycle.segment[1-2-3].lift_m,0.3500,0.1500
 cycle.segment[4-5-0].lift_m,0.3500,0.1500
 ```
 
-Lowering alone saves 2.000 s: four Z moves of 0.2 m less at 0.4 m/s (`the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`). Segments are counted from 0. Last, once nothing else helps, the optimiser also tries to round a lift's two corners: one segment that goes straight up, through a via point on a spline, and straight down (`via` in [`[[cycle.segment]]`](config-reference.md#cyclesegment)), timed by the path planner, as long as the path keeps the clearance; such a row reads `cycle.segment[1-2-3].via_m,,0.5000 0.3000`. On the default T-gantry it never won: an arch is slower than two stops with corner blending. In the app, "Apply" writes the new cycle into the config (saved, the file is then written without its comments).
+With the other steps the cycle takes 3.44 s (3.36 s with `--nominal`, which fails `settling` in the bands). Lowering alone saves 2.000 s: four Z moves of 0.2 m less at 0.4 m/s (`the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`). Segments are counted from 0. Last, once nothing else helps, the optimiser also tries to round a lift's two corners: one segment that goes straight up, through a via point on a spline, and straight down (`via` in [`[[cycle.segment]]`](config-reference.md#cyclesegment)), timed by the path planner, as long as the path keeps the clearance; such a row reads `cycle.segment[1-2-3].via_m,,0.5000 0.3000`. On the default T-gantry it never won: an arch is slower than two stops with corner blending. In the app, "Apply" writes the new cycle into the config (saved, the file is then written without its comments).
+
+**Over obstacles.** Where the config has `obstacles`, each lift is lowered no further than its traverse keeps `profile.min_clearance_m` to them with the machine's collision bodies (the T-gantry's Z axis, flange and payload), looked at every millimetre at rest. A box across the traverse puts the lift at its top plus the clearance plus how far the lowest body reaches below the tool. With a 0.1 m box under the middle of the default T-gantry's traverse:
+
+```text
+$ sim-cli optimise t-gantry --set profile.min_clearance_m=0.05 --set 'obstacles=[{ name = "box", centre_m = [0.65, -0.05, -0.65], size_m = [0.1, 0.2, 0.1] }]'
+setting,before,after
+cycle_s,6.0800,4.0840
+...
+cycle.segment[1-2-3].lift_m,0.3500,0.2521
+cycle.segment[4-5-0].lift_m,0.3500,0.1521
+```
+
+By hand: the box's top at -0.6 m in the view, the payload's bottom 0.802 m below the tool on the way there, the flange's 0.702 m on the way back: -0.6 + 0.05 + 0.802 = 0.252 m and 0.152 m (without the box both would go down to 0.1 m). The lifts end 0.1 mm higher: the run sways the payload 0.05 mm nearer than the plan at rest, and the bounds a little more, so the optimiser runs such a setting again with the lifts higher by what was missing (`the_optimiser_lifts_each_traverse_over_a_box_across_it_by_hand`). A lift that an obstacle raised is also tried rounded through a via point over the obstacle, its ends as low as pick and place allow; a via point whose planned path comes nearer to an obstacle than the clearance is not run.
 
 Limits for this task:
 
@@ -1223,7 +1244,7 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Analysis: operating points | After "Analyse and judge the cycle": the motor torque over the motor speed once per millisecond of the cycle, one colour per motor, over the motors' torque-speed curve (dashed: the peak torque both ways up to the rated speed, falling to nothing at the no-load speed), and below it the same points as a table that scrolls. The same as `sim-cli analyze --points` |
 | Effect views | Opens when a cycle has been analysed; its own button "Analyse and judge the cycle" does the same as the Analysis part's. "Where each motor's torque goes": per motor a plot over the scopes' time window of the four parts of its torque (inertia, gravity, friction, belt and the rest) and, dashed, the torque itself, which they add up to; it shares the scopes' time axis and cursor. "Torque parts over the analysed cycle": per part and motor the peak and the RMS, as `sim-cli analyze --breakdown` writes them. "Energy budget of the analysed cycle": the supply, every loss and store that is not exactly zero, and what is not accounted for, in J and in percent of the supply, as `--budget` writes it. "Friction per guide": per guide the friction force of steady sliding over the speed (solid) and its Coulomb, viscous and stiction parts (dashed) at the guide load of the moment, the point where the guide is now, and a table of the speed, the three parts, the force and the load factor now. "Temperatures": the rise of each winding and, with gearbox and guide heating on, of each gearbox and guide over the scopes' window, the table of now, where each settles on the analysed cycle, its rated rise and the share of the rating where it settles, and the colour scale of the 3D view. "Belt sections": tension (pretension dashed) and stretch per section, the table of both now, and the belt's colour scale. "Effect on and off": an effect, a quantity and "Compare"; both runs overlaid, off dashed, and per line the peak and RMS of the difference. Above each plot, its lines' names in their colours. See [See where torque and energy go](#see-where-torque-and-energy-go) |
 | Analysis: Sensitivity | The eight parameters with `[bounds]` that the cycle depends on most |
-| Analysis: Optimise the cycle | The optimiser. "Apply these settings to the running machine" puts its result into the config |
+| Analysis: Optimise the cycle | The optimiser; with "error bands" ticked, its result has to pass in the bands too (the rows below the settings say how fast it got on the config as written and what that fails there). Below the table the front of energy per cycle against cycle time, the result marked. "Apply these settings to the running machine" puts its result into the config |
 | Motor search | Supply (230v, 400v or s120), how the article numbers start (empty: every motor of the catalogue) and optionally a gearbox series such as `NRK` or `NRK070`; ticked, "Every axis of the catalogue" tries each motor on every catalogue axis of the machine's kind as well (`--axes`). "Search" runs every such motor on the cycle and lists them, passing ones first, cheapest first (installed mass stands in for the price), with gearbox, axis, the mass of motor and gearbox, the installed mass, and the check nearest to its limit or the reason a motor or an axis was not run. "Use" in a row names that motor, its supply, its gearbox, its drive and its axis in `[parts]` of the running config. The same as `sim-cli search` |
 | Path | A file name, typed in. "Lines, arcs and splines" is a path file, planned within the axis limits or, ticked, "As fast as the motors allow"; "Poses at times" is a trajectory file. "Plan, run and analyse" plans the path from where the machine stands, analyses it on a simulation of its own (duration, deviation by transition curves, path error, distance behind the setpoint, loads, checks), draws the planned path as a plot in the panel and as a line in the 3D view, and has the machine in the 3D view run it. The same as `sim-cli analyze --path` or `--trajectory` |
 | Trace, Mapping | A file name, typed in, and for a vendor's export its mapping file (as `--map` takes it; empty for a trace in the simulator's columns). "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), per axis the fitted mass, friction and constant force next to the config's, with what to change in the config, and per motor what the trace says by itself: inertia, friction, the loops' lags, each with its standard error and 95 % interval, and how well each model reproduces the trace. The same as `sim-cli replay`, `fit --trace` and `identify --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |

@@ -1386,6 +1386,7 @@ pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(St
 /// A cycle made faster: the cycle before and after, the settings that changed (path, before, after) and
 /// the number of cycles that were simulated on the way. Where the optimiser changed the cycle's geometry, `changes`
 /// has the whole new cycle as the entry "cycle.segment" (TOML, for `Config::set_text`), and `lifts` says what changed.
+/// `runs` counts the search's cycles, the sweep of `OptimiseOptions::pareto` among them; the bands' are in `robust`.
 #[derive(Debug, Clone)]
 pub struct Optimised {
     pub before: CycleLoad,
@@ -1393,6 +1394,74 @@ pub struct Optimised {
     pub changes: Vec<(String, String, String)>,
     pub lifts: Vec<LiftChange>,
     pub runs: usize,
+    /// With `OptimiseOptions::robust`: how the result stands in the error bands.
+    pub robust: Option<Robust>,
+    /// With `OptimiseOptions::pareto`: the settings run that passed every verdict and that no other one beats in cycle
+    /// time, energy and peak utilisation at once, fastest first. Empty without.
+    pub front: Vec<FrontPoint>,
+}
+
+/// What to optimise for: at most `max_runs` cycles in the search; `robust`: the result has to pass every verdict in the
+/// error bands too (`verdict_bands`, one bound of `[bounds]` at a time), not only as configured; `pareto`: the
+/// non-dominated set of cycle time, energy and peak utilisation (`Optimised::front`), with a sweep of slower settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OptimiseOptions {
+    pub max_runs: usize,
+    pub robust: bool,
+    pub pareto: bool,
+}
+
+/// The fastest setting the search found on the verdicts as configured, judged in the error bands: its cycle time and
+/// the checks it fails there (none where it passes); the checks the cycle as configured fails in the bands already,
+/// which the result is not judged on (it cannot take back a margin the config does not have); how many accepted steps
+/// the result went back from the fastest to the fastest one that passes the other checks in the bands; and the cycles
+/// the bands took (2 n + 1 per setting judged, n the bounds).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Robust {
+    pub nominal_duration: f64,
+    pub nominal_fails: Vec<&'static str>,
+    pub excused: Vec<&'static str>,
+    pub steps_back: usize,
+    pub runs: usize,
+}
+
+/// A setting on the energy-against-time front: cycle time (s), energy per cycle from the supply (`supply_energy`, J),
+/// the highest utilisation of any motor's torque-speed curve (`MotorLoad::utilisation`), and the setting: factors on the
+/// axes' speed, acceleration and jerk, corner blending and input shaping. The lifts are not shown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrontPoint {
+    pub duration: f64,
+    pub energy: f64,
+    pub utilisation: f64,
+    pub factors: [f64; 3],
+    pub blending: bool,
+    pub shaping: bool,
+}
+
+/// The energy a cycle takes from the supply, J: what the drives drew less what they fed back, plus what the braking
+/// resistor burned of what they fed back (with the DC link simulated; a shared one counted once). What the capacitors
+/// hold more at the end than at the start counts as fed back.
+// shortcut: the line module's own loss (effects.regenerative_supply) and the bleeder are left out, add them once a front
+// is drawn for a regenerative supply.
+pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
+    let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
+    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) { load.motors.first().map_or(0.0, |m| m.resistor_energy) } else { load.motors.iter().map(|m| m.resistor_energy).sum() };
+    net + burned
+}
+
+/// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
+/// a point that is there twice is kept once.
+pub fn non_dominated(points: &[FrontPoint]) -> Vec<FrontPoint> {
+    let figures = |p: &FrontPoint| [p.duration, p.energy, p.utilisation];
+    let beats = |a: &FrontPoint, b: &FrontPoint| figures(a).iter().zip(figures(b)).all(|(x, y)| *x <= y) && figures(a) != figures(b);
+    let mut front: Vec<FrontPoint> = Vec::new();
+    for p in points {
+        if !points.iter().any(|q| beats(q, p)) && !front.iter().any(|q| figures(q) == figures(p)) {
+            front.push(p.clone());
+        }
+    }
+    front.sort_by(|a, b| a.duration.total_cmp(&b.duration));
+    front
 }
 
 /// A lift, traverse and lower of the cycle that the optimiser changed: the three segments of the configured cycle
@@ -1410,7 +1479,10 @@ pub struct LiftChange {
 /// A lift, traverse and lower of a configured cycle (`lifts`): segment `lift` goes from `from` straight along the last
 /// axis to `height`, `traverse` along the other axes at that height, `lower` straight along the last axis to `to`.
 /// `up` is the side (+1 or -1 on the last axis) both ends lie away from; `lowest` the height nearest them that keeps
-/// `profile.min_clearance_m` to the farther of the two.
+/// `profile.min_clearance_m` to the farther of the two. `needed` is the lowest height at which the traverse keeps that
+/// clearance to the obstacles as well (`over_obstacles`; `lowest` without obstacles in the way, the height as configured
+/// where none clears them), `over` the pose on the traverse nearest to an obstacle there, where one raised it. `payload`:
+/// whether the payload is on during the three segments.
 struct Lift {
     segments: [usize; 3],
     from: Vec<f64>,
@@ -1418,6 +1490,9 @@ struct Lift {
     height: f64,
     up: f64,
     lowest: f64,
+    needed: f64,
+    over: Option<Vec<f64>>,
+    payload: bool,
 }
 
 /// The lifts of a cycle: three segments in a row (round the end of the cycle too) of which the first moves along the
@@ -1455,10 +1530,44 @@ fn lifts(cfg: &Config, clearance: f64) -> Result<Vec<Lift>, ConfigError> {
         let lowest = if (lowest - height).abs() < 1e-9 { height } else { lowest };
         // A lift that is lower than the clearance asks for as configured is left as it is.
         if up * (height - lowest) >= 0.0 {
-            out.push(Lift { segments: [a, b, c], from, to, height, up, lowest });
+            // The segments run with the payload as the one before left it, which `quiet` keeps.
+            let payload = segments[a].get("payload").and_then(|p| p.as_bool()).unwrap_or(true);
+            out.push(Lift { segments: [a, b, c], from, to, height, up, lowest, needed: lowest, over: None, payload });
         }
     }
     Ok(out)
+}
+
+/// The lowest height of a lift's traverse at which the machine's collision bodies keep `clearance` to the obstacles, at
+/// rest at every millimetre of it (`collision::check_path`), with the pose nearest to an obstacle there where one raised
+/// it above `lowest`. From `lowest`, the height is moved each time by what the clearance lacks (up) or has too much
+/// (down, never below `lowest`) until it is the clearance to 1 nm. The bodies move with the last axis, so the clearance
+/// changes by no more than the height: a box across the traverse is cleared in one step, to the clearance exactly. `None`
+/// where 40 steps within the axis's range find no height that clears (a box beside the traverse that reaches above it).
+fn over_obstacles(machine: &mut dyn sim_core::Machine, obstacles: &[sim_core::Obstacle], lift: &Lift, clearance: f64, axis: &sim_core::AxisInfo) -> Option<(f64, Option<Vec<f64>>)> {
+    let z = lift.from.len() - 1;
+    machine.set_payload_attached(lift.payload);
+    let machine: &dyn sim_core::Machine = machine;
+    let gap_at = |height: f64| {
+        let at = |p: &[f64]| -> Vec<f64> { p[..z].iter().copied().chain([height]).collect() };
+        let mut check = crate::collision::PlanCheck::default();
+        crate::collision::check_path(machine, obstacles, &[at(&lift.from), at(&lift.to)], &mut check);
+        (check.clearance, check.nearest)
+    };
+    let (mut height, mut best) = (lift.lowest, None::<(f64, Option<Vec<f64>>)>);
+    for _ in 0..40 {
+        let (gap, nearest) = gap_at(height);
+        if gap >= clearance - 1e-9 && best.as_ref().is_none_or(|(b, _)| lift.up * (height - b) < 0.0) {
+            best = Some((height, nearest));
+        }
+        // How far beyond `lowest` the next height is (on the side `up`): what it is now, plus what the clearance lacks.
+        let next = lift.lowest + lift.up * (lift.up * (height - lift.lowest) + clearance - gap).max(0.0);
+        if !gap.is_finite() || (gap - clearance).abs() <= 1e-9 || next == height || !(axis.min..=axis.max).contains(&next) {
+            break;
+        }
+        height = next;
+    }
+    best.map(|(height, nearest)| (height, if height == lift.lowest { None } else { nearest }))
 }
 
 /// The cycle with each lift at `heights` and, where `vias` has one, rounded through that via point (see `LiftChange`).
@@ -1497,8 +1606,10 @@ fn cycle_with(cfg: &Config, lifts: &[Lift], heights: &[f64], vias: &[Option<Vec<
 }
 
 /// Whether the path of a lift rounded through `via` keeps its clearance: every planned pose that lies between the two
-/// ends along the other axes is at `lowest` or beyond, less the path tolerance the transition curves may use.
-fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, height: f64, via: &[f64]) -> bool {
+/// ends along the other axes is at `lowest` or beyond, less the path tolerance the transition curves may use; and where
+/// there are obstacles, the machine's collision bodies keep `clearance` to them along the whole path, at rest at each
+/// planned pose (`collision::check_path`).
+fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, height: f64, via: &[f64], bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64)) -> bool {
     let z = lift.from.len() - 1;
     let at_height = |p: &[f64]| {
         let mut p = p.to_vec();
@@ -1509,10 +1620,19 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
     let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK) else { return false };
     let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
     let width = across.iter().map(|d| d * d).sum::<f64>();
-    points.iter().all(|(_, pose)| {
+    let above = points.iter().all(|(_, pose)| {
         let along = (0..z).map(|i| (pose[i] - lift.from[i]) * across[i]).sum::<f64>() / width;
         along <= 0.0 || along >= 1.0 || lift.up * (pose[z] - lift.lowest) >= -tolerance - 1e-9
-    })
+    });
+    let (machine, obstacles, clearance) = bodies;
+    if !above || obstacles.is_empty() {
+        return above;
+    }
+    machine.set_payload_attached(lift.payload);
+    let mut check = crate::collision::PlanCheck::default();
+    let poses: Vec<Vec<f64>> = std::iter::once(lift.from.clone()).chain(points.into_iter().map(|(_, pose)| pose)).collect();
+    crate::collision::check_path(&*machine, obstacles, &poses, &mut check);
+    check.clearance >= clearance - 1e-9
 }
 
 /// Shortens the cycle of a config without breaking a verdict. Tries corner blending, then raises speed,
@@ -1538,12 +1658,38 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
 /// clearance fails the verdict "collision" and is not taken; the cycle as configured is refused if it does.
 ///
 /// A search by trial, not a proof of the optimum: it stops at the first setting from which no single step
-/// is an improvement.
+/// is an improvement. Judged on the verdicts as configured, at most `max_runs` cycles: `optimise_cycle_with` for the
+/// error bands and the energy front.
 pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Result<Optimised, ConfigError> {
-    let probe = Sim::new(entry, cfg)?;
-    let lifts = lifts(cfg, cfg.non_negative("profile.min_clearance_m")?)?;
+    optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false })
+}
+
+/// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
+/// judged with `verdict_bands` over the config's `[bounds]`; where it fails, the accepted steps of the search are gone
+/// back one at a time, each judged in the bands, until one passes (2 n + 1 cycles each, n the bounds). With
+/// `options.pareto`, every setting run that passes every verdict, and a sweep of slower ones from the result (its
+/// acceleration and jerk, and all three limits, at 0.8, 0.6 and 0.4 times: six cycles more), give the front of cycle
+/// time against energy and peak utilisation (`Optimised::front`).
+///
+/// Where the config has obstacles, a lift is lowered no further than its traverse keeps the clearance to them
+/// (`over_obstacles`): a box under the traverse puts the lift at its top plus the clearance plus how far the machine's
+/// lowest collision body reaches below the tool. A lift that an obstacle raises is tried rounded through a via point
+/// over that obstacle as well, its ends at the clearance above pick and place; every via point's path is checked
+/// against the obstacles before it runs.
+pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &OptimiseOptions) -> Result<Optimised, ConfigError> {
+    let max_runs = options.max_runs;
+    let mut probe = Sim::new(entry, cfg)?;
+    let clearance = cfg.non_negative("profile.min_clearance_m")?;
+    let mut lifts = lifts(cfg, clearance)?;
     let (cycle_s, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
     let axis_infos = probe.machine.axes().to_vec();
+    let obstacles = probe.obstacles.clone();
+    if !obstacles.is_empty() {
+        for lift in &mut lifts {
+            let axis = &axis_infos[lift.from.len() - 1];
+            (lift.needed, lift.over) = over_obstacles(probe.machine.as_mut(), &obstacles, lift, clearance, axis).unwrap_or((lift.height, None));
+        }
+    }
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
     let (first, configured) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
     let second_frequency = if configured > 0.0 { Some(configured) } else { resonance.filter(|f| (f / first - 1.0).abs() > 0.1) };
@@ -1579,6 +1725,8 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
         Ok(changed)
     };
     let runs = std::cell::Cell::new(0usize);
+    // Every setting run that passed every verdict, for the front.
+    let passed = std::cell::RefCell::new(Vec::<FrontPoint>::new());
     // The cycle of a setting and the checks it fails, if it runs.
     let judged = |setting: &Setting| -> Option<(CycleLoad, Vec<&'static str>)> {
         runs.set(runs.get() + 1);
@@ -1588,7 +1736,12 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
             return None;
         }
         let load = analyse_cycle_with(&mut sim, false).ok()?;
-        let failed = verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+        let failed: Vec<&'static str> = verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+        if failed.is_empty() {
+            let utilisation = load.motors.iter().fold(0.0, |a: f64, m| a.max(m.utilisation));
+            let (factors, blending, shaping) = (setting.factors, setting.blending, setting.shaping);
+            passed.borrow_mut().push(FrontPoint { duration: load.duration, energy: supply_energy(&changed, &load), utilisation, factors, blending, shaping });
+        }
         Some((load, failed))
     };
     let start = Setting {
@@ -1604,7 +1757,21 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
         Some((load, failed)) if failed.is_empty() => load,
         _ => return Err(ConfigError::Invalid("the cycle as configured fails a verdict".into())),
     };
+    // The setting with the lifts the obstacles raised (where it changed them) higher by `lack`, their via points with them.
+    let raised_by = |setting: &Setting, lack: f64| {
+        let mut higher = setting.clone();
+        for (k, lift) in lifts.iter().enumerate().filter(|(k, lift)| lift.over.is_some() && setting.heights[*k] != lift.height) {
+            higher.heights[k] += lift.up * lack;
+            if let Some(z) = higher.vias[k].as_mut().and_then(|via| via.last_mut()) {
+                *z += lift.up * lack;
+            }
+        }
+        higher
+    };
     let (mut best, mut best_load) = (start.clone(), before.clone());
+    // The settings the search took, one after the other, each faster than the one before: where the robust result steps
+    // back to.
+    let mut accepted = vec![(start.clone(), before.clone())];
     let mut improved = true;
     while improved {
         improved = false;
@@ -1615,12 +1782,12 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
             lower.heights[k] = height;
             lower
         };
-        if lifts.iter().zip(&best.heights).filter(|(lift, h)| **h != lift.lowest).count() > 1 {
-            candidates.push(Setting { heights: lifts.iter().map(|lift| lift.lowest).collect(), ..best.clone() });
+        if lifts.iter().zip(&best.heights).filter(|(lift, h)| **h != lift.needed).count() > 1 {
+            candidates.push(Setting { heights: lifts.iter().map(|lift| lift.needed).collect(), ..best.clone() });
         }
-        for (k, lift) in lifts.iter().enumerate().filter(|(k, lift)| best.heights[*k] != lift.lowest) {
-            candidates.push(lower(&best, k, lift.lowest));
-            candidates.push(lower(&best, k, 0.5 * (best.heights[k] + lift.lowest)));
+        for (k, lift) in lifts.iter().enumerate().filter(|(k, lift)| best.heights[*k] != lift.needed) {
+            candidates.push(lower(&best, k, lift.needed));
+            candidates.push(lower(&best, k, 0.5 * (best.heights[k] + lift.needed)));
         }
         candidates.push(Setting { blending: !best.blending, ..best.clone() });
         if best.shaping {
@@ -1652,6 +1819,13 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
                         via.push(best.heights[k] + lift.up * above * width);
                         candidates.push(with_via(Some(via)));
                     }
+                    // Over the obstacle that raised the lift, the ends as low as pick and place allow.
+                    for above in [0.0, 0.125] {
+                        if let Some(over) = &lift.over {
+                            let via = over[..z].iter().copied().chain([lift.needed + lift.up * above * width]).collect();
+                            candidates.push(Setting { heights: lower(&best, k, lift.lowest).heights, ..with_via(Some(via)) });
+                        }
+                    }
                 }
                 Some(via) => {
                     for step in [0.125, 1.0 / 32.0] {
@@ -1667,17 +1841,20 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
                 }
             }
         }
-        // A via point whose path would come too near to pick and place is not run.
-        candidates.retain(|c| lifts.iter().enumerate().all(|(k, lift)| c.vias[k].as_ref().is_none_or(|via| clears(&axis_infos, cycle_s, tolerance, lift, c.heights[k], via))));
+        // A via point whose path would come too near to pick and place, or to an obstacle, is not run.
+        let machine = probe.machine.as_mut();
+        candidates.retain(|c| lifts.iter().enumerate().all(|(k, lift)| c.vias[k].as_ref().is_none_or(|via| clears(&axis_infos, cycle_s, tolerance, lift, c.heights[k], via, (&mut *machine, &obstacles, clearance)))));
         'candidates: for candidate in candidates {
             // A candidate that only leaves the tool swinging gets its tries with the shaper right after it.
             let mut tries = std::collections::VecDeque::from([candidate]);
+            let mut raised = 0;
             while let Some(setting) = tries.pop_front() {
                 if runs.get() >= max_runs {
                     break 'candidates;
                 }
                 let Some((load, failed)) = judged(&setting) else { continue };
                 if failed.is_empty() && load.duration < best_load.duration - 1e-4 {
+                    accepted.push((setting.clone(), load.clone()));
                     (best, best_load, improved) = (setting, load, true);
                     break 'candidates;
                 }
@@ -1691,8 +1868,82 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
                         tries.push_back(Setting { second: true, ..setting.clone() });
                     }
                 }
+                // The lifts placed over the obstacles keep the clearance at rest; the run sways by some hundredths of a
+                // millimetre (0.05 mm on the T-gantry). A setting that fails on that alone, by less than a millimetre, is
+                // run again (twice at most) with those lifts higher by what the run lacked and 1 um.
+                let lack = load.clearance.map_or(f64::INFINITY, |run| clearance - run + 1e-6);
+                if failed == ["collision"] && raised < 2 && lack < 1e-3 {
+                    let higher = raised_by(&setting, lack);
+                    if higher != setting {
+                        raised += 1;
+                        tries.push_back(higher);
+                    }
+                }
             }
         }
+    }
+    let mut robust = None;
+    if options.robust {
+        let mut band_runs = 0;
+        // The checks a setting fails in the bands, each once, and the least clearance to the obstacles there.
+        let mut fails = |setting: &Setting| -> Result<(Vec<&'static str>, f64), ConfigError> {
+            let changed = build(setting)?;
+            let bounded = bounds(&changed)?;
+            band_runs += 2 * bounded.len() + 1;
+            let bands = verdict_bands(entry, &changed, &bounded)?;
+            let least = bands.iter().find(|b| b.verdict.check == "collision").map_or(f64::INFINITY, |b| b.low);
+            let mut out: Vec<&'static str> = bands.into_iter().filter(|b| !b.ok).map(|b| b.verdict.check).collect();
+            out.sort();
+            out.dedup();
+            Ok((out, least))
+        };
+        let last = accepted.len() - 1;
+        let (nominal_fails, mut least) = fails(&best)?;
+        let excused = match (nominal_fails.is_empty(), last) {
+            (true, _) => Vec::new(),
+            (false, 0) => nominal_fails.clone(),
+            (false, _) => fails(&accepted[0].0)?.0,
+        };
+        let judged_on = |checks: &[&'static str]| -> Vec<&'static str> { checks.iter().copied().filter(|c| !excused.contains(c)).collect() };
+        // Pass or fail in the bands need not follow the cycle time, so the steps are judged from the fastest down, and
+        // no further than the first that passes; the cycle as configured passes what it is judged on by definition.
+        let (mut k, mut failing) = (last, judged_on(&nominal_fails));
+        let result = loop {
+            if failing.is_empty() {
+                break accepted[k].clone();
+            }
+            // A step whose lifts over the obstacles the bounds sway nearer than the clearance, by less than a millimetre:
+            // those lifts higher by that and 1 um, judged as written and in the bands.
+            if failing == ["collision"] && clearance - least < 1e-3 {
+                let higher = raised_by(&accepted[k].0, clearance - least + 1e-6);
+                if higher != accepted[k].0
+                    && let Some((load, _)) = judged(&higher).filter(|(_, failed)| failed.is_empty())
+                    && judged_on(&fails(&higher)?.0).is_empty()
+                {
+                    break (higher, load);
+                }
+            }
+            if k <= 1 {
+                k = 0;
+                break accepted[0].clone();
+            }
+            k -= 1;
+            let (checks, at_k) = fails(&accepted[k].0)?;
+            (failing, least) = (judged_on(&checks), at_k);
+        };
+        let (nominal_duration, steps_back) = (best_load.duration, last - k);
+        (best, best_load) = result;
+        robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: band_runs });
+    }
+    let mut front = Vec::new();
+    if options.pareto {
+        for f in [0.8, 0.6, 0.4] {
+            let [v, a, j] = best.factors;
+            for factors in [[v, a * f, j * f], [v * f, a * f, j * f]] {
+                judged(&Setting { factors, ..best.clone() });
+            }
+        }
+        front = non_dominated(&passed.borrow());
     }
     let (from, to) = (build(&start)?, build(&best)?);
     let mut changes: Vec<(String, String, String)> = to
@@ -1712,7 +1963,7 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
         .filter(|(k, lift)| best.heights[*k] != lift.height || best.vias[*k].is_some())
         .map(|(k, lift)| LiftChange { segments: lift.segments, before: lift.height, after: best.heights[k], via: best.vias[k].clone() })
         .collect();
-    Ok(Optimised { before, after: best_load, changes, lifts, runs: runs.get() })
+    Ok(Optimised { before, after: best_load, changes, lifts, runs: runs.get(), robust, front })
 }
 
 /// Keys of `[ratings]` that are a choice of how to judge, not uncertain data of the machine, with a range of their own
@@ -2438,5 +2689,17 @@ mod tests {
             (3.0 * lag(5.0) / (lag(50.0) * lag(200.0) * lag(400.0)), (x / w(5.0)).atan() - (x / w(50.0)).atan() - (x / w(200.0)).atan() - (x / w(400.0)).atan())
         }));
         assert!(m.stable() && m.gain_margin_db.is_infinite() && (m.phase_margin_deg - 24.0).abs() < 0.2 && (m.crossover_hz / 1516.0 - 1.0).abs() < 0.01, "{m:?}");
+    }
+
+    /// The front keeps what no other point beats in all three figures at once. By hand, as (cycle time, energy,
+    /// utilisation): A (1, 3, 0.5) and B (2, 2, 0.5) beat each other in one figure each, so both stay; C (2, 3, 0.5) is
+    /// beaten by both; D (3, 1, 0.9) is the slowest but takes the least energy, so it stays; E is A again and is kept
+    /// once; F (1, 3, 0.6) is A with a higher utilisation, beaten by A alone.
+    #[test]
+    fn the_front_keeps_the_points_no_other_beats_in_every_figure() {
+        let point = |duration: f64, energy: f64, utilisation: f64| FrontPoint { duration, energy, utilisation, factors: [1.0; 3], blending: false, shaping: false };
+        let (a, b, c, d, f) = (point(1.0, 3.0, 0.5), point(2.0, 2.0, 0.5), point(2.0, 3.0, 0.5), point(3.0, 1.0, 0.9), point(1.0, 3.0, 0.6));
+        let front = non_dominated(&[d.clone(), c, b.clone(), a.clone(), a.clone(), f]);
+        assert_eq!(front, [a, b, d]);
     }
 }

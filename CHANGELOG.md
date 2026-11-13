@@ -26,6 +26,16 @@ item are in [PROGRESS.md](PROGRESS.md).
   `machine-joint-kit`: `screw-axis`, `rack-axis`, `linear-motor-axis`, `rotary-table`, `urdf-arm`, `scara`, with
   their own rating checks (`screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life`,
   `rack-feed-force`, `strain-wave-life`).
+- Cycle optimiser: lifts placed over the config's obstacles (each traverse no lower than keeps the clearance with the
+  machine's collision bodies, a via point over the obstacle tried too); `sim-cli optimise --pareto FILE` writes the
+  front of cycle time, energy per cycle from the supply and peak motor utilisation, which the app plots below the
+  optimiser's table.
+
+### Changed
+
+- `sim-cli optimise` judges its result in the error bands of `[bounds]` too and steps back along the search to the
+  fastest setting that passes there (checks the configured cycle fails there already are listed, not judged);
+  `--nominal` gives the old result. EXCT-30: 1.590 s instead of 1.492 s. The app does so with "error bands" ticked.
 
 ## [1.0.0-rc.1] - 2026-11-13
 
