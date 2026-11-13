@@ -1605,3 +1605,58 @@ Left open:
 - The belt mode holds the pulleys and leaves out the guides' and motors' own stiffness; the CoreXY's idler nodes are
   one per corner for both belts.
 - The belt is drawn as straight strips through the route, not round the pulleys.
+
+## Linear delta (13 November)
+
+A new machine, `delta-linear` in the crate `machine-delta-linear`: three vertical toothed-belt axes on the columns of a
+frame at 120 degrees, each carriage with a parallelogram of rods down to a plate that stays level (Festo EXPT tripod,
+Kossel printers). Registered in `sim-machines`.
+
+- **Sizing.** Like the Festo EXPT-95 (datasheet EXPT, 2022/02 edition; the 2016 edition for the size table): working
+  range 950 mm across and 100 mm high, EGC-80 toothed-belt axes without gearbox, 1 kg rated load at the highest
+  dynamics, positioning accuracy +-0.5 mm (the settling limit). Festo publishes no rod length, column layout or masses:
+  vertical columns at 0.52 m, rods of 1.1 m, a 0.7 m stroke, carriage 1.3 kg, rods 0.35 kg a pair, plate 0.8 kg, all
+  marked and bounded estimates, chosen so that the range is reached with rods at most 57.2 degrees from the vertical and
+  condition numbers up to 3.98. Motors: the High Dynamic 1FK2104-5AF has the torque but 0.65 kg cm2 of rotor against
+  about 6 kg cm2 of load at its shaft; its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to
+  2.5 mm. The Compact 1FK2205-2AF (4.0 kg cm2, with brake) on the 6SL3210-5HE11-0UF0 takes 0.25 N m s/rad with Tn 0.02 s:
+  at least 41.0 degrees and 8.5 dB over the bounds with friction off (`sim-cli margins delta-linear --bands`).
+- **Kinematics** after the D3's (copied, not shared: the machine crates stay apart): inverse h_i = z + sqrt(L^2 -
+  rho_i^2), forward by trilateration (the lower point), J = J_x^-1 J_q with J_q = diag(u_i,z), the velocity term
+  w_i = -|p' - e_z h_i'|^2, the condition number. The working range refuses targets outside its cylinder, out of reach,
+  with a rod steeper than `workspace.max_rod_angle_deg` or a carriage beyond its stroke (two new error keys), or near a
+  singularity.
+- **Dynamics** at the D3's level: rods split between carriage and plate (`mass.rod_carriage_share`),
+  M = m_c 1 + m_nt J^T J, Q_g = -g m_c - m_nt g J_z. Each column is the single axis's belt axis turned upright with the
+  motor at the top: two belt sections as springs (`Belt`), pulley, coupling (`Gearbox` of ratio 1), motor shaft friction,
+  ripple, brake, stops, a LuGre guide whose levels follow its load across the rail (the rods' pull at rest). Elastic
+  (24 states) and rigid (12) models, the feedforward with the speed, `rigid_tensions` for the time-optimal planner,
+  `rest_sag` for the setpoint slack (0.1 mm: the belts sag 0.01 to 0.02 mm).
+- **Signals, views, scene**: carriage heights, six belt tensions and stretches, radial loads, guide loads, coupling
+  torques, the condition number; torque breakdown, loss powers, energies, three friction contacts, six belt sections; a
+  scene with columns, belt loops, pulleys, carriages, rods and plate; the plate and payload as collision bodies.
+- **Default cycle**: the D3's Adept cycle 25/305/25 mm at the top of the range, 0.720 s; every verdict passes (settling
+  0.06 mm against 0.5 mm, belts 141 to 529 N, condition 3.28 against 5), and with `--bands` at both bounds of every
+  estimate.
+- `sim-machines/tests/views.rs`: the hand calculation of `belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_hold`
+  is the single axis's and the T-gantry's geometry; the linear delta is left out of it (its own test checks its belts).
+
+Tests (`crates/machine-delta-linear/src/tests.rs`): the standard suite; inverse against forward over 1000 and more poses
+and the Jacobian against central differences (its z row summing to 1); the belts' holding forces by hand at the centre
+(22.065 N, 0.31606 N m) and off it through a finite-difference Jacobian (32.784, 19.257, 14.154 N, summing to
+66.195 N), in the rigid and the elastic model; the range's edges at a height by hand (rod tilt at x = -0.502628 m,
+carriage stop at x = 0.302014 m); the feedforward with the speed and an inertia torque by hand (0.63355 N m); the
+default cycle's verdicts and its 720 profile cycles; the setpoint slack at rest. The test suites were not run here (the
+coordinating session runs them); `cargo check --tests` passes and the numbers above are from `sim-cli`.
+
+Left open:
+
+- The guides' load from accelerating the plate (the load at rest stands in), and with it guide ratings and life.
+- No part warms but the motors: the guides' heat is not modelled, so `effects.part_heating` and `thermal_feedback`
+  change nothing on this machine.
+- Pulley bearing life and the belt teeth's load: the EGC-80's ratings are not in the catalogue, nor the axis itself.
+- Inclined columns (some linear deltas lean them inwards): the columns are vertical.
+- The rods' rotational inertia, elastic frame, columns and rods, a fourth axis, tooth meshing, tooth jump and belt-span
+  vibration on this machine.
+- The cross-machine tests in `sim-machines` (effect switches, budgets, scene, lives, ratio change) run on it for the
+  first time with the coordinator's test run.

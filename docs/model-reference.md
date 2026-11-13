@@ -5,7 +5,7 @@ The equations the simulator solves, taken from the code and its comments. Each s
 - [Structure of one time step](#structure-of-one-time-step)
 - [Integrator](#integrator)
 - Components: [belt](#belt-sections), [guide friction](#guide-friction-lugre), [motor shaft](#motor-shaft-friction-ripple-cogging), [tooth meshing](#tooth-meshing), [gearbox](#gearbox), [hard stops](#hard-stops), [drive and motor](#drive-and-motor)
-- Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3)
+- Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3), [linear delta](#linear-delta)
 - Motion: [controller](#motion-controller), [profile generator](#profile-generator), [corner blending](#corner-blending), [path planners](#path-planners), [input shaper](#input-shaper)
 - [Analysis quantities](#analysis-quantities), [verdicts](#verdicts), [other analyses](#other-analyses), [effect views](#effect-views), [fit](#fit)
 - [Known shortcuts](#known-shortcuts), [other simplifications](#other-simplifications)
@@ -717,6 +717,57 @@ dynamics    m_nt = m_plate + m_payload + 2 (1 − s) m_fb,  M = I_b · 1 + m_nt 
 The joints, the elastic and rigid models (10 and 6 states), the feedforward, the signals (`arm.1/2.angle`, `gearbox.1/2.output_torque`, `kinematics.condition`), the effect views, part heating and the refusals (`error-delta-*`) are the D3's. **Working range**: the band |x| ≤ `workspace.half_width_m` below `top_z_m`, its bottom an arc through both edges at `height_edge_m` and the centre at `height_centre_m` below the top. **Static hold, and stability**: held by constant motor torques the plate's vertical mode is unstable in the upper part of the range, −3.49 N m/rad at the middle of the default range (638.5 mm below the shoulders), +7.52 N m/rad at 788.5 mm; the sideways mode is stable (13.5 and 18.9 N m/rad). The standard suite's loss-free configs put range, start and cycle 150 mm lower. `Machine::setpoint_slack` is `rest_sag` over 41 columns of the range: 0.42 mm with 1 arcmin backlash (at most 0.37 mm found at rest in the simulation).
 
 The model takes the plate as kept level. The 3D view draws each forearm pair as two rods apart along y, as on the D3; in the plane, a plate on two legs needs a parallelogram in the x-z plane (or a third link) to keep it from turning about y, which real D2s have. The scene: a base beam, per arm a motor and gearbox box with the rotor bar, the arm, the two rods, the plate and the payload; the collision bodies are the plate and the payload. Not modelled, as on the D3: the forearms' rotational inertia, elastic links, friction in the ball joints, collisions between links.
+
+## Linear delta
+
+Source: [`machine-delta-linear/src/lib.rs`](../crates/machine-delta-linear/src/lib.rs), with the belt, guide, coupling and motor components of the single axis. The parallel kinematics are the D3's with the arms replaced by carriages on vertical columns (as the Festo EXPT tripod and the Kossel printers); the dynamics are at the D3's level (Codourey 1998, Olsson 2009).
+
+Three columns stand at the azimuths φ_i = 0°, 120°, 240° at the column radius R. Each carries a carriage on a vertical toothed-belt axis; a parallelogram of two rods of length L joins it to a plate of radius r that stays level. The tool is the plate's centre p = (x, y, z), in a frame with its origin on the column axis at the carriages' upper stop and z up (the plate works below 0). h_i is carriage i's joint height, x_i = h_i − h_min its place in its stroke. Because the plate never turns, e = R − r.
+
+### Kinematics
+
+```text
+joint       c_i = (e cos φ_i, e sin φ_i, h_i)
+constraint  |p − c_i|² = L²
+inverse     h_i = z + sqrt(L² − ρ_i²),   ρ_i² = (x − e cos φ_i)² + (y − e sin φ_i)²       (carriage above the plate)
+forward     the point at L from all three joints (trilateration), the lower of the two
+Jacobian    J_x ṗ = J_q ḣ,   J_x rows u_i = p − c_i,   J_q = diag(u_i,z),   ṗ = J ḣ,   J = J_x⁻¹ J_q
+            J_x p̈ = J_q ḧ + w,   w_i = −|ṗ − e_z ḣ_i|²
+```
+
+Raising all three carriages alike lifts the plate alike: the z row of J sums to 1, the x and y rows to 0. The condition number of J is the signal `kinematics.condition`, judged by `singularity` as on the D3; the default range has up to 3.98 (at its bottom rim, opposite a column), the centre 3.15: a metre of carriage moves the plate further sideways than up.
+
+**Working range** (`Machine::unreachable`): a cylinder of `workspace.radius_m` from `workspace.bottom_z_m` to `top_z_m`; the axis ranges are the box around it. A target outside it (`error-delta-outside-envelope`), out of the rods' reach (`-out-of-reach`), where a rod would stand steeper from the vertical than `workspace.max_rod_angle_deg` (`error-delta-linear-rod-angle`: ρ_i > L sin of it), where a carriage would leave its stroke from `geometry.carriage_top_m` − `stroke_m` to `carriage_top_m` (`error-delta-linear-carriage-stop`), or with a condition number above `workspace.max_condition_number` (`-singularity`) is refused with its reason.
+
+### Dynamics
+
+Each rod pair's mass m_rod is split: a share s (`mass.rod_carriage_share`, default 1/2) moves with its carriage, the rest with the plate. The rods' rotational inertia is left out. Then
+
+```text
+m_c  = m_carriage + s m_rod,   m_nt = m_plate + m_payload + 3 (1 − s) m_rod
+M(h) ḧ = F_belt + Q_g − m_nt Jᵀ J_x⁻¹ w − F_guide + F_stop
+M = m_c · 1 + m_nt JᵀJ,   Q_g,i = −g m_c − m_nt g J_zi
+```
+
+exact for the lumped model as on the D3 (V = g (m_nt z + m_c Σ h_i)). Each column is a belt axis as on the [single axis](#single-axis), upright with its motor at the top: section 1 runs from the motor pulley straight down to the carriage (length span + stroke − x), section 2 from the motor pulley down round an idler and up to the carriage (3 span + stroke + x); the belt pulls the carriage up with T₁ − T₂ and turns the pulley with r (m₂ − m₁), the material forces of the [belt sections](#belt-sections). The guide of each carriage is a [LuGre contact](#guide-friction-lugre); with `effects.load_dependent_friction` its levels scale with its load across the rail, the horizontal part of the rods' pull that holds the plate at rest, |λ_i| ρ_i with J_xᵀ λ = −m_nt g e_z (the levels hold for the guide under its preload alone). The stops are springs and dampers beyond the stroke.
+
+**Elastic model** (`effects.belt_stretch`), 24 states: h, pulley angles, rotor angles, their speeds, the guides' friction states and the brakes. The pulley: J_pulley ä = τ_gear,out + r (m₂ − m₁); the rotor as on the single axis, behind the coupling (or gearbox). **Rigid model**, 12 states (h, ḣ, friction, brakes): x = r a, rotor = i a, and
+
+```text
+(M + diag(J_pulley / r² + λ_i i² J_rotor / r²)) ḧ = λ ⊙ d + Q_g − m_nt Jᵀ J_x⁻¹ w − F_guide + F_stop,   d_i = i (ripple(τ_i) − τ_shaft − τ_brake) / r
+```
+
+λ_i the gearbox loss factor, in two passes as on the other machines. Feedforward: the rigid, loss-free model, τ_k = ((m_c + J_pulley / r²) ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k) r / i + J_rotor i ḧ_k / r with ḧ = J⁻¹ (p̈ − J_x⁻¹ w) (`feedforward_torque_moving`). `rigid_tensions` shares each carriage's force F = m_c ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k between its two sections so that the belt keeps its length: T₁ = P + F L₂ / (L₁ + L₂), T₂ = P − F L₁ / (L₁ + L₂).
+
+**Static hold.** At rest each belt holds −Q_g,i: at the centre the carriage's weight and a third of the plate's, 22.07 N with the default masses (`the_belts_hold_the_carriages_and_the_plates_weight_through_the_jacobian`). Held by constant motor torques the hanging plate is stable sideways (it rises to second order when two carriages move apart) and neutral in the vertical mode, so the standard suite's loss-free configs keep the default range. The belts' stretch and the couplings' twist put the motors' pose 0.01 to 0.02 mm off the tool at rest; `setpoint_slack` is worked out over a grid of the range as on the D3 (`rest_sag`) and stays at the default 0.1 mm.
+
+### Signals
+
+Per column k: `carriage.<k>.height` (m), `belt.<2k−1>.tension` and `belt.<2k>.tension` (N; rigid: the pretension), `pulley.<k>.radial_load` (T₁ + T₂, judged by `gearbox-radial-load`), `carriage.<k>.guide_load` (N), `gearbox.<k>.output_torque` (N m, judged by `pulley-torque`); `kinematics.condition`. Effect views: the [torque breakdown](#torque-breakdown) per motor with inertia = r / i ((M ḧ + velocity term)_k + (J_pulley + i² J_rotor) / r² ḧ_k), gravity = −r / i Q_g,k, friction = shaft + brake + gearbox loss at the rotor + r / i guide friction; the loss powers `power.guide_<k>`, `power.shaft_<k>`, `power.gearbox_<k>`, `power.belt_<k>`, `power.hard_stops`, `power.other`; the energies; the friction contacts `carriage.<k>` with their `friction_*` signals; `belt.<i>.stretch`. The six belt sections are offered to the belt view.
+
+`Machine::scene_point` is the plate's centre. The scene: a frame plate, per column a column, its belt loop with motor, pulley and idler (drawn in the plane parallel to x–z through the column), the carriage and the two rods of its pair, the plate and the payload under it.
+
+Not modelled: the rods' rotational inertia; elasticity of frame, columns, rods and ball joints; friction in the ball joints; collisions between the links; a fourth axis; the guides' heat (no part warms but the motors); what accelerating the plate adds to the guides' load (the load at rest stands in); tooth meshing, tooth jump and belt-span vibration.
 
 ## Motion controller
 

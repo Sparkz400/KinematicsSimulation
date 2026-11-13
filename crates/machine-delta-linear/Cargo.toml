@@ -1,0 +1,9 @@
+[package]
+name = "machine-delta-linear"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true

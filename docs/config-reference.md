@@ -10,6 +10,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
 | D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
 
+| L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
+
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
 The **Source** column says where a value of this kind normally comes from:
@@ -565,6 +567,48 @@ The D2's config ([`machine-delta-d2/default.toml`](../crates/machine-delta-d2/de
 | `gearbox.backlash_rad` | rad | Backlash of an arm's gearbox | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin: a reduced-backlash precision planetary. The NRB080-05-20, whose other values the config has (catalogue), has 9 arcmin, with which the cycle fails `settling` (0.85 mm against 0.5 mm) |
 
 The motor, drive, ratings, axis limits (3 m/s, 50 m/s², 2500 m/s³ along x and z) and loop gains are the D3's.
+
+## Linear delta
+
+The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml)) has the tables every machine has as T and S have them: `[sim]`, `[parts]`, `[motor]`, `[gearbox]` (here a coupling of ratio 1), `[pulley]`, `[hard_stop]`, `[temperature]`, `[thermal_feedback]`, `[drive]`, `[ratings]` (without guide, pulley-bearing, gearbox and tooth-load ratings), `[profile]`, `[bounds]`, `[start]`, `[[cycle.segment]]`, the belt's `[belt]` keys the [belt sections](model-reference.md#belt-sections) read (no tooth meshing or tooth jump), and the effects of the drives and the controller. It has no frame, idler, cable chain, process force or `[thermal]`: no part but the motors warms, so `effects.part_heating` and `thermal_feedback` change nothing. Its own keys:
+
+`[effects]`: `belt_stretch` (off: the rigid reference model), `belt_damping`, `belt_slack`, `belt_mass`, `belt_tooth_stiffness`, `belt_material_damping`, `guide_friction`, `load_dependent_friction` (the guides' levels follow their load across the rail, the rods' pull at rest), `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `temperature`, `hard_stops` (the carriages' stroke ends), `holding_brake`, as on the single axis; the shipped values as there, `belt_tooth_stiffness`, `belt_material_damping` and `temperature` off.
+
+`[geometry]` (estimates, bounded but the stroke and the stop)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `column_radius_m` | m | Centre of the frame to a carriage's joint line, R | 0.52 |
+| `plate_radius_m` | m | Centre of the plate to a rod pair's centre, r. The equations use e = R − r | 0.07 |
+| `rod_m` | m | Rod length, carriage joint to plate joint (the parallelogram's centre line), L | 1.1 |
+| `rod_spacing_m` | m | Distance of the two rods of a pair; for the 3D view only | 0.08 |
+| `carriage_top_m` | m | Height of the carriages' joints at their upper stop | 0.0 |
+| `stroke_m` | m | The carriages' stroke below it | 0.7 |
+| `pulley_radius_m` | m | Drive pulley radius (EGC-80-TB: 90 mm per revolution) | 0.014324 |
+| `span_min_m` | m | Shortest free belt span between a carriage and either pulley | 0.1 |
+
+`[workspace]`
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `radius_m` | m | Radius of the working cylinder; also the x and y axis ranges ±radius | 0.475, catalogue (Festo EXPT-95: Ø950) |
+| `top_z_m`, `bottom_z_m` | m | Its top and bottom, the z axis range | −1.12, −1.22: 100 mm, catalogue (EXPT nominal height); where it hangs an estimate |
+| `max_rod_angle_deg` | ° | A target where a rod stands steeper from the vertical is refused (`error-delta-linear-rod-angle`) | 60, estimate (the range needs up to 57.2) |
+| `max_condition_number` | – | A target whose Jacobian has a higher condition number is refused (`error-delta-singularity`) | 10, estimate (the range has up to 3.98) |
+
+`[mass]` (estimates but the payload, bounded)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `carriage_kg` | kg | A carriage (EGC-80 slide) with its ball studs | 1.3 |
+| `rod_pair_kg` | kg | A pair of rods with their ball cups | 0.35 |
+| `rod_carriage_share` | share | The share of a pair's mass counted at its carriage, the rest at the plate (0 to 1) | 0.5 |
+| `plate_kg` | kg | The plate (front unit without rotary drive) | 0.8 |
+| `payload_kg` | kg | Payload, with `effects.payload` | 1.0, catalogue (EXPT rated load at the highest dynamics) |
+
+`[friction]`: each carriage's guide, the keys of the single axis's `[friction_x]`, its values.
+
+L's values of the shared tables: motor 1FK2205-2AF at 400 V with brake (catalogue: rotor 4.0 kg cm², 1.241379 N m/A, 10.8 N m peak, 3.0 N m rated at 3000 r/min, 9.5 A and 2.5 A; R, L, thermal time constant and brake torque estimates; the High Dynamic 1FK2104-5AF, 0.65 kg cm², left the velocity loop ringing near 450 Hz against about 6 kg cm² of load), a coupling of ratio 1 (3000 N m/rad, estimate as the EXCT-30's), converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A; its internal braking resistor 50 W, 3 kW, 820 V), belt EA 6e5 N and 300 N pretension (estimates as the EXCT-30's), `settling_tolerance_m` 0.5 mm (catalogue: EXPT positioning accuracy), `belt_max_tension_n` 1000, `pulley_max_torque_nm` 10 and `shaft_max_radial_load_n` 1500 (estimates for the EGC-80), `ratings.max_condition_number` 5, the velocity loop 0.25 N m s/rad, 0.02 s with 0.2 ms filters (tuned with `sim-cli margins delta-linear --bands`). Its cycle is the D3's Adept cycle 25/305/25 mm at the top of the range; `start.pose` above the place position.
 
 ## `[[cycle.segment]]`
 

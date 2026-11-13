@@ -11,6 +11,7 @@ machine-t-gantry = { path = "../machine-t-gantry" }
 machine-single-axis = { path = "../machine-single-axis" }
 machine-delta-d3 = { path = "../machine-delta-d3" }
 machine-delta-d2 = { path = "../machine-delta-d2" }
+machine-delta-linear = { path = "../machine-delta-linear" }
 machine-joint-kit = { path = "../machine-joint-kit" }
 sim-netlist = { path = "../sim-netlist" }
 toml.workspace = true
