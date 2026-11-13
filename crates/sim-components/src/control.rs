@@ -124,6 +124,8 @@ pub struct Controller {
     pending_shaper: Option<(Option<(f64, f64, f64, f64)>, Option<(f64, f64)>)>,
     /// How many cycles of `history` the shaper has needed so far.
     shaper_reach: usize,
+    /// The half periods (first, second) the shaper used in the last cycle, kept while the plan stands still.
+    shaper_held: Option<(f64, f64)>,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
     /// setpoints on their way, oldest first, each with the cycles it takes: per motor position, speed,
     /// acceleration and torque feedforward.
@@ -184,6 +186,7 @@ impl Controller {
             shaper_follows: None,
             pending_shaper: None,
             shaper_reach: 0,
+            shaper_held: None,
             fieldbus_delay: 0,
             fieldbus: Default::default(),
             fieldbus_jitter: 0,
@@ -354,6 +357,7 @@ impl Controller {
         // The shaper in use counts its period in cycles too. (A pending one was worked out for the new cycle.)
         self.shaper = self.shaper.map(|(k, half, k2, half2)| (k, half * ratio, k2, half2 * ratio));
         self.shaper_follows = self.shaper_follows.map(|(per_hz, per_hz2)| (per_hz * ratio, per_hz2 * ratio));
+        self.shaper_held = self.shaper_held.map(|(half, half2)| (half * ratio, half2 * ratio));
         self.tick = (now as f64 * ratio).round() as u64;
         let new_now = self.tick as f64;
         // A tick of u64::MAX is a motion not yet picked up.
@@ -763,6 +767,7 @@ impl Controller {
             && let Some(next) = self.pending_shaper.take()
         {
             (self.shaper, self.shaper_follows) = next;
+            self.shaper_held = None;
         }
         self.raw_pos.clone_from(&self.set_pos);
         self.raw_vel.clone_from(&self.set_vel);
@@ -820,16 +825,21 @@ impl Controller {
     ///
     /// Following the pose, the half period is that of the resonance the machine reports where the plan
     /// stands, and the second shaper's that of the machine's second mode there. The weights always add up to one, so once the plan has stood still for a whole period the
-    /// setpoint is the plan exactly, whatever the period did on the way.
+    /// setpoint is the plan exactly, whatever the period did on the way. While the plan stands still the period stays
+    /// as it was: a resonance that changes at rest (the gripper takes its payload) would reach back into the move that
+    /// has just arrived and take the setpoint off its target.
     fn shape(&mut self, machine: &dyn Machine) {
         // shortcut: while the period changes, the speed and acceleration setpoints are the delayed plan's,
         // not the exact rates of the shaped position (off by the rate of the delay, a few percent in a Z
         // move); they are feedforward only. Shape the position alone and difference it if that matters.
-        let (Some((k, _, k2, _)), Some((half, half2))) = (self.shaper, self.shaper_halves(machine, &self.raw_pos)) else {
+        let (Some((k, _, k2, _)), Some(halves)) = (self.shaper, self.shaper_halves(machine, &self.raw_pos)) else {
             self.history.clear();
             self.shaper_reach = 0;
             return;
         };
+        let standing = self.history.back().is_some_and(|past| past[0] == self.raw_pos);
+        let (half, half2) = self.shaper_held.filter(|_| standing).unwrap_or(halves);
+        self.shaper_held = Some((half, half2));
         self.history.push_back([self.raw_pos.clone(), self.raw_vel.clone(), self.raw_acc.clone()]);
         // The store keeps the longest period met so far: a period that grows again finds its past.
         self.shaper_reach = self.shaper_reach.max((2.0 * half + 2.0 * half2).ceil() as usize + 2);

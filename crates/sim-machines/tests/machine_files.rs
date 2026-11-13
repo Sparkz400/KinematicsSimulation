@@ -154,14 +154,10 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
 
         let shared = shared_signals(a.as_ref(), b.as_ref(), &sa, &sb, &torque, what);
         assert!(shared >= b.signal_infos().len() * 9 / 10, "{what}: only {shared} of the file machine's signals are the crate's");
-        // The spans, which the file names span_1 to span_8 (ids are unique in a file, and the sections have 1 to 3).
-        let (ia, ib, mut va, mut vb) = (a.signal_infos(), b.signal_infos(), Vec::new(), Vec::new());
-        a.signals(&sa, &torque, &mut va);
-        b.signals(&sb, &torque, &mut vb);
-        for i in 1..=8 {
-            let (Some(x), Some(y)) = (ia.iter().position(|s| s.id == format!("belt.span.{i}.frequency")), ib.iter().position(|s| s.id == format!("belt.span.span_{i}.frequency"))) else { continue };
-            assert!(close(va[x], vb[y], 1e-9), "{what}: span {i}: crate {}, file {}", va[x], vb[y]);
-        }
+        // The spans (nodes span_1 to span_8 in the file) give their signals the crate's names, so the comparison above
+        // took their frequencies too.
+        let names = |m: &dyn Machine| m.signal_infos().iter().filter(|s| s.id.starts_with("belt.span.")).map(|s| s.id.clone()).collect::<Vec<_>>();
+        assert_eq!(names(a.as_ref()), names(b.as_ref()), "{what}: span signals");
     }
 }
 

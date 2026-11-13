@@ -349,7 +349,7 @@ fn every_effect_switch_changes_the_traces() {
         // Whether the traces with `cfg` differ from the reference, as `traces(cfg) != reference` says, but it stops at
         // the first sample that differs: most effects show within milliseconds, and only a switch that changes nothing
         // runs the whole 4 s.
-        let differs = |cfg: &Config| {
+        let differs = |cfg: &Config, reference: &[u64]| {
             let mut sim = Sim::new(entry, cfg).unwrap();
             sim.command(Command::StartCycle).unwrap();
             let (mut at, mut sample) = (0, Vec::new());
@@ -369,8 +369,9 @@ fn every_effect_switch_changes_the_traces() {
         let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
-        // A crash needs an obstacle, and the configs have none. Their own tests show them working.
-        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash"];
+        // A crash needs an obstacle, and the configs have none. The thermal warm start acts on the cycle analysis, not on
+        // a run. Their own tests show them working.
+        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash", "effects.thermal_warm_start"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
         // An effect whose values are all zero (or all one) in this config has nothing to do (a backlash-free coupling and nut, a
@@ -397,10 +398,27 @@ fn every_effect_switch_changes_the_traces() {
         };
         let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e)).collect();
         assert!(effects.len() >= 20, "{}: only {} effect switches", entry.id, effects.len());
+        // A switch that acts only in a setting the base has not is flipped from that setting, in both runs: the belt's
+        // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
+        // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's 0.3 N m).
+        let current = format!("ratings.drive_max_current_a = {:?}", 0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap());
+        let through = [("effects.belt_wrap", "effects.belt_tooth_jump = true"), ("effects.drive_current_limit", current.as_str())];
         for effect in effects {
-            let mut flipped = base.clone();
-            flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
-            assert!(differs(&flipped), "{}: flipping {effect} changed nothing", entry.id);
+            let (from, own);
+            let reference = match through.iter().find(|(e, _)| *e == effect) {
+                Some((_, setting)) => {
+                    from = config_of(&base, &[setting]);
+                    own = traces(&from);
+                    &own
+                }
+                None => {
+                    from = base.clone();
+                    &reference
+                }
+            };
+            let mut flipped = from.clone();
+            flipped.set_text(&format!("{effect} = {}", !from.bool(&effect).unwrap())).unwrap();
+            assert!(differs(&flipped, reference), "{}: flipping {effect} changed nothing", entry.id);
         }
     }
 }
@@ -543,9 +561,9 @@ fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
 /// With input shaping the setpoint arrives one period of the shaper after the plan. The dwell (and with it
 /// the process force) and the gripper wait for the setpoint: while the cycle dwells and whenever the payload
 /// switches, the setpoint is on the target. They used to start with the plan, 40 ms early at 25 Hz, with
-/// the setpoint still half a millimetre away. (On the target to a micrometre, not exactly: where the shaper
-/// follows the pose, the gripper closing lowers the resonance, and the longer period reaches a little
-/// further back into the last crawl of the plan.)
+/// the setpoint still half a millimetre away. Where the shaper follows the pose, the gripper closing lowers the
+/// resonance (the delta's from 41.5 to 27.2 Hz); the period stays as it was while the plan stands still, else
+/// the longer one reached back into the lift and took the setpoint 0.1 mm off the target.
 #[test]
 fn with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived() {
     for entry in MACHINES {
