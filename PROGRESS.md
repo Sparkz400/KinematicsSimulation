@@ -1194,3 +1194,56 @@ Left open:
   but not used.
 - With the shaper following, the EXCT-30's second shaper (17.5 Hz, the tool's response peak) would move to the upper
   two-mass mode (373 Hz there, `sim-cli modes`); it does not follow in the shipped config.
+
+## Delta picker D3: forearm inertia, bending arms, forearms as collision bodies (13 November)
+
+What, how, test:
+
+- **Forearm inertia** (`effects.forearm_inertia`, on in the shipped config). Each forearm pair is a rigid slender rod.
+  Its kinetic energy (m/6)(|c'|^2 + c'.p' + |p'|^2) is exactly that of m/6 at each end and 2m/3 at its middle, so the
+  existing model holds with the elbow share 1/6 and the platform share 1/6, plus per leg a point mass 2 m_fb / 3 at the
+  rod's middle with its Jacobian (J + dc_i/dtheta e_i^T) / 2 (`Legs::rod_middle`, `Delta::load_at`): mass matrix,
+  velocity term and gravity. The feedforward with the speed now takes `load` whole. Off, the lumped Codourey/Olsson
+  model as before (`mass.forearm_elbow_share`). In the Adept cycle (`sim-cli analyze delta-d3`, rods against lumped):
+  motor 1 peak 7.640 against 7.786 N m (-1.9 %), RMS 2.575 against 2.645 N m (-2.6 %); motors 2 and 3 peak 3.987
+  against 3.989 N m, RMS 1.587 against 1.615 N m (-1.7 %). Tests: `with_the_arms_horizontal_a_vertical_acceleration_
+  takes_the_hand_calculated_torque_with_rods` (arms level at the centre, z = -sqrt(0.6): every rod translates, -10.0 N m
+  at the arm, -0.6053 N m at the motor, both models), `the_rods_kinetic_energy_is_the_hand_calculated_one` (sideways
+  1 m/s there: 0.31302 J rods against 0.37604 J lumped, plus 2.52596 J of arms, rotors and platform),
+  `a_free_loss_free_motion_keeps_its_energy` (E less the constant torques' work over 0.1 s of RK4 at 10 us, to 1e-7 of
+  the kinetic energy: seen 3e-14 J of 3.7 J, with rods, bending, both, rigid joints).
+- **Bending arms** (`effects.link_elasticity`, off in the shipped config: the stiffness is an estimate). The drive
+  train's torsion was already the gearbox's stiffness (`joint_elasticity`), so only the upper arms' bending is new:
+  6 states after the brakes (bend delta_i and its rate), the elbow at theta + delta on a spring k_b = 3 E I / L_a with a
+  damper (`[upper_arm] bending_stiffness_nm_rad` 65000 = a carbon tube 50 x 2 mm at E 100 GPa, bounds 40000 to 100000;
+  `bending_damping_nm_s_rad` 5, bounds 2 to 10). The arm's tube stays with the root. Loss `power.arm_bending`, the
+  spring's energy in the elastic energy, the bend at rest Q_d / k_b in `equilibrium` and `rest_sag`. In the Adept cycle:
+  tracking error 4.0 to 5.3 mm, dwell error 0.68 to 0.73 mm, motor 1 peak 7.83 N m.
+- **Resonance** through `Machine::resonance_hz` and `mode_shape` (the delta had none, so `effects.shaper_follows_pose`
+  did nothing on it): the lowest mode with the motors held, the gearboxes' springs (`joint_elasticity`) and the bending
+  springs (`link_elasticity`) in series with the arm's tube between them, the rest the mass matrix at the elbows.
+  Inverse iteration with the flexibility per arm [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] (`lowest_mode`, pub). Test
+  `the_lowest_mode_is_the_hand_calculated_one` (arms level at the centre, forearms lumped, the sideways mode
+  M_s = 1.09572 kg m^2: bending alone 38.76 Hz, gearboxes alone 28.14 Hz, both 22.88 Hz from the two-mass quadratic;
+  the shape moves the platform sideways by 1 m). With the shipped config (gearboxes elastic, rods) the delta now reports
+  a frequency, so `shaper_follows_pose` follows it.
+- **Forearms as collision bodies**: each of the six rods is ten boxes along the drawn segment (`Legs::rods`, shared
+  with the scene), each the box around its piece widened by the rod's 12 mm. `the_collision_bodies_are_boxes_of_the_
+  scene` (sim-machines) now also accepts a box around a piece of a drawn segment. Test
+  `a_forearm_running_into_an_obstacle_is_a_crash` (a 30 mm box at arm 1's rod middle at the centre, 0.36 m above the
+  platform: the plan finds the contact, the traverse with `effects.crash` trips the drives at x = 0.137, the platform's
+  boxes stay more than 0.3 m away).
+- The three hand calculations of the lumped model (holding torque at the centre and the edge, vertical acceleration at
+  the centre) and the constant-torque stability test set `effects.forearm_inertia = false`. Docs: model, config and
+  validation references, user guide EN/DE (new `analyze` and `verdicts` figures of the default cycle).
+
+Left open:
+
+- The rods' spin about their own axis; the arms' bending out of the plane they turn in, and the tube's own share of the
+  bending mode (it stays with the root; 33/140 of a beam's mass would go to its tip).
+- The resonance leaves out gravity's stiffness (a few N m/rad) and the backlash; it is the lowest mode only, for the
+  one-mode `resonance_hz` (see the coordination note in the report: several modes are a small change of `lowest_mode`).
+- Forearm boxes are up to a piece's length (95 mm) wider than a slanted rod; the upper arms are not collision bodies.
+- The feedforward stays rigid (no bend under acceleration); the suite configs keep `link_elasticity` off.
+- `verdicts --bands` with the rods: gearbox peak 124.7 to 143.3 N m, settling 0.624 to 0.736 mm (fails at all bounds,
+  as before); the bending keys' bounds only act with the switch on.

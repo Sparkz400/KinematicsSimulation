@@ -9,6 +9,9 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Delta picker D3: forearms as rigid rods with their inertia (`effects.forearm_inertia`, on; off is the lumped model),
+  bending upper arms (`effects.link_elasticity`, `[upper_arm]`, off), the lowest mode with the motors held through
+  `resonance_hz` and `mode_shape` (so `shaper_follows_pose` follows it), and the forearm rods as collision bodies.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

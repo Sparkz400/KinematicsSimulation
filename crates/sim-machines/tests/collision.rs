@@ -154,8 +154,9 @@ fn a_time_optimal_path_into_an_obstacle_is_refused() {
 }
 
 /// The collision bodies are built without the rest of the scene (it was drawn every base step), and are still the
-/// boxes the scene draws, to the last bit: on every machine, during its cycle (the T-gantry's Z axis leaning with
-/// tool flex and its frame swaying), with and without the payload.
+/// boxes the scene draws, to the last bit, or boxes around pieces of a segment it draws (the delta's forearms): on
+/// every machine, during its cycle (the T-gantry's Z axis leaning with tool flex and its frame swaying), with and
+/// without the payload.
 #[test]
 fn the_collision_bodies_are_boxes_of_the_scene() {
     for entry in MACHINES {
@@ -170,7 +171,18 @@ fn the_collision_bodies_are_boxes_of_the_scene() {
             let bodies = sim.machine.collision_bodies(&sim.state);
             assert!(!bodies.is_empty(), "{}", entry.id);
             for body in bodies {
-                let drawn = scene.parts.iter().any(|p| matches!(p.shape, sim_core::Shape::Box { size } if size.map(f64::abs) == body.size && p.pos == body.centre));
+                // A box drawn as such, or the box around a piece of a drawn segment (the delta's forearm rods): its
+                // centre on the segment, no wider than the segment's extent plus its width.
+                let along = |from: [f64; 3], to: [f64; 3], width: f64| {
+                    let d: Vec<f64> = (0..3).map(|i| to[i] - from[i]).collect();
+                    let f = (0..3).map(|i| (body.centre[i] - from[i]) * d[i]).sum::<f64>() / d.iter().map(|v| v * v).sum::<f64>();
+                    (0.0..=1.0).contains(&f) && (0..3).all(|i| (from[i] + f * d[i] - body.centre[i]).abs() < 1e-9 && body.size[i] <= d[i].abs() + width + 1e-12)
+                };
+                let drawn = scene.parts.iter().any(|p| match p.shape {
+                    sim_core::Shape::Box { size } => size.map(f64::abs) == body.size && p.pos == body.centre,
+                    sim_core::Shape::Segment { to, width } => along(p.pos, to, width),
+                    _ => false,
+                });
                 assert!(drawn, "{}: {body:?} is not drawn", entry.id);
                 checked += 1;
             }

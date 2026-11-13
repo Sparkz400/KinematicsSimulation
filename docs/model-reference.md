@@ -632,7 +632,7 @@ No solution of the inverse (A² + B² < C²): out of reach. The forward kinemati
 
 ### Dynamics
 
-Each forearm pair's mass m_fb is split: a share s (`mass.forearm_elbow_share`, default 2/3, which matches the rod's inertia about its end, m L²/3) turns with the arm at the elbow, the rest moves with the platform. The forearms' own rotational inertia is left out. Then the machine is three arms about their joints and a point mass at the platform:
+Lumped (`effects.forearm_inertia` off), each forearm pair's mass m_fb is split: a share s (`mass.forearm_elbow_share`, default 2/3, which matches the rod's inertia about its end, m L²/3) turns with the arm at the elbow, the rest moves with the platform. The forearms' own rotational inertia is left out. Then the machine is three arms about their joints and a point mass at the platform:
 
 ```text
 m_nt = m_platform + m_payload + 3 (1 − s) m_fb
@@ -660,13 +660,35 @@ with J_rotor the motor's rotor and the gearbox's input inertia. **Rigid model**,
 
 **Static hold, and stability.** At rest each gearbox holds −Q_g,i (with the twist τ / k plus half the backlash in the elastic model). Held by constant motor torques, as the standard suite holds it after a pulse, the D3 is unstable in its vertical mode in the upper part of its range: the stiffness of V − τ θ in the symmetric mode is −1.68 N m/rad at the middle of the default range (868 mm below the shoulders) and +2.64 N m/rad at 1000 mm (`the_vertical_mode_under_constant_torques_is_unstable_high_up`). The drives' position loops hold it; the suite's loss-free configs put the range, the start pose and the cycle 175 mm lower, where it is stable, so that the suite's 10 s energy check measures the integration and not this. Their stops keep their springs and lose their damping. The gearboxes' twist and backlash under the weight put the motors' pose (the setpoint of the machine at rest) up to 2.09 mm from the tool at the lower edge of the range (with the catalogue's 9 arcmin; 1.02 mm with 3 arcmin), 0.64 mm at pick and place (0.29 mm). `Machine::setpoint_slack` follows from that: the delta works it out when it is built (`rest_sag`) as the most that each gearbox's twist under its holding torque plus half its backlash either way, all eight combinations, moves the forward kinematics over a grid of the range (5 radii, 24 directions, 9 heights and the bottom, payload on and off), plus a tenth: 2.30 mm (0.1 mm on the belt machines, and in the rigid model). The controller lets a path or trajectory start that far from the tool and beyond the range or the envelope, and no further: a pose further from the start than the slack has to lie in the range (`near_start`). No limit cycle at rest with either backlash: the tool stands still to 2e-8 m peak to peak at five poses.
 
+**Forearm inertia** (`effects.forearm_inertia`, on in the shipped config). Each forearm pair is a rigid slender rod from the elbow c_i to the platform p (the two rods of a pair move alike, the platform never turning; their spin about their own axis is left out). Its kinetic energy (m/6)(|ċ|² + ċ·ṗ + |ṗ|²) is exactly that of m/6 at each end and 2m/3 at its middle, and so is its weight (its centre is the middle). So the model above holds with s = 1/6 and m_nt = m_platform + m_payload + 3 m_fb / 6, plus per leg a point mass m_mid = 2 m_fb / 3 at (c_i + p) / 2:
+
+```text
+J_m,i = (J + ∂c_i/∂θ_i e_iᵀ) / 2                 (the middle's Jacobian; e_i the unit vector of arm i)
+M    += Σ_i m_mid J_m,iᵀ J_m,i
+v    += Σ_i m_mid J_m,iᵀ (J_x⁻¹ w + ∂²c_i/∂θ² θ̇_i²) / 2
+Q_g  −= Σ_i m_mid g (J_m,i)_z
+```
+
+(`Legs::rod_middle`, `Delta::load_at`). With the arms level at the centre the rods translate and both models give the same torque for a vertical acceleration; sideways at 1 m/s the rods' kinetic energy is 0.313 J against the lumped 0.376 J. In the Adept cycle the lumped model puts 2.6 % more RMS torque on motor 1 (2.645 against 2.575 N m; peak 7.786 against 7.640 N m) and 1.8 % more on motors 2 and 3 (1.615 against 1.587 N m).
+
+**Bending arms** (`effects.link_elasticity`, off in the shipped config), 6 more states after the brakes: the bend δ_i and its rate. Each upper arm bends in the plane it turns in; the elbow's angle is θ_i + δ_i, and a spring k_b = 3 E I / L_a (a cantilever's tip deflection F L³ / (3 E I) as a turn about the shoulder) with a damper c_b (`[upper_arm]`) joins it to the arm's root. The arm's tube stays with the root, the elbow and all beyond move with the elbow angle:
+
+```text
+I_arm θ̈_i = τ_out,i + g m_arm l_cg cos θ_i + k_b δ_i + c_b δ̇_i + τ_joint,i
+M_d(θ + δ) (θ̈ + δ̈) = Q_d − v_d − k_b δ − c_b δ̇           (M, v, Q_g of the elbows and beyond, at the elbow angles)
+```
+
+The kinematics (tool, condition number, scene, collision bodies) take the elbow angles; the arm angle signal, the stops and the gearbox the joint's. At rest δ = Q_d / k_b. The damper's loss is `power.arm_bending`, the spring's energy is elastic energy. The feedforward stays the rigid model's. In the Adept cycle the tracking error grows from 4.0 to 5.3 mm, the dwell error from 0.68 to 0.73 mm.
+
+**Resonance** (`Machine::resonance_hz`, `mode_shape`; what `effects.shaper_follows_pose` sets the input shaper to). The lowest mode with the motors held by their position loops: per arm the gearbox's spring k_g (with `joint_elasticity`) from the held rotor to the arm's root, the bending spring k_b (with `link_elasticity`) from the root to the elbow, the root I_arm and everything beyond the mass matrix M_d at the elbow angles. Inverse iteration on K x = ω² M x with the flexibility per arm K⁻¹ = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] (a rigid spring 0); gravity's stiffness (a few N m/rad) and backlash are left out (`lowest_mode`). With rigid gearboxes and arms there is none. At the centre with the arms level the lowest is the platform's sideways mode (twice): the forearms lumped, 28.14 Hz on the gearboxes alone, 38.76 Hz on the bending alone, 22.88 Hz with both (vertical: 68.39 Hz on the bending alone).
+
 ### Signals
 
-`arm.<k>.angle` (rad), `gearbox.<k>.output_torque` (N m; elastic: the spring's torque on the arm, rigid: λ (d − i² J_rotor θ̈)), `kinematics.condition`. Effect views: the [torque breakdown](#torque-breakdown) per motor with inertia = ((M θ̈ + velocity term)_k + i² J_rotor θ̈_k) / i, gravity = −Q_g,k / i, friction = shaft + brake + gearbox loss at the rotor + joint friction / i; the loss powers `power.joint_<k>`, `power.shaft_<k>`, `power.gearbox_<k>`, `power.hard_stops`, `power.other` (ripple); the energies. The joints are not offered as friction contacts: the friction view draws a guide's force over its speed along an axis. Each gearbox warms with `effects.part_heating` (`temperature.gearbox_<k>`) and follows its temperature with `effects.thermal_feedback`.
+`arm.<k>.angle` (rad), `gearbox.<k>.output_torque` (N m; elastic: the spring's torque on the arm, rigid: λ (d − i² J_rotor θ̈)), `kinematics.condition`. Effect views: the [torque breakdown](#torque-breakdown) per motor with inertia = ((M θ̈ + velocity term)_k + i² J_rotor θ̈_k) / i, gravity = −Q_g,k / i, friction = shaft + brake + gearbox loss at the rotor + joint friction / i; the loss powers `power.joint_<k>`, `power.shaft_<k>`, `power.gearbox_<k>`, `power.hard_stops`, `power.other` (ripple), with bending arms `power.arm_bending`; the energies. With bending arms the joint carries the tube and the spring: gravity = −(g m_arm l_cg cos θ + Q_d) / i, inertia the rest of the spring's torque. The joints are not offered as friction contacts: the friction view draws a guide's force over its speed along an axis. Each gearbox warms with `effects.part_heating` (`temperature.gearbox_<k>`) and follows its temperature with `effects.thermal_feedback`.
 
-`Machine::scene_point` is the platform's centre: the machine's frame is the scene's. The scene: base plate, per arm a motor and a gearbox box with a bar turned by the rotor angle, the arm and the two rods of its forearm pair as segments, the platform as a box, the payload under it.
+`Machine::scene_point` is the platform's centre: the machine's frame is the scene's. The scene: base plate, per arm a motor and a gearbox box with a bar turned by the rotor angle, the arm (to its elbow, bent or not) and the two rods of its forearm pair as segments, the platform as a box, the payload under it. The collision bodies are the platform, the payload and each forearm rod as ten boxes along it (each the box around its piece of the drawn segment, widened by the rod's 12 mm).
 
-Not modelled: the forearms' rotational inertia and the error of the 2/3 split (it matches the inertia at the elbow, not the momentum), elasticity of arms, rods and ball joints (no figures published for any product; the gearbox is the one elastic part), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, a fourth axis, a resonance for a shaper that follows the pose.
+Not modelled: the rods' spin about their own axis, the arms' bending out of the plane they turn in and the tube's own share of the bending mode (it stays with the root), elasticity of rods and ball joints (no figures published for any product), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, the upper arms as collision bodies, a fourth axis.
 
 ## Motion controller
 

@@ -68,13 +68,13 @@ fn centre_by_hand(d: &Delta, z: f64) -> (f64, f64) {
     (t, dz / 3.0)
 }
 
-/// Static hold at the centre, 100 mm below the top: the platform's weight shares out evenly. By hand (default
-/// config): t = 0.0577 degrees, dz/dt per arm = -0.13343 m/rad, m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg, m_LG =
-/// 0.9 * 0.2 + 0.4 (0.3 + 2/3 0.5) = 0.4333 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt
+/// Static hold at the centre, 100 mm below the top, the forearms lumped (effects.forearm_inertia off): the platform's
+/// weight shares out evenly. By hand (default config): t = 0.0577 degrees, dz/dt per arm = -0.13343 m/rad,
+/// m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg, m_LG = 0.9 * 0.2 + 0.4 (0.3 + 2/3 0.5) = 0.4333 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt
 /// = -4.249 - 6.150 = -10.40 N m (negative: the arm is held up), the motor that over 20: -0.520 N m.
 #[test]
 fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_arms_own() {
-    let d = delta(&["effects.torque_ripple = false"]);
+    let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let z = -0.775;
     let (t, dz) = centre_by_hand(&d, z);
     let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5));
@@ -96,7 +96,7 @@ fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_a
 /// research note).
 #[test]
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
-    let d = delta(&["effects.torque_ripple = false"]);
+    let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let p = [0.6, 0.0, -0.775];
     let t = d.legs.inverse(p).unwrap();
     let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5);
@@ -130,7 +130,7 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
 /// feedforward says so, and the rigid model given that torque accelerates the platform at 10 m/s^2 with no sideways part.
 #[test]
 fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque() {
-    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false"]);
+    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", "effects.forearm_inertia = false"]);
     let z = -0.775;
     let (_, dz) = centre_by_hand(&d, z);
     let i_b = 0.048 + 0.16 * (0.3 + 0.6667 * 0.5);
@@ -234,6 +234,7 @@ fn the_condition_number_is_the_ratio_of_the_singular_values() {
 fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     let mut cfg = lossless_config();
     cfg.set_text("effects.joint_elasticity = false").unwrap();
+    cfg.set_text("effects.forearm_inertia = false").unwrap();
     let m = Delta::new(&cfg).unwrap();
     let stiffness = |z: f64| {
         let (mut s, mut hold) = (Vec::new(), [0.0; 3]);
@@ -360,4 +361,199 @@ fn an_arc_along_the_rim_of_the_range_is_planned() {
     for time_optimal in [false, true] {
         assert!(sim.plan_path(&rim, time_optimal).is_ok(), "{time_optimal}: {:?}", sim.plan_path(&rim, time_optimal).err());
     }
+}
+
+/// The rigid, loss-free model with or without the forearm rods (effects.forearm_inertia).
+fn loss_free(rods: bool, more: &[&str]) -> Delta {
+    let rods = format!("effects.forearm_inertia = {rods}");
+    let mut edits = vec!["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", &rods];
+    edits.extend(more);
+    delta(&edits)
+}
+
+/// The height at the centre where the arms are horizontal: the elbows at e + L_a = 0.55 m from the axis, so
+/// z = -sqrt(0.95^2 - 0.55^2) = -sqrt(0.6).
+const LEVEL: f64 = -0.774_596_669_241_483;
+
+/// The arms horizontal at the centre, a vertical acceleration of 10 m/s^2: the elbows move straight down with the
+/// platform (dc/dt = (0, 0, -L_a), and u_i . (p' - c' t') = 0 with u_i = (-0.55 cos phi_i, -0.55 sin phi_i, z) gives
+/// p'_z = -L_a t'), so every rod translates and counts with all its mass, in either model: t'' = -a / L_a = -25 rad/s^2
+/// and per arm, at the arm, (I_arm + L_a^2 m_elbow) t'' - L_a m_fb a - (L_a / 3)(m_platform + m_payload) a
+/// = -0.096 * 25 - 0.4 * 0.5 * 10 - 0.13333 * 4.2 * 10 = -2.4 - 2.0 - 5.6 = -10.0 N m; at the motor over 20 plus
+/// the rotor's (1.7e-4 + 4.06e-5) * 20 * (-25): -0.6053 N m. The model given that torque accelerates the platform at
+/// 10 m/s^2 straight up.
+#[test]
+fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_torque_with_rods() {
+    let by_hand: f64 = (-(0.048 + 0.16 * 0.3) * 25.0 - 0.4 * 0.5 * 10.0 - 0.4 / 3.0 * 4.2 * 10.0) / 20.0 + (1.7e-4 + 4.06e-5) * 20.0 * -25.0;
+    assert!((by_hand + 0.6053).abs() < 1e-4, "{by_hand}");
+    for rods in [true, false] {
+        let d = loss_free(rods, &[]);
+        let p = [0.0, 0.0, LEVEL];
+        let t = d.legs.inverse(p).unwrap();
+        assert!(t.iter().all(|a| a.abs() < 1e-7), "{t:?}");
+        let (mut moving, mut still) = ([0.0; 3], [0.0; 3]);
+        d.feedforward_torque(&p, &[0.0, 0.0, 10.0], &mut moving);
+        d.feedforward_torque(&p, &[0.0; 3], &mut still);
+        for k in 0..3 {
+            close(moving[k] - still[k], by_hand, 1e-6, "inertia torque");
+        }
+        let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&p, &mut state, &mut hold);
+        let mut rates = vec![0.0; d.state_len()];
+        d.derivatives(&state, &moving, &mut rates);
+        let platform = mul(&d.pose(t).1, [rates[3], rates[4], rates[5]]);
+        assert!(platform[0].abs() < 1e-9 && platform[1].abs() < 1e-9 && (platform[2] - 10.0).abs() < 1e-9, "rods {rods}: {platform:?}");
+    }
+}
+
+/// Kinetic energy at the same pose, the platform moving sideways at 1 m/s: there the rods turn and the two models part.
+/// By hand: t'_i = u_i . p' / (u_i . dc_i/dt) = (-0.55 cos phi_i) / (-0.4 z) = 0.55 cos phi_i / (0.4 z), the elbows
+/// moving straight up or down at 0.4 t'_i; sum t'^2 = 1.5 (0.55 / (0.4 * 0.7746))^2 = 4.7265 rad^2/s^2, sum of the
+/// elbows' speeds squared 0.16 * 4.7265 = 0.75624 m^2/s^2. A slender rod has (m/6)(|c'|^2 + c'.p' + |p'|^2), here
+/// c'.p' = 0: (0.5 / 6)(3 + 0.75624) = 0.31302 J for the three pairs; lumped, (0.5 / 2)(2/3 * 0.75624 + 1/3 * 3)
+/// = 0.37604 J (0.6667 for 2/3). The rest is the same in both: arms (I_arm + L_a^2 m_elbow + i^2 J_rotor) sum t'^2 / 2
+/// = (0.096 + 0.08424) * 4.7265 / 2 = 0.42596 J, the platform with its payload 4.2 / 2 = 2.1 J.
+#[test]
+fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
+    let sum_t2 = 1.5 * (0.55 / (0.4 * -LEVEL)).powi(2);
+    let elbows = 0.16 * sum_t2;
+    let common = 0.5 * (0.048 + 0.16 * 0.3 + 400.0 * (1.7e-4 + 4.06e-5)) * sum_t2 + 0.5 * 4.2;
+    let rods = 0.5 / 6.0 * (3.0 + elbows);
+    let lumped = 0.5 * 0.5 * (0.6667 * elbows + (1.0 - 0.6667) * 3.0);
+    println!("rods {rods:.5} J, lumped {lumped:.5} J, the rest {common:.5} J");
+    assert!((rods - 0.31302).abs() < 1e-4 && (lumped - 0.37604).abs() < 2e-4 && (common - 2.52596).abs() < 1e-4);
+    for (on, by_hand) in [(true, rods), (false, lumped)] {
+        let d = loss_free(on, &["effects.gravity = false"]);
+        let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&[0.0, 0.0, LEVEL], &mut state, &mut hold);
+        d.set_tool_velocity(&mut state, &[1.0, 0.0, 0.0]);
+        close(state[3] * state[3] + state[4] * state[4] + state[5] * state[5], sum_t2, 1e-6, "sum of t'^2");
+        close(d.energy_parts(&state)[0], common + by_hand, 1e-6, &format!("kinetic energy, rods {on}"));
+    }
+}
+
+/// Free and loss-free (no friction, damping, backlash or ripple), held by the constant motor torques of the pose and
+/// started at (1, -0.5, 0.3) m/s, the energy less the motors' work, E - sum tau_k rotor_k, stays what it was: over 0.1 s
+/// of RK4 at 10 us to 1e-7 of the kinetic energy at the start, with the rods, with bending arms, with both, on elastic
+/// and rigid joints. A velocity term or a gravity that does not belong to the mass matrix shows as a drift.
+#[test]
+fn a_free_loss_free_motion_keeps_its_energy() {
+    for (rods, bending, elastic) in [(true, false, true), (false, true, true), (true, true, true), (true, true, false)] {
+        let mut cfg = lossless_config();
+        for e in [format!("effects.forearm_inertia = {rods}"), format!("effects.link_elasticity = {bending}"), format!("effects.joint_elasticity = {elastic}"), "effects.gearbox_backlash = false".into()] {
+            cfg.set_text(&e).unwrap();
+        }
+        let d = Delta::new(&cfg).unwrap();
+        let (mut s, mut torque) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&[0.1, -0.05, -0.85], &mut s, &mut torque);
+        d.set_tool_velocity(&mut s, &[1.0, -0.5, 0.3]);
+        let budget = |s: &[f64]| {
+            let (mut rotor, mut speed) = ([0.0; 3], [0.0; 3]);
+            d.motor_state(s, &mut rotor, &mut speed);
+            d.energy(s) - (0..3).map(|k| torque[k] * rotor[k]).sum::<f64>()
+        };
+        let (start, kinetic) = (budget(&s), d.energy_parts(&s)[0]);
+        let n = s.len();
+        let rate = |s: &[f64]| {
+            let mut r = vec![0.0; n];
+            d.derivatives(s, &torque, &mut r);
+            r
+        };
+        let h = 1e-5;
+        for _ in 0..10_000 {
+            let k1 = rate(&s);
+            let k2 = rate(&s.iter().zip(&k1).map(|(x, k)| x + 0.5 * h * k).collect::<Vec<_>>());
+            let k3 = rate(&s.iter().zip(&k2).map(|(x, k)| x + 0.5 * h * k).collect::<Vec<_>>());
+            let k4 = rate(&s.iter().zip(&k3).map(|(x, k)| x + h * k).collect::<Vec<_>>());
+            for i in 0..n {
+                s[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+            }
+        }
+        let drift = (budget(&s) - start).abs();
+        let (mut at, mut vel) = ([0.0; 3], [0.0; 3]);
+        d.tool_state(&s, &mut at, &mut vel);
+        let travel = norm(sub(at, [0.1, -0.05, -0.85]));
+        println!("rods {rods}, bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, {travel:.3} m travelled");
+        assert!(travel > 0.05, "{travel} m");
+        assert!(drift < 1e-7 * kinetic, "rods {rods}, bending {bending}, elastic {elastic}: {drift} J");
+    }
+}
+
+/// The lowest mode with the motors held, the forearms lumped, at the centre with the arms horizontal. Sideways the
+/// platform moves 1 m/s for sum t'^2 = 4.7265 rad^2/s^2 (as in `the_rods_kinetic_energy_is_the_hand_calculated_one`),
+/// so a unit turn vector carries M_s = L_a^2 (m_elbow + s m_fb) + m_nt / 4.7265 = 0.16 * 0.63335 + 4.69995 / 4.7265
+/// = 0.10134 + 0.99438 = 1.09572 kg m^2 beyond the arm's tube; up and down (all arms together, p'_z = -L_a t' / 3 each)
+/// M_v = 0.10134 + m_nt L_a^2 / 3 = 0.35200. The heavier sideways mode is the lowest:
+/// bending alone (rigid gearboxes): w^2 = k_b / M_s = 65000 / 1.09572, 38.76 Hz (vertical: 68.39 Hz);
+/// gearboxes alone (rigid arms): w^2 = k_g / (I_arm + M_s) = 35752.6 / 1.14372, 28.14 Hz;
+/// both, the tube I_arm = 0.048 between the two springs: the lower root of
+/// I_arm M_s w^4 - (k_g M_s + k_b M_s + k_b I_arm) w^2 + k_g k_b = 0.
+/// The mode's shape moves the platform sideways by 1 m, not up or down.
+#[test]
+fn the_lowest_mode_is_the_hand_calculated_one() {
+    let (kb, kg, i_arm) = (65000.0, 35752.6, 0.048);
+    let sum_t2 = 1.5 * (0.55 / (0.4 * -LEVEL)).powi(2);
+    let m_nt = 1.2 + 3.0 + 3.0 * (1.0 - 0.6667) * 0.5;
+    let tip = 0.16 * (0.3 + 0.6667 * 0.5);
+    let (sideways, vertical) = (tip + m_nt / sum_t2, tip + m_nt * 0.16 / 3.0);
+    assert!((sideways - 1.09572).abs() < 1e-4 && (vertical - 0.352).abs() < 1e-4);
+    let hz = |w2: f64| w2.sqrt() / std::f64::consts::TAU;
+    let (b, c) = (kg * sideways + kb * sideways + kb * i_arm, kg * kb);
+    let both = (b - (b * b - 4.0 * i_arm * sideways * c).sqrt()) / (2.0 * i_arm * sideways);
+    let cases = [("bending", false, true, kb / sideways), ("gearboxes", true, false, kg / (i_arm + sideways)), ("both", true, true, both)];
+    for (what, elastic, bending, w2) in cases {
+        let d = delta(&["effects.forearm_inertia = false", &format!("effects.joint_elasticity = {elastic}"), &format!("effects.link_elasticity = {bending}")]);
+        let found = d.resonance_hz(&[0.0, 0.0, LEVEL]).unwrap();
+        println!("{what}: {found:.4} Hz, by hand {:.4} Hz", hz(w2));
+        close(found, hz(w2), 1e-6, what);
+    }
+    assert!((hz(kb / sideways) - 38.76).abs() < 0.01 && (hz(kb / vertical) - 68.39).abs() < 0.01 && (hz(kg / (i_arm + sideways)) - 28.14).abs() < 0.01);
+    assert!(hz(both) < hz(kg / (i_arm + sideways)));
+    assert_eq!(delta(&["effects.joint_elasticity = false"]).resonance_hz(&[0.0, 0.0, LEVEL]), None);
+    let d = delta(&["effects.forearm_inertia = false", "effects.link_elasticity = true"]);
+    let (_, shape) = d.mode_shape(&[0.0, 0.0, LEVEL]).unwrap();
+    let (mut s, mut torque) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&[0.0, 0.0, LEVEL], &mut s, &mut torque);
+    let moved: Vec<f64> = s.iter().zip(&shape).map(|(a, b)| a + 1e-6 * b).collect();
+    let (mut at, mut rest, mut vel) = ([0.0; 3], [0.0; 3], [0.0; 3]);
+    d.tool_state(&moved, &mut at, &mut vel);
+    d.tool_state(&s, &mut rest, &mut vel);
+    let travel: Vec<f64> = (0..3).map(|i| (at[i] - rest[i]) / 1e-6).collect();
+    assert!((travel[0].abs().max(travel[1].abs()) - 1.0).abs() < 1e-3 && travel[2].abs() < 1e-3, "{travel:?}");
+}
+
+/// A box in the way of a forearm and of nothing else: at the centre, 0.75 m down, leg 1's rod on the +y side has its
+/// middle where the box is put (0.03 m across). From the start pose (0.1525, 0, -0.75) that middle is some 0.08 m
+/// away in x; on the traverse to (-0.1525, 0, -0.75) the rod sweeps through it. Planned, the check finds the contact;
+/// run with effects.crash the drives trip. The platform passes far below: the box's bottom lies more than 0.3 m above
+/// the platform's top, so the platform's and payload's boxes alone (the bodies until 13 November) never touch it.
+#[test]
+fn a_forearm_running_into_an_obstacle_is_a_crash() {
+    let d = delta(&[]);
+    let p = [0.0, 0.0, -0.75];
+    let t = d.legs.inverse(p).unwrap();
+    let [_, (from, to)] = d.legs.rods(0, t[0], p, 0.05, 0.1);
+    let middle: V3 = std::array::from_fn(|i| 0.5 * (from[i] + to[i]));
+    println!("rod middle at the centre: {middle:?}");
+    assert!(middle[1] > 0.0 && middle[2] - 0.015 - (p[2] + 0.015) > 0.3, "{middle:?}");
+    let obstacle = format!("obstacles = [{{ name = \"rod\", centre_m = [{:?}, {:?}, {:?}], size_m = [0.03, 0.03, 0.03] }}]", middle[0], middle[1], middle[2]);
+    let mut cfg = ENTRY.config();
+    cfg.set_text(&obstacle).unwrap();
+    let start = cfg.f64s("start.pose").unwrap();
+    let sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let bodies = sim.machine.collision_bodies(&sim.state);
+    assert_eq!(bodies.len(), 2 + 6 * ROD_PIECES);
+    let gap = |bodies: &[sim_core::Aabb]| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
+    assert!(gap(&bodies) > 0.0 && gap(&bodies[..2]) > 0.3, "at the start {} m", gap(&bodies));
+    let planned = sim.check_plan(&[start, vec![-0.1525, 0.0, -0.75]]).unwrap();
+    assert!(planned.clearance < 0.0 && planned.contact.is_some(), "{planned:?}");
+    cfg.set_text("effects.crash = true").unwrap();
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(Command::MoveTo(vec![-0.1525, 0.0, -0.75])).unwrap();
+    sim.run(0.5, |_| {});
+    let contact = sim.contact.as_ref().unwrap();
+    println!("contact at {:?}, {:.3} m/s", contact.pose, contact.speed);
+    assert!(sim.crashed && !sim.control.enabled() && contact.pose[0] > -0.1525 && contact.pose[0] < 0.1525);
+    let bodies = sim.machine.collision_bodies(&sim.state);
+    assert!(gap(&bodies[..2]) > 0.3, "the platform {} m from it", gap(&bodies[..2]));
 }
