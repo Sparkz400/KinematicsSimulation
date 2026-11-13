@@ -360,3 +360,10 @@ ui-recording = Recording
 ui-recording-stop = Stop
 ui-video-dropped = The disk did not keep up: { $arg } frames were left out of the video.
 ui-video-detached = Blender is still making the video and finishes it on its own: { $arg }
+
+# Vendor trace import and the per-motor identification (branch drive-trace-import).
+ui-trace-map = Mapping
+ui-trace-map-hint = For a trace exported by a drive's or controller's tool (SINAMICS, TwinCAT, CODESYS, other CSV): the mapping file that names its signals and units, as sim-cli takes it with --map. Empty for a trace in the simulator's columns.
+ui-trace-identify = What the trace says by itself, per motor
+ui-identify-value = Value
+ui-identify-interval = 95 % interval

@@ -650,3 +650,77 @@ pub fn two_mass_from_ringing(ringing: &Ringing, total: Estimate, motor: Estimate
         anti_resonance: propagate(&|v| v[2] * (v[1] / v[0]).sqrt(), &inputs),
     }
 }
+
+/// The names `Identified` gives its values and qualities, every one it can give.
+pub const QUANTITIES: [&str; 19] = [
+    "inertia_kg_m2",
+    "viscous_nm_s_rad",
+    "coulomb_nm",
+    "constant_torque_nm",
+    "stiction_nm",
+    "stribeck_speed_rad_s",
+    "presliding_stiffness_nm_rad",
+    "current_loop_gain",
+    "current_loop_time_constant_s",
+    "current_loop_dead_time_s",
+    "position_loop_gain",
+    "position_loop_time_constant_s",
+    "position_loop_dead_time_s",
+    "friction_model_fit_percent",
+    "friction_model_rms_nm",
+    "current_loop_fit_percent",
+    "current_loop_following_error_fit_percent",
+    "position_loop_fit_percent",
+    "position_loop_following_error_fit_percent",
+];
+
+/// Everything a trace of one motor gives without extra tests: inertia and friction, and the lags from torque
+/// setpoint to torque (where the trace has the setpoint) and from position setpoint to position. What
+/// `sim-cli identify` and the app show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Identified {
+    pub friction: Option<Friction>,
+    pub current_loop: Option<Lag>,
+    pub position_loop: Option<Lag>,
+}
+
+impl Identified {
+    pub fn of(time: &[f64], motor: &crate::trace::MotorTrace, torque_setpoint: Option<&[f64]>) -> Self {
+        Self {
+            friction: friction(time, &motor.angle, &motor.speed, &motor.torque),
+            current_loop: torque_setpoint.and_then(|input| lag(time, input, &motor.torque)),
+            position_loop: lag(time, &motor.setpoint, &motor.angle),
+        }
+    }
+
+    /// The fitted values by name (quantity and unit, as `sim-cli identify` writes them), in a fixed order;
+    /// what the trace did not show is left out.
+    pub fn estimates(&self) -> Vec<(&'static str, Estimate)> {
+        let mut out = Vec::new();
+        if let Some(f) = &self.friction {
+            out.extend([("inertia_kg_m2", f.inertia), ("viscous_nm_s_rad", f.viscous), ("coulomb_nm", f.coulomb), ("constant_torque_nm", f.constant)]);
+            let optional = [("stiction_nm", f.stiction), ("stribeck_speed_rad_s", f.stribeck_speed), ("presliding_stiffness_nm_rad", f.presliding_stiffness)];
+            out.extend(optional.into_iter().filter_map(|(name, e)| e.map(|e| (name, e))));
+        }
+        for (names, lag) in [(["current_loop_gain", "current_loop_time_constant_s", "current_loop_dead_time_s"], &self.current_loop), (["position_loop_gain", "position_loop_time_constant_s", "position_loop_dead_time_s"], &self.position_loop)] {
+            if let Some(l) = lag {
+                out.extend(names.into_iter().zip([l.gain, l.time_constant, l.dead_time]));
+            }
+        }
+        out
+    }
+
+    /// How well each model reproduces the trace, by name: fit in percent, and the friction model's RMS in N m.
+    pub fn qualities(&self) -> Vec<(&'static str, f64)> {
+        let mut out = Vec::new();
+        if let Some(f) = &self.friction {
+            out.extend([("friction_model_fit_percent", f.quality.fit_percent), ("friction_model_rms_nm", f.quality.rms)]);
+        }
+        for (names, lag) in [(["current_loop_fit_percent", "current_loop_following_error_fit_percent"], &self.current_loop), (["position_loop_fit_percent", "position_loop_following_error_fit_percent"], &self.position_loop)] {
+            if let Some(l) = lag {
+                out.extend(names.into_iter().zip([l.quality.fit_percent, l.error_quality.fit_percent]));
+            }
+        }
+        out
+    }
+}

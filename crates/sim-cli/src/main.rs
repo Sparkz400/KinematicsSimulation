@@ -4,7 +4,7 @@
 use sim_components::analysis::{SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
 use sim_components::identify::{fit_rigid, fit_sweep, parse_sweep};
 use sim_components::import::{Imported, Mapping, decode, import};
-use sim_components::motor_fit::{Estimate, TwoMass, frequency_response, friction, lag, ringing, two_mass, two_mass_from_ringing};
+use sim_components::motor_fit::{Estimate, Identified, TwoMass, frequency_response, ringing, two_mass, two_mass_from_ringing};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
@@ -381,39 +381,29 @@ fn identify(args: &Args, tr: &Translations) -> Result<(), Failure> {
         };
         let t = &imported.trace.time;
         time.clone_from(t);
-        let mut total_inertia = None;
-        match friction(t, &m.angle, &m.speed, &m.torque) {
-            Some(f) => {
-                for (name, e) in [("inertia_kg_m2", f.inertia), ("viscous_nm_s_rad", f.viscous), ("coulomb_nm", f.coulomb), ("constant_torque_nm", f.constant)] {
-                    estimate_row(&mut *out, name, id, e)?;
-                }
-                for (name, e) in [("stiction_nm", f.stiction), ("stribeck_speed_rad_s", f.stribeck_speed), ("presliding_stiffness_nm_rad", f.presliding_stiffness)] {
-                    if let Some(e) = e {
-                        estimate_row(&mut *out, name, id, e)?;
-                    }
-                }
-                value_row(&mut *out, "friction_model_fit_percent", id, f.quality.fit_percent)?;
-                value_row(&mut *out, "friction_model_rms_nm", id, f.quality.rms)?;
-                total_inertia = Some(f.inertia);
-                overlay.push(("torque_measured".into(), m.torque.clone()));
-                overlay.push(("torque_model".into(), f.model));
-            }
-            None => eprintln!("{}", tr.tr_arg("error-identify-friction", id)),
+        let found = Identified::of(t, m, imported.torque_setpoints[k].as_deref());
+        for (name, e) in found.estimates() {
+            estimate_row(&mut *out, name, id, e)?;
         }
-        let lags = [("current_loop", imported.torque_setpoints[k].as_deref(), &m.torque), ("position_loop", Some(m.setpoint.as_slice()), &m.angle)];
-        for (name, input, output) in lags {
-            let Some(input) = input else { continue };
-            match lag(t, input, output) {
-                Some(l) => {
-                    estimate_row(&mut *out, &format!("{name}_gain"), id, l.gain)?;
-                    estimate_row(&mut *out, &format!("{name}_time_constant_s"), id, l.time_constant)?;
-                    estimate_row(&mut *out, &format!("{name}_dead_time_s"), id, l.dead_time)?;
-                    value_row(&mut *out, &format!("{name}_fit_percent"), id, l.quality.fit_percent)?;
-                    value_row(&mut *out, &format!("{name}_following_error_fit_percent"), id, l.error_quality.fit_percent)?;
-                    overlay.push((format!("{name}_measured"), output.clone()));
-                    overlay.push((format!("{name}_model"), l.model));
-                }
-                None => eprintln!("{}", tr.tr_arg("error-identify-lag", id)),
+        for (name, value) in found.qualities() {
+            value_row(&mut *out, name, id, value)?;
+        }
+        let has_setpoint = imported.torque_setpoints[k].is_some();
+        if found.friction.is_none() {
+            eprintln!("{}", tr.tr_arg("error-identify-friction", id));
+        }
+        if found.position_loop.is_none() || (has_setpoint && found.current_loop.is_none()) {
+            eprintln!("{}", tr.tr_arg("error-identify-lag", id));
+        }
+        let total_inertia = found.friction.as_ref().map(|f| f.inertia);
+        if let Some(f) = &found.friction {
+            overlay.push(("torque_measured".into(), m.torque.clone()));
+            overlay.push(("torque_model".into(), f.model.clone()));
+        }
+        for (name, lag, output) in [("current_loop", &found.current_loop, &m.torque), ("position_loop", &found.position_loop, &m.angle)] {
+            if let Some(l) = lag {
+                overlay.push((format!("{name}_measured"), output.clone()));
+                overlay.push((format!("{name}_model"), l.model.clone()));
             }
         }
         if let (Some(from), Some(to)) = (args.number("--from")?, args.number("--to")?) {
