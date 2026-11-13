@@ -557,3 +557,53 @@ fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let bodies = sim.machine.collision_bodies(&sim.state);
     assert!(gap(&bodies[..2]) > 0.3, "the platform {} m from it", gap(&bodies[..2]));
 }
+
+/// Transition curves on the delta's three axes, with `profile.path_tolerance_m` = 0.1 mm: a line along x onto a circle
+/// of 0.1 m around (0, 0, -0.85) in the plane tilted by 30 degrees about x (along x and along (0, cos 30, sin 30), in
+/// no plane of two axes), a quarter of it, and 0.15 m on in its direction. By hand within the axis limits (3 m/s,
+/// 50 m/s^2, 2500 m/s^3): 2 m/s on the arc (sqrt(0.8 a r)), whose entry would need a curve of v^3 dk / (0.4 j) = 80 mm;
+/// the tolerance allows L = sqrt(24 e r) = 15.49 mm, and the arc moves in by e = L^2 / (24 r) = 0.1 mm, which is the
+/// deviation reported. Both planners: every planned pose within the reported deviation (at most 0.1 mm) of the given
+/// path, and the path takes less time than without the tolerance.
+#[test]
+fn a_path_in_a_tilted_plane_gets_its_transition_curves() {
+    let (c, r, t) = ([0.0, 0.0, -0.85], 0.1, 30f64.to_radians());
+    let (e1, e2) = ([1.0, 0.0, 0.0], [0.0, t.cos(), t.sin()]);
+    let at = |a: f64, b: f64| [0, 1, 2].map(|i| c[i] + a * e1[i] + b * e2[i]);
+    let (start, onto, off, end) = (at(-0.2, -r), at(0.0, -r), at(r, 0.0), at(r, 0.15));
+    let text = format!("line,{:?},{:?},{:?}\nline,{:?},{:?},{:?}\narc,{:?},{:?},{:?},{:?},{:?},{:?},ccw\nline,{:?},{:?},{:?}", start[0], start[1], start[2], onto[0], onto[1], onto[2], off[0], off[1], off[2], c[0], c[1], c[2], end[0], end[1], end[2]);
+    let pieces = sim_components::path::parse(&text).unwrap();
+    let mut cfg = ENTRY.config();
+    cfg.set_text("profile.path_tolerance_m = 0.0001").unwrap();
+    let (blended, given) = (Sim::new(&ENTRY, &cfg).unwrap(), Sim::new(&ENTRY, &ENTRY.config()).unwrap());
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let sub = |a: &[f64], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let to_segment = |p: &[f64], a: [f64; 3], b: [f64; 3]| {
+        let (ab, ap) = (sub(&b, a), sub(p, a));
+        let s = (dot(ab, ap) / dot(ab, ab)).clamp(0.0, 1.0);
+        dot(sub(&ap, ab.map(|x| s * x)), sub(&ap, ab.map(|x| s * x))).sqrt()
+    };
+    // From the arc: out of the plane, and in it from the circle, where the point is beside the quarter.
+    let normal = [0.0, -t.sin(), t.cos()];
+    let to_arc = |p: &[f64]| {
+        let q = sub(p, c);
+        let (h, a, b) = (dot(q, normal), dot(q, e1), dot(q, e2));
+        if a >= 0.0 && b <= 0.0 { (h * h + ((a * a + b * b).sqrt() - r).powi(2)).sqrt() } else { f64::INFINITY }
+    };
+    for time_optimal in [false, true] {
+        let points = blended.plan_path(&pieces, time_optimal).unwrap();
+        let reported = blended.path_deviation(&pieces, time_optimal).unwrap();
+        assert!(reported > 0.0 && reported <= 1e-4 * (1.0 + 1e-9), "time-optimal {time_optimal}: {reported} m reported");
+        if !time_optimal {
+            close(reported, 1e-4, 1e-9, "e = L^2 / (24 r) within the axis limits");
+        }
+        let home: [f64; 3] = [points[0].1[0], points[0].1[1], points[0].1[2]];
+        let off_path = |p: &[f64]| to_segment(p, home, start).min(to_segment(p, start, onto)).min(to_arc(p)).min(to_segment(p, off, end));
+        let furthest = points.iter().map(|p| off_path(&p.1)).fold(0.0, f64::max);
+        assert!(furthest <= reported + 1e-7 && furthest > 0.5 * reported, "time-optimal {time_optimal}: {furthest} m off the path, {reported} m reported");
+        let as_given = given.plan_path(&pieces, time_optimal).unwrap();
+        let (time, before) = (points[points.len() - 1].0, as_given[as_given.len() - 1].0);
+        assert!(time < before - 0.01 && dot(sub(&points[points.len() - 1].1, end), sub(&points[points.len() - 1].1, end)).sqrt() < 1e-9, "time-optimal {time_optimal}: {time} s against {before} s");
+        println!("time-optimal {time_optimal}: {time} s against {before} s, off by {furthest} m, {reported} m reported");
+    }
+}
