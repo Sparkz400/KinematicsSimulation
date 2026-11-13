@@ -5,6 +5,9 @@ C-ABI-Funktionen bereit, und `crates/sim-wasm/web/index.html` ist eine statische
 eine Auslegungsprüfung rechnet: Maschine wählen, Konfiguration (TOML) bearbeiten, und die Seite fährt den Zyklus und
 zeigt jedes Prüfurteil und die Last je Motor. Nichts verlässt den Browser; ein Server muss nur zwei Dateien ausliefern.
 
+**Live-Seite:** https://sparkz400.github.io/KinematicsSimulation/, bei jedem Push auf `main` vom Workflow
+[`pages.yml`](../../.github/workflows/pages.yml) gebaut.
+
 ## Bauen und öffnen
 
 ```bash

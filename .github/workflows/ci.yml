@@ -72,6 +72,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py
 
+  # Advisories, licences, duplicate versions and sources of the dependency tree, against deny.toml.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          command: check
+
   # The core, the machines and the analysis for the browser, and the page that runs a sizing check with them.
   wasm:
     runs-on: ubuntu-latest

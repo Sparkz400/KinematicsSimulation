@@ -36,6 +36,11 @@ item are in [PROGRESS.md](PROGRESS.md).
   1FK2105-4AF behind ratio 20; kinematics, Jacobian and condition number, the D3's dynamics, scene, collision bodies,
   a default Adept cycle that passes its verdicts. The gearbox backlash is an estimate (1 arcmin): with the catalogue's
   9 arcmin the cycle fails settling.
+
+- `CITATION.cff`; `deny.toml` with a cargo-deny job in CI (licences, advisories, duplicate versions, sources).
+- GitHub Pages workflow (`pages.yml`) that publishes the browser sizing page: https://sparkz400.github.io/KinematicsSimulation/.
+- README: an animated GIF of the T-gantry's cycle and a screenshot of the delta picker; intro, machine list, limits
+  and crate table brought up to date (nine machines, machine files, FMI 3.0, Python, WebAssembly), also in German.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

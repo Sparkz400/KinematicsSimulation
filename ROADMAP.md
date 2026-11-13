@@ -30,4 +30,3 @@ What is not built yet, from the "Not built" and "Blocked" lists of [PROGRESS.md]
 ## Release
 
 - Signing the MSI and the .deb; packages for Linux distributions other than Debian and Ubuntu.
-- The CI and release workflows have never run: the repository has no GitHub remote yet.
