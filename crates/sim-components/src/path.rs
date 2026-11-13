@@ -23,8 +23,8 @@
 //! normal points to when the normal is taken upwards (+z); for a vertical plane, towards the viewer (-y), as the
 //! scene looks at the machine; for the y-z plane, from +x. So an arc in the x-z plane is seen as on a two-axis
 //! machine with x and z. What three axes do not have: a full turn or a half turn (start, end and centre on one line
-//! leave the plane open, and such an arc is refused), and transition curves (`profile.path_tolerance_m` is not used:
-//! the path runs as given, with a stop or a crawl where the curvature steps).
+//! leave the plane open, and such an arc is refused). Transition curves on three axes are laid in the plane of the arc
+//! they meet (`blend3`); where two arcs in different planes meet, the path passes as given.
 
 use crate::control::CommandError;
 use crate::drive::DriveParams;
@@ -85,8 +85,10 @@ enum Geo {
     /// u from the centre to its start, w at right angles to it in its plane, in the direction it turns.
     Arc3 { centre: [f64; 3], u: [f64; 3], w: [f64; 3], radius: f64, length: f64 },
     /// A transition curve (clothoid): from the point `from` in the direction `heading`, the curvature goes
-    /// evenly with the distance from `k0` to `k1`. Curvature is 1 / radius, positive counter-clockwise.
-    Clothoid { from: [f64; 2], heading: f64, k0: f64, k1: f64, length: f64 },
+    /// evenly with the distance from `k0` to `k1`. Curvature is 1 / radius, positive counter-clockwise. On three axes
+    /// `plane` is where the curve lies: a point (the origin of `from`) and the two directions of its first and second
+    /// coordinate; `None` on two axes.
+    Clothoid { from: [f64; 2], heading: f64, k0: f64, k1: f64, length: f64, plane: Option<[[f64; 3]; 3]> },
     /// One span of a spline, from one via point to the next, or a part of one: the polynomial c0 + c1 u + ... +
     /// c5 u^5 for u from 0 to `h` (a cubic, c4 = c5 = 0, but where a spline is eased into a line or an arc,
     /// `ease`). `travelled` is the distance along it at `SPLINE_PARTS` + 1 evenly spaced u, the last being the
@@ -197,7 +199,7 @@ impl Geo {
                 let (sin, cos) = (s / radius).sin_cos();
                 [(0..3).map(|i| centre[i] + radius * (cos * u[i] + sin * w[i])).collect(), (0..3).map(|i| -sin * u[i] + cos * w[i]).collect(), (0..3).map(|i| -(cos * u[i] + sin * w[i]) / radius).collect()]
             }
-            Geo::Clothoid { from, heading, k0, k1, length } => {
+            Geo::Clothoid { from, heading, k0, k1, length, plane } => {
                 let angle = |u: f64| heading + k0 * u + 0.5 * (k1 - k0) * u * u / length;
                 // The pose is the direction added up along the curve, which has no closed form: Simpson's
                 // rule over 64 intervals, exact to far below a nanometre for the turns a blend makes.
@@ -209,7 +211,15 @@ impl Geo {
                     (x, y) = (x + weight * cos, y + weight * sin);
                 }
                 let ((sin, cos), k) = (angle(s).sin_cos(), k0 + (k1 - k0) * s / length);
-                [vec![from[0] + x * h / 3.0, from[1] + y * h / 3.0], vec![cos, sin], vec![-k * sin, k * cos]]
+                let flat = [[from[0] + x * h / 3.0, from[1] + y * h / 3.0], [cos, sin], [-k * sin, k * cos]];
+                match plane {
+                    None => flat.map(|v| v.to_vec()),
+                    // In space: the pose from the plane's point, direction and curvature along its two directions.
+                    Some([o, e1, e2]) => {
+                        let lift = |v: [f64; 2], point: f64| (0..3).map(|i| point * o[i] + v[0] * e1[i] + v[1] * e2[i]).collect();
+                        [lift(flat[0], 1.0), lift(flat[1], 0.0), lift(flat[2], 0.0)]
+                    }
+                }
             }
             Geo::Spline { c, h, travelled, dims, .. } => {
                 // The u at which the span has run the distance s: from the table, then Newton's method on the
@@ -300,15 +310,20 @@ fn distance(a: &[f64], b: &[f64]) -> f64 {
 /// The path the planners time: the pieces laid end to end from `start`, with transition curves where the
 /// tolerance allows them (`blend` between lines and arcs, `ease` where a spline meets a line or an arc), and how
 /// far that path is from the given one at most. `speed` is the highest speed along a piece that the planner will
-/// allow, which sets how long a transition has to be.
+/// allow, which sets how long a transition has to be. On three axes the curves between lines and arcs are laid in the
+/// arcs' planes (`blend3`); paths on other numbers of axes have only lines and run as given.
 fn geometry(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, speed: &dyn Fn(&Geo) -> f64, slack: f64) -> Result<(Vec<Geo>, f64), CommandError> {
     let (geo, off) = given(start, pieces, slack)?;
-    // shortcut: transition curves are worked out in the plane, so a path on three axes runs as given; lift them into
-    // space (along the osculating plane) if a three-axis machine has to pass junctions at speed.
-    if tolerance <= 0.0 || start.len() != 2 {
+    if tolerance <= 0.0 {
         return Ok((geo, off));
     }
-    let (geo, moved) = blend(geo, axes, tolerance, speed);
+    // The speeds of the pieces as given, in space: `blend3` hands `blend` the pieces in a plane's coordinates.
+    let speeds: Vec<f64> = geo.iter().map(speed).collect();
+    let (geo, moved) = match start.len() {
+        2 => blend(geo, &speeds, axes, tolerance),
+        3 => blend3(geo, &speeds, axes, tolerance),
+        _ => (geo, 0.0),
+    };
     let (geo, eased) = ease(geo, axes, tolerance, speed);
     // The two change different places of the path, so the larger of them counts.
     Ok((geo, off + moved.max(eased)))
@@ -501,7 +516,7 @@ enum Side {
 fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
     // The curve laid from the origin along +x: the centre of the circle that fits it at its end.
     let centre_at_end = |k0: f64, k1: f64, length: f64| {
-        let [end, dir, _] = Geo::Clothoid { from: [0.0, 0.0], heading: 0.0, k0, k1, length }.at(length);
+        let [end, dir, _] = Geo::Clothoid { from: [0.0, 0.0], heading: 0.0, k0, k1, length, plane: None }.at(length);
         [end[0] - dir[1] / k1, end[1] + dir[0] / k1]
     };
     // To first order the gap is the change of curvature times length squared / 24.
@@ -514,13 +529,13 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
             let length = largest(0.0, longest(k), |length| length == 0.0 || centre_at_end(0.0, k, length)[1].abs() <= beside);
             let along = dir[0] * to_centre[0] + dir[1] * to_centre[1] - centre_at_end(0.0, k, length)[0];
             let from = [point[0] + along * dir[0], point[1] + along * dir[1]];
-            (length > 0.0 && length < longest(k)).then(|| Geo::Clothoid { from, heading: dir[1].atan2(dir[0]), k0: 0.0, k1: k, length })
+            (length > 0.0 && length < longest(k)).then(|| Geo::Clothoid { from, heading: dir[1].atan2(dir[0]), k0: 0.0, k1: k, length, plane: None })
         }
         // The same curve run backwards: every direction and every turn is the other way round.
         (Side::Circle { centre, curvature }, Side::Line { point, dir }) => {
             let back = transition(Side::Line { point, dir: [-dir[0], -dir[1]] }, Side::Circle { centre, curvature: -curvature }, gap)?;
             let [end, dir, _] = back.at(back.length());
-            Some(Geo::Clothoid { from: [end[0], end[1]], heading: (-dir[1]).atan2(-dir[0]), k0: curvature, k1: 0.0, length: back.length() })
+            Some(Geo::Clothoid { from: [end[0], end[1]], heading: (-dir[1]).atan2(-dir[0]), k0: curvature, k1: 0.0, length: back.length(), plane: None })
         }
         (Side::Circle { centre: ca, curvature: k0 }, Side::Circle { centre: cb, curvature: k1 }) => {
             // The two circles of the curve start out touching and move apart (or into each other) as it
@@ -532,7 +547,7 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
             let end = centre_at_end(k0, k1, length);
             let heading = (cb[1] - ca[1]).atan2(cb[0] - ca[0]) - (end[1] - 1.0 / k0).atan2(end[0]);
             let from = [ca[0] + heading.sin() / k0, ca[1] - heading.cos() / k0];
-            (length > 0.0 && length < longest(k1 - k0)).then(|| Geo::Clothoid { from, heading, k0, k1, length })
+            (length > 0.0 && length < longest(k1 - k0)).then(|| Geo::Clothoid { from, heading, k0, k1, length, plane: None })
         }
         _ => None,
     }
@@ -550,29 +565,35 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
 /// e = L^2 / (24 r)        (first term; the code solves the exact length)
 /// ```
 ///
-//// So every blended arc keeps its centre and gets a radius smaller by its e, and the transition curves
+/// So every blended arc keeps its centre and gets a radius smaller by its e, and the transition curves
 /// replace about L / 2 of the pieces on either side of each junction. The planned path is then nowhere
-/// further from the given one than the largest e, which is what is reported. One L serves the whole path:
-/// the length the fastest junction needs to pass at the speed of its slower piece with 0.4 of the jerk
-/// limit, L = v^3 dk / (0.4 j), but no longer than the tolerance allows on the tightest arc,
-/// L = sqrt(24 e_max r_min). The speed v is that of the plan: the axis limits for `plan`, the motors for
-/// `plan_time_optimal`. Where L is shorter than needed, `limits` lowers the speed on the curve.
+/// further from the given one than the largest e, which is what is reported. Each arc gets its own L: the
+/// length the faster of its junctions needs to be passed at the speed of its slower piece with 0.4 of the jerk
+/// limit, L = v^3 dk / (0.4 j), but no longer than the tolerance allows on it, L = sqrt(24 e_max r). The speed v
+/// is that of the plan: the axis limits for `plan`, the motors for `plan_time_optimal`. Where L is shorter than
+/// needed, `limits` lowers the speed on the curve. A junction of a line and an arc so gets the curve its own speed
+/// asks for, not the one the fastest junction of the path asks for.
 ///
-/// With every arc moved in by e = L^2 / (24 r), all junctions come out with curves of about this one L:
-/// two arcs turning the same way are apart by the difference of their e, two turning opposite ways by the
-/// sum. An arc whose one end has to stay where it is given (at a corner, at an end of the path, or where a
-/// spline joins it, see `ease`) and whose other end meets a line in its direction is moved another way: its
-/// circle shrinks by s and moves towards the fixed end by s, so that it still passes through that end in the
-/// same direction, and is then apart from the line by s (1 - cos phi), phi being the angle the arc turns
-/// through. That gap is made e, so s = e / (1 - cos phi), for arcs of up to half a turn whose radius stays above
-/// half of what it was; the new circle is nowhere on the arc further from the old one than about e either (the
-/// exact figure is reported). An arc with both ends fixed, or with one end fixed and an arc at the other, stays as
-/// it is; and where a curve would not fit (a wider arc moved in beside a tighter one that was not) both arcs stay
-/// as given. Two arcs of the same curvature (to 1e-9 relative: one circle) get no curve between them. Pieces too
-/// short for their curves halve L for the whole path, up to eight times; then the path stays as given. So does a
-/// blend in which a curve would take more of an arc than it can reach, or whose length differs from the given one's
-/// by more than the curves' lengths and the moved arcs' shrink times their angles (a whole turn gained or lost).
-fn blend(geo: Vec<Geo>, axes: &[AxisInfo], tolerance: f64, speed: &dyn Fn(&Geo) -> f64) -> (Vec<Geo>, f64) {
+/// With an arc moved in by e = L^2 / (24 r), a line beside it is apart from it by e and the curve there comes out
+/// L long. Two arcs turning opposite ways are apart by the sum of their e, which fits whatever their L. Two arcs
+/// turning the same way are apart by the difference of their e, which is positive for one L only: arcs that hand
+/// over to one another turning the same way share one L (the longest any of them needs, the shortest any allows).
+/// An arc whose one end has to stay where it is given (at a corner, at an end of the path, or where a
+/// spline joins it, see `ease`) and whose other end meets a line or an arc in its direction is moved another way:
+/// its circle shrinks by s and moves towards the fixed end by s, so that it still passes through that end in the
+/// same direction, and is then inside its old circle by s (1 - cos phi) at its other end, phi being the angle the arc
+/// turns through. That gap is made e, so s = e / (1 - cos phi), for arcs whose radius stays above half of what it
+/// was; next to an arc the gap is taken as e as well, and `transition` fits the curve to where the circles really
+/// are. Halfway round, phi = pi, the new circle is 2 s inside the old one; so an arc that turns more than half a
+/// circle gets s no larger than half the tolerance, e = (tolerance / 2) (1 - cos phi) at its free end and a shorter
+/// L. The exact distance of the two circles on the arc is reported. A whole turn has no free end to move and stays
+/// as it is. An arc with both ends fixed meets nothing in its direction and needs no curve. Where a curve would not
+/// fit (a wider arc moved in beside a tighter one that was not) both arcs stay as given. Two arcs of the same
+/// curvature (to 1e-9 relative: one circle) get no curve between them. Pieces too short for their curves halve
+/// every L of the path, up to eight times; then the path stays as given. So does a blend in which a curve would
+/// take more of an arc than it can reach, or whose length differs from the given one's by more than the curves'
+/// lengths and the moved arcs' shrink times their angles (a whole turn gained or lost).
+fn blend(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
     let n = geo.len();
     let k: Vec<f64> = geo.iter().map(|g| if let Geo::Arc { radius, turn, .. } = g { turn / radius } else { 0.0 }).collect();
     // Junction j is where piece j - 1 hands over to piece j; it gets a curve where both are lines or arcs that
@@ -580,38 +601,56 @@ fn blend(geo: Vec<Geo>, axes: &[AxisInfo], tolerance: f64, speed: &dyn Fn(&Geo) 
     let spline = |i: usize| matches!(geo[i], Geo::Spline { .. });
     let tangent: Vec<bool> = (0..=n).map(|j| j > 0 && j < n && !corner(&geo[j - 1], &geo[j]) && !spline(j - 1) && !spline(j)).collect();
     let free: Vec<bool> = (0..n).map(|i| k[i] != 0.0 && tangent[i] && tangent[i + 1]).collect();
-    let line = |i: usize| matches!(geo[i], Geo::Line { .. });
-    let half_turn = |i: usize| geo[i].length() * k[i].abs() <= std::f64::consts::PI;
-    // An arc fixed at one end: Some(true) at its start, Some(false) at its end.
+    // The angle an arc turns through.
+    let sweep = |i: usize| geo[i].length() * k[i].abs();
+    // An arc fixed at one end: Some(true) at its start, Some(false) at its end. Not a whole turn, whose far end is
+    // its fixed one (1 - cos phi = 0).
     let fixed: Vec<Option<bool>> = (0..n)
-        .map(|i| match (k[i] != 0.0 && half_turn(i), tangent[i], tangent[i + 1]) {
-            (true, true, false) if line(i - 1) => Some(false),
-            (true, false, true) if line(i + 1) => Some(true),
+        .map(|i| match (k[i] != 0.0 && 1.0 - sweep(i).cos() > 1e-9, tangent[i], tangent[i + 1]) {
+            (true, true, false) => Some(false),
+            (true, false, true) => Some(true),
             _ => None,
         })
         .collect();
-    let tightest = (0..n).filter(|&i| free[i] || fixed[i].is_some()).map(|i| k[i].abs()).fold(0.0, f64::max);
-    if tightest == 0.0 {
+    let blended = |i: usize| free[i] || fixed[i].is_some();
+    if !(0..n).any(blended) {
         return (geo, 0.0);
     }
     let jerk = axes.iter().map(|a| a.max_jerk).fold(f64::INFINITY, f64::min);
-    let speed: Vec<f64> = geo.iter().map(speed).collect();
-    let needed = (1..n).filter(|&j| tangent[j]).map(|j| speed[j - 1].min(speed[j]).powi(3) * (k[j] - k[j - 1]).abs() / (0.4 * jerk)).fold(0.0, f64::max);
-    let mut length = (24.0 * tolerance / tightest).sqrt().min(needed);
+    let needed = |j: usize| speed[j - 1].min(speed[j]).powi(3) * (k[j] - k[j - 1]).abs() / (0.4 * jerk);
+    // Per arc: the longest L its junctions need, and the longest the tolerance allows on it (for an arc fixed at one
+    // end that turns more than half a circle, s = e / (1 - cos phi) up to half the tolerance).
+    let mut want: Vec<[f64; 2]> = (0..n)
+        .map(|i| {
+            if !blended(i) {
+                return [0.0; 2];
+            }
+            let room = if fixed[i].is_some() && sweep(i) > std::f64::consts::PI { 0.5 * tolerance * (1.0 - sweep(i).cos()) } else { tolerance };
+            [[i, i + 1].into_iter().filter(|&j| tangent[j]).map(needed).fold(0.0, f64::max), (24.0 * room / k[i].abs()).sqrt()]
+        })
+        .collect();
+    // Arcs that hand over to one another turning the same way share one L, along the whole chain of them.
+    for _ in 0..n {
+        for j in (1..n).filter(|&j| tangent[j] && k[j] * k[j - 1] > 0.0 && blended(j) && blended(j - 1)) {
+            let shared = [want[j][0].max(want[j - 1][0]), want[j][1].min(want[j - 1][1])];
+            (want[j - 1], want[j]) = (shared, shared);
+        }
+    }
+    let mut length: Vec<f64> = want.iter().map(|[need, most]| need.min(*most)).collect();
     for _ in 0..8 {
-        if let Some(blended) = blend_with(&geo, &k, &free, &fixed, &tangent, length) {
+        if let Some(blended) = blend_with(&geo, &k, &free, &fixed, &tangent, &length) {
             return blended;
         }
-        length /= 2.0;
+        length.iter_mut().for_each(|l| *l /= 2.0);
     }
     (geo, 0.0)
 }
 
-/// `blend` for one length of the transition curves; `None` if a piece is too short for its curves.
-fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tangent: &[bool], length: f64) -> Option<(Vec<Geo>, f64)> {
+/// `blend` for one length of the transition curves per arc; `None` if a piece is too short for its curves.
+fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tangent: &[bool], length: &[f64]) -> Option<(Vec<Geo>, f64)> {
     let n = geo.len();
     // The gap each arc leaves to a line beside it: moved in by it, or (fixed at one end) shrunk and moved.
-    let mut inset: Vec<f64> = (0..n).map(|i| if free[i] || fixed[i].is_some() { k[i].abs() * length * length / 24.0 } else { 0.0 }).collect();
+    let mut inset: Vec<f64> = (0..n).map(|i| if free[i] || fixed[i].is_some() { k[i].abs() * length[i] * length[i] / 24.0 } else { 0.0 }).collect();
     // The circle each arc is laid on: centre and radius. A fixed arc's circle moves towards its fixed end.
     let circle = |inset: &[f64], i: usize| match &geo[i] {
         Geo::Arc { centre, radius, from_angle, turn, length } => Some(match fixed[i] {
@@ -704,11 +743,12 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
                 }
                 let left = sweep - before - after;
                 // How far the new circle is from the old one on the arc: the gap where it meets the line, and for a
-                // fixed arc at its free end r - |s u + (r - s) v|, with u and v at the angle phi apart.
+                // fixed arc r - |s u + (r - s) v|, with u and v at the angle theta apart, which grows with theta up to
+                // half a turn (2 s there): at its free end, or halfway round for an arc that turns further.
                 let shrink = radius - moved;
                 // On its smaller circle the arc is shorter by up to the shrink times its angle.
                 cut += shrink.abs() * sweep;
-                let swing = if fixed[i].is_some() { radius - (radius * radius - 2.0 * shrink * moved * (1.0 - sweep.cos())).sqrt() } else { 0.0 };
+                let swing = if fixed[i].is_some() { radius - (radius * radius - 2.0 * shrink * moved * (1.0 - sweep.min(std::f64::consts::PI).cos())).sqrt() } else { 0.0 };
                 off = off.max(inset[i]).max(swing);
                 // Curves that overlap leave less than nothing: a length below zero, refused below.
                 Geo::Arc { centre, radius: moved, from_angle: start.as_deref().map_or(*from_angle, angle), turn: *turn, length: left * moved }
@@ -727,6 +767,118 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
         return None;
     }
     Some((out, off))
+}
+
+/// A plane: a point on it, two directions in it at right angles, and its normal.
+type Plane = [[f64; 3]; 4];
+
+/// `blend` on three axes. A line that meets an arc in its direction lies in the arc's plane, and so does a line or an
+/// arc that meets that line in its direction and lies in the plane (to 1 nm). Such a run of pieces is blended in its
+/// plane, on the coordinates along the first arc's start and its direction there (`blend` as on two axes, with the
+/// speeds of the pieces in space), and laid back into space: lines and arcs as such, the curves with their plane.
+/// The deviation is the one in the plane, as the plane's coordinates keep distances. A line between two arcs in
+/// different planes lies in both; it is cut in half, and each half goes with its arc.
+///
+/// Two arcs that meet in their direction in different planes keep their junction, which the path passes at the
+/// speed `junction_speed` allows: a curve between them has to turn from one plane into the other, with torsion, and
+/// the planar construction (each arc moved in within its plane, the curve fitted exactly between the two circles)
+/// has no counterpart there. A piece that lies off its run's plane by more than 1 nm (a line written with too few
+/// digits) ends the run, and its junctions stay as given.
+fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
+    // shortcut: a piece more than 1 nm off its run's plane ends the run, and two arcs in different planes keep their
+    // junction; project such pieces (adding the projection to the deviation) or build a space curve with torsion there
+    // if hand-written tilted paths or helix-like tool paths have to pass those junctions at speed.
+    let plane_of = |g: &Geo| if let Geo::Arc3 { centre, u, w, .. } = g { Some([*centre, *u, *w, cross3(*u, *w)]) } else { None };
+    let near = |p: &[f64], [o, _, _, normal]: &Plane| dot3([p[0] - o[0], p[1] - o[1], p[2] - o[2]], *normal).abs() < 1e-9;
+    let lies_in = |g: &Geo, plane: &Plane| match g {
+        Geo::Line { .. } => near(&g.at(0.0)[0], plane) && near(&g.at(g.length())[0], plane),
+        Geo::Arc3 { centre, u, w, .. } => near(centre, plane) && norm3(cross3(cross3(*u, *w), plane[3])) < 1e-9,
+        _ => false,
+    };
+    let (mut out, mut off) = (Vec::new(), 0f64);
+    // The run being gathered, with the speeds of its pieces, and its plane once an arc has set it.
+    let (mut run, mut plane): (Vec<(Geo, f64)>, Option<Plane>) = (Vec::new(), None);
+    let mut flush = |run: Vec<(Geo, f64)>, plane: Option<Plane>| {
+        let (blended, moved) = blend_in_plane(run, plane, axes, tolerance);
+        out.extend(blended);
+        off = off.max(moved);
+    };
+    for (g, v) in geo.into_iter().zip(speed.iter().copied()) {
+        let joins = run.last().is_some_and(|(last, _)| matches!(last, Geo::Line { .. } | Geo::Arc3 { .. }) && matches!(g, Geo::Line { .. } | Geo::Arc3 { .. }) && !corner(last, &g));
+        let own = plane_of(&g);
+        match (joins, plane, own) {
+            (true, Some(p), _) if lies_in(&g, &p) => run.push((g, v)),
+            // An arc in another plane: a line before it that lies in both is shared out between the two runs.
+            (true, Some(_), Some(q)) => {
+                let shared = match run.last() {
+                    Some((line @ Geo::Line { from, dir, length }, _)) if lies_in(line, &q) => {
+                        let middle: Vec<f64> = from.iter().zip(dir).map(|(f, d)| f + 0.5 * length * d).collect();
+                        Some((Geo::Line { from: from.clone(), dir: dir.clone(), length: 0.5 * length }, Geo::Line { from: middle, dir: dir.clone(), length: 0.5 * length }))
+                    }
+                    _ => None,
+                };
+                let mut next = Vec::new();
+                if let Some((first, second)) = shared {
+                    let (_, speed) = run.pop().unwrap();
+                    run.push((first, speed));
+                    next.push((second, speed));
+                }
+                flush(std::mem::replace(&mut run, next), plane);
+                (run, plane) = ([run, vec![(g, v)]].concat(), own);
+            }
+            // The first arc of a run of lines sets its plane; lines before it that do not lie in it stay as given.
+            (true, None, Some(q)) => {
+                let keep = run.len() - run.iter().rev().take_while(|(line, _)| lies_in(line, &q)).count();
+                let rest = run.split_off(keep);
+                flush(std::mem::replace(&mut run, rest), None);
+                run.push((g, v));
+                plane = own;
+            }
+            (true, None, None) => run.push((g, v)),
+            _ => {
+                flush(std::mem::replace(&mut run, vec![(g, v)]), plane);
+                plane = own;
+            }
+        }
+    }
+    flush(run, plane);
+    (out, off)
+}
+
+/// A run of lines and arcs in one plane (`blend3`) blended there and laid back into space.
+fn blend_in_plane(run: Vec<(Geo, f64)>, plane: Option<Plane>, axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
+    let Some([o, e1, e2, normal]) = plane.filter(|_| run.len() > 1) else { return (run.into_iter().map(|(g, _)| g).collect(), 0.0) };
+    let along = |d: &[f64]| vec![dot3([d[0], d[1], d[2]], e1), dot3([d[0], d[1], d[2]], e2)];
+    let flat = |p: &[f64]| along(&[p[0] - o[0], p[1] - o[1], p[2] - o[2]]);
+    let (pieces, speeds): (Vec<Geo>, Vec<f64>) = run
+        .into_iter()
+        .map(|(g, v)| {
+            let g = match g {
+                Geo::Line { from, dir, length } => Geo::Line { from: flat(&from), dir: along(&dir), length },
+                Geo::Arc3 { centre, u, w, radius, length } => {
+                    let c = flat(&centre);
+                    Geo::Arc { centre: [c[0], c[1]], radius, from_angle: dot3(u, e2).atan2(dot3(u, e1)), turn: dot3(cross3(u, w), normal).signum(), length }
+                }
+                other => other,
+            };
+            (g, v)
+        })
+        .unzip();
+    let (blended, moved) = blend(pieces, &speeds, axes, tolerance);
+    let up = |v: &[f64], point: f64| [0, 1, 2].map(|i| point * o[i] + v[0] * e1[i] + v[1] * e2[i]);
+    let lifted = blended
+        .into_iter()
+        .map(|g| match g {
+            Geo::Line { from, dir, length } => Geo::Line { from: up(&from, 1.0).to_vec(), dir: up(&dir, 0.0).to_vec(), length },
+            Geo::Arc { centre, radius, from_angle, turn, length } => {
+                let (sin, cos) = from_angle.sin_cos();
+                Geo::Arc3 { centre: up(&centre, 1.0), u: up(&[cos, sin], 0.0), w: up(&[-turn * sin, turn * cos], 0.0), radius, length }
+            }
+            Geo::Clothoid { from, heading, k0, k1, length, .. } => Geo::Clothoid { from, heading, k0, k1, length, plane: Some([o, e1, e2]) },
+            other => other,
+        })
+        .collect();
+    (lifted, moved)
 }
 
 /// How far the easing of a spline's end (`ease`) moves it at most, per change of curvature and square of the
@@ -1136,8 +1288,9 @@ line,0.2,0.0,-0.9").unwrap();
             }
         }
         assert!(distance(&points[points.len() - 1].1, &[0.2, 0.0, -0.9]) < 1e-9);
-        // A tolerance changes nothing on three axes: no transition curves there.
-        assert_eq!(deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3, ARC_SLACK).unwrap(), 0.0);
+        // With a tolerance its junctions with the lines are eased as on two axes, within the tolerance.
+        let eased = deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3, ARC_SLACK).unwrap();
+        assert!(eased > 0.0 && eased <= 1e-3, "{eased} m");
     }
 
     #[test]
@@ -1333,13 +1486,15 @@ line,0.2,0.0,-0.9").unwrap();
         out
     }
 
-    /// How far a point is from a path given as `polyline`: from the nearest of its straight pieces.
+    /// How far a point is from a path given as `polyline`: from the nearest of its straight pieces. Any number of axes.
     fn off_line(line: &[Vec<f64>], p: &[f64]) -> f64 {
+        let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
         line.windows(2)
             .map(|w| {
-                let (ab, ap) = ([w[1][0] - w[0][0], w[1][1] - w[0][1]], [p[0] - w[0][0], p[1] - w[0][1]]);
-                let t = ((ab[0] * ap[0] + ab[1] * ap[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-300)).clamp(0.0, 1.0);
-                (ap[0] - t * ab[0]).hypot(ap[1] - t * ab[1])
+                let ab: Vec<f64> = w[1].iter().zip(&w[0]).map(|(b, a)| b - a).collect();
+                let ap: Vec<f64> = p.iter().zip(&w[0]).map(|(p, a)| p - a).collect();
+                let t = (dot(&ab, &ap) / dot(&ab, &ab).max(1e-300)).clamp(0.0, 1.0);
+                ap.iter().zip(&ab).map(|(p, b)| (p - t * b) * (p - t * b)).sum::<f64>().sqrt()
             })
             .fold(f64::INFINITY, f64::min)
     }
@@ -1717,5 +1872,151 @@ line,0.1,0.35";
                 assert_blend_keeps_the_path(&lead, &pieces, tolerance, &format!("case {case}, tolerance {tolerance}: {pieces:?}"));
             }
         }
+    }
+
+    /// No step in position, direction or curvature between two pieces that meet in their direction.
+    fn assert_no_steps(geo: &[Geo], what: &str) {
+        for pair in geo.windows(2).filter(|pair| !corner(&pair[0], &pair[1])) {
+            let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
+            let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+            assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{what}: steps {steps:?}");
+        }
+    }
+
+    /// Every planned pose is within the reported deviation of the given path (and a part of it gets there), the axis
+    /// limits hold (by differences, as above), the path ends on `end`, and it takes less time than as given (the gain
+    /// is that of the junctions only: 5 % on a path that is mostly one arc at full speed). The planned poses.
+    fn assert_blend_runs_within(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, end: &[f64], what: &str) -> Vec<(f64, Vec<f64>)> {
+        let (cycle, given) = (1e-3, geometry(axes, start, pieces, 0.0, &axis_speed(axes), ARC_SLACK).unwrap().0);
+        let reported = deviation(axes, start, pieces, tolerance, ARC_SLACK).unwrap();
+        assert!(reported > 0.0 && reported <= tolerance * (1.0 + 1e-9), "{what}: {reported} m reported");
+        let (points, before) = (plan(axes, start, pieces, cycle, tolerance, ARC_SLACK).unwrap(), plan(axes, start, pieces, cycle, 0.0, ARC_SLACK).unwrap());
+        let line = polyline(&given);
+        let furthest = points.iter().map(|p| off_line(&line, &p.1)).fold(0.0, f64::max);
+        assert!(furthest <= reported + 1e-7 && furthest > 0.5 * reported, "{what}: {furthest} m off, {reported} m reported");
+        for w in points.windows(4) {
+            for (i, axis) in axes.iter().enumerate() {
+                let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
+                assert!(((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc, "{what}, axis {i}");
+                assert!(((p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)).abs() <= 1.001 * axis.max_jerk, "{what}, axis {i}");
+            }
+        }
+        let (last, slower) = (points.len() - 1, before[before.len() - 1].0);
+        assert!(distance(&points[last].1, end) < 1e-9 && points[last].0 < slower - 0.01,"{what}: {} s against {slower} s", points[last].0);
+        println!("{what}: {} s against {slower} s, off by {furthest} m, {reported} m reported", points[last].0);
+        points
+    }
+
+    /// The pieces of a line, an arc and a line on three axes, in the plane through (0, 0, -0.85) along x and along
+    /// (0, cos 30, sin 30) (tilted by 30 degrees about x, in no plane of two axes): along x onto the circle of 0.1 m
+    /// around that point, a quarter of it counter-clockwise, then 0.15 m on in its direction. The start, the plane's
+    /// point and its two directions.
+    fn tilted_path() -> (Vec<f64>, Vec<Piece>, [[f64; 3]; 3]) {
+        let (c, e1, e2, r) = ([0.0, 0.0, -0.85], [1.0, 0.0, 0.0], [0.0, 30f64.to_radians().cos(), 30f64.to_radians().sin()], 0.1);
+        let at = |a: f64, b: f64| (0..3).map(|i| c[i] + a * e1[i] + b * e2[i]).collect::<Vec<f64>>();
+        let pieces = vec![Piece::Line(at(0.0, -r)), Piece::Arc { to: at(r, 0.0), centre: c.to_vec(), clockwise: false }, Piece::Line(at(r, 0.15))];
+        (at(-0.2, -r), pieces, [c, e1, e2])
+    }
+
+    /// Transition curves on three axes, on `tilted_path` with a tolerance of 0.1 mm (the delta's limits: 3 m/s,
+    /// 50 m/s^2, 2500 m/s^3). By hand: on the arc the speed is sqrt(0.8 a r) = sqrt(0.8 * 50 * 0.1) = 2 m/s, whose
+    /// entry would need a curve of v^3 dk / (0.4 j) = 8 * 10 / 1000 = 80 mm; the tolerance allows
+    /// L = sqrt(24 e r) = sqrt(24 * 1e-4 * 0.1) = 15.49 mm, so the arc moves in by e = L^2 / (24 r) = 0.1 mm to a radius
+    /// of 99.9 mm. Both curves are 15.49 mm, every piece and every planned pose lies in the tilted plane, there is no
+    /// step in position, direction or curvature, every pose is within the reported 0.1 mm of the given path and the
+    /// path is faster than as given. Then a second arc of 0.05 m in another plane (x = 0.1, through the last line)
+    /// and a line out of it: the line between the arcs lies in both planes and is shared out, so all four junctions get
+    /// their curve (the second arc's in its own plane), with the same checks.
+    #[test]
+    fn transition_curves_on_three_axes_lie_in_the_plane_of_the_arc() {
+        let (axes, tolerance) = (axes3(), 1e-4);
+        let (start, pieces, [c, e1, e2]) = tilted_path();
+        let normal = cross3(e1, e2);
+        let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+        assert!((reported - 1e-4).abs() < 1e-12, "{reported} m reported, 0.1 mm by hand");
+        let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
+        assert!(curves.len() == 2 && curves.iter().all(|l| (l / 0.01549 - 1.0).abs() < 5e-3), "curves {curves:?}, 15.49 mm by hand");
+        assert!(geo.iter().any(|g| matches!(g, Geo::Arc3 { radius, .. } if (radius - 0.0999).abs() < 1e-12)), "the arc moved in by 0.1 mm");
+        assert_no_steps(&geo, "tilted");
+        let in_plane = |p: &[f64]| dot3([p[0] - c[0], p[1] - c[1], p[2] - c[2]], normal).abs();
+        let points = assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.1, 0.15 * e2[1], -0.85 + 0.15 * e2[2]], "tilted");
+        let off_plane = points.iter().map(|p| in_plane(&p.1)).fold(0.0, f64::max);
+        assert!(off_plane < 1e-12, "{off_plane} m off the plane");
+
+        // On out of the last line into an arc in the plane x = 0.1: its centre 0.05 m along the first plane's normal
+        // (0, -sin 30, cos 30), a quarter turn towards e2, and 0.1 m on along that normal.
+        let q = [0.1, 0.15 * e2[1], -0.85 + 0.15 * e2[2]];
+        let centre: Vec<f64> = (0..3).map(|i| q[i] + 0.05 * normal[i]).collect();
+        let end: Vec<f64> = (0..3).map(|i| centre[i] + 0.05 * e2[i] + 0.1 * normal[i]).collect();
+        let more = [pieces, vec![Piece::Arc { to: (0..3).map(|i| centre[i] + 0.05 * e2[i]).collect(), centre, clockwise: false }, Piece::Line(end.clone())]].concat();
+        let (geo, _) = geometry(&axes, &start, &more, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+        assert_eq!(geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).count(), 4);
+        assert_no_steps(&geo, "two planes");
+        assert_blend_runs_within(&axes, &start, &more, tolerance, &end, "two planes");
+    }
+
+    /// One curve length per arc: a line, a quarter arc of 0.1 m, a line, a quarter arc of 20 mm, a line, with 1 mm.
+    /// By hand (axes as above, 100 m/s^3): on the wide arc 0.4 m/s (the axis limit), its curves
+    /// L = v^3 dk / (0.4 j) = 0.064 * 10 / 40 = 16 mm (the tolerance allows sqrt(24 * 1e-3 * 0.1) = 49 mm); on the
+    /// tight arc the jerk decides, v = (0.4 j r^2)^(1/3) = (40 * 0.0004)^(1/3) = 0.252 m/s, and
+    /// L = 0.016 * 50 / 40 = 20 mm (allowed: sqrt(24 * 1e-3 * 0.02) = 21.9 mm). One length for the whole path made
+    /// both 20 mm. The tight arc moves in by e = L^2 / (24 r) = 0.0004 / 0.48 = 0.833 mm, the wide one by
+    /// 0.000256 / 2.4 = 0.107 mm; the larger is reported.
+    #[test]
+    fn each_arc_gets_the_curve_its_own_junctions_need() {
+        let (axes, start, tolerance) = (axes(), [0.1, 0.35], 1e-3);
+        let pieces = parse("line,0.5,0.35
+arc,0.6,0.25,0.5,0.25,cw
+line,0.6,0.15
+arc,0.58,0.13,0.58,0.15,cw
+line,0.3,0.13").unwrap();
+        let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+        let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
+        assert_eq!(curves.len(), 4);
+        println!("curves {curves:?} m");
+        assert!(curves[..2].iter().all(|l| (l / 0.016 - 1.0).abs() < 5e-3), "{curves:?}: the wide arc's 16 mm by hand");
+        // Fitted exactly, 19.67 mm: e = L^2 / (24 r) is the first term, and a curve as long as the radius turns 0.5 rad.
+        assert!(curves[2..].iter().all(|l| (l / 0.020 - 1.0).abs() < 0.02), "{curves:?}: the tight arc's 20 mm by hand");
+        assert!((reported / 0.833e-3 - 1.0).abs() < 2e-3, "{reported} m reported, 0.833 mm by hand");
+        assert_no_steps(&geo, "two arcs");
+        assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.3, 0.13], "two arcs");
+    }
+
+    /// An arc fixed at one end with an arc at its other end: the path starts on a quarter arc of 0.1 m (its start, where
+    /// the machine stands, stays), which hands over to a quarter arc of 50 mm turning the other way (an S), or the same
+    /// way, and then to a line. The first arc shrinks by s and moves towards its start, s (1 - cos 90 degrees) = e:
+    /// both junctions get their curve, the first arc still leaves the start along +x, no step anywhere, every pose
+    /// within the reported deviation (at most 0.1 mm), faster than as given.
+    #[test]
+    fn an_arc_fixed_at_one_end_gets_its_curve_towards_an_arc() {
+        let (axes, start, tolerance) = (axes(), [0.3, 0.5], 1e-4);
+        for (text, end) in [("arc,0.4,0.4,0.3,0.4,cw\narc,0.45,0.35,0.45,0.4,ccw\nline,0.7,0.35", [0.7, 0.35]), ("arc,0.4,0.4,0.3,0.4,cw\narc,0.35,0.35,0.35,0.4,cw\nline,0.1,0.35", [0.1, 0.35])] {
+            let pieces = parse(text).unwrap();
+            let (geo, _) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+            assert_eq!(geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).count(), 2, "{text}");
+            let [from, dir, _] = geo[0].at(0.0);
+            assert!(distance(&from, &start) < 1e-12 && distance(&dir, &[1.0, 0.0]) < 1e-12, "{text}: {from:?} {dir:?}");
+            assert_no_steps(&geo, text);
+            assert_blend_runs_within(&axes, &start, &pieces, tolerance, &end, text);
+        }
+    }
+
+    /// An arc fixed at one end that turns three quarters: a line into a 0.1 m arc that ends the path after 270 degrees.
+    /// Halfway round its smaller circle is 2 s inside the old one, so s is at most half the tolerance: with 0.1 mm,
+    /// s = 0.05 mm, the gap at the free end e = s (1 - cos 270 degrees) = 0.05 mm, the curve
+    /// L = sqrt(24 e r) = sqrt(24 * 5e-5 * 0.1) = 10.95 mm (shorter than the 16 mm the speed asks for), and the reported
+    /// deviation is 2 s = 0.1 mm. The arc still ends on (0.4, 0.25) heading +y, and the path runs as above.
+    #[test]
+    fn an_arc_fixed_at_one_end_that_turns_three_quarters_gets_its_curve() {
+        let (axes, start, tolerance) = (axes(), [0.1, 0.35], 1e-4);
+        let pieces = parse("line,0.5,0.35\narc,0.4,0.25,0.5,0.25,cw").unwrap();
+        let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+        let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
+        assert!(curves.len() == 1 && (curves[0] / 0.010954 - 1.0).abs() < 5e-3, "{curves:?}, 10.95 mm by hand");
+        assert!((reported / 1e-4 - 1.0).abs() < 1e-3 && reported <= tolerance, "{reported} m reported, 0.1 mm by hand");
+        let [end, dir, _] = geo[geo.len() - 1].at(geo[geo.len() - 1].length());
+        assert!(distance(&end, &[0.4, 0.25]) < 1e-12 && distance(&dir, &[0.0, 1.0]) < 1e-12, "{end:?} {dir:?}");
+        assert_no_steps(&geo, "three quarters");
+        assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.4, 0.25], "three quarters");
     }
 }

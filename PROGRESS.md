@@ -1171,3 +1171,29 @@ Left open:
   stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
   has gone `CREEP` (1 um) further in, not on their torque or following error.
 - The PLC test's crash and reset run against the wall clock like the other PLC tests.
+
+## Transition curves on three axes, one length per arc, the planar corner cases (13 November)
+
+Closes the "Not built" line of the transition curves and the "Missing: arcs and splines on machines with more than
+two axes" of C1 (lines, arcs and splines on three axes were built with the delta; their transition curves now too).
+
+| What | How | Test |
+| --- | --- | --- |
+| Curves on three axes | `blend3` in `path.rs`: a line that meets an arc in its direction lies in its plane; a run of lines and arcs in one plane (to 1 nm) is mapped onto the plane's coordinates (along the first arc's start and its direction), blended by the planar `blend` with the speeds of the pieces in space, and laid back: lines and `Arc3` as such, `Geo::Clothoid` with a new field `plane` (point and two directions; `None` on two axes) that `at` lifts into space. A line between two arcs in different planes is cut in half, each half with its arc. `ease` now runs on three axes too. `path::deviation`, `Sim::path_deviation`, the CLI's error-stream line and the app's path table take it as on two axes (the plane keeps distances) | `transition_curves_on_three_axes_lie_in_the_plane_of_the_arc`, path: line, quarter arc of 0.1 m, line in a plane tilted by 30°, 0.1 mm, delta limits: needed 80 mm, allowed L = sqrt(24 e r) = 15.49 mm, so e = L² / (24 r) = 0.1 mm, radius 99.9 mm; curves 15.49 mm; every pose in the plane to 1e-12 m; no steps; every pose within 0.1 mm; 0.353 s against 0.418 s; with a 0.05 m arc in the plane x = 0.1 after the last line all four junctions blended. `a_path_in_a_tilted_plane_gets_its_transition_curves`, delta-d3: both planners through `Sim`, 0.1 mm reported (1e-9), every pose within it, 0.551 s against 0.616 s (time-optimal 0.516 s against 0.578 s) |
+| Arcs in different planes | Not blended: a curve between them turns from one plane into the other, with torsion, and the planar construction (each circle moved in within its plane, the curve fitted exactly between two circles) has no counterpart; the path passes at `junction_speed` | — (documented, `shortcut:` in `blend3`) |
+| One length per arc | Each blended arc takes L = min(max over its two junctions of v³ dk / (0.4 j), sqrt(24 · tolerance · r)); arcs that hand over to one another turning the same way share one L (longest need, shortest limit along the chain), since their gap is the difference of their e. Opposite turns and lines fit whatever the L. A piece too short still halves every L | `each_arc_gets_the_curve_its_own_junctions_need`: line, 0.1 m quarter, line, 20 mm quarter, line, 1 mm: wide arc at 0.4 m/s, L = 0.064 · 10 / 40 = 16 mm (15.99 fitted); tight arc at (0.4 j r²)^(1/3) = 0.252 m/s, L = 0.016 · 50 / 40 = 20 mm (19.67 fitted; first-order formula at L/r = 1); reported 0.02² / 0.48 = 0.833 mm. One length made both 20 mm |
+| Arc fixed at one end, an arc at the other | The fixed arc's circle shrinks by s and moves towards the fixed end as before; its gap to the neighbouring arc is taken as e for the insets, and `transition` fits the curve to the real circles. Same-turn pairs share their L | `an_arc_fixed_at_one_end_gets_its_curve_towards_an_arc`: the path starts on a 0.1 m quarter that hands over to a 50 mm quarter (an S and the same way) and a line, 0.1 mm: two curves, the first arc still leaves the start along +x, no steps, every pose within the reported deviation, faster |
+| Arc fixed at one end that turns more than half a circle | At the angle θ from the fixed end the circles are r − sqrt(r² − 2 s (r − s)(1 − cos θ)) apart, 2 s at θ = π; so s ≤ tolerance / 2, e = (tolerance / 2)(1 − cos φ), and the reported distance takes θ up to π. A whole turn has no free end and stays | `an_arc_fixed_at_one_end_that_turns_three_quarters_gets_its_curve`: 270°, r = 0.1 m, 0.1 mm: s = e = 0.05 mm, L = sqrt(24 e r) = 10.95 mm, reported 2 s = 0.1 mm, ends on (0.4, 0.25) heading +y, 1.922 s against 2.025 s |
+| Arc fixed at both ends | Meets nothing in its direction (corners, path ends; a spline end is eased by `ease`): no curve is needed, nothing to build | — |
+
+Changed tests: `a_spline_on_three_axes_passes_through_its_points_within_the_limits` said a tolerance changes nothing on three axes; its junctions are now eased (deviation above 0, within 1 mm). The test helper `off_line` works on any number of axes. No config key, no new effect switch (the curves stay under `profile.path_tolerance_m`, 0 in every shipped config, so no golden snapshot changes).
+
+Left open:
+
+- Two arcs that meet in their direction in different planes (a helix-like path) keep their junction and are passed
+  slowly.
+- A piece more than 1 nm off the plane of its run (a tilted path written with few digits) gets no curves; the
+  deviation then stays 0, so the user sees that nothing was blended.
+- A piece too short for its curves halves every length of the path, not only the curves at that piece.
+- Next to an arc, a fixed arc's gap is taken as its e; the exact gap between the moved circles differs slightly, and
+  a curve that would then take too much of an arc is refused (shorter curves, then the path as given).

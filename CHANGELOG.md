@@ -9,6 +9,13 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Transition curves on three axes (the delta): with `profile.path_tolerance_m` the curves between lines and arcs are
+  laid in the plane of the arc they meet, a line between arcs in two planes is shared out, and deviation, plan and
+  reports hold in space; spline junctions on three axes are eased as on two. Two arcs meeting in different planes
+  keep their junction.
+- Transition curves: one length per arc (from its own junctions' speed and its own tolerance limit) instead of one
+  for the whole path; curves at an arc fixed at one end with an arc at its other end, and at one that turns more
+  than half a circle (moved by at most half the tolerance).
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and
