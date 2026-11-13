@@ -14,3 +14,6 @@ fmi-error-step = Der Kommunikationsschritt ist kein ganzzahliges Vielfaches des 
 fmi-error-experiment = Startzeit, Stoppzeit und Toleranz müssen endliche Zahlen sein: { $arg }
 fmi-error-time = Der Kommunikationszeitpunkt ist nicht dort, wo die Simulation steht: { $arg }
 fmi-refused = Befehl abgelehnt: { $arg }
+fmi-error-fmu-state = Dieser FMU-Zustand gehört nicht zu dieser FMU oder ist beschädigt: { $arg }
+fmi-error-count = Die Zahl der Werte ist nicht die Zahl der Wertreferenzen: { $arg }
+fmi-error-null = Ein Zeiger auf Werte ist null, bei dieser Zahl von Werten: { $arg }

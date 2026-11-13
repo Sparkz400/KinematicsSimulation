@@ -1,0 +1,20 @@
+[package]
+name = "sim-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The Python module `kinematics_sim`, built with maturin (see pyproject.toml). One abi3 wheel per platform serves
+# every CPython from 3.10 on.
+[lib]
+name = "kinematics_sim"
+crate-type = ["cdylib"]
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
+sim-machines.workspace = true
+toml.workspace = true
+# Only the Python module may depend on these two; numpy's release follows pyo3's.
+pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }
+numpy = "=0.30.0"

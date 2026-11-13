@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sizing check</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d9d9de; --ok: #1a7f37; --fail: #c62828; --accent: #2457c5; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #ececf0; --muted: #a0a0a8; --line: #36363c; --ok: #4cc26a; --fail: #ff6b6b; --accent: #7ea2ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  select, button, textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 240px; font-family: ui-monospace, monospace; font-size: 13px; }
+  details { margin: 8px 0 16px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  td.n { text-align: right; }
+  .ok { color: var(--ok); font-weight: 600; } .fail { color: var(--fail); font-weight: 600; }
+  #status { color: var(--muted); } #error { color: var(--fail); white-space: pre-wrap; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sizing check</h1>
+  <p class="lead">The kinematics simulator, compiled to WebAssembly, runs the machine's cycle in this browser and judges it
+    against the motor, drive and part ratings. Nothing is sent anywhere.</p>
+  <div class="row">
+    <label for="machine">Machine</label> <select id="machine"></select>
+    <label for="lang">Language</label> <select id="lang"><option value="en">English</option><option value="de">Deutsch</option></select>
+    <button id="run" disabled>Run sizing check</button> <span id="status">Loading…</span>
+  </div>
+  <details>
+    <summary>Config (TOML; edit motor, masses, cycle, ratings…)</summary>
+    <textarea id="config" spellcheck="false" aria-label="Config"></textarea>
+  </details>
+  <div id="error" role="alert"></div>
+  <div id="result" class="scroll"></div>
+</main>
+<script>
+"use strict";
+let wasm;
+const $ = (id) => document.getElementById(id);
+
+// One request to the module: text in, JSON out (see crates/sim-wasm/src/lib.rs).
+function call(kind, text) {
+  const bytes = new TextEncoder().encode(text);
+  const ptr = wasm.alloc(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  const code = wasm.call(kind, ptr, bytes.length);
+  const out = new Uint8Array(wasm.memory.buffer, wasm.out_ptr(), wasm.out_len());
+  const json = JSON.parse(new TextDecoder().decode(out));
+  if (code !== 0) throw new Error(json.error);
+  return json;
+}
+
+const fmt = (v) => v === null ? "–" : Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(3) : v.toFixed(3);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function loadMachines() {
+  const current = $("machine").value;
+  $("machine").innerHTML = call(0, $("lang").value).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("");
+  if (current) $("machine").value = current;
+}
+
+function loadConfig() {
+  $("config").value = call(1, $("machine").value).config;
+  $("result").innerHTML = "";
+}
+
+function run() {
+  $("error").textContent = "";
+  $("status").textContent = "Simulating…";
+  $("run").disabled = true;
+  // Let the page paint the status before the module blocks the thread for the cycle.
+  setTimeout(() => {
+    const started = performance.now();
+    try {
+      const r = call(2, `${$("machine").value}\n${$("lang").value}\n${$("config").value}`);
+      const failed = r.verdicts.filter((v) => !v.ok).length;
+      let html = `<p><b class="${failed ? "fail" : "ok"}">${failed ? failed + " check(s) FAIL" : "Every check passes"}</b> · cycle ${fmt(r.cycle_s)} s${r.tripped ? " · <b class=fail>a drive tripped</b>" : ""}</p>`;
+      if (r.warnings.length) html += `<ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`;
+      html += "<table><thead><tr><th>Check</th><th>Motor</th><th>Value</th><th>Limit</th><th>Result</th></tr></thead><tbody>";
+      for (const v of r.verdicts) html += `<tr><td>${esc(v.label)}</td><td>${esc(v.motor ?? "")}</td><td class=n>${fmt(v.value)}</td><td class=n>${fmt(v.limit)}</td><td class="${v.ok ? "ok" : "fail"}">${v.ok ? "ok" : "FAIL"}</td></tr>`;
+      html += "</tbody></table><table><thead><tr><th>Motor</th><th>Peak torque [N m]</th><th>RMS torque [N m]</th><th>Peak speed [rad/s]</th><th>Curve used</th><th>Thermal</th><th>Winding rise [K]</th></tr></thead><tbody>";
+      for (const m of r.motors) html += `<tr><td>${esc(m.name)}</td><td class=n>${fmt(m.peak_torque_nm)}</td><td class=n>${fmt(m.rms_torque_nm)}</td><td class=n>${fmt(m.peak_speed_rad_s)}</td><td class=n>${fmt(m.utilisation)}</td><td class=n>${fmt(m.thermal_utilisation)}</td><td class=n>${fmt(m.winding_rise_k)}</td></tr>`;
+      $("result").innerHTML = html + "</tbody></table>";
+      $("status").textContent = `Done in ${((performance.now() - started) / 1000).toFixed(1)} s`;
+    } catch (e) {
+      $("error").textContent = e.message;
+      $("status").textContent = "";
+    }
+    $("run").disabled = false;
+  }, 20);
+}
+
+WebAssembly.instantiateStreaming(fetch("sim_wasm.wasm"), {})
+  .then(({ instance }) => {
+    wasm = instance.exports;
+    loadMachines();
+    loadConfig();
+    $("run").disabled = false;
+    $("status").textContent = "";
+    $("machine").addEventListener("change", loadConfig);
+    $("lang").addEventListener("change", loadMachines);
+    $("run").addEventListener("click", run);
+  })
+  .catch((e) => { $("status").textContent = ""; $("error").textContent = "Could not load sim_wasm.wasm: " + e.message; });
+</script>
+</body>
+</html>

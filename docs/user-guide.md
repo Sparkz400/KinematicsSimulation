@@ -1014,7 +1014,7 @@ In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m 
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang en
 ```
 
-This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840) and `--lang` are the only arguments. A machine the simulator does not have, a port or language it cannot read and any other word are refused with a message and exit code 2.
+This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1) and `--cycle-ms` (default 10) are the only arguments. A machine the simulator does not have, a port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
 
 | Property | Value |
 | --- | --- |
@@ -1054,7 +1054,7 @@ How commands behave:
 Limits for this task:
 
 - **Not tested against a real PLC.** The client in the tests is written with the same library as the server. Interoperability with Siemens, Beckhoff or CODESYS clients, their data types, security settings and cycle jitter are untested.
-- The server binds to 127.0.0.1 only and serves the machine's default config only. There is no `--config` and no `--set`.
+- The server binds to one address (127.0.0.1 unless `--host` names another) and serves the machine's default config only. There is no `--config` and no `--set`.
 - No security profiles, no user accounts, no methods, no config changes.
 - Paths: `status.refused` names the key, not the line that could not be read, and there is no `--trajectory` (poses at times) over OPC UA. A path is planned inside the simulation's 10 ms tick: a long time-optimal path that takes longer to plan makes the simulation fall behind real time for that moment.
 - The server writes its keys into a folder `pki` in the working directory.
@@ -1066,7 +1066,7 @@ cargo build --release -p sim-fmi                                   # the FMU's b
 sim-cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml --out exct30.fmu
 ```
 
-`fmu` writes the machine with its config (the default, or `--config`, `--motor`, `--supply`, `--gearbox` and `--set` as for every command) as an FMI 2.0 Co-Simulation FMU. The FMU runs the same simulation as `sim-cli run`: drives, controller, every switched-on effect. Import it in Simulink (FMU block), OpenModelica (`File > Import > FMU`, or `importFMU`), Dymola (`File > Import > FMU`) or any other FMI 2.0 tool; a controller or PLC model there sends the position setpoints and reads back the signals. FMI 2.0 and not 3.0, because every one of those tools imports 2.0 Co-Simulation and the simulator needs nothing that only 3.0 has.
+`fmu` writes the machine with its config (the default, or `--config`, `--motor`, `--supply`, `--gearbox` and `--set` as for every command) as an FMI 2.0 Co-Simulation FMU. The FMU runs the same simulation as `sim-cli run`: drives, controller, every switched-on effect. Import it in Simulink (FMU block), OpenModelica (`File > Import > FMU`, or `importFMU`), Dymola (`File > Import > FMU`) or any other FMI 2.0 tool; a controller or PLC model there sends the position setpoints and reads back the signals. FMI 2.0 is the default because every one of those tools imports 2.0 Co-Simulation; `--fmi 3` writes an FMI 3.0 Co-Simulation FMU instead, with the same variables and the binaries under `binaries/<architecture>-<system>` (for example `binaries/x86_64-windows`). [FMI export](fmi.md) describes both versions, the FMU state, the derivatives, why there is no Model Exchange, how the FMUs were validated and how to import them.
 
 What is in the FMU:
 
@@ -1102,8 +1102,8 @@ How a step works:
 
 Limits for this task:
 
-- **Not checked with an independent FMI tool.** No FMI tool was available here (`fmpy` is not installed in the project). The tests call the FMU's functions from Rust and compare with the simulator; the archive and model description were also read with Python's `zipfile` and XML parser and the binary driven through `ctypes`. Import into Simulink, OpenModelica or Dymola is untested.
-- Co-Simulation only, no Model Exchange. No FMU state (`fmi2GetFMUstate` and its kind return `fmi2Error`), so tools that roll back a step cannot use it; no directional derivatives, no asynchronous steps.
+- Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Import into Simulink, OpenModelica or Dymola is untested.
+- Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). The FMU state works by replaying every step since initialisation, so restoring a state takes as long as simulating up to it. The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
 - Inputs are position setpoints only: no move targets, cycle or path commands, and no torque input. The servo loops stay inside the FMU.
 - Messages and descriptions in one language, the one of `--lang` when the FMU was written.
 - A 64-bit Windows binary unless a Linux one is added as above; no 32-bit binaries.

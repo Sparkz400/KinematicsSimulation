@@ -1052,10 +1052,15 @@ fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<
         }
     };
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(count.max(1));
-    let mut runs: Vec<_> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads).map(|_| scope.spawn(worker)).collect();
-        workers.into_iter().flat_map(|worker| worker.join().expect("a run of the cycle panicked")).collect()
-    });
+    // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
+    let mut runs: Vec<_> = if threads <= 1 {
+        worker()
+    } else {
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(worker)).collect();
+            workers.into_iter().flat_map(|worker| worker.join().expect("a run of the cycle panicked")).collect()
+        })
+    };
     runs.sort_by_key(|(run, _)| *run);
     runs.into_iter().map(|(_, run)| run).collect()
 }
@@ -2051,10 +2056,14 @@ pub fn velocity_loop_margins(entry: &MachineEntry, cfg: &Config, bounds: &[(Stri
         done
     };
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
-    let found: Vec<_> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-        workers.into_iter().flat_map(|w| w.join().expect("a loop measurement panicked")).collect()
-    });
+    let found: Vec<_> = if threads <= 1 {
+        work()
+    } else {
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+            workers.into_iter().flat_map(|w| w.join().expect("a loop measurement panicked")).collect()
+        })
+    };
     let mut out: Vec<(String, Vec<LoopMargins>)> = runs.iter().map(|(name, _)| (name.clone(), vec![loop_margins(&[]); motors])).collect();
     for (run, motor, margins) in found {
         out[run].1[motor] = margins?;
@@ -2125,11 +2134,15 @@ fn record_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Vec<f64>>, Con
 /// machine, with the same signals.
 pub fn compare_configs(entry: &MachineEntry, on: &Config, off: &Config) -> Result<Comparison, ConfigError> {
     let signals = Sim::new(entry, on)?.signal_infos();
-    let (with, without) = std::thread::scope(|scope| {
-        let with = scope.spawn(|| record_cycle(entry, on));
-        let without = record_cycle(entry, off);
-        (with.join().expect("a run of the cycle panicked"), without)
-    });
+    let (with, without) = if std::thread::available_parallelism().is_err() {
+        (record_cycle(entry, on), record_cycle(entry, off))
+    } else {
+        std::thread::scope(|scope| {
+            let with = scope.spawn(|| record_cycle(entry, on));
+            let without = record_cycle(entry, off);
+            (with.join().expect("a run of the cycle panicked"), without)
+        })
+    };
     Ok(Comparison { signals, on: with?, off: without? })
 }
 

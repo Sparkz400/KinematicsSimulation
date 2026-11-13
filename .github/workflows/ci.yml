@@ -35,11 +35,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # sim-py is a Python extension: maturin builds it, in the job "python".
       - name: Build
-        run: cargo build --workspace --release --locked
+        run: cargo build --workspace --release --locked --exclude sim-py
 
       - name: Test
-        run: cargo test --workspace --release --locked
+        run: cargo test --workspace --release --locked --exclude sim-py
 
       # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
       - uses: actions/setup-python@v5
@@ -60,4 +61,57 @@ jobs:
 
       # Not "-D warnings" yet: the code base has 34 clippy warnings (13 November 2026). Make it fail once they are gone.
       - name: Clippy
-        run: cargo clippy --workspace --release --all-targets --locked
+        run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py
+
+  # The core, the machines and the analysis for the browser, and the page that runs a sizing check with them.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build for wasm32
+        run: |
+          cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
+          mkdir -p site
+          cp crates/sim-wasm/web/index.html site/
+          cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
+      - name: Native tests of the module
+        run: cargo test -p sim-wasm --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sizing-page
+          path: site
+
+  # The Python module: an abi3 wheel per platform, its pytest suite (against sim-cli) and the example notebook.
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sim-cli (the tests compare against it)
+        run: cargo build -p sim-cli --release --locked
+      - name: Wheel and tests
+        shell: bash
+        run: |
+          pip install maturin==1.16.0
+          (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
+          pip install target/wheels/*.whl "pytest==9.2.0" pandas matplotlib nbformat nbclient ipykernel
+          pytest crates/sim-py/tests -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: target/wheels/*.whl

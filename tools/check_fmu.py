@@ -1,15 +1,22 @@
-"""Independent check of an FMU written by `sim-cli fmu`, with fmpy (CI runs it on Windows and Linux).
+"""Independent check of an FMU written by `sim-cli fmu` (FMI 2.0 or, with --fmi 3, FMI 3.0), with fmpy (CI runs it on
+Windows and Linux).
 
 usage: python tools/check_fmu.py SIM_CLI FMU MACHINE [--config TOML] [--stop S]
 
-1. fmpy's validator (FMI 2.0 XSD, names, model structure, start values, causality, units) finds no problem.
+1. fmpy's validator (the XSD of the FMU's FMI version, names, model structure, start values, causality, units) finds
+   no problem.
 2. fmpy runs the FMU as co-simulation at its default step with no input; every output must equal
    `sim-cli run` of the same machine and config at the same instants (the CLI prints 9 digits).
+3. Through fmpy's own bindings of the C functions: an FMU state taken halfway brings back bit for bit the outputs of
+   the steps after it, set on the same instance and serialized onto a second one; the directional derivative of
+   the outputs by the first setpoint input is zero, as is the finite difference by hand.
 Exits 1 on any failure.
 """
-import argparse, os, subprocess, sys, tempfile
+import argparse, os, shutil, subprocess, sys, tempfile
 import numpy as np
-from fmpy import read_model_description, simulate_fmu
+from fmpy import extract, read_model_description, simulate_fmu
+from fmpy.fmi2 import FMU2Slave
+from fmpy.fmi3 import FMU3Slave
 from fmpy.validation import validate_fmu
 
 REL_TOL = 1e-8  # the CLI's 9 printed digits; the hand check found 5e-10
@@ -26,6 +33,7 @@ for p in problems:
 failed |= bool(problems)
 
 md = read_model_description(a.fmu)
+v3 = md.fmiVersion.startswith("3")
 step = float(md.defaultExperiment.stepSize)
 outputs = [v.name for v in md.modelVariables if v.causality == "output"]
 logs = []
@@ -57,6 +65,65 @@ for name in outputs:
     if rel > REL_TOL:
         print(f"{name}: FMU differs from sim-cli by {rel:.2e} of its peak"); failed = True
 
-print(f"{a.machine} {a.config or ''}: {len(problems)} validator problems, {len(outputs)} outputs, "
+# 3. FMU state and derivatives, called the way an importing tool calls them.
+out_refs = [v.valueReference for v in md.modelVariables if v.causality == "output"]
+setpoint = next(v for v in md.modelVariables if v.name.startswith("command.setpoint."))
+unzipped = extract(a.fmu)
+
+
+def started():
+    cls = FMU3Slave if v3 else FMU2Slave
+    s = cls(guid=md.guid, unzipDirectory=unzipped, modelIdentifier=md.coSimulation.modelIdentifier, instanceName="check")
+    s.instantiate()
+    if v3:
+        s.enterInitializationMode(startTime=0.0)
+    else:
+        s.setupExperiment(startTime=0.0)
+        s.enterInitializationMode()
+    s.exitInitializationMode()
+    return s
+
+
+get = lambda s, refs: list(s.getFloat64(refs) if v3 else s.getReal(refs))
+put = lambda s, refs, values: s.setFloat64(refs, values) if v3 else s.setReal(refs, values)
+
+
+def run(s, ks):
+    """Steps k with the first setpoint 1 mm on per step (8 mm at most); the outputs after each."""
+    rows = []
+    for k in ks:
+        put(s, [setpoint.valueReference], [float(setpoint.start) + 0.001 * min(k, 8)])
+        s.doStep(k * step, step)
+        rows.append(get(s, out_refs))
+    return rows
+
+
+s = started()
+run(s, range(0, 5))
+state = s.getFMUState() if v3 else s.getFMUstate()
+after = run(s, range(5, 12))
+(s.setFMUState if v3 else s.setFMUstate)(state)
+same = run(s, range(5, 12)) == after
+data = (s.serializeFMUState if v3 else s.serializeFMUstate)(state)
+(s.freeFMUState if v3 else s.freeFMUstate)(state)
+s.terminate(); s.freeInstance()
+t = started()
+restored = (t.deserializeFMUState if v3 else t.deSerializeFMUstate)(data)
+(t.setFMUState if v3 else t.setFMUstate)(restored)
+elsewhere = run(t, range(5, 12)) == after
+base = get(t, out_refs)
+derivative = t.getDirectionalDerivative(out_refs, [setpoint.valueReference], [1.0])
+u = get(t, [setpoint.valueReference])[0]
+put(t, [setpoint.valueReference], [u + 1e-4])
+by_hand = [(x - y) / 1e-4 for x, y in zip(get(t, out_refs), base)]
+t.terminate(); t.freeInstance()
+shutil.rmtree(unzipped, ignore_errors=True)
+zero = all(x == 0.0 for x in derivative) and all(x == 0.0 for x in by_hand)
+print(f"FMU state: restored {'bit for bit' if same else 'DIFFERENT'}, serialized {len(data)} bytes and restored "
+      f"{'bit for bit' if elsewhere else 'DIFFERENT'}; directional derivative and finite difference "
+      f"{'zero' if zero else 'NOT ZERO'}")
+failed |= not (same and elsewhere and zero)
+
+print(f"{a.machine} {a.config or ''} (FMI {md.fmiVersion}): {len(problems)} validator problems, {len(outputs)} outputs, "
       f"{len(fmu)} rows, worst {worst[0]:.1e} ({worst[1]}): {'FAIL' if failed else 'ok'}")
 sys.exit(1 if failed else 0)

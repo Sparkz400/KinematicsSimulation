@@ -241,6 +241,11 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/model-reference.md](docs/model-reference.md) | The equations, per component and per machine, with assumptions and known shortcuts |
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, and what is not validated |
+| [docs/python.md](docs/python.md) | The Python module `kinematics_sim`: configs, runs, analysis, verdicts, bands and sizing as NumPy arrays and pandas-ready tables; a parameter-sweep notebook |
+| [docs/web.md](docs/web.md) | The sizing check in the browser: the simulator built for WebAssembly and a static page |
+| [docs/fmi.md](docs/fmi.md) | FMU export (FMI 2.0 and 3.0): variables, FMU state, directional derivatives, validation, import into Simulink, OpenModelica and Dymola |
+| [docs/plc.md](docs/plc.md) | PLC virtual commissioning: PLCopen-style blocks per axis over OPC UA, real-time pacing and jitter, TwinCAT and CODESYS examples, soak test |
+| [docs/fieldbus-emulation.md](docs/fieldbus-emulation.md) | Design note: emulating an EtherCAT or PROFINET drive for a real PLC |
 | [PROGRESS.md](PROGRESS.md) | Status per phase, design decisions, what is blocked |
 | [Project plan](<T-Gantry Physics Simulator Project Plan.md>) | Goal, architecture, stages |
 
@@ -253,7 +258,8 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis) | Machines | Transformation, assembly, signals, 3D scene description, configs |
 | [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines; cross-machine tests |
 | [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |
-| [`sim-cli`](crates/sim-cli), [`sim-app`](crates/sim-app), [`sim-opcua`](crates/sim-opcua) | Front ends | Command line, desktop app, OPC UA server |
+| [`sim-cli`](crates/sim-cli), [`sim-app`](crates/sim-app), [`sim-opcua`](crates/sim-opcua) | Front ends | Command line, desktop app, OPC UA server with PLCopen-style axes |
+| [`sim-py`](crates/sim-py), [`sim-wasm`](crates/sim-wasm) | Front ends | Python module (PyO3, maturin), WebAssembly module and sizing page |
 
 A crate depends only on crates below it; a test checks that.
 

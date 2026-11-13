@@ -807,3 +807,43 @@ fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
     refused(&["fmu", MACHINES[0].id, "--binary", dll.to_str().unwrap(), "--binary", other.to_str().unwrap(), "--out", twice.to_str().unwrap()], "--binary");
     assert!(!twice.exists());
 }
+
+/// `fmu --fmi 3` writes an FMI 3.0 FMU: its model description with the instantiation token, and each binary in the
+/// folder of its architecture, read from its header; a binary without a known header and another version are refused.
+#[test]
+fn fmu_writes_an_fmi3_archive_with_a_folder_per_architecture() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("fmi3");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut pe = vec![0u8; 0x48];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3c] = 0x40;
+    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
+    pe[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
+    let mut elf = b"\x7fELF".to_vec();
+    elf.resize(20, 0);
+    elf[18] = 62;
+    let macho = [[0xcf, 0xfa, 0xed, 0xfe], 0x0100_000cu32.to_le_bytes()].concat();
+    let (dll, so, dylib) = (dir.join("sim_fmi.dll"), dir.join("libsim_fmi.so"), dir.join("libsim_fmi.dylib"));
+    std::fs::write(&dll, &pe).unwrap();
+    std::fs::write(&so, &elf).unwrap();
+    std::fs::write(&dylib, &macho).unwrap();
+    let path = dir.join("fmi3.fmu");
+    let binaries = ["--binary", dll.to_str().unwrap(), "--binary", so.to_str().unwrap(), "--binary", dylib.to_str().unwrap()];
+    let out = cli(&[&["fmu", MACHINES[0].id, "--fmi", "3", "--out", path.to_str().unwrap()][..], &binaries].concat());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let files = unzip(&std::fs::read(&path).unwrap());
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names[3..], ["binaries/x86_64-windows/sim_fmi.dll", "binaries/x86_64-linux/sim_fmi.so", "binaries/aarch64-darwin/sim_fmi.dylib"]);
+    let xml = text(&files[0].1);
+    let root = &xml_elements(&xml)[0];
+    assert_eq!(attribute(&root.1, "fmiVersion"), Some("3.0"));
+    let model = sim_fmi::Model::with_fmi(MACHINES[0], &text(&files[2].1), "en", 3).unwrap();
+    assert_eq!(attribute(&root.1, "instantiationToken"), Some(model.guid.as_str()));
+    assert_eq!(xml, model.xml);
+    // A file that is no binary of a known architecture; a version that does not exist.
+    let fake = dir.join("fake").join("sim_fmi.dll");
+    std::fs::create_dir_all(fake.parent().unwrap()).unwrap();
+    std::fs::write(&fake, b"windows binary").unwrap();
+    refused(&["fmu", MACHINES[0].id, "--fmi", "3", "--binary", fake.to_str().unwrap(), "--out", path.to_str().unwrap()], "sim_fmi.dll");
+    refused(&["fmu", MACHINES[0].id, "--fmi", "4", "--binary", dll.to_str().unwrap(), "--out", path.to_str().unwrap()], "--fmi 4");
+}

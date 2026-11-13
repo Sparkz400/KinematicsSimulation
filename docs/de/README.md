@@ -65,6 +65,11 @@ Alle Befehle schreiben CSV auf die Standardausgabe oder mit `--out FILE` in eine
 | Dokument | Wofür |
 | --- | --- |
 | [Benutzerhandbuch](benutzerhandbuch.md) | Deutsch. Ein Abschnitt je Aufgabe: einen Motor auslegen, eine Katalogmaschine prüfen, suchen, Fehlerbänder, einen Zyklus verkürzen, eine Bahn fahren, Regler einstellen, eine Aufzeichnung nachfahren und Parameter anpassen, eine SPS anbinden, die App bedienen |
+| [Python-Modul](python.md) | `kinematics_sim`: Konfigurationen, Läufe, Analyse, Prüfurteile, Bänder und Auslegung als NumPy-Arrays und Tabellen für pandas; ein Notebook mit einer Parameterstudie |
+| [Auslegung im Browser](web.md) | Der Simulator als WebAssembly und eine statische Seite mit der Auslegungsprüfung |
+| [FMI-Export](fmi.md) | FMUs nach FMI 2.0 und 3.0: Variablen, FMU-Zustand, Richtungsableitungen, Prüfung, Import in Simulink, OpenModelica und Dymola |
+| [Virtuelle Inbetriebnahme mit einer SPS](sps.md) | PLCopen-artige Bausteine je Achse über OPC UA, Echtzeittakt und Jitter, Beispiele für TwinCAT und CODESYS, Dauertest |
+| [Feldbus-Emulation](feldbus-emulation.md) | Entwurfsnotiz: einen EtherCAT- oder PROFINET-Antrieb für eine echte SPS nachbilden |
 
 Die Referenzdokumente gibt es nur auf Englisch:
 

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin==1.16.0"]
+build-backend = "maturin"
+
+[project]
+name = "kinematics-sim"
+description = "Physics of belt-driven gantries and parallel pickers: runs, analyses, sizing verdicts and catalogue sizing, from Python."
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.10"
+# The arrays are NumPy's; pandas is optional (pandas.DataFrame(result) takes every table as it is).
+dependencies = ["numpy>=1.23"]
+dynamic = ["version"]
+classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: 3", "Topic :: Scientific/Engineering"]
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0", "pandas>=2.0", "matplotlib>=3.7", "nbformat>=5.9", "nbclient>=0.10", "ipykernel>=6.29"]
+notebook = ["pandas>=2.0", "matplotlib>=3.7", "jupyter"]
+
+[tool.maturin]
+# The stubs kinematics_sim.pyi beside this file go into the wheel with a py.typed marker.
+module-name = "kinematics_sim"
