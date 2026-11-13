@@ -77,7 +77,7 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
             // From near the low end of the axis, 5 % of it in (on the gantries 50 mm from their start at 0.1 m).
             let mut low = sim.control.set_pos.clone();
             low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
-            sim.command(Command::MoveTo(low)).unwrap();
+            sim.command(Command::MoveTo(low)).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
             while sim.control.busy() {
                 sim.step();
             }

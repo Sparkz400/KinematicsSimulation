@@ -119,7 +119,7 @@ fn torque_feedforward_cuts_the_following_error_while_accelerating() {
     for entry in MACHINES {
         let peak = |edit: &[&str]| {
             let mut sim = Sim::new(entry, &config(entry, edit)).unwrap();
-            sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+            sim.command(Command::MoveTo(long_move(&sim))).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
             let mut peak = 0f64;
             sim.run(0.15, |s| peak = peak.max(s.control.tool_error[0].abs()));
             peak
@@ -135,7 +135,7 @@ fn a_move_arrives_and_comes_to_rest() {
     for entry in MACHINES {
         let mut sim = Sim::new(entry, &entry.config()).unwrap();
         let target = long_move(&sim);
-        sim.command(Command::MoveTo(target.clone())).unwrap();
+        sim.command(Command::MoveTo(target.clone())).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
         while sim.control.busy() || sim.step == 0 {
             sim.step();
         }
@@ -199,7 +199,7 @@ fn bad_commands_are_refused() {
         outside[0] = sim.machine.axes()[0].max + 0.01;
         assert_eq!(sim.command(Command::MoveTo(outside)).unwrap_err().key, "error-target-out-of-range");
         assert_eq!(sim.command(Command::MoveTo(vec![])).unwrap_err().key, "error-target-out-of-range");
-        sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+        sim.command(Command::MoveTo(long_move(&sim))).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
         assert_eq!(sim.command(Command::MoveTo(long_move(&sim))).unwrap_err().key, "error-busy");
         assert_eq!(sim.command(Command::StartCycle).unwrap_err().key, "error-busy");
     }
@@ -213,7 +213,7 @@ fn external_setpoints_are_interpolated() {
         let start = sim.control.set_pos.clone();
         let mut target = start.clone();
         target[0] += 0.002;
-        sim.command(Command::Setpoint(target.clone())).unwrap();
+        sim.command(Command::Setpoint(target.clone())).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
         let (mut biggest_jump, mut last) = (0f64, start[0]);
         sim.run(0.02, |s| {
             biggest_jump = biggest_jump.max((s.control.set_pos[0] - last).abs());
@@ -277,7 +277,7 @@ fn halving_the_integration_step_changes_a_controlled_move_by_less_than_one_perce
             let cfg = config(entry, &[&format!("sim.substeps = {substeps}"), "effects.velocity_feedforward = false"]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
             let start = sim.control.set_pos[0];
-            sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+            sim.command(Command::MoveTo(long_move(&sim))).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
             let torque = sim.signal_index(&format!("motor.{}.torque", sim.machine.motors()[0].id)).unwrap();
             let (mut peak_torque, mut sum_sq, mut peak_error, mut n, mut sample) = (0f64, 0.0, 0f64, 0u32, Vec::new());
             sim.run(1.0, |s| {

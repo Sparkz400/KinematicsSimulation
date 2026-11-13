@@ -221,7 +221,10 @@ max_acceleration_m_s2 = 50.0
 max_jerk_m_s3 = 2500.0
 
 [axis.z]
-max_velocity_m_s = 3.0
+# Below x and y: z turns all three carriages one to one, so 3 m/s on every axis at once would ask the motors for
+# 337.7 rad/s against their rated 314.16 (`check_limits` at the middle of the range); 2.5 m/s asks 302.8. The cycle's
+# 25 mm lifts stay far below either.
+max_velocity_m_s = 2.5
 max_acceleration_m_s2 = 50.0
 max_jerk_m_s3 = 2500.0
 
@@ -347,9 +350,10 @@ thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 
-# Above the place position of the cycle.
+# Above the place position of the cycle, 10 mm below the working range's top face, so that the pose the machine
+# settles at (its belts stretch a few um) stays inside it. The cycle's own pass starts at the top face.
 [start]
-pose = [0.1525, 0.0, -1.12]
+pose = [0.1525, 0.0, -1.13]
 
 # The Adept cycle 25/305/25 mm, as Festo times the EXPT ("12-inch cycle") and as the D3 runs it: up 25 mm, across
 # 305 mm, down 25 mm, and back. Each leg is a move of its own, stopping at the corners; at the bottom the gripper acts
