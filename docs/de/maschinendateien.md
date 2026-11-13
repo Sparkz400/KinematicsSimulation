@@ -1,7 +1,8 @@
 # Maschinendateien
 
 Eine Maschinendatei beschreibt eine Maschine ohne Rust-Code und ohne Neuübersetzen: die Bauteile aus `sim-components`
-wie eine Netzliste verschaltet (Motor, Getriebe, Riemenscheibe, Riemenabschnitte, Wagen, Führungen), dazu Achsen,
+wie eine Netzliste verschaltet (Motor, Getriebe, Riemenscheibe, Riemenabschnitte, Wagen, Führungen, und neben den
+Riemen Kugelgewindetriebe, Zahnstangen, Linearmotoren und Rundtische), dazu Achsen,
 Grenzwerte, Fehlerbänder, Regelkreise und Zyklus einer Maschinenkonfiguration. Kommandozeile, App und SPS-Anbindung
 laden sie zur Laufzeit aus einem Pfad. Die englische Fassung ist [machine-files.md](../machine-files.md); die
 Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
@@ -11,6 +12,7 @@ Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
 - [Durchgerechnetes Beispiel: ein H-Bot](#durchgerechnetes-beispiel-ein-h-bot)
 - [Die Knoten](#die-knoten)
 - [Motoren, die sich unterscheiden](#motoren-die-sich-unterscheiden)
+- [Spindeln, Zahnstangen, Linearmotoren und Rundtische](#spindeln-zahnstangen-linearmotoren-und-rundtische)
 - [Die anderen Beispiele: ein CoreXY und ein XYZ-Portal](#die-anderen-beispiele-ein-corexy-und-ein-xyz-portal)
 - [Was geprüft wird, und wie Fehler lauten](#was-geprüft-wird-und-wie-fehler-lauten)
 - [Das Modell dahinter](#das-modell-dahinter)
@@ -223,12 +225,13 @@ Motorsignale und von `--motor N`.
 | ----- | ---- | - | --------- |
 | `axis` | `id` | Pflicht | die Achse; Signale `axis.<id>.*`, ihre Grenzen in `[axis.<id>]` |
 | | `key` | | Übersetzungsschlüssel ihres Namens; Vorgabe `axis-<id>` |
-| | `stroke_m` | Pflicht | Hub, m; die Achse läuft von 0 bis zu ihm |
+| | `stroke_m` | Pflicht | Hub, m; die Achse läuft von 0 bis zu ihm (eine Drehachse hat statt dessen `stroke_rad`) |
+| | `stroke_rad` | | Bereich einer Drehachse ab 0, rad, an Stelle von `stroke_m` |
 | | `incline_deg` | | Winkel über der Waagrechten, Grad, 90 senkrecht und nach + steigend; Vorgabe 0 |
 | `motor` | `id` | Pflicht | ein Servomotor mit seinem Antrieb; Signale `motor.<id>.*` |
 | | `key` | | Übersetzungsschlüssel seines Namens; Vorgabe `motor-<id>` |
-| `gearbox` | `motor` | Pflicht | der Motor, der es antreibt; ein Getriebe je Motor; Übersetzung 1 ist eine Kupplung |
-| `pulley` | `gearbox` | Pflicht | das Getriebe, dessen Abtrieb sie dreht; eine Scheibe je Getriebe |
+| `gearbox` | `motor` | Pflicht | der Motor, der es antreibt; ein Getriebe je Motor (keins bei einem Linearmotor); Übersetzung 1 ist eine Kupplung |
+| `pulley` | `gearbox` | Pflicht | das Getriebe, dessen Abtrieb sie dreht; eine Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe |
 | | `radius_m` | Pflicht | Wirkradius, m |
 | | `inertia_kgm2` | Pflicht | Trägheit ohne Riemen, kg m² |
 | `section` | `length_m` | Pflicht | geometrische Länge bei allen Achsen auf 0, m |
@@ -257,9 +260,20 @@ Motorsignale und von `--motor N`.
 | `span` | `section` | Pflicht | ein freies Riementrum dieses Abschnitts, für seine Querschwingung (`effects.belt_span_vibration`) |
 | | `length_m` | Pflicht | seine Länge bei allen Achsen auf 0, m |
 | | `axes` | | wie viel länger es je Meter jeder Achse wird |
+| `screw` | `gearbox`, `axis` | Pflicht | ein Kugelgewindetrieb am Abtrieb dieses Getriebes, dessen Mutter diese Achse treibt ([unten](#spindeln-zahnstangen-linearmotoren-und-rundtische)) |
+| | `values` | Pflicht | die Tabelle seiner Werte, aufgebaut wie `[screw]` der Kugelgewindeachse des Gelenkbaukastens |
+| `rack` | `gearbox`, `axis` | Pflicht | ein Ritzel am Abtrieb dieses Getriebes, das diese Achse an einer Zahnstange treibt |
+| | `values` | Pflicht | die Tabelle seiner Werte, aufgebaut wie `[rack]` der Zahnstangenachse des Gelenkbaukastens |
+| `linear_motor` | `motor`, `axis` | Pflicht | dieser Motor ist ein Linearmotor, der diese Achse treibt; er hat keinen Getriebeknoten |
+| | `values` | Pflicht | die Tabelle seiner Werte, aufgebaut wie `[linear_motor]` der Linearmotorachse des Gelenkbaukastens |
+| `rotary` | `gearbox`, `axis` | Pflicht | ein Rundtisch am Abtrieb dieses Getriebes: die Achse dreht sich, in rad |
+| | `inertia_kgm2` | Pflicht | die Trägheit, die er dreht, kg m² |
+| | `payload_inertia_kgm2` | | die seiner Last, solange `effects.payload` an ist und der Greifer sie hält, kg m² |
+| | `strain_wave` | | die Tabelle der Lebensdauerwerte seines Wellgetriebes, aufgebaut wie `[strain_wave]` |
 
-Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `guide`, `idler`, `frame` und
-`span` dürfen fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
+Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `axis` und `motor` immer,
+`gearbox`, `pulley` und `section`, wo Riemen getrieben werden, `body`, wo eine Achse einen bewegt; die anderen dürfen
+fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
 `belt_span_vibration` ohne `span`), lehnt die Datei mit `machine.<Liste>` ab.
 
 ## Motoren, die sich unterscheiden
@@ -298,6 +312,62 @@ der Antriebe, der Rauschstartwert, ein gemeinsamer Zwischenkreis und das Bremsmo
 gemeinsamen Motor; ein Motor mit eigenem `[parts.<id>]` behält sein Teil bei der Suche. Der zeitoptimale Bahnplaner
 nimmt für jeden Motor die Kennlinie des gemeinsamen `[drive]`.
 
+## Spindeln, Zahnstangen, Linearmotoren und Rundtische
+
+Ein Motor kann eine Achse ohne Riemen treiben: über einen Knoten `screw`, `rack` oder `rotary` am Abtrieb seines
+Getriebes (ein Getriebe der Übersetzung 1 ist die Kupplung), oder als `linear_motor`, der der Motor selbst ist und
+keinen Getriebeknoten hat. Jeder treibt eine Achse, eine Achse hat höchstens einen, und Riemen und diese mischen sich in
+einer Datei:
+
+```toml
+[[machine.screw]]          # machines/screw-portal.toml: X und Y an Riemen, Z an einem Kugelgewindetrieb 16 x 10
+id = "screw_z"
+gearbox = "gearbox_z"      # die Kupplung: [gearbox.mz] hat ratio = 1
+axis = "z"
+values = "screw_z"         # die Tabelle [screw_z], aufgebaut wie [screw] der Kugelgewindeachse des Gelenkbaukastens
+```
+
+Die Werte sind die des Gelenkbaukastens ([Mechanismen](mechanismen.md)), in einer Tabelle, die der Knoten nennt, so dass
+zwei Spindeln zwei Tabellen haben: der Aufbau von `[screw]` für eine Spindel (Steigung, Nenn- und Kerndurchmesser,
+Länge zwischen den Lagern, Lagerung, Wirkungsgrad, Steifigkeit von Mutter und Lagern, Vorspannung, Tragzahlen und
+Faktoren, `max_dn`), der von `[rack]` für eine Zahnstange (Modul, Zähne, Schrägungswinkel, Wirkungsgrad, Steifigkeit,
+Spiel, Ritzelträgheit, zulässige Vorschubkraft, Betriebsfaktor), der von `[linear_motor]` für einen Linearmotor
+(Anziehungskraft, Polteilung, Reibbeiwert der Führung), der von `[strain_wave]` für das Wellgetriebe eines Rundtischs
+(Nennmoment, Antriebsdrehzahl und Lebensdauer). Der Antriebsstrang wird gebaut wie im Gelenkbaukasten
+(`transmission::Converter` hinter dem Getriebe): Steigung / 2 pi der Spindel oder der Radius des Ritzels als Hebel,
+seine Steifigkeit in Reihe mit der des Getriebes, sein Wirkungsgrad auf dem des Getriebes, die Trägheit der Spindel
+oder des Ritzels auf dem Läufer. Ein Spindelmotor braucht also T = J a / Hebel + F Hebel / eta, um eine Last F mit der
+Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer Zahnstange dreht sich um i x / r.
+
+- Mit `effects.guide_friction` bremst die Vorspannung der Mutter am Motor, und die Anziehung eines Linearmotors fügt
+  den Reibbeiwert der Führung mal sich selbst hinzu; Anziehung und Gewicht des Primärteils drücken außerdem auf die
+  Führung der Achse (`axis.<id>.guide_load`, von den Führungsprüfungen beurteilt).
+- `[motor.<id>]` und `[drive.<id>]` eines Linearmotors lesen sich in N für N m und m für rad (Kraftkonstante in N/A,
+  die Masse des Primärteils als `rotor_inertia_kgm2`); sein `[gearbox.<id>]` hat die Übersetzung 1 und ist die
+  Anbindung des Primärteils.
+- Ein Rundtisch dreht seine Achse in rad: die Achse hat `stroke_rad` statt `stroke_m`, ihre Grenzen sind
+  `max_velocity_rad_s`, `max_acceleration_rad_s2` und `max_jerk_rad_s3` in `[axis.<id>]`, und was sie bewegt, ist
+  `inertia_kgm2` (und `payload_inertia_kgm2`) des Rundtischs. Kein Körper bewegt sich mit ihr; sie hat keine Führung,
+  keine Neigung und keine Energiekette.
+- Signale und Prüfungen heißen nach dem Motor, wie die des Gelenkbaukastens nach seinem Gelenk: `joint.<Motor>.force`
+  (was Spindel, Zahnstange, Linearmotor oder Rundtisch an die Achse gibt), `screw.<Motor>.speed`, `.dn` und
+  `.damage_rate`, `rack.<Motor>.feed_force`, `strain_wave.<Motor>.damage_rate`; `gearbox.<Motor>.output_torque` ist das
+  Moment vor Spindel oder Zahnstange. Die Prüfungen sind die des Baukastens: `screw-speed`, `screw-dn`,
+  `screw-buckling`, `screw-static`, `screw-life`, `rack-feed-force`, `strain-wave-life` (die Lebensdauern, wo
+  `ratings.required_life_h` gesetzt ist). Ein Motor, der keine Scheibe dreht, meldet kein
+  `pulley.<Motor>.radial_load`, also übergehen ihn die Prüfungen der Riemenzähne und Scheibenlager.
+- `effects.belt_stretch` schaltet das elastische Modell der ganzen Maschine: damit verdrehen sich auch die Getriebe der
+  Spindeln, Zahnstangen und Rundtische (die Steifigkeit des Wandlers in Reihe), und die Eigenform des Riemens in einer
+  Lage enthält sie, bei festgehaltenen Läufern.
+
+`machines/screw-portal.toml` ist das XYZ-Portal, dessen Z-Riemen durch einen Kugelgewindetrieb 16 x 10 hinter einer
+Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5).
+`machines/rack-gantry.toml` ist ein Zweiachsportal mit einem 3 m langen X an Zahnstange und Ritzel (Modul 2, 200 mm je
+Umdrehung) hinter einem Getriebe der Übersetzung 10 und Y an einem Riemen. Beide bestehen jede Prüfung auf ihren
+Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 422 von 2400 N). Die Kugelgewinde-,
+Zahnstangen-, Linearmotor- und Rundtischachse des Gelenkbaukastens als Dateien geschrieben geben die Urteile des
+Baukastens Ziffer für Ziffer.
+
 ## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
 
 `machines/corexy.toml` ist ein CoreXY-Tisch. Seine beiden Motoren stehen an den vorderen Ecken; jeder treibt einen
@@ -322,11 +392,13 @@ Eine Maschinendatei wird beim Laden vollständig geprüft, bevor etwas läuft:
 - das TOML oder JSON selbst, `format_version` und `machine.version`;
 - jeder Knoten: kein Feld, das seine Art nicht hat, jedes Pflichtfeld vorhanden, jeder Wert vom richtigen Typ, ids
   gültig und eindeutig, jeder Verweis auf einen vorhandenen Knoten, jeder Pfad auf eine vorhandene Zahl;
-- die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor und eine Scheibe je Getriebe, so viele Motoren
-  wie Achsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
+- die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor (keins bei einem Linearmotor) und eine
+  Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe, höchstens eins davon je Achse, eine Spindel mindestens so
+  lang wie ihr Hub, so viele Motoren wie Achsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
 - jeder andere Schlüssel gegen die Schlüssel der Konfigurationen der eingetragenen Maschinen (so wird `pretensoin_n`
-  beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung und jeder Schlüssel, den die
-  Netzliste über einen Pfad nennt;
+  beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung, die Wertetabellen von Spindeln,
+  Zahnstangen, Linearmotoren und Wellgetrieben im Aufbau des Gelenkbaukastens und jeder Schlüssel, den die Netzliste
+  über einen Pfad nennt;
 - dann alles, was die Simulation bei ihrem Start liest, wie bei einer Konfiguration: der Antrieb, der Zyklus, die
   Startlage, die Katalogteile, die die Datei nennt.
 
@@ -386,6 +458,12 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   Riemens bei festgehaltenen Scheiben, K = Σ_s EA / L_s c_s c_s^T, gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
   Form (auf 1 m Werkzeugweg skaliert).
+- Spindel, Zahnstange, Linearmotor oder Rundtisch (`machine.screw`, ...): das Getriebe seines Motors wird eines in der
+  Einheit der Achse, der Übersetzung i / Hebel (der `RotaryJoint` des Gelenkbaukastens mit dem
+  `transmission::Converter` dahinter), und seine "Scheibe" ist die Achse selbst: K hat für ihn die Zeile e_i, die Achse
+  nimmt den Abtrieb des Getriebes als ihre Kraft, die Gleichungen des Riemens überlassen ihm die Achse (in Ruhe und bei
+  den starren Spannungen), und im elastischen Modell folgen die Zustände der Scheibe der Achse. Die Masse einer
+  Drehachse ist die Trägheit ihres Rundtischs, ohne Schwerkraft entlang ihr.
 
 Regler, Antriebe, Zwischenkreis, Wicklungserwärmung, Analysen, Urteile, Sensitivität und Fehlerbänder sind die jeder
 Maschine; an ihnen ist nichts besonders für Maschinendateien.
@@ -397,7 +475,14 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   Riemen und Körpern nicht hat; ein Knoten dafür wäre der Sonderfall des T-Portals. Eine Datei, die ihn einschaltet,
   wird abgelehnt (`effects.tool_flex (not in machine files yet)`), damit ein Ergebnis nie einen verlangten Effekt
   auslässt.
-- Andere Mechanismen als Riemen: Spindeln, Zahnstangen, Koppelgetriebe, Drehgelenke. Es gibt die Knotenarten oben.
+- Koppelgetriebe (ein Fünfgelenk, eine Scherenhubbühne) und Schneckengetriebe: die Mechanismen neben Riemen sind
+  Spindeln, Zahnstangen, Linearmotoren und Rundtische, jeder treibt eine Achse gerade. Ein Körper kann nicht auf einer
+  Drehachse mitfahren (er bewegte sich auf einem Kreis, nicht entlang rechtwinkliger Achsen), und eine Drehachse hat
+  keine eigene Lagerreibung (nur die ihres Motors und Getriebes).
+- `effects.belt_tooth_jump` zusammen mit Spindel, Zahnstange, Linearmotor oder Rundtisch: seine Zustände liegen je
+  Motor, und ein Motor ohne Scheibe hat keine; die Datei wird abgelehnt.
+- Die Steifigkeit einer Spindel ist die bei der weichsten Mutterstellung für den ganzen Hub, wie im Gelenkbaukasten;
+  das Bremsmoment ihrer Vorspannung sitzt am Motor, mit einer Glättung in rad/s.
 - Andere Eigenformen als die des Riemens: der Rahmen geht in die des Riemens ein, wo er schwingt, die eigene
   Steifigkeit der Führungen und Motoren nicht, und die Biegung eines Körpers ist nicht modelliert.
 - Abschnitts- und Trumlängen sind Zahlen (oder Pfade), keine Formeln: eine, die von einem Hub abhängt, folgt einer
@@ -442,6 +527,14 @@ Standardprüfung ist die Getriebelose aus: nichts zieht seine Getriebe an eine F
 Prüfung schlägt sie durch die Lose, was die Energie um 0,17 % driften lässt, mehr als die erlaubten 0,1 %. Das liegt
 am Getriebekontakt bei der Schrittweite der Prüfung, nicht an der Netzliste: das Crate T-Portal ohne Schwerkraft driftet
 auf dieselbe Weise um 0,19 %.
+
+`crates/sim-machines/tests/machine_file_mechanisms.rs` hält die Spindeln, Zahnstangen, Linearmotoren und Rundtische:
+die Kugelgewindeachse des Gelenkbaukastens als Datei ist ihr Crate auf 1e-9 (elastisch und starr, mit gehaltener,
+abgesetzter Last und mit Bremse: Kinematik, Ruhelage, Ableitungen, Energie, Vorsteuerung, die Signale der Spindel und
+die Momentaufteilung, ihre Prüfungen); von Hand das Moment des Z-Motors des Spindelportals für eine Last und
+Beschleunigung und die kritische Drehzahl seiner Spindel, Motorwinkel x i / r und Vorschubkraft des
+Zahnstangenportals, der Strom eines Linearmotors für eine Kraft und seine Führungslast, das Moment eines Rundtischs in
+rad; beide neuen Dateien bestehen die Standardprüfung; und eine kaputte Spindel wird mit Schlüssel und Zeile abgelehnt.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden
 hat und was behoben ist: eine Maschine mit zwei oder drei getrennten Riemen (ihre Ruhelage war falsch, wo eine Achse

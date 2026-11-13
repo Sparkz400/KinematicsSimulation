@@ -1325,8 +1325,10 @@ pub fn motor_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 /// effects.belt_wrap those of the smallest wrap over the pass (`MotorLoad::belt_wrap`), wrap r / `belt.tooth_pitch_m`
 /// (wrap / (2 pi) of the pulley's 2 pi r / p teeth). The highest ratio
 /// over the cycle, each speed band (`MotorLoad::gearbox_torque_by_speed`) at its upper speed, where the rating is lowest.
-/// `None` where the machine reports no output torque or the config lacks one of these values. A rating, not a life: no
-/// belt maker publishes a life in hours or load cycles for these belts.
+/// `None` where the machine reports no output torque or the config lacks one of these values, and for a motor that turns
+/// no pulley (the machine reports neither its pulley's radial load nor its wrap: a screw, rack or linear motor in a
+/// machine file whose other motors drive belts). A rating, not a life: no belt maker publishes a life in hours or load
+/// cycles for these belts.
 pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>, ConfigError> {
     let Ok(rpm) = cfg.f64s("ratings.belt_tooth_load_rpm") else { return Ok(None) };
     let get = |key: &str| cfg.f64(key).ok();
@@ -1335,7 +1337,7 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
     if load.len() != rpm.len() || rpm.is_empty() || rpm.windows(2).any(|w| w[0] >= w[1]) {
         return Err(ConfigError::Invalid("ratings.belt_tooth_load_rpm".into()));
     }
-    if m.gearbox_torque.is_none() {
+    if m.gearbox_torque.is_none() || (m.radial_load_equivalent.is_none() && m.belt_wrap.is_none()) {
         return Ok(None);
     }
     let allowed = |n: f64| -> f64 {

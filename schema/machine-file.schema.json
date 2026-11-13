@@ -56,7 +56,20 @@
                 "type": "array"
               },
               "stroke_m": {
-                "description": "Stroke, m.",
+                "description": "Stroke, m; every axis but a rotary one has it.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "stroke_rad": {
+                "description": "Range of a rotary axis (one a rotary node turns), from 0, rad; in place of stroke_m.",
                 "oneOf": [
                   {
                     "type": "number"
@@ -70,8 +83,7 @@
               }
             },
             "required": [
-              "id",
-              "stroke_m"
+              "id"
             ],
             "type": "object"
           },
@@ -435,6 +447,48 @@
           },
           "type": "array"
         },
+        "linear_motor": {
+          "description": "An ironcore linear motor that drives an axis with no transmission (transmission::LinearMotor). Its motor's values read in N for N m and m for rad ([motor.<id>]: force constant in N/A, the forcer's mass as rotor_inertia_kgm2); its gearbox values ([gearbox.<id>], ratio 1) are the forcer's mounting.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The axis it drives; one screw, rack, linear motor or rotary per axis. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "motor": {
+                "description": "The motor it is; that motor has no gearbox node. Id of a machine.motor node.",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "values": {
+                "description": "The table of its values, laid out as [linear_motor] of the joint kit's linear motor axis (attraction force, pole pitch, guide friction coefficient).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "motor",
+              "axis",
+              "values"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "motor": {
           "description": "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors; [motor.<id>], [drive.<id>], [gearbox.<id>], [ratings.<id>] and [parts.<id>] give one motor its own.",
           "items": {
@@ -534,6 +588,158 @@
               "gearbox",
               "radius_m",
               "inertia_kgm2"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rack": {
+          "description": "A pinion on a gearbox's output that drives an axis along a rack (transmission::RackPinion; check rack-feed-force on rack.<motor>.feed_force).",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The axis it drives; one screw, rack, linear motor or rotary per axis. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "gearbox": {
+                "description": "The gearbox that turns the pinion. Id of a machine.gearbox node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "values": {
+                "description": "The table of its values, laid out as [rack] of the joint kit's rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "gearbox",
+              "axis",
+              "values"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rotary": {
+          "description": "A rotary table or joint on a gearbox's output: its axis turns, in rad. With strain_wave the gearbox is a strain wave gear (check strain-wave-life on strain_wave.<motor>.damage_rate).",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The axis it turns, which has stroke_rad; no body moves with it. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "gearbox": {
+                "description": "The gearbox that turns it. Id of a machine.gearbox node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "inertia_kgm2": {
+                "description": "Inertia it turns, kg m^2.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "payload_inertia_kgm2": {
+                "description": "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "strain_wave": {
+                "description": "The table of the strain wave gear's life values, laid out as [strain_wave] of the joint kit's rotary table.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "gearbox",
+              "axis",
+              "inertia_kgm2"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "screw": {
+          "description": "A ball screw on a gearbox's output (a gearbox of ratio 1 is the coupling) that drives an axis through its nut (transmission::BallScrew; checks screw-speed, screw-dn, screw-buckling, screw-static, screw-life). Its signals and checks are named by its motor: screw.<motor>.speed, joint.<motor>.force.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The axis its nut drives; one screw, rack, linear motor or rotary per axis. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "gearbox": {
+                "description": "The gearbox that turns it. Id of a machine.gearbox node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "values": {
+                "description": "The table of its values, laid out as [screw] of the joint kit's screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "gearbox",
+              "axis",
+              "values"
             ],
             "type": "object"
           },
@@ -695,11 +901,7 @@
       "required": [
         "version",
         "axis",
-        "motor",
-        "gearbox",
-        "pulley",
-        "section",
-        "body"
+        "motor"
       ],
       "type": "object"
     }

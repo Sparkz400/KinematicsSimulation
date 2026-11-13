@@ -1660,3 +1660,67 @@ Left open:
   vibration on this machine.
 - The cross-machine tests in `sim-machines` (effect switches, budgets, scene, lives, ratio change) run on it for the
   first time with the coordinator's test run.
+
+## Machine files: screws, racks, linear motors and rotary tables (13 November)
+
+What, how, test:
+
+- **Four node kinds** in `sim-netlist` (`netlist::NODES`, so the parser and the JSON schema have them): `screw`
+  (gearbox, axis, `values`), `rack` (gearbox, axis, `values`), `linear_motor` (motor, axis, `values`; the motor has no
+  gearbox node) and `rotary` (gearbox, axis, `inertia_kgm2`, `payload_inertia_kgm2`, `strain_wave`). `values` names a
+  table of the file laid out as the joint kit's `[screw]`, `[rack]`, `[linear_motor]`, `[strain_wave]`; the key check
+  lays that layout over it (a misspelt key is refused by name and line). An axis turned by a rotary has `stroke_rad` for
+  `stroke_m` and limits `max_velocity_rad_s`...; no body, guide, incline or chain on it. A gearbox drives one pulley,
+  screw, rack or rotary; an axis has at most one of them; belts and these mix. `pulley`, `section`, `body` and
+  `gearbox` are no longer required lists (JSON schema regenerated).
+- **The joint kit's drive train, reused.** For such a motor `ConfigMachine` builds a `RotaryJoint` from its own config
+  and puts the kit's `transmission::Converter` behind it (`BallScrew::converter(softest_position)`,
+  `RackPinion::converter`), exactly as `machine-joint-kit` does: the gearbox becomes one in the axis's unit (ratio
+  i / lever, stiffness in series, efficiency multiplied, converter inertia on the rotor, brake from that rotor). Its
+  "pulley" is the axis: K gets the row e_i, the axis takes the gearbox output as its force, the belt's rest-state and
+  rigid-tension equations leave that axis out, the elastic pulley states follow the axis, no tooth mesh. Linear motor:
+  ratio 1 required, cogging order 2 pi / pole pitch, attraction and forcer weight added to the axis's guide load
+  signal; nut preload drag and the attraction's friction at the motor with `effects.guide_friction`. Rotary: its
+  inertia (and payload's) is the axis's mass. Thermal feedback keeps the converter's share of the efficiency; a coupling
+  stays a coupling (`coupled`) after the converter changes the ratio. Signals and checks named by the motor as the kit
+  names them by its joint: `joint.<m>.force`, `screw.<m>.speed/.dn/.damage_rate`, `rack.<m>.feed_force`,
+  `strain_wave.<m>.damage_rate`, `gearbox.<m>.output_torque` ahead of the converter; `rating_checks` gives
+  `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life`, `rack-feed-force`, `strain-wave-life`.
+  The belt mode includes their gearboxes' stiffness (rotors held); the 3D view draws a screw, rack or magnet track
+  along the axis and a rotary as a disc.
+- **Fixes on the way**: the least-squares solves for K and for the rest state's pulley angles ran over every motor, and
+  a motor without a pulley (a zero column) made them singular; they run over the belt motors now. A file with no belt
+  section at all builds.
+- **Verdicts**: a motor that turns no pulley reports no `pulley.<m>.radial_load`; `analysis::belt_tooth_utilisation`
+  passes over a motor that reports neither that nor a belt wrap (else the rack gantry's X motor was judged on belt
+  teeth it has not: 1.18, FAIL). Pulley- and motor-bearing lives drop for such a motor the same way.
+- **Two files**: `machines/screw-portal.toml` (the XYZ portal with Z on a ball screw 16 x 10 behind a bellows coupling,
+  the Z motor's brake holding 0.055 N m of its 0.5) and `machines/rack-gantry.toml` (3 m X on rack and pinion behind
+  ratio 10, Y on a belt). `sim-cli verdicts --machine-file`: every check passes (screw-speed 2402 of 9833 r/min,
+  rack-feed-force 422 of 2400 N); `--bands --worst` runs on the screw portal with its new bounds.
+- Before the tests: the joint kit's screw, rack, linear motor and rotary table axes written as files (the kit's config,
+  the belt and guide tables a file needs, a netlist; joint friction off, hard stops as the slide's) gave the kit's
+  `sim-cli verdicts` digit for digit, elastic; rigid and vertical the screw differs only in the warm-start residual
+  (1.864e-5 against 1.883e-5: the file's gearbox loss takes a third pass, the kit's two).
+
+Tests (`crates/sim-machines/tests/machine_file_mechanisms.rs`): the screw portal's Z by hand (T = J a / lever +
+F lever / eta = 0.0536936 + 0.0730756 N m gives a = 2 m/s2 with F = 3.5 kg (a + g); force, torque ahead of the screw,
+1800 r/min, feedforward 0.1194617 N m, holding m g lever) and its critical speed (12291.2 r/min, check limit 0.8 of it);
+the rack gantry's motor angle i x / r = 314.159 rad at 1 m and its feed force 34 / 0.97 N for 17 kg at 2 m/s2 with
+T = 0.1369228 N m; a linear motor's 130 N at 10 m/s2 drawing 2 A at 65 N/A and its guide load 2627.486 N; a rotary
+table's 0.76 N m at 10 rad/s2 in rad with its strain-wave-life check; the joint kit's screw axis as a file against its
+crate to 1e-9 (elastic and rigid, payload on, set down, braked: kinematics, rest state, derivatives, energy, feedforward,
+14 signals, the checks); both files through the standard suite; a broken screw refused by key and line (unknown field,
+misspelt value key, a screw shorter than its stroke, a gearbox with a pulley and a screw). Only the schema test was run
+here (`MACHINE_SCHEMA_WRITE=1`); `cargo check --tests` passes, the numbers above are from `sim-cli`.
+
+Left open:
+
+- Linkages and worm gears in files; a body riding on a rotary axis; bearing friction of a rotary axis of its own.
+- `effects.belt_tooth_jump` beside a screw, rack, linear motor or rotary is refused (its states are per motor).
+- A screw motor's coupling is judged with whatever gearbox ratings the motor's `[ratings]` has (the screw portal's Z:
+  a size 40 gearbox's placeholders); a coupling has no ratings of its own.
+- The rack's pinion load on the gearbox's output bearing is not modelled: no pulley/output-bearing life for a rack.
+- One elastic switch for the whole machine (`effects.belt_stretch`), not the kit's `joint_elasticity`.
+- The comparison with the kit covers the screw axis; rack, linear motor and table are compared by `sim-cli` (above)
+  and by hand in the tests, not to 1e-9 in a test.

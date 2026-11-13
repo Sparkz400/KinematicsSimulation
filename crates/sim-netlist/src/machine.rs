@@ -39,12 +39,23 @@
 //! C = [[1, 1], [0, -2], [-1, 1]] and F = [[1, 0], [-1, 1], [0, -1]]; `machines/*.toml` hold them, and
 //! crates/sim-machines/tests/machine_files.rs checks them against their crates. The equations are those crates',
 //! written for any C and F: their module comments derive them.
+//!
+//! A motor may drive an axis without a belt (`Direct`): a ball screw or a rack behind its gearbox, a linear motor, or a
+//! rotary table (an axis in rad). Its drive train is the joint kit's (`RotaryJoint` with the screw's or rack's
+//! `transmission::Converter` behind the gearbox): the gearbox is then one in the axis's unit, of ratio i / lever, its
+//! stiffness the gearbox's and the converter's in series, its efficiency both, the screw's or pinion's inertia on the
+//! rotor. Its "pulley" is the axis itself: K has a row e_i for it, the axis takes the gearbox's output as its force,
+//! and in the elastic model the pulley's states follow the axis. So the joint kit's one-axis machines are this with no
+//! belt (crates/sim-machines/tests/machine_files.rs checks the screw axis against its crate). A rotary axis has no
+//! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
-use crate::netlist::{Netlist, Waypoint};
+use crate::netlist::{Netlist, Transmission, Waypoint};
 use sim_components::catalog::motor_config;
+use sim_components::joint::RotaryJoint;
 use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency};
-use sim_core::scene::{drive_unit, idler};
-use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_components::transmission::{BallScrew, LinearMotor, RackPinion, StrainWave};
+use sim_core::scene::{MOTOR_PART, drive_unit, idler};
+use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MotorInfo, Part, RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 const G: f64 = 9.80665;
 
@@ -124,6 +135,46 @@ struct Span {
     c: Vec<f64>,
 }
 
+/// What a motor drives without a belt: an axis, through its gearbox in the axis's unit (see the module comment).
+struct Direct {
+    axis: usize,
+    kind: DirectKind,
+    /// Travel per radian of the gearbox's own output (screw, rack): the torque there is the force times it.
+    lever: Option<f64>,
+    /// `ratings.required_life_h` of its motor, where set.
+    required_life: Option<f64>,
+}
+
+enum DirectKind {
+    Screw(BallScrew),
+    Rack(RackPinion),
+    /// The attraction between forcer and magnets and the forcer's mass, which press on the axis's guide.
+    Linear { attraction: f64, forcer: f64 },
+    Rotary(Option<StrainWave>),
+}
+
+/// The motor's config with its `[<layout>]` (`screw`, `rack`, ...) replaced by the file's table at `table`: what the
+/// joint kit's `from_config` reads.
+fn values_config(own: &Config, cfg: &Config, layout: &str, table: &str) -> Result<Config, ConfigError> {
+    let mut all: toml::Table = own.to_text()?.parse().map_err(|_| ConfigError::Parse(table.into()))?;
+    all.insert(layout.into(), cfg.get(table)?.clone());
+    Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)
+}
+
+/// An error about `<layout>.<key>` as one about the file's `<table>.<key>`.
+fn renamed(e: ConfigError, layout: &str, table: &str) -> ConfigError {
+    let fix = |d: String| match d.strip_prefix(&format!("{layout}.")) {
+        Some(rest) => format!("{table}.{rest}"),
+        None => d,
+    };
+    match e {
+        ConfigError::Missing(d) => ConfigError::Missing(fix(d)),
+        ConfigError::Type(d) => ConfigError::Type(fix(d)),
+        ConfigError::Invalid(d) => ConfigError::Invalid(fix(d)),
+        other => other,
+    }
+}
+
 pub struct ConfigMachine {
     elastic: bool,
     axes: Vec<AxisInfo>,
@@ -182,6 +233,14 @@ pub struct ConfigMachine {
     spans: Vec<Span>,
     payload_attached: bool,
     brake_engaged: bool,
+    /// Per motor: the axis it drives without a belt, `None` for a belt motor.
+    direct: Vec<Option<Direct>>,
+    /// Per motor: its configured gearbox has ratio 1 (a coupling; a screw or rack behind it changes the ratio), and
+    /// what a screw or rack puts on its efficiency (1 for none), which thermal feedback keeps.
+    coupled: Vec<bool>,
+    extra_efficiency: Vec<f64>,
+    /// Per axis: the inertia a rotary turns with it and its payload's (0 on a straight axis), kg m^2.
+    turned: Vec<(f64, f64)>,
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -357,22 +416,89 @@ impl ConfigMachine {
         let belt = Belt::from_config(cfg)?;
         // Each motor's drive train from its own config.
         let own: Vec<Config> = net.motors.iter().map(|d| motor_config(cfg, &d.id)).collect::<Result<_, _>>()?;
-        let gears = own.iter().map(Gearbox::from_config).collect::<Result<Vec<_>, _>>()?;
-        let j_rotor = own.iter().map(|c| Ok(c.positive("motor.rotor_inertia_kgm2")? + c.non_negative("gearbox.inertia_at_input_kgm2")?)).collect::<Result<Vec<f64>, ConfigError>>()?;
+        let mut gears = own.iter().map(Gearbox::from_config).collect::<Result<Vec<_>, _>>()?;
+        let mut j_rotor = own.iter().map(|c| Ok(c.positive("motor.rotor_inertia_kgm2")? + c.non_negative("gearbox.inertia_at_input_kgm2")?)).collect::<Result<Vec<f64>, ConfigError>>()?;
+        let mut shafts = own.iter().map(ShaftFriction::from_config).collect::<Result<Vec<_>, _>>()?;
+        let mut ripples = own.iter().map(Ripple::from_config).collect::<Result<Vec<_>, _>>()?;
+        let mut brakes = own.iter().zip(&j_rotor).map(|(c, j)| HoldingBrake::from_config(c, *j)).collect::<Result<Vec<_>, _>>()?;
+        let mut coupled: Vec<bool> = gears.iter().map(Gearbox::is_coupling).collect();
+        let mut extra_efficiency = vec![1.0; m];
+        // A screw, rack, linear motor or rotary: the drive train as the joint kit builds it, the converter behind the
+        // gearbox, which is then one in the axis's unit (see the module comment).
+        let guide_friction = cfg.bool("effects.guide_friction")?;
+        let mut direct = Vec::with_capacity(m);
+        for (kk, d) in net.motors.iter().enumerate() {
+            let Some(axis) = d.axis else {
+                direct.push(None);
+                continue;
+            };
+            let own = &own[kk];
+            let stroke = net.axes[axis].stroke;
+            let free = ShaftFriction { coulomb: 0.0, viscous: 0.0, smoothing: 1.0 };
+            let mut joint = RotaryJoint::with(own, free, HardStop { stiffness: 0.0, damping: 0.0 }, (0.0, stroke))?;
+            let ratio = joint.ratio();
+            let (kind, lever) = match &d.transmission {
+                Transmission::Screw { values } => {
+                    let screw = BallScrew::from_config(&values_config(own, cfg, "screw", values)?).map_err(|e| renamed(e, "screw", values))?;
+                    if screw.length < stroke {
+                        return Err(ConfigError::Invalid(format!("{values}.length_m (shorter than the stroke of axis {})", net.axes[axis].id)));
+                    }
+                    screw.converter(screw.softest_position()).apply(own, &mut joint)?;
+                    // The nut's preload drags as friction at the screw, at the rotor through the gearbox.
+                    if guide_friction {
+                        joint.shaft.coulomb += screw.preload_torque() / ratio;
+                    }
+                    let lever = 1.0 / screw.ratio();
+                    (DirectKind::Screw(screw), Some(lever))
+                }
+                Transmission::Rack { values } => {
+                    let rack = RackPinion::from_config(&values_config(own, cfg, "rack", values)?).map_err(|e| renamed(e, "rack", values))?;
+                    rack.converter().apply(own, &mut joint)?;
+                    let lever = rack.radius();
+                    (DirectKind::Rack(rack), Some(lever))
+                }
+                Transmission::LinearMotor { values } => {
+                    let view = values_config(own, cfg, "linear_motor", values)?;
+                    let motor = LinearMotor::from_config(&view).map_err(|e| renamed(e, "linear_motor", values))?;
+                    if ratio != 1.0 {
+                        let own_ratio = format!("gearbox.{}.ratio", d.id);
+                        let at = if cfg.get(&own_ratio).is_ok() { own_ratio } else { "gearbox.ratio".into() };
+                        return Err(ConfigError::Invalid(format!("{at} (motor {} is a linear motor: its gearbox is the forcer's mounting, ratio 1)", d.id)));
+                    }
+                    joint.ripple.cogging_order = motor.cogging_order();
+                    // The attraction presses the guides: its friction, as the joint kit adds it.
+                    if guide_friction {
+                        joint.shaft.coulomb += view.non_negative("linear_motor.guide_friction_coefficient").map_err(|e| renamed(e, "linear_motor", values))? * motor.attraction;
+                    }
+                    (DirectKind::Linear { attraction: motor.attraction, forcer: joint.rotor_inertia }, None)
+                }
+                Transmission::Rotary { strain_wave, .. } => {
+                    let read = |t: &String| StrainWave::from_config(&values_config(own, cfg, "strain_wave", t)?).map_err(|e| renamed(e, "strain_wave", t));
+                    (DirectKind::Rotary(strain_wave.as_ref().map(read).transpose()?), None)
+                }
+                Transmission::Belt => return Err(ConfigError::Invalid(format!("machine.motor[{}]", d.id))),
+            };
+            let RotaryJoint { gearbox, rotor_inertia, shaft, ripple, brake, extra_efficiency: extra, coupled: coupling, .. } = joint;
+            (gears[kk], j_rotor[kk], shafts[kk], ripples[kk], brakes[kk]) = (gearbox, rotor_inertia, shaft, ripple, brake);
+            (coupled[kk], extra_efficiency[kk]) = (coupling, extra);
+            direct.push(Some(Direct { axis, kind, lever, required_life: own.f64("ratings.required_life_h").ok() }));
+        }
         let axes = net
             .axes
             .iter()
             .map(|a| -> Result<AxisInfo, ConfigError> {
-                let limit = |name: &str| cfg.positive(&format!("axis.{}.{name}", a.id));
+                // A rotary axis's limits are in rad: max_velocity_rad_s.
+                let unit = if a.rotary { "rad" } else { "m" };
+                let limit = |what: &str, rate: &str| cfg.positive(&format!("axis.{}.max_{what}_{unit}_{rate}", a.id));
                 Ok(AxisInfo {
                     id: intern(&a.id),
                     key: intern(&a.key),
-                    unit: "m",
+                    unit,
                     min: 0.0,
                     max: a.stroke,
-                    max_vel: limit("max_velocity_m_s")?,
-                    max_acc: limit("max_acceleration_m_s2")?,
-                    max_jerk: limit("max_jerk_m_s3")?,
+                    max_vel: limit("velocity", "s")?,
+                    max_acc: limit("acceleration", "s2")?,
+                    max_jerk: limit("jerk", "s3")?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -387,22 +513,30 @@ impl ConfigMachine {
             })
             .collect();
         let r: Vec<f64> = net.motors.iter().map(|d| d.radius).collect();
-        // The rigid kinematics: F diag(r) K = C.
-        let fr: Vec<Vec<f64>> = sections.iter().map(|s| (0..m).map(|k| s.f[k] * r[k]).collect()).collect();
+        // The rigid kinematics: F diag(r) K = C, over the motors that drive belts (the columns of F).
+        let belted: Vec<usize> = (0..m).filter(|&kk| direct[kk].is_none()).collect();
+        let fr: Vec<Vec<f64>> = sections.iter().map(|s| belted.iter().map(|&k| s.f[k] * r[k]).collect()).collect();
         let mut k = vec![vec![0.0; n]; m];
-        for i in 0..n {
+        // Without belt sections (every motor drives its axis without a belt) there is nothing to solve.
+        for i in (0..n).filter(|_| !sections.is_empty()) {
             let column: Vec<f64> = sections.iter().map(|s| s.c[i]).collect();
             let solved = lstsq(&fr, &column).ok_or_else(|| ConfigError::Invalid("machine.section (the pulleys do not set every section)".into()))?;
-            for kk in 0..m {
-                k[kk][i] = solved[kk];
+            for (j, &kk) in belted.iter().enumerate() {
+                k[kk][i] = solved[j];
             }
         }
         for (s, row) in sections.iter().zip(&fr) {
             for i in 0..n {
-                let follows: f64 = (0..m).map(|kk| row[kk] * k[kk][i]).sum();
+                let follows: f64 = belted.iter().enumerate().map(|(j, &kk)| row[j] * k[kk][i]).sum();
                 if (follows - s.c[i]).abs() > 1e-9 * (1.0 + s.c[i].abs()) {
                     return Err(ConfigError::Invalid(format!("machine.section[{}].axes (the belt cannot keep its length)", &s.id["belt.".len()..])));
                 }
+            }
+        }
+        // A motor that drives an axis without a belt turns its "pulley" (the gearbox output, in the axis's unit) with it.
+        for (row, d) in k.iter_mut().zip(&direct) {
+            if let Some(d) = d {
+                *row = (0..n).map(|i| if i == d.axis { 1.0 } else { 0.0 }).collect();
             }
         }
         let mut k_inv = vec![vec![0.0; m]; n];
@@ -414,8 +548,15 @@ impl ConfigMachine {
             }
         }
         // The belt runs at pulley surface speed: its mass is shared out on the driven pulleys.
-        let belt_mass = belt.mass_per_m * sections.iter().map(|s| s.bare).sum::<f64>() / m as f64;
+        let belt_motors = direct.iter().filter(|d| d.is_none()).count().max(1);
+        let belt_mass = belt.mass_per_m * sections.iter().map(|s| s.bare).sum::<f64>() / belt_motors as f64;
         let payload_on = cfg.bool("effects.payload")?;
+        let mut turned = vec![(0.0, 0.0); n];
+        for d in &net.motors {
+            if let (Transmission::Rotary { inertia, payload, .. }, Some(axis)) = (&d.transmission, d.axis) {
+                turned[axis] = (*inertia, if payload_on { *payload } else { 0.0 });
+            }
+        }
         let guides = net
             .guides
             .iter()
@@ -465,6 +606,11 @@ impl ConfigMachine {
             None => None,
         };
         let mut jumps = Vec::new();
+        // shortcut: the jumps' states are laid out per motor; a motor without a pulley would need a gap there. Give the
+        // jump states to the belt motors only if a file needs tooth jump beside a screw.
+        if elastic && on("belt_tooth_jump")? && direct.iter().any(Option::is_some) {
+            return Err(ConfigError::Invalid("effects.belt_tooth_jump (not with a screw, rack, linear motor or rotary yet)".into()));
+        }
         if elastic && on("belt_tooth_jump")? {
             for (kk, d) in net.motors.iter().enumerate() {
                 let side = |f: f64| -> Result<usize, ConfigError> {
@@ -497,15 +643,15 @@ impl ConfigMachine {
             bodies: net.bodies.iter().map(|b| Body { mass: b.mass, payload: if payload_on { b.payload } else { 0.0 }, axes: b.axes.clone() }).collect(),
             motors: net.motors.iter().map(|d| MotorInfo { id: intern(&d.id), key: intern(&d.key) }).collect(),
             r_mat: r.iter().map(|r| belt.rest_length(*r)).collect(),
-            j_pulley: net.motors.iter().map(|d| d.inertia + belt_mass * d.radius * d.radius).collect(),
+            j_pulley: net.motors.iter().zip(&direct).map(|(d, x)| if x.is_some() { 0.0 } else { d.inertia + belt_mass * d.radius * d.radius }).collect(),
             pulley_at: net.motors.iter().map(|d| d.at).collect(),
             r,
             k,
             k_inv,
             ratio: gears.iter().map(|g| g.ratio).collect(),
-            shafts: own.iter().map(ShaftFriction::from_config).collect::<Result<_, _>>()?,
-            ripples: own.iter().map(Ripple::from_config).collect::<Result<_, _>>()?,
-            brakes: own.iter().zip(&j_rotor).map(|(c, j)| HoldingBrake::from_config(c, *j)).collect::<Result<_, _>>()?,
+            shafts,
+            ripples,
+            brakes,
             j_rotor,
             gears,
             mesh: ToothMesh::from_config(cfg)?,
@@ -529,7 +675,34 @@ impl ConfigMachine {
             axes,
             payload_attached: true,
             brake_engaged: false,
+            direct,
+            coupled,
+            extra_efficiency,
+            turned,
         })
+    }
+
+    /// The angle and speed of motor kk's gearbox output in the elastic model: its pulley's, or the axis's that its
+    /// screw, rack, linear motor or rotary drives.
+    fn output(&self, s: &[f64], kk: usize) -> (f64, f64) {
+        let (n, v) = (self.n(), self.vel());
+        match &self.direct[kk] {
+            Some(d) => (s[d.axis], s[v + d.axis]),
+            None => (s[n + kk], s[v + n + kk]),
+        }
+    }
+    /// The belt's tooth mesh force at motor kk's pulley; none where it drives no pulley.
+    fn mesh_force(&self, kk: usize, x: f64) -> f64 {
+        if self.direct[kk].is_some() { 0.0 } else { self.mesh.force(x) }
+    }
+    /// A screw, rack, linear motor or rotary drives axis i.
+    fn driven(&self, i: usize) -> bool {
+        self.direct.iter().flatten().any(|d| d.axis == i)
+    }
+    /// What presses on axis i's guide beside the weights: a linear motor's attraction and its forcer's weight.
+    fn pressed(&self, i: usize) -> f64 {
+        let on = |d: &&Direct| d.axis == i;
+        self.direct.iter().flatten().filter(on).map(|d| if let DirectKind::Linear { attraction, forcer } = d.kind { attraction + forcer * self.g_across[i] } else { 0.0 }).sum()
     }
 
     fn n(&self) -> usize {
@@ -563,9 +736,10 @@ impl ConfigMachine {
     fn body_mass(&self, b: &Body) -> f64 {
         b.mass + if self.payload_attached { b.payload } else { 0.0 }
     }
-    /// The bodies' mass on each axis.
+    /// The bodies' mass on each axis; on a rotary axis its rotary's inertia (with the payload's while attached).
     fn mass(&self) -> Vec<f64> {
-        (0..self.n()).map(|i| self.bodies.iter().filter(|b| b.axes[i]).map(|b| self.body_mass(b)).sum()).collect()
+        let turned = |i: usize| self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
+        (0..self.n()).map(|i| self.bodies.iter().filter(|b| b.axes[i]).map(|b| self.body_mass(b)).sum::<f64>() + turned(i)).collect()
     }
     /// The mass matrix of the axes at q: the bodies, the cable chains and the idlers.
     fn axis_mass(&self, q: &[f64]) -> Vec<Vec<f64>> {
@@ -757,11 +931,19 @@ impl ConfigMachine {
         out[..v].copy_from_slice(&s[v..2 * v]);
         let (gravity, (idlers, _), drag) = (self.gravity(), self.idler_friction(vq), self.chain_drag(vq));
         let (u, du) = self.sway(s);
+        // What the screws, racks, linear motors and rotaries pass to their axes: their gearbox's output.
+        let mut driven = vec![0.0; n];
+        for (kk, d) in self.direct.iter().enumerate() {
+            if let Some(d) = d {
+                let (theta, w_theta) = self.output(s, kk);
+                driven[d.axis] += self.gears[kk].torque(s[n + m + kk], s[v + n + m + kk], theta, w_theta).output;
+            }
+        }
         // What the frame and the things on it put on the axes: it takes all of it back.
         let mut force: Vec<f64> = (0..n)
             .map(|i| {
                 let belt: f64 = self.sections.iter().zip(&sec).map(|(x, f)| -x.c[i] * f.tension).sum();
-                belt - friction[i] + idlers[i] - drag[i] + self.stop_force(i, q[i], vq[i]) + gravity[i]
+                belt - friction[i] + idlers[i] - drag[i] + self.stop_force(i, q[i], vq[i]) + gravity[i] + driven[i]
             })
             .collect();
         let (chain, chain_on_frame) = self.chain_inertia(vq, du);
@@ -778,22 +960,28 @@ impl ConfigMachine {
         }
         out[v..v + n].copy_from_slice(&acc);
         for kk in 0..m {
-            let (theta, w_theta, phi, w_phi) = (s[n + kk], s[v + n + kk], s[n + m + kk], s[v + n + m + kk]);
+            let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
+            let (theta, w_theta) = self.output(s, kk);
             let gear = self.gears[kk].torque(phi, w_phi, theta, w_theta);
-            let belt: f64 = self.r_mat[kk] * self.sections.iter().zip(&sec).map(|(x, f)| x.f[kk] * f.material).sum::<f64>();
-            let r = self.r[kk];
-            // While its teeth are out of mesh the pulley feels only the ridge it holds the sliding belt back with.
-            let (on_pulley, j_pulley) = match self.jumps.get(kk) {
-                Some((jump, ..)) => {
-                    let slip = &s[self.jump_at(kk)..];
-                    (jump.pulley_torque(slip, belt, r), jump.pulley_inertia(slip, self.j_pulley[kk], r))
+            if let Some(d) = &self.direct[kk] {
+                // Its pulley is the axis: the pulley's states follow it.
+                out[v + n + kk] = out[v + d.axis];
+            } else {
+                let belt: f64 = self.r_mat[kk] * self.sections.iter().zip(&sec).map(|(x, f)| x.f[kk] * f.material).sum::<f64>();
+                let r = self.r[kk];
+                // While its teeth are out of mesh the pulley feels only the ridge it holds the sliding belt back with.
+                let (on_pulley, j_pulley) = match self.jumps.get(kk) {
+                    Some((jump, ..)) => {
+                        let slip = &s[self.jump_at(kk)..];
+                        (jump.pulley_torque(slip, belt, r), jump.pulley_inertia(slip, self.j_pulley[kk], r))
+                    }
+                    None => (belt, self.j_pulley[kk]),
+                };
+                out[v + n + kk] = (gear.output + on_pulley + r * self.mesh.force(r * theta)) / j_pulley;
+                if let Some((jump, ..)) = self.jumps.get(kk) {
+                    let at = self.jump_at(kk);
+                    jump.rates(&s[at..], belt / r, r * out[v + n + kk], &mut out[at..]);
                 }
-                None => (belt, self.j_pulley[kk]),
-            };
-            out[v + n + kk] = (gear.output + on_pulley + r * self.mesh.force(r * theta)) / j_pulley;
-            if let Some((jump, ..)) = self.jumps.get(kk) {
-                let at = self.jump_at(kk);
-                jump.rates(&s[at..], belt / r, r * out[v + n + kk], &mut out[at..]);
             }
             let (brake, brake_rate) = self.brakes[kk].torque(self.brake_engaged, w_phi, s[ba + kk]);
             out[v + n + m + kk] = (self.ripples[kk].apply(torque[kk], phi) - gear.rotor - self.shafts[kk].torque(w_phi) - brake) / self.j_rotor[kk];
@@ -817,7 +1005,7 @@ impl ConfigMachine {
         let (gravity, (idlers, _), drag, (chain, _), process) = (self.gravity(), self.idler_friction(v), self.chain_drag(v), self.chain_inertia(v, 0.0), self.process_force());
         let base: Vec<f64> = (0..n)
             .map(|i| {
-                let mesh: f64 = (0..m).map(|kk| self.r[kk] * self.mesh.force(self.r[kk] * angle[kk] / self.ratio[kk]) * self.k[kk][i]).sum();
+                let mesh: f64 = (0..m).map(|kk| self.r[kk] * self.mesh_force(kk, self.r[kk] * angle[kk] / self.ratio[kk]) * self.k[kk][i]).sum();
                 mesh - friction[i] + self.stop_force(i, q[i], v[i]) + gravity[i] + idlers[i] - drag[i] + chain[i] + process[i]
             })
             .collect();
@@ -881,7 +1069,7 @@ impl ConfigMachine {
         let kinetic = quadratic(&self.axis_mass(q), &ground) + turning + frame[0];
         let (geo, mat) = (self.geo(q), self.mat(s));
         let belt: f64 = geo.iter().zip(&mat).map(|(g, l)| self.belt.energy(*g, *l)).sum();
-        let gears: f64 = (0..m).map(|kk| self.gears[kk].energy(s[n + m + kk], s[n + kk])).sum();
+        let gears: f64 = (0..m).map(|kk| self.gears[kk].energy(s[n + m + kk], self.output(s, kk).0)).sum();
         [kinetic, potential, stops + belt + gears + frame[1]]
     }
 
@@ -898,12 +1086,13 @@ impl ConfigMachine {
         let (mut belt, mut tool_v) = (0.0, vq.to_vec());
         if self.elastic {
             for kk in 0..m {
-                let (theta, w_theta, phi, w_phi) = (s[n + kk], s[v + n + kk], s[n + m + kk], s[v + n + m + kk]);
+                let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
+                let (theta, w_theta) = self.output(s, kk);
                 let gear = self.gears[kk].torque(phi, w_phi, theta, w_theta);
                 gear_loss[kk] = gear.rotor - gear.output / self.ratio[kk];
                 gear_power[kk] = self.gears[kk].loss_power(phi, w_phi, theta, w_theta);
                 brake[kk] = self.brakes[kk].torque(self.brake_engaged, w_phi, s[self.brake_at() + kk]).0;
-                mesh_in += self.r[kk] * self.mesh.force(self.r[kk] * theta) * w_theta;
+                mesh_in += self.r[kk] * self.mesh_force(kk, self.r[kk] * theta) * w_theta;
             }
             let (geo, mat, (_, rate)) = (self.geo(q), self.mat(s), self.fed(s));
             for (i, sec) in self.sections.iter().enumerate() {
@@ -919,7 +1108,7 @@ impl ConfigMachine {
                 brake[kk] = self.brakes[kk].torque(self.brake_engaged, speed[kk], s[self.brake_at() + kk]).0;
                 gear_loss[kk] = (solved.into[kk] - solved.out[kk]) / self.ratio[kk];
                 gear_power[kk] = gear_loss[kk] * speed[kk];
-                mesh_in += self.mesh.force(self.r[kk] * angle[kk] / self.ratio[kk]) * self.r[kk] * self.pulley_angle(kk, vq);
+                mesh_in += self.mesh_force(kk, self.r[kk] * angle[kk] / self.ratio[kk]) * self.r[kk] * self.pulley_angle(kk, vq);
             }
         }
         let mut powers: Vec<f64> = self.guides.iter().map(|g| friction[g.axis] * vq[g.axis]).collect();
@@ -1004,8 +1193,8 @@ impl ConfigMachine {
         for motor in &self.motors {
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_{}", motor.id), motor.key, "quantity-shaft-friction-power", "W"));
         }
-        for (motor, gear) in self.motors.iter().zip(&self.gears) {
-            let quantity = if gear.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+        for (motor, coupled) in self.motors.iter().zip(&self.coupled) {
+            let quantity = if *coupled { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", motor.id), motor.key, quantity, "W"));
         }
         if !self.idlers.is_empty() {
@@ -1045,7 +1234,7 @@ impl ConfigMachine {
         let (mut angle, mut speed) = (vec![0.0; m], vec![0.0; m]);
         self.motor_state(s, &mut angle, &mut speed);
         let mut excitations = Vec::with_capacity(3 * m);
-        for kk in 0..m {
+        for kk in (0..m).filter(|&kk| self.direct[kk].is_none()) {
             let pulley = if self.elastic { s[self.vel() + n + kk] } else { speed[kk] / self.ratio[kk] };
             drive_excitations(self.mesh.pitch, self.r[kk] * pulley, &self.ripples[kk], speed[kk], &mut excitations);
         }
@@ -1073,6 +1262,12 @@ impl ConfigMachine {
                 }
             }
         }
+        // A screw's, rack's, linear motor's or rotary's gearbox (with its converter) holds its axis on the rotor.
+        for (kk, d) in self.direct.iter().enumerate() {
+            if let Some(d) = d {
+                stiffness[d.axis][d.axis] += self.gears[kk].stiffness;
+            }
+        }
         if let Some(f) = &self.frame {
             // The frame's coordinate moves the bodies along its axis with it.
             for i in 0..n {
@@ -1087,7 +1282,8 @@ impl ConfigMachine {
     /// Where the scene draws a pose: each axis runs from the origin along its incline in the x-z plane.
     fn scene_at(&self, q: &[f64], moves: &[bool]) -> [f64; 3] {
         let mut p = [0.0, -0.03, 0.06];
-        for i in (0..self.n()).filter(|i| moves[*i]) {
+        // A rotary axis turns its table in place.
+        for i in (0..self.n()).filter(|i| moves[*i] && self.axes[*i].unit == "m") {
             // Up by the incline, and across: the first axis along x, the others along y.
             let (up, across) = self.incline[i].sin_cos();
             p[if i == 0 { 0 } else { 1 }] += q[i] * across;
@@ -1100,6 +1296,35 @@ impl ConfigMachine {
     fn pulley_scene_at(&self, kk: usize) -> [f64; 3] {
         let end = self.axes[0].max;
         self.pulley_at[kk].unwrap_or([if kk % 2 == 0 { -0.1 } else { end + 0.1 }, -0.05, -0.15 * (kk / 2) as f64])
+    }
+    /// A screw, rack or magnet track along its axis from 0 to its stroke, carried by what carries the axis (the first
+    /// body it moves, without its own travel), with the motor at the 0 end; a rotary as a disc where the motor's pulley
+    /// would be, its mark turned with the axis. Where the motor's label goes.
+    fn direct_scene(&self, kk: usize, d: &Direct, q: &[f64], out: &mut Scene) -> [f64; 3] {
+        let motor = [0.9, 0.45, 0.1];
+        let id = match d.kind {
+            DirectKind::Screw(_) => "screw",
+            DirectKind::Rack(_) => "rack",
+            DirectKind::Linear { .. } => "magnet-track",
+            DirectKind::Rotary(_) => {
+                let at = self.pulley_scene_at(kk);
+                out.parts.push(Part::new("table", Shape::Cylinder { radius: 0.15, length: 0.04 }, at, [0.55, 0.55, 0.6]));
+                out.parts.push(Part::new("index-mark", Shape::Box { size: [0.27, 0.004, 0.02] }, [at[0], at[1] - 0.025, at[2]], [0.1, 0.1, 0.1]).turned(q[d.axis]));
+                out.parts.push(Part::new(MOTOR_PART, Shape::Cylinder { radius: 0.04, length: 0.1 }, [at[0], at[1], at[2] - 0.1], motor));
+                return at;
+            }
+        };
+        let moves = self.bodies.iter().find(|b| b.axes[d.axis]).map_or_else(|| vec![false; self.n()], |b| b.axes.clone());
+        let mut pose = q.to_vec();
+        pose[d.axis] = 0.0;
+        let start = self.scene_at(&pose, &moves);
+        pose[d.axis] = self.axes[d.axis].max;
+        let end = self.scene_at(&pose, &moves);
+        out.parts.push(Part::new(id, Shape::Segment { to: end, width: 0.02 }, start, [0.75, 0.75, 0.78]));
+        // A linear motor's forcer rides on the carriage.
+        let motor_at = if matches!(d.kind, DirectKind::Linear { .. }) { self.scene_at(q, &moves) } else { start };
+        out.parts.push(Part::new(MOTOR_PART, Shape::Cylinder { radius: 0.04, length: 0.1 }, motor_at, motor));
+        motor_at
     }
     fn idler_scene_at(&self, d: &Idler, q: &[f64]) -> [f64; 3] {
         let at = d.at.unwrap_or_default();
@@ -1171,7 +1396,7 @@ impl Machine for ConfigMachine {
             let at_pulley = lstsq(&kt, &gravity.iter().map(|g| -g).collect::<Vec<_>>()).unwrap_or_else(|| vec![0.0; m]);
             for kk in 0..m {
                 let angle = self.ratio[kk] * self.pulley_angle(kk, tool);
-                let shaft = (at_pulley[kk] - self.r[kk] * self.mesh.force(self.r[kk] * angle / self.ratio[kk])) / self.ratio[kk];
+                let shaft = (at_pulley[kk] - self.r[kk] * self.mesh_force(kk, self.r[kk] * angle / self.ratio[kk])) / self.ratio[kk];
                 torque[kk] = self.ripples[kk].invert(shaft, angle);
             }
             return;
@@ -1179,14 +1404,15 @@ impl Machine for ConfigMachine {
         // The tensions at rest: they hold every axis against gravity, sum_s c_si T_s = gravity_i, and each closed belt
         // keeps its material, sum over its sections of L_s / (1 + T_s / EA) = what it had at q = 0. Newton from the
         // pretension; the first equations are linear, the others nearly so. The frame stands at 0: nothing pulls along
-        // its horizontal axis.
+        // its horizontal axis. An axis a screw, rack, linear motor or rotary drives is held by that, not by the belt.
         let geo = self.geo(tool);
         let (ea, slack) = (self.belt.ea, self.belt.slack);
         let taut = |t: f64| if slack { t.max(0.0) } else { t };
         let mut tension = vec![self.belt.pretension; self.sections.len()];
+        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
         for _ in 0..50 {
-            let mut jac: Vec<Vec<f64>> = (0..n).map(|i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
-            let mut res: Vec<f64> = (0..n).map(|i| gravity[i] - dot(&jac[i], &tension)).collect();
+            let mut jac: Vec<Vec<f64>> = belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
+            let mut res: Vec<f64> = belt_held.iter().zip(&jac).map(|(&i, row)| gravity[i] - dot(row, &tension)).collect();
             for belt in &self.loops {
                 let mut row = vec![0.0; self.sections.len()];
                 let mut held = 0.0;
@@ -1205,14 +1431,24 @@ impl Machine for ConfigMachine {
             }
         }
         let mat: Vec<f64> = geo.iter().zip(&tension).map(|(g, t)| g / (1.0 + taut(*t) / ea)).collect();
-        let fed: Vec<Vec<f64>> = self.sections.iter().map(|s| (0..m).map(|kk| s.f[kk] * self.r_mat[kk]).collect()).collect();
+        // The belt motors' pulley angles that feed that material (a motor without a pulley feeds none).
+        let belted: Vec<usize> = (0..m).filter(|&kk| self.direct[kk].is_none()).collect();
+        let fed: Vec<Vec<f64>> = self.sections.iter().map(|s| belted.iter().map(|&kk| s.f[kk] * self.r_mat[kk]).collect()).collect();
         let change: Vec<f64> = self.sections.iter().zip(&mat).map(|(s, l)| l - s.mat0).collect();
-        let angles = lstsq(&fed, &change).unwrap_or_else(|| vec![0.0; m]);
+        let mut angles = vec![0.0; m];
+        for (&kk, a) in belted.iter().zip(lstsq(&fed, &change).unwrap_or_else(|| vec![0.0; belted.len()])) {
+            angles[kk] = a;
+        }
         let material: Vec<f64> = geo.iter().zip(&mat).map(|(g, l)| self.belt.section(*g, *l, 0.0, 0.0).material).collect();
         for kk in 0..m {
-            let theta = angles[kk];
-            let belt: f64 = self.r_mat[kk] * self.sections.iter().zip(&material).map(|(s, f)| s.f[kk] * f).sum::<f64>();
-            let gear = -belt - self.r[kk] * self.mesh.force(self.r[kk] * theta);
+            let (theta, gear) = match &self.direct[kk] {
+                // The axis's force balance: the gearbox's output, the belt's pull and gravity.
+                Some(d) => (tool[d.axis], self.sections.iter().zip(&tension).map(|(s, t)| s.c[d.axis] * taut(*t)).sum::<f64>() - gravity[d.axis]),
+                None => {
+                    let belt: f64 = self.r_mat[kk] * self.sections.iter().zip(&material).map(|(s, f)| s.f[kk] * f).sum::<f64>();
+                    (angles[kk], -belt - self.r[kk] * self.mesh.force(self.r[kk] * angles[kk]))
+                }
+            };
             let phi = self.ratio[kk] * (theta + self.gears[kk].static_twist(gear));
             state[n + kk] = theta;
             state[n + m + kk] = phi;
@@ -1280,8 +1516,10 @@ impl Machine for ConfigMachine {
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let (n, mass, gravity) = (self.n(), self.axis_mass(pos), self.gravity());
         let geo = self.geo(pos);
-        let mut a: Vec<Vec<f64>> = (0..n).map(|i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
-        let mut b: Vec<f64> = (0..n).map(|i| -(dot(&mass[i], acc) - gravity[i])).collect();
+        // An axis a screw, rack, linear motor or rotary drives takes its force from that.
+        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
+        let mut a: Vec<Vec<f64>> = belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
+        let mut b: Vec<f64> = belt_held.iter().map(|&i| -(dot(&mass[i], acc) - gravity[i])).collect();
         // Each closed belt keeps its length.
         for belt in &self.loops {
             a.push((0..self.sections.len()).map(|s| if belt.contains(&s) { geo[s] } else { 0.0 }).collect());
@@ -1350,9 +1588,10 @@ impl Machine for ConfigMachine {
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some((laws, viscous)) = &self.thermal else { return };
         let mut next = rises.iter();
-        for (gear, law) in self.gears.iter_mut().zip(laws) {
-            if !gear.is_coupling() {
-                gear.efficiency = law.gearbox_efficiency(*next.next().unwrap_or(&0.0));
+        // A screw's or rack's share of the efficiency stays what it is.
+        for (kk, (gear, law)) in self.gears.iter_mut().zip(laws).enumerate() {
+            if !self.coupled[kk] {
+                gear.efficiency = law.gearbox_efficiency(*next.next().unwrap_or(&0.0)) * self.extra_efficiency[kk];
             }
         }
         for (g, base) in self.guides.iter_mut().zip(viscous) {
@@ -1370,7 +1609,8 @@ impl Machine for ConfigMachine {
             out.push(SignalInfo::new("frame.deflection", "frame", "quantity-deflection", "m"));
         }
         out.push(SignalInfo::new("belt.slack_time", "group-belt", "quantity-slack-time", "s"));
-        for motor in &self.motors {
+        // Only a motor that turns a pulley has one: the verdicts judge belt teeth and pulley bearings where it does.
+        for (motor, _) in self.motors.iter().zip(&self.direct).filter(|(_, d)| d.is_none()) {
             out.push(SignalInfo::new(format!("pulley.{}.radial_load", motor.id), motor.key, "quantity-radial-load", "N"));
         }
         for g in &self.guides {
@@ -1389,7 +1629,36 @@ impl Machine for ConfigMachine {
             out.extend(self.spans.iter().map(|p| SignalInfo::new(format!("belt.span.{}.frequency", p.id), p.key, "quantity-span-frequency", "Hz")));
             out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
         }
+        // Named by the motor, as the joint kit names them by its joint (`joint.1.force`, `screw.1.speed`).
+        for (kk, d) in self.direct.iter().enumerate() {
+            let Some(d) = d else { continue };
+            let (motor, axis) = (&self.motors[kk], &self.axes[d.axis]);
+            out.push(SignalInfo::new(format!("joint.{}.force", motor.id), axis.key, "quantity-joint-force", if axis.unit == "m" { "N" } else { "N m" }));
+            match &d.kind {
+                DirectKind::Screw(screw) => out.extend(screw.signal_infos(motor.id, motor.key)),
+                DirectKind::Rack(rack) => out.push(rack.signal_info(motor.id, motor.key)),
+                DirectKind::Rotary(Some(gear)) => out.push(gear.signal_info(motor.id, motor.key)),
+                _ => {}
+            }
+        }
         self.effect_infos(&mut out);
+        out
+    }
+
+    /// The checks of the screws (speed, d n, buckling, static load, life), racks (feed force) and strain wave gears
+    /// (life, where the motor's ratings.required_life_h is set), as the joint kit judges them.
+    fn rating_checks(&self) -> Vec<RatingCheck> {
+        let mut out = Vec::new();
+        for (kk, d) in self.direct.iter().enumerate() {
+            let Some(d) = d else { continue };
+            let id = self.motors[kk].id;
+            match &d.kind {
+                DirectKind::Screw(screw) => out.extend(screw.rating_checks(id, kk, d.required_life)),
+                DirectKind::Rack(rack) => out.extend(rack.rating_checks(id, kk)),
+                DirectKind::Rotary(Some(gear)) => out.extend(d.required_life.map(|life| gear.rating_check(id, kk, life))),
+                _ => {}
+            }
+        }
         out
     }
 
@@ -1408,7 +1677,7 @@ impl Machine for ConfigMachine {
     /// body it carries (or its overhang).
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         let mut parts = Vec::new();
-        for (kk, motor) in self.motors.iter().enumerate().filter(|(kk, _)| !self.gears[*kk].is_coupling()) {
+        for (kk, motor) in self.motors.iter().enumerate().filter(|(kk, _)| !self.coupled[*kk]) {
             parts.push(ThermalPart { id: intern(&format!("gearbox_{}", motor.id)), kind: "gearbox", owner_key: motor.key, scene_part: "gearbox", scene_index: kk });
         }
         for g in &self.guides {
@@ -1428,8 +1697,14 @@ impl Machine for ConfigMachine {
         let (friction, _) = self.friction(q, vq, &s[fa..fa + n], torque);
         let tensions = self.tensions(s);
         let (stretch, slack, outputs) = if self.elastic {
-            let stretch: Vec<f64> = (0..n).map(|i| q[i] - dot(&self.k_inv[i], &s[n..n + m])).collect();
-            let outputs = (0..m).map(|kk| self.gears[kk].torque(s[n + m + kk], s[self.vel() + n + m + kk], s[n + kk], s[self.vel() + n + kk]).output).collect();
+            let angles: Vec<f64> = (0..m).map(|kk| self.output(s, kk).0).collect();
+            let stretch: Vec<f64> = (0..n).map(|i| q[i] - dot(&self.k_inv[i], &angles)).collect();
+            let outputs: Vec<f64> = (0..m)
+                .map(|kk| {
+                    let (theta, w_theta) = self.output(s, kk);
+                    self.gears[kk].torque(s[n + m + kk], s[self.vel() + n + m + kk], theta, w_theta).output
+                })
+                .collect();
             (stretch, s[self.slack_at()], outputs)
         } else {
             (vec![0.0; n], 0.0, self.rigid_solve(s, torque).out)
@@ -1442,17 +1717,37 @@ impl Machine for ConfigMachine {
             out.push(self.sway(s).0);
         }
         out.push(slack);
-        for kk in 0..m {
+        for kk in (0..m).filter(|&kk| self.direct[kk].is_none()) {
             out.push(self.sections.iter().zip(&tensions).filter(|(sec, _)| sec.f[kk] != 0.0).map(|(_, t)| t).sum());
         }
         let acc = if self.guides.iter().any(|g| g.overhang.is_some()) { self.commanded_acc(torque) } else { vec![0.0; n] };
-        out.extend(self.guides.iter().map(|g| self.guide_load(g, q, &acc)));
-        out.extend(outputs);
+        out.extend(self.guides.iter().map(|g| self.guide_load(g, q, &acc) + self.pressed(g.axis)));
+        // Behind a screw or rack the gearbox's own output, ahead of the converter: more than the force times the lever
+        // while it drives, less while the load drives it back (as the joint kit).
+        out.extend((0..m).map(|kk| match &self.direct[kk] {
+            Some(Direct { axis, lever: Some(lever), .. }) => {
+                let (force, e) = (outputs[kk], self.extra_efficiency[kk]);
+                force * lever * if force * vq[*axis] >= 0.0 { 1.0 / e } else { e }
+            }
+            _ => outputs[kk],
+        }));
         for kk in 0..self.jumps.len() {
             out.extend([s[self.jump_at(kk) + 4], s[self.jump_at(kk)]]);
         }
         if let Some(mass) = self.span_mass {
             self.span_signals(s, mass, out);
+        }
+        // The screws', racks' and strain wave gears' own signals, from the force each passes to its axis.
+        for (kk, d) in self.direct.iter().enumerate() {
+            let Some(d) = d else { continue };
+            let (force, speed) = (outputs[kk], vq[d.axis]);
+            out.push(force);
+            match &d.kind {
+                DirectKind::Screw(screw) => screw.signals(speed, force, out),
+                DirectKind::Rack(_) => out.push(RackPinion::feed_force(force, speed, self.extra_efficiency[kk])),
+                DirectKind::Rotary(Some(gear)) => out.push(gear.signal(force, speed * self.ratio[kk])),
+                _ => {}
+            }
         }
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
@@ -1482,17 +1777,23 @@ impl Machine for ConfigMachine {
             out.parts.push(Part::new("carriage", Shape::Box { size: [0.16, 0.05, 0.03] }, at, [shade, shade + 0.02, shade + 0.06]));
         }
         for kk in 0..m {
-            let at = self.pulley_scene_at(kk);
-            let pulley = if self.elastic { s[n + kk] } else { rotor[kk] / self.ratio[kk] };
-            drive_unit(&mut out.parts, [at[0], at[2]], at[1], self.r[kk], -pulley, -rotor[kk], [0.9, 0.45, 0.1]);
+            let at = match &self.direct[kk] {
+                Some(d) => self.direct_scene(kk, d, q, out),
+                None => {
+                    let at = self.pulley_scene_at(kk);
+                    let pulley = if self.elastic { s[n + kk] } else { rotor[kk] / self.ratio[kk] };
+                    drive_unit(&mut out.parts, [at[0], at[2]], at[1], self.r[kk], -pulley, -rotor[kk], [0.9, 0.45, 0.1]);
+                    at
+                }
+            };
             out.labels.push(Label { pos: [at[0], at[1], at[2] + 0.11], owner_key: self.motors[kk].key, value: rotor_speed[kk] * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 });
         }
         for d in &self.idlers {
             let at = self.idler_scene_at(d, q);
             idler(&mut out.parts, [at[0], at[2]], at[1], d.radius, -dot(&d.speed, q) / d.radius);
         }
-        // A machine without idler nodes and one motor gets the idler at the far end the single axis has.
-        if m == 1 && self.idlers.is_empty() {
+        // A machine without idler nodes and one belt motor gets the idler at the far end the single axis has.
+        if m == 1 && self.idlers.is_empty() && self.direct[0].is_none() {
             idler(&mut out.parts, [end + 0.1, 0.0], -0.05, self.r[0], 0.0);
         }
         let tensions = self.tensions(s);
@@ -1506,7 +1807,8 @@ impl Machine for ConfigMachine {
         for (i, axis) in self.axes.iter().enumerate() {
             let moves: Vec<bool> = (0..n).map(|l| l <= i).collect();
             let at = self.scene_at(q, &moves);
-            out.labels.push(Label { pos: [at[0], at[1], at[2] + 0.16 + 0.06 * i as f64], owner_key: axis.key, value: q[i], unit_key: "unit-m", decimals: 3 });
+            let (value, unit_key, decimals) = if axis.unit == "m" { (q[i], "unit-m", 3) } else { (q[i].to_degrees(), "unit-deg", 1) };
+            out.labels.push(Label { pos: [at[0], at[1], at[2] + 0.16 + 0.06 * i as f64], owner_key: axis.key, value, unit_key, decimals });
         }
     }
 
