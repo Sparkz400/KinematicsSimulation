@@ -1,0 +1,8 @@
+# GitHub Actions only: Cargo dependencies are pinned with "=" and upgraded by hand (CONTRIBUTING.md, rule 6),
+# because each upgrade needs a new THIRD-PARTY-LICENSES.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

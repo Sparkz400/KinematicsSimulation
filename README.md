@@ -1,8 +1,15 @@
 # Gantry physics simulator
 
+[![CI](https://github.com/Sparkz400/KinematicsSimulation/actions/workflows/ci.yml/badge.svg)](https://github.com/Sparkz400/KinematicsSimulation/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Sparkz400/KinematicsSimulation?include_prereleases)](https://github.com/Sparkz400/KinematicsSimulation/releases)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
+
+![The T-gantry in the 3D view](docs/images/3d-view.png)
+
 A simulator of belt-driven gantries in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
 It has two machines, a two-motor T-gantry (X and Z on one belt) and a single belt axis, behind four front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server for a PLC, and an FMI 2.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
+**Quick start:** download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
 Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](docs/de/benutzerhandbuch.md).
 
 ## What it can and cannot tell you

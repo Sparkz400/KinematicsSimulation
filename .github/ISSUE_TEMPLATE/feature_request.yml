@@ -1,0 +1,21 @@
+name: Feature request
+description: A new effect, machine, catalogue part or front-end feature
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to find out or do
+      description: The question about your machine the simulator cannot answer today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work. For a new effect, the model you have in mind and where its parameters come from.
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources
+      description: Datasheets, papers or measurements that would back the numbers.
