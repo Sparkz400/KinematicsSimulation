@@ -816,8 +816,9 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     }
     let _ = sim.command(Command::Stop);
     let duration = sim.time() - start;
-    // Stopped before a measured pass ended (a trip, or a crash): not converged.
-    let warm_start = warm.then(|| WarmStart { passes: passes.saturating_sub(2), change: f64::INFINITY });
+    // Stopped before a measured pass ended (a trip, or a crash): not converged, where a warm pass had begun; before
+    // that the run was measured from cold.
+    let warm_start = (warm && passes > 2).then(|| WarmStart { passes: passes - 2, change: f64::INFINITY });
     Ok(CycleLoad { warm_start, ..tally.finish(sim, duration) })
 }
 
@@ -848,7 +849,7 @@ pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, view
             return Ok(load);
         }
         if !sim.control.enabled() {
-            return Ok(CycleLoad { warm_start: Some(WarmStart { passes, change: f64::INFINITY }), ..load });
+            return Ok(CycleLoad { warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY }), ..load });
         }
         if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
             return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
@@ -1123,8 +1124,9 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         }
     }
     // How the measured pass was started (effects.thermal_warm_start): the most a rise it started at lies from the one it
-    // settles at, against the warm start's tolerance. No row: from cold.
-    if let Some(warm) = load.warm_start {
+    // settles at, against the warm start's tolerance. No row: from cold, or a change without a value (a run that stopped,
+    // a winding that does not settle), whose cause fails a verdict of its own (the trip's, the crash's, motor-thermal).
+    if let Some(warm) = load.warm_start.filter(|w| w.change.is_finite()) {
         out.push(at_most("thermal-warm-start", None, warm.change, WARM_START_TOLERANCE_K));
     }
     Ok(out)

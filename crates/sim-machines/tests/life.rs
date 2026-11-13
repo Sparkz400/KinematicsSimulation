@@ -17,7 +17,13 @@ use sim_machines::MACHINES;
 #[test]
 fn the_life_loads_are_the_signals_added_up() {
     for entry in MACHINES.iter().copied() {
-        let cfg = entry.config();
+        // Cold: the signals are added up over one run from the start, and with effects.thermal_warm_start the analysis
+        // measures the last of its passes, which begins after a way back and a rest with the windings warm. Nothing
+        // here judges a temperature. A config without the key starts cold anyway.
+        let mut cfg = entry.config();
+        if cfg.get("effects.thermal_warm_start").is_ok() {
+            cfg.set_text("effects.thermal_warm_start = false").unwrap();
+        }
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
         let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap_or_else(|e| panic!("{}: {e:?}", entry.id));
