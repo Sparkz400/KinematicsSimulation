@@ -83,5 +83,6 @@ shaper2_damping = 0.03
 torque_reserve = 0.8
 # Read but not used: no belt.
 tension_reserve = 0.8
+tension_margin_n = 0.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
