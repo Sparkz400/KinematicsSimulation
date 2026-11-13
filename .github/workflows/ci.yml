@@ -15,7 +15,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The toolchain the project is built and tested with locally; clippy's lints change between releases.
       - uses: dtolnay/rust-toolchain@master
@@ -76,7 +76,7 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
@@ -103,7 +103,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
