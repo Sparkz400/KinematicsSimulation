@@ -72,6 +72,7 @@ Die Referenzdokumente gibt es nur auf Englisch:
 | --- | --- |
 | [config-reference.md](../config-reference.md) | Jede Tabelle und jeder Schlüssel der Konfiguration, mit Einheit, Bedeutung, Quelle und dem zugehörigen Effektschalter |
 | [model-reference.md](../model-reference.md) | Die Gleichungen, je Komponente und je Maschine, mit Annahmen und bekannten Vereinfachungen |
+| [mechanismen.md](mechanismen.md) | Kugelgewindetrieb, Zahnstange, Linearmotor, Rundtisch und Roboter aus URDF-Dateien: die Maschinen, ihre Formeln, Prüfungen und Grenzen |
 | [catalogue.md](../catalogue.md) | Was in `catalog/` liegt, woher es stammt, gefundene Druckfehler, was fehlt |
 | [validation.md](../validation.md) | Jede Prüfung gegen etwas Unabhängiges, und was nicht validiert ist |
 | [user-guide.md](../user-guide.md) | Die englische Fassung des Benutzerhandbuchs |

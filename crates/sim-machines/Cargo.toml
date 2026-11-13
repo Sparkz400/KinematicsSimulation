@@ -10,6 +10,7 @@ sim-components.workspace = true
 machine-t-gantry = { path = "../machine-t-gantry" }
 machine-single-axis = { path = "../machine-single-axis" }
 machine-delta-d3 = { path = "../machine-delta-d3" }
+machine-joint-kit = { path = "../machine-joint-kit" }
 
 [dev-dependencies]
 toml.workspace = true

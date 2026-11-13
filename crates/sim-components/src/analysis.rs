@@ -689,7 +689,7 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 9] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life", "worm-life", "cam-follower-life"];
+pub const AT_LEAST: [&str; 7] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life"];
 
 /// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
 /// Above 1 it fails (but "belt-slack" at exactly 1).
@@ -847,9 +847,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     if let (Some(detuning), Some(band)) = (load.belt_span_detuning, rating("belt_span_resonance_band")) {
         out.push(at_least("belt-span-resonance", None, detuning, band));
     }
-    // The machine's own parts (`Machine::rating_checks`): a peak at most its limit, a life at least its required life.
+    // The machine's own parts (`Machine::rating_checks`): a peak at most its limit, a life (an L10) times the life
+    // factor a1 at least its required life.
     for (check, value) in &load.checks {
-        out.push(if check.life { at_least(check.check, check.motor, *value, check.limit) } else { at_most(check.check, check.motor, *value, check.limit) });
+        let a1 = reliability_factor(cfg).ok_or_else(|| ConfigError::Invalid("ratings.bearing_reliability_percent".into()))?;
+        out.push(if check.life { at_least(check.check, check.motor, value * a1, check.limit) } else { at_most(check.check, check.motor, *value, check.limit) });
     }
     if let (Some(value), Some(limit)) = (load.condition_peak, rating("max_condition_number")) {
         out.push(at_most("singularity", None, value, limit));

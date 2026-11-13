@@ -432,7 +432,8 @@ impl Controller {
                 // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
                 // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
                 // path from there starts that far outside the range.
-                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_range(machine, pose, SETPOINT_SLACK)) {
+                let slack = self.start_slack(machine);
+                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_range(machine, pose, slack)) {
                     return Err(CommandError { key: "error-trajectory" });
                 }
                 // A path that starts elsewhere would make the setpoint jump.
@@ -443,6 +444,13 @@ impl Controller {
             }
         }
         Ok(())
+    }
+
+    /// How far the setpoint stands beyond its axes' ranges, at least `SETPOINT_SLACK`: a path may start that far out and
+    /// come back. An arm's gears twist under its weight by some mrad (2.6 at the six-axis example's joint 2), which its
+    /// motors see: at an end of a joint's range the setpoint stands beyond it by that much.
+    fn start_slack(&self, machine: &dyn Machine) -> f64 {
+        self.raw_pos.iter().zip(machine.axes()).map(|(p, a)| (a.min - p).max(p - a.max)).fold(SETPOINT_SLACK, f64::max)
     }
 
     /// Drives off: a move or cycle under way is dropped.
@@ -460,7 +468,8 @@ impl Controller {
         }?;
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
-        if !points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)) {
+        let slack = self.start_slack(machine);
+        if !points.iter().all(|(_, pose)| near_range(machine, pose, slack)) {
             return Err(CommandError { key: "error-path-range" });
         }
         Ok(points)

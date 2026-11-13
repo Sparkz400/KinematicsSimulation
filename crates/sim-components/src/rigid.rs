@@ -12,7 +12,7 @@ use sim_core::ConfigError;
 pub type V3 = [f64; 3];
 pub type M3 = [[f64; 3]; 3];
 
-fn add(a: V3, b: V3) -> V3 {
+pub fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 fn scale(a: V3, k: f64) -> V3 {
@@ -306,7 +306,15 @@ impl Chain {
                                     j.rot = rpy(c.vec("rpy")?);
                                 }
                                 "axis" => j.axis = c.vec("xyz")?,
-                                "limit" if c.attr("lower").is_some() || c.attr("upper").is_some() => j.limits = Some((c.number("lower")?, c.number("upper")?)),
+                                // URDF's default for a bound left out is 0; a range that is empty or upside down is refused.
+                                "limit" if c.attr("lower").is_some() || c.attr("upper").is_some() => {
+                                    let bound = |name: &str| if c.attr(name).is_some() { c.number(name) } else { Ok(0.0) };
+                                    let (lower, upper) = (bound("lower")?, bound("upper")?);
+                                    if lower >= upper {
+                                        return Err(bad(&format!("the limits of the joint to {}", j.child)));
+                                    }
+                                    j.limits = Some((lower, upper));
+                                }
                                 _ => {}
                             }
                         }
@@ -563,5 +571,14 @@ mod tests {
         for bad in ["<robot><link name=\"a\"/>", "<robot><link name=\"a\"/></robot>", "<robot><link name=\"a\"/><link name=\"b\"/><joint name=\"j\" type=\"planar\"><parent link=\"a\"/><child link=\"b\"/></joint></robot>"] {
             assert!(Chain::from_urdf(bad).is_err(), "{bad}");
         }
+    }
+
+    /// URDF's limits: a bound left out is 0, an empty or upside-down range is refused (it would turn the stops inside
+    /// out).
+    #[test]
+    fn urdf_limits_default_to_zero_and_must_be_a_range() {
+        let urdf = |limit: &str| format!("<robot><link name=\"a\"/><link name=\"b\"><inertial><mass value=\"1\"/><inertia ixx=\"1\" ixy=\"0\" ixz=\"0\" iyy=\"1\" iyz=\"0\" izz=\"1\"/></inertial></link><joint name=\"j\" type=\"prismatic\"><parent link=\"a\"/><child link=\"b\"/><axis xyz=\"0 0 1\"/>{limit}</joint></robot>");
+        assert_eq!(Chain::from_urdf(&urdf("<limit upper=\"0.3\" effort=\"1\" velocity=\"1\"/>")).unwrap().bodies[0].limits, Some((0.0, 0.3)));
+        assert!(Chain::from_urdf(&urdf("<limit lower=\"0.2\" upper=\"0.0\"/>")).is_err());
     }
 }

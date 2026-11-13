@@ -239,6 +239,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/user-guide.md](docs/user-guide.md) | One section per task: size a motor, check a catalogue machine, search, error bands and sampled runs, shorten a cycle, run a path, tune, replay and fit a trace, connect a PLC, use the app |
 | [docs/config-reference.md](docs/config-reference.md) | Every config table and key, with unit, meaning, source and effect switch |
 | [docs/model-reference.md](docs/model-reference.md) | The equations, per component and per machine, with assumptions and known shortcuts |
+| [docs/mechanisms.md](docs/mechanisms.md) | Ball screw, rack and pinion, linear motor, rotary table and arms from URDF files: the machines, their formulas, checks and limits ([German](docs/de/mechanismen.md)) |
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, and what is not validated |
 | [PROGRESS.md](PROGRESS.md) | Status per phase, design decisions, what is blocked |

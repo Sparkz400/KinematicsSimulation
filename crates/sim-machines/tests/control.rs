@@ -229,7 +229,7 @@ fn axis_limits_are_checked_against_motor_limits() {
         let sim = Sim::new(entry, &entry.config()).unwrap();
         let mut faster: Vec<String> = Vec::new();
         for axis in sim.machine.axes() {
-            faster.push(format!("axis.{}.max_velocity_m_s = {:?}", axis.id, axis.max_vel * 1.5));
+            faster.push(format!("axis.{}.max_velocity_{}_s = {:?}", axis.id, axis.unit, axis.max_vel * 1.5));
         }
         let faster: Vec<&str> = faster.iter().map(String::as_str).collect();
         assert!(violations(&faster).iter().any(|v| v.key == "limit-motor-speed"), "{}", entry.id);
@@ -306,7 +306,13 @@ fn every_effect_switch_changes_the_traces() {
         // voltage limits matter; a via point, so that corner blending matters.
         let mut base = with_via_point(entry);
         // The pretension where there is a belt.
-        for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 81.65"] {
+        // The weak drive at 0.3 / 3.8 of the peak torque (0.3 N m on the belt machines' 3.8): enough to move an axis
+        // against its friction (a screw's preload drags with 0.34 N m), not to run its cycle.
+        let weak = format!("drive.peak_torque_nm = {:?}", 0.3 / 3.8 * base.f64("drive.peak_torque_nm").unwrap());
+        // The low bus at 81.65 V for a rotary motor; a linear motor's force constant (N/A) is tens of times a rotary
+        // motor's torque constant, and its bus is lowered with it (65 N/A: 37.7 V, 0.71 m/s at no load).
+        let bus = format!("drive.bus_voltage_v = {:?}", 81.65 * f64::min(1.0, 30.0 / base.f64("motor.torque_constant_nm_a").unwrap()));
+        for e in ["belt.pretension_n = 20.0", weak.as_str(), bus.as_str()] {
             if base.get(e.split(' ').next().unwrap()).is_ok() {
                 base.set_text(e).unwrap();
             }
@@ -331,7 +337,29 @@ fn every_effect_switch_changes_the_traces() {
         let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
-        let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link")).collect();
+        // An effect whose values are all zero (or all one) in this config has nothing to do (a backlash-free coupling and nut, a
+        // linear motor's forcer without bearings), nor gravity where it loads no motor (a table turning about the
+        // vertical).
+        let zero = |keys: &[&str]| keys.iter().all(|k| base.f64(k).map_or(true, |v| v == 0.0));
+        let hold = |cfg: &Config| {
+            let m = (entry.build)(cfg).unwrap();
+            let (mut state, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(&cfg.f64s("start.pose").unwrap(), &mut state, &mut hold);
+            hold
+        };
+        let unloaded = hold(&base) == hold(&config_of(&base, &["effects.gravity = false"]));
+        // A machine with no part that warms but its motors (a screw on a coupling, a linear motor).
+        let cold = (entry.build)(&base).unwrap().thermal_parts().is_empty();
+        let idle = |e: &str| match e {
+            "effects.gearbox_backlash" => zero(&["gearbox.backlash_rad", "rack.backlash_m"]),
+            "effects.motor_friction" => zero(&["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]),
+            // Every efficiency 1 (a linear motor's forcer on its mounting).
+            "effects.gearbox_efficiency" => ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"].iter().all(|k| base.f64(k).map_or(true, |v| v == 1.0)),
+            "effects.gravity" => unloaded,
+            "effects.part_heating" | "effects.thermal_feedback" => cold,
+            _ => false,
+        };
+        let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e)).collect();
         assert!(effects.len() >= 20, "{}: only {} effect switches", entry.id, effects.len());
         for effect in effects {
             let mut flipped = base.clone();

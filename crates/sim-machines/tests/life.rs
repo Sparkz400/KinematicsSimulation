@@ -16,7 +16,7 @@ fn the_life_loads_are_the_signals_added_up() {
         let cfg = entry.config();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
-        let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap();
+        let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap_or_else(|e| panic!("{}: {e:?}", entry.id));
         let load = analyse_trajectory(&mut sim, path.clone()).unwrap();
 
         let mut sim = Sim::new(entry, &cfg).unwrap();
@@ -28,7 +28,8 @@ fn the_life_loads_are_the_signals_added_up() {
         let axes = sim.machine.axes().to_vec();
         // A machine without pulleys (the delta's arms) reports no radial load, one without guides no guide load.
         let radial: Vec<Option<usize>> = motors.iter().map(|m| find(format!("pulley.{}.radial_load", m.id))).collect();
-        let gear: Vec<usize> = motors.iter().map(|m| find(format!("gearbox.{}.output_torque", m.id)).unwrap()).collect();
+        // A linear motor has no gearbox, so no gearbox torque either.
+        let gear: Vec<Option<usize>> = motors.iter().map(|m| find(format!("gearbox.{}.output_torque", m.id))).collect();
         let guides: Vec<(usize, usize)> = axes.iter().enumerate().filter_map(|(a, axis)| Some((find(format!("axis.{}.guide_load", axis.id))?, a))).collect();
         let every = (1e-3 / sim.dt).round().max(1.0) as u64;
         let n = motors.len();
@@ -42,7 +43,7 @@ fn the_life_loads_are_the_signals_added_up() {
             sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
             sim.sample(&mut values);
             for k in 0..n {
-                let (w, torque) = (speed[k].abs(), values[gear[k]].abs());
+                let (w, torque) = (speed[k].abs(), gear[k].map_or(0.0, |g| values[g].abs()));
                 speed_sum[k] += w;
                 life[k] += torque.powf(10.0 / 3.0) * w;
                 let band = ((w / SPEED_BAND) as usize).min(4000);
@@ -69,7 +70,13 @@ fn the_life_loads_are_the_signals_added_up() {
             if radial[k].is_some() {
                 close(m.radial_load_equivalent.unwrap(), (cubed[k] / weight[k]).cbrt(), "equivalent radial load");
             }
-            close(m.gearbox_life_torque.unwrap(), (life[k] / speed_sum[k]).powf(0.3), "equivalent gearbox torque");
+            if gear[k].is_none() {
+                assert!(m.gearbox_life_torque.is_none() && m.gearbox_torque_by_speed.is_empty(), "{}", entry.id);
+                continue;
+            }
+            // A joint the move leaves where it is (the arm's first) weighs no torque: 0.
+            let by_hand = if speed_sum[k] > 0.0 { (life[k] / speed_sum[k]).powf(0.3) } else { 0.0 };
+            close(m.gearbox_life_torque.unwrap(), by_hand, "equivalent gearbox torque");
             let peaks = &m.gearbox_torque_by_speed;
             assert!(!peaks.is_empty() && bands[k][peaks.len()..].iter().all(|&t| t == 0.0), "{}: bands", entry.id);
             for (i, &peak) in peaks.iter().enumerate() {
@@ -105,7 +112,8 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
             assert_eq!(find(&judged, "gearbox-life", Some(k)).map(|v| v.value), gearbox_life_h(&cfg, m), "{}", entry.id);
             let Some(bearing) = pulley_bearing_life_h(&cfg, m) else {
                 assert!(find(&judged, "pulley-bearing-life", Some(k)).is_none() && belt_tooth_utilisation(&cfg, m).unwrap().is_none(), "{}", entry.id);
-                let life = gearbox_life_h(&cfg, m).unwrap();
+                // A machine without gearbox ratings (a screw on a coupling, a linear motor) has no gearbox life.
+                let Some(life) = gearbox_life_h(&cfg, m) else { continue };
                 for (factor, ok) in [(1.001, false), (0.999, true)] {
                     let mut edited = cfg.clone();
                     edited.set_text(&format!("ratings.required_life_h = {:?}", life * factor)).unwrap();

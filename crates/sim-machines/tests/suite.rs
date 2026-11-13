@@ -31,7 +31,8 @@ fn ids_are_unique_and_findable() {
 
 /// The scene shows the motion: when the machine moves, pulley spokes and the motor shaft bars
 /// turn, belt teeth travel, and the speed labels show the motor speeds in revolutions per minute. A machine without
-/// belts (it reports no belt sections) has no pulleys and teeth to show; its motor shaft bars and labels are checked.
+/// belts (it reports no belt sections) has no pulleys and teeth to show; its motor shaft bars and labels are checked
+/// where it has motors that turn.
 #[test]
 fn the_scene_shows_pulleys_turning_teeth_travelling_and_motor_speeds() {
     use sim_components::{Command, Sim};
@@ -49,7 +50,9 @@ fn the_scene_shows_pulleys_turning_teeth_travelling_and_motor_speeds() {
         sim.scene(&mut after);
         let belted = !sim.machine.belt_sections().is_empty();
         let angles = |scene: &sim_core::Scene, id: &str| scene.parts.iter().filter(|p| p.id == id).map(|p| p.angle).collect::<Vec<_>>();
-        for id in if belted { &["pulley-spoke", "rotor-bar", "idler-bar"][..] } else { &["rotor-bar"][..] } {
+        // A linear motor has no shaft to turn: its speed label is in m/s, not rpm.
+        let rotary = before.labels.iter().any(|l| l.unit_key == "unit-rpm");
+        for id in if belted { &["pulley-spoke", "rotor-bar", "idler-bar"][..] } else if rotary { &["rotor-bar"][..] } else { &[][..] } {
             let (a, b) = (angles(&before, id), angles(&after, id));
             assert!(!a.is_empty() && a.len() == b.len(), "{}: no {id}", entry.id);
             assert!(a.iter().zip(&b).any(|(a, b)| (a - b).abs() > 0.5), "{}: {id} did not turn", entry.id);

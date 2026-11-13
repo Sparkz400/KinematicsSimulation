@@ -476,7 +476,11 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         let resolved = resolve(entry, &named).unwrap();
         // The rotor is a little heavier than the config's and the gearbox adds its own inertia: more gain.
         let (gain, own) = (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
-        assert!(gain > own && gain < 2.0 * own, "{}: gain {gain}", entry.id);
+        // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
+        // gain with it (a screw on a coupling: far less).
+        if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
+            assert!(gain > own && gain < 2.0 * own, "{}: gain {gain}", entry.id);
+        }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
         // Resolved once, a config names no part any more: doing it again changes nothing.

@@ -15,6 +15,7 @@ use sim_machines::MACHINES;
 /// path that leaves the range by a millimetre is refused as before.
 #[test]
 fn a_path_from_an_end_of_a_stroke_is_run() {
+    let mut starts_beyond = 0;
     for entry in MACHINES.iter().copied() {
         let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().to_vec();
         let middle: Vec<f64> = axes.iter().map(|a| 0.5 * (a.min + a.max)).collect();
@@ -30,22 +31,29 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
             cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
             let mut sim = Sim::new(entry, &cfg).unwrap();
             beyond_range += sim.control.set_pos.iter().zip(&axes).filter(|(p, a)| **p < a.min || **p > a.max).count();
-            let path = sim.plan_path(&[Piece::Line(middle.clone())], false).unwrap();
+            let path = sim.plan_path(&[Piece::Line(middle.clone())], false).unwrap_or_else(|e| panic!("{}: from {pose:?}: {e:?}", entry.id));
             let duration = path[path.len() - 1].0;
             assert_eq!(sim.command(Command::Trajectory(path)).err().map(|e| e.key), None, "{}: path from {pose:?}", entry.id);
             sim.run(duration + 0.3, |_| {});
             let (mut tool, mut speed) = (middle.clone(), middle.clone());
             sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
-            assert!(tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < 1e-3), "{}: from {pose:?} the tool arrives at {tool:?}", entry.id);
+            // To 1 mm, or the machine's own settling tolerance where that is wider (an arm's gears twist under its weight,
+            // which its motors' encoders do not see: 3 mrad).
+            let tolerance = f64::max(1e-3, cfg.f64("ratings.settling_tolerance_m").unwrap_or(0.0));
+            assert!(tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < tolerance), "{}: from {pose:?} the tool arrives at {tool:?}", entry.id);
 
             let mut sim = Sim::new(entry, &cfg).unwrap();
-            let outside: Vec<f64> = pose.iter().zip(&axes).map(|(p, a)| if *p == a.max { p + 1e-3 } else if *p == a.min { p - 1e-3 } else { *p }).collect();
+            // 1 mm beyond where the setpoint stands (an arm's twist puts it some mrad beyond its range already).
+            let beyond: Vec<f64> = sim.control.set_pos.iter().zip(&axes).map(|(s, a)| (a.min - s).max(s - a.max).max(0.0)).collect();
+            let outside: Vec<f64> = pose.iter().zip(&axes).zip(&beyond).map(|((p, a), b)| if *p == a.max { p + b + 1e-3 } else if *p == a.min { p - b - 1e-3 } else { *p }).collect();
             let leaves = vec![(0.0, sim.control.set_pos.clone()), (0.5, outside), (1.0, pose.clone())];
             assert_eq!(sim.command(Command::Trajectory(leaves)).err().map(|e| e.key), Some("error-trajectory"), "{}", entry.id);
         }
-        // The scenario is there: some setpoint did start beyond its range.
-        assert!(beyond_range > 0, "{}: no setpoint starts beyond its range", entry.id);
+        starts_beyond += beyond_range;
     }
+    // The scenario is there: some setpoint did start beyond its range (a belt that sags at rest; a screw on a coupling
+    // or a linear motor stands where it is told).
+    assert!(starts_beyond > 0, "no setpoint starts beyond its range");
 }
 
 // ---------------------------------------------------------------------------------------------

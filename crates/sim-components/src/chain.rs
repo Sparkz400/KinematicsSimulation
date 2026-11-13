@@ -283,7 +283,7 @@ impl<M: Mechanism> JointMachine<M> {
             out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
         }
         for (k, motor) in self.motors.iter().enumerate() {
-            let gear = if self.joints[k].drive.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+            let gear = if self.joints[k].drive.coupled { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}joint_{}", motor.id), self.joints[k].key, "quantity-friction-power", "W"));
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_{}", motor.id), motor.key, "quantity-shaft-friction-power", "W"));
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", motor.id), motor.key, gear, "W"));
@@ -452,9 +452,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// The gearboxes, in the order of `thermal_parts`.
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };
-        let geared = self.joints.iter_mut().filter(|j| !j.drive.gearbox.is_coupling());
+        let geared = self.joints.iter_mut().filter(|j| !j.drive.coupled);
         for (joint, rise) in geared.zip(rises) {
-            joint.drive.gearbox.efficiency = law.gearbox_efficiency(*rise);
+            joint.drive.gearbox.efficiency = law.gearbox_efficiency(*rise) * joint.drive.extra_efficiency;
         }
     }
 
@@ -471,8 +471,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         if !self.mechanism.inverse(tool, &mut q) {
             return Some("error-target-out-of-range");
         }
-        // A joint beyond its stops.
-        let beyond = self.joints.iter().zip(&q).any(|(j, q)| *q < j.drive.range.0 - 1e-9 || *q > j.drive.range.1 + 1e-9);
+        // A joint beyond its stops, by more than `slack` (taken in the joint's unit: where the tool is the joints, as on
+        // the arms and slides, that is the controller's slack; an arm's gears twist under its weight beyond a stop).
+        let beyond = self.joints.iter().zip(&q).any(|(j, q)| *q < j.drive.range.0 - slack - 1e-9 || *q > j.drive.range.1 + slack + 1e-9);
         beyond.then_some("error-joint-beyond-stop")
     }
 
@@ -497,7 +498,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         for k in 0..self.n() {
             out.extend([q[k], force[k]]);
             match self.joints[k].gear_lever {
-                Some(lever) => out.push(force[k] * lever),
+                // Ahead of the converter: more than the joint's force times the lever while it drives, less while the
+                // load drives it back.
+                Some(lever) => {
+                    let e = self.joints[k].drive.extra_efficiency;
+                    out.push(force[k] * lever * if force[k] * qd[k] >= 0.0 { 1.0 / e } else { e });
+                }
                 None if self.axes[k].unit != "m" => out.push(force[k]),
                 None => {}
             }
@@ -526,7 +532,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.joints
             .iter()
             .zip(&self.motors)
-            .filter(|(j, _)| !j.drive.gearbox.is_coupling())
+            .filter(|(j, _)| !j.drive.coupled)
             .enumerate()
             .map(|(k, (_, m))| ThermalPart { id: GEARBOX_IDS[MOTOR_IDS.iter().position(|id| *id == m.id).unwrap_or(0)], kind: "gearbox", owner_key: m.key, scene_part: "gearbox", scene_index: k })
             .collect()

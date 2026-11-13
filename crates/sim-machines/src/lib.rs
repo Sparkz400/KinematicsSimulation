@@ -3,7 +3,16 @@
 
 use sim_core::{MachineEntry, Translations};
 
-pub static MACHINES: &[&MachineEntry] = &[&machine_t_gantry::ENTRY, &machine_single_axis::ENTRY];
+pub static MACHINES: &[&MachineEntry] = &[
+    &machine_t_gantry::ENTRY,
+    &machine_single_axis::ENTRY,
+    &machine_joint_kit::SCREW,
+    &machine_joint_kit::RACK,
+    &machine_joint_kit::LINEAR_MOTOR,
+    &machine_joint_kit::ROTARY_TABLE,
+    &machine_joint_kit::URDF_ARM,
+    &machine_joint_kit::SCARA,
+];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];
 

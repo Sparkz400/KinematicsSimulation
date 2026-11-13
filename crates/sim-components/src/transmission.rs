@@ -6,7 +6,9 @@
 //!
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
-use sim_core::{Config, ConfigError};
+use crate::joint::RotaryJoint;
+use crate::mech::HoldingBrake;
+use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
 type Result<T> = std::result::Result<T, ConfigError>;
@@ -53,6 +55,43 @@ impl Mounting {
             Self::FixedSupported => 2.046,
             Self::FixedFixed => 4.0,
         }
+    }
+}
+
+/// What turns a gearbox's output rotation into a joint's travel (ball screw, rack and pinion): the travel per radian of
+/// its input (`lever`, m/rad), its own stiffness along the travel (N/m), its backlash (m), efficiency, and the inertia
+/// that turns with its input (screw shaft, pinion; kg m^2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Converter {
+    pub lever: f64,
+    pub stiffness: f64,
+    pub backlash: f64,
+    pub efficiency: f64,
+    pub inertia: f64,
+}
+
+impl Converter {
+    /// Puts the converter behind `joint`'s gearbox (read in N m and rad at the converter's input): the joint's gearbox
+    /// becomes gearbox and converter together, in N and m. Ratio i / lever; stiffness and damping of the gearbox seen at
+    /// the joint (over lever^2) in series with the converter's; backlash and efficiency added and multiplied as
+    /// effects.gearbox_backlash and effects.gearbox_efficiency say; the converter's inertia joins the rotor over i^2.
+    ///
+    /// With effects.thermal_feedback the gearbox's temperature changes the gearbox's share of the efficiency, not the
+    /// converter's (`RotaryJoint::extra_efficiency`).
+    pub fn apply(&self, cfg: &Config, joint: &mut RotaryJoint) -> Result<()> {
+        let (g, l) = (&mut joint.gearbox, self.lever);
+        let i = g.ratio;
+        g.ratio = i / l;
+        g.stiffness = 1.0 / (l * l / g.stiffness + 1.0 / self.stiffness);
+        g.damping /= l * l;
+        g.half_backlash = g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
+        if cfg.bool("effects.gearbox_efficiency")? {
+            g.efficiency *= self.efficiency;
+            joint.extra_efficiency *= self.efficiency;
+        }
+        joint.rotor_inertia += self.inertia / (i * i);
+        joint.brake = HoldingBrake::from_config(cfg, joint.rotor_inertia)?;
+        Ok(())
     }
 }
 
@@ -198,6 +237,19 @@ impl BallScrew {
     pub fn dn(&self, rpm: f64) -> f64 {
         self.nominal_diameter * 1e3 * rpm.abs()
     }
+
+    /// The screw as a `Converter`, stiff as it is with the nut at `x` from the fixed bearing.
+    ///
+    /// shortcut: one stiffness for the whole stroke (the joint's gearbox has one); pass the softest nut position
+    /// (the far end, the middle for fixed-fixed) to judge resonance and settling on the safe side.
+    pub fn converter(&self, x: f64) -> Converter {
+        Converter { lever: 1.0 / self.ratio(), stiffness: self.stiffness(x), backlash: 0.0, efficiency: self.efficiency, inertia: self.inertia() }
+    }
+
+    /// Where the shaft is softest: its far end, or its middle where both ends are fixed.
+    pub fn softest_position(&self) -> f64 {
+        if self.mounting == Mounting::FixedFixed { 0.5 * self.length } else { self.length }
+    }
 }
 
 /// A pinion on a rack. Config `[rack]`: `module_m`, `teeth`, `helix_angle_deg`, `efficiency`, `stiffness_n_m` (mesh and
@@ -245,6 +297,10 @@ impl RackPinion {
     /// The highest feed force the cycle may reach: the rated feed force over the service factor.
     pub fn allowed_force(&self) -> f64 {
         self.rated_force / self.service_factor
+    }
+
+    pub fn converter(&self) -> Converter {
+        Converter { lever: self.radius(), stiffness: self.stiffness, backlash: self.backlash, efficiency: self.efficiency, inertia: self.pinion_inertia }
     }
 }
 
@@ -324,6 +380,78 @@ impl StrainWave {
     /// The share of the rated life used per hour at an output torque and input speed (r/min): |n| / nr (|T| / Tr)^3 / Ln.
     pub fn damage_rate(&self, torque: f64, input_rpm: f64) -> f64 {
         input_rpm.abs() / self.rated_speed * (torque.abs() / self.rated_torque).powi(3) / self.rated_life
+    }
+}
+
+/// The signals and rating checks of a ball screw on joint `id` (one of `chain::MOTOR_IDS`, its motor `motor`): screw
+/// speed (r/min), d n, and the share of its life used per hour, from the joint's speed and force (signal
+/// `joint.<id>.force`). Checks: "screw-speed" (against `allowed_speed_rpm`), "screw-dn" (where `max_dn` is set),
+/// "screw-buckling" (|force| against `allowed_buckling_force`; pulling too, on the safe side), "screw-static" (against
+/// `allowed_static_force`) and "screw-life" (against `required_life_h`, where set).
+impl BallScrew {
+    pub fn signal_infos(&self, id: &str, key: &'static str) -> Vec<SignalInfo> {
+        vec![
+            SignalInfo::new(format!("screw.{id}.speed"), key, "quantity-screw-speed", "rpm"),
+            SignalInfo::new(format!("screw.{id}.dn"), key, "quantity-screw-dn", "mm rpm"),
+            SignalInfo::new(format!("screw.{id}.damage_rate"), key, "quantity-damage-rate", "1/h"),
+        ]
+    }
+
+    /// Joint speed (m/s) and force (N) to the values of `signal_infos`.
+    pub fn signals(&self, speed: f64, force: f64, out: &mut Vec<f64>) {
+        let rpm = speed * self.ratio() * 60.0 / (2.0 * PI);
+        out.extend([rpm, self.dn(rpm), self.damage_rate(force, rpm)]);
+    }
+
+    pub fn rating_checks(&self, id: &str, motor: usize, required_life_h: Option<f64>) -> Vec<RatingCheck> {
+        let check = |check: &'static str, signal: &str, limit: f64, life: bool| RatingCheck { check, signal: signal.into(), motor: Some(motor), limit, life };
+        let force = format!("joint.{id}.force");
+        let mut out = vec![
+            check("screw-speed", &format!("screw.{id}.speed"), self.allowed_speed_rpm(), false),
+            check("screw-buckling", &force, self.allowed_buckling_force(), false),
+            check("screw-static", &force, self.allowed_static_force(), false),
+        ];
+        if self.max_dn > 0.0 {
+            out.push(check("screw-dn", &format!("screw.{id}.dn"), self.max_dn, false));
+        }
+        if let Some(life) = required_life_h {
+            out.push(check("screw-life", &format!("screw.{id}.damage_rate"), life, true));
+        }
+        out
+    }
+}
+
+impl RackPinion {
+    pub fn signal_info(&self, id: &str, key: &'static str) -> SignalInfo {
+        SignalInfo::new(format!("rack.{id}.feed_force"), key, "quantity-rack-feed-force", "N")
+    }
+
+    /// The force on the teeth for the force `force` the rack passes to the load at `speed` and the efficiency
+    /// `efficiency` in effect (1 with effects.gearbox_efficiency off): more than it while the pinion drives, less while
+    /// the load drives it back.
+    pub fn feed_force(force: f64, speed: f64, efficiency: f64) -> f64 {
+        if force * speed >= 0.0 { force / efficiency } else { force * efficiency }
+    }
+
+    /// "rack-feed-force": the force on the teeth of joint `id` (signal `rack.<id>.feed_force`) against `allowed_force`.
+    pub fn rating_checks(&self, id: &str, motor: usize) -> Vec<RatingCheck> {
+        vec![RatingCheck { check: "rack-feed-force", signal: format!("rack.{id}.feed_force"), motor: Some(motor), limit: self.allowed_force(), life: false }]
+    }
+}
+
+/// The share of a strain wave gear's life used per hour on joint `id`, from its output torque and input speed (rad/s),
+/// and the check "strain-wave-life" against `required_life_h`.
+impl StrainWave {
+    pub fn signal_info(&self, id: &str, key: &'static str) -> SignalInfo {
+        SignalInfo::new(format!("strain_wave.{id}.damage_rate"), key, "quantity-damage-rate", "1/h")
+    }
+
+    pub fn signal(&self, torque: f64, input_speed: f64) -> f64 {
+        self.damage_rate(torque, input_speed * 60.0 / (2.0 * PI))
+    }
+
+    pub fn rating_check(&self, id: &str, motor: usize, required_life_h: f64) -> RatingCheck {
+        RatingCheck { check: "strain-wave-life", signal: format!("strain_wave.{id}.damage_rate"), motor: Some(motor), limit: required_life_h, life: true }
     }
 }
 
@@ -416,5 +544,51 @@ mod tests {
     #[test]
     fn a_linear_motor_cogs_once_per_pole_pitch() {
         close(LinearMotor { attraction: 0.0, pole_pitch: 0.024 }.cogging_order(), 261.799, "order");
+    }
+    /// At 0.5 m/s and 2000 N on the 10 mm lead: 3000 r/min, d n 25 * 3000 = 75000, 60 * 3000 * (1.2 * 2000 / 15000)^3 /
+    /// 1e6 = 7.3728e-4 per hour. The checks' limits are those of the hand-calculated test above; life only where
+    /// required, d n only where limited.
+    #[test]
+    fn the_screw_reports_and_checks_by_hand() {
+        let s = screw();
+        let mut out = Vec::new();
+        s.signals(0.5, 2000.0, &mut out);
+        close(out[0], 3000.0, "rpm");
+        close(out[1], 75000.0, "dn");
+        close(out[2], 7.3728e-4, "damage");
+        assert_eq!(s.signal_infos("3", "joint-3").iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["screw.3.speed", "screw.3.dn", "screw.3.damage_rate"]);
+        let checks = s.rating_checks("3", 2, Some(20000.0));
+        let limit = |id: &str| checks.iter().find(|c| c.check == id).map(|c| (c.limit, c.signal.clone(), c.life, c.motor));
+        assert_eq!(limit("screw-life"), Some((20000.0, "screw.3.damage_rate".into(), true, Some(2))));
+        close(limit("screw-speed").unwrap().0, 0.8 * 3959.7, "speed limit");
+        close(limit("screw-buckling").unwrap().0, 19855.5, "buckling limit");
+        assert_eq!(limit("screw-static").unwrap().1, "joint.3.force");
+        assert_eq!(limit("screw-dn").unwrap().0, 70000.0);
+        let plain = BallScrew { max_dn: 0.0, ..s }.rating_checks("3", 2, None);
+        assert!(plain.iter().all(|c| c.check != "screw-dn" && c.check != "screw-life"));
+        for c in &checks {
+            assert_eq!(c.life, crate::analysis::AT_LEAST.contains(&c.check), "{}", c.check);
+        }
+    }
+
+    /// 100 N m at 1000 r/min in (104.72 rad/s): 5.7143e-4 per hour, as by the catalogue's formula above.
+    #[test]
+    fn the_strain_wave_gear_reports_its_wear_from_the_input_speed() {
+        let g = StrainWave { rated_torque: 50.0, rated_speed: 2000.0, rated_life: 7000.0 };
+        close(g.signal(100.0, 1000.0 * 2.0 * PI / 60.0), 5.7143e-4, "damage");
+        let c = g.rating_check("2", 1, 15000.0);
+        assert!(c.life && c.check == "strain-wave-life" && c.signal == "strain_wave.2.damage_rate" && c.limit == 15000.0);
+    }
+
+    #[test]
+    fn a_rack_is_checked_against_its_feed_force_over_the_service_factor() {
+        let r = RackPinion { module: 0.002, teeth: 30.0, helix_angle: 0.0, efficiency: 0.97, stiffness: 1e8, backlash: 0.0, pinion_inertia: 1e-4, rated_force: 3000.0, service_factor: 1.25 };
+        let c = &r.rating_checks("1", 0)[0];
+        assert!(c.check == "rack-feed-force" && c.signal == "rack.1.feed_force" && c.limit == 2400.0 && !c.life);
+        // 970 N to the load at 97 %: 1000 N on the teeth driving, 940.9 N braking.
+        close(RackPinion::feed_force(970.0, 1.0, 0.97), 1000.0, "driving");
+        close(RackPinion::feed_force(970.0, -1.0, 0.97), 940.9, "braking");
+        // Straight teeth: r = m z / 2 = 30 mm.
+        close(r.converter().lever, 0.03, "lever");
     }
 }
