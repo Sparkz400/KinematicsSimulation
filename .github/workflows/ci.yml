@@ -52,7 +52,7 @@ jobs:
         run: cargo test --doc --workspace --release --locked --exclude sim-py
 
       # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -108,7 +108,7 @@ jobs:
         with:
           toolchain: "1.98.1"
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Build sim-cli (the tests compare against it)
