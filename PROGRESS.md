@@ -1326,3 +1326,44 @@ Left open:
   the delta.
 - A store that gave energy back is drawn as a source of the first column whichever side it is on; its band goes to the
   next bars in order, not to its own side's.
+
+## Planar delta picker D2 (13 November)
+
+A new machine, `machine-delta-d2` (id `delta-d2`): the planar 2-axis delta, two motor-driven arms in the vertical x-z
+plane with forearm pairs down to a plate that keeps its orientation. Built on the D3 throughout, with its own copy of
+the code (the D3 is being changed by another session): the D3's equations with two legs at 0 and 180 degrees, a 2 x 2
+Jacobian with its condition number in closed form, the forward kinematics as two circles' lower crossing, the same
+lumped dynamics (Codourey, Olsson; m_nt = plate + payload + 2 (1 - s) m_fb), `RotaryJoint`s elastic or rigid, the D3's
+signals, effect views, part heating, refusals and `rest_sag` slack. Tool pose (x, z); the working range a band 800 mm
+wide with an arc for its bottom. Scene in the plane y = 0; collision bodies plate and payload. Registered in
+`sim-machines`.
+
+Sized like the Codian Robotics D2-800-S020 (codian-robotics.com/robots, read 13 November 2026: range 800 x 477 mm,
+5 kg, up to 210 picks a minute, 0.1 mm repeatability); the arm lengths (R 0.15, r 0.05, L_a 0.4, L_b 0.7 m) from a
+search over the geometry for the lowest condition number that reaches the whole range (1.56); the D3's 1FK2105-4AF and
+S210, ratio 20. The cycle is the D3's Adept cycle in the plane, 0.720 s, and passes all its verdicts, also with
+`--bands` one estimate at a time; loop margins at least 41.7 degrees and 8.1 dB over the bands with friction off.
+
+Tests (`crates/machine-delta-d2/src/tests.rs`, hand numbers from a Python mirror of the equations): the standard suite;
+round trip and Jacobian against finite differences over the range; holding torque at the centre (-18.358 N m) and at
+the edge (-25.43, -4.19 N m); the inertia torque of 10 m/s^2 straight up (-0.9929 N m at the motor); the range's edge
+at z = -0.8 (x = 0.256560 m from the bottom arc); refusals with reasons; the cycle's 720 profile cycles; the default
+cycle's verdicts; the condition number; the vertical mode's stiffness under constant torques (-3.49 at the default
+range's middle, +7.52 N m/rad 150 mm lower, where the suite's configs lie); the feedforward with the speed; the
+setpoint slack (0.420 mm by hand, 0.29 to 0.37 mm simulated); a path beyond the range; the collision bodies. The
+tests were not run here (by the coordinator's rule); `cargo check --tests` passes and `sim-cli verdicts`, `margins`
+and `analyze` were run.
+
+Left open:
+
+- The gearbox's backlash is an estimate (1 arcmin, a reduced-backlash precision planetary): with the 9 arcmin of the
+  catalogue's NRB080-05-20 the cycle fails settling (0.85 mm against 0.5 mm), as the D3 does, and every catalogue
+  gearbox of this size and ratio has 7 to 9 arcmin. A precision gearbox series in the catalogue would make it
+  `[catalogue]`.
+- `--bands --worst` (every estimate at its worst at once) fails gearbox peak (201 against 192 N m) and settling
+  (0.61 mm).
+- Codian publishes no arm lengths, masses, range shape below its two figures, speeds or motors: all estimates.
+- The model keeps the plate level; the parallelogram in the x-z plane that does it on the real machine is not drawn (the
+  view draws the pairs' rods apart along y, as on the D3), and its rods' mass is in the forearm pairs'.
+- Not in the app's own lists or the CAD mass tool (`tools/cad/cadmass.py` knows the D3 only); not in
+  docs/integrations.md.

@@ -30,6 +30,12 @@ item are in [PROGRESS.md](PROGRESS.md).
 - Transition curves: one length per arc (from its own junctions' speed and its own tolerance limit) instead of one
   for the whole path; curves at an arc fixed at one end with an arc at its other end, and at one that turns more
   than half a circle (moved by at most half the tolerance).
+
+- Planar delta picker D2 (`delta-d2`, crate `machine-delta-d2`): two rotary arms in the x-z plane with forearm pairs
+  to a plate that keeps its orientation, sized like the Codian D2-800-S020 (800 x 477 mm, 5 kg) with Siemens
+  1FK2105-4AF behind ratio 20; kinematics, Jacobian and condition number, the D3's dynamics, scene, collision bodies,
+  a default Adept cycle that passes its verdicts. The gearbox backlash is an estimate (1 arcmin): with the catalogue's
+  9 arcmin the cycle fails settling.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

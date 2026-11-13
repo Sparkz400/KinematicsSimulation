@@ -15,6 +15,7 @@ Test files, abbreviated in the tables:
 | axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
 | delta | [`crates/machine-delta-d3/src/tests.rs`](../crates/machine-delta-d3/src/tests.rs) |
+| delta2 | [`crates/machine-delta-d2/src/tests.rs`](../crates/machine-delta-d2/src/tests.rs) |
 | joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
 | suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
@@ -28,6 +29,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: control, profiles and paths](#hand-calculations-control-profiles-and-paths)
 - [Hand calculations: analysis and verdicts](#hand-calculations-analysis-and-verdicts)
 - [Hand calculations: delta picker D3](#hand-calculations-delta-picker-d3)
+- [Hand calculations: planar delta picker D2](#hand-calculations-planar-delta-picker-d2)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -280,6 +282,27 @@ The delta's geometry and masses are estimates (see [its config](../crates/machin
 | Rotary joint | Joint friction 2 + 0.5 · 4 = 4 N m, stop 1e5 · 0.01 = 1000 N m, rotor 2e-4 · 20² = 0.08 kg m², 1 N m less 0.1 N m friction through ratio 20 = 18 N m, losses 16 W and 8 W | 1e-9 | `a_joint_adds_friction_stops_and_the_rotor_as_calculated`, joint |
 | Arcs on three axes | A quarter circle of 0.1 m in the x-z plane is π/20 m long, passes (0.0707, 0, 0.0707) about its centre halfway with its curvature 1/r towards the centre; clockwise the other way round; in the x-y plane seen from +z; a half turn refused | 1e-12 | `arcs_on_three_axes_lie_in_the_plane_of_their_points`, path |
 | Splines on three axes | Through their via points, out of and into the lines beside them in their directions, the plan within every axis's speed, acceleration and jerk | 1e-9; 0.1 % | `a_spline_on_three_axes_passes_through_its_points_within_the_limits`, path |
+
+## Hand calculations: planar delta picker D2
+
+The planar delta's geometry and masses are estimates (see [its config](../crates/machine-delta-d2/default.toml)), so these check the equations, not the machine. All in `delta2`.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The standard suite, in the crate as well as in `suite` | As every machine | – | `the_planar_delta_passes_the_standard_suite` |
+| Inverse and forward kinematics over the working range in steps of 10 mm (2500 and more poses); the Jacobian | Each other; central differences of the forward kinematics | 1e-12 m; 1e-7 m/rad | `the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_kinematics` |
+| Holding torque at the centre, 100 mm below the top | The leg equation solved by halving: θ = 1.4290°, dz/dθ per arm = −0.20503 m/rad, m_nt = 6.4 kg, m_LG = 0.560 kg m: −5.490 − 12.868 = −18.358 N m at each gearbox | 1e-4 | `the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms_own` |
+| Holding torque at the edge, x = 0.4 m | The weight through the transpose of a Jacobian from finite differences: −25.43 N m on arm 1, −4.19 N m on arm 2 | 1e-6 | `the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose` |
+| A vertical acceleration of 10 m/s² at the centre | θ̈ = a / (2 dz/dθ) = −24.39 rad/s², I_b θ̈ + m_nt a dz/dθ = −17.80 N m at the arm, −0.9929 N m at the motor; the rigid model given it accelerates the plate at 10 m/s² straight up | 1e-6; 1e-9 m/s² | `a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque` |
+| The edge of the working range at a height | The bottom arc r = (0.4² + 0.227²) / (2 · 0.227) = 0.465923 m about z_c = −0.411077 m: at z = −0.8, x = ±0.256560 m; at z = −0.6 the half width 0.4 m | 1e-5 m | `the_edge_of_the_working_range_at_a_height_is_where_the_bottom_arc_cuts_it` |
+| Targets outside the range, beyond a stop, out of reach, near a singularity | Refused with their reason | exact | `targets_outside_the_working_range_are_refused_with_their_reason` |
+| The Adept cycle in the plane | As on the D3: 720 profile cycles, 0.720 s | 1e-9 s | `the_adept_cycle_takes_the_hand_calculated_time` |
+| The default cycle's verdicts | All pass; the condition number's peak between the poses' 1.02 and 1.11 by hand and the lifts' tops (1.136) | – | `the_default_cycle_passes_its_verdicts` |
+| Condition number | 4 for a turned diag(1, 4), 1 for 2 · 1 | 1e-12 | `the_condition_number_is_the_ratio_of_the_singular_values` |
+| Stability under constant torques | Second differences of gravity less torque times angle: −3.49 N m/rad in the vertical mode at 638.5 mm, +7.52 at 788.5 mm; sideways 13.47 and 18.86 | 0.05 N m/rad | `the_vertical_mode_under_constant_torques_is_unstable_high_up` |
+| The feedforward with the speed | The rigid loss-free model at (2, −1) m/s accelerates the plate at the asked (10, −20) m/s² | 1e-9 m/s² | `the_feedforward_with_the_speed_gives_the_asked_acceleration` |
+| The setpoint slack at rest | 0.420 mm by hand (`rest_sag`'s grid, twist and half of 1 arcmin either way, plus a tenth), covering the simulation's 0.29 to 0.37 mm at six poses after 0.5 s | 2e-6 m; covered, within 1.4 times | `the_setpoint_slack_covers_the_sag_at_rest` |
+| A path beyond the range; collision bodies | A line to x = 0.4014 refused, to 0.4 laid out; plate and payload boxes at (x, 0, z) and 70 mm below | exact; 1e-12 m | `a_path_may_not_use_the_setpoint_slack_away_from_its_start`, `the_collision_bodies_are_the_plate_and_the_payload_at_the_tool` |
 
 ## Vendor formulas and vendor documents
 

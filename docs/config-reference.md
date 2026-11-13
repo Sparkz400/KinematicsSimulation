@@ -8,6 +8,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | E | [`crates/machine-t-gantry/exct-30.toml`](../crates/machine-t-gantry/exct-30.toml) | T-gantry: Festo EXCT-30 with Siemens 1FK2205-4AF. Each value marked `[catalogue]` or `[estimate]` in the file |
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
 | D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
+| D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
 
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
@@ -442,6 +443,7 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | T | 34 | Belt stiffness, pretension, damping, tooth force, tooth jump factor; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values; the thermal resistances and time constants of `[thermal]`; the four estimates of `[thermal_feedback]`; the DC link's discharge time constant and the line module's efficiency; the belt's teeth in mesh | Masses, inertias, backlash; values of effects that are off by default, but for `[thermal]`, `[thermal_feedback]` and the tooth jump factor; the shape of the friction curve (Stribeck speed, bristles, preload); the rated rises of `[thermal]`; the reference temperature; the span resonance band (a limit) |
 | S | 26 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
 | D | 26 | The geometry and the masses (not the payload), the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
+| D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
 | E | 74 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Keys with bounds in one config only:
@@ -530,6 +532,24 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | `max_condition_number` | – | The highest condition number of the Jacobian the cycle may reach | `singularity` | 5, estimate (a design rule; the working range has up to 3.6) |
 
 D's values of the shared tables: motor 1FK2105-4AF at 400 V (catalogue: rotor 1.7 kg cm², 1.07527 N m/A, 15 N m peak, 4.6 N m rated at 3000 r/min, 18 A and 4.35 A, 37 min; winding R and L estimates), gearbox Siemens NRB080-05-20 (catalogue: ratio 20, 96 %, 35752.6 N m/rad, 9 arcmin backlash, 0.406 kg cm² at the input), converter 6SL3210-5HE11-5UF0 (5 A, 19 A), DC link capacitance and chopper threshold estimates as the EXCT-30's, the converter's internal braking resistor (100 W, 5.7 kW) and trip level (820 V) from `braking_s210.csv`, `settling_tolerance_m` 0.5 mm (an estimate of the positioning accuracy of the class, Festo EXPT ±0.5 mm; the gearboxes' sag under the platform's weight puts the tool 0.64 mm off at pick and place at rest and 0.68 mm in the dwell, so the cycle fails `settling`: a sizing finding, the NRB080's backlash is too large for the class; 3 arcmin pass with 0.33 mm), `gearbox_reference_speed_rpm` 100 (estimate), the velocity loop 0.25 N m s/rad, 0.03 s with 0.1 ms filters (tuned with `sim-cli margins delta-d3 --bands`). Its cycle is the Adept cycle 25/305/25 mm with stops at the corners and 35 ms gripper dwells, one pass = one place and one pick; `profile.min_clearance_m` is its 25 mm lift, `start.pose` above the place position (near the edge of the range one arm carries little of the weight and its velocity loop cannot be measured), `mass.forearm_elbow_share` bounded 0.5 to 0.667. The suite's loss-free configs (`suite_configs`) set `workspace.top_z_m` to −0.85, see the [model reference](model-reference.md#delta-picker-d3).
+
+## Delta picker D2
+
+The D2's config ([`machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml)) has the D3's tables and keys, with these differences. The tool pose, `start.pose` and the cycle's targets are (x, z); there is no `[axis.y]`.
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `geometry.base_radius_m`, `platform_radius_m`, `upper_arm_m`, `forearm_m` | m | As on the D3, in the x-z plane: the shoulder axes at x = ±R | 0.15, 0.05, 0.4, 0.7, estimates (the whole range reachable with condition numbers up to 1.56) |
+| `geometry.forearm_spacing_m` | m | The rods of a pair apart along y; for the 3D view only | 0.1 |
+| `workspace.half_width_m` | m | Half the width of the working range; also the x axis range ±half width. In place of the D3's `radius_m` | 0.4, catalogue (Codian: 800 mm) |
+| `workspace.top_z_m` | m | Height of its top below the shoulder axes; the upper end of the z axis range | −0.4, estimate |
+| `workspace.height_edge_m`, `height_centre_m` | m | Its height at the edges and at the centre; the bottom is an arc through both | 0.25 estimate, 0.477 catalogue (Codian: 477 mm) |
+| `mass.upper_arm_kg`, `upper_arm_cg_m`, `upper_arm_inertia_kgm2`, `elbow_kg`, `forearm_pair_kg`, `forearm_elbow_share`, `platform_kg` | | As on the D3 | 1.2, 0.2, 0.064, 0.4, 0.6, 0.6667, 1.0, estimates |
+| `mass.payload_kg` | kg | Payload | 5, catalogue (Codian D2-800-S020) |
+| `joint.min_angle_deg`, `max_angle_deg` | ° | The stops | −60, 85, estimates |
+| `gearbox.backlash_rad` | rad | Backlash of an arm's gearbox | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin: a reduced-backlash precision planetary. The NRB080-05-20, whose other values the config has (catalogue), has 9 arcmin, with which the cycle fails `settling` (0.85 mm against 0.5 mm) |
+
+The motor, drive, ratings, axis limits (3 m/s, 50 m/s², 2500 m/s³ along x and z) and loop gains are the D3's.
 
 ## `[[cycle.segment]]`
 

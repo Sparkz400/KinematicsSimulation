@@ -584,6 +584,22 @@ Die Unterarme sind starre Stäbe mit ihrer Masse und Drehträgheit (`effects.for
 
 Was der Delta nicht hat: elastische Stäbe und Kugelgelenke, die Biegung der Arme aus ihrer Drehebene, die Kegelgrenzen der Kugelgelenke (Anschläge und Arbeitsraum stehen dafür), eine vierte Achse, einen Übergangsbogen, wo zwei Kreisbögen in verschiedenen Ebenen aufeinandertreffen, eine Reibungsansicht für seine Gelenke (ihre Verluste stehen in der Energiebilanz) sowie Nachfahren und Anpassen einer Aufzeichnung, die eine lineare Transformation voraussetzen (`replay` und `fit` lehnen den Delta ab: `Nachfahren und Anpassen einer Aufzeichnung brauchen eine Maschine, deren Motorwinkel ihren Achsen linear folgen ...`). Von festen Motormomenten gehalten ist er im oberen Teil seines Arbeitsraums in der senkrechten Bewegung instabil; die Lageregler der Antriebe halten ihn (siehe die Modellreferenz).
 
+### Der planare Delta D2
+
+`delta-d2` ist ein Zwei-Arm-Delta in der senkrechten x-z-Ebene: zwei Drehantriebe, jeder mit einem Unterarmpaar hinab zu einer Platte, die ihre Lage behält, ausgelegt wie der Codian Robotics D2-800-S020 (Arbeitsraum 800 mm breit und 477 mm hoch, 5 kg Nutzlast, bis zu 210 Picks pro Minute). Codian nennt keine Motoren; die Konfiguration nimmt die 1FK2105-4AF des D3 an S210-Umrichtern hinter Übersetzung 20 und kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` ([die Konfiguration](../../crates/machine-delta-d2/default.toml)). Die Werkzeugpose ist (x, z); Bahnen schreibt man `line,x,z` und `arc,x,z,cx,cz,cw` wie bei den Portalen. Der Zyklus ist der Adept-Zyklus des D3 in der Ebene, 100 mm unter der Oberkante des Arbeitsraums: 0,720 s.
+
+```text
+$ sim-cli verdicts delta-d2
+motor-peak,1,0.6272,1.000,ok
+gearbox-continuous,1,71.55,120.0,ok
+gearbox-peak,1,164.5,192.0,ok
+...
+settling,,0.0003476,0.0005000,ok
+singularity,,1.136,5.000,ok
+```
+
+Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,31 bis 0,41 mm, Getriebespitze bis 163 N m); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt die Getriebespitze (201 N m) und das Einschwingen (0,61 mm) scheitern. Zwei Arme tragen 5 kg, wo beim D3 drei Arme 3 kg tragen, also arbeitet das Getriebe näher an seinen 192 N m. Das Einschwingen besteht, weil das Getriebespiel eine Schätzung von 1 Winkelminute ist, ein spielreduziertes Präzisions-Planetengetriebe: Mit den 9 Winkelminuten des NRB080-05-20 aus dem Katalog (`--set gearbox.backlash_rad=2.618e-3`) scheitert es mit 0,85 mm, aus demselben Grund wie beim D3: Beide Arme halten die Platte immer oben und liegen an einer Seite ihres Spiels an. Das Modell hält die Platte waagerecht, wie es die Parallelogramme der echten Maschine tun.
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).
