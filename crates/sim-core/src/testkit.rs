@@ -183,9 +183,14 @@ pub const LOSS_BUDGET_TOLERANCE: f64 = 1e-3;
 /// The energy balance with losses: over a run with a strong torque pulse, the work of the motor torques
 /// (sum of torque times rotor angle turned, exact for torques held over a step) equals the change of the
 /// machine's energy plus the time integral of every loss power it reports (signals starting with `LOSS_PREFIX`),
-/// to within `LOSS_BUDGET_TOLERANCE`. The powers are taken at the end of each step and summed times the step,
-/// which is the trapezoid rule but for the two ends of the run; what is left is that rule's error on powers that
-/// change within a step (the bristles of a friction contact settle within microseconds when the speed reverses).
+/// to within `LOSS_BUDGET_TOLERANCE`. The run takes the integrator's own sub-steps (`DT / SUBSTEPS`, one each) as its
+/// steps; the powers are taken at the end of each and summed times the step, which is the trapezoid rule but for the
+/// two ends of the run. What is left is that rule's error on powers that change within a step (the bristles of a
+/// friction contact settle within microseconds when the speed reverses), and on a power that jumps, up to half of
+/// it times the step: a stop's damper takes c v^2 as soon as the axis touches it. On the linear delta, whose
+/// carriages the pulse takes into their upper stops, one touches at 0.533 m/s 1.7 us before the end of a step:
+/// 5000 N s/m * 0.533^2 = 1422 W, of which the trapezoid booked 0.5 * 1422 W * 62.5 us = 0.044 J where 0.002 J were
+/// lost, 0.042 J off against the 0.018 J allowed; on the 15.6 us sub-steps at most 0.011 J.
 /// The energy parts it reports (`energy.*`) add up to `Machine::energy`. A machine that reports no loss powers is
 /// not checked.
 pub fn loss_budget(m: &dyn Machine) {
@@ -196,7 +201,8 @@ pub fn loss_budget(m: &dyn Machine) {
         return;
     }
     assert_eq!(parts.len(), ENERGY_PARTS.len(), "the energy parts are not all reported");
-    let mut run = PulseRun::new(m, DT, 0.5, 0.1);
+    let mut run = PulseRun::new(m, DT / SUBSTEPS as f64, 0.5, 0.1);
+    run.substeps = 1;
     let start = m.energy(&run.state);
     let (mut before, mut work, mut gross, mut lost, mut signals) = (run.motor_pos(), 0.0, 0.0, 0.0, Vec::new());
     run.run(1.0, |r| {
@@ -205,7 +211,7 @@ pub fn loss_budget(m: &dyn Machine) {
         (work, gross, before) = (work + step, gross + step.abs(), after);
         signals.clear();
         m.signals(&r.state, &r.torque, &mut signals);
-        lost += losses.iter().map(|&i| signals[i]).sum::<f64>() * DT;
+        lost += losses.iter().map(|&i| signals[i]).sum::<f64>() * r.dt;
         let (energy, sum) = (m.energy(&r.state), parts.iter().map(|&i| signals[i]).sum::<f64>());
         assert!((sum - energy).abs() <= 1e-9 * energy.abs().max(1.0), "energy parts add up to {sum}, not {energy}");
     });

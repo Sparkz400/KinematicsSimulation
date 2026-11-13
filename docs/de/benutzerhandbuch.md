@@ -636,31 +636,31 @@ Das Werkzeug ist die Mitte der Platte, x, y und z in Metern, z nach oben ab dem 
 ```text
 $ sim-cli analyze delta-linear
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-1,0.720000,4.749490,2.025259,106.0492,0.4401,0.6751,141.10,529.06,1.6426,35.34,...
-2,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
-3,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+1,0.720000,4.773111,2.024602,106.1491,0.4423,0.6749,143.45,527.75,1.6420,35.31,...
+2,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
+3,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
 ```
 
 Der Zyklus liegt entlang x, auf Säule 1 zu und von ihr weg, also arbeitet Säule 1 am meisten. Seine 0,720 s sind die des D3: derselbe Zyklus, dieselben Achsgrenzen. Festo gibt für den EXPT-95 bis zu 150 solcher Zyklen je Minute bei leichter Last an (je 0,4 s), mit verrundeten Ecken und bis zu 7 m/s und 110 m/s²; `sim-cli optimise delta-linear` verrundet die Ecken und hebt die Grenzen, so weit alle Prüfungen es zulassen.
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4401,1.000,ok
-motor-thermal,1,35.34,100.0,ok
-drive-current,1,1.643,3.000,ok
-pulley-torque,1,3.991,10.00,ok
+motor-peak,1,0.4423,1.000,ok
+motor-thermal,1,35.31,100.0,ok
+drive-current,1,1.642,3.000,ok
+pulley-torque,1,3.979,10.00,ok
 ...
-settling,,0.00006175,0.0005000,ok
-belt-tension,,529.1,1000,ok
-belt-slack,,141.1,0,ok
+settling,,0.00007184,0.0005000,ok
+belt-tension,,527.8,1000,ok
+belt-slack,,143.5,0,ok
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,785.7,1500,ok
+gearbox-radial-load,,783.1,1500,ok
 ```
 
 Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Was man daraus liest:
 
-- **Motor.** Ein Compact-Motor, wegen seines Läufers: der High-Dynamic-Motor 1FK2104-5AF hätte das Moment (7,5 N m gegen 4,7 N m Bedarf), aber 0,65 kg cm² Läufer gegen etwa 6 kg cm² aus Schlitten, Platte und Riemenscheibe an seiner Welle: sein Drehzahlregler schwang oberhalb 0,1 N m s/rad bei etwa 450 Hz, und der Zyklus kam nur auf 2,5 mm statt 0,5 mm zur Ruhe. Die 4,0 kg cm² des 1FK2205-2AF vertragen eine Verstärkung von 0,25 mit mindestens 41° Phasenreserve über die Grenzen.
-- **Riemen.** Der Riemen jeder Säule trägt das Gewicht des Schlittens und seinen Anteil an dem der Platte (22 N in der Mitte) und was ihr Beschleunigen braucht: 141 bis 529 N in seinen beiden Abschnitten, bei 300 N Vorspannung.
+- **Motor.** Ein Compact-Motor, wegen seines Läufers: der High-Dynamic-Motor 1FK2104-5AF hätte das Moment (7,5 N m gegen 4,8 N m Bedarf), aber 0,65 kg cm² Läufer gegen etwa 6 kg cm² aus Schlitten, Platte und Riemenscheibe an seiner Welle: sein Drehzahlregler schwang oberhalb 0,1 N m s/rad bei etwa 450 Hz, und der Zyklus kam nur auf 2,5 mm statt 0,5 mm zur Ruhe. Die 4,0 kg cm² des 1FK2205-2AF vertragen eine Verstärkung von 0,25 mit mindestens 38° Phasenreserve über die Grenzen, und eine Nachstellzeit von 0,012 s (0,01 s ließ 34°), kurz, damit der Integrator die Schlitten nach einer Bewegung bald durch die Reibung ihrer Führungen schiebt.
+- **Riemen.** Der Riemen jeder Säule trägt das Gewicht des Schlittens und seinen Anteil an dem der Platte (22 N in der Mitte) und was ihr Beschleunigen braucht: 143 bis 528 N in seinen beiden Abschnitten, bei 300 N Vorspannung.
 - **Singularität.** Die Konditionszahl ist schon in der Mitte 3,15: ein Meter Schlittenweg bewegt die Platte seitlich weiter als nach oben. Der Arbeitsraum hat bis zu 3,98, am unteren Rand gegenüber einer Säule.
 - **Keine Prüfungen für Getriebe, Riemenscheibenlager, Führungen oder Zahnbelastung**: die Achsen haben kein Getriebe, und für Lager, Führungen und Riemenzähne stehen keine Kennwerte in der Konfiguration (die der EGC-80 sind nicht im Katalog).
 
@@ -1423,7 +1423,7 @@ Ein Antrieb, der wegen Überspannung im Zwischenkreis abschaltet, wird unter „
 
 Was die laufende Maschine mit einer Änderung tut:
 
-- Eine geänderte Getriebeübersetzung (`gearbox.ratio`) oder ein geänderter Scheibenradius (`geometry.pulley_radius_m`) baut den Zustand der Maschine an der Pose und mit der Geschwindigkeit des Werkzeugs neu auf, mit Riemen und Getriebe so, wie sie dort in Ruhe sind. Die Riemenkräfte bleiben bis auf einige Prozent, wie sie waren.
+- Eine geänderte Getriebeübersetzung (`gearbox.ratio`) oder ein geänderter Scheibenradius (`geometry.pulley_radius_m`) baut den Zustand der Maschine an der Pose und mit der Geschwindigkeit des Werkzeugs neu auf, mit Riemen und Getriebe so, wie sie dort in Ruhe sind. Die Riemenkräfte bleiben bis auf einige Prozent, wie sie waren. Der Linear-Delta behält stattdessen die Dehnung seiner Riemen, das Moment seiner Kupplungen und die Reibung seiner Führungen, wie sie waren: in Fahrt tragen seine Riemen 34 N mehr als in Ruhe.
 - Eine Änderung am Input Shaper (sein Schalter, die Frequenz, der Dämpfungsgrad oder „Input Shaper folgt der Pose“) wird übernommen, sobald die geplante Bewegung das nächste Mal steht. So springt der Sollwert nicht. Ein Zyklus ohne Verweilzeit und ohne Greiferwechsel steht nie; dort wartet die Änderung auf „Nach Segment anhalten“.
 - Ein Zyklus, der im Lauf Segmente verliert, läuft in den Segmenten weiter, die er hat.
 

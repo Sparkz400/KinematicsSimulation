@@ -549,10 +549,15 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             ("Guide life by the catalogue formula [km]", life),
             ("Guide life at the cycle's mean speed [h]", sim_components::analysis::guide_life_h(&entry.config(), &load)),
         ];
-        // The belt machines have every figure; a machine without belts, pulleys and guides (the delta) has the first three.
+        // The belt machines have every belt figure, and the guide figures where their config rates the parts (guides,
+        // pulley bearings, belt teeth: the gantries' do, the linear delta's EGC-80 axes are not in the catalogue, and it
+        // tells its guides' load per carriage only); a machine without belts, pulleys and guides (the delta) has the first
+        // three.
         let belted = !sim.machine.belt_sections().is_empty();
+        let rated = entry.config().get("ratings.guide_dynamic_load_rating_n").is_ok();
         if belted {
-            assert!(expected.iter().all(|(_, value)| value.is_some()) && load.radial_load_peak.unwrap() > 100.0 && life.unwrap() > 1.0, "{}: {expected:?}", entry.id);
+            assert!(expected[..6].iter().all(|(_, value)| value.is_some()) && load.radial_load_peak.unwrap() > 100.0, "{}: {expected:?}", entry.id);
+            assert!(!rated || (expected[6..].iter().all(|(_, value)| value.is_some()) && life.unwrap() > 1.0), "{}: {expected:?}", entry.id);
         }
         let expected: Vec<(&str, Option<f64>)> = expected.into_iter().filter(|(_, value)| value.is_some()).collect();
         assert!(expected.len() >= 3);
@@ -565,9 +570,10 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         // fed back into the mains (zero without the regenerative supply).
         assert_eq!(motors[0][0], "Figure");
         assert_eq!(motors[0][1..], model.session.motors.iter().map(|info| model.tr.tr(info.key).to_string()).collect::<Vec<_>>());
-        // And the lives in hours and the belt's tooth load, which both belt machines' default configs have (not the
+        // And the lives in hours and the belt's tooth load, which both gantries' default configs have (not the
         // gearing's, which their cycles never take above its rated torque, nor the motor bearings', as their belts pull on a
-        // gearbox); the delta has the gearbox's lives alone, a machine without a rated gearbox (the screw's coupling) none.
+        // gearbox); the delta has the gearbox's lives alone, a machine without a rated gearbox (the screw's coupling, the
+        // linear delta's direct drives) none.
         let lives = {
             let (cfg, m) = (entry.config(), &load.motors[0]);
             let figures = [
@@ -579,7 +585,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             ];
             figures.iter().filter(|l| l.is_some()).count()
         };
-        assert_eq!(motors.len(), if belted { 14 } else { 11 + lives }, "{}", entry.id);
+        assert_eq!(motors.len(), if belted && rated { 14 } else { 11 + lives }, "{}", entry.id);
         assert!(row(motors, "Fed back into the mains [J]").iter().all(|cell| shows(cell, 0.0)), "{motors:?}");
         for (k, m) in load.motors.iter().enumerate() {
             let figures = [
@@ -604,7 +610,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
                 ("Belt tooth load, share of its rating", sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()),
             ];
             let gearing = lives[2].0;
-            for (label, value) in lives.into_iter().filter(|(label, value)| (belted && *label != gearing) || value.is_some()) {
+            for (label, value) in lives.into_iter().filter(|(label, value)| (belted && rated && *label != gearing) || value.is_some()) {
                 assert!(shows(&row(motors, label)[k], value.unwrap()), "{}: {label} {value:?} in {motors:?}", entry.id);
             }
         }
@@ -1945,8 +1951,12 @@ fn the_frequency_response_is_measured_in_the_app() {
 
 /// Stage 2 of the fit in the app, as `sim-cli fit --sweep` gives it (`identify::fit_sweep`, which `cli.rs` checks
 /// against the command line's output). The measured response is that of the default machine, whose belt has
-/// EA = 500 kN; the app's config says 400 kN. By hand the stiffness is off by 500 / 400 = 1.25, and the fit
-/// says so within its standard error. A file without a dip, a missing one and one that is no sweep are refused.
+/// EA = 500 kN (the linear delta's 600 kN); the app's config says 0.8 of it, 400 kN (480 kN). By hand the stiffness is
+/// off by 1 / 0.8 = 1.25, and the fit says so within its standard error, half a step of the sweep at the dip's flanks.
+/// The sweep has 30 points from 50 to 130 Hz, 3.4 % apart, and 40 (2.5 %) for a broad dip (damping above 0.3; the
+/// gantries' is 0.08): the linear delta's (damping 0.35, flanks near 62 and 123 Hz) came to a standard error of
+/// 2 * 1.270 * 0.5 * 0.0335 * 123 / 87.6 = 0.060 on 30 points (above the 0.05 asked), 0.044 (1.268) on 40.
+/// A file without a dip, a missing one and one that is no sweep are refused.
 #[test]
 fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app() {
     for entry in MACHINES.iter().copied() {
@@ -1954,14 +1964,18 @@ fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app() {
         if (entry.build)(&entry.config()).unwrap().belt_sections().is_empty() {
             continue;
         }
-        let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
+        let sweep = |count| sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &sim_components::analysis::log_spaced(50.0, 130.0, count), 1.5).unwrap();
+        let mut points = sweep(30);
+        if sim_components::identify::resonance(&points).is_some_and(|dip| dip.damping > 0.3) {
+            points = sweep(40);
+        }
         let file = temp_file(entry, "sweep.csv");
-        let text = sweep_csv(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap());
+        let text = sweep_csv(&points);
         std::fs::write(&file, &text).unwrap();
 
         let mut model = Model::new(entry, "en");
         assert!(model.sweep_fit_table().is_none() && model.sweep_fit_advice().is_none());
-        model.set_param("belt.stiffness_ea_n", toml::Value::Float(4.0e5));
+        model.set_param("belt.stiffness_ea_n", toml::Value::Float(0.8 * entry.config().f64("belt.stiffness_ea_n").unwrap()));
         (model.inputs.sweep_file, model.inputs.sweep_amplitude, model.inputs.sweep_motor) = (file.clone(), 1.5, 0);
         model.run_analysis(Analysis::SweepFit);
         wait_for_analysis(&mut model);
