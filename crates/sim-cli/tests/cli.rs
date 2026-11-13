@@ -703,10 +703,18 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
         let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-rounded.csv", entry.id)).to_str().unwrap().to_string();
         let pieces = format!("line,{},{}\narc,{},{},{},{},{turn}\nline,{},{}\n", corner[0], corner[1], end[0], end[1], corner[0], end[1], end[0], end[1] + 0.1 * dz);
         std::fs::write(&path, pieces).unwrap();
+        // `analyze` ends its error stream with how the run was started (effects.thermal_warm_start, since 13 November):
+        // what it says before that line.
+        let said_before_start = |out: &Output| {
+            let all = text(&out.stderr);
+            let (said, start) = all.trim_end().rsplit_once('\n').unwrap_or(("", all.trim_end()));
+            assert!(start.starts_with("Thermal start: ") || start.starts_with("Thermischer Start: "), "{}: {all:?}", entry.id);
+            said.to_string()
+        };
         let analysed = |extra: &[&str]| -> (f64, String) {
             let out = cli(&[&["analyze", entry.id, "--path", &path], extra].concat());
             assert!(out.status.success(), "{}", text(&out.stderr));
-            (text(&out.stdout).lines().nth(1).unwrap().split(',').nth(1).unwrap().parse().unwrap(), text(&out.stderr))
+            (text(&out.stdout).lines().nth(1).unwrap().split(',').nth(1).unwrap().parse().unwrap(), said_before_start(&out))
         };
         let tolerance = ["--set", "profile.path_tolerance_m=0.0001"];
         let ((given, silent), (blended, said)) = (analysed(&[]), analysed(&tolerance));
@@ -720,7 +728,7 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
         std::fs::write(&rounded, format!("line,{},{}\narc,{:.7},{:.7},{},{},{turn}\n", corner[0], corner[1], on_circle[0], on_circle[1], corner[0], end[1])).unwrap();
         let off = sim.path_deviation(&sim_components::path::parse(&std::fs::read_to_string(&rounded).unwrap()).unwrap(), false).unwrap();
         let out = cli(&["analyze", entry.id, "--path", &rounded]);
-        assert!(off > 1e-9 && off < 5e-8 && out.status.success() && text(&out.stderr).is_empty(), "{}: off by {off} m, said {:?}", entry.id, text(&out.stderr));
+        assert!(off > 1e-9 && off < 5e-8 && out.status.success() && said_before_start(&out).is_empty(), "{}: off by {off} m, said {:?}", entry.id, text(&out.stderr));
         // A tolerance below zero is no tolerance.
         let refused = cli(&["analyze", entry.id, "--path", &path, "--set", "profile.path_tolerance_m=-0.001"]);
         assert!(refused.status.code() == Some(2) && text(&refused.stderr).contains("profile.path_tolerance_m"), "{}", text(&refused.stderr));

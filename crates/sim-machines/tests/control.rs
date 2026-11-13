@@ -698,24 +698,32 @@ fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
     let mut configs: Vec<(String, Config, &MachineEntry, f64, f64)> = MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e, 35.0, 6.0)).collect();
     let exct = &machine_t_gantry::ENTRY;
     configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct, 35.0, 6.0));
-    for (name, cfg, entry, phase, gain) in configs {
-        for friction in [true, false] {
+    let passes = configs.iter().flat_map(|(name, cfg, entry, phase, gain)| {
+        [true, false].map(|friction| {
             // Motor friction, and the guides' or the joints' (whichever the machine has).
             let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
-            let cfg = config_of(&cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
+            let cfg = config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
             // With friction off, the friction values act on nothing: their runs gave the margins of the config as it is
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
             let mut bounded = bounds(&cfg).unwrap();
             bounded.retain(|(path, ..)| !skip || !["friction_", "motor.friction_", "joint.friction_"].iter().any(|start| path.starts_with(start)));
-            for (run, margins) in velocity_loop_margins(entry, &cfg, &bounded).unwrap() {
+            (name, friction, cfg, *entry, bounded, *phase, *gain)
+        })
+    });
+    // All passes at once: each spreads its runs over every core, and one waiting for its last run leaves the cores to
+    // the others instead of idle (the 24 passes, one after the other, ended 24 times on one run).
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = passes.map(|(name, friction, cfg, entry, bounded, phase, gain)| scope.spawn(move || (name, friction, phase, gain, velocity_loop_margins(entry, &cfg, &bounded).unwrap()))).collect();
+        for (name, friction, phase, gain, runs) in workers.into_iter().map(|w| w.join().unwrap()) {
+            for (run, margins) in runs {
                 for (k, m) in margins.iter().enumerate() {
                     assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");
                 }
             }
         }
-    }
+    });
 }
 
 fn config_of(cfg: &Config, edit: &[&str]) -> Config {

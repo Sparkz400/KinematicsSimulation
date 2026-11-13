@@ -402,7 +402,8 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
     let cfg = config(entry, &["mass.payload_kg = 120.0"]);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let load = analyse_cycle(&mut sim).unwrap();
-    assert!(load.tripped && !sim.control.enabled() && sim.control.cycle_passes() < 2);
+    // Tripped before a warm pass began: measured from cold, so no warm start to judge (the trip is the finding).
+    assert!(load.tripped && !sim.control.enabled() && sim.control.cycle_passes() < 2 && load.warm_start.is_none());
     let motor = &load.motors[0];
     assert!(load.duration > 0.1 && motor.peak_torque > 1.0 && motor.rms_torque > 0.1 && motor.utilisation > 0.5 && motor.peak_speed > 10.0, "{motor:?} in {} s", load.duration);
     let judged = verdicts(&cfg, &load).unwrap();
@@ -412,10 +413,16 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
     let candidate = Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load, judged)), refused: "" };
     assert!(!candidate.passes());
     assert_eq!(candidate.tightest(), Some(("dc-link-overvoltage", f64::INFINITY)));
-    // A cycle that does not trip is measured as before, over its second pass.
+    // A cycle that does not trip is measured as before over its second pass, and since 13 November, with
+    // effects.thermal_warm_start, over the warm passes after it: the winding, the one rise here that acts back, settles
+    // at 100 / 1.39 (0.4463 / 2.822)^2 = 1.799 K, / (1 - 0.0039 * 1.799) = 1.812 K, which the cold pass, started a few mK
+    // warm, misses by more than 0.1 K. One pass started there settles within 0.1 K (2e-6 K: the warmer winding asks for
+    // more voltage, not more current), so the controller has begun its fourth pass.
     let mut sim = Sim::new(entry, &entry.config()).unwrap();
     let load = analyse_cycle(&mut sim).unwrap();
-    assert!(!load.tripped && sim.control.cycle_passes() == 3);
+    let warm = load.warm_start.unwrap();
+    assert!((load.motors[0].winding_rise - 1.812).abs() < 1e-3 && warm.passes == 1 && warm.converged(), "{:?}, {} K", load.warm_start, load.motors[0].winding_rise);
+    assert!(!load.tripped && sim.control.cycle_passes() == 3 + 1);
 }
 
 // ---------------------------------------------------------------------------------------------
