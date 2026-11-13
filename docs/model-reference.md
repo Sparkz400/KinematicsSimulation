@@ -648,6 +648,22 @@ with J_rotor the motor's rotor and the gearbox's input inertia. **Rigid model**,
 
 Not modelled: the forearms' rotational inertia and the error of the 2/3 split (it matches the inertia at the elbow, not the momentum), elasticity of arms, rods and ball joints (no figures published for any product; the gearbox is the one elastic part), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, a fourth axis, a resonance for a shaper that follows the pose.
 
+## Delta picker D2
+
+Source: [`machine-delta-d2/src/lib.rs`](../crates/machine-delta-d2/src/lib.rs). The planar delta: two arms in the vertical x-z plane, their shoulder axes along y at x = ±R, each with a pair of forearms down to a plate that keeps its orientation (a five-bar whose lower links are parallelograms, as in Codian's D2 or ABB's two-axis FlexPicker). The tool is the plate's centre p = (x, z), z up from the shoulder axes. The equations are the [D3's](#delta-picker-d3) with two legs at φ = 0° and 180° and y = 0; leg i points along s_i x (s_1 = +1, s_2 = −1):
+
+```text
+elbow       c_i(θ) = (s_i (e + L_a cos θ), −L_a sin θ)
+inverse     x′ = s_i x,  A = −2 L_a (x′ − e),  B = 2 L_a z,  C = (x′ − e)² + z² + L_a² − L_b²,  θ = 2 atan((−B − sqrt(A² + B² − C²)) / (C − A))
+forward     the lower of the two points at L_b from both elbows (two circles)
+Jacobian    2 × 2: J_x rows u_i = p − c_i, J_q = diag(u_i · ∂c_i/∂θ_i), J = J_x⁻¹ J_q; condition number from the eigenvalues of JᵀJ in closed form
+dynamics    m_nt = m_plate + m_payload + 2 (1 − s) m_fb,  M = I_b · 1 + m_nt JᵀJ,  Q_g,i = g m_LG cos θ_i − m_nt g J_zi   (I_b, m_LG as on the D3)
+```
+
+The joints, the elastic and rigid models (10 and 6 states), the feedforward, the signals (`arm.1/2.angle`, `gearbox.1/2.output_torque`, `kinematics.condition`), the effect views, part heating and the refusals (`error-delta-*`) are the D3's. **Working range**: the band |x| ≤ `workspace.half_width_m` below `top_z_m`, its bottom an arc through both edges at `height_edge_m` and the centre at `height_centre_m` below the top. **Static hold, and stability**: held by constant motor torques the plate's vertical mode is unstable in the upper part of the range, −3.49 N m/rad at the middle of the default range (638.5 mm below the shoulders), +7.52 N m/rad at 788.5 mm; the sideways mode is stable (13.5 and 18.9 N m/rad). The standard suite's loss-free configs put range, start and cycle 150 mm lower. `Machine::setpoint_slack` is `rest_sag` over 41 columns of the range: 0.42 mm with 1 arcmin backlash (at most 0.37 mm found at rest in the simulation).
+
+The model takes the plate as kept level. The 3D view draws each forearm pair as two rods apart along y, as on the D3; in the plane, a plate on two legs needs a parallelogram in the x-z plane (or a third link) to keep it from turning about y, which real D2s have. The scene: a base beam, per arm a motor and gearbox box with the rotor bar, the arm, the two rods, the plate and the payload; the collision bodies are the plate and the payload. Not modelled, as on the D3: the forearms' rotational inertia, elastic links, friction in the ball joints, collisions between links.
+
 ## Motion controller
 
 Source: [`control.rs`](../crates/sim-components/src/control.rs).

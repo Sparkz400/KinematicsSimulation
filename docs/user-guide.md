@@ -577,6 +577,22 @@ To size for another payload, change `mass.payload_kg` (and `ratings` where the p
 
 What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
 
+### The planar delta D2
+
+`delta-d2` is a two-arm delta in the vertical x-z plane: two rotary arms, each with a pair of forearms down to a plate that keeps its orientation, sized like the Codian Robotics D2-800-S020 (working range 800 mm wide and 477 mm high, 5 kg payload, up to 210 picks a minute). Codian names no motors; the config uses the D3's 1FK2105-4AF on S210 converters behind ratio 20, and marks every value `[catalogue]` or `[estimate]` ([the config](../crates/machine-delta-d2/default.toml)). The tool pose is (x, z); paths are written `line,x,z` and `arc,x,z,cx,cz,cw` as on the gantries. The cycle is the D3's Adept cycle in the plane, 100 mm below the top of the range: 0.720 s.
+
+```text
+$ sim-cli verdicts delta-d2
+motor-peak,1,0.6272,1.000,ok
+gearbox-continuous,1,71.55,120.0,ok
+gearbox-peak,1,164.5,192.0,ok
+...
+settling,,0.0003476,0.0005000,ok
+singularity,,1.136,5.000,ok
+```
+
+Every check passes, with `--bands` too (settling 0.31 to 0.41 mm, gearbox peak up to 163 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails gearbox peak (201 N m) and settling (0.61 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its 192 N m. The settling passes because the gearbox's backlash is an estimate of 1 arcmin, a reduced-backlash precision planetary: with the 9 arcmin of the catalogue's NRB080-05-20 (`--set gearbox.backlash_rad=2.618e-3`) it fails, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

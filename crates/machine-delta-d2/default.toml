@@ -1,0 +1,363 @@
+# Delta picker D2, the planar delta: two rotary arms in the vertical x-z plane, each with a pair of forearms down to a
+# plate that keeps its orientation (a five-bar with parallelograms). Sized like the Codian Robotics D2-800-S020:
+# working range 800 mm wide and 477 mm high, 5 kg payload, up to 210 picks a minute (codian-robotics.com/robots,
+# read 13 November 2026). Codian names no motors; the drives are the D3's Siemens 1FK2105-4AF behind a ratio of 20.
+# Every value says where it comes from:
+#   [catalogue]  read from a maker's document: Codian's product listing (range, payload, picks a minute, 0.1 mm
+#                repeatability), Siemens catalogue D 32 and the planetary gearbox manual (catalog/siemens/*.csv).
+#   [estimate]   ours. Codian publishes no arm lengths, masses or the shape of the range's bottom; the geometry is
+#                chosen to reach all of the range with condition numbers below 1.6 (a search over base radius, arm,
+#                forearm and the range's height below the shoulders).
+# Units are in the field names. The frame: origin midway between the shoulder axes, x across, z up, so the plate
+# works below zero; arm 1 points along +x, arm 2 along -x. The tool pose is (x, z).
+format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.0, 0.0, -0.65], size_m = [0.1, 0.1, 0.1] }]
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). Named here, they
+# would replace the numbers below when the config is loaded; the numbers below are those parts' own, written out
+# (motor 1FK2105-4AF at 400 V, gearbox NRB080-05-20, converter 6SL3210-5HE11-5UF0), so that the config reads as it
+# runs. "" names none.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+[effects]
+gravity = true
+payload = true
+# The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the arm times the ratio.
+joint_elasticity = true
+# Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+# Stops at both ends of each arm's angle range ([joint]).
+hard_stops = true
+holding_brake = true
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there (see docs/model-reference.md). Off by default.
+crash = false
+
+# The kinematics. e = base_radius_m - platform_radius_m is what the equations use.
+# [estimate] all four: with them the whole working range is reachable, the arm angles stay between -49 and +70
+# degrees and the condition number of the Jacobian below 1.56 (1.48 to 1.8 for the neighbours of the search).
+[geometry]
+base_radius_m = 0.15
+platform_radius_m = 0.05
+upper_arm_m = 0.4
+forearm_m = 0.7
+# Distance between the two rods of a forearm pair, along the joints' axis (y), for the 3D view only.
+forearm_spacing_m = 0.1
+
+# The working range in the x-z plane: a band of half_width_m either side of the centre below top_z_m, its bottom an
+# arc through both edges at height_edge_m and the centre at height_centre_m below the top.
+# [catalogue] Codian D2-800-S020: 800 mm wide, 477 mm high.
+# [estimate] 250 mm high at the edges (Codian draws the shape behind the listing), the top 400 mm below the shoulders.
+[workspace]
+half_width_m = 0.4
+top_z_m = -0.4
+height_edge_m = 0.25
+height_centre_m = 0.477
+# Targets where the Jacobian's condition number is above this are refused: near a singularity. Above anything in
+# the working range (1.56). The cycle is judged against ratings.max_condition_number.
+# [estimate]
+max_condition_number = 10.0
+
+# [estimate] all: a carbon tube arm with an aluminium elbow block, carbon rods with ball cups, an aluminium plate;
+# heavier than the D3's for the 5 kg payload.
+[mass]
+upper_arm_kg = 1.2
+# Centre of mass of the arm's tube from the shoulder axis, and its inertia about the shoulder axis (uniform tube:
+# m L^2 / 3 = 0.064 kg m^2), without the elbow block.
+upper_arm_cg_m = 0.2
+upper_arm_inertia_kgm2 = 0.064
+elbow_kg = 0.4
+forearm_pair_kg = 0.6
+# The share of a forearm pair's mass counted at the elbow (the rest at the plate): 2/3 matches the rod's inertia
+# about its end, m L^2 / 3 (Codourey 1998, Olsson 2009). The rods' own rotational inertia is not modelled.
+forearm_elbow_share = 0.6667
+platform_kg = 1.0
+# [catalogue] Codian D2-800-S020: payload 5 kg
+payload_kg = 5.0
+
+# Each arm's joint at the base.
+[joint]
+# [estimate] two angular contact bearings of the arm's shaft, about 1 % of the arm's holding torque.
+friction_coulomb_nm = 0.3
+friction_viscous_nm_s_rad = 0.05
+friction_smoothing_rad_s = 0.01
+# The stops. [estimate] beyond the -49 to +70 degrees the working range needs (+81 for the standard suite's range,
+# 150 mm lower).
+min_angle_deg = -60.0
+max_angle_deg = 85.0
+# [estimate] a rubber buffer.
+stop_stiffness_nm_rad = 2.0e4
+stop_damping_nm_s_rad = 20.0
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min (1FK2 configuration manual); 15 N m at the
+# maximum current of 18 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# With effects.holding_brake: while the drives are disabled, a brake holds each motor shaft up to this torque.
+# [estimate] the D 32 gives no brake torque.
+brake_torque_nm = 8.0
+
+# The gearbox of each arm. [catalogue] Siemens NRB080-05-20 (catalog/siemens/gearbox_nrb.csv): ratio 20, 96 % at full
+# load, 10.4 N m/arcmin, 0.406 kg cm2 at the input, and its torque ratings below; but not its 9 arcmin backlash.
+# With it the cycle fails settling, 0.85 mm against 0.5 mm (`sim-cli verdicts delta-d2 --set gearbox.backlash_rad=
+# 2.618e-3`): both arms always hold the plate up, so each rests at one side of its backlash, and that constant offset
+# is what the motors' encoders do not see. Every gearbox of this size and ratio in the catalogue has 7 to 9 arcmin; a
+# 2-axis delta of this class uses a precision planetary gearbox with reduced backlash.
+# [estimate] 1 arcmin (reduced-backlash class of servo planetary gearboxes): settling 0.35 mm; 2 arcmin 0.41 mm,
+# 3 arcmin 0.47 mm.
+# The ratio: the arms hold up to 25 N m against the plate's weight at the range's edge (1.27 N m at the motor), and
+# the motors turn at up to 1507 r/min in the cycle, of the rated 3000.
+[gearbox]
+ratio = 20.0
+efficiency = 0.96
+backlash_rad = 2.909e-4
+stiffness_nm_rad = 35752.6
+# [estimate]
+damping_nm_s_rad = 5.0
+inertia_at_input_kgm2 = 4.06e-5
+
+# With effects.part_heating: each gearbox warms with its loss (power.gearbox_*). [estimate] as for the D3.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as the delta has no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+# The tool's limits along x and z. [estimate] Codian publishes none; the D3's 3 m/s, 50 m/s2 and 2500 m/s3.
+[axis.x]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+[axis.z]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# Velocity loop gain, the D3's (same motor and gearbox); checked with `sim-cli margins delta-d2 --bands`.
+velocity_kp_nm_s_rad = 0.25
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+[ratings]
+# How far the tool may be from its target in the second half of a dwell, when the gripper acts. It counts the
+# gearboxes' twist and backlash under the plate's weight, which the motors' encoders do not see.
+# [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue 2024/12); Codian's
+# 0.1 mm is the repeatability, which a constant sag does not spoil.
+settling_tolerance_m = 0.0005
+# [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
+gearbox_rated_torque_nm = 120.0
+gearbox_max_torque_nm = 192.0
+# [estimate] a gearbox of this size; not in the catalogue's files.
+gearbox_max_input_speed_rpm = 6000.0
+# The DC link of the S210 converter. [estimate] as for the EXCT-30: 66 uF for 1.5 kW, the chopper at 770 V.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] its internal braking resistor and trip level (catalog/siemens/braking_s210.csv, operating instructions
+# 09/2022): 100 W, 5.7 kW, 820 V.
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+# Reliability of the bearing lives, %: the life factor a1 of ISO 281 (see docs/config-reference.md). 90 to 99.95.
+bearing_reliability_percent = 90.0
+# The output speed at which the planet bearings last 20000 h at the rated torque, for the gearbox life.
+# [estimate] as on the D3: not printed for the NRB080-05-20.
+gearbox_reference_speed_rpm = 100.0
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0, which D 32 pairs with the 1FK2105-4AF at 400 V: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# The highest condition number of the Jacobian the cycle may reach ("singularity"). [estimate] a design rule, as on
+# the D3: the working range has up to 1.56.
+max_condition_number = 5.0
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: the delta has no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+# Not used on a nonlinear machine (see docs/user-guide.md): paths run as given.
+path_tolerance_m = 0.0
+# For `sim-cli optimise`: the cycle's own 25 mm lift; the same clearance is kept from every obstacle.
+min_clearance_m = 0.025
+
+# Low and high bound of the values that are estimates (see the other machines' configs).
+[bounds]
+geometry.base_radius_m = [0.13, 0.17]
+geometry.platform_radius_m = [0.04, 0.06]
+geometry.upper_arm_m = [0.38, 0.42]
+geometry.forearm_m = [0.68, 0.72]
+mass.upper_arm_kg = [0.8, 1.6]
+mass.upper_arm_inertia_kgm2 = [0.043, 0.085]
+mass.elbow_kg = [0.25, 0.6]
+mass.forearm_pair_kg = [0.4, 0.8]
+mass.forearm_elbow_share = [0.5, 0.667]
+mass.platform_kg = [0.7, 1.4]
+joint.friction_coulomb_nm = [0.1, 0.6]
+joint.friction_viscous_nm_s_rad = [0.02, 0.1]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+gearbox.damping_nm_s_rad = [2.0, 10.0]
+gearbox.backlash_rad = [1.454e-4, 5.818e-4]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+
+# Above the place position of the cycle.
+[start]
+pose = [0.1525, -0.5]
+
+# The Adept cycle 25/305/25 mm in the plane: up 25 mm, across 305 mm, down 25 mm, and back. Each leg is a move of its
+# own, stopping at the corners; at the bottom the gripper acts for 35 ms. It lies across the centre, 100 mm below the
+# top of the working range. "payload" is the state of the gripper once the segment has arrived.
+[[cycle.segment]]
+target = [0.1525, -0.525]
+dwell_s = 0.035
+payload = false
+
+[[cycle.segment]]
+target = [0.1525, -0.5]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, -0.5]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, -0.525]
+dwell_s = 0.035
+payload = true
+
+[[cycle.segment]]
+target = [-0.1525, -0.5]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [0.1525, -0.5]
+dwell_s = 0.0
+payload = true
