@@ -233,8 +233,9 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
-        // A crash needs an obstacle, and the configs have none. Their own tests show them working.
-        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash"];
+        // A crash needs an obstacle, and the configs have none. The thermal warm start acts on the cycle analysis, not on
+        // a run. Their own tests show them working.
+        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash", "effects.thermal_warm_start"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Runner::new(entry, &base).unwrap().sim.machine.motors().len() < 2;
         // Nor does backlash or a gearbox's loss act where the config has none (the screw's and the linear motor's couplings;
@@ -252,7 +253,16 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
             .into_iter()
             .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !(tight && e == "effects.gearbox_backlash") && !(lossless && e == "effects.gearbox_efficiency") && !(frictionless && e == "effects.motor_friction") && !(level && e == "effects.gravity") && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback")))
             .collect();
+        // A switch that acts only in a setting the base has not is switched from that setting, in both runs: the belt's
+        // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
+        // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's).
+        let current = format!("ratings.drive_max_current_a = {:?}", 0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap());
+        let through = [("effects.belt_wrap", "effects.belt_tooth_jump = true"), ("effects.drive_current_limit", current.as_str())];
         for effect in effects {
+            let mut base = base.clone();
+            if let Some((_, setting)) = through.iter().find(|(e, _)| *e == effect) {
+                base.set_text(setting).unwrap();
+            }
             let mut runners = [Runner::new(entry, &base).unwrap(), Runner::new(entry, &base).unwrap()];
             let mut events = [Vec::new(), Vec::new()];
             for (runner, events) in runners.iter_mut().zip(&mut events) {
@@ -1474,8 +1484,12 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
         }
         let axes = runner.sim.machine.axes().to_vec();
         let far: Vec<f64> = axes.iter().map(|a| a.min + 0.75 * (a.max - a.min)).collect();
-        // The tool at rest is off its pose by what the gears give way (an arm's twist, some mm at its tool).
-        let twist = twist_in_scene(runner.sim.machine.as_ref(), &far);
+        // The tool at rest is off its pose by what the gears give way (an arm's twist, some mm at its tool). On a machine
+        // in metres that is its setpoint slack, a distance already: 0.1 mm on the belts, 2.32 mm on the delta (its
+        // gearboxes' twist under the arms' weight and half their backlash). There, with the forearms as rods since
+        // 13 November, the tool rests 1.48 mm off `far` (1.22 mm with the lumped forearms) and the trail ends 1.006 mm
+        // off it (0.884 mm), past the 1 mm this bound had without the slack.
+        let twist = if axes.iter().all(|a| a.unit == "m") { runner.sim.machine.setpoint_slack() } else { twist_in_scene(runner.sim.machine.as_ref(), &far) };
         let points = runner.sim.plan_path(&[sim_components::path::Piece::Line(far.clone())], false).unwrap();
         let duration = points[points.len() - 1].0;
 

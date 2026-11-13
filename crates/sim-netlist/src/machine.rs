@@ -128,7 +128,6 @@ struct FrameMode {
 }
 
 struct Span {
-    id: &'static str,
     key: &'static str,
     section: usize,
     length: f64,
@@ -632,7 +631,7 @@ impl ConfigMachine {
         } else {
             None
         };
-        let spans = net.spans.iter().map(|s| Span { id: intern(&s.id), key: intern(&format!("belt-span-{}", s.id)), section: s.section, length: s.length, c: s.axes.clone() }).collect();
+        let spans = net.spans.iter().map(|s| Span { key: intern(&format!("belt-span-{}", s.id)), section: s.section, length: s.length, c: s.axes.clone() }).collect();
         Ok(Self {
             elastic,
             g_along: incline.iter().map(|a| gravity * a.sin()).collect(),
@@ -1626,7 +1625,8 @@ impl Machine for ConfigMachine {
             }
         }
         if self.span_mass.is_some() {
-            out.extend(self.spans.iter().map(|p| SignalInfo::new(format!("belt.span.{}.frequency", p.id), p.key, "quantity-span-frequency", "Hz")));
+            // Numbered from 1 in the file's order, as the crates number theirs (`belt.span.<i>.frequency`); the label names the node.
+            out.extend(self.spans.iter().enumerate().map(|(i, p)| SignalInfo::new(format!("belt.span.{}.frequency", i + 1), p.key, "quantity-span-frequency", "Hz")));
             out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
         }
         // Named by the motor, as the joint kit names them by its joint (`joint.1.force`, `screw.1.speed`).

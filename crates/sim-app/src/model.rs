@@ -1096,7 +1096,9 @@ impl Model {
                 let step = step_response(entry, &config, axis, 0.001, 0.5)?;
                 let response = closed_loop_response(entry, &config, axis, &log_spaced(1.0, 200.0, 40), 0.0005)?;
                 let sim = Sim::new(entry, &config)?;
-                let modes = modes_along(sim.machine.as_ref(), sim.control.planned_pos(), axis, MODE_POINTS);
+                // At the configured start pose, where the tool stands: the plan at rest is the motors' pose by the
+                // rigid kinematics, off it by the belt's stretch (46 um in Z on the T-gantry).
+                let modes = modes_along(sim.machine.as_ref(), &config.f64s("start.pose")?, axis, MODE_POINTS);
                 Ok(Tuning { axis, step, bandwidth: bandwidth(&response), response, modes })
             };
             let _ = result.send(measure().map_err(|e| (e.key(), e.detail().to_string())));

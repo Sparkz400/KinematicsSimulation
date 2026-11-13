@@ -380,8 +380,8 @@ fn off_path(points: &[(f64, Vec<f64>)], pose: &[f64]) -> f64 {
 }
 
 /// What `run_path` saw: the poses read on the way, the simulator time it was busy with the path (from the first poll
-/// that read busy to the first that read idle), the largest step of `signal.time` between two polls (the busy time
-/// is that coarse) and the mean step.
+/// that read busy to the first that read idle), the largest step of `signal.time` between two polls, counted from a
+/// read before the path was written (the busy time is that coarse), and the mean step.
 struct Polled {
     poses: Vec<Vec<f64>>,
     busy: f64,
@@ -396,11 +396,14 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
         ("command.path_time_optimal".to_string(), Variant::Boolean(time_optimal)),
         ("command.run_path".to_string(), Variant::Boolean(true)),
     ];
+    // The time before the write: the path starts after it. Without it the first poll, late behind a slow write, was
+    // taken for the start (the delta busy for 0.27 s of a 0.31 s plan).
+    let before = plc.numbers(&["signal.time".to_string()]).await[0];
     assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
     // Busy and the time in one read, so that a slow answer does not put time between them.
     let mut names = position.to_vec();
     names.extend(["signal.time".into(), "status.busy".into()]);
-    let (mut poses, mut started, mut polls, mut times) = (Vec::new(), None, 0, Vec::new());
+    let (mut poses, mut started, mut polls, mut times) = (Vec::new(), None, 0, vec![before]);
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut values = plc.read(&names).await;
@@ -553,6 +556,17 @@ impl Plc {
         start.elapsed().as_secs_f64()
     }
 
+    /// Waits until the simulation has run `seconds` on (`signal.time`): a loaded machine runs it slower than the wall
+    /// clock, so that a wait in wall time can end before the axis has settled.
+    async fn simulated(&self, seconds: f64) {
+        let time = || async { self.numbers(&["signal.time".to_string()]).await[0] };
+        let (until, start) = (time().await + seconds, std::time::Instant::now());
+        while time().await < until {
+            assert!(start.elapsed() < Duration::from_secs(30), "the simulation did not run {seconds} s within 30 s");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// A rising edge on `<fb>.Execute`: false, then true, in one write, with the inputs before them.
     async fn execute(&self, axis: &str, fb: &str, inputs: &[(&str, f64)]) {
         let mut values: Vec<(String, Variant)> = inputs.iter().map(|(name, v)| (format!("{fb}.{name}"), Variant::Double(*v))).collect();
@@ -611,12 +625,24 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             assert!(plc.axis_flag(id, "IsHomed").await && !plc.axis_flag(id, "Home.Busy").await);
 
             let target = towards_middle(axis, *home);
-            plc.execute(id, "MoveAbsolute", &[("Position", target), ("Velocity", 0.5 * axis.max_vel)]).await;
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            assert!(plc.axis_flag(id, "MoveAbsolute.Busy").await && plc.axis_flag(id, "MoveAbsolute.Active").await);
-            assert_eq!(plc.axis_read(id, "State").await, Variant::from("DiscreteMotion"));
+            // Busy and Active, and the state, from the edge on until the move is done: polled, as a loaded machine answers
+            // late. At half the top speed, or slower so that the move takes 0.5 s of simulated time at least (some
+            // axes were there in 0.1 s), a poll comes while it runs; one that ended unseen fails.
+            let speed = f64::min(0.5 * axis.max_vel, (target - home).abs() / 0.5);
+            plc.execute(id, "MoveAbsolute", &[("Position", target), ("Velocity", speed)]).await;
+            let outputs: Vec<String> = ["MoveAbsolute.Busy", "MoveAbsolute.Active", "MoveAbsolute.Done", "State"].iter().map(|n| format!("axis.{id}.{n}")).collect();
+            let start = std::time::Instant::now();
+            loop {
+                let read = plc.read(&outputs).await;
+                if read[0] == Variant::Boolean(true) {
+                    assert_eq!((&read[1], &read[3]), (&Variant::Boolean(true), &Variant::from("DiscreteMotion")), "{}.{id}", entry.id);
+                    break;
+                }
+                assert!(read[2] != Variant::Boolean(true) && start.elapsed() < Duration::from_secs(5), "{}.{id}: MoveAbsolute not seen busy before {read:?}", entry.id);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
             plc.until(id, "MoveAbsolute.Done", 5.0).await;
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            plc.simulated(0.3).await;
             let at = plc.axis_number(id, "ActualPosition").await;
             let set = plc.numbers(&setpoints).await;
             assert!((set[index(id)] - target).abs() < 1e-6, "{}.{id}: set to {} m, target {target} m", entry.id, set[index(id)]);
@@ -629,7 +655,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             let back = 0.05f64.min(0.25 * (axis.max - axis.min)) * (target - home).signum();
             plc.execute(id, "MoveRelative", &[("Distance", -back)]).await;
             plc.until(id, "MoveRelative.Done", 5.0).await;
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            plc.simulated(0.3).await;
             let moved = plc.axis_number(id, "ActualPosition").await;
             let (set, wanted) = (plc.numbers(&setpoints).await, target - back);
             assert!((set[index(id)] - wanted).abs() < 1e-6, "{}.{id}: set to {} m, wanted {wanted} m", entry.id, set[index(id)]);

@@ -933,7 +933,9 @@ fn modes(args: &Args) -> Result<(), Failure> {
         return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
     }
     let sim = Sim::new(entry, &cfg)?;
-    let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), sim.control.planned_pos(), axis, points as usize);
+    // At the configured start pose, where the tool stands, not the plan at rest (the motors' pose by the rigid
+    // kinematics, off it by the belt's stretch).
+    let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, axis, points as usize);
     let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let mut out = output(args, "--out")?;
     let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping")).collect();
