@@ -633,31 +633,31 @@ The tool is the plate's centre, x, y and z in metres, z up from the carriages' u
 ```text
 $ sim-cli analyze delta-linear
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-1,0.720000,4.749490,2.025259,106.0492,0.4401,0.6751,141.10,529.06,1.6426,35.34,...
-2,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
-3,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+1,0.720000,4.773111,2.024602,106.1491,0.4423,0.6749,143.45,527.75,1.6420,35.31,...
+2,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
+3,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
 ```
 
 The cycle lies along x, towards column 1 and away from it, so column 1 works hardest. Its 0.720 s are the D3's: the same cycle and axis limits. Festo times the EXPT-95 at up to 150 of these cycles a minute at light loads (0.4 s each) with rounded corners and up to 7 m/s and 110 m/s²; `sim-cli optimise delta-linear` rounds the corners and raises the limits as far as every check allows.
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4401,1.000,ok
-motor-thermal,1,35.34,100.0,ok
-drive-current,1,1.643,3.000,ok
-pulley-torque,1,3.991,10.00,ok
+motor-peak,1,0.4423,1.000,ok
+motor-thermal,1,35.31,100.0,ok
+drive-current,1,1.642,3.000,ok
+pulley-torque,1,3.979,10.00,ok
 ...
-settling,,0.00006175,0.0005000,ok
-belt-tension,,529.1,1000,ok
-belt-slack,,141.1,0,ok
+settling,,0.00007184,0.0005000,ok
+belt-tension,,527.8,1000,ok
+belt-slack,,143.5,0,ok
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,785.7,1500,ok
+gearbox-radial-load,,783.1,1500,ok
 ```
 
 Every check passes, with `--bands` at both bounds of every estimate too. What to read from them:
 
-- **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.7 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 41° of phase margin over the bounds.
-- **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 141 to 529 N in its two sections, against the pretension of 300 N.
+- **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.8 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 38° of phase margin over the bounds, and an integral time of 0.012 s (0.01 s left 34°), short so that the integrator pushes the carriages through their guides' friction soon after a move.
+- **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 143 to 528 N in its two sections, against the pretension of 300 N.
 - **Singularity.** The condition number is 3.15 already at the centre: a metre of carriage moves the plate further sideways than up. The range has up to 3.98, at its bottom rim opposite a column.
 - **No gearbox, pulley-bearing, guide or tooth-load checks**: the axes have no gearbox, and their pulley bearings, guides and belt teeth have no ratings in the config (the EGC-80's are not in the catalogue).
 
@@ -1376,7 +1376,7 @@ A drive that trips on DC link overvoltage is reported under Messages, once per t
 
 What the running machine does with a change:
 
-- A changed `gearbox.ratio` or `geometry.pulley_radius_m` rebuilds the machine's state at the tool's pose and speed, with belts and gears as they are at rest there. The belt tensions stay within some percent of what they were.
+- A changed `gearbox.ratio` or `geometry.pulley_radius_m` rebuilds the machine's state at the tool's pose and speed, with belts and gears as they are at rest there. The belt tensions stay within some percent of what they were. The linear delta keeps its belts' stretch, its couplings' torque and its guides' friction as they were instead: at speed its belts carry 34 N more than at rest.
 - A change to the input shaper (its switch, frequency, damping, or following the pose) is taken when the planned motion next stands still, so the setpoint does not jump. A cycle without a dwell and without a gripper action never stands still; there the change waits for Stop.
 - A cycle that loses segments while it runs goes on within the segments it has.
 

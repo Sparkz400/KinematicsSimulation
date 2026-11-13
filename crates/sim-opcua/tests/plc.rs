@@ -624,11 +624,14 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m, within {rest} m", entry.id);
             assert!(plc.axis_number(id, "ActualVelocity").await.abs() < 1e-2);
 
-            plc.execute(id, "MoveRelative", &[("Distance", -0.05 * (target - home).signum())]).await;
+            // 0.05 m back, or a quarter of the range on a shorter axis: the linear delta's z has 100 mm with its home 10 mm
+            // below the top, and 0.05 m back from 20 mm below home would end 30 mm above home, beyond the range.
+            let back = 0.05f64.min(0.25 * (axis.max - axis.min)) * (target - home).signum();
+            plc.execute(id, "MoveRelative", &[("Distance", -back)]).await;
             plc.until(id, "MoveRelative.Done", 5.0).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             let moved = plc.axis_number(id, "ActualPosition").await;
-            let (set, wanted) = (plc.numbers(&setpoints).await, target - 0.05 * (target - home).signum());
+            let (set, wanted) = (plc.numbers(&setpoints).await, target - back);
             assert!((set[index(id)] - wanted).abs() < 1e-6, "{}.{id}: set to {} m, wanted {wanted} m", entry.id, set[index(id)]);
             let rest = at_rest_within(entry, &set);
             assert!((moved - wanted).abs() < rest, "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m", entry.id);

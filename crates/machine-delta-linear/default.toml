@@ -237,11 +237,14 @@ current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
 # Velocity loop gain, tuned with `sim-cli margins delta-linear --bands` for a phase margin of at least 35 degrees and a
-# gain margin of at least 6 dB in every run, also with motor and guide friction off. Found: at least 41.0 degrees and
-# 8.5 dB (friction off), 51.0 degrees and 9.8 dB (on); 59.8 degrees and 10.5 dB as configured. 0.3 left 26 degrees with
-# the belt's damping at its low bound, and Tn 0.01 s 34 degrees at a crossover near 21 Hz.
+# gain margin of at least 6 dB in every run, also with motor and guide friction off. Found: at least 38.2 degrees and
+# 8.8 dB (friction off), 50.2 degrees and 10.1 dB (on); 58.9 degrees and 10.7 dB as configured. 0.3 left 26 degrees with
+# the belt's damping at its low bound, and Tn 0.01 s 34 degrees at a crossover near 21 Hz. Tn as short as that allows:
+# the integrator pushes the carriages through their guides' friction, and against the bristles' 5e5 N/m (the loop's
+# 0.25 * 50 / r^2 = 61 kN/m at a carriage) it settles with Tn (1 + 5e5 / 61e3) = 0.11 s; with Tn 0.02 s, 0.18 s, the
+# tool still crept 20 um within 0.2 s, 0.3 s after a move, and a sine of 0.5 mm along x passed below 3 Hz.
 velocity_kp_nm_s_rad = 0.25
-velocity_tn_s = 0.02
+velocity_tn_s = 0.012
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -350,41 +353,43 @@ thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 
-# Above the place position of the cycle, 10 mm below the working range's top face, so that the pose the machine
-# settles at (its belts stretch a few um) stays inside it. The cycle's own pass starts at the top face.
+# Where the cycle ends, above its place position, as on every machine (the cycle runs on from there), 10 mm below the
+# working range's top face: on the face, the pose the motors stand at (the belts stretch and the couplings twist a few
+# um under the weight) lay above it, and every move from there was refused as out of range.
 [start]
 pose = [0.1525, 0.0, -1.13]
 
 # The Adept cycle 25/305/25 mm, as Festo times the EXPT ("12-inch cycle") and as the D3 runs it: up 25 mm, across
 # 305 mm, down 25 mm, and back. Each leg is a move of its own, stopping at the corners; at the bottom the gripper acts
-# for 35 ms. It lies on y = 0, across the centre, at the top of the working range: the lifts go 25 mm into its 100 mm.
+# for 35 ms. It lies on y = 0, across the centre, 10 mm below the top of the working range (see [start]): the lifts go
+# 25 mm further into its 100 mm.
 # "payload" is the state of the gripper once the segment has arrived.
 [[cycle.segment]]
-target = [0.1525, 0.0, -1.145]
+target = [0.1525, 0.0, -1.155]
 dwell_s = 0.035
 payload = false
 
 [[cycle.segment]]
-target = [0.1525, 0.0, -1.12]
+target = [0.1525, 0.0, -1.13]
 dwell_s = 0.0
 payload = false
 
 [[cycle.segment]]
-target = [-0.1525, 0.0, -1.12]
+target = [-0.1525, 0.0, -1.13]
 dwell_s = 0.0
 payload = false
 
 [[cycle.segment]]
-target = [-0.1525, 0.0, -1.145]
+target = [-0.1525, 0.0, -1.155]
 dwell_s = 0.035
 payload = true
 
 [[cycle.segment]]
-target = [-0.1525, 0.0, -1.12]
+target = [-0.1525, 0.0, -1.13]
 dwell_s = 0.0
 payload = true
 
 [[cycle.segment]]
-target = [0.1525, 0.0, -1.12]
+target = [0.1525, 0.0, -1.13]
 dwell_s = 0.0
 payload = true

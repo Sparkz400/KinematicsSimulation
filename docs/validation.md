@@ -49,7 +49,7 @@ Test files, abbreviated in the tables:
 | Total energy minus the work of the holding torques, for 10 s after a torque pulse, losses off | Constant | 0.1 % of the energy the pulse put in | `energy_conservation` |
 | Travel after 1 s with the time step halved | Travel with the full step | 1 % | `step_convergence` |
 | Two identical runs | Each other | Bit-identical | `determinism` |
-| Work of the motor torques (Σ τ Δφ) over 1 s after a strong pulse (half the acceleration limit for 0.1 s), with the default config's losses on | Change of the machine's energy plus the time integral of every loss power it reports (`power.*`); the energy parts (`energy.*`) add up to the energy | 0.1 % of the work either way (measured 9e-5 on the T-gantry, 1.4e-6 on the single axis); 1e-9 | `loss_budget` |
+| Work of the motor torques (Σ τ Δφ) over 1 s after a strong pulse (half the acceleration limit for 0.1 s), with the default config's losses on | Change of the machine's energy plus the time integral of every loss power it reports (`power.*`), summed on the integrator's sub-steps of 15.6 µs (on whole steps, the linear delta's stop damper, which takes c v² the moment a carriage touches, put 0.042 J of 18.3 J into one step); the energy parts (`energy.*`) add up to the energy | 0.1 % of the work either way (measured 9e-5 on the T-gantry, 1.4e-6 on the single axis); 1e-9 | `loss_budget` |
 
 The integrator itself: a harmonic oscillator against its closed form (1e-12), and the error falling by a factor of 14 to 18 when the step is halved, as fourth order demands (`harmonic_oscillator_matches_closed_form`, `error_falls_with_fourth_order`, core `integrate.rs`).
 

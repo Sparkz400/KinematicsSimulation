@@ -286,8 +286,8 @@ pub struct LinearDelta {
 }
 
 // Elastic state: [h 1..3, pulley angle 1..3, rotor angle 1..3, h' 1..3, pulley speed 1..3, rotor speed 1..3,
-// friction 1..3, brake 1..3].
-const N_ELASTIC: usize = 24;
+// friction 1..3, brake 1..3, slack]; slack: seconds a belt section has spent without tension, as on the single axis.
+const N_ELASTIC: usize = 25;
 // Rigid state: [h 1..3, h' 1..3, friction 1..3, brake 1..3].
 const N_RIGID: usize = 12;
 /// Loss powers per column: guide, motor shaft and brake, gearbox, belt; then the stops, and what the ripple gives off.
@@ -766,8 +766,12 @@ impl Machine for LinearDelta {
         }
         let (mass, velocity, gravity) = self.load(h, v);
         let mut rhs = [0.0; 3];
+        out[24] = 0.0;
         for k in 0..3 {
             let sec = self.sections(s, k);
+            if sec.iter().any(|f| f.tension <= 0.0) {
+                out[24] = 1.0;
+            }
             let (ff, ds) = self.friction.eval(v[k], frictions[k], scales[k]);
             rhs[k] = sec[0].tension - sec[1].tension + gravity[k] - velocity[k] - ff + self.stop_force(h[k], v[k]);
             let gear = self.gearbox.torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
@@ -855,6 +859,40 @@ impl Machine for LinearDelta {
         self.energy_parts(s).iter().sum()
     }
 
+    /// As `Machine::adopt_state`, the same tool pose and speed, but what the belts, couplings, guides and brakes were
+    /// doing is kept: rebuilt at rest, the belts dropped what they carried beyond the weight (the guides' friction and
+    /// the plate's pull, 34 N of tension at 3 m/s) and the guides' bristles their deflection. Each column's section 1
+    /// keeps its stretch (section 2 then its own, as the belt keeps its length) and its coupling the torque it passed.
+    fn adopt_state(&self, old: &dyn Machine, old_state: &[f64]) -> Vec<f64> {
+        let (mut pos, mut vel, mut before, mut after) = ([0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]);
+        old.tool_state(old_state, &mut pos, &mut vel);
+        old.inverse(&pos, &mut before);
+        self.inverse(&pos, &mut after);
+        if old_state.len() == self.state_len() && before == after {
+            return old_state.to_vec();
+        }
+        let mut state = Vec::new();
+        self.equilibrium(&pos, &mut state, &mut [0.0; 3]);
+        self.set_tool_velocity(&mut state, &vel);
+        // The old machine is a linear delta too (`Sim::reconfigure` keeps the entry), elastic or rigid: its friction and
+        // brake states.
+        let was_elastic = old_state.len() == N_ELASTIC;
+        let (from, to) = (if was_elastic { 18 } else { 6 }, if self.elastic { 18 } else { 6 });
+        state[to..to + 6].copy_from_slice(&old_state[from..from + 6]);
+        if self.elastic && was_elastic {
+            state[24] = old_state[24];
+            let (infos, mut row) = (old.signal_infos(), Vec::new());
+            old.signals(old_state, &[0.0; 3], &mut row);
+            let signal = |id: String| row[infos.iter().position(|s| s.id == id).unwrap()];
+            for k in 0..3 {
+                let geo = self.geo(state[k] - self.h_min())[0];
+                state[3 + k] = (self.mat0[0] - geo + signal(format!("{}.stretch", SECTIONS[2 * k]))) / self.r_mat;
+                state[6 + k] = self.gearbox.ratio * (state[3 + k] + self.gearbox.static_twist(signal(format!("gearbox.{}.output_torque", k + 1))));
+            }
+        }
+        state
+    }
+
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
@@ -899,6 +937,7 @@ impl Machine for LinearDelta {
             out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
         }
         out.push(SignalInfo::new("kinematics.condition", "group-kinematics", "quantity-condition-number", ""));
+        out.push(SignalInfo::new("belt.slack_time", "group-belt", "quantity-slack-time", "s"));
         self.effect_infos(&mut out);
         out
     }
@@ -913,6 +952,7 @@ impl Machine for LinearDelta {
         }
         let (_, j) = self.pose(h);
         out.push(condition_number(&j));
+        out.push(if self.elastic { s[24] } else { 0.0 });
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         self.view_signals(s, torque, out);

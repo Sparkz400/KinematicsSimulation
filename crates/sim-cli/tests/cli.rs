@@ -229,7 +229,8 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
 }
 
 /// A path file is run and analysed on every machine, timed within the axis limits and as fast as the motors
-/// allow: the run ends at the end of the path, and the faster plan takes less time and more torque.
+/// allow: the run ends at the end of the path, and the faster plan takes less time and more torque, or where the belts
+/// bind before the motors keeps them tauter than the axis limits do.
 #[test]
 fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
     for entry in MACHINES {
@@ -247,15 +248,26 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
         let position = last[sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap()];
         assert!((position - (axis.min + 0.75 * (axis.max - axis.min))).abs() < 1e-3, "{}: ends at {position}", entry.id);
 
-        let analysed = |extra: &[&str]| -> (f64, f64) {
+        // Cycle time, peak torque and lowest belt tension (none without belts) of motor 1.
+        let analysed = |extra: &[&str]| -> (f64, f64, f64) {
             let out = cli(&[&["analyze", entry.id, "--path", &path], extra].concat());
             assert!(out.status.success(), "{}", text(&out.stderr));
             let table = text(&out.stdout);
             let row: Vec<&str> = table.lines().nth(1).unwrap().split(',').collect();
-            (row[1].parse().unwrap(), row[2].parse().unwrap())
+            (row[1].parse().unwrap(), row[2].parse().unwrap(), row[7].parse().unwrap_or(f64::INFINITY))
         };
-        let ((slow, gentle), (fast, hard)) = (analysed(&[]), analysed(&["--time-optimal"]));
-        assert!(fast < slow && hard > gentle, "{}: {fast} s and {hard} N m against {slow} s and {gentle} N m", entry.id);
+        let ((slow, gentle, slackest), (fast, hard, kept)) = (analysed(&[]), analysed(&["--time-optimal"]));
+        // Where the axis limits take a belt section below what the faster plan keeps for the guides' friction
+        // (`profile.tension_margin_n` above `ratings.belt_min_tension_n`), the belts bind before the motors, and that plan
+        // keeps them above it, more slowly. The linear delta's sections hold 300 +- 14 N at rest, so it may change one by
+        // `profile.tension_reserve` 0.5 * (286 - 75) = 105 N; the axis limits' 50 m/s2 take one to 28 N on this path.
+        let cfg = entry.config();
+        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY) + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+        if slackest < floor {
+            assert!(kept > floor, "{}: the faster plan takes a belt to {kept} N, the axis limits to {slackest} N", entry.id);
+        } else {
+            assert!(fast < slow && hard > gentle, "{}: {fast} s and {hard} N m against {slow} s and {gentle} N m", entry.id);
+        }
 
         // A line the file format does not know is named, in the chosen language.
         std::fs::write(&path, "line,0.5\ncircle,1,2\n").unwrap();
