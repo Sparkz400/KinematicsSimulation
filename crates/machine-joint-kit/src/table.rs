@@ -71,12 +71,18 @@ impl Mechanism for Table {
         self.strain_wave.iter().filter(|(_, life)| life.is_finite()).map(|(g, life)| g.rating_check("1", 0, *life)).collect()
     }
 
-    /// The table seen from the front, its index mark turning; the motor beneath it.
+    fn collision_parts(&self) -> &'static [&'static str] {
+        &["fixture", "payload"]
+    }
+
+    /// The table seen from the front, its index mark turning, the fixture on it; the motor beneath it.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let r = self.radius;
         out.parts.push(Part::new("base", Shape::Box { size: [2.2 * r, 2.2 * r, 0.1] }, [0.0, 0.0, -0.1], [0.62, 0.64, 0.68]));
         out.parts.push(Part::new("table", Shape::Cylinder { radius: r, length: 0.04 }, [0.0, 0.0, 0.25], [0.55, 0.55, 0.6]));
         out.parts.push(Part::new("index-mark", Shape::Box { size: [1.8 * r, 0.004, 0.02] }, [0.0, -0.025, 0.25], [0.1, 0.1, 0.1]).turned(q[0]));
+        // The fixture as the box it turns within, for the collision with obstacles.
+        out.parts.push(Part::new("fixture", Shape::Box { size: [1.2 * r, 0.08, 0.1] }, [0.0, 0.0, 0.32], [0.45, 0.45, 0.5]));
         if self.attached && self.payload > 0.0 {
             out.parts.push(Part::new("payload", Shape::Box { size: [0.4 * r, 0.06, 0.4 * r] }, [0.6 * r * q[0].cos(), -0.05, 0.25 + 0.6 * r * q[0].sin()], [0.2, 0.7, 0.3]));
         }

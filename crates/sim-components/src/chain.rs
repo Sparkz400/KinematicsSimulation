@@ -80,6 +80,11 @@ pub trait Mechanism: Send {
         Vec::new()
     }
 
+    /// The ids of the boxes `scene` draws that move with the load and can hit an obstacle (`Machine::collision_bodies`).
+    fn collision_parts(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Draws the machine at joint positions `q` with the motor shafts at `rotors` (rad) turning at `rotor_speeds`.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene);
     fn scene_point(&self, _tool: &[f64]) -> Option<[f64; 3]> {
@@ -582,6 +587,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
         self.mechanism.scene_point(tool)
+    }
+
+    /// The boxes of the scene that the mechanism names (`Mechanism::collision_parts`).
+    fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
+        let mut scene = Scene::default();
+        self.scene(s, &mut scene);
+        sim_core::scene::scene_boxes(&scene.parts, self.mechanism.collision_parts())
     }
 }
 

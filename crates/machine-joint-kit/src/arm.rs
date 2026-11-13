@@ -168,7 +168,12 @@ impl Mechanism for Arm {
         out
     }
 
-    /// Each body as a bar from its joint to the next, each joint with its motor's shaft bar and speed.
+    fn collision_parts(&self) -> &'static [&'static str] {
+        &["flange", "payload"]
+    }
+
+    /// Each body as a bar from its joint to the next, each joint with its motor's shaft bar and speed; the flange and
+    /// the payload as boxes, for the collision with obstacles.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let frames = self.chain.frames(q);
         let (_, tip) = self.chain.tip(q);
@@ -185,6 +190,7 @@ impl Mechanism for Arm {
             from = *at;
         }
         out.parts.push(Part::new("link", Shape::Segment { to: tip, width: 0.03 }, from, [0.2, 0.22, 0.26]));
+        out.parts.push(Part::new("flange", Shape::Box { size: [0.06, 0.06, 0.06] }, tip, [0.3, 0.3, 0.32]));
         if self.extra().is_some() {
             out.parts.push(Part::new("payload", Shape::Box { size: [0.08, 0.08, 0.08] }, tip, [0.2, 0.7, 0.3]));
         }

@@ -135,6 +135,10 @@ impl Mechanism for Slide {
         }
     }
 
+    fn collision_parts(&self) -> &'static [&'static str] {
+        &["carriage", "payload"]
+    }
+
     /// Drawn along the incline: frame, the screw or rack, the carriage, the motor at the start of the stroke.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let (s, c) = self.incline.sin_cos();
