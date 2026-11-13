@@ -4336,6 +4336,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-joint-kit"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "machine-single-axis"
 version = "1.0.0-rc.1"
 dependencies = [
@@ -6064,6 +6072,7 @@ name = "sim-machines"
 version = "1.0.0-rc.1"
 dependencies = [
  "machine-delta-d3",
+ "machine-joint-kit",
  "machine-single-axis",
  "machine-t-gantry",
  "serde_json",

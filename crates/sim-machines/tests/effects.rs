@@ -33,6 +33,11 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
         ("every effect".into(), everything),
     ];
     out.extend((entry.suite_configs)().into_iter().enumerate().map(|(i, cfg)| (format!("loss-free {i}"), cfg)));
+    // Not the SCARA's loss-free elastic configs (2 and 3): with no damping at all its quill on the screw is a 570 Hz mode
+    // that the velocity loop's delays drive unstable, a real property of a loop around an undamped mode and not of the
+    // integration (0.05 N m s/rad of damping or a quarter of the gain holds it; the default config has 1 N m s/rad).
+    // The standard suite checks those configs' energy without the controller.
+    out.retain(|(name, _)| !(entry.id == "scara" && (name == "loss-free 2" || name == "loss-free 3")));
     if entry.id == machine_t_gantry::ENTRY.id {
         out.push(("EXCT-30".into(), sim_components::load_config(entry, machine_t_gantry::EXCT_30_CONFIG).unwrap()));
     }
@@ -180,12 +185,15 @@ fn a_direct_drive_has_no_gearbox_that_warms() {
     for entry in MACHINES {
         for (name, cfg) in configs(entry).into_iter().chain([("ratio 1".to_string(), with(&entry.config(), &["gearbox.ratio = 1.0"]))]) {
             let machine = (entry.build)(&cfg).unwrap();
-            let direct = cfg.f64("gearbox.ratio").unwrap() == 1.0;
+            // An arm has its ratios per joint (`arm.gear_ratios`), and a SCARA's quill sits on its screw through a
+            // coupling: each joint's gearbox warms and is named as such, each coupling neither.
+            let direct = cfg.f64("gearbox.ratio").unwrap() == 1.0 && cfg.get("arm.gear_ratios").is_err();
             let gearboxes = machine.thermal_parts().iter().filter(|p| p.kind == "gearbox").count();
-            assert_eq!(gearboxes, if direct { 0 } else { machine.motors().len() }, "{} {name}", entry.id);
             let losses: Vec<_> = machine.signal_infos().into_iter().filter(|s| s.id.starts_with(&format!("{LOSS_PREFIX}gearbox"))).collect();
-            let quantity = if direct { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
-            assert!(losses.len() == machine.motors().len() && losses.iter().all(|s| s.quantity_key == quantity), "{} {name}: {losses:?}", entry.id);
+            let geared = losses.iter().filter(|s| s.quantity_key == "quantity-gearbox-loss-power").count();
+            assert!(losses.len() == machine.motors().len() && losses.iter().all(|s| s.quantity_key == "quantity-gearbox-loss-power" || s.quantity_key == "quantity-coupling-loss-power"), "{} {name}: {losses:?}", entry.id);
+            assert_eq!(gearboxes, geared, "{} {name}", entry.id);
+            assert!(if direct { geared == 0 } else { geared > 0 }, "{} {name}: {geared} gearboxes", entry.id);
         }
     }
 }

@@ -1,0 +1,97 @@
+<?xml version="1.0"?>
+<!-- A generic six-axis arm of about 6 kg payload and 1.4 m reach, for the simulator's examples. All values are
+     estimates of this project (bodies as tubes and housings of aluminium and cast iron), not any maker's; link6 is
+     the flange with a tool changer and gripper. z up. -->
+<robot name="six-axis-example">
+  <link name="base_link"/>
+  <link name="link1">
+    <inertial>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <mass value="18.0"/>
+      <inertia ixx="0.35" ixy="0" ixz="0" iyy="0.35" iyz="0" izz="0.25"/>
+    </inertial>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.35" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.967" upper="2.967" effort="0" velocity="0"/>
+  </joint>
+  <link name="link2">
+    <inertial>
+      <origin xyz="0 0 0.3" rpy="0 0 0"/>
+      <mass value="12.0"/>
+      <inertia ixx="0.4" ixy="0" ixz="0" iyy="0.4" iyz="0" izz="0.05"/>
+    </inertial>
+  </link>
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0.15 0 0.3" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.571" upper="2.356" effort="0" velocity="0"/>
+  </joint>
+  <link name="link3">
+    <inertial>
+      <origin xyz="0.08 0 0.08" rpy="0 0 0"/>
+      <mass value="7.0"/>
+      <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.06" iyz="0" izz="0.05"/>
+    </inertial>
+  </link>
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0 0 0.6" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="1.2" effort="0" velocity="0"/>
+  </joint>
+  <link name="link4">
+    <inertial>
+      <origin xyz="0.2 0 0" rpy="0 0 0"/>
+      <mass value="4.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.06" iyz="0" izz="0.06"/>
+    </inertial>
+  </link>
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.25 0 0.12" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.3" upper="3.3" effort="0" velocity="0"/>
+  </joint>
+  <link name="link5">
+    <inertial>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/>
+    </inertial>
+  </link>
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0.4 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.1" upper="2.1" effort="0" velocity="0"/>
+  </joint>
+  <link name="link6">
+    <inertial>
+      <origin xyz="0.01 0 0" rpy="0 0 0"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.006" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/>
+    </inertial>
+  </link>
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-6.28" upper="6.28" effort="0" velocity="0"/>
+  </joint>
+  <link name="tool0"/>
+  <joint name="flange" type="fixed">
+    <parent link="link6"/>
+    <child link="tool0"/>
+    <origin xyz="0.02 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

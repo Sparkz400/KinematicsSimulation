@@ -247,6 +247,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/machine-files.md](docs/machine-files.md) | Define a machine in a TOML or JSON file, wired together from components like a netlist, without Rust code; the format, its checks, a worked example |
 | [docs/config-reference.md](docs/config-reference.md) | Every config table and key, with unit, meaning, source and effect switch |
 | [docs/model-reference.md](docs/model-reference.md) | The equations, per component and per machine, with assumptions and known shortcuts |
+| [docs/mechanisms.md](docs/mechanisms.md) | Ball screw, rack and pinion, linear motor, rotary table and arms from URDF files: the machines, their formulas, checks and limits ([German](docs/de/mechanismen.md)) |
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, and what is not validated |
 | [docs/python.md](docs/python.md) | The Python module `kinematics_sim`: configs, runs, analysis, verdicts, bands and sizing as NumPy arrays and pandas-ready tables; a parameter-sweep notebook |

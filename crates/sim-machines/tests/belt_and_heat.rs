@@ -50,7 +50,7 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
         let mut target: Vec<f64> = cfg.f64s("start.pose").unwrap();
         target[0] = axis.max - 0.05 * axis.max;
         sim.command(Command::MoveTo(target)).unwrap();
-        while (signal(&sim, "axis.x.velocity_setpoint") - axis.max_vel).abs() > 1e-9 {
+        while (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9 {
             sim.step();
         }
         sim.run(0.1, |_| {});
@@ -68,7 +68,17 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
         }
         if let (Some(id), Some(cold)) = (gearbox, cold) {
             let warm = signal(&sim, &id);
-            assert!((warm / cold - 0.64088).abs() < 0.01, "{}: {warm} W against {cold} W, {}", entry.id, warm / cold);
+            // The gearbox's own shortfall 1 - g falls to 0.64088 of itself; a screw's or rack's behind it (efficiency e)
+            // stays. The loss is T w (1 - eta) with the torque into the gearbox set, T w (1 - eta) / eta with the torque
+            // out of it set, eta = g e; the ratio warm to cold lies between the two (by hand 0.6409 and 0.6338 for a
+            // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
+            let g = cfg.f64("gearbox.efficiency").unwrap();
+            // An arm's heated gearboxes are those of its turning joints, with nothing behind them.
+            let e = if cfg.get("arm.gear_ratios").is_ok() { 1.0 } else { ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0) };
+            let warm_eta = (1.0 - 0.64088 * (1.0 - g)) * e;
+            let (input_set, output_set) = ((1.0 - warm_eta) / (1.0 - g * e), (1.0 - warm_eta) / warm_eta / ((1.0 - g * e) / (g * e)));
+            let ratio = warm / cold;
+            assert!(ratio > output_set.min(input_set) - 0.005 && ratio < output_set.max(input_set) + 0.005, "{}: {warm} W against {cold} W, {ratio} not within {output_set} to {input_set}", entry.id);
         }
     }
 }

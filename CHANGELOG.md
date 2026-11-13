@@ -20,6 +20,12 @@ item are in [PROGRESS.md](PROGRESS.md).
 - CI on Windows and Linux (`.github/workflows/ci.yml`): build, tests, clippy.
 - Unsigned release packages: `tools/package.ps1` (zip) and `tools/package.sh` (tar.gz) write `dist/`.
 - The FMUs of both machines and of the EXCT-30 config checked with an independent tool (fmpy).
+- Mechanisms and transmissions (`docs/mechanisms.md`, German `docs/de/mechanismen.md`): ball screw, rack and pinion,
+  linear motor, worm and strain wave gear as components (`sim_components::transmission`), a URDF reader with
+  recursive Newton-Euler dynamics (`rigid`), a machine of joints (`chain::JointMachine`), and six machines in
+  `machine-joint-kit`: `screw-axis`, `rack-axis`, `linear-motor-axis`, `rotary-table`, `urdf-arm`, `scara`, with
+  their own rating checks (`screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life`,
+  `rack-feed-force`, `strain-wave-life`).
 
 ## [1.0.0-rc.1] - 2026-11-13
 

@@ -90,7 +90,29 @@ pub struct ThermalPart {
     pub scene_index: usize,
 }
 
+/// A rating of one of the machine's own parts that the cycle is judged against (`Machine::rating_checks`), beside the
+/// checks every machine gets from its motors, drives, gearbox, guides and belts. The analysis follows the signal `signal`
+/// (one of `signal_infos`, among the base signals) over the measured pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RatingCheck {
+    /// The verdict's id; its label is the translation key `check-<check>`.
+    pub check: &'static str,
+    pub signal: String,
+    pub motor: Option<usize>,
+    pub limit: f64,
+    /// `false`: the highest |signal| over the pass has to stay at or below `limit`. `true`: the signal is a damage
+    /// rate, the share of the part's life used per hour, and the life in hours, 1 / its mean over the pass (Palmgren
+    /// and Miner), has to reach `limit`; such a check's id ends in "-life" and is one of `analysis::AT_LEAST`.
+    pub life: bool,
+}
+
 pub trait Machine: Send {
+    /// The ratings of the machine's own parts (ball screw, rack, strain wave gear, ...) that its cycle is judged
+    /// against. Empty where it has none beyond the common ones.
+    fn rating_checks(&self) -> Vec<RatingCheck> {
+        Vec::new()
+    }
+
     fn axes(&self) -> &[AxisInfo];
     fn motors(&self) -> &[MotorInfo];
     /// Tool pose to motor shaft angles, and back. Both are pure kinematics.

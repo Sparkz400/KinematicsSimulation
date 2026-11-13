@@ -476,7 +476,11 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         let resolved = resolve(entry, &named).unwrap();
         // The rotor is a little heavier than the config's and the gearbox adds its own inertia: more gain.
         let (gain, own) = (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
-        assert!(gain > own && gain < 2.0 * own, "{}: gain {gain}", entry.id);
+        // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
+        // gain with it (a screw on a coupling: far less).
+        if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
+            assert!(gain > own && gain < 2.0 * own, "{}: gain {gain}", entry.id);
+        }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
         // Resolved once, a config names no part any more: doing it again changes nothing.
@@ -727,7 +731,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     use sim_components::analysis::{CycleLoad, Verdict};
     use sim_components::catalog::Candidate;
     let verdict = |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new() };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new() };
     let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
     let with_resistor = candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), verdict("braking-resistor-continuous", 6.0, 20.0, true), verdict("dc-link-overvoltage", 770.0, 820.0, true)]);

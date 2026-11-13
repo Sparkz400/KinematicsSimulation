@@ -81,14 +81,20 @@ fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
     for entry in MACHINES.iter().copied() {
         let cfg = edited(entry, &["effects.part_heating = true", "motor.start_temperature_rise_k = 25.0", "motor.rated_temperature_rise_k = 100.0"]);
         let mut sim = Sim::new(entry, &cfg).unwrap();
-        sim.heated[0].rise = 0.5 * sim.heated[0].max_rise;
+        // A screw on a coupling, a linear motor: no part but the motor warms.
+        let parts = !sim.heated.is_empty();
+        if parts {
+            sim.heated[0].rise = 0.5 * sim.heated[0].max_rise;
+        }
         let mut scene = Scene::default();
         sim.scene(&mut scene);
         let motors: Vec<_> = scene.parts.iter().filter(|p| p.id == sim_core::scene::MOTOR_PART).collect();
         assert_eq!(motors.len(), sim.machine.motors().len());
         assert!(motors.iter().all(|p| p.heat == Some(0.25)), "{}: {:?}", entry.id, motors.iter().map(|p| p.heat).collect::<Vec<_>>());
-        let first = &sim.heated[0].part;
-        assert_eq!(scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index).unwrap().heat, Some(0.5));
+        if parts {
+            let first = &sim.heated[0].part;
+            assert_eq!(scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index).unwrap().heat, Some(0.5));
+        }
         // Without the heating effects the parts keep their colours.
         let mut scene = Scene::default();
         Sim::new(entry, &edited(entry, &["effects.winding_heating = false"])).unwrap().scene(&mut scene);

@@ -1,0 +1,87 @@
+# What every machine of this crate shares (config/common.toml); the machine's own part follows [profile] below.
+format_version = 1
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
+# the numbers in this file are used as written.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+[effects]
+gravity = true
+payload = true
+# Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the joint times the ratio.
+joint_elasticity = true
+# Friction in the joint: bearings, guides, the screw nut's preload.
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+hard_stops = true
+holding_brake = true
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+
+# With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
+# delta picker's planetary gearboxes.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as these machines have no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: no belt.
+tension_reserve = 0.8
+path_tolerance_m = 0.0
+min_clearance_m = 0.0

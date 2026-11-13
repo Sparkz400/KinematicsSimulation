@@ -1,0 +1,162 @@
+# Linear motor axis: an ironcore linear motor drives a carriage of 5 kg (8 kg with the forcer) and up to 5 kg on it over
+# 1 m, no transmission. The motor's values in [motor] and [drive] read in N for N m and m for rad: force constant in
+# N/A, the forcer's mass as the rotor's inertia, speeds in m/s.
+#   [estimate]   all: an ironcore motor of 300 N continuous and 900 N peak force as the makers' catalogues list
+#                them, not one maker's article; the drive as the S210 of the other machines.
+
+[mass]
+# Without the forcer, whose mass is motor.rotor_inertia_kgm2.
+carriage_kg = 5.0
+payload_kg = 5.0
+
+# The carriage on its guides. [estimate] two ball guides of size 25, four carriages; the attraction's friction is added (see [linear_motor]).
+[slide]
+stroke_m = 1.0
+# 90 for an axis that moves straight up, 0 for a horizontal one.
+incline_deg = 0.0
+friction_coulomb_n = 20.0
+friction_viscous_n_s_m = 30.0
+friction_smoothing_m_s = 0.002
+# [estimate] a rubber buffer at each end.
+stop_stiffness_n_m = 2.0e6
+stop_damping_n_s_m = 2000.0
+
+# The magnetic attraction between forcer and magnet track presses on the guides (signal axis.x.guide_load, judged by
+# the guide ratings) and adds guide_friction_coefficient times itself to the guides' friction. The cogging repeats once
+# per pole pitch (motor.cogging_order is replaced by 2 pi / pole_pitch_m).
+[linear_motor]
+attraction_force_n = 2500.0
+pole_pitch_m = 0.024
+guide_friction_coefficient = 0.005
+
+# No gearbox: the ratio 1 is the forcer's mounting to the carriage, along the travel in N/m. [estimate]
+[gearbox]
+ratio = 1.0
+efficiency = 1.0
+backlash_rad = 0.0
+stiffness_nm_rad = 2.0e8
+damping_nm_s_rad = 500.0
+inertia_at_input_kgm2 = 0.0
+
+[motor]
+# The forcer's mass, kg.
+rotor_inertia_kgm2 = 3.0
+friction_coulomb_nm = 0.0
+friction_viscous_nm_s_rad = 0.0
+friction_smoothing_rad_s = 0.002
+ripple_fraction = 0.02
+# Six per electrical period of two pole pitches: 6 * 2 pi / 0.048 m.
+ripple_order = 785.4
+cogging_nm = 8.0
+cogging_order = 261.8
+# Force constant, N/A.
+torque_constant_nm_a = 65.0
+resistance_ohm = 2.5
+inductance_h = 0.025
+rated_current_a = 4.6
+thermal_time_constant_s = 600.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 15.0
+torque_constant_at_max_current_nm_a = 60.0
+# A rail clamp, N.
+brake_torque_nm = 300.0
+
+# [estimate]
+[axis.x]
+max_velocity_m_s = 2.0
+max_acceleration_m_s2 = 20.0
+max_jerk_m_s3 = 2000.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 100.0
+# A direct drive on a linear scale is tuned harder than a geared one. Found with `velocity_loop_margins` over the
+# [bounds], friction on and off: at least 42 degrees and 10 dB at kp 8000 N s/m (16000 left 20 degrees with friction
+# off); it settles to 25 um (4000, kv 50: 86 um).
+velocity_kp_nm_s_rad = 8000.0
+velocity_tn_s = 0.02
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# 900 N peak, 300 N continuous, 3 m/s rated; sqrt(3/2) * 540 V / 65 N/A no-load.
+peak_torque_nm = 900.0
+rated_torque_nm = 300.0
+rated_speed_rad_s = 3.0
+no_load_speed_rad_s = 10.175
+# [estimate] a linear scale of 1 um: counts per 2 pi m.
+encoder_counts_per_rev = 6283185.3
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+
+[ratings]
+# [estimate] 30 um: a linear motor axis on a 1 um scale.
+settling_tolerance_m = 0.00003
+# [estimate] four carriages of size 25: dynamic load rating of the set, and its highest load.
+guide_dynamic_load_rating_n = 60000.0
+guide_max_load_n = 20000.0
+# The DC link of the S210 converter. [estimate] as for the delta picker.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+
+[start]
+pose = [0.1]
+
+[[cycle.segment]]
+target = [0.9]
+dwell_s = 0.05
+payload = false
+
+[[cycle.segment]]
+target = [0.1]
+dwell_s = 0.05
+payload = true
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+mass.carriage_kg = [4.0, 6.0]
+slide.friction_coulomb_n = [10.0, 40.0]
+slide.friction_viscous_n_s_m = [15.0, 60.0]
+linear_motor.attraction_force_n = [2000.0, 3000.0]
+linear_motor.guide_friction_coefficient = [0.003, 0.01]
+motor.rated_current_a = [4.0, 5.2]
+gearbox.damping_nm_s_rad = [250.0, 1000.0]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [4.0, 16.0]
+motor.resistance_ohm = [2.0, 3.0]
+motor.inductance_h = [0.02, 0.03]
+motor.thermal_time_constant_s = [450.0, 750.0]
+motor.torque_constant_nm_a = [60.0, 70.0]
+motor.rotor_inertia_kgm2 = [2.5, 3.5]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]

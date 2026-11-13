@@ -3,7 +3,7 @@
 
 use crate::control::{Command, CommandError};
 use crate::sim::Sim;
-use sim_core::{Config, ConfigError, LOSS_PREFIX, MachineEntry, Rk4, SignalInfo, TORQUE_PARTS, ThermalPart, advance};
+use sim_core::{Config, ConfigError, LOSS_PREFIX, MachineEntry, RatingCheck, Rk4, SignalInfo, TORQUE_PARTS, ThermalPart, advance};
 
 /// The load on one motor over one pass of the cycle.
 #[derive(Debug, Clone, Default)]
@@ -159,6 +159,9 @@ pub struct CycleLoad {
     /// With effects.part_heating, each part that warms with its loss (`Sim::heated`) and the rise it settles at when
     /// the cycle repeats for long: its thermal resistance times its mean loss over the measured pass. Empty without.
     pub part_rises: Vec<(ThermalPart, f64)>,
+    /// The machine's own rating checks (`Machine::rating_checks`) and what the pass reached in each: the highest
+    /// |signal|, or for a life check the life in hours, 1 / the mean damage rate (infinite where nothing wore).
+    pub checks: Vec<(RatingCheck, f64)>,
 }
 
 /// What a run adds up step by step, for a cycle or a trajectory.
@@ -183,6 +186,9 @@ struct Tally {
     condition: Option<usize>,
     condition_peak: f64,
     lowest_detuning: f64,
+    /// The machine's rating checks, the places of their signals, and per check the highest |signal| and the sum of the
+    /// signal, one per sample.
+    checks: Vec<(RatingCheck, usize, f64, f64)>,
     sample: Vec<f64>,
     /// Every signal looked at in `sample` is one of `Sim::sample_base`: the effect views need not be sampled.
     base_only: bool,
@@ -282,7 +288,9 @@ impl Tally {
         let mut base = Vec::new();
         sim.sample_base(&mut base);
         let condition = infos.iter().position(|s| s.id == "kinematics.condition");
-        let base_only = tensions.iter().chain(&radial).chain(&guides).chain(&jumps).chain(&slack).chain(&detuning).chain(&condition).all(|&i| i < base.len());
+        let checks: Vec<(RatingCheck, usize, f64, f64)> = sim.machine.rating_checks().into_iter().filter_map(|c| Some((infos.iter().position(|s| s.id == c.signal)?, c))).map(|(i, c)| (c, i, 0.0, 0.0)).collect();
+        let check_places: Vec<usize> = checks.iter().map(|c| c.1).collect();
+        let base_only = tensions.iter().chain(&radial).chain(&guides).chain(&jumps).chain(&slack).chain(&detuning).chain(&condition).chain(&check_places).all(|&i| i < base.len());
         Self {
             gear: sim.machine.motors().iter().map(gear).collect(),
             parts: sim.machine.motors().iter().map(|m| if views { parts(m) } else { None }).collect(),
@@ -311,6 +319,7 @@ impl Tally {
             lowest_detuning: 1.0,
             condition,
             condition_peak: 0.0,
+            checks,
             radial_peak: 0.0,
             guide_loads: vec![(0.0, 0.0); guides.len()],
             guide_axes: guides.iter().map(|&i| sim.machine.axes().iter().position(|a| infos[i].id == format!("axis.{}.guide_load", a.id))).collect(),
@@ -358,6 +367,9 @@ impl Tally {
             }
             if let Some(i) = self.condition {
                 self.condition_peak = self.condition_peak.max(self.sample[i]);
+            }
+            for (_, i, peak, sum) in &mut self.checks {
+                (*peak, *sum) = (peak.max(self.sample[*i].abs()), *sum + self.sample[*i]);
             }
             for (&i, (peak, cubed)) in self.guides.iter().zip(&mut self.guide_loads) {
                 (*peak, *cubed) = (peak.max(self.sample[i]), *cubed + self.sample[i].powi(3));
@@ -546,6 +558,7 @@ impl Tally {
             motors: self.loads,
             budget,
             part_rises,
+            checks: std::mem::take(&mut self.checks).into_iter().map(|(c, _, peak, sum)| { let value = if c.life { samples / sum } else { peak }; (c, value) }).collect(),
         }
     }
 
@@ -676,7 +689,7 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 5] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance"];
+pub const AT_LEAST: [&str; 7] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life"];
 
 /// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
 /// Above 1 it fails (but "belt-slack" at exactly 1).
@@ -833,6 +846,12 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     }
     if let (Some(detuning), Some(band)) = (load.belt_span_detuning, rating("belt_span_resonance_band")) {
         out.push(at_least("belt-span-resonance", None, detuning, band));
+    }
+    // The machine's own parts (`Machine::rating_checks`): a peak at most its limit, a life (an L10) times the life
+    // factor a1 at least its required life.
+    for (check, value) in &load.checks {
+        let a1 = reliability_factor(cfg).ok_or_else(|| ConfigError::Invalid("ratings.bearing_reliability_percent".into()))?;
+        out.push(if check.life { at_least(check.check, check.motor, value * a1, check.limit) } else { at_most(check.check, check.motor, *value, check.limit) });
     }
     if let (Some(value), Some(limit)) = (load.condition_peak, rating("max_condition_number")) {
         out.push(at_most("singularity", None, value, limit));
@@ -2226,6 +2245,7 @@ mod tests {
             motors: vec![m.clone()],
             budget: None,
             part_rises: Vec::new(),
+            checks: Vec::new(),
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

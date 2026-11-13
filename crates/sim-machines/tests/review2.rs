@@ -69,6 +69,8 @@ fn bad_config_values_are_refused_with_their_key() {
         let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
         let pose = |first: &str| format!("start.pose = [{}]", [&[first][..], &vec!["0.2"; axes - 1]].concat().join(", "));
         let (not_a_number, beyond) = (pose("nan"), pose("5.0"));
+        // A no-load speed below the rated speed (rad/s of a motor, m/s of a linear motor).
+        let slow = format!("drive.no_load_speed_rad_s = {:?}", 0.9995 * entry.config().f64("drive.rated_speed_rad_s").unwrap());
         let table = [
             ("gearbox.backlash_rad = -0.001", "gearbox.backlash_rad"),
             ("gearbox.inertia_at_input_kgm2 = -0.3e-4", "gearbox.inertia_at_input_kgm2"),
@@ -80,7 +82,7 @@ fn bad_config_values_are_refused_with_their_key() {
             ("gearbox.damping_nm_s_rad = -0.2", "gearbox.damping_nm_s_rad"),
             ("motor.ripple_fraction = 1.0", "motor.ripple_fraction"),
             ("motor.start_temperature_rise_k = -300.0", "motor.start_temperature_rise_k"),
-            ("drive.no_load_speed_rad_s = 314.0", "drive.no_load_speed_rad_s"),
+            (slow.as_str(), "drive.no_load_speed_rad_s"),
             ("drive.kv_1_s = inf", "drive.kv_1_s"),
             ("profile.shaper_damping = 1.0", "profile.shaper_damping"),
             ("profile.blend_time_s = -0.1", "profile.blend_time_s"),
@@ -290,14 +292,20 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 let what = format!("{}: {path} changed by 1 % {}", entry.id, if moving { "during a move" } else { "at standstill" });
                 assert!(tension_off <= 0.1 * pretension, "{what}: belt tension off by {tension_off} N");
                 // 0.1 mm, or a tenth of what the machine's gears sag at rest where that is more (the delta's backlash
-                // takes up anew after the change: 0.13 mm with 9 arcmin).
-                assert!(tool_off < (0.1 * sims[0].machine.setpoint_slack()).max(1e-4), "{what}: tool off by {tool_off} m");
+                // takes up anew after the change: 0.13 mm with 9 arcmin); on a turning axis 1e-4 of its range in rad
+                // (the table: 0.68 mrad, 0.27 mm at its edge).
+                let axis = &sims[0].machine.axes()[0];
+                let turning = if axis.unit == "rad" { 1e-4 * (axis.max - axis.min) } else { 0.0 };
+                let limit = (0.1 * sims[0].machine.setpoint_slack()).max(1e-4).max(turning);
+                assert!(tool_off < limit, "{what}: tool off by {tool_off}, limit {limit}");
                 // The motors stand where the new kinematics put them for this pose.
                 let (mut wanted, mut speed) = (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
                 sims[1].machine.inverse(&tool(&sims[1]), &mut wanted);
                 let mut angle = wanted.clone();
                 sims[1].machine.motor_state(&sims[1].state, &mut angle, &mut speed);
-                assert!(wanted.iter().zip(&angle).all(|(w, a)| (w - a).abs() < 0.05), "{what}: motors at {angle:?}, the pose asks for {wanted:?}");
+                // To 0.05 rad, or 1 %: an arm's gears twist under its weight (2.6 mrad at joint 2), which its motors see
+                // times the ratio (0.3 rad behind 120).
+                assert!(wanted.iter().zip(&angle).all(|(w, a)| (w - a).abs() < f64::max(0.05, 0.01 * w.abs())), "{what}: motors at {angle:?}, the pose asks for {wanted:?}");
             }
         }
     }
