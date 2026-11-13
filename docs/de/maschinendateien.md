@@ -364,7 +364,7 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
 Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5).
 `machines/rack-gantry.toml` ist ein Zweiachsportal mit einem 3 m langen X an Zahnstange und Ritzel (Modul 2, 200 mm je
 Umdrehung) hinter einem Getriebe der Übersetzung 10 und Y an einem Riemen. Beide bestehen jede Prüfung auf ihren
-Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 422 von 2400 N). Die Kugelgewinde-,
+Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 180 von 2400 N). Die Kugelgewinde-,
 Zahnstangen-, Linearmotor- und Rundtischachse des Gelenkbaukastens als Dateien geschrieben geben die Urteile des
 Baukastens Ziffer für Ziffer.
 

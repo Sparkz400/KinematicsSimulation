@@ -1760,7 +1760,10 @@ What, how, test:
 - **Two files**: `machines/screw-portal.toml` (the XYZ portal with Z on a ball screw 16 x 10 behind a bellows coupling,
   the Z motor's brake holding 0.055 N m of its 0.5) and `machines/rack-gantry.toml` (3 m X on rack and pinion behind
   ratio 10, Y on a belt). `sim-cli verdicts --machine-file`: every check passes (screw-speed 2402 of 9833 r/min,
-  rack-feed-force 422 of 2400 N); `--bands --worst` runs on the screw portal with its new bounds.
+  rack-feed-force 180 of 2400 N); `--bands --worst` runs on both with their new bounds. The rack gantry first took the belt motors'
+  small gearbox for X too: at its upper stiffness bound X rang (settling 1.2 mm, 4863 N on the rack, 7616 N in the worst
+  band); X now has the joint kit rack axis's planetary values (35752.6 N m/rad, damping 5) in `[gearbox.mx]` with bounds,
+  and settles to 0.015 mm across 25000 to 45000 N m/rad.
 - Before the tests: the joint kit's screw, rack, linear motor and rotary table axes written as files (the kit's config,
   the belt and guide tables a file needs, a netlist; joint friction off, hard stops as the slide's) gave the kit's
   `sim-cli verdicts` digit for digit, elastic; rigid and vertical the screw differs only in the warm-start residual

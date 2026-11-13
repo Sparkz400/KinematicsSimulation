@@ -350,7 +350,7 @@ and shaft), and a rack's motor turns i x / r.
 `machines/screw-portal.toml` is the XYZ portal with its Z belt replaced by a ball screw 16 x 10 behind a bellows coupling,
 the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gantry.toml` is a two-axis gantry with a
 3 m X on a rack and pinion (module 2, 200 mm per turn) behind a gearbox of ratio 10 and Y on a belt. Both pass every
-verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 422 of 2400 N). The joint kit's
+verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 180 of 2400 N). The joint kit's
 screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
 
 ## The other examples: a CoreXY and an XYZ portal
