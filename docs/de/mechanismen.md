@@ -156,6 +156,19 @@ Getriebe und Spindeln entlang dieser. Die Einschwingtoleranz ist dann in rad (`r
 seinen Namen); sie enthält die Verdrehung der Getriebe unter dem Gewicht des Arms, die die Geber der Motoren nicht sehen
 (2,6 mrad an Gelenk 2 des Sechsachsbeispiels, ausgestreckt).
 
+## Teleskopwelle mit zwei Kardangelenken (delta-d4)
+
+Der Vierachs-Delta `delta-d4` (ein eigenes Crate auf dem D3, keine Gelenkmaschine) dreht sein Werkzeug über eine
+Teleskopwelle mit je einem Kardangelenk an beiden Enden. Ein einzelnes, um beta gebeugtes Kardangelenk dreht seinen
+Abtrieb ungleichförmig: tan chi = tan phi / cos beta, die Drehzahl zwischen cos beta und 1 / cos beta der des Antriebs,
+zweimal je Umdrehung. Zwei gleich gebeugte Gelenke in einer Ebene, die Gabeln der Zwischenwelle in Phase
+(Z-Anordnung), heben sich auf: Das zweite gibt phi zurück. Am Delta stehen die Motorwelle und die Werkzeugwelle beide
+senkrecht (die Plattform bleibt waagerecht), also heben sich die Gelenke in jeder Lage auf, und das Werkzeug dreht mit
+dem Getriebeabtrieb; nur die Welle dazwischen dreht ungleichförmig. Die Welle verdreht sich in Reihe mit dem
+Werkzeuggetriebe (`effects.shaft_torsion`), ihr Gewichtsanteil belastet die Arme (`effects.shaft_mass`), und die
+Gleitreibung des Teleskops zieht längs der Welle an der Plattform (`effects.telescope_friction`). Siehe die
+Modellreferenz (docs/model-reference.md, Abschnitt „Delta picker D4“).
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,

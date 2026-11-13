@@ -9,6 +9,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Four-axis delta picker D4 (`delta-d4`, crate `machine-delta-d4`): the D3 with a turning tool, driven by a fourth
+  motor through a telescopic shaft with two cardan joints (the pair in phase cancels: the tool turns with the motor),
+  tool pose (x, y, z, c); switches `effects.shaft_mass`, `shaft_torsion`, `telescope_friction` (on); the check
+  `tool-gearbox-peak`; its default cycle (the Adept cycle with a 90 degree turn) passes every verdict. The D3 gained
+  `PlatformDrag` (`Delta::set_platform_drag`), a force on its platform along a line, for the telescope's friction.
 - Delta picker D3: forearms as rigid rods with their inertia (`effects.forearm_inertia`, on; off is the lumped model),
   bending upper arms (`effects.link_elasticity`, `[upper_arm]`, off), the lowest mode with the motors held through
   `resonance_hz` and `mode_shape` (so `shaper_follows_pose` follows it), and the forearm rods as collision bodies.

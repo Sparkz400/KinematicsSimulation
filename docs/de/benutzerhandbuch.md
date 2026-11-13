@@ -666,6 +666,23 @@ Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Wa
 
 Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse, die Erwärmung der Führungen, Trace-Wiedergabe und Fit (eine nichtlineare Transformation, wie beim D3). Siehe die [Modellreferenz](../model-reference.md#linear-delta).
 
+### Der Vierachs-Delta D4
+
+`delta-d4` ist der D3 mit einer vierten Achse, die das Werkzeug um die Senkrechte dreht, wie ABBs IRB 360 mit seiner vierten Achse: Ein vierter 1FK2105-4AF in der Mitte der Basis treibt hinter einem Planetengetriebe mit Übersetzung 8 (Siemens NRB060-05-8) eine Teleskopwelle mit je einem Kardangelenk an beiden Enden hinab zur Werkzeugwelle in der Plattform. Die Werkzeugpose ist (x, y, z, c), c in rad; `start.pose` und die Ziele des Zyklus haben vier Werte. Sein Zyklus ist der Adept-Zyklus des D3, bei dem sich das Werkzeug auf jeder Querfahrt um 90° dreht (+90° zum Aufnehmen, zurück auf 0° zum Ablegen): weiter 0,720 s, die Drehung passt in die Querfahrt. Beide Kardangelenke sind gleich gebeugt (beide Wellen senkrecht), also dreht das Werkzeug genau mit dem Motor; nur die Welle zwischen ihnen dreht ungleichförmig (`shaft.speed`). Der Gewichtsanteil der Welle und die Reibung des Teleskops belasten die Arme ([die Konfiguration](../../crates/machine-delta-d4/default.toml), Modellreferenz).
+
+```text
+$ sim-cli verdicts delta-d4
+motor-peak,1,0.5630,1.000,ok
+gearbox-peak,1,149.0,192.0,ok
+motor-peak,4,0.05336,1.000,ok
+...
+settling,,0.0003879,0.0005000,ok
+tool-gearbox-peak,4,2.262,29.00,ok
+singularity,,2.072,5.000,ok
+```
+
+Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,21 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` erreicht das Einschwingen 0,52 mm am oberen Ende aller Schätzungen zugleich. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).

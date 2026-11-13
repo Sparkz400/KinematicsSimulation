@@ -1660,3 +1660,66 @@ Left open:
   vibration on this machine.
 - The cross-machine tests in `sim-machines` (effect switches, budgets, scene, lives, ratio change) run on it for the
   first time with the coordinator's test run.
+
+## Four-axis delta picker D4 (13 November)
+
+A new machine, `delta-d4` (crate `machine-delta-d4`): the D3 with a fourth axis that turns the tool about the
+vertical, as ABB's IRB 360 with its fourth axis. A fourth motor with its gearbox in the base's centre drives a
+telescopic shaft through a cardan joint, and a second cardan joint drives the tool's shaft in the platform.
+
+- Built on the D3: `Delta4` holds a `machine_delta_d3::Delta` built from its own config with the shaft's share of mass
+  added to `mass.platform_kg`, and delegates the arms' kinematics, dynamics, rods, bending arms, rest sag, refusals,
+  modes, scene and collision rods to it; the tool's turn is a `RotaryJoint` behind them (states: the D3's, then c, its
+  speed, rotor angle and speed when elastic, brake). The one change in machine-delta-d3: `pub struct PlatformDrag`
+  and `Delta::set_platform_drag`, a force on the platform along the line from a fixed point (the telescope's sliding
+  friction), added as J^T F to the velocity term of `load_at` and moved to the friction part of the torque breakdown;
+  `None` on the D3, which is unchanged.
+- The cardans: one joint at a bend beta turns its output by tan chi = tan phi / cos beta; the motor's and the tool's
+  shafts are both vertical, so the two joints are bent alike in one plane (Z arrangement) and with the intermediate
+  shaft's yokes in phase the second undoes the first: the tool turns exactly as the gearbox's output at any pose. Only
+  the intermediate shaft turns unevenly (signal `shaft.speed`); its spin inertia counts at the tool's speed (its mean
+  over a turn is 1 % more at 30 degrees, of a part that is 1 % of the tool's inertia).
+- Three switches, all on in the shipped config: `effects.shaft_mass` (the shaft's `platform_share` of `mass_kg` on the
+  arms, its spin inertia at the tool), `effects.shaft_torsion` (the shaft's 500 N m/rad in series with the tool
+  gearbox's spring, damped by the shaft: the tool rings at 41 Hz with the payload, among `Machine::modes`),
+  `effects.telescope_friction` (5 N Coulomb and 2 N s/m along the shaft, a loss `power.telescope`).
+- Sized after the ABB IRB 360 datasheet (ROB0082EN: 3 or 4 axes, axis 4 angular repeatability 0.4 degrees; older
+  brochures: axis 4 unlimited) on the D3's Autonox RL3-1200 arms. The fourth motor is the arms' 1FK2105-4AF (one motor
+  type per machine), behind a Siemens NRB060-05-8 (catalogue; 29 N m maximum, judged by the new check
+  `tool-gearbox-peak`). Shaft, tool and joint positions are estimates with bounds; with them the whole working range is
+  reachable by the shaft (0.625 to 1.020 m, at most 43.8 degrees bend; beyond: `error-delta-shaft-stroke`,
+  `error-delta-cardan-angle`).
+- The default cycle is the D3's Adept cycle with the tool turned by +90 degrees on the traverse to the pick and back on
+  the return: 0.720 s, every verdict passes (`sim-cli verdicts delta-d4`: settling 0.39 mm, motor 1 at 0.563 of its
+  peak against the D3's 0.510, the tool's gearbox at 2.26 of 29 N m). That needs reduced-backlash gearboxes, as on the
+  D2: 3 arcmin on the arms and 1 arcmin on the tool, estimates; with the catalogue's 9 and 10 arcmin settling fails,
+  1.21 mm (0.6 mm the arms' sag, the D3's finding, and 1 mrad of the tool resting in its backlash, which settling
+  counts as 1 mm).
+- Scene: the fourth motor, gearbox and rotor bar in the base's centre, the telescope's tube and inner shaft, both
+  joints, a bar under the platform turned with the tool; collision bodies: the D3's and six boxes along each of tube
+  and inner shaft. Labels en and de; registered in sim-machines.
+
+Test (`crates/machine-delta-d4/src/tests.rs`, hand calculations in each test's comment): the shaft's length, bend and
+bending plane at (0.3, 0.4, -0.85) (0.943398 m, 32.0054 degrees, 53.1301 degrees) and over the range, with both
+refusals; one cardan joint's angle (34.2486 degrees at 30), the pair giving the angle back over a turn, the speed
+ratio as the derivative, tool 10 rad/s with motor 80 rad/s and the shaft at 10.3937 rad/s; the tool motor's torque
+for 100 rad/s^2 (0.25226 N m, 0.18976 without the payload); the arms' holding torques at the centre equal the D3's
+plus 0.7 kg through dz/dtheta (-0.04580 N m per motor); the telescope's friction (6.696 N, 5.678 W); the tool's
+torsional mode (41.116 Hz, 75.857 Hz empty, 2.05 %); the standard suite; the default cycle (the tool at 90 degrees in
+the pick, all verdicts pass, with catalogue backlash settling fails alone). Before committing the standard suite, the
+i18n, scene and collision-body checks of sim-machines and the hand figures were run once for the D4 alone from a
+throwaway example (not kept); `sim-cli margins delta-d4 --bands` with friction on and off: at least 41.7 degrees and
+8.1 dB, the fourth motor 48.1 degrees.
+
+Left open:
+
+- With `--bands` settling reaches 0.52 mm at the high end of all estimates at once (the tool's bearing friction and
+  backlash, which settling counts in rad as m); the default passes.
+- Settling, path and tracking errors take the turn's rad as m (as on the SCARA). A separate angular tolerance (ABB
+  states 0.4 degrees for axis 4) would judge the turn as makers do; it is a change in analysis.rs.
+- The fourth motor has to be the arms' motor and drive (one `[motor]`/`[drive]` per machine), and the common gearbox
+  checks of motor 4 take the arms' `[gearbox]` ratings; `tool-gearbox-peak` alone judges the tool's gearbox.
+- Arcs and splines on four axes: the path module takes two and three; `line,x,y,z,c` works.
+- Not modelled: cardan yokes out of phase, the joints' friction and play, the shaft's swing about the upper joint and
+  its bending, the shaft's own torsional mode between gearbox and tool (gearbox and shaft are one spring in series).
+- Not in the app's own lists, the CAD mass tool, README's machine list or docs/integrations.md; not run in the app.

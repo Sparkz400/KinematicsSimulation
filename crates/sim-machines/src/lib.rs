@@ -12,6 +12,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_delta_d3::ENTRY,
     &machine_delta_d2::ENTRY,
     &machine_delta_linear::ENTRY,
+    &machine_delta_d4::ENTRY,
     &machine_joint_kit::SCREW,
     &machine_joint_kit::RACK,
     &machine_joint_kit::LINEAR_MOTOR,

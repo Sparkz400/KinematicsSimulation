@@ -148,6 +148,18 @@ them. The settling tolerance is then in rad (`ratings.settling_tolerance_m` keep
 under the arm's weight, which the motors' encoders do not see (2.6 mrad at joint 2 of the six-axis example reaching
 out).
 
+## Telescopic shaft with two cardan joints (delta-d4)
+
+The four-axis delta `delta-d4` (its own crate, built on the D3, not a joint machine) turns its tool through a telescopic
+shaft with a cardan joint at each end. One cardan joint bent by beta turns its output unevenly: tan chi = tan phi /
+cos beta, the speed between cos beta and 1 / cos beta of the input's, twice a turn. Two joints bent alike in one plane,
+the intermediate shaft's yokes in phase (the Z arrangement), cancel: the second gives phi back. On the delta both the
+motor's shaft and the tool's are vertical (the platform stays level), so the pair cancels at every pose and the tool
+turns with the gearbox's output; only the shaft between turns unevenly. The shaft twists in series with the tool's
+gearbox (`effects.shaft_torsion`), its weight share loads the arms (`effects.shaft_mass`) and the telescope's sliding
+friction pulls on the platform along the shaft (`effects.telescope_friction`). See the
+[model reference](model-reference.md#delta-picker-d4).
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
