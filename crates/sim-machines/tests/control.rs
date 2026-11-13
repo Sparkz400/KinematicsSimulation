@@ -51,12 +51,32 @@ fn to_low_end(sim: &mut Sim) {
     }
 }
 
-/// Mean following error of the first axis while it cruises at its speed limit, and what each motor's lag of its speed
-/// over Kv makes of it at the tool: forward(motor setpoints) - forward(motor setpoints - motor speeds / Kv), which is
-/// v / Kv where the kinematics are linear (the gantries) and a little more or less where they are not (the delta, whose
-/// lag of 60 mm at 3 m/s spans a curved part of its kinematics).
+/// The config with the first axis's speed limit lowered, where its stroke is too short, to one at which the long move
+/// from the low end (85 % of the range) cruises for `cruise` seconds. At 3 m/s, 50 m/s2 and 2500 m/s3 a cruise of 0.25 s
+/// takes a move of 0.99 m, 85 % of 1.16 m: the D3's range of 1.2 m has it, the D2's 0.8 m (0.147 s of cruise) and the
+/// linear delta's 0.95 m (0.19 s) have not, and a test on a cruise needs it at a lower speed there. The S-curve's cruise
+/// d / v - a / j - v / a solved for v, with ramps that reach the acceleration limit; where they do not, they are shorter
+/// and the cruise longer.
+fn cruising(entry: &MachineEntry, mut cfg: Config, cruise: f64) -> Config {
+    let axis = (entry.build)(&cfg).unwrap().axes()[0].clone();
+    let (d, a, lead) = (0.85 * (axis.max - axis.min), axis.max_acc, cruise + axis.max_acc / axis.max_jerk);
+    let v = 0.5 * a * ((lead * lead + 4.0 * d / a).sqrt() - lead);
+    if v < axis.max_vel {
+        cfg.set_text(&format!("axis.{}.max_velocity_{}_s = {v:?}", axis.id, axis.unit)).unwrap();
+    }
+    cfg
+}
+
+/// Mean following error of the first axis while it cruises at its speed limit, and what each motor's position loop makes
+/// of it at the tool: forward(motor setpoints) - forward(motor setpoints through a first-order lag of 1 / Kv, as a
+/// position loop on an ideal velocity loop follows them), which is v / Kv where the kinematics are linear (the gantries)
+/// and a little more or less where they are not: the delta's lag of 60 mm at 3 m/s spans a curved part of its
+/// kinematics, and its motors accelerate while the tool cruises. That lag's first term alone, forward(motor setpoints -
+/// motor speeds / Kv), was 2.2 % short of the D2's following error at Kv = 50, whose motors accelerate more in its cruise
+/// across 0.68 m; the whole lag is within 0.13 % of it.
 fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
-    let cfg = config(entry, edit);
+    // 0.15 s to settle and 1600 base steps to measure on.
+    let cfg = cruising(entry, config(entry, edit), 0.25);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let v_max = sim.machine.axes()[0].max_vel;
     let kv = cfg.f64("drive.kv_1_s").unwrap();
@@ -64,8 +84,12 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
     sim.command(Command::MoveTo(long_move(&sim))).unwrap();
     let (mut sum, mut n, mut cruise_since, mut lag) = (0.0, 0u32, None, 0.0);
     let (mut set, mut behind) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
+    let mut lagging: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set - d.following_error).collect();
     while sim.control.busy() || sim.step == 0 {
         sim.step();
+        for (m, d) in lagging.iter_mut().zip(&sim.control.drives) {
+            *m += sim.dt * kv * (d.pos_set - *m);
+        }
         if sim.control.set_vel[0] < v_max * (1.0 - 1e-9) {
             cruise_since = None;
             continue;
@@ -76,7 +100,6 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
             sum += sim.control.tool_error[0];
             n += 1;
             let motors: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set).collect();
-            let lagging: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set - d.vel_set / kv).collect();
             sim.machine.forward(&motors, &mut set);
             sim.machine.forward(&lagging, &mut behind);
             lag += set[0] - behind[0];
@@ -93,7 +116,7 @@ fn following_error_at_constant_speed_is_v_over_kv() {
     for entry in MACHINES {
         let off = ["effects.velocity_feedforward = false", "effects.torque_feedforward = false"];
         // Within 1 %, and what the gears sag beyond the default slack of 0.1 mm (the delta's with 9 arcmin backlash: up
-        // to 2.2 mm more; 0.43 mm seen at Kv = 100), which the tool's error carries along.
+        // to 2.2 mm more; 0.52 mm seen at Kv = 100), which the tool's error carries along.
         let sag = ((entry.build)(&entry.config()).unwrap().setpoint_slack() - 1e-4).max(0.0);
         let (measured, expected) = cruise_following_error(entry, &off);
         assert!((measured - expected).abs() < 0.01 * expected + sag, "{}: {measured} m, v/Kv = {expected} m", entry.id);
@@ -596,7 +619,9 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
     for entry in MACHINES {
         for elastic in [true, false] {
             let switch = model_switch(&entry.config());
-            let cfg = config(entry, &[&format!("{switch} = {elastic}")]);
+            // 50 ms before the switch and 200 ms after it, all in the cruise (with 50 ms to spare): on the D2 at its
+            // 3 m/s the braking at the end of its short cruise fell into them, 8.6 N m with no switch at all.
+            let cfg = cruising(entry, config(entry, &[&format!("{switch} = {elastic}")]), 0.3);
             let mut sim = Sim::new(entry, &cfg).unwrap();
             to_low_end(&mut sim);
             sim.command(Command::MoveTo(long_move(&sim))).unwrap();

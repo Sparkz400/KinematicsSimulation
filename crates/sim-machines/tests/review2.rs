@@ -363,7 +363,10 @@ fn an_external_setpoint_beyond_the_speed_limit_is_refused() {
         let mut sim = Sim::new(entry, &entry.config()).unwrap();
         let (start, axis) = (sim.control.set_pos.clone(), sim.machine.axes()[0].clone());
         let interval = entry.config().f64("profile.setpoint_interval_s").unwrap();
-        let at = |offset: f64| [&[start[0] + offset][..], &start[1..]].concat();
+        // Towards the end of the range with more room: the D2 starts 0.2475 m below its high end, and 0.25 m up from
+        // there was refused as out of range, not as too far.
+        let side = if axis.max - start[0] >= start[0] - axis.min { 1.0 } else { -1.0 };
+        let at = |offset: f64| [&[start[0] + side * offset][..], &start[1..]].concat();
         assert_eq!(sim.command(Command::Setpoint(at(0.25))).err().map(|e| e.key), Some("error-setpoint-too-far"), "{}", entry.id);
         assert_eq!(sim.command(Command::Setpoint(at(1.01 * axis.max_vel * interval))).err().map(|e| e.key), Some("error-setpoint-too-far"));
         sim.run(0.05, |_| {});

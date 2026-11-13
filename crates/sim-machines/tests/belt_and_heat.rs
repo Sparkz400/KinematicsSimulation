@@ -45,14 +45,23 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
             assert_eq!((coulomb, viscous), (cfg.f64(&format!("{table}.coulomb_n")).unwrap(), 0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap()), "{}", entry.id);
         }
-        // Into a cruise, then the same state with every part 30 K warm.
+        // Into a cruise, then the same state with every part 30 K warm. From near the low end of the range, as the long
+        // moves of control.rs: from the start pose the D2's 228 mm peaked at 2.91 m/s of its 3, and the loop waiting for
+        // the cruise stepped on for ever.
         let axis = sim.machine.axes()[0].clone();
+        let mut low = sim.control.set_pos.clone();
+        low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+        sim.command(Command::MoveTo(low)).unwrap();
+        while sim.control.busy() {
+            sim.step();
+        }
         let mut target: Vec<f64> = cfg.f64s("start.pose").unwrap();
         target[0] = axis.max - 0.05 * axis.max;
         sim.command(Command::MoveTo(target)).unwrap();
-        while (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9 {
+        while sim.control.busy() && (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9 {
             sim.step();
         }
+        assert!(sim.control.busy(), "{}: the move ended without a cruise at {} {}/s", entry.id, axis.max_vel, axis.unit);
         sim.run(0.1, |_| {});
         let gearbox = sim.heated.iter().position(|h| h.part.kind == "gearbox").map(|i| format!("power.{}", sim.heated[i].part.id));
         let cold = gearbox.as_ref().map(|id| signal(&sim, id));
