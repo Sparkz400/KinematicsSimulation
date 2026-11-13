@@ -209,6 +209,12 @@ fn a_drive_by_name_brings_its_published_dc_link_data() {
         apply_drive(&mut cfg, module, "s120").unwrap();
         assert_eq!(rating(&cfg, "dc_link_capacitance_uf"), uf, "{module}");
     }
+    // A capacitance measured on a real drive (dc_link_measured.csv): 139 uF for the 6SL5310-1BE10-8DF0. A converter
+    // without a measurement or a published value keeps the config's, as the EXCT-30's 6SL3210-5HE11-5UF0 its 66 uF.
+    let mut cfg = exct_30();
+    apply_drive(&mut cfg, "6SL5310-1BE10-8DF0", "400v").unwrap();
+    assert_eq!(rating(&cfg, "dc_link_capacitance_uf"), 139.0);
+    assert_eq!(rating(&exct, "dc_link_capacitance_uf"), 66.0);
 }
 
 /// The S120 motors: a 1FK7 brings its data sheet's winding as the model's one winding has it (three times the

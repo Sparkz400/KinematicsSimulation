@@ -14,8 +14,9 @@ What is not built yet, from the "Not built" and "Blocked" lists of [PROGRESS.md]
 - Transition curves: one length per path today; none at arcs fixed at both ends.
 - Life estimates: the motors' own bearings (Siemens publishes their radial force limits only as diagrams in the
   configuration manuals), belt life, gearbox gearing fatigue above rated torque, the life factor a_ISO.
-- The S210's DC link capacitance and chopper threshold: Siemens publishes neither, so they stay estimates even with
-  a converter named (its resistor powers and trip level come from the catalogue).
+- The S210's DC link capacitance and chopper threshold: Siemens publishes neither. The capacitance is measured for
+  one converter (6SL5310-1BE10-8DF0, `dc_link_measured.csv`); for every other converter both stay estimates. The
+  chopper threshold needs a stop that reaches it (more braking energy, or a smaller DC link).
 
 ## Front ends
 

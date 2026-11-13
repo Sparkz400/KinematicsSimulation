@@ -109,6 +109,16 @@ Columns: `article`, `series`, `supply`, `line_current_a`, `power_loss_w`, `rated
 
 Columns: `article`, `line` (`1ac` or `3ac`), `rated_power_kw`, `continuous_braking_power_w`, `peak_braking_power_kw`, `braking_energy_kj` (the internal braking resistor's), `dc_link_overvoltage_v` (410 V on 1 AC, 820 V on 3 AC). The 100 W converter has no internal resistor (the table's footnote). Not published in any Siemens document found (D 32 07/2021 and 02/2026, these operating instructions 06/2020 and 09/2022, product data sheets, SiePortal): the DC link capacitance and the braking chopper's switch-on threshold.
 
+### `siemens/dc_link_measured.csv`
+
+| | |
+| --- | --- |
+| Source | Measured on real drives, not catalogue data: one unit each, on one day. The file's header gives the method and the numbers it came from |
+| A row is | One converter article with a measured DC link. 1 row: a 6SL5310-1BE10-8DF0 (S210, new generation, firmware 6.4) with a 1FK2204-5AF, 13 November 2026 |
+| Script | None: worked out from a Startdrive trace of a quick stop from 3000 rpm |
+
+Columns: `article`, `date`, `firmware`, `capacitance_uf` (139), `capacitance_low_uf` and `_high_uf` (113 and 164: the energy between two ways of integrating it, the winding resistance taken as 3 to 6 ohm), `chopper_above_v` (632: the stop did not reach the chopper), `idle_dc_link_v` (547 on a 400 V line). A drive by name sets `dc_link_capacitance_uf` from it.
+
 ### `siemens/motors_1fk2_s120.csv` and `siemens/dynamic_braking_1fk2.csv`
 
 | | |

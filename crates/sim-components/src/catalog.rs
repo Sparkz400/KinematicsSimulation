@@ -19,6 +19,7 @@ const MOTORS_S120_ELECTRICAL: &str = include_str!("../../../catalog/siemens/moto
 const CONVERTERS_S210: &str = include_str!("../../../catalog/siemens/converters_s210.csv");
 const MOTOR_MODULES_S120: &str = include_str!("../../../catalog/siemens/motor_modules_s120.csv");
 const BRAKING_S210: &str = include_str!("../../../catalog/siemens/braking_s210.csv");
+const DC_LINK_MEASURED: &str = include_str!("../../../catalog/siemens/dc_link_measured.csv");
 const GEARBOXES: [&str; 3] = [
     include_str!("../../../catalog/siemens/gearbox_nrb.csv"),
     include_str!("../../../catalog/siemens/gearbox_nrk.csv"),
@@ -272,8 +273,9 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// no switch-on threshold of the braking chopper, so `braking_threshold_v` stays the config's estimate; only where that
 /// is at or above the trip level (a config for a 400 V bus scaled to a 230 V converter's 325 V) it is taken halfway
 /// between the highest line peak the converter is rated for (240 or 480 V + 10 %, times the square root of 2) and the
-/// trip level. Nor does Siemens publish the S210's DC link capacitance, which stays as the config has it. An S120 Motor Module sets `dc_link_capacitance_uf`
-/// from `motor_modules_s120.csv`, half of it per axis for a Double Motor Module.
+/// trip level. Nor does Siemens publish the S210's DC link capacitance, which stays as the config has it unless
+/// `dc_link_measured.csv` has one measured on a real drive of that article. An S120 Motor Module sets
+/// `dc_link_capacitance_uf` from `motor_modules_s120.csv`, half of it per axis for a Double Motor Module.
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     let (rated, max) = if let Some(c) = rows(CONVERTERS_S210).into_iter().find(|r| r["article"] == article) {
         if let Some(b) = rows(BRAKING_S210).into_iter().find(|r| r["article"] == article) {
@@ -297,6 +299,9 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         }
         (number(&m, "rated_current_a"), number(&m, "max_current_a"))
     };
+    if let Some(capacitance) = rows(DC_LINK_MEASURED).into_iter().find(|r| r["article"] == article).and_then(|r| number(&r, "capacitance_uf")) {
+        set_if_present(cfg, "ratings.dc_link_capacitance_uf", capacitance)?;
+    }
     let (rated, max) = rated.zip(max).ok_or_else(|| unknown("drive", article))?;
     set_if_present(cfg, "ratings.drive_rated_current_a", rated)?;
     set_if_present(cfg, "ratings.drive_max_current_a", max)
