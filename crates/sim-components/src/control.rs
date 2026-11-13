@@ -114,11 +114,12 @@ pub struct Controller {
     /// Input shaper: (amplitude ratio K of successive steps, half the damped period in profile cycles), and the same
     /// of a second shaper convolved with it, (0, 0) without one.
     shaper: Option<(f64, f64, f64, f64)>,
-    /// With the shaper following the pose: half the damped period in profile cycles, times the frequency.
-    shaper_follows: Option<f64>,
+    /// With the shaper following the pose: half the damped period in profile cycles, times the frequency, of the first
+    /// shaper and of the second.
+    shaper_follows: Option<(f64, f64)>,
     /// A shaper setting (`shaper`, `shaper_follows`) from a changed config, waiting for the plan to stand
     /// still: taken under a moving plan it would make the setpoint jump.
-    pending_shaper: Option<(Option<(f64, f64, f64, f64)>, Option<f64>)>,
+    pending_shaper: Option<(Option<(f64, f64, f64, f64)>, Option<(f64, f64)>)>,
     /// How many cycles of `history` the shaper has needed so far.
     shaper_reach: usize,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
@@ -261,10 +262,10 @@ impl Controller {
             ((-damping * std::f64::consts::PI / root).exp(), 0.5 / (frequency * root) / profile_cycle)
         };
         if cfg.bool("effects.input_shaping")? {
-            let root = (1.0 - damping * damping).sqrt();
+            let per_hz = |damping: f64| 0.5 / (1.0 - damping * damping).sqrt() / profile_cycle;
             let ((k, half), (k2, half2)) = (zvd(frequency, damping), if frequency2 > 0.0 { zvd(frequency2, damping2) } else { (0.0, 0.0) });
             shaper = Some((k, half, k2, half2));
-            shaper_follows = cfg.bool("effects.shaper_follows_pose")?.then_some(0.5 / root / profile_cycle);
+            shaper_follows = cfg.bool("effects.shaper_follows_pose")?.then_some((per_hz(damping), per_hz(damping2)));
         }
         let fieldbus_delay = cfg.f64("profile.fieldbus_delay_cycles")?;
         if fieldbus_delay < 0.0 || fieldbus_delay.fract() != 0.0 || fieldbus_delay > 1000.0 {
@@ -347,7 +348,7 @@ impl Controller {
         let now = self.tick;
         // The shaper in use counts its period in cycles too. (A pending one was worked out for the new cycle.)
         self.shaper = self.shaper.map(|(k, half, k2, half2)| (k, half * ratio, k2, half2 * ratio));
-        self.shaper_follows = self.shaper_follows.map(|per_hz| per_hz * ratio);
+        self.shaper_follows = self.shaper_follows.map(|(per_hz, per_hz2)| (per_hz * ratio, per_hz2 * ratio));
         self.tick = (now as f64 * ratio).round() as u64;
         let new_now = self.tick as f64;
         // A tick of u64::MAX is a motion not yet picked up.
@@ -654,7 +655,7 @@ impl Controller {
                 // dwells, both wait for the setpoint: the tool is not there before.
                 let waits = self.cycle.is_some_and(|i| self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached);
                 // The shaper's oldest copy is a whole period old, read between two stored cycles.
-                let lag = if waits { self.shaper_half(machine, &self.set_pos).map_or(0.0, |half| (2.0 * half + 2.0 * self.shaper_half2()).ceil()) } else { 0.0 };
+                let lag = if waits { self.shaper_halves(machine, &self.set_pos).map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil()) } else { 0.0 };
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
@@ -690,7 +691,7 @@ impl Controller {
                     // once the shaped setpoint is there, where the segment waits for it.
                     if let Some(i) = self.cycle {
                         let waits = self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
-                        let lag = if waits { self.shaper_half(machine, &self.set_pos).map_or(0.0, |half| (2.0 * half + 2.0 * self.shaper_half2()).ceil()) } else { 0.0 };
+                        let lag = if waits { self.shaper_halves(machine, &self.set_pos).map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil()) } else { 0.0 };
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.payload_attached = self.segments[i].payload;
                             Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
@@ -785,19 +786,15 @@ impl Controller {
         }
     }
 
-    /// Half the shaper's period in profile cycles with the plan at `pose`: as configured, or that of the
-    /// resonance the machine reports there when the shaper follows the pose. `None` with the shaper off.
-    fn shaper_half(&self, machine: &dyn Machine, pose: &[f64]) -> Option<f64> {
-        let (_, half, ..) = self.shaper?;
-        Some(match (self.shaper_follows, machine.resonance_hz(pose)) {
-            (Some(per_hz), Some(resonance)) => per_hz / resonance,
-            _ => half,
-        })
-    }
-
-    /// Half the period of the second shaper in profile cycles; 0 without one.
-    fn shaper_half2(&self) -> f64 {
-        self.shaper.map_or(0.0, |(.., half2)| half2)
+    /// Half the period in profile cycles of the first shaper and of the second (0 without one) with the plan at `pose`:
+    /// as configured, or, when the shaper follows the pose, that of the resonance the machine reports there for the
+    /// first and that of its second mode (`Machine::modes`) for the second; one the machine does not report stays as
+    /// configured. `None` with the shaper off.
+    pub fn shaper_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<(f64, f64)> {
+        let (_, half, _, half2) = self.shaper?;
+        let Some((per_hz, per_hz2)) = self.shaper_follows else { return Some((half, half2)) };
+        let second = if half2 > 0.0 { machine.modes(pose).get(1).map_or(half2, |mode| per_hz2 / mode.hz) } else { 0.0 };
+        Some((machine.resonance_hz(pose).map_or(half, |resonance| per_hz / resonance), second))
     }
 
     /// Input shaping (ZVD): the setpoints become the sum of three copies of the plan, now, half a period
@@ -807,13 +804,13 @@ impl Controller {
     /// that the vibration of each of the two resonances is cancelled. Without one its weights are 1 : 0 : 0.
     ///
     /// Following the pose, the half period is that of the resonance the machine reports where the plan
-    /// stands. The weights always add up to one, so once the plan has stood still for a whole period the
+    /// stands, and the second shaper's that of the machine's second mode there. The weights always add up to one, so once the plan has stood still for a whole period the
     /// setpoint is the plan exactly, whatever the period did on the way.
     fn shape(&mut self, machine: &dyn Machine) {
         // shortcut: while the period changes, the speed and acceleration setpoints are the delayed plan's,
         // not the exact rates of the shaped position (off by the rate of the delay, a few percent in a Z
         // move); they are feedforward only. Shape the position alone and difference it if that matters.
-        let (Some((k, _, k2, half2)), Some(half)) = (self.shaper, self.shaper_half(machine, &self.raw_pos)) else {
+        let (Some((k, _, k2, _)), Some((half, half2))) = (self.shaper, self.shaper_halves(machine, &self.raw_pos)) else {
             self.history.clear();
             self.shaper_reach = 0;
             return;

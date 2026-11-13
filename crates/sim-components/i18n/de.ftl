@@ -297,6 +297,7 @@ quantity-tooth-slip = Schlupf des Riemens über der Scheibe
 quantity-tooth-jump-power = Verlust durch Zahnsprünge
 check-belt-tooth-jump = Zahnsprünge des Riemens im Zyklus
 effect-belt_span_vibration = Querschwingung der freien Riementrume
+effect-belt_wrap = Zähne im Eingriff aus dem Umschlingungswinkel der Pose
 param-belt_span_resonance_band = Riementrum: kleinster Abstand der ersten Eigenform von einer Anregung (Anteil)
 quantity-span-frequency = Erste Quereigenfrequenz
 quantity-span-detuning = Riementrume: Abstand der nächsten ersten Eigenform von einer Anregung (Anteil)

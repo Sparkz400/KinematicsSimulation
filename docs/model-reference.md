@@ -106,7 +106,23 @@ m is the belt's mass that the machine lumps on that pulley (single axis: the who
 
 Signals: `pulley.<motor>.tooth_jumps` (count) and `pulley.<motor>.tooth_slip` (u, m), `power.tooth_jump` (W). Verdict `belt-tooth-jump`: the jumps during the measured pass, which must be 0.
 
-Assumptions: one jump law per pulley with the configured teeth in mesh, not the wrap the pose gives; no radial motion of the belt, so the energy with which the tension presses a tooth back into its groove is not modelled (a tooth that climbs out and falls back takes nothing); the teeth themselves are not hurt (their load is `belt-tooth-load`).
+Assumptions: one jump law per pulley, with the configured teeth in mesh or, with `effects.belt_wrap`, those of the wrap at the pose ([Belt wrap](#belt-wrap)); no radial motion of the belt, so the energy with which the tension presses a tooth back into its groove is not modelled (a tooth that climbs out and falls back takes nothing); the teeth themselves are not hurt (their load is `belt-tooth-load`).
+
+## Belt wrap
+
+Source: `wrap_angle` in [`mech.rs`](../crates/sim-components/src/mech.rs), `Machine::belt_wraps`; `effects.belt_wrap`, off by default (so that earlier results stay as they were). The teeth in mesh on a driven pulley are counted from the angle φ by which the belt wraps it at the pose, in place of `ratings.belt_teeth_in_mesh`:
+
+```text
+z_m  = φ / (2π) · 2π r / p = φ · r / p                    teeth in mesh
+lean = atan2(h, d) − asin((r + r₂) / sqrt(d² + h²))       per span, to the next wheel at (d, h), radius r₂
+φ    = π − lean_upper − lean_lower
+```
+
+r₂ is positive where pulley and wheel lie on either side of the belt, negative where on the same side, 0 for a clamp; a span that leaves level leans by 0. With it the tooth-jump law's c = k · z_m · p / r becomes **c = k · φ**, whatever the pitch and radius, and the belt's tooth load (`belt-tooth-load`) counts φ · r / p teeth (at most 12) at the smallest wrap of the measured pass.
+
+Both machine crates give their geometry: the T-gantry its carriage idlers (`idler.radius_m`) beside the carriage at the heights ±(r + r_i), the single axis the clamp at the pulley's height and the idler as large as the pulley at the far end. In both the spans leave the motor pulleys level at every pose: **φ = π wherever the carriage is**, 12.6 teeth on the default configs' pulley (r = 20 mm, p = 5 mm, against the 10 configured), 10 of the EXCT-30's 20. The tooth-jump limit is then 2.4 π = 7.54 times the slack side, against 6 with the configured 10 teeth. Machine files give no geometry and keep the configured value.
+
+Assumptions: the wheels stand where the scene draws them; the belt's sag and the teeth's give do not change the wrap.
 
 ## Sideways vibration of the belt spans
 
@@ -460,13 +476,17 @@ The axis is softer the further it hangs below the carriage. The spring gets stif
 
 Assumptions: the Z axis is a rigid body on a compliant guide; it does not bend. Only its lean in X is a degree of freedom, not in Y and not in rotation as a state of its own. The payload sits at the centre of mass used for h.
 
-The resonance the machine reports for the input shaper (`resonance_hz`) is the lower mode of two masses in a row: the carriage on the belt's X stiffness k_b = EA/L₁ + EA/L₃ (pulleys taken as held), and the Z axis on k(z):
+The modes the machine reports (`modes`; the lower one is `resonance_hz`, the input shaper's) are those of two masses in a row: the carriage on the belt's X stiffness k_b = EA/L₁ + EA/L₃ (pulleys taken as held), and the Z axis on k(z):
 
 ```text
 ω⁴ − ( k_b/m_c + k/m_c + k/m_z ) · ω² + k_b · k / (m_c · m_z) = 0
+v = (k − ω² m_z, ω² m_z)                                    shape in (x, u)
+ζ = (c_b v_x² + c_z v_u²) / (2 ω (m_c v_x² + m_z (v_x + v_u)²))
 ```
 
-The frame mode and the stiffness of the control loops are not in it.
+Both roots: in the lower mode carriage and Z axis swing together (24.6 Hz at x = 0.9 m, z = 0.05 m), in the upper one against each other (104.2 Hz). c_b is the damping of the two sections (2 · `belt.damping_n_s_m`, or with material damping `belt.damping_time_s` · k_b), c_z `tool_flex.damping_n_s_m`; the cross terms of a damping that is not proportional are left out. The frame mode and the stiffness of the control loops are not in it.
+
+The single axis reports one mode, its carriage on the belt with the pulley held: f = sqrt(k / m) / (2π), k = EA/L₁ + EA/L₂, m the carriage with payload and cable chain, ζ = c / (2 m ω) (65.8 Hz at x = 0.5 m). None in the rigid model.
 
 ### Idlers
 
@@ -809,7 +829,7 @@ shaped(t) = ( plan(t) + 2K · plan(t − T_half) + K² · plan(t − 2 T_half) )
 
 f `shaper_frequency_hz`, ζ `shaper_damping`. The delays are interpolated between profile cycles. The weights add up to one, so once the plan has stood still for a whole period the setpoint is the plan exactly. Where a cycle segment has a dwell or switches the payload, both wait until the shaped setpoint has arrived, ceil(2 · T_half / cycle) profile cycles after the plan (with a second shaper ceil(2 · (T_half + T_half,2) / cycle)); the process force starts with the dwell. Segments without a dwell and without a gripper action go on with the plan. A plain move (`Move`) is no longer busy when its plan has arrived.
 
-With `effects.shaper_follows_pose` the half period of the first shaper is that of the resonance the machine reports for the planned pose; the second stays at its frequency. Only the T-gantry reports one. Its resonance also depends on the payload: when the gripper closes at the start of a dwell the period grows a little, and the setpoint leaves the target once more by less than a micrometre.
+With `effects.shaper_follows_pose` the half period of the first shaper is that of the resonance the machine reports for the planned pose, and that of a second shaper (`shaper2_frequency_hz` above 0) the machine's second mode there (`Machine::modes`); one the machine does not report stays at its frequency. The T-gantry reports two modes, the single axis one. `sim-cli modes` and the app's tuning panel show them over an axis's stroke. Its resonance also depends on the payload: when the gripper closes at the start of a dwell the period grows a little, and the setpoint leaves the target once more by less than a micrometre.
 
 A changed shaper setting in a running simulation (the switch, the frequency, the damping, following the pose) is held back until the plan stands still and the shaper's store holds nothing but that pose. Then the setpoint is the plan with the old shaper and with the new one, and does not step. Taken at speed, the three copies of the plan were suddenly read at other delays, or two of them dropped, and the setpoint jumped by up to 16 mm on the T-gantry's X axis at 0.8 m/s.
 

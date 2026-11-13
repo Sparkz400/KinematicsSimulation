@@ -20,7 +20,7 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
     // Not the fieldbus jitter: the drives' position setpoint then holds for a cycle and jumps, and the budget's losses,
     // taken once per step, miss 0.12 % of the T-gantry's supply (0.03 % at half the step, so it is the sampling, not a
     // loss left out), beyond its 0.1 %.
-    for effect in ["idlers", "cable_chain", "process_force", "belt_tooth_stiffness", "belt_material_damping", "sensor_noise", "fieldbus_delay", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration"] {
+    for effect in ["idlers", "cable_chain", "process_force", "belt_tooth_stiffness", "belt_material_damping", "sensor_noise", "fieldbus_delay", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration", "belt_wrap"] {
         if everything.bool(&format!("effects.{effect}")).is_ok() {
             everything.set_text(&format!("effects.{effect} = true")).unwrap();
         }

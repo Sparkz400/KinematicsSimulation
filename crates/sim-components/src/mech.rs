@@ -121,6 +121,8 @@ pub const JUMP_STATES: usize = 6;
 pub struct ToothJump {
     pub pitch: f64,
     pub climb: f64,
+    /// `belt.tooth_jump_factor`, k: with the wrap angle known (`set_wrap`) climb = k z_m p / r = k wrap.
+    pub factor: f64,
     /// The belt's mass lumped on the pulley, kg.
     pub mass: f64,
 }
@@ -135,9 +137,16 @@ impl ToothJump {
         if mass <= 0.0 {
             return Err(ConfigError::Invalid("effects.belt_tooth_jump".into()));
         }
-        let pitch = cfg.positive("belt.tooth_pitch_m")?;
-        let climb = cfg.positive("belt.tooth_jump_factor")? * cfg.positive("ratings.belt_teeth_in_mesh")? * pitch / radius;
-        Ok(Some(Self { pitch, climb, mass }))
+        let (pitch, factor) = (cfg.positive("belt.tooth_pitch_m")?, cfg.positive("belt.tooth_jump_factor")?);
+        let climb = factor * cfg.positive("ratings.belt_teeth_in_mesh")? * pitch / radius;
+        Ok(Some(Self { pitch, climb, factor, mass }))
+    }
+
+    /// The teeth in mesh from the angle `wrap` (rad) by which the belt wraps the pulley (effects.belt_wrap), in place of
+    /// `ratings.belt_teeth_in_mesh`: a pulley of radius r has 2 pi r / p teeth, wrap / (2 pi) of them in mesh, so
+    /// z_m = wrap r / p and climb = k z_m p / r = k wrap, whatever the pitch and radius.
+    pub fn set_wrap(&mut self, wrap: f64) {
+        self.climb = self.factor * wrap;
     }
 
     /// The pulley's inertia: `lumped` (with the belt's share) while the teeth are in mesh, without it while they are out.
@@ -212,6 +221,18 @@ impl ToothJump {
 
 // ---------------------------------------------------------------------------------------------
 // Sideways vibration of the free belt spans
+
+/// The angle (rad) by which a belt wraps a pulley of radius `r` (effects.belt_wrap), the pulley's centre at the origin and
+/// its two spans leaving towards +x, one over the top, one under the bottom. Each span runs to the next wheel, given as
+/// (d, h, r2): its centre d along +x and h out on the span's own side (up for the upper span, down for the lower), and
+/// its radius r2, positive where pulley and wheel lie on either side of the belt (an inner tangent), negative where on
+/// the same side (an outer tangent), 0 for a clamp. A span leans away from the pulley by atan2(h, d) - asin((r + r2) / D),
+/// D the distance of the centres (0 for a span that leaves level), and takes as much off the half turn:
+/// wrap = pi - lean_upper - lean_lower.
+pub fn wrap_angle(r: f64, upper: [f64; 3], lower: [f64; 3]) -> f64 {
+    let lean = |[d, h, r2]: [f64; 3]| h.atan2(d) - ((r + r2) / d.hypot(h)).asin();
+    std::f64::consts::PI - lean(upper) - lean(lower)
+}
 
 /// First transverse mode of a free belt span as a string: f1 = sqrt(T / mu) / (2 L). The belt's own speed lowers it
 /// by the factor 1 - v² / c² (c = sqrt(T / mu)), below 0.2 % at the speeds and tensions here, left out. 0 for a slack
@@ -1064,9 +1085,24 @@ preload_n = 200.0
     /// 600 N do not, and a slack side climbs at any pull. A jump runs towards the tight side against the ridge, 600 N
     /// (6 * 100 N) times sin(2 pi d / p): at d = p / 4 the full 600 N, its energy 600 N * 5 mm / pi = 0.954930 J at
     /// the top; it ends where the belt crosses the next groove (counted) or the one it left (not counted).
+    /// Level spans on both sides (to a clamp at the pulley's top, r2 = 0, and under an idler as large as the pulley,
+    /// r2 = -r) wrap half a turn. A span that leaves straight up to a clamp at (0, 0.5 m) over a pulley of r = 0.02 m
+    /// touches it on its left at 90 degrees plus asin(r / D) less: lean = pi / 2 - asin(0.04), so with a level lower span
+    /// wrap = pi / 2 + asin(0.04) = 1.610807 rad. With climb = k wrap the tooth jump threshold follows: k = 2.4 gives
+    /// 2.4 pi = 7.539822 for the half turn.
+    #[test]
+    fn the_wrap_angle_is_half_a_turn_less_the_lean_of_both_spans() {
+        let close = |a: f64, b: f64| assert!((a - b).abs() < 1e-6, "{a} against {b} by hand");
+        close(wrap_angle(0.02, [0.4, 0.02, 0.0], [1.2, 0.0, -0.02]), std::f64::consts::PI);
+        close(wrap_angle(0.02, [0.0, 0.5, 0.0], [1.2, 0.0, -0.02]), 1.610807);
+        let mut jump = ToothJump { pitch: 0.005, climb: 6.0, factor: 2.4, mass: 0.26 };
+        jump.set_wrap(std::f64::consts::PI);
+        close(jump.climb, 7.539822);
+    }
+
     #[test]
     fn a_tooth_jump_starts_at_the_climb_limit_and_ends_one_pitch_on() {
-        let jump = ToothJump { pitch: 0.005, climb: 6.0, mass: 0.26 };
+        let jump = ToothJump { pitch: 0.005, climb: 6.0, factor: 2.4, mass: 0.26 };
         assert!(jump.climbs(100.0, 700.1) && jump.climbs(700.1, 100.0) && !jump.climbs(100.0, 600.0) && jump.climbs(0.0, 1.0));
         let mut slip = [0.0; JUMP_STATES];
         let mut v = 1.0;

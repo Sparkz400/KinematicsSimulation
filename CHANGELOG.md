@@ -26,6 +26,12 @@ item are in [PROGRESS.md](PROGRESS.md).
   `machine-joint-kit`: `screw-axis`, `rack-axis`, `linear-motor-axis`, `rotary-table`, `urdf-arm`, `scara`, with
   their own rating checks (`screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life`,
   `rack-feed-force`, `strain-wave-life`).
+- `Machine::modes`: every mode a machine knows at a pose, with its damping (T-gantry both two-mass modes, the single
+  axis its carriage on the belt); `sim-cli modes` and a plot in the app's tuning panel show them over an axis's stroke.
+- With `effects.shaper_follows_pose` the second input shaper follows the machine's second mode; the optimiser's second
+  shaper uses it.
+- `effects.belt_wrap` (off): the teeth in mesh from the belt's wrap at the pose, for the tooth-jump law and the tooth
+  load.
 
 ## [1.0.0-rc.1] - 2026-11-13
 

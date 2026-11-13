@@ -25,8 +25,8 @@
 //! lower carriage idlers at 2 vx + vz (left) and 2 vx - vz (right), and the Z-bottom idler, which rises
 //! with z, at 2 vx.
 
-use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency};
-use sim_core::{Arrow, AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle};
+use sim_core::{Arrow, AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "t-gantry",
@@ -81,7 +81,7 @@ fn suite_configs() -> Vec<Config> {
     let mut rigid = lossless_config();
     rigid.set_text("effects.belt_stretch = false").unwrap();
     let mut loaded = lossless_config();
-    for effect in ["belt_tooth_stiffness", "idlers", "cable_chain", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration"] {
+    for effect in ["belt_tooth_stiffness", "idlers", "cable_chain", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration", "belt_wrap"] {
         loaded.set_text(&format!("effects.{effect} = true")).unwrap();
     }
     vec![rigid, lossless_config(), loaded]
@@ -123,6 +123,8 @@ pub struct TGantry {
     jump_loss: f64,
     /// With effects.belt_span_vibration: the belt's mass per metre, for the spans' string frequencies.
     span_mass: Option<f64>,
+    /// With effects.belt_wrap: the carriage idlers' radius, for the belt's wrap at the motor pulleys (`belt_wraps`).
+    wrap_idler: Option<f64>,
     frame: Option<Frame>,
     flex: Option<ToolFlex>,
     /// Idler inertia as mass on [X, Z]: with m = J / r^2 per idler and the belt speeds of the module
@@ -260,6 +262,7 @@ impl TGantry {
             jump: None,
             jump_loss: 0.0,
             span_mass: if cfg.bool("effects.belt_span_vibration")? { Some(cfg.positive("belt.mass_kg_m")?) } else { None },
+            wrap_idler: if cfg.bool("effects.belt_wrap")? { Some(idler_radius) } else { None },
             frame,
             flex,
             payload_attached: true,
@@ -883,26 +886,53 @@ impl Machine for TGantry {
         self.energy_parts(s).iter().sum()
     }
 
+    /// The lower of the two modes of `modes`.
+    fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
+        self.modes(tool_pose).first().map(|mode| mode.hz)
+    }
+
     /// The Z axis leaning on its guide while the belt holds the carriage: two masses in a row. The carriage
     /// sits on the belt's stiffness in X (the two sections that end at the clamp, EA / L each, with the
     /// pulleys taken as held), the Z axis with what it carries on the spring of its guide at this height.
-    /// The lower of the two modes, from w^4 - (kb / mc + kz / mc + kz / mz) w^2 + kb kz / (mc mz) = 0.
-    fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        if !self.elastic || self.flex.is_none() {
-            return None;
-        }
+    /// Both modes, from w^4 - (kb / mc + kz / mc + kz / mz) w^2 + kb kz / (mc mz) = 0: in the lower one carriage and
+    /// Z axis swing together, in the upper one against each other. Each one's damping ratio is that of its shape v
+    /// (`mode_shape`) in (x, u), v'Cv / (2 w v'Mv) with C = [[cb, 0], [0, cz]]: cb the damping of the two sections
+    /// (`belt.damping_n_s_m` each, or with effects.belt_material_damping `belt.damping_time_s` EA / L), cz that of the
+    /// guide (`tool_flex.damping_n_s_m`); the cross terms of a damping that is not proportional are left out.
+    fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        let Some(flex) = self.flex.as_ref().filter(|_| self.elastic) else { return Vec::new() };
         let geo = self.geo(tool_pose[0], tool_pose[1]);
         let (belt, lean) = (self.belt.ea / geo[0] + self.belt.ea / geo[2], self.flex_at(tool_pose[1]).0);
-        let m_carriage = self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(tool_pose[0]).0;
-        let (sum, product) = ((belt + lean) / m_carriage + lean / self.m_z(), belt * lean / (m_carriage * self.m_z()));
-        Some((0.5 * (sum - (sum * sum - 4.0 * product).sqrt())).sqrt() / std::f64::consts::TAU)
+        let belt_damping = 2.0 * self.belt.damping + self.belt.damping_time * belt;
+        let (mc, mz) = (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(tool_pose[0]).0, self.m_z());
+        let (sum, product) = ((belt + lean) / mc + lean / mz, belt * lean / (mc * mz));
+        let root = (sum * sum - 4.0 * product).sqrt();
+        [sum - root, sum + root]
+            .map(|twice| {
+                let w2 = 0.5 * twice;
+                let (vx, vu) = (lean - w2 * mz, w2 * mz);
+                let (kinetic, damped) = (mc * vx * vx + mz * (vx + vu) * (vx + vu), belt_damping * vx * vx + flex.damping * vu * vu);
+                Mode { hz: w2.sqrt() / std::f64::consts::TAU, damping: damped / (2.0 * w2.sqrt() * kinetic) }
+            })
+            .to_vec()
+    }
+
+    /// With effects.belt_wrap: the wrap at each motor pulley, from where `scene` puts the wheels next to it, the carriage
+    /// idlers (`idler.radius_m`) beside the carriage (0.03 m either side of its middle) at the heights r + ri and
+    /// -(r + ri). The spans to them are inner tangents that leave level, atan2(r + ri, d) = asin((r + ri) / D), at every
+    /// pose: half a turn on each pulley wherever the carriage is (`mech::wrap_angle`). Only a wheel at another height
+    /// would make it change with x.
+    fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
+        let Some(ri) = self.wrap_idler else { return Vec::new() };
+        let (r, end, cx) = (self.r, 2.0 * self.span_min + self.axes[0].max, self.span_min + tool_pose[0]);
+        [cx - 0.03 - ri, end - cx - 0.03 - ri].iter().map(|&d| wrap_angle(r, [d, r + ri, ri], [d, r + ri, ri])).collect()
     }
 
     /// The mode of `resonance_hz`. What moves: the carriage on the frame, x (with the pulleys held, all of it is
     /// belt stretch), and the Z axis's centre of mass against the carriage, u. Nothing else: pulleys, motors and
     /// frame stay. In (x, u), with the Z axis at x + u over ground:
     ///   M = [[mc + mz, mz], [mz, mz]], K = [[kb, 0], [0, kz]],
-    /// kb, kz, mc, mz as in `resonance_hz`. The second row of (K - w^2 M) v = 0, -w^2 mz vx + (kz - w^2 mz) vu = 0,
+    /// kb, kz, mc, mz as in `modes`. The second row of (K - w^2 M) v = 0, -w^2 mz vx + (kz - w^2 mz) vu = 0,
     /// gives v = (kz - w^2 mz, w^2 mz), scaled so that the larger of the carriage's travel x and the tool's travel
     /// x + tip u (`tool_state`) is 1 m. Not to the tool's alone: high on the Z axis tip turns negative and the tool
     /// stands still in the mode at one height, where that scale would be infinite. In the lower mode x and u have
@@ -933,8 +963,12 @@ impl Machine for TGantry {
     /// section 2.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;
-        let Some(jump) = self.jump.clone() else { return };
+        let Some(mut jump) = self.jump.clone() else { return };
+        let wraps = self.belt_wraps(&[s[X], s[Z]]);
         for k in 0..2 {
+            if let Some(&wrap) = wraps.get(k) {
+                jump.set_wrap(wrap);
+            }
             let (before, t) = (self.energy(s), self.sections(s).map(|f| f.tension));
             let at = JUMP + JUMP_STATES * k;
             let (rest, mut v) = ((self.j_pulley / (self.r * self.r)) - jump.mass, self.r * s[V + A + k]);

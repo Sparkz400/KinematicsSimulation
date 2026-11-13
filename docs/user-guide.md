@@ -816,7 +816,19 @@ A sine torque on one motor on top of the holding torques, measured at that motor
 --set effects.input_shaping=true --set profile.shaper_frequency_hz=25 --set profile.shaper_damping=0.03
 ```
 
-Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The machine reports the lower mode of carriage-on-belt and Z-axis-on-guide (24.6 Hz at z = 0.05 m and 35.6 Hz at z = 0.15 m for the default config at x = 0.9 m). The single axis reports no resonance, so there the shaper stays at the fixed frequency.
+Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The machine reports the lower mode of carriage-on-belt and Z-axis-on-guide (24.6 Hz at z = 0.05 m and 35.6 Hz at z = 0.15 m for the default config at x = 0.9 m). The single axis reports its carriage on the belt (65.8 Hz at x = 0.5 m). A second shaper (`profile.shaper2_frequency_hz` above 0) follows the machine's second mode as well: on the T-gantry carriage and Z axis swinging against each other, 104.2 Hz at z = 0.05 m.
+
+**Resonances over the stroke**, to choose the shaper frequencies: `modes` asks the machine for its modes at `--points` places (21 by default) over the stroke of one axis (`--axis-index`, the first by default), the other axes at the start pose. A machine that reports none writes the column `position` alone. The app's tuning panel plots the same over the axis it measures, under the shaper frequencies configured.
+
+```text
+$ sim-cli modes t-gantry --axis-index 1 --points 3
+position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
+0.000000,21.0375,0.03737,106.9110,0.05326
+0.250000,47.7769,0.02417,208.0698,0.02559
+0.500000,27.5889,0.02248,86.9525,0.06739
+```
+
+The Z axis is stiffest where its centre of mass hangs at the carriage (z = 0.3 m here), and both modes rise there.
 
 What it does on the EXCT-30 cycle. The config has the shaper on, at a fixed 25 Hz with a second one at 17.5 Hz; the first run switches both off:
 
@@ -1229,7 +1241,7 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Trace, Mapping | A file name, typed in, and for a vendor's export its mapping file (as `--map` takes it; empty for a trace in the simulator's columns). "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), per axis the fitted mass, friction and constant force next to the config's, with what to change in the config, and per motor what the trace says by itself: inertia, friction, the loops' lags, each with its standard error and 95 % interval, and how well each model reproduces the trace. The same as `sim-cli replay`, `fit --trace` and `identify --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |
 | Frequency response of the mechanics | From, to, frequencies and torque amplitude as `sim-cli sweep` takes them (5 to 500 Hz, 120, and 1.5 N m or 40 % of the drive's peak torque where that is less, at the start). "Measure every motor" measures the open-loop response from each motor's torque to its speed, as `sim-cli sweep --motor N` does for one: gain in dB and phase over the frequency, one line per motor, and per motor the dip where the load swings on the belt (resonance and damping ratio of the dip lowest in frequency; empty where the range does not hold a dip with both its flanks). The defaults show it on every motor of the default machines. Before, they did not: the amplitude was 0.05 N m, at which stiction holds the motors, not the range. Switching machine or opening a config sets the amplitude to that config's default unless another one was typed |
 | Frequency response: Measured response, taken on, Fit the belt stiffness | A file as `sim-cli sweep` writes it (the columns `frequency_hz` and `gain_rad_s_per_nm`), measured on the motor ticked with the torque amplitude above. "Fit the belt stiffness" runs the config's own response at the file's frequencies and shows resonance and damping ratio of both, and what to change in the config: the factor on the belt stiffness. The same as `sim-cli fit --sweep FILE --sweep-motor N --amplitude A` |
-| Tuning: Measure step and frequency response | Step response and closed-loop response of one axis, with rise time, overshoot, settling time and bandwidth |
+| Tuning: Measure step and frequency response | Step response and closed-loop response of one axis, with rise time, overshoot, settling time and bandwidth; below them the modes the machine reports over that axis's stroke, with the shaper frequencies dashed |
 | Scope plots | One plot per quantity, one line per axis or motor. Setpoints are dashed in the colour of their actual value. Shared time axis and cursor; min, max, span and RMS per trace; units switch to mm and µm by themselves |
 
 The right panel scrolls as a whole, and each of its parts (Scopes, Config file, Analysis, Effect views, Motor search, Path, Trace, Frequency response of the mechanics, Tuning) folds away under its heading. A part opens by itself when its result arrives. The tables are laid out for the panel's default width: long names wrap, and numbers have four digits.

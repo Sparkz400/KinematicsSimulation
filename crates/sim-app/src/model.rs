@@ -4,7 +4,7 @@
 
 use crate::session::{Event, Request, Session, extend_trail};
 use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict, compare_effect};
-use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
+use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, modes_along, step_response};
 use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
 use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
@@ -12,7 +12,7 @@ use sim_components::import::{Mapping, decode, import};
 use sim_components::motor_fit::{Identified, QUANTITIES};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv, replay};
 use sim_components::{Command, CommandError, Sim, path};
-use sim_core::{Config, ConfigError, Machine, MachineEntry, Scene, SignalInfo, TEMPERATURE_PREFIX, TORQUE_PARTS, Translations};
+use sim_core::{Config, ConfigError, Machine, MachineEntry, Mode, Scene, SignalInfo, TEMPERATURE_PREFIX, TORQUE_PARTS, Translations};
 use sim_machines::{MACHINES, translations};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -61,7 +61,13 @@ pub struct Tuning {
     pub step: StepResponse,
     pub response: Vec<SweepPoint>,
     pub bandwidth: Option<f64>,
+    /// The modes the machine reports at `MODE_POINTS` places over the axis's stroke, the other axes at the start pose
+    /// (`analysis::modes_along`): empty lists where it reports none.
+    pub modes: Vec<(f64, Vec<Mode>)>,
 }
+
+/// How many places over the stroke the tuning help asks the machine for its modes.
+pub const MODE_POINTS: usize = 41;
 
 /// What the analysis panel can compute. Each takes seconds, so each runs in a thread of its own.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1033,7 +1039,9 @@ impl Model {
             let measure = || -> Result<Tuning, sim_core::ConfigError> {
                 let step = step_response(entry, &config, axis, 0.001, 0.5)?;
                 let response = closed_loop_response(entry, &config, axis, &log_spaced(1.0, 200.0, 40), 0.0005)?;
-                Ok(Tuning { axis, step, bandwidth: bandwidth(&response), response })
+                let sim = Sim::new(entry, &config)?;
+                let modes = modes_along(sim.machine.as_ref(), sim.control.planned_pos(), axis, MODE_POINTS);
+                Ok(Tuning { axis, step, bandwidth: bandwidth(&response), response, modes })
             };
             let _ = result.send(measure().map_err(|e| (e.key(), e.detail().to_string())));
         });

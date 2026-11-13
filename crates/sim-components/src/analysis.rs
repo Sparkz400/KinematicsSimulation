@@ -3,7 +3,7 @@
 
 use crate::control::{Command, CommandError};
 use crate::sim::Sim;
-use sim_core::{Config, ConfigError, LOSS_PREFIX, MachineEntry, RatingCheck, Rk4, SignalInfo, TORQUE_PARTS, ThermalPart, advance};
+use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Mode, RatingCheck, Rk4, SignalInfo, TORQUE_PARTS, ThermalPart, advance};
 
 /// The load on one motor over one pass of the cycle.
 #[derive(Debug, Clone, Default)]
@@ -58,6 +58,9 @@ pub struct MotorLoad {
     /// Where the machine reports the radial load on this motor's pulley shaft (`pulley.<motor>.radial_load`): its cubic
     /// mean weighted with the speed, the equivalent load P of the bearings' rating life (ISO 281), once per millisecond.
     pub radial_load_equivalent: Option<f64>,
+    /// With effects.belt_wrap, where the machine gives its belt geometry (`Machine::belt_wraps`): the smallest angle by
+    /// which the belt wrapped this motor's pulley over the pass, rad, once per millisecond. For the teeth in mesh.
+    pub belt_wrap: Option<f64>,
     /// Peak and RMS of each part of the motor torque, in the order of `TORQUE_PARTS`, where the machine reports
     /// them (signals `motor.<id>.torque_<part>`). Looked at every step. The parts add up to the torque at every
     /// moment; their peaks and RMS values do not add up, as they come at different times.
@@ -384,6 +387,12 @@ impl Tally {
             }
             if let Some(i) = self.condition {
                 self.condition_peak = self.condition_peak.max(self.sample[i]);
+            }
+            let axes = sim.machine.axes().len();
+            let (mut tool, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
+            sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
+            for (load, wrap) in self.loads.iter_mut().zip(sim.machine.belt_wraps(&tool)) {
+                load.belt_wrap = Some(load.belt_wrap.map_or(wrap, |least| least.min(wrap)));
             }
             for (_, i, peak, sum) in &mut self.checks {
                 (*peak, *sum) = (peak.max(self.sample[*i].abs()), *sum + self.sample[*i]);
@@ -1010,7 +1019,9 @@ pub fn gearbox_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 /// (02.2026, page 9): the effective pull Fu = output torque / `geometry.pulley_radius_m` times the service factor
 /// `ratings.belt_service_factor`, against the specific tooth load the teeth allow at the pulley's speed
 /// (`ratings.belt_tooth_load_n_cm` at `ratings.belt_tooth_load_rpm`, interpolated, held beyond the ends) times the width in
-/// cm (`ratings.belt_width_mm` / 10) and the teeth in mesh (`ratings.belt_teeth_in_mesh`, at most 12). The highest ratio
+/// cm (`ratings.belt_width_mm` / 10) and the teeth in mesh (at most 12): `ratings.belt_teeth_in_mesh`, or with
+/// effects.belt_wrap those of the smallest wrap over the pass (`MotorLoad::belt_wrap`), wrap r / `belt.tooth_pitch_m`
+/// (wrap / (2 pi) of the pulley's 2 pi r / p teeth). The highest ratio
 /// over the cycle, each speed band (`MotorLoad::gearbox_torque_by_speed`) at its upper speed, where the rating is lowest.
 /// `None` where the machine reports no output torque or the config lacks one of these values. A rating, not a life: no
 /// belt maker publishes a life in hours or load cycles for these belts.
@@ -1036,6 +1047,10 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
         }
     };
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let teeth = match m.belt_wrap {
+        Some(wrap) => wrap * radius / cfg.positive("belt.tooth_pitch_m")?,
+        None => teeth,
+    };
     let capacity = |n: f64| allowed(n) * width / 10.0 * teeth.min(12.0);
     let band_rpm = |i: usize| (i + 1) as f64 * SPEED_BAND * 30.0 / std::f64::consts::PI / ratio;
     Ok(Some(m.gearbox_torque_by_speed.iter().enumerate().map(|(i, torque)| torque / radius * factor / capacity(band_rpm(i))).fold(0.0, f64::max)))
@@ -1523,8 +1538,9 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
 /// on "settling" alone is run again with the shaper, and with the shaper following the pose where the
 /// machine reports a resonance, and is taken if it then passes and is shorter. A setting with the shaper that still
 /// fails on "settling" alone is run again with a second shaper convolved with it, at `profile.shaper2_frequency_hz`
-/// where the config has one, else at the resonance the machine reports at the start pose where that is more than 10 %
-/// off the first shaper's frequency (no second shaper is tried where neither is). Where a shaper is on already,
+/// where the config has one, else at the machine's second mode at the start pose (`Machine::modes`), else at the one
+/// resonance it reports there where that is more than 10 % off the first shaper's frequency (no second shaper is tried
+/// where none of these is). Where a shaper is on already,
 /// switching it off is tried too. Simulates at most `max_runs` cycles.
 ///
 /// The geometry of the cycle is a variable too. Each lift, traverse and lower (see `lifts`) is tried first with all
@@ -1546,7 +1562,8 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     let axis_infos = probe.machine.axes().to_vec();
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
     let (first, configured) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
-    let second_frequency = if configured > 0.0 { Some(configured) } else { resonance.filter(|f| (f / first - 1.0).abs() > 0.1) };
+    let second_mode = probe.machine.modes(probe.control.planned_pos()).get(1).map(|mode| mode.hz);
+    let second_frequency = if configured > 0.0 { Some(configured) } else { second_mode.or(resonance.filter(|f| (f / first - 1.0).abs() > 0.1)) };
     // In the axis's own unit: `axis.x.max_velocity_m_s`, `axis.c.max_velocity_rad_s` (with metres alone, a machine with an
     // axis in rad could not be built and its cycle was said to fail a verdict).
     let limits = ["max_velocity_{unit}_s", "max_acceleration_{unit}_s2", "max_jerk_{unit}_s3"];
@@ -1864,6 +1881,20 @@ pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequen
 /// A response is measured over whole periods: at 0 Hz that never ends, and below it means nothing.
 fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
     if frequencies.iter().all(|f| f.is_finite() && *f > 0.0) { Ok(()) } else { Err(ConfigError::Invalid("frequency".into())) }
+}
+
+/// The modes the machine reports (`Machine::modes`) at `points` places spread evenly over the range of axis `axis`, both
+/// ends included, the other axes where `pose` has them: the resonances over a stroke, to choose shaper frequencies by
+/// (`sim-cli modes`, the app's plot of them). Each place with its modes, which may be fewer at one place than at another.
+pub fn modes_along(machine: &dyn Machine, pose: &[f64], axis: usize, points: usize) -> Vec<(f64, Vec<Mode>)> {
+    let info = &machine.axes()[axis];
+    (0..points)
+        .map(|i| {
+            let mut at = pose.to_vec();
+            at[axis] = info.min + (info.max - info.min) * i as f64 / (points.max(2) - 1) as f64;
+            (at[axis], machine.modes(&at))
+        })
+        .collect()
 }
 
 /// Frequencies spaced evenly on a logarithmic axis, both ends included.
@@ -2438,5 +2469,36 @@ mod tests {
             (3.0 * lag(5.0) / (lag(50.0) * lag(200.0) * lag(400.0)), (x / w(5.0)).atan() - (x / w(50.0)).atan() - (x / w(200.0)).atan() - (x / w(400.0)).atan())
         }));
         assert!(m.stable() && m.gain_margin_db.is_infinite() && (m.phase_margin_deg - 24.0).abs() < 0.2 && (m.crossover_hz / 1516.0 - 1.0).abs() < 0.01, "{m:?}");
+    }
+
+    /// With the belt's wrap known (effects.belt_wrap) the teeth in mesh are wrap r / p in place of
+    /// `ratings.belt_teeth_in_mesh`: 2 rad on a pulley of r = 0.02 m with p = 5 mm, 8 teeth. The load of the lives' test,
+    /// 2 N m at up to 95.49 r/min of the pulley: 100 N * 1.4 / (34.045 N/cm * 2.5 cm * 8) = 0.205610; half a turn,
+    /// pi r / p = 12.57 teeth, is capped at 12 like the configured 14: 0.137073.
+    #[test]
+    fn the_tooth_load_counts_the_teeth_in_mesh_from_the_wrap() {
+        let cfg = Config::parse(
+            "format_version = 1
+[gearbox]
+ratio = 5.0
+[geometry]
+pulley_radius_m = 0.02
+[belt]
+tooth_pitch_m = 0.005
+[ratings]
+             belt_tooth_load_rpm = [0.0, 100.0, 1000.0]
+belt_tooth_load_n_cm = [35.0, 34.0, 26.0]
+belt_width_mm = 25.0
+belt_service_factor = 1.4
+             belt_teeth_in_mesh = 14.0
+",
+        )
+        .unwrap();
+        let mut bands = vec![0.0; 200];
+        bands[9] = 2.0;
+        let m = MotorLoad { gearbox_torque: Some((2.0, 1.0)), gearbox_torque_by_speed: bands, belt_wrap: Some(2.0), ..MotorLoad::default() };
+        let close = |a: f64, b: f64| assert!((a / b - 1.0).abs() < 1e-5, "{a} against {b} by hand");
+        close(belt_tooth_utilisation(&cfg, &m).unwrap().unwrap(), 0.205610);
+        close(belt_tooth_utilisation(&cfg, &MotorLoad { belt_wrap: Some(std::f64::consts::PI), ..m.clone() }).unwrap().unwrap(), 0.137073);
     }
 }

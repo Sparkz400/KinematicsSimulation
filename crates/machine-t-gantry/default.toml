@@ -79,6 +79,11 @@ belt_tooth_jump = false
 # excites (tooth mesh, torque ripple, cogging); judged at steady speed against ratings.belt_span_resonance_band.
 # Signals and a check only, nothing acts back on the motion. Off by default.
 belt_span_vibration = false
+# The teeth in mesh on each driven pulley from the angle the belt wraps it at the pose, found from the places of pulleys
+# and idlers: wrap r / tooth pitch, in place of ratings.belt_teeth_in_mesh, in the tooth-jump law and the belt's tooth
+# load. Off by default, so that earlier results stay as they were
+# (half a turn on both pulleys at every pose here, pi r / p = 12.6 teeth against the 10 configured).
+belt_wrap = false
 torque_saturation = true
 drive_delay = true
 # The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.

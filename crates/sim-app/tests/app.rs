@@ -427,7 +427,7 @@ fn scopes_have_a_window_freeze_statistics_and_export() {
 }
 
 /// Tuning help in the app: step and frequency response of an axis, measured in the background
-/// with the parameters as they are, and changing when a gain is changed.
+/// with the parameters as they are, and changing when a gain is changed; with them the modes over the axis's stroke.
 #[test]
 fn tuning_measures_the_axis_with_the_current_gains() {
     let mut model = Model::new(MACHINES[0], "en");
@@ -440,6 +440,12 @@ fn tuning_measures_the_axis_with_the_current_gains() {
             std::thread::sleep(Duration::from_millis(20));
         }
         let tuning = model.tuning.take().expect("the tuning job returned nothing");
+        // The modes over X at the start height (z = 0.35 m), as the machine reports them there: both at every place,
+        // the middle place at x = 0.5 m.
+        let machine = (model.entry.build)(&model.config).unwrap();
+        let (at, modes) = &tuning.modes[sim_app::model::MODE_POINTS / 2];
+        assert!(tuning.modes.len() == sim_app::model::MODE_POINTS && tuning.modes.iter().all(|(_, m)| m.len() == 2), "{:?}", tuning.modes);
+        assert!((at - 0.5).abs() < 1e-12 && *modes == machine.modes(&[0.5, 0.35]), "{at}: {modes:?}");
         (tuning.step.rise_time, tuning.bandwidth.unwrap())
     };
     let (rise, band) = measure(&mut model);

@@ -1247,3 +1247,21 @@ fn the_friction_curve_is_the_formula() {
     }
     assert_eq!(m.friction_curve(1, 0.5, 1.0), [0.0; 3]);
 }
+
+/// The carriage on the belt with the pulley held (`modes`): m = 4 + 2 kg, at x = 0.5 m the sections are 0.65 m and
+/// 1.95 m long, k = 5e5 / 0.65 + 5e5 / 1.95 = 1.025641e6 N/m, f = sqrt(k / m) / (2 pi) = 65.8025 Hz; at x = 0.1 m,
+/// 0.25 m and 2.35 m, k = 2.212766e6 N/m, 96.6523 Hz. Damping ratio 2 * 100 N s/m / (2 m w): 0.040311 and 0.027445.
+/// The rigid model tells none.
+#[test]
+fn the_carriage_mode_is_the_hand_calculated_one_at_two_places() {
+    let m = machine(ENTRY.config(), &[]);
+    for (x, hz, damping) in [(0.5, 65.8025, 0.040311), (0.1, 96.6523, 0.027445)] {
+        let modes = m.modes(&[x]);
+        assert!(modes.len() == 1 && (modes[0].hz - hz).abs() < 1e-3 && (modes[0].damping - damping).abs() < 1e-5, "x = {x}: {modes:?}");
+        assert_eq!(m.resonance_hz(&[x]), Some(modes[0].hz));
+    }
+    assert!(rigid(&[]).modes(&[0.5]).is_empty());
+    // The clamp holds the belt at the pulley's height, the idler at the far end is as large as the pulley: half a turn.
+    let wraps = machine(ENTRY.config(), &["effects.belt_wrap = true"]).belt_wraps(&[0.3]);
+    assert!(wraps.len() == 1 && (wraps[0] - std::f64::consts::PI).abs() < 1e-12, "{wraps:?}");
+}
