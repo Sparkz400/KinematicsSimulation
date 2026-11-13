@@ -348,8 +348,9 @@ pub fn load_color(model: &Model, id: &str, nth: usize) -> Option<Color32> {
 }
 
 /// The bar on top: machine and language, run and speed, the open config file, and how close the analysed cycle
-/// runs each part to its limit, the tightest checks as gauges. A gauge opens its check in the tools panel.
-pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<Action>) {
+/// runs each part to its limit, the tightest checks as gauges. A gauge opens its check in the tools panel. While the
+/// view is `recording`, a sign of it and its Stop button, out of the frames (the view's own controls are hidden then).
+pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     ui.horizontal_centered(|ui| {
         ComboBox::from_id_salt("machine").selected_text(RichText::new(tr(model.entry.key)).strong()).show_ui(ui, |ui| {
@@ -374,6 +375,13 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec
         ui.spacing_mut().slider_width = 90.0;
         if ui.add(Slider::new(&mut speed, 0.01..=2.0).logarithmic(true).text(tr("ui-speed"))).changed() {
             actions.push(Action::Speed(speed));
+        }
+        if recording {
+            ui.separator();
+            ui.label(RichText::new(tr("ui-recording")).color(LIMIT).strong());
+            if ui.button(tr("ui-recording-stop")).clicked() {
+                actions.push(Action::Record(false));
+            }
         }
         if let Some(name) = std::path::Path::new(&model.inputs.config_file).file_name() {
             ui.separator();

@@ -172,6 +172,8 @@ fn main() {
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(Update, (sync_scene, sync_ghost, paint_cad_parts, draw_paths, orbit_camera, follow_tool, developer_hooks, record).chain())
+        // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
+        .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
         .add_systems(EguiPrimaryContextPass, panels)
         .run();
 }
@@ -383,6 +385,27 @@ fn paint_cad_parts(
 fn part_color(part: &Part) -> Color {
     let [r, g, b] = sim_app::model::part_color(part.color, part.highlight, part.heat);
     Color::srgb(r, g, b)
+}
+
+/// The painted finish: metallic, perceptual roughness and reflectance.
+const PAINTED: [f32; 3] = [0.3, 0.45, 0.5];
+
+/// A part's finish in its own colour (as `PAINTED`). Turned steel for round parts, matt rubber for the belt; by
+/// colour and size for the rest, so that no machine needs naming: long grey parts are aluminium profiles, small dark
+/// ones anodised, the others painted. Aluminium is not brushed (anisotropic): Bevy draws anisotropy only with its
+/// pbr_anisotropy_texture feature, which the workspace does not switch on; a fairly smooth, mostly metallic finish
+/// stands in.
+fn finish(part: &Part) -> [f32; 3] {
+    let [r, g, b] = part.color;
+    let grey = r.max(g).max(b) - r.min(g).min(b) < 0.1;
+    let long = part_transform(part).scale.max_element() >= 0.15;
+    match part.shape {
+        Shape::Cylinder { .. } => [0.9, 0.3, 0.5],
+        _ if part.id.starts_with("belt") => [0.0, 0.9, 0.3],
+        _ if grey && long => [0.8, 0.35, 0.5],
+        _ if grey && r.max(g).max(b) < 0.35 => [0.4, 0.45, 0.5],
+        _ => PAINTED,
+    }
 }
 
 /// A colour of the panels' palette in the 3D view, so that amber, cyan and red mean the same in both.
@@ -663,22 +686,8 @@ fn sync_scene(
                 state.parts.push((entity, material));
                 continue;
             }
-            // Turned steel for round parts, matt rubber for the belt; by colour and size for the rest, so that no
-            // machine needs naming: long grey parts are aluminium profiles, small dark ones anodised, the others
-            // painted. The scene's colour stays the base colour, since heat, load and belt tension are drawn in it.
-            // Aluminium is not brushed (anisotropic): Bevy draws anisotropy only with its pbr_anisotropy_texture
-            // feature, which the workspace does not switch on; a fairly smooth, mostly metallic finish stands in.
-            let [r, g, b] = part.color;
-            let grey = r.max(g).max(b) - r.min(g).min(b) < 0.1;
-            let long = part_transform(part).scale.max_element() >= 0.15;
-            let (metallic, perceptual_roughness, reflectance) = match part.shape {
-                Shape::Cylinder { .. } => (0.9, 0.3, 0.5),
-                _ if part.id.starts_with("belt") => (0.0, 0.9, 0.3),
-                _ if grey && long => (0.8, 0.35, 0.5),
-                _ if grey && r.max(g).max(b) < 0.35 => (0.4, 0.45, 0.5),
-                _ => (0.3, 0.45, 0.5),
-            };
-            let material = materials.add(StandardMaterial { base_color: part_color(part), perceptual_roughness, metallic, reflectance, ..default() });
+            // The colour and finish are set by the move below, as the part is drawn.
+            let material = materials.add(StandardMaterial::default());
             if let Some(file) = cad_mesh(&state.mesh_config, part.id) {
                 let at = part_transform(part).with_scale(Vec3::ONE);
                 let entity = commands.spawn((WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))), at, CadPart(index))).id();
@@ -727,13 +736,20 @@ fn sync_scene(
             cad = is_cad;
         }
         // The load view's colour in place of the part's own; x-ray: CAD parts see-through, to show the belt and pulleys they hide.
-        let own = load_color(state, scene, index).unwrap_or_else(|| part_color(part));
+        let load = load_color(state, scene, index);
+        let own = load.unwrap_or_else(|| part_color(part));
         let (color, mode) = if cad && state.overlays.xray { (own.with_alpha(0.18), AlphaMode::Blend) } else { (own, AlphaMode::Opaque) };
-        // Only where the colour changed, so that the other materials are not sent to the graphics card again.
-        if materials.get(material).is_some_and(|m| m.base_color != color || m.alpha_mode != mode)
-            && let Some(mut material) = materials.get_mut(material)
+        // A meaning colour (heat, load, belt tension) is drawn painted on every part: a metal finish darkens it, so
+        // the same colour would read differently on a profile than on a motor.
+        let meaning = load.is_some() || part.heat.is_some() || part.highlight != 0.0;
+        let [metallic, roughness, reflectance] = if meaning { PAINTED } else { finish(part) };
+        // Only where something changed, so that the other materials are not sent to the graphics card again.
+        if materials.get(material).is_some_and(|m| {
+            m.base_color != color || m.alpha_mode != mode || [m.metallic, m.perceptual_roughness, m.reflectance] != [metallic, roughness, reflectance]
+        }) && let Some(mut material) = materials.get_mut(material)
         {
             (material.base_color, material.alpha_mode) = (color, mode);
+            (material.metallic, material.perceptual_roughness, material.reflectance) = (metallic, roughness, reflectance);
         }
     }
 }
@@ -845,7 +861,7 @@ fn panels(
     let mut root = egui::Ui::new(ctx.clone(), "root".into(), egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()));
     // The bar on top and the scopes below span the window; setup and tools flank the view between them.
     let edge = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::symmetric(10, 6));
-    let top = egui::Panel::top("bar").exact_size(52.0).frame(edge).show(&mut root, |ui| ui::top_bar(ui, &state.model, state.panels, &mut actions)).response.rect;
+    let top = egui::Panel::top("bar").exact_size(52.0).frame(edge).show(&mut root, |ui| ui::top_bar(ui, &state.model, state.panels, state.recording.is_some(), &mut actions)).response.rect;
     let bottom = egui::Panel::bottom("scopes").resizable(true).default_size(250.0).frame(edge).show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, &mut actions)).response.rect;
     let side = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::same(10));
     let left = egui::Panel::left("setup").resizable(true).default_size(270.0).frame(side).show(&mut root, |ui| ui::setup(ui, &state.model, state.panels, &mut actions)).response.rect;
@@ -861,8 +877,10 @@ fn panels(
         camera.viewport = Some(Viewport { physical_position: position, physical_size: size, ..default() });
     }
     state.view_rect = [left.right(), view_top, right.left(), view_bottom];
-    // The view's own controls float over its top left corner.
-    let controls = egui::Area::new("view-controls".into())
+    // The view's own controls float over its top left corner. While recording, they, the timeline and the tool
+    // view are hidden, so that the frames show the view alone; Stop is then in the top bar.
+    let recording = state.recording.is_some();
+    let controls = (!recording).then(|| egui::Area::new("view-controls".into())
         .fixed_pos(egui::pos2(left.right() + 10.0, view_top + 10.0))
         .show(ctx, |ui| {
             if state.compare_effect.is_empty() {
@@ -872,16 +890,16 @@ fn panels(
             ui::view_controls(ui, &state.model, state.overlays, view, &mut actions)
         })
         .response
-        .rect;
+        .rect);
     // The timeline floats over the view's bottom edge, once there is a scene to go back to.
     let span = state.recorded.front().zip(state.recorded.back()).map(|((first, _), (last, _))| (*first, *last));
-    let timeline = span.map(|span| {
+    let timeline = span.filter(|_| !recording).map(|span| {
         let width = (right.left() - left.right() - 36.0).max(100.0);
         let area = egui::Area::new("timeline".into()).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(egui::pos2(left.right() + 10.0, view_bottom - 10.0));
         area.show(ctx, |ui| ui::timeline(ui, &state.model, state.timeline, span, width, &mut actions)).response.rect
     });
     // The tool view in the view's bottom right corner, above the timeline.
-    let tool_picture = state.overlays.tool_view.then(|| {
+    let tool_picture = (state.overlays.tool_view && !recording).then(|| {
         let above = timeline.map_or(view_bottom, |t| t.top()) - 8.0;
         let area = egui::Area::new("tool-view".into()).pivot(egui::Align2::RIGHT_BOTTOM).fixed_pos(egui::pos2(right.left() - 10.0, above));
         let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, ui::MACHINED)).corner_radius(3);
@@ -933,7 +951,7 @@ fn panels(
         .collect();
     // Top to bottom, each label where it is free of those placed before, of the view's controls and of the timeline.
     labels.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
-    let mut taken: Vec<egui::Rect> = [Some(controls), timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
+    let mut taken: Vec<egui::Rect> = [controls, timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
     for (at, galley) in labels {
         let size = galley.size() + egui::vec2(10.0, 6.0);
         let room = view.shrink(4.0);
@@ -1088,20 +1106,37 @@ fn set_recording(state: &mut State, on: bool) {
 
 /// While recording, a screenshot of the window for each frame due, cut to the 3D view; and the messages of videos
 /// made.
-fn record(mut state: ResMut<State>, mut commands: Commands, window: Single<&Window, With<PrimaryWindow>>) {
+fn record(mut state: ResMut<State>, mut commands: Commands, window: Single<&Window, With<PrimaryWindow>>, clear: Res<ClearColor>) {
     let state = &mut *state;
     if let Some(recording) = &mut state.recording {
         let due = recording.due();
-        if !due.is_empty() {
-            let scale = window.scale_factor();
-            let [left, top, right, bottom] = state.view_rect.map(|v| (v * scale).round() as u32);
-            let crop = [left, top, right.saturating_sub(left), bottom.saturating_sub(top)];
-            commands.spawn(Screenshot::primary_window()).observe(recording.saver(crop, due));
+        let scale = window.scale_factor();
+        let [left, top, right, bottom] = state.view_rect.map(|v| (v * scale).round() as u32);
+        let view = [left, top, right.saturating_sub(left), bottom.saturating_sub(top)];
+        // Not before the panels have left the view room: the first frame fixes the video's size.
+        if !due.is_empty() && view[2] >= 2 && view[3] >= 2 {
+            commands.spawn(Screenshot::primary_window()).observe(recording.saver(view, clear.0.to_srgba().to_u8_array(), due));
         }
     }
     let mut done = Vec::new();
-    state.encodings.retain_mut(|encoding| encoding.poll().map(|message| done.push(message)).is_none());
+    state.encodings.retain_mut(|encoding| encoding.poll().map(|messages| done.extend(messages)).is_none());
     state.model.messages.extend(done);
+}
+
+/// At the app's exit, however it comes (the window closed, the screenshot hook): a recording is stopped, its frames
+/// still queued are written and the videos still being made are waited for a few seconds (`Encoding::finish`).
+/// Their messages go to the terminal, since the window is gone.
+fn finish_videos(mut exits: MessageReader<AppExit>, mut state: ResMut<State>) {
+    if exits.read().next().is_none() {
+        return;
+    }
+    set_recording(&mut state, false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for encoding in std::mem::take(&mut state.encodings) {
+        for (key, arg) in encoding.finish(deadline) {
+            eprintln!("{}", state.model.tr.tr_arg(key, &arg));
+        }
+    }
 }
 
 /// Back to the newest scene, as the "Live" button does.

@@ -23,7 +23,8 @@ def main():
     width, height = first.size
     scene = bpy.context.scene
     render = scene.render
-    # H.264 in 4:2:0 needs even sizes; the app crops to them, this guards against a stray frame.
+    # H.264 in 4:2:0 needs even sizes. The app cuts every frame to the first one's even size; this guards frames
+    # made otherwise.
     render.resolution_x, render.resolution_y = width - width % 2, height - height % 2
     render.resolution_percentage = 100
     render.fps, render.fps_base = 30, 1.0
