@@ -90,7 +90,7 @@ jobs:
           cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
       - name: Native tests of the module
         run: cargo test -p sim-wasm --release --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sizing-page
           path: site
@@ -120,7 +120,7 @@ jobs:
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
           pip install target/wheels/*.whl "pytest==9.2.0" pandas matplotlib nbformat nbclient ipykernel
           pytest crates/sim-py/tests -q
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}
           path: target/wheels/*.whl
