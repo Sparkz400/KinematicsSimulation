@@ -54,6 +54,21 @@ fn analysed(edits: &[&str]) -> Vec<(String, CycleLoad)> {
     })
 }
 
+/// `check` on every config of `configs` on every machine, each on a thread of its own: (machine, config name, config).
+fn on_every_config(check: impl Fn(&MachineEntry, &str, Config) + Sync) {
+    let runs: Vec<(&MachineEntry, String, Config)> = MACHINES.iter().flat_map(|entry| configs(entry).into_iter().map(move |(name, cfg)| (*entry, name, cfg))).collect();
+    let check = &check;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = runs.into_iter().map(|(entry, name, cfg)| scope.spawn(move || check(entry, &name, cfg))).collect();
+        workers.into_iter().for_each(|w| w.join().unwrap());
+    });
+}
+
+/// `cfg` analysed from cold (effects.thermal_warm_start off; a config without the key starts cold anyway).
+fn cold(cfg: &Config) -> Config {
+    if cfg.get("effects.thermal_warm_start").is_err() { cfg.clone() } else { with(cfg, &["effects.thermal_warm_start = false"]) }
+}
+
 /// The supply equals the copper loss, the resistor, each loss of the machine and what the stores hold more at the end
 /// of the pass, to within `BUDGET_TOLERANCE` of the supply (0.1 %), on every config, the loss-free ones included.
 /// Measured: at most 0.03 % (T-gantry loss-free elastic), 0.009 % on the default configs.
@@ -203,33 +218,32 @@ fn a_direct_drive_has_no_gearbox_that_warms() {
 /// judge the hottest of each kind against `thermal.<kind>_max_rise_k`. Without the effect neither is judged.
 #[test]
 fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
-    for entry in MACHINES {
-        for (name, cfg) in configs(entry) {
-            // The temperature feedback warms the parts too, so both are off here.
-            let off = analyse_cycle_with(&mut Sim::new(entry, &with(&cfg, &["effects.part_heating = false", "effects.thermal_feedback = false"])).unwrap(), false).unwrap();
-            let judged = verdicts(&cfg, &off).unwrap();
-            assert!(off.part_rises.is_empty() && !judged.iter().any(|v| v.check.ends_with("-thermal") && v.check != "motor-thermal"), "{} {name}", entry.id);
+    on_every_config(|entry, name, cfg| {
+        // The temperature feedback warms the parts too, so both are off here. From cold: with no part warming, no part
+        // rise and no part's verdict can come up whatever the windings start at.
+        let off = analyse_cycle_with(&mut Sim::new(entry, &cold(&with(&cfg, &["effects.part_heating = false", "effects.thermal_feedback = false"]))).unwrap(), false).unwrap();
+        let judged = verdicts(&cfg, &off).unwrap();
+        assert!(off.part_rises.is_empty() && !judged.iter().any(|v| v.check.ends_with("-thermal") && v.check != "motor-thermal"), "{} {name}", entry.id);
 
-            let cfg = with(&cfg, &["effects.part_heating = true"]);
-            let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
-            let budget = load.budget.as_ref().unwrap();
-            assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
-            for (part, rise) in &load.part_rises {
-                let lost = budget.rows.iter().find(|r| r.id == format!("{LOSS_PREFIX}{}", part.id)).unwrap().energy;
-                let by_hand = cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap() * lost / load.duration;
-                assert!((rise - by_hand).abs() <= 1e-12 * by_hand.abs(), "{} {name} {}: {rise} K against {by_hand} K", entry.id, part.id);
-            }
-            let judged = verdicts(&cfg, &load).unwrap();
-            for (kind, check) in [("gearbox", "gearbox-thermal"), ("guide", "guide-thermal")] {
-                let hottest = load.part_rises.iter().filter(|(p, _)| p.kind == kind).map(|(_, rise)| *rise).reduce(f64::max);
-                let verdict = judged.iter().find(|v| v.check == check);
-                assert_eq!(verdict.map(|v| v.value), hottest, "{} {name} {check}", entry.id);
-                if let Some(v) = verdict {
-                    assert!(v.limit == cfg.f64(&format!("thermal.{kind}_max_rise_k")).unwrap() && v.ok == (v.value <= v.limit), "{} {name}: {v:?}", entry.id);
-                }
+        let cfg = with(&cfg, &["effects.part_heating = true"]);
+        let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+        let budget = load.budget.as_ref().unwrap();
+        assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
+        for (part, rise) in &load.part_rises {
+            let lost = budget.rows.iter().find(|r| r.id == format!("{LOSS_PREFIX}{}", part.id)).unwrap().energy;
+            let by_hand = cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap() * lost / load.duration;
+            assert!((rise - by_hand).abs() <= 1e-12 * by_hand.abs(), "{} {name} {}: {rise} K against {by_hand} K", entry.id, part.id);
+        }
+        let judged = verdicts(&cfg, &load).unwrap();
+        for (kind, check) in [("gearbox", "gearbox-thermal"), ("guide", "guide-thermal")] {
+            let hottest = load.part_rises.iter().filter(|(p, _)| p.kind == kind).map(|(_, rise)| *rise).reduce(f64::max);
+            let verdict = judged.iter().find(|v| v.check == check);
+            assert_eq!(verdict.map(|v| v.value), hottest, "{} {name} {check}", entry.id);
+            if let Some(v) = verdict {
+                assert!(v.limit == cfg.f64(&format!("thermal.{kind}_max_rise_k")).unwrap() && v.ok == (v.value <= v.limit), "{} {name}: {v:?}", entry.id);
             }
         }
-    }
+    });
 }
 
 /// What the costly effect signals were split out for changes no number: the cheap loss powers are the `power.*`
@@ -243,25 +257,25 @@ fn the_cheap_signals_and_the_lean_analysis_change_no_number() {
         });
         motors && (a.duration, a.belt_tension, a.belt_slack_time, a.radial_load_peak, a.guide_load, a.path_error_peak, a.dwell_error_peak) == (b.duration, b.belt_tension, b.belt_slack_time, b.radial_load_peak, b.guide_load, b.path_error_peak, b.dwell_error_peak) && a.part_rises == b.part_rises
     };
-    for entry in MACHINES {
-        for (name, cfg) in configs(entry) {
-            let mut sim = Sim::new(entry, &cfg).unwrap();
-            let losses: Vec<usize> = sim.machine.signal_infos().iter().enumerate().filter(|(_, s)| s.id.starts_with(LOSS_PREFIX)).map(|(i, _)| i).collect();
-            sim.command(Command::StartCycle).unwrap();
-            let (mut all, mut cheap) = (Vec::new(), Vec::new());
-            for _ in 0..100 {
-                sim.run(0.01, |_| {});
-                (all.clear(), cheap.clear());
-                sim.machine.signals(&sim.state, &sim.torque, &mut all);
-                sim.machine.loss_powers(&sim.state, &sim.torque, &mut cheap);
-                assert_eq!(cheap, losses.iter().map(|&i| all[i]).collect::<Vec<_>>(), "{} {name}", entry.id);
-            }
-            let cfg = with(&cfg, &["effects.part_heating = true"]);
-            let (full, lean) = (analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap(), analyse_cycle_with(&mut Sim::new(entry, &cfg).unwrap(), false).unwrap());
-            assert!(same(&full, &lean) && lean.budget.is_none() && lean.motors.iter().all(|m| m.torque_parts.is_none()), "{} {name}", entry.id);
-            assert_eq!(verdicts(&cfg, &full).unwrap(), verdicts(&cfg, &lean).unwrap(), "{} {name}", entry.id);
+    on_every_config(|entry, name, cfg| {
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let losses: Vec<usize> = sim.machine.signal_infos().iter().enumerate().filter(|(_, s)| s.id.starts_with(LOSS_PREFIX)).map(|(i, _)| i).collect();
+        sim.command(Command::StartCycle).unwrap();
+        let (mut all, mut cheap) = (Vec::new(), Vec::new());
+        for _ in 0..100 {
+            sim.run(0.01, |_| {});
+            (all.clear(), cheap.clear());
+            sim.machine.signals(&sim.state, &sim.torque, &mut all);
+            sim.machine.loss_powers(&sim.state, &sim.torque, &mut cheap);
+            assert_eq!(cheap, losses.iter().map(|&i| all[i]).collect::<Vec<_>>(), "{} {name}", entry.id);
         }
-    }
+        // From cold: a warm pass runs the same steps from the rises the pass before settled at, which the two analyses
+        // would share as they share every other figure, so it adds no case to compare.
+        let cfg = cold(&with(&cfg, &["effects.part_heating = true"]));
+        let (full, lean) = (analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap(), analyse_cycle_with(&mut Sim::new(entry, &cfg).unwrap(), false).unwrap());
+        assert!(same(&full, &lean) && lean.budget.is_none() && lean.motors.iter().all(|m| m.torque_parts.is_none()), "{} {name}", entry.id);
+        assert_eq!(verdicts(&cfg, &full).unwrap(), verdicts(&cfg, &lean).unwrap(), "{} {name}", entry.id);
+    });
 }
 
 /// The `[thermal]` values change nothing while effects.part_heating is off, so they get no runs then: no bounds for
