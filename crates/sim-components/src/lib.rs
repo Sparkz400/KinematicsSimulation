@@ -5,6 +5,7 @@ pub static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("d
 
 pub mod analysis;
 pub mod catalog;
+pub mod chain;
 pub mod control;
 pub mod drive;
 pub mod identify;
@@ -12,8 +13,10 @@ pub mod joint;
 pub mod mech;
 pub mod path;
 pub mod profile;
+pub mod rigid;
 pub mod sim;
 pub mod trace;
+pub mod transmission;
 
 pub use control::{Command, CommandError, Controller, LimitViolation, check_limits};
 pub use sim::{Sim, load_config};
