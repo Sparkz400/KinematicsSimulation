@@ -1,7 +1,7 @@
 //! The life estimates on every machine: what the analysis adds up for them is what the signals say, and the verdicts
 //! judge the lives against the required life.
 
-use sim_components::analysis::{SPEED_BAND, analyse_trajectory, belt_tooth_utilisation, gearbox_life_h, guide_life_h, pulley_bearing_life_h, verdicts};
+use sim_components::analysis::{SPEED_BAND, analyse_trajectory, sensitivity, belt_tooth_utilisation, gearbox_life_h, guide_life_h, pulley_bearing_life_h, verdicts};
 use sim_components::path::Piece;
 use sim_components::{Command, Sim};
 use sim_machines::MACHINES;
@@ -128,4 +128,14 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
         assert_eq!(verdicts(&unreliable, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_reliability_percent".into())), "{}", entry.id);
         println!("{}: guide {guide:?} h, pulley bearing {:?} h, gearbox {:?} h, tooth load {:?}", entry.id, pulley_bearing_life_h(&cfg, &load.motors[0]), gearbox_life_h(&cfg, &load.motors[0]), belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap());
     }
+}
+
+/// `sensitivity` leaves out the reliability of the life estimates: 20 % either way of the shipped 90 % is 72 % and 108 %,
+/// which ISO 281 has no life factor for (`verdicts` refuses them), and it is a choice of how to judge, not machine data.
+#[test]
+fn sensitivity_leaves_the_bearing_reliability_alone() {
+    let entry = MACHINES[0];
+    let paths = ["ratings.bearing_reliability_percent".to_string()];
+    let (_, rows) = sensitivity(entry, &entry.config(), &paths, 0.2).unwrap();
+    assert!(rows.is_empty(), "{:?}", rows.iter().map(|r| (r.path.clone(), r.bounds)).collect::<Vec<_>>());
 }

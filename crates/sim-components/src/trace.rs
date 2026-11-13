@@ -17,6 +17,22 @@ impl From<ConfigError> for TraceError {
     }
 }
 
+/// Whether the motors turn by the same angle per travel of each axis everywhere: at 40 % and at 60 % of every range,
+/// 1 mm along each axis, to 1e-9. Replay and fit take the motor angles per axis travel as constant (`identify`), so
+/// they refuse a machine whose transformation is not linear (the delta's arms), which gave numbers without meaning.
+pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
+    let (axes, motors) = (machine.axes(), machine.motors().len());
+    let turned = |pose: &[f64], axis: usize| {
+        let (mut a, mut b) = (vec![0.0; motors], vec![0.0; motors]);
+        let ahead: Vec<f64> = pose.iter().enumerate().map(|(i, p)| if i == axis { p + 1e-3 } else { *p }).collect();
+        machine.inverse(pose, &mut a);
+        machine.inverse(&ahead, &mut b);
+        b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
+    };
+    let at = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<f64>>();
+    (0..axes.len()).all(|axis| turned(&at(0.4), axis).iter().zip(turned(&at(0.6), axis)).all(|(a, b)| (a - b).abs() <= 1e-9 * a.abs().max(1e-6)))
+}
+
 /// One motor's columns of a trace, all at the motor shaft: position setpoint, position, speed, torque.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MotorTrace {
@@ -99,6 +115,9 @@ impl Trace {
 /// acceleration setpoints are slopes between rows.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     let mut sim = Sim::new(entry, cfg)?;
+    if !linear_transformation(sim.machine.as_ref()) {
+        return Err(TraceError { key: "error-trace-not-linear", detail: String::new() });
+    }
     let rows = trace.time.len();
     // The first row is the start, and carrying on behind the last one (below) takes three more.
     if rows < 4 {

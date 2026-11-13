@@ -1047,8 +1047,10 @@ fn panels(
             Action::OpenConfig(dialog) => {
                 if let Some(path) = config_path(model, dialog, false) {
                     model.open_config(&path);
-                    // Forget the drawn parts, so the camera frames the machine as the file sets it up.
+                    // Forget the drawn parts, so the camera frames the machine as the file sets it up (another machine,
+                    // where the file is of one).
                     state.part_ids.clear();
+                    state.panels.part = None;
                     forget_run(state);
                     go_live(state);
                     state.recorded.clear();
@@ -1173,7 +1175,8 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// with 1.5 N m and, with a file, its fit. SIM_APP_POINTS runs the cycle alone, for its operating points.
 /// SIM_APP_EFFECTS starts the cycle and analyses it, for the effect views; SIM_APP_COMPARE (an effect's name in
 /// `[effects]`) runs the effect comparison with it as well. SIM_APP_CONFIG (a file) opens that config
-/// file first. SIM_APP_SCROLL (pixels) scrolls the right panel down. SIM_APP_OVERLAYS ("xray,forces,planned", any
+/// file first (a config of another machine switches to it); SIM_APP_MACHINE (a machine's id) switches to that
+/// machine before. SIM_APP_SCROLL (pixels) scrolls the right panel down. SIM_APP_OVERLAYS ("xray,forces,planned", any
 /// of them, and "load"; "mode" for the mode, "toolview" for the tool view, "compare-<effect>" (its name in
 /// `[effects]`) for the run with that effect switched, "trail-speed" or "trail-error" for the travelled path's colour
 /// and "tube" for the deviation tube) switches on what the 3D view draws besides the parts, SIM_APP_EXAGGERATION (a factor) draws
@@ -1197,6 +1200,10 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
             *record_for = asked("SIM_APP_RECORD").and_then(|s| s.parse().ok());
             if record_for.is_some() {
                 set_recording(&mut state, true);
+            }
+            if let Some(entry) = asked("SIM_APP_MACHINE").and_then(|id| MACHINES.iter().copied().find(|m| m.id == id)) {
+                state.model.set_machine(entry);
+                state.part_ids.clear();
             }
             if let Some(file) = asked("SIM_APP_CONFIG") {
                 state.model.open_config(&file);

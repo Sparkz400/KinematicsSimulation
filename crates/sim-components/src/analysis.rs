@@ -1069,15 +1069,26 @@ fn envelope(entry: &MachineEntry, cfg: &Config, count: usize, changed: impl Fn(u
 
 /// The bands of these judged runs: per check the envelope, whether every run passed, and the share that did.
 fn bands_of(runs: Vec<Result<Vec<Verdict>, ConfigError>>) -> Result<Vec<Band>, ConfigError> {
-    let (total, mut bands) = (runs.len() as f64, Vec::<Band>::new());
+    // The failed runs are counted and divided once: subtracting 1 / total per failure left -5e-16 where all failed.
+    let (total, mut bands, mut failed) = (runs.len(), Vec::<Band>::new(), Vec::<usize>::new());
     for run in runs {
         for v in run? {
-            let failed = if v.ok { 0.0 } else { 1.0 / total };
-            match bands.iter_mut().find(|b| b.verdict.check == v.check && b.verdict.motor == v.motor) {
-                Some(b) => (b.low, b.high, b.ok, b.share) = (b.low.min(v.value), b.high.max(v.value), b.ok && v.ok, b.share - failed),
-                None => bands.push(Band { low: v.value, high: v.value, ok: v.ok, share: 1.0 - failed, verdict: v }),
+            let fails = usize::from(!v.ok);
+            match bands.iter().position(|b| b.verdict.check == v.check && b.verdict.motor == v.motor) {
+                Some(k) => {
+                    let b = &mut bands[k];
+                    (b.low, b.high, b.ok) = (b.low.min(v.value), b.high.max(v.value), b.ok && v.ok);
+                    failed[k] += fails;
+                }
+                None => {
+                    bands.push(Band { low: v.value, high: v.value, ok: v.ok, share: 1.0, verdict: v });
+                    failed.push(fails);
+                }
             }
         }
+    }
+    for (band, failed) in bands.iter_mut().zip(failed) {
+        band.share = (total - failed) as f64 / total as f64;
     }
     Ok(bands)
 }
@@ -1404,7 +1415,7 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
         p
     };
     let pieces = crate::control::via_pieces(&[at_height(&lift.from), via.to_vec(), at_height(&lift.to)], &lift.to);
-    let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance) else { return false };
+    let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK) else { return false };
     let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
     let width = across.iter().map(|d| d * d).sum::<f64>();
     points.iter().all(|(_, pose)| {
@@ -1611,6 +1622,10 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     Ok(Optimised { before, after: best_load, changes, lifts, runs: runs.get() })
 }
 
+/// Keys of `[ratings]` that are a choice of how to judge, not uncertain data of the machine, with a range of their own
+/// that 20 % either way leaves: the reliability of the life estimates (90 to 99.95 %, `verdicts` refuses 72 and 108).
+const NOT_MACHINE_DATA: [&str; 1] = ["ratings.bearing_reliability_percent"];
+
 /// What one parameter does to the cycle when it is lower and when it is higher than in the config.
 #[derive(Debug, Clone)]
 pub struct Sensitivity {
@@ -1650,7 +1665,8 @@ impl Sensitivity {
 /// time: the bounds the config gives the parameter (see `bounds`), or the value scaled by 1 - delta and
 /// by 1 + delta where it gives none. Shows which of the uncertain parameters the results depend on, and
 /// so which are worth measuring. A parameter that is not a number, whose changed value the machine
-/// refuses, or that only an effect that is off uses (see `bounds`), is left out.
+/// refuses, or that only an effect that is off uses (see `bounds`), is left out, and so are the analysis' own choices
+/// in `NOT_MACHINE_DATA`.
 pub fn sensitivity(entry: &MachineEntry, cfg: &Config, paths: &[String], delta: f64) -> Result<(CycleLoad, Vec<Sensitivity>), ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let configured = bounds(cfg)?;
@@ -1658,7 +1674,7 @@ pub fn sensitivity(entry: &MachineEntry, cfg: &Config, paths: &[String], delta: 
     // (path, value, low, high) of each parameter that is varied; the runs are independent and share the processors.
     let varied: Vec<(&String, f64, (f64, f64))> = paths
         .iter()
-        .filter(|path| !effect_off(cfg, path))
+        .filter(|path| !effect_off(cfg, path) && !NOT_MACHINE_DATA.contains(&path.as_str()))
         .filter_map(|path| {
             let value = cfg.f64(path).ok()?;
             Some((path, value, configured.iter().find(|b| b.0 == *path).map_or((value * (1.0 - delta), value * (1.0 + delta)), |b| (b.1, b.2))))

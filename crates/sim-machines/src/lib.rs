@@ -3,7 +3,7 @@
 
 use sim_core::{MachineEntry, Translations};
 
-pub static MACHINES: &[&MachineEntry] = &[&machine_t_gantry::ENTRY, &machine_single_axis::ENTRY];
+pub static MACHINES: &[&MachineEntry] = &[&machine_t_gantry::ENTRY, &machine_single_axis::ENTRY, &machine_delta_d3::ENTRY];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];
 

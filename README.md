@@ -1,8 +1,15 @@
 # Gantry physics simulator
 
+[![CI](https://github.com/Sparkz400/KinematicsSimulation/actions/workflows/ci.yml/badge.svg)](https://github.com/Sparkz400/KinematicsSimulation/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Sparkz400/KinematicsSimulation?include_prereleases)](https://github.com/Sparkz400/KinematicsSimulation/releases)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
+
+![The T-gantry in the 3D view](docs/images/3d-view.png)
+
 A simulator of belt-driven gantries in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
-It has two machines, a two-motor T-gantry (X and Z on one belt) and a single belt axis, behind four front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server for a PLC, and an FMI 2.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools.
+It has three machines, a two-motor T-gantry (X and Z on one belt), a single belt axis and a three-arm delta picker (D3, sized like an Autonox RL3-1200-3kg), behind four front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server for a PLC, and an FMI 2.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
+**Quick start:** download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
 Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](docs/de/benutzerhandbuch.md).
 
 ## What it can and cannot tell you
@@ -32,7 +39,7 @@ These checks prove that the equations are solved correctly and that the catalogu
 
 Other limits that matter:
 
-- The default configs of both machines are made-up placeholder machines, not products.
+- The default configs of the two belt machines are made-up placeholder machines, not products. The delta's config is sized like a product (Autonox RL3-1200-3kg, Siemens motor and gearbox from the catalogue), but its arm lengths, masses and inertias are estimates: Autonox keeps them behind a registration.
 - The motor is one equivalent winding (R, L, back-EMF) that carries the RMS phase current and gets at most sqrt(3/2) times the DC link voltage. There is no three-phase model, no PWM, no field weakening.
 - The life figures are the makers' formulas and nothing more: no life factors, one bearing per pulley shaft, load ratings that are partly estimates (Festo publishes none for the EXCT). They are not validated.
 - The OPC UA link was tested against a client written with the same library, not against a PLC.
@@ -55,7 +62,7 @@ cargo test --workspace                            # all tests
 `cargo test --workspace` also builds the app with its graphics libraries. To test only the physics, the analysis and the command line:
 
 ```sh
-cargo test -p sim-core -p sim-components -p machine-t-gantry -p machine-single-axis -p sim-machines -p sim-cli
+cargo test -p sim-core -p sim-components -p machine-t-gantry -p machine-single-axis -p machine-delta-d3 -p sim-machines -p sim-cli
 ```
 
 ## Five-minute tour
@@ -249,8 +256,8 @@ The curve leaves the first line in its direction and ends in the direction of th
 | Crate | Layer | Content |
 | --- | --- | --- |
 | [`sim-core`](crates/sim-core/src) | Core | Fixed-step integrator, machine interface, config loading, translations, the standard test suite. Knows no physics |
-| [`sim-components`](crates/sim-components/src) | Components | Belt, friction, gearbox, drive, controller, profiles, paths, analysis, catalogue lookup, trace replay and fit. Knows no machine |
-| [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis) | Machines | Transformation, assembly, signals, 3D scene description, configs |
+| [`sim-components`](crates/sim-components/src) | Components | Belt, friction, gearbox, rotary joint, drive, controller, profiles, paths (lines, arcs and splines on two and three axes), analysis, catalogue lookup, trace replay and fit. Knows no machine |
+| [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis), [`machine-delta-d3`](crates/machine-delta-d3) | Machines | Transformation, assembly, signals, 3D scene description, configs. The delta: kinematics with its Jacobian and working range, the Codourey/Olsson dynamics, three rotary joints |
 | [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines; cross-machine tests |
 | [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |
 | [`sim-cli`](crates/sim-cli), [`sim-app`](crates/sim-app), [`sim-opcua`](crates/sim-opcua) | Front ends | Command line, desktop app, OPC UA server |

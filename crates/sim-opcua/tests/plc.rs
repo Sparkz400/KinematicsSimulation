@@ -143,9 +143,16 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
         let reached = plc.numbers(&position).await;
+        // The drives hold their motors on the target; what the gearboxes and belts give way under the weight they hold
+        // is off it at the tool, which the encoders do not see. Within 0.2 mm, or the config's settling tolerance or the
+        // machine's setpoint slack where that is larger (the delta's gearboxes with 9 arcmin: 0.69 mm here, slack 2.3 mm).
+        let rest = entry.config().f64("ratings.settling_tolerance_m").unwrap().max(2e-4).max((entry.build)(&entry.config()).unwrap().setpoint_slack());
         for i in 0..axes.len() {
-            assert!((reached[i] - target[i]).abs() < 2e-4, "{}: axis {i} at {} m, target {} m", entry.id, reached[i], target[i]);
-            assert!(peak_error[i] > 1e-7 && peak_error[i] < 1e-3, "{}: axis {i} reported a following error of {} m", entry.id, peak_error[i]);
+            assert!((reached[i] - target[i]).abs() < rest, "{}: axis {i} at {} m, target {} m", entry.id, reached[i], target[i]);
+            // Below 1 mm, and on a fast machine 0.04 mm per m/s2 of its fastest axis (the delta's diagonal move at 50 m/s2
+            // per axis: up to 1.4 mm, 2 mm allowed).
+            let fastest = axes.iter().map(|a| a.max_acc).fold(0.0, f64::max);
+            assert!(peak_error[i] > 1e-7 && peak_error[i] < f64::max(1e-3, 4e-5 * fastest), "{}: axis {i} reported a following error of {} m", entry.id, peak_error[i]);
         }
         let status = plc.read(&["status.refused".to_string()]).await;
         assert_eq!(status[0], Variant::from(""), "{}", entry.id);
@@ -289,6 +296,8 @@ async fn a_refusal_stays_until_a_command_of_its_kind_is_accepted() {
         plc.write(vec![(target.clone(), Variant::Double(axis.max + 1.0)), go()]).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(refused().await, Variant::from("error-target-out-of-range"), "{}", entry.id);
+        // Where the tool stands before the setpoints: under load a little off the setpoint (the gears' give).
+        let before = plc.numbers(&[format!("signal.axis.{}.position", axis.id)]).await[0];
         // Accepted commands of other kinds: enabling, and setpoints that are followed.
         assert!(plc.write(vec![("command.enable".to_string(), Variant::Boolean(true))]).await[0].is_good());
         for step in 1..=5 {
@@ -297,7 +306,7 @@ async fn a_refusal_stays_until_a_command_of_its_kind_is_accepted() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let position = plc.numbers(&[format!("signal.axis.{}.position", axis.id)]).await[0];
-        assert!((position - sim.control.set_pos[0] - 0.0025).abs() < 2e-4, "{}: the setpoints were not followed", entry.id);
+        assert!((position - before - 0.0025).abs() < 2e-4, "{}: the setpoints were not followed", entry.id);
         assert_eq!(refused().await, Variant::from("error-target-out-of-range"), "{}: an accepted setpoint wiped the refused move", entry.id);
         // An accepted move settles it.
         plc.write(vec![(target.clone(), Variant::Double(sim.control.set_pos[0])), go()]).await;
@@ -364,31 +373,61 @@ fn off_path(points: &[(f64, Vec<f64>)], pose: &[f64]) -> f64 {
     points.windows(2).map(|w| segment(&w[0].1, &w[1].1)).fold(f64::INFINITY, f64::min)
 }
 
-/// Runs `text` as a path from the PLC and polls until it is over: the poses read on the way and the time the
-/// simulator was busy with it.
-async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]) -> (Vec<Vec<f64>>, f64) {
+/// What `run_path` saw: the poses read on the way, the simulator time it was busy with the path (from the first poll
+/// that read busy to the first that read idle), the largest step of `signal.time` between two polls (the busy time
+/// is that coarse) and the mean step.
+struct Polled {
+    poses: Vec<Vec<f64>>,
+    busy: f64,
+    largest_step: f64,
+    mean_step: f64,
+}
+
+/// Runs `text` as a path from the PLC and polls until it is over.
+async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]) -> Polled {
     let writes = vec![
         ("command.path".to_string(), Variant::from(text)),
         ("command.path_time_optimal".to_string(), Variant::Boolean(time_optimal)),
         ("command.run_path".to_string(), Variant::Boolean(true)),
     ];
     assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
+    // Busy and the time in one read, so that a slow answer does not put time between them.
     let mut names = position.to_vec();
-    names.push("signal.time".into());
-    let (mut poses, mut started, mut polls) = (Vec::new(), None, 0);
+    names.extend(["signal.time".into(), "status.busy".into()]);
+    let (mut poses, mut started, mut polls, mut times) = (Vec::new(), None, 0, Vec::new());
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let busy = plc.busy().await;
-        let mut read = plc.numbers(&names).await;
+        let mut values = plc.read(&names).await;
+        let busy = matches!(values.pop(), Some(Variant::Boolean(true)));
+        let mut read: Vec<f64> = values.into_iter().map(|v| if let Variant::Double(x) = v { x } else { panic!("not a number: {v:?}") }).collect();
         let time = read.pop().unwrap();
-        poses.push(read);
+        times.push(time);
         polls += 1;
         assert!(polls < 1000, "the path did not start and finish within ten seconds");
         match (busy, started) {
             (true, None) => started = Some(time),
-            (false, Some(start)) => return (poses, time - start),
+            (false, Some(start)) => {
+                let steps: Vec<f64> = times.windows(2).map(|w| w[1] - w[0]).collect();
+                let (largest_step, mean_step) = (steps.iter().fold(0.0, |a: f64, b| a.max(*b)), (times[times.len() - 1] - times[0]) / steps.len() as f64);
+                return Polled { poses, busy: time - start, largest_step, mean_step };
+            }
             _ => {}
         }
+        if started.is_some() {
+            poses.push(read);
+        }
+    }
+}
+
+/// Polls `status.refused` until it reads `key`, for up to 5 s (a loaded machine answers a write late); what it read last.
+async fn refusal(plc: &Plc, key: &str) -> Variant {
+    let start = std::time::Instant::now();
+    loop {
+        let now = plc.read(&["status.refused".to_string()]).await.remove(0);
+        if now == Variant::from(key) || start.elapsed() > Duration::from_secs(5) {
+            return now;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -420,8 +459,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         for (path, key) in bad {
             let written = plc.write(vec![("command.path".into(), Variant::from(path.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
             assert!(written.iter().all(|s| s.is_good()));
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            assert_eq!(refused().await, Variant::from(key), "{}: {path}", entry.id);
+            assert_eq!(refusal(&plc, key).await, Variant::from(key), "{}: {path}", entry.id);
             assert!(!plc.busy().await, "{}: {path}", entry.id);
             let now = plc.numbers(&position).await;
             assert!(now.iter().zip(&at_rest).all(|(n, r)| (n - r).abs() < 1e-6), "{}: moved to {now:?} from {at_rest:?} on {path}", entry.id);
@@ -432,34 +470,48 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         let pieces = sim_components::path::parse(&text).unwrap();
         let planned = sim.plan_path(&pieces, false).unwrap();
         let path_error = sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap().path_error_peak;
-        let (poses, slow) = run_path(&plc, &text, false, &position).await;
+        let slow = run_path(&plc, &text, false, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}: an accepted path leaves a refusal", entry.id);
         assert_eq!(plc.read(&["command.path".to_string()]).await[0], Variant::from(text.as_str()), "the path reads back what was written");
-        assert!(poses.len() > 20, "{}: {} poses read", entry.id, poses.len());
-        let worst = poses.iter().map(|p| off_path(&planned, p)).fold(0.0, f64::max);
+        // Polled while it ran: at least half the polls its planned time takes at the mean step seen (a loaded machine
+        // polls less often, and the simulator still keeps to real time).
+        let slow_plan = planned.last().unwrap().0;
+        let polls = slow.poses.len() as f64;
+        assert!(polls >= 0.5 * slow_plan / slow.mean_step, "{}: {polls} poses read in {slow_plan} s, a poll every {} s", entry.id, slow.mean_step);
+        let worst = slow.poses.iter().map(|p| off_path(&planned, p)).fold(0.0, f64::max);
         assert!(worst <= path_error, "{}: {worst} m off the planned path, the analysis gives {path_error} m", entry.id);
         tokio::time::sleep(Duration::from_millis(300)).await;
         let end = &planned.last().unwrap().1;
         let reached = plc.numbers(&position).await;
-        let tolerance = cfg.f64("ratings.settling_tolerance_m").unwrap();
+        // At rest the tool is off its setpoint by what gears and belts give way under the load, up to the machine's
+        // setpoint slack: on the delta with its catalogue gearboxes that is more than the settling tolerance (the
+        // cycle fails `settling` there, a sizing finding).
+        let tolerance = cfg.f64("ratings.settling_tolerance_m").unwrap().max(sim.machine.setpoint_slack());
         assert!(reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance), "{}: at {reached:?}, the path ends at {end:?}", entry.id);
-        assert!((slow - planned.last().unwrap().0).abs() < 0.05, "{}: busy for {slow} s, planned {} s", entry.id, planned.last().unwrap().0);
+        // The busy time is known to one poll: within the largest step of `signal.time` seen, and 1 ms.
+        assert!((slow.busy - slow_plan).abs() <= slow.largest_step + 1e-3, "{}: busy for {} s, planned {slow_plan} s, polled up to {} s apart", entry.id, slow.busy, slow.largest_step);
 
         // Busy: a path started while one runs is refused.
-        let back = format!("line,{}", at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(","));
+        // Back by the middle, a stop on the way, so that it still runs when the second start arrives on a loaded machine.
+        let back = format!("line,{}\nline,{}", point(0.5), at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(","));
         plc.write(vec![("command.path".into(), Variant::from(back.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert!(plc.busy().await, "{}: not on the way back", entry.id);
+        let start = std::time::Instant::now();
+        while !plc.busy().await {
+            assert!(start.elapsed() < Duration::from_secs(5), "{}: not on the way back", entry.id);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         plc.write(vec![("command.run_path".into(), Variant::Boolean(true))]).await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(refused().await, Variant::from("error-busy"), "{}", entry.id);
+        assert_eq!(refusal(&plc, "error-busy").await, Variant::from("error-busy"), "{}", entry.id);
         move_done(&plc).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Time-optimal: the same path from the same pose finishes sooner, as in the command-line tool.
-        let fast_plan = sim.plan_path(&pieces, true).unwrap();
-        let (_, fast) = run_path(&plc, &text, true, &position).await;
+        let fast_plan = sim.plan_path(&pieces, true).unwrap().last().unwrap().0;
+        let fast = run_path(&plc, &text, true, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
-        assert!(fast < slow - 0.05 && (fast - fast_plan.last().unwrap().0).abs() < 0.05, "{}: {fast} s time-optimal (planned {} s), {slow} s within the axis limits", entry.id, fast_plan.last().unwrap().0);
+        // The plans: sooner by 5 % at least (the delta's 0.32 s, whose axis limits are near what its motors can do, is
+        // the closest). The run keeps to its plan as the slow one does.
+        assert!(fast_plan < 0.95 * slow_plan, "{}: planned {fast_plan} s time-optimal, {slow_plan} s within the axis limits", entry.id);
+        assert!((fast.busy - fast_plan).abs() <= fast.largest_step + 1e-3, "{}: busy for {} s time-optimal, planned {fast_plan} s, polled up to {} s apart", entry.id, fast.busy, fast.largest_step);
     }
 }

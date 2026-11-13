@@ -39,7 +39,9 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
             assert!(tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < 1e-3), "{}: from {pose:?} the tool arrives at {tool:?}", entry.id);
 
             let mut sim = Sim::new(entry, &cfg).unwrap();
-            let outside: Vec<f64> = pose.iter().zip(&axes).map(|(p, a)| if *p == a.max { p + 1e-3 } else if *p == a.min { p - 1e-3 } else { *p }).collect();
+            // A millimetre beyond what the controller takes as the setpoint's give (`Machine::setpoint_slack`).
+            let by = 1e-3 + sim.machine.setpoint_slack();
+            let outside: Vec<f64> = pose.iter().zip(&axes).map(|(p, a)| if *p == a.max { p + by } else if *p == a.min { p - by } else { *p }).collect();
             let leaves = vec![(0.0, sim.control.set_pos.clone()), (0.5, outside), (1.0, pose.clone())];
             assert_eq!(sim.command(Command::Trajectory(leaves)).err().map(|e| e.key), Some("error-trajectory"), "{}", entry.id);
         }
@@ -66,11 +68,18 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
         for (share, jitter) in [(1.0, 0usize), (0.95, 0), (1.0, 24), (0.5, 24)] {
             let mut sim = Sim::new(entry, &cfg).unwrap();
             let axis = sim.machine.axes()[0].clone();
+            // From near the low end of the axis, 5 % of it in (on the gantries 50 mm from their start at 0.1 m).
+            let mut low = sim.control.set_pos.clone();
+            low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+            sim.command(Command::MoveTo(low)).unwrap();
+            while sim.control.busy() {
+                sim.step();
+            }
             let (per, step) = ((interval / sim.dt).round() as usize, share * axis.max_vel * interval);
             let mut target = sim.control.set_pos.clone();
             let (mut fastest, mut slowest) = (0f64, f64::INFINITY);
             // 40 setpoints, or as many as the stroke has room for with the two of the jump at the end.
-            let room = ((axis.max - target[0] - 2.0 * axis.max_vel * interval) / step).floor() as usize;
+            let room = ((axis.max - target[0] - 2.5 * axis.max_vel * interval) / step).floor() as usize;
             assert!(room > 20, "{}: room for {room} setpoints", entry.id);
             for k in 0..40.min(room) {
                 target[0] += step;

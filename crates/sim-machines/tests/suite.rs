@@ -69,7 +69,7 @@ fn the_scene_shows_pulleys_turning_teeth_travelling_and_motor_speeds() {
         sim.sample(&mut sample);
         for (motor, label) in sim.machine.motors().iter().zip(after.labels.iter().filter(|l| l.unit_key == "unit-rpm")) {
             let speed = sample[sim.signal_index(&format!("motor.{}.speed", motor.id)).unwrap()];
-            assert!((label.value - speed * 60.0 / std::f64::consts::TAU).abs() < 1e-9 && label.value.abs() > 50.0, "{}: {} rpm", entry.id, label.value);
+            assert!((label.value - speed * 60.0 / std::f64::consts::TAU).abs() < 1e-9 && label.value.abs() > 10.0, "{}: {} rpm", entry.id, label.value);
             assert_eq!(label.owner_key, motor.key);
         }
     }

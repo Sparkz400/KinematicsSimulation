@@ -119,8 +119,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("search") => &["--series", "--gearboxes", "--axes"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
-        Some("step") => &["--axis", "--size", "--time"],
-        Some("bode") => &["--axis", "--from", "--to", "--count", "--amplitude"],
+        Some("step") => &["--axis-index", "--size", "--time"],
+        Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
         Some("replay") => &["--trace"],
@@ -235,7 +235,11 @@ fn read(path: &str) -> Result<String, Failure> {
 /// of the trace.
 fn replay(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let motors = (entry.build)(&cfg)?.motors().to_vec();
+    let machine = (entry.build)(&cfg)?;
+    if !sim_components::trace::linear_transformation(machine.as_ref()) {
+        return Err(Failure("error-trace-not-linear", String::new()));
+    }
+    let motors = machine.motors().to_vec();
     let measured = Trace::parse(&read(args.option("--trace").ok_or(Failure("cli-usage", String::new()))?)?, &motors)?;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
     println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
@@ -260,6 +264,9 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
+    }
+    if !sim_components::trace::linear_transformation(machine.as_ref()) {
+        return Err(Failure("error-trace-not-linear", String::new()));
     }
     let mut out = output(args, "--out")?;
     let (mut advice, mut result) = (Vec::new(), Ok(()));
@@ -555,7 +562,7 @@ fn number(args: &Args, name: &str, default: f64) -> Result<f64, Failure> {
 /// `step <machine>`: the answer of one axis to a small step of its position setpoint.
 fn step(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let response = step_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
+    let response = step_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "time_s,setpoint,response").map_err(io)?;
     for (t, y) in &response.trace {
@@ -568,7 +575,7 @@ fn step(args: &Args) -> Result<(), Failure> {
 fn bode(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let frequencies = log_spaced(number(args, "--from", 1.0)?, number(args, "--to", 200.0)?, number(args, "--count", 40.0)? as usize);
-    let points = closed_loop_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
+    let points = closed_loop_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "frequency_hz,gain,gain_db,phase_deg").map_err(io)?;
     for p in points {

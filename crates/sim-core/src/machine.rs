@@ -108,6 +108,12 @@ pub trait Machine: Send {
     fn motor_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]);
     /// Motor torques from the rigid model for a tool pose and acceleration, including gravity.
     fn feedforward_torque(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut [f64]);
+    /// `feedforward_torque` with the tool's speed too, for what the speed asks of the motors in a kinematics that is
+    /// not linear (the centripetal and Coriolis part of the torque). The controller uses this one; the default leaves
+    /// the speed out, which is exact where the motor angles are a linear function of the tool pose.
+    fn feedforward_torque_moving(&self, tool_pos: &[f64], _tool_vel: &[f64], tool_acc: &[f64], out: &mut [f64]) {
+        self.feedforward_torque(tool_pos, tool_acc, out);
+    }
     /// The tension of each belt section (N, in the order of `belt_sections`) that the loss-free rigid model of
     /// `feedforward_torque` gives at a tool pose and acceleration: what the belt has to pull on the moved masses (not
     /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the
@@ -147,6 +153,14 @@ pub trait Machine: Send {
     /// the box of their axis ranges keep this default.
     fn unreachable(&self, _tool_pose: &[f64], _slack: f64) -> Option<&'static str> {
         None
+    }
+
+    /// How far the setpoint of the machine at rest may be from the pose of its tool, m: the setpoint is where the
+    /// motors stand, and what belts and gears give way under the load they hold puts the tool off it. The controller
+    /// takes paths and trajectories that start or run this far beyond the travel range or the envelope. 0.1 mm by
+    /// default (12 and 46 um on the gantry holding its Z axis).
+    fn setpoint_slack(&self) -> f64 {
+        1e-4
     }
 
     /// Signals beyond axis and motor positions, speeds and torques, which every machine gets for free: first those

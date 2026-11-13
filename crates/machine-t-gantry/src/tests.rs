@@ -810,12 +810,12 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
 /// carriage, Z axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis, F_z = 7 kg * g = 68.65 N; the
 /// sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at z = 0.35), and with
 /// sum (T_i - P) L_i = 0 section 3 carries T = 300 - 68.65 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2 accelerating. At rest
-/// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.681 N per m/s^2, and with
-/// `profile.tension_reserve` = 0.8 the plan may use 0.8 * (400 - 284.47) = 92.42 N of it: a = 13.84 m/s^2. The plan
-/// without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension` on the full model (425 N); the plan with it
-/// accelerates at 13.84 m/s^2 within 0.5 %, its rigid tension reaches the 376.9 N the plan allows within 3 % (where it
-/// accelerates, x = 0.7 to 0.8, the rise per m/s^2 is a little less), and the full model, friction and belt vibration
-/// on top, passes `belt-tension` within 3 % of the 400 N.
+/// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N per m/s^2, and with
+/// `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 * (400 - 31 - 284.47)
+/// = 42.26 N of it: a = 6.328 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension`
+/// on the full model (425 N); the plan with it accelerates at 6.328 m/s^2 within 0.5 %, its rigid tension reaches the
+/// 326.7 N the plan allows within 3 % (where it accelerates, x = 0.7 to 0.8, the rise per m/s^2 is a little less), and
+/// the full model, friction and belt vibration on top, passes `belt-tension`.
 #[test]
 fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let pieces = sim_components::path::parse("line,0.95,0.35").unwrap();
@@ -851,15 +851,49 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let weight = 7.0 * 9.80665;
     assert!((at[2] - (300.0 - weight * 0.95 / 4.2 + 110.0 * 1.55 / 4.2 + 110.0 * 0.95 / 4.2)).abs() < 1e-9, "{at:?}");
     assert!((at[0] - (300.0 - weight * 0.95 / 4.2 - 110.0 * (0.95 + 0.75) / 4.2)).abs() < 1e-9, "{at:?}");
-    let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.8 * (400.0 - (300.0 - weight * 0.95 / 4.2)));
+    let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.5 * (400.0 - 31.0 - (300.0 - weight * 0.95 / 4.2)));
     let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
-    assert!((allowed - 13.84).abs() < 5e-3 && (still + room - 376.89).abs() < 0.01, "{allowed}");
+    assert!((allowed - 6.328).abs() < 5e-3 && (still + room - 326.74).abs() < 0.01, "{allowed}");
     let (old_acc, _, old) = run(1e12);
     assert!(old_acc > 1.3 * allowed && !old.ok, "{old_acc} m/s^2, {old:?}");
     let (acc, tension, new) = run(400.0);
     assert!((acc / allowed - 1.0).abs() < 0.005, "{acc} m/s^2 against {allowed}");
     assert!(tension <= (still + room) * 1.001 && tension >= 0.97 * (still + room), "{tension} N");
-    assert!(new.ok && new.value >= 0.97 * 400.0, "{new:?}");
+    assert!(new.ok, "{new:?}");
+}
+
+/// The tenth review's paths, as fast as the motors and a belt rated 340 to 600 N allow, with the axis limits raised to
+/// 40 m/s^2, 2000 m/s^3 and 2 m/s so that the belt is what limits: with the share alone (0.8, no margin) the full
+/// model went 1.4 to 6.9 N above the rating and the slack side to 0 N. A ramp of acceleration quick against the belt's
+/// period overshoots by up to the change itself, so the rigid model may use half the room, less the friction the
+/// belt pulls (`profile.tension_margin_n`): the full model keeps both ratings on every one, or the plan is refused as
+/// the holding tension leaves no room (340 N: up to 310 N held, less 31 N margin).
+#[test]
+fn the_full_model_keeps_the_belt_ratings_on_a_time_optimal_plan_at_high_jerk() {
+    let reviewed = "line,0.9,0.3\nline,0.1,0.05\nline,0.5,0.4";
+    let refused = |rated: f64| rated <= 340.0;
+    for (path, rated, fast) in [(reviewed, 330.0, false), (reviewed, 340.0, true), (reviewed, 360.0, true), (reviewed, 400.0, true), (reviewed, 1500.0, true), ("line,0.7,0.35\nline,0.95,0.35\nline,0.2,0.1\nline,0.9,0.05\nline,0.5,0.35", 400.0, true)] {
+        let mut cfg = ENTRY.config();
+        if fast {
+            for (axis, key, value) in ["x", "z"].into_iter().flat_map(|a| [(a, "max_jerk_m_s3", 2000.0), (a, "max_acceleration_m_s2", 40.0), (a, "max_velocity_m_s", 2.0)]) {
+                cfg.set_text(&format!("axis.{axis}.{key} = {value:?}")).unwrap();
+            }
+        }
+        cfg.set_text(&format!("ratings.belt_max_tension_n = {rated:?}")).unwrap();
+        let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+        let points = match sim.plan_path(&sim_components::path::parse(path).unwrap(), true) {
+            Ok(points) => points,
+            Err(e) => {
+                assert!(e.key == "error-path-tension" && refused(rated), "{rated} N: {}", e.key);
+                continue;
+            }
+        };
+        assert!(!refused(rated), "{rated} N planned");
+        let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+        let (low, high) = load.belt_tension.unwrap();
+        println!("{rated} N, fast {fast}: {low:.2} to {high:.2} N");
+        assert!(high <= rated && low > 0.0, "{rated} N, fast {fast}: {low} to {high} N");
+    }
 }
 
 /// The most that any pose of `plan_use` uses of each of the three limits.

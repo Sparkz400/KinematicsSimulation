@@ -176,7 +176,9 @@ fn a_drive_by_name_judges_the_motor_current_at_the_hand_calculated_share() {
 /// 6SL3210-5HB10-8UF0: 40 W, 2.4 kW, 410 V; a threshold of 470 V (at or above the trip) becomes
 /// (1.1 * 240 * sqrt 2 + 410) / 2 = 391.676 V, one below it stays. A 3 AC converter on 230 V must use an external
 /// resistor: the config's powers stay. An S120 Motor Module brings its DC link capacitance: 110 uF for the Single
-/// 6SL3120-1TE15-0AD0, 220 / 2 = 110 uF per axis for the Double 6SL3120-2TE13-0AD0.
+/// 6SL3120-1TE15-0AD0, 220 / 2 = 110 uF per axis for the Double 6SL3120-2TE13-0AD0; and, having no resistor of its
+/// own, the Braking Module's (braking_s120.csv: 1.5 kW, 100 kW, on at 770 V) and the booksize trip at 820 V, not the
+/// S210 converter's 100 W and 5.7 kW the EXCT-30 config has.
 #[test]
 fn a_drive_by_name_brings_its_published_dc_link_data() {
     // Every converter of converters_s210.csv has its braking row, and no other converter has one.
@@ -208,6 +210,7 @@ fn a_drive_by_name_brings_its_published_dc_link_data() {
         cfg.set_text("ratings.dc_link_capacitance_uf = 1.0").unwrap();
         apply_drive(&mut cfg, module, "s120").unwrap();
         assert_eq!(rating(&cfg, "dc_link_capacitance_uf"), uf, "{module}");
+        assert_eq!(values(&cfg), [1500.0, 100_000.0, 820.0, 770.0], "{module}");
     }
     // A capacitance measured on a real drive (dc_link_measured.csv): 139 uF for the 6SL5310-1BE10-8DF0. A converter
     // without a measurement or a published value keeps the config's, as the EXCT-30's 6SL3210-5HE11-5UF0 its 66 uF.

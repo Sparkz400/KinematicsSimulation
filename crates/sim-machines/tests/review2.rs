@@ -34,6 +34,18 @@ fn long_move(sim: &Sim) -> Vec<f64> {
     target
 }
 
+/// Moves the first axis to near the low end of its range (5 % of it in) and waits there (see control.rs): 50 mm on the
+/// gantries, which start at 0.1 m.
+fn to_low_end(sim: &mut Sim) {
+    let axis = sim.machine.axes()[0].clone();
+    let mut low = sim.control.set_pos.clone();
+    low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+    sim.command(Command::MoveTo(low)).unwrap();
+    while sim.control.busy() {
+        sim.step();
+    }
+}
+
 fn tool(sim: &Sim) -> Vec<f64> {
     let n = sim.machine.axes().len();
     let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
@@ -177,6 +189,8 @@ fn a_part_that_is_no_name_and_a_key_the_machine_does_not_know_are_refused() {
 fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim) {
     let shaped = config(entry, &["effects.input_shaping = true"]);
     let mut sim = Sim::new(entry, &shaped).unwrap();
+    to_low_end(&mut sim);
+    let begun = sim.time();
     sim.command(Command::MoveTo(long_move(&sim))).unwrap();
     let (mut last, mut step, mut demand) = (sim.control.set_pos[0], 0f64, 0f64);
     let mut watch = |sim: &Sim| {
@@ -186,7 +200,7 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
     };
     // 0.4 s in, or as soon as the first axis cruises where a move is shorter (the delta's 3 m/s over a metre).
     let v_max = sim.machine.axes()[0].max_vel;
-    while sim.time() < 0.4 && !(sim.time() > 0.1 && sim.control.set_vel[0] >= v_max * (1.0 - 1e-9)) {
+    while sim.time() - begun < 0.4 && !(sim.time() - begun > 0.1 && sim.control.set_vel[0] >= v_max * (1.0 - 1e-9)) {
         sim.step();
         watch(&sim);
     }
@@ -222,8 +236,13 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
             if change.ends_with("false") {
                 let back = sim.control.planned_pos().iter().zip(sim.machine.axes()).map(|(p, a)| p - 0.2 * (a.max - a.min)).collect();
                 sim.command(Command::MoveTo(back)).unwrap();
-                sim.run(0.2, |sim| assert_eq!(sim.control.set_pos, sim.control.planned_pos()));
+                // On the way and to its end (the gantries' moves take longer than 0.2 s, the delta's not).
+                sim.step();
                 assert!(sim.control.busy());
+                while sim.control.busy() {
+                    sim.step();
+                    assert_eq!(sim.control.set_pos, sim.control.planned_pos());
+                }
             }
         }
     }
@@ -250,9 +269,12 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 let mut sims = [Sim::new(entry, &cfg).unwrap(), Sim::new(entry, &cfg).unwrap()];
                 for sim in &mut sims {
                     if moving {
+                        to_low_end(sim);
                         sim.command(Command::MoveTo(long_move(sim))).unwrap();
                     }
-                    sim.run(0.4, |_| {});
+                    // 0.4 s in, or in the middle of a move too short for that (the delta's 0.42 s), at speed.
+                    let duration = sim_components::profile::Move::new(&sim.control.set_pos, &long_move(sim), sim.machine.axes()).duration();
+                    sim.run(if moving { f64::min(0.4, 0.5 * duration) } else { 0.4 }, |_| {});
                 }
                 assert_eq!(sims[0].control.busy(), moving);
                 let mut changed = cfg.clone();
@@ -267,7 +289,9 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 }
                 let what = format!("{}: {path} changed by 1 % {}", entry.id, if moving { "during a move" } else { "at standstill" });
                 assert!(tension_off <= 0.1 * pretension, "{what}: belt tension off by {tension_off} N");
-                assert!(tool_off < 1e-4, "{what}: tool off by {tool_off} m");
+                // 0.1 mm, or a tenth of what the machine's gears sag at rest where that is more (the delta's backlash
+                // takes up anew after the change: 0.13 mm with 9 arcmin).
+                assert!(tool_off < (0.1 * sims[0].machine.setpoint_slack()).max(1e-4), "{what}: tool off by {tool_off} m");
                 // The motors stand where the new kinematics put them for this pose.
                 let (mut wanted, mut speed) = (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
                 sims[1].machine.inverse(&tool(&sims[1]), &mut wanted);
@@ -392,11 +416,15 @@ fn replay_refuses_a_trace_too_short_to_replay() {
     for entry in MACHINES.iter().copied() {
         let cfg = entry.config();
         let sim = Sim::new(entry, &cfg).unwrap();
+        let linear = sim_components::trace::linear_transformation(sim.machine.as_ref());
         for rows in 0..=4usize {
             let motors = sim.control.drives.iter().map(|d| MotorTrace { setpoint: vec![d.pos_set; rows], angle: vec![d.pos_set; rows], speed: vec![0.0; rows], torque: vec![0.0; rows] });
             let trace = Trace { time: (0..rows).map(|i| i as f64 * 1e-3).collect(), motors: motors.collect() };
             let replayed = replay(entry, &cfg, &trace);
-            if rows < 4 {
+            if !linear {
+                // Replay refuses a transformation that is not linear (the delta), whatever the trace.
+                assert_eq!(replayed.err().map(|e| e.key), Some("error-trace-not-linear"), "{}", entry.id);
+            } else if rows < 4 {
                 assert_eq!(replayed.err().map(|e| e.key), Some("error-trace-short"), "{}: {rows} rows", entry.id);
             } else {
                 assert_eq!(replayed.unwrap().time.len(), rows, "{}", entry.id);

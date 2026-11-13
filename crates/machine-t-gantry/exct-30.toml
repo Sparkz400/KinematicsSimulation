@@ -515,9 +515,14 @@ shaper2_damping = 0.03
 # rest is for friction and elasticity, which the plan leaves out).
 torque_reserve = 0.8
 # For a path timed as fast as the motors allow: the share of the room between the tension that holds the tool and the
-# belt's tension ratings that the plan may use (the rest is for the belt's vibration and damping, which the plan's rigid
-# model leaves out). [estimate]
-tension_reserve = 0.8
+# belt's tension ratings (less tension_margin_n) that the plan's rigid model may use. 0.5, because the belt's vibration
+# adds up to as much again: a change of acceleration that is quick against the belt's period (a ramp shorter than about
+# a third of it) makes a lightly damped belt overshoot by up to the change itself. [estimate]
+tension_reserve = 0.5
+# For a path timed as fast as the motors allow: taken off both tension ratings before the share above, for what the
+# rigid model leaves out whatever the room: the guides' friction, which the loss-free rigid model does not carry:
+# the x guide's 20 N coulomb plus 20 N s/m at the axis' 2.5 m/s. [estimate]
+tension_margin_n = 70.0
 # For a path of lines and arcs: how far the planned path may leave them, so that transition curves
 # (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
 path_tolerance_m = 0.0

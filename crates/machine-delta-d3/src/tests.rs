@@ -262,3 +262,91 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
 }
 
 
+
+/// The feedforward with the speed is the rigid, loss-free model's torque: given it at a pose where the platform moves
+/// at (2, -1, 0.5) m/s, the model accelerates the platform at the asked (10, 5, -20) m/s^2, the velocity term
+/// m_nt J^T J_x^-1 w included (to 1e-9 m/s^2). Without the speed (the old feedforward) it misses by that term's
+/// effect, here more than 1 m/s^2.
+#[test]
+fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
+    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", "effects.gravity = true"]);
+    let (p, v, a) = ([0.2, -0.1, -0.85], [2.0, -1.0, 0.5], [10.0, 5.0, -20.0]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&p, &mut state, &mut hold);
+    d.set_tool_velocity(&mut state, &v);
+    let platform = |torque: &[f64]| {
+        let mut rates = vec![0.0; d.state_len()];
+        d.derivatives(&state, torque, &mut rates);
+        let t = [state[0], state[1], state[2]];
+        let (_, j) = d.pose(t);
+        let w = [state[3], state[4], state[5]];
+        let bend = d.legs.velocity_term(t, p, w, v).unwrap();
+        let along = mul(&j, [rates[3], rates[4], rates[5]]);
+        [0, 1, 2].map(|i| along[i] + bend[i])
+    };
+    let (mut moving, mut still) = ([0.0; 3], [0.0; 3]);
+    d.feedforward_torque_moving(&p, &v, &a, &mut moving);
+    d.feedforward_torque(&p, &a, &mut still);
+    let (with, without) = (platform(&moving), platform(&still));
+    assert!((0..3).all(|i| (with[i] - a[i]).abs() < 1e-9), "{with:?}");
+    assert!((0..3).map(|i| (without[i] - a[i]).powi(2)).sum::<f64>().sqrt() > 1.0, "{without:?}");
+    // At rest the two are the same.
+    d.feedforward_torque_moving(&p, &[0.0; 3], &a, &mut moving);
+    assert!((0..3).all(|k| (moving[k] - still[k]).abs() < 1e-12));
+}
+
+
+/// The setpoint at rest is where the motors stand; the platform's weight twists the gearboxes and sits them at a side
+/// of their backlash, so the tool is off it. `setpoint_slack` (`rest_sag`: twist and half the backlash either way at
+/// every arm, over the range) covers what the simulation shows after 0.5 s at rest at five poses, the rim's lower edge
+/// between two arms among them (2.09 mm there with the catalogue's 9 arcmin, the most found over the rim in steps of
+/// 30 degrees), and is not far above it; without backlash and with stiff gearboxes it is the default 0.1 mm.
+#[test]
+fn the_setpoint_slack_covers_the_sag_at_rest() {
+    let slack = delta(&[]).setpoint_slack();
+    let mut most = 0f64;
+    for pose in [[-0.6, 0.0, -0.7], [0.0, 0.0, -0.9], [0.3, 0.4, -0.8], [0.0, -0.55, -0.75], [0.29995, 0.51953, -0.874]] {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.run(0.5, |_| {});
+        let mut out = Vec::new();
+        sim.sample(&mut out);
+        let at = |id: &str| out[sim.signal_index(id).unwrap()];
+        let off = ["x", "y", "z"].map(|a| at(&format!("axis.{a}.position_setpoint")) - at(&format!("axis.{a}.position")));
+        let off = norm(off);
+        println!("{pose:?}: setpoint {:.3} mm off the tool", off * 1e3);
+        most = most.max(off);
+    }
+    println!("slack {:.3} mm", slack * 1e3);
+    assert!(most <= slack && slack <= 1.4 * most, "{most} m at rest, slack {slack} m");
+    assert_eq!(delta(&["effects.gearbox_backlash = false", "gearbox.stiffness_nm_rad = 1e12"]).setpoint_slack(), 1e-4);
+}
+
+/// A first arc from rest is laid out from the setpoint, which the sag puts 0.6 mm from the start pose: its end may be
+/// off the circle through there by the machine's slack, not the gantries' 0.1 mm (refused before as "cannot be laid
+/// out"). An end further off than the slack is still refused.
+#[test]
+fn a_first_arc_from_rest_is_laid_out_with_the_machines_slack() {
+    let sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    let arc = |end: f64| sim_components::path::parse(&format!("arc,{end},0.0,-0.85,0.1525,0.0,-0.85,cw")).unwrap();
+    assert!(sim.plan_path(&arc(0.2525), false).is_ok(), "{:?}", sim.plan_path(&arc(0.2525), false).err());
+    let slack = sim.machine.setpoint_slack();
+    assert_eq!(sim.plan_path(&arc(0.2525 + 2.0 * slack), false).err().map(|e| e.key), Some("error-path"));
+}
+
+/// The slack is for where a path starts, not for where it goes: a line to x = 0.6014, 1.4 mm beyond the range's
+/// 0.6 m, is refused as the move there is; one to 0.6 runs. A trajectory too.
+#[test]
+fn a_path_may_not_use_the_setpoint_slack_away_from_its_start() {
+    let mut sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    let line = |x: f64| sim_components::path::parse(&format!("line,{x},0.0,-0.775")).unwrap();
+    assert_eq!(sim.command(Command::MoveTo(vec![0.6014, 0.0, -0.775])).err().map(|e| e.key), Some("error-target-out-of-range"));
+    for time_optimal in [false, true] {
+        assert_eq!(sim.plan_path(&line(0.6014), time_optimal).err().map(|e| e.key), Some("error-path-range"));
+        assert!(sim.plan_path(&line(0.6), time_optimal).is_ok());
+    }
+    let mut points = sim.plan_path(&line(0.6), false).unwrap();
+    points.last_mut().unwrap().1[0] = 0.6014;
+    assert_eq!(sim.command(Command::Trajectory(points)).err().map(|e| e.key), Some("error-trajectory"));
+}
