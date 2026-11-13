@@ -1,0 +1,19 @@
+# Densities in kg/m3; these add to or override steel, aluminium, stainless, pom and carbon.
+[materials]
+brass = 8500.0
+
+# The first rule whose glob matches a part's STEP product name wins; unmatched parts are listed and not counted.
+[[part]]
+match = "Carriage*"
+role = "carriage"
+material = "aluminium"
+
+[[part]]
+match = "Z*"
+role = "arm"
+material = "aluminium"
+
+[[part]]
+match = "Gripper*"
+role = "payload"
+material = "steel"

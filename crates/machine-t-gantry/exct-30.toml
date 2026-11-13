@@ -371,6 +371,7 @@ rated_speed_rad_s = 314.0
 no_load_speed_rad_s = 518.0
 # [catalogue] 22-bit encoder
 encoder_counts_per_rev = 4194304.0
+
 velocity_filter_s = 0.2e-3
 torque_filter_s = 0.2e-3
 notch_frequency_hz = 60.0

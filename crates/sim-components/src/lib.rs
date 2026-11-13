@@ -12,6 +12,7 @@ pub mod joint;
 pub mod mech;
 pub mod path;
 pub mod profile;
+pub mod report;
 pub mod sim;
 pub mod trace;
 

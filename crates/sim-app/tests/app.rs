@@ -2025,3 +2025,31 @@ fn drives_belts_and_axes_are_named_in_the_app_and_searched_over() {
     let part = |key: &str| model.config.get(&format!("parts.{key}")).unwrap().as_str().unwrap().to_string();
     assert_eq!((part("motor"), part("axis"), part("drive")), (found[row].article.to_string(), found[row].axis.clone(), found[row].drive.to_string()));
 }
+
+/// The sizing report is written in the background, as PDF or HTML by the file's name, with an edited value marked as
+/// set for this run, and says so when done.
+#[test]
+fn the_sizing_report_is_written_from_the_config_as_edited() {
+    let mut model = Model::new(MACHINES[0], "en");
+    model.set_param("mass.payload_kg", toml::Value::Float(2.5));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    for name in ["app-report.html", "app-report.pdf"] {
+        let path = dir.join(name);
+        let _ = std::fs::remove_file(&path);
+        model.export_report(path.to_str().unwrap());
+        assert!(model.report_running());
+        let start = Instant::now();
+        while model.report_running() && start.elapsed() < Duration::from_secs(120) {
+            model.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(model.messages.last().map(|m| m.0), Some("ui-report-written"), "{:?}", model.messages.last());
+        let bytes = std::fs::read(&path).unwrap();
+        if name.ends_with(".pdf") {
+            assert!(bytes.starts_with(b"%PDF"));
+        } else {
+            let html = String::from_utf8(bytes).unwrap();
+            assert!(html.contains("<td>mass.payload_kg</td><td>2.5</td><td>set for this run</td>"), "the edit is marked");
+        }
+    }
+}

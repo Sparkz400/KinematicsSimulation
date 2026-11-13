@@ -1319,3 +1319,47 @@ fn the_friction_curves_are_the_formula() {
         assert!(curve.iter().zip(&expected).all(|(a, b)| (a - b).abs() < 1e-5), "contact {contact} at {speed} m/s: {curve:?}");
     }
 }
+
+/// The sizing report on the EXCT-30 config names where each value comes from: the comments' tags, where several sit
+/// close together, a CAD value, one set on top, and those a motor named in [parts] brings.
+#[test]
+fn the_report_names_the_source_of_each_exct_30_value() {
+    use sim_components::report::{Block, make, sources};
+    let tags = sources(EXCT_30_CONFIG);
+    let tag = |path: &str| tags.get(path).map(String::as_str);
+    assert_eq!(tag("drive.encoder_counts_per_rev"), Some("[catalogue]"));
+    assert_eq!(tag("drive.velocity_filter_s"), None, "the encoder's tag is not the filters'");
+    assert_eq!(tag("geometry.span_min_m"), Some("[cad]"));
+    assert_eq!(tag("geometry.z_com_drop_m"), None, "a [cad] line marks one key");
+    assert_eq!(tag("thermal.guide_resistance_k_w"), Some("[estimate]"), "a tag at the end of the line");
+    assert_eq!(tag("thermal_feedback.reference_c"), Some("[catalogue]"));
+    assert_eq!(tag("mass.carriage_kg"), Some("[catalogue]"));
+
+    let tr = sim_core::Translations::parse(sim_components::I18N.iter().find(|(lang, _)| *lang == "en").unwrap().1);
+    let source = |text: &str, named: &Config, cfg: &Config, path: &str| -> String {
+        let report = make(&ENTRY, text, "test", named, cfg, false, &tr).unwrap();
+        let mut found = Vec::new();
+        for block in &report.blocks {
+            if let Block::Table(_, rows) = block {
+                found.extend(rows.iter().filter(|(cells, _)| cells[0] == path).map(|(cells, _)| cells[2].clone()));
+            }
+        }
+        // The last table, the inputs, has every path; the machine's table before it has some of them too.
+        found.pop().unwrap_or_else(|| panic!("{path} not in the report"))
+    };
+    let text = EXCT_30_CONFIG.replacen("z_axis_kg = 4.7", "# [cad] gantry.step: m=4.7 kg\nz_axis_kg = 4.7", 1);
+    let named = Config::parse(&text).unwrap();
+    let mut cfg = sim_components::catalog::resolve(&ENTRY, &named).unwrap();
+    cfg.set_text("mass.payload_kg = 2.5").unwrap();
+    assert_eq!(source(&text, &named, &cfg, "mass.z_axis_kg"), "[cad]");
+    assert_eq!(source(&text, &named, &cfg, "mass.payload_kg"), "set for this run");
+    // The file already holds the catalogue's value of the motor it names.
+    assert_eq!(source(&text, &named, &cfg, "motor.rotor_inertia_kgm2"), "[catalogue]");
+
+    // The default config with that motor named for the run: its values come from the catalogue.
+    let mut named = ENTRY.config();
+    named.set_text("parts.motor = \"1FK2205-4AF\"").unwrap();
+    let cfg = sim_components::catalog::resolve(&ENTRY, &named).unwrap();
+    assert_eq!(source(ENTRY.default_config, &named, &cfg, "motor.rotor_inertia_kgm2"), "[catalogue] part in [parts]");
+    assert_eq!(source(ENTRY.default_config, &named, &cfg, "parts.motor"), "set for this run");
+}

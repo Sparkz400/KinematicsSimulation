@@ -227,8 +227,10 @@ const POINTS_KEYS: [&str; 3] = ["ui-analysis-motor", "ui-points-speed", "ui-poin
 /// The overlay's quantities, in the order of `Model::overlay`.
 const OVERLAY_KEYS: [&str; 3] = ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"];
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
-const NOTES: [&str; 21] = [
+const NOTES: [&str; 23] = [
     "ui-overlay-exported",
+    "ui-report-written",
+    "ui-report-failed",
     "ui-config-opened",
     "ui-config-saved",
     "ui-config-save-failed",
@@ -468,6 +470,8 @@ pub struct Model {
     pub tuning_axis: usize,
     pub tuning: Option<Tuning>,
     tuning_job: Option<Job<Tuning>>,
+    /// The sizing report being written; answers with the message to show.
+    report_job: Option<Job<Message>>,
     pub inputs: Inputs,
     /// Results of the analysis panel, each for the config as it was when it was asked for.
     /// With the motors' torque-speed curve as corners (speed, lowest torque, highest torque), from the highest
@@ -614,6 +618,7 @@ impl Model {
             tuning_axis: 0,
             tuning: None,
             tuning_job: None,
+            report_job: None,
             inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
             cycle_report: None,
             bands: None,
@@ -824,6 +829,10 @@ impl Model {
             self.ended = true;
             self.say(("ui-simulation-ended", String::new()));
         }
+        if let Some(result) = self.report_job.as_ref().and_then(answer) {
+            self.report_job = None;
+            self.say(result.unwrap_or_else(|message| message));
+        }
         if let Some(result) = self.tuning_job.as_ref().and_then(answer) {
             self.tuning_job = None;
             match result {
@@ -941,6 +950,30 @@ impl Model {
             Err(e) => ("ui-export-failed", e.to_string()),
         };
         self.say(message);
+    }
+
+    pub fn report_running(&self) -> bool {
+        self.report_job.is_some()
+    }
+
+    /// Writes the sizing report of the config as it is now (`sim_components::report`) to `path`, as PDF for a name
+    /// ending in .pdf and as HTML otherwise, with the error bands where the analysis panel asks for them. In the
+    /// background: the cycle and the bands take a while.
+    pub fn export_report(&mut self, path: &str) {
+        let (entry, config, text, lang, tr) = (self.entry, self.config.clone(), self.config_text.clone(), self.lang, self.tr.clone());
+        let source = if self.inputs.config_file.is_empty() { tr.tr("report-default-config").to_string() } else { self.inputs.config_file.clone() };
+        let (bands, path) = (self.inputs.bands, path.to_string());
+        let (result, job) = channel();
+        std::thread::spawn(move || {
+            let write = || -> Result<Message, Message> {
+                let report = sim_components::report::make(entry, &text, &source, &config, &config, bands, &tr).map_err(|e| (e.key(), e.detail().to_string()))?;
+                let bytes = if path.to_lowercase().ends_with(".pdf") { report.pdf() } else { report.html(lang).into_bytes() };
+                std::fs::write(&path, bytes).map_err(|e| ("ui-report-failed", format!("{path}: {e}")))?;
+                Ok(("ui-report-written", path.clone()))
+            };
+            let _ = result.send(write());
+        });
+        self.report_job = Some(Mutex::new(job));
     }
 
     // ---------------------------------------------------------------------------------------
