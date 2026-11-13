@@ -18,6 +18,9 @@ item are in [PROGRESS.md](PROGRESS.md).
   `cargo metadata` by `tools/third_party_licenses.py`.
 - `CONTRIBUTING.md`, `ROADMAP.md`, this changelog.
 - CI on Windows and Linux (`.github/workflows/ci.yml`): build, tests, clippy.
+- App: a workspace map of the delta in the Path tab (a horizontal slice at a chosen height, coloured by the
+  Jacobian's condition number; `Machine::condition`), the S1 line beside the peak torque-speed curve, the operating
+  points of a path, the energy budget as a flow diagram, and the obstacles as filled translucent boxes.
 - Unsigned release packages: `tools/package.ps1` (zip) and `tools/package.sh` (tar.gz) write `dist/`.
 - The FMUs of both machines and of the EXCT-30 config checked with an independent tool (fmpy).
 - Mechanisms and transmissions (`docs/mechanisms.md`, German `docs/de/mechanismen.md`): ball screw, rack and pinion,

@@ -804,6 +804,14 @@ impl Machine for Delta {
         }
     }
 
+    /// Of the arm angles, elbows out, as the signal `kinematics.condition` and the check against
+    /// `workspace.max_condition_number`.
+    fn condition(&self, tool: &[f64]) -> Option<f64> {
+        let p = [tool[0], tool[1], tool[2]];
+        let j = self.legs.inverse(p).and_then(|t| self.legs.jacobian(t, p));
+        Some(j.map_or(f64::INFINITY, |j| condition_number(&j)))
+    }
+
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
         for (k, motor) in self.motors.iter().enumerate() {

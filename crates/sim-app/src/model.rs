@@ -126,6 +126,8 @@ pub struct Inputs {
     /// The effect comparison: the effect switched (its name in `[effects]`), and the quantity of the scope overlaid.
     pub compare_effect: String,
     pub compare_quantity: String,
+    /// The height of the workspace map's slice, in the unit of the third axis; `None`: the middle of its range.
+    pub workspace_z: Option<f64>,
 }
 
 /// The supplies the motor catalogue has data for: the S210 at 230 V and 400 V, and the S120.
@@ -141,6 +143,24 @@ pub struct PathRun {
     pub verdicts: Vec<Verdict>,
     /// How far the planned path is off the given one, at most: transition curves and arcs off their stated end.
     pub deviation: f64,
+    /// The motors' torque-speed curves, for its operating points (`torque_speed_curves`).
+    pub curves: Curves,
+}
+
+/// The motors' torque-speed curves as lines of (speed in rad/s, torque in N m): the highest and the lowest torque the
+/// drives give (peak), and the same of the continuous (S1) rating.
+pub type Curves = [Vec<[f64; 2]>; 4];
+
+/// The torque-speed curves of `Curves` from the drive's data. The peak curve is straight between its corners
+/// (`DriveParams::torque_curve`): the peak torque both ways up to the rated speed, falling to nothing at the no-load
+/// speed in the direction of motion. The S1 curve is the rated torque up to the rated speed both ways.
+// shortcut: the S1 line ends at the rated speed, where the motor data says nothing more; upgrade when the catalogue
+// gives the S1 curve above it.
+pub fn torque_speed_curves(drive: &sim_components::drive::DriveParams) -> Curves {
+    let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
+    let peak = |high: bool| corners.iter().map(|&speed| [speed, if high { drive.torque_curve(speed).1 } else { drive.torque_curve(speed).0 }]).collect();
+    let s1 = |sign: f64| [-drive.rated_speed, drive.rated_speed].iter().map(|&speed| [speed, sign * drive.rated_torque]).collect();
+    [peak(true), peak(false), s1(1.0), s1(-1.0)]
 }
 
 /// A trace replayed and fitted: per motor the RMS and peak difference between the trace and its replay, of
@@ -159,7 +179,7 @@ enum Report {
     /// With the error bands, where they were asked for, and the number of samples they are of (0: each
     /// bounded value alone at its bounds).
     /// And the worst corners, where they were searched, with the paths of the bounds they name.
-    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize, Vec<[f64; 3]>, Option<(Vec<Worst>, Vec<String>)>),
+    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize, Curves, Option<(Vec<Worst>, Vec<String>)>),
     Sensitivity(CycleLoad, Vec<Sensitivity>),
     Optimised(Optimised),
     /// With the supply that was searched.
@@ -429,6 +449,24 @@ pub struct CompareView {
     pub table: Table,
 }
 
+/// A horizontal slice through what the machine can reach, for the workspace map (`Model::workspace_slice`).
+pub struct WorkspaceSlice {
+    /// The span of the first two axes the grid covers, (low, high) each, and the slice's height on the third.
+    pub x: (f64, f64),
+    pub y: (f64, f64),
+    pub z: f64,
+    /// Nodes per side: node (i, j) is at x.0 + i (x.1 - x.0) / (n - 1), and likewise in y with j.
+    pub n: usize,
+    /// Per node, row after row (j outer): the condition number there, `INFINITY` out of reach of the kinematics, and
+    /// whether the machine goes there (`Machine::unreachable` has nothing against it: within the envelope and the
+    /// joints' stops, and not near a singularity).
+    pub nodes: Vec<(f64, bool)>,
+    /// Where the colour scale ends: `ratings.max_condition_number`, or 10 where the config has none.
+    pub limit: f64,
+    /// The range the height can be chosen in: the third axis's.
+    pub heights: (f64, f64),
+}
+
 /// One friction contact in the effect view.
 pub struct FrictionView {
     /// Whose it is, translated.
@@ -492,9 +530,8 @@ pub struct Model {
     report_job: Option<Job<Message>>,
     pub inputs: Inputs,
     /// Results of the analysis panel, each for the config as it was when it was asked for.
-    /// With the motors' torque-speed curve as corners (speed, lowest torque, highest torque), from the highest
-    /// speed backwards to the highest forwards, to plot the operating points over.
-    pub cycle_report: Option<(CycleLoad, Vec<Verdict>, Vec<[f64; 3]>)>,
+    /// With the motors' torque-speed curves, to plot the operating points over.
+    pub cycle_report: Option<(CycleLoad, Vec<Verdict>, Curves)>,
     /// The checks of the cycle with their error bands, where the cycle was analysed with them.
     pub bands: Option<Vec<Band>>,
     /// How many samples those bands are of; 0: each bounded value alone at its low and at its high bound.
@@ -637,7 +674,7 @@ impl Model {
             tuning: None,
             tuning_job: None,
             report_job: None,
-            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), trace_map: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
+            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), trace_map: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into(), workspace_z: None },
             cycle_report: None,
             bands: None,
             band_samples: 0,
@@ -1086,10 +1123,7 @@ impl Model {
                     Analysis::Cycle => {
                         let mut sim = Sim::new(entry, &config).map_err(refused)?;
                         let load = analyse_cycle(&mut sim).map_err(command)?;
-                        // The curve is straight between these speeds (`DriveParams::torque_curve`).
-                        let drive = sim.control.drive_params();
-                        let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
-                        let curve = corners.iter().map(|&speed| [speed, drive.torque_curve(speed).0, drive.torque_curve(speed).1]).collect();
+                        let curve = torque_speed_curves(sim.control.drive_params());
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
                         // Two more cycles per bounded value, or one per sample (always with the same seed, so
                         // that asking again gives the same bands).
@@ -1148,7 +1182,7 @@ impl Model {
                         let scene_line = points.iter().filter_map(|(_, pose)| sim.machine.scene_point(pose)).collect();
                         let load = analyse_trajectory(&mut sim, points.clone()).map_err(command)?;
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
-                        Report::Path(PathRun { points, scene_line, load, verdicts, deviation })
+                        Report::Path(PathRun { points, scene_line, load, verdicts, deviation, curves: torque_speed_curves(sim.control.drive_params()) })
                     }
                     Analysis::Trace => {
                         let unfit = |e: TraceError| (e.key, e.detail);
@@ -1475,12 +1509,15 @@ impl Model {
         Some((all.count(), [vec![self.header(&POINTS_KEYS)], shown.collect()].concat()))
     }
 
-    /// The operating points per motor as (speed, torque), and the torque-speed curve as two lines: highest and
-    /// lowest torque over the speed.
-    pub fn points_plot(&self) -> Option<(Vec<Vec<[f64; 2]>>, [Vec<[f64; 2]>; 2])> {
-        let (load, _, curve) = self.cycle_report.as_ref()?;
+    /// The operating points per motor as (speed, torque), and the torque-speed curves (`Curves`): of the analysed
+    /// cycle (`Analysis::Cycle`) or of the path that was run (`Analysis::Path`). `None` until there is one.
+    pub fn points_plot(&self, kind: Analysis) -> Option<(Vec<Vec<[f64; 2]>>, Curves)> {
+        let (load, curves) = match kind {
+            Analysis::Path => self.path_run.as_ref().map(|run| (&run.load, &run.curves))?,
+            _ => self.cycle_report.as_ref().map(|(load, _, curves)| (load, curves))?,
+        };
         let points = load.motors.iter().map(|m| m.points.iter().map(|(speed, torque)| [*speed, *torque]).collect()).collect();
-        Some((points, [curve.iter().map(|c| [c[0], c[2]]).collect(), curve.iter().map(|c| [c[0], c[1]]).collect()]))
+        Some((points, curves.clone()))
     }
 
     /// The parts of each motor's torque over the scopes' time window: per motor its name with the unit, and per
@@ -1533,6 +1570,59 @@ impl Model {
         table.extend(budget.rows.iter().filter(|r| r.energy != 0.0).map(|r| line(format!("{} · {}", tr(&r.owner_key), tr(&r.quantity_key)), r.energy)));
         table.push(line(tr("budget-unaccounted"), budget.unaccounted()));
         Some(table)
+    }
+
+    /// The energy budget of the analysed cycle as a flow diagram, in three columns of (label, energy in J), every
+    /// energy above zero. The first holds the supply and every store that gave energy back over the cycle (a row of the
+    /// budget below zero); the second what the electrical side lost or stored (the rows `EnergyBudget::
+    /// electrical_unaccounted` counts, and what that leaves), and last the shaft work, with what the machine's stores
+    /// gave back; the third what the machine lost or stored, and what its own balance leaves. So the first column adds
+    /// up to the second, the second's last to the third, and the second and third less what the first has beyond the
+    /// supply are the supply, as the budget's rows and what it leaves unaccounted are. Rows that are exactly zero (an
+    /// effect that is off) are left out, as in `budget_table`. `None` where that has nothing.
+    pub fn budget_flows(&self) -> Option<[Vec<(String, f64)>; 3]> {
+        let budget = self.cycle_report.as_ref()?.0.budget.as_ref()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let electrical = |id: &str| id.starts_with("copper.") || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors");
+        let unaccounted = |energy: f64| (tr("budget-unaccounted"), energy);
+        let stage = |side: bool, rest: f64| -> Vec<(String, f64)> {
+            let rows = budget.rows.iter().filter(|r| r.energy != 0.0 && electrical(&r.id) == side);
+            rows.map(|r| (format!("{} · {}", tr(&r.owner_key), tr(&r.quantity_key)), r.energy)).chain([unaccounted(rest)]).collect()
+        };
+        let electrical_rest = budget.electrical_unaccounted();
+        let (supplied, machine) = (stage(true, electrical_rest), stage(false, budget.unaccounted() - electrical_rest));
+        let given_back = |items: &[(String, f64)]| items.iter().filter(|(_, e)| *e < 0.0).map(|(label, e)| (label.clone(), -e)).collect::<Vec<_>>();
+        let taken = |items: &[(String, f64)]| items.iter().filter(|(_, e)| *e > 0.0).cloned().collect::<Vec<_>>();
+        let back: f64 = given_back(&machine).iter().map(|(_, e)| e).sum();
+        let first = [vec![(tr("budget-supply"), budget.supply)], given_back(&supplied), given_back(&machine)].concat();
+        let second = [taken(&supplied), vec![(tr("ui-effects-shaft-work"), budget.shaft_work + back)]].concat();
+        Some([first, second, taken(&machine)])
+    }
+
+    /// A horizontal slice through what the machine can reach, at the height `inputs.workspace_z` (the middle of the
+    /// third axis's range where it is `None`, and within that range), for the workspace map: per node of a grid the
+    /// condition number of the kinematics there (`Machine::condition`). The grid spans the first two axes' ranges and
+    /// half of their width beyond each end, so that the reach shows where it goes past the travel range. `None` for a
+    /// machine with fewer than three axes or no condition to tell, and for a config it does not build.
+    pub fn workspace_slice(&self, n: usize) -> Option<WorkspaceSlice> {
+        let machine = self.machine()?;
+        let axes = machine.axes();
+        let heights = (axes.get(2)?.min, axes[2].max);
+        let z = self.inputs.workspace_z.unwrap_or((heights.0 + heights.1) / 2.0).clamp(heights.0, heights.1);
+        machine.condition(&[0.0, 0.0, z])?;
+        let span = |a: &sim_core::AxisInfo| (a.min - (a.max - a.min) / 2.0, a.max + (a.max - a.min) / 2.0);
+        let (x, y) = (span(&axes[0]), span(&axes[1]));
+        let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (n - 1) as f64;
+        let mut pose = vec![0.0; axes.len()];
+        let mut nodes = Vec::with_capacity(n * n);
+        for j in 0..n {
+            for i in 0..n {
+                (pose[0], pose[1], pose[2]) = (at(x, i), at(y, j), z);
+                nodes.push((machine.condition(&pose).unwrap_or(f64::INFINITY), machine.unreachable(&pose, 0.0).is_none()));
+            }
+        }
+        let limit = self.config.f64("ratings.max_condition_number").unwrap_or(10.0);
+        Some(WorkspaceSlice { x, y, z, n, nodes, limit, heights })
     }
 
     /// Per friction contact of the machine its curve of steady sliding and where it is now (see `FrictionView`). The

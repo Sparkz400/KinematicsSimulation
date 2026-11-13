@@ -1122,6 +1122,13 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         for (row, v) in checks[1..].iter().zip(&judged) {
             assert_eq!((row[0].as_str(), row[4].as_str()), (model.tr.tr(&format!("check-{}", v.check)), if v.ok { "ok" } else { "FAIL" }));
         }
+        // The operating points of the path, as its analysis has them, over the curves the cycle's plot has.
+        let run = model.path_run.as_ref().unwrap();
+        let (points_of_path, curves) = model.points_plot(Analysis::Path).unwrap();
+        assert_eq!(curves, sim_app::model::torque_speed_curves(sim.control.drive_params()));
+        for (k, m) in run.load.motors.iter().enumerate() {
+            assert!(m.points.len() > 100 && points_of_path[k] == m.points.iter().map(|(s, t)| [*s, *t]).collect::<Vec<_>>(), "{}: motor {k}", entry.id);
+        }
         // The planned path for the plot: every pose, from where the machine stood to the end of the file.
         let (across, up, line) = model.path_plot().unwrap();
         // In the unit of the axis drawn upwards: m, or rad on the rotary table.
@@ -1797,14 +1804,15 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
 }
 
 /// The operating points in the app, as `sim-cli analyze --points` writes them (`MotorLoad::points`, which
-/// `cli.rs` checks against the command line's file), over the torque-speed curve. The curve by hand: the peak
+/// `cli.rs` checks against the command line's file), over the torque-speed curves. The peak curve by hand: the peak
 /// torque both ways up to the rated speed, falling straight to nothing at the no-load speed in the direction
-/// of motion, and the peak torque against the motion at every speed.
+/// of motion, and the peak torque against the motion at every speed. The S1 curve: the rated torque both ways from
+/// the rated speed backwards to the rated speed forwards (on the gantry 1.27 N m up to 314 rad/s).
 #[test]
 fn the_operating_points_are_shown_over_the_torque_speed_curve() {
     for entry in MACHINES.iter().copied() {
         let mut model = Model::new(entry, "en");
-        assert!(model.points_plot().is_none() && model.points_table(0..10).is_none());
+        assert!(model.points_plot(Analysis::Cycle).is_none() && model.points_plot(Analysis::Path).is_none() && model.points_table(0..10).is_none());
         model.run_analysis(Analysis::Cycle);
         wait_for_analysis(&mut model);
         let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &entry.config()).unwrap()).unwrap();
@@ -1820,7 +1828,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
         let (_, window) = model.points_table(count - 3..count + 5).unwrap();
         assert!(window.len() == 4 && shows(&window[3][2], all[count - 1].1.1), "{window:?}");
 
-        let (points, [high, low]) = model.points_plot().unwrap();
+        let (points, [high, low, s1_high, s1_low]) = model.points_plot(Analysis::Cycle).unwrap();
         for (k, m) in load.motors.iter().enumerate() {
             assert_eq!(points[k], m.points.iter().map(|(s, t)| [*s, *t]).collect::<Vec<_>>());
         }
@@ -1828,12 +1836,16 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
         let [peak, rated, no_load] = ["drive.peak_torque_nm", "drive.rated_speed_rad_s", "drive.no_load_speed_rad_s"].map(|path| resolved.f64(path).unwrap());
         assert_eq!(high, [[-no_load, peak], [-rated, peak], [0.0, peak], [rated, peak], [no_load, 0.0]]);
         assert_eq!(low, [[-no_load, 0.0], [-rated, -peak], [0.0, -peak], [rated, -peak], [no_load, -peak]]);
+        let continuous = resolved.f64("drive.rated_torque_nm").unwrap();
+        assert!(s1_high == [[-rated, continuous], [rated, continuous]] && s1_low == [[-rated, -continuous], [rated, -continuous]], "{}", entry.id);
+        // Nothing of a path before one was run.
+        assert!(model.points_plot(Analysis::Path).is_none());
         // The cycle runs inside the curve.
         assert!(all.iter().all(|(_, (speed, torque))| speed.abs() < rated && torque.abs() <= peak), "{}", entry.id);
         model.set_language("de");
         assert_eq!(model.points_table(0..1).unwrap().1[0][1], "Motordrehzahl [rad/s]");
         model.clear_analysis();
-        assert!(model.points_plot().is_none());
+        assert!(model.points_plot(Analysis::Cycle).is_none());
     }
 }
 
@@ -2043,16 +2055,74 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
         let last = shown.last().unwrap();
         assert!(last[0] == "Not accounted for" && shows(&last[1], budget.unaccounted()) && budget.unaccounted().abs() < BUDGET_TOLERANCE * budget.supply, "{last:?}");
         assert!(rows_named(&shown, "Copper loss") == model.session.motors.len() && rows_named(&shown, "Friction loss") >= 1, "{shown:?}");
+        // The flow diagram: the first column (the supply and what stores gave back) adds up to the second, the shaft
+        // work in the second's last bar passes on to the third, and the bars of the second and third, less what the
+        // first has beyond the supply, are the supply, as the budget's rows and what it leaves unaccounted are. One
+        // bar per row that is not zero, and one per side for what that side leaves unaccounted.
+        let [first, second, third] = model.budget_flows().unwrap();
+        let sum = |bars: &[(String, f64)]| bars.iter().map(|(_, e)| e).sum::<f64>();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9 * budget.supply;
+        assert_eq!(first[0], ("Drawn from the supply".to_string(), budget.supply));
+        assert_eq!(second.last().unwrap().0, "Shaft work");
+        assert!(close(sum(&first), sum(&second)) && close(second.last().unwrap().1, sum(&third)), "{}: {first:?} {second:?} {third:?}", entry.id);
+        assert!(close(sum(&second[..second.len() - 1]) + sum(&third) - (sum(&first) - budget.supply), budget.supply), "{}", entry.id);
+        let electrical_rest = budget.electrical_unaccounted();
+        let rests = [electrical_rest, budget.unaccounted() - electrical_rest].iter().filter(|e| **e != 0.0).count();
+        let nonzero = budget.rows.iter().filter(|r| r.energy != 0.0).count();
+        assert!(first.len() + second.len() + third.len() == 2 + nonzero + rests && [&first, &second, &third].iter().all(|c| c.iter().all(|(_, e)| *e > 0.0)), "{}", entry.id);
 
         model.set_language("de");
         assert_eq!(model.breakdown_table().unwrap()[0][0], "Anteil");
         assert_eq!(model.budget_table().unwrap()[1][0], "Aus der Einspeisung bezogen");
+        assert_eq!(model.budget_flows().unwrap()[1].last().unwrap().0, "Wellenarbeit");
         assert_eq!(model.breakdown_lines()[0].1[0].0, "Moment für die Trägheit");
         if !views.is_empty() {
             assert_eq!(model.friction_views()[0].curves[0].0, "Reibkraft");
         }
         model.clear_analysis();
         assert!(model.breakdown_table().is_none() && model.budget_table().is_none());
+    }
+}
+
+/// The workspace map of the delta, a slice at z = -1.0 m, ends where the hand-calculated reach ends. Along the row
+/// through the middle (y = 0), away from arm 1 (towards -x), the reach ends where arm 1's forearm stands in line with
+/// its upper arm: the platform's centre la + lb = 0.4 + 0.95 = 1.35 m from the arm's shoulder, which in the legs'
+/// frame (the platform's radius taken off the base's) is at x = e = 0.2 - 0.05 = 0.15 m, so x = 0.15 - sqrt(1.35^2 -
+/// 1.0^2) = 0.15 - 0.9069 = -0.7569 m. The other two arms reach there: in arm 2's frame that point is at x' = 0.378,
+/// y' = 0.656, whose distance to its elbow circle (radius 0.4 about x' = 0.15) is at most 0.906 m, within its
+/// forearm's 0.95 m. The grid spans the travel range of +-0.6 m and half its width beyond each end, +-1.2 m, in steps
+/// of 2.4 / 240 = 0.01 m: the first node reached is x = -0.75 m, the 45th. The working envelope's bottom sphere (radius
+/// (0.6^2 + 0.186^2) / (2 * 0.186) = 1.0607 m about z = -0.675 - 0.386 + 1.0607 = -0.0003 m) is 0.3545 m wide at
+/// z = -1.0: the machine goes to x = 0.3 m but not to x = 0.5 m, which its arms reach (at 7.3 and 66.4 degrees). The
+/// other machines move their tool as their axes and have no map.
+#[test]
+fn the_workspace_map_ends_at_the_hand_calculated_reach_of_the_delta() {
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        if entry.id != "delta-d3" {
+            assert!(model.workspace_slice(5).is_none(), "{}", entry.id);
+            continue;
+        }
+        // The middle of the z range by default: -0.675 - 0.386 / 2.
+        assert!((model.workspace_slice(5).unwrap().z + 0.868).abs() < 1e-12);
+        model.inputs.workspace_z = Some(-1.0);
+        let slice = model.workspace_slice(241).unwrap();
+        assert_eq!((slice.x, slice.y, slice.z, slice.limit), ((-1.2, 1.2), (-1.2, 1.2), -1.0, 5.0));
+        assert!((slice.heights.0 + 1.061).abs() < 1e-12 && slice.heights.1 == -0.675, "{:?}", slice.heights);
+        let middle = &slice.nodes[120 * 241..121 * 241];
+        let first = middle.iter().position(|(condition, _)| condition.is_finite()).unwrap();
+        let reach = 0.15 - (1.35f64.powi(2) - 1.0).sqrt();
+        let x = |i: usize| -1.2 + 0.01 * i as f64;
+        assert!(first == 45 && x(first) >= reach && x(first - 1) < reach, "{first}");
+        // Beyond arm 1's stop at 95 degrees there (124.7), so reached but not gone to.
+        assert!(!middle[first].1);
+        // The centre: gone to, the condition the signal kinematics.condition has there.
+        let machine = (entry.build)(&entry.config()).unwrap();
+        assert!(middle[120].1 && middle[120].0 == machine.condition(&[0.0, 0.0, -1.0]).unwrap() && middle[120].0 >= 1.0 && middle[120].0 < 3.6, "{:?}", middle[120]);
+        assert!(middle[150].1 && middle[170].0.is_finite() && !middle[170].1, "{:?} {:?}", middle[150], middle[170]);
+        // A height beyond the z range is taken at its end.
+        model.inputs.workspace_z = Some(0.0);
+        assert_eq!(model.workspace_slice(5).unwrap().z, -0.675);
     }
 }
 
