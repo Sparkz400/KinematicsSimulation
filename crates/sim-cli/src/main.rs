@@ -36,7 +36,7 @@ fn texts(lang: &str, entry: &MachineEntry) -> Translations {
 struct Args(Vec<String>);
 
 /// Options every command takes, each with a value.
-const COMMON: [&str; 10] = ["--config", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
+const COMMON: [&str; 11] = ["--machine-file", "--config", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
 /// Options without a value.
 const FLAGS: [&str; 5] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes"];
 /// The ways to say what the machine should do: one at most.
@@ -102,7 +102,7 @@ impl Args {
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
     let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
-    let entry = args.positional(1).and_then(find).unwrap_or(MACHINES[0]);
+    let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
         eprintln!("{}", tr.tr_arg(key, &arg));
@@ -157,12 +157,24 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
 }
 
+/// The machine `--machine-file FILE` defines (docs/machine-files.md), or else the registered one named after the
+/// command. A file's errors name the file and the line.
+fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
+    if let Some(path) = args.option("--machine-file") {
+        return sim_machines::load_file(std::path::Path::new(path)).map_err(|e| {
+            let at = e.line.map_or(String::new(), |line| format!(":{line}"));
+            Failure(e.error.key(), format!("{}{at}: {}", e.file.display(), e.error.detail()))
+        });
+    }
+    let id = args.positional(1).ok_or(Failure("cli-usage", String::new()))?;
+    find(id).ok_or(Failure("cli-error-unknown-machine", id.into()))
+}
+
 /// The machine named on the command line with its config: the default, or `--config FILE`, with the
 /// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
-    let id = args.positional(1).ok_or(Failure("cli-usage", String::new()))?;
-    let entry = find(id).ok_or(Failure("cli-error-unknown-machine", id.into()))?;
+    let entry = machine(args)?;
     let mut cfg = match args.option("--config") {
         Some(path) => sim_components::load_config(entry, &read(path)?)?,
         None => entry.config(),
@@ -642,6 +654,10 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// the descriptions in the language of `--lang`. Its binaries are the files `--binary` names (it may repeat: a .dll goes
 /// to win64, a .so to linux64, a .dylib to darwin64), or else the sim-fmi library built next to this program.
 fn fmu(args: &Args) -> Result<(), Failure> {
+    // shortcut: the FMU finds its machine by id among the registered ones, so a machine file cannot go into one yet.
+    if args.option("--machine-file").is_some() {
+        return Err(Failure("cli-error-machine-file-fmu", String::new()));
+    }
     let (entry, cfg) = machine_and_config(args)?;
     let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
     let model = sim_fmi::Model::new(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"))?;

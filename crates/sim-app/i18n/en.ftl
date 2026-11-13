@@ -214,6 +214,7 @@ ui-config-open = Open
 ui-config-save = Save
 ui-config-open-dialog = Open…
 ui-config-save-dialog = Save as…
+ui-machine-file-opened = Machine and config read from { $arg }
 ui-config-opened = Config read from { $arg }
 ui-config-saved = Config written to { $arg }
 ui-config-save-failed = The config could not be written: { $arg }

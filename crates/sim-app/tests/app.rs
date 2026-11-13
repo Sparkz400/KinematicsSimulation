@@ -2025,3 +2025,28 @@ fn drives_belts_and_axes_are_named_in_the_app_and_searched_over() {
     let part = |key: &str| model.config.get(&format!("parts.{key}")).unwrap().as_str().unwrap().to_string();
     assert_eq!((part("motor"), part("axis"), part("drive")), (found[row].article.to_string(), found[row].axis.clone(), found[row].drive.to_string()));
 }
+
+/// A machine file (docs/machine-files.md) opened like a config brings its machine: the H-bot runs in the app, Save
+/// writes back over its file, and a broken one is reported with its line while the machine shown stays.
+#[test]
+fn a_machine_file_opens_with_its_machine() {
+    let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../../machines/h-bot.toml");
+    let file = temp_file(MACHINES[0], "machine-file.toml");
+    std::fs::copy(shipped, &file).unwrap();
+    let mut model = Model::new(MACHINES[0], "en");
+    model.open_config(&file);
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-machine-file-opened"), "{:?}", model.messages);
+    assert_eq!((model.entry.id, model.inputs.config_file.as_str()), ("h-bot", file.as_str()));
+    wait_for_data(&mut model);
+    model.save_config(&file);
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-config-saved"), "{:?}", model.messages);
+
+    let original = std::fs::read_to_string(shipped).unwrap();
+    std::fs::write(&file, original.replacen("friction = \"friction_z\"", "fricton = \"friction_z\"", 1)).unwrap();
+    let mut model = Model::new(MACHINES[1], "de");
+    model.open_config(&file);
+    let line = original.lines().position(|l| l == "friction = \"friction_z\"").unwrap() + 1;
+    let (key, detail) = model.messages.last().cloned().unwrap();
+    assert_eq!((key, model.entry.id), ("error-config-unknown", MACHINES[1].id));
+    assert!(detail.ends_with(&format!(":{line}: machine.guide[guide_y].fricton")), "{detail}");
+}

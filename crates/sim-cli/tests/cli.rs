@@ -807,3 +807,30 @@ fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
     refused(&["fmu", MACHINES[0].id, "--binary", dll.to_str().unwrap(), "--binary", other.to_str().unwrap(), "--out", twice.to_str().unwrap()], "--binary");
     assert!(!twice.exists());
 }
+
+/// `--machine-file` takes the place of the machine's id: the H-bot of docs/machine-files.md is run and judged, and a
+/// broken file is refused with its file, line and key. That machine files give their crates' results is checked in
+/// sim-machines (tests/machine_files.rs).
+#[test]
+fn a_machine_file_is_run_judged_and_checked() {
+    let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../machines/h-bot.toml");
+    let verdicts = cli(&["verdicts", "--machine-file", file]);
+    assert_eq!(verdicts.status.code(), Some(0), "{}", text(&verdicts.stderr));
+    let rows: Vec<String> = text(&verdicts.stdout).lines().map(str::to_string).collect();
+    assert!(rows.len() > 20 && rows.iter().skip(1).all(|r| r.ends_with(",ok")), "{rows:?}");
+    let run = cli(&["run", "--machine-file", file, "--move", "0.5,0.2", "--time", "0.01"]);
+    assert_eq!(run.status.code(), Some(0), "{}", text(&run.stderr));
+    assert!(text(&run.stdout).starts_with("time[s]") && text(&run.stdout).contains("belt.3.tension"));
+
+    let dir = std::env::temp_dir().join(format!("sim-cli-machine-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let broken = dir.join("broken.toml");
+    let original = std::fs::read_to_string(file).unwrap();
+    std::fs::write(&broken, original.replacen("friction = \"friction_z\"", "fricton = \"friction_z\"", 1)).unwrap();
+    let line = original.lines().position(|l| l == "friction = \"friction_z\"").unwrap() + 1;
+    let refused = cli(&["verdicts", "--machine-file", broken.to_str().unwrap()]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(text(&refused.stderr).contains(&format!("broken.toml:{line}: machine.guide[guide_y].fricton")), "{}", text(&refused.stderr));
+    assert_eq!(cli(&["fmu", "--machine-file", file, "--out", dir.join("x.fmu").to_str().unwrap()]).status.code(), Some(2));
+    std::fs::remove_dir_all(dir).ok();
+}

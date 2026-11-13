@@ -137,7 +137,12 @@ struct WorldCamera;
 
 fn main() {
     let lang = std::env::var("SIM_APP_LANG").ok().and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l)).unwrap_or(LANGUAGES[0]);
-    let model = Model::new(MACHINES[0], lang);
+    let mut model = Model::new(MACHINES[0], lang);
+    // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(file) = args.windows(2).find(|w| w[0] == "--machine-file").map(|w| w[1].clone()) {
+        model.open_config(&file);
+    }
     let window = Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
     App::new()
         .insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
@@ -1154,6 +1159,10 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
         return Some(model.inputs.config_file.clone());
     }
     let mut files = rfd::FileDialog::new().add_filter("toml", &["toml"]);
+    // Machine files may be JSON (docs/machine-files.md); a config is saved as TOML.
+    if !save {
+        files = files.add_filter("json", &["json"]);
+    }
     if let Some(folder) = typed.parent().filter(|folder| folder.is_dir()) {
         files = files.set_directory(folder);
     }

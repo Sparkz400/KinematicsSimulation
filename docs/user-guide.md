@@ -30,6 +30,7 @@ sim-cli COMMAND MACHINE [options]
 
 | Option | Effect |
 | --- | --- |
+| `--machine-file FILE` | In place of `MACHINE`: a machine defined in a TOML or JSON file, wired together from components without Rust code (not for `fmu`). See [machine files](machine-files.md) |
 | `--config FILE` | Use this config instead of the machine's default. The EXCT-30 config is `crates/machine-t-gantry/exct-30.toml` |
 | `--motor ARTICLE` | Put a motor of the Siemens S210 catalogue into the config, e.g. `1FK2205-4AF`. Sets `parts.motor` |
 | `--supply 230v` or `400v` | The supply the motor data is for. Sets `parts.motor_supply`. Default as in the config |

@@ -673,7 +673,25 @@ impl Model {
 
     /// Opens a config file for the machine shown: it replaces the running config, as switching machine does.
     /// A file that cannot be read, or that the machine refuses, is reported and the running config stays.
+    /// A machine file (one with a `[machine]` table, or any `.json`; see docs/machine-files.md) brings its own
+    /// machine and replaces the machine shown too.
     pub fn open_config(&mut self, path: &str) {
+        let json = path.to_ascii_lowercase().ends_with(".json");
+        let machine_file = json || std::fs::read_to_string(path).ok().and_then(|text| Config::parse(&text).ok()).is_some_and(|c| c.get("machine").is_ok_and(|m| m.is_table()));
+        if machine_file {
+            let opened = sim_machines::load_file(std::path::Path::new(path)).map_err(|e| (e.error.key(), format!("{}{}: {}", path, e.line.map_or(String::new(), |l| format!(":{l}")), e.error.detail()))).and_then(|entry| {
+                Self::with_config(entry, self.lang, entry.config(), entry.default_config.to_string()).map_err(|e| (e.key(), e.detail().to_string()))
+            });
+            return match opened {
+                Ok(fresh) => {
+                    self.restart(fresh);
+                    // A JSON file is held as TOML: Save does not write that over it.
+                    self.inputs.config_file = if json { String::new() } else { path.into() };
+                    self.say(("ui-machine-file-opened", path.into()));
+                }
+                Err(message) => self.say(message),
+            };
+        }
         let opened = std::fs::read_to_string(path).map_err(|e| ("ui-file-unreadable", format!("{path}: {e}"))).and_then(|text| {
             let config = sim_components::load_config(self.entry, &text).map_err(|e| (e.key(), e.detail().to_string()))?;
             Self::with_config(self.entry, self.lang, config, text).map_err(|e| (e.key(), e.detail().to_string()))

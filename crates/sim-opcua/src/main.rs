@@ -1,4 +1,4 @@
-//! The PLC link as a process: `sim-opcua [MACHINE] [--port N] [--lang en|de]`.
+//! The PLC link as a process: `sim-opcua [MACHINE | --machine-file FILE] [--port N] [--lang en|de]`.
 //! Serves the machine's default config on opc.tcp://127.0.0.1:PORT/ until stopped.
 
 use sim_core::MachineEntry;
@@ -16,6 +16,11 @@ fn arguments(args: &[String]) -> Result<(&'static MachineEntry, &'static str, u1
         match args[at].as_str() {
             "--lang" => lang = LANGUAGES.iter().copied().find(|known| Some(*known) == value).ok_or_else(unreadable)?,
             "--port" => port = value.and_then(|port| port.parse().ok()).ok_or_else(unreadable)?,
+            // A machine defined in a file (docs/machine-files.md), in place of a registered one: not both.
+            "--machine-file" => {
+                let path = value.filter(|_| at == 0 || args[0].starts_with("--")).ok_or_else(unreadable)?;
+                entry = sim_machines::load_file(std::path::Path::new(path)).map_err(|e| ("opcua-error-machine-file", e.to_string()))?;
+            }
             // The machine comes first, if it is named at all.
             id if at == 0 && !id.starts_with("--") => {
                 entry = find(id).ok_or(("opcua-error-machine", id.to_string()))?;
@@ -87,5 +92,18 @@ mod tests {
         // A misspelt option, and a machine that does not come first.
         assert_eq!(parsed(&["--prot", "4840"]), Err(("opcua-error-argument", "--prot".into())));
         assert_eq!(parsed(&["--port", "4840", MACHINES[0].id]), Err(("opcua-error-argument", MACHINES[0].id.into())));
+    }
+
+    /// `--machine-file` names a machine defined in a file, in place of a registered one; a file that cannot be used
+    /// is refused with its file, line and key, and so is a machine named twice.
+    #[test]
+    fn a_machine_file_takes_the_place_of_a_machine() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../machines/h-bot.toml");
+        assert_eq!(parsed(&["--machine-file", file, "--port", "4842"]), Ok(("h-bot", "en", 4842)));
+        assert_eq!(parsed(&["--port", "4842", "--machine-file", file]), Ok(("h-bot", "en", 4842)));
+        assert_eq!(parsed(&[MACHINES[0].id, "--machine-file", file]), Err(("opcua-error-argument", format!("--machine-file {file}"))));
+        let missing = parsed(&["--machine-file", "no-such-file.toml"]).unwrap_err();
+        assert_eq!(missing.0, "opcua-error-machine-file");
+        assert!(missing.1.starts_with("no-such-file.toml: error-config-parse"), "{}", missing.1);
     }
 }

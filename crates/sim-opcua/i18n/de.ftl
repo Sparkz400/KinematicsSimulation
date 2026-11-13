@@ -5,6 +5,7 @@ opcua-cycle = Zyklus fahren
 opcua-busy = In Bewegung
 opcua-refused = Zuletzt abgelehnter Befehl
 opcua-error-machine = Unbekannte Maschine: { $arg }
+opcua-error-machine-file = Die Maschinendatei lässt sich nicht verwenden: { $arg }
 opcua-error-argument = Dieses Argument ist nicht lesbar: { $arg }
 opcua-error-start = Der OPC-UA-Server konnte nicht starten: { $arg }
 opcua-listening = OPC-UA-Server erreichbar unter { $arg }

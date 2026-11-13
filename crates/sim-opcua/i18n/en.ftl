@@ -5,6 +5,7 @@ opcua-cycle = Run cycle
 opcua-busy = Busy
 opcua-refused = Last refused command
 opcua-error-machine = Unknown machine: { $arg }
+opcua-error-machine-file = The machine file cannot be used: { $arg }
 opcua-error-argument = Cannot read this argument: { $arg }
 opcua-error-start = The OPC UA server could not start: { $arg }
 opcua-listening = OPC UA server listening at { $arg }

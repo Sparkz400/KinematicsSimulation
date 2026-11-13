@@ -31,12 +31,13 @@ fn deps(manifest: &Table) -> Vec<(String, Value)> {
 }
 
 /// core 0, components 1, machines 2, registration list 3, front ends 4 and 5. The FMI export is the one front end
-/// another may use: the command line writes the FMU from the same code as the FMU's binary.
+/// another may use: the command line writes the FMU from the same code as the FMU's binary. The machine that machine
+/// files build (`sim-netlist`) is a machine like the others, but names none.
 fn layer(name: &str) -> u32 {
     match name {
         "sim-core" => 0,
         "sim-components" => 1,
-        n if n.starts_with("machine-") => 2,
+        n if n.starts_with("machine-") || n == "sim-netlist" => 2,
         "sim-machines" => 3,
         "sim-fmi" => 4,
         _ => 5,
@@ -94,7 +95,8 @@ fn no_machine_name_outside_its_crate() {
     for name in names.iter().filter(|n| layer(n) != 2 && layer(n) != 3) {
         text_files(&crates_dir().join(name), &mut files);
     }
-    for machine in names.iter().filter(|n| layer(n) == 2) {
+    // `sim-netlist` is no machine of its own to be named, but is scanned like the machines for the others' names.
+    for machine in names.iter().filter(|n| n.starts_with("machine-")) {
         // A machine may not name another machine either.
         let mut scanned = files.clone();
         for other in names.iter().filter(|n| layer(n) == 2 && *n != machine) {

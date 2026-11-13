@@ -9,6 +9,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
+  belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
+  the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and
+  key in every error, with a generated JSON Schema (`schema/machine-file.schema.json`). The single axis and the
+  T-gantry as machine files reproduce their crates (`machines/`, `docs/machine-files.md`).
 - Licence: dual MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`), and `THIRD-PARTY-LICENSES.md` generated from
   `cargo metadata` by `tools/third_party_licenses.py`.
 - `CONTRIBUTING.md`, `ROADMAP.md`, this changelog.

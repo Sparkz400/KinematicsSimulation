@@ -237,6 +237,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | Document | For |
 | --- | --- |
 | [docs/user-guide.md](docs/user-guide.md) | One section per task: size a motor, check a catalogue machine, search, error bands and sampled runs, shorten a cycle, run a path, tune, replay and fit a trace, connect a PLC, use the app |
+| [docs/machine-files.md](docs/machine-files.md) | Define a machine in a TOML or JSON file, wired together from components like a netlist, without Rust code; the format, its checks, a worked example |
 | [docs/config-reference.md](docs/config-reference.md) | Every config table and key, with unit, meaning, source and effect switch |
 | [docs/model-reference.md](docs/model-reference.md) | The equations, per component and per machine, with assumptions and known shortcuts |
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |

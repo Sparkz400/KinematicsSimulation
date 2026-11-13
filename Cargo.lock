@@ -5947,6 +5947,17 @@ dependencies = [
  "machine-delta-d3",
  "machine-single-axis",
  "machine-t-gantry",
+ "serde_json",
+ "sim-components",
+ "sim-core",
+ "sim-netlist",
+ "toml",
+]
+
+[[package]]
+name = "sim-netlist"
+version = "1.0.0-rc.1"
+dependencies = [
  "sim-components",
  "sim-core",
  "toml",

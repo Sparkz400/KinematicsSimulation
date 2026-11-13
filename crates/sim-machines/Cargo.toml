@@ -10,6 +10,6 @@ sim-components.workspace = true
 machine-t-gantry = { path = "../machine-t-gantry" }
 machine-single-axis = { path = "../machine-single-axis" }
 machine-delta-d3 = { path = "../machine-delta-d3" }
-
-[dev-dependencies]
+sim-netlist = { path = "../sim-netlist" }
 toml.workspace = true
+serde_json.workspace = true
