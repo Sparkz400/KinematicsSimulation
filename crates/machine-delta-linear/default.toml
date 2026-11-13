@@ -137,7 +137,7 @@ mass_kg_m = 0.07
 tooth_mesh_stiffness_n_m = 5.0e6
 damping_time_s = 2.5e-4
 
-# Each carriage's guide. [estimate] as the single axis's ball guide.
+# Each carriage's guide. [estimate] as the one-axis machine's ball guide.
 [friction]
 coulomb_n = 15.0
 stiction_n = 20.0
@@ -311,7 +311,7 @@ shaper2_frequency_hz = 0.0
 shaper2_damping = 0.03
 torque_reserve = 0.8
 # For a path timed as fast as the motors allow: the share of the room to the belt's tension ratings the plan may use,
-# and what is taken off them first (the guide's 15 N plus 20 N s/m at 3 m/s), as on the single axis.
+# and what is taken off them first (the guide's 15 N plus 20 N s/m at 3 m/s), as on the one-axis machine.
 tension_reserve = 0.5
 tension_margin_n = 75.0
 # Not used on three axes (see docs/user-guide.md): paths run as given.

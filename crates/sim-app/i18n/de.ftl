@@ -318,6 +318,7 @@ ui-effects-item = Wohin sie ging
 ui-effects-energy = Energie [J]
 ui-effects-share = Anteil an der Einspeisung [%]
 ui-effects-flow = Wohin die bezogene Energie ging: Bänder so breit wie die Energie
+ui-effects-flow-energy = { $arg } J
 ui-effects-shaft-work = Wellenarbeit
 ui-effects-friction = Reibung je Führung
 ui-effects-friction-hint = Linien: stationäres Gleiten bei der jetzigen Führungslast; Punkt: jetzt

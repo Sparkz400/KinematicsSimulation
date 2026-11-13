@@ -1195,7 +1195,7 @@ fn sankey(ui: &mut Ui, model: &Model) {
     for (c, (column, stack)) in columns.iter().zip(&stacks).enumerate() {
         for ((label, energy), &(top, bottom)) in column.iter().zip(stack) {
             painter.rect_filled(Rect::from_min_max(egui::pos2(xs[c], top), egui::pos2(xs[c] + bar, bottom.max(top + 1.0))), 0.0, colors[c]);
-            let text = format!("{label}: {} J, {} %", short(*energy), short(100.0 * energy / supply));
+            let text = format!("{label}: {}, {} %", model.tr.tr_arg("ui-effects-flow-energy", &short(*energy)), short(100.0 * energy / supply));
             if response.hover_pos().is_some_and(|p| (top - 2.0..=bottom + 2.0).contains(&p.y) && (xs[c] - 4.0..=xs[c] + bar + 4.0).contains(&p.x)) {
                 response.clone().on_hover_text(text.clone());
             }

@@ -440,7 +440,7 @@ fn ringing(trace: &Trace) -> Vec<f64> {
 /// factor, and the factor is the one whose replay's motor torques ring as the trace's do (`ringing`: least squares over
 /// every motor and row). The replay has the config's loops, filters, delays and friction, which damp the ringing of a
 /// move in the trace as they do in the machine, so that they need not be fitted as well; a free two-mass fit of the
-/// torque took the drive's own lag, at 51 Hz on the single axis, for the belt. The masses have to be right first (stage
+/// torque took the drive's own lag, at 51 Hz on the belt axis, for the belt. The masses have to be right first (stage
 /// 1), as for a sweep.
 ///
 /// The factor is searched from 1/4 to 4: nine replays a factor of 1.41 apart, then a parabola through seven replays
@@ -448,7 +448,7 @@ fn ringing(trace: &Trace) -> Vec<f64> {
 /// standard error from the curvature 2 a of the last parabola: var(ln factor) = 2 σ² / (2 a), σ² = S / (N − 1) widened
 /// by (1 + ρ) / (1 − ρ) for the lag-one correlation ρ of the residuals (the ringing of neighbouring rows is not
 /// independent), plus the variance of the vertex from the points' scatter about the parabola (on a trace without noise
-/// that is all there is: 0.70 on the single axis came out 0.681 ± 0.001 without it).
+/// that is all there is: 0.70 on the belt axis came out 0.681 ± 0.001 without it).
 ///
 /// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor or the best
 /// factor lies at an end of the range: the trace's moves did not ring the load enough against its noise (a gentle

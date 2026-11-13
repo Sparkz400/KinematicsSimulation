@@ -834,6 +834,11 @@ pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, view
     let end = points.last().map_or(0.0, |p| p.0) + 0.3;
     let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
     let first = points.first().map(|p| p.1.clone());
+    // Where the tool stands at the path's start: within the range, where the path's first pose (the setpoint at rest,
+    // where the motors stand) lies beyond an end of a stroke by what belts and gears give, and a move there is refused.
+    let axes = sim.machine.axes().len();
+    let (mut tool, mut speed) = (vec![0.0; axes], vec![0.0; axes]);
+    sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
     let mut before = None;
     for passes in 0.. {
         let started_at = fed_back_rises(sim);
@@ -857,7 +862,9 @@ pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, view
         // machine starts the next pass with what still rings; a pass from the machine's start state would need a Sim
         // that can be copied.
         let rises = fed_back_rises(sim);
-        sim.command(Command::MoveTo(first.clone().unwrap_or_default()))?;
+        if sim.command(Command::MoveTo(first.clone().unwrap_or_default())).is_err() {
+            sim.command(Command::MoveTo(tool.clone()))?;
+        }
         while sim.control.busy() && sim.time() < 600.0 {
             sim.step();
         }
@@ -2190,7 +2197,7 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
                     }
                 }
                 // The lifts placed over the obstacles keep the clearance at rest; the run sways by some hundredths of a
-                // millimetre (0.05 mm on the T-gantry). A setting that fails on that alone, by less than a millimetre, is
+                // millimetre (0.05 mm on the gantry). A setting that fails on that alone, by less than a millimetre, is
                 // run again (twice at most) with those lifts higher by what the run lacked and 1 um.
                 let lack = load.clearance.map_or(f64::INFINITY, |run| clearance - run + 1e-6);
                 if failed == ["collision"] && raised < 2 && lack < 1e-3 {

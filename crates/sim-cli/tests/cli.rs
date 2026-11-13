@@ -23,6 +23,11 @@ fn has_gearbox_ratings(cfg: &sim_core::Config) -> bool {
     cfg.get("ratings.gearbox_max_torque_nm").is_ok()
 }
 
+/// The machine of one axis on a belt, found by its config: the tests name no machine.
+fn one_belt_axis() -> &'static sim_core::MachineEntry {
+    MACHINES.iter().copied().find(|e| e.config().f64s("start.pose").unwrap().len() == 1 && e.config().get("belt.stiffness_ea_n").is_ok()).unwrap()
+}
+
 #[test]
 fn list_names_every_machine_in_both_languages() {
     let (en, de) = (cli(&["list"]), cli(&["list", "--lang", "de"]));
@@ -628,7 +633,7 @@ fn fit_without_a_resonance_dip_fails() {
 /// accuracy is `the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused` (sim-machines).
 #[test]
 fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = one_belt_axis();
     let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stiffness-{name}.csv")).to_str().unwrap().to_string();
     let (moved, gentle) = (file("move"), file("gentle"));
     // A belt of 0.7 times the config's, out to 0.9 m at the config's limits; and 2 mm at 1 m/s³ and 0.2 m/s².
@@ -1049,7 +1054,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
 }
 
 /// `modes` writes the reported modes over an axis's stroke for every machine (a header alone after "position" where the
-/// machine reports none). The single axis's carriage on its belt, m = 6 kg on k = EA / L1 + EA / L2 with EA = 5e5 N:
+/// machine reports none). The belt axis's carriage, m = 6 kg on k = EA / L1 + EA / L2 with EA = 5e5 N:
 /// at x = 0, L = 0.15 m and 2.45 m, k = 3.537415e6 N/m, sqrt(k / m) / (2 pi) = 122.2046 Hz; at x = 0.5 m, 65.8025 Hz;
 /// at x = 1 m, L = 1.15 m and 1.45 m, k = 7.796102e5 N/m, 57.3698 Hz. Damping ratio 200 N s/m / (2 m w): 0.021706,
 /// 0.040311, 0.046237.
@@ -1061,10 +1066,10 @@ fn modes_write_the_resonances_over_the_stroke() {
         let table = text(&out.stdout);
         assert!(table.starts_with("position") && table.lines().count() == 5, "{}: {table}", entry.id);
     }
-    let out = cli(&["modes", "single-axis", "--points", "3"]);
+    let out = cli(&["modes", one_belt_axis().id, "--points", "3"]);
     let rows: Vec<Vec<f64>> = text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect();
     for (row, by_hand) in rows.iter().zip([[0.0, 122.2046, 0.021706], [0.5, 65.8025, 0.040311], [1.0, 57.3698, 0.046237]]) {
         assert!(row.iter().zip(by_hand).all(|(a, b)| (a - b).abs() < 1e-3 * b.max(0.01)), "{row:?} against {by_hand:?} by hand");
     }
-    assert!(!cli(&["modes", "single-axis", "--points", "1"]).status.success());
+    assert!(!cli(&["modes", one_belt_axis().id, "--points", "1"]).status.success());
 }

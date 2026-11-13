@@ -545,7 +545,7 @@ impl Machine for SingleAxis {
         self.brake_engaged = engaged;
     }
 
-    /// The carriage on the belt with the pulley held, as the T-gantry's `modes` takes it: the carriage, its payload and
+    /// The carriage on the belt with the pulley held, as the gantry's `modes` takes it: the carriage, its payload and
     /// the cable chain's share (m) on the two sections, k = EA / L1 + EA / L2, f = sqrt(k / m) / (2 pi). Its damping
     /// ratio c / (2 m w), c the two sections' damping (`belt.damping_n_s_m` each, or `belt.damping_time_s` k). The
     /// gearbox's twist and the motor's inertia behind it are left out: the drive's velocity loop holds the pulley far

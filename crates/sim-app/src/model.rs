@@ -598,7 +598,10 @@ fn without_parts(config: &Config) -> Config {
 /// changed), the config is written plainly, without comments.
 fn saved_text(config: &Config, text: &str) -> Result<String, Message> {
     let plain = config.to_text().map_err(|e| (e.key(), e.detail().to_string()))?;
-    let (Ok(mut doc), Ok(old)) = (text.parse::<toml_edit::DocumentMut>(), Config::parse(text)) else { return Ok(plain) };
+    let (Ok(doc), Ok(old)) = (toml_edit::Document::parse(text), Config::parse(text)) else { return Ok(plain) };
+    // Each new value replaces the old one's text: a document written out anew would group dotted keys that the file
+    // has apart (`ratings.a`, `thermal.b`, `ratings.c` in `[bounds]`), and so change its order.
+    let mut edits = Vec::new();
     for (path, value) in config.leaves() {
         if old.get(&path).ok() == Some(&value) {
             continue;
@@ -610,14 +613,16 @@ fn saved_text(config: &Config, text: &str) -> Result<String, Message> {
             Value::String(name) => toml_edit::Value::from(name),
             _ => return Ok(plain),
         };
-        let item = path.split('.').fold(doc.as_item_mut(), |item, key| &mut item[key]);
-        match item.as_value_mut() {
-            // The comment behind the value stays with it.
-            Some(old) => *old = new.decorated(old.decor().prefix().cloned().unwrap_or_default(), old.decor().suffix().cloned().unwrap_or_default()),
-            None => return Ok(plain),
-        }
+        // The span is the value's own text: the comment behind it stays.
+        let span = path.split('.').try_fold(doc.as_item(), |item, key| item.get(key)).and_then(toml_edit::Item::as_value).and_then(toml_edit::Value::span);
+        let Some(span) = span else { return Ok(plain) };
+        edits.push((span, new.to_string()));
     }
-    let kept = doc.to_string();
+    edits.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+    let mut kept = text.to_string();
+    for (span, new) in edits {
+        kept.replace_range(span, &new);
+    }
     Ok(if Config::parse(&kept).as_ref() == Ok(config) { kept } else { plain })
 }
 
@@ -1679,7 +1684,10 @@ impl Model {
         let views = machine.friction_contacts().into_iter().enumerate().map(|(i, contact)| {
             let get = |part: &str| value(format!("{}.friction_{part}", contact.id));
             let scale = get("load_scale").unwrap_or(1.0);
-            let top = self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(1.0, |a| a.max_vel);
+            // shortcut: a contact on no axis of its own (a delta's carriage) spans the fastest axis's limit, which a
+            // carriage can exceed; a speed limit per contact from the machine would be exact.
+            let fastest = self.session.axes.iter().map(|a| a.max_vel).fold(0.0, f64::max);
+            let top = self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel);
             let speeds = (1..=100).rev().map(|j| -top * (j as f64 / 100.0).powi(3)).chain((1..=100).map(|j| top * (j as f64 / 100.0).powi(3)));
             let mut points: [Vec<[f64; 2]>; 4] = Default::default();
             for v in speeds {
