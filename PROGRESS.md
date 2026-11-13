@@ -1171,3 +1171,26 @@ Left open:
   stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
   has gone `CREEP` (1 um) further in, not on their torque or following error.
 - The PLC test's crash and reset run against the wall clock like the other PLC tests.
+
+## Resonances and the belt's wrap (13 November)
+
+| Item | What was built | Test |
+| --- | --- | --- |
+| Modes through the machine interface | `Machine::modes(tool_pose) -> Vec<Mode>` (`sim_core::Mode { hz, damping }`, lowest first); the default is the one of `resonance_hz` with damping 0, so every other machine keeps working. T-gantry: both roots of the two-mass equation of carriage-on-belt and Z-axis-on-guide, each with the damping ratio of its shape (v'Cv / (2 w v'Mv), belt and guide damping, cross terms left out); `resonance_hz` is now the first of them. Single axis: the carriage on its two sections with the pulley held, f = sqrt(k / m) / (2 pi) (it reported none before) | `both_modes_are_the_roots_of_the_two_mass_hand_calculation` (24.6303 / 104.1875 Hz at z = 0.05 m, 35.6220 / 109.5573 Hz at 0.15 m, damping 0.029751 / 0.055161 / 0.017328 / 0.053512), `the_carriage_mode_is_the_hand_calculated_one_at_two_places` (65.8025 Hz at x = 0.5 m, 96.6523 Hz at 0.1 m) |
+| Second shaper | With `effects.shaper_follows_pose` the second shaper (`profile.shaper2_frequency_hz` above 0) takes the machine's second mode at the planned pose, as the first takes `resonance_hz`; one the machine does not report stays as configured (`Controller::shaper_halves`, now public). The optimiser's second shaper without a configured frequency uses the second mode at the start pose, else the one resonance as before | `the_second_shaper_follows_the_second_mode_at_each_pose` (104.1875 / 109.5573 Hz, not following 25 / 100 Hz) |
+| Resonance over a stroke | `analysis::modes_along(machine, pose, axis, points)`; `sim-cli modes MACHINE [--axis-index N] [--points N]`: CSV position, then frequency and damping of each mode (empty where a place has fewer). App: the tuning panel's run also asks for the modes at 41 places over the measured axis (`Tuning::modes`), plotted under the configured shaper frequencies (`modes_plot` in ui.rs, its own function). Generic for any machine that reports modes. Labels EN/DE | `modes_write_the_resonances_over_the_stroke` (every machine; single axis 122.2046 / 65.8025 / 57.3698 Hz), `tuning_measures_the_axis_with_the_current_gains` (41 places, two modes each, the middle one the machine's own) |
+| Belt wrap | `effects.belt_wrap`, off in all shipped configs (results stay as they were). `Machine::belt_wraps(tool_pose)`: the angle per driven pulley from the places of pulleys and idlers (`mech::wrap_angle`: pi less the lean of both spans). Teeth in mesh = wrap r / p; the tooth-jump law's climb = k z_m p / r becomes k wrap (`ToothJump::set_wrap`, every step in `after_step`), the tooth load counts the teeth of the smallest wrap of the pass (`MotorLoad::belt_wrap`). In both machine crates the spans leave the motor pulleys level at every pose, so the wrap is pi wherever the carriage is: 12.6 teeth on the default pulley (10 configured), 10 of the EXCT-30's 20 | `the_wrap_angle_is_half_a_turn_less_the_lean_of_both_spans` (pi; pi / 2 + asin(0.04) = 1.610807; 2.4 pi = 7.539822), `the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k_pi` (pi at x = 0.1 and 0.9 m; at T2 = 8 T1 the teeth jump with the configured teeth and hold with the wrap), `with_the_wrap_the_belt_teeth_jump_at_the_pull_of_half_a_turn` (single axis upright: 289.44 N), `the_tooth_load_counts_the_teeth_in_mesh_from_the_wrap` (8 teeth: 0.205610) |
+| Docs | Model reference (Belt wrap, Leaning Z axis's modes, Input shaper), config reference (`belt_wrap`, `shaper_follows_pose`, `shaper2_frequency_hz`, `belt_teeth_in_mesh`), user guide and Benutzerhandbuch (the second shaper, `modes`, the tuning panel), validation | -- |
+
+Left open:
+
+- The wrap is pi at every pose in both machine crates: their idlers stand at the pulleys' tangent heights. The brief
+  expected it to change with the pose; it would only with a wheel at another height (an offset tensioner), which no
+  config describes. Machine files (`sim-netlist`) give no belt geometry and keep `ratings.belt_teeth_in_mesh`; their
+  `UNSUPPORTED_EFFECTS` does not list `belt_wrap` yet, so it is quietly ignored there.
+- The T-gantry's modes leave out the frame mode (q) and the control loops, as `resonance_hz` did; the single axis's
+  leaves out the gearbox's twist and the motor's inertia. The modal damping leaves out the cross terms.
+- The shaper's damping ratio stays the configured one when it follows the pose; the machine's modal damping is reported
+  but not used.
+- With the shaper following, the EXCT-30's second shaper (17.5 Hz, the tool's response peak) would move to the upper
+  two-mass mode (373 Hz there, `sim-cli modes`); it does not follow in the shipped config.

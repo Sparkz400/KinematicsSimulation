@@ -106,6 +106,15 @@ pub struct RatingCheck {
     pub life: bool,
 }
 
+/// A structural mode of a machine at a pose, from `Machine::modes`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mode {
+    /// Its undamped natural frequency, Hz.
+    pub hz: f64,
+    /// Its damping ratio; 0 where the machine tells none.
+    pub damping: f64,
+}
+
 pub trait Machine: Send {
     /// The ratings of the machine's own parts (ball screw, rack, strain wave gear, ...) that its cycle is judged
     /// against. Empty where it has none beyond the common ones.
@@ -167,6 +176,18 @@ pub trait Machine: Send {
     /// 1 m along its first axis. `None` where the machine tells no resonance.
     fn mode_shape(&self, _tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         None
+    }
+    /// Every structural mode the machine knows at a tool pose, lowest first: for a second input shaper, the resonance
+    /// over an axis's stroke (`sim-cli modes`) and the app's plot of it. By default the one of `resonance_hz`, its
+    /// damping unknown (0).
+    fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.resonance_hz(tool_pose).map(|hz| Mode { hz, damping: 0.0 }).into_iter().collect()
+    }
+    /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
+    /// of the pulleys and idlers, in the order of `motors`. Empty where the machine gives no belt geometry or the
+    /// effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.
+    fn belt_wraps(&self, _tool_pose: &[f64]) -> Vec<f64> {
+        Vec::new()
     }
 
     /// Why a tool pose within the axis ranges cannot be gone to, as a translation key: out of reach of the

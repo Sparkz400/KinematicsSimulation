@@ -7,8 +7,8 @@
 //! section 2 from the pulley around the idler to the carriage (length const - x, fed by - r a).
 //! Belt force on the carriage: T2 - T1. Belt torque on the pulley: r (T1 - T2).
 
-use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency};
-use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle};
+use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "single-axis",
@@ -64,7 +64,7 @@ fn suite_configs() -> Vec<Config> {
         // The effects of 13 November in the level elastic run: no loss is on, so the parts stay at ambient, and no tooth
         // jumps; the slip states and the span signals are there all the same. Not in the inclined one: nothing damps it,
         // its gearbox knocks through the backlash, and a tooth climbing out and falling back sends it another way.
-        for effect in ["thermal_feedback", "belt_tooth_jump", "belt_span_vibration"] {
+        for effect in ["thermal_feedback", "belt_tooth_jump", "belt_span_vibration", "belt_wrap"] {
             cfg.set_text(&format!("effects.{effect} = {}", elastic && incline == 0.0)).unwrap();
         }
         cfg.set_text(&format!("effects.belt_stretch = {elastic}")).unwrap();
@@ -112,6 +112,8 @@ pub struct SingleAxis {
     jump_loss: f64,
     /// With effects.belt_span_vibration: the belt's mass per metre, for the spans' string frequencies.
     span_mass: Option<f64>,
+    /// effects.belt_wrap: the teeth in mesh at the motor pulley from the belt's wrap there (`belt_wraps`).
+    wrap: bool,
     axes: [AxisInfo; 1],
     motors: [MotorInfo; 1],
 }
@@ -179,6 +181,7 @@ impl SingleAxis {
             jump: None,
             jump_loss: 0.0,
             span_mass: if cfg.bool("effects.belt_span_vibration")? { Some(cfg.positive("belt.mass_kg_m")?) } else { None },
+            wrap: cfg.bool("effects.belt_wrap")?,
             axes: [AxisInfo {
                 id: "x",
                 key: "axis-x",
@@ -542,10 +545,42 @@ impl Machine for SingleAxis {
         self.brake_engaged = engaged;
     }
 
+    /// The carriage on the belt with the pulley held, as the T-gantry's `modes` takes it: the carriage, its payload and
+    /// the cable chain's share (m) on the two sections, k = EA / L1 + EA / L2, f = sqrt(k / m) / (2 pi). Its damping
+    /// ratio c / (2 m w), c the two sections' damping (`belt.damping_n_s_m` each, or `belt.damping_time_s` k). The
+    /// gearbox's twist and the motor's inertia behind it are left out: the drive's velocity loop holds the pulley far
+    /// below this frequency, and stiffer than the belt above it. `None` in the rigid model.
+    fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
+        self.modes(tool_pose).first().map(|mode| mode.hz)
+    }
+    fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let geo = self.geo(tool_pose[0]);
+        let (k, m) = (self.belt.ea / geo[0] + self.belt.ea / geo[1], self.m() + self.chain.mass(tool_pose[0]).0);
+        let (w, c) = ((k / m).sqrt(), 2.0 * self.belt.damping + self.belt.damping_time * k);
+        vec![Mode { hz: w / std::f64::consts::TAU, damping: c / (2.0 * m * w) }]
+    }
+
+    /// With effects.belt_wrap: the wrap at the motor pulley. The section to the carriage leaves its top for the clamp,
+    /// which holds the belt at the pulley's height r (`scene`), the other its bottom for the idler at the far end, as
+    /// large as the pulley: both spans leave level at every pose, half a turn (`mech::wrap_angle`).
+    fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
+        if !self.wrap {
+            return Vec::new();
+        }
+        let (r, end) = (self.r, 2.0 * self.span_min + self.axes[0].max);
+        vec![wrap_angle(r, [self.span_min + tool_pose[0], r, 0.0], [end, 0.0, -r])]
+    }
+
     /// Belt tooth jump at the motor pulley (`ToothJump`); section 1 is the one a positive slip feeds.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;
-        let Some(jump) = self.jump.clone() else { return };
+        let Some(mut jump) = self.jump.clone() else { return };
+        if let Some(&wrap) = self.belt_wraps(&s[..1]).first() {
+            jump.set_wrap(wrap);
+        }
         let (before, sec) = (self.energy(s), self.sections(s));
         let (rest, mut v) = ((self.j_pulley / (self.r * self.r)) - jump.mass, self.r * s[4]);
         if jump.update(&mut s[JUMP..JUMP + JUMP_STATES], sec[0].tension, sec[1].tension, rest, &mut v) {

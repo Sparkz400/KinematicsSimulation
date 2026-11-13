@@ -1513,5 +1513,28 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         Plot::new("tuning-phase").height(110.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
             plot.line(Line::new(tr("ui-tuning-phase"), phase_line(&result.response)).color(PALETTE[2]).width(1.8));
         });
+        modes_plot(ui, model, result);
     }
+}
+
+/// The modes the machine reports over the stroke of the tuning axis, the other axes at the start pose, under the shaper
+/// frequencies configured (dashed): to choose them, or to see whether `effects.shaper_follows_pose` is worth it. Nothing
+/// where the machine reports no mode.
+fn modes_plot(ui: &mut Ui, model: &Model, result: &sim_app::model::Tuning) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let count = result.modes.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
+    let Some(axis) = model.session.axes.get(result.axis).filter(|_| count > 0) else { return };
+    ui.strong(format!("{} [{}] · {} [{}]", tr("ui-tuning-modes"), tr("unit-hz"), tr(axis.key), axis.unit));
+    Plot::new("tuning-modes").height(150.0).legend(Legend::default()).show(ui, |plot| {
+        for (key, i) in [("ui-tuning-shaper", 1), ("ui-tuning-shaper2", 2)] {
+            let path = if i == 1 { "profile.shaper_frequency_hz" } else { "profile.shaper2_frequency_hz" };
+            if let Some(hz) = model.config.f64(path).ok().filter(|hz| *hz > 0.0) {
+                plot.hline(HLine::new(tr(key), hz).color(Color32::GRAY).style(LineStyle::dashed_dense()));
+            }
+        }
+        for i in 0..count {
+            let points: Vec<[f64; 2]> = result.modes.iter().filter_map(|(at, modes)| Some([*at, modes.get(i)?.hz])).collect();
+            plot.line(Line::new(format!("{} {}", tr("ui-tuning-mode"), i + 1), points).color(PALETTE[i % PALETTE.len()]).width(1.8));
+        }
+    });
 }

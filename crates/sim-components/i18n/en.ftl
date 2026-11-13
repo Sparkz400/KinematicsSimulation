@@ -297,6 +297,7 @@ quantity-tooth-slip = Belt slip over the pulley
 quantity-tooth-jump-power = Lost in tooth jumps
 check-belt-tooth-jump = Belt tooth jumps in the cycle
 effect-belt_span_vibration = Sideways vibration of the free belt spans
+effect-belt_wrap = Teeth in mesh from the belt's wrap at the pose
 param-belt_span_resonance_band = Belt span: smallest distance of its first mode from an excitation (share)
 quantity-span-frequency = First sideways mode
 quantity-span-detuning = Belt spans: distance of the nearest first mode from an excitation (share)

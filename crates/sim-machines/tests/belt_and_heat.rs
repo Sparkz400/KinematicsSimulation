@@ -146,6 +146,37 @@ fn the_belt_teeth_jump_at_the_hand_calculated_pull() {
     assert_eq!(hold(1.02), Some(-0.005));
 }
 
+/// The same hold with the teeth in mesh from the belt's wrap (effects.belt_wrap): the belt wraps the motor pulley by
+/// half a turn, so c = 2.4 pi = 7.539822 in place of 6, and W = c P / (1 + c L2 / (L1 + L2)) = 2261.947 / 7.814839 =
+/// 289.4425 N, 29.5149 kg. At 2 % less nothing jumps (where 6 would have let the teeth go at 280.24 N), at 2 % more the
+/// first jump ends one pitch on.
+#[test]
+fn with_the_wrap_the_belt_teeth_jump_at_the_pull_of_half_a_turn() {
+    let entry = &machine_single_axis::ENTRY;
+    let hold = |share: f64| {
+        let payload = share * 29.5149 - 4.0;
+        let cfg = edited(entry, &[
+            "effects.belt_tooth_jump = true",
+            "effects.belt_wrap = true",
+            "effects.tooth_meshing = false",
+            "effects.torque_ripple = false",
+            "geometry.incline_deg = 90.0",
+            &format!("mass.payload_kg = {payload}"),
+        ]);
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let mut first = None;
+        for _ in 0..16000 {
+            sim.step();
+            if first.is_none() && signal(&sim, "pulley.m.tooth_jumps") >= 1.0 {
+                first = Some(signal(&sim, "pulley.m.tooth_slip"));
+            }
+        }
+        first
+    };
+    assert_eq!(hold(0.98), None);
+    assert_eq!(hold(1.02), Some(-0.005));
+}
+
 /// Teeth that jump in a cycle fail "belt-tooth-jump", and what they take closes the energy budget like every other
 /// loss: the single axis with 90 N of pretension, where its acceleration pulls the slack side below a sixth of the
 /// pull (with 100 N the slack side keeps 20.9 N against 119.5 N of pull, just above a sixth, and nothing jumps).

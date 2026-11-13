@@ -125,6 +125,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
+        Some("modes") => &["--axis-index", "--points"],
         Some("replay") => &["--trace", "--map"],
         Some("fit") => &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude"],
         Some("identify") => &["--trace", "--map", "--from", "--to", "--sweep", "--step-from", "--step-to", "--motor-inertia", "--overlay"],
@@ -156,6 +157,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
         Some("margins") => margins(args),
+        Some("modes") => modes(args),
         Some("replay") => replay(args),
         Some("fit") => fit(args, tr),
         Some("identify") => identify(args, tr),
@@ -857,6 +859,28 @@ fn margins(args: &Args) -> Result<(), Failure> {
             let result = if m.stable() { "ok" } else { "FAIL" };
             writeln!(out, "{run},{},{:.1},{:.1},{:.2},{:.3},{:.1},{result}", motor.id, m.crossover_hz, m.phase_margin_deg, m.gain_margin_db, m.peak_sensitivity, m.peak_frequency_hz).map_err(io)?;
         }
+    }
+    out.flush().map_err(io)
+}
+
+/// `modes <machine>`: the modes the machine reports over the stroke of one axis (`--axis-index`, the first by default) at
+/// `--points` places (21 by default), the other axes at the start pose: position, then frequency and damping ratio of
+/// each mode, lowest first; a mode a place does not have is left empty.
+fn modes(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let (axis, points) = (axis_index(args, entry, &cfg)?, number(args, "--points", 21.0)?);
+    if points < 2.0 || points.fract() != 0.0 {
+        return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
+    }
+    let sim = Sim::new(entry, &cfg)?;
+    let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), sim.control.planned_pos(), axis, points as usize);
+    let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
+    let mut out = output(args, "--out")?;
+    let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping")).collect();
+    writeln!(out, "position{header}").map_err(io)?;
+    for (position, modes) in rows {
+        let cells: String = (0..count).map(|i| modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping))).collect();
+        writeln!(out, "{position:.6}{cells}").map_err(io)?;
     }
     out.flush().map_err(io)
 }

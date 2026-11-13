@@ -1398,3 +1398,89 @@ fn the_report_names_the_source_of_each_exct_30_value() {
     assert_eq!(source(ENTRY.default_config, &named, &cfg, "motor.rotor_inertia_kgm2"), "[catalogue] part in [parts]");
     assert_eq!(source(ENTRY.default_config, &named, &cfg, "parts.motor"), "set for this run");
 }
+
+/// Both modes of the carriage on the belt and the leaning Z axis (`modes`), by hand from the default config: mc = 4 kg,
+/// mz = 7 kg, cb = 2 * 100 N s/m, cz = 80 N s/m.
+/// x = 0.9 m, z = 0.05 m: kb = 5e5 / 1.25 + 5e5 / 0.45 = 1.511111e6 N/m, kz = 1 / (1 / 2e7 + 0.25^2 / 1.2e4) = 1.901743e5 N/m;
+///   s = (kb + kz) / mc + kz / mz = 4.524891e5, p = kb kz / 28 = 1.026338e10, w^2 = (s -+ sqrt(s^2 - 4 p)) / 2 =
+///   2.394966e4 and 4.285395e5: 24.6303 Hz and 104.1875 Hz. Shapes v = (kz - w^2 mz, w^2 mz) = (2.2527e4, 1.6765e5) and
+///   (-2.8096e6, 2.9998e6); damping ratio (cb vx^2 + cz vu^2) / (2 w (mc vx^2 + mz (vx + vu)^2)) = 0.029751 and 0.055161.
+/// x = 0.9 m, z = 0.15 m: kb = 5e5 / 1.35 + 5e5 / 0.55 = 1.279461e6 N/m, kz = 5.194805e5 N/m: 35.6220 Hz and 109.5573 Hz,
+///   damping 0.017328 and 0.053512.
+/// The lower one is `resonance_hz`; the rigid model and the one without the leaning Z axis tell none.
+#[test]
+fn both_modes_are_the_roots_of_the_two_mass_hand_calculation() {
+    let m = machine(ENTRY.config(), &[]);
+    for (z, by_hand) in [(0.05, [(24.6303, 0.029751), (104.1875, 0.055161)]), (0.15, [(35.6220, 0.017328), (109.5573, 0.053512)])] {
+        let modes = m.modes(&[0.9, z]);
+        assert_eq!(modes.len(), 2);
+        for (mode, (hz, damping)) in modes.iter().zip(by_hand) {
+            assert!((mode.hz - hz).abs() < 1e-3 && (mode.damping - damping).abs() < 1e-5, "z = {z}: {mode:?}, by hand {hz} Hz, {damping}");
+        }
+        assert_eq!(m.resonance_hz(&[0.9, z]), Some(modes[0].hz));
+    }
+    assert!(machine(ENTRY.config(), &["effects.tool_flex = false"]).modes(&[0.9, 0.05]).is_empty());
+    assert!(rigid(&[]).modes(&[0.9, 0.05]).is_empty());
+}
+
+/// With the shaper following the pose, the second shaper takes the machine's second mode where the plan stands (see
+/// `both_modes_are_the_roots_of_the_two_mass_hand_calculation`): 104.1875 Hz at z = 0.05 m, 109.5573 Hz at 0.15 m, in
+/// place of the configured 100 Hz. Half its damped period in profile cycles of 1 ms, 0.5 / (f sqrt(1 - 0.03^2) * 1 ms),
+/// is 4.8012 and 4.5659; the first shaper's at the same time that of the lower mode, 20.3093 and 14.0426.
+/// Not following, both stay as configured: 25 Hz and 100 Hz.
+#[test]
+fn the_second_shaper_follows_the_second_mode_at_each_pose() {
+    let shaper = |follows: bool| {
+        let mut cfg = ENTRY.config();
+        for edit in ["effects.input_shaping = true", "profile.shaper2_frequency_hz = 100.0", &format!("effects.shaper_follows_pose = {follows}")] {
+            cfg.set_text(edit).unwrap();
+        }
+        sim_components::Sim::new(&ENTRY, &cfg).unwrap()
+    };
+    let hz = |half: f64| 0.5 / (half * (1.0f64 - 0.03 * 0.03).sqrt() * 1e-3);
+    let sim = shaper(true);
+    for (z, first, second) in [(0.05, 24.6303, 104.1875), (0.15, 35.6220, 109.5573)] {
+        let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, z]).unwrap();
+        assert!((hz(half) - first).abs() < 1e-3 && (hz(half2) - second).abs() < 1e-3, "z = {z}: {} Hz and {} Hz", hz(half), hz(half2));
+    }
+    let sim = shaper(false);
+    let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, 0.05]).unwrap();
+    assert!((hz(half) - 25.0).abs() < 1e-6 && (hz(half2) - 100.0).abs() < 1e-6);
+}
+
+/// The belt's wrap at the motor pulleys (effects.belt_wrap). The carriage idlers (ri = 0.012 m) stand beside the carriage
+/// at the heights +-(r + ri) = +-0.032 m. At x = 0.1 m the idler next to pulley A is d = 0.15 + 0.1 - 0.03 - 0.012 = 0.208 m
+/// along: the span leans by atan2(0.032, 0.208) - asin(0.032 / hypot(0.208, 0.032)) = 0.152649 - 0.152649 = 0; next to
+/// pulley B, d = 1.3 - 0.25 - 0.042 = 1.008 m, again 0; at x = 0.9 m, d = 1.008 m and 0.208 m. Half a turn, pi, on both
+/// pulleys at both poses: wherever the carriage is, the spans leave level.
+///
+/// The teeth then climb out above k pi = 2.4 pi = 7.5398 times the slack side's tension, against k z_m p / r =
+/// 2.4 * 10 * 0.005 / 0.02 = 6 with the configured 10 teeth: with section 2 pulling 8 times section 1 at pulley A,
+/// T2 - T1 = 7 T1 lies between the two, so the teeth jump with the configured teeth and hold with the wrap.
+#[test]
+fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k_pi() {
+    let m = machine(ENTRY.config(), &["effects.belt_wrap = true"]);
+    for x in [0.1, 0.9] {
+        let wraps = m.belt_wraps(&[x, 0.2]);
+        assert!(wraps.len() == 2 && wraps.iter().all(|w| (w - std::f64::consts::PI).abs() < 1e-12), "x = {x}: {wraps:?}");
+    }
+    assert!(machine(ENTRY.config(), &[]).belt_wraps(&[0.5, 0.2]).is_empty());
+
+    let jumps = |wrap: bool| {
+        let m = machine(ENTRY.config(), &["effects.belt_tooth_jump = true", &format!("effects.belt_wrap = {wrap}")]);
+        let (mut s, mut torque) = (Vec::new(), [0.0; 2]);
+        m.equilibrium(&[0.5, 0.2], &mut s, &mut torque);
+        // More belt fed into section 1 by pulley A slackens it and tightens section 2: T2 / T1 = 8, by bisection.
+        let (mut low, mut high) = (s[A], s[A] + 0.03);
+        for _ in 0..60 {
+            s[A] = 0.5 * (low + high);
+            let t = m.sections(&s).map(|f| f.tension);
+            if t[1] < 8.0 * t[0] { low = s[A] } else { high = s[A] }
+        }
+        let mut m = m;
+        m.after_step(&mut s, DT);
+        s[JUMP + 2] != 0.0
+    };
+    assert!(jumps(false), "with the configured teeth the teeth climb out above 6 times the slack side");
+    assert!(!jumps(true), "with the wrap they hold up to 7.54 times");
+}
