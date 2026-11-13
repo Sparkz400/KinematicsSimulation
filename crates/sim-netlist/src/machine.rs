@@ -62,7 +62,7 @@ const G: f64 = 9.80665;
 /// Effects the shipped machine crates have and machine files do not: switched on, a machine file is refused.
 /// tool_flex is the gantry's Z axis leaning on its carriage: it needs where that axis's centre of mass and tool tip
 /// sit below the guide and how that changes with its travel, geometry a netlist of belts and bodies does not have.
-pub const UNSUPPORTED_EFFECTS: [&str; 1] = ["tool_flex"];
+pub const UNSUPPORTED_EFFECTS: [&str; 2] = ["tool_flex", "belt_wrap"];
 
 /// A `&'static str` for an id or key read from a file, which `AxisInfo` and the other machine descriptions take.
 /// Each distinct text is leaked once, so rebuilding a machine on every config change does not grow memory.

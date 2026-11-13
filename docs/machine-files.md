@@ -449,6 +449,9 @@ machine; nothing about them is particular to machine files.
   sit below its guide and how that changes with its travel, geometry a netlist of belts and bodies does not have; a node
   for it would be the T-gantry's special case. A file that switches it on is refused (`effects.tool_flex (not in machine
   files yet)`), so a result never leaves out an effect that was asked for.
+- `belt_wrap`: the belt's wrap angle at each pulley from where the pulleys and idlers stand. A netlist gives section
+  lengths, not the pulleys' places in the plane, so a file keeps `ratings.belt_teeth_in_mesh`; one that switches the
+  wrap on is refused the same way.
 - Linkages (a five-bar, a scissor lift) and worm gears: the mechanisms beside belts are screws, racks, linear motors
   and rotary tables, each driving one axis straight. A body cannot ride on a rotary axis (it would move on a circle,
   not along square axes), and a rotary axis has no bearing friction of its own (only its motor's and gearbox's).

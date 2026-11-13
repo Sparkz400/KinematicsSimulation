@@ -475,6 +475,9 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   Riemen und Körpern nicht hat; ein Knoten dafür wäre der Sonderfall des T-Portals. Eine Datei, die ihn einschaltet,
   wird abgelehnt (`effects.tool_flex (not in machine files yet)`), damit ein Ergebnis nie einen verlangten Effekt
   auslässt.
+- `belt_wrap`: der Umschlingungswinkel des Riemens an jeder Scheibe aus der Lage von Scheiben und Umlenkrollen.
+  Eine Netzliste gibt Trumlängen, nicht die Lage der Scheiben in der Ebene, also behält eine Datei
+  `ratings.belt_teeth_in_mesh`; eine, die ihn einschaltet, wird ebenso abgelehnt.
 - Koppelgetriebe (ein Fünfgelenk, eine Scherenhubbühne) und Schneckengetriebe: die Mechanismen neben Riemen sind
   Spindeln, Zahnstangen, Linearmotoren und Rundtische, jeder treibt eine Achse gerade. Ein Körper kann nicht auf einer
   Drehachse mitfahren (er bewegte sich auf einem Kreis, nicht entlang rechtwinkliger Achsen), und eine Drehachse hat
