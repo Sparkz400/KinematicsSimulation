@@ -3,6 +3,10 @@
 #   [estimate]   all but the motor and drive (as the delta picker's): a gear of this size as the makers' catalogues
 #                list them, not one maker's article.
 
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
 [table]
 inertia_kgm2 = 3.0
 payload_inertia_kgm2 = 1.5

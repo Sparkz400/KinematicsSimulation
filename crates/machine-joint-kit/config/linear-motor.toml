@@ -4,6 +4,10 @@
 #   [estimate]   all: an ironcore motor of 300 N continuous and 900 N peak force as the makers' catalogues list
 #                them, not one maker's article; the drive as the S210 of the other machines.
 
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
 [mass]
 # Without the forcer, whose mass is motor.rotor_inertia_kgm2.
 carriage_kg = 5.0

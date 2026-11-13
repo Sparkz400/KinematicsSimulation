@@ -268,3 +268,25 @@ gearbox_reference_speed_rpm = 400.0
     cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_ok());
 }
+
+/// The mass matrix from the bodies' Jacobians is Newton-Euler's, one unit acceleration at a time, to rounding: on
+/// both URDF examples, with the payload, at poses away from zero.
+#[test]
+fn the_jacobian_mass_matrix_is_newton_eulers() {
+    for entry in [&URDF_ARM, &SCARA] {
+        let chain = arm::chain(&entry.config()).unwrap();
+        let n = chain.len();
+        let q: Vec<f64> = (0..n).map(|k| 0.3 - 0.17 * k as f64).collect();
+        let extra = Some((3.0, [0.05, 0.01, -0.02]));
+        let mut fast = vec![0.0; n * n];
+        chain.mass_matrix(&q, extra, &mut fast);
+        let (mut unit, mut tau) = (vec![0.0; n], vec![0.0; n]);
+        for j in 0..n {
+            unit.iter_mut().enumerate().for_each(|(k, u)| *u = if k == j { 1.0 } else { 0.0 });
+            chain.inverse_dynamics(&q, &vec![0.0; n], &unit, 0.0, extra, &mut tau);
+            for i in 0..n {
+                assert!((fast[i * n + j] - tau[i]).abs() < 1e-12 * tau[i].abs().max(1.0), "{} M[{i}][{j}]: {} against {}", entry.id, fast[i * n + j], tau[i]);
+            }
+        }
+    }
+}

@@ -4,10 +4,6 @@ format_version = 1
 # { name, centre_m, size_m } boxes, or [[obstacles]] tables. None by default.
 obstacles = []
 
-[sim]
-dt_s = 62.5e-6
-substeps = 4
-
 # Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
 # the numbers in this file are used as written.
 [parts]

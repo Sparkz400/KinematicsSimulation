@@ -157,14 +157,20 @@ impl Chain {
     /// positions `q` and speeds `qd` under gravity `g` (m/s^2, along -z of the base), `extra` a point mass and where it
     /// sits on the last body. Out: `tau`.
     pub fn inverse_dynamics(&self, q: &[f64], qd: &[f64], qdd: &[f64], g: f64, extra: Option<(f64, V3)>, tau: &mut [f64]) {
+        let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
+        self.newton_euler(&links, qd, qdd, g, extra, tau);
+    }
+
+    /// `inverse_dynamics` with each body's frame in the one before it (`link`) worked out already: the mass matrix
+    /// takes n + 1 passes at the same positions, and the links' rotations are most of a pass's work.
+    fn newton_euler(&self, links: &[(M3, V3)], qd: &[f64], qdd: &[f64], g: f64, extra: Option<(f64, V3)>, tau: &mut [f64]) {
         let n = self.len();
-        let mut links = Vec::with_capacity(n);
         let mut forces: Vec<(V3, V3)> = Vec::with_capacity(n);
         // The base accelerates up by g instead of gravity pulling down.
         let (mut w, mut dw, mut a) = ([0.0; 3], [0.0; 3], [0.0, 0.0, g]);
         for i in 0..n {
             let b = &self.bodies[i];
-            let (r, p) = self.link(i, q[i]);
+            let (r, p) = links[i];
             // The previous origin's acceleration carried to this origin, then into this frame.
             let a_here = tmul(&r, add(a, add(cross(dw, p), cross(w, cross(w, p)))));
             let (w_in, dw_in) = (tmul(&r, w), tmul(&r, dw));
@@ -184,7 +190,6 @@ impl Chain {
             let force = scale(ac, body.mass);
             let moment = add(mul(&body.inertia, dw), cross(w, mul(&body.inertia, w)));
             forces.push((force, add(moment, cross(body.com, force))));
-            links.push((r, p));
         }
         // Back from the tip: what each body passes to the one before it, about its own origin.
         let (mut f, mut m) = ([0.0; 3], [0.0; 3]);
@@ -206,15 +211,51 @@ impl Chain {
     /// The mass matrix M (n x n, row by row): column j is the inverse dynamics at rest without gravity for a unit
     /// acceleration of joint j.
     pub fn mass_matrix(&self, q: &[f64], extra: Option<(f64, V3)>, out: &mut [f64]) {
+        let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
+        self.mass_matrix_at(&links, extra, out);
+    }
+
+    /// The mass matrix from each body's Jacobian, in one pass along the chain: M = sum over the bodies k of
+    /// m_k Jv_k^T Jv_k + Jw_k^T I_k Jw_k, its centre of mass's and its rotation's Jacobian over the joints up to it (a
+    /// revolute joint j moves it by a_j x (c_k - o_j) and turns it by a_j, a prismatic one moves it by a_j), I_k its
+    /// inertia about its centre in the base frame. The same matrix as n passes of Newton-Euler with a unit acceleration
+    /// each, at a fraction of the work.
+    fn mass_matrix_at(&self, links: &[(M3, V3)], extra: Option<(f64, V3)>, out: &mut [f64]) {
         let n = self.len();
-        let (zero, mut unit, mut tau) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
-        for j in 0..n {
-            unit.iter_mut().enumerate().for_each(|(k, u)| *u = if k == j { 1.0 } else { 0.0 });
-            self.inverse_dynamics(q, &zero, &unit, 0.0, extra, &mut tau);
-            for i in 0..n {
-                out[i * n + j] = tau[i];
+        out[..n * n].fill(0.0);
+        let (mut rot, mut pos) = (IDENTITY, [0.0; 3]);
+        let (mut axes, mut origins) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        let mut columns: Vec<(V3, V3)> = Vec::with_capacity(n);
+        for k in 0..n {
+            let (r, p) = links[k];
+            pos = add(pos, mul(&rot, p));
+            rot = matmul(&rot, &r);
+            let b = &self.bodies[k];
+            axes.push(mul(&rot, b.axis));
+            origins.push(pos);
+            let mut body = b.inertial;
+            if let (true, Some((m, at))) = (k + 1 == n, extra) {
+                body = body.merged(&Inertial { mass: m, com: at, inertia: [[0.0; 3]; 3] }, &IDENTITY, [0.0; 3]);
+            }
+            let c = add(pos, mul(&rot, body.com));
+            let turned = matmul(&matmul(&rot, &body.inertia), &transpose(&rot));
+            columns.clear();
+            columns.extend((0..=k).map(|j| if self.bodies[j].prismatic { (axes[j], [0.0; 3]) } else { (cross(axes[j], sub(c, origins[j])), axes[j]) }));
+            for (i, (vi, wi)) in columns.iter().enumerate() {
+                let iw = mul(&turned, *wi);
+                for (j, (vj, wj)) in columns.iter().enumerate() {
+                    out[i * n + j] += body.mass * dot(*vi, *vj) + dot(iw, *wj);
+                }
             }
         }
+    }
+
+    /// The mass matrix (`mass_matrix`) and the torques at zero acceleration (velocity terms and gravity,
+    /// `inverse_dynamics` with q'' = 0) at once, the links worked out once for both.
+    pub fn dynamics(&self, q: &[f64], qd: &[f64], g: f64, extra: Option<(f64, V3)>, mass: &mut [f64], bias: &mut [f64]) {
+        let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
+        self.mass_matrix_at(&links, extra, mass);
+        self.newton_euler(&links, qd, &vec![0.0; q.len()], g, extra, bias);
     }
 
     /// Potential energy in gravity g: the sum of m g z of every centre of mass.

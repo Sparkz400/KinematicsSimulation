@@ -127,8 +127,7 @@ impl Arm {
 
 impl Mechanism for Arm {
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
-        self.chain.mass_matrix(q, self.extra(), mass);
-        self.chain.inverse_dynamics(q, qd, &vec![0.0; q.len()], self.g, self.extra(), bias);
+        self.chain.dynamics(q, qd, self.g, self.extra(), mass, bias);
     }
     fn potential(&self, q: &[f64]) -> f64 {
         self.chain.potential(q, self.g, self.extra())

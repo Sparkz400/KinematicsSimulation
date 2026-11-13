@@ -5,6 +5,10 @@
 #   [estimate]   ours: a screw of this size as the screw makers' catalogues list them, not one maker's article.
 # Units are in the field names; x runs from the motor end.
 
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
 [mass]
 carriage_kg = 15.0
 payload_kg = 10.0

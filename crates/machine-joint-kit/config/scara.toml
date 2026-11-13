@@ -4,6 +4,13 @@
 #   [estimate]   all but the motor and drive (as the delta picker's).
 # The tool pose is the four joints: rad, rad, m (down), rad.
 
+[sim]
+dt_s = 62.5e-6
+# Two sub-steps of the integrator, not the belt machines' four: the stiffest mode, the wrist on its gear, is near
+# 530 Hz, which RK4 resolves at 31 us. Measured on the default cycle: no verdict differs from 8 sub-steps by more than
+# 0.05 % (motor peak), at half the computing time.
+substeps = 2
+
 [arm]
 urdf_file = "builtin:scara"
 # Joint 3: the coupling before the screw.
