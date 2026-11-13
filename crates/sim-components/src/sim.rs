@@ -1,7 +1,7 @@
 //! A machine, its controller and the integrator, stepped together. Every front end runs this.
 
 use crate::control::{Command, CommandError, Controller, LimitViolation, check_limits, in_range};
-use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Rk4, Scene, SignalInfo, TEMPERATURE_PREFIX, ThermalPart, advance};
+use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Obstacle, Rk4, Scene, SignalInfo, TEMPERATURE_PREFIX, ThermalPart, advance};
 
 /// A part of the machine that warms with its loss power (`Machine::thermal_parts`, effects.part_heating): one thermal
 /// mass with a thermal resistance R to its surroundings, so that its temperature rise follows
@@ -34,6 +34,11 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
     Ok(parts)
 }
 
+/// How far a part in contact with an obstacle may go further into it, m, in all, before it counts as moving in
+/// (effects.crash, `Sim::check_obstacles`): drives enabled again at rest against the obstacle settle some 25 nm into
+/// it (and rounding moves it by 1e-16 m), and they tripped on that. A drive that pushes on goes further.
+const CREEP: f64 = 1e-6;
+
 /// Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
 /// copper loss and the work on the shaft.
 const WINDING_STATES: usize = 4;
@@ -57,6 +62,9 @@ pub struct Sim {
     /// What switching the payload has added to the machine's energy since the start: a payload picked up brings
     /// its energy along, one put down takes it away. For the energy budget.
     pub payload_energy: f64,
+    /// The machine's energy that the stops at obstacles took since the start (effects.crash, `check_obstacles`): lost
+    /// in the impact. For the energy budget.
+    pub crash_energy: f64,
     /// Axis limits that exceed what the drives allow, found when the config was applied.
     pub limit_violations: Vec<LimitViolation>,
     /// The parts that warm with their losses, and whether they do (effects.part_heating, or effects.thermal_feedback,
@@ -68,6 +76,35 @@ pub struct Sim {
     pub thermal_feedback: bool,
     /// The machine's loss powers, for the heated parts.
     losses: Vec<f64>,
+    /// The obstacles of the config (`collision::obstacles`), each marked while a part of the machine touches it.
+    pub obstacles: Vec<Obstacle>,
+    /// effects.crash: the obstacles are rigid; a part moving into one stops dead and the drives go off
+    /// (`check_obstacles`).
+    pub crash: bool,
+    /// `profile.min_clearance_m`: the least clearance to the obstacles a time-optimal path may keep (`plan_path`).
+    pub min_clearance: f64,
+    /// The clearance to the nearest obstacle after the last step, and the least since the start, m; infinite without
+    /// obstacles. Checked every base step.
+    pub clearance: f64,
+    pub least_clearance: f64,
+    /// The first contact with an obstacle since the start.
+    pub contact: Option<Contact>,
+    /// Whether the drives went off at an obstacle (effects.crash) and have not been enabled since.
+    pub crashed: bool,
+    /// Per obstacle the clearance, and the tool's pose, after the last step: whether a part moves into an obstacle,
+    /// and where along the step it met its face (`check_obstacles`).
+    gaps: Vec<f64>,
+    last_pose: Vec<f64>,
+}
+
+/// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
+/// how fast the tool went then (the length of its speed vector, axis units per second) and which obstacle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Contact {
+    pub time: f64,
+    pub pose: Vec<f64>,
+    pub speed: f64,
+    pub obstacle: usize,
 }
 
 /// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
@@ -129,11 +166,21 @@ impl Sim {
             substeps,
             payload_attached: true,
             payload_energy: 0.0,
+            crash_energy: 0.0,
             limit_violations,
             heated,
             part_heating,
             thermal_feedback: cfg.bool("effects.thermal_feedback")?,
             losses: Vec::new(),
+            obstacles: crate::collision::obstacles(cfg)?,
+            crash: cfg.bool("effects.crash")?,
+            min_clearance: cfg.non_negative("profile.min_clearance_m")?,
+            clearance: f64::INFINITY,
+            least_clearance: f64::INFINITY,
+            contact: None,
+            crashed: false,
+            gaps: Vec::new(),
+            last_pose: Vec::new(),
         })
     }
 
@@ -171,6 +218,7 @@ impl Sim {
         }
         (self.heated, self.part_heating) = (heated, heats(cfg)?);
         self.thermal_feedback = cfg.bool("effects.thermal_feedback")?;
+        (self.obstacles, self.crash, self.min_clearance) = (crate::collision::obstacles(cfg)?, cfg.bool("effects.crash")?, cfg.non_negative("profile.min_clearance_m")?);
         self.machine = machine;
         self.feed_temperatures_back();
         self.substeps = substeps;
@@ -186,8 +234,28 @@ impl Sim {
     }
 
     /// The timing for a path from where the machine stands, to run with `Command::Trajectory`.
+    /// A time-optimal path that comes nearer to an obstacle than `profile.min_clearance_m`, or touches one, is refused
+    /// (`error-path-collision`); one timed within the axis limits is planned all the same, and `check_plan` tells.
     pub fn plan_path(&self, pieces: &[crate::path::Piece], time_optimal: bool) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-        self.control.plan_path(self.machine.as_ref(), pieces, time_optimal)
+        let points = self.control.plan_path(self.machine.as_ref(), pieces, time_optimal)?;
+        if time_optimal
+            && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
+            && (check.clearance < self.min_clearance || check.contact.is_some())
+        {
+            return Err(CommandError { key: "error-path-collision" });
+        }
+        Ok(points)
+    }
+
+    /// The path through `poses` checked against the obstacles before it runs, with the payload as it is now
+    /// (`collision::check_path`). `None` without obstacles.
+    pub fn check_plan(&self, poses: &[Vec<f64>]) -> Option<crate::collision::PlanCheck> {
+        if self.obstacles.is_empty() {
+            return None;
+        }
+        let mut check = crate::collision::PlanCheck::default();
+        crate::collision::check_path(self.machine.as_ref(), &self.obstacles, poses, &mut check);
+        Some(check)
     }
 
     /// How far that planned path is from the pieces as given, at most.
@@ -199,6 +267,7 @@ impl Sim {
     /// together (with the drives disabled, the mechanics alone without torque).
     pub fn step(&mut self) {
         self.control.update(self.step, self.machine.as_ref(), &self.state, &mut self.torque);
+        self.crashed &= !self.control.enabled();
         if self.control.payload_attached != self.payload_attached {
             self.payload_attached = self.control.payload_attached;
             let before = self.machine.energy(&self.state);
@@ -216,6 +285,9 @@ impl Sim {
             advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
         }
         self.machine.after_step(&mut self.state, self.dt);
+        if !self.obstacles.is_empty() {
+            self.check_obstacles();
+        }
         if self.part_heating && !self.heated.is_empty() {
             // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
             self.losses.clear();
@@ -227,6 +299,73 @@ impl Sim {
             }
         }
         self.step += 1;
+    }
+
+    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact. With
+    /// effects.crash the obstacles are rigid: a part that touches one and moves further into it (its clearance more
+    /// than `CREEP` less than after the step before) stops dead, a perfectly plastic impact, whether the drives are on
+    /// or off. The
+    /// machine is put at rest (`Machine::equilibrium`, so belts and gears hold what they held at rest there) at the
+    /// pose along the step where the part met the face, and drives that were on go off, as a real drive trips on the
+    /// following error of a blocked axis; holding brakes engage. A part in contact that stands or moves out of the
+    /// obstacle is left to move, so drives enabled again after a crash can take the machine away. The energy the stop
+    /// takes (the kinetic energy, and what springs held beyond their rest) is lost in the impact: `crash_energy`.
+    fn check_obstacles(&mut self) {
+        let bodies = self.machine.collision_bodies(&self.state);
+        let gap_to = |bodies: &[sim_core::Aabb], o: &Obstacle| bodies.iter().map(|b| b.gap(&o.aabb).2).fold(f64::INFINITY, f64::min);
+        let mut gaps: Vec<f64> = self.obstacles.iter().map(|o| gap_to(&bodies, o)).collect();
+        let (mut nearest, mut stop) = ((f64::INFINITY, 0), None::<f64>);
+        let (known, mut held) = (self.gaps.len() == gaps.len(), false);
+        for (k, (obstacle, gap)) in self.obstacles.iter_mut().zip(&mut gaps).enumerate() {
+            obstacle.contact = *gap <= 0.0;
+            if *gap < nearest.0 {
+                nearest = (*gap, k);
+            }
+            let Some(&before) = self.gaps.get(k).filter(|_| known) else { continue };
+            if *gap <= 0.0 && *gap < before - CREEP {
+                // Where the clearance reached 0, linearly from the pose it was measured at (the last step's, or where
+                // the part stood in contact before it crept in); at that pose if it was in contact already.
+                let at = (before / (before - *gap)).clamp(0.0, 1.0);
+                stop = Some(stop.map_or(at, |s| s.min(at)));
+            } else if *gap <= 0.0 && *gap < before {
+                // In contact and a little further in: judged from where it was, so that creeping in adds up.
+                (*gap, held) = (before, true);
+            }
+        }
+        self.clearance = nearest.0;
+        self.least_clearance = self.least_clearance.min(nearest.0);
+        let n = self.machine.axes().len();
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        self.machine.tool_state(&self.state, &mut pos, &mut vel);
+        if nearest.0 <= 0.0 && self.contact.is_none() {
+            let speed = vel.iter().map(|v| v * v).sum::<f64>().sqrt();
+            // The step counter moves on after this check.
+            self.contact = Some(Contact { time: (self.step + 1) as f64 * self.dt, pose: pos.clone(), speed, obstacle: nearest.1 });
+        }
+        self.gaps = gaps;
+        if self.crash
+            && let Some(at) = stop
+            && self.last_pose.len() == n
+        {
+            pos = self.last_pose.iter().zip(&pos).map(|(from, to)| from + at * (to - from)).collect();
+            let mut torque = vec![0.0; self.machine.motors().len()];
+            let before = self.machine.energy(&self.state);
+            self.machine.equilibrium(&pos, &mut self.state, &mut torque);
+            self.crash_energy += before - self.machine.energy(&self.state);
+            if self.control.enabled() {
+                let _ = self.control.command(Command::Disable, self.machine.as_ref());
+                self.crashed = true;
+            }
+            // Moving on from the face is judged from where the stop left the parts.
+            let bodies = self.machine.collision_bodies(&self.state);
+            for (gap, o) in self.gaps.iter_mut().zip(&self.obstacles) {
+                *gap = gap_to(&bodies, o);
+            }
+            held = false;
+        }
+        if !held || self.last_pose.len() != n {
+            self.last_pose = pos;
+        }
     }
 
     /// With effects.thermal_feedback, tells the machine its parts' rises (`Machine::set_part_temperatures`).
@@ -362,6 +501,9 @@ impl Sim {
     pub fn scene(&self, out: &mut Scene) {
         self.machine.scene(&self.state, out);
         out.tool = self.tool_point();
+        out.obstacles.clone_from(&self.obstacles);
+        out.clearance = crate::collision::nearest(&self.machine.collision_bodies(&self.state), &self.obstacles).map(|(_, gap)| gap);
+        out.first_contact = self.contact.as_ref().map(|c| c.time);
         let mut colour = |id: &str, index: usize, heat: f64| {
             if let Some(part) = out.parts.iter_mut().filter(|p| p.id == id).nth(index) {
                 part.heat = Some(heat as f32);

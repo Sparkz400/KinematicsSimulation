@@ -324,6 +324,9 @@ pub struct Drive {
     pub rectifier_power: f64,
     pub mains_power: f64,
     pub line_loss: f64,
+    /// With the DC link simulated and the drive off: what its discharge through the bleeder took out of the DC link over
+    /// the last step, as a mean power (the rectifier draws it back while the link is held at the bus level).
+    pub discharge_power: f64,
     /// The drive's own stream of sensor noise.
     pub noise: Noise,
     current_integral: f64,
@@ -461,7 +464,7 @@ impl Drive {
     pub fn winding_stepped(&mut self, p: &DriveParams, current: f64, [electrical, copper, work]: [f64; 3]) {
         let dt = p.current_cycle;
         (self.current, self.torque) = (current, p.torque_of(current));
-        (self.power, self.copper_loss, self.shaft_power) = (electrical / dt, copper / dt, work / dt);
+        (self.power, self.copper_loss, self.shaft_power, self.discharge_power) = (electrical / dt, copper / dt, work / dt, 0.0);
         // A DC link of its own. A shared one is stepped once all drives have had this step (`shared_dc_link`).
         if p.dc_link && !p.shared_dc_link {
             self.own_dc_link(p);
@@ -483,7 +486,9 @@ impl Drive {
         if p.dc_link {
             // C dU/dt = -U / R_b: the voltage falls by exp(-dt / (R_b C)) per step, exactly. The rectifier catches it
             // at the bus level, a regenerative supply takes what is above.
+            let before = self.dc_voltage;
             self.dc_voltage *= (-p.current_cycle / p.discharge_time_constant).exp();
+            self.discharge_power = 0.5 * p.dc_capacitance * (before * before - self.dc_voltage * self.dc_voltage) / p.current_cycle;
             if !p.shared_dc_link {
                 self.own_dc_link(p);
             }

@@ -11,6 +11,7 @@ pub static I18N: &[(&str, &str)] = &[
 pub mod analysis;
 pub mod catalog;
 pub mod chain;
+pub mod collision;
 pub mod control;
 pub mod dataset;
 pub mod drive;
@@ -28,4 +29,4 @@ pub mod trace;
 pub mod transmission;
 
 pub use control::{Command, CommandError, Controller, LimitViolation, check_limits};
-pub use sim::{Sim, load_config};
+pub use sim::{Contact, Sim, load_config};

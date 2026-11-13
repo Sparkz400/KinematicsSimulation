@@ -208,6 +208,15 @@ pub trait Machine: Send {
     fn scene_point(&self, _tool_pose: &[f64]) -> Option<[f64; 3]> {
         None
     }
+    /// The parts of the machine that can hit an obstacle of the config, as boxes in scene coordinates at `state`. By
+    /// default the tool alone, as a point where `scene_point` puts it (none without that mapping); a machine names
+    /// the boxes of its scene that move with the tool through `scene::scene_boxes`.
+    fn collision_bodies(&self, state: &[f64]) -> Vec<crate::Aabb> {
+        let n = self.axes().len();
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        self.tool_state(state, &mut pos, &mut vel);
+        self.scene_point(&pos).map(|centre| crate::Aabb { centre, size: [0.0; 3] }).into_iter().collect()
+    }
 
     /// The friction contacts for the friction view. Empty where the machine tells none.
     fn friction_contacts(&self) -> Vec<FrictionContact> {

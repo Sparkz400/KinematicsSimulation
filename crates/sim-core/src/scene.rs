@@ -74,12 +74,73 @@ pub struct Scene {
     /// Asked of the machine, not filled in by it: how many times larger to draw the parts' deflections (frame
     /// sway, the Z axis leaning), which are micrometres. 1 draws them as they are.
     pub exaggeration: f64,
+    /// The obstacles of the config, each marked while a part of the machine touches it. Filled in like `tool`.
+    pub obstacles: Vec<Obstacle>,
+    /// Where there are obstacles: the nearest points of the machine's parts and of an obstacle (`Aabb::gap`), and the
+    /// clearance between them, m. Filled in like `tool`.
+    pub clearance: Option<([f64; 3], [f64; 3], f64)>,
+    /// The simulated time of the first contact with an obstacle so far, s. Filled in like `tool`.
+    pub first_contact: Option<f64>,
 }
 
 impl Default for Scene {
     fn default() -> Self {
-        Self { parts: Vec::new(), labels: Vec::new(), arrows: Vec::new(), tool: None, planned: None, exaggeration: 1.0 }
+        Self { parts: Vec::new(), labels: Vec::new(), arrows: Vec::new(), tool: None, planned: None, exaggeration: 1.0, obstacles: Vec::new(), clearance: None, first_contact: None }
     }
+}
+
+/// A box with its edges along the scene's axes: an obstacle, or a part of the machine that can hit one
+/// (`Machine::collision_bodies`). Metres, in scene coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Aabb {
+    pub centre: [f64; 3],
+    pub size: [f64; 3],
+}
+
+impl Aabb {
+    /// The nearest points of the two boxes, one on each, and the clearance between them: the distance of the two
+    /// points; where the boxes overlap, the depth of the overlap along the axis where it is least, negative (both
+    /// points then lie in the middle of the overlap).
+    pub fn gap(&self, other: &Aabb) -> ([f64; 3], [f64; 3], f64) {
+        let (mut p, mut q, mut apart, mut overlap) = ([0.0; 3], [0.0; 3], 0.0, f64::INFINITY);
+        for i in 0..3 {
+            let (lo, hi) = (self.centre[i] - self.size[i] / 2.0, self.centre[i] + self.size[i] / 2.0);
+            let (other_lo, other_hi) = (other.centre[i] - other.size[i] / 2.0, other.centre[i] + other.size[i] / 2.0);
+            (p[i], q[i]) = if hi < other_lo {
+                (hi, other_lo)
+            } else if other_hi < lo {
+                (lo, other_hi)
+            } else {
+                overlap = f64::min(overlap, hi.min(other_hi) - lo.max(other_lo));
+                let middle = (lo.max(other_lo) + hi.min(other_hi)) / 2.0;
+                (middle, middle)
+            };
+            apart += (q[i] - p[i]).powi(2);
+        }
+        (p, q, if apart > 0.0 { apart.sqrt() } else { -overlap })
+    }
+}
+
+/// An obstacle of the config (`[[obstacles]]`), and whether a part of the machine touches it now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Obstacle {
+    pub name: String,
+    pub aabb: Aabb,
+    pub contact: bool,
+}
+
+/// The boxes among `parts` (as a machine draws them in its scene) whose id is one of `ids`, turned or not: what
+/// `Machine::collision_bodies` takes for the parts that move with the tool. A machine passes only the parts it needs:
+/// drawing the whole scene every base step made the live check about three times as slow as the run without it.
+pub fn scene_boxes(parts: &[Part], ids: &[&str]) -> Vec<Aabb> {
+    parts
+        .iter()
+        .filter(|part| ids.contains(&part.id))
+        .filter_map(|part| match part.shape {
+            Shape::Box { size } => Some(Aabb { centre: part.pos, size: size.map(f64::abs) }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A point on a circle, for laying a belt path around a pulley. `turn` is in radians from +x.
@@ -157,6 +218,20 @@ pub fn idler(out: &mut Vec<Part>, centre: [f64; 2], y: f64, radius: f64, angle: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// By hand: a 0.2 m cube at the origin and a 0.1 m cube at (0.4, 0.3, 0): 0.25 m apart in x (0.4 - 0.1 - 0.05),
+    /// 0.15 m in y, overlapping in z, so 0.29155 m apart. Moved to (0.12, 0, 0.02) they overlap by 0.03 m in x, the
+    /// least of 0.03, 0.1 and 0.1.
+    #[test]
+    fn gap_between_boxes_by_hand() {
+        let big = Aabb { centre: [0.0; 3], size: [0.2; 3] };
+        let (p, q, d) = big.gap(&Aabb { centre: [0.4, 0.3, 0.0], size: [0.1; 3] });
+        assert!((d - (0.25f64.powi(2) + 0.15f64.powi(2)).sqrt()).abs() < 1e-12, "{d}");
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+        assert!(near(p, [0.1, 0.1, 0.0]) && near(q, [0.35, 0.25, 0.0]), "{p:?} {q:?}");
+        let (_, _, d) = big.gap(&Aabb { centre: [0.12, 0.0, 0.02], size: [0.1; 3] });
+        assert!((d + 0.03).abs() < 1e-12, "{d}");
+    }
 
     #[test]
     fn belt_teeth_keep_their_place_on_the_belt_when_the_path_changes() {

@@ -863,8 +863,8 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     assert!(new.ok, "{new:?}");
 }
 
-/// The tenth review's paths, as fast as the motors and a belt rated 340 to 600 N allow, with the axis limits raised to
-/// 40 m/s^2, 2000 m/s^3 and 2 m/s so that the belt is what limits: with the share alone (0.8, no margin) the full
+/// The tenth review's paths, as fast as the motors and a belt rated 330 to 1500 N allow (330 N with the default axis
+/// limits, the others with them raised to 40 m/s^2, 2000 m/s^3 and 2 m/s so that the belt is what limits): with the share alone (0.8, no margin) the full
 /// model went 1.4 to 6.9 N above the rating and the slack side to 0 N. A ramp of acceleration quick against the belt's
 /// period overshoots by up to the change itself, so the rigid model may use half the room, less the friction the
 /// belt pulls (`profile.tension_margin_n`): the full model keeps both ratings on every one, or the plan is refused as

@@ -116,6 +116,8 @@ notch_bandwidth_hz = 20.0
 encoder_noise_counts = 4.0
 current_noise_a = 0.01
 noise_seed = 1
+# Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
+braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged. The
 # screw's own checks (speed, d n, buckling, static load, life) come from [screw] and ratings.required_life_h.

@@ -1,5 +1,8 @@
 # What every machine of this crate shares (config/common.toml); the machine's own part follows [profile] below.
 format_version = 1
+# Obstacles the machine must not touch, as for every machine (see docs/config-reference.md): a list of
+# { name, centre_m, size_m } boxes, or [[obstacles]] tables. None by default.
+obstacles = []
 
 [sim]
 dt_s = 62.5e-6
@@ -53,6 +56,8 @@ fieldbus_delay = false
 fieldbus_jitter = false
 sensor_noise = false
 shaper_follows_pose = false
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
 
 # With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
 # delta picker's planetary gearboxes.

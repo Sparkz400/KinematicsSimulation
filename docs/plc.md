@@ -60,6 +60,7 @@ Every axis of the machine has a folder `axis.<axis id>` with one set of handshak
 | 5 | A move, path or the cycle of the link's other commands is under way |
 | 6 | The controller refused a streamed setpoint (axis error) |
 | 7 | The drives were switched off while the axis was powered: `command.disable` or a DC-link trip (axis error) |
+| 8 | The drives went off because the machine ran into an obstacle (`effects.crash`, axis error) |
 
 How the blocks behave:
 
@@ -69,7 +70,7 @@ How the blocks behave:
 - Moves and Stop take over from the motion under way at the position and velocity the axis has. The block that was running reports `CommandAborted`, unless it is the same block started again: that one starts anew with cleared outputs.
 - MC_Stop brakes with `Stop.Deceleration` to standstill and then reports `Done`. The axis stays in `Stopping` as long as `Stop.Execute` is true, and refuses moves there (ErrorID 2). It goes to `Standstill` when `Stop.Execute` falls.
 - MC_Home moves the axis to its home position, at half the axis velocity and acceleration limits, and sets `IsHomed`. The home position is the axis value of the machine's start pose (`[start] pose` in the config). It does not search a switch and does not set a new zero: positions in the simulator are absolute.
-- MC_Reset clears the axis error and leaves ErrorStop for Standstill (or Disabled when `Power.Enable` is false). After an ErrorID 7 it switches the drives on again.
+- MC_Reset clears the axis error and leaves ErrorStop for Standstill (or Disabled when `Power.Enable` is false). After an ErrorID 7 or 8 it switches the drives on again; after a crash the axis can then be moved out of the obstacle, and a move further into it trips the drives again.
 - MC_Power: the controller has one enable for all drives. The drives go on when an axis is powered, and off when the last axis is switched off. An axis whose `Power.Enable` is false is Disabled and refuses blocks, but its motor still holds position while another axis keeps the drives on. Switching an axis off aborts its motion.
 - Parameters above the axis limits are cut to the limits. The profile is a trapezoid: velocity, acceleration and deceleration are kept, `Jerk` is accepted and not used.
 - Do not mix the PLCopen blocks with `command.setpoint.*`, `command.move`, `command.cycle` or `command.run_path` on the same machine at the same time. Blocks started while those run fail with ErrorID 5; a stream started while blocks run makes the controller refuse one of the two.

@@ -1,0 +1,38 @@
+# cargo nextest run --workspace --release --exclude sim-py
+# Every test runs in a process of its own, the tests of all binaries at once. nextest runs no doctests:
+# cargo test --doc --workspace --release --exclude sim-py
+
+[profile.default]
+# A test still running after a minute is reported as slow; none is stopped for it (the longest takes about four
+# minutes under full load).
+slow-timeout = "60s"
+# Run every test and report every failure, not just the first.
+fail-fast = false
+# No retries: a test that passes on the second try still has a defect to find.
+retries = 0
+
+# Tests that run against the wall clock: the OPC UA server and the app's simulation thread. They share the
+# machine with every other test; few of them at a time, so that a busy machine does not make them miss their times.
+[test-groups]
+real-time = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = "package(sim-opcua) & (binary(plc) | binary(soak))"
+test-group = "real-time"
+
+[[profile.default.overrides]]
+filter = "package(sim-app) & binary(app)"
+test-group = "real-time"
+
+# The longest tests first, so that the run does not end waiting for one of them: each takes 30 s to 4 min.
+[[profile.default.overrides]]
+filter = """
+test(=the_shipped_velocity_loops_keep_their_margins_across_the_bounds)
+| test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+| test(=step_bode_and_tuning_write_csv_for_every_machine)
+| test(=the_cheap_signals_and_the_lean_analysis_change_no_number)
+| test(=the_part_thermal_verdicts_judge_where_the_parts_settle)
+| test(=the_default_sweep_finds_the_lowest_dip_on_every_config)
+| test(=verdicts_search_the_worst_corner_of_the_bounds)
+"""
+priority = 50

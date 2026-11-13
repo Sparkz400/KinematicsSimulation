@@ -4,7 +4,7 @@ What the simulator has been compared with, and what it has not.
 
 **The short version.** Every check below proves one of two things: that the equations are solved correctly, or that the catalogue data was read correctly. None proves that the parameters describe a real machine. No real machine has been measured.
 
-All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 374 tests. All of them passed on 13 November 2026 (`cargo test --workspace --release`, with the delta picker registered).
+All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 417 tests. All of them passed on 13 November 2026 (`cargo nextest run --workspace --release --exclude sim-py`, with the delta picker, obstacles and the twelfth review fixes).
 
 Test files, abbreviated in the tables:
 

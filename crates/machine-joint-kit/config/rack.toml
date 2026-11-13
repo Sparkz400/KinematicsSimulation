@@ -110,6 +110,8 @@ notch_bandwidth_hz = 20.0
 encoder_noise_counts = 4.0
 current_noise_a = 0.01
 noise_seed = 1
+# Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
+braking_module = false
 
 [ratings]
 # [estimate] a rack axis, its encoder on the motor: 0.1 mm (it settles to 0.06).

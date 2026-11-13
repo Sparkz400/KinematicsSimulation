@@ -378,7 +378,8 @@ fn the_guid_changes_with_the_model_description() {
     assert_eq!(a.guid, b.guid);
     assert_ne!(a.guid, Model::new(entry, &text, "de").unwrap().guid, "the descriptions are part of it");
     let mut cfg = entry.config();
-    let (name, on) = cfg.leaves().into_iter().find_map(|(p, v)| Some((p, v.as_bool()?))).unwrap();
+    // An effect switch: the FMU's boolean start values are the effects (`drive.braking_module` is no variable).
+    let (name, on) = cfg.leaves().into_iter().filter(|(p, _)| p.starts_with("effects.")).find_map(|(p, v)| Some((p, v.as_bool()?))).unwrap();
     cfg.set_text(&format!("{name} = {}", !on)).unwrap();
     assert_ne!(a.guid, Model::new(entry, &cfg.to_text().unwrap(), "en").unwrap().guid, "a start value is part of it");
 }

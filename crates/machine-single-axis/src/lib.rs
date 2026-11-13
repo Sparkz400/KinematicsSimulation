@@ -125,6 +125,20 @@ const N_RIGID: usize = 4;
 const JUMP: usize = N_ELASTIC;
 
 impl SingleAxis {
+    /// The carriage at `x`, the belt's clamp on it and the payload, as `scene` draws them.
+    fn on_carriage(&self, x: f64) -> Vec<Part> {
+        let (cx, part) = (self.span_min + x, Part::new);
+        let mut parts = vec![
+            // The tool: drawn where `scene_point` says.
+            part("carriage", Shape::Box { size: [0.16, 0.05, 0.03] }, self.scene_point(&[x]).unwrap_or_default(), [0.2, 0.22, 0.26]),
+            part("clamp", Shape::Box { size: [0.06, 0.035, 0.03] }, [cx, -0.05, self.r + 0.017], [0.85, 0.3, 0.2]),
+        ];
+        if self.payload_attached && self.m_payload > 0.0 {
+            parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, -0.03, 0.125], [0.2, 0.7, 0.3]));
+        }
+        parts
+    }
+
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
         let g = if cfg.bool("effects.gravity")? { G } else { 0.0 };
         let incline = cfg.f64("geometry.incline_deg")?.to_radians();
@@ -648,13 +662,8 @@ impl Machine for SingleAxis {
             part("beam", Shape::Box { size: [end - 0.14, 0.07, 0.09] }, [end / 2.0, 0.045, 0.0], [0.62, 0.64, 0.68]),
             part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
             part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [end - 0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
-            // The tool: drawn where `scene_point` says.
-            part("carriage", Shape::Box { size: [0.16, 0.05, 0.03] }, self.scene_point(&[x]).unwrap_or_default(), [0.2, 0.22, 0.26]),
-            part("clamp", Shape::Box { size: [0.06, 0.035, 0.03] }, [cx, y, r + 0.017], [0.85, 0.3, 0.2]),
         ]);
-        if self.payload_attached && self.m_payload > 0.0 {
-            out.parts.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, -0.03, 0.125], [0.2, 0.7, 0.3]));
-        }
+        out.parts.extend(self.on_carriage(x));
         // A positive pulley angle moves the carriage to the right: the top of the pulley moves
         // right, which is clockwise seen from the front.
         drive_unit(&mut out.parts, [0.0, 0.0], y, r, -pulley, -rotor[0], [0.9, 0.45, 0.1]);
@@ -688,6 +697,12 @@ impl Machine for SingleAxis {
     /// The carriage on the beam.
     fn scene_point(&self, tool_pose: &[f64]) -> Option<[f64; 3]> {
         Some([self.span_min + tool_pose[0], -0.03, 0.06])
+    }
+
+    /// The carriage and the payload on it, where `scene` draws them, without drawing the rest: the live check asks for
+    /// them every base step.
+    fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
+        sim_core::scene::scene_boxes(&self.on_carriage(s[0]), &["carriage", "payload"])
     }
 }
 

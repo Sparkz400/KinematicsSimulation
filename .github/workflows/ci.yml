@@ -35,12 +35,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Runs the tests of all binaries at once, each in a process of its own (settings in .config/nextest.toml).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       # sim-py is a Python extension: maturin builds it, in the job "python".
       - name: Build
         run: cargo build --workspace --release --locked --exclude sim-py
 
       - name: Test
-        run: cargo test --workspace --release --locked --exclude sim-py
+        run: cargo nextest run --workspace --release --locked --exclude sim-py
+
+      # nextest does not run doctests.
+      - name: Doctests
+        run: cargo test --doc --workspace --release --locked --exclude sim-py
 
       # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
       - uses: actions/setup-python@v5

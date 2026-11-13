@@ -381,16 +381,25 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     use sim_components::analysis::{CycleLoad, Verdict};
     use sim_components::catalog::Candidate;
     let verdict = |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new() };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 0.0 };
     let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
     let with_resistor = candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), verdict("braking-resistor-continuous", 6.0, 20.0, true), verdict("dc-link-overvoltage", 770.0, 820.0, true)]);
     assert_eq!(with_resistor.tightest(), Some(("motor-peak", 0.7)));
+    // An S120 line-up's one Braking Module is judged once, without a motor: it backs every axis's DC link.
+    let module = Verdict { motor: None, ..verdict("braking-resistor-continuous", 600.0, 1500.0, true) };
+    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), module]).tightest(), Some(("motor-peak", 0.7)));
     // Without a resistor a full DC link is the limit, and one that fails is the reason. The voltage, which
     // starts at the bus level, says nothing while it passes.
     assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-energy", 5.0, 6.2, true), verdict("dc-link-overvoltage", 760.0, 820.0, true)]).tightest().unwrap().0, "dc-link-energy");
     assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-overvoltage", 830.0, 820.0, false)]).tightest().unwrap().0, "dc-link-overvoltage");
     assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-energy", 9.3, 6.2, false), verdict("braking-resistor-peak", 1.0, 2.0, true)]).tightest(), Some(("dc-link-energy", 1.5)));
+    // A contact with no clearance asked for (`profile.min_clearance_m` 0, as on the single axis) fails and is the
+    // tightest; the same check passing at a clearance has no share.
+    let contact = Verdict { motor: None, ..verdict("collision", -0.03, 0.0, false) };
+    assert_eq!(candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), contact]).tightest(), Some(("collision", f64::INFINITY)));
+    let clear = Verdict { motor: None, ..verdict("collision", 0.1, 0.0, true) };
+    assert_eq!(candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), clear]).tightest(), Some(("gearbox-radial-load", 0.42)));
 }
 
 /// The EXCT-30 config passes every check with margin: in the worst case of both band modes. One at a time,

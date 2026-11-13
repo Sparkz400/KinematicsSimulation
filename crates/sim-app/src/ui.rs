@@ -768,8 +768,17 @@ pub fn timeline(ui: &mut Ui, model: &Model, timeline: Timeline, span: (f64, f64)
             }
             let mut time = timeline.time.unwrap_or(span.1);
             ui.spacing_mut().slider_width = (ui.available_width() - 250.0).max(60.0);
-            if ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false)).changed() {
+            let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
+            if slider.changed() {
                 actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
+            }
+            // The first contact with an obstacle as a red mark on the slider, where it lies in the recorded span.
+            if let Some(contact) = model.scene.first_contact.filter(|t| *t >= span.0 && *t <= span.1 && span.1 > span.0) {
+                let rect = slider.rect;
+                let x = rect.left() + (rect.width() * ((contact - span.0) / (span.1 - span.0)) as f32);
+                let mark = egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(3.0, rect.height()));
+                ui.painter().rect_filled(mark, 1.0, LIMIT);
+                ui.interact(mark.expand(2.0), ui.id().with("contact-mark"), egui::Sense::hover()).on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
             }
             // The time shown, and how far back from the newest scene: the scopes' right edge.
             ui.label(RichText::new(format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s")).color(if live { CHALK } else { ACTUAL }));

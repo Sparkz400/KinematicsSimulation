@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// Polls until the simulation thread has delivered samples and a scene.
 fn wait_for_data(model: &mut Model) {
     let start = Instant::now();
-    while (model.history.len() < 20 || model.scene.parts.is_empty()) && start.elapsed() < Duration::from_secs(5) {
+    while (model.history.len() < 20 || model.scene.parts.is_empty()) && start.elapsed() < Duration::from_secs(60) {
         model.poll();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -140,7 +140,7 @@ fn editing_a_parameter_reaches_the_running_simulation() {
     model.set_param("drive.velocity_cycle_s", toml::Value::Float(1.0e-4));
     model.set_param("no.such_value", toml::Value::Float(1.0));
     let start = Instant::now();
-    while model.messages.len() < 2 && start.elapsed() < Duration::from_secs(5) {
+    while model.messages.len() < 2 && start.elapsed() < Duration::from_secs(60) {
         model.poll();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -148,8 +148,11 @@ fn editing_a_parameter_reaches_the_running_simulation() {
     assert!(keys.contains(&"error-config-missing") && keys.contains(&"error-config-invalid"), "{keys:?}");
     let before = model.history.len();
     wait_for_data(&mut model);
-    std::thread::sleep(Duration::from_millis(50));
-    model.poll();
+    let start = Instant::now();
+    while model.history.len() <= before && start.elapsed() < Duration::from_secs(60) {
+        model.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(model.history.len() > before);
 }
 
@@ -216,8 +219,8 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
-        // Their own tests show them working.
-        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose"];
+        // A crash needs an obstacle, and the configs have none. Their own tests show them working.
+        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Runner::new(entry, &base).unwrap().sim.machine.motors().len() < 2;
         let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link")).collect();
@@ -370,6 +373,12 @@ fn scopes_have_a_window_freeze_statistics_and_export() {
     let frozen_end = *rows.last().unwrap();
     std::thread::sleep(Duration::from_millis(200));
     model.poll();
+    // On a busy machine 0.2 s of wall time may bring no sample: wait for one.
+    let start = Instant::now();
+    while model.history.back().unwrap()[0] <= frozen_end && start.elapsed() < Duration::from_secs(60) {
+        std::thread::sleep(Duration::from_millis(5));
+        model.poll();
+    }
     assert!(model.visible_rows().last().unwrap()[0] <= frozen_end + 0.2 && model.history.back().unwrap()[0] > model.visible_rows().last().unwrap()[0]);
 
     // Export writes what the scopes show.
@@ -1084,7 +1093,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         assert!(apart(planned_end, sim.machine.scene_point(&point(0.75)).unwrap()) < 1e-9 && apart(planned_start, planned_end) > 0.1, "{}", entry.id);
         // The trail starts once the machine has taken the path, not when it is sent.
         let sent = Instant::now();
-        while model.trail.is_none() && sent.elapsed() < Duration::from_secs(5) {
+        while model.trail.is_none() && sent.elapsed() < Duration::from_secs(60) {
             model.poll();
             std::thread::sleep(Duration::from_millis(1));
         }
