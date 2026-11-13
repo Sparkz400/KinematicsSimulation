@@ -126,7 +126,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("replay") => &["--trace"],
         Some("fit") => &["--trace", "--sweep", "--sweep-motor", "--amplitude"],
         Some("compare") => &["--effect", "--signal", "--differences"],
-        Some("fmu") => &["--binary"],
+        Some("fmu") => &["--binary", "--fmi"],
         _ => &[],
     };
     args.check(known)?;
@@ -645,13 +645,20 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     out.flush().map_err(io)
 }
 
-/// `fmu <machine> --out FILE.fmu`: the machine with its config as an FMI 2.0 Co-Simulation FMU (see `sim_fmi`), with
-/// the descriptions in the language of `--lang`. Its binaries are the files `--binary` names (it may repeat: a .dll goes
-/// to win64, a .so to linux64, a .dylib to darwin64), or else the sim-fmi library built next to this program.
+/// `fmu <machine> --out FILE.fmu [--fmi 2|3]`: the machine with its config as an FMI 2.0 (the default) or 3.0
+/// Co-Simulation FMU (see `sim_fmi`), with the descriptions in the language of `--lang`. Its binaries are the files
+/// `--binary` names (it may repeat: for FMI 2.0 a .dll goes to win64, a .so to linux64, a .dylib to darwin64; for
+/// FMI 3.0 to `<architecture>-<system>`, the architecture read from the binary), or else the sim-fmi library built
+/// next to this program.
 fn fmu(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
-    let model = sim_fmi::Model::new(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"))?;
+    let fmi = match args.option("--fmi") {
+        None | Some("2") => 2,
+        Some("3") => 3,
+        Some(other) => return Err(Failure("cli-error-bad-argument", format!("--fmi {other}"))),
+    };
+    let model = sim_fmi::Model::with_fmi(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"), fmi)?;
     let mut binaries: Vec<std::path::PathBuf> = args.options("--binary").into_iter().map(Into::into).collect();
     if binaries.is_empty() {
         let name = format!("{}{}{}", std::env::consts::DLL_PREFIX, sim_fmi::MODEL_IDENTIFIER, std::env::consts::DLL_SUFFIX);
@@ -662,12 +669,14 @@ fn fmu(args: &Args) -> Result<(), Failure> {
     let mut platforms: Vec<(String, &std::path::PathBuf)> = Vec::new();
     for binary in &binaries {
         let file_name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let inside = sim_fmi::binary_path(file_name).ok_or_else(|| Failure("cli-error-bad-argument", format!("--binary {}", binary.display())))?;
+        let bad = || Failure("cli-error-bad-argument", format!("--binary {}", binary.display()));
+        let inside = sim_fmi::binary_path(file_name).ok_or_else(bad)?;
+        let bytes = std::fs::read(binary).map_err(|e| Failure("cli-error-fmu-binary", format!("{}: {e}", binary.display())))?;
+        let inside = if fmi == 3 { sim_fmi::binary_path3(file_name, &bytes).ok_or_else(bad)? } else { inside };
         // Two binaries for one platform would be two entries of one name in the archive.
         if let Some((_, other)) = platforms.iter().find(|(path, _)| *path == inside) {
             return Err(Failure("cli-error-conflict", format!("--binary {} --binary {}", other.display(), binary.display())));
         }
-        let bytes = std::fs::read(binary).map_err(|e| Failure("cli-error-fmu-binary", format!("{}: {e}", binary.display())))?;
         platforms.push((inside.clone(), binary));
         files.push((inside, bytes));
     }

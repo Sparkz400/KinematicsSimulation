@@ -901,10 +901,15 @@ fn run_jobs(entry: &MachineEntry, supply: &str, jobs: Vec<Job>, mut out: Vec<Can
         done
     };
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len().max(1));
-    let found: Vec<Candidate> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-        workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
-    });
+    // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
+    let found: Vec<Candidate> = if threads <= 1 {
+        work().into_iter().flatten().collect()
+    } else {
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+            workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
+        })
+    };
     out.extend(found);
     rank(&mut out);
     out

@@ -17,6 +17,7 @@ fn bad_arguments_end_with_exit_code_2_and_a_message() {
         (&["--lang", "fr"], "--lang fr"),
         (&["--prot", "4840"], "--prot"),
         (&["--port", "4840", "stray"], "stray"),
+        (&["--cycle-ms", "0"], "--cycle-ms 0"),
     ] {
         let (en, de) = (link(args), link(&[args, &["--lang", "de"]].concat()));
         assert_eq!(en.status.code(), Some(2), "{args:?}: {}", String::from_utf8_lossy(&en.stderr));

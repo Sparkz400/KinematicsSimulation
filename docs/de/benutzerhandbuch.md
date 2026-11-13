@@ -1058,7 +1058,7 @@ In diesem Lauf steht die Z-Achse bei 0,498 s auf 0,2276 m und bewegt sich; bei 1
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang de
 ```
 
-Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine, `--port` (Standard 4840) und `--lang` sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, ein Port oder eine Sprache, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt.
+Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine, `--port` (Standard 4840), `--lang`, `--host` (Standard 127.0.0.1) und `--cycle-ms` (Standard 10) sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, ein Port, eine Sprache, eine Adresse oder ein Takt, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt. PLCopen-Bausteine je Achse, der Echtzeittakt und seine Messung, Beispiele für TwinCAT und CODESYS und der Dauertest stehen in [SPS-Inbetriebnahme](sps.md).
 
 | Eigenschaft | Wert |
 | --- | --- |
@@ -1098,7 +1098,7 @@ So verhalten sich die Befehle:
 Grenzen bei dieser Aufgabe:
 
 - **Nicht an einer realen SPS geprüft.** Der Client in den Tests ist mit derselben Bibliothek geschrieben wie der Server. Das Zusammenspiel mit Clients von Siemens, Beckhoff oder CODESYS, deren Datentypen, Sicherheitseinstellungen und Zyklus-Jitter sind ungeprüft.
-- Der Server bindet sich nur an 127.0.0.1 und bietet nur die Standardkonfiguration der Maschine an. Es gibt weder `--config` noch `--set`.
+- Der Server bindet sich an eine Adresse (127.0.0.1, wenn `--host` keine andere nennt) und bietet nur die Standardkonfiguration der Maschine an. Es gibt weder `--config` noch `--set`.
 - Keine Sicherheitsprofile, keine Benutzerkonten, keine Methoden, keine Konfigurationsänderungen.
 - Bahnen: `status.refused` nennt den Schlüssel, nicht die Zeile, die sich nicht lesen ließ, und Posen zu Zeitpunkten (`--trajectory`) gibt es über OPC UA nicht. Eine Bahn wird innerhalb des 10-ms-Takts der Simulation ausgelegt: Eine lange zeitoptimale Bahn, deren Auslegung länger dauert, lässt die Simulation in diesem Moment hinter der Echtzeit zurückfallen.
 - Der Server schreibt seine Schlüssel in einen Ordner `pki` im Arbeitsverzeichnis.
@@ -1110,7 +1110,7 @@ cargo build --release -p sim-fmi                                   # die Binärd
 sim-cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml --out exct30.fmu
 ```
 
-`fmu` schreibt die Maschine mit ihrer Konfiguration (der Standardkonfiguration, oder `--config`, `--motor`, `--supply`, `--gearbox` und `--set` wie bei jedem Befehl) als FMU für FMI 2.0 Co-Simulation. Die FMU rechnet dieselbe Simulation wie `sim-cli run`: Antriebe, Regler, jeden eingeschalteten Effekt. Importiert wird sie in Simulink (FMU-Block), OpenModelica (`File > Import > FMU` oder `importFMU`), Dymola (`File > Import > FMU`) oder jedem anderen Werkzeug für FMI 2.0; ein Regler- oder SPS-Modell dort sendet die Lagesollwerte und liest die Signale zurück. FMI 2.0 und nicht 3.0, weil jedes dieser Werkzeuge 2.0 Co-Simulation importiert und der Simulator nichts braucht, was nur 3.0 hat.
+`fmu` schreibt die Maschine mit ihrer Konfiguration (der Standardkonfiguration, oder `--config`, `--motor`, `--supply`, `--gearbox` und `--set` wie bei jedem Befehl) als FMU für FMI 2.0 Co-Simulation. Die FMU rechnet dieselbe Simulation wie `sim-cli run`: Antriebe, Regler, jeden eingeschalteten Effekt. Importiert wird sie in Simulink (FMU-Block), OpenModelica (`File > Import > FMU` oder `importFMU`), Dymola (`File > Import > FMU`) oder jedem anderen Werkzeug für FMI 2.0; ein Regler- oder SPS-Modell dort sendet die Lagesollwerte und liest die Signale zurück. FMI 2.0 ist die Vorgabe, weil jedes dieser Werkzeuge 2.0 Co-Simulation importiert; `--fmi 3` schreibt stattdessen eine FMU für FMI 3.0 Co-Simulation, mit denselben Variablen und den Binärdateien unter `binaries/<Architektur>-<System>` (zum Beispiel `binaries/x86_64-windows`). [FMI-Export](fmi.md) beschreibt beide Versionen, den FMU-Zustand, die Ableitungen, warum es kein Model Exchange gibt, wie die FMUs geprüft wurden und wie man sie importiert.
 
 Was in der FMU steht:
 
@@ -1146,8 +1146,8 @@ Wie ein Schritt abläuft:
 
 Grenzen bei dieser Aufgabe:
 
-- **Nicht mit einem unabhängigen FMI-Werkzeug geprüft.** Hier stand keines zur Verfügung (`fmpy` ist im Projekt nicht installiert). Die Tests rufen die Funktionen der FMU aus Rust auf und vergleichen mit dem Simulator; Archiv und Modellbeschreibung wurden außerdem mit `zipfile` und dem XML-Parser von Python gelesen und die Binärdatei über `ctypes` gefahren. Der Import in Simulink, OpenModelica oder Dymola ist ungeprüft.
-- Nur Co-Simulation, kein Model Exchange. Kein FMU-Zustand (`fmi2GetFMUstate` und seinesgleichen geben `fmi2Error` zurück), Werkzeuge, die einen Schritt zurücknehmen, können sie also nicht nutzen; keine Richtungsableitungen, keine asynchronen Schritte.
+- Geprüft mit fmpy und OMSimulator (Prüfung gegen das FMI-Schema, Simulation verglichen mit `sim-cli run`; die Befehle stehen in [FMI-Export](fmi.md#prüfung)). Der Import in Simulink, OpenModelica oder Dymola ist ungeprüft.
+- Nur Co-Simulation, kein Model Exchange ([warum](fmi.md#warum-es-kein-model-exchange-gibt)). Der FMU-Zustand arbeitet durch Wiederholen jedes Schritts seit der Initialisierung; einen Zustand wiederherzustellen dauert also so lange, wie bis zu ihm zu simulieren. Die Richtungsableitungen sind null, weil kein Ausgang direkt von einem Eingang abhängt. Keine asynchronen Schritte.
 - Eingänge sind nur Lagesollwerte: keine Fahrziele, kein Zyklus- oder Bahnbefehl und kein Momenteingang. Die Regelkreise bleiben in der FMU.
 - Meldungen und Beschreibungen in einer Sprache, der von `--lang` beim Schreiben der FMU.
 - Eine 64-Bit-Binärdatei für Windows, solange keine für Linux wie oben hinzukommt; keine 32-Bit-Binärdateien.
