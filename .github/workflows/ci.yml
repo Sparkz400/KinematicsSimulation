@@ -14,11 +14,13 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    # Build, about 500 tests and the FMU check; a stuck test is stopped after 30 minutes (nextest profile ci).
+    timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The toolchain the project is built and tested with locally; clippy's lints change between releases.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
         with:
           toolchain: "1.98.1"
           components: clippy
@@ -33,10 +35,10 @@ jobs:
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libwayland-dev libvulkan-dev
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Runs the tests of all binaries at once, each in a process of its own (settings in .config/nextest.toml).
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest
 
@@ -45,14 +47,14 @@ jobs:
         run: cargo build --workspace --release --locked --exclude sim-py
 
       - name: Test
-        run: cargo nextest run --workspace --release --locked --exclude sim-py
+        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci
 
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --doc --workspace --release --locked --exclude sim-py
 
       # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
 
@@ -77,8 +79,8 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
 
@@ -86,12 +88,12 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
         with:
           toolchain: "1.98.1"
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build for wasm32
         run: |
           cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
@@ -100,7 +102,7 @@ jobs:
           cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
       - name: Native tests of the module
         run: cargo test -p sim-wasm --release --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sizing-page
           path: site
@@ -113,12 +115,12 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
         with:
           toolchain: "1.98.1"
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Build sim-cli (the tests compare against it)
@@ -130,7 +132,7 @@ jobs:
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
           pip install target/wheels/*.whl "pytest==9.2.0" pandas matplotlib nbformat nbclient ipykernel
           pytest crates/sim-py/tests -q
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheel-${{ matrix.os }}
           path: target/wheels/*.whl

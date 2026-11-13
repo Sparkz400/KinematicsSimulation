@@ -36,3 +36,8 @@ test(=the_shipped_velocity_loops_keep_their_margins_across_the_bounds)
 | test(=verdicts_search_the_worst_corner_of_the_bounds)
 """
 priority = 50
+
+# CI: a test still running after 30 minutes is stopped and fails, so that one that hangs cannot hold a runner until the
+# job's own limit. The longest test takes about 10 minutes alone on an 8-core machine.
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 30 }
