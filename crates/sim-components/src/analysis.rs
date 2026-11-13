@@ -98,12 +98,12 @@ impl EnergyBudget {
         self.supply - self.rows.iter().map(|r| r.energy).sum::<f64>()
     }
 
-    /// The electrical side on its own: the supply less copper loss, braking resistor, mains and line module, the
+    /// The electrical side on its own: the supply less copper loss, braking resistor, bleeder discharge, mains and line module, the
     /// windings' and the capacitors' stored energy and the shaft work. Below `ELECTRICAL_TOLERANCE` of the supply on
     /// every machine and config with the back-EMF on, loss-free ones included; the rest of `unaccounted` is the
     /// machine's own balance.
     pub fn electrical_unaccounted(&self) -> f64 {
-        let electrical = |id: &str| id.starts_with("copper.") || matches!(id, "resistor" | "mains" | "line_module" | "windings" | "capacitors");
+        let electrical = |id: &str| id.starts_with("copper.") || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors");
         self.supply - self.shaft_work - self.rows.iter().filter(|r| electrical(&r.id)).map(|r| r.energy).sum::<f64>()
     }
 }
@@ -159,6 +159,14 @@ pub struct CycleLoad {
     /// With effects.part_heating, each part that warms with its loss (`Sim::heated`) and the rise it settles at when
     /// the cycle repeats for long: its thermal resistance times its mean loss over the measured pass. Empty without.
     pub part_rises: Vec<(ThermalPart, f64)>,
+    /// Where the config has obstacles: the least clearance to them over the whole run, the way to the cycle and its
+    /// first pass included (`Sim::least_clearance`), m; and the run's first contact with one.
+    pub clearance: Option<f64>,
+    pub contact: Option<crate::Contact>,
+    /// The highest braking power of all drives at once, W: with the DC link simulated, what the braking resistors
+    /// took (a shared one counted once); without, the power the drives fed back. For an S120 line-up, which brakes
+    /// through one Braking Module (`verdicts`).
+    pub braking_power_peak: f64,
 }
 
 /// What a run adds up step by step, for a cycle or a trajectory.
@@ -223,9 +231,13 @@ struct Tally {
     /// The windings', capacitors' and payload energy after the last step counted, where the budget ends: the stores
     /// are read where the flows stop (the machine's from `machine_signals` of that step).
     end: (f64, f64, f64),
+    /// `Sim::crash_energy` when the measurement began and after the last step counted.
+    crash: (f64, f64),
     supply: f64,
     copper: Vec<f64>,
     resistor: f64,
+    /// What the DC links of drives switched off lost through their bleeders (`Drive::discharge_power`).
+    discharge: f64,
     drawn: f64,
     mains: f64,
     line_loss: f64,
@@ -239,6 +251,8 @@ struct Tally {
     views: bool,
     /// Energy fed back since each motor last drew power.
     braking: Vec<f64>,
+    /// `CycleLoad::braking_power_peak`.
+    braking_peak: f64,
     /// The setpoints of the last half second: the piece of the path the tool can be near.
     path: std::collections::VecDeque<Vec<f64>>,
     path_error: (f64, f64, u64),
@@ -290,11 +304,13 @@ impl Tally {
             lost: vec![0.0; losses.len()],
             start: (energies.iter().map(|&i| machine_signals[i]).collect(), windings, capacitors, sim.payload_energy),
             end: (windings, capacitors, sim.payload_energy),
+            crash: (sim.crash_energy, sim.crash_energy),
             losses,
             energies,
             supply: 0.0,
             copper: vec![0.0; motors],
             resistor: 0.0,
+            discharge: 0.0,
             drawn: 0.0,
             mains: 0.0,
             line_loss: 0.0,
@@ -332,6 +348,7 @@ impl Tally {
             base_only,
             belt_tension: None,
             braking: vec![0.0; motors],
+            braking_peak: 0.0,
             path: std::collections::VecDeque::new(),
             path_error: (0.0, 0.0, 0),
             tracking_error: 0.0,
@@ -443,12 +460,15 @@ impl Tally {
                 total * sim.dt
             };
             self.resistor += link(|d| d.resistor_power);
+            // Each drive discharges its own share of a shared link (`Drive::disabled_step`), so these add up.
+            self.discharge += drives.iter().map(|d| d.discharge_power).sum::<f64>() * sim.dt;
             self.drawn += link(|d| d.rectifier_power);
             self.mains += link(|d| d.mains_power);
             self.line_loss += link(|d| d.line_loss);
             if !self.losses.is_empty() {
                 let (windings, capacitors) = stored_electrically(sim);
                 self.end = (windings, capacitors, sim.payload_energy);
+                self.crash.1 = sim.crash_energy;
             }
         }
         for (k, (i, peak, cubed)) in self.gear.iter_mut().enumerate().filter_map(|(k, gear)| Some((k, gear.as_mut()?))) {
@@ -499,6 +519,13 @@ impl Tally {
                 load.points.push((self.speed[k], torque));
             }
         }
+        let (drives, p) = (&sim.control.drives, sim.control.drive_params());
+        let braking: f64 = match (p.dc_link, p.shared_dc_link) {
+            (true, true) => drives.first().map_or(0.0, |d| d.resistor_power),
+            (true, false) => drives.iter().map(|d| d.resistor_power).sum(),
+            (false, _) => drives.iter().map(|d| (-d.power).max(0.0)).sum(),
+        };
+        self.braking_peak = self.braking_peak.max(braking);
         self.steps += 1;
     }
 
@@ -546,6 +573,9 @@ impl Tally {
             motors: self.loads,
             budget,
             part_rises,
+            clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
+            contact: sim.contact.clone(),
+            braking_power_peak: self.braking_peak,
         }
     }
 
@@ -563,6 +593,7 @@ impl Tally {
         let p = sim.control.drive_params();
         if p.dc_link {
             rows.push(row("resistor", "group-drive", "budget-resistor", self.resistor));
+            rows.push(row("discharge", "group-drive", "budget-discharge", self.discharge));
         }
         if p.regenerative {
             rows.push(row("mains", "group-drive", "budget-mains", self.mains));
@@ -576,6 +607,10 @@ impl Tally {
         rows.extend(self.energies.iter().zip(&self.start.0).map(|(&i, start)| row(&own[i].id, &own[i].owner_key, &own[i].quantity_key, now[i] - start)));
         // A payload picked up brings energy into the machine, one put down takes it away.
         rows.push(row("payload", "group-energy", "budget-payload", self.start.3 - payload));
+        // What the stops at obstacles took out of the machine (effects.crash).
+        if sim.crash {
+            rows.push(row("crash", "group-energy", "budget-crash", self.crash.1 - self.crash.0));
+        }
         // With the DC link simulated the supply is what the rectifier drew, counted on its own: that the capacitors,
         // the resistor, the line module and the drives account for it is the check of `electrical_unaccounted`.
         let supply = if p.dc_link { self.drawn } else { self.supply };
@@ -676,11 +711,14 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 5] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance"];
+pub const AT_LEAST: [&str; 6] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "guide-life", "belt-span-resonance", "collision"];
 
 /// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
-/// Above 1 it fails (but "belt-slack" at exactly 1).
+/// Above 1 it fails (but "belt-slack" at exactly 1). A contact ("collision" at no clearance) is infinitely far over.
 pub fn utilisation(v: &Verdict) -> f64 {
+    if v.check == "collision" && v.value <= 0.0 {
+        return f64::INFINITY;
+    }
     if AT_LEAST.contains(&v.check) { v.limit / v.value } else { v.value / v.limit }
 }
 
@@ -720,6 +758,10 @@ pub fn utilisation(v: &Verdict) -> f64 {
 /// "belt-span-resonance", with effects.belt_span_vibration, how close a span's first sideways mode came to an
 /// excitation at steady speed (`CycleLoad::belt_span_detuning`) against `ratings.belt_span_resonance_band` (it passes
 /// at or above it).
+///
+/// "collision" judges, where the config has obstacles, the least clearance of the run to them (`CycleLoad::clearance`)
+/// against `profile.min_clearance_m`: it passes at or above it, never at a contact. Without obstacles it is not judged,
+/// as a rating left out is not, so it cannot fail there.
 pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigError> {
     let cfg = &crate::catalog::parts_applied(cfg)?;
     // A rating that is no number (NaN) would otherwise count as left out, and not be judged.
@@ -733,6 +775,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     let simulated = cfg.bool("effects.dc_link")?;
     let (bus, rated_rise) = (cfg.positive("drive.bus_voltage_v")?, cfg.positive("motor.rated_temperature_rise_k")?);
     let mut out = Vec::new();
+    // An S120 line-up brakes through one Braking Module for all its axes (`drive.braking_module`): their braking power
+    // is judged together, after the axes. An S210 has a resistor of its own and is judged per axis.
+    let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
+    let mut line_up_brakes = false;
     for (k, m) in load.motors.iter().enumerate() {
         // Peak torque against the torque-speed curve, and the settled winding temperature against the rated rise.
         out.push(at_most("motor-peak", Some(k), m.utilisation, 1.0));
@@ -790,7 +836,8 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
             };
             // With a resistor to fall back on, a full DC link is no failure in itself.
             out.push(Verdict { check: "dc-link-energy", motor: Some(k), value: stored, limit: room, ok: !resistor || continuous.is_some() });
-            if resistor {
+            line_up_brakes |= resistor;
+            if resistor && !line_up {
                 if let Some(limit) = continuous {
                     out.push(at_most("braking-resistor-continuous", Some(k), mean_power, limit));
                 }
@@ -814,6 +861,21 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
             }
         }
     }
+    // The line-up's mean braking power is the sum of the axes' means; its peak the peak of their sum at each step.
+    if line_up && line_up_brakes {
+        let shared = simulated && cfg.bool("effects.shared_dc_link")?;
+        let energy: f64 = match (simulated, shared) {
+            (true, true) => load.motors.first().map_or(0.0, |m| m.resistor_energy),
+            (true, false) => load.motors.iter().map(|m| m.resistor_energy).sum(),
+            (false, _) => load.motors.iter().map(|m| m.energy_regenerated).sum(),
+        };
+        if let Some(limit) = rating("braking_resistor_continuous_w") {
+            out.push(at_most("braking-resistor-continuous", None, energy / load.duration, limit));
+        }
+        if let Some(limit) = rating("braking_resistor_peak_w") {
+            out.push(at_most("braking-resistor-peak", None, load.braking_power_peak, limit));
+        }
+    }
     if let Some(limit) = rating("settling_tolerance_m") {
         out.push(at_most("settling", None, load.dwell_error_peak, limit));
     }
@@ -833,6 +895,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     }
     if let (Some(detuning), Some(band)) = (load.belt_span_detuning, rating("belt_span_resonance_band")) {
         out.push(at_least("belt-span-resonance", None, detuning, band));
+    }
+    // The least clearance to the obstacles against `profile.min_clearance_m`; a contact fails whatever the limit.
+    if let Some(clearance) = load.clearance {
+        let limit = cfg.non_negative("profile.min_clearance_m")?;
+        out.push(Verdict { check: "collision", motor: None, value: clearance, limit, ok: clearance >= limit && clearance > 0.0 });
     }
     if let (Some(value), Some(limit)) = (load.condition_peak, rating("max_condition_number")) {
         out.push(at_most("singularity", None, value, limit));
@@ -1448,7 +1515,8 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
 /// path planner with the transition curves of `profile.path_tolerance_m`), the via point at the middle and a half, a
 /// quarter and an eighth of the width above the lift height; then moved by an eighth and a thirty-second of the width
 /// along each axis, or the rounding dropped. A via point whose planned path comes nearer to pick and place than the
-/// clearance between them is not run.
+/// clearance between them is not run. Where the config has obstacles, a setting whose run comes nearer to one than the
+/// clearance fails the verdict "collision" and is not taken; the cycle as configured is refused if it does.
 ///
 /// A search by trial, not a proof of the optimum: it stops at the first setting from which no single step
 /// is an improvement.
@@ -2226,6 +2294,9 @@ mod tests {
             motors: vec![m.clone()],
             budget: None,
             part_rises: Vec::new(),
+            clearance: None,
+            contact: None,
+            braking_power_peak: 0.0,
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

@@ -7,6 +7,11 @@
 #                `exct_30_config_agrees_with_the_catalogue` holds these in place
 #   [estimate]   not published; a guess of the right order, with a low and a high bound in [bounds]
 format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.677, -0.05, -0.65], size_m = [0.1, 0.2, 0.1] }]
+# (under the middle of the traverse, 221 mm below the payload: `collision` passes at profile.min_clearance_m 0.17)
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
 
 [sim]
 dt_s = 62.5e-6
@@ -106,6 +111,9 @@ fieldbus_jitter = false
 sensor_noise = false
 # With input_shaping: the shaper is set to the resonance the machine reports for the planned pose.
 shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
+# (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
+crash = false
 
 [geometry]
 # [catalogue] half the effective diameter of 31.82 mm
@@ -382,6 +390,10 @@ encoder_noise_counts = 4.0
 current_noise_a = 0.02
 # The seed also draws the fieldbus jitter (effects.fieldbus_jitter), from a stream of its own.
 noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module: verdicts judges the
+# sum of their braking power against ratings.braking_resistor_continuous_w and _peak_w. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 # Left out here: the highest gearbox input speed, because there is no gearbox.
@@ -529,6 +541,7 @@ path_tolerance_m = 0.0
 # For `sim-cli optimise`: how far the tool has to stay beyond the farther of pick and place while it traverses
 # between them (an obstacle there). The optimiser lowers each lift, traverse and lower of the cycle to this and
 # rounds its corners only where the path keeps it. [estimate] The lift as configured: 0.17 m above pick and place. No obstacle is known.
+# The same clearance is kept from every obstacle (check "collision", and a time-optimal path that comes nearer is refused).
 min_clearance_m = 0.17
 
 # Low and high bound of every [estimate] above, in the tables and units they have there.

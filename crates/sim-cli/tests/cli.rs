@@ -122,6 +122,25 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
     }
 }
 
+/// `--axis-index` takes a whole number naming an axis: -1, 1.7 and one past the last axis are refused in words that
+/// name the option, on `step` and `bode`, in English and German (-1 ran as 0 and 1.7 as 1, and past the end the
+/// error named "axis").
+#[test]
+fn a_bad_axis_index_is_refused() {
+    for entry in MACHINES {
+        let axes = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
+        for command in ["step", "bode"] {
+            for bad in ["-1".to_string(), "1.7".to_string(), axes.to_string()] {
+                for (lang, words) in [("en", "whole number from 0 to"), ("de", "ganze Zahl von 0 bis")] {
+                    let out = cli(&[command, entry.id, "--axis-index", &bad, "--lang", lang]);
+                    let error = text(&out.stderr);
+                    assert!(!out.status.success() && error.contains("--axis-index") && error.contains(&format!("{words} {}", axes - 1)), "{} {command} {bad} {lang}: {error}", entry.id);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn step_bode_and_tuning_write_csv_for_every_machine() {
     for entry in MACHINES {

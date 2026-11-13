@@ -916,9 +916,13 @@ fn near_start(machine: &dyn Machine, start: &[f64], pose: &[f64]) -> bool {
     let beyond = |s: f64, a: &sim_core::AxisInfo| ((a.min - s).clamp(0.0, slack), (s - a.max).clamp(0.0, slack));
     pose.len() == axes.len()
         && start.len() == axes.len()
-        && pose.iter().zip(start).zip(axes).all(|((t, s), a)| t.is_finite() && *t >= a.min - beyond(*s, a).0 && *t <= a.max + beyond(*s, a).1)
-        && machine.unreachable(pose, if machine.unreachable(start, 0.0).is_some() { slack } else { 0.0 }).is_none()
+        && pose.iter().zip(start).zip(axes).all(|((t, s), a)| t.is_finite() && *t >= a.min - beyond(*s, a).0 - ROUNDING && *t <= a.max + beyond(*s, a).1 + ROUNDING)
+        && machine.unreachable(pose, ROUNDING + if machine.unreachable(start, 0.0).is_some() { slack } else { 0.0 }).is_none()
 }
+
+/// What a pose away from the start may be off the range by rounding alone: an arc along the rim of a cylindrical
+/// range samples points a hair beyond it, and was refused with no allowance.
+const ROUNDING: f64 = 1e-9;
 
 /// `in_range`, with every axis range wider by `slack` at both ends, and the machine's own envelope too
 /// (`Machine::unreachable`).

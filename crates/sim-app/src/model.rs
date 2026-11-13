@@ -256,7 +256,7 @@ const SENSITIVITY_KEYS: [&str; 6] =
     ["ui-analysis-parameter", "ui-analysis-low", "ui-analysis-high", "ui-analysis-peak-change", "ui-analysis-rms-change", "ui-analysis-time-change"];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 28] = [
+const CHECKS: [&str; 29] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -285,13 +285,14 @@ const CHECKS: [&str; 28] = [
     "drive-current",
     "drive-peak-current",
     "singularity",
+    "collision",
 ];
 /// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
 const BREAKDOWN_KEYS: [&str; 5] = ["quantity-torque-inertia", "quantity-torque-gravity", "quantity-torque-friction", "quantity-torque-rest", "quantity-torque"];
 /// The parts of a friction force, in the order of `Machine::friction_curve`.
 const FRICTION_KEYS: [&str; 3] = ["quantity-friction-coulomb", "quantity-friction-viscous", "quantity-friction-stiction"];
 /// The labels of the effect view's tables and of the rows of an energy budget that the machine does not name.
-const EFFECT_KEYS: [&str; 19] = [
+const EFFECT_KEYS: [&str; 21] = [
     "ui-effects-part",
     "ui-effects-peak",
     "ui-effects-rms",
@@ -311,6 +312,8 @@ const EFFECT_KEYS: [&str; 19] = [
     "budget-mains",
     "budget-line-module",
     "budget-payload",
+    "budget-crash",
+    "budget-discharge",
 ];
 
 /// The labels of the thermal, belt and comparison views.

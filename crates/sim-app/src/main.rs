@@ -421,8 +421,8 @@ fn arrow_length(force: f32) -> f32 {
 }
 
 /// The planned path as a line in the 3D view, and over it the path the tool has really travelled since; a grid on
-/// the floor; where they are switched on, the force arrows and where the plan has the tool; and a box around the part
-/// picked by a click.
+/// the floor; where they are switched on, the force arrows and where the plan has the tool; a box around the part
+/// picked by a click; and the obstacles of the config with the clearance to the nearest.
 fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     if let Some((_, middle, width)) = state.floor {
         let flat = Isometry3d::new(middle, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
@@ -456,6 +456,16 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
         let ghost = tool + (planned - tool) * state.model.exaggeration as f32;
         gizmos.line(tool, ghost, GAP);
         gizmos.sphere(Isometry3d::from_translation(ghost), 0.012, GAP);
+    }
+    // The obstacles as see-through boxes, red while a part touches one, and the clearance to the nearest as a line (its
+    // value is a label, `panels`).
+    for obstacle in &scene.obstacles {
+        let (centre, size) = (to_bevy(obstacle.aabb.centre), to_bevy(obstacle.aabb.size).abs());
+        let colour = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM });
+        gizmos.cube(Transform::from_translation(centre).with_scale(size), colour.with_alpha(0.6));
+    }
+    if let Some((from, to, _)) = scene.clearance {
+        gizmos.line(to_bevy(from), to_bevy(to), palette(ui::LIMIT));
     }
     if let Some(run) = &state.model.path_run {
         gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
@@ -939,11 +949,17 @@ fn panels(
         let text = format!("{}  {:.0} {}", state.model.tr.tr(arrow.owner_key), size, "N");
         (size > 0.5).then(|| (to_bevy(arrow.pos) + force / size * (arrow_length(size) + 0.03), text))
     });
+    // The clearance to the nearest obstacle in mm, at the middle of its line (`draw_paths`).
+    let clearance = scene.clearance.map(|(from, to, gap)| {
+        let middle = (to_bevy(from) + to_bevy(to)) / 2.0;
+        (middle, state.model.tr.tr_arg("ui-clearance", &format!("{:.1}", gap * 1e3)))
+    });
     // Each label where its point is seen, if that is in the view.
     let view = egui::Rect::from_min_max(egui::pos2(view_left, view_top), egui::pos2(view_right, view_bottom));
     let mut labels: Vec<_> = values
         .chain(forces)
         .chain(ghost)
+        .chain(clearance)
         .filter_map(|(pos, text)| {
             let at = camera.world_to_viewport(camera_transform, pos).ok()?;
             let at = egui::pos2(at.x, at.y);

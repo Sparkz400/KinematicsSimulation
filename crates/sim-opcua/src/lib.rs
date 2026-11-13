@@ -74,7 +74,7 @@ use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerHandle};
 use opcua::types::{DataTypeId, DataValue, MessageSecurityMode, NodeId, ObjectId, StatusCode, Variant};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
-use plcopen::{Axis, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
+use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -334,7 +334,9 @@ impl SimLoop {
         for (axis, at) in self.plc.iter_mut().zip(&setpoint) {
             axis.advance(self.interval, *at);
         }
-        if !moving.contains(&true) {
+        // Drives that went off in this tick (a trip, a crash) are the axes' error, ErrorID 7 or 8 after the steps, not
+        // the refused setpoint.
+        if !moving.contains(&true) || !self.sim.control.enabled() {
             return None;
         }
         let err = self.sim.command(Command::Setpoint(self.plc.iter().map(|a| a.pos).collect())).err()?;
@@ -471,10 +473,10 @@ async fn simulate(mut s: SimLoop) {
             owed -= s.sim.dt;
         }
         s.pacing.lock().unwrap().record(period, (s.sim.step - steps_before) as f64 * s.sim.dt);
-        // Drives switched off by `command.disable` or a trip: an error for every powered axis.
+        // Drives switched off by `command.disable`, a trip or a crash: an error for every powered axis.
         if !s.sim.control.enabled() {
             for axis in s.plc.iter_mut().filter(|a| a.enable && a.error_id == 0) {
-                axis.fault(ERR_DRIVES_OFF);
+                axis.fault(if s.sim.crashed { ERR_CRASH } else { ERR_DRIVES_OFF });
             }
         }
 

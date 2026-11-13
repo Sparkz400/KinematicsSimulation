@@ -220,6 +220,35 @@ fn a_drive_by_name_brings_its_published_dc_link_data() {
     assert_eq!(rating(&exct, "dc_link_capacitance_uf"), 66.0);
 }
 
+/// An S120 line-up brakes through one Braking Module (1.5 kW continuous, 100 kW peak) for all its axes, so their
+/// braking power is judged together. Two axes each feeding back 900 J in a 1 s cycle, both at 60 kW at the same
+/// moment, each more than its DC link takes: by hand 900 + 900 = 1800 W mean against 1500 W and 60 + 60 = 120 kW
+/// peak against 100 kW, both FAIL, where each axis alone (900 W, 60 kW) passed before. An S210 has a resistor of its
+/// own: the same load on the EXCT-30's 6SL3210-5HE11-5UF0 is judged per axis against 100 W and 5.7 kW. And a run:
+/// the peak of the summed signal lies between the highest axis' peak and the sum of the peaks.
+#[test]
+fn an_s120_line_up_is_judged_against_its_one_braking_module() {
+    use sim_components::analysis::{CycleLoad, MotorLoad, verdicts};
+    let axis = MotorLoad { energy_regenerated: 900.0, peak_regenerated_power: 60e3, largest_regeneration: 900.0, ..Default::default() };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: vec![axis.clone(), axis], budget: None, part_rises: Vec::new(), clearance: None, contact: None, braking_power_peak: 120e3 };
+    let braking = |cfg: &Config| -> Vec<(&'static str, Option<usize>, f64, f64, bool)> {
+        verdicts(cfg, &load).unwrap().into_iter().filter(|v| v.check.starts_with("braking-resistor")).map(|v| (v.check, v.motor, v.value, v.limit, v.ok)).collect()
+    };
+    let mut cfg = exct_30();
+    cfg.set_text("effects.dc_link = false").unwrap();
+    cfg.set_text("parts.drive = \"6SL3120-2TE13-0AD0\"").unwrap();
+    let s120 = resolve(&machine_t_gantry::ENTRY, &cfg).unwrap();
+    assert_eq!(braking(&s120), [("braking-resistor-continuous", None, 1800.0, 1500.0, false), ("braking-resistor-peak", None, 120e3, 100e3, false)]);
+    let mut s210 = resolve(&machine_t_gantry::ENTRY, &exct_30()).unwrap();
+    s210.set_text("effects.dc_link = false").unwrap();
+    let per_axis: Vec<_> = (0..2).flat_map(|k| [("braking-resistor-continuous", Some(k), 900.0, 100.0, false), ("braking-resistor-peak", Some(k), 60e3, 5700.0, false)]).collect();
+    assert_eq!(braking(&s210), per_axis);
+    let run = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(&machine_t_gantry::ENTRY, &s120).unwrap()).unwrap();
+    let peaks: Vec<f64> = run.motors.iter().map(|m| m.peak_regenerated_power).collect();
+    let (highest, sum) = (peaks.iter().cloned().fold(0.0, f64::max), peaks.iter().sum::<f64>());
+    assert!(highest > 0.0 && run.braking_power_peak >= highest && run.braking_power_peak <= sum * (1.0 + 1e-12), "{} W, axes {peaks:?}", run.braking_power_peak);
+}
+
 /// The S120 motors: a 1FK7 brings its data sheet's winding as the model's one winding has it (three times the
 /// phase's resistance and inductance) and the current loop retuned for it (Kp = L / T with the config's T = 10 mH /
 /// 40 V/A = 0.25 ms, Tn = L / R); a 1FK2 on S120 its manual's rated values. The pairing: D 21.4's Motor Module for

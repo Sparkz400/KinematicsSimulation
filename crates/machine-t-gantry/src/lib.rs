@@ -311,6 +311,35 @@ impl TGantry {
         (k, 2.0 * k * k * h / f.tilt, k * (1.0 / f.lateral + h * h_tool / f.tilt))
     }
 
+    /// The Z axis and what hangs from it, as `scene` draws them before the frame sways, and their lean: with
+    /// effects.tool_flex they turn about the carriage so that the tool moves by its flex travel, `exaggeration` times
+    /// (`Scene::exaggeration`; deflections are micrometres).
+    fn hanging(&self, s: &[f64], exaggeration: f64) -> (Vec<Part>, f64) {
+        let (x, z, span) = (s[0], s[1], self.span_min);
+        let (y, cx, half) = (-0.05, span + x, 0.03);
+        let (top, bottom) = (span + z, z - self.axes[1].max - span);
+        let part = Part::new;
+        let mut hanging = vec![
+            part("z-axis", Shape::Box { size: [0.04, 0.03, top - bottom] }, [cx, y, (top + bottom) / 2.0], [0.78, 0.8, 0.84]),
+            part("clamp", Shape::Box { size: [0.09, 0.035, 0.03] }, [cx, y, top + 0.015], [0.85, 0.3, 0.2]),
+            // The tool: drawn where `scene_point` says, at the carriage's place on the beam.
+            part("flange", Shape::Box { size: [0.07, 0.05, 0.02] }, self.scene_point(&[x, z]).unwrap_or_default(), [0.3, 0.3, 0.33]),
+        ];
+        if self.payload() > 0.0 {
+            hanging.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, y, bottom - half - 0.072], [0.2, 0.7, 0.3]));
+        }
+        sim_core::scene::idler(&mut hanging, [cx, bottom], y, half - 0.002, -2.0 * x / half);
+        let u = if self.elastic { s[U] } else { 0.0 };
+        let tool_arm = -self.scene_point(&[x, z]).unwrap_or_default()[2];
+        let lean = (exaggeration * self.flex_at(z).2 * u / tool_arm.max(0.05)).clamp(-0.5, 0.5).asin();
+        let (sin, cos) = lean.sin_cos();
+        for p in &mut hanging {
+            [p.pos[0], p.pos[2]] = [cx + (p.pos[0] - cx) * cos - p.pos[2] * sin, (p.pos[0] - cx) * sin + p.pos[2] * cos];
+            p.angle += lean;
+        }
+        (hanging, lean)
+    }
+
     /// Bearing friction of the idlers as forces opposing (vx, vz): each idler holds back the belt that
     /// passes it (see the module comment for the speeds).
     fn idler_friction(&self, vx: f64, vz: f64) -> (f64, f64) {
@@ -1060,30 +1089,12 @@ impl Machine for TGantry {
             part("carriage", Shape::Box { size: [0.16, 0.02, 0.16] }, [cx, -0.02, 0.0], [0.2, 0.22, 0.26]),
         ]);
         cable_chain(&mut out.parts, end, x, cx, beam_half);
-        // The Z axis and what hangs from it, apart: with effects.tool_flex they lean about the carriage.
-        let mut hanging = vec![
-            part("z-axis", Shape::Box { size: [0.04, 0.03, top - bottom] }, [cx, y, (top + bottom) / 2.0], [0.78, 0.8, 0.84]),
-            part("clamp", Shape::Box { size: [0.09, 0.035, 0.03] }, [cx, y, top + 0.015], [0.85, 0.3, 0.2]),
-            // The tool: drawn where `scene_point` says, at the carriage's place on the beam.
-            part("flange", Shape::Box { size: [0.07, 0.05, 0.02] }, self.scene_point(&[x, z]).unwrap_or_default(), [0.3, 0.3, 0.33]),
-        ];
-        if self.payload() > 0.0 {
-            hanging.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, y, bottom - half - 0.072], [0.2, 0.7, 0.3]));
-        }
-        idler(&mut hanging, [cx, bottom], y, half - 0.002, -2.0 * x / half);
-        // Deflections are micrometres; the front end may ask for them larger (`Scene::exaggeration`). The Z axis
-        // turns about the carriage so that the tool moves by its flex travel; the frame sways by q.
-        let (q, u) = if self.elastic { (s[Q], s[U]) } else { (0.0, 0.0) };
-        let tool_arm = -self.scene_point(&[x, z]).unwrap_or_default()[2];
-        let lean = (out.exaggeration * self.flex_at(z).2 * u / tool_arm.max(0.05)).clamp(-0.5, 0.5).asin();
+        let (hanging, lean) = self.hanging(s, out.exaggeration);
+        let q = if self.elastic { s[Q] } else { 0.0 };
         let turn = |p: [f64; 2]| {
             let (sin, cos) = lean.sin_cos();
             [cx + (p[0] - cx) * cos - p[1] * sin, (p[0] - cx) * sin + p[1] * cos]
         };
-        for p in &mut hanging {
-            [p.pos[0], p.pos[2]] = turn([p.pos[0], p.pos[2]]);
-            p.angle += lean;
-        }
         out.parts.extend(hanging);
         // Positive pulley angles turn clockwise seen from the front (the top of the pulley moves right).
         drive_unit(&mut out.parts, [0.0, 0.0], y, r, -pulley[0], -rotor[0], [0.9, 0.45, 0.1]);
@@ -1183,6 +1194,15 @@ impl Machine for TGantry {
     /// The flange under the idler at the bottom of the Z axis, in the belt plane.
     fn scene_point(&self, tool_pose: &[f64]) -> Option<[f64; 3]> {
         Some([self.span_min + tool_pose[0], -0.05, tool_pose[1] - self.axes[1].max - self.span_min - 0.042])
+    }
+
+    /// What hangs from the carriage and moves through the work area: the Z axis, the flange and the payload, where
+    /// `scene` draws them (unexaggerated), without drawing the rest: the live check asks for them every base step.
+    fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
+        let sway = if self.elastic { s[Q] } else { 0.0 };
+        let mut boxes = sim_core::scene::scene_boxes(&self.hanging(s, 1.0).0, &["z-axis", "flange", "payload"]);
+        boxes.iter_mut().for_each(|b| b.centre[0] += sway);
+        boxes
     }
 }
 

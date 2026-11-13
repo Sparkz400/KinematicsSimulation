@@ -46,6 +46,8 @@ pub const ERR_RANGE: u16 = 4;
 pub const ERR_BUSY: u16 = 5;
 pub const ERR_REFUSED: u16 = 6;
 pub const ERR_DRIVES_OFF: u16 = 7;
+/// The drives went off because the machine ran into an obstacle (effects.crash).
+pub const ERR_CRASH: u16 = 8;
 
 /// A function block's inputs and outputs. `Active` reads the same as `Busy`: there is no buffering.
 #[derive(Debug, Clone, Default)]
@@ -480,7 +482,7 @@ mod tests {
         let t = 0.01;
         let mut a = axis();
         // Each step: the motion's velocity, acceleration and deceleration bound it; braking through zero is two parts.
-        let mut step = |a: &mut Axis, n: usize, (vel, acc, dec): (f64, f64, f64)| {
+        let step = |a: &mut Axis, n: usize, (vel, acc, dec): (f64, f64, f64)| {
             // Without a motion the axis would follow the setpoint 0 given here.
             for _ in 0..n {
                 if !a.moving() {

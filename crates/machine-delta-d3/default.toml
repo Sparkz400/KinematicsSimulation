@@ -10,6 +10,11 @@
 # Units are in the field names. The frame: origin at the centre of the shoulder axes' plane, z up, so the platform
 # works below zero; arm 1 points along +x, arms 2 and 3 at 120 and 240 degrees.
 format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.0, 0.0, -0.95], size_m = [0.1, 0.1, 0.1] }]
+# (between pick and place, 50 mm below the payload as it passes: `collision` passes at profile.min_clearance_m 0.025)
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
 
 [sim]
 dt_s = 62.5e-6
@@ -67,6 +72,9 @@ fieldbus_delay = false
 fieldbus_jitter = false
 sensor_noise = false
 shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
+# (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
+crash = false
 
 # The kinematics. e = base_radius_m - platform_radius_m is what the equations use.
 # [estimate] Williams' IRB 360-1/1600 figures (R 164, r 44, upper arm 524, forearm 1244 mm, for a working radius of
@@ -214,7 +222,7 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# Velocity loop gain, tuned with `sim-cli margins delta --bands` for a phase margin of at least 35 degrees and a gain
+# Velocity loop gain, tuned with `sim-cli margins delta-d3 --bands` for a phase margin of at least 35 degrees and a gain
 # margin of at least 6 dB in every run, also with motor and joint friction off. The loop crosses over near 230 Hz, where
 # the rotor alone is left (above the gearboxes' resonance), so the filters below are 0.1 ms (0.2 ms on the belt
 # machines). Found: at least 41.7 degrees and 8.1 dB (friction off), 47.0 degrees and 8.6 dB (on), with the catalogue's
@@ -242,6 +250,10 @@ notch_bandwidth_hz = 20.0
 encoder_noise_counts = 4.0
 current_noise_a = 0.01
 noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module: verdicts judges the
+# sum of their braking power against ratings.braking_resistor_continuous_w and _peak_w. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
@@ -298,7 +310,8 @@ tension_reserve = 0.8
 tension_margin_n = 0.0
 # Not used on three axes (see docs/user-guide.md): paths run as given.
 path_tolerance_m = 0.0
-# For `sim-cli optimise`: the cycle's own 25 mm lift, as if something that high stood between pick and place.
+# For `sim-cli optimise`: the cycle's own 25 mm lift, as if something that high stood between pick and place. The
+# same clearance is kept from every obstacle (check "collision", and a time-optimal path that comes nearer is refused).
 min_clearance_m = 0.025
 
 # Low and high bound of the values that are estimates (see the other machines' configs).

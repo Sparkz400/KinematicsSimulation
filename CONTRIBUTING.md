@@ -30,12 +30,18 @@ below are about evidence first and code second.
 ## Before a pull request
 
 ```
-cargo build --workspace --release
-cargo test --workspace --release
-cargo clippy --workspace --release --all-targets
+cargo build --workspace --release --exclude sim-py
+cargo nextest run --workspace --release --exclude sim-py
+cargo test --doc --workspace --release --exclude sim-py
+cargo clippy --workspace --release --all-targets --exclude sim-py
 ```
 
-The physics tests integrate millions of steps; run them in release.
+The physics tests integrate millions of steps; run them in release. [cargo-nextest](https://nexte.st) (`cargo install
+cargo-nextest --locked`) runs the tests of all binaries at once, which takes the suite from about 10 to under 5 minutes
+on 16 cores; its settings are in `.config/nextest.toml`. It does not run doctests, hence the third line.
+`cargo test --workspace --release --exclude sim-py` still runs everything, one test binary after the other. One
+test: `cargo nextest run --release -p sim-machines -E 'test(=every_effect_switch_changes_the_traces)'`. sim-py is
+built and tested with maturin (see the CI workflow).
 
 ## Licence
 

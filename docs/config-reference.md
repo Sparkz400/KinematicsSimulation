@@ -23,7 +23,7 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 ## Rules
 
 - `format_version = 1` is required. Any other value is refused.
-- A config has to be complete. There are no built-in defaults for a missing key: a key that the machine reads and the file lacks is refused (`Configuration value is missing: ...`). Only `[ratings]` entries, `[parts]` and `[bounds]` may be left out.
+- A config has to be complete. There are no built-in defaults for a missing key: a key that the machine reads and the file lacks is refused (`Configuration value is missing: ...`). Only `[ratings]` entries, `[parts]`, `[bounds]`, `obstacles` and `drive.braking_module` (off) may be left out.
 - A config file (`--config`) may not have a key that the machine's default config lacks: it is refused by name (`Configuration has a value this machine does not know: ...`), so a misspelt key cannot pass for the default's value. `[bounds]` has its own check, and `ratings.pulley_max_torque_nm` is the one rating no default config has. A name in `[parts]` has to be text.
 - `--set path=value` and the app's parameter panel can only change values that exist, and cannot change their type. An integer is accepted where a float is expected.
 - Most physical values must be strictly positive (masses, radii, stiffnesses, cycle times, friction levels). A zero there is refused as out of range.
@@ -40,6 +40,7 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 | Key | In | Unit | Meaning |
 | --- | --- | --- | --- |
 | `format_version` | T E S | – | Format of the file. Must be 1 |
+| `obstacles` | T E S D | – | Obstacles in the work area: a list of boxes with their edges along the axes of the 3D view (scene coordinates, m: x right, y into the depth, z up), each a table with `name` (text), `centre_m` and `size_m` (three numbers each, the sizes above 0; another key in an entry is refused). `[]` in all four files: no obstacles, and nothing changes. Write `obstacles = [{ name = "fixture", centre_m = [...], size_m = [...] }]`, or `[[obstacles]]` tables at the end of a file without the `obstacles = []` line. A config without the key has none. The tool is where the 3D view draws it: T and E at (`geometry.span_min_m` + x, −0.05, z − `stroke_z_m` − `span_min_m` − 0.042), S at (`span_min_m` + x, −0.03, 0.06), D at (x, y, z). What can hit an obstacle, the clearance kept (`profile.min_clearance_m`) and the crash are in the [model reference](model-reference.md#obstacles-and-crash) |
 
 ## `[sim]`
 
@@ -123,6 +124,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `fieldbus_delay` | T E S | off | The motor setpoints reach the drives some profile cycles late |
 | `fieldbus_jitter` | T E S | off | Each frame of motor setpoints takes from 0 to `profile.fieldbus_jitter_cycles` more cycles than the delay, evenly and pseudo-random from `drive.noise_seed` (every run the same); the drives use the newest frame that has arrived, so a late frame leaves them the one before. Works with or without `fieldbus_delay`. Off by default, so that earlier results stay as they were |
 | `sensor_noise` | T E S | off | Gaussian noise on the measured position and current, repeatable from a seed |
+| `crash` | T E S D | off | The obstacles of `obstacles` are rigid: a part moving into one stops dead at its face, with the drives on or off, and drives that were on go off; enabled again, they can take the machine out (see the [model reference](model-reference.md#obstacles-and-crash)). Contacts are found and reported whether it is on or not; off, the machine moves through the obstacle. Changes nothing without obstacles. Off by default, so that earlier results stay as they were |
 
 **Motion planning**
 
@@ -363,6 +365,7 @@ One drive per motor, all with the same settings.
 | `encoder_noise_counts` | T E S | counts | Standard deviation of the noise on the measured position | estimate | `sensor_noise` |
 | `current_noise_a` | T E S | A | Standard deviation of the noise on the measured current | estimate | `sensor_noise` |
 | `noise_seed` | T E S | – | Seed of the noise and of the fieldbus jitter. A whole number, not negative. Each motor has a stream of its own, and the jitter one more | choice | `sensor_noise`, `fieldbus_jitter` |
+| `braking_module` | T E S D | on/off | The axes brake through one braking resistor for all, as an S120 line-up through its Braking Module: `verdicts` judges the sum of their braking power against `ratings.braking_resistor_continuous_w` (the mean of the sum) and `_peak_w` (the peak of the summed power, step by step), once for the machine. Off in all four files: each axis has a resistor of its own, as an S210, and is judged alone. A drive by name sets it: on for an S120 Motor Module, off for an S210. Optional in a config file (off) | choice | `verdicts` |
 
 ## `[ratings]`
 
@@ -419,7 +422,7 @@ The DC link ratings of T and S are placeholders for the drive those configs were
 | `torque_reserve` | T E S | fraction | Share of the torque-speed curve a time-optimal path may use. Above 0, at most 1 | choice | `--time-optimal` |
 | `tension_reserve` | T E S | fraction | Share of the room between the belt tension that holds the tool and `ratings.belt_max_tension_n` / `belt_min_tension_n` (each less `tension_margin_n`) that a time-optimal path may use in the plan's rigid model. 0.5 in all three files: a change of acceleration quick against the belt's period makes a lightly damped belt overshoot by up to the change itself, so the full model swings up to twice the rigid model's dynamic tension (0.8 let the default T-gantry pass a 330 N rating by 1.4 N at 100 m/s³ and go slack at 1000 m/s³). Above 0, at most 1. Without a tension rating the belt is no limit of the plan | choice (E: estimate) | `--time-optimal` |
 | `tension_margin_n` | T E S D | N | Taken off both belt tension ratings before `tension_reserve`, for the guide friction the belt pulls, which the loss-free rigid model leaves out: the X guide's coulomb friction plus its viscous friction at the axis' top speed (T 15 + 20 · 0.8 = 31 N, E 20 + 20 · 2.5 = 70 N, S 15 + 20 · 1.0 = 35 N; D 0, no belt). At least 0. A path whose holding tension alone is beyond a rating less the margin is refused | estimate | `--time-optimal` |
-| `min_clearance_m` | T E S | m | For `sim-cli optimise` and the app's optimiser: how far the tool has to stay beyond the farther of pick and place (along the last axis, the side the lift goes to) while it traverses between them. The optimiser lowers each lift, traverse and lower of the cycle to this, and rounds its corners through a via point only where the planned path keeps it (less the path tolerance). Not negative. T 0.3 and E 0.17: the lifts as configured (no obstacle is known); S 0 (no lift) | choice, or the height of an obstacle | `optimise` |
+| `min_clearance_m` | T E S D | m | The least clearance the machine keeps from every obstacle of `obstacles` (surface to surface, between the obstacle and the parts that can hit one): the check `collision` judges the run's least clearance against it, and a time-optimal path that comes nearer is refused (`error-path-collision`). Also, for `sim-cli optimise` and the app's optimiser: how far the tool has to stay beyond the farther of pick and place (along the last axis, the side the lift goes to) while it traverses between them. The optimiser lowers each lift, traverse and lower of the cycle to this, and rounds its corners through a via point only where the planned path keeps it (less the path tolerance). Not negative. T 0.3 and E 0.17: the lifts as configured (no obstacle is known); S 0 (no lift); D 0.025, its 25 mm lift | choice, or the height of an obstacle | `optimise` |
 | `path_tolerance_m` | T E S | m | How far a planned path may leave the lines, arcs and splines of its file, so that transition curves can take it from a line into an arc at speed, and a spline's end can be eased to the curvature of the line or arc it meets. The deviation is L² / (24 r) for curves of length L at an arc of radius r, 0.01728 dk l² for a spline eased over l against a step dk of the curvature, and is reported. Not negative; 0 (in all three files) plans the path as given | choice | `--path`, and the app's Path |
 
 ## `[bounds]`

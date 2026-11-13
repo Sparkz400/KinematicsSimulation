@@ -305,6 +305,16 @@ struct Losses {
 }
 
 impl Delta {
+    /// The platform at `p` and the payload under it, as `scene` draws them.
+    fn on_platform(&self, p: [f64; 3]) -> Vec<Part> {
+        let size = 2.4 * self.platform_radius.max(0.03);
+        let mut parts = vec![Part::new("platform", Shape::Box { size: [size, size, 0.03] }, p, [0.55, 0.55, 0.6])];
+        if self.payload_attached && self.m_payload > 0.0 {
+            parts.push(Part::new("payload", Shape::Box { size: [0.1, 0.1, 0.08] }, [p[0], p[1], p[2] - 0.06], [0.2, 0.7, 0.3]));
+        }
+        parts
+    }
+
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
         let base_radius = cfg.positive("geometry.base_radius_m")?;
         let platform_radius = cfg.non_negative("geometry.platform_radius_m")?;
@@ -867,17 +877,20 @@ impl Machine for Delta {
             }
             out.labels.push(Label { pos: at(self.base_radius, 0.3), owner_key: self.motors[k].key, value: rotor_speed[k] * 60.0 / std::f64::consts::TAU, unit_key: "unit-rpm", decimals: 0 });
         }
-        let size = 2.4 * self.platform_radius.max(0.03);
-        out.parts.push(Part::new("platform", Shape::Box { size: [size, size, 0.03] }, p, [0.55, 0.55, 0.6]));
-        if self.payload_attached && self.m_payload > 0.0 {
-            out.parts.push(Part::new("payload", Shape::Box { size: [0.1, 0.1, 0.08] }, [p[0], p[1], p[2] - 0.06], [0.2, 0.7, 0.3]));
-        }
+        out.parts.extend(self.on_platform(p));
         out.labels.push(Label { pos: [p[0], p[1], p[2] - 0.15], owner_key: "axis-z", value: p[2], unit_key: "unit-m", decimals: 3 });
     }
 
     /// The platform's centre: the machine's frame is the scene's.
     fn scene_point(&self, tool_pose: &[f64]) -> Option<[f64; 3]> {
         Some([tool_pose[0], tool_pose[1], tool_pose[2]])
+    }
+
+    /// The platform and the payload under it, where `scene` draws them, without drawing the rest: the live check asks
+    /// for them every base step. The forearms are left out.
+    fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
+        let (t, _) = self.arms(s);
+        sim_core::scene::scene_boxes(&self.on_platform(self.pose(t).0), &["platform", "payload"])
     }
 }
 

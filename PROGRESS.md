@@ -1045,3 +1045,129 @@ Left open:
 - The tension margin and share are a judgement backed by sweeps of the default T-gantry, not a bound: the plan has no belt frequency to compute the swing from; an elastic estimate of the plan (a mode filter on the rigid tensions) would need one per machine and pose.
 - The S120 trip level 820 V is typed from the manual into `catalog.rs`, not extracted into a catalogue file.
 - The delta with the catalogue gearbox fails `settling`; no low-backlash gearbox is in the catalogue to put in its place.
+
+## Obstacles and crash detection (13 November)
+
+| Item | What was built | Test |
+| --- | --- | --- |
+| Config | `obstacles`: a list of boxes along the axes of the 3D view (`name`, `centre_m`, `size_m`), `[]` in all four configs, optional in a config file; an entry with another key, a size of 0 or not three numbers is refused (`obstacles[i]`). No second clearance key: `profile.min_clearance_m` was the optimiser's lift above pick and place, "an obstacle there"; it is now the one clearance the machine keeps, from the modelled obstacles too. Its values stay (T 0.3, E 0.17, S 0, D 0.025) | `a_bad_obstacle_is_refused` |
+| Collision bodies | `Machine::collision_bodies(state)`, by default the tool as a point at `scene_point`; `scene::scene_boxes` takes named boxes of the machine's own scene. T: Z axis, flange, payload; S: carriage, payload; D: platform, payload (no forearms). `Aabb::gap`: nearest points and clearance, negative depth in an overlap | `gap_between_boxes_by_hand` (sim-core) |
+| Checks | Before a run: `collision::check_path` (every mm, machine at rest at each pose) and `check_cycle` (start, each segment with the payload as the segment before left it, round again; via points as planned; blending not followed). While it runs: every base step in `Sim::step`, only with obstacles. Check `collision` (in `AT_LEAST`): least clearance of the run against `profile.min_clearance_m`, failing at contact; not made without obstacles | `a_box_beside_a_straight_move_keeps_the_clearance_by_hand` (0.13 m by hand, planned and run), `a_box_under_the_traverse_is_judged_by_the_collision_check` (0.048 m by hand on the T-gantry; fails at 0.3, passes at 0.04; no check and no change on any machine without obstacles) |
+| Crash | `effects.crash`, off: on contact the machine is put at rest at the tool's pose and the drives go off (plastic impact on a rigid obstacle; a contact spring would need a stiffness, a damping and a smaller step). Contact time, pose, impact speed and obstacle in `Sim::contact` and `CycleLoad::contact`, with the crash off too | `a_move_into_a_box_stops_at_its_face_at_the_planned_speed` (face at x = 0.47 by hand, 1 m/s planned and at impact, stopped within one step's travel; through it without the crash) |
+| Optimiser | A time-optimal path nearer than the clearance is refused (`error-path-collision`); `optimise` judges candidates by the verdicts, so `collision` keeps its lifts off the obstacles | `a_time_optimal_path_into_an_obstacle_is_refused` |
+| Front ends | CLI `run` and `verdicts` say the planned least clearance and first contact pose, `run` the run's, on the error stream; the verdict table has the `collision` row. App: obstacles as see-through wire boxes, red in contact; the clearance as a red line with an mm label among the view's labels; the first contact as a red mark on the timeline. Labels EN/DE in sim-components, sim-cli and sim-app | the workspace's key and string checks |
+
+Left open:
+
+- The app draws the obstacles as see-through wireframe boxes (gizmos), not filled translucent meshes.
+- ~~The crash's kinetic energy is not booked as a loss; the energy budget of a run with a crash does not close.~~ Booked (eleventh review fixes), with the bleeder loss of the drives switched off.
+- ~~The live check builds the machine's scene every base step while obstacles exist: 4 s of the T-gantry's cycle take 0.61 s instead of 0.23 s on the CLI (the planned check included). Without obstacles nothing changes. Worth a cheaper body list per machine if obstacles are used in searches.~~ The machines build only their collision boxes now (eleventh review fixes).
+- The delta's forearms are not collision bodies; turned parts count as their unturned boxes.
+
+## Eleventh review fixes (13 November 2026)
+
+A review confirmed the points below by experiment. Each fix has a test that was seen to fail with the fix taken out (the fix taken out of the file by hand, the test run, the file restored), except where the row says otherwise. `cargo test --workspace --release --exclude sim-py`: 414 tests (4 new: delta rim arc, CLI axis index, S120 line-up, collision bodies; the crash budget and tightest-check cases extend existing tests), all pass; one run had `a_config_file_is_opened_changed_saved_and_opened_again` (app) fail on `wait_for_data` timing out under load (another test process at full CPU), which passed 3 of 3 alone and in the app suite again. `sim-fmi`'s `the_guid_changes_with_the_model_description` took the first boolean of the config for an effect switch; it now takes an effect (`drive.braking_module` sorts first).
+
+| Fix | What changed | Test |
+| --- | --- | --- |
+| 1 A delta path along the rim of its range refused by rounding | `control::near_start` allows a pose away from the start 1e-9 m (`ROUNDING`) beyond the axis range and the envelope (`unreachable`). The reviewer's `line,0.6,0.0,-0.775` then `arc,0.0,0.6,-0.775,0.0,0.0,-0.775,ccw` runs again on `analyze delta-d3 --path` | `an_arc_along_the_rim_of_the_range_is_planned` (delta, both planners; seen failing with `ROUNDING` 0) |
+| 2 PLC tests took the end within 2.3 mm on the delta | The three tests read the controller's setpoint (`signal.axis.<id>.position_setpoint`) and want it on the target to 1e-6 m; the tool's actual position within 1.2 times the sag at rest at that pose (0.5 s at rest with it as the start pose), at least 0.2 mm (`at_rest_within`). On the gantries that is the 0.2 mm, on the delta the sag of the pose, not the 2.3 mm slack | `a_plc_commanded_move_runs_and_reports_position_and_following_error`, `a_path_from_the_plc_is_planned_and_run`, `plcopen_power_home_and_moves_reach_their_targets` (each seen failing with the commanded target, or the path's end it is judged against, 1 mm off: "set to 0.30099 m, target 0.29999 m") |
+| 3 Guides said poses up to 0.1 mm outside the range are taken | The limits bullet and the `--trajectory` bullet, EN and DE: only near its start may a path leave the range, by the machine's setpoint slack (0.1 mm gantries, 2.3 mm delta); the first pose of a trajectory within that slack of the setpoint | — |
+| 4 German `error-path-tension` named the margin "Reserve" | "abzüglich des Abstands (profile.tension_margin_n)", as its label | — |
+| 5 `step`/`bode --axis-index` took -1 as 0 and 1.7 as 1 | `axis_index` in the CLI reads a whole number below the machine's axis count; otherwise `cli-error-axis-index` (EN/DE) names `--axis-index` and the highest index | `a_bad_axis_index_is_refused` (cli; -1, 1.7 and one past the last axis, both commands, both languages; seen failing: -1 ran) |
+| 6 S120 axes each judged against the whole Braking Module | New key `drive.braking_module` (all four configs off, optional in a config file, label EN/DE, config reference): the axes brake through one resistor for all. `apply_drive` sets it for an S120 Motor Module and clears it for an S210. `verdicts` then judges `braking-resistor-continuous` and `-peak` once, without a motor: the mean of the summed braking power and the peak of the sum step by step (`CycleLoad::braking_power_peak`: the resistors' power with the DC link simulated, a shared one once, or the power fed back without). The search's "tightest check" takes such a verdict as backing every axis's DC link (without that the S120 search example of the guide showed `dc-link-energy` 1.0000; it is unchanged now). Guides' Drive row EN/DE | `an_s120_line_up_is_judged_against_its_one_braking_module` (catalog_parts; two axes each 900 J in 1 s, 60 kW at once: by hand 1800 W against 1500 W and 120 kW against 100 kW, both FAIL; the same load on the EXCT-30's S210 per axis; and a run's summed peak between the highest axis peak and the sum of the peaks; seen failing: per axis, 900 W and 60 kW, ok). `the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs` (one more case; seen failing: dc-link-energy 1.0) |
+| 7 Comments | The gantry test's doc says 330 to 1500 N (330 N at the default limits); the delta config says `sim-cli margins delta-d3` | — |
+| 8 Crash energy not booked | `Sim::crash_energy`: what each stop at an obstacle took (`Machine::energy` before less after), budget row `crash` with effects.crash ("Crash"/"Aufprall", sim-components, app key list). That alone left 0.074 J of 22.7 J (0.32 %) open on the move into a box: the DC link of the drives, off from the stop on, discharges through its bleeder and the rectifier draws it back, a loss no row had (on any run with the drives off: `--disable-at` as well). `Drive::discharge_power` and budget row `discharge` ("DC link discharge of drives switched off"/"Zwischenkreisentladung abgeschalteter Antriebe"), counted in `electrical_unaccounted`. Guides' budget table and example, model reference | `a_move_into_a_box_stops_at_its_face_at_the_planned_speed` (now also: budget within `BUDGET_TOLERANCE`, 0.0016 J of 22.7 J, and the electrical side within `ELECTRICAL_TOLERANCE`; seen failing without the `crash` row, and without the discharge: 0.0738 J of 22.73 J) |
+| 9 The live collision check drew the whole scene every base step | `scene::scene_boxes` takes parts; each machine builds only the parts it can hit with: T-gantry `hanging` (Z axis, clamp, flange, payload, the bottom idler, leaned with tool flex; plus the frame's sway), single axis `on_carriage`, delta `on_platform`, which `scene` draws too. `sim-cli run t-gantry --cycle --time 4 --every 100000` with the reviewer's box under the traverse: before 1.67 s, after 0.89 s, without obstacles 0.55 s (the least of 7 runs each, on a machine with another test process running; the planned check `check_cycle` included). The CSV and the reported clearances (48.0 mm planned and run) are the same byte for byte | `the_collision_bodies_are_boxes_of_the_scene` (every machine, during its cycle, with and without the payload: each body is a box the scene draws, to the bit; seen failing with the T-gantry's sway left out); the existing collision tests unchanged |
+
+Left open:
+
+- The S120 line-up's Braking Module is judged against the summed braking power, but with `effects.dc_link` and `shared_dc_link` off each axis still simulates a DC link and resistor of its own; `shared_dc_link` is not switched on by an S120 drive.
+- The PLC tests' bound on the delta rests on the sag at rest at the pose, which the backlash side of the approach can change; 1.2 times it held on every run here.
+
+## Faster tests (13 November 2026)
+
+The suite runs under [cargo-nextest](https://nexte.st): every test in a process of its own, the tests of all binaries at
+once, where `cargo test` ran the binaries one after the other. `.config/nextest.toml`: a test running over 60 s is
+reported as slow; no retries; the tests against the wall clock (`sim-opcua` plc and soak, `sim-app` app) form the group
+`real-time`, at most 4 at a time; the eight longest tests start first. CI installs nextest with
+`taiki-e/install-action` and runs the doctests on their own (`cargo test --doc`; there are none yet). CONTRIBUTING shows
+the commands.
+
+Measured on the 16-core development machine, release, warm build (nothing to compile), 414 tests:
+
+| | Before (`cargo test`) | After (`cargo nextest run`) |
+| --- | --- | --- |
+| Build and tests, wall clock | 9 min 53 s | 4 min 24 s to 4 min 57 s (two runs) |
+| Tests alone | 580 s (the binaries' own times added up) | 263 s to 293 s |
+
+The suite is now limited by processor time, not by waiting: two tests that sweep every bound use all cores between
+them, and the run ends when the longer one does. Shortened, each without a weaker assertion:
+
+| Test | Change | Alone, before → after | How it was shown to still catch its defect |
+| --- | --- | --- | --- |
+| `every_effect_switch_changes_the_traces` (sim-machines control) | Each flipped run is compared sample by sample with the reference and stops at the first difference, instead of recording 4 s and comparing at the end; same samples, same 4 s for a switch that changes nothing, the same answer to the bit | 34.5 s → 1.3 s | `effects.torque_ripple` read as always on in `Ripple::from_config`: fails "t-gantry: flipping effects.torque_ripple changed nothing"; restored |
+| `the_shipped_velocity_loops_keep_their_margins_across_the_bounds` (sim-machines control) | In the pass with friction off, the bounds of the friction values (`friction_*`, `motor.friction_*`, `joint.friction_*`) are left out: they act on nothing there | 128 s → 111 s | A run of every bound on all four configs, both passes, compared each run's margins with those of the config as it is: all 68 friction runs of the pass without friction were the same to the bit (and no other friction run was left out) |
+
+The real-time waits of the app tests poll with a bound of 60 s instead of 5 s (`wait_for_data`, the refusals of
+`editing_a_parameter_reaches_the_running_simulation`, the trail of `a_path_is_planned_run_and_analysed_in_the_app`), and
+two fixed sleeps before an assertion that new samples arrived became polls (`editing_a_parameter...`, the frozen scopes
+of `scopes_have_a_window_freeze_statistics_and_export`). They return as soon as the data is there; only a failing run
+waits longer. `a_config_file_is_opened_changed_saved_and_opened_again`, which timed out once under load, waits like that.
+
+The 15 slowest tests, each alone (`--test-threads 1`; most of them use every core themselves):
+
+| Test | s |
+| --- | --- |
+| sim-machines control `the_shipped_velocity_loops_keep_their_margins_across_the_bounds` | 128 (111 now) |
+| sim-machines catalog `the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds` | 123 |
+| sim-cli `step_bode_and_tuning_write_csv_for_every_machine` | 73 |
+| sim-app `the_app_optimises_the_cycle_and_applies_the_settings` | 39 |
+| sim-machines control `every_effect_switch_changes_the_traces` | 34 (1.3 now) |
+| sim-machines effects `the_cheap_signals_and_the_lean_analysis_change_no_number` | 34 |
+| sim-machines effects `the_part_thermal_verdicts_judge_where_the_parts_settle` | 31 |
+| sim-machines sweep `the_default_sweep_finds_the_lowest_dip_on_every_config` | 30 |
+| sim-cli `verdicts_search_the_worst_corner_of_the_bounds` | 29 |
+| sim-app `the_frequency_response_is_measured_in_the_app` | 28 |
+| sim-app `the_checks_get_error_bands_in_the_app` | 27 |
+| sim-app `the_app_searches_the_worst_corner_of_the_bounds` | 24 |
+| sim-app `the_app_shows_and_applies_lower_lifts` | 23 |
+| sim-opcua soak `the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift` | 23 |
+| sim-app `a_path_is_planned_run_and_analysed_in_the_app` | 22 |
+
+Left as they are, and why:
+
+- The worst-corner search of the EXCT-30 (about 2400 cycles) and the margins over every bound (about 830 loop
+  measurements of 60 frequencies each) are what they test; fewer runs or frequencies would test less. Of the margin
+  runs, 174 of 468 give the margins of the config as it is to the bit (ratings, hard stops, the brake, process forces,
+  cable chain, idlers, noise: values the loop never meets at standstill), but which ones is known only by running them.
+  Leaving them out of `analysis::bounds` (as `PATH_EFFECTS` does for values of effects that are off) would also speed up
+  the app's bands; that is a change to the product, not to a test.
+- `step_bode_and_tuning...`: 25 of its 73 s are `sim-cli tuning` (17 s on the delta), which has no shorter mode.
+- The soak test runs 20 s by design (`SOAK_SECONDS`).
+- The effects tests repeat one cycle analysis between them (`part_heating` on, every config); sharing it would mean
+  merging two tests. They are single-threaded and run beside the others, so they do not lengthen the suite.
+- The dev profile already builds with `opt-level = 1` and the dependencies with 3, so nothing was added for quick
+  debug runs (not measured here: a debug build of the whole workspace with Bevy takes several minutes).
+
+## Twelfth review fixes (13 November 2026)
+
+A review confirmed the points below by experiment. Each fix has a test that was seen to fail with the fix taken out
+(the change undone in the file, the test run, the file restored), except where the row says otherwise.
+
+| Fix | What changed | Test |
+| --- | --- | --- |
+| 1 After a crash the machine could never be powered up again | The stop left the carriage up to one step's travel inside the obstacle (clearance -26.8 um), and every step after `Enable` found the contact and tripped the drives again. `Sim::check_obstacles` now stops a part only when it moves further into an obstacle: its clearance more than `CREEP` (1 um, in all while in contact) less than where it was judged from; a part that stands or moves out is left to move. The stop puts the machine at the pose where the clearance reached 0, linearly along the step that went in, so at the face (0.7 to 1e-9 m on the single axis), or back where it stood if it was in contact already. `CREEP`: with a strict comparison, drives enabled at rest against the wall tripped after 69 steps on 4.4e-16 m of rounding, and they settle some 25 nm in. `Sim::crashed` says the drives went off at an obstacle (until they are enabled again). PLCopen: ErrorID 8 (`ERR_CRASH`) for a crash instead of 7, and a setpoint streamed in the tick in which the drives went off is no longer refused as ErrorID 6 (seen once: the stream ran before the check of the drives); MC_Reset switches the drives on again as after 7. FMI needs nothing: `command.enable` held true switches the drives on at the next communication step, and they now stay on unless the setpoint drives the tool further in. Guides EN/DE, PLC pages EN/DE, model and config reference | `after_a_crash_the_drives_are_enabled_again_and_move_out` (single axis: the reviewer's wall, 1 s, `Enable`, 0.25 s at rest, `MoveTo(0.1)` reaches it, `MoveTo(0.9)` stops at the face again and trips; seen failing with the old stop: "the drives tripped at rest at 0.4700268"). `plcopen_a_crash_is_reported_reset_and_left` (sim-opcua plc: ErrorID 8, MC_Reset, Standstill, MoveAbsolute to 0.1 within 0.2 mm; seen failing with the old stop, Power.Status never true after the reset, and with ErrorID 7 reported). `a_move_into_a_box_stops_at_its_face_at_the_planned_speed` now wants the face to 1e-9 m (seen failing with the stop at the pose of the step: 0.7000268) |
+| 2 Obstacles stopped the machine only while its drives were on | The stop acts with the drives on or off; drives that were on go off. Its energy is booked in the `crash` row as before | `obstacles_stop_the_machine_with_its_drives_off`: the single axis coasting from x = 0.44 with the drives and brake off stops at the face (seen failing: 81 mm in); the T-gantry without a holding brake, its payload into a table at the pick position, rests on it at z = 0.102 within 2 um (seen failing: it fell 0.098 m through), the budget closes to `BUDGET_TOLERANCE` of the supply plus the 17 J of potential energy (the drives draw 0.18 J for a lower that gravity drives; 1.1 mJ open). With brake on the same run is 6.1 mJ open, so the rest is not the stops' |
+| 3 The search's tightest check hid a failing collision at `min_clearance_m` 0 | `Candidate::tightest` counts a verdict with a limit of 0 when it fails (`utilisation` is infinite for a contact). The reviewer's `search single-axis --series 1FK2104 --gearboxes NRK070` with the wall now names `collision,inf` | `the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs` (two cases: a contact against limit 0 is the tightest, a clearance against limit 0 has no share; seen failing: gearbox-radial-load 0.42) |
+| 4 Stale nextest comment | `every_effect_switch_changes_the_traces` (1.3 s now) left out of the tests started first; seven remain, each 30 s to 4 min | — |
+| 5 Docs | The `obstacles` example of each config lies by its tool path, checked with `sim-cli verdicts`: T-gantry under the traverse, 48 mm below the payload (`collision` fails at 0.3); EXCT-30 under the traverse, 221 mm (passes at 0.17); single axis beside the stroke, 130 mm; delta between pick and place, 50 mm below the payload (passes at 0.025). Config reference: `min_clearance_m` is "T E S D" (D 0.025, its lift); the `crash` rows and the configs' `crash` comments say the obstacles are rigid | — |
+| 6 The faster margins test could skip a bound that acts | The friction bounds are left out of the pass with friction off only while `effects.cable_chain` is off too: the chain's drag takes `friction_x.stribeck_m_s` | — (no shipped config has the chain on, so nothing changes; not seen failing) |
+| 7 `unused mut` in plcopen.rs | Removed | the build has no warning |
+
+Left open:
+
+- The stop puts the whole machine at rest, not only the motion into the obstacle: a part sliding along a face is not
+  stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
+  has gone `CREEP` (1 um) further in, not on their torque or following error.
+- The PLC test's crash and reset run against the wall clock like the other PLC tests.

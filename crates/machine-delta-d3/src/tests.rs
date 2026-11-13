@@ -350,3 +350,14 @@ fn a_path_may_not_use_the_setpoint_slack_away_from_its_start() {
     points.last_mut().unwrap().1[0] = 0.6014;
     assert_eq!(sim.command(Command::Trajectory(points)).err().map(|e| e.key), Some("error-trajectory"));
 }
+
+/// An arc along the rim of the range (r = 0.6 m) samples points a hair beyond it by rounding; both planners lay it
+/// out (refused as leaving the range with no allowance for rounding, while r = 0.5999999999 ran).
+#[test]
+fn an_arc_along_the_rim_of_the_range_is_planned() {
+    let sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    let rim = sim_components::path::parse("line,0.6,0.0,-0.775\narc,0.0,0.6,-0.775,0.0,0.0,-0.775,ccw").unwrap();
+    for time_optimal in [false, true] {
+        assert!(sim.plan_path(&rim, time_optimal).is_ok(), "{time_optimal}: {:?}", sim.plan_path(&rim, time_optimal).err());
+    }
+}

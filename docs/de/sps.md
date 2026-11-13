@@ -60,6 +60,7 @@ Jede Achse der Maschine hat einen Ordner `axis.<Achsen-ID>` mit einem Satz Hands
 | 5 | Eine Fahrt, Bahn oder der Zyklus der übrigen Befehle der Kopplung läuft |
 | 6 | Der Regler hat einen gestreamten Sollwert abgelehnt (Achsfehler) |
 | 7 | Die Antriebe wurden ausgeschaltet, während die Achse eingeschaltet war: `command.disable` oder eine Zwischenkreis-Abschaltung (Achsfehler) |
+| 8 | Die Antriebe gingen aus, weil die Maschine gegen ein Hindernis fuhr (`effects.crash`, Achsfehler) |
 
 So verhalten sich die Bausteine:
 
@@ -69,7 +70,7 @@ So verhalten sich die Bausteine:
 - Fahrten und Stop übernehmen die laufende Bewegung mit der Lage und Geschwindigkeit, die die Achse hat. Der Baustein, der lief, meldet `CommandAborted`, außer es ist derselbe Baustein, neu gestartet: Der beginnt neu mit gelöschten Ausgängen.
 - MC_Stop bremst mit `Stop.Deceleration` bis zum Stillstand und meldet dann `Done`. Die Achse bleibt in `Stopping`, solange `Stop.Execute` true ist, und lehnt dort Fahrten ab (ErrorID 2). Sie geht nach `Standstill`, wenn `Stop.Execute` fällt.
 - MC_Home fährt die Achse in ihre Grundstellung, mit der halben Geschwindigkeits- und Beschleunigungsgrenze der Achse, und setzt `IsHomed`. Die Grundstellung ist der Achswert der Startpose der Maschine (`[start] pose` in der Konfiguration). Es sucht keinen Schalter und setzt keinen neuen Nullpunkt: Lagen im Simulator sind absolut.
-- MC_Reset löscht den Achsfehler und verlässt ErrorStop nach Standstill (oder Disabled, wenn `Power.Enable` false ist). Nach ErrorID 7 schaltet es die Antriebe wieder ein.
+- MC_Reset löscht den Achsfehler und verlässt ErrorStop nach Standstill (oder Disabled, wenn `Power.Enable` false ist). Nach ErrorID 7 oder 8 schaltet es die Antriebe wieder ein; nach einem Aufprall lässt sich die Achse dann aus dem Hindernis fahren, und eine Fahrt weiter hinein schaltet die Antriebe wieder ab.
 - MC_Power: Der Regler hat eine Freigabe für alle Antriebe. Die Antriebe gehen an, wenn eine Achse eingeschaltet wird, und aus, wenn die letzte Achse ausgeschaltet wird. Eine Achse mit `Power.Enable` false ist Disabled und lehnt Bausteine ab, ihr Motor hält aber die Lage, solange eine andere Achse die Antriebe an hält. Ausschalten einer Achse bricht ihre Bewegung ab.
 - Parameter über den Achsgrenzen werden auf die Grenzen gekürzt. Das Profil ist ein Trapez: Geschwindigkeit, Beschleunigung und Verzögerung werden eingehalten, `Jerk` wird angenommen und nicht verwendet.
 - Die PLCopen-Bausteine nicht gleichzeitig mit `command.setpoint.*`, `command.move`, `command.cycle` oder `command.run_path` an derselben Maschine verwenden. Bausteine, die gestartet werden, während diese laufen, scheitern mit ErrorID 5; ein Sollwertstrom, der startet, während Bausteine laufen, lässt den Regler einen der beiden ablehnen.

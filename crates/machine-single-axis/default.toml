@@ -1,6 +1,11 @@
 # Single-axis test machine: one motor, one belt, one carriage. Component checks run on it.
 # Placeholder values; units are in the field names.
 format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.5, 0.2, 0.06], size_m = [0.1, 0.1, 0.1] }]
+# (beside the stroke, 130 mm from the payload as it passes)
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
 
 [sim]
 dt_s = 62.5e-6
@@ -96,6 +101,9 @@ fieldbus_jitter = false
 sensor_noise = false
 # With input_shaping: the shaper is set to the resonance the machine reports for the planned pose.
 shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
+# (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
+crash = false
 
 [geometry]
 pulley_radius_m = 0.02
@@ -280,6 +288,10 @@ encoder_noise_counts = 1.0
 current_noise_a = 0.01
 # The seed also draws the fieldbus jitter (effects.fieldbus_jitter), from a stream of its own.
 noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module: verdicts judges the
+# sum of their braking power against ratings.braking_resistor_continuous_w and _peak_w. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
@@ -396,7 +408,8 @@ tension_margin_n = 35.0
 path_tolerance_m = 0.0
 # For `sim-cli optimise`: how far the tool has to stay beyond the farther of pick and place while it traverses
 # between them (an obstacle there). The optimiser lowers each lift, traverse and lower of the cycle to this and
-# rounds its corners only where the path keeps it. One axis has no lift; read but not used.
+# rounds its corners only where the path keeps it. One axis has no lift. The same clearance is kept from every
+# obstacle (check "collision", and a time-optimal path that comes nearer is refused); 0: no contact.
 min_clearance_m = 0.0
 
 # Low and high bound of the values that are estimates, in the tables and units they have above.

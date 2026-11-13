@@ -198,6 +198,14 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
     } else {
         poses(args, &sim, tr)?.map(Command::Trajectory)
     };
+    // Where the config has obstacles: what the motion keeps from them as planned, before it runs.
+    let planned = match &command {
+        Some(Command::StartCycle) => sim_components::collision::check_cycle(entry, &cfg)?,
+        Some(Command::MoveTo(target)) => sim.check_plan(&[sim.control.planned_pos().to_vec(), target.clone()]),
+        Some(Command::Trajectory(points)) => sim.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>()),
+        _ => None,
+    };
+    tell_plan(tr, planned);
     if let Some(command) = command {
         sim.command(command).map_err(|e| Failure(e.key, String::new()))?;
     }
@@ -223,6 +231,33 @@ fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, V
         eprintln!("{}", tr.tr_arg("path-deviation", &shown));
     }
     sim.plan_path(&pieces, args.flag("--time-optimal")).map(Some).map_err(refused)
+}
+
+fn pose_text(pose: &[f64]) -> String {
+    pose.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(" ")
+}
+
+/// On the error stream: the least clearance of a planned path to the obstacles, in mm, and its first pose in contact.
+/// Nothing without obstacles.
+fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>) {
+    let Some(check) = check else { return };
+    eprintln!("{}", tr.tr_arg("cli-planned-clearance", &format!("{:.1}", check.clearance * 1e3)));
+    if let Some(pose) = check.contact {
+        eprintln!("{}", tr.tr_arg("cli-planned-contact", &pose_text(&pose)));
+    }
+}
+
+/// On the error stream: the least clearance of the run so far to the obstacles, in mm, and its first contact with one.
+/// Nothing without obstacles.
+fn tell_run(tr: &Translations, sim: &Sim) {
+    if sim.obstacles.is_empty() {
+        return;
+    }
+    eprintln!("{}", tr.tr_arg("cli-run-clearance", &format!("{:.1}", sim.least_clearance * 1e3)));
+    if let Some(c) = &sim.contact {
+        let detail = format!("{}: {:.4} s, {:.4} /s, {}", sim.obstacles[c.obstacle].name, c.time, c.speed, pose_text(&c.pose));
+        eprintln!("{}", tr.tr_arg("cli-run-contact", &detail));
+    }
 }
 
 fn read(path: &str) -> Result<String, Failure> {
@@ -391,11 +426,14 @@ fn significant(value: f64) -> String {
 /// `verdict_bands_sampled`; `--seed S` picks another set of samples, 1 by default) and adds the share of
 /// the runs in which each check passed. `--bands --worst` searches per check for the worst corner of the bounds
 /// instead (`verdict_worst`) and prints its value, its result and which parameters are at their high and which at
-/// their low bound there; the number of cycles it simulated goes to the error stream.
+/// their low bound there; the number of cycles it simulated goes to the error stream. Where the config has obstacles,
+/// the error stream first says what the cycle as planned keeps from them (`collision::check_cycle`), and the check
+/// "collision" judges the run.
 fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled, verdict_worst};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
+    tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?);
     if args.flag("--worst") {
         if !args.flag("--bands") || args.option("--samples").is_some() || args.option("--seed").is_some() {
             return Err(Failure("cli-error-worst", String::new()));
@@ -559,10 +597,21 @@ fn number(args: &Args, name: &str, default: f64) -> Result<f64, Failure> {
     args.number(name).map(|v| v.unwrap_or(default))
 }
 
+/// `--axis-index N` of `step` and `bode`: a whole number naming one of the machine's axes, from 0. A float read
+/// and cast took -1 as 0 and 1.7 as 1.
+fn axis_index(args: &Args, entry: &MachineEntry, cfg: &Config) -> Result<usize, Failure> {
+    let count = (entry.build)(cfg)?.axes().len();
+    match args.option("--axis-index").map(|v| v.parse::<usize>()) {
+        None => Ok(0),
+        Some(Ok(i)) if i < count => Ok(i),
+        _ => Err(Failure("cli-error-axis-index", (count - 1).to_string())),
+    }
+}
+
 /// `step <machine>`: the answer of one axis to a small step of its position setpoint.
 fn step(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let response = step_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
+    let response = step_response(entry, &cfg, axis_index(args, entry, &cfg)?, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "time_s,setpoint,response").map_err(io)?;
     for (t, y) in &response.trace {
@@ -575,7 +624,7 @@ fn step(args: &Args) -> Result<(), Failure> {
 fn bode(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let frequencies = log_spaced(number(args, "--from", 1.0)?, number(args, "--to", 200.0)?, number(args, "--count", 40.0)? as usize);
-    let points = closed_loop_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
+    let points = closed_loop_response(entry, &cfg, axis_index(args, entry, &cfg)?, &frequencies, number(args, "--amplitude", 0.0005)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "frequency_hz,gain,gain_db,phase_deg").map_err(io)?;
     for p in points {
@@ -619,7 +668,9 @@ fn margins(args: &Args) -> Result<(), Failure> {
 }
 
 /// `run <machine>`: simulate a move or the cycle and write every signal as CSV. `--disable-at SECONDS`
-/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling.
+/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling. Where the config has
+/// obstacles, the error stream says what the motion keeps from them as planned before the run, and the least clearance
+/// and first contact of the run after it.
 fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut sim = start(args, tr)?;
     let seconds = args.number("--time")?.unwrap_or(2.0);
@@ -642,6 +693,7 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         sim.step();
     }
+    tell_run(tr, &sim);
     out.flush().map_err(io)
 }
 

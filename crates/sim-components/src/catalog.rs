@@ -284,9 +284,14 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// braking from the Braking Module row of `braking_s120.csv` (6SL3100-1AE31-0AB1 with its 6SL3100-1BE31-0AA0 resistor:
 /// 1.5 kW continuous, 100 kW peak, switching on at 770 V as `braking_threshold_v`) and `dc_link_overvoltage_v` to the
 /// booksize units' trip at 820 V (S120 manual, not in the catalogue tables). Before 13 November 2026 an S120 drive was
-/// judged against the S210 converter's internal resistor the config had (100 W, 5.7 kW on the EXCT-30).
+/// judged against the S210 converter's internal resistor the config had (100 W, 5.7 kW on the EXCT-30). And it sets
+/// `drive.braking_module`, so that `verdicts` judges the axes' braking power together against the one module (an S210
+/// clears it); until the eleventh review each axis was judged against the whole module.
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
+    // An S210 brakes into a resistor of its own, the axes of an S120 line-up into its one Braking Module.
+    let braking_module = |cfg: &mut Config, on: bool| if cfg.get("drive.braking_module").is_ok() { cfg.set_text(&format!("drive.braking_module = {on}")) } else { Ok(()) };
     let (rated, max) = if let Some(c) = rows(CONVERTERS_S210).into_iter().find(|r| r["article"] == article) {
+        braking_module(cfg, false)?;
         if let Some(b) = rows(BRAKING_S210).into_iter().find(|r| r["article"] == article) {
             let trip = number(&b, "dc_link_overvoltage_v").ok_or_else(|| unknown("drive", article))?;
             let line = if b["line"] == "1ac" { 240.0 } else { 480.0 };
@@ -313,6 +318,7 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "ratings.braking_resistor_peak_w", peak * 1e3)?;
         set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
         set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
+        braking_module(cfg, true)?;
         (number(&m, "rated_current_a"), number(&m, "max_current_a"))
     };
     if let Some(capacitance) = rows(DC_LINK_MEASURED).into_iter().find(|r| r["article"] == article).and_then(|r| number(&r, "capacitance_uf")) {
@@ -782,9 +788,11 @@ impl Candidate {
         if load.tripped {
             return Some(("dc-link-overvoltage", f64::INFINITY));
         }
-        let resistor = |v: &Verdict| verdicts.iter().any(|w| w.motor == v.motor && w.check.starts_with("braking-resistor"));
+        // A resistor of the axis, or one for all (an S120 line-up's Braking Module, judged once without a motor).
+        let resistor = |v: &Verdict| verdicts.iter().any(|w| (w.motor == v.motor || w.motor.is_none()) && w.check.starts_with("braking-resistor"));
         let by_design = |v: &Verdict| v.ok && (v.check == "dc-link-overvoltage" || v.check == "dc-link-energy" && resistor(v));
-        verdicts.iter().filter(|v| v.limit > 0.0 && v.check != "belt-slack" && !by_design(v)).map(|v| (v.check, crate::analysis::utilisation(v))).max_by(|a, b| a.1.total_cmp(&b.1))
+        // A limit of 0 gives no share while it passes ("collision" at `profile.min_clearance_m` 0); one that fails counts.
+        verdicts.iter().filter(|v| (v.limit > 0.0 || !v.ok) && v.check != "belt-slack" && !by_design(v)).map(|v| (v.check, crate::analysis::utilisation(v))).max_by(|a, b| a.1.total_cmp(&b.1))
     }
 }
 

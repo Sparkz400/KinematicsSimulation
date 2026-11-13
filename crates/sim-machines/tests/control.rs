@@ -342,11 +342,31 @@ fn every_effect_switch_changes_the_traces() {
             all
         };
         let reference = traces(&base);
+        // Whether the traces with `cfg` differ from the reference, as `traces(cfg) != reference` says, but it stops at
+        // the first sample that differs: most effects show within milliseconds, and only a switch that changes nothing
+        // runs the whole 4 s.
+        let differs = |cfg: &Config| {
+            let mut sim = Sim::new(entry, cfg).unwrap();
+            sim.command(Command::StartCycle).unwrap();
+            let (mut at, mut sample) = (0, Vec::new());
+            for _ in 0..(4.0 / sim.dt).round() as u64 {
+                sim.step();
+                if sim.step % 16 == 0 {
+                    sim.sample(&mut sample);
+                    let rest = &reference[at.min(reference.len())..];
+                    if sample.len() > rest.len() || sample.iter().zip(rest).any(|(v, r)| v.to_bits() != *r) {
+                        return true;
+                    }
+                    at += sample.len();
+                }
+            }
+            at != reference.len()
+        };
         let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
-        // Their own tests show them working.
-        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose"];
+        // A crash needs an obstacle, and the configs have none. Their own tests show them working.
+        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
         let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link")).collect();
@@ -354,7 +374,7 @@ fn every_effect_switch_changes_the_traces() {
         for effect in effects {
             let mut flipped = base.clone();
             flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
-            assert!(traces(&flipped) != reference, "{}: flipping {effect} changed nothing", entry.id);
+            assert!(differs(&flipped), "{}: flipping {effect} changed nothing", entry.id);
         }
     }
 }
@@ -632,7 +652,13 @@ fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
             // Motor friction, and the guides' or the joints' (whichever the machine has).
             let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
             let cfg = config_of(&cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
-            for (run, margins) in velocity_loop_margins(entry, &cfg, &bounds(&cfg).unwrap()).unwrap() {
+            // With friction off, the friction values act on nothing: their runs gave the margins of the config as it is
+            // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
+            // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
+            let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
+            let mut bounded = bounds(&cfg).unwrap();
+            bounded.retain(|(path, ..)| !skip || !["friction_", "motor.friction_", "joint.friction_"].iter().any(|start| path.starts_with(start)));
+            for (run, margins) in velocity_loop_margins(entry, &cfg, &bounded).unwrap() {
                 for (k, m) in margins.iter().enumerate() {
                     assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");
                 }

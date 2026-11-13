@@ -24,10 +24,15 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Starts the simulator's server on a free local port and connects a client to it.
 async fn connect(entry: &'static MachineEntry, name: &str) -> Plc {
+    connect_with(entry, &entry.config(), name).await
+}
+
+/// `connect` with the config `cfg`.
+async fn connect_with(entry: &'static MachineEntry, cfg: &sim_core::Config, name: &str) -> Plc {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("opc.tcp://{}/", listener.local_addr().unwrap());
     let labels = translations("en", entry);
-    let link = serve(entry, &entry.config(), &labels, listener, &scratch(&format!("{name}-server")), Duration::from_millis(10)).await.unwrap();
+    let link = serve(entry, cfg, &labels, listener, &scratch(&format!("{name}-server")), Duration::from_millis(10)).await.unwrap();
 
     let mut client = ClientBuilder::new()
         .application_name("test-plc")
@@ -143,12 +148,13 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
         let reached = plc.numbers(&position).await;
-        // The drives hold their motors on the target; what the gearboxes and belts give way under the weight they hold
-        // is off it at the tool, which the encoders do not see. Within 0.2 mm, or the config's settling tolerance or the
-        // machine's setpoint slack where that is larger (the delta's gearboxes with 9 arcmin: 0.69 mm here, slack 2.3 mm).
-        let rest = entry.config().f64("ratings.settling_tolerance_m").unwrap().max(2e-4).max((entry.build)(&entry.config()).unwrap().setpoint_slack());
+        // The setpoint is the target; the tool is off it by what the gearboxes and belts give way under the weight
+        // they hold (`at_rest_within`).
+        let setpoint = plc.numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>()).await;
+        let rest = at_rest_within(entry, &target);
         for i in 0..axes.len() {
-            assert!((reached[i] - target[i]).abs() < rest, "{}: axis {i} at {} m, target {} m", entry.id, reached[i], target[i]);
+            assert!((setpoint[i] - target[i]).abs() < 1e-6, "{}: axis {i} set to {} m, target {} m", entry.id, setpoint[i], target[i]);
+            assert!((reached[i] - target[i]).abs() < rest, "{}: axis {i} at {} m, target {} m, within {rest} m", entry.id, reached[i], target[i]);
             // Below 1 mm, and on a fast machine 0.04 mm per m/s2 of its fastest axis (the delta's diagonal move at 50 m/s2
             // per axis: up to 1.4 mm, 2 mm allowed).
             let fastest = axes.iter().map(|a| a.max_acc).fold(0.0, f64::max);
@@ -483,11 +489,13 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let end = &planned.last().unwrap().1;
         let reached = plc.numbers(&position).await;
-        // At rest the tool is off its setpoint by what gears and belts give way under the load, up to the machine's
-        // setpoint slack: on the delta with its catalogue gearboxes that is more than the settling tolerance (the
+        // The setpoint stands on the path's end; the tool is off it by what gears and belts give way under the load
+        // there (`at_rest_within`; on the delta with its catalogue gearboxes more than the settling tolerance: the
         // cycle fails `settling` there, a sizing finding).
-        let tolerance = cfg.f64("ratings.settling_tolerance_m").unwrap().max(sim.machine.setpoint_slack());
-        assert!(reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance), "{}: at {reached:?}, the path ends at {end:?}", entry.id);
+        let setpoint = plc.numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>()).await;
+        assert!(setpoint.iter().zip(end).all(|(s, e)| (s - e).abs() < 1e-6), "{}: set to {setpoint:?}, the path ends at {end:?}", entry.id);
+        let tolerance = at_rest_within(entry, end);
+        assert!(reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance), "{}: at {reached:?}, the path ends at {end:?}, within {tolerance} m", entry.id);
         // The busy time is known to one poll: within the largest step of `signal.time` seen, and 1 ms.
         assert!((slow.busy - slow_plan).abs() <= slow.largest_step + 1e-3, "{}: busy for {} s, planned {slow_plan} s, polled up to {} s apart", entry.id, slow.busy, slow.largest_step);
 
@@ -555,6 +563,23 @@ impl Plc {
     }
 }
 
+/// How far the tool may be from its setpoint at rest at `pose`: what gearboxes and belts give way under the load there,
+/// which the encoders do not see. The offset after 0.5 s at rest with `pose` as the start pose, times 1.2, and at
+/// least 0.2 mm (some hundredths of a millimetre on the gantries; on the delta with its catalogue gearboxes up to
+/// 0.69 mm at the poses of these tests, so the machine's whole 2.3 mm setpoint slack is not needed). A target off by
+/// 1 mm fails the setpoint's own check to 1e-6 m.
+fn at_rest_within(entry: &'static MachineEntry, pose: &[f64]) -> f64 {
+    let mut cfg = entry.config();
+    cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.run(0.5, |_| {});
+    let mut out = Vec::new();
+    sim.sample(&mut out);
+    let at = |id: String| out[sim.signal_index(&id).unwrap()];
+    let sag = sim.machine.axes().iter().map(|a| (at(format!("axis.{}.position_setpoint", a.id)) - at(format!("axis.{}.position", a.id))).powi(2)).sum::<f64>().sqrt();
+    (1.2 * sag).max(2e-4)
+}
+
 /// 0.2 of the axis range from `from` towards the middle.
 fn towards_middle(axis: &sim_core::AxisInfo, from: f64) -> f64 {
     from + 0.2 * (axis.max - axis.min) * (0.5 * (axis.min + axis.max) - from).signum()
@@ -567,8 +592,10 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
     for entry in MACHINES.iter().copied() {
         let plc = connect(entry, &format!("plcopen-{}", entry.id)).await;
         let sim = Sim::new(entry, &entry.config()).unwrap();
-        // At rest the tool is off the motors' target by what gearboxes and belts give way, as in the test above.
-        let rest = entry.config().f64("ratings.settling_tolerance_m").unwrap().max(2e-4).max((entry.build)(&entry.config()).unwrap().setpoint_slack());
+        // The setpoint is the target to 1e-6 m; the tool is off it by what gearboxes and belts give way at the pose the
+        // setpoints make (`at_rest_within`).
+        let setpoints: Vec<String> = sim.machine.axes().iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect();
+        let index = |id: &str| sim.machine.axes().iter().position(|a| a.id == id).unwrap();
         for (axis, home) in sim.machine.axes().iter().zip(&sim.control.set_pos) {
             let id = axis.id;
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -591,14 +618,20 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             plc.until(id, "MoveAbsolute.Done", 5.0).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             let at = plc.axis_number(id, "ActualPosition").await;
-            assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m", entry.id);
+            let set = plc.numbers(&setpoints).await;
+            assert!((set[index(id)] - target).abs() < 1e-6, "{}.{id}: set to {} m, target {target} m", entry.id, set[index(id)]);
+            let rest = at_rest_within(entry, &set);
+            assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m, within {rest} m", entry.id);
             assert!(plc.axis_number(id, "ActualVelocity").await.abs() < 1e-2);
 
             plc.execute(id, "MoveRelative", &[("Distance", -0.05 * (target - home).signum())]).await;
             plc.until(id, "MoveRelative.Done", 5.0).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             let moved = plc.axis_number(id, "ActualPosition").await;
-            assert!((moved - (target - 0.05 * (target - home).signum())).abs() < rest, "{}.{id}: at {moved} m", entry.id);
+            let (set, wanted) = (plc.numbers(&setpoints).await, target - 0.05 * (target - home).signum());
+            assert!((set[index(id)] - wanted).abs() < 1e-6, "{}.{id}: set to {} m, wanted {wanted} m", entry.id, set[index(id)]);
+            let rest = at_rest_within(entry, &set);
+            assert!((moved - wanted).abs() < rest, "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m", entry.id);
             assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
             assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""));
         }
@@ -705,6 +738,36 @@ async fn plcopen_errors_and_reset() {
     assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
     plc.execute(id, "MoveRelative", &[("Distance", 0.01)]).await;
     plc.until(id, "MoveRelative.Done", 2.0).await;
+}
+
+/// A crash (effects.crash: the machine with one axis into a wall it meets at x = 0.47) puts the powered axis into
+/// ErrorStop with ErrorID 8, not 7. MC_Reset switches the drives on again, they stay on, and the axis moves out of
+/// the wall. (They tripped again at once: the stop left the carriage inside the wall, and every step found it there.)
+#[tokio::test(flavor = "multi_thread")]
+async fn plcopen_a_crash_is_reported_reset_and_left() {
+    use sim_opcua::plcopen::ERR_CRASH;
+    // The wall lies across the stroke of the machine with one axis, where its scene draws the carriage.
+    let entry = *MACHINES.iter().find(|e| e.config().f64s("start.pose").unwrap().len() == 1).unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text(r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#).unwrap();
+    cfg.set_text("effects.crash = true").unwrap();
+    let plc = connect_with(entry, &cfg, "plcopen-crash").await;
+    let id = Sim::new(entry, &cfg).unwrap().machine.axes()[0].id;
+    plc.axis_write(id, &[("Power.Enable", Variant::Boolean(true))]).await;
+    plc.until(id, "Power.Status", 1.0).await;
+    plc.execute(id, "MoveAbsolute", &[("Position", 0.9)]).await;
+    plc.until(id, "Error", 5.0).await;
+    assert_eq!(plc.axis_read(id, "ErrorID").await, Variant::UInt16(ERR_CRASH));
+    plc.execute(id, "Reset", &[]).await;
+    plc.until(id, "Reset.Done", 1.0).await;
+    plc.until(id, "Power.Status", 1.0).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "ErrorID {:?}", plc.axis_read(id, "ErrorID").await);
+    plc.execute(id, "MoveAbsolute", &[("Position", 0.1)]).await;
+    plc.until(id, "MoveAbsolute.Done", 5.0).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let at = plc.axis_number(id, "ActualPosition").await;
+    assert!((at - 0.1).abs() < 2e-4 && plc.axis_flag(id, "Power.Status").await, "at {at} m");
 }
 
 /// Execute acts on its rising edge only: writing true again while it is true does not start the block again; Done
