@@ -1,0 +1,51 @@
+name: Pages
+
+# The sizing page (crates/sim-wasm/web) on GitHub Pages: https://sparkz400.github.io/KinematicsSimulation/
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push waits for the running one instead of cancelling it half-way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # The same build as the job "wasm" in ci.yml.
+      - name: Build for wasm32
+        run: |
+          cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
+          mkdir -p site
+          cp crates/sim-wasm/web/index.html site/
+          cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

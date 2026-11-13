@@ -4,13 +4,18 @@
 [![Release](https://img.shields.io/github/v/release/Sparkz400/KinematicsSimulation?include_prereleases)](https://github.com/Sparkz400/KinematicsSimulation/releases)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
-![The T-gantry in the 3D view](docs/images/3d-view.png)
+![The T-gantry running its pick-and-place cycle in the app](docs/images/t-gantry-cycle.gif)
 
-A simulator of belt-driven gantries in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
-It has three machines, a two-motor T-gantry (X and Z on one belt), a single belt axis and a three-arm delta picker (D3, sized like an Autonox RL3-1200-3kg), behind four front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server for a PLC, and an FMI 2.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools.
+A simulator of motion machines in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
+It has nine machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, a three-arm delta picker (D3, sized like an Autonox RL3-1200-3kg), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file and a SCARA ([mechanisms](docs/mechanisms.md)). More machines, such as an H-bot, are described in [machine files](docs/machine-files.md) (`machines/*.toml`) without Rust code.
+They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a sizing check in the browser.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
-**Quick start:** download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
+**Quick start:** try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
 Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](docs/de/benutzerhandbuch.md).
+
+![The delta picker in the app: motion panel, 3D view, cycle analysis and scopes](docs/images/delta-d3-app.png)
+
+*The delta picker (`delta-d3`) in the app. Its shipped config fails one check, the settling at the pick (0.68 mm against 0.5 mm); the top bar says so.*
 
 ## What it can and cannot tell you
 
@@ -19,6 +24,7 @@ It can tell you, for a machine described in a config file:
 - peak, RMS and cubic-mean torque, speed, current, winding temperature rise and energy per motor over a cycle or a path
 - how much of each motor's torque goes to inertia, gravity, friction and the belt, where the energy of a cycle is lost (each guide, shaft, gearbox, damper, winding, the braking resistor), and what each guide's friction does at its operating point
 - pass or fail of that cycle against the ratings in the config (torque-speed curve, winding temperature, gearbox, belt tension, slack and tooth load, DC link and braking resistor, guide and shaft load, settling at the pick)
+- for the joint machines also their transmission's own checks: a ball screw's speed, DN value, buckling and life, a rack's feed force, a strain wave gear's life
 - how many hours the pulley shaft bearings, the gearbox's planet bearings and the guides last on that cycle, against a required life (ISO 281, Siemens' gearbox formula, the guide makers' formula; the belt has a tooth load rating instead, because no belt maker publishes a life)
 - how those results move when an uncertain value is at its low or high bound, or when all uncertain values are off at once
 - how far the tool tip is from its path, and what gains, corner blending and input shaping do to that
@@ -39,11 +45,12 @@ These checks prove that the equations are solved correctly and that the catalogu
 
 Other limits that matter:
 
-- The default configs of the two belt machines are made-up placeholder machines, not products. The delta's config is sized like a product (Autonox RL3-1200-3kg, Siemens motor and gearbox from the catalogue), but its arm lengths, masses and inertias are estimates: Autonox keeps them behind a registration.
+- The default configs of the two belt machines are made-up placeholder machines, not products. The delta's config is sized like a product (Autonox RL3-1200-3kg, Siemens motor and gearbox from the catalogue), but its arm lengths, masses and inertias are estimates: Autonox keeps them behind a registration. The joint machines (screw, rack, linear motor, rotary table, arms) are sized examples whose mechanics are estimates of a typical part of that size, not one maker's article; the arms are sized in joint space, with no Cartesian paths.
 - The motor is one equivalent winding (R, L, back-EMF) that carries the RMS phase current and gets at most sqrt(3/2) times the DC link voltage. There is no three-phase model, no PWM, no field weakening.
 - The life figures are the makers' formulas and nothing more: no life factors, one bearing per pulley shaft, load ratings that are partly estimates (Festo publishes none for the EXCT). They are not validated.
 - The OPC UA link was tested against a client written with the same library, not against a PLC.
-- The FMU was tested by calling its functions from Rust and Python, not imported into Simulink, OpenModelica or Dymola, and not checked with an independent FMI tool.
+- The FMU was checked with fmpy's validator and simulator and with OMSimulator (OpenModelica's co-simulation tool), not imported into Simulink or Dymola, and not with the Modelica Association's `fmusim` or the FMU Compliance Checker ([docs/fmi.md](docs/fmi.md#validation)).
+- The browser's numbers agree with the command line's to four or five significant digits, not bit for bit ([docs/web.md](docs/web.md)).
 - Mouse handling of the app (orbit camera, panels) was not checked by a person; screenshots were.
 - Import of drive traces and the parameter fit were tested on traces the simulator made itself.
 
@@ -62,7 +69,7 @@ cargo test --workspace                            # all tests
 `cargo test --workspace` also builds the app with its graphics libraries. To test only the physics, the analysis and the command line:
 
 ```sh
-cargo test -p sim-core -p sim-components -p machine-t-gantry -p machine-single-axis -p machine-delta-d3 -p sim-machines -p sim-cli
+cargo test -p sim-core -p sim-components -p machine-t-gantry -p machine-single-axis -p machine-delta-d3 -p machine-joint-kit -p sim-netlist -p sim-machines -p sim-cli
 ```
 
 ## Five-minute tour
@@ -75,7 +82,16 @@ All commands print CSV to standard output, or to a file with `--out FILE`. Messa
 $ cargo run -q --release -p sim-cli -- list
 t-gantry	T-gantry
 single-axis	Single axis
+delta-d3	Delta picker (3 arms)
+screw-axis	Ball screw axis
+rack-axis	Rack and pinion axis
+linear-motor-axis	Linear motor axis
+rotary-table	Rotary indexing table
+urdf-arm	Six-axis arm (URDF)
+scara	SCARA arm (URDF)
 ```
+
+A machine file is run like a registered machine: `sim-cli verdicts --machine-file machines/h-bot.toml`, or `sim-app --machine-file machines/h-bot.toml`.
 
 **Cycle analysis of the default T-gantry.** One row per motor, measured over the second pass of the pick-and-place cycle. The first seven of 28 columns:
 
@@ -237,6 +253,8 @@ b,2.101000,0.296009,...,1.646e-4,5.616e-5,1.679e-4,...
 
 The curve leaves the first line in its direction and ends in the direction of the last one. Where it joins a line the curvature steps, so the path is slow there, like a line into an arc.
 
+![The T-gantry in the app with its panels](docs/images/3d-view.png)
+
 **The app** does the same from its right panel: the cycle analysis with its checks and their error bands (one value at a time or sampled), the sensitivity ranking, the optimiser, the motor search with a button that puts a motor into the running machine, paths and traces from files (a planned path is also drawn in the 3D view; a replayed trace is plotted against its simulation), the operating points over the torque-speed curve, the frequency response of the mechanics with the fit of the belt stiffness, and the tuning help.
 
 ## Where to go next
@@ -265,8 +283,10 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [`sim-core`](crates/sim-core/src) | Core | Fixed-step integrator, machine interface, config loading, translations, the standard test suite. Knows no physics |
 | [`sim-components`](crates/sim-components/src) | Components | Belt, friction, gearbox, rotary joint, drive, controller, profiles, paths (lines, arcs and splines on two and three axes), analysis, catalogue lookup, trace replay and fit. Knows no machine |
 | [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis), [`machine-delta-d3`](crates/machine-delta-d3) | Machines | Transformation, assembly, signals, 3D scene description, configs. The delta: kinematics with its Jacobian and working range, the Codourey/Olsson dynamics, three rotary joints |
-| [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines; cross-machine tests |
-| [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |
+| [`machine-joint-kit`](crates/machine-joint-kit) | Machines | Ball screw, rack and pinion, linear motor, rotary table, and arms from URDF files (a six-axis arm, a SCARA), built from one kit of joints and transmissions |
+| [`sim-netlist`](crates/sim-netlist) | Machines | Machines from TOML or JSON machine files ([`machines/`](machines/)), wired together from components like a netlist |
+| [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines, the loader of machine files; cross-machine tests |
+| [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 and 3.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |
 | [`sim-cli`](crates/sim-cli), [`sim-app`](crates/sim-app), [`sim-opcua`](crates/sim-opcua) | Front ends | Command line, desktop app, OPC UA server with PLCopen-style axes |
 | [`sim-py`](crates/sim-py), [`sim-wasm`](crates/sim-wasm) | Front ends | Python module (PyO3, maturin), WebAssembly module and sizing page |
 

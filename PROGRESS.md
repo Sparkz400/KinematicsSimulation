@@ -1171,3 +1171,38 @@ Left open:
   stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
   has gone `CREEP` (1 um) further in, not on their torque or following error.
 - The PLC test's crash and reset run against the wall clock like the other PLC tests.
+
+## Public repository polish (13 November)
+
+The repository is public on GitHub since 13 November; its front pages caught up with what is built.
+
+- README and docs/de/README.md: nine registered machines (three belt and delta machines, six from the joint kit) and
+  machine files such as the H-bot; six front ends (FMI 2.0 and 3.0, the Python module, the browser page, PLCopen over
+  OPC UA). The tour's `sim-cli list` output is the real one of all nine (English and `--lang de`). The limits keep
+  every one that is still true; the FMU limit now says what it was checked with (fmpy, OMSimulator) and what not
+  (Simulink, Dymola, `fmusim`, the FMU Compliance Checker), and the browser's four-to-five-digit agreement is listed.
+  The crate table has `machine-joint-kit` and `sim-netlist`; the test line names them.
+- `CITATION.cff` (CFF 1.2.0, version 1.0.0-rc.1). ROADMAP: the "never ran, no remote" item is gone.
+- `deny.toml` and a `deny` job in ci.yml (`EmbarkStudios/cargo-deny-action@v2.1.1`). Licences: exactly the 13 the tree
+  uses (cargo-deny 0.20.2 reports none allowed and unused). Duplicate versions warn (30 crates, from Bevy and
+  async-opcua). Sources: crates.io only. `cargo deny check` locally: advisories ok, bans ok, licenses ok, sources ok,
+  with four advisories ignored, each with its reason in the file: RUSTSEC-2023-0071 (rsa, Marvin attack, via
+  async-opcua; sim-opcua has only a SecurityPolicy::None endpoint, so no RSA decryption runs) and three unmaintained
+  crates with no release to move to (atomic-polyfill and unsafe-libyaml via async-opcua 0.19, ttf-parser via winit
+  in Bevy 0.20).
+- `.github/workflows/pages.yml`: on push to main and by hand, builds `sim-wasm` for wasm32 as the `wasm` job does and
+  deploys `index.html` and `sim_wasm.wasm` to GitHub Pages. Linked from both READMEs and docs/web.md (EN, DE).
+- README images: `docs/images/t-gantry-cycle.gif` (800 x 532, 8.6 s, 6.3 MB) from the app's own recorder
+  (`SIM_APP_SCREENSHOT` with `SIM_APP_RECORD=9`, frames every second one at 15 fps, made into a GIF with Pillow; no
+  ffmpeg here) and `docs/images/delta-d3-app.png` (`SIM_APP_MACHINE=delta-d3`, `SIM_APP_VIEW=30,20`). No app code
+  changed: the existing hooks were enough.
+
+Test: no code changed, so no new test. `cargo deny check` as above; `sim-cli list` and `sim-cli verdicts
+--machine-file machines/h-bot.toml` run for the README's text; both images looked at.
+
+Left open:
+
+- The shipped `delta-d3` config fails `settling` (0.677 mm against 0.5 mm, `sim-cli verdicts delta-d3`); the
+  screenshot and its caption show it as it is.
+- The Pages workflow has not run: Pages must be switched on in the repository settings (source: GitHub Actions).
+- The advisory ignores in deny.toml go once async-opcua and Bevy are updated past them.

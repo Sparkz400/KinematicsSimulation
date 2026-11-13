@@ -5,6 +5,9 @@ in four C-ABI functions, and `crates/sim-wasm/web/index.html` is a static page t
 check in the browser: pick a machine, edit its config (TOML), and the page runs the cycle and shows every verdict and the
 load per motor. Nothing leaves the browser; there is no server beyond one that hands out two files.
 
+**Live page:** https://sparkz400.github.io/KinematicsSimulation/, built from `main` by the workflow
+[`pages.yml`](../.github/workflows/pages.yml) on every push.
+
 ## Build and open
 
 ```bash
@@ -16,7 +19,8 @@ python -m http.server 8765 -d crates/sim-wasm/web
 
 Then open http://localhost:8765/. Browsers load WebAssembly only over HTTP, not from a `file://` page, so any static file
 server will do. To publish it, copy `index.html` and `sim_wasm.wasm` to any static host. The CI job `wasm` builds both
-and keeps them as the artifact `sizing-page`.
+and keeps them as the artifact `sizing-page`; the workflow `pages.yml` builds them the same way and publishes them on
+GitHub Pages.
 
 No wasm-bindgen and no JavaScript toolchain: the page writes a request into the module's memory and reads JSON back, so
 `cargo` is the only build tool. The module is about 1.1 MB.

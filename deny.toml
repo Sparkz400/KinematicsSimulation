@@ -1,0 +1,53 @@
+# cargo-deny: `cargo deny check` (the CI job "deny" runs it on every push).
+
+[graph]
+all-features = true
+
+# RustSec advisories: vulnerabilities, unmaintained and unsound crates. Every ignore has its reason; each comes in through
+# a pinned dependency (async-opcua 0.19.0, Bevy 0.20.1) with no release that drops it (checked 13 November 2026).
+# Drop an ignore when that dependency is updated.
+[advisories]
+ignore = [
+    # rsa 0.9 (Marvin attack, a timing side channel in RSA decryption), via async-opcua. sim-opcua offers one endpoint,
+    # SecurityPolicy::None with MessageSecurityMode::None (crates/sim-opcua/src/lib.rs), so no RSA decryption runs.
+    { id = "RUSTSEC-2023-0071", reason = "sim-opcua has only a SecurityPolicy::None endpoint; no RSA decryption runs" },
+    # Unmaintained, no fix to take: atomic-polyfill (heapless 0.7 via postcard via async-opcua-server).
+    { id = "RUSTSEC-2023-0089", reason = "unmaintained, via async-opcua 0.19; no release without it" },
+    # Unmaintained, no fix to take: unsafe-libyaml (serde_yaml via async-opcua-core).
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained, via async-opcua 0.19; no release without it" },
+    # Unmaintained, no fix to take: ttf-parser (ab_glyph via sctk-adwaita via winit via Bevy), the Wayland window frame.
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained, via winit in Bevy 0.20; no release without it" },
+]
+
+# Exactly the licences the dependency tree uses (where a crate offers a choice, the one it is used under).
+# MPL-2.0 is async-opcua's, in sim-opcua only: see the README's "Licence" section.
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+ignore = true
+
+# Bevy and the OPC UA stack bring several versions of some crates; that costs build time, not correctness.
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
