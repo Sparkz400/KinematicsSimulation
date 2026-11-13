@@ -1248,7 +1248,7 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         model.run_analysis(Analysis::Trace);
         wait_for_analysis(&mut model);
         let tables = model.trace_tables();
-        let [replayed, fitted] = &tables[..] else { panic!("{} tables", tables.len()) };
+        let [replayed, fitted, _identified] = &tables[..] else { panic!("{} tables", tables.len()) };
         // Per motor the difference between trace and replay: within 0.5 % (RMS) and 5 % (peak) of the largest torque.
         assert_eq!((replayed.len(), replayed[0][0].as_str(), replayed[0].len()), (5, "Figure", 1 + measured.motors.len()));
         for (k, motor) in measured.motors.iter().enumerate() {
@@ -1290,7 +1290,7 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         std::fs::write(&other, rows[..4].join("\n")).unwrap();
         assert_eq!(refused(&mut model, other).0, "error-trace-short");
         // The result that was there stays.
-        assert_eq!(model.trace_tables().len(), 2);
+        assert_eq!(model.trace_tables().len(), 3);
     }
 }
 
@@ -2203,4 +2203,53 @@ fn a_machine_file_opens_with_its_machine() {
     let (key, detail) = model.messages.last().cloned().unwrap();
     assert_eq!((key, model.entry.id), ("error-config-unknown", MACHINES[1].id));
     assert!(detail.ends_with(&format!(":{line}: machine.guide[guide_y].fricton")), "{detail}");
+}
+
+/// A vendor-style trace (semicolons, decimal commas, encoder counts, 1/min) through a mapping file in
+/// "Replay and fit": the same replay as the simulator's own columns, and a table of what the trace says by
+/// itself per motor, the values `Identified` gives on the imported trace.
+#[test]
+fn a_vendor_trace_through_a_mapping_is_replayed_and_identified_per_motor() {
+    // The machine with one motor, by the registry.
+    let entry = MACHINES.iter().copied().find(|m| (m.build)(&m.config()).unwrap().motors().len() == 1).unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    let mut recorded = sim_components::trace::Trace::default();
+    for _ in 0..=(3.0 / sim.dt).round() as u64 {
+        recorded.record(&sim);
+        sim.step();
+    }
+    let counts = 1048576.0;
+    let comma = |v: f64| format!("{v}").replace('.', ",");
+    let mut text = String::from("time [ms];position setpoint [inc];position actual [inc];speed actual [1/min];torque actual [Nm]\n");
+    let m = &recorded.motors[0];
+    for (row, t) in recorded.time.iter().enumerate() {
+        let cells = [t * 1e3, (m.setpoint[row] / std::f64::consts::TAU * counts).round(), (m.angle[row] / std::f64::consts::TAU * counts).round(), m.speed[row] * 60.0 / std::f64::consts::TAU, m.torque[row]];
+        text += &(cells.map(comma).join(";") + "\n");
+    }
+    let (file, map) = (temp_file(entry, "vendor-trace.csv"), temp_file(entry, "vendor-map.toml"));
+    std::fs::write(&file, &text).unwrap();
+    let mapping = format!("format = \"csv\"\ntime = \"time\"\n[[motor]]\nsetpoint = {{ signal = \"position setpoint\", per_rev = {counts} }}\nangle = {{ signal = \"position actual\", per_rev = {counts} }}\nspeed = \"speed actual\"\ntorque = \"torque actual\"\n");
+    std::fs::write(&map, &mapping).unwrap();
+
+    let mut model = Model::new(entry, "de");
+    model.set_param("effects.payload", toml::Value::Boolean(false));
+    model.inputs.trace_file = file;
+    model.inputs.trace_map = map;
+    model.run_analysis(Analysis::Trace);
+    wait_for_analysis(&mut model);
+    let tables = model.trace_tables();
+    assert_eq!(tables.len(), 3, "{:?}", model.messages);
+    let imported = sim_components::import::import(&text, &sim_components::import::Mapping::parse(&mapping).unwrap()).unwrap();
+    let expected = sim_components::motor_fit::Identified::of(&imported.trace.time, &imported.trace.motors[0], None);
+    let inertia = expected.estimates()[0].1;
+    let identified = &tables[2];
+    assert_eq!(identified[0][2], "Wert");
+    let row = identified.iter().find(|r| r[1] == model.tr.tr("identify-inertia_kg_m2")).expect("an inertia row");
+    assert_eq!((row[2].as_str(), row[3].as_str()), (sim_app::model::short(inertia.value).as_str(), sim_app::model::short(inertia.error).as_str()));
+    // Values and qualities, all labelled.
+    assert_eq!(identified.len() - 1, expected.estimates().len() + expected.qualities().len());
+    assert!(identified[1..].iter().all(|r| !r[1].starts_with("identify-")), "{identified:?}");
 }

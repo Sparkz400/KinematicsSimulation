@@ -361,3 +361,10 @@ ui-recording = Aufnahme läuft
 ui-recording-stop = Stopp
 ui-video-dropped = Die Festplatte kam nicht nach: { $arg } Bilder fehlen im Video.
 ui-video-detached = Blender macht das Video noch und stellt es selbst fertig: { $arg }
+
+# Import von Herstellertraces und die Identifikation je Motor (Zweig drive-trace-import).
+ui-trace-map = Zuordnung
+ui-trace-map-hint = Für einen Trace aus dem Werkzeug eines Antriebs oder einer Steuerung (SINAMICS, TwinCAT, CODESYS, andere CSV): die Zuordnungsdatei, die seine Signale und Einheiten benennt, wie sim-cli sie mit --map nimmt. Leer für einen Trace in den Spalten des Simulators.
+ui-trace-identify = Was der Trace für sich sagt, je Motor
+ui-identify-value = Wert
+ui-identify-interval = 95-%-Intervall

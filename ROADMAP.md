@@ -4,8 +4,11 @@ What is not built yet, from the "Not built" and "Blocked" lists of [PROGRESS.md]
 
 ## Needs a real machine
 
-- Test runs on a real axis and acceptance on a measured cycle (stages D2, D4); the fit's stage 3 (drive delays
-  and filters).
+- Test runs on a real axis and acceptance on a measured cycle (stages D2, D4). The importers for SINAMICS,
+  TwinCAT and CODESYS traces and the machine-free identification (`sim-cli identify`: friction, inertia,
+  two-mass stiffness and damping, and the fit's stage 3, drive delays and filters) are built and tested on
+  synthetic traces and on files built after the vendors' layouts; none has read a real drive's trace yet.
+  The layout of the Startdrive CSV export is not documented by Siemens and is assumed.
 - A real PLC (Siemens, Beckhoff, CODESYS) against the OPC UA server: data types, security, cycle jitter.
 
 ## Physics and planning

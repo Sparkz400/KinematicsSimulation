@@ -1,0 +1,59 @@
+# How the signals of a trace file become motor quantities (rad, rad/s, N m at the motor shaft, s).
+# Pick the block for your format, delete the others. Every signal is either a name, or a table:
+#   signal        the column, channel or variable name (an exact match, else the one name containing it)
+#   unit          overrides the unit the file gives; required where the file gives none
+#   per_rev       units of the signal per MOTOR revolution where the unit is not an angle (increments, LU, mm)
+#   reference     N m at 100 % for a torque in %, or at 1000 ‰ for one in per mille
+#   scale         multiplies after the unit conversion; for a unit the importer does not know (A -> N m: the
+#                 torque constant), or to refer a torque at a gearbox output to the motor (1 / ratio)
+#   offset        added to the raw value
+#   wrap          the span at which a raw counter wraps (4294967296 for a 32-bit encoder count)
+#   time_offset_s added to this signal's times, where it was recorded on another clock
+# speed and torque_setpoint are optional: without speed it is the slope of the angle; without a torque
+# setpoint the current loop's lag is not fitted.
+
+# --- SINAMICS S210 / S120 trace in Startdrive, exported as CSV ---------------------------------------
+# Siemens does not document the CSV layout; the importer finds the header line and reads units in [..].
+format = "sinamics"
+time = "Time"                        # the time column; give time_unit = "ms" if its header has no unit
+sample_time_s = 1e-3                 # optional: the grid all signals are put on
+
+[[motor]]
+id = "x"
+# LU per motor revolution = p2506 x p2505 / p2504 (LU per load turn x load turns / motor turns)
+setpoint = { signal = "r2665", per_rev = 10000 }
+angle = { signal = "r2521", per_rev = 10000 }
+speed = "r61"                        # 1/min, unsmoothed
+torque = "r80"                       # N m
+torque_setpoint = "r79"              # N m
+
+# --- TwinCAT 3 Scope View, exported as CSV --------------------------------------------------------------
+# format = "twincat"
+# [[motor]]
+# id = "x"
+# setpoint = { signal = "Axis1.NcToPlc.SetPos", unit = "mm", per_rev = 110.0 }
+# angle = { signal = "Axis1.NcToPlc.ActPos", unit = "mm", per_rev = 110.0 }
+# speed = { signal = "Axis1.NcToPlc.ActVelo", unit = "mm/s", per_rev = 110.0 }
+# # The NC axis has no torque; record the drive's process data, e.g. CiA 402 0x6077 in per mille of 0x6076.
+# torque = { signal = "Torque actual value", unit = "‰", reference = 1.27 }
+# torque_setpoint = { signal = "Target torque", unit = "‰", reference = 1.27 }
+
+# --- CODESYS trace (.trace, .txt or .trace.csv), SoftMotion axis -----------------------------------------
+# format = "codesys"
+# [[motor]]
+# id = "x"
+# setpoint = { signal = "Axis1.fSetPosition", unit = "mm", per_rev = 110.0 }
+# angle = { signal = "Axis1.fActPosition", unit = "mm", per_rev = 110.0 }
+# speed = { signal = "Axis1.fActVelocity", unit = "mm/s", per_rev = 110.0 }
+# # SoftMotion gives torque in N m at the gearbox output: scale = 1 / ratio refers it to the motor.
+# torque = { signal = "Axis1.fActTorque", unit = "Nm", scale = 1.0 }
+# torque_setpoint = { signal = "Axis1.fSetTorque", unit = "Nm", scale = 1.0 }
+
+# --- Any other CSV ------------------------------------------------------------------------------------------
+# format = "csv"
+# time = "t"
+# time_unit = "ms"
+# [[motor]]
+# setpoint = { signal = "pos_set", unit = "deg" }
+# angle = { signal = "pos_act", unit = "inc", per_rev = 1048576, wrap = 4294967296 }
+# torque = { signal = "current", unit = "A", scale = 0.92 }   # scale: the torque constant, N m/A

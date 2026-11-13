@@ -1,0 +1,37 @@
+# An example of the dataset format, made by the simulator, not measured. See datasets/README.md.
+
+[dataset]
+id = "example-synthetic-belt-axis"
+title = "Single belt axis, pick-and-place cycle (synthetic)"
+description = "The simulator's single-axis machine running its default cycle without payload, written as a drive would record it: positions as 20-bit encoder counts, speed in 1/min, torque with noise. It shows the format and is what the checker and the tests run on; it says nothing about a real machine."
+license = "CC0-1.0"
+contributor = "anonymous"
+recorded = "2026-11"
+synthetic = true
+
+[machine]
+kind = "single belt axis"
+transmission = "toothed belt, pulley radius 0.02 m, planetary gearbox"
+mounting = "horizontal"
+travel_per_motor_rev_m = 0.1257
+payload_kg = 0.0
+
+[drive]
+vendor = "simulated"
+family = "SINAMICS S210 model of the simulator"
+current_cycle_s = 62.5e-6
+speed_cycle_s = 125e-6
+position_cycle_s = 1e-3
+
+[motor]
+family = "1FK2 model of the simulator"
+rated_torque_nm = 1.27
+rotor_inertia_kg_m2 = 0.3e-4
+encoder_counts_per_rev = 1048576
+
+[[recording]]
+file = "trace.csv"
+map = "map.toml"
+test = "cycle"
+sample_time_s = 1e-3
+notes = "sim-cli run single-axis --cycle --time 6 --set effects.payload=false, columns converted to vendor-like units"

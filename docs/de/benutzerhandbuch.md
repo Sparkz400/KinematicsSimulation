@@ -896,7 +896,7 @@ Was die Anpassung ermitteln kann und was nicht:
 | Coulomb-Reibung je Achse | Die Dämpfung des Riemens gegenüber der Reibung (die Dämpfung des Einbruchs enthält Reibung und Getriebe) |
 | Konstante Kraft je Achse (Gewicht, Neigung, Kabelzug) | Steifigkeit aus der Aufzeichnung einer Bewegung: Regelkreise und Reibung dämpfen das Nachschwingen, es braucht einen Frequenzgang |
 | Ein Faktor für die Steifigkeit zwischen Motor und Last, aus einem Frequenzgang | Welche Feder zwischen Motor und Last danebenliegt: Der Faktor umfasst alle |
-| | Totzeiten und Filter des Antriebs (Stufe 3 ist nicht gebaut) |
+| | Totzeiten und Filter des Antriebs: je Motor mit `sim-cli identify` (unten), nicht je Achse |
 | | Spiel, Zahnsteifigkeit, Steifigkeit von Gestell und Z-Achse |
 
 Grenzen bei dieser Aufgabe:
@@ -907,7 +907,38 @@ Grenzen bei dieser Aufgabe:
 - Eine falsche Reibung zeigt sich als einige Prozent falsche Masse und umgekehrt; das liegt an den Getriebeverlusten. Ändern Sie die Konfiguration und passen Sie erneut an.
 - Der Steifigkeitsfaktor gilt erst, wenn die Massen stimmen.
 - Ein Frequenzgang mit kleiner Amplitude zeigt bei eingeschalteter Reibung keinen Einbruch. Ein Frequenzgang mit 0,05 N m ergibt `Keine Steifigkeit angepasst: Der gemessene Frequenzgang oder der der Konfiguration zeigt keinen Einbruch mit beiden Flanken im gemessenen Bereich.` Das ist ein Fehler wie jeder andere: `fit` endet mit dem Code 2, nachdem es geschrieben hat, was eine Aufzeichnung ergab. Der Frequenzgang muss außerdem den Einbruch und seine beiden Flanken enthalten. Seine Frequenzen müssen über null liegen.
-- All das wurde an Aufzeichnungen geprüft, die der Simulator selbst erzeugt hat, mit zusätzlichem Rauschen. Eine Aufzeichnung eines realen Antriebs wurde nicht gelesen. Bei realen Exporten müssen die Spalten umbenannt und die Einheiten in rad, rad/s und N m an der Motorwelle umgerechnet werden.
+- All das wurde an Aufzeichnungen geprüft, die der Simulator selbst erzeugt hat, mit zusätzlichem Rauschen. Eine Aufzeichnung eines realen Antriebs wurde nicht gelesen.
+
+### Aufzeichnungen aus den Werkzeugen der Hersteller
+
+`replay`, `fit` und `identify` nehmen neben `--trace DATEI` auch `--map DATEI`: eine Zuordnungsdatei (TOML), die sagt, welche Signale eines Exports Lagesollwert, Lage, Drehzahl, Moment und Momentsollwert sind und wie ihre Einheiten (LU, Inkremente, mm, 1/min, %, ‰) in rad, rad/s und N m an der Motorwelle umzurechnen sind. Gelesen werden:
+
+| Format | Export | Was belegt ist |
+| --- | --- | --- |
+| `sinamics` | Trace in Startdrive / TIA Portal, „Messung exportieren“ als CSV | Siemens beschreibt den Aufbau der CSV-Datei nicht; er ist angenommen. Das eigene Format `.ttrecx` ist nicht beschrieben und wird nicht gelesen. |
+| `twincat` | TwinCAT 3 Scope View, Export als CSV mit vollem Kopf | Der Aufbau echter Exporte von Scope 3.4. `.svdx` ist nicht beschrieben und wird nicht gelesen. |
+| `codesys` | CODESYS-Trace als `.trace`, `.txt` oder `.trace.csv` | Echte Exporte einer auf CODESYS V3.5 SP20 beruhenden Umgebung. |
+| `csv` | jede andere Tabelle | |
+
+Trenner (Komma, Semikolon, Tab) und Dezimalkomma werden erkannt, ebenso Einheiten in `[..]` oder `(..)` hinter dem Namen, eine Einheitenzeile, Kopfzeilen mit Angaben über der Tabelle, Zähler, die überlaufen (`wrap`), und Signale mit eigener Abtastzeit oder eigenem Zeitversatz (`time_offset_s`). Eine Vorlage mit einem Block je Format liegt in [datasets/template/map.toml](../../datasets/template/map.toml).
+
+In der App steht die Zuordnungsdatei im Feld „Zuordnung“ neben der Aufzeichnung unter „Nachfahren und anpassen“. Die Motoren der Zuordnung müssen die der Maschine sein, in ihrer Reihenfolge.
+
+### Identifikation ohne Konfiguration
+
+```text
+sim-cli identify --trace trace.csv --map map.toml --out bericht.csv --overlay vergleich.csv
+```
+
+passt den Antriebsstrang eines Motors aus seiner eigenen Aufzeichnung an, ohne Konfiguration der Maschine: Gesamtträgheit am Motor, viskose und Coulomb-Reibung, Stribeck-Reibung (nur wo die Aufzeichnung den Abfall deutlich zeigt), die Vorgleitsteifigkeit σ0 des LuGre-Modells, ein konstantes Moment, und Verstärkung, Verzögerung und Totzeit vom Momentsollwert zum Moment (Stromregelkreis, wo der Sollwert zugeordnet ist) und vom Lagesollwert zur Lage (Lageregelkreis). Das ist die Stufe 3 der Anpassung. `--motor N` wählt den Motor.
+
+Steifigkeit und Dämpfung zwischen Motor und Last als Zweimassenmodell kommen aus einem gemessenen Frequenzgang (`--sweep DATEI`), aus einer Aufzeichnung mit Rauschanregung (`--from HZ --to HZ`) oder aus dem Nachschwingen nach einem Momentsprung (`--step-from S --step-to S --motor-inertia KGM2`).
+
+Jeder Wert steht mit seinem Standardfehler und seinem 95-%-Intervall in der Tabelle, und jedes Modell sagt, wie gut es die Aufzeichnung trifft (`*_fit_percent`). In der App erscheint dieselbe Tabelle unter „Was der Trace für sich sagt, je Motor“.
+
+Welche Testbewegungen aufzuzeichnen sind, mit welcher Abtastzeit, und wie das Ergebnis zu lesen ist, beschreibt [Measuring a drive train](../measurement-procedure.md) (englisch). Gemessene Datensätze werden in [datasets/](../../datasets/README.md) veröffentlicht und mit `sim-cli check-dataset ORDNER` geprüft, auch auf personenbezogene Angaben.
+
+Geprüft ist das an synthetischen Aufzeichnungen (LuGre-Reibung, Geberauflösung, Rauschen, Verzögerung des Stromregelkreises) und an Dateien, die nach dem Aufbau der Herstellerexporte gebaut sind. Eine Aufzeichnung eines realen Antriebs wurde noch nicht gelesen.
 
 ## Sehen, wohin Moment und Energie gehen
 
@@ -1200,7 +1231,7 @@ Das Fenster zeigt in der Mitte die 3D-Ansicht, links ein Bedienfeld und rechts d
 | Analyse: Zyklus optimieren | Der Optimierer. „Diese Einstellungen in die laufende Maschine übernehmen“ setzt sein Ergebnis in die Konfiguration ein |
 | Motorsuche | Netzspannung (230v, 400v oder s120), der Anfang der Artikelnummern (leer: jeder Motor des Katalogs) und wahlweise eine Getriebebaureihe wie `NRK` oder `NRK070`; angekreuzt probiert „Jede Achse des Katalogs“ jeden Motor zusätzlich auf jeder Achse des Katalogs, die zur Art der Maschine passt (`--axes`). „Suchen“ fährt jeden solchen Motor auf dem Zyklus und listet sie auf, bestandene zuerst, günstigste zuerst (die eingebaute Masse steht für den Preis), mit Getriebe, Achse, der Masse von Motor und Getriebe, der eingebauten Masse und der knappsten Prüfung oder dem Grund, aus dem ein Motor oder eine Achse nicht gefahren wurde. „Einsetzen“ in einer Zeile benennt diesen Motor, seine Netzspannung, sein Getriebe, seinen Antrieb und seine Achse in `[parts]` der laufenden Konfiguration. Dasselbe wie `sim-cli search` |
 | Bahn | Ein Dateiname, eingetippt. „Geraden, Kreisbögen und Splines“ ist eine Bahndatei, geplant innerhalb der Achsgrenzwerte oder, angekreuzt, „So schnell, wie die Motoren es erlauben“; „Posen mit Zeiten“ ist eine Datei mit einer zeitlich vorgegebenen Bahn. „Planen, fahren und analysieren“ plant die Bahn von dort, wo die Maschine steht, analysiert sie mit einer eigenen Simulation (Dauer, Abweichung durch Übergangsbögen, Bahnfehler, Abstand hinter dem Sollwert, Belastungen, Prüfungen), zeichnet die geplante Bahn als Diagramm im Bedienfeld und als Linie in der 3D-Ansicht und lässt die Maschine in der 3D-Ansicht sie fahren. Dasselbe wie `sim-cli analyze --path` oder `--trajectory` |
-| Aufzeichnung | Ein Dateiname, eingetippt. „Nachfahren und anpassen“ fährt die Antriebsaufzeichnung nach und zeigt je Motor, wie weit die Simulation von ihr abweicht (Moment und Schleppfehler, Effektivwert und Spitze), und je Achse die angepasste Masse, Reibung und konstante Kraft neben den Werten der Konfiguration, mit dem, was in der Konfiguration zu ändern ist. Dasselbe wie `sim-cli replay` und `fit --trace`. Die Startpose der Konfiguration muss dort liegen, wo die Aufzeichnung beginnt. Darunter „Aufzeichnung gegen Simulation“: Motormoment, Motordrehzahl und Schleppfehler am Motor über der Zeit, die Aufzeichnung durchgezogen und die Simulation gestrichelt, eine Farbe je Motor. „CSV exportieren“ dort schreibt sie nach `replay-overlay.csv` im Arbeitsverzeichnis, dieselbe Datei wie `sim-cli replay --out` |
+| Aufzeichnung, Zuordnung | Ein Dateiname, eingetippt, und für den Export eines Herstellerwerkzeugs seine Zuordnungsdatei (wie `--map` sie nimmt; leer für eine Aufzeichnung in den Spalten des Simulators). „Nachfahren und anpassen“ fährt die Antriebsaufzeichnung nach und zeigt je Motor, wie weit die Simulation von ihr abweicht (Moment und Schleppfehler, Effektivwert und Spitze), je Achse die angepasste Masse, Reibung und konstante Kraft neben den Werten der Konfiguration, mit dem, was in der Konfiguration zu ändern ist, und je Motor, was die Aufzeichnung für sich sagt: Trägheit, Reibung, die Verzögerungen der Regelkreise, jeweils mit Standardfehler und 95-%-Intervall, und wie gut jedes Modell die Aufzeichnung trifft. Dasselbe wie `sim-cli replay`, `fit --trace` und `identify --trace`. Die Startpose der Konfiguration muss dort liegen, wo die Aufzeichnung beginnt. Darunter „Aufzeichnung gegen Simulation“: Motormoment, Motordrehzahl und Schleppfehler am Motor über der Zeit, die Aufzeichnung durchgezogen und die Simulation gestrichelt, eine Farbe je Motor. „CSV exportieren“ dort schreibt sie nach `replay-overlay.csv` im Arbeitsverzeichnis, dieselbe Datei wie `sim-cli replay --out` |
 | Frequenzgang der Mechanik | Von, bis, Frequenzen und Momentamplitude, wie `sim-cli sweep` sie nimmt (anfangs 5 bis 500 Hz, 120, und 1,5 N m oder 40 % des Spitzenmoments des Antriebs, wo das weniger ist). „Jeden Motor messen“ misst den Frequenzgang im offenen Kreis vom Moment jedes Motors zu seiner Drehzahl, wie `sim-cli sweep --motor N` für einen: Betrag in dB und Phase über der Frequenz, eine Linie je Motor, und je Motor den Einbruch, bei dem die Last am Riemen schwingt (Resonanz und Dämpfungsgrad des Einbruchs mit der niedrigsten Frequenz; leer, wo der Bereich keinen Einbruch mit beiden Flanken enthält). Die Voreinstellungen zeigen ihn an jedem Motor der Standardmaschinen. Vorher taten sie das nicht: Die Amplitude war 0,05 N m, bei der die Haftreibung die Motoren hält, nicht der Bereich. Ein Wechsel der Maschine oder das Öffnen einer Konfiguration setzt die Amplitude auf die Voreinstellung dieser Konfiguration, sofern keine andere eingetippt wurde |
 | Frequenzgang: Gemessener Frequenzgang, gemessen an, Riemensteifigkeit anpassen | Eine Datei, wie `sim-cli sweep` sie schreibt (die Spalten `frequency_hz` und `gain_rad_s_per_nm`), gemessen an dem angewählten Motor mit der Momentamplitude darüber. „Riemensteifigkeit anpassen“ rechnet den Frequenzgang der Konfiguration bei den Frequenzen der Datei und zeigt Resonanz und Dämpfungsgrad beider und was in der Konfiguration zu ändern ist: den Faktor auf die Riemensteifigkeit. Dasselbe wie `sim-cli fit --sweep DATEI --sweep-motor N --amplitude A` |
 | Reglereinstellung: Sprungantwort und Frequenzgang messen | Sprungantwort und Führungsfrequenzgang einer Achse, mit Anstiegszeit, Überschwingen, Einschwingzeit und Bandbreite |

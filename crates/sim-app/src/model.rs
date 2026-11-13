@@ -8,6 +8,8 @@ use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth
 use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
 use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
+use sim_components::import::{Mapping, decode, import};
+use sim_components::motor_fit::{Identified, QUANTITIES};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv, replay};
 use sim_components::{Command, CommandError, Sim, path};
 use sim_core::{Config, ConfigError, Machine, MachineEntry, Scene, SignalInfo, TEMPERATURE_PREFIX, TORQUE_PARTS, Translations};
@@ -106,6 +108,8 @@ pub struct Inputs {
     pub path_timed: bool,
     pub time_optimal: bool,
     pub trace_file: String,
+    /// A mapping file for a vendor's trace export (`sim-cli --map`); "" for a trace in the simulator's columns.
+    pub trace_map: String,
     /// The config file to open or save.
     pub config_file: String,
     /// Part names as typed, in the order of `PARTS`: motor article, supply, gearbox, drive, belt and axis; "" for none.
@@ -141,10 +145,12 @@ pub struct PathRun {
 
 /// A trace replayed and fitted: per motor the RMS and peak difference between the trace and its replay, of
 /// torque and of following error, and per axis the fit (none for an axis the trace does not move both ways).
-/// With the trace and its replay, for the overlay.
+/// With the trace and its replay, for the overlay, and per motor what the trace says by itself
+/// (`sim-cli identify`: inertia, friction, the loops' lags).
 pub struct TraceFit {
     pub differences: Vec<[f64; 4]>,
     pub fits: Vec<Option<AxisFit>>,
+    pub identified: Vec<Identified>,
     pub measured: Trace,
     pub simulated: Trace,
 }
@@ -220,6 +226,8 @@ const TRACE_KEYS: [&str; 4] = ["ui-trace-torque-rms", "ui-trace-torque-peak", "u
 const FIT_KEYS: [&str; 4] = ["ui-trace-quantity", "ui-trace-config", "ui-trace-fitted", "ui-trace-error"];
 /// The four values of `AxisFit`, in its order.
 const FIT_QUANTITIES: [&str; 4] = ["ui-trace-mass", "ui-trace-viscous", "ui-trace-coulomb", "ui-trace-constant"];
+/// The table of what the trace says per motor by itself.
+const IDENTIFY_KEYS: [&str; 5] = ["ui-analysis-motor", "ui-trace-quantity", "ui-identify-value", "ui-trace-error", "ui-identify-interval"];
 /// Rows of the frequency response's table and of its fit.
 const SWEEP_KEYS: [&str; 2] = ["ui-sweep-resonance", "ui-sweep-damping"];
 /// The operating points: motor, speed, torque.
@@ -621,7 +629,7 @@ impl Model {
             tuning_axis: 0,
             tuning: None,
             tuning_job: None,
-            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
+            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), trace_map: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
             cycle_report: None,
             bands: None,
             band_samples: 0,
@@ -1108,10 +1116,23 @@ impl Model {
                     }
                     Analysis::Trace => {
                         let unfit = |e: TraceError| (e.key, e.detail);
-                        let measured = Trace::parse(&read(&inputs.trace_file)?, &motors).map_err(unfit)?;
+                        // A vendor's export through its mapping, whose motors are the machine's in its order.
+                        let (measured, setpoints) = if inputs.trace_map.is_empty() {
+                            let measured = Trace::parse(&read(&inputs.trace_file)?, &motors).map_err(unfit)?;
+                            let none = vec![None; measured.motors.len()];
+                            (measured, none)
+                        } else {
+                            let bytes = std::fs::read(&inputs.trace_file).map_err(|e| ("ui-file-unreadable", format!("{}: {e}", inputs.trace_file)))?;
+                            let imported = import(&decode(&bytes), &Mapping::parse(&read(&inputs.trace_map)?).map_err(unfit)?).map_err(unfit)?;
+                            if imported.trace.motors.len() != motors.len() {
+                                return Err(("error-import-map", format!("{} [[motor]] for {} motors", imported.trace.motors.len(), motors.len())));
+                            }
+                            (imported.trace, imported.torque_setpoints)
+                        };
                         let simulated = replay(entry, &config, &measured).map_err(unfit)?;
                         let fits = fit_rigid(entry, &config, &measured).map_err(unfit)?;
-                        Report::Trace(TraceFit { differences: differences(&measured, &simulated), fits, measured, simulated })
+                        let identified = measured.motors.iter().zip(&setpoints).map(|(m, s)| Identified::of(&measured.time, m, s.as_deref())).collect();
+                        Report::Trace(TraceFit { differences: differences(&measured, &simulated), fits, identified, measured, simulated })
                     }
                     Analysis::Sweep => {
                         let frequencies = log_spaced(inputs.sweep_from, inputs.sweep_to, inputs.sweep_count);
@@ -1361,7 +1382,20 @@ impl Model {
                 fitted.push(vec![format!("{} · {}", tr(axis.key), tr(key)), short(fit.config[q]), short(fit.fitted[q]), short(fit.error[q])]);
             }
         }
-        vec![replayed, fitted]
+        let mut identified = vec![self.header(&IDENTIFY_KEYS)];
+        for (motor, found) in self.session.motors.iter().zip(&fit.identified) {
+            let named = |name: &str| (tr(motor.key), tr(&format!("identify-{name}")));
+            for (name, e) in found.estimates() {
+                let (low, high) = e.interval();
+                let (motor, quantity) = named(name);
+                identified.push(vec![motor, quantity, short(e.value), short(e.error), format!("{} … {}", short(low), short(high))]);
+            }
+            for (name, value) in found.qualities() {
+                let (motor, quantity) = named(name);
+                identified.push(vec![motor, quantity, short(value), String::new(), String::new()]);
+            }
+        }
+        vec![replayed, fitted, identified]
     }
 
     /// What the fit says to change in the config, one line per value, and which axis it could not fit.
@@ -1706,10 +1740,12 @@ impl Model {
             keys.push(group.key);
             keys.extend(group.params.into_iter().map(|(_, key, _)| key));
         }
-        let headers = [&CYCLE_KEYS[..], &MOTOR_KEYS, &LIFE_KEYS, &VERDICT_KEYS, &BAND_KEYS, &WORST_KEYS, &SENSITIVITY_KEYS, &OPTIMISED_KEYS, &SEARCH_KEYS, &TRACE_KEYS, &FIT_KEYS, &FIT_QUANTITIES, &NOTES, &SWEEP_KEYS, &POINTS_KEYS, &OVERLAY_KEYS, &BREAKDOWN_KEYS, &FRICTION_KEYS, &EFFECT_KEYS, &VIEW_KEYS];
+        let headers = [&CYCLE_KEYS[..], &MOTOR_KEYS, &LIFE_KEYS, &VERDICT_KEYS, &BAND_KEYS, &WORST_KEYS, &SENSITIVITY_KEYS, &OPTIMISED_KEYS, &SEARCH_KEYS, &TRACE_KEYS, &FIT_KEYS, &FIT_QUANTITIES, &IDENTIFY_KEYS, &NOTES, &SWEEP_KEYS, &POINTS_KEYS, &OVERLAY_KEYS, &BREAKDOWN_KEYS, &FRICTION_KEYS, &EFFECT_KEYS, &VIEW_KEYS];
         keys.extend(headers.concat().into_iter().map(String::from));
         keys.extend(["ui-analysis-ok", "ui-analysis-fail", "fit-axis-skipped", "fit-mass", "fit-viscous", "fit-coulomb", "fit-constant", "fit-stiffness", "fit-no-resonance"].map(String::from));
         keys.extend(CHECKS.iter().map(|check| format!("check-{check}")));
+        keys.extend(QUANTITIES.iter().map(|name| format!("identify-{name}")));
+        keys.extend(["error-import-map", "error-import-signal", "error-import-unit"].map(String::from));
         let budget = self.cycle_report.as_ref().and_then(|(load, ..)| load.budget.as_ref());
         keys.extend(budget.into_iter().flat_map(|b| b.rows.iter().flat_map(|r| [r.owner_key.clone(), r.quantity_key.clone()])));
         keys
