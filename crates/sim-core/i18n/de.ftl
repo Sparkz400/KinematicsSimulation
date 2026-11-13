@@ -6,4 +6,7 @@ error-config-invalid = Konfigurationswert liegt außerhalb des gültigen Bereich
 error-config-unknown = Die Konfiguration enthält einen Wert, den diese Maschine nicht kennt: { $arg }
 error-config-part-motor = Der Katalog kennt dieses Bauteil nicht: Motor { $arg }
 error-config-part-gearbox = Der Katalog kennt dieses Bauteil nicht: Getriebe { $arg }
+error-config-part-drive = Der Katalog kennt dieses Bauteil nicht: Antrieb { $arg }
+error-config-part-belt = Der Katalog kennt dieses Bauteil nicht: Riemen { $arg }
+error-config-part-axis = Der Katalog kennt dieses Bauteil nicht: Achse { $arg }
 param-format_version = Formatversion

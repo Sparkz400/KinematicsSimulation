@@ -25,6 +25,10 @@ fn signal(sim: &Sim, id: &str) -> f64 {
 #[test]
 fn a_guide_at_constant_speed_warms_to_resistance_times_its_loss() {
     for entry in MACHINES.iter().copied() {
+        // On a machine with an X guide that warms (not the delta's arms).
+        if !(entry.build)(&entry.config()).unwrap().thermal_parts().iter().any(|p| p.id == "guide_x") {
+            continue;
+        }
         // A short time constant, so that the guide settles within the cruise of a move.
         let mut cfg = edited(entry, &["effects.part_heating = true", "thermal.guide_time_constant_s = 0.02", "thermal.guide_resistance_k_w = 2.0"]);
         let machine = (entry.build)(&cfg).unwrap();
@@ -101,6 +105,10 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
     for entry in MACHINES.iter().copied() {
         let sim = Sim::new(entry, &edited(entry, &["effects.gravity = false"])).unwrap();
         let sections = sim.machine.belt_sections();
+        // A machine without belts reports no sections.
+        if sections.is_empty() {
+            continue;
+        }
         assert!(sections.len() >= 2, "{}", entry.id);
         let (p, ea) = (300.0, 5.0e5);
         for section in &sections {
@@ -147,6 +155,11 @@ fn comparing_friction_on_and_off_gives_the_friction_torque() {
     for entry in MACHINES.iter().copied() {
         let cfg = entry.config();
         let same = compare_configs(entry, &cfg, &cfg).unwrap();
+        assert!(same.on.len() > 500 && same.on == same.off, "{}", entry.id);
+        // The friction of an X guide (not the delta's joints, whose friction its own tests check).
+        if !(entry.build)(&cfg).unwrap().friction_contacts().iter().any(|c| c.id == "axis.x") {
+            continue;
+        }
         // Without torque ripple and tooth meshing, whose periodic torques the controller answers within a sample.
         let cfg = edited(entry, &["effects.torque_ripple = false", "effects.tooth_meshing = false"]);
         assert!(same.on.len() > 500 && same.on == same.off, "{}", entry.id);

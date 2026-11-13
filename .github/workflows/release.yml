@@ -1,0 +1,105 @@
+name: Release
+
+# On a version tag (v1.0.0, v1.0.0-rc.2): the Windows zip and MSI, the Linux tarball and .deb, and FMUs of the three
+# example configs with win64 and linux64 binaries, each checked with fmpy, attached to a draft GitHub release.
+# Nothing is signed.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Read-only unless a job asks for more; only the job that drafts the release writes.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            fmi: sim_fmi.dll
+          - os: ubuntu-latest
+            fmi: libsim_fmi.so
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Third-party actions pinned to a commit: their output ends up in the release.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
+        with:
+          toolchain: "1.98.1"
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev libvulkan-dev
+
+      - name: Package (Windows, with MSI)
+        if: runner.os == 'Windows'
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          pwsh tools/package.ps1
+
+      - name: Package (Linux, with .deb)
+        if: runner.os == 'Linux'
+        run: sh tools/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ runner.os }}
+          path: |
+            dist/*
+            target/release/${{ matrix.fmi }}
+            target/release/sim-cli
+
+  fmu:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: FMUs with both binaries, checked with fmpy
+        run: |
+          pip install fmpy==0.3.32 numpy
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          cli=artifacts/package-Linux/target/release/sim-cli
+          chmod +x $cli
+          both="--binary artifacts/package-Windows/target/release/sim_fmi.dll --binary artifacts/package-Linux/target/release/libsim_fmi.so"
+          mkdir -p fmu
+          $cli fmu t-gantry $both --out fmu/t-gantry-$version.fmu
+          $cli fmu single-axis $both --out fmu/single-axis-$version.fmu
+          $cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml $both --out fmu/exct-30-$version.fmu
+          python tools/check_fmu.py $cli fmu/t-gantry-$version.fmu t-gantry
+          python tools/check_fmu.py $cli fmu/single-axis-$version.fmu single-axis
+          python tools/check_fmu.py $cli fmu/exct-30-$version.fmu t-gantry --config crates/machine-t-gantry/exct-30.toml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmu
+          path: fmu/*
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/package-Windows/dist/*
+            artifacts/package-Linux/dist/*
+            fmu/*

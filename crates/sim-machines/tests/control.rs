@@ -5,6 +5,12 @@ use sim_components::{Command, Sim, check_limits};
 use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
+/// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
+/// gearboxes' elasticity on one of arms.
+fn model_switch(cfg: &Config) -> &'static str {
+    ["effects.belt_stretch", "effects.joint_elasticity"].into_iter().find(|key| cfg.bool(key).is_ok()).expect("a machine with an elastic and a rigid model")
+}
+
 fn config(entry: &MachineEntry, edit: &[&str]) -> Config {
     let mut cfg = entry.config();
     for e in edit {
@@ -32,13 +38,27 @@ fn long_move(sim: &Sim) -> Vec<f64> {
     target
 }
 
-/// Mean following error of the first axis while it cruises at its speed limit.
+/// Mean following error of the first axis while it cruises at its speed limit, and what each motor's lag of its speed
+/// over Kv makes of it at the tool: forward(motor setpoints) - forward(motor setpoints - motor speeds / Kv), which is
+/// v / Kv where the kinematics are linear (the gantries) and a little more or less where they are not (the delta, whose
+/// lag of 60 mm at 3 m/s spans a curved part of its kinematics).
 fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
     let cfg = config(entry, edit);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let v_max = sim.machine.axes()[0].max_vel;
+    let kv = cfg.f64("drive.kv_1_s").unwrap();
+    // From near the low end of the first axis, so that the long move has a long cruise also where the start pose is
+    // in the middle of the range (the delta's).
+    let axis = &sim.machine.axes()[0];
+    let mut low = sim.control.set_pos.clone();
+    low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+    sim.command(Command::MoveTo(low)).unwrap();
+    while sim.control.busy() {
+        sim.step();
+    }
     sim.command(Command::MoveTo(long_move(&sim))).unwrap();
-    let (mut sum, mut n, mut cruise_since) = (0.0, 0u32, None);
+    let (mut sum, mut n, mut cruise_since, mut lag) = (0.0, 0u32, None, 0.0);
+    let (mut set, mut behind) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
     while sim.control.busy() || sim.step == 0 {
         sim.step();
         if sim.control.set_vel[0] < v_max * (1.0 - 1e-9) {
@@ -50,10 +70,16 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
         if sim.time() - since > 0.15 {
             sum += sim.control.tool_error[0];
             n += 1;
+            let motors: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set).collect();
+            let lagging: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set - d.vel_set / kv).collect();
+            sim.machine.forward(&motors, &mut set);
+            sim.machine.forward(&lagging, &mut behind);
+            lag += set[0] - behind[0];
         }
     }
     assert!(n > 1000, "{}: the move has no long cruise to measure on", entry.id);
-    (sum / n as f64, v_max / cfg.f64("drive.kv_1_s").unwrap())
+    println!("{}: lag at the tool {} m, v / Kv {} m", entry.id, lag / n as f64, v_max / kv);
+    (sum / n as f64, lag / n as f64)
 }
 
 /// Following error at constant speed, no feedforward: equals v / Kv.
@@ -144,7 +170,11 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         // Every segment ran, and the cycle started over.
         assert!(visited.iter().all(|n| *n >= 1) && visited[0] >= 2, "{}: segments run {visited:?} times in 8 s", entry.id);
         assert!(payload_seen == [true, true], "{}: the payload never switched", entry.id);
-        assert!(worst_error < 5e-4, "{}: following error up to {worst_error} m in the cycle", entry.id);
+        // 0.5 mm, and on a fast machine 0.08 mm per m/s2 of its fastest axis less 0.3 mm: the delta (50 m/s2, 3.7 mm) has
+        // up to 2.9 mm at the motors, from its gearboxes' twist and the velocity term its rigid feedforward leaves out.
+        let fastest = sim.machine.axes().iter().map(|a| a.max_acc).fold(0.0, f64::max);
+        let limit = f64::max(5e-4, 8e-5 * fastest - 3e-4);
+        assert!(worst_error < limit, "{}: following error up to {worst_error} m in the cycle, limit {limit} m", entry.id);
         // Stop ends the cycle after the segment under way.
         sim.command(Command::Stop).unwrap();
         sim.run(3.0, |_| {});
@@ -275,8 +305,11 @@ fn every_effect_switch_changes_the_traces() {
         // switch matters; a weak drive and a low bus voltage (100 V at the winding), so that the torque and
         // voltage limits matter; a via point, so that corner blending matters.
         let mut base = with_via_point(entry);
+        // The pretension where there is a belt.
         for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 81.65"] {
-            base.set_text(e).unwrap();
+            if base.get(e.split(' ').next().unwrap()).is_ok() {
+                base.set_text(e).unwrap();
+            }
         }
         let traces = |cfg: &Config| {
             let mut sim = Sim::new(entry, cfg).unwrap();
@@ -498,7 +531,8 @@ fn a_cycle_of_one_segment_is_analysed() {
 fn switching_the_model_at_speed_carries_the_motion_over() {
     for entry in MACHINES {
         for elastic in [true, false] {
-            let cfg = config(entry, &[&format!("effects.belt_stretch = {elastic}")]);
+            let switch = model_switch(&entry.config());
+            let cfg = config(entry, &[&format!("{switch} = {elastic}")]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
             sim.command(Command::MoveTo(long_move(&sim))).unwrap();
             let axes = sim.machine.axes().to_vec();
@@ -516,7 +550,7 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             let (before, peak) = (tool(&sim), cfg.f64("drive.peak_torque_nm").unwrap());
             let quiet = sim.control.drives.iter().map(|d| d.torque_command.abs()).fold(0.0, f64::max);
             let mut other = cfg.clone();
-            other.set_text(&format!("effects.belt_stretch = {}", !elastic)).unwrap();
+            other.set_text(&format!("{switch} = {}", !elastic)).unwrap();
             sim.reconfigure(entry, &other).unwrap();
             let after = tool(&sim);
             for i in 0..axes.len() {
@@ -576,7 +610,9 @@ fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
     configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct, 35.0, 6.0));
     for (name, cfg, entry, phase, gain) in configs {
         for friction in [true, false] {
-            let cfg = config_of(&cfg, &[&format!("effects.motor_friction = {friction}"), &format!("effects.guide_friction = {friction}")]);
+            // Motor friction, and the guides' or the joints' (whichever the machine has).
+            let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
+            let cfg = config_of(&cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
             for (run, margins) in velocity_loop_margins(entry, &cfg, &bounds(&cfg).unwrap()).unwrap() {
                 for (k, m) in margins.iter().enumerate() {
                     assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");

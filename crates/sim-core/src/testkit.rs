@@ -51,22 +51,29 @@ pub fn mid_pose(m: &dyn Machine) -> Vec<f64> {
     m.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect()
 }
 
-/// Forward of inverse returns the starting pose within 1e-9, on a grid over the whole workspace.
+/// Forward of inverse returns the starting pose within 1e-9, on a grid over the whole workspace: the box of the
+/// axis ranges, less the poses the machine reports it cannot go to (`Machine::unreachable`).
 pub fn round_trip(m: &dyn Machine) {
     let axes = m.axes();
     let (mut motors, mut back) = (vec![0.0; m.motors().len()], vec![0.0; axes.len()]);
+    let mut tried = 0;
     for k in 0..5usize.pow(axes.len() as u32) {
         let pose: Vec<f64> = axes
             .iter()
             .enumerate()
             .map(|(i, a)| a.min + (a.max - a.min) * ((k / 5usize.pow(i as u32)) % 5) as f64 / 4.0)
             .collect();
+        if m.unreachable(&pose, 0.0).is_some() {
+            continue;
+        }
+        tried += 1;
         m.inverse(&pose, &mut motors);
         m.forward(&motors, &mut back);
         for (p, b) in pose.iter().zip(&back) {
             assert!((p - b).abs() < 1e-9, "round trip at {pose:?} gave {back:?}");
         }
     }
+    assert!(2 * tried > 5usize.pow(axes.len() as u32) / 2, "only {tried} poses of the grid are in the workspace");
 }
 
 /// At the equilibrium state, under the holding torques, nothing moves for one second.

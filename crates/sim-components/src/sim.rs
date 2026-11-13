@@ -59,12 +59,21 @@ pub struct Sim {
     pub payload_energy: f64,
     /// Axis limits that exceed what the drives allow, found when the config was applied.
     pub limit_violations: Vec<LimitViolation>,
-    /// The parts that warm with their losses, and whether they do (effects.part_heating). Their rises are signals
+    /// The parts that warm with their losses, and whether they do (effects.part_heating, or effects.thermal_feedback,
+    /// which feeds back what this computes: `heats`). Their rises are signals
     /// whether or not; switched off they stay as they are.
     pub heated: Vec<HeatedPart>,
     pub part_heating: bool,
+    /// Whether the machine's friction and losses follow the parts' rises (effects.thermal_feedback).
+    pub thermal_feedback: bool,
     /// The machine's loss powers, for the heated parts.
     losses: Vec<f64>,
+}
+
+/// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
+/// temperatures.
+pub fn heats(cfg: &Config) -> Result<bool, ConfigError> {
+    Ok(cfg.bool("effects.part_heating")? || cfg.bool("effects.thermal_feedback")?)
 }
 
 fn timing(cfg: &Config) -> Result<(f64, u32), ConfigError> {
@@ -104,7 +113,7 @@ impl Sim {
         machine.equilibrium(&start, &mut state, &mut torque);
         let control = Controller::new(cfg, machine.as_ref(), &state)?;
         let limit_violations = check_limits(machine.as_ref(), cfg)?;
-        let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, cfg.bool("effects.part_heating")?);
+        let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, heats(cfg)?);
         let motors = torque.len();
         Ok(Self {
             rk: Rk4::new(state.len()),
@@ -123,6 +132,7 @@ impl Sim {
             limit_violations,
             heated,
             part_heating,
+            thermal_feedback: cfg.bool("effects.thermal_feedback")?,
             losses: Vec::new(),
         })
     }
@@ -159,8 +169,10 @@ impl Sim {
         for part in &mut heated {
             part.rise = self.heated.iter().find(|old| old.part.id == part.part.id).map_or(0.0, |old| old.rise);
         }
-        (self.heated, self.part_heating) = (heated, cfg.bool("effects.part_heating")?);
+        (self.heated, self.part_heating) = (heated, heats(cfg)?);
+        self.thermal_feedback = cfg.bool("effects.thermal_feedback")?;
         self.machine = machine;
+        self.feed_temperatures_back();
         self.substeps = substeps;
         Ok(())
     }
@@ -195,11 +207,15 @@ impl Sim {
         }
         self.machine.set_dwelling(self.control.dwell_progress().is_some());
         self.machine.set_brake_engaged(!self.control.enabled());
+        // The temperatures the last step ended with; fed back here and not after the parts warm, so that the losses
+        // the parts warmed with are those the machine reports after the step.
+        self.feed_temperatures_back();
         if self.control.enabled() {
             self.advance_with_windings();
         } else {
             advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
         }
+        self.machine.after_step(&mut self.state, self.dt);
         if self.part_heating && !self.heated.is_empty() {
             // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
             self.losses.clear();
@@ -211,6 +227,14 @@ impl Sim {
             }
         }
         self.step += 1;
+    }
+
+    /// With effects.thermal_feedback, tells the machine its parts' rises (`Machine::set_part_temperatures`).
+    pub fn feed_temperatures_back(&mut self) {
+        if self.thermal_feedback {
+            let rises: Vec<f64> = self.heated.iter().map(|h| h.rise).collect();
+            self.machine.set_part_temperatures(&rises);
+        }
     }
 
     /// Windings and mechanics over one base step in one integration, the voltages held as the controller set them: the
@@ -301,6 +325,14 @@ impl Sim {
 
     /// The current value of every signal, in the order of `signal_infos`.
     pub fn sample(&self, out: &mut Vec<f64>) {
+        self.sample_base(out);
+        self.machine.effect_signals(&self.state, &self.torque, out);
+        out.extend(self.heated.iter().map(|h| h.rise));
+    }
+
+    /// The signals of `sample` up to the end of the machine's `base_signals`, in the same places: without those of the
+    /// effect views (which cost about one more evaluation of the machine) and the parts' temperatures after them.
+    pub fn sample_base(&self, out: &mut Vec<f64>) {
         let (axes, motors) = (self.machine.axes().len(), self.machine.motors().len());
         let (mut pos, mut vel) = (vec![0.0; axes], vec![0.0; axes]);
         let (mut angle, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
@@ -315,8 +347,7 @@ impl Sim {
         for (k, d) in c.drives.iter().enumerate() {
             out.extend([angle[k], speed[k], d.torque, d.torque_command, d.current, d.voltage, d.power, d.temperature_rise, d.dc_voltage, d.resistor_power, d.speed_command, d.following_error, d.pos_set]);
         }
-        self.machine.signals(&self.state, &self.torque, out);
-        out.extend(self.heated.iter().map(|h| h.rise));
+        self.machine.base_signals(&self.state, &self.torque, out);
     }
 
     /// Position of a signal in a sample.

@@ -5,8 +5,8 @@
 use crate::session::{Event, Request, Session, extend_trail};
 use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict, compare_effect};
 use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
-use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst, verdicts};
-use sim_components::catalog::{Candidate, search_motors};
+use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts};
+use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv, replay};
 use sim_components::{Command, CommandError, Sim, path};
@@ -94,10 +94,12 @@ pub struct Inputs {
     pub samples: usize,
     /// With the error bands: also search per check for the worst corner of the bounds (`verdict_worst`).
     pub worst: bool,
-    /// Motor search: "230v" or "400v", how the article numbers start, and a gearbox series or nothing.
+    /// Motor search: a supply of `SUPPLIES`, how the article numbers start, a gearbox series or nothing, and whether
+    /// every axis of the catalogue of the machine's kind is tried too (`search_axes`).
     pub supply: String,
     pub series: String,
     pub gearboxes: String,
+    pub axes: bool,
     /// Path: the file, whether it holds poses at times and not lines and arcs, and whether lines and arcs
     /// are timed as fast as the motors allow and not within the axis limits.
     pub path_file: String,
@@ -106,8 +108,8 @@ pub struct Inputs {
     pub trace_file: String,
     /// The config file to open or save.
     pub config_file: String,
-    /// Part names as typed, in the order of `PARTS`: motor article, supply and gearbox; "" for none.
-    pub parts: [String; 3],
+    /// Part names as typed, in the order of `PARTS`: motor article, supply, gearbox, drive, belt and axis; "" for none.
+    pub parts: [String; 6],
     /// Frequency response: lowest and highest frequency in Hz, number of frequencies and torque amplitude in
     /// N m, as `sim-cli sweep` takes them. The amplitude is also the one a measured sweep was taken with.
     pub sweep_from: f64,
@@ -122,8 +124,8 @@ pub struct Inputs {
     pub compare_quantity: String,
 }
 
-/// The supplies the motor catalogue has data for.
-pub const SUPPLIES: [&str; 2] = ["230v", "400v"];
+/// The supplies the motor catalogue has data for: the S210 at 230 V and 400 V, and the S120.
+pub const SUPPLIES: [&str; 3] = sim_components::catalog::SUPPLIES;
 
 /// A path as it was planned, run on a simulation of its own and judged.
 pub struct PathRun {
@@ -213,7 +215,7 @@ const LIFE_KEYS: [&str; 3] = ["ui-analysis-pulley-bearing-life", "ui-analysis-ge
 const VERDICT_KEYS: [&str; 5] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-value", "ui-analysis-limit", "ui-analysis-result"];
 const BAND_KEYS: [&str; 6] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-band-low", "ui-analysis-band-high", "ui-analysis-band-worst", "ui-analysis-band-share"];
 const WORST_KEYS: [&str; 7] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-worst-value", "ui-analysis-limit", "ui-analysis-result", "ui-analysis-worst-high", "ui-analysis-worst-low"];
-const SEARCH_KEYS: [&str; 6] = ["ui-analysis-motor", "ui-search-gearbox", "ui-search-mass", "ui-analysis-result", "ui-search-tightest", "ui-search-share"];
+const SEARCH_KEYS: [&str; 8] = ["ui-analysis-motor", "ui-search-gearbox", "ui-search-axis", "ui-search-mass", "ui-search-cost", "ui-analysis-result", "ui-search-tightest", "ui-search-share"];
 const TRACE_KEYS: [&str; 4] = ["ui-trace-torque-rms", "ui-trace-torque-peak", "ui-trace-error-rms", "ui-trace-error-peak"];
 const FIT_KEYS: [&str; 4] = ["ui-trace-quantity", "ui-trace-config", "ui-trace-fitted", "ui-trace-error"];
 /// The four values of `AxisFit`, in its order.
@@ -225,7 +227,7 @@ const POINTS_KEYS: [&str; 3] = ["ui-analysis-motor", "ui-points-speed", "ui-poin
 /// The overlay's quantities, in the order of `Model::overlay`.
 const OVERLAY_KEYS: [&str; 3] = ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"];
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
-const NOTES: [&str; 18] = [
+const NOTES: [&str; 21] = [
     "ui-overlay-exported",
     "ui-config-opened",
     "ui-config-saved",
@@ -241,17 +243,20 @@ const NOTES: [&str; 18] = [
     "ui-search-refused",
     "ui-search-limit-motor-speed",
     "ui-search-limit-motor-torque",
+    "ui-search-axis-stroke",
+    "ui-search-axis-payload",
+    "ui-search-axis-speed",
     "ui-file-unreadable",
     "ui-file-line",
     "ui-analysis-figure",
 ];
-/// The names of `[parts]` that a motor of the search goes into.
-const PARTS: [&str; 3] = ["motor", "motor_supply", "gearbox"];
+/// The names of `[parts]`; a motor of the search goes into the first three, its drive and axis into two more.
+const PARTS: [&str; 6] = sim_components::catalog::PART_KEYS;
 const SENSITIVITY_KEYS: [&str; 6] =
     ["ui-analysis-parameter", "ui-analysis-low", "ui-analysis-high", "ui-analysis-peak-change", "ui-analysis-rms-change", "ui-analysis-time-change"];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 23] = [
+const CHECKS: [&str; 28] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -275,6 +280,11 @@ const CHECKS: [&str; 23] = [
     "gearbox-life",
     "guide-life",
     "belt-tooth-load",
+    "belt-tooth-jump",
+    "belt-span-resonance",
+    "drive-current",
+    "drive-peak-current",
+    "singularity",
 ];
 /// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
 const BREAKDOWN_KEYS: [&str; 5] = ["quantity-torque-inertia", "quantity-torque-gravity", "quantity-torque-friction", "quantity-torque-rest", "quantity-torque"];
@@ -361,13 +371,14 @@ pub fn part_color(color: [f32; 3], highlight: f32, heat: Option<f32>) -> [f32; 3
     std::array::from_fn(|c| color[c] + (toward[c] - color[c]) * amount)
 }
 
-/// The temperatures in the effect view: one line per winding and, with effects.part_heating, per heated part, over the
-/// scopes' window, and the table of where each is now, where it settles on the analysed cycle and what it is rated for.
+/// The temperatures in the effect view: one line per winding and, with effects.part_heating or thermal_feedback, per
+/// heated part, over the scopes' window, and the table of where each is now, where it settles on the analysed cycle and
+/// what it is rated for.
 pub struct ThermalView {
     /// Per motor winding and heated part its name and the points (time, temperature rise in K).
     pub lines: Vec<(String, Vec<[f64; 2]>)>,
     pub table: Table,
-    /// Neither the windings nor the parts warm (effects.winding_heating and effects.part_heating off).
+    /// Neither the windings nor the parts warm (effects.winding_heating, part_heating and thermal_feedback off).
     pub off: bool,
 }
 
@@ -416,7 +427,7 @@ const TOP_ROWS: usize = 8;
 
 /// A number at a readable length, whatever its size: four digits and at most three decimals, so 12.5 reads
 /// as 12.50 and 1912.141 as 1912, and 0.0000312 as 3.12e-5. Narrow, so that the tables fit the panel.
-fn short(value: f64) -> String {
+pub fn short(value: f64) -> String {
     match value.abs() {
         size if size == 0.0 => "0.000".into(),
         size if (0.01..1e5).contains(&size) => format!("{value:.*}", (3 - size.log10().floor() as i32).clamp(0, 3) as usize),
@@ -449,6 +460,8 @@ pub struct Model {
     pub scene: Scene,
     pub paused: bool,
     pub speed: f64,
+    /// How many times larger the 3D view draws the parts' deflections (`Scene::exaggeration`).
+    pub exaggeration: f64,
     /// Target of the next point-to-point move, per axis.
     pub target: Vec<f64>,
     pub messages: Vec<Message>,
@@ -490,11 +503,12 @@ pub struct Model {
     analysis_jobs: Vec<(Analysis, Config, Job<Report>)>,
 }
 
-/// A config without the names of its parts: what a motor search does not depend on, because it puts its
-/// own motor (and gearbox) in.
+/// A config without the names of its motor, gearbox and drive: what a motor search does not depend on, because it puts its
+/// own in (the drive the catalogue pairs with each motor). The belt and axis the config names are part of what it
+/// searches on, so naming an axis of the axis search marks the search as computed for an earlier configuration.
 fn without_parts(config: &Config) -> Config {
     let mut out = config.clone();
-    for key in PARTS {
+    for key in &PARTS[..4] {
         let _ = out.set_text(&format!("parts.{key} = \"\""));
     }
     out
@@ -594,12 +608,13 @@ impl Model {
             scene: Scene::default(),
             paused: false,
             speed: 1.0,
+            exaggeration: 1.0,
             target: Vec::new(),
             messages: Vec::new(),
             tuning_axis: 0,
             tuning: None,
             tuning_job: None,
-            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
+            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), axes: false, path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
             cycle_report: None,
             bands: None,
             band_samples: 0,
@@ -635,7 +650,7 @@ impl Model {
     /// new config over it), a motor number the new machine may not have, and the sweep amplitude where it is
     /// still the default for the old motors.
     fn restart(&mut self, fresh: Self) {
-        let (paused, speed, window, inputs) = (self.paused, self.speed, self.window_s, self.inputs.clone());
+        let (paused, speed, exaggeration, window, inputs) = (self.paused, self.speed, self.exaggeration, self.window_s, self.inputs.clone());
         let old_amplitude = default_sweep_amplitude(self.entry, &self.config).ok();
         *self = fresh;
         let parts = std::mem::take(&mut self.inputs.parts);
@@ -646,6 +661,7 @@ impl Model {
         (self.window_s, self.inputs) = (window, Inputs { parts, config_file, sweep_motor, sweep_amplitude, compare_effect, ..inputs });
         self.set_paused(paused);
         self.set_speed(speed);
+        self.set_exaggeration(exaggeration);
     }
 
     /// The part fields show the parts the config names.
@@ -701,11 +717,11 @@ impl Model {
     /// the motor search's button does. A name the catalogue does not have is refused, and so is any name in a
     /// config without `[parts]`, as on the command line.
     pub fn apply_parts(&mut self) {
-        let [motor, supply, gearbox] = self.inputs.parts.clone().map(|name| name.trim().to_string());
-        if !supply.is_empty() && !SUPPLIES.contains(&supply.as_str()) {
-            return self.say(("ui-search-bad-supply", supply));
+        let names = self.inputs.parts.clone().map(|name| name.trim().to_string());
+        if !names[1].is_empty() && !SUPPLIES.contains(&names[1].as_str()) {
+            return self.say(("ui-search-bad-supply", names[1].clone()));
         }
-        self.name_parts([&motor, &supply, &gearbox]);
+        self.name_parts(names.each_ref().map(String::as_str));
     }
 
     pub fn set_language(&mut self, lang: &'static str) {
@@ -721,6 +737,11 @@ impl Model {
     pub fn set_speed(&mut self, speed: f64) {
         self.speed = speed;
         self.session.send(Request::Speed(speed));
+    }
+
+    pub fn set_exaggeration(&mut self, factor: f64) {
+        self.exaggeration = factor.clamp(1.0, 1.0e4);
+        self.session.send(Request::Exaggeration(self.exaggeration));
     }
 
     /// Adds a message, unless it only repeats the last one: a refusal that comes back with every edit
@@ -1002,14 +1023,15 @@ impl Model {
                             0 => verdict_bands(entry, &config, &bounds),
                             samples => verdict_bands_sampled(entry, &config, &bounds, samples, 1),
                         };
-                        let bands = if inputs.bands { Some(banded(bounds(&config).map_err(refused)?).map_err(refused)?) } else { None };
-                        // The search for the worst corners, beside the bands.
-                        let worst = if inputs.bands && inputs.worst {
+                        // The search for the worst corners, beside the bands. Its first runs are those of the bands at
+                        // their bounds, which it gives back, so that they are not run twice.
+                        let (bands, worst) = if inputs.bands && inputs.worst {
                             let bounded = bounds(&config).map_err(refused)?;
-                            let (worst, _) = verdict_worst(entry, &config, &bounded).map_err(refused)?;
-                            Some((worst, bounded.into_iter().map(|bound| bound.0).collect()))
+                            let (worst, at_bounds, _) = verdict_worst_and_bands(entry, &config, &bounded).map_err(refused)?;
+                            let bands = if inputs.samples == 0 { at_bounds } else { banded(bounded.clone()).map_err(refused)? };
+                            (Some(bands), Some((worst, bounded.into_iter().map(|bound| bound.0).collect())))
                         } else {
-                            None
+                            (if inputs.bands { Some(banded(bounds(&config).map_err(refused)?).map_err(refused)?) } else { None }, None)
                         };
                         Report::Cycle(load, verdicts, bands, inputs.samples, curve, worst)
                     }
@@ -1023,10 +1045,11 @@ impl Model {
                     Analysis::Optimise => Report::Optimised(optimise_cycle(entry, &config, 40).map_err(refused)?),
                     Analysis::Search => {
                         let (series, gearboxes) = (inputs.series.trim(), Some(inputs.gearboxes.trim()).filter(|series| !series.is_empty()));
-                        let found = search_motors(entry, &config, &inputs.supply, &|article| article.starts_with(series), gearboxes);
-                        if found.is_empty() {
+                        let wanted = |article: &str| article.starts_with(series);
+                        let found = if inputs.axes { search_axes(entry, &config, &inputs.supply, &wanted, gearboxes) } else { search_motors(entry, &config, &inputs.supply, &wanted, gearboxes) };
+                        if found.iter().all(|c| c.article.is_empty()) {
                             // Motors there are, so it is the gearbox series that has nothing for them.
-                            let motors = sim_components::catalog::motor_articles().iter().any(|article| article.starts_with(series));
+                            let motors = sim_components::catalog::motor_articles_for(&inputs.supply).iter().any(|article| article.starts_with(series));
                             return Err(match gearboxes.filter(|_| motors) {
                                 Some(gearboxes) => ("ui-search-no-gearbox", gearboxes.to_string()),
                                 None => ("ui-search-none", series.to_string()),
@@ -1098,25 +1121,28 @@ impl Model {
         [Analysis::Cycle, Analysis::Sensitivity, Analysis::Optimise].into_iter().for_each(|kind| self.clear(kind));
     }
 
-    /// Names a motor of the search (and its gearbox, where it was searched with one) in `[parts]` of the
-    /// config and applies it to the running simulation: the row of `search_table` after the header. The
+    /// Names a motor of the search (and its gearbox, where it was searched with one, its drive and its axis, where it
+    /// was tried on one) in `[parts]` of the config and applies it to the running simulation: the row of `search_table`
+    /// after the header. A row of an axis ruled out has no motor and names nothing. The
     /// candidate passed or failed on the config that was searched, so over a config changed since in
     /// anything but its part names nothing is applied.
     pub fn use_candidate(&mut self, row: usize) {
         let (Some((found, supply)), Some(searched)) = (&self.candidates, &self.computed_for[Analysis::Search as usize]) else { return };
-        let Some(candidate) = found.get(row) else { return };
+        let Some(candidate) = found.get(row).filter(|c| !c.article.is_empty()) else { return };
         if self.outdated(Analysis::Search) {
             return self.say(("ui-analysis-stale", String::new()));
         }
         // A candidate without a gearbox of its own ran with the one the searched config names.
-        let own = searched.get("parts.gearbox").ok().and_then(|name| name.as_str()).unwrap_or("");
-        let names = [candidate.article, supply.as_str(), if candidate.gearbox.is_empty() { own } else { &candidate.gearbox }].map(String::from);
-        self.name_parts([&names[0], &names[1], &names[2]]);
+        // Where it has none of its own (gearbox, drive, axis), it ran with the one the searched config names.
+        let own = |key: &str| searched.get(&format!("parts.{key}")).ok().and_then(|name| name.as_str()).unwrap_or("").to_string();
+        let or_own = |name: &str, key: &str| if name.is_empty() { own(key) } else { name.to_string() };
+        let names = [candidate.article.to_string(), supply.clone(), or_own(&candidate.gearbox, "gearbox"), or_own(candidate.drive, "drive"), own("belt"), or_own(&candidate.axis, "axis")];
+        self.name_parts(names.each_ref().map(String::as_str));
     }
 
-    /// Names motor, supply and gearbox in `[parts]` of the config and applies it to the running simulation.
-    /// Names the catalogue does not have are refused here, before the config changes.
-    fn name_parts(&mut self, names: [&str; 3]) {
+    /// Names motor, supply, gearbox, drive, belt and axis in `[parts]` of the config and applies it to the running
+    /// simulation. Names the catalogue does not have are refused here, before the config changes.
+    fn name_parts(&mut self, names: [&str; 6]) {
         let mut config = self.config.clone();
         let named = PARTS.iter().zip(names).try_for_each(|(key, name)| config.set_text(&format!("parts.{key} = {name:?}")));
         match named.and_then(|()| sim_components::catalog::resolve(self.entry, &config)) {
@@ -1249,9 +1275,11 @@ impl Model {
         Some(rows)
     }
 
-    /// The motors of the search as ranked: passing ones first, lightest first. Per motor its gearbox (empty:
-    /// the config's own), mass, result, and the check nearest to its limit with value over limit, or why the
-    /// cycle was not run. No more columns than the panel is wide: the cycle analysis has the rest.
+    /// The motors of the search as ranked: passing ones first, cheapest first. Per motor its gearbox and axis (empty:
+    /// the config's own), the mass of motor and gearbox, the installed mass that stands in for the price
+    /// (`Candidate::cost`), result, and the check nearest to its limit with value over limit, or why the cycle was
+    /// not run. An axis ruled out by its catalogue numbers has a row without motor. No more columns than the panel is
+    /// wide: the cycle analysis has the rest.
     pub fn search_table(&self) -> Option<Table> {
         let (found, _) = self.candidates.as_ref()?;
         let tr = |key: &str| self.tr.tr(key).to_string();
@@ -1263,7 +1291,8 @@ impl Model {
                 (None, Some(_)) => (String::new(), String::new()),
                 (None, None) => (tr(if self.tr.has(&reason) { &reason } else { "ui-search-refused" }), String::new()),
             };
-            table.push(vec![c.article.to_string(), c.gearbox.clone(), short(c.mass), self.result(c.passes()), check, share]);
+            let mass = |kg: f64| if kg.is_finite() { short(kg) } else { String::new() };
+            table.push(vec![c.article.to_string(), c.gearbox.clone(), c.axis.clone(), mass(c.mass), mass(c.cost), self.result(c.passes()), check, share]);
         }
         Some(table)
     }
@@ -1485,7 +1514,9 @@ impl Model {
             let settles = load.and_then(|l| l.motors.get(k)).map(|m| m.winding_rise);
             add(format!("{} · {}", tr(motor.key), tr("quantity-winding-temperature")), format!("motor.{}.winding_temperature", motor.id), settles, winding_rated);
         }
-        if on("part_heating") {
+        // The temperature feedback warms the parts too (`sim::heats`).
+        let parts = on("part_heating") || on("thermal_feedback");
+        if parts {
             for part in self.machine().map(|m| m.thermal_parts()).unwrap_or_default() {
                 let key = |name: &str| format!("thermal.{}_{name}", part.kind);
                 let settles = load.and_then(|l| l.part_rises.iter().find(|(p, _)| p.id == part.id)).map(|(_, rise)| *rise);
@@ -1493,7 +1524,7 @@ impl Model {
                 add(name, format!("{TEMPERATURE_PREFIX}{}", part.id), settles, self.config.positive(&key("max_rise_k")).ok());
             }
         }
-        ThermalView { lines, table, off: !on("winding_heating") && !on("part_heating") }
+        ThermalView { lines, table, off: !on("winding_heating") && !parts }
     }
 
     /// The belt view (see `BeltView`); `None` for a machine that tells no belt sections. Stretch in mm.
@@ -1587,8 +1618,16 @@ impl Model {
         let mut table = vec![self.header(&OPTIMISED_KEYS)];
         table.push(vec![self.tr.tr("ui-analysis-cycle-time").to_string(), short(found.before.duration), short(found.after.duration)]);
         table.push(vec![self.tr.tr("ui-analysis-dwell-error").to_string(), short(found.before.dwell_error_peak * 1e3), short(found.after.dwell_error_peak * 1e3)]);
-        for (path, before, after) in &found.changes {
+        // The new cycle itself is applied whole; its lifts say what changed in it (segments counted from 1).
+        for (path, before, after) in found.changes.iter().filter(|c| c.0 != "cycle.segment") {
             table.push(vec![self.param_label(path), before.clone(), after.clone()]);
+        }
+        for lift in &found.lifts {
+            let segments = lift.segments.map(|i| (i + 1).to_string()).join(", ");
+            table.push(vec![self.tr.tr_arg("optimised-lift", &segments), short(lift.before), short(lift.after)]);
+            if let Some(via) = &lift.via {
+                table.push(vec![self.tr.tr_arg("optimised-via", &segments), String::new(), via.iter().map(|x| short(*x)).collect::<Vec<_>>().join(", ")]);
+            }
         }
         Some(table)
     }

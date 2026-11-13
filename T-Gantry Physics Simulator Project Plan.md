@@ -366,10 +366,8 @@ None of these is needed for the first full-physics version. Each can be added on
 
 **Extra physics**
 
-- [ ] Sideways vibration of the free belt spans, as a string model per span
 - [ ] Tooth contact and wear: a simplified tooth stiffness and a wear estimate from load cycles
 - [ ] Air drag on carriage and vertical axis
-- [ ] Computed thermal model: winding and friction heat that feed back into friction and belt stiffness, replacing the manual temperature setting
 
 **Further kinematics**
 

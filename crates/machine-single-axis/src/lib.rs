@@ -7,7 +7,7 @@
 //! section 2 from the pulley around the idler to the carriage (length const - x, fed by - r a).
 //! Belt force on the carriage: T2 - T1. Belt torque on the pulley: r (T1 - T2).
 
-use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, Lugre, Ripple, SectionForce, ShaftFriction, ToothMesh};
+use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency};
 use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
@@ -61,6 +61,12 @@ fn suite_configs() -> Vec<Config> {
         cfg.set_text(&format!("effects.belt_tooth_stiffness = {}", incline > 0.0)).unwrap();
         cfg.set_text(&format!("effects.cable_chain = {}", incline > 0.0)).unwrap();
         cfg.set_text(&format!("effects.part_heating = {}", incline > 0.0)).unwrap();
+        // The effects of 13 November in the level elastic run: no loss is on, so the parts stay at ambient, and no tooth
+        // jumps; the slip states and the span signals are there all the same. Not in the inclined one: nothing damps it,
+        // its gearbox knocks through the backlash, and a tooth climbing out and falling back sends it another way.
+        for effect in ["thermal_feedback", "belt_tooth_jump", "belt_span_vibration"] {
+            cfg.set_text(&format!("effects.{effect} = {}", elastic && incline == 0.0)).unwrap();
+        }
         cfg.set_text(&format!("effects.belt_stretch = {elastic}")).unwrap();
         cfg.set_text(&format!("geometry.incline_deg = {incline:.1}")).unwrap();
         out.push(cfg);
@@ -99,6 +105,13 @@ pub struct SingleAxis {
     brake: HoldingBrake,
     brake_engaged: bool,
     payload_attached: bool,
+    /// With effects.thermal_feedback: the law, and the guide's viscous coefficient at the reference temperature.
+    thermal: Option<(ThermalFeedback, f64)>,
+    /// With effects.belt_tooth_jump (elastic model only): the law, and the energy the last step's jump took, J/s.
+    jump: Option<ToothJump>,
+    jump_loss: f64,
+    /// With effects.belt_span_vibration: the belt's mass per metre, for the spans' string frequencies.
+    span_mass: Option<f64>,
     axes: [AxisInfo; 1],
     motors: [MotorInfo; 1],
 }
@@ -108,6 +121,8 @@ pub struct SingleAxis {
 const N_ELASTIC: usize = 9;
 // Rigid state: [x, v, s, brake].
 const N_RIGID: usize = 4;
+// With effects.belt_tooth_jump the elastic state goes on with the motor pulley's slip states (`JUMP_STATES`).
+const JUMP: usize = N_ELASTIC;
 
 impl SingleAxis {
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
@@ -143,6 +158,13 @@ impl SingleAxis {
             brake: HoldingBrake::from_config(cfg, j_rotor)?,
             brake_engaged: false,
             payload_attached: true,
+            thermal: match ThermalFeedback::from_config(cfg)? {
+                Some(law) => Some((law, cfg.non_negative("friction_x.viscous_n_s_m")?)),
+                None => None,
+            },
+            jump: None,
+            jump_loss: 0.0,
+            span_mass: if cfg.bool("effects.belt_span_vibration")? { Some(cfg.positive("belt.mass_kg_m")?) } else { None },
             axes: [AxisInfo {
                 id: "x",
                 key: "axis-x",
@@ -157,6 +179,10 @@ impl SingleAxis {
         };
         let geo = m.geo(0.0);
         m.mat0 = geo.map(|g| m.belt.rest_length(g));
+        if m.elastic {
+            // The whole belt's mass is lumped on the motor pulley (below).
+            m.jump = ToothJump::from_config(cfg, r, m.belt.mass_per_m * (geo[0] + geo[1] - 2.0 * m.belt.tooth_length))?;
+        }
         // The whole belt runs at carriage speed, so all of its mass sits on the pulley.
         m.j_pulley += m.belt.mass_per_m * (geo[0] + geo[1] - 2.0 * m.belt.tooth_length) * r * r;
         Ok(m)
@@ -179,14 +205,22 @@ impl SingleAxis {
         let (stroke, s, teeth) = (self.axes[0].max, self.span_min, self.belt.tooth_length);
         [s + x + teeth, 3.0 * s + 2.0 * stroke - x + teeth]
     }
-    fn mat(&self, a: f64) -> [f64; 2] {
-        [self.mat0[0] + self.r_mat * a, self.mat0[1] - self.r_mat * a]
+    /// Unstretched belt per section of the elastic state `s`: the pulley at angle s[1] has fed in r_mat a, and with
+    /// effects.belt_tooth_jump the belt has slipped over it by u, which is r_mat / r u of material.
+    fn mat(&self, s: &[f64]) -> [f64; 2] {
+        let fed = self.r_mat * (s[1] + self.slip(s).0 / self.r);
+        [self.mat0[0] + fed, self.mat0[1] - fed]
+    }
+    /// The belt's slip over the motor pulley and its rate (m, m/s); 0 without effects.belt_tooth_jump.
+    fn slip(&self, s: &[f64]) -> (f64, f64) {
+        if self.jump.is_some() { (s[JUMP], s[JUMP + 1]) } else { (0.0, 0.0) }
     }
     fn sections(&self, s: &[f64]) -> [SectionForce; 2] {
-        let (geo, mat, r) = (self.geo(s[0]), self.mat(s[1]), self.r_mat);
+        let (geo, mat, r) = (self.geo(s[0]), self.mat(s), self.r_mat);
+        let fed = r * (s[4] + self.slip(s).1 / self.r);
         [
-            self.belt.section(geo[0], mat[0], s[3], r * s[4]),
-            self.belt.section(geo[1], mat[1], -s[3], -r * s[4]),
+            self.belt.section(geo[0], mat[0], s[3], fed),
+            self.belt.section(geo[1], mat[1], -s[3], -fed),
         ]
     }
 
@@ -218,7 +252,13 @@ impl SingleAxis {
         let m = self.m() + self.chain.mass(s[0]).0;
         out[3] = (sec[1].tension - sec[0].tension - ff + self.stop_force(s[0], s[3]) + self.extra_force(s[0], s[3])) / m - self.g_along;
         let belt_torque = self.r_mat * (sec[0].material - sec[1].material);
-        out[4] = (gear.output + belt_torque + r * self.mesh.force(r * s[1])) / self.j_pulley;
+        // While its teeth are out of mesh the pulley feels only the ridge it holds the sliding belt back with.
+        let on_pulley = self.jump.as_ref().map_or(belt_torque, |j| j.pulley_torque(&s[JUMP..], belt_torque, r));
+        let j_pulley = self.jump.as_ref().map_or(self.j_pulley, |j| j.pulley_inertia(&s[JUMP..], self.j_pulley, r));
+        out[4] = (gear.output + on_pulley + r * self.mesh.force(r * s[1])) / j_pulley;
+        if let Some(jump) = &self.jump {
+            jump.rates(&s[JUMP..], belt_torque / r, r * out[4], &mut out[JUMP..]);
+        }
         let (brake, brake_rate) = self.brake.torque(self.brake_engaged, s[5], s[8]);
         out[5] = (self.ripple.apply(torque[0], s[2]) - gear.rotor - self.shaft.torque(s[5]) - brake) / self.j_rotor;
         out[8] = brake_rate;
@@ -258,8 +298,9 @@ impl SingleAxis {
         if !self.elastic {
             return [0.5 * (self.m_total() + chain) * s[1] * s[1], potential, stops];
         }
-        let (geo, mat) = (self.geo(s[0]), self.mat(s[1]));
-        let kinetic = 0.5 * (self.m() + chain) * s[3] * s[3] + 0.5 * self.j_pulley * s[4] * s[4] + 0.5 * self.j_rotor * s[5] * s[5];
+        let (geo, mat) = (self.geo(s[0]), self.mat(s));
+        let slip = self.jump.as_ref().map_or(0.0, |j| j.slip_energy(&s[JUMP..], self.r * s[4]));
+        let kinetic = 0.5 * (self.m() + chain) * s[3] * s[3] + 0.5 * self.j_pulley * s[4] * s[4] + 0.5 * self.j_rotor * s[5] * s[5] + slip;
         [kinetic, potential, stops + self.belt.energy(geo[0], mat[0]) + self.belt.energy(geo[1], mat[1]) + self.gearbox.energy(s[2], s[1])]
     }
 
@@ -276,8 +317,8 @@ impl SingleAxis {
         // Gearbox loss at the rotor and as power, brake, power of the tooth meshing put in, belt damping.
         let (gear_loss, gear_power, brake, mesh_in, belt) = if self.elastic {
             let gear = self.gearbox.torque(s[2], s[5], s[1], s[4]);
-            let (geo, mat) = (self.geo(x), self.mat(s[1]));
-            let belt = self.belt.loss_power(geo[0], mat[0], v, self.r_mat * s[4]) + self.belt.loss_power(geo[1], mat[1], -v, -self.r_mat * s[4]);
+            let (geo, mat, fed) = (self.geo(x), self.mat(s), self.r_mat * (s[4] + self.slip(s).1 / r));
+            let belt = self.belt.loss_power(geo[0], mat[0], v, fed) + self.belt.loss_power(geo[1], mat[1], -v, -fed);
             let brake = self.brake.torque(self.brake_engaged, s[5], s[8]).0;
             (gear.rotor - gear.output / ratio, self.gearbox.loss_power(s[2], s[5], s[1], s[4]), brake, r * self.mesh.force(r * s[1]) * s[4], belt)
         } else {
@@ -308,8 +349,8 @@ impl SingleAxis {
         let (powers, gear_loss, brake) = self.losses(s, torque);
         // Carriage acceleration.
         let acc = if self.elastic {
-            let mut d = [0.0; N_ELASTIC];
-            self.elastic_derivatives(s, torque, &mut d);
+            let mut d = [0.0; N_ELASTIC + JUMP_STATES];
+            self.elastic_derivatives(s, torque, &mut d[..self.state_len()]);
             d[3]
         } else {
             self.rigid_solve(s, torque).0
@@ -323,14 +364,34 @@ impl SingleAxis {
         out.extend(parts);
         out.push(torque[0] - parts.iter().sum::<f64>());
         out.extend(powers);
+        if self.jump.is_some() {
+            out.push(self.jump_loss);
+        }
         out.extend(self.energy_parts(s));
         out.push(v);
         out.extend(self.friction.split(v, state, scale));
         out.push(scale);
         // Stretch per belt section: its length less its unstretched belt; in the rigid model that of pretension.
         let geo = self.geo(x);
-        let mat = if self.elastic { self.mat(s[1]) } else { geo.map(|g| self.belt.rest_length(g)) };
+        let mat = if self.elastic { self.mat(s) } else { geo.map(|g| self.belt.rest_length(g)) };
         out.extend([geo[0] - mat[0], geo[1] - mat[1]]);
+    }
+
+    /// The first-mode frequency of each free belt span (`span_frequency`) and how far the nearest of them is from what
+    /// the drive excites (`span_detuning`). Spans: 1 motor pulley to carriage (section 1), 2 motor pulley to idler and
+    /// 3 idler to carriage (section 2); their lengths are those of `geo` without the teeth in mesh.
+    fn span_signals(&self, s: &[f64], mass: f64, out: &mut Vec<f64>) {
+        let (x, stroke, span) = (s[0], self.axes[0].max, self.span_min);
+        let tension = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 2] };
+        let spans = [(span + x, tension[0]), (2.0 * span + stroke, tension[1]), (span + stroke - x, tension[1])];
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        self.motor_state(s, &mut angle, &mut speed);
+        let pulley = if self.elastic { s[4] } else { speed[0] / self.gearbox.ratio };
+        let mut excitations = Vec::with_capacity(3);
+        drive_excitations(self.mesh.pitch, self.r * pulley, &self.ripple, speed[0], &mut excitations);
+        let frequencies = spans.map(|(length, t)| span_frequency(length, t, mass));
+        out.extend(frequencies);
+        out.push(frequencies.iter().map(|f| span_detuning(*f, &excitations)).fold(1.0, f64::min));
     }
 
     /// The signal list of `effect_signals`.
@@ -347,6 +408,9 @@ impl SingleAxis {
             ("other", "loss-other", "quantity-power-given-off"),
         ];
         out.extend(powers.map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")));
+        if self.jump.is_some() {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}tooth_jump"), "group-belt", "quantity-tooth-jump-power", "W"));
+        }
         out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
         for part in FRICTION_SIGNALS {
             let unit = match part {
@@ -376,7 +440,13 @@ impl Machine for SingleAxis {
     }
 
     fn state_len(&self) -> usize {
-        if self.elastic { N_ELASTIC } else { N_RIGID }
+        if !self.elastic {
+            N_RIGID
+        } else if self.jump.is_some() {
+            N_ELASTIC + JUMP_STATES
+        } else {
+            N_ELASTIC
+        }
     }
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
@@ -396,6 +466,7 @@ impl Machine for SingleAxis {
         let gear = -self.r_mat * (m[0] - m[1]) - r * self.mesh.force(r * a);
         let p = ratio * (a + self.gearbox.static_twist(gear));
         *state = vec![x, a, p, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        state.resize(self.state_len(), 0.0);
         torque[0] = self.ripple.invert(gear / ratio, p);
     }
 
@@ -434,6 +505,15 @@ impl Machine for SingleAxis {
         out[0] = ((self.m_total() + chain) * acc[0] + (self.m() + chain) * self.g_along) * self.r / self.gearbox.ratio;
     }
 
+    /// T2 - T1 = F, the force on the carriage and what it carries (without pulley and rotor), and the belt keeps its
+    /// length: (T1 - P) L1 + (T2 - P) L2 = 0. So T1 = P - F L2 / (L1 + L2), T2 = P + F L1 / (L1 + L2).
+    fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
+        let force = (self.m() + self.chain.mass(pos[0]).0) * (acc[0] + self.g_along);
+        let [l1, l2] = self.geo(pos[0]);
+        let p = self.belt.pretension;
+        out.extend([p - force * l2 / (l1 + l2), p + force * l1 / (l1 + l2)]);
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
@@ -448,6 +528,28 @@ impl Machine for SingleAxis {
         self.brake_engaged = engaged;
     }
 
+    /// Belt tooth jump at the motor pulley (`ToothJump`); section 1 is the one a positive slip feeds.
+    fn after_step(&mut self, s: &mut [f64], dt: f64) {
+        self.jump_loss = 0.0;
+        let Some(jump) = self.jump.clone() else { return };
+        let (before, sec) = (self.energy(s), self.sections(s));
+        let (rest, mut v) = ((self.j_pulley / (self.r * self.r)) - jump.mass, self.r * s[4]);
+        if jump.update(&mut s[JUMP..JUMP + JUMP_STATES], sec[0].tension, sec[1].tension, rest, &mut v) {
+            s[4] = v / self.r;
+            self.jump_loss = (before - self.energy(s)) / dt;
+        }
+    }
+
+    /// The gearbox (where there is one) and the guide, in the order of `thermal_parts`.
+    fn set_part_temperatures(&mut self, rises: &[f64]) {
+        let Some((law, viscous)) = &self.thermal else { return };
+        let (gearbox, guide) = if self.gearbox.is_coupling() { (None, rises[0]) } else { (Some(rises[0]), rises[1]) };
+        if let Some(rise) = gearbox {
+            self.gearbox.efficiency = law.gearbox_efficiency(rise);
+        }
+        self.friction.viscous = viscous * law.viscosity_factor(guide);
+    }
+
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let key = self.axes[0].key;
         let mut out = vec![
@@ -460,6 +562,14 @@ impl Machine for SingleAxis {
             SignalInfo::new("axis.x.guide_load", key, "quantity-guide-load", "N"),
             SignalInfo::new("gearbox.m.output_torque", self.motors[0].key, "quantity-gearbox-torque", "N m"),
         ];
+        if self.jump.is_some() {
+            out.push(SignalInfo::new("pulley.m.tooth_jumps", self.motors[0].key, "quantity-tooth-jumps", ""));
+            out.push(SignalInfo::new("pulley.m.tooth_slip", self.motors[0].key, "quantity-tooth-slip", "m"));
+        }
+        if self.span_mass.is_some() {
+            out.extend((1..=3).map(|i| SignalInfo::new(format!("belt.span.{i}.frequency"), &format!("belt-span-{i}"), "quantity-span-frequency", "Hz")));
+            out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
+        }
         self.effect_infos(&mut out);
         out
     }
@@ -501,12 +611,21 @@ impl Machine for SingleAxis {
         }
         out.push(self.m() * self.g_normal);
         out.push(if self.elastic { self.gearbox.torque(s[2], s[5], s[1], s[4]).output } else { self.rigid_solve(s, torque).3 });
+        if self.jump.is_some() {
+            out.extend([s[JUMP + 4], s[JUMP]]);
+        }
+        if let Some(mass) = self.span_mass {
+            self.span_signals(s, mass, out);
+        }
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         self.view_signals(s, torque, out);
     }
     fn loss_powers(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         out.extend(self.losses(s, torque).0);
+        if self.jump.is_some() {
+            out.push(self.jump_loss);
+        }
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {

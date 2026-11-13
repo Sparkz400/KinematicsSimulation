@@ -593,7 +593,9 @@ fn the_app_optimises_the_cycle_and_applies_the_settings() {
         assert_eq!(table[1][0], "Cycle time [s]");
         let (before, after) = (number(&table[1][1]), number(&table[1][2]));
         assert!(after < 0.95 * before && (before - cycle_time(entry, &entry.config())).abs() < 2e-3, "{}: {before} s to {after} s", entry.id);
-        assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len());
+        let cycle = found.changes.iter().filter(|c| c.0 == "cycle.segment").count();
+        let lift_rows = found.lifts.len() + found.lifts.iter().filter(|l| l.via.is_some()).count();
+        assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len() - cycle + lift_rows);
         assert!(table[3..].iter().all(|row| row[1] != row[2] && !row[0].contains("param-") && !row[0].contains("effect-")), "{table:?}");
 
         // An edit made since the optimiser ran: its settings, absolute values, used to be written over it
@@ -622,6 +624,28 @@ fn the_app_optimises_the_cycle_and_applies_the_settings() {
             assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
         }
     }
+}
+
+/// The optimiser's lower lifts in the app: with `profile.min_clearance_m` = 0.1 m the two lifts of the machine with two axes go from
+/// 0.35 m to 0.15 m (see `the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`); the table
+/// has a row per lift, in both languages, and "Apply" writes the new cycle into the config.
+#[test]
+fn the_app_shows_and_applies_lower_lifts() {
+    let entry = MACHINES.iter().copied().find(|e| e.config().f64s("start.pose").unwrap().len() == 2).unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_param("profile.min_clearance_m", toml::Value::Float(0.1));
+    model.run_analysis(Analysis::Optimise);
+    wait_for_analysis(&mut model);
+    let table = model.optimised_table().unwrap();
+    for segments in ["2, 3, 4", "5, 6, 1"] {
+        let row = table.iter().find(|row| row[0] == format!("Lift height, segments {segments} [m]")).unwrap_or_else(|| panic!("{table:?}"));
+        assert!(number(&row[1]) == 0.35 && (number(&row[2]) - 0.15).abs() < 1e-9, "{row:?}");
+    }
+    model.set_language("de");
+    assert!(model.optimised_table().unwrap().iter().any(|row| row[0] == "Hubhöhe, Abschnitte 2, 3, 4 [m]"));
+    model.apply_optimised();
+    let lifted = model.config.array("cycle.segment").unwrap().iter().filter(|s| (s["target"][1].as_float().unwrap() - 0.15).abs() < 1e-12).count();
+    assert_eq!(lifted, 4);
 }
 
 /// Disable and Enable from the app: disabled, no motor gives torque and a move is refused with the reason;
@@ -712,9 +736,10 @@ fn a_refused_config_value_is_rolled_back_and_reported_once() {
 /// analysis also searches it (`verdict_worst`) and shows per check the worst value found, its limit, the result
 /// and which bounded values are at their high and which at their low bound; in both languages. Without the option,
 /// or without the bands, there is no such table. On the machine with the fewest bounded values (some 300 cycles).
+/// The bands beside it come from the search's first runs (`verdict_worst_and_bands`) and are those of `verdict_bands`.
 #[test]
 fn the_app_searches_the_worst_corner_of_the_bounds() {
-    use sim_components::analysis::{bounds, verdict_worst};
+    use sim_components::analysis::{bounds, verdict_bands, verdict_worst};
     // The machine with the fewest bounded values, so that the search stays short.
     let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
     let mut model = Model::new(entry, "en");
@@ -739,6 +764,12 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
             let named = |cell: &str| cell.split(", ").any(|path| path == bound.0);
             assert!(named(&row[5]) == (*high == Some(true)) && named(&row[6]) == (*high == Some(false)), "{}: {row:?}", bound.0);
         }
+    }
+    let bands = verdict_bands(entry, &cfg, &bounded).unwrap();
+    let tables = model.cycle_tables();
+    assert_eq!(tables[3].len(), 1 + bands.len());
+    for (row, band) in tables[3][1..].iter().zip(&bands) {
+        assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share), "{row:?} against {band:?}");
     }
     model.set_language("de");
     assert_eq!(model.worst_table().unwrap()[0][2..], ["Ungünstigster Wert", "Grenze", "Ergebnis", "An der oberen Grenze", "An der unteren Grenze"]);
@@ -840,15 +871,15 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         wait_for_analysis(&mut model);
         let found = search_motors(entry, &entry.config(), "400v", &|article| article.starts_with(series), None);
         let table = model.search_table().unwrap();
-        assert_eq!(table[0], ["Motor", "Gearbox", "Mass [kg]", "Result", "Tightest check", "Value / limit"]);
+        assert_eq!(table[0], ["Motor", "Gearbox", "Axis", "Motor and gearbox [kg]", "Installed mass [kg]", "Result", "Tightest check", "Value / limit"]);
         assert!(found.len() >= 3 && table.len() == 1 + found.len(), "{}: {table:?}", entry.id);
         for (row, c) in table[1..].iter().zip(&found) {
-            assert_eq!((row[0].as_str(), row[1].as_str(), row[3].as_str()), (c.article, "", if c.passes() { "ok" } else { "FAIL" }));
-            assert!(shows(&row[2], c.mass), "{row:?}");
+            assert_eq!((row[0].as_str(), row[1].as_str(), row[2].as_str(), row[5].as_str()), (c.article, "", "", if c.passes() { "ok" } else { "FAIL" }));
+            assert!(shows(&row[3], c.mass) && shows(&row[4], c.cost), "{row:?}");
             match c.tightest() {
-                Some((check, share)) => assert!(row[4] == model.tr.tr(&format!("check-{check}")) && shows(&row[5], share), "{row:?}"),
+                Some((check, share)) => assert!(row[6] == model.tr.tr(&format!("check-{check}")) && shows(&row[7], share), "{row:?}"),
                 // Not run: the reason in words, and no figure.
-                None => assert!(row[4].contains(' ') && row[5].is_empty(), "{row:?}"),
+                None => assert!(row[6].contains(' ') && row[7].is_empty(), "{row:?}"),
             }
         }
         // A 2000 r/min motor is too slow for the axis speed by its catalogue numbers alone: it is listed as
@@ -856,7 +887,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         model.inputs.series = "1FK2208-3AC".into();
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
-        assert_eq!(model.search_table().unwrap()[1][3..], ["FAIL", "Motor speed at the highest axis speed", ""]);
+        assert_eq!(model.search_table().unwrap()[1][5..], ["FAIL", "Motor speed at the highest axis speed", ""]);
         model.inputs.series = series.into();
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
@@ -894,7 +925,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
     wait_for_analysis(&mut model);
     let found = search_motors(entry, &entry.config(), "400v", &|article| article == "1FK2104-5AK", Some("NRK070"));
     let table = model.search_table().unwrap();
-    assert_eq!((table[0][1].as_str(), table[0][4].as_str()), ("Getriebe", "Knappste Prüfung"));
+    assert_eq!((table[0][1].as_str(), table[0][6].as_str()), ("Getriebe", "Knappste Prüfung"));
     assert!(found.len() >= 3 && table.len() == 1 + found.len(), "{table:?}");
     for (row, c) in table[1..].iter().zip(&found) {
         assert!(row[1] == c.gearbox && row[1].starts_with("NRK070-04-"), "{row:?}");
@@ -1452,13 +1483,15 @@ fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() 
     let entry = MACHINES[0];
     let motor = "1FK2104-5AK";
     let mut typed = Model::new(entry, "en");
-    assert_eq!(typed.inputs.parts, ["", "400v", ""].map(String::from));
-    typed.inputs.parts = [motor, "400v", ""].map(String::from);
+    assert_eq!(typed.inputs.parts, ["", "400v", "", "", "", ""].map(String::from));
+    // With the converter the search pairs with this motor, which its button names too.
+    typed.inputs.parts = [motor, "400v", "", "6SL3210-5HE11-5UF0", "", ""].map(String::from);
     typed.apply_parts();
     // The command line: `--motor 1FK2104-5AK --supply 400v`, the parts put in by `resolve`.
     let mut cli = entry.config();
     cli.set_text(&format!("parts.motor = {motor:?}")).unwrap();
     cli.set_text(r#"parts.motor_supply = "400v""#).unwrap();
+    cli.set_text(r#"parts.drive = "6SL3210-5HE11-5UF0""#).unwrap();
     assert!(resolve(entry, &typed.config).unwrap() == resolve(entry, &cli).unwrap());
     // The search's button, for the same motor.
     let mut searched = Model::new(entry, "en");
@@ -1488,9 +1521,12 @@ fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() 
     // Names the catalogue does not have, and a supply it has no data for: refused, the config stays.
     let before = typed.config.clone();
     for (parts, (key, name)) in [
-        (["1FK9999-9XX", "400v", ""], ("error-config-part-motor", "1FK9999-9XX")),
-        ([motor, "400v", "NRK999-04-5"], ("error-config-part-gearbox", "NRK999-04-5")),
-        ([motor, "110v", ""], ("ui-search-bad-supply", "110v")),
+        (["1FK9999-9XX", "400v", "", "", "", ""], ("error-config-part-motor", "1FK9999-9XX")),
+        ([motor, "400v", "NRK999-04-5", "", "", ""], ("error-config-part-gearbox", "NRK999-04-5")),
+        ([motor, "110v", "", "", "", ""], ("ui-search-bad-supply", "110v")),
+        ([motor, "400v", "", "6SL0000-0XX00-0XX0", "", ""], ("error-config-part-drive", "6SL0000-0XX00-0XX0")),
+        ([motor, "400v", "", "", "XT5-25", ""], ("error-config-part-belt", "XT5-25")),
+        ([motor, "400v", "", "", "", "EXCT-99"], ("error-config-part-axis", "EXCT-99")),
     ] {
         typed.inputs.parts = parts.map(String::from);
         typed.apply_parts();
@@ -1503,7 +1539,7 @@ fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() 
     let file = temp_file(entry, "no-parts.toml");
     std::fs::write(&file, toml::to_string(&table).unwrap()).unwrap();
     typed.open_config(&file);
-    assert_eq!(typed.inputs.parts, ["", "", ""].map(String::from));
+    assert_eq!(typed.inputs.parts, ["", "", "", "", "", ""].map(String::from));
     let opened = typed.config.clone();
     typed.inputs.parts[0] = motor.into();
     typed.apply_parts();
@@ -1837,6 +1873,12 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation() {
         // Without heating the view says that nothing warms.
         model.set_param("effects.winding_heating", Value::Boolean(false));
         assert!(model.thermal_view().off);
+        // The temperature feedback warms the parts too, so they are shown with it alone.
+        model.set_param("effects.thermal_feedback", Value::Boolean(true));
+        let view = model.thermal_view();
+        let parts = (entry.build)(&model.config).unwrap().thermal_parts().len();
+        assert!(!view.off && view.lines.len() == model.session.motors.len() + parts, "{}: {} lines", entry.id, view.lines.len());
+        model.set_param("effects.thermal_feedback", Value::Boolean(false));
         model.set_param("effects.winding_heating", Value::Boolean(true));
         model.set_param("effects.part_heating", Value::Boolean(true));
         model.set_param("thermal.guide_time_constant_s", Value::Float(0.5));
@@ -1943,4 +1985,43 @@ fn the_thermal_share_is_that_of_the_settled_rise_and_marked_above_the_rating() {
         let hottest = load.part_rises.iter().filter(|(part, _)| part.kind == "guide").map(|(_, rise)| *rise).fold(0.0, f64::max);
         assert!(shows(&check[1], hottest) && shows(&check[2], rated) && check[3] == "FAIL", "{}: {check:?}", entry.id);
     }
+}
+
+/// A drive, a belt and an axis typed by name give the config of `--drive`, `--belt` and `--axis` on the command line;
+/// and the search over every catalogue axis in the app is `search_axes`, its button naming the axis and the drive the
+/// motor ran with as well.
+#[test]
+fn drives_belts_and_axes_are_named_in_the_app_and_searched_over() {
+    use sim_components::catalog::{resolve, search_axes};
+    // The machine with a Z stroke, which the X/Z gantries of the catalogue fit.
+    let entry = MACHINES.iter().copied().find(|e| e.config().get("geometry.stroke_z_m").is_ok()).unwrap();
+    let mut typed = Model::new(entry, "en");
+    typed.inputs.parts = ["", "400v", "", "6SL3120-1TE15-0AD0", "MTD5-25", "EXCT-30"].map(String::from);
+    typed.apply_parts();
+    assert!(typed.messages.iter().all(|m| m.0.starts_with("limit-")), "{:?}", typed.messages);
+    let mut cli = entry.config();
+    for (key, name) in [("drive", "6SL3120-1TE15-0AD0"), ("belt", "MTD5-25"), ("axis", "EXCT-30")] {
+        cli.set_text(&format!("parts.{key} = {name:?}")).unwrap();
+    }
+    let resolved = resolve(entry, &typed.config).unwrap();
+    assert!(resolved == resolve(entry, &cli).unwrap());
+    // The belt named after the axis is the one in the config: MTD5 at 25 mm, 1805 N.
+    assert_eq!((resolved.f64("ratings.belt_max_tension_n").unwrap(), resolved.f64("ratings.drive_max_current_a").unwrap()), (1805.0, 15.0));
+
+    let mut model = Model::new(entry, "en");
+    (model.inputs.series, model.inputs.axes) = ("1FK2205-4AF".into(), true);
+    model.run_analysis(Analysis::Search);
+    wait_for_analysis(&mut model);
+    let found = search_axes(entry, &entry.config(), "400v", &|article| article == "1FK2205-4AF", None);
+    let table = model.search_table().unwrap();
+    assert!(found.len() >= 4 && table.len() == 1 + found.len(), "{table:?}");
+    for (row, c) in table[1..].iter().zip(&found) {
+        assert_eq!((row[0].as_str(), row[2].as_str()), (c.article, c.axis.as_str()));
+        // An axis ruled out has no motor, no masses and its reason in words.
+        assert!(!c.article.is_empty() || (row[3].is_empty() && row[6].contains(' ')), "{row:?}");
+    }
+    let row = found.iter().position(|c| !c.article.is_empty()).unwrap();
+    model.use_candidate(row);
+    let part = |key: &str| model.config.get(&format!("parts.{key}")).unwrap().as_str().unwrap().to_string();
+    assert_eq!((part("motor"), part("axis"), part("drive")), (found[row].article.to_string(), found[row].axis.clone(), found[row].drive.to_string()));
 }

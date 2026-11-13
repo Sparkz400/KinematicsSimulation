@@ -11,3 +11,6 @@ belt-section-2 = Riemen, Rücklauf
 effect-hard_stops = Endanschläge an den Hubenden
 group-hard_stop = Endanschläge
 param-stiffness_n_m = Steifigkeit [N/m]
+belt-span-1 = Riementrum, Motorscheibe bis Schlitten
+belt-span-2 = Riementrum, Motorscheibe bis Umlenkrolle
+belt-span-3 = Riementrum, Umlenkrolle bis Schlitten

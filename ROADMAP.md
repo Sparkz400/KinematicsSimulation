@@ -1,0 +1,29 @@
+# Roadmap
+
+What is not built yet, from the "Not built" and "Blocked" lists of [PROGRESS.md](PROGRESS.md). No dates.
+
+## Needs a real machine
+
+- Test runs on a real axis and acceptance on a measured cycle (stages D2, D4); the fit's stage 3 (drive delays
+  and filters).
+- A real PLC (Siemens, Beckhoff, CODESYS) against the OPC UA server: data types, security, cycle jitter.
+
+## Physics and planning
+
+- A time-optimal plan whose limits change within a piece (within a spline span).
+- Transition curves: one length per path today; none at arcs fixed at both ends.
+- Life estimates: the motors' own bearings (Siemens publishes their radial force limits only as diagrams in the
+  configuration manuals), belt life, gearbox gearing fatigue above rated torque, the life factor a_ISO.
+- The S210's DC link capacitance and chopper threshold: Siemens publishes neither, so they stay estimates even with
+  a converter named (its resistor powers and trip level come from the catalogue).
+
+## Front ends
+
+- In the app: `--set` and the operating points of a path (command line only today).
+- FMI: FMU state, directional derivatives, a darwin64 binary, import tested in Simulink,
+  OpenModelica or Dymola.
+
+## Release
+
+- Signing the MSI and the .deb; packages for Linux distributions other than Debian and Ubuntu.
+- The CI and release workflows have never run: the repository has no GitHub remote yet.

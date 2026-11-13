@@ -26,7 +26,8 @@ fn the_life_loads_are_the_signals_added_up() {
         let find = |id: String| infos.iter().position(|s| s.id == id);
         let motors = sim.machine.motors().to_vec();
         let axes = sim.machine.axes().to_vec();
-        let radial: Vec<usize> = motors.iter().map(|m| find(format!("pulley.{}.radial_load", m.id)).unwrap()).collect();
+        // A machine without pulleys (the delta's arms) reports no radial load, one without guides no guide load.
+        let radial: Vec<Option<usize>> = motors.iter().map(|m| find(format!("pulley.{}.radial_load", m.id))).collect();
         let gear: Vec<usize> = motors.iter().map(|m| find(format!("gearbox.{}.output_torque", m.id)).unwrap()).collect();
         let guides: Vec<(usize, usize)> = axes.iter().enumerate().filter_map(|(a, axis)| Some((find(format!("axis.{}.guide_load", axis.id))?, a))).collect();
         let every = (1e-3 / sim.dt).round().max(1.0) as u64;
@@ -46,8 +47,8 @@ fn the_life_loads_are_the_signals_added_up() {
                 life[k] += torque.powf(10.0 / 3.0) * w;
                 let band = ((w / SPEED_BAND) as usize).min(4000);
                 bands[k][band] = bands[k][band].max(torque);
-                if steps % every == 0 {
-                    (cubed[k], weight[k]) = (cubed[k] + values[radial[k]].powi(3) * w, weight[k] + w);
+                if let (0, Some(r)) = (steps % every, radial[k]) {
+                    (cubed[k], weight[k]) = (cubed[k] + values[r].powi(3) * w, weight[k] + w);
                 }
             }
             if steps % every == 0 {
@@ -64,7 +65,10 @@ fn the_life_loads_are_the_signals_added_up() {
         for k in 0..n {
             let m = &load.motors[k];
             close(m.mean_speed, speed_sum[k] / steps as f64, "mean speed");
-            close(m.radial_load_equivalent.unwrap(), (cubed[k] / weight[k]).cbrt(), "equivalent radial load");
+            assert_eq!(m.radial_load_equivalent.is_some(), radial[k].is_some(), "{}", entry.id);
+            if radial[k].is_some() {
+                close(m.radial_load_equivalent.unwrap(), (cubed[k] / weight[k]).cbrt(), "equivalent radial load");
+            }
             close(m.gearbox_life_torque.unwrap(), (life[k] / speed_sum[k]).powf(0.3), "equivalent gearbox torque");
             let peaks = &m.gearbox_torque_by_speed;
             assert!(!peaks.is_empty() && bands[k][peaks.len()..].iter().all(|&t| t == 0.0), "{}: bands", entry.id);
@@ -72,10 +76,13 @@ fn the_life_loads_are_the_signals_added_up() {
                 close(peak, bands[k][i], "torque in a speed band");
             }
         }
-        let g = (0..guides.len()).max_by(|&a, &b| guide_cubed[a].total_cmp(&guide_cubed[b])).unwrap();
-        close(load.guide_load.unwrap().1, (guide_cubed[g] / samples).cbrt(), "guide load");
-        close(load.guide_speed.unwrap(), guide_speed[g] / samples, "guide speed");
-        println!("{}: motor speed {:.2} rad/s, radial {:.1} N, guide {:.3} m/s", entry.id, load.motors[0].mean_speed, load.motors[0].radial_load_equivalent.unwrap(), load.guide_speed.unwrap());
+        if let Some(g) = (0..guides.len()).max_by(|&a, &b| guide_cubed[a].total_cmp(&guide_cubed[b])) {
+            close(load.guide_load.unwrap().1, (guide_cubed[g] / samples).cbrt(), "guide load");
+            close(load.guide_speed.unwrap(), guide_speed[g] / samples, "guide speed");
+        } else {
+            assert!(load.guide_load.is_none() && load.guide_speed.is_none(), "{}", entry.id);
+        }
+        println!("{}: motor speed {:.2} rad/s, radial {:?} N, guide {:?} m/s", entry.id, load.motors[0].mean_speed, load.motors[0].radial_load_equivalent, load.guide_speed);
     }
 }
 
@@ -90,13 +97,23 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
         let judged = verdicts(&cfg, &load).unwrap();
         let find = |v: &[sim_components::analysis::Verdict], check: &str, motor: Option<usize>| v.iter().find(|v| v.check == check && v.motor == motor).cloned();
         let required = cfg.f64("ratings.required_life_h").unwrap();
-        let guide = guide_life_h(&cfg, &load).unwrap();
-        assert_eq!(find(&judged, "guide-life", None).map(|v| (v.value, v.limit)), Some((guide, required)), "{}", entry.id);
+        // Each life is judged where the machine reports what it needs: a delta has no guide, pulley or belt.
+        let guide = guide_life_h(&cfg, &load);
+        assert_eq!(find(&judged, "guide-life", None).map(|v| (v.value, v.limit)), guide.map(|g| (g, required)), "{}", entry.id);
         for (k, m) in load.motors.iter().enumerate() {
-            let bearing = pulley_bearing_life_h(&cfg, m).unwrap();
-            assert_eq!(find(&judged, "pulley-bearing-life", Some(k)).map(|v| v.value), Some(bearing), "{}", entry.id);
             // The EXCT-30 has no gearbox and no gearbox rating: its gearbox life is not judged.
             assert_eq!(find(&judged, "gearbox-life", Some(k)).map(|v| v.value), gearbox_life_h(&cfg, m), "{}", entry.id);
+            let Some(bearing) = pulley_bearing_life_h(&cfg, m) else {
+                assert!(find(&judged, "pulley-bearing-life", Some(k)).is_none() && belt_tooth_utilisation(&cfg, m).unwrap().is_none(), "{}", entry.id);
+                let life = gearbox_life_h(&cfg, m).unwrap();
+                for (factor, ok) in [(1.001, false), (0.999, true)] {
+                    let mut edited = cfg.clone();
+                    edited.set_text(&format!("ratings.required_life_h = {:?}", life * factor)).unwrap();
+                    assert_eq!(find(&verdicts(&edited, &load).unwrap(), "gearbox-life", Some(k)).unwrap().ok, ok, "{}", entry.id);
+                }
+                continue;
+            };
+            assert_eq!(find(&judged, "pulley-bearing-life", Some(k)).map(|v| v.value), Some(bearing), "{}", entry.id);
             let tooth = belt_tooth_utilisation(&cfg, m).unwrap().unwrap();
             assert_eq!(find(&judged, "belt-tooth-load", Some(k)).map(|v| v.value), Some(tooth), "{}", entry.id);
             for (factor, ok) in [(1.001, false), (0.999, true)] {
@@ -105,6 +122,10 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
                 assert_eq!(find(&verdicts(&edited, &load).unwrap(), "pulley-bearing-life", Some(k)).unwrap().ok, ok, "{}", entry.id);
             }
         }
-        println!("{}: guide {guide:.0} h, pulley bearing {:.0} h, tooth load {:.3}", entry.id, pulley_bearing_life_h(&cfg, &load.motors[0]).unwrap(), belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap().unwrap());
+        // A reliability the standard (ISO 281) has no life factor for is refused by name.
+        let mut unreliable = cfg.clone();
+        unreliable.set_text("ratings.bearing_reliability_percent = 99.99").unwrap();
+        assert_eq!(verdicts(&unreliable, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_reliability_percent".into())), "{}", entry.id);
+        println!("{}: guide {guide:?} h, pulley bearing {:?} h, gearbox {:?} h, tooth load {:?}", entry.id, pulley_bearing_life_h(&cfg, &load.motors[0]), gearbox_life_h(&cfg, &load.motors[0]), belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap());
     }
 }

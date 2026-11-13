@@ -615,7 +615,10 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
     let physical = ["motor-peak", "motor-thermal", "gearbox-peak", "gearbox-continuous", "braking-resistor-continuous", "braking-resistor-peak"];
     for entry in sim_machines::MACHINES {
         let mut cfg = entry.config();
-        assert_eq!(cfg.f64("drive.bus_voltage_v").unwrap(), 155.13);
+        // A config written for a catalogue motor's own DC link (540 V) has no placeholder drive to correct.
+        if cfg.f64("drive.bus_voltage_v").unwrap() != 155.13 {
+            continue;
+        }
         // The braking threshold and the trip level keep their distance to the bus: 224.65 V and 257.6 V at 155.13 V.
         for (supply, bus) in [("230v", 325.0), ("400v", 540.0)] {
             apply_motor(&mut cfg, "1FK2104-5AK", supply).unwrap();
@@ -724,8 +727,8 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     use sim_components::analysis::{CycleLoad, Verdict};
     use sim_components::catalog::Candidate;
     let verdict = |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, radial_load_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new() };
-    let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), mass: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new() };
+    let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
     let with_resistor = candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), verdict("braking-resistor-continuous", 6.0, 20.0, true), verdict("dc-link-overvoltage", 770.0, 820.0, true)]);
     assert_eq!(with_resistor.tightest(), Some(("motor-peak", 0.7)));

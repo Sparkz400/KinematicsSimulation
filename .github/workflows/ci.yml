@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain the project is built and tested with locally; clippy's lints change between releases.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+
+      # Bevy (window, input, audio) and the native file dialog need these on Linux.
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev libvulkan-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --workspace --release --locked
+
+      - name: Test
+        run: cargo test --workspace --release --locked
+
+      # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: FMU check
+        shell: bash
+        run: |
+          pip install fmpy==0.3.32 numpy
+          cli=target/release/sim-cli
+          $cli fmu t-gantry --out t-gantry.fmu
+          $cli fmu single-axis --out single-axis.fmu
+          $cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml --out exct-30.fmu
+          python tools/check_fmu.py $cli t-gantry.fmu t-gantry
+          python tools/check_fmu.py $cli single-axis.fmu single-axis
+          python tools/check_fmu.py $cli exct-30.fmu t-gantry --config crates/machine-t-gantry/exct-30.toml
+
+      # Not "-D warnings" yet: the code base has 34 clippy warnings (13 November 2026). Make it fail once they are gone.
+      - name: Clippy
+        run: cargo clippy --workspace --release --all-targets --locked

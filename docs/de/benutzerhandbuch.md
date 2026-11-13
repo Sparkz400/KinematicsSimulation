@@ -114,6 +114,8 @@ $ sim-cli verdicts t-gantry
 check,motor,value,limit,result
 motor-peak,a,0.1476,1.000,ok
 motor-thermal,a,1.227,100.0,ok
+drive-current,a,0.3676,3.000,ok
+drive-peak-current,a,1.246,10.90,ok
 gearbox-continuous,a,0.7955,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
 gearbox-peak,a,2.175,64.00,ok
@@ -156,10 +158,12 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | `belt-tooth-load` | Zahnbelastung des Riemens | `belt_tooth_utilisation` | 1 | Anteil |
 | `gearbox-thermal` | Übertemperatur des Getriebes, eingeschwungen | Endwert des wärmsten Getriebes im Zyklus (nur mit `effects.part_heating`; keine bei Direktantrieb) | `thermal.gearbox_max_rise_k` | K |
 | `guide-thermal` | Übertemperatur der Führung, eingeschwungen | Endwert der wärmsten Führung im Zyklus (nur mit `effects.part_heating`) | `thermal.guide_max_rise_k` | K |
+| `belt-tooth-jump` | Zahnsprünge des Riemens im Zyklus | wie oft die Zähne des Riemens über eine angetriebene Scheibe gesprungen sind (nur mit `effects.belt_tooth_jump`) | 0 | Anzahl |
+| `belt-span-resonance` | Erste Eigenform eines Riementrums, Abstand von einer Anregung bei konstanter Geschwindigkeit (Anteil) | wie nahe die erste Quereigenfrequenz eines freien Trums dem kam, was der Antrieb anregt, bei konstanter Geschwindigkeit, als Anteil der Eigenfrequenz (nur mit `effects.belt_span_vibration`); besteht ab dem Grenzwert | `ratings.belt_span_resonance_band` | Anteil |
 
 Grenzen bei dieser Aufgabe:
 
-- Ein Grenzwert, den die Konfiguration nicht angibt, wird nicht geprüft. Eine fehlende Zeile heißt nicht „bestanden“. Ebenso werden `gearbox-thermal` und `guide-thermal` bei ausgeschaltetem `effects.part_heating` nicht geprüft. Ist der Effekt an, erreicht die X-Führung des EXCT-30 im eingeschwungenen Zustand 25 K von 40 K und fällt im ungünstigsten Fall von `--bands` durch (51 K an der oberen Grenze ihres Wärmewiderstands); die Wärmewiderstände sind Schätzungen (siehe Konfigurationsreferenz).
+- Ein Grenzwert, den die Konfiguration nicht angibt, wird nicht geprüft. Eine fehlende Zeile heißt nicht „bestanden“. Ebenso werden `gearbox-thermal` und `guide-thermal` bei ausgeschaltetem `effects.part_heating` und `effects.thermal_feedback` nicht geprüft, `belt-tooth-jump` ohne `effects.belt_tooth_jump` und `belt-span-resonance` ohne `effects.belt_span_vibration`. Ist der Effekt an, erreicht die X-Führung des EXCT-30 im eingeschwungenen Zustand 25 K von 40 K und fällt im ungünstigsten Fall von `--bands` durch (51 K an der oberen Grenze ihres Wärmewiderstands); die Wärmewiderstände sind Schätzungen (siehe Konfigurationsreferenz).
 - `belt-slack` und die drei Lebensdauern sind die Prüfungen, bei denen der Wert über der Grenze bleiben muss. `belt-slack` fällt auch dann durch, wenn irgendein Trum irgendwann ohne Riemenkraft war.
 - Die Lebensdauern sind die Formeln der Hersteller mit Tragzahlen, die zum Teil Schätzungen sind; was sie auslassen, steht in der [Modellreferenz](../model-reference.md#analysis-quantities). Die Lager der Motoren selbst werden nicht abgeschätzt: In diesen Konfigurationen zieht der Riemen an keiner Motorwelle.
 - `dc-link-energy` ist immer `ok`, wenn die Konfiguration einen Bremswiderstand hat, der einspringen kann, auch wenn der Wert die Grenze erreicht oder überschreitet. Die beiden Zeilen zum Bremswiderstand erscheinen nur, wenn er gebraucht wird. Alle drei Standardkonfigurationen simulieren den Zwischenkreis (`effects.dc_link = true`); ist er abgeschaltet, sind die Zeilen zum Bremsen Schätzungen aus dem, was der Motor zurückspeist.
@@ -209,17 +213,22 @@ braking-resistor-peak,a,200.5,3000,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ```
 
-**Bauteile nach Namen.** `[parts]` in einer Konfiguration oder `--motor`, `--supply` und `--gearbox` auf der Befehlszeile benennen einen Motor und ein Getriebe aus dem Katalog. Deren Katalogwerte ersetzen dann die Zahlen der Konfiguration:
+**Bauteile nach Namen.** `[parts]` in einer Konfiguration oder `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` und `--axis` auf der Befehlszeile benennen einen Motor, ein Getriebe, einen Antrieb, einen Riemen und eine Achse aus dem Katalog. Deren Katalogwerte ersetzen dann die Zahlen der Konfiguration. Sie werden in der Reihenfolge Achse, Riemen, Getriebe, Motor, Antrieb eingesetzt; ein neben einer Achse benannter Riemen ersetzt also den Riemen der Achse:
 
 | Bauteil | Was es setzt |
 | --- | --- |
 | Motor | `motor.rotor_inertia_kgm2`, `motor.torque_constant_nm_a` (Stillstandsmoment geteilt durch Stillstandsstrom), `motor.max_current_a`, `motor.torque_constant_at_max_current_nm_a`, `motor.rated_current_a` (der Wert des Katalogs, höchstens das 1,05-Fache des Stillstandsstroms), `motor.thermal_time_constant_s` (wo das Projektierungshandbuch sie nennt), `drive.peak_torque_nm` (begrenzt auf `ratings.pulley_max_torque_nm` geteilt durch die Getriebeübersetzung), `drive.rated_torque_nm`, `drive.rated_speed_rad_s`, `drive.bus_voltage_v` (die Zwischenkreisspannung: 540 V bei `400v`, 325 V bei `230v`), `drive.no_load_speed_rad_s` (sqrt(3/2) × Zwischenkreisspannung geteilt durch die Drehmomentkonstante) sowie `ratings.braking_threshold_v` und `ratings.dc_link_overvoltage_v`, beide mit der Zwischenkreisspannung skaliert |
 | Getriebe | `gearbox.ratio`, `gearbox.efficiency`, `gearbox.stiffness_nm_rad`, `gearbox.backlash_rad` und `gearbox.inertia_at_input_kgm2` (die beiden letzten, wo das Handbuch sie nennt), `ratings.gearbox_rated_torque_nm` und `ratings.gearbox_max_torque_nm` (wo die Konfiguration sie hat) |
-| Beide | `drive.velocity_kp_nm_s_rad`, für das Bauteil nachgeführt (siehe unten) |
+| Motor am S120 (`--supply s120`) | Dieselben Schlüssel aus den S120-Daten: für einen 1FK7 oder 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) und seinem Datenblatt (Maximalmoment und -strom, thermische Zeitkonstante), für einen 1FK2 oder 1FT2 aus seinem S120-Projektierungshandbuch. Ein 1FK7 oder 1FT7 bringt auch seine Wicklung mit: `motor.resistance_ohm` und `motor.inductance_h` sind das Dreifache der Strangwerte des Datenblatts (die eine Wicklung des Modells führt den Strangstrom bei dreifacher Strangspannung), und der Stromregler wird damit neu eingestellt, `drive.current_kp_v_a` = L / T mit der Zeitkonstante T des Stromkreises der Konfiguration (ihre Induktivität geteilt durch ihre Verstärkung) und `drive.current_tn_s` = L / R. Der Zwischenkreis hat 540 V |
+| Antrieb | Ein S210-Umrichter ([`converters_s210.csv`](../../catalog/siemens/converters_s210.csv)) oder ein S120 Motor Module ([`motor_modules_s120.csv`](../../catalog/siemens/motor_modules_s120.csv)) mit seiner Artikelnummer: `ratings.drive_rated_current_a` und `ratings.drive_max_current_a`, sein Bemessungs- und sein Maximalausgangsstrom (bei einem Double Motor Module je Achse). `verdicts` beurteilt den Effektivwert des Motorstroms im Zyklus gegen den ersten (`drive-current`) und seine Spitze gegen den zweiten (`drive-peak-current`). Die Strombegrenzung des Antriebs selbst wird nicht simuliert |
+| Riemen | Als Profil-Breite, z. B. `AT5-25`: ein Riemen MEGALINEAR von Megadyne mit Standard-Stahlcord ([`megadyne/belts.csv`](../../catalog/megadyne/belts.csv); T5, AT3, AT5, AT10 und die HTD-kompatiblen MTD3, MTD5, MTD8). `belt.stiffness_ea_n` (die zulässige Zugkraft geteilt durch die Dehnung bei ihr, 4 mm/m), `belt.mass_kg_m`, `belt.tooth_pitch_m` und, wo die Konfiguration sie hat, `ratings.belt_max_tension_n` (die zulässige Zugkraft, ein Viertel der Bruchkraft), `ratings.belt_width_mm` und die Zahnbelastungstabelle `ratings.belt_tooth_load_rpm` und `_n_cm`. Eine Breite zwischen zwei Standardbreiten wird interpoliert, eine außerhalb im Verhältnis zur nächsten genommen |
+| Achse | Mit Namen: `EXCT-15`, `EXCT-30`, `EXCT-100` (Festo, [`festo/exct.toml`](../../catalog/festo/exct.toml)) und die Achsen und X/Z-Portale von Bahr als Baureihe-Größe, z. B. `ELZI-40` oder `ELZ-60S` ([`bahr/belt_axes.csv`](../../catalog/bahr/belt_axes.csv)). Ein X/Z-Portal gehört zu einer Konfiguration mit Z-Hub, eine Einzelachse zu einer mit einem Hub; umgekehrt, und ein Hub, den die Achse nicht hat, wird abgelehnt. Setzt `geometry.pulley_radius_m`, den Riemen (wie oben, für Profil und Breite der Achse: die EXCT von Festo als AT, die HTD-Riemen von Bahr als MTD; die Dehnsteifigkeit der EXCT aus Festos angegebener Dehnung), `ratings.belt_teeth_in_mesh` (die Hälfte der Zähne der Scheibe), `ratings.pulley_max_torque_nm`, wo die Konfiguration es hat (Festos Maximalmoment; Bahrs Spitzenvorschubkraft mal Radius), und die bewegten Massen: Die Portal-Datenblätter von Bahr nennen sie je Achse (Z-Achse, und der Schlitten als X weniger Z); Festo nennt die Z-Masse seiner Momentformel, und der Schlitten wird so angepasst, dass die Maschine bei 45 Grad Festos Moment braucht, wie `exct-30.toml` geschrieben wurde. Die Hübe bleiben; eine EXCT erhält den kürzesten Z-Hub, den Festo anbietet und der den der Konfiguration fasst. Die Einzelachsen von Bahr nennen keine bewegte Masse, also bleibt der Schlitten der Konfiguration |
+| Alle außer dem Antrieb | `drive.velocity_kp_nm_s_rad`, für das Bauteil nachgeführt (siehe unten) |
 
 Was ein Bauteil nach Namen **nicht** setzt und was daraus folgt:
 
-- **Wicklungswiderstand und Wicklungsinduktivität.** Siemens veröffentlicht sie für 1FK2 und 1FT2 nicht. Die Werte der Konfiguration bleiben, und mit ihnen die Verstärkungen des Stromreglers.
+- **Wicklungswiderstand und Wicklungsinduktivität.** Siemens veröffentlicht sie für 1FK2 und 1FT2 nicht. Die Werte der Konfiguration bleiben, und mit ihnen die Verstärkungen des Stromreglers. (Für 1FK7 und 1FT7 am S120 werden sie gesetzt, siehe oben.)
+- **Der Antrieb zum Motor.** Einen Motor zu benennen benennt nicht seinen Antrieb; die Antriebs-Grenzwerte der Konfiguration bleiben. Die Suche ordnet jedem Motor seinen Antrieb zu (unten).
 - **Die Zwischenkreiskapazität und die Leistungen des Bremswiderstands.** Sie bleiben, wie die Konfiguration sie hat. Die Einschaltspannung des Bremswiderstands und die Abschaltspannung behalten ihr Verhältnis zur Zwischenkreisspannung. Für Platzhalter ist das vertretbar, mehr nicht: Setzen Sie alle fünf Zwischenkreis-Grenzwerte für den realen Antrieb, bevor Sie den Zeilen zum Bremsen trauen.
 - **Antriebsdrehzahl, Radialkraft und Lebensdauer des Getriebes.** Die Getriebedateien enthalten sie nicht. `ratings.gearbox_max_input_speed_rpm`, `ratings.shaft_max_radial_load_n`, `ratings.pulley_bearing_load_rating_n` und `ratings.gearbox_reference_speed_rpm` bleiben, wie die Konfiguration sie hat.
 
@@ -236,49 +245,58 @@ belt-slack,,252.0,0,ok
 
 Der Rotor des 1FK2204-6AF hat ein Drittel der Trägheit des 1FK2205-4AF aus der Konfiguration; die Verstärkung geht von 0,45 auf 0,23 N m s/rad. (Für diesen Motor ist zufällig auch 0,45 ruhig.) Der 1FK2104-5AF hat ein Neuntel der Trägheit: Bleibt die Verstärkung bei 0,45, schwingt er, und seine Wicklung kommt nie zur Ruhe; auf 0,13 angepasst fährt er den Zyklus mit 1,22 N m Effektivmoment.
 
-Eine unbekannte Artikelnummer wird abgelehnt: `Der Katalog kennt dieses Bauteil nicht: Motor 1FK9`. Ebenso ein Motor, den der Katalog für die gewählte Netzspannung nicht anbietet.
+Eine unbekannte Artikelnummer wird abgelehnt: `Der Katalog kennt dieses Bauteil nicht: Motor 1FK9`. Ebenso ein Motor, den der Katalog für die gewählte Netzspannung nicht anbietet, und unbekannte Antriebe, Riemen und Achsen.
+
+Die Achse von `exct-30.toml` mit Namen einzusetzen gibt deren eigene Zahlen zurück (der Test `an_axis_by_name_gives_the_numbers_of_the_hand_written_exct_30`): Der neu angepasste Schlitten hat 7,136 kg gegen 7,16 kg in der Datei, die Riemenmasse aus der AT5-Tabelle 97,9 g/m gegen den Schätzwert 0,1 kg/m der Datei.
 
 ## Den leichtesten Motor finden
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
-motor,gearbox,mass_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-1FK2104-5AF,,2.85,ok,pulley-bearing-life,0.6309,3.2886,20.44
-1FK2104-5AK,,2.85,ok,pulley-bearing-life,0.6309,3.2977,41.56
-1FK2204-5AF,,2.90,ok,pulley-bearing-life,0.6310,3.4296,21.55
-1FK2104-6AF,,3.40,ok,pulley-bearing-life,0.6311,3.3446,11.27
-1FK2204-6AF,,3.50,ok,pulley-bearing-life,0.6311,3.4468,12.07
-1FK2205-2AF,,3.75,ok,pulley-bearing-life,0.6311,3.5158,14.67
-1FK2205-4AF,,5.20,ok,pulley-bearing-life,0.6310,3.6598,6.88
+Search time on 16: 0.3 s
+axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2886,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2977,41.56
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,pulley-bearing-life,0.6310,3.4296,21.55
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,pulley-bearing-life,0.6311,3.3446,11.27
+,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,pulley-bearing-life,0.6311,3.4468,12.07
+,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,pulley-bearing-life,0.6311,3.5158,14.67
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,pulley-bearing-life,0.6310,3.6598,6.88
 ...
-1FK2204-5AK,,2.90,FAIL,motor-thermal,1.6796,3.4378,167.96
-1FK2103-2AH,,1.18,FAIL,limit-motor-torque,NaN,NaN,NaN
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6796,3.4378,167.96
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
-1FK2208-3AC,,12.60,FAIL,limit-motor-speed,NaN,NaN,NaN
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
 
 An der EXCT-30 hat jeder Motor, der besteht, dieselbe knappste Prüfung, die Lebensdauer der Lager der Scheibenwellen (20000 h gefordert von etwa 31700 h), die kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`.
 
-Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)), der für die Netzspannung angeboten wird. Zuerst kommen die Motoren, die bestehen, der leichteste voran. Danach folgen die, die nicht bestehen, der knappste voran. Ein Kandidat, dessen Antriebe wegen Überspannung im Zwischenkreis abschalten, steht hinter allen diesen, mit `inf` als `tightest_utilisation`: Seine Werte enden mit dem Abschalten.
+Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der für die Netzspannung angeboten wird, jeden mit dem Antrieb, den der Katalog ihm zuordnet, auf allen Prozessorkernen. Zuerst kommen die Motoren, die bestehen, der günstigste voran. Danach folgen die, die nicht bestehen, der knappste voran. Ein Kandidat, dessen Antriebe wegen Überspannung im Zwischenkreis abschalten, steht hinter allen diesen, mit `inf` als `tightest_utilisation`: Seine Werte enden mit dem Abschalten.
+
+**Kosten.** Keine Katalogdatei enthält einen Preis, und Siemens veröffentlicht keine Listenpreise auf einem Server, der sich automatisch lesen lässt (die Industry Mall lehnt solche Zugriffe ab). Für den Preis steht die eingebaute Masse: `cost_kg` ist Motor und Getriebe mal der Zahl der Motoren, dazu die Achse, wo eine des Katalogs probiert wird (`--axes`). Bestandene Kandidaten werden danach geordnet, dann nach `mass_kg`. Bei einer Motorsuche an einer festen Maschine ergeben beide dieselbe Reihenfolge.
 
 | Option | Wirkung |
 | --- | --- |
-| `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2` oder `1FT2105` |
-| `--supply 230v` oder `400v` | Netzspannung, für die gesucht wird. Standard `400v` |
-| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat |
+| `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2`, `1FT2105` oder `1FK7` |
+| `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). Standard `400v` |
+| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut) |
+| `--axes` | Zusätzlich jede Achse des Katalogs probieren, die zur Art der Maschine passt (siehe unten) |
 
 | Spalte | Bedeutung |
 | --- | --- |
+| `axis` | Die Achse des Katalogs, auf der der Motor probiert wurde; leer für die eigene der Konfiguration |
 | `motor`, `gearbox` | Der Kandidat. `gearbox` ist leer, wo das Getriebe der Konfiguration geblieben ist |
-| `mass_kg` | Masse des Motors ohne Bremse |
+| `drive` | Der Antrieb, den der Katalog dem Motor zuordnet; der Zyklus wird gegen seine Ströme beurteilt (`drive-current`, `drive-peak-current`) |
+| `mass_kg` | Masse des Motors ohne Bremse und seines Getriebes (Projektierungshandbuch von Siemens 01/2023, siehe [den Katalog](../catalogue.md)) |
+| `cost_kg` | Was für den Preis steht: die eingebaute Masse, siehe oben |
 | `result` | `ok`, wenn jede Prüfung bestanden ist |
-| `tightest_check` | Die Prüfung, die ihrer Grenze am nächsten kommt oder sie am weitesten überschreitet. Zwei Zwischenkreisprüfungen bleiben außen vor, solange sie bestehen, weil ihr Verhältnis nichts über die Reserve sagt: `dc-link-energy`, wenn ein Bremswiderstand arbeitet (die Kondensatoren füllen sich dann planmäßig bis zur Grenze), und `dc-link-overvoltage` (die Spannung liegt nie unter dem Ruhewert des Zwischenkreises). Bei einem Kandidaten, der nicht simuliert wurde: der Grund (`limit-motor-speed`, `limit-motor-torque`) |
+| `tightest_check` | Die Prüfung, die ihrer Grenze am nächsten kommt oder sie am weitesten überschreitet. Zwei Zwischenkreisprüfungen bleiben außen vor, solange sie bestehen, weil ihr Verhältnis nichts über die Reserve sagt: `dc-link-energy`, wenn ein Bremswiderstand arbeitet (die Kondensatoren füllen sich dann planmäßig bis zur Grenze), und `dc-link-overvoltage` (die Spannung liegt nie unter dem Ruhewert des Zwischenkreises). Bei einem Kandidaten, der nicht simuliert wurde: der Grund (`limit-motor-speed`, `limit-motor-torque`, `axis-stroke`, `axis-payload`, `axis-speed`) |
 | `tightest_utilisation` | Wert geteilt durch Grenze dieser Prüfung |
 | `peak_torque_nm` | Höchstes Spitzenmoment aller Motoren der Maschine |
 | `winding_rise_k` | Höchste eingeschwungene Übertemperatur der Wicklung über alle Motoren |
 
-Bevor ein Zyklus simuliert wird, werden die Katalogwerte gegen die Achsgrenzwerte geprüft: die Motordrehzahl bei der höchsten Achsgeschwindigkeit gegen die Bemessungsdrehzahl, das Moment des Starrkörpermodells bei der höchsten Beschleunigung gegen das Maximalmoment des Motors. Was hier scheitert, wird mit `NaN` aufgeführt und nicht simuliert.
+Bevor ein Zyklus simuliert wird, werden die Katalogwerte gegen die Achsgrenzwerte geprüft: die Motordrehzahl bei der höchsten Achsgeschwindigkeit gegen die Bemessungsdrehzahl, das Moment des Starrkörpermodells bei der höchsten Beschleunigung gegen das Maximalmoment des Motors. Was hier scheitert, wird mit `NaN` aufgeführt und nicht simuliert. Der Fehlerkanal nennt, wie viele Kandidaten das waren und wie lange die Suche auf wie vielen Kernen gedauert hat.
 
 Die Drehzahlverstärkung jedes Kandidaten wird nach der Regel aus [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen) nachgeführt: Quadratwurzel aus (Verhältnis der Trägheiten, die die Motoren drehen) × (Verhältnis der Rotorträgheiten), bezogen auf die Zahlen der Konfiguration. `--gearbox NAME` für die ganze Suche und `--gearboxes SERIES` liefern für dasselbe Paar dasselbe Ergebnis: Die Trägheit des Getriebes hat einen eigenen Schlüssel (`gearbox.inertia_at_input_kgm2`) und bleibt, wenn ein Motor eingesetzt wird.
 
@@ -287,20 +305,56 @@ Mit Getrieben, an der Einzelachse:
 ```text
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
 Ohne Simulation eines Zyklus ausgeschlossen, nach Katalogwerten gegen die Achsgrenzwerte: 12 / 35 Kandidaten
-motor,gearbox,mass_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-1FK2104-4AF,NRK070-04-3,2.05,ok,gearbox-radial-load,0.4188,0.7670,3.85
-1FK2104-4AF,NRK070-04-4,2.05,ok,settling,0.4568,0.6009,2.50
-1FK2104-4AF,NRK070-04-5,2.05,ok,settling,0.4637,0.5294,1.91
+Dauer der Suche auf 16: 0.3 s
+axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7670,3.85
+,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4568,0.6009,2.50
+,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
 ...
-1FK2104-4AF,NRK070-04-7,2.05,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
+
+Die Motoren des S120 an der EXCT-30:
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
+Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
+Search time on 16: 0.7 s
+axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,54.09
+...
+```
+
+**Achskombinationen.** `--axes` behält Zyklus, Nutzlast und Hübe der Konfiguration und probiert jeden Motor auf jeder Achse des Katalogs, die zur Art der Maschine passt: beim T-Portal die Festo EXCT-15, -30 und -100 und die X/Z-Portale ELZI 30, 40 und 60 von Bahr; bei der Einzelachse die 56 Einzelachsen von Bahr. Jede Achse wird eingesetzt wie mit `[parts] axis` ([Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). Bevor ein Motor probiert wird, schließen die Katalogwerte der Achse sie aus, wenn der Hub länger ist, als sie hat (`axis-stroke`; eine EXCT erhält den kürzesten Z-Hub, den Festo anbietet und der den der Konfiguration fasst), die Nutzlast über ihrer Nennlast liegt (`axis-payload`; Festos Nennlast, bei Bahr die dynamische Vertikallast des Schlittens gegen Z-Achse und Nutzlast) oder ein Achsgrenzwert der Konfiguration über ihrer Geschwindigkeit oder Beschleunigung liegt (`axis-speed`). Eine solche Achse hat eine Zeile ohne Motor. Auf dem Zyklus der EXCT-30, alle Motoren des S210 an 400 V:
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
+Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 124 / 338 candidates
+Search time on 16: 4.6 s
+axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9078,3.9932,25.08
+ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9087,3.9946,51.85
+ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,dc-link-energy,0.6367,3.8864,26.96
+...
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,pulley-bearing-life,0.6310,3.2869,20.39
+...
+EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7292,5.0201,52.65
+...
+EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,46.90,FAIL,motor-thermal,1.6727,3.4351,167.27
+...
+ELZI-30,,,,NaN,NaN,FAIL,axis-speed,NaN,NaN,NaN
+EXCT-15,,,,NaN,NaN,FAIL,axis-stroke,NaN,NaN,NaN
+```
+
+Das ELZI 40 von Bahr ist die leichteste Achse, die diesen Zyklus trägt (19,05 kg bei 1 m mal 0,25 m, gegen 41,1 kg für die EXCT-30), und steht deshalb vorn. Die EXCT-15 hat keinen Z-Hub von 250 mm; das ELZI 30 erlaubt 2 m/s, die Konfiguration verlangt 2,5 m/s. Lesen Sie die ELZI-Zeilen mit Vorsicht: Input Shaper, Riemenvorspannung, Reibung, Rahmen und Werkzeug sind Schätzwerte für die EXCT-30, und Bahr veröffentlicht weder die Nennlast des Portals noch die Dehnung des Riemens (der Riemen ist Megadynes HTD-kompatibler MTD5 in der Breite des Datenblatts).
 
 Grenzen bei dieser Aufgabe:
 
-- **Das Gewicht steht für den Preis.** Keine Katalogdatei enthält Preise. Das Gewicht ist das des Motors; die Getriebedateien enthalten keine Masse.
+- **Das Gewicht steht für den Preis.** Siehe oben. Das Gewicht des Antriebs zählt nicht mit: Die Umrichterdateien enthalten keines.
 - Das Nachführen der Verstärkung ist eine Faustregel, keine Reglereinstellung nach dem Frequenzgang der Maschine. Ein Kandidat kann immer noch an seiner Verstärkung scheitern. Prüfen Sie einen gewählten Motor mit `tuning`.
 - Die Vorauswahl nach dem Moment lässt den Getriebewirkungsgrad außer Acht.
-- Gesucht wird nur nach Motoren und Getrieben. Antriebe, Riemen und Achsen werden nicht variiert, ebenso wenig Kombinationen verschiedener Motoren je Achse.
+- Die Achssuche behält alles von der Konfiguration, was die Achse nicht setzt: Getriebe, Reibung, Rahmen, Input Shaper und Verstärkungen. Die Einzelachsen von Bahr nennen keine bewegte Masse, also bleibt bei ihnen der Schlitten der Konfiguration; die maximalen Längen von Bahr gelten als längster Hub.
+- Riemen werden nicht variiert; ein Riemen wird mit `--belt` benannt. Kombinationen verschiedener Motoren je Achse werden nicht gesucht.
 - Die Zwischenkreiskapazität und der Bremswiderstand bleiben, wie die Konfiguration sie hat; die Einschaltspannung des Bremswiderstands und die Abschaltspannung werden auf die Zwischenkreisspannung des Motors skaliert (siehe den vorigen Abschnitt). Bei einer Standardkonfiguration werden die Zeilen zum Bremsen bei jedem Kandidaten gegen Platzhalter beurteilt.
 - Ein Kandidat, der an den Achsgrenzwerten mehr als seine Bemessungsdrehzahl verlangt, besteht nie, auch wenn sein simulierter Zyklus bestehen würde.
 
@@ -353,6 +407,8 @@ $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --band
 check,motor,value,limit,result,low,high,worst_case
 motor-peak,a,0.2930,1.000,ok,0.2826,0.3151,ok
 motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
+drive-current,a,1.145,5.000,ok,1.125,1.198,ok
+drive-peak-current,a,2.874,19.00,ok,2.770,3.091,ok
 pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
 pulley-bearing-life,a,31788,20000,ok,17349,67792,FAIL
 belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
@@ -380,6 +436,8 @@ $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --band
 check,motor,value,limit,result,low,high,worst_case,pass_share
 motor-peak,a,0.2930,1.000,ok,0.2799,0.3435,ok,1.000
 motor-thermal,a,6.882,100.0,ok,6.421,8.347,ok,1.000
+drive-current,a,1.145,5.000,ok,1.107,1.257,ok,1.000
+drive-peak-current,a,2.874,19.00,ok,2.743,3.371,ok,1.000
 pulley-torque,a,3.126,12.50,ok,2.959,3.719,ok,1.000
 pulley-bearing-life,a,31788,20000,ok,11887,126380,FAIL,0.860
 belt-tooth-load,a,0.3529,1.000,ok,0.2876,0.5665,ok,1.000
@@ -455,6 +513,19 @@ Der Optimierer probiert das Überschleifen und höhere Grenzwerte für Geschwind
 In der Konfiguration der EXCT-30 sind das Überschleifen und der Shaper schon eingeschaltet. Der Optimierer erhöht hier deshalb die Grenzwerte und schaltet den Shaper ab (beide Shaper): Der Zyklus fällt von 2,05 s auf 1,49 s, und das Werkzeug steht beim Verweilen 0,095 mm neben seinem Ziel statt 0,039 mm.
 
 `--runs N` begrenzt die Zahl der simulierten Zyklen (Standard 40).
+
+**Hubhöhen und gerundete Hübe.** Auch die Geometrie des Zyklus ist eine Variable. Ein Heben, Verfahren und Senken (gerade nach oben von der Aufnahme, auf dieser Höhe verfahren, gerade nach unten zur Ablage; das Standard-T-Portal hat zwei) wird zuerst so niedrig probiert, wie `profile.min_clearance_m` es zulässt: so weit über der höheren von Aufnahme und Ablage, etwa die Höhe eines Hindernisses dazwischen. Die mitgelieferten T-Portal-Konfigurationen setzen den Wert auf ihre Hübe, dort ändert sich also nichts. Mit einem Hindernis von 0,1 m:
+
+```text
+$ sim-cli optimise t-gantry --set profile.min_clearance_m=0.1
+setting,before,after
+cycle_s,6.0800,3.3640
+...
+cycle.segment[1-2-3].lift_m,0.3500,0.1500
+cycle.segment[4-5-0].lift_m,0.3500,0.1500
+```
+
+Das Absenken allein spart 2,000 s: vier Z-Bewegungen um 0,2 m kürzer bei 0,4 m/s (`the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`). Die Abschnitte zählen ab 0. Zuletzt, wenn sonst nichts mehr hilft, probiert der Optimierer auch, die beiden Ecken eines Hubs zu runden: ein Abschnitt, der gerade nach oben, auf einem Spline durch einen Zwischenpunkt und gerade nach unten fährt (`via` in [`[[cycle.segment]]`](../config-reference.md#cyclesegment)), getaktet von der Bahnplanung, solange die Bahn den Abstand hält; eine solche Zeile lautet `cycle.segment[1-2-3].via_m,,0.5000 0.3000`. Am Standard-T-Portal hat das nie gewonnen: Ein Bogen ist langsamer als zwei Halte mit Überschleifen. In der App schreibt „Diese Einstellungen in die laufende Maschine übernehmen“ den neuen Zyklus in die Konfiguration (beim Speichern wird die Datei dann ohne ihre Kommentare geschrieben).
 
 Grenzen bei dieser Aufgabe:
 
@@ -574,7 +645,7 @@ Grenzen bei dieser Aufgabe:
 - Ohne zulässige Abweichung ist eine verrundete Ecke mit dem Standardplaner langsam: 0,07 m/s in einen Kreisbogen mit 0,1 m Radius bei 100 m/s³.
 - Splines: Ohne zulässige Abweichung springt die Krümmung, wo einer an eine Gerade oder einen Kreisbogen anschließt; die Bahn durchfährt diesen Übergang deshalb langsam, wie von einer Geraden in einen Kreisbogen. Mit einer zulässigen Abweichung wird der ausgeglichene Übergang zügig durchfahren, aber langsamer, als eine Klothoide bei gleicher Abweichung erlaubte. Ein Abschnitt hat einen Grenzwert, nach seiner engsten Stelle; ein Abschnitt mit einer engen Biegung ist also auf ganzer Länge langsam.
 - Übergangsbögen zwischen Geraden und Kreisbögen: eine Länge für die ganze Bahn, sodass ein Kreisbogen, dessen Übergänge weniger bräuchten, trotzdem um das einrückt, was diese Länge verlangt. Keiner an einem an beiden Enden festen Kreisbogen (zwischen zwei Ecken oder einer Ecke und einem Spline), an einem an einem Ende festen mit einem Kreisbogen am anderen, oder an einem, der mehr als einen halben Umlauf dreht. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,499 s, ohne 1,729 s).
-- Der zeitoptimale Plan kennt weder den Riemen noch die Führungen noch den Zwischenkreis. Lassen Sie `analyze` oder `verdicts` darüber laufen.
+- Der zeitoptimale Plan kennt die Zuggrenzen des Riemens (`ratings.belt_max_tension_n`, `belt_min_tension_n`): Er hält die Zugkraft jedes Abschnitts im starren Modell innerhalb von `profile.tension_reserve` (0,8) des Spielraums bis dorthin; der Rest bleibt für Reibung und Riemenschwingung (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Die Momentgrenzen von Getriebe und Riemenscheibe, die Führungen und den Zwischenkreis kennt er nicht. Lassen Sie `analyze` oder `verdicts` darüber laufen.
 - Der zeitoptimale Plan ist nicht der schnellste mögliche. Er hat je Bahnstück einen Grenzwert für Geschwindigkeit und Beschleunigung, und auf einem Kreisbogen teilt er die Grenzen der Motoren auf die Richtungen längs der Bahn und zum Mittelpunkt auf, was einen Teil ungenutzt lässt. Im vollständigen Modell überschreiten die Motoren die Bemessungsdrehzahl um das, was die Regelkreise hinzufügen (0,1 % im Beispiel).
 - Eine Maschine, die am Ende eines Hubs steht, hat ihren Sollwert einige hundertstel Millimeter dahinter: Der Sollwert liegt dort, wo die Motoren stehen, unter Riemendehnung und Getriebeverdrehung. Eine Bahn von dort beginnt so weit außerhalb des Verfahrbereichs und wird gefahren. Posen, die mehr als 0,1 mm außerhalb liegen, werden abgelehnt (`Die Bahn verlässt den Verfahrbereich. ...` bei einer Bahn aus Stücken, `Die zeitlich vorgegebene Bahn braucht mindestens zwei Punkte im Verfahrbereich, mit steigenden Zeiten ab 0.` bei Posen mit Zeiten).
 - Die Nutzlast ist so, wie die Maschine sie beim Planen hat (angehängt, am Start).
@@ -867,7 +938,9 @@ Beim Standard-T-Portal nehmen die Führungen die Hälfte, die Motorwellen ein Dr
 
 Die Momentanteile, Verlustleistungen und Energieanteile sind ebenfalls Signale: `sim-cli run` schreibt sie, die Scopes der App können sie zeigen und eine SPS kann sie lesen.
 
-**Temperaturen.** Die App zeichnet die Übertemperatur jeder Motorwicklung über das Zeitfenster der Oszilloskope und, mit dem Effekt „Erwärmung von Getriebe und Führung“ (`effects.part_heating`, standardmäßig aus), die jedes Getriebes und jeder Führung. Jedes davon erwärmt sich mit seinem eigenen Verlust (`power.gearbox_*`, `power.guide_*`) über einen Wärmewiderstand, mit einer Zeitkonstante und bis zu einer zulässigen Übertemperatur; alle drei stehen in `[thermal]` der Konfiguration. Die Tabelle zeigt für jedes die Übertemperatur jetzt, ihren Endwert, wenn der analysierte Zyklus lange wiederholt wird (für ein Bauteil: Wärmewiderstand mal mittlerer Verlust), die zulässige Übertemperatur und den Anteil des Endwerts daran, über 100 % mit „(über dem Zulässigen)“ markiert. Der Anteil ist der des Endwerts, weil die Übertemperatur jetzt viele Minuten lang nur wenige Prozent davon ist; `gearbox-thermal` und `guide-thermal` prüfen denselben Endwert. Ein Direktantrieb (EXCT-30: Getriebeübersetzung 1) hat kein Getriebe, das sich erwärmt; sein `power.gearbox_*` ist die Dämpfung der Kupplung und heißt so. In der 3D-Ansicht nehmen Motorgehäuse, Getriebe, der Schlitten und (T-Portal) die Z-Achse die Farbe ihrer Übertemperatur gegenüber der zulässigen an: blau kalt, gelb bei der Hälfte, rot bei der zulässigen, magenta darüber; die Ansicht zeichnet diese Skala. Mit den Standard-Zeitkonstanten von 20 bis 40 Minuten zeigt eine Minute der Oszilloskope nur einen langsamen Anstieg; wer ein Bauteil einschwingen sehen will, verkürzt seine Zeitkonstante. Nichts wirkt zurück: Reibung und Wirkungsgrad ändern sich mit der Temperatur nicht. Die Kommandozeile schreibt die Übertemperaturen mit `run` (Signale `motor.<id>.winding_temperature`, `temperature.<bauteil>`).
+**Temperaturen.** Die App zeichnet die Übertemperatur jeder Motorwicklung über das Zeitfenster der Oszilloskope und, mit dem Effekt „Erwärmung von Getriebe und Führung“ (`effects.part_heating`, standardmäßig aus), die jedes Getriebes und jeder Führung. Jedes davon erwärmt sich mit seinem eigenen Verlust (`power.gearbox_*`, `power.guide_*`) über einen Wärmewiderstand, mit einer Zeitkonstante und bis zu einer zulässigen Übertemperatur; alle drei stehen in `[thermal]` der Konfiguration. Die Tabelle zeigt für jedes die Übertemperatur jetzt, ihren Endwert, wenn der analysierte Zyklus lange wiederholt wird (für ein Bauteil: Wärmewiderstand mal mittlerer Verlust), die zulässige Übertemperatur und den Anteil des Endwerts daran, über 100 % mit „(über dem Zulässigen)“ markiert. Der Anteil ist der des Endwerts, weil die Übertemperatur jetzt viele Minuten lang nur wenige Prozent davon ist; `gearbox-thermal` und `guide-thermal` prüfen denselben Endwert. Ein Direktantrieb (EXCT-30: Getriebeübersetzung 1) hat kein Getriebe, das sich erwärmt; sein `power.gearbox_*` ist die Dämpfung der Kupplung und heißt so. In der 3D-Ansicht nehmen Motorgehäuse, Getriebe, der Schlitten und (T-Portal) die Z-Achse die Farbe ihrer Übertemperatur gegenüber der zulässigen an: blau kalt, gelb bei der Hälfte, rot bei der zulässigen, magenta darüber; die Ansicht zeichnet diese Skala. Mit den Standard-Zeitkonstanten von 20 bis 40 Minuten zeigt eine Minute der Oszilloskope nur einen langsamen Anstieg; wer ein Bauteil einschwingen sehen will, verkürzt seine Zeitkonstante. Mit dem Effekt „Temperaturen wirken auf Reibung, Getriebeverluste und Riemensteifigkeit“ (`effects.thermal_feedback`, standardmäßig aus) erwärmen sich die Bauteile ebenso und wirken zurück: die viskose Reibung einer Führung folgt der Viskosität ihres Schmierstoffs (das 0,28-Fache bei 30 K über 20 °C), ein Getriebe verliert weniger, wenn sein Öl dünner wird (ein Getriebe mit 95 % hat bei 30 K 96,8 %, wenn die Hälfte seines Verlusts als viskos gilt), und die Steifigkeit des Riemens folgt ein wenig der Umgebungstemperatur. Die Werte stehen in `[thermal_feedback]`: Umgebungstemperatur, Bezugstemperatur, für die Reibung und Wirkungsgrad der Konfiguration gelten, Viskositätsverlauf des Schmierstoffs, viskoser Anteil des Getriebeverlusts und Steifigkeitsverlust des Riemens je Kelvin. Der Effekt ersetzt `effects.temperature`, dessen zwei von Hand gesetzte Faktoren nicht verwendet werden, solange er an ist. In einem Zyklus von Sekunden erwärmen sich die Bauteile mit den Standard-Zeitkonstanten von 20 bis 40 Minuten kaum; die Ergebnisse des Zyklus ändern sich daher nur, wo die Umgebungs- von der Bezugstemperatur abweicht. Wer ein Bauteil dort einschwingen sehen will, wo Verlust und Wärmeabfuhr sich ausgleichen, verkürzt seine Zeitkonstante. Die Kommandozeile schreibt die Übertemperaturen mit `run` (Signale `motor.<id>.winding_temperature`, `temperature.<bauteil>`).
+
+**Riemenzähne und Trume.** Mit `effects.belt_tooth_jump` (standardmäßig aus) steigen die Zähne des Riemens aus den Lücken einer Motorscheibe, wenn die Zugkraft dort übersteigt, womit die Kraft im Leertrum sie hält (`belt.tooth_jump_factor` mal Zähne im Eingriff mal Teilung durch Radius, mal Kraft im Leertrum: teilen sich beide Trume die Zugkraft gleich, mit den Standardwerten etwa das 1,5-Fache der Vorspannung), und der Riemen rutscht einen Zahn weiter oder zurück. Die Signale `pulley.<motor>.tooth_jumps` zählen die Sprünge, `pulley.<motor>.tooth_slip` ist der Schlupf des Riemens über der Scheibe; `power.tooth_jump` ist, was die Sprünge verbrauchen, in der Energiebilanz. Jeder Sprung im Zyklus lässt `belt-tooth-jump` durchfallen. Mit `effects.belt_span_vibration` (standardmäßig aus) hat jedes freie Trum seine erste Quereigenfrequenz, Wurzel(Kraft / Masse je Meter) / (2 · Länge), als Signal `belt.span.<i>.frequency`, und `belt.span_detuning` gibt an, wie weit die nächstliegende davon von dem entfernt ist, was der Antrieb anregt: Zahneingriff (Riemengeschwindigkeit durch Teilung) sowie Drehmomentwelligkeit und Rastmoment der Motoren. `belt-span-resonance` fällt durch, wo ein Trum bei konstanter Geschwindigkeit der Achsen näher als `ratings.belt_span_resonance_band` (10 %) an einer Anregung läuft. Berechnet werden nur die Frequenzen, nicht wie weit ein Trum ausschwingt.
 
 **Riemenabschnitte.** Je Abschnitt die Riemenkraft (die Vorspannung gestrichelt) und die Dehnung in mm über das Zeitfenster der Oszilloskope, und eine Tabelle beider Werte jetzt mit der zulässigen Kraft (`ratings.belt_max_tension_n`) und dem Anteil daran. Die zulässige Kraft ist nicht eingezeichnet: beim Fünffachen der Vorspannung würde sie die Linien flach drücken. Die Dehnung ist die Länge des Abschnitts weniger seines ungedehnten Riemens, ein Abschnitt bei Vorspannung ist also auch gedehnt (0,18 mm auf 0,3 m bei 300 N und EA = 5·10⁵ N). Die 3D-Ansicht färbt jeden Abschnitt nach derselben Kraft: das eigene Dunkelgrau des Riemens bei Vorspannung, darüber zu Rot hin (rot bei doppelter Vorspannung), darunter zu Blau hin (blau, wenn er schlaff ist); die Ansicht zeichnet diese Skala mit ihren Zahlen. `sim-cli run` schreibt die Signale `belt.<i>.tension` und `belt.<i>.stretch`.
 
@@ -1076,14 +1149,14 @@ Das Fenster zeigt in der Mitte die 3D-Ansicht, links ein Bedienfeld und rechts d
 | Oszilloskope (Überschrift) | Welche Größen gezeichnet werden |
 | Konfigurationsdatei: Datei, Öffnen, Speichern | Ein Dateiname, eingetippt. „Öffnen“ lädt sie als Konfiguration der gezeigten Maschine, wie `--config FILE`: Sie ersetzt die laufende Konfiguration und startet die Simulation neu, wie ein Wechsel der Maschine. Eine Datei, die nicht lesbar ist oder die die Maschine ablehnt (ein falsch geschriebener Schlüssel, ein Wert außerhalb seines Bereichs), wird unter „Meldungen“ beantwortet, und die laufende Konfiguration bleibt. „Speichern“ schreibt die Konfiguration, wie sie jetzt ist, mit jeder Änderung aus den Feldern „Effekte“ und „Parameter“ und an den Bauteilnamen. Wo nur Werte geändert wurden, behält die Datei die Kommentare und den Aufbau der Datei, aus der die Konfiguration gelesen wurde (der geöffneten Datei oder der Standardkonfiguration der Maschine); wo eine Liste geändert wurde, wird sie schlicht geschrieben, ohne Kommentare. Ein Wechsel der Maschine leert das Dateifeld, und „Speichern“ schreibt nicht über eine Datei, die die Konfiguration einer anderen Maschine enthält: Es meldet das unter Meldungen und lässt die Datei, wie sie ist |
 | Konfigurationsdatei: Öffnen…, Speichern unter… | Dasselbe mit dem Dateidialog des Systems, der dort beginnt, wohin das Feld zeigt. Das Fenster wartet, solange der Dialog offen ist |
-| Konfigurationsdatei: Motor-Artikelnummer, Netzspannung, Getriebe, Bauteile einsetzen | Die Bauteile, die `[parts]` der Konfiguration benennt, so gezeigt, wie die Konfiguration sie hat. „Bauteile einsetzen“ benennt das Eingetippte in der laufenden Konfiguration, wie `--motor`, `--supply` und `--gearbox` und wie „Einsetzen“ der Motorsuche: einen Motor mit seiner Artikelnummer (`1FK2104-5AK`), die Netzspannung `230v` oder `400v`, ein Getriebe als Baugröße-Flansch-Übersetzung (`NRK070-04-5`); ein leeres Feld benennt keines. Ein Name, den der Katalog nicht hat, wird unter „Meldungen“ abgelehnt, ebenso jeder Name in einer Konfiguration ohne `[parts]` |
+| Konfigurationsdatei: Motor-Artikelnummer, Netzspannung, Getriebe, Artikelnummer des Antriebs, Riemen, Achse, Bauteile einsetzen | Die Bauteile, die `[parts]` der Konfiguration benennt, so gezeigt, wie die Konfiguration sie hat. „Bauteile einsetzen“ benennt das Eingetippte in der laufenden Konfiguration, wie `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` und `--axis` und wie „Einsetzen“ der Motorsuche: einen Motor mit seiner Artikelnummer (`1FK2104-5AK`), die Netzspannung `230v`, `400v` oder `s120`, ein Getriebe als Baugröße-Flansch-Übersetzung (`NRK070-04-5`), einen Antrieb mit seiner Artikelnummer (`6SL3210-5HE11-5UF0`), einen Riemen als Profil-Breite (`AT5-25`), eine Achse mit Namen (`EXCT-30`, `ELZI-40`); ein leeres Feld benennt keines. Ein Name, den der Katalog nicht hat, wird unter „Meldungen“ abgelehnt, ebenso jeder Name in einer Konfiguration ohne `[parts]` |
 | Analyse: Zyklus analysieren und beurteilen | Die Zyklusanalyse und die Prüfungen, als drei Tabellen: die Kennwerte der Maschine (Zykluszeit, Bahnfehler, Abstand vom Ziel beim Verweilen, kleinste Riemenkraft, Zeit mit schlaffem Trum, Radialkraft auf eine Scheibenwelle, Führungsbelastung, Lebensdauer der Führung), die Belastung je Motor (Spitzenmoment, Effektivmoment, kubisch gemitteltes Moment, Übertemperatur der Wicklung, aufgenommene und rückgespeiste Energie, Energie und mittlere Leistung am Bremswiderstand, höchste Zwischenkreisspannung) und eine Zeile je Prüfung |
 | Analyse: mit Fehlerbändern, Stichproben | Angekreuzt fährt „Zyklus analysieren und beurteilen“ den Zyklus zusätzlich mit jedem Wert aus `[bounds]` an seiner unteren und oberen Grenze (zwei weitere Zyklen je Wert) und zeigt eine vierte Tabelle: je Prüfung den kleinsten und den größten Wert, das Ergebnis im ungünstigsten Fall und „Bestandene Läufe [%]“. Dasselbe wie `sim-cli verdicts --bands`. Steht im Zahlenfeld „Stichproben“ neben dem Kontrollkästchen eine Zahl über 0, wird der Zyklus stattdessen so oft mit allen Werten aus `[bounds]` zugleich zwischen ihren Grenzen gefahren, und die Tabelle trägt die Überschrift „Die Prüfungen mit allen unsicheren Werten zugleich zwischen ihren Grenzen“. Dasselbe wie `--bands --samples N`; die App nimmt immer den Startwert (`--seed`) 1. Mit „ungünstigste Ecke“ (nur zusammen mit den Fehlerbändern) sucht sie zusätzlich je Prüfung die ungünstigste Ecke der Grenzen und zeigt eine Tabelle mit dem ungünstigsten Wert, dem Grenzwert dort, dem Ergebnis und den Werten an ihrer oberen und an ihrer unteren Grenze. Dasselbe wie `--bands --worst`; das braucht viele Zyklen mehr |
 | Effekt-Ansichten | Klappt auf, wenn ein Zyklus analysiert wurde; ihr eigener Knopf „Zyklus analysieren und beurteilen“ tut dasselbe wie der im Teil Analyse. „Wofür jeder Motor sein Moment braucht“: je Motor ein Plot über das Zeitfenster der Oszilloskope mit den vier Anteilen seines Moments (Trägheit, Schwerkraft, Reibung, Riemen und Rest) und gestrichelt dem Moment selbst, das sie zusammen ergeben; Zeitachse und Cursor teilt er mit den Oszilloskopen. „Momentanteile über den analysierten Zyklus“: je Anteil und Motor Spitze und Effektivwert, wie `sim-cli analyze --breakdown` sie schreibt. „Energiebilanz des analysierten Zyklus“: die Einspeisung, jeder Verlust und Speicher, der nicht genau null ist, und was nicht zugeordnet ist, in J und in Prozent der Einspeisung, wie `--budget` sie schreibt. „Reibung je Führung“: je Führung die Reibkraft beim stationären Gleiten über der Geschwindigkeit (durchgezogen) und ihre Coulomb-, viskosen und Haftanteile (gestrichelt) bei der jetzigen Führungslast, der Punkt, an dem die Führung gerade ist, und eine Tabelle mit Geschwindigkeit, den drei Anteilen, der Kraft und dem Lastfaktor jetzt. „Temperaturen“: die Übertemperatur jeder Wicklung und, mit der Erwärmung von Getriebe und Führung, jedes Getriebes und jeder Führung über das Zeitfenster der Oszilloskope, die Tabelle mit jetzt, Endwert im analysierten Zyklus, zulässiger Übertemperatur und Anteil des Endwerts daran, und die Farbskala der 3D-Ansicht. „Riemenabschnitte“: Riemenkraft (Vorspannung gestrichelt) und Dehnung je Abschnitt, die Tabelle beider jetzt und die Farbskala des Riemens. „Effekt ein und aus“: ein Effekt, eine Größe und „Vergleichen“; beide Läufe übereinander, aus gestrichelt, und je Linie Spitze und Effektivwert der Differenz. Über jedem Plot die Namen seiner Linien in ihren Farben. Siehe [Sehen, wohin Moment und Energie gehen](#sehen-wohin-moment-und-energie-gehen) |
 | Analyse: Betriebspunkte | Nach „Zyklus analysieren und beurteilen“: das Motormoment über der Motordrehzahl einmal je Millisekunde des Zyklus, eine Farbe je Motor, über der Drehmoment-Drehzahl-Kennlinie der Motoren (gestrichelt: das Spitzenmoment in beide Richtungen bis zur Bemessungsdrehzahl, das bis zur Leerlaufdrehzahl auf null fällt), und darunter dieselben Punkte als rollbare Tabelle. Dasselbe wie `sim-cli analyze --points` |
 | Analyse: Empfindlichkeit | Die acht Parameter mit `[bounds]`, von denen der Zyklus am stärksten abhängt |
 | Analyse: Zyklus optimieren | Der Optimierer. „Diese Einstellungen in die laufende Maschine übernehmen“ setzt sein Ergebnis in die Konfiguration ein |
-| Motorsuche | Netzspannung (230v oder 400v), der Anfang der Artikelnummern (leer: jeder Motor des Katalogs, das dauert Minuten) und wahlweise eine Getriebebaureihe wie `NRK` oder `NRK070`. „Suchen“ fährt jeden solchen Motor auf dem Zyklus und listet sie auf, bestandene zuerst, leichteste zuerst, mit der knappsten Prüfung oder dem Grund, aus dem ein Motor nicht gefahren wurde. „Einsetzen“ in einer Zeile benennt diesen Motor, seine Netzspannung und sein Getriebe in `[parts]` der laufenden Konfiguration. Dasselbe wie `sim-cli search` |
+| Motorsuche | Netzspannung (230v, 400v oder s120), der Anfang der Artikelnummern (leer: jeder Motor des Katalogs) und wahlweise eine Getriebebaureihe wie `NRK` oder `NRK070`; angekreuzt probiert „Jede Achse des Katalogs“ jeden Motor zusätzlich auf jeder Achse des Katalogs, die zur Art der Maschine passt (`--axes`). „Suchen“ fährt jeden solchen Motor auf dem Zyklus und listet sie auf, bestandene zuerst, günstigste zuerst (die eingebaute Masse steht für den Preis), mit Getriebe, Achse, der Masse von Motor und Getriebe, der eingebauten Masse und der knappsten Prüfung oder dem Grund, aus dem ein Motor oder eine Achse nicht gefahren wurde. „Einsetzen“ in einer Zeile benennt diesen Motor, seine Netzspannung, sein Getriebe, seinen Antrieb und seine Achse in `[parts]` der laufenden Konfiguration. Dasselbe wie `sim-cli search` |
 | Bahn | Ein Dateiname, eingetippt. „Geraden, Kreisbögen und Splines“ ist eine Bahndatei, geplant innerhalb der Achsgrenzwerte oder, angekreuzt, „So schnell, wie die Motoren es erlauben“; „Posen mit Zeiten“ ist eine Datei mit einer zeitlich vorgegebenen Bahn. „Planen, fahren und analysieren“ plant die Bahn von dort, wo die Maschine steht, analysiert sie mit einer eigenen Simulation (Dauer, Abweichung durch Übergangsbögen, Bahnfehler, Abstand hinter dem Sollwert, Belastungen, Prüfungen), zeichnet die geplante Bahn als Diagramm im Bedienfeld und als Linie in der 3D-Ansicht und lässt die Maschine in der 3D-Ansicht sie fahren. Dasselbe wie `sim-cli analyze --path` oder `--trajectory` |
 | Aufzeichnung | Ein Dateiname, eingetippt. „Nachfahren und anpassen“ fährt die Antriebsaufzeichnung nach und zeigt je Motor, wie weit die Simulation von ihr abweicht (Moment und Schleppfehler, Effektivwert und Spitze), und je Achse die angepasste Masse, Reibung und konstante Kraft neben den Werten der Konfiguration, mit dem, was in der Konfiguration zu ändern ist. Dasselbe wie `sim-cli replay` und `fit --trace`. Die Startpose der Konfiguration muss dort liegen, wo die Aufzeichnung beginnt. Darunter „Aufzeichnung gegen Simulation“: Motormoment, Motordrehzahl und Schleppfehler am Motor über der Zeit, die Aufzeichnung durchgezogen und die Simulation gestrichelt, eine Farbe je Motor. „CSV exportieren“ dort schreibt sie nach `replay-overlay.csv` im Arbeitsverzeichnis, dieselbe Datei wie `sim-cli replay --out` |
 | Frequenzgang der Mechanik | Von, bis, Frequenzen und Momentamplitude, wie `sim-cli sweep` sie nimmt (anfangs 5 bis 500 Hz, 120, und 1,5 N m oder 40 % des Spitzenmoments des Antriebs, wo das weniger ist). „Jeden Motor messen“ misst den Frequenzgang im offenen Kreis vom Moment jedes Motors zu seiner Drehzahl, wie `sim-cli sweep --motor N` für einen: Betrag in dB und Phase über der Frequenz, eine Linie je Motor, und je Motor den Einbruch, bei dem die Last am Riemen schwingt (Resonanz und Dämpfungsgrad des Einbruchs mit der niedrigsten Frequenz; leer, wo der Bereich keinen Einbruch mit beiden Flanken enthält). Die Voreinstellungen zeigen ihn an jedem Motor der Standardmaschinen. Vorher taten sie das nicht: Die Amplitude war 0,05 N m, bei der die Haftreibung die Motoren hält, nicht der Bereich. Ein Wechsel der Maschine oder das Öffnen einer Konfiguration setzt die Amplitude auf die Voreinstellung dieser Konfiguration, sofern keine andere eingetippt wurde |
@@ -1095,9 +1168,9 @@ In den Ergebnistabellen der Analyse steht „in Ordnung“ für `ok` und „NICH
 
 Das rechte Bedienfeld rollt als Ganzes, und jeder seiner Teile (Oszilloskope, Konfigurationsdatei, Analyse, Effekt-Ansichten, Motorsuche, Bahn, Aufzeichnung, Frequenzgang der Mechanik, Reglereinstellung) lässt sich unter seiner Überschrift einklappen. Ein Teil klappt von selbst auf, wenn sein Ergebnis eintrifft. Die Tabellen sind für die Standardbreite des Bedienfelds ausgelegt: Lange Namen brechen um, und Zahlen haben vier Stellen.
 
-Die Schaltflächen dieser Teile rechnen im Hintergrund mit eigenen Simulationen, und zwar mit der Konfiguration, wie sie in diesem Augenblick ist; solange steht ein Wartezeichen an Stelle der Schaltfläche. Die laufende Maschine wird nicht gestört. Ein Ergebnis wird nicht neu berechnet, wenn sich danach ein Parameter ändert. Es wird stattdessen als „für eine frühere Konfiguration berechnet“ gekennzeichnet, und nichts davon wird in die geänderte Konfiguration übernommen: „Diese Einstellungen übernehmen“, „Einsetzen“ und das Fahren einer geplanten Bahn antworten dann mit einer Meldung (die Änderung zurücknehmen oder neu berechnen). Einen Motor mit „Einsetzen“ zu benennen macht die Suche, aus der er stammt, nicht ungültig; danach lässt sich eine andere Zeile versuchen.
+Die Schaltflächen dieser Teile rechnen im Hintergrund mit eigenen Simulationen, und zwar mit der Konfiguration, wie sie in diesem Augenblick ist; solange steht ein Wartezeichen an Stelle der Schaltfläche. Die laufende Maschine wird nicht gestört. Ein Ergebnis wird nicht neu berechnet, wenn sich danach ein Parameter ändert. Es wird stattdessen als „für eine frühere Konfiguration berechnet“ gekennzeichnet, und nichts davon wird in die geänderte Konfiguration übernommen: „Diese Einstellungen übernehmen“, „Einsetzen“ und das Fahren einer geplanten Bahn antworten dann mit einer Meldung (die Änderung zurücknehmen oder neu berechnen). Einen Motor mit „Einsetzen“ zu benennen macht die Suche, aus der er stammt, nicht ungültig; danach lässt sich eine andere Zeile versuchen. Eine Achse der Achssuche zu benennen schon, denn sonst lief die Suche auf der eigenen Achse der Konfiguration.
 
-Eine Datei, die fehlt oder nicht lesbar ist, eine nicht lesbare Zeile darin, eine andere Netzspannung als 230v und 400v und eine Suche, die keinen Motor findet oder kein Getriebe der Baureihe, das an einen passt, werden unter „Meldungen“ beantwortet. Ebenso eine Bahn, die die Maschine nicht fahren kann, weil sie sich seit dem Planen bewegt hat oder in Bewegung ist.
+Eine Datei, die fehlt oder nicht lesbar ist, eine nicht lesbare Zeile darin, eine andere Netzspannung als 230v, 400v und s120 und eine Suche, die keinen Motor findet oder kein Getriebe der Baureihe, das an einen passt, werden unter „Meldungen“ beantwortet. Ebenso eine Bahn, die die Maschine nicht fahren kann, weil sie sich seit dem Planen bewegt hat oder in Bewegung ist.
 
 Ein Antrieb, der wegen Überspannung im Zwischenkreis abschaltet, wird unter „Meldungen“ genannt, einmal je Abschaltung, für die laufende Maschine und für einen analysierten Zyklus oder eine analysierte Bahn. „Antriebe freigeben“ bringt die Antriebe zurück.
 

@@ -51,13 +51,35 @@ pub struct Label {
     pub decimals: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+/// A force that acts at a place in the machine, drawn as an arrow: on what (`owner_key`, a translation key)
+/// and how much, in newtons, along the scene's axes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arrow {
+    pub pos: [f64; 3],
+    pub force: [f64; 3],
+    pub owner_key: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
     pub parts: Vec<Part>,
     pub labels: Vec<Label>,
+    /// Forces worth seeing, e.g. the belt's pull on the carriage. Filled in by the machine.
+    pub arrows: Vec<Arrow>,
     /// Where the tool is in the scene right now (`Machine::scene_point` of its pose), for drawing the path
     /// it travels. Filled in by whoever steps the machine, not by the machine; `None` where there is no mapping.
     pub tool: Option<[f64; 3]>,
+    /// Where the plan has the tool now (`Machine::scene_point` of the planned pose), filled in like `tool`.
+    pub planned: Option<[f64; 3]>,
+    /// Asked of the machine, not filled in by it: how many times larger to draw the parts' deflections (frame
+    /// sway, the Z axis leaning), which are micrometres. 1 draws them as they are.
+    pub exaggeration: f64,
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self { parts: Vec::new(), labels: Vec::new(), arrows: Vec::new(), tool: None, planned: None, exaggeration: 1.0 }
+    }
 }
 
 /// A point on a circle, for laying a belt path around a pulley. `turn` is in radians from +x.
@@ -75,24 +97,32 @@ pub const BELT_COLOR: [f32; 3] = [0.08, 0.08, 0.09];
 /// when the path changes with the pose they travel along it and around the pulleys by themselves.
 /// `shade(i)` is the highlight of the strip from point i to point i + 1.
 pub fn belt(out: &mut Vec<Part>, path: &[[f64; 2]], y: f64, width: f64, tooth_spacing: f64, shade: impl Fn(usize) -> f32) {
+    let along: Vec<f64> = std::iter::once(0.0).chain(path.windows(2).scan(0.0, |sum, p| {
+        *sum += (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1]);
+        Some(*sum)
+    })).collect();
+    belt_along(out, path, &along, y, width, tooth_spacing, shade);
+}
+
+/// `belt` with the belt length of each path point given (`along`, rising) rather than taken from the drawn path:
+/// for a drawn path that is not the belt's length, e.g. a span drawn sagging larger than it is. Each tooth keeps its
+/// place in belt length and sits on the drawn segment whose ends' belt lengths hold it, at the same share between them.
+pub fn belt_along(out: &mut Vec<Part>, path: &[[f64; 2]], along: &[f64], y: f64, width: f64, tooth_spacing: f64, shade: impl Fn(usize) -> f32) {
     let (strip, tooth) = (BELT_COLOR, [0.75, 0.75, 0.7]);
-    let mut along = 0.0;
     let mut next_tooth = tooth_spacing / 2.0;
     for (i, pair) in path.windows(2).enumerate() {
-        let (a, b) = (pair[0], pair[1]);
+        let (a, b, (c0, c1)) = (pair[0], pair[1], (along[i], along[i + 1]));
         let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
-        let length = dx.hypot(dz);
-        if length < 1e-9 {
+        if dx.hypot(dz) < 1e-9 || c1 - c0 < 1e-9 {
             continue;
         }
         out.push(Part::new("belt", Shape::Segment { to: [b[0], y, b[1]], width }, [a[0], y, a[1]], strip).highlighted(shade(i)));
-        while next_tooth < along + length {
-            let f = (next_tooth - along) / length;
+        while next_tooth < c1 {
+            let f = (next_tooth - c0) / (c1 - c0);
             let pos = [a[0] + f * dx, y - 0.001, a[1] + f * dz];
             out.push(Part::new("belt-tooth", Shape::Box { size: [0.004, width, 0.007] }, pos, tooth).turned(dz.atan2(dx)));
             next_tooth += tooth_spacing;
         }
-        along += length;
     }
 }
 

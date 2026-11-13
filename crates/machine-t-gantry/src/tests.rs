@@ -805,6 +805,63 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     all
 }
 
+/// The belt's tension is a limit of the time-optimal plan. Default config, jerk 300 m/s^3, a line along X from
+/// (0.7, 0.35) to (0.95, 0.35), and `ratings.belt_max_tension_n` = 400 N. The rigid model: the belt pulls the
+/// carriage, Z axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis, F_z = 7 kg * g = 68.65 N; the
+/// sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at z = 0.35), and with
+/// sum (T_i - P) L_i = 0 section 3 carries T = 300 - 68.65 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2 accelerating. At rest
+/// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.681 N per m/s^2, and with
+/// `profile.tension_reserve` = 0.8 the plan may use 0.8 * (400 - 284.47) = 92.42 N of it: a = 13.84 m/s^2. The plan
+/// without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension` on the full model (425 N); the plan with it
+/// accelerates at 13.84 m/s^2 within 0.5 %, its rigid tension reaches the 376.9 N the plan allows within 3 % (where it
+/// accelerates, x = 0.7 to 0.8, the rise per m/s^2 is a little less), and the full model, friction and belt vibration
+/// on top, passes `belt-tension` within 3 % of the 400 N.
+#[test]
+fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
+    let pieces = sim_components::path::parse("line,0.95,0.35").unwrap();
+    let run = |rated: f64| {
+        let mut cfg = ENTRY.config();
+        for e in ["axis.x.max_jerk_m_s3 = 300.0", "axis.z.max_jerk_m_s3 = 300.0", "start.pose = [0.7, 0.35]"] {
+            cfg.set_text(e).unwrap();
+        }
+        cfg.set_text(&format!("ratings.belt_max_tension_n = {rated:?}")).unwrap();
+        let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+        let points = sim.plan_path(&pieces, true).unwrap();
+        // The most acceleration along X and the most tension of the rigid model, by differences over the planned poses.
+        let (c, mut most_acc, mut most_tension) = (1e-3, 0f64, 0f64);
+        for w in points.windows(3) {
+            let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
+            let mut tensions = Vec::new();
+            sim.machine.rigid_tensions(&w[1].1, &acc, &mut tensions);
+            most_acc = most_acc.max(acc[0].abs());
+            most_tension = tensions.iter().fold(most_tension, |m, t| m.max(*t));
+        }
+        let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+        let mut judged = cfg.clone();
+        judged.set_text("ratings.belt_max_tension_n = 400.0").unwrap();
+        let verdict = sim_components::analysis::verdicts(&judged, &load).unwrap().into_iter().find(|v| v.check == "belt-tension").unwrap();
+        println!("limit {rated} N: {most_acc} m/s^2, rigid {most_tension} N, simulated {} N", verdict.value);
+        (most_acc, most_tension, verdict)
+    };
+    // The tension law of the rigid model, by hand, at rest and accelerating at x = 0.9.
+    let machine = (ENTRY.build)(&ENTRY.config()).unwrap();
+    let mut at = Vec::new();
+    machine.rigid_tensions(&[0.9, 0.35], &[10.0, 0.0], &mut at);
+    // At x = 0.9: L1 = 1.55, L3 = 0.75.
+    let weight = 7.0 * 9.80665;
+    assert!((at[2] - (300.0 - weight * 0.95 / 4.2 + 110.0 * 1.55 / 4.2 + 110.0 * 0.95 / 4.2)).abs() < 1e-9, "{at:?}");
+    assert!((at[0] - (300.0 - weight * 0.95 / 4.2 - 110.0 * (0.95 + 0.75) / 4.2)).abs() < 1e-9, "{at:?}");
+    let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.8 * (400.0 - (300.0 - weight * 0.95 / 4.2)));
+    let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
+    assert!((allowed - 13.84).abs() < 5e-3 && (still + room - 376.89).abs() < 0.01, "{allowed}");
+    let (old_acc, _, old) = run(1e12);
+    assert!(old_acc > 1.3 * allowed && !old.ok, "{old_acc} m/s^2, {old:?}");
+    let (acc, tension, new) = run(400.0);
+    assert!((acc / allowed - 1.0).abs() < 0.005, "{acc} m/s^2 against {allowed}");
+    assert!(tension <= (still + room) * 1.001 && tension >= 0.97 * (still + room), "{tension} N");
+    assert!(new.ok && new.value >= 0.97 * 400.0, "{new:?}");
+}
+
 /// The most that any pose of `plan_use` uses of each of the three limits.
 fn most_used(used: &[[f64; 3]]) -> [f64; 3] {
     used.iter().fold([0.0; 3], |most, u| [most[0].max(u[0]), most[1].max(u[1]), most[2].max(u[2])])
@@ -1015,6 +1072,81 @@ fn the_optimiser_switches_input_shaping_on_where_a_faster_cycle_fails_settling()
     assert!(failing(&faster).is_empty());
     faster.set_text("effects.input_shaping = false").unwrap();
     assert_eq!(failing(&faster), ["settling"]);
+}
+
+/// The optimiser lowers the lifts of the cycle to the clearance. Default cycle (blending and shaping off), with
+/// `profile.min_clearance_m` = 0.1 m: both lifts go from 0.35 m to 0.05 + 0.1 = 0.15 m, the first thing it tries (two
+/// runs: the cycle as configured, then this). Each of the four Z moves (lift and lower at pick and place) is jerk-limited
+/// with v = 0.4 m/s, a = 6 m/s^2, j = 100 m/s^3 (v j = 40 >= a^2 = 36, and both distances above v (v/a + a/j) = 0.0507 m,
+/// so the speed is reached): t = d/v + v/a + a/j, 0.8767 s for 0.3 m and 0.3767 s for 0.1 m. The cycle shortens by
+/// 4 * 0.2 m / 0.4 m/s = 2.000 s, within 5 ms (each segment arrives on a whole profile cycle).
+#[test]
+fn the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time() {
+    use sim_components::analysis::optimise_cycle;
+    let mut cfg = ENTRY.config();
+    cfg.set_text("profile.min_clearance_m = 0.1").unwrap();
+    let found = optimise_cycle(&ENTRY, &cfg, 2).unwrap();
+    assert_eq!(found.lifts.len(), 2, "{:?}", found.lifts);
+    for lift in &found.lifts {
+        assert!(lift.before == 0.35 && (lift.after - 0.15).abs() < 1e-12 && lift.via.is_none(), "{lift:?}");
+    }
+    assert_eq!(found.lifts.iter().map(|l| l.segments).collect::<Vec<_>>(), [[1, 2, 3], [4, 5, 0]]);
+    let t = |d: f64| d / 0.4 + 0.4 / 6.0 + 6.0 / 100.0;
+    let saved = 4.0 * (t(0.3) - t(0.1));
+    assert!((saved - 2.0).abs() < 1e-12);
+    let shorter = found.before.duration - found.after.duration;
+    assert!((shorter - saved).abs() < 5e-3, "{} s to {} s: {shorter} s saved", found.before.duration, found.after.duration);
+    // "Apply" writes the cycle with the lower lifts; it is the one the optimiser ran.
+    let (path, _, after) = found.changes.iter().find(|c| c.0 == "cycle.segment").unwrap();
+    cfg.set_text(&format!("{path} = {after}")).unwrap();
+    assert_eq!(cfg.f64s("start.pose").unwrap().len(), 2);
+    let targets: Vec<Vec<f64>> = cfg.array("cycle.segment").unwrap().iter().map(|s| s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect()).collect();
+    assert_eq!(targets.iter().filter(|t| (t[1] - 0.15).abs() < 1e-12).count(), 4, "{targets:?}");
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+    assert!((load.duration - found.after.duration).abs() < 1e-12);
+}
+
+/// A lift rounded through a via point: the segment with `via` runs the planned path up from the pick, through the
+/// via point and down to the place (`control::via_pieces`), without a stop at the corners, and arrives where its
+/// target is before the dwell. A via point outside the stroke is refused by the config.
+#[test]
+fn a_cycle_segment_runs_its_path_through_via_points() {
+    let cfg = |via: &str| {
+        let text = ENTRY.default_config;
+        let cycle = format!("[[cycle.segment]]
+target = [0.1, 0.05]
+dwell_s = 0.1
+payload = true
+
+[[cycle.segment]]
+target = [0.9, 0.05]
+dwell_s = 0.1
+payload = false
+via = {via}
+");
+        let mut cfg = Config::parse(&format!("{}{cycle}", &text[..text.find("[[cycle.segment]]").unwrap()])).unwrap();
+        cfg.set_text("start.pose = [0.1, 0.05]").unwrap();
+        cfg
+    };
+    let rounded = cfg("[[0.1, 0.15], [0.5, 0.3], [0.9, 0.15]]");
+    let mut sim = sim_components::Sim::new(&ENTRY, &rounded).unwrap();
+    sim.command(sim_components::Command::StartCycle).unwrap();
+    let (mut highest, mut stopped_above, mut arrived) = (0f64, false, false);
+    sim.run(6.0, |s| {
+        let c = &s.control;
+        highest = highest.max(c.set_pos[1]);
+        // Between the two vertical lines the plan never stands still.
+        if c.set_pos[0] > 0.11 && c.set_pos[0] < 0.89 && c.set_vel.iter().all(|v| v.abs() < 1e-9) {
+            stopped_above = true;
+        }
+        if c.dwell_progress().is_some() && c.cycle_segment() == Some(1) {
+            arrived |= (c.set_pos[0] - 0.9).abs() < 1e-9 && (c.set_pos[1] - 0.05).abs() < 1e-9 && !c.payload_attached;
+        }
+    });
+    assert!(highest > 0.29 && highest < 0.35 && !stopped_above && arrived, "highest {highest}, stopped {stopped_above}, arrived {arrived}");
+    // Outside the stroke the config is refused, naming the via points.
+    let outside = sim_components::Sim::new(&ENTRY, &cfg("[[0.1, 0.15], [0.5, 9.0], [0.9, 0.15]]"));
+    assert_eq!(outside.err().map(|e| e.detail().to_string()), Some("cycle.segment[1].via".to_string()));
 }
 
 /// The torque at the gearbox outputs against a hand calculation. Each pulley carries half the weight of the Z

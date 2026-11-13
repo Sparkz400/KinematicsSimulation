@@ -9,12 +9,19 @@ dt_s = 62.5e-6
 substeps = 4
 
 # Parts by name from the catalogue in catalog/: a motor by its article number, with the supply its data
-# is for ("230v" or "400v"), and a gearbox as size-frame-ratio, e.g. "NRK070-04-5". The catalogue values
-# of a named part replace the numbers this file has for it when the config is loaded. "" names none.
+# is for ("230v" or "400v" for the S210 data, "s120" for the motor on a SINAMICS S120), and a gearbox as
+# size-frame-ratio, e.g. "NRK070-04-5". A drive (S210 converter or S120 Motor Module) by its article number
+# sets ratings.drive_rated_current_a and drive_max_current_a; a belt as profile-width, e.g. "AT5-25" (Megadyne
+# MEGALINEAR, steel cords); an axis by name, e.g. "EXCT-30" or "ELZI-40" (Festo, Bahr), sets pulley, belt,
+# moved masses and the pulley rating, and keeps the strokes. The catalogue values of a named part replace the
+# numbers this file has for it when the config is loaded. "" names none.
 [parts]
 motor = ""
 motor_supply = "400v"
 gearbox = ""
+drive = ""
+belt = ""
+axis = ""
 
 # One switch per effect. With belt_stretch off the machine falls back to the rigid reference model,
 # in which belt damping, slack, backlash, gear stiffness and the frame mode have no meaning.
@@ -54,8 +61,19 @@ input_shaping = false
 back_emf = true
 voltage_limit = true
 winding_heating = true
-# Gearboxes and guides warm with their losses (see [thermal]). Only computed and shown; nothing feeds back.
+# Gearboxes and guides warm with their losses (see [thermal]). Only computed and shown, unless thermal_feedback is on.
 part_heating = false
+# Guide friction and gearbox losses follow the temperatures part_heating computes, the belt's stiffness the ambient
+# temperature (see [thermal_feedback]). Replaces effects.temperature: its hand-set factors are not used while this is
+# on. Without part_heating the parts stay at ambient. Off by default, so that earlier results stay as they were.
+thermal_feedback = false
+# The belt's teeth jump over a driven pulley when the effective pull there exceeds what the slack side's tension holds
+# in mesh (see belt.tooth_jump_factor); elastic model only. Off by default, so that earlier results stay as they were.
+belt_tooth_jump = false
+# The first sideways mode of each free belt span, a string at its live tension, against the frequencies the drive
+# excites (tooth mesh, torque ripple, cogging); judged at steady speed against ratings.belt_span_resonance_band.
+# Signals and a check only, nothing acts back on the motion. Off by default.
+belt_span_vibration = false
 torque_saturation = true
 drive_delay = true
 # The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.
@@ -112,6 +130,14 @@ tooth_mesh_stiffness_n_m = 5.0e6
 # With effects.belt_material_damping: a section damps with its stiffness times this time (so a short
 # section damps more), instead of with damping_n_s_m whatever its length.
 damping_time_s = 2.5e-4
+# With effects.belt_tooth_jump: the teeth climb out of a driven pulley's grooves when the effective pull there exceeds
+# this times the teeth in mesh (ratings.belt_teeth_in_mesh) times pitch / pulley radius times the slack side's tension:
+# each tooth in mesh is held in its groove by the tension's radial pull over one pitch and pushed out by its share of
+# the pull times the tangent of an effective flank angle; this is 1 / that tangent (flank, friction and the tooth's
+# give together). Estimate: 2.4 makes a pulley drive with 10 of 25 teeth in mesh (both sides at the pretension P
+# plus and minus half the pull) jump at an effective pull of 1.5 P, between the belt makers' rule of a pretension at
+# least the effective pull (which keeps the slack side at P / 2) and the slack side going slack at 2 P.
+tooth_jump_factor = 2.4
 
 [friction_x]
 coulomb_n = 15.0
@@ -214,8 +240,9 @@ belt_stiffness_scale = 1.1
 
 # With effects.part_heating: each gearbox and guide is one thermal mass that warms with its loss power (the signals
 # power.gearbox_*, power.guide_*) through a thermal resistance to the air: its rise settles at resistance times the
-# mean loss, with the time constant. The rated rises are the limits the 3D view colours up to. Nothing feeds back:
-# friction and efficiency stay as they are. Estimates for a size 60 to 70 planetary gearbox and a size 15 ball guide.
+# mean loss, with the time constant. The rated rises are the limits the 3D view colours up to. Friction and efficiency
+# follow them only with effects.thermal_feedback (see [thermal_feedback]). Estimates for a size 60 to 70 planetary
+# gearbox and a size 15 ball guide.
 # The guide's heat goes into its rail and the aluminium profile the rail is bolted to, over the whole stroke: about
 # 0.35 m2 of profile at 10 W/(m2 K) (still air and radiation) with a fin efficiency of about 0.6 gives 0.5 K/W, and
 # about 5 kg of aluminium and steel (5 kJ/K) gives 40 minutes. The carriage alone would give 2 K/W, which put the
@@ -227,6 +254,21 @@ gearbox_max_rise_k = 50.0
 guide_resistance_k_w = 0.5
 guide_time_constant_s = 2400.0
 guide_max_rise_k = 40.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback): the config's friction, efficiency and belt stiffness hold
+# at the reference temperature, 20 °C as gearbox makers quote their no-load torque; the machine stands at the ambient
+# temperature, and each gearbox and guide is warmer by its rise. A lubricant's viscosity follows
+# exp(B (1/T - 1/T_ref)): B from a mineral oil's viscosities at 40 and 100 °C, 3470 K for ISO VG 32 to 4730 K for
+# VG 220, 4000 K for VG 68. The guide's viscous friction follows the viscosity (its Coulomb and stiction levels stay),
+# and so does the share of the gearbox's loss that is churning and bearing drag (an estimate; the rest is tooth
+# friction). The belt's EA falls by the coefficient per kelvin above the reference: the polyurethane softens, but the
+# steel cords carry the load (an estimate; steel's own modulus falls by about 2.5e-4 per K).
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
 
 [axis.x]
 max_velocity_m_s = 0.8
@@ -324,6 +366,9 @@ guide_dynamic_load_rating_n = 5000.0
 # The life the parts are to last, against which the lives below are judged: 20000 h, the life Siemens rates its
 # planetary gearboxes' planet bearings for.
 required_life_h = 20000.0
+# Reliability of the two bearing lives (pulley shaft, gearbox planets), %: the life factor a1 of ISO 281 turns their
+# L10, which 90 % of bearings reach, into the life this share reaches (0.64 at 95 %, 0.25 at 99 %). 90 to 99.95.
+bearing_reliability_percent = 90.0
 # Dynamic load rating C of the bearing that takes the belt's pull on a pulley shaft (here the gearbox output),
 # for its rating life (C / P)^3 * 10^6 / (60 n) h. Placeholder: the output bearing of a Siemens NRB120, whose
 # 1500 N of average radial force for 30000 h at 100 r/min in the middle of the shaft (Table 7-14 of the
@@ -346,6 +391,16 @@ belt_tooth_load_n_cm = [35.0, 35.0, 35.0, 34.0, 34.0, 34.0, 32.0, 31.0, 30.0, 29
 belt_width_mm = 25.0
 belt_service_factor = 1.4
 belt_teeth_in_mesh = 10.0
+# With effects.belt_span_vibration: how close a span's first sideways mode may come to what the drive excites, as a
+# share of the mode, at steady speed. An estimate: belt makers ask to keep the two apart without a figure; 10 % is the
+# separation usually kept from a resonance.
+belt_span_resonance_band = 0.1
+# The drive's rated and maximum output current, against which the cycle's RMS and peak motor current are judged
+# (checks drive-current and drive-peak-current). A drive named in [parts] sets them. Placeholders here: the values
+# of the S210 converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A), which carries this placeholder motor's rated (2.8 A) and
+# maximum current (9.5 A).
+drive_rated_current_a = 3.0
+drive_max_current_a = 10.9
 
 [profile]
 cycle_s = 1.0e-3
@@ -370,9 +425,17 @@ shaper2_damping = 0.03
 # For a path timed as fast as the motors allow: the share of the torque-speed curve the plan may use (the
 # rest is for friction and elasticity, which the plan leaves out).
 torque_reserve = 0.8
+# For a path timed as fast as the motors allow: the share of the room between the tension that holds the tool and the
+# belt's tension ratings that the plan may use (the rest is for the belt's vibration and damping, which the plan's rigid
+# model leaves out).
+tension_reserve = 0.8
 # For a path of lines and arcs: how far the planned path may leave them, so that transition curves
 # (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
 path_tolerance_m = 0.0
+# For `sim-cli optimise`: how far the tool has to stay beyond the farther of pick and place while it traverses
+# between them (an obstacle there). The optimiser lowers each lift, traverse and lower of the cycle to this and
+# rounds its corners only where the path keeps it. The lift as configured: 0.3 m above pick and place. Placeholder: no obstacle is known.
+min_clearance_m = 0.3
 
 # Low and high bound of the values that are estimates, in the tables and units they have above.
 # `sim-cli verdicts --bands` runs the cycle with each at its low and at its high bound, one at a time,
@@ -386,6 +449,7 @@ belt.stiffness_ea_n = [4.0e5, 6.0e5]
 belt.pretension_n = [200.0, 400.0]
 belt.damping_n_s_m = [50.0, 200.0]
 belt.tooth_force_n = [1.0, 4.0]
+belt.tooth_jump_factor = [1.2, 4.8]
 friction_x.coulomb_n = [10.0, 20.0]
 friction_x.stiction_n = [15.0, 30.0]
 friction_x.viscous_n_s_m = [10.0, 40.0]
@@ -411,6 +475,10 @@ thermal.guide_time_constant_s = [1200.0, 4800.0]
 ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
 ratings.line_module_efficiency = [0.95, 0.99]
 ratings.belt_teeth_in_mesh = [6.0, 12.0]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 
 [start]
 pose = [0.1, 0.35]

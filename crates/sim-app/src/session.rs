@@ -2,7 +2,7 @@
 //! samples from a channel; it never blocks the physics, and the physics never waits for a frame.
 
 use sim_components::{Command, LimitViolation, Sim};
-use sim_core::{AxisInfo, Config, ConfigError, MachineEntry, MotorInfo, Scene, SignalInfo};
+use sim_core::{AxisInfo, Config, ConfigError, Label, MachineEntry, MotorInfo, Scene, SignalInfo};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,10 @@ pub enum Request {
     Pause(bool),
     /// Simulated seconds per real second: 1 is real time, below 1 slow motion.
     Speed(f64),
+    /// How many times larger the 3D view draws the parts' deflections (`Scene::exaggeration`).
+    Exaggeration(f64),
+    /// The 3D view shows the machine swinging in its mode (`mode_scene`) in place of the live state, which waits.
+    Mode(bool),
     Quit,
 }
 
@@ -48,6 +52,58 @@ pub const TRAIL: usize = 100_000;
 pub fn extend_trail(trail: &mut Vec<[f64; 3]>, points: &[[f64; 3]]) {
     trail.extend_from_slice(points);
     trail.drain(..trail.len().saturating_sub(TRAIL));
+}
+
+/// A point of the travelled path with what the 3D view may colour it by: where the plan had the tool at that
+/// step, in the scene, and how fast the tool went.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrailPoint {
+    pub at: [f64; 3],
+    pub planned: [f64; 3],
+    pub speed: f64,
+}
+
+/// What only the window reads, apart from `Event`s (which the model drains): the travelled path's points with
+/// their speed and plan, and whether the machine tells a mode to show.
+#[derive(Debug, Default)]
+pub struct ViewNews {
+    /// The path started anew since the last read: what the window holds of it ends.
+    pub restarted: bool,
+    pub trail: Vec<TrailPoint>,
+    pub has_mode: bool,
+}
+
+/// Swings per second of the mode in the 3D view: slowed down to about one, so that the eye can follow it.
+pub const MODE_SHOWN_HZ: f64 = 1.0;
+/// How far the mode's amplitude swings, in m, per time the view draws the deflections larger, and at most: the
+/// shape moves by it whichever of carriage and tool moves most (`Machine::mode_shape`). A few millimetres read on a
+/// machine of metres, and up to a tenth of a metre the parts still hang together.
+pub const MODE_TRAVEL: f64 = 0.004;
+pub const MODE_TRAVEL_MOST: f64 = 0.1;
+
+/// The machine at rest at its planned pose plus its mode (`Machine::mode_shape`) swinging at `MODE_SHOWN_HZ`,
+/// `seconds` after it started, with the mode's true frequency as a label by the tool. `exaggeration` scales the
+/// whole shape through its amplitude, and the scene draws it at true scale (`Scene::exaggeration` 1): the scene
+/// draws the carriage's part of the shape at true scale and only the lean larger, which would distort the shape.
+/// `None` where the machine tells no mode.
+pub fn mode_scene(sim: &Sim, exaggeration: f64, seconds: f64) -> Option<Scene> {
+    let machine = &sim.machine;
+    let pose = sim.control.planned_pos();
+    let (hz, shape) = machine.mode_shape(pose)?;
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    machine.equilibrium(pose, &mut state, &mut torque);
+    let amplitude = (MODE_TRAVEL * exaggeration).min(MODE_TRAVEL_MOST) * (std::f64::consts::TAU * MODE_SHOWN_HZ * seconds).sin();
+    state.iter_mut().zip(&shape).for_each(|(s, d)| *s += amplitude * d);
+    let mut scene = Scene { exaggeration: 1.0, ..Scene::default() };
+    machine.scene(&state, &mut scene);
+    let (mut pos, mut vel) = (vec![0.0; pose.len()], vec![0.0; pose.len()]);
+    machine.tool_state(&state, &mut pos, &mut vel);
+    (scene.tool, scene.planned) = (machine.scene_point(&pos), machine.scene_point(pose));
+    let at = scene.tool.unwrap_or_default();
+    // The live values drawn from the swinging state would show the swing, not the machine: only the mode's label.
+    scene.labels.clear();
+    scene.labels.push(Label { pos: [at[0] + 0.1, at[1], at[2]], owner_key: "ui-view-mode-label", value: hz, unit_key: "unit-hz", decimals: 1 });
+    Some(scene)
 }
 
 /// What the simulation has produced and the interface has not read yet. It is bounded, so that a window
@@ -99,13 +155,17 @@ pub struct Runner {
     trail: Option<[f64; 3]>,
     /// The travelled path still grows: its trajectory runs. Finished, it stays shown as it is.
     recording: bool,
+    /// The points of `Event::Trail` since the session thread last took them, with their speed and plan, and whether
+    /// the path started anew meanwhile (`ViewNews`).
+    pub trail_points: Vec<TrailPoint>,
+    pub trail_restarted: bool,
 }
 
 impl Runner {
     pub fn new(entry: &'static MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
         let sim = Sim::new(entry, cfg)?;
         let sample_every = (1e-3 / sim.dt).round().max(1.0) as u64;
-        Ok(Self { sim, entry, sample_every, tripped: false, trail: None, recording: false })
+        Ok(Self { sim, entry, sample_every, tripped: false, trail: None, recording: false, trail_points: Vec::new(), trail_restarted: false })
     }
 
     pub fn handle(&mut self, request: Request, events: &mut Vec<Event>) {
@@ -131,7 +191,7 @@ impl Runner {
                     Err(e) => Err((e.key(), e.detail().into())),
                 }));
             }
-            Request::Pause(_) | Request::Speed(_) | Request::Quit => {}
+            Request::Pause(_) | Request::Speed(_) | Request::Exaggeration(_) | Request::Mode(_) | Request::Quit => {}
         }
     }
 
@@ -139,9 +199,26 @@ impl Runner {
         // Nothing to end where nothing is recorded: a parameter edit on a machine that runs no path.
         if at.is_some() || self.trail.is_some() {
             events.push(Event::TrailStart(at));
+            let first = at.map(|at| self.trail_point(at));
+            self.trail_restarted = true;
+            self.trail_points.clear();
+            self.trail_points.extend(first);
         }
         self.trail = at;
         self.recording = at.is_some();
+    }
+
+    /// A point of the travelled path, with where the plan has the tool and the tool's speed now.
+    /// shortcut: the speed is the length of the tool's speed vector, which mixes units on a machine with a turning
+    /// axis; upgrade to the speed in the scene when one has such an axis.
+    fn trail_point(&self, at: [f64; 3]) -> TrailPoint {
+        let axes = self.sim.machine.axes().len();
+        let (mut pos, mut vel) = (vec![0.0; axes], vec![0.0; axes]);
+        self.sim.machine.tool_state(&self.sim.state, &mut pos, &mut vel);
+        // Against the setpoint the drives follow, after input shaping, as the cycle analysis measures tracking: the
+        // plan before shaping runs ahead of it by the shaper's delay on purpose, which is not an error.
+        let planned = self.sim.machine.scene_point(&self.sim.control.set_pos).unwrap_or(at);
+        TrailPoint { at, planned, speed: vel.iter().map(|v| v * v).sum::<f64>().sqrt() }
     }
 
     /// Runs whole base steps for `seconds` of simulated time and reports the samples.
@@ -152,6 +229,8 @@ impl Runner {
             if let (true, Some(last), Some(tool)) = (self.recording, self.trail, self.sim.tool_point()) {
                 if (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8 {
                     travelled.push(tool);
+                    let point = self.trail_point(tool);
+                    self.trail_points.push(point);
                     self.trail = Some(tool);
                 }
             }
@@ -173,6 +252,8 @@ impl Runner {
         if !travelled.is_empty() {
             events.push(Event::Trail(travelled));
         }
+        // Bounded as the path is, for a runner whose points nobody takes (the tests).
+        self.trail_points.drain(..self.trail_points.len().saturating_sub(TRAIL));
     }
 }
 
@@ -180,6 +261,7 @@ pub struct Session {
     requests: Sender<Request>,
     events: Arc<Mutex<Outbox>>,
     thread: JoinHandle<()>,
+    news: Arc<Mutex<ViewNews>>,
     pub signals: Vec<SignalInfo>,
     pub axes: Vec<AxisInfo>,
     pub motors: Vec<MotorInfo>,
@@ -193,11 +275,15 @@ impl Session {
         let (requests, inbox) = channel();
         let events = Arc::new(Mutex::new(Outbox::default()));
         let outbox = events.clone();
+        let news = Arc::new(Mutex::new(ViewNews::default()));
+        let window_news = news.clone();
         if let Ok(mut outbox) = outbox.lock() {
             outbox.push(Event::Limits(runner.sim.limit_violations.clone()));
         }
         let thread = std::thread::spawn(move || {
-            let (mut paused, mut speed, mut owed) = (false, 1.0, 0.0);
+            let (mut paused, mut speed, mut owed, mut exaggeration) = (false, 1.0, 0.0, 1.0);
+            // When the mode started showing; meanwhile the simulation waits.
+            let mut mode: Option<Instant> = None;
             let (mut last, mut last_scene) = (Instant::now(), Instant::now() - Duration::from_secs(1));
             let mut batch = Vec::new();
             loop {
@@ -207,13 +293,15 @@ impl Session {
                         Ok(Request::Quit) | Err(TryRecvError::Disconnected) => return,
                         Ok(Request::Pause(on)) => paused = on,
                         Ok(Request::Speed(factor)) => speed = factor.clamp(0.0, 100.0),
+                        Ok(Request::Exaggeration(factor)) => exaggeration = factor.clamp(1.0, 1.0e4),
+                        Ok(Request::Mode(on)) => mode = if on { mode.or(Some(Instant::now())) } else { None },
                         Ok(other) => runner.handle(other, &mut batch),
                         Err(TryRecvError::Empty) => break,
                     }
                 }
                 // The wall clock only decides how many steps are due; the core never sees it.
                 let now = Instant::now();
-                if !paused {
+                if !paused && mode.is_none() {
                     owed += (now - last).as_secs_f64() * speed;
                 }
                 last = now;
@@ -223,10 +311,26 @@ impl Session {
                 runner.advance(whole, &mut batch);
                 owed -= whole;
                 if now - last_scene > Duration::from_millis(8) {
-                    let mut scene = Scene::default();
-                    runner.sim.scene(&mut scene);
+                    let swinging = mode.and_then(|since| mode_scene(&runner.sim, exaggeration, since.elapsed().as_secs_f64()));
+                    let scene = swinging.unwrap_or_else(|| {
+                        let mut scene = Scene { exaggeration, ..Scene::default() };
+                        runner.sim.scene(&mut scene);
+                        scene.planned = runner.sim.machine.scene_point(runner.sim.control.planned_pos());
+                        scene
+                    });
                     batch.push(Event::Scene(scene));
                     last_scene = now;
+                    if let Ok(mut news) = news.lock() {
+                        news.has_mode = runner.sim.machine.mode_shape(runner.sim.control.planned_pos()).is_some();
+                    }
+                }
+                if let Ok(mut news) = news.lock() {
+                    if std::mem::take(&mut runner.trail_restarted) {
+                        (news.restarted, news.trail) = (true, Vec::new());
+                    }
+                    news.trail.append(&mut runner.trail_points);
+                    let over = news.trail.len().saturating_sub(TRAIL);
+                    news.trail.drain(..over);
                 }
                 // Held only to move the batch over: the interface never makes the physics wait for a frame.
                 let Ok(mut outbox) = outbox.lock() else { return };
@@ -235,7 +339,14 @@ impl Session {
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
-        Ok(Self { requests, events, thread, signals, axes, motors })
+        Ok(Self { requests, events, thread, news: window_news, signals, axes, motors })
+    }
+
+    /// The travelled path's points with their speed and plan since the last call, whether the path started anew
+    /// before them (`ViewNews`), and whether the machine tells a mode to show. Never waits long.
+    pub fn view_news(&self) -> ViewNews {
+        let take = |news: &mut ViewNews| ViewNews { restarted: std::mem::take(&mut news.restarted), trail: std::mem::take(&mut news.trail), has_mode: news.has_mode };
+        self.news.lock().map(|mut news| take(&mut news)).unwrap_or_default()
     }
 
     /// Everything the simulation has produced since the last call, less what `Outbox` dropped. Never waits.

@@ -20,14 +20,14 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
     // Not the fieldbus jitter: the drives' position setpoint then holds for a cycle and jumps, and the budget's losses,
     // taken once per step, miss 0.12 % of the T-gantry's supply (0.03 % at half the step, so it is the sampling, not a
     // loss left out), beyond its 0.1 %.
-    for effect in ["idlers", "cable_chain", "process_force", "belt_tooth_stiffness", "belt_material_damping", "sensor_noise", "fieldbus_delay", "part_heating"] {
+    for effect in ["idlers", "cable_chain", "process_force", "belt_tooth_stiffness", "belt_material_damping", "sensor_noise", "fieldbus_delay", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration"] {
         if everything.bool(&format!("effects.{effect}")).is_ok() {
             everything.set_text(&format!("effects.{effect} = true")).unwrap();
         }
     }
     let mut out = vec![
         ("default".to_string(), entry.config()),
-        ("rigid".into(), edited(&["effects.belt_stretch = false"])),
+        ("rigid".into(), edited(&[&format!("{} = false", ["effects.belt_stretch", "effects.joint_elasticity"].into_iter().find(|key| entry.config().bool(key).is_ok()).unwrap())])),
         ("no DC link".into(), edited(&["effects.dc_link = false"])),
         ("shared DC link".into(), edited(&["effects.shared_dc_link = true"])),
         ("every effect".into(), everything),
@@ -197,7 +197,8 @@ fn a_direct_drive_has_no_gearbox_that_warms() {
 fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
     for entry in MACHINES {
         for (name, cfg) in configs(entry) {
-            let off = analyse_cycle_with(&mut Sim::new(entry, &with(&cfg, &["effects.part_heating = false"])).unwrap(), false).unwrap();
+            // The temperature feedback warms the parts too, so both are off here.
+            let off = analyse_cycle_with(&mut Sim::new(entry, &with(&cfg, &["effects.part_heating = false", "effects.thermal_feedback = false"])).unwrap(), false).unwrap();
             let judged = verdicts(&cfg, &off).unwrap();
             assert!(off.part_rises.is_empty() && !judged.iter().any(|v| v.check.ends_with("-thermal") && v.check != "motor-thermal"), "{} {name}", entry.id);
 
@@ -265,8 +266,10 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
         assert!(!cfg.bool("effects.part_heating").unwrap());
         let thermal = |cfg: &Config| bounds(cfg).unwrap().into_iter().filter(|(path, ..)| path.starts_with("thermal.")).count();
         assert_eq!(thermal(&cfg), 0, "{}", entry.id);
-        assert_eq!(thermal(&with(&cfg, &["effects.part_heating = true"])), 4, "{}", entry.id);
-        let (_, rows) = sensitivity(entry, &cfg, &["thermal.guide_resistance_k_w".to_string()], 0.2).unwrap();
+        // A resistance and a time constant for each kind of part the machine has that warms (gearbox, guide).
+        let kinds = (entry.build)(&cfg).unwrap().thermal_parts().iter().map(|p| p.kind).collect::<std::collections::BTreeSet<_>>().len();
+        assert_eq!(thermal(&with(&cfg, &["effects.part_heating = true"])), 2 * kinds, "{}", entry.id);
+        let (_, rows) = sensitivity(entry, &cfg, &["thermal.gearbox_resistance_k_w".to_string()], 0.2).unwrap();
         assert!(rows.is_empty(), "{}", entry.id);
         // The line module's efficiency only with the regenerative supply; the DC link's discharge, which acts only
         // while the drives are disabled, never.
@@ -274,5 +277,16 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
         let regenerative = with(&cfg, &["effects.regenerative_supply = true"]);
         assert!(!named(&cfg, "ratings.line_module_efficiency") && named(&regenerative, "ratings.line_module_efficiency"), "{}", entry.id);
         assert!(!named(&regenerative, "ratings.dc_link_discharge_time_constant_s") && cfg.f64s("bounds.ratings.dc_link_discharge_time_constant_s").is_ok(), "{}", entry.id);
+        // The temperature feedback's values only with it, and with it the [thermal] values, as it warms the parts; the
+        // tooth jump factor only with the jumps.
+        let feedback = with(&cfg, &["effects.thermal_feedback = true"]);
+        let starting = |cfg: &Config, start: &str| bounds(cfg).unwrap().iter().filter(|(p, ..)| p.starts_with(start)).count();
+        let feedback_bounds = cfg.get("bounds.thermal_feedback").ok().and_then(|t| t.as_table()).map_or(0, |t| t.len());
+        assert_eq!((starting(&cfg, "thermal_feedback."), starting(&feedback, "thermal_feedback."), thermal(&feedback)), (0, feedback_bounds, 2 * kinds), "{}", entry.id);
+        assert!(feedback_bounds >= 3, "{}", entry.id);
+        // A machine without a belt has no tooth jump.
+        if cfg.bool("effects.belt_tooth_jump").is_ok() {
+            assert!(!named(&cfg, "belt.tooth_jump_factor") && named(&with(&cfg, &["effects.belt_tooth_jump = true"]), "belt.tooth_jump_factor"), "{}", entry.id);
+        }
     }
 }

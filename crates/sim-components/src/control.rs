@@ -41,6 +41,18 @@ struct Segment {
     dwell_ticks: u64,
     /// Whether the payload is attached once this segment has arrived.
     payload: bool,
+    /// With `via`: the path to the target, planned by `path::plan` where the segment starts (see `via_pieces`).
+    path: Option<Vec<Piece>>,
+}
+
+/// The path of a cycle segment through its via points (`via` in `[[cycle.segment]]`): a line to the first, a smooth
+/// curve (`Piece::Spline`) through the others, and a line from the last to the target. So the path leaves its start and
+/// arrives at its target on straight lines, and rounds the corners in between: with via points straight above the start
+/// and the target, a lift, traverse and lower without a stop. One via point alone is two lines, with a stop between.
+pub fn via_pieces(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
+    let mut pieces: Vec<Piece> = via.iter().enumerate().map(|(i, point)| if i == 0 { Piece::Line(point.clone()) } else { Piece::Spline(point.clone()) }).collect();
+    pieces.push(Piece::Line(target.to_vec()));
+    pieces
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +82,10 @@ pub struct Controller {
     torque_reserve: f64,
     /// How far a planned path may leave its lines and arcs for transition curves.
     path_tolerance: f64,
+    /// For a path timed as fast as the motors allow: the lowest and highest belt tension it may need
+    /// (`ratings.belt_min_tension_n`, `belt_max_tension_n`; unbounded where the config has none), and the share of the
+    /// room to them it may use (`profile.tension_reserve`).
+    belt_tension: [f64; 3],
     segments: Vec<Segment>,
     motion: Motion,
     /// Index of the cycle segment under way, while the cycle runs.
@@ -141,6 +157,7 @@ impl Controller {
             blend_time: 0.0,
             torque_reserve: 1.0,
             path_tolerance: 0.0,
+            belt_tension: [f64::NEG_INFINITY, f64::INFINITY, 1.0],
             segments: Vec::new(),
             motion: Motion::Idle,
             cycle: None,
@@ -266,6 +283,10 @@ impl Controller {
             return Err(ConfigError::Invalid("profile.torque_reserve".into()));
         }
         let path_tolerance = cfg.non_negative("profile.path_tolerance_m")?;
+        let tension_reserve = cfg.positive("profile.tension_reserve")?;
+        if tension_reserve > 1.0 {
+            return Err(ConfigError::Invalid("profile.tension_reserve".into()));
+        }
         let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
@@ -274,11 +295,32 @@ impl Controller {
             if !in_range(machine, &target) {
                 return Err(bad());
             }
+            let via = match segment.get("via") {
+                None => None,
+                Some(points) => {
+                    let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].via"));
+                    let points: Vec<Vec<f64>> = points.as_array().ok_or_else(bad)?.iter().map(|p| Some(p.as_array()?.iter().filter_map(number).collect())).collect::<Option<_>>().ok_or_else(bad)?;
+                    if points.is_empty() || !points.iter().all(|p| in_range(machine, p)) {
+                        return Err(bad());
+                    }
+                    Some(via_pieces(&points, &target))
+                }
+            };
             segments.push(Segment {
                 target,
                 dwell_ticks: (segment.get("dwell_s").and_then(number).filter(|d| d.is_finite() && *d >= 0.0).ok_or_else(bad)? / profile_cycle).round() as u64,
                 payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
+                path: via,
             });
+        }
+        // A path through via points has to be one the planner times, from where the segment before ends.
+        for (i, segment) in segments.iter().enumerate() {
+            let from = &segments[(i + segments.len() - 1) % segments.len()].target;
+            if let Some(pieces) = &segment.path
+                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance).map_or(true, |points| !points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)))
+            {
+                return Err(ConfigError::Invalid(format!("cycle.segment[{i}].via")));
+            }
         }
         if profile_cycle != self.profile_cycle {
             self.rescale_ticks(self.profile_cycle / profile_cycle);
@@ -290,6 +332,7 @@ impl Controller {
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
         self.blend_time = blend_time;
         (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
+        self.belt_tension = [cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY), cfg.f64("ratings.belt_max_tension_n").unwrap_or(f64::INFINITY), tension_reserve];
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) = (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
         Ok(())
     }
@@ -348,9 +391,7 @@ impl Controller {
                 }
             }
             Command::MoveTo(target) => {
-                if !in_range(machine, &target) {
-                    return Err(CommandError { key: "error-target-out-of-range" });
-                }
+                refuse_target(machine, &target)?;
                 if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
                     return Err(CommandError { key: "error-busy" });
                 }
@@ -369,9 +410,7 @@ impl Controller {
             }
             Command::Stop => self.stopping = true,
             Command::Setpoint(target) => {
-                if !in_range(machine, &target) {
-                    return Err(CommandError { key: "error-target-out-of-range" });
-                }
+                refuse_target(machine, &target)?;
                 if self.busy() {
                     return Err(CommandError { key: "error-busy" });
                 }
@@ -400,15 +439,7 @@ impl Controller {
                 if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > SETPOINT_SLACK) {
                     return Err(CommandError { key: "error-trajectory-start" });
                 }
-                // Speed at each point: the slope between its neighbours; at rest at both ends.
-                let axes = self.set_pos.len();
-                let mut speeds = vec![vec![0.0; axes]; points.len()];
-                for i in 1..points.len() - 1 {
-                    for a in 0..axes {
-                        speeds[i][a] = (points[i + 1].1[a] - points[i - 1].1[a]) / (points[i + 1].0 - points[i - 1].0);
-                    }
-                }
-                self.motion = Motion::Trajectory { points, speeds, start_tick: u64::MAX };
+                self.motion = trajectory(points);
             }
         }
         Ok(())
@@ -423,7 +454,7 @@ impl Controller {
     /// `Command::Trajectory` runs: within the axis limits, or as fast as the motors allow (see `path`).
     pub fn plan_path(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = if time_optimal {
-            path::plan_time_optimal(machine, &self.params, self.torque_reserve, &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance)
+            path::plan_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance)
         } else {
             path::plan(machine.axes(), &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance)
         }?;
@@ -442,7 +473,7 @@ impl Controller {
     pub fn path_deviation(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<f64, CommandError> {
         self.plan_path(machine, pieces, time_optimal)?;
         if time_optimal {
-            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, &self.raw_pos, pieces, self.path_tolerance)
+            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.path_tolerance)
         } else {
             path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance)
         }
@@ -649,6 +680,18 @@ impl Controller {
                     self.set_pos.copy_from_slice(&points[last].1);
                     self.set_vel.fill(0.0);
                     self.set_acc.fill(0.0);
+                    // A cycle segment's path arrives as a move does (see above): the gripper acts and the dwell starts
+                    // once the shaped setpoint is there, where the segment waits for it.
+                    if let Some(i) = self.cycle {
+                        let waits = self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
+                        let lag = if waits { self.shaper_half(machine, &self.set_pos).map_or(0.0, |half| (2.0 * half + 2.0 * self.shaper_half2()).ceil()) } else { 0.0 };
+                        self.motion = if t >= points[last].0 + lag * dt {
+                            self.payload_attached = self.segments[i].payload;
+                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
+                        } else {
+                            Motion::Trajectory { points, speeds, start_tick }
+                        };
+                    }
                 } else {
                     let i = points.partition_point(|(time, _)| *time <= t) - 1;
                     let h = points[i + 1].0 - points[i].0;
@@ -802,6 +845,9 @@ impl Controller {
             return None;
         }
         let next_index = (i + 1) % self.segments.len();
+        if self.segments[next_index].path.is_some() {
+            return None;
+        }
         let next = Move::new(&segment.target, &self.segments[next_index].target, machine.axes());
         if current.delta().iter().zip(next.delta()).any(|(a, b)| a * b < 0.0) || next.duration() == 0.0 {
             return None;
@@ -825,8 +871,27 @@ impl Controller {
         let next = (last + 1) % self.segments.len();
         self.cycle = Some(next);
         self.passes += (next == 0) as u64;
-        self.motion = Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX, tail: None };
+        // A path through via points, planned from where the plan stands; were it refused from there (the first segment,
+        // from the start pose), the straight move.
+        let planned = self.segments[next].path.as_ref().and_then(|pieces| path::plan(machine.axes(), &self.set_pos, pieces, self.profile_cycle, self.path_tolerance).ok());
+        self.motion = match planned {
+            Some(points) if points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)) => trajectory(points),
+            _ => Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX, tail: None },
+        };
     }
+}
+
+/// A path given as poses at times as the controller runs it: a cubic through them, with the speed at each point the
+/// slope between its neighbours, at rest at both ends.
+fn trajectory(points: Vec<(f64, Vec<f64>)>) -> Motion {
+    let axes = points[0].1.len();
+    let mut speeds = vec![vec![0.0; axes]; points.len()];
+    for i in 1..points.len() - 1 {
+        for a in 0..axes {
+            speeds[i][a] = (points[i + 1].1[a] - points[i - 1].1[a]) / (points[i + 1].0 - points[i - 1].0);
+        }
+    }
+    Motion::Trajectory { points, speeds, start_tick: u64::MAX }
 }
 
 pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
@@ -836,10 +901,21 @@ pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
 /// How far the setpoint of a machine at rest may be from the pose of its tool (see `Controller::hold_here`).
 const SETPOINT_SLACK: f64 = 1e-4;
 
-/// `in_range`, with every axis range wider by `slack` at both ends.
+/// `in_range`, with every axis range wider by `slack` at both ends, and the machine's own envelope too
+/// (`Machine::unreachable`).
 fn near_range(machine: &dyn Machine, target: &[f64], slack: f64) -> bool {
     let axes = machine.axes();
-    target.len() == axes.len() && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - slack && *t <= a.max + slack)
+    target.len() == axes.len() && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - slack && *t <= a.max + slack) && machine.unreachable(target, slack).is_none()
+}
+
+/// A target that a move or a setpoint cannot go to, with the reason: outside an axis range, or where the machine says
+/// it cannot reach (out of reach, outside its envelope, beyond a joint's stop), in its own words.
+fn refuse_target(machine: &dyn Machine, target: &[f64]) -> std::result::Result<(), CommandError> {
+    let axes = machine.axes();
+    if target.len() != axes.len() || !target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min && *t <= a.max) {
+        return Err(CommandError { key: "error-target-out-of-range" });
+    }
+    machine.unreachable(target, 0.0).map_or(Ok(()), |key| Err(CommandError { key }))
 }
 
 /// An axis limit that asks more of a motor than the drive allows; `key` is a translation key.

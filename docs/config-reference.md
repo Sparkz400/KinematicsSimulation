@@ -7,6 +7,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | T | [`crates/machine-t-gantry/default.toml`](../crates/machine-t-gantry/default.toml) | T-gantry, made-up mid-size machine. Placeholder values |
 | E | [`crates/machine-t-gantry/exct-30.toml`](../crates/machine-t-gantry/exct-30.toml) | T-gantry: Festo EXCT-30 with Siemens 1FK2205-4AF. Each value marked `[catalogue]` or `[estimate]` in the file |
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
+| D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
 
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
@@ -27,7 +28,7 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 - `--set path=value` and the app's parameter panel can only change values that exist, and cannot change their type. An integer is accepted where a float is expected.
 - Most physical values must be strictly positive (masses, radii, stiffnesses, cycle times, friction levels). A zero there is refused as out of range.
 - Values that may be zero must not be negative: the payload, dampings, viscous and shaft friction, backlash, belt pretension and belt mass, the gearbox's inertia, idler and cable chain values, feedforward factors, the blend time, the path tolerance, the start temperature rise.
-- `gearbox.efficiency` and `profile.torque_reserve` are above 0 and at most 1; `motor.ripple_fraction` and `profile.shaper_damping` are from 0 to below 1; `drive.no_load_speed_rad_s` is above `drive.rated_speed_rad_s`.
+- `gearbox.efficiency`, `profile.torque_reserve` and `profile.tension_reserve` are above 0 and at most 1; `motor.ripple_fraction` and `profile.shaper_damping` are from 0 to below 1; `drive.no_load_speed_rad_s` is above `drive.rated_speed_rad_s`.
 - Free in sign: forces (`process.*`, `belt.tooth_force_n`, `motor.cogging_nm`), `geometry.incline_deg`, the two drops of the Z axis, the ripple and cogging orders.
 - NaN and infinity are refused for every number. `start.pose` has one position per axis within its range, and a cycle segment's `dwell_s` is finite and not negative.
 - Every refusal names the key (`Configuration value is out of range: gearbox.backlash_rad`). Most values are checked whether or not their effect is switched on.
@@ -53,13 +54,16 @@ Parts by name from the catalogue. The catalogue values of a named part replace t
 
 | Key | In | Meaning |
 | --- | --- | --- |
-| `motor` | T E S | Article number of a motor in [`catalog/siemens/motors_s210.csv`](../catalog/siemens/motors_s210.csv), e.g. `"1FK2205-4AF"`. E names its motor; T and S name none |
-| `motor_supply` | T E S | `"230v"` or `"400v"`: the supply the motor's rated data is taken for. `"400v"` in all configs |
+| `motor` | T E S | Article number of a motor, e.g. `"1FK2205-4AF"`: for `"230v"` and `"400v"` one of [`catalog/siemens/motors_s210.csv`](../catalog/siemens/motors_s210.csv); for `"s120"` a 1FK7 or 1FT7 of `motors_s120.csv` (with its data sheet in `motors_s120_electrical.csv`) or a 1FK2 or 1FT2 of `motors_1fk2_s120.csv`, `motors_1ft2_s120.csv`. E names its motor; T and S name none |
+| `motor_supply` | T E S | `"230v"` or `"400v"`: the S210 data at that supply; `"s120"`: the motor on a SINAMICS S120 at 400 V (DC link 540 V). `"400v"` in all configs |
 | `gearbox` | T E S | A gearbox as size-frame-ratio, e.g. `"NRK070-04-5"`, from the three `gearbox_*.csv` files. None named in any config |
+| `drive` | T E S | Article number of an S210 converter ([`converters_s210.csv`](../catalog/siemens/converters_s210.csv)) or an S120 Motor Module ([`motor_modules_s120.csv`](../catalog/siemens/motor_modules_s120.csv)). Sets `ratings.drive_rated_current_a` and `drive_max_current_a`. An S210 converter also sets `dc_link_overvoltage_v` and, unless it is a 3 AC converter on the `"230v"` supply (external resistor required), `braking_resistor_continuous_w` and `_peak_w` ([`braking_s210.csv`](../catalog/siemens/braking_s210.csv)); a `braking_threshold_v` at or above its trip level becomes the midpoint between its highest line peak and the trip. An S120 Motor Module sets `dc_link_capacitance_uf` (half per axis for a Double). E names its converter, `"6SL3210-5HE11-5UF0"`; T and S name none |
+| `belt` | T E S | A belt as profile-width, e.g. `"AT5-25"`, from [`megadyne/belts.csv`](../catalog/megadyne/belts.csv) (T5, AT3, AT5, AT10, MTD3, MTD5, MTD8; a width between the standard ones is interpolated). Sets `belt.stiffness_ea_n`, `belt.mass_kg_m`, `belt.tooth_pitch_m` and, where the config has them, `ratings.belt_max_tension_n`, `belt_width_mm` and the tooth load table. None named in any config |
+| `axis` | T E S | An axis by name: `"EXCT-15"`, `"EXCT-30"`, `"EXCT-100"` ([`festo/exct.toml`](../catalog/festo/exct.toml)) or a Bahr axis as series-size, e.g. `"ELZI-40"`, `"ELZ-60S"` ([`bahr/belt_axes.csv`](../catalog/bahr/belt_axes.csv); not the XY gantries ELZU and not the DLZPVI). An X/Z gantry needs a config with `geometry.stroke_z_m`, a single axis one with `geometry.stroke_m`. Sets pulley radius, belt, teeth in mesh, the pulley's torque rating and the moved masses; keeps the strokes (an EXCT takes the shortest Z stroke offered that holds the config's) and refuses a stroke the axis does not have. None named in any config: E's numbers are those `"EXCT-30"` gives |
 
-A part by name also retunes `drive.velocity_kp_nm_s_rad`: the gain is scaled by the square root of (ratio of the inertia the motors turn) × (ratio of the rotor inertias, the gearbox's own included), new over old. The reference is the config's own numbers as the file has them before the part goes in, so a config states its gain for the rotor, gearbox and masses it has as numbers, whichever part it names. A motor by name sets `drive.bus_voltage_v` to the DC link voltage of its supply and scales `ratings.braking_threshold_v` and `ratings.dc_link_overvoltage_v` with it. The gearbox is put in before the motor, so the motor's peak torque is capped with the ratio in effect.
+The parts go in in the order axis, belt, gearbox, motor, drive. A part by name other than the drive also retunes `drive.velocity_kp_nm_s_rad`: the gain is scaled by the square root of (ratio of the inertia the motors turn) × (ratio of the rotor inertias, the gearbox's own included), new over old. The reference is the config's own numbers as the file has them before the part goes in, so a config states its gain for the rotor, gearbox and masses it has as numbers, whichever part it names. A motor by name sets `drive.bus_voltage_v` to the DC link voltage of its supply and scales `ratings.braking_threshold_v` and `ratings.dc_link_overvoltage_v` with it. The gearbox is put in before the motor, so the motor's peak torque is capped with the ratio in effect.
 
-`[parts]` is not shown in the app's parameter panel, which shows numbers only; the app's motor search sets it with the "Use" button of a row. A gain edited there is the gain for the config's own numbers; with a part named, the simulation runs with the retuned value.
+`[parts]` is not shown in the app's parameter panel, which shows numbers only; the app's part fields and the "Use" button of a row of its motor search set it. A gain edited there is the gain for the config's own numbers; with a part named, the simulation runs with the retuned value.
 
 ## `[effects]`
 
@@ -91,7 +95,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
 | `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled, in the elastic and in the rigid model |
-| `temperature` | T E S | off | Scale factors on friction and belt stiffness, set by hand in `[temperature]` |
+| `temperature` | T E S | off | Scale factors on friction and belt stiffness, set by hand in `[temperature]`; not used while `thermal_feedback` is on |
 
 **Drive and control**
 
@@ -107,7 +111,10 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `back_emf` | T E S | on | Back-EMF of the turning rotor in the winding |
 | `voltage_limit` | T E S | on | The winding voltage is limited to sqrt(3/2) times the DC link voltage |
 | `winding_heating` | T E S | on | The winding warms with its copper loss and its resistance rises with it |
-| `part_heating` | T E S | off | Each gearbox and guide warms with its loss power, as one thermal mass with the values of `[thermal]`. Only computed and shown (signals `temperature.<part>`, the thermal view, the 3D colours); nothing feeds back |
+| `part_heating` | T E S | off | Each gearbox and guide warms with its loss power, as one thermal mass with the values of `[thermal]`. Only computed and shown (signals `temperature.<part>`, the thermal view, the 3D colours), unless `thermal_feedback` is on |
+| `thermal_feedback` | T E S | off | Guide friction and gearbox losses follow the parts' temperatures, the belt's EA the ambient temperature (`[thermal_feedback]`, see the [model reference](model-reference.md#temperature-feedback)). Warms the parts as `part_heating` does, whether that is on or not. Replaces `temperature`: its hand-set factors are not used while this is on. Off by default, so that earlier results stay as they were |
+| `belt_tooth_jump` | T E S | off | Elastic model: the belt's teeth climb out of a driven pulley's grooves when the effective pull there exceeds `belt.tooth_jump_factor` · `ratings.belt_teeth_in_mesh` · pitch / radius times the slack side's tension, and the belt slides over the pulley until it falls into the next groove (a jump) or back. Signals `pulley.<motor>.tooth_jumps`, `.tooth_slip`, `power.tooth_jump`; check `belt-tooth-jump`. Needs `belt_mass`. See the [model reference](model-reference.md#belt-tooth-jump). Off by default |
+| `belt_span_vibration` | T E S | off | The first sideways mode of each free belt span, a string at its section's live tension (signals `belt.span.<i>.frequency`), against the tooth mesh and the motors' ripple and cogging (`belt.span_detuning`); check `belt-span-resonance` against `ratings.belt_span_resonance_band` at steady speed. Signals and a check only. Off by default |
 | `torque_saturation` | T E S | on | The torque constant falls towards the maximum current |
 | `drive_delay` | T E S | on | Computation delay of the current and the velocity loop, in whole cycles |
 | `dc_link` | T E S | on | A simulated DC link per drive with capacitance, braking chopper, resistor and overvoltage trip, built from `[ratings]`. The ratings of T and S are placeholders. Off, the DC link voltage stays at `drive.bus_voltage_v` and the braking checks are estimates |
@@ -159,6 +166,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `tooth_force_n` | T E S | N | Amplitude of the tooth-meshing force | estimate | `tooth_meshing` |
 | `tooth_mesh_stiffness_n_m` | T E S | N/m | Stiffness of the teeth in mesh on one driven pulley | estimate | `belt_tooth_stiffness` |
 | `damping_time_s` | T E S | s | A section damps with its stiffness times this time | estimate | `belt_material_damping` |
+| `tooth_jump_factor` | T E S | – | k of the climb-out law: the teeth jump when the effective pull exceeds k · z_m · p / r times the slack side's tension; 1 / the tangent of an effective flank angle (flank, friction and the tooth's give together). 2.4: a pulley drive with 10 of 25 teeth in mesh jumps at 1.5 times its pretension of effective pull (E, 10 of 20 teeth: 1.58), between the makers' rule of a pretension at least the effective pull and the slack side going slack at twice the pretension | estimate, bounds 1.2 to 4.8 (runs only with the effect) | `belt_tooth_jump` |
 
 ## `[friction_x]` and `[friction_z]`
 
@@ -278,7 +286,7 @@ With `effects.hard_stops`: a spring and a damper at both ends of each stroke tha
 
 ## `[temperature]`
 
-Applied only with `effects.temperature` on. A cold machine has more friction and a stiffer belt. Set by hand; nothing computes these.
+Applied only with `effects.temperature` on, and not with `effects.thermal_feedback`, which computes what these set by hand. A cold machine has more friction and a stiffer belt.
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
@@ -298,7 +306,19 @@ With `effects.part_heating`. Each gearbox and guide is one thermal mass behind a
 | `guide_time_constant_s` | T E S | s | Thermal time constant of a guide. 2400 | estimate | 1200 to 4800 |
 | `guide_max_rise_k` | T E S | K | Rated rise of a guide: 80 °C at 40 °C around | estimate (typical maker limit) | none |
 
-With `effects.part_heating` the resistances move the two thermal checks and have bands; the time constants move no verdict. Without the effect nothing depends on these values, and their bounds get no runs: `verdicts --bands` and the sensitivity leave them out.
+With `effects.part_heating` (or `thermal_feedback`, which warms the parts too) the resistances move the two thermal checks and have bands; the time constants move no verdict unless the feedback is on. Without either effect nothing depends on these values, and their bounds get no runs: `verdicts --bands` and the sensitivity leave them out.
+
+## `[thermal_feedback]`
+
+With `effects.thermal_feedback` (see the [model reference](model-reference.md#temperature-feedback)). The config's friction, efficiency and belt stiffness hold at the reference temperature; the machine stands at the ambient temperature; each gearbox and guide is warmer by its rise (`[thermal]`). Without the effect nothing depends on these values, and their bounds get no runs.
+
+| Key | In | Unit | Meaning | Source | Bounds (T S E) |
+| --- | --- | --- | --- | --- | --- |
+| `ambient_c` | T E S | °C | Temperature of the air around the machine. 20 | estimate | 10 to 40 |
+| `reference_c` | T E S | °C | Temperature at which the config's friction, gearbox efficiency and EA hold. 20, as gearbox makers quote their no-load torque at 20 °C | catalogue convention | none |
+| `viscosity_slope_k` | T E S | K | B of the lubricant's viscosity, exp(B (1/T − 1/T_ref)). 4000: a mineral oil ISO VG 68 (68 and 8.7 mm²/s at 40 and 100 °C); VG 32 gives 3470, VG 220 4730 | estimate | 3470 to 4730 |
+| `gearbox_viscous_loss_share` | T E S | – | Share of a gearbox's loss (1 − η) that is churning and bearing drag and follows the viscosity; the rest, tooth friction, stays. 0.5. No maker publishes it. In E only for a gearbox put in | estimate | 0.25 to 0.75 |
+| `belt_stiffness_coefficient_1_k` | T E S | 1/K | How much of its EA the belt loses per kelvin above the reference: the polyurethane softens, the steel cords (about 2.5e-4 per K) carry the load. 3e-4. The belt is taken at ambient | estimate | 0 to 1e-3 |
 
 ## `[axis.x]` and `[axis.z]`
 
@@ -361,17 +381,21 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `guide_max_load_n` | T E S | N | Highest load on a guide | `guide-load` | placeholder (T S), estimate (E) |
 | `guide_dynamic_load_rating_n` | T E S | N | Dynamic load rating C of the life estimate L10 = (C / P)³ · 50 km | `guide_life_km` of `analyze`; in hours `guide-life` | placeholder (T S), estimate (E) |
 | `required_life_h` | T E S | h | The life bearings, gearbox and guide are to last. 20000 h in all three, the life Siemens rates its planetary gearboxes' planet bearings for | `pulley-bearing-life`, `gearbox-life`, `guide-life` (each passes at or above it) | choice |
+| `bearing_reliability_percent` | T E S | % | Reliability of the two bearing lives: the life factor a1 of ISO 281 turns their L10 (90 %) into the life this share of bearings reaches (0.64 at 95 %, 0.25 at 99 %). 90 to 99.95; 90 in all three, which leaves the lives as they were | `pulley-bearing-life`, `gearbox-life` | choice |
 | `pulley_bearing_load_rating_n` | T E S | N | Dynamic load rating C of the bearing that takes the belt's pull on a pulley shaft, for the rating life (C / P)³ · 10⁶ / (60 n) h. T S: 8469 N, the output bearing of a Siemens NRB120 (1500 N for 30000 h at 100 r/min, Table 7-14 of the planetary gearbox configuration manual 01/2023; the NRB060 whose torques T S take would allow 340 N, less than their 600 N of pretension on the shaft). E: 9500 N for two deep-groove ball bearings of about 5.85 kN that share the pull (a pair lasts as one bearing of 1.62 C) | `pulley-bearing-life` | placeholder from the catalogue (T S); estimate (E), bounds 8000 to 12000 N |
 | `gearbox_reference_speed_rpm` | T E S | r/min | Output speed at which a planetary gearbox's planet bearings last 20000 h at the rated torque, for Siemens' life formula. 175 r/min, the NRB060 with ratio 5 (Table 7-15). A gearbox by name does not set it. In E not used: no gearbox and no `gearbox_rated_torque_nm` | `gearbox-life` | catalogue |
 | `belt_tooth_load_rpm`, `belt_tooth_load_n_cm` | T E S | r/min, N/cm | Two arrays of the same length, speeds rising: the specific tooth load the belt's teeth allow per cm of width and tooth in mesh, at the pulley's speed; interpolated, held beyond the ends. Megadyne's table for open-ended AT5 (MEGALINEAR handbook 02.2026, page 52). Not in the parameter panel (arrays) | `belt-tooth-load` | catalogue (E); placeholder (T S) |
 | `belt_width_mm` | T E S | mm | Belt width. E: 30 mm (Festo); T S: 25 mm | `belt-tooth-load` | catalogue (E), placeholder (T S) |
 | `belt_service_factor` | T E S | – | Factor on the effective pull at the pulley. 1.4, Megadyne's factor for low shock loads (Table 4 of the handbook) | `belt-tooth-load` | choice |
-| `belt_teeth_in_mesh` | T E S | – | Teeth in mesh on a driven pulley; at most 12 count, as the handbook says. 10 in all three (half of the EXCT-30's 20-tooth pulley) | `belt-tooth-load` | estimate, bounds 6 to 12 (T S), 7 to 12 (E) |
+| `belt_teeth_in_mesh` | T E S | – | Teeth in mesh on a driven pulley; at most 12 count, as the handbook says. 10 in all three (half of the EXCT-30's 20-tooth pulley). With `effects.belt_tooth_jump` also z_m of the climb-out law (see `belt.tooth_jump_factor`) | `belt-tooth-load` | estimate, bounds 6 to 12 (T S), 7 to 12 (E) |
+| `drive_rated_current_a` | T E S | A | Rated output current of the drive, against which the RMS motor current of the cycle is judged. A drive by name sets it. E: 5 A, its converter 6SL3210-5HE11-5UF0; T S: 3 A, the S210 converter 6SL3210-5HE11-0UF0, which carries the placeholder motor's rated current (2.8 A) | `drive-current` | catalogue (E), placeholder (T S) |
+| `drive_max_current_a` | T E S | A | Maximum output current of the drive, against which the peak motor current is judged. The drive's current limit is not simulated. E: 19 A; T S: 10.9 A (above the placeholder motor's 9.5 A) | `drive-peak-current` | catalogue (E), placeholder (T S) |
+| `belt_span_resonance_band` | T E S | share | With `effects.belt_span_vibration`: how close a span's first sideways mode may come to an excitation of the drive at steady speed, as a share of the mode. 0.1: belt makers ask to keep the two apart without a figure; 10 % is the separation usually kept from a resonance | `belt-span-resonance` (passes at or above it) | estimate, a limit, not bounded |
 | `dc_link_capacitance_uf` | T E S | µF | DC link capacitance of one drive | `dc-link-energy` | placeholder (T S); estimate from S120 data (E) |
 | `braking_threshold_v` | T E S | V | DC link voltage at which the chopper switches the braking resistor in. T S: 224.65 V. A motor by name scales it with the DC link voltage | `dc-link-energy` | placeholder (T S); estimate (E) |
-| `braking_resistor_continuous_w` | T E S | W | Continuous power of the braking resistor | `braking-resistor-continuous` | placeholder (T S); estimate (E) |
-| `braking_resistor_peak_w` | T E S | W | Peak power of the braking resistor. The simulated resistor never takes more | `braking-resistor-peak` | placeholder (T S); estimate (E) |
-| `dc_link_overvoltage_v` | T E S | V | DC link voltage at which the drive trips. T S: 257.6 V. A motor by name scales it with the DC link voltage | `dc-link-overvoltage` (only with `effects.dc_link`) | placeholder (T S); estimate (E) |
+| `braking_resistor_continuous_w` | T E S | W | Continuous power of the braking resistor. A drive by name sets it (S210) | `braking-resistor-continuous` | placeholder (T S); catalogue (E, 100 W, its converter's internal resistor) |
+| `braking_resistor_peak_w` | T E S | W | Peak power of the braking resistor. The simulated resistor never takes more. A drive by name sets it (S210) | `braking-resistor-peak` | placeholder (T S); catalogue (E, 5.7 kW) |
+| `dc_link_overvoltage_v` | T E S | V | DC link voltage at which the drive trips. T S: 257.6 V. A motor by name scales it with the DC link voltage; an S210 converter by name sets its trip level (410 V on 1 AC, 820 V on 3 AC) | `dc-link-overvoltage` (only with `effects.dc_link`) | placeholder (T S); catalogue (E, 820 V) |
 | `dc_link_discharge_time_constant_s` | T E S | s | With `effects.dc_link`: time constant R C with which a disabled drive's DC link discharges through its bleeder and the drive's own consumption, down to the bus level the rectifier holds. 130 s in all three: Siemens asks to wait 5 minutes after switching off for the DC link to discharge, taken as 600 V falling to 60 V, 300 s / ln 10. Required with `effects.dc_link`. No cycle uses it, so its bounds get no runs | none | estimate, bounds 30 to 300 s |
 | `line_module_rated_power_w` | T E S | W | With `effects.regenerative_supply`: rated power of the line module. 16 kW, the smallest S120 Active Line Module 6SL3130-7TE21-6AA4 in [`line_modules_s120.csv`](../catalog/siemens/line_modules_s120.csv) | `line-module-continuous`: the mean power through it, drawn and fed back | catalogue |
 | `line_module_max_power_w` | T E S | W | With `effects.regenerative_supply`: the most it feeds back; the simulated line module never feeds back more. 35 kW, the same module's maximum power. Required with the effect | `line-module-peak`: the highest power through it either way | catalogue |
@@ -393,6 +417,8 @@ The DC link ratings of T and S are placeholders for the drive those configs were
 | `shaper2_frequency_hz` | T E S | Hz | A second resonance: a second ZVD shaper at this frequency is convolved with the first, so that both are suppressed; each move then takes both periods longer. Not negative; 0 for none (T S). E: 17.5 Hz, the peak of the tool's response, so that the worst corner of the bounds passes `settling` (0.095 mm against 0.115 mm with the 25 Hz shaper alone). It does not follow the pose | measurement (`sim-cli sweep`), or the machine's own figure | `input_shaping` |
 | `shaper2_damping` | T E S | fraction | Damping ratio of the second resonance. From 0 to below 1 | estimate, measurement | `input_shaping`, with `shaper2_frequency_hz` above 0 |
 | `torque_reserve` | T E S | fraction | Share of the torque-speed curve a time-optimal path may use. Above 0, at most 1 | choice | `--time-optimal` |
+| `tension_reserve` | T E S | fraction | Share of the room between the belt tension that holds the tool and `ratings.belt_max_tension_n` / `belt_min_tension_n` that a time-optimal path may use; the rest is for friction and belt vibration, which the plan's rigid model leaves out (on the default T-gantry the full model's peak tension was 15 to 70 N above the rigid one at jerks of 300 to 2000 m/s³). Above 0, at most 1; 0.8 in all three files. Without a tension rating the belt is no limit of the plan | choice (E: estimate) | `--time-optimal` |
+| `min_clearance_m` | T E S | m | For `sim-cli optimise` and the app's optimiser: how far the tool has to stay beyond the farther of pick and place (along the last axis, the side the lift goes to) while it traverses between them. The optimiser lowers each lift, traverse and lower of the cycle to this, and rounds its corners through a via point only where the planned path keeps it (less the path tolerance). Not negative. T 0.3 and E 0.17: the lifts as configured (no obstacle is known); S 0 (no lift) | choice, or the height of an obstacle | `optimise` |
 | `path_tolerance_m` | T E S | m | How far a planned path may leave the lines, arcs and splines of its file, so that transition curves can take it from a line into an arc at speed, and a spline's end can be eased to the curvature of the line or arc it meets. The deviation is L² / (24 r) for curves of length L at an arc of radius r, 0.01728 dk l² for a spline eased over l against a step dk of the curvature, and is reported. Not negative; 0 (in all three files) plans the path as given | choice | `--path`, and the app's Path |
 
 ## `[bounds]`
@@ -406,9 +432,9 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 
 | Config | Bounded values | What is bounded | What is not |
 | --- | --- | --- | --- |
-| T | 29 | Belt stiffness, pretension, damping, tooth force; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values; the thermal resistances and time constants of `[thermal]`; the DC link's discharge time constant and the line module's efficiency; the belt's teeth in mesh | Masses, inertias, backlash; values of effects that are off by default, but for `[thermal]`; the shape of the friction curve (Stribeck speed, bristles, preload); the rated rises of `[thermal]` |
-| S | 21 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
-| E | 69 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them) and the thermal resistances and time constants | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]` |
+| T | 34 | Belt stiffness, pretension, damping, tooth force, tooth jump factor; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values; the thermal resistances and time constants of `[thermal]`; the four estimates of `[thermal_feedback]`; the DC link's discharge time constant and the line module's efficiency; the belt's teeth in mesh | Masses, inertias, backlash; values of effects that are off by default, but for `[thermal]`, `[thermal_feedback]` and the tooth jump factor; the shape of the friction curve (Stribeck speed, bristles, preload); the rated rises of `[thermal]`; the reference temperature; the span resonance band (a limit) |
+| S | 26 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
+| E | 74 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Keys with bounds in one config only:
 
@@ -422,14 +448,81 @@ Keys with bounds in one config only:
 | --- | --- | --- | --- |
 | `pose` | T E S | m | Tool pose the simulation starts at, at rest: one position per axis. T: `[0.1, 0.35]`, E: `[0.1, 0.2]`, S: `[0.1]`. A path, a trajectory and a replayed trace have to start here |
 
+## Delta picker D3
+
+The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml)) has the tables every machine has as T and S have them: `[sim]`, `[parts]`, `[motor]`, `[gearbox]`, `[thermal]` (gearbox values only), `[thermal_feedback]`, `[drive]`, `[ratings]` (without the belt, pulley and guide ratings), `[profile]`, `[bounds]`, `[start]`, `[[cycle.segment]]`, and the effects of the drives and the controller. It has no belt, guide, pulley, frame, idler, cable chain, process force or `[temperature]`. Its own keys:
+
+`[effects]`
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `joint_elasticity` | The gearboxes twist (stiffness, damping, backlash): motor and arm are two bodies per joint. Off: the rigid reference model (the switch that `belt_stretch` is on the belt machines) | true |
+| `joint_friction` | Friction in the arms' joints at the base, `[joint]` | true |
+| `hard_stops` | The stops at the ends of the arms' angle range, `[joint]` | true |
+| `gravity`, `payload`, `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `holding_brake` | As on the other machines | true |
+
+`[geometry]` (all estimates, bounded)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `base_radius_m` | m | Centre of the base to a shoulder axis, R | 0.2 |
+| `platform_radius_m` | m | Centre of the platform to a forearm pair's centre, r. The equations use e = R − r | 0.05 |
+| `upper_arm_m` | m | Upper arm, shoulder axis to elbow, L_a | 0.4 |
+| `forearm_m` | m | Forearm, elbow to platform (the parallelogram's centre line), L_b. Longer than the upper arm | 0.95 |
+| `forearm_spacing_m` | m | Distance of the two rods of a pair; for the 3D view only | 0.1 |
+
+`[workspace]`
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `radius_m` | m | Radius of the working cylinder; also the x and y axis ranges ±radius | 0.6, catalogue (Autonox: Ø1200) |
+| `top_z_m` | m | Height of its top, negative below the shoulder plane; the upper end of the z axis range | −0.675, estimate (the bottom sphere's centre on the shoulder plane) |
+| `height_edge_m` | m | Its height at the edge | 0.2, catalogue |
+| `height_centre_m` | m | Its height at the centre, at least the edge's: the bottom is a sphere through both; the lower end of the z axis range is top less this | 0.386, catalogue (Autonox: approx. 386, sphere R1060.74) |
+| `max_condition_number` | – | A target whose Jacobian has a higher condition number is refused (`error-delta-singularity`) | 10, estimate |
+
+`[mass]` (all estimates but the payload, bounded)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `upper_arm_kg` | kg | An upper arm without the elbow block | 0.9 |
+| `upper_arm_cg_m` | m | Its centre of mass from the shoulder axis | 0.2 |
+| `upper_arm_inertia_kgm2` | kg m² | Its inertia about the shoulder axis (uniform tube: m L²/3) | 0.048 |
+| `elbow_kg` | kg | The elbow block with its ball studs, at the arm's end | 0.3 |
+| `forearm_pair_kg` | kg | A pair of forearm rods with their ball cups | 0.5 |
+| `forearm_elbow_share` | share | The share of a pair's mass counted at the elbow, the rest at the platform (0 to 1). 2/3 matches the rod's inertia about its end (Codourey, Olsson) | 0.6667 |
+| `platform_kg` | kg | The platform with its flange | 1.2 |
+| `payload_kg` | kg | Payload, with `effects.payload` | 3.0, catalogue (Autonox rated payload) |
+
+`[joint]` (read by the rotary joint component; estimates)
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `friction_coulomb_nm` | N m | Coulomb friction of an arm's joint, at the arm, with `effects.joint_friction` | 0.3 |
+| `friction_viscous_nm_s_rad` | N m s/rad | Viscous friction of the joint | 0.05 |
+| `friction_smoothing_rad_s` | rad/s | The Coulomb step is smoothed with tanh over this speed | 0.01 |
+| `min_angle_deg`, `max_angle_deg` | ° | The stops: arm angle, 0 horizontal and positive down. A target that asks an arm beyond them is refused (`error-delta-joint-stop`); with `effects.hard_stops` a spring and damper act beyond them | −55, 95 |
+| `stop_stiffness_nm_rad`, `stop_damping_nm_s_rad` | N m/rad, N m s/rad | The stops' spring and damper | 2e4, 20 |
+
+`[axis.x]`, `[axis.y]`, `[axis.z]`: the tool's speed, acceleration and jerk limits along x, y and z, as for the other machines' axes: 3 m/s, 50 m/s², 2500 m/s³ (estimates; Autonox publishes none).
+
+`[ratings]`: one more rating, judged on any machine that reports the signal `kinematics.condition`:
+
+| Key | Unit | Meaning | Judged by | Value |
+| --- | --- | --- | --- | --- |
+| `max_condition_number` | – | The highest condition number of the Jacobian the cycle may reach | `singularity` | 5, estimate (a design rule; the working range has up to 3.6) |
+
+D's values of the shared tables: motor 1FK2105-4AF at 400 V (catalogue: rotor 1.7 kg cm², 1.07527 N m/A, 15 N m peak, 4.6 N m rated at 3000 r/min, 18 A and 4.35 A, 37 min; winding R and L estimates), gearbox Siemens NRB080-05-20 (catalogue: ratio 20, 96 %, 35752.6 N m/rad, 0.406 kg cm² at the input; its 9 arcmin backlash is not taken, 3 arcmin estimated, see the file), converter 6SL3210-5HE11-5UF0 (5 A, 19 A), DC link and braking estimates as the EXCT-30's, `settling_tolerance_m` 0.5 mm (an estimate of the positioning accuracy of the class, Festo EXPT ±0.5 mm: the gearboxes' sag under the platform's weight puts the tool 0.33 mm off at the pick), `gearbox_reference_speed_rpm` 100 (estimate), the velocity loop 0.25 N m s/rad, 0.03 s with 0.1 ms filters (tuned with `sim-cli margins delta-d3 --bands`). Its cycle is the Adept cycle 25/305/25 mm with stops at the corners and 35 ms gripper dwells, one pass = one place and one pick. The suite's loss-free configs (`suite_configs`) set `workspace.top_z_m` to −0.85, see the [model reference](model-reference.md#delta-picker-d3).
+
 ## `[[cycle.segment]]`
 
-The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited with `--set` or in the app.
+The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited in the parameter panel; `--set "cycle.segment = [{...}, ...]"` replaces it whole (TOML inline tables), and so does "Apply" of the app's optimiser where it changed the cycle's lifts.
 
 | Key | Unit | Meaning |
 | --- | --- | --- |
 | `target` | m | Tool pose to move to, one position per axis, inside the strokes |
 | `dwell_s` | s | Time to stay there. Rounded to whole profile cycles. With input shaping the dwell starts when the shaped setpoint has arrived |
 | `payload` | true/false | State of the gripper once the segment has arrived (with input shaping: once the shaped setpoint has): `true` picks up or keeps the payload, `false` releases it |
+| `via` | m | Optional, in no shipped file. Via points, each one position per axis inside the strokes: the segment then runs a path planned within the axis limits (`path::plan`, with the transition curves of `profile.path_tolerance_m`) instead of the straight move: a line to the first via point, a smooth curve (spline) through the others, and a line from the last to `target`. With via points straight above pick and place and one between, a lift, traverse and lower without a stop; the optimiser writes such segments. One via point is two lines with a stop between. The path is planned from the segment before's target when the config is read, and refused (`cycle.segment[i].via`) where it cannot be planned or leaves the strokes. A segment with via points does not blend (`corner_blending`) with the one before. The first segment of a run starts from the start pose; were its path refused from there, it runs the straight move |
 
 T and E: lower, dwell (grip), lift, traverse, lower, dwell (release), lift, traverse back; six segments. S: a shuttle between x = 0.9 and x = 0.1 with a dwell of 0.1 s at each end; two segments.

@@ -4322,8 +4322,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-delta-d3"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "machine-single-axis"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4331,7 +4339,7 @@ dependencies = [
 
 [[package]]
 name = "machine-t-gantry"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -5885,7 +5893,7 @@ dependencies = [
 
 [[package]]
 name = "sim-app"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -5900,7 +5908,7 @@ dependencies = [
 
 [[package]]
 name = "sim-cli"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -5910,7 +5918,7 @@ dependencies = [
 
 [[package]]
 name = "sim-components"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "sim-core",
  "toml",
@@ -5918,14 +5926,14 @@ dependencies = [
 
 [[package]]
 name = "sim-core"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "toml",
 ]
 
 [[package]]
 name = "sim-fmi"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -5934,8 +5942,9 @@ dependencies = [
 
 [[package]]
 name = "sim-machines"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
+ "machine-delta-d3",
  "machine-single-axis",
  "machine-t-gantry",
  "sim-components",
@@ -5945,7 +5954,7 @@ dependencies = [
 
 [[package]]
 name = "sim-opcua"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-opcua",
  "sim-components",

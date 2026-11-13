@@ -108,6 +108,11 @@ pub trait Machine: Send {
     fn motor_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]);
     /// Motor torques from the rigid model for a tool pose and acceleration, including gravity.
     fn feedforward_torque(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut [f64]);
+    /// The tension of each belt section (N, in the order of `belt_sections`) that the loss-free rigid model of
+    /// `feedforward_torque` gives at a tool pose and acceleration: what the belt has to pull on the moved masses (not
+    /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the
+    /// acceleration. Appends nothing where the machine has no belt sections to tell.
+    fn rigid_tensions(&self, _tool_pos: &[f64], _tool_acc: &[f64], _out: &mut Vec<f64>) {}
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);
@@ -115,10 +120,32 @@ pub trait Machine: Send {
     fn set_dwelling(&mut self, _dwelling: bool) {}
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
+    /// Called after every base step, for what happens at once and not by integration (a belt tooth that jumps):
+    /// the machine may change `state` and must report what that took out of its energy among its loss powers
+    /// over this step of `dt` seconds, so that the energy budget closes.
+    fn after_step(&mut self, _state: &mut [f64], _dt: f64) {}
+    /// With effects.thermal_feedback: the temperature rise (K) of each part of `thermal_parts`, in that order, for
+    /// the friction and losses that change with it.
+    fn set_part_temperatures(&mut self, _rises: &[f64]) {}
 
     /// The lowest structural resonance at a tool pose, for a controller that sets its input shaper by it.
     /// `None` where the machine has none to tell.
     fn resonance_hz(&self, _tool_pose: &[f64]) -> Option<f64> {
+        None
+    }
+    /// The mode `resonance_hz` reports at a tool pose: its frequency in Hz and its shape, a direction in the state
+    /// (as long as it, positions only, rates zero). The equilibrium at that pose plus a small amplitude times the
+    /// shape, drawn with `scene`, shows how the machine moves in that mode; one unit of amplitude moves the tool by
+    /// 1 m along its first axis. `None` where the machine tells no resonance.
+    fn mode_shape(&self, _tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
+        None
+    }
+
+    /// Why a tool pose within the axis ranges cannot be gone to, as a translation key: out of reach of the
+    /// kinematics, outside the working envelope, beyond a joint's stop. `slack` (m) widens the envelope at its
+    /// edges, as it widens the axis ranges for a setpoint at rest. `None` where it can; machines whose workspace is
+    /// the box of their axis ranges keep this default.
+    fn unreachable(&self, _tool_pose: &[f64], _slack: f64) -> Option<&'static str> {
         None
     }
 

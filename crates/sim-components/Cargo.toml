@@ -2,6 +2,7 @@
 name = "sim-components"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 sim-core.workspace = true

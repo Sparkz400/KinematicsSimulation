@@ -1,0 +1,29 @@
+<!-- The Windows installer, built by tools/package.ps1 with WiX 5 from the staged release folder (-d Stage=...).
+     Per machine, into Program Files; a Start menu entry for the app; bin/ on the system PATH for sim-cli. Unsigned. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- The UpgradeCode never changes: a newer version replaces an older one. -->
+  <Package Name="Kinematics Simulation" Manufacturer="Kinematics Simulation" Version="$(Version)"
+           UpgradeCode="6B0F2D7E-3C51-4F7A-9E0B-8D4A2C1F5E63" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kinematics Simulation" />
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <Files Include="$(Stage)\**" Directory="INSTALLFOLDER" />
+
+      <Component Id="StartMenu" Directory="ProgramMenuFolder">
+        <Shortcut Id="AppShortcut" Name="Kinematics Simulation" Target="[INSTALLFOLDER]bin\sim-app.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="Software\Kinematics Simulation" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="Path" Directory="INSTALLFOLDER">
+        <Environment Id="Path" Name="PATH" Value="[INSTALLFOLDER]bin" Part="last" Action="set" System="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Kinematics Simulation" Name="Path" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

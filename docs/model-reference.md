@@ -5,7 +5,7 @@ The equations the simulator solves, taken from the code and its comments. Each s
 - [Structure of one time step](#structure-of-one-time-step)
 - [Integrator](#integrator)
 - Components: [belt](#belt-sections), [guide friction](#guide-friction-lugre), [motor shaft](#motor-shaft-friction-ripple-cogging), [tooth meshing](#tooth-meshing), [gearbox](#gearbox), [hard stops](#hard-stops), [drive and motor](#drive-and-motor)
-- Machines: [T-gantry](#t-gantry), [single axis](#single-axis)
+- Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3)
 - Motion: [controller](#motion-controller), [profile generator](#profile-generator), [corner blending](#corner-blending), [path planners](#path-planners), [input shaper](#input-shaper)
 - [Analysis quantities](#analysis-quantities), [verdicts](#verdicts), [other analyses](#other-analyses), [effect views](#effect-views), [fit](#fit)
 - [Known shortcuts](#known-shortcuts), [other simplifications](#other-simplifications)
@@ -81,6 +81,48 @@ Stretched belt carries its strain energy along when it passes a pulley, and `mat
 **At rest.** The unstretched belt per section at an equilibrium is found by bisection from two conditions: the tension differences the load needs, and the total amount of belt, which is fixed.
 
 Not modelled: sideways (string) vibration of the free spans, tooth contact, wear, a belt mass that moves with the load.
+
+## Belt tooth jump
+
+Source: `ToothJump` in [`mech.rs`](../crates/sim-components/src/mech.rs); `effects.belt_tooth_jump`, off by default, elastic model only (the rigid model has no tensions). Needs `effects.belt_mass`: the belt's mass is what slides.
+
+**Climbing out.** At a driven pulley with the sections a and b on either side (tensions T_a, T_b), the teeth climb out of the grooves when
+
+```text
+|T_a − T_b| > c · max(0, min(T_a, T_b))        c = k · z_m · p / r
+```
+
+Each of the z_m teeth in mesh (`ratings.belt_teeth_in_mesh`) is held in its groove by the tension's radial pull over one pitch, T · p / r, and pushed out by its share of the effective pull times the tangent of an effective flank angle; k = 1 / that tangent is `belt.tooth_jump_factor` (an estimate, 2.4, bounds 1.2 to 4.8: flank, friction and the tooth's give together, not derived from the tooth profile). Summed over the teeth the pull the pulley takes is proportional to the slack side's tension, as the torque at which timing belts jump is reported to rise with their installation tension (no maker's chart was read for the factor). On a pulley drive with both sides at P ± F/2 the teeth jump at F = c P / (1 + c/2): with 10 of 25 teeth in mesh, c = 2.4 · 10 · 5 mm / 20 mm = 6 and F = 1.5 P, between the makers' rule of a pretension at least the effective pull (slack side at P/2) and the slack side going slack at 2 P. With the EXCT-30's 10 of 20 teeth c = 7.54 and F = 1.58 P.
+
+**The jump.** Per driven pulley the elastic state carries six more entries (`JUMP_STATES`): the belt's slip over the pulley u (m of belt), its rate w, the direction of a jump under way (0 while in mesh), u where it began, the jumps counted and the ridge force F_s. The sections see the pulley angle plus u / r, so a slip of u feeds u · r_mat / r of material from one section into the other. While the teeth are out (decided after each base step, `Machine::after_step`):
+
+```text
+m · (r · d²a/dt² + d²u/dt²) = F − F_s · sin(2π d / p)     belt, F = belt torque / r its pull towards +u, d = u − u_start
+J' · d²a/dt² = gear + r · F_s · sin(2π d / p) + mesh       pulley, J' = J_pulley − m r²
+F_s = c · min(T_a, T_b) at the moment it climbed out, held over the jump
+```
+
+m is the belt's mass that the machine lumps on that pulley (single axis: the whole belt; T-gantry: half of it on each). The belt moves on its own and the pulley holds it back with a ridge force, the potential F_s p / (2π) (1 − cos(2π d / p)); with its kinetic energy ½ m ((v + w)² − v²) on top of what the pulley's lumped inertia counts (v = r da/dt), the energy is exact. Where the belt crosses the next groove (|d| = p) the teeth fall in: u is set to u_start ± p, the jump is counted (`pulley.<motor>.tooth_jumps`), and belt and pulley run on at the speed that keeps their momentum (a plastic impact). Where it slides back over the groove it left, it falls in there, uncounted. Where the pull settles below the ridge the belt stays half out, carrying the load through the ridge. What changes the energy at once (the start, the landing) is reported as `power.tooth_jump` over that base step, so the energy budget closes; a jump is found at the end of a step and lands up to one step late, so in a run that ratchets the budget's remainder grows (0.33 % at the base step, 0.21 % at half, 0.14 % at a quarter, on the single axis at 90 N of pretension; `jumping_teeth_fail_the_check_and_close_the_energy_budget`).
+
+Signals: `pulley.<motor>.tooth_jumps` (count) and `pulley.<motor>.tooth_slip` (u, m), `power.tooth_jump` (W). Verdict `belt-tooth-jump`: the jumps during the measured pass, which must be 0.
+
+Assumptions: one jump law per pulley with the configured teeth in mesh, not the wrap the pose gives; no radial motion of the belt, so the energy with which the tension presses a tooth back into its groove is not modelled (a tooth that climbs out and falls back takes nothing); the teeth themselves are not hurt (their load is `belt-tooth-load`).
+
+## Sideways vibration of the belt spans
+
+Source: `span_frequency`, `span_detuning`, `drive_excitations` in [`mech.rs`](../crates/sim-components/src/mech.rs); each machine's `span_signals`; `effects.belt_span_vibration`, off by default. Signals and a check only: nothing acts back on the motion.
+
+Each free span between two of the points that guide the belt (pulleys, idlers, clamps) is a string at the live tension of its section:
+
+```text
+f1 = sqrt(T / μ) / (2 L)          μ = belt.mass_kg_m, L the span's length, T its section's tension; 0 when slack
+```
+
+The belt's own speed would lower it by 1 − v² / c² (c = sqrt(T / μ), 55 m/s at 300 N and 0.1 kg/m), below 0.2 % here, left out. The drives excite the belt at the tooth mesh |v_pulley| / p and, with `effects.torque_ripple`, at the motors' ripple and cogging orders times their turns per second. `belt.span_detuning` is the smallest min |f1 − f_e| / f1 over spans and excitations, capped at 1 (a span far from every excitation, a slack span or a machine at rest). Spans: single axis 3 (motor pulley to carriage, motor pulley to idler, idler to carriage), T-gantry 8 (clamp to carriage idler, carriage idler to motor A, motor A to the lower left carriage idler, down to the Z-bottom idler and up again, to motor B, motor B to the carriage idler, carriage idler to the clamp), their lengths those of the sections' geometry without the teeth in mesh.
+
+Verdict `belt-span-resonance`: the lowest `belt.span_detuning` while the axes run at a steady speed (every acceleration setpoint 0, some speed setpoint not), sampled once per millisecond, must stay at or above `ratings.belt_span_resonance_band` (0.1). A sweep through a resonance while speeding up passes in moments; a cruise on one does not. On a linear axis the spans' lengths change during a cruise, so their frequencies sweep, and a sweep across an excitation in a cruise fails the check as well: it is slow, the ±10 % band of a 200 Hz span 0.5 m long takes 0.2 L / v = 0.1 s at 1 m/s, 20 periods, enough for a lightly damped span to ring up. The default T-gantry fails it so (detuning 5e-6 when its Z axis runs at 0.4 m/s: the tooth mesh at 0.4 m / 5 mm = 80 Hz meets spans 4 and 5, down to and up from the Z-bottom idler, whose frequency changes with z). Belt makers ask to keep a span's natural frequency away from the drive's excitations without a figure; 10 % is the separation usually kept from a resonance (an estimate).
+
+Not built: the amplitude. A lumped first-mode oscillator driven by the tension's fluctuation would need a damping of the sideways motion that nobody publishes and a forcing term (tension times the span's curvature) that has no measurement to be checked against; the frequency and the check need neither. Only the first mode; its harmonics n f1 are not checked.
 
 ## Guide friction (LuGre)
 
@@ -158,7 +200,7 @@ engaged  = twist − clamp(twist, −β/2, +β/2)            twist beyond the de
 - **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / η. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
 - **At rest** under an output torque the twist is τ / k_g + β/2 on the matching side.
 
-Assumptions: one constant efficiency (the catalogue's full-load value), no speed- or load-dependent loss, no no-load torque, constant stiffness, backlash as a hard dead zone. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+Assumptions: one constant efficiency (the catalogue's full-load value; with `effects.thermal_feedback` it follows the gearbox's temperature, see [temperature feedback](#temperature-feedback)), no speed- or load-dependent loss, no no-load torque, constant stiffness, backlash as a hard dead zone. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
 
 ## Hard stops
 
@@ -546,6 +588,66 @@ Signals: `belt.1/2.tension`, `axis.x.belt_stretch` (x − r · a), `axis.x.frict
 
 Not on the single axis: frame mode, leaning tool, idler inertia and friction, a resonance for the input shaper. In the rigid model, as in the elastic one, disabled drives leave it to the holding brake.
 
+## Delta picker D3
+
+Source: [`machine-delta-d3/src/lib.rs`](../crates/machine-delta-d3/src/lib.rs), with the joint of [`joint.rs`](../crates/sim-components/src/joint.rs). Equations after the research note of 13 November 2026: Williams, "The Delta Parallel Robot: Kinematics Solutions" (Ohio University, 2016), for the kinematics; Codourey (IJRR 17(12), 1998) as used by Olsson ("Modeling and control of a Delta-3 robot", Lund 2009) for the dynamics.
+
+Three arms at the azimuths φ_i = 0°, 120°, 240° turn about horizontal axes at the base radius R; each carries a parallelogram of two forearms down to a platform of radius r, which stays level. The tool is the platform's centre p = (x, y, z), in a frame with its origin at the centre of the shoulder plane and z up (the platform works below 0). θ_i is the arm angle, 0 horizontal and positive downwards. Because the platform never turns, its offset folds into the base: e = R − r.
+
+### Kinematics
+
+```text
+elbow       c_i(θ) = R_z(φ_i) · (e + L_a cos θ, 0, −L_a sin θ)
+constraint  |p − c_i|² = L_b²                                  (the parallelogram's centre line)
+inverse     (x′, y′, z) = R_z(−φ_i) p,   A = −2 L_a (x′ − e),   B = 2 L_a z,   C = (x′ − e)² + y′² + z² + L_a² − L_b²
+            A cos θ + B sin θ + C = 0  →  θ = 2 atan( (−B − sqrt(A² + B² − C²)) / (C − A) )     (elbow out)
+forward     the point at L_b from all three elbows (trilateration), the lower of the two
+Jacobian    J_x ṗ = J_q θ̇,   J_x rows u_i = p − c_i,   J_q = diag(u_i · ∂c_i/∂θ_i),   ṗ = J θ̇,   J = J_x⁻¹ J_q
+            J_x p̈ = J_q θ̈ + w,   w_i = θ̇_i² (u_i · ∂²c_i/∂θ²) − |ṗ − ∂c_i/∂θ θ̇_i|²
+```
+
+No solution of the inverse (A² + B² < C²): out of reach. The forward kinematics fails where the elbows cannot be joined (z² < 0) and at a direct singularity (J_x singular). The condition number of J (2-norm: the square root of the largest over the smallest eigenvalue of JᵀJ, by the closed form for a symmetric 3 × 3) is the signal `kinematics.condition`, and the check `singularity` judges its highest value in the cycle against `ratings.max_condition_number`.
+
+**Working range** (`Machine::unreachable`): a cylinder of `workspace.radius_m` below `workspace.top_z_m`, its bottom a sphere through the edge at `height_edge_m` and the centre at `height_centre_m` below the top (Autonox's drawing: R 1060.74 mm = (600² + 186²) / (2 · 186)). The axis ranges are the box around it. A target outside the cylinder or the sphere, out of reach, with an arm beyond `joint.min_angle_deg` / `max_angle_deg`, or with a condition number above `workspace.max_condition_number` is refused with its reason (`error-delta-outside-envelope`, `-out-of-reach`, `-joint-stop`, `-singularity`). The controller checks moves, setpoints, cycle targets and every pose of a planned path against it; a straight move between two poses in the range stays in it (the range is convex). The standard suite's round trip runs over the poses of its grid that are in the range.
+
+### Dynamics
+
+Each forearm pair's mass m_fb is split: a share s (`mass.forearm_elbow_share`, default 2/3, which matches the rod's inertia about its end, m L²/3) turns with the arm at the elbow, the rest moves with the platform. The forearms' own rotational inertia is left out. Then the machine is three arms about their joints and a point mass at the platform:
+
+```text
+m_nt = m_platform + m_payload + 3 (1 − s) m_fb
+I_b  = I_arm + L_a² (m_elbow + s m_fb)             (I_arm about the joint; rotor and gearbox not in it)
+m_LG = m_arm l_cg + L_a (m_elbow + s m_fb)
+M(θ) θ̈ = τ_out + Q_g − m_nt Jᵀ J_x⁻¹ w + τ_joint
+M = I_b · 1 + m_nt JᵀJ,   Q_g,i = g m_LG cos θ_i − m_nt g J_zi
+```
+
+This is exact for the lumped model: the platform's kinetic energy ½ m_nt |J θ̇|² is what M holds, the velocity term is the platform's m_nt p̈ through Jᵀ with p̈ = J θ̈ + J_x⁻¹ w, and Q_g = −∂V/∂θ with V = m_nt g z − g m_LG Σ sin θ_i. τ_joint is the joint's friction (Coulomb, smoothed with tanh over `joint.friction_smoothing_rad_s`, and viscous; `effects.joint_friction`) and its stops (springs and dampers beyond the stop angles, `effects.hard_stops`).
+
+**Elastic model** (`effects.joint_elasticity`), 15 states: θ, θ̇, rotor angles φ, rotor speeds, brake deflections. Each joint is a `RotaryJoint`: the gearbox's spring, damper, backlash and efficiency (the [gearbox](#gearbox)) pass τ_out to the arm, and
+
+```text
+J_rotor φ̈_i = ripple(τ_motor,i, φ_i) − τ_gear,rotor,i − τ_shaft(φ̇_i) − τ_brake,i
+```
+
+with J_rotor the motor's rotor and the gearbox's input inertia. **Rigid model**, 9 states (θ, θ̇, brakes): φ = i θ, and with the torque the motor puts on its arm through a loss-free gearbox with a massless rotor, d_i = i (ripple(τ_motor) − τ_shaft − τ_brake),
+
+```text
+(M + diag(λ_i i² J_rotor)) θ̈ = λ ⊙ d + Q_g − m_nt Jᵀ J_x⁻¹ w + τ_joint
+```
+
+λ_i the gearbox loss factor on what passes through it (d_i − i² J_rotor θ̈_i), found in two passes as on the other machines. Feedforward (`feedforward_torque`): the rigid, loss-free model at rest, τ_motor = (M θ̈ − Q_g) / i + J_rotor i θ̈ with θ̈ = J⁻¹ p̈. It has no velocity term, as the interface gives it no speed.
+
+**Static hold, and stability.** At rest each gearbox holds −Q_g,i (with the twist τ / k plus half the backlash in the elastic model). Held by constant motor torques, as the standard suite holds it after a pulse, the D3 is unstable in its vertical mode in the upper part of its range: the stiffness of V − τ θ in the symmetric mode is −1.68 N m/rad at the middle of the default range (868 mm below the shoulders) and +2.64 N m/rad at 1000 mm (`the_vertical_mode_under_constant_torques_is_unstable_high_up`). The drives' position loops hold it; the suite's loss-free configs put the range 175 mm lower, where it is stable, so that the suite's 10 s energy check measures the integration and not this.
+
+### Signals
+
+`arm.<k>.angle` (rad), `gearbox.<k>.output_torque` (N m; elastic: the spring's torque on the arm, rigid: λ (d − i² J_rotor θ̈)), `kinematics.condition`. Effect views: the [torque breakdown](#torque-breakdown) per motor with inertia = ((M θ̈ + velocity term)_k + i² J_rotor θ̈_k) / i, gravity = −Q_g,k / i, friction = shaft + brake + gearbox loss at the rotor + joint friction / i; the loss powers `power.joint_<k>`, `power.shaft_<k>`, `power.gearbox_<k>`, `power.hard_stops`, `power.other` (ripple); the energies; the joints as friction contacts `joint.<k>` (Coulomb and viscous, no stiction). Each gearbox warms with `effects.part_heating` (`temperature.gearbox_<k>`) and follows its temperature with `effects.thermal_feedback`.
+
+`Machine::scene_point` is the platform's centre: the machine's frame is the scene's. The scene: base plate, per arm a motor and a gearbox box with a bar turned by the rotor angle, the arm and the two rods of its forearm pair as segments, the platform as a box, the payload under it.
+
+Not modelled: the forearms' rotational inertia and the error of the 2/3 split (it matches the inertia at the elbow, not the momentum), elasticity of arms, rods and ball joints (no figures published for any product; the gearbox is the one elastic part), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, a fourth axis, a resonance for a shaper that follows the pose.
+
 ## Motion controller
 
 Source: [`control.rs`](../crates/sim-components/src/control.rs).
@@ -677,7 +779,21 @@ So every planned pose keeps each motor's torque from the rigid model within the 
 
 Where the holding torque alone is above the reserve at a pose of the path, the path is refused (`error-path-torque`).
 
-Assumptions and limits: the rigid model, so no friction and no elasticity (that is what the reserve is for); the velocity and acceleration limits of the axes play no part; one set of limits per piece, so the plan is not the fastest one possible: on an arc the shares leave a part of torque, speed and jerk unused, and a piece has one top speed however its direction turns; without a path tolerance it crawls into an arc as the plan within the axis limits does; belt tension and the other ratings are not limits of the plan; the payload is as the machine has it when planning. Until 12 November 2026 this was the classic time-optimal parameterisation on a grid of points, without a jerk limit and smoothed by a moving mean (`profile.path_smoothing_s`, which no longer exists). It was faster (0.69 s against 1.43 s on the line, arc, line of the user guide) and passed the motors' limits on arcs, many times over on short ones.
+**Belt tension as a limit.** Where the config rates the belt (`ratings.belt_max_tension_n`, `belt_min_tension_n`), the rigid model also gives each belt section's tension at each of the nine poses (`Machine::rigid_tensions`). It is linear in the acceleration, T = c + g · acceleration: the belt pulls the moved masses (not pulleys and rotors) and keeps its length, Σ (T_i − P) L_i = 0 over the geometric section lengths (the elastic law to first order in T / EA). T-gantry, with F_x = (m_X + idlers + chain) a_x and F_z = (m_Z + idler) a_z + m_Z g:
+
+```text
+d1 = −((F_x + F_z) L2 / 2 + F_x L3) / (L1 + L2 + L3)      d3 = d1 + F_x      d2 = d1 + (F_x + F_z) / 2      T_i = P + d_i
+```
+
+Single axis, F = (m + chain)(a + g sin incline): T1 = P − F L2 / (L1 + L2), T2 = P + F L1 / (L1 + L2). Each section and pose is one more row of the acceleration bounds, for either direction as the torque:
+
+```text
+| g · acceleration |  ≤  profile.tension_reserve · min( T_max − c,  c − T_min )
+```
+
+The reserve (0.8) is for what the rigid model leaves out: guide friction and the belt's vibration and damping. On the default T-gantry, a line along X with 400 N allowed, the full model's peak was 25 to 30 N above the rigid tension at 300 m/s³ and up to 70 N at 2000 m/s³ (`the_time_optimal_plan_keeps_the_belt_within_its_tension_limit`: 13.84 m/s² by hand and in the plan, 396 N on the full model; without the limit 19.3 m/s² and 425 N). So a plan passes `belt-tension` and `belt-slack` by construction on the rigid model, and on the full model as far as the reserve covers. A path on which the holding tension alone is beyond a limit is refused (`error-path-tension`). None of the shipped examples is limited by the belt: their plans are unchanged.
+
+Assumptions and limits: the rigid model, so no friction and no elasticity (that is what the reserve is for); the velocity and acceleration limits of the axes play no part; one set of limits per piece, so the plan is not the fastest one possible: on an arc the shares leave a part of torque, speed and jerk unused, and a piece has one top speed however its direction turns; without a path tolerance it crawls into an arc as the plan within the axis limits does; the gearbox and pulley torque ratings, the guide loads and the DC link are not limits of the plan (the belt's tension is, above); the limits are per piece, not point by point: the classic point-by-point parameterisation with a jerk limit (limits that change within a piece) is not built; the payload is as the machine has it when planning. Until 12 November 2026 this was the classic time-optimal parameterisation on a grid of points, without a jerk limit and smoothed by a moving mean (`profile.path_smoothing_s`, which no longer exists). It was faster (0.69 s against 1.43 s on the line, arc, line of the user guide) and passed the motors' limits on arcs, many times over on short ones.
 
 ## Input shaper
 
@@ -718,6 +834,7 @@ Per motor, summed over every base step of the measured pass (N steps):
 | Utilisation | max of \|τ_demand\| / (torque the [torque-speed curve](#torque-speed-curve) leaves at that speed in the direction of τ_demand). τ_demand is the velocity loop's output after its filters and before the torque limit. The delivered torque is clamped to the curve and could never exceed it |
 | Thermal utilisation | RMS torque / `drive.rated_torque_nm`. Not judged; `motor-thermal` judges the winding rise |
 | RMS current | sqrt( Σ i² / N ) |
+| Peak current | max \|i\| |
 | Winding rise (settled) | With q = ϑ_rated / (1 + 0.0039 ϑ_rated) · (I_rms / I_rated)²: ϑ = q / (1 − 0.0039 q). The copper loss with the resistance at that temperature, against the loss at the rated current `motor.rated_current_a`. Infinite if 0.0039 q ≥ 1 |
 | Energy in | Σ P · dt over the steps with P ≥ 0 |
 | Energy regenerated | −Σ P · dt over the steps with P < 0 |
@@ -760,7 +877,7 @@ Notes:
   | Gearbox planet bearings | L10h = 20000 h · (n2B / n2) · (M2N / M2eq)^(10/3): M2N = `ratings.gearbox_rated_torque_nm`, n2B = `ratings.gearbox_reference_speed_rpm`, n2 the output's mean speed, M2eq the gearbox life torque above | Siemens, configuration manual "Planetary gearboxes for S-1FK2 and S-1FT2 servomotors", 01/2023, section 6.3.3 |
   | Guide | L10 in km over the mean speed of its axis | The catalogue formula above |
 
-  One bearing per pulley shaft takes all of the radial load (a config can fold a pair into one C, as the EXCT-30's does); no axial load, no life factors a1 or a_ISO (lubrication, contamination). The gearbox's own gearing (fatigue only above M2N, by Siemens' damage sum over overload partial cycles) is not computed; `gearbox-continuous` and `gearbox-peak` judge the torques. The motors' own bearings are not estimated: in all three configs the belt does not pull on the motor shaft (a gearbox or Festo's drive head with a coupling is between), and Siemens gives no load rating for them, only allowable radial forces for 25000 h (S210 operating instructions 09/2022, 12.1.12).
+  One bearing per pulley shaft takes all of the radial load (a config can fold a pair into one C, as the EXCT-30's does); no axial load. Both bearing lives are multiplied by the life factor a1 of ISO 281 for `ratings.bearing_reliability_percent` R: a1 = 0.95 · (ln(100 / R) / ln(100 / 90))^(2/3) + 0.05, the Weibull form behind the standard's table (1 at 90 %, 0.64 at 95 %, 0.25 at 99 %); R from 90 to 99.95 %, others refused by `verdicts`. The guide life is not, its makers use factors of their own. No a_ISO (lubrication, contamination): the configs have no viscosity, contamination or fatigue load limit to compute it from. The gearbox's own gearing (fatigue only above M2N, by Siemens' damage sum over overload partial cycles) is not computed; `gearbox-continuous` and `gearbox-peak` judge the torques. The motors' own bearings are not estimated: in all three configs the belt does not pull on the motor shaft (a gearbox or Festo's drive head with a coupling is between), and Siemens gives no load rating for them, only allowable radial forces for 25000 h (S210 operating instructions 09/2022, 12.1.12).
 - The belt's teeth (`belt_tooth_utilisation`): no belt maker publishes a life in hours or load cycles, or a Wöhler curve, for polyurethane steel-cord belts (Megadyne's MEGALINEAR handbook, Gates' polyurethane belt catalogue and BRECO's data sheets were read; Optibelt's could not be reached). They size by the tooth load and the cord tension with a service factor, so this is a rating, not a life: per motor the highest over the cycle of τ_out / r · c_s / (F_spec(n) · b / 10 · min(z_m, 12)), with r = `geometry.pulley_radius_m`, c_s = `ratings.belt_service_factor`, F_spec the allowed specific tooth load at the pulley's speed n (`ratings.belt_tooth_load_n_cm` over `belt_tooth_load_rpm`, interpolated, held beyond the ends; each speed band taken at its upper speed), b = `ratings.belt_width_mm`, z_m = `ratings.belt_teeth_in_mesh`. Megadyne's method (handbook 02.2026, page 9). The cords are judged by `belt-tension`.
 - The guide life is the catalogue formula and nothing more: no load factors for shock, temperature or hardness, no moments on single blocks, the mean taken over time and not over distance, and a guide load that is itself an estimate from the rigid model. It is not validated.
 
@@ -774,6 +891,8 @@ Per motor:
 | --- | --- | --- |
 | `motor-peak` | Utilisation | 1 |
 | `motor-thermal` | Settled winding rise | `motor.rated_temperature_rise_k` |
+| `drive-current` | RMS current | `ratings.drive_rated_current_a`: the drive's rated output current (a drive by name sets it). The cycle's RMS against the rated current: the power unit warms in seconds to minutes, about as long as a cycle |
+| `drive-peak-current` | Peak current | `ratings.drive_max_current_a`: the drive's maximum output current. The drive's current limit itself is not simulated: the motor's maximum current stays the limit, and a cycle that needs more than the drive gives fails here |
 | `pulley-torque` | Peak torque at the gearbox output | `ratings.pulley_max_torque_nm` |
 | `gearbox-continuous` | Cubic mean of the torque at the gearbox output, weighted with the speed | `ratings.gearbox_rated_torque_nm` |
 | `gearbox-input-speed` | Peak speed in r/min | `ratings.gearbox_max_input_speed_rpm` |
@@ -809,10 +928,12 @@ For the machine:
 | `gearbox-radial-load` | Radial load peak | `ratings.shaft_max_radial_load_n` |
 | `guide-load` | Peak load of the reported guide | `ratings.guide_max_load_n` |
 | `guide-life` | Guide life in hours. Passes at or **above** the limit | `ratings.required_life_h` |
+| `belt-tooth-jump` | With `effects.belt_tooth_jump`: how often the belt's teeth jumped over a driven pulley in the cycle (see [belt tooth jump](#belt-tooth-jump)) | 0 |
+| `belt-span-resonance` | With `effects.belt_span_vibration`: the lowest distance of a span's first sideways mode from an excitation at steady speed, as a share of the mode (see [belt spans](#sideways-vibration-of-the-belt-spans)). Passes at or **above** the limit | `ratings.belt_span_resonance_band` |
 | `gearbox-thermal` | With `effects.part_heating`: where the hottest gearbox settles on the cycle, R_th × its mean loss (`CycleLoad::part_rises`, see [thermal model](#thermal-model-and-view)); not judged on a direct drive, which has no gearbox | `thermal.gearbox_max_rise_k` |
 | `guide-thermal` | With `effects.part_heating`: where the hottest guide settles on the cycle | `thermal.guide_max_rise_k` |
 
-Without `effects.part_heating` the two thermal checks are not judged, as a rating left out is not.
+Without `effects.part_heating` (or `effects.thermal_feedback`, which warms the parts too) the two thermal checks are not judged, as a rating left out is not.
 
 Gearbox and pulley torques are those at the gearbox output, the signals `gearbox.<motor>.output_torque`, looked at every simulation step: peak, and the cubic mean cbrt( Σ |τ_out|³ · |ω| / Σ |ω| ). The rotor's own acceleration torque is not in them (it never passes through the gearbox), and the efficiency is: driving, the output carries η times what the gear's spring transmits, driven back 1/η times. The motor torque times the ratio, which these checks used before, reads too high while the motor accelerates its own rotor and too low while the load drives the gearbox back. On a machine that does not report the signal the three checks are not made. In the elastic model the peak includes the ringing of the gear's spring and the knocks of its backlash.
 
@@ -820,11 +941,11 @@ Gearbox and pulley torques are those at the gearbox output, the signals `gearbox
 
 | Analysis | Definition |
 | --- | --- |
-| Error bands | The cycle is run with the config as it is and with each parameter of `[bounds]` at its low and at its high value, one at a time. A bound on a value that only an effect that is off uses (`[thermal]` without `effects.part_heating`, `ratings.line_module_efficiency` without `effects.regenerative_supply`), or that no cycle uses (`ratings.dc_link_discharge_time_constant_s`, which acts only while the drives are disabled), gets no runs, here and in the sensitivity. A band is the envelope of the verdict's value over all runs; the worst case passes only if every run passes. The runs share the processor cores |
+| Error bands | The cycle is run with the config as it is and with each parameter of `[bounds]` at its low and at its high value, one at a time. A bound on a value that only an effect that is off uses (`[thermal]` without `effects.part_heating` or `thermal_feedback`, `[thermal_feedback]` without `effects.thermal_feedback`, `belt.tooth_jump_factor` without `effects.belt_tooth_jump`, `ratings.line_module_efficiency` without `effects.regenerative_supply`), or that no cycle uses (`ratings.dc_link_discharge_time_constant_s`, which acts only while the drives are disabled), gets no runs, here and in the sensitivity. A band is the envelope of the verdict's value over all runs; the worst case passes only if every run passes. The runs share the processor cores |
 | Sampled error bands | `--bands --samples N`: N runs with every parameter of `[bounds]` between its bounds at once, as a Latin hypercube: the range of each parameter is cut into N equal parts, each part is used in exactly one run at a random place inside it, and each parameter has its parts in a random order of its own. Random numbers from the simulator's own generator and a seed, so a call repeats. Reported per check: the envelope, the worst case, and the share of the runs (the config as it is among them) that pass; a run in which a check does not come up has passed it. It finds what two or more values do together; it does not put a value exactly on a bound, and N runs do not find the worst of the 2ⁿ corners |
 | Worst corner | `--bands --worst` (`analysis::verdict_worst`): per verdict a search among the 2ⁿ corners. (1) The one-at-a-time runs above. (2) The corner where each parameter is at the bound that made this verdict worse alone (at its high bound where it moved the verdict not at all); for a verdict that is monotone in each parameter and whose effects do not depend on each other, that is the worst corner. (3) Up to `WORST_PASSES` = 3 passes: every parameter that moved the verdict alone is flipped to its other bound, one at a time; the flips that made it worse are taken together, and the worse of that corner and the best single flip becomes the corner if it is worse than before; a pass that finds nothing worse ends it. "Worse" is the margin, value − limit (limit − value for `belt-slack` and the lives, `AT_LEAST`), not the value, because some limits are bounded too (DC link capacitance and threshold). `dc-link-energy` is the exception: it fails only where the braking resistor is needed and has no rating, and with a resistor the link fills up to its room at every corner that brakes hard (margin 0 at all of them), so it is ranked by the energy in the capacitors, a failing run above any passing one. A corner is run once for all verdicts that land on it; reported per verdict is the worst at any run, the one-at-a-time runs and the config as it is included (so the worst is never better than the bands), with its value, limit, result and where the parameters were (a parameter left as configured is at neither bound). Cost: 2n + 1 runs, plus per pass up to the number of parameters per verdict; on the EXCT-30 (63 bounded values, 24 checks) about 2400 cycles in about 47 s on all cores, on the single axis (14) about 300 in 3.5 s. A search, not a proof: a worst case that no chain of single flips from the sign corner reaches, or one inside the bounds (a resonance hit by a stiffness between them), can be missed |
 | Sensitivity | The same runs, reported as relative changes of peak torque and RMS torque (each of the motor it changes most) and of the cycle time. Ranked by the largest of these six changes |
-| Optimiser | Starts from the config. Candidates: toggle corner blending, switch input shaping off where it is on, raise velocity, acceleration or jerk of all axes by 1.5 or 1.2. A candidate without input shaping that fails `settling` and nothing else is run again with the shaper, and with the shaper following the pose where the machine reports a resonance; one with the shaper that still fails `settling` alone, with a second shaper at `profile.shaper2_frequency_hz`, or where that is 0 at the resonance the machine reports at the start pose if that is more than 10 % off `shaper_frequency_hz`. Where a second shaper is on, switching it off is a candidate too. The first of these that is shorter by more than 0.1 ms, has no motor-limit violation and passes every verdict is taken; repeat until none is |
+| Optimiser | Starts from the config. Candidates: toggle corner blending, switch input shaping off where it is on, raise velocity, acceleration or jerk of all axes by 1.5 or 1.2. A candidate without input shaping that fails `settling` and nothing else is run again with the shaper, and with the shaper following the pose where the machine reports a resonance; one with the shaper that still fails `settling` alone, with a second shaper at `profile.shaper2_frequency_hz`, or where that is 0 at the resonance the machine reports at the start pose if that is more than 10 % off `shaper_frequency_hz`. Where a second shaper is on, switching it off is a candidate too. The first of these that is shorter by more than 0.1 ms, has no motor-limit violation and passes every verdict is taken; repeat until none is. **Geometry** (`analysis::lifts`): a lift, traverse and lower is three segments in a row of which the first moves along the last axis only, away from both the start (the target before) and the end of the three, the second along the other axes only at that height, the third along the last axis only; the first two neither dwell nor change the payload. Its lowest height is the farther of the two ends plus `profile.min_clearance_m`. Candidates, before all others: every lift at its lowest, then each alone at its lowest and halfway there. After all others: a lift rounded through a via point (`control::via_pieces`: a line straight up from the start to the lift height, a spline through the via point to the point straight above the end, a line down; timed by `path::plan` within the axis limits, with the transition curves of `profile.path_tolerance_m`), the via point at the middle and 1/2, 1/4, 1/8 of the width above the lift height; a via point moved by 1/8 or 1/32 of the width along each axis; the rounding dropped. A via candidate whose planned poses between the two ends (along the other axes) come nearer to the ends than the lowest height, less the path tolerance, is not run. The new cycle is reported as a whole (`changes` entry `cycle.segment`, applied by `set_text`) and per lift (`Optimised::lifts`). On the default T-gantry with a clearance of 0.1 m the lifts go to 0.15 m and the cycle from 6.08 s to 3.36 s with the other steps; a rounded lift never won there (300 runs, with and without a path tolerance of 2 mm): the arch's curvature and its slower speed cost more than the two stops it saves |
 | Frequency sweep | No control. A sine torque on one motor on top of the holding torques; that motor's speed is correlated with sine and cosine over whole periods (at least 0.2 s) after settling (at least 0.3 s). Gain in rad/s per N m |
 | Step response | The machine settles for 0.05 s, then the position setpoint of one axis is offset by the step size, without feedforward. Rise time 10 % to 90 %; overshoot as a fraction; settling to within 2 % |
 | Closed-loop response | A sine offset on the position setpoint, measured at the tool. Bandwidth: where the gain first falls below 1/√2, interpolated on the logarithmic frequency axis |
@@ -836,7 +957,9 @@ Sources: `losses` and `view_signals` (the machine's `loss_powers` and `effect_si
 
 A machine tells the effect views what it knows through signals with fixed names and four methods with defaults; a machine that has none of them still runs, and the views say nothing about it. Front ends and the analysis find the signals by their names only.
 
-**Cost.** The torque breakdown needs the machine's accelerations, one more evaluation of its derivatives. So the machine gives its signals in two parts: `base_signals` (tensions, guide loads, gearbox torques: what the verdicts look at every step) and `effect_signals` (the signals of the views, after them), and the loss powers alone as `loss_powers`, without derivatives. `Sim::sample` and `run` take both parts; `Sim::step` takes only the loss powers, and only with `effects.part_heating`; the analysis adds up breakdown and budget only where they are asked for (`analyse_cycle_with(sim, views)`: the app's analysis and `sim-cli analyze --breakdown/--budget` ask, bands, sensitivity, optimiser and motor search do not). Every number is the same either way (`the_cheap_signals_and_the_lean_analysis_change_no_number`).
+**Cost.** The torque breakdown needs the machine's accelerations, one more evaluation of its derivatives. So the machine gives its signals in two parts: `base_signals` (tensions, guide loads, gearbox torques: what the verdicts look at every step) and `effect_signals` (the signals of the views, after them), and the loss powers alone as `loss_powers`, without derivatives. `Sim::sample` and `run` take both parts; `Sim::step` takes only the loss powers, and only with `effects.part_heating` or `thermal_feedback`; the analysis adds up breakdown and budget only where they are asked for (`analyse_cycle_with(sim, views)`: the app's analysis and `sim-cli analyze --breakdown/--budget` ask, bands, sensitivity, optimiser and motor search do not). Every number is the same either way (`the_cheap_signals_and_the_lean_analysis_change_no_number`).
+
+**Run time of the analyses** (13 November). Where a cycle run's time goes, release build, measured on one run each: the integration of the machine (16 evaluations of its derivatives per base step: RK4 with 4 sub-steps, 176 ns each on the T-gantry) is 90 %; the analysis's tally 10 %, of which the path error (the tool against the last 500 setpoints, every millisecond) was 6 %, the machine's own signals every step 2 %, the sample of all signals every millisecond 1 %. Changed without changing a number: the sensitivity's runs share the processor cores (they ran one after the other); the tally samples only the signals of `base_signals` where every signal it looks at is among them (`Sim::sample_base`); the path error skips a piece of setpoint path that the tool is beyond along one axis by more than the nearest distance found so far (plus 1 pm), looking at the newest pieces first, and reuses the oldest setpoint's storage; the bands and the worst-corner search in the app share their first 2 n + 1 runs (`verdict_worst_and_bands`). The searches were on all cores already, and 8 cores with 16 threads are the limit there.
 
 ### Torque breakdown
 
@@ -943,6 +1066,25 @@ A direct drive (`gearbox.ratio` = 1, as the EXCT-30) has no gearbox: its gearbox
 
 **Colour.** `Sim::scene` gives a part a heat value h = rise / rated rise (`Part::heat`): the k-th motor housing (`scene::MOTOR_PART`, drawn by `drive_unit`) with motor k's winding while `effects.winding_heating` is on, and the part `thermal_parts` names with its rise while `effects.part_heating` is on. The 3D view then draws the part in the heat scale in place of its own colour: blue at 0, yellow at 0.5, red at 1, magenta above 1 (`model::heat_color`).
 
+### Temperature feedback
+
+Source: `ThermalFeedback` in [`mech.rs`](../crates/sim-components/src/mech.rs); `effects.thermal_feedback`, off by default. It replaces `effects.temperature`: while it is on, the hand-set factors of `[temperature]` are not used. It warms the parts as `effects.part_heating` does (`sim::heats`), whether that is on or not, and before each base step `Sim` tells the machine the rises the last one ended with (`Machine::set_part_temperatures`). The config's friction, efficiency and EA hold at `thermal_feedback.reference_c` (20 °C, the temperature gearbox makers quote their no-load torque at); the machine stands at `ambient_c`, and a part is at ambient plus its rise.
+
+```text
+nu(T) / nu_ref = exp(B · (1/T − 1/T_ref))                 T in K, B = thermal_feedback.viscosity_slope_k
+guide:   b = b_config · nu(T_guide) / nu_ref              Coulomb and stiction levels stay
+gearbox: 1 − eta = (1 − eta_config) · (1 − s + s · nu(T_gearbox) / nu_ref),   at least 0.01       s = gearbox_viscous_loss_share
+belt:    EA = EA_config · (1 − alpha · (T_ambient − T_ref))                    alpha = belt_stiffness_coefficient_1_k
+```
+
+- **Viscosity.** Andrade's (Arrhenius) law for a lubricant's viscosity. B from a mineral oil's viscosities at 40 and 100 °C (viscosity index about 100): ISO VG 32 (32 and 5.4 mm²/s) gives 3470 K, VG 68 (68 and 8.7) 4000 K, VG 220 (220 and 19.4) 4730 K; 4000 K, bounds 3470 to 4730. 30 K above the reference the oil has 0.2817 of its viscosity, at −10 °C 4.74 times.
+- **Guide.** The viscous coefficient is the lubricant's drag and follows the viscosity; the Coulomb level of a rolling contact and its seals is taken as constant.
+- **Gearbox.** The model has one efficiency and no no-load torque. Makers quote the no-load running torque at 20 °C and it falls as the gearbox warms (churning and bearing drag in thinner oil), while the tooth friction under load does not. So a share s of the loss (1 − η) follows the viscosity, the rest stays: an estimate, s = 0.5, bounds 0.25 to 0.75. 30 K warm, a 95 % gearbox has 96.80 %. No maker publishes the curve; a search found the 20 °C convention and the direction, nothing more.
+- **Belt.** Polyurethane softens as it warms, but the steel cords carry EA, and steel's modulus falls by about 2.5e-4 per K: alpha = 3e-4 per K (bounds 0 to 1e-3), 0.6 % at 20 K. The belt is taken at ambient: it has no loss of its own in the model, and an EA that changed while running would change the stored energy without a loss to account for it. So the belt's factor acts only when ambient differs from the reference.
+- Without part heating's losses the parts stay at ambient; the windings are not part of this (their resistance already follows their temperature, `effects.winding_heating`).
+
+Tests: `the_temperature_laws_follow_their_formulas` (the factors at fixed temperatures), `with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature` (the machines at 30 K), `a_guide_settles_where_its_loss_and_heat_flow_balance` (single axis, R 2 K/W at 1 m/s: rise = 2 (λ F_c + b ν/ν_ref v) v settles at 40.2 K instead of 72.5 K).
+
 ### Belt view
 
 `belt_sections` names the belt sections, each with its pretension. Signals `<id>.tension` (N, the existing `belt.<i>.tension`) and `<id>.stretch` (m):
@@ -997,9 +1139,9 @@ Not marked as shortcuts in the code, but worth knowing. Most are stated in the s
 | --- | --- |
 | Motor | One equivalent winding. No phases, PWM, field weakening or iron loss |
 | Drive | Delays are whole cycles; the fieldbus jitter is whole profile cycles, evenly spread, frame by frame independent. The same settings for every drive. The filters are generic, not a vendor's |
-| Thermal | One thermal mass per winding, gearbox and guide (`effects.part_heating`); no belt temperature. Nothing feeds back: `effects.temperature` is two factors set by hand |
+| Thermal | One thermal mass per winding, gearbox and guide (`effects.part_heating`); no belt temperature (the belt is at ambient). With `effects.thermal_feedback` guide friction and gearbox losses follow the temperatures (one viscosity law for all lubricants); without it `effects.temperature` is two factors set by hand |
 | DC link | One per drive, or one for all with the sum of their capacitances; feedback into the line only through an ideal line module of one efficiency (`effects.regenerative_supply`); no resistor heating, no Line Module capacitance or busbar resistance; the bleeder draws only while the drives are disabled |
-| Belt | Mass lumped on the pulleys. No string vibration, no tooth jump, no wear |
+| Belt | Mass lumped on the pulleys. Sideways span vibration as first-mode frequencies only, no amplitude (`effects.belt_span_vibration`); tooth jump with a quasi-static climb-out law and the belt sliding over a sinusoidal ridge (`effects.belt_tooth_jump`); no wear |
 | Friction | Guide loads from the commanded acceleration of a loss-free rigid machine, not from the true one. No moments on single guide blocks |
 | Gearbox | Constant efficiency, constant stiffness, hard dead zone |
 | Frame | One mode, in X only |

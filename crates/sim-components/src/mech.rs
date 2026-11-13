@@ -6,8 +6,240 @@ use sim_core::{Config, ConfigError};
 
 type Result<T> = std::result::Result<T, ConfigError>;
 
+/// The hand-set factor of effects.temperature. With effects.thermal_feedback it is not used: the temperatures then
+/// come from `ThermalFeedback`.
 fn temperature_scale(cfg: &Config, leaf: &str) -> Result<f64> {
-    Ok(if cfg.bool("effects.temperature")? { cfg.positive(&format!("temperature.{leaf}"))? } else { 1.0 })
+    Ok(if cfg.bool("effects.temperature")? && !cfg.bool("effects.thermal_feedback")? { cfg.positive(&format!("temperature.{leaf}"))? } else { 1.0 })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Temperature feedback
+
+const KELVIN: f64 = 273.15;
+
+/// With effects.thermal_feedback: what the temperatures of the parts do to friction, gearbox losses and belt
+/// stiffness. The config's values hold at `reference` (gearbox makers quote their no-load torque at 20 °C); the
+/// machine stands in air at `ambient`, and a part is at ambient plus its rise (effects.part_heating; without it the
+/// rises stay 0).
+///
+/// - Lubricant viscosity (Arrhenius/Andrade): nu(T) / nu_ref = exp(B (1/T - 1/T_ref)), T in K. A mineral oil of
+///   viscosity index about 100 has B = 3470 K (ISO VG 32: 32 and 5.4 mm²/s at 40 and 100 °C) to 4730 K (VG 220:
+///   220 and 19.4 mm²/s); VG 68 (68 and 8.7) gives 4000 K.
+/// - Guide: its viscous coefficient follows the viscosity; Coulomb and stiction levels (rolling contact, seals)
+///   stay as they are.
+/// - Gearbox: a share s of its loss (1 - eta_ref) is churning and bearing drag, which follows the viscosity; the
+///   rest, tooth friction, does not: 1 - eta = (1 - eta_ref) (1 - s + s nu / nu_ref).
+/// - Belt: polyurethane loses modulus as it warms, but the steel cords carry EA: EA (1 - alpha (T - T_ref)), alpha a
+///   few 1e-4 per K (steel's own modulus falls by about 2.5e-4 per K). The belt is taken at ambient: it has no loss
+///   of its own in the model, and a stiffness that changed while running would change its stored energy.
+#[derive(Debug, Clone)]
+pub struct ThermalFeedback {
+    /// K.
+    pub ambient: f64,
+    pub reference: f64,
+    /// B of the viscosity law, K.
+    pub viscosity_slope: f64,
+    pub gearbox_viscous_share: f64,
+    /// alpha, 1/K.
+    pub belt_coefficient: f64,
+    /// The gearbox's efficiency at the reference temperature (1 with effects.gearbox_efficiency off).
+    pub efficiency: f64,
+}
+
+impl ThermalFeedback {
+    /// `None` with the effect off.
+    pub fn from_config(cfg: &Config) -> Result<Option<Self>> {
+        if !cfg.bool("effects.thermal_feedback")? {
+            return Ok(None);
+        }
+        let celsius = |leaf: &str| -> Result<f64> {
+            let t = cfg.f64(&format!("thermal_feedback.{leaf}"))? + KELVIN;
+            if t > 0.0 { Ok(t) } else { Err(ConfigError::Invalid(format!("thermal_feedback.{leaf}"))) }
+        };
+        let share = cfg.non_negative("thermal_feedback.gearbox_viscous_loss_share")?;
+        if share > 1.0 {
+            return Err(ConfigError::Invalid("thermal_feedback.gearbox_viscous_loss_share".into()));
+        }
+        Ok(Some(Self {
+            ambient: celsius("ambient_c")?,
+            reference: celsius("reference_c")?,
+            viscosity_slope: cfg.non_negative("thermal_feedback.viscosity_slope_k")?,
+            gearbox_viscous_share: share,
+            belt_coefficient: cfg.f64("thermal_feedback.belt_stiffness_coefficient_1_k")?,
+            efficiency: Gearbox::configured_efficiency(cfg)?,
+        }))
+    }
+
+    /// nu / nu_ref of a lubricant `rise` above ambient.
+    pub fn viscosity_factor(&self, rise: f64) -> f64 {
+        (self.viscosity_slope * (1.0 / (self.ambient + rise) - 1.0 / self.reference)).exp()
+    }
+
+    /// The gearbox's efficiency `rise` above ambient. Not below 0.01: a gearbox far below its reference temperature
+    /// would otherwise lose more than it transmits.
+    pub fn gearbox_efficiency(&self, rise: f64) -> f64 {
+        let s = self.gearbox_viscous_share;
+        (1.0 - (1.0 - self.efficiency) * (1.0 - s + s * self.viscosity_factor(rise))).max(0.01)
+    }
+
+    /// Factor on the belt's EA at ambient.
+    pub fn belt_stiffness_factor(&self) -> f64 {
+        1.0 - self.belt_coefficient * (self.ambient - self.reference)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Belt tooth jump
+
+/// States per driven pulley with effects.belt_tooth_jump: the slip of the belt over the pulley u (m of belt, a
+/// whole number of pitches while the teeth are in mesh), its rate, the direction of a jump under way (+1, -1;
+/// 0 while in mesh), u where the jump began, the jumps counted, and the ridge force of the jump under way.
+pub const JUMP_STATES: usize = 6;
+
+/// With effects.belt_tooth_jump: the belt's teeth jump over a driven pulley.
+///
+/// The teeth climb out when the effective pull at the pulley, |T_a - T_b|, exceeds `climb` times the slack-side
+/// tension min(T_a, T_b): each tooth in mesh is held in its groove by the tension's radial pull, T p / r over one
+/// pitch, and pushed out by its share of the pull times the tangent of an effective flank angle (flank, friction
+/// and the tooth's give together). Summed over the z_m teeth in mesh: climb = k z_m p / r, k = 1 / tan(effective
+/// angle) an estimate (`belt.tooth_jump_factor`). The pull a pulley can take before the teeth jump is then
+/// proportional to the tension the belt is set up with: the torque at which timing belts jump is reported to rise
+/// with their installation tension. No maker's chart was read for the factor.
+///
+/// Once out, the teeth ride over the pulley's: the belt, with its mass, moves on its own, and the pulley holds it
+/// back with a ridge force F_s sin(2 pi d / p), d how far it has slid, F_s the pull it climbed out at (climb times
+/// the slack side's tension then), held over the jump so that the ridge is a spring with the energy
+/// F_s p / (2 pi) (1 - cos(2 pi d / p)). That force is what the pulley passes on meanwhile. Where the belt crosses the
+/// next groove (d = p) the teeth fall in: a jump, counted; where it slides back over the groove it left (d < 0),
+/// they fall back in, uncounted. Either way belt and pulley run on together, at the speed that keeps their momentum
+/// (a plastic impact): what that takes is what a jump dissipates. Where the pull settles below the ridge the belt
+/// stays half out, held by it.
+///
+/// The belt's mass is the share the machine lumps on that pulley (effects.belt_mass, which the effect needs): while
+/// the teeth are out it moves with the belt and not with the pulley.
+#[derive(Debug, Clone)]
+pub struct ToothJump {
+    pub pitch: f64,
+    pub climb: f64,
+    /// The belt's mass lumped on the pulley, kg.
+    pub mass: f64,
+}
+
+impl ToothJump {
+    /// `None` with the effect off. `radius` is the driven pulley's, `mass` the belt's mass the machine lumps on it;
+    /// none (effects.belt_mass off) is refused.
+    pub fn from_config(cfg: &Config, radius: f64, mass: f64) -> Result<Option<Self>> {
+        if !cfg.bool("effects.belt_tooth_jump")? {
+            return Ok(None);
+        }
+        if mass <= 0.0 {
+            return Err(ConfigError::Invalid("effects.belt_tooth_jump".into()));
+        }
+        let pitch = cfg.positive("belt.tooth_pitch_m")?;
+        let climb = cfg.positive("belt.tooth_jump_factor")? * cfg.positive("ratings.belt_teeth_in_mesh")? * pitch / radius;
+        Ok(Some(Self { pitch, climb, mass }))
+    }
+
+    /// The pulley's inertia: `lumped` (with the belt's share) while the teeth are in mesh, without it while they are out.
+    pub fn pulley_inertia(&self, slip: &[f64], lumped: f64, radius: f64) -> f64 {
+        if slip[2] == 0.0 { lumped } else { lumped - self.mass * radius * radius }
+    }
+
+    /// Whether the teeth climb out at these tensions of the two sections that meet at the pulley.
+    pub fn climbs(&self, a: f64, b: f64) -> bool {
+        (a - b).abs() > self.climb * a.min(b).max(0.0)
+    }
+
+    /// The force between belt and pulley along the belt, towards +u on the pulley: the sections' pull `force` while
+    /// the teeth are in mesh, the ridge force while they are out.
+    pub fn pulley_force(&self, slip: &[f64], force: f64) -> f64 {
+        if slip[2] == 0.0 { force } else { slip[5] * (std::f64::consts::TAU * (slip[0] - slip[3]) / self.pitch).sin() }
+    }
+
+    /// `pulley_force` as a torque on a pulley of `radius`: the belt's torque as it is while in mesh, so that an effect
+    /// that never climbs out changes no bit.
+    pub fn pulley_torque(&self, slip: &[f64], belt_torque: f64, radius: f64) -> f64 {
+        if slip[2] == 0.0 { belt_torque } else { radius * self.pulley_force(slip, 0.0) }
+    }
+
+    /// The rates of a pulley's slip states: none while in mesh. While the teeth are out, the belt moves on its own at
+    /// r da/dt + du/dt (a the pulley's angle) under `force`, the sections' pull towards +u, less the ridge force:
+    /// d2u/dt2 = (force - ridge) / mass - `surface_acc`, the pulley's surface acceleration r d2a/dt2.
+    pub fn rates(&self, slip: &[f64], force: f64, surface_acc: f64, out: &mut [f64]) {
+        out[..JUMP_STATES].fill(0.0);
+        if slip[2] != 0.0 {
+            (out[0], out[1]) = (slip[1], (force - self.pulley_force(slip, force)) / self.mass - surface_acc);
+        }
+    }
+
+    /// What a sliding belt adds to the energy of a machine that counts its mass with the pulley, whose surface moves at
+    /// v: 1/2 m (v + du/dt)^2 - 1/2 m v^2, and the ridge's energy; 0 while the teeth are in mesh.
+    pub fn slip_energy(&self, slip: &[f64], surface_speed: f64) -> f64 {
+        if slip[2] == 0.0 {
+            return 0.0;
+        }
+        let ridge = slip[5] * self.pitch / std::f64::consts::TAU * (1.0 - (std::f64::consts::TAU * (slip[0] - slip[3]) / self.pitch).cos());
+        0.5 * self.mass * slip[1] * (2.0 * surface_speed + slip[1]) + ridge
+    }
+
+    /// After a step: starts a jump where the teeth climb out at the tensions `a`, `b` (the section that +u feeds
+    /// and the other one), or ends one where the belt has crossed the next groove (a jump) or the one it left: belt
+    /// and pulley then share their momentum, `surface_speed` the pulley's and `rest_mass` its inertia without the belt
+    /// over r^2. Returns whether it changed anything: the machine's energy then changes at once.
+    pub fn update(&self, slip: &mut [f64], a: f64, b: f64, rest_mass: f64, surface_speed: &mut f64) -> bool {
+        let dir = slip[2];
+        if dir == 0.0 {
+            if !self.climbs(a, b) {
+                return false;
+            }
+            (slip[1], slip[2], slip[3], slip[5]) = (0.0, (a - b).signum(), slip[0], self.climb * a.min(b).max(0.0));
+            return true;
+        }
+        let travel = (slip[0] - slip[3]) * dir;
+        if (0.0..self.pitch).contains(&travel) {
+            return false;
+        }
+        let jumped = travel >= self.pitch;
+        *surface_speed += self.mass * slip[1] / (rest_mass + self.mass);
+        slip[0] = slip[3] + if jumped { dir * self.pitch } else { 0.0 };
+        (slip[1], slip[2], slip[5]) = (0.0, 0.0, 0.0);
+        if jumped {
+            slip[4] += 1.0;
+        }
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sideways vibration of the free belt spans
+
+/// First transverse mode of a free belt span as a string: f1 = sqrt(T / mu) / (2 L). The belt's own speed lowers it
+/// by the factor 1 - v² / c² (c = sqrt(T / mu)), below 0.2 % at the speeds and tensions here, left out. 0 for a slack
+/// span.
+pub fn span_frequency(length: f64, tension: f64, mass_per_m: f64) -> f64 {
+    if tension > 0.0 && length > 0.0 { (tension / mass_per_m).sqrt() / (2.0 * length) } else { 0.0 }
+}
+
+/// How far a span's first mode is from the nearest excitation, as a share of the mode: min |f1 - f_e| / f1. 1 for
+/// a slack span or none.
+pub fn span_detuning(f1: f64, excitations: &[f64]) -> f64 {
+    if f1 <= 0.0 {
+        return 1.0;
+    }
+    excitations.iter().filter(|f| **f > 0.0).map(|f| (f1 - f).abs() / f1).fold(1.0, f64::min)
+}
+
+/// The frequencies one drive excites the belt with, Hz: the tooth mesh |v| / p at the pulley (v its belt speed), and
+/// with effects.torque_ripple the motor's ripple and cogging orders times its turns per second.
+pub fn drive_excitations(pitch: f64, belt_speed: f64, ripple: &Ripple, motor_speed: f64, out: &mut Vec<f64>) {
+    let turns = motor_speed.abs() / std::f64::consts::TAU;
+    out.push(belt_speed.abs() / pitch);
+    if ripple.ripple != 0.0 {
+        out.push(ripple.ripple_order.abs() * turns);
+    }
+    if ripple.cogging != 0.0 {
+        out.push(ripple.cogging_order.abs() * turns);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -46,7 +278,11 @@ pub struct SectionForce {
 
 impl Belt {
     pub fn from_config(cfg: &Config) -> Result<Self> {
-        let ea = cfg.positive("belt.stiffness_ea_n")? * temperature_scale(cfg, "belt_stiffness_scale")?;
+        let feedback = ThermalFeedback::from_config(cfg)?.map_or(1.0, |t| t.belt_stiffness_factor());
+        let ea = cfg.positive("belt.stiffness_ea_n")? * temperature_scale(cfg, "belt_stiffness_scale")? * feedback;
+        if ea <= 0.0 {
+            return Err(ConfigError::Invalid("thermal_feedback.belt_stiffness_coefficient_1_k".into()));
+        }
         let damping = cfg.bool("effects.belt_damping")?;
         let material = cfg.bool("effects.belt_material_damping")? && damping;
         let teeth = cfg.bool("effects.belt_tooth_stiffness")?;
@@ -254,7 +490,8 @@ impl Lugre {
             on: cfg.bool("effects.guide_friction")?,
             sigma0: cfg.positive(&format!("{table}.bristle_stiffness_n_m"))?,
             sigma1: get("bristle_damping_n_s_m")?,
-            viscous: get("viscous_n_s_m")? * scale,
+            // With the feedback, at ambient; the machine follows the guide's temperature (`ThermalFeedback`).
+            viscous: get("viscous_n_s_m")? * scale * ThermalFeedback::from_config(cfg)?.map_or(1.0, |t| t.viscosity_factor(0.0)),
             coulomb,
             // Breaking away takes at least what sliding takes. A value below the Coulomb level counts as that
             // level: uncertainty bounds of the two that overlap would otherwise give runs that slide harder
@@ -442,17 +679,27 @@ const EFFICIENCY_FADE_W: f64 = 0.5;
 impl Gearbox {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         // A negative backlash would turn the dead zone inside out (and `clamp` panics on that).
-        let (backlash, efficiency) = (cfg.non_negative("gearbox.backlash_rad")?, cfg.positive("gearbox.efficiency")?);
-        if efficiency > 1.0 {
-            return Err(ConfigError::Invalid("gearbox.efficiency".into()));
-        }
+        let backlash = cfg.non_negative("gearbox.backlash_rad")?;
         Ok(Self {
             ratio: cfg.positive("gearbox.ratio")?,
             stiffness: cfg.positive("gearbox.stiffness_nm_rad")?,
             damping: cfg.non_negative("gearbox.damping_nm_s_rad")?,
             half_backlash: if cfg.bool("effects.gearbox_backlash")? { 0.5 * backlash } else { 0.0 },
-            efficiency: if cfg.bool("effects.gearbox_efficiency")? { efficiency } else { 1.0 },
+            // With the feedback, at ambient; the machine follows the gearbox's temperature (`ThermalFeedback`).
+            efficiency: match ThermalFeedback::from_config(cfg)? {
+                Some(t) => t.gearbox_efficiency(0.0),
+                None => Self::configured_efficiency(cfg)?,
+            },
         })
+    }
+
+    /// The efficiency as configured: 1 with effects.gearbox_efficiency off.
+    pub fn configured_efficiency(cfg: &Config) -> Result<f64> {
+        let efficiency = cfg.positive("gearbox.efficiency")?;
+        if efficiency > 1.0 {
+            return Err(ConfigError::Invalid("gearbox.efficiency".into()));
+        }
+        Ok(if cfg.bool("effects.gearbox_efficiency")? { efficiency } else { 1.0 })
     }
 
     /// A ratio of 1 is a direct drive: the table describes the coupling between motor and pulley, there is no
@@ -704,6 +951,7 @@ mod tests {
 [effects]
 guide_friction = true
 temperature = false
+thermal_feedback = false
 load_dependent_friction = false
 [guide]
 bristle_stiffness_n_m = 1e5
@@ -784,6 +1032,90 @@ preload_n = 200.0
         // Without backlash the gearbox is a plain spring and damper, in both directions.
         g.half_backlash = 0.0;
         assert!((g.torque(5.0 * 1e-4, 0.0, 0.0, 1.0).output + 4.0).abs() < 1e-9);
+    }
+
+    fn feedback() -> ThermalFeedback {
+        ThermalFeedback { ambient: 293.15, reference: 293.15, viscosity_slope: 4000.0, gearbox_viscous_share: 0.5, belt_coefficient: 3e-4, efficiency: 0.95 }
+    }
+
+    /// The temperature laws at fixed temperatures, by hand. B 4000 K, ambient and reference 20 °C. 30 K above:
+    /// nu / nu_ref = exp(4000 (1 / 323.15 - 1 / 293.15)) = exp(-1.26672) = 0.281749; the gearbox of 95 % with half its
+    /// loss viscous then has 1 - 0.05 (0.5 + 0.5 * 0.281749) = 0.967956. At -10 °C ambient the oil is 4.73776 times
+    /// as thick and the gearbox has 1 - 0.05 (0.5 + 2.36888) = 0.856556. At ambient = reference nothing changes; at
+    /// 40 °C ambient the belt has 1 - 3e-4 * 20 = 0.994 of its EA.
+    #[test]
+    fn the_temperature_laws_follow_their_formulas() {
+        let t = feedback();
+        let close = |a: f64, b: f64| assert!((a - b).abs() < 1e-6, "{a} against {b}");
+        close(t.viscosity_factor(0.0), 1.0);
+        close(t.gearbox_efficiency(0.0), 0.95);
+        close(t.belt_stiffness_factor(), 1.0);
+        close(t.viscosity_factor(30.0), 0.281749);
+        close(t.gearbox_efficiency(30.0), 0.967956);
+        let cold = ThermalFeedback { ambient: 263.15, ..feedback() };
+        close(cold.viscosity_factor(0.0), 4.737759);
+        close(cold.gearbox_efficiency(0.0), 0.856556);
+        close(ThermalFeedback { ambient: 313.15, ..feedback() }.belt_stiffness_factor(), 0.994);
+        // A gearbox without losses keeps none, warm or cold.
+        close(ThermalFeedback { efficiency: 1.0, ..cold }.gearbox_efficiency(0.0), 1.0);
+    }
+
+    /// The teeth climb out above climb times the slack side's tension: with climb 6, 100 N and 700 N climb, 100 N and
+    /// 600 N do not, and a slack side climbs at any pull. A jump runs towards the tight side against the ridge, 600 N
+    /// (6 * 100 N) times sin(2 pi d / p): at d = p / 4 the full 600 N, its energy 600 N * 5 mm / pi = 0.954930 J at
+    /// the top; it ends where the belt crosses the next groove (counted) or the one it left (not counted).
+    #[test]
+    fn a_tooth_jump_starts_at_the_climb_limit_and_ends_one_pitch_on() {
+        let jump = ToothJump { pitch: 0.005, climb: 6.0, mass: 0.26 };
+        assert!(jump.climbs(100.0, 700.1) && jump.climbs(700.1, 100.0) && !jump.climbs(100.0, 600.0) && jump.climbs(0.0, 1.0));
+        let mut slip = [0.0; JUMP_STATES];
+        let mut v = 1.0;
+        assert!(!jump.update(&mut slip, 100.0, 600.0, 1.0, &mut v) && slip == [0.0; JUMP_STATES]);
+        assert_eq!(jump.pulley_force(&slip, -500.0), -500.0);
+        // Section b is the tight one: the belt slides towards it, -u.
+        assert!(jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [0.0, 0.0, -1.0, 0.0, 0.0, 600.0] && v == 1.0);
+        assert_eq!((jump.pulley_inertia(&slip, 1e-3, 0.02), jump.pulley_inertia(&[0.0; JUMP_STATES], 1e-3, 0.02)), (1e-3 - 0.26 * 4e-4, 1e-3));
+        slip[0] = -0.00125;
+        assert!((jump.pulley_force(&slip, -601.0) + 600.0).abs() < 1e-9);
+        let mut rates = [0.0; JUMP_STATES];
+        jump.rates(&slip, -601.0, 2.0, &mut rates);
+        assert!((rates[1] - (-1.0 / 0.26 - 2.0)).abs() < 1e-9 && rates[0] == 0.0, "{rates:?}");
+        slip[0] = -0.0025;
+        slip[1] = -1.0;
+        // 1/2 0.26 ((1 - 1)^2 - 1^2) = -0.13 J, and the ridge's top.
+        assert!((jump.slip_energy(&slip, 1.0) - (-0.13 + 0.954930)).abs() < 1e-6, "{}", jump.slip_energy(&slip, 1.0));
+        assert_eq!(jump.slip_energy(&[0.0; JUMP_STATES], 1.0), 0.0);
+        (slip[0], slip[1]) = (-0.0049, -1.0);
+        assert!(!jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v));
+        // Landed one pitch on: a pulley of 1 kg at its surface at 1 m/s and the belt of 0.26 kg at 0 m/s run on at
+        // 1 / 1.26 = 0.793651 m/s.
+        slip[0] = -0.0051;
+        assert!(jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [-0.005, 0.0, 0.0, 0.0, 1.0, 0.0], "{slip:?}");
+        assert!((v - 0.793651).abs() < 1e-6, "{v}");
+        // Back over the groove it left: in again where it was, not counted.
+        let mut back = [0.0101, -0.1, 1.0, 0.01, 2.0, 50.0];
+        let mut v = 0.0;
+        assert!(!jump.update(&mut back, 0.0, 0.0, 1.0, &mut v));
+        back[0] = 0.0099;
+        assert!(jump.update(&mut back, 0.0, 0.0, 1.0, &mut v) && back == [0.01, 0.0, 0.0, 0.01, 2.0, 0.0], "{back:?}");
+    }
+
+    /// A span of 0.25 m at 300 N with 0.1 kg/m: f1 = sqrt(3000) / 0.5 = 109.545 Hz. Excited at 100 Hz it is 8.71 %
+    /// off; with nothing exciting, or slack, it counts as 1. The drive at 1 m/s of belt with a 5 mm pitch meshes at
+    /// 200 Hz, and a motor at 250 rad/s with ripple and cogging of order 24 adds 954.930 Hz.
+    #[test]
+    fn a_span_vibrates_as_a_string_and_is_judged_against_the_excitations() {
+        let f = span_frequency(0.25, 300.0, 0.1);
+        assert!((f - 109.544512).abs() < 1e-6, "{f}");
+        assert!((span_detuning(f, &[0.0, 100.0, 300.0]) - 0.087129).abs() < 1e-6);
+        assert_eq!((span_detuning(f, &[0.0]), span_detuning(0.0, &[100.0]), span_frequency(0.25, 0.0, 0.1)), (1.0, 1.0, 0.0));
+        let ripple = Ripple { ripple: 0.02, ripple_order: 24.0, cogging: 0.01, cogging_order: 24.0 };
+        let mut out = Vec::new();
+        drive_excitations(0.005, -1.0, &ripple, -250.0, &mut out);
+        assert!(out.len() == 3 && (out[0] - 200.0).abs() < 1e-9 && (out[1] - 954.929659).abs() < 1e-6 && out[1] == out[2], "{out:?}");
+        out.clear();
+        drive_excitations(0.005, 1.0, &Ripple { ripple: 0.0, cogging: 0.0, ..ripple }, 250.0, &mut out);
+        assert_eq!(out.len(), 1);
     }
 
     #[test]

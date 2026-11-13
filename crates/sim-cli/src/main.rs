@@ -36,9 +36,9 @@ fn texts(lang: &str, entry: &MachineEntry) -> Translations {
 struct Args(Vec<String>);
 
 /// Options every command takes, each with a value.
-const COMMON: [&str; 7] = ["--config", "--motor", "--supply", "--gearbox", "--set", "--out", "--lang"];
+const COMMON: [&str; 10] = ["--config", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
 /// Options without a value.
-const FLAGS: [&str; 4] = ["--cycle", "--time-optimal", "--bands", "--worst"];
+const FLAGS: [&str; 5] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -116,7 +116,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs"],
-        Some("search") => &["--series", "--gearboxes"],
+        Some("search") => &["--series", "--gearboxes", "--axes"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis", "--size", "--time"],
@@ -158,7 +158,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
 }
 
 /// The machine named on the command line with its config: the default, or `--config FILE`, with the
-/// parts it names or `--motor`, `--supply` and `--gearbox` name put in from the catalogue, then every
+/// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
     let id = args.positional(1).ok_or(Failure("cli-usage", String::new()))?;
@@ -169,7 +169,8 @@ fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Fa
     };
     // `sweep --motor N` picks a motor of the machine by number; an article number is never a plain number.
     let motor = args.option("--motor").filter(|m| m.parse::<usize>().is_err());
-    for (key, name) in [("motor", motor), ("motor_supply", args.option("--supply")), ("gearbox", args.option("--gearbox"))] {
+    let named = [("motor", motor), ("motor_supply", args.option("--supply")), ("gearbox", args.option("--gearbox")), ("drive", args.option("--drive")), ("belt", args.option("--belt")), ("axis", args.option("--axis"))];
+    for (key, name) in named {
         if let Some(name) = name {
             cfg.set_text(&format!("parts.{key} = {name:?}"))?;
         }
@@ -309,8 +310,9 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 }
 
 /// `optimise <machine>`: a shorter cycle that still passes every verdict, found by trying corner blending
-/// and higher axis limits, with input shaping where a faster setting fails on settling alone (`--runs N`
-/// cycles at most, 40 by default). Prints the cycle time and what to change in the config.
+/// and higher axis limits, with input shaping where a faster setting fails on settling alone, lower lifts down to
+/// `profile.min_clearance_m` and lifts rounded through a via point (`--runs N` cycles at most, 40 by default). Prints
+/// the cycle time and what to change in the config; per changed lift its segments, height before and after, and via point.
 fn optimise(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let runs = args.number("--runs")?.unwrap_or(40.0) as usize;
@@ -319,30 +321,51 @@ fn optimise(args: &Args) -> Result<(), Failure> {
     writeln!(out, "setting,before,after").map_err(io)?;
     writeln!(out, "cycle_s,{:.4},{:.4}", found.before.duration, found.after.duration).map_err(io)?;
     writeln!(out, "dwell_error_peak_m,{:.3e},{:.3e}", found.before.dwell_error_peak, found.after.dwell_error_peak).map_err(io)?;
-    for (path, before, after) in &found.changes {
+    // The new cycle itself is TOML with commas; its lifts say what changed in it.
+    for (path, before, after) in found.changes.iter().filter(|c| c.0 != "cycle.segment") {
         writeln!(out, "{path},{before},{after}").map_err(io)?;
+    }
+    for lift in &found.lifts {
+        let [a, b, c] = lift.segments;
+        writeln!(out, "cycle.segment[{a}-{b}-{c}].lift_m,{:.4},{:.4}", lift.before, lift.after).map_err(io)?;
+        if let Some(via) = &lift.via {
+            let point: Vec<String> = via.iter().map(|x| format!("{x:.4}")).collect();
+            writeln!(out, "cycle.segment[{a}-{b}-{c}].via_m,,{}", point.join(" ")).map_err(io)?;
+        }
     }
     out.flush().map_err(io)
 }
 
-/// `search <machine>`: every motor of the S210 catalogue on the cycle of the config, the passing ones
-/// first, lightest first. `--series PREFIX` limits it to article numbers starting that way, `--supply`
-/// picks 230v or 400v. `--gearboxes SERIES` (e.g. NRK) also tries each motor with the fitting gearboxes
-/// of that series, on a machine that has a gearbox. Says on the error stream how many candidates the
-/// catalogue numbers ruled out before any cycle was simulated; they are in the table too.
+/// `search <machine>`: every motor of the catalogue on the cycle of the config, each with the drive the catalogue
+/// pairs with it, the passing ones first, cheapest first (installed weight stands in for the price). `--series
+/// PREFIX` limits it to article numbers starting that way, `--supply` picks 230v or 400v (S210) or s120 (the S120
+/// motors and Motor Modules). `--gearboxes SERIES` (e.g. NRK) also tries each motor with the fitting gearboxes of
+/// that series, on a machine that has a gearbox. `--axes` tries every motor on every axis of the catalogue of the
+/// machine's kind as well, the axis's weight in the cost. Says on the error stream how many candidates the
+/// catalogue numbers ruled out before any cycle was simulated (they are in the table too) and how long the search
+/// took on how many processors.
 fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let prefix = args.option("--series").unwrap_or("");
-    let found = sim_components::catalog::search_motors(entry, &cfg, args.option("--supply").unwrap_or("400v"), &|article| article.starts_with(prefix), args.option("--gearboxes"));
+    let (supply, gearboxes, wanted) = (args.option("--supply").unwrap_or("400v"), args.option("--gearboxes"), |article: &str| article.starts_with(prefix));
+    let started = std::time::Instant::now();
+    let found = if args.flag("--axes") {
+        sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes)
+    } else {
+        sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)
+    };
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     eprintln!("{}", tr.tr_arg("cli-search-screened", &format!("{} / {}", found.iter().filter(|c| c.result.is_none()).count(), found.len())));
+    eprintln!("{}", tr.tr_arg("cli-search-time", &format!("{threads}: {:.1} s", started.elapsed().as_secs_f64())));
     let mut out = output(args, "--out")?;
-    writeln!(out, "motor,gearbox,mass_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
+    writeln!(out, "axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
     for c in &found {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
         let (peak, rise) = c.result.as_ref().map_or((f64::NAN, f64::NAN), |(load, _)| {
             (load.motors.iter().map(|m| m.peak_torque).fold(0.0, f64::max), load.motors.iter().map(|m| m.winding_rise).fold(0.0, f64::max))
         });
-        writeln!(out, "{},{},{:.2},{},{check},{utilisation:.4},{peak:.4},{rise:.2}", c.article, c.gearbox, c.mass, if c.passes() { "ok" } else { "FAIL" }).map_err(io)?;
+        let result = if c.passes() { "ok" } else { "FAIL" };
+        writeln!(out, "{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}", c.axis, c.article, c.gearbox, c.drive, c.mass, c.cost).map_err(io)?;
     }
     out.flush().map_err(io)
 }

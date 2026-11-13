@@ -1043,16 +1043,19 @@ fn sampled_bands_find_the_two_masses_that_fail_only_together() {
 /// masses high and the efficiency LOW, (2.05 / 0.85 + 0.375) / 5 = 0.5574 N m, 0.1467 of the 3.8 N m peak torque
 /// (the motor runs at 250 rad/s at most, below the rated speed). A bound on the belt damping does nothing in the
 /// rigid model. The search finds both corners, within 2 % of the hand calculation, and no sample of 40 (seeds 1
-/// and 2) is worse.
+/// and 2) is worse. The bands it gives back from its first runs (`verdict_worst_and_bands`) are those of
+/// `verdict_bands`, to the last bit.
 #[test]
 fn the_worst_corner_search_finds_the_hand_calculated_corner() {
-    use sim_components::analysis::{verdict_bands_sampled, verdict_worst};
+    use sim_components::analysis::{verdict_bands, verdict_bands_sampled, verdict_worst, verdict_worst_and_bands};
     let mut cfg = ideal_rigid();
     for e in ["effects.payload = true", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.9", "effects.dc_link = false"] {
         cfg.set_text(e).unwrap();
     }
     let bounds = [("mass.carriage_kg".to_string(), 4.0, 6.0), ("mass.payload_kg".to_string(), 2.0, 4.0), ("gearbox.efficiency".to_string(), 0.85, 0.95), ("belt.damping_n_s_m".to_string(), 50.0, 200.0)];
     let (worst, runs) = verdict_worst(&ENTRY, &cfg, &bounds).unwrap();
+    let (again, bands, _) = verdict_worst_and_bands(&ENTRY, &cfg, &bounds).unwrap();
+    assert!(again == worst && bands == verdict_bands(&ENTRY, &cfg, &bounds).unwrap());
     let find = |check: &str| worst.iter().find(|w| w.verdict.check == check).unwrap().clone();
     let (gearbox, motor) = (find("gearbox-peak"), find("motor-peak"));
     assert!(gearbox.high[..2] == [Some(true), Some(true)] && (gearbox.verdict.value / 2.05 - 1.0).abs() < 0.02, "{gearbox:?}");

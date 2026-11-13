@@ -4,3 +4,5 @@
 /cad-source
 /crates/sim-app/assets/meshes
 __pycache__/
+/dist
+recordings/

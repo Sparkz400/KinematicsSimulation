@@ -44,7 +44,8 @@ fn a_disabled_winding_cools_by_the_exponential() {
 /// the bus level, where the rectifier holds it. With tau = R_b C = 0.2 s and 220 V at the moment the drives go off (below
 /// the chopper's threshold, which would burn the excess first), by hand 220 V exp(-0.25) = 171.336 V after 0.05 s, and
 /// the bus level of 155.13 V after tau ln(220 / 155.13) = 69.9 ms, from then on held. A shared link discharges the same
-/// way. A regenerative supply takes what is above the bus level at once (from 160 V, 0.36 J, in one step).
+/// way. A regenerative supply takes what is above the bus level at once (from 160 V, 0.36 J, in one step). On a config
+/// with another bus level (540 V, a catalogue motor's) every voltage is scaled with it, 220 V to 765.8 V: the times stay.
 #[test]
 fn a_disabled_drives_dc_link_discharges_by_the_rc_exponential() {
     for entry in MACHINES {
@@ -52,13 +53,14 @@ fn a_disabled_drives_dc_link_discharges_by_the_rc_exponential() {
             let cfg = with(&entry.config(), &["ratings.dc_link_discharge_time_constant_s = 0.2", &format!("effects.shared_dc_link = {shared}")]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
             let bus = cfg.f64("drive.bus_voltage_v").unwrap();
+            let scale = bus / 155.13;
             sim.command(Command::Disable).unwrap();
             // The first disabled step hands the holding current's energy to the link; from then on it only discharges.
             sim.step();
-            sim.control.drives.iter_mut().for_each(|d| d.dc_voltage = 220.0);
+            sim.control.drives.iter_mut().for_each(|d| d.dc_voltage = 220.0 * scale);
             sim.run(0.05, |_| {});
             for d in &sim.control.drives {
-                assert!((d.dc_voltage - 171.336).abs() < 1e-3, "{} shared {shared}: {} V after 0.05 s", entry.id, d.dc_voltage);
+                assert!((d.dc_voltage - 171.336 * scale).abs() < 1e-3 * scale, "{} shared {shared}: {} V after 0.05 s", entry.id, d.dc_voltage);
             }
             sim.run(0.019, |_| {});
             assert!(sim.control.drives.iter().all(|d| d.dc_voltage > bus), "{} shared {shared}: at the bus level before 69.9 ms", entry.id);
@@ -69,7 +71,8 @@ fn a_disabled_drives_dc_link_discharges_by_the_rc_exponential() {
         }
         let mut regenerative = Sim::new(entry, &with(&entry.config(), &["effects.regenerative_supply = true"])).unwrap();
         regenerative.command(Command::Disable).unwrap();
-        regenerative.control.drives.iter_mut().for_each(|d| d.dc_voltage = 160.0);
+        let bus = entry.config().f64("drive.bus_voltage_v").unwrap();
+        regenerative.control.drives.iter_mut().for_each(|d| d.dc_voltage = 160.0 * bus / 155.13);
         regenerative.step();
         assert!(regenerative.control.drives.iter().all(|d| d.dc_voltage == entry.config().f64("drive.bus_voltage_v").unwrap() && d.mains_power > 0.0), "{}", entry.id);
     }

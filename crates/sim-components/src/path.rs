@@ -14,8 +14,17 @@
 //! of the piece before it is a full turn. As the first piece an arc has to end at least 1 mm from where the
 //! machine stands (see `FIRST_ARC`). Spline pieces that follow one another form one curve through all their points (see
 //! `spline`); it leaves the line or arc before it in that piece's direction and ends in the direction the
-//! line or arc after it starts with. Arcs and splines need a machine with two axes. Empty lines and lines
-//! starting with `#` are skipped.
+//! line or arc after it starts with. Lines work on any number of axes; arcs and splines on two and on three (see
+//! below). Empty lines and lines starting with `#` are skipped.
+//!
+//! On a machine with three axes (x, y, z) a line has three positions (`line,0.1,0.0,-0.8`), and so does a spline
+//! point. An arc gives its end and its centre with three positions each, `arc,x,y,z,cx,cy,cz,cw`: it lies in the
+//! plane through where it starts, its end and its centre, and `cw`/`ccw` is seen from the side of that plane its
+//! normal points to when the normal is taken upwards (+z); for a vertical plane, towards the viewer (-y), as the
+//! scene looks at the machine; for the y-z plane, from +x. So an arc in the x-z plane is seen as on a two-axis
+//! machine with x and z. What three axes do not have: a full turn or a half turn (start, end and centre on one line
+//! leave the plane open, and such an arc is refused), and transition curves (`profile.path_tolerance_m` is not used:
+//! the path runs as given, with a stop or a crawl where the curvature steps).
 
 use crate::control::CommandError;
 use crate::drive::DriveParams;
@@ -44,6 +53,9 @@ pub fn parse(text: &str) -> Result<Vec<Piece>, String> {
             "arc" if fields.len() == 6 && (turn == "cw" || turn == "ccw") => {
                 numbers(&fields[1..5]).map(|n| Piece::Arc { to: n[..2].to_vec(), centre: n[2..].to_vec(), clockwise: turn == "cw" })
             }
+            "arc" if fields.len() == 8 && (turn == "cw" || turn == "ccw") => {
+                numbers(&fields[1..7]).map(|n| Piece::Arc { to: n[..3].to_vec(), centre: n[3..].to_vec(), clockwise: turn == "cw" })
+            }
             _ => None,
         };
         pieces.push(piece.ok_or(line.to_string())?);
@@ -69,6 +81,9 @@ enum Geo {
     Line { from: Vec<f64>, dir: Vec<f64>, length: f64 },
     /// `turn` is 1 counter-clockwise and -1 clockwise.
     Arc { centre: [f64; 2], radius: f64, from_angle: f64, turn: f64, length: f64 },
+    /// An arc in space: at the angle phi = s / radius from its start the point centre + radius (cos phi u + sin phi w),
+    /// u from the centre to its start, w at right angles to it in its plane, in the direction it turns.
+    Arc3 { centre: [f64; 3], u: [f64; 3], w: [f64; 3], radius: f64, length: f64 },
     /// A transition curve (clothoid): from the point `from` in the direction `heading`, the curvature goes
     /// evenly with the distance from `k0` to `k1`. Curvature is 1 / radius, positive counter-clockwise.
     Clothoid { from: [f64; 2], heading: f64, k0: f64, k1: f64, length: f64 },
@@ -76,11 +91,24 @@ enum Geo {
     /// c5 u^5 for u from 0 to `h` (a cubic, c4 = c5 = 0, but where a spline is eased into a line or an arc,
     /// `ease`). `travelled` is the distance along it at `SPLINE_PARTS` + 1 evenly spaced u, the last being the
     /// length; `tightest` and `rate` are the most its curvature and the change of curvature per distance get.
-    Spline { c: Poly, h: f64, travelled: Vec<f64>, tightest: f64, rate: f64 },
+    /// `dims` is the number of axes it runs in, two or three (a two-axis span has its third coefficients zero).
+    Spline { c: Poly, h: f64, travelled: Vec<f64>, tightest: f64, rate: f64, dims: usize },
 }
 
-/// The coefficients of a spline span's polynomial in u, per power, for both axes.
-type Poly = [[f64; 2]; 6];
+/// The coefficients of a spline span's polynomial in u, per power, for up to three axes.
+type Poly = [[f64; 3]; 6];
+
+fn norm3(a: [f64; 3]) -> f64 {
+    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
 
 /// A spline span's table of distance travelled has this many parts.
 const SPLINE_PARTS: usize = 64;
@@ -89,20 +117,20 @@ const SPLINE_PARTS: usize = 64;
 const SPLINE_MARGIN: f64 = 1.05;
 
 /// Derivatives of a spline span's polynomial by u: first, second, third.
-fn poly_rates(c: &Poly, u: f64) -> [[f64; 2]; 3] {
+fn poly_rates(c: &Poly, u: f64) -> [[f64; 3]; 3] {
     // The k-th derivative: sum over m of m! / (m - k)! c_m u^(m - k).
     let rate = |k: usize, i: usize| (k..6).rev().fold(0.0, |sum, m| sum * u + c[m][i] * ((m - k + 1)..=m).map(|f| f as f64).product::<f64>());
-    [1, 2, 3].map(|k| [rate(k, 0), rate(k, 1)])
+    [1, 2, 3].map(|k| [rate(k, 0), rate(k, 1), rate(k, 2)])
 }
 
 /// The same polynomial with u counted from `from`: its coefficients around that point.
 fn poly_shift(c: &Poly, from: f64) -> Poly {
-    let mut out = [[0.0; 2]; 6];
+    let mut out = [[0.0; 3]; 6];
     for (m, cm) in c.iter().enumerate() {
         // (u + from)^m = sum over k of m! / (k! (m - k)!) u^k from^(m - k)
         let mut binomial = 1.0;
         for (k, o) in out.iter_mut().enumerate().take(m + 1) {
-            for i in 0..2 {
+            for i in 0..3 {
                 o[i] += cm[i] * binomial * from.powi((m - k) as i32);
             }
             binomial *= (m - k) as f64 / (k + 1) as f64;
@@ -117,13 +145,13 @@ fn poly_distance(c: &Poly, from: f64, to: f64) -> f64 {
     const NODES: [(f64, f64); 5] =
         [(0.0, 0.568_888_888_888_888_9), (0.538_469_310_105_683_1, 0.478_628_670_499_366_5), (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5), (0.906_179_845_938_664, 0.236_926_885_056_189_1), (-0.906_179_845_938_664, 0.236_926_885_056_189_1)];
     let (mid, half) = (0.5 * (from + to), 0.5 * (to - from));
-    half * NODES.iter().map(|(x, w)| { let [d, ..] = poly_rates(c, mid + half * x); w * d[0].hypot(d[1]) }).sum::<f64>()
+    half * NODES.iter().map(|(x, w)| { let [d, ..] = poly_rates(c, mid + half * x); w * norm3(d) }).sum::<f64>()
 }
 
 /// A spline span of the polynomial `c` for u from 0 to `h`, with its table of distance travelled and the most its
 /// curvature and the change of curvature per distance get. `None` for a curve that nearly stops and turns on the
 /// spot somewhere (its speed by u, 1 on average, falls below 0.05).
-fn span(c: Poly, h: f64) -> Option<Geo> {
+fn span(c: Poly, h: f64, dims: usize) -> Option<Geo> {
     let part = h / SPLINE_PARTS as f64;
     let mut travelled = vec![0.0];
     for k in 0..SPLINE_PARTS {
@@ -132,22 +160,26 @@ fn span(c: Poly, h: f64) -> Option<Geo> {
     let (mut tightest, mut rate) = (0f64, 0f64);
     for k in 0..=4 * SPLINE_PARTS {
         let [d, d2, d3] = poly_rates(&c, k as f64 * part / 4.0);
-        let (speed, cross) = (d[0].hypot(d[1]), |a: [f64; 2], b: [f64; 2]| a[0] * b[1] - a[1] * b[0]);
+        let speed = norm3(d);
         if speed < 0.05 {
             return None;
         }
-        // Curvature k = d x d2 / speed^3, and its derivative by u over the speed.
-        let curvature = cross(d, d2) / speed.powi(3);
-        let by_u = cross(d, d3) / speed.powi(3) - 3.0 * curvature * (d[0] * d2[0] + d[1] * d2[1]) / (speed * speed);
-        (tightest, rate) = (tightest.max(curvature.abs()), rate.max((by_u / speed).abs()));
+        // Curvature k = |d x d2| / speed^3, and its derivative by u over the speed: d|n|/du = n . (d x d3) / |n| with
+        // n = d x d2 (on two axes n has a z part only, and this is the size of the signed formula).
+        let n = cross3(d, d2);
+        let (size, turn) = (norm3(n), cross3(d, d3));
+        let curvature = size / speed.powi(3);
+        let along = if size > 0.0 { dot3(n, turn) / size } else { norm3(turn) };
+        let by_u = along / speed.powi(3) - 3.0 * curvature * dot3(d, d2) / (speed * speed);
+        (tightest, rate) = (tightest.max(curvature), rate.max((by_u / speed).abs()));
     }
-    Some(Geo::Spline { c, h, travelled, tightest: SPLINE_MARGIN * tightest, rate: SPLINE_MARGIN * rate })
+    Some(Geo::Spline { c, h, travelled, tightest: SPLINE_MARGIN * tightest, rate: SPLINE_MARGIN * rate, dims })
 }
 
 impl Geo {
     fn length(&self) -> f64 {
         match self {
-            Geo::Line { length, .. } | Geo::Arc { length, .. } | Geo::Clothoid { length, .. } => *length,
+            Geo::Line { length, .. } | Geo::Arc { length, .. } | Geo::Arc3 { length, .. } | Geo::Clothoid { length, .. } => *length,
             Geo::Spline { travelled, .. } => travelled[SPLINE_PARTS],
         }
     }
@@ -160,6 +192,10 @@ impl Geo {
             Geo::Arc { centre, radius, from_angle, turn, .. } => {
                 let (sin, cos) = (from_angle + turn * s / radius).sin_cos();
                 [vec![centre[0] + radius * cos, centre[1] + radius * sin], vec![-turn * sin, turn * cos], vec![-cos / radius, -sin / radius]]
+            }
+            Geo::Arc3 { centre, u, w, radius, .. } => {
+                let (sin, cos) = (s / radius).sin_cos();
+                [(0..3).map(|i| centre[i] + radius * (cos * u[i] + sin * w[i])).collect(), (0..3).map(|i| -sin * u[i] + cos * w[i]).collect(), (0..3).map(|i| -(cos * u[i] + sin * w[i]) / radius).collect()]
             }
             Geo::Clothoid { from, heading, k0, k1, length } => {
                 let angle = |u: f64| heading + k0 * u + 0.5 * (k1 - k0) * u * u / length;
@@ -175,7 +211,7 @@ impl Geo {
                 let ((sin, cos), k) = (angle(s).sin_cos(), k0 + (k1 - k0) * s / length);
                 [vec![from[0] + x * h / 3.0, from[1] + y * h / 3.0], vec![cos, sin], vec![-k * sin, k * cos]]
             }
-            Geo::Spline { c, h, travelled, .. } => {
+            Geo::Spline { c, h, travelled, dims, .. } => {
                 // The u at which the span has run the distance s: from the table, then Newton's method on the
                 // distance itself, which converges to rounding in two or three steps.
                 let part = travelled.partition_point(|t| *t <= s).clamp(1, SPLINE_PARTS) - 1;
@@ -183,14 +219,14 @@ impl Geo {
                 let mut u = u0 + du * (s - travelled[part]) / (travelled[part + 1] - travelled[part]);
                 for _ in 0..4 {
                     let [d, ..] = poly_rates(c, u);
-                    u -= (travelled[part] + poly_distance(c, u0, u) - s) / d[0].hypot(d[1]);
+                    u -= (travelled[part] + poly_distance(c, u0, u) - s) / norm3(d);
                 }
                 let [d, d2, _] = poly_rates(c, u);
-                let speed = d[0].hypot(d[1]);
-                let (dir, along) = ([d[0] / speed, d[1] / speed], (d[0] * d2[0] + d[1] * d2[1]) / speed);
-                let pose = (0..2).map(|i| c.iter().rev().fold(0.0, |sum, cm| sum * u + cm[i])).collect();
+                let speed = norm3(d);
+                let (dir, along) = (d.map(|x| x / speed), dot3(d, d2) / speed);
+                let pose = (0..*dims).map(|i| c.iter().rev().fold(0.0, |sum, cm| sum * u + cm[i])).collect();
                 // The second derivative by distance: what of the second derivative by u is across the direction.
-                [pose, dir.to_vec(), (0..2).map(|i| (d2[i] - along * dir[i]) / (speed * speed)).collect()]
+                [pose, dir[..*dims].to_vec(), (0..*dims).map(|i| (d2[i] - along * dir[i]) / (speed * speed)).collect()]
             }
         }
     }
@@ -212,20 +248,21 @@ impl Geo {
 ///
 /// `None` for a curve that nearly stops and turns on the spot somewhere (its speed by u, 1 on average, falls
 /// below 0.05): via points and end directions that fight each other.
-fn spline(points: &[Vec<f64>], before: Option<[f64; 2]>, after: Option<[f64; 2]>) -> Option<Vec<Geo>> {
-    let n = points.len() - 1;
+fn spline(points: &[Vec<f64>], before: Option<[f64; 3]>, after: Option<[f64; 3]>) -> Option<Vec<Geo>> {
+    let (n, dims) = (points.len() - 1, points[0].len());
     let h: Vec<f64> = points.windows(2).map(|w| distance(&w[0], &w[1])).collect();
-    let chord = |i: usize, axis: usize| (points[i + 1][axis] - points[i][axis]) / h[i];
+    // A two-axis point has no third position: its chord there is zero.
+    let chord = |i: usize, axis: usize| if axis < dims { (points[i + 1][axis] - points[i][axis]) / h[i] } else { 0.0 };
     // Rows (below, diagonal, above, right side) of the system for the derivatives at the points.
     let mut rows: Vec<[f64; 3]> = Vec::new();
-    let mut right: Vec<[f64; 2]> = Vec::new();
+    let mut right: Vec<[f64; 3]> = Vec::new();
     for i in 0..=n {
         let (row, side) = match (i, before, after) {
             (0, Some(dir), _) => ([0.0, 1.0, 0.0], dir),
-            (0, None, _) => ([0.0, 2.0, 1.0], [3.0 * chord(0, 0), 3.0 * chord(0, 1)]),
+            (0, None, _) => ([0.0, 2.0, 1.0], [0, 1, 2].map(|axis| 3.0 * chord(0, axis))),
             (i, _, Some(dir)) if i == n => ([0.0, 1.0, 0.0], dir),
-            (i, _, None) if i == n => ([1.0, 2.0, 0.0], [3.0 * chord(n - 1, 0), 3.0 * chord(n - 1, 1)]),
-            _ => ([h[i], 2.0 * (h[i - 1] + h[i]), h[i - 1]], [0, 1].map(|axis| 3.0 * (h[i] * chord(i - 1, axis) + h[i - 1] * chord(i, axis)))),
+            (i, _, None) if i == n => ([1.0, 2.0, 0.0], [0, 1, 2].map(|axis| 3.0 * chord(n - 1, axis))),
+            _ => ([h[i], 2.0 * (h[i - 1] + h[i]), h[i - 1]], [0, 1, 2].map(|axis| 3.0 * (h[i] * chord(i - 1, axis) + h[i - 1] * chord(i, axis)))),
         };
         rows.push(row);
         right.push(side);
@@ -234,24 +271,24 @@ fn spline(points: &[Vec<f64>], before: Option<[f64; 2]>, after: Option<[f64; 2]>
     for i in 1..=n {
         let factor = rows[i][0] / rows[i - 1][1];
         rows[i][1] -= factor * rows[i - 1][2];
-        right[i] = [right[i][0] - factor * right[i - 1][0], right[i][1] - factor * right[i - 1][1]];
+        right[i] = [0, 1, 2].map(|axis| right[i][axis] - factor * right[i - 1][axis]);
     }
-    let mut d = vec![[0.0; 2]; n + 1];
+    let mut d = vec![[0.0; 3]; n + 1];
     for i in (0..=n).rev() {
-        let above = if i < n { d[i + 1] } else { [0.0; 2] };
-        d[i] = [0, 1].map(|axis| (right[i][axis] - rows[i][2] * above[axis]) / rows[i][1]);
+        let above = if i < n { d[i + 1] } else { [0.0; 3] };
+        d[i] = [0, 1, 2].map(|axis| (right[i][axis] - rows[i][2] * above[axis]) / rows[i][1]);
     }
     (0..n)
         .map(|i| {
             let c = [
-                [points[i][0], points[i][1]],
+                [0, 1, 2].map(|axis| if axis < dims { points[i][axis] } else { 0.0 }),
                 d[i],
-                [0, 1].map(|axis| (3.0 * chord(i, axis) - 2.0 * d[i][axis] - d[i + 1][axis]) / h[i]),
-                [0, 1].map(|axis| (d[i][axis] + d[i + 1][axis] - 2.0 * chord(i, axis)) / (h[i] * h[i])),
-                [0.0; 2],
-                [0.0; 2],
+                [0, 1, 2].map(|axis| (3.0 * chord(i, axis) - 2.0 * d[i][axis] - d[i + 1][axis]) / h[i]),
+                [0, 1, 2].map(|axis| (d[i][axis] + d[i + 1][axis] - 2.0 * chord(i, axis)) / (h[i] * h[i])),
+                [0.0; 3],
+                [0.0; 3],
             ];
-            span(c, h[i])
+            span(c, h[i], dims)
         })
         .collect()
 }
@@ -266,7 +303,9 @@ fn distance(a: &[f64], b: &[f64]) -> f64 {
 /// allow, which sets how long a transition has to be.
 fn geometry(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, speed: &dyn Fn(&Geo) -> f64) -> Result<(Vec<Geo>, f64), CommandError> {
     let (geo, off) = given(start, pieces)?;
-    if tolerance <= 0.0 {
+    // shortcut: transition curves are worked out in the plane, so a path on three axes runs as given; lift them into
+    // space (along the osculating plane) if a three-axis machine has to pass junctions at speed.
+    if tolerance <= 0.0 || start.len() != 2 {
         return Ok((geo, off));
     }
     let (geo, moved) = blend(geo, axes, tolerance, speed);
@@ -319,12 +358,12 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
     while let Some((piece, after)) = rest.split_first() {
         rest = after;
         let geo = match piece {
-            Piece::Spline(_) if here.len() == 2 => {
+            Piece::Spline(_) if here.len() == 2 || here.len() == 3 => {
                 // The whole run of spline pieces is one curve; a via point given twice counts once.
                 let run = 1 + rest.iter().take_while(|p| matches!(p, Piece::Spline(_))).count();
                 let mut points = vec![here.clone()];
                 for to in std::iter::once(piece).chain(&rest[..run - 1]).filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None }) {
-                    if to.len() != 2 {
+                    if to.len() != here.len() {
                         return bad;
                     }
                     if distance(to, &points[points.len() - 1]) > 1e-9 {
@@ -338,13 +377,15 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
                 }
                 let end = &points[points.len() - 1];
                 // The direction the piece before ends with, and the one the line or arc after starts with.
-                let before = out.last().map(|g| { let [_, dir, _] = g.at(g.length()); [dir[0], dir[1]] });
+                let dir3 = |v: &[f64]| [0, 1, 2].map(|i| v.get(i).copied().unwrap_or(0.0));
+                let before = out.last().map(|g| dir3(&g.at(g.length())[1]));
                 let after = match rest.first() {
-                    Some(Piece::Line(to)) if to.len() == 2 && distance(to, end) > 1e-9 => Some([(to[0] - end[0]) / distance(to, end), (to[1] - end[1]) / distance(to, end)]),
-                    Some(Piece::Arc { centre, clockwise, .. }) if centre.len() == 2 && distance(end, centre) > 1e-6 => {
+                    Some(Piece::Line(to)) if to.len() == end.len() && distance(to, end) > 1e-9 => Some(dir3(&to.iter().zip(end).map(|(t, e)| (t - e) / distance(to, end)).collect::<Vec<_>>())),
+                    Some(Piece::Arc { centre, clockwise, .. }) if centre.len() == 2 && end.len() == 2 && distance(end, centre) > 1e-6 => {
                         let (turn, radius) = (if *clockwise { -1.0 } else { 1.0 }, distance(end, centre));
-                        Some([-turn * (end[1] - centre[1]) / radius, turn * (end[0] - centre[0]) / radius])
+                        Some([-turn * (end[1] - centre[1]) / radius, turn * (end[0] - centre[0]) / radius, 0.0])
                     }
+                    Some(Piece::Arc { to, centre, clockwise }) if end.len() == 3 && to.len() == 3 && centre.len() == 3 => arc3(end, to, centre, *clockwise).map(|g| dir3(&g.at(0.0)[1])),
                     _ => None,
                 };
                 let Some(spans) = spline(&points, before, after) else { return bad };
@@ -375,6 +416,16 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
                 let sweep = if full { std::f64::consts::TAU } else { (turn * (angle(to) - angle(from))).rem_euclid(std::f64::consts::TAU) };
                 Geo::Arc { centre: [centre[0], centre[1]], radius, from_angle: angle(&here), turn, length: sweep * radius }
             }
+            Piece::Arc { to, centre, clockwise } if here.len() == 3 && to.len() == 3 && centre.len() == 3 => {
+                // Its end is told from the end stated before it, as on two axes. An arc in space is never a full turn,
+                // so a first arc needs no distance from where the machine stands.
+                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], ARC_SLACK) };
+                if (distance(to, centre) - distance(from, centre)).abs() >= slack {
+                    return bad;
+                }
+                let Some(geo) = arc3(&here, to, centre, *clockwise) else { return bad };
+                geo
+            }
             _ => return bad,
         };
         if geo.length() > 1e-9 {
@@ -387,6 +438,31 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
     }
     // Below a nanometre it is rounding.
     if out.is_empty() { bad } else { Ok((out, if off > 1e-9 { off } else { 0.0 })) }
+}
+
+/// An arc in space from `from` around `centre` towards `to`, in the plane of the three points, turning clockwise or
+/// counter-clockwise as seen from the side its normal points to: the normal taken upwards (+z), for a vertical plane
+/// towards the viewer (-y), for the y-z plane along +x (see the top of the file). `None` where the three points leave
+/// the plane open (on one line: a half or a full turn) or the radius is nil.
+fn arc3(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo> {
+    let at = |p: &[f64]| [p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]];
+    let (a, b) = (at(from), at(to));
+    let radius = norm3(a);
+    let mut normal = cross3(a, b);
+    let size = norm3(normal);
+    if radius < 1e-6 || size < 1e-9 * radius * norm3(b) {
+        return None;
+    }
+    normal = normal.map(|x| x / size);
+    let view = if normal[2].abs() > 1e-9 { [0.0, 0.0, 1.0] } else if normal[1].abs() > 1e-9 { [0.0, -1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    if dot3(normal, view) < 0.0 {
+        normal = normal.map(|x| -x);
+    }
+    // Counter-clockwise seen from the normal's side turns from u towards normal x u.
+    let u = a.map(|x| x / radius);
+    let w = cross3(normal, u).map(|x| if clockwise { -x } else { x });
+    let angle = dot3(b, w).atan2(dot3(b, u)).rem_euclid(std::f64::consts::TAU);
+    Some(Geo::Arc3 { centre: [centre[0], centre[1], centre[2]], u, w, radius, length: angle * radius })
 }
 
 /// A planned pose with what rounding has put outside an axis's range back on its end. A path that ends on the
@@ -571,7 +647,7 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
     let side = |i: usize| match &geo[i] {
         Geo::Arc { turn, .. } => circle(&inset, i).map(|(centre, radius)| Side::Circle { centre, curvature: turn / radius }),
         Geo::Line { from, dir, .. } => Some(Side::Line { point: [from[0], from[1]], dir: [dir[0], dir[1]] }),
-        Geo::Clothoid { .. } | Geo::Spline { .. } => None,
+        Geo::Clothoid { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } => None,
     };
     let mut curves: Vec<Option<Geo>> = vec![None];
     for j in 1..n {
@@ -636,7 +712,7 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
                 // Curves that overlap leave less than nothing: a length below zero, refused below.
                 Geo::Arc { centre, radius: moved, from_angle: start.as_deref().map_or(*from_angle, angle), turn: *turn, length: left * moved }
             }
-            Geo::Spline { .. } => piece.clone(),
+            Geo::Spline { .. } | Geo::Arc3 { .. } => piece.clone(),
             Geo::Clothoid { .. } => return None,
         });
         if out[out.len() - 1].length() <= 0.0 {
@@ -695,14 +771,14 @@ fn ease(mut geo: Vec<Geo>, axes: &[AxisInfo], tolerance: f64, speed: &dyn Fn(&Ge
         let (into, out_of) = (spline(&geo[j]) && !spline(&geo[j - 1]), spline(&geo[j - 1]) && !spline(&geo[j]));
         if (into || out_of) && !corner(&geo[j - 1], &geo[j]) {
             let (at, other) = if into { (j, j - 1) } else { (j - 1, j) };
-            let Geo::Spline { c, h, .. } = &geo[at] else { unreachable!() };
-            let (c, h) = (*c, *h);
+            let Geo::Spline { c, h, dims, .. } = &geo[at] else { unreachable!() };
+            let (c, h, dims) = (*c, *h, *dims);
             // The neighbour's curvature where it meets the spline, and the spline's own there.
             let target = &geo[other].at(if into { geo[other].length() } else { 0.0 })[2];
             let [d, d2, _] = poly_rates(&c, if into { 0.0 } else { h });
-            let along = d[0] * d2[0] + d[1] * d2[1];
-            let change = [0, 1].map(|i| target[i] - (d2[i] - along * d[i]));
-            let dk = change[0].hypot(change[1]);
+            let along = dot3(d, d2);
+            let change = [0, 1, 2].map(|i| target.get(i).copied().unwrap_or(0.0) - (d2[i] - along * d[i]));
+            let dk = norm3(change);
             let v = speed(&geo[other]).min(speed(&geo[at]));
             let needed = EASE_RATE * SPLINE_MARGIN * dk * v.powi(3) / (0.4 * jerk);
             let l = (tolerance / (EASE_PEAK * dk)).sqrt().min(needed).min(0.5 * h);
@@ -712,11 +788,11 @@ fn ease(mut geo: Vec<Geo>, axes: &[AxisInfo], tolerance: f64, speed: &dyn Fn(&Ge
                 // delta expanded in powers of u: from the junction at u = 0, or towards it at u = l.
                 let powers = if into { [0.5, -1.5 / l, 1.5 / (l * l), -0.5 / (l * l * l)] } else { [0.0, 0.5 / l, -1.0 / (l * l), 0.5 / (l * l * l)] };
                 for (m, p) in powers.iter().enumerate() {
-                    for i in 0..2 {
+                    for i in 0..3 {
                         eased[m + 2][i] += p * change[i];
                     }
                 }
-                if let (Some(eased), Some(rest)) = (span(eased, l), span(rest, h - l)) {
+                if let (Some(eased), Some(rest)) = (span(eased, l, dims), span(rest, h - l, dims)) {
                     let pieces = if into { [eased, rest] } else { [rest, eased] };
                     geo.splice(at..=at, pieces);
                     moved = moved.max(EASE_PEAK * dk * l * l);
@@ -775,7 +851,7 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
     let any = || tightest(&|row| row.iter().map(|w| w * w).sum::<f64>().sqrt());
     match geo {
         Geo::Line { dir, .. } => tightest(&|row| row.iter().zip(dir).map(|(w, d)| w * d).sum::<f64>().abs()),
-        Geo::Arc { radius, .. } => curved(*radius, 0.0, any()),
+        Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, 0.0, any()),
         // A transition curve counts as an arc of its tightest radius.
         Geo::Clothoid { k0, k1, length, .. } => curved(1.0 / k0.abs().max(k1.abs()), (k1 - k0).abs() / length, any()),
         // So does a spline span, with the fastest its curvature changes anywhere on it.
@@ -909,22 +985,33 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 /// So on a line the plan uses the motors' torque and speed in full, apart from the holding torque being
 /// counted against both directions. On an arc it shares them out as `curved` does, which leaves a part
 /// unused. The velocity and acceleration limits of the axes play no part.
-pub fn plan_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let ((geo, _), limited) = time_optimal_geometry(machine, drive, reserve, start, pieces, tolerance)?;
+///
+/// The belt is a limit of the plan too: `tension` is the lowest and the highest tension a belt section may have
+/// (`ratings.belt_min_tension_n` and `belt_max_tension_n`; -inf and inf where the config has none) and the share of the
+/// room to them the plan may use (`profile.tension_reserve`). The rigid model gives each section's tension at the nine
+/// poses as c + g . acceleration (`Machine::rigid_tensions`), linear in the acceleration, so each section and pose is
+/// one more row of the acceleration bounds: |g . acceleration| <= share * min(highest - c, c - lowest), for either
+/// direction, as the torque is. The rest of the room is for what the rigid model leaves out: the belt's vibration
+/// and damping (on one shipped gantry 15 to 70 N above the rigid tension at jerks of 300 to 2000 m/s^3).
+pub fn plan_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    let ((geo, _), limited) = time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance)?;
     Ok(timed(machine.axes(), &geo, &limited, cycle))
 }
 
 /// The same path as `plan` times, transition curves included, their lengths for the speeds the motors allow, with
 /// the deviation and the motors' limits per piece; refused where a piece has no torque left beyond holding the tool
-/// or turns no motor.
-fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f64, start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
-    let piece_limits = motor_limits(machine, drive, reserve);
+/// or turns no motor, or where the belt holding the tool there is already beyond its tension limits.
+fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
+    let piece_limits = motor_limits(machine, drive, reserve, tension);
     let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0])?;
     let mut limited = Vec::new();
+    let usable = |limits: &[f64; 3]| limits.iter().all(|l| l.is_finite() && *l > 0.0);
     for piece in &path.0 {
         let limits = piece_limits(piece);
-        if !limits.iter().all(|l| l.is_finite() && *l > 0.0) {
-            return Err(CommandError { key: "error-path-torque" });
+        if !usable(&limits) {
+            // Said by what is short: the torque, or the belt alone.
+            let torque_alone = usable(&motor_limits(machine, drive, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
+            return Err(CommandError { key: if torque_alone { "error-path-tension" } else { "error-path-torque" } });
         }
         limited.push(limits);
     }
@@ -933,13 +1020,13 @@ fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f6
 
 /// `deviation` for the path `plan_time_optimal` plans: its transition curves are as long as the speeds the
 /// motors allow need them to be, not the speeds of the axis limits. Refused as that plan is.
-pub fn deviation_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<f64, CommandError> {
-    Ok(time_optimal_geometry(machine, drive, reserve, start, pieces, tolerance)?.0.1)
+pub fn deviation_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<f64, CommandError> {
+    Ok(time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
-/// from the motors, jerk from the axes.
-fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f64) -> impl Fn(&Geo) -> [f64; 3] + 'a {
+/// from the motors and the belt's tension limits, jerk from the axes.
+fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f64, [lowest, highest, share]: [f64; 3]) -> impl Fn(&Geo) -> [f64; 3] + 'a {
     let axes = machine.axes();
     let [_, _, jerk] = axis_bounds(axes);
     let (torque, h) = (reserve * drive.torque_curve(drive.rated_speed).1, 1e-3);
@@ -962,6 +1049,18 @@ fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f
                 vel.push((turn.iter().map(|per_axis| per_axis[m]).collect(), drive.rated_speed));
                 acc.push((per_acc.iter().map(|per_axis| per_axis[m] - hold[m]).collect(), torque - hold[m].abs()));
             }
+            if lowest.is_finite() || highest.is_finite() {
+                let tensions = |acc: &[f64]| {
+                    let mut out = Vec::new();
+                    machine.rigid_tensions(pose, acc, &mut out);
+                    out
+                };
+                let still = tensions(&unit(0, 0.0));
+                let per_acc: Vec<Vec<f64>> = (0..axes.len()).map(|a| tensions(&unit(a, 1.0))).collect();
+                for (k, c) in still.iter().enumerate() {
+                    acc.push((per_acc.iter().map(|per_axis| per_axis[k] - c).collect(), share * (highest - c).min(c - lowest)));
+                }
+            }
         }
         limits(piece, &[vel, acc, jerk.clone()])
     }
@@ -974,6 +1073,69 @@ mod tests {
     fn axes() -> [AxisInfo; 2] {
         let axis = |max_vel: f64, max_acc: f64| AxisInfo { id: "", key: "", unit: "m", min: 0.0, max: 1.0, max_vel, max_acc, max_jerk: 100.0 };
         [axis(0.8, 8.0), axis(0.4, 6.0)]
+    }
+
+    fn axes3() -> [AxisInfo; 3] {
+        let axis = |min: f64, max: f64| AxisInfo { id: "", key: "", unit: "m", min, max, max_vel: 3.0, max_acc: 50.0, max_jerk: 2500.0 };
+        [axis(-0.6, 0.6), axis(-0.6, 0.6), axis(-1.1, -0.6)]
+    }
+
+    /// On three axes: a line and a spline point have three positions, an arc its end and its centre with three each.
+    /// A quarter circle of 0.1 m in the x-z plane, from +x to +z around its centre, is counter-clockwise seen from the
+    /// viewer (-y, x to the right and z up, as on a two-axis machine with x and z): 0.1 pi / 2 long, through
+    /// (0.1 cos 45, 0, 0.1 sin 45) about the centre halfway; clockwise it goes the other way round, three quarters.
+    /// In the x-y plane, seen from +z, from +x to +y is counter-clockwise too. An arc whose start, end and centre lie on
+    /// one line (a half or a full turn) leaves its plane open and is refused.
+    #[test]
+    fn arcs_on_three_axes_lie_in_the_plane_of_their_points() {
+        let pieces = parse("line,0.1,0.0,-0.8
+arc,0.0,0.0,-0.7,0.0,0.0,-0.8,ccw
+arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
+        assert_eq!(pieces[1], Piece::Arc { to: vec![0.0, 0.0, -0.7], centre: vec![0.0, 0.0, -0.8], clockwise: false });
+        let geo = given(&[0.1, 0.0, -0.9], &pieces).unwrap().0;
+        assert_eq!(geo.len(), 3);
+        let quarter = std::f64::consts::FRAC_PI_2 * 0.1;
+        assert!((geo[1].length() - quarter).abs() < 1e-12 && (geo[2].length() - quarter).abs() < 1e-12);
+        let half = 0.1 * std::f64::consts::FRAC_1_SQRT_2;
+        let [mid, dir, curve] = geo[1].at(0.5 * quarter);
+        assert!(distance(&mid, &[half, 0.0, -0.8 + half]) < 1e-12 && distance(&dir, &[-std::f64::consts::FRAC_1_SQRT_2, 0.0, std::f64::consts::FRAC_1_SQRT_2]) < 1e-12);
+        // Its curvature points at the centre, 1 / r long.
+        assert!(distance(&curve, &[-10.0 * std::f64::consts::FRAC_1_SQRT_2, 0.0, -10.0 * std::f64::consts::FRAC_1_SQRT_2]) < 1e-9);
+        let cw = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.0,-0.7,0.0,0.0,-0.8,cw").unwrap()).unwrap().0;
+        assert!((cw[0].length() - 3.0 * quarter).abs() < 1e-12 && cw[0].at(cw[0].length() / 3.0)[0][2] < -0.8);
+        let flat = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.1,-0.8,0.0,0.0,-0.8,ccw").unwrap()).unwrap().0;
+        assert!((flat[0].length() - quarter).abs() < 1e-12 && flat[0].at(0.5 * quarter)[0][1] > 0.0);
+        assert_eq!(given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap()).err().unwrap().key, "error-path");
+        // Planned within the axis limits, the path ends where it was told.
+        let points = plan(&axes3(), &[0.1, 0.0, -0.9], &pieces, 1e-3, 0.0).unwrap();
+        assert!(distance(&points[points.len() - 1].1, &[-0.1, 0.0, -0.8]) < 1e-9);
+    }
+
+    /// A spline on three axes passes through its via points, leaves the line before it in that line's direction, and its
+    /// plan keeps every axis within its speed, acceleration and jerk (to the 0.1 % of differencing the planned poses).
+    #[test]
+    fn a_spline_on_three_axes_passes_through_its_points_within_the_limits() {
+        let pieces = parse("line,0.0,0.0,-0.8
+spline,0.1,0.1,-0.75
+spline,0.2,0.0,-0.8
+line,0.2,0.0,-0.9").unwrap();
+        let geo = given(&[0.0, 0.0, -0.9], &pieces).unwrap().0;
+        let ends: Vec<Vec<f64>> = geo.iter().map(|g| g.at(g.length())[0].clone()).collect();
+        assert!(distance(&ends[1], &[0.1, 0.1, -0.75]) < 1e-9 && distance(&ends[2], &[0.2, 0.0, -0.8]) < 1e-9);
+        // Out of the vertical line upwards, into the last line downwards: no corner at either junction.
+        assert!(distance(&geo[1].at(0.0)[1], &[0.0, 0.0, 1.0]) < 1e-9 && distance(&geo[2].at(geo[2].length())[1], &[0.0, 0.0, -1.0]) < 1e-9);
+        let (axes, cycle) = (axes3(), 1e-3);
+        let points = plan(&axes, &[0.0, 0.0, -0.9], &pieces, cycle, 0.0).unwrap();
+        for w in points.windows(4) {
+            for (i, axis) in axes.iter().enumerate() {
+                let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
+                assert!(((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc);
+                assert!(((p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)).abs() <= 1.001 * axis.max_jerk);
+            }
+        }
+        assert!(distance(&points[points.len() - 1].1, &[0.2, 0.0, -0.9]) < 1e-9);
+        // A tolerance changes nothing on three axes: no transition curves there.
+        assert_eq!(deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3).unwrap(), 0.0);
     }
 
     #[test]
@@ -1334,7 +1496,7 @@ line,0.1,0.35";
             .map(|g| match g {
                 Geo::Arc { radius, turn, length, .. } => turn * length / radius,
                 Geo::Clothoid { k0, k1, length, .. } => 0.5 * (k0 + k1) * length,
-                Geo::Line { .. } | Geo::Spline { .. } => 0.0,
+                Geo::Line { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } => 0.0,
             })
             .sum();
         assert!((turned + a + b).abs() < 1e-9, "the planned path turns by {turned} rad, the given one by {}", -a - b);
@@ -1466,7 +1628,7 @@ line,0.1,0.35";
         let turned = |g: &Geo| match g {
             Geo::Arc { radius, turn, length, .. } => turn * length / radius,
             Geo::Clothoid { k0, k1, length, .. } => 0.5 * (k0 + k1) * length,
-            Geo::Line { .. } | Geo::Spline { .. } => 0.0,
+            Geo::Line { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } => 0.0,
         };
         (geo.iter().map(Geo::length).sum(), geo.iter().map(turned).sum())
     }

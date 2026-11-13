@@ -2,12 +2,14 @@
 name = "sim-machines"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 sim-core.workspace = true
 sim-components.workspace = true
 machine-t-gantry = { path = "../machine-t-gantry" }
 machine-single-axis = { path = "../machine-single-axis" }
+machine-delta-d3 = { path = "../machine-delta-d3" }
 
 [dev-dependencies]
 toml.workspace = true

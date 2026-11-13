@@ -75,7 +75,8 @@ fn bad_config_values_are_refused_with_their_key() {
             ("friction_x.viscous_n_s_m = nan", "friction_x.viscous_n_s_m"),
             ("hard_stop.damping_n_s_m = -5.0", "hard_stop.damping_n_s_m"),
         ];
-        for (edit, key) in table {
+        // Keys of belt and guide on the machines that have them.
+        for (edit, key) in table.into_iter().filter(|(_, key)| *key == "start.pose" || entry.config().get(key).is_ok()) {
             let cfg = config(entry, &[edit]);
             let refused = refusal(entry, &cfg).unwrap_or_else(|| panic!("{}: {edit} was accepted", entry.id));
             assert_eq!((refused.key(), refused.detail()), ("error-config-invalid", key), "{}: {edit}", entry.id);
@@ -91,11 +92,16 @@ fn bad_config_values_are_refused_with_their_key() {
         }
         // A rating that is no number is refused where it is read, not passed over as if it were left out.
         let load = analyse_cycle(&mut Sim::new(entry, &entry.config()).unwrap()).unwrap();
-        let no_number = config(entry, &["ratings.belt_max_tension_n = nan"]);
-        assert_eq!(verdicts(&no_number, &load).err(), Some(ConfigError::Invalid("ratings.belt_max_tension_n".into())), "{}", entry.id);
+        let rating = if entry.config().get("ratings.belt_max_tension_n").is_ok() { "ratings.belt_max_tension_n" } else { "ratings.settling_tolerance_m" };
+        let no_number = config(entry, &[&format!("{rating} = nan")]);
+        assert_eq!(verdicts(&no_number, &load).err(), Some(ConfigError::Invalid(rating.into())), "{}", entry.id);
         // A cycle segment that dwells for a negative or an endless time is refused too.
+        let first_dwell = |text: &str| {
+            let at = text.find("dwell_s = ").unwrap() + "dwell_s = ".len();
+            text[at..at + text[at..].find('\n').unwrap()].to_string()
+        };
         for dwell in ["-1.0", "inf", "nan"] {
-            let text = entry.default_config.replacen("dwell_s = 0.1", &format!("dwell_s = {dwell}"), 1);
+            let text = entry.default_config.replacen(&format!("dwell_s = {}", first_dwell(entry.default_config)), &format!("dwell_s = {dwell}"), 1);
             let refused = refusal(entry, &Config::parse(&text).unwrap()).unwrap_or_else(|| panic!("{}: a dwell of {dwell} was accepted", entry.id));
             assert!(refused.detail().starts_with("cycle.segment["), "{}: {refused:?}", entry.id);
         }
@@ -148,8 +154,8 @@ fn a_part_that_is_no_name_and_a_key_the_machine_does_not_know_are_refused() {
         assert_eq!(sim_components::catalog::resolve(entry, &cfg).err(), Some(ConfigError::Type("parts.motor".into())));
 
         assert!(load_config(entry, entry.default_config).is_ok());
-        let misspelt = entry.default_config.replacen("pretension_n = ", "pretention_n = ", 1);
-        assert_eq!(load_config(entry, &misspelt).err(), Some(ConfigError::Unknown("belt.pretention_n".into())), "{}", entry.id);
+        let misspelt = entry.default_config.replacen("\n[gearbox]\nratio = ", "\n[gearbox]\nratoi = ", 1);
+        assert_eq!(load_config(entry, &misspelt).err(), Some(ConfigError::Unknown("gearbox.ratoi".into())), "{}", entry.id);
         let table = format!("{}\n[gearbxo]\nratio = 3.0\n", entry.default_config);
         assert_eq!(load_config(entry, &table).err(), Some(ConfigError::Unknown("gearbxo".into())), "{}", entry.id);
         let rating = entry.default_config.replacen("\n[ratings]\n", "\n[ratings]\nbelt_max_tensoin_n = 1.0\n", 1);
@@ -178,8 +184,13 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
         last = sim.control.set_pos[0];
         demand = sim.control.drives.iter().fold(demand, |d, drive| d.max(drive.torque_demand.abs()));
     };
-    sim.run(0.4, &mut watch);
-    assert!(sim.control.set_vel[0] > 0.5 * sim.machine.axes()[0].max_vel, "{}: not at speed at the moment of the change", entry.id);
+    // 0.4 s in, or as soon as the first axis cruises where a move is shorter (the delta's 3 m/s over a metre).
+    let v_max = sim.machine.axes()[0].max_vel;
+    while sim.time() < 0.4 && !(sim.time() > 0.1 && sim.control.set_vel[0] >= v_max * (1.0 - 1e-9)) {
+        sim.step();
+        watch(&sim);
+    }
+    assert!(sim.control.set_vel[0] > 0.5 * v_max, "{}: not at speed at the moment of the change", entry.id);
     if let Some(change) = change {
         let mut changed = shaped.clone();
         changed.set_text(change).unwrap();
@@ -230,11 +241,12 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
 #[test]
 fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
     for entry in MACHINES.iter().copied() {
-        for path in ["gearbox.ratio", "geometry.pulley_radius_m"] {
+        // The pulley radius where there are pulleys.
+        for path in ["gearbox.ratio", "geometry.pulley_radius_m"].into_iter().filter(|path| entry.config().get(path).is_ok()) {
             for moving in [false, true] {
                 // With the fieldbus delay, so that setpoints worked out with the old kinematics are on their way.
                 let cfg = config(entry, &["effects.fieldbus_delay = true"]);
-                let pretension = cfg.f64("belt.pretension_n").unwrap();
+                let pretension = cfg.f64("belt.pretension_n").unwrap_or(0.0);
                 let mut sims = [Sim::new(entry, &cfg).unwrap(), Sim::new(entry, &cfg).unwrap()];
                 for sim in &mut sims {
                     if moving {
@@ -254,7 +266,7 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                     tool_off = tool_off.max(off(tool(&sims[0]), tool(&sims[1])));
                 }
                 let what = format!("{}: {path} changed by 1 % {}", entry.id, if moving { "during a move" } else { "at standstill" });
-                assert!(tension_off < 0.1 * pretension, "{what}: belt tension off by {tension_off} N");
+                assert!(tension_off <= 0.1 * pretension, "{what}: belt tension off by {tension_off} N");
                 assert!(tool_off < 1e-4, "{what}: tool off by {tool_off} m");
                 // The motors stand where the new kinematics put them for this pose.
                 let (mut wanted, mut speed) = (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
@@ -362,7 +374,7 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
     let peak = judged.iter().find(|v| v.check == "motor-peak").unwrap();
     assert!(peak.value > 0.5, "motor-peak judges {}", peak.value);
     assert!(judged.iter().any(|v| v.check == "dc-link-overvoltage" && !v.ok));
-    let candidate = Candidate { article: "", gearbox: String::new(), mass: 1.0, result: Some((load, judged)), refused: "" };
+    let candidate = Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load, judged)), refused: "" };
     assert!(!candidate.passes());
     assert_eq!(candidate.tightest(), Some(("dc-link-overvoltage", f64::INFINITY)));
     // A cycle that does not trip is measured as before, over its second pass.

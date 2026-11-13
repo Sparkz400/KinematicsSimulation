@@ -88,7 +88,8 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
             let (peak, rms, use_): (f64, f64, f64) = (row[2].parse().unwrap(), row[3].parse().unwrap(), row[5].parse().unwrap());
             assert!(peak > rms && rms > 0.0 && use_ > 0.0 && use_ < 1.0, "{row:?}");
         }
-        assert!(std::fs::read_to_string(&points).unwrap().lines().count() > 1000 * motors);
+        // One operating point per millisecond of the cycle (0.72 s on the delta).
+        assert!(std::fs::read_to_string(&points).unwrap().lines().count() > 700 * motors);
         // The operating points are those of `analyse_cycle`, which the app shows too.
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
@@ -154,8 +155,11 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
         assert_eq!(margins.lines().count(), 1 + found[0].1.len());
     }
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
+    // (10 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25.)
     for entry in MACHINES {
-        let out = cli(&["margins", entry.id, "--set", "drive.velocity_kp_nm_s_rad=0.3"]);
+        let shipped = entry.config().f64("drive.velocity_kp_nm_s_rad").unwrap();
+        let gain = if 7.5 * shipped <= 0.3 { 0.3 } else { 10.0 * shipped };
+        let out = cli(&["margins", entry.id, "--set", &format!("drive.velocity_kp_nm_s_rad={gain}")]);
         let unstable = text(&out.stdout);
         assert!(out.status.success() && unstable.lines().count() > 1 && unstable.lines().skip(1).all(|row| row.ends_with(",FAIL")), "{}: {unstable}", entry.id);
     }
@@ -210,12 +214,18 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
         assert!(lines.next().unwrap().starts_with("parameter,value,low,high,peak_torque_low,peak_torque_high"), "{out}");
         let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
         assert!(rows.len() >= 2 && rows.iter().all(|r| r[0].starts_with("mass.") && r.len() == 12), "{}: {out}", entry.id);
+        let cfg = entry.config();
         let strength = |r: &Vec<&str>| r[4..10].iter().map(|v| v.parse::<f64>().unwrap().abs()).fold(0.0, f64::max);
         assert!(rows.windows(2).all(|w| strength(&w[0]) >= strength(&w[1]) - 1e-4), "{}: not ranked: {out}", entry.id);
-        // Without bounds in the config the low and high values are the value less and plus 10 %.
+        // Without bounds in the config the low and high values are the value less and plus 10 %; with bounds, the bounds
+        // (the delta bounds its estimated masses).
         let number = |cell: &str| cell.parse::<f64>().unwrap();
-        assert!(rows.iter().all(|r| (number(r[2]) / number(r[1]) - 0.9).abs() < 1e-9 && (number(r[3]) / number(r[1]) - 1.1).abs() < 1e-9), "{out}");
-        // With bounds, they are the bounds: 10 N to 20 N for the Coulomb friction of both default configs.
+        let expected = |r: &Vec<&str>| cfg.f64s(&format!("bounds.{}", r[0])).map_or((0.9 * number(r[1]), 1.1 * number(r[1])), |b| (b[0], b[1]));
+        assert!(rows.iter().all(|r| (number(r[2]) - expected(r).0).abs() < 1e-9 * number(r[1]) && (number(r[3]) - expected(r).1).abs() < 1e-9 * number(r[1])), "{out}");
+        // With bounds, they are the bounds: 10 N to 20 N for the Coulomb friction of both belt machines' guides.
+        if cfg.get("friction_x").is_err() {
+            continue;
+        }
         let run = cli(&["sensitivity", entry.id, "--group", "friction_x", "--delta", "0.1"]);
         let out = text(&run.stdout);
         let coulomb: Vec<&str> = out.lines().find(|l| l.starts_with("friction_x.coulomb_n,")).unwrap_or_else(|| panic!("{out}")).split(',').collect();
@@ -233,14 +243,16 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap(), "check,motor,value,limit,result");
         let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
-        for check in ["motor-peak", "motor-thermal", "gearbox-peak", "dc-link-energy", "belt-tension"] {
+        // The belt's tension where the machine has belts.
+        let belted = !sim_components::Sim::new(entry, &entry.config()).unwrap().machine.belt_sections().is_empty();
+        for check in ["motor-peak", "motor-thermal", "gearbox-peak", "dc-link-energy", "belt-tension"].into_iter().filter(|c| belted || *c != "belt-tension") {
             assert!(rows.iter().any(|r| r[0] == check), "{}: no {check} in {out}", entry.id);
         }
         assert!(rows.iter().all(|r| r.len() == 5 && r[4] == "ok"), "{}: {out}", entry.id);
         // Four significant digits for every value: some tens of micrometres off the target do not print as 0.0000.
         let settling = rows.iter().find(|r| r[0] == "settling").unwrap();
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
-        assert!(value > 1e-6 && value < limit && limit == 1e-4 && settling[2].trim_start_matches("0.0").len() >= 4, "{}: {settling:?}", entry.id);
+        assert!(value > 1e-6 && value < limit && limit == entry.config().f64("ratings.settling_tolerance_m").unwrap() && settling[2].trim_start_matches("0.0").len() >= 4, "{}: {settling:?}", entry.id);
 
         // With bands: the same checks and values, each with the lowest and highest value over the config's
         // bounds around it. More friction needs more torque, so the bands have a width.
@@ -318,6 +330,20 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
 fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
     for entry in MACHINES {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        // Replay and fit take a motor angle per axis travel that is the same everywhere (`identify`): a machine whose
+        // transformation is not linear (the delta) is not what they are for.
+        let (axes, motors) = (sim.machine.axes(), sim.machine.motors().len());
+        let turned = |pose: Vec<f64>| {
+            let (mut a, mut b) = (vec![0.0; motors], vec![0.0; motors]);
+            let ahead: Vec<f64> = pose.iter().enumerate().map(|(i, p)| if i == 0 { p + 1e-3 } else { *p }).collect();
+            sim.machine.inverse(&pose, &mut a);
+            sim.machine.inverse(&ahead, &mut b);
+            b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
+        };
+        let (low, high) = (axes.iter().map(|a| a.min + 0.4 * (a.max - a.min)).collect(), axes.iter().map(|a| a.min + 0.6 * (a.max - a.min)).collect());
+        if turned(low).iter().zip(turned(high)).any(|(a, b)| (a - b).abs() > 1e-9 * a.abs().max(1e-6)) {
+            continue;
+        }
         let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}.csv", entry.id)).to_str().unwrap().to_string();
         let (trace, overlay) = (file("trace"), file("overlay"));
         let table = |args: &[&str]| -> Vec<Vec<String>> {
@@ -536,7 +562,8 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
     for entry in MACHINES {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let (axes, home) = (sim.machine.axes(), entry.config().f64s("start.pose").unwrap());
-        if axes.len() < 2 {
+        // Transition curves are worked out in the plane: on two axes only.
+        if axes.len() != 2 {
             continue;
         }
         let towards = |i: usize| (0.5 * (axes[i].min + axes[i].max) - home[i]).signum();
@@ -602,7 +629,8 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
         let unaccounted: f64 = lines.last().unwrap().strip_prefix("unaccounted,").unwrap().split(',').next().unwrap().parse().unwrap();
         assert!(unaccounted.abs() < BUDGET_TOLERANCE * b.supply, "{}: {unaccounted} J", entry.id);
         let copper = lines.iter().filter(|l| l.starts_with("copper.")).count();
-        assert!(copper == sim.machine.motors().len() && lines.iter().any(|l| l.starts_with("power.guide_x,")), "{}: {written}", entry.id);
+        let guide = sim.machine.friction_contacts().iter().any(|c| c.id == "axis.x");
+        assert!(copper == sim.machine.motors().len() && (!guide || lines.iter().any(|l| l.starts_with("power.guide_x,"))), "{}: {written}", entry.id);
         assert!(!lines.iter().any(|l| l.starts_with("mains,")), "{}: {written}", entry.id);
 
         // With the regenerative supply, the column `mains_energy_j` of `analyze` is each motor's energy fed back into the mains,
@@ -633,9 +661,11 @@ fn compare_writes_the_cycle_with_an_effect_on_and_off() {
         let (traces, differences) = (dir.join(format!("{}-compare.csv", entry.id)), dir.join(format!("{}-differences.csv", entry.id)));
         let motor = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.motors()[0].id;
         let torque = format!("motor.{motor}.torque");
-        let out = cli(&["compare", entry.id, "--effect", "guide_friction", "--signal", &torque, "--signal", "axis.x.position", "--out", traces.to_str().unwrap(), "--differences", differences.to_str().unwrap()]);
+        // The friction the machine has: of its guides, or of its arms' joints.
+        let effect = if entry.config().bool("effects.guide_friction").is_ok() { "guide_friction" } else { "joint_friction" };
+        let out = cli(&["compare", entry.id, "--effect", effect, "--signal", &torque, "--signal", "axis.x.position", "--out", traces.to_str().unwrap(), "--differences", differences.to_str().unwrap()]);
         assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
-        let found = compare_effect(entry, &entry.config(), "guide_friction").unwrap();
+        let found = compare_effect(entry, &entry.config(), effect).unwrap();
         let place = |id: &str| found.signals.iter().position(|s| s.id == id).unwrap();
         let written = std::fs::read_to_string(&traces).unwrap();
         let lines: Vec<&str> = written.lines().collect();
