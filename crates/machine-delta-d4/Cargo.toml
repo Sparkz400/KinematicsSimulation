@@ -1,0 +1,10 @@
+[package]
+name = "machine-delta-d4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
+machine-delta-d3 = { path = "../machine-delta-d3" }

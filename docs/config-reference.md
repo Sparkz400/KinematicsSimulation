@@ -9,6 +9,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
 | D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
 | D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
+| D4 | [`crates/machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml) | Four-axis delta picker D4: the D3 with a turning tool on a telescopic shaft, sized after the ABB IRB 360 with its fourth axis. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d4) |
 
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
@@ -444,6 +445,7 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | S | 26 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
 | D | 26 | The geometry and the masses (not the payload), the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
 | D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
+| D4 | 47 | As D, with the arms' backlash, and the estimates of `[tool_gearbox]` (backlash, damping), `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
 | E | 74 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Keys with bounds in one config only:
@@ -550,6 +552,35 @@ The D2's config ([`machine-delta-d2/default.toml`](../crates/machine-delta-d2/de
 | `gearbox.backlash_rad` | rad | Backlash of an arm's gearbox | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin: a reduced-backlash precision planetary. The NRB080-05-20, whose other values the config has (catalogue), has 9 arcmin, with which the cycle fails `settling` (0.85 mm against 0.5 mm) |
 
 The motor, drive, ratings, axis limits (3 m/s, 50 m/s², 2500 m/s³ along x and z) and loop gains are the D3's.
+
+## Delta picker D4
+
+The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml)) has the D3's tables and keys with the D3's values, but for the arms' `gearbox.backlash_rad` (8.727e-4, 3 arcmin, estimate, bounded 2 to 4 arcmin: a reduced-backlash precision planetary; the NRB080-05-20's 9 arcmin fail `settling`, 1.21 mm with the tool's 10). The tool pose, `start.pose` and the cycle's targets are (x, y, z, c), c in rad. These keys are its own:
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `effects.shaft_mass` | – | The shaft's weight share at the platform (on the arms) and its spin inertia at the tool | on |
+| `effects.shaft_torsion` | – | The shaft twists in series with the tool's gearbox (with `joint_elasticity`) | on |
+| `effects.telescope_friction` | – | The telescope's sliding friction along the shaft, a force on the platform that the arms take | on |
+| `axis.c.min_angle_deg`, `max_angle_deg` | ° | The controller's range of the tool's turn (the machine has no stops) | −360, 360, choice |
+| `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 600, 30000, estimates (ABB publishes none; 30 rad/s is the motor's 240 rad/s behind ratio 8) |
+| `tool_gearbox.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox, as `[gearbox]` | 8, 0.95, 8594.4, 3.47e-5, catalogue (Siemens NRB060-05-8) |
+| `tool_gearbox.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
+| `tool_gearbox.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
+| `tool.inertia_kgm2` | kg m² | Flange and gripper about the tool's axis | 2e-3, estimate, bounded 1e-3 to 4e-3 |
+| `tool.payload_inertia_kgm2` | kg m² | The payload about the tool's axis (with `effects.payload`) | 5e-3, estimate (3 kg, 100 × 100 mm), bounded 2.5e-3 to 1e-2 |
+| `tool.friction_coulomb_nm`, `friction_viscous_nm_s_rad`, `friction_smoothing_rad_s` | | The tool bearing's friction (`effects.joint_friction`) | 0.02, 1e-4, 0.01, estimates; the first two bounded |
+| `shaft.upper_joint_z_m` | m | Height of the upper cardan joint on the base's axis | 0, estimate, bounded ±0.05 |
+| `shaft.lower_joint_offset_m` | m | The lower cardan joint above the platform's centre | 0.05, estimate, bounded 0.03 to 0.08 |
+| `shaft.min_length_m`, `max_length_m` | m | Shortest and longest the telescope can be; beyond: `error-delta-shaft-stroke` | 0.6, 1.1, estimates, bounded |
+| `shaft.max_cardan_angle_deg` | ° | Largest bend of a cardan joint; beyond: `error-delta-cardan-angle` | 45, estimate, bounded 40 to 50 |
+| `shaft.mass_kg`, `platform_share` | kg, – | The shaft's mass and the share of it the platform carries | 1.4, 0.5, estimates, bounded |
+| `shaft.spin_inertia_kgm2` | kg m² | Tube, shaft and joints about the shaft's axis, at the tool | 8e-5, estimate, bounded |
+| `shaft.torsional_stiffness_nm_rad`, `torsional_damping_nm_s_rad` | N m/rad, N m s/rad | The shaft's twist (`effects.shaft_torsion`) | 500, 0.075, estimates, bounded 250 to 1000 and 0.03 to 0.2 |
+| `shaft.slide_friction_n`, `slide_friction_viscous_n_s_m`, `slide_friction_smoothing_m_s` | N, N s/m, m/s | The telescope's sliding friction (`effects.telescope_friction`) | 5, 2, 0.005, estimates; the first two bounded |
+| `ratings.tool_gearbox_max_torque_nm` | N m | The highest torque the tool's gearbox may pass (`tool-gearbox-peak`) | 29, catalogue (NRB060-05-8) |
+
+The fourth motor is the arms' 1FK2105-4AF with the same drive settings (the drive reads one `[motor]` and `[drive]` per machine); the common gearbox checks of motor 4 are judged against the arms' `[ratings]`, the tool's gearbox by `tool-gearbox-peak`.
 
 ## `[[cycle.segment]]`
 

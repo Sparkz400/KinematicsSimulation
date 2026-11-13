@@ -4344,6 +4344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-delta-d4"
+version = "1.0.0-rc.1"
+dependencies = [
+ "machine-delta-d3",
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "machine-joint-kit"
 version = "1.0.0-rc.1"
 dependencies = [
@@ -6081,6 +6090,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "machine-delta-d2",
  "machine-delta-d3",
+ "machine-delta-d4",
  "machine-joint-kit",
  "machine-single-axis",
  "machine-t-gantry",

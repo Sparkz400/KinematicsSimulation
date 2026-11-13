@@ -597,6 +597,23 @@ singularity,,1.136,5.000,ok
 
 Every check passes, with `--bands` too (settling 0.31 to 0.41 mm, gearbox peak up to 163 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails gearbox peak (201 N m) and settling (0.61 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its 192 N m. The settling passes because the gearbox's backlash is an estimate of 1 arcmin, a reduced-backlash precision planetary: with the 9 arcmin of the catalogue's NRB080-05-20 (`--set gearbox.backlash_rad=2.618e-3`) it fails, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
 
+### The four-axis delta D4
+
+`delta-d4` is the D3 with a fourth axis that turns the tool about the vertical, as ABB's IRB 360 with its fourth axis: a fourth 1FK2105-4AF in the centre of the base, behind a planetary gearbox of ratio 8 (Siemens NRB060-05-8), drives a telescopic shaft with a cardan joint at each end down to the tool's shaft in the platform. The tool pose is (x, y, z, c), c in rad; `start.pose` and the cycle's targets have four values. Its cycle is the D3's Adept cycle with the tool turned by 90° on each traverse (+90° to the pick, back to 0° to the place): still 0.720 s, the turn fits into the traverse. The two cardan joints are bent alike (both shafts vertical), so the tool turns exactly with the motor; only the shaft between them turns unevenly (`shaft.speed`). The shaft's weight share and the telescope's friction load the arms ([the config](../crates/machine-delta-d4/default.toml), [model reference](model-reference.md#delta-picker-d4)).
+
+```text
+$ sim-cli verdicts delta-d4
+motor-peak,1,0.5630,1.000,ok
+gearbox-peak,1,149.0,192.0,ok
+motor-peak,4,0.05336,1.000,ok
+...
+settling,,0.0003879,0.0005000,ok
+tool-gearbox-peak,4,2.262,29.00,ok
+singularity,,2.072,5.000,ok
+```
+
+Every check passes. Motor 1 carries a little more than on the D3 (peak 0.563 against 0.510 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor works at 5 % of its peak: the 1FK2105 is far larger than the turn needs, but a machine has one motor type here. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) settling fails, 1.21 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` settling reaches 0.52 mm at the high end of all estimates at once. A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

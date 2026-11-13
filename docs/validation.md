@@ -16,6 +16,7 @@ Test files, abbreviated in the tables:
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
 | delta | [`crates/machine-delta-d3/src/tests.rs`](../crates/machine-delta-d3/src/tests.rs) |
 | delta2 | [`crates/machine-delta-d2/src/tests.rs`](../crates/machine-delta-d2/src/tests.rs) |
+| delta4 | [`crates/machine-delta-d4/src/tests.rs`](../crates/machine-delta-d4/src/tests.rs) |
 | joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
 | suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
@@ -30,6 +31,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: analysis and verdicts](#hand-calculations-analysis-and-verdicts)
 - [Hand calculations: delta picker D3](#hand-calculations-delta-picker-d3)
 - [Hand calculations: planar delta picker D2](#hand-calculations-planar-delta-picker-d2)
+- [Hand calculations: four-axis delta picker D4](#hand-calculations-four-axis-delta-picker-d4)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -303,6 +305,21 @@ The planar delta's geometry and masses are estimates (see [its config](../crates
 | The feedforward with the speed | The rigid loss-free model at (2, −1) m/s accelerates the plate at the asked (10, −20) m/s² | 1e-9 m/s² | `the_feedforward_with_the_speed_gives_the_asked_acceleration` |
 | The setpoint slack at rest | 0.420 mm by hand (`rest_sag`'s grid, twist and half of 1 arcmin either way, plus a tenth), covering the simulation's 0.29 to 0.37 mm at six poses after 0.5 s | 2e-6 m; covered, within 1.4 times | `the_setpoint_slack_covers_the_sag_at_rest` |
 | A path beyond the range; collision bodies | A line to x = 0.4014 refused, to 0.4 laid out; plate and payload boxes at (x, 0, z) and 70 mm below | exact; 1e-12 m | `a_path_may_not_use_the_setpoint_slack_away_from_its_start`, `the_collision_bodies_are_the_plate_and_the_payload_at_the_tool` |
+
+## Hand calculations: four-axis delta picker D4
+
+The D4's arms are the D3's (checked above); these check what the fourth axis adds. Its shaft and tool values are estimates (see [its config](../crates/machine-delta-d4/default.toml)). All in `delta4`.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The standard suite, in the crate as well as in `suite` | As every machine | – | `the_d4_passes_the_standard_suite` |
+| The shaft at (0.3, 0.4, −0.85) | d = (0.3, 0.4, −0.8): L = √0.89 = 0.943398 m, β = atan(0.5/0.8) = 32.0054°, bending plane at 53.1301°; over the range 0.625 to 1.0201 m and at most 43.8309°, so every pose the arms reach the shaft reaches (grid of 10 cm); beyond the stroke or the bend refused with the reason | 1e-6 relative | `the_shafts_length_and_cardan_angles_are_the_hand_calculated` |
+| The cardan joints | One joint at β = 32.0054°, φ = 30°: tan χ = tan φ / cos β, χ = 34.2486°; the pair in phase gives φ back over a turn; the speed ratio cos β / (1 − sin²β cos²φ) is the derivative of χ; tool 10 rad/s and motor 80 rad/s at the pose, rigid and elastic, the shaft between at 10.3937 rad/s (between 8.480 and 11.792) | 1e-12 rad; 1e-7; 1e-5 | `the_tool_turns_with_the_motor_through_the_cardan_pair_and_the_shaft_between_unevenly` |
+| The tool motor's torque for 100 rad/s² | J_c = 2e-3 + 8e-5 + 5e-3 = 7.08e-3 kg m²: 7.08e-3 · 100 / 8 + (1.7e-4 + 3.47e-5) · 8 · 100 = 0.25226 N m (0.18976 N m without the payload); the rigid model given it turns the tool at 100 rad/s² | 1e-9 | `the_tool_motors_torque_for_a_turn_is_the_hand_calculated` |
+| The arms' holding torques at the centre, 100 mm below the top | The D3's plus the shaft's 0.7 kg through dz/dθ = −0.13343 m/rad: 0.7 · 9.80665 · (−0.13343) / 20 = −0.04580 N m more at each motor; the D3's alone without `effects.shaft_mass`; the tool's motor holds nothing | 1e-6 | `the_arms_hold_the_d3s_torques_plus_the_shafts_weight_share` |
+| The telescope's friction, the platform sinking at 1 m/s at (0.3, 0.4, −0.85) | L̇ = 0.8/0.943398 = 0.848 m/s: 5 N + 2 · 0.848 = 6.696 N along the shaft, 5.678 W | 1e-5 | `the_telescopes_friction_is_the_hand_calculated` |
+| The tool's torsional mode | 1 / (1/8594.4 + 1/500) = 472.51 N m/rad against 7.08e-3 kg m²: 41.116 Hz (75.857 Hz without the payload), 2.05 % damping; among `modes` | 1e-5 | `the_tools_torsional_mode_is_the_hand_calculated` |
+| The default cycle with a 90° turn | The tool at 90° in the pick to 1.5 mrad; every verdict passes (settling 0.39 mm); with the catalogue's 9 and 10 arcmin backlash settling fails alone (1.21 mm) | – | `the_default_cycle_turns_the_tool_and_passes_its_verdicts` |
 
 ## Vendor formulas and vendor documents
 

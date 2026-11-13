@@ -45,7 +45,7 @@
 //! its inertia counts at the arm times the ratio squared, the gearbox losing its efficiency on what passes through it.
 
 use sim_components::joint::RotaryJoint;
-use sim_components::mech::ThermalFeedback;
+use sim_components::mech::{ShaftFriction, ThermalFeedback};
 use sim_core::{AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
@@ -325,8 +325,37 @@ pub fn lowest_mode(root: f64, distal: &M3, k_gear: Option<f64>, k_bend: Option<f
     (w2, [rt, tip])
 }
 
+/// A force on the platform against its motion along the line from a fixed point to a point on the platform: the
+/// sliding friction of a telescopic shaft hung from `pivot` and joined to the platform at `offset` from its centre (the
+/// D4's fourth axis, `machine-delta-d4`). The D3 itself has none.
+#[derive(Debug, Clone)]
+pub struct PlatformDrag {
+    pub pivot: [f64; 3],
+    pub offset: [f64; 3],
+    /// Along the line, N, against the rate at which the line lengthens.
+    pub friction: ShaftFriction,
+}
+
+impl PlatformDrag {
+    /// The unit vector from the pivot to the platform's joint, with the platform's centre at p.
+    pub fn direction(&self, p: [f64; 3]) -> [f64; 3] {
+        let d: V3 = std::array::from_fn(|k| p[k] + self.offset[k] - self.pivot[k]);
+        let l = norm(d);
+        d.map(|v| v / l)
+    }
+
+    /// The force on the platform at p moving at v: -f(L') u, with u the line's direction and L' = u . v its rate.
+    pub fn force(&self, p: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+        let u = self.direction(p);
+        let f = self.friction.torque(dot(u, v));
+        u.map(|c| -f * c)
+    }
+}
+
 pub struct Delta {
     legs: Legs,
+    /// `PlatformDrag`, set by a machine built on this one; `None` on the D3.
+    drag: Option<PlatformDrag>,
     /// The geometry as configured, for the scene: base and platform radius, the rods' spacing.
     base_radius: f64,
     platform_radius: f64,
@@ -430,6 +459,7 @@ impl Delta {
         };
         let mut delta = Self {
             legs: Legs::new(base_radius - platform_radius, la, lb),
+            drag: None,
             base_radius,
             platform_radius,
             rod_spacing: cfg.non_negative("geometry.forearm_spacing_m")?,
@@ -507,6 +537,19 @@ impl Delta {
 
     pub fn legs(&self) -> &Legs {
         &self.legs
+    }
+
+    /// Puts a force on the platform against its motion (`PlatformDrag`), or takes it off. It enters the dynamics as a
+    /// generalised force J^T F at the elbows (in `load_at`'s velocity term) and the feedforward with the speed.
+    pub fn set_platform_drag(&mut self, drag: Option<PlatformDrag>) {
+        self.drag = drag;
+    }
+
+    /// The drag's generalised force J^T F at elbow angles t and speeds w; zero without a drag.
+    fn drag_torque(&self, t: V3, w: V3) -> V3 {
+        let Some(drag) = &self.drag else { return [0.0; 3] };
+        let (p, j) = self.pose(t);
+        mul(&transpose(&j), drag.force(p, mul(&j, w)))
     }
 
     fn ratio(&self) -> f64 {
@@ -591,6 +634,10 @@ impl Delta {
         let mut mass: M3 = std::array::from_fn(|r| std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { inertia } else { 0.0 }));
         let a0 = self.legs.velocity_term(t, p, w, mul(&j, w)).unwrap_or([f64::NAN; 3]);
         let mut velocity = mul(&jt, a0.map(|v| m * v));
+        if self.drag.is_some() {
+            let drag = self.drag_torque(t, w);
+            velocity = std::array::from_fn(|k| velocity[k] - drag[k]);
+        }
         let mut gravity: V3 = std::array::from_fn(|k| self.g * moment * t[k].cos() - m * self.g * j[2][k]);
         let mm = self.m_rod_middle;
         if mm > 0.0 {
@@ -786,14 +833,17 @@ impl Delta {
         let acc = self.arm_acceleration(s, torque);
         let moving = mul(&mass, acc);
         let losses = self.losses(s, torque);
+        // A drag on the platform is friction: with rigid links it is in the joints' velocity term (`load_at`), and is
+        // moved over to the friction here. With bending arms it reaches the joints through the springs.
+        let drag = if self.bending.is_none() { self.drag_torque(self.arms(s).0, w) } else { [0.0; 3] };
         for k in 0..3 {
             let joint = &self.joints[k];
             let i = joint.ratio();
             let held = joint.brake.torque(self.brake_engaged, rotor_speed[k], brakes[k]).0;
             let parts = [
-                (moving[k] + velocity[k] + joint.reflected_inertia() * acc[k]) / i,
+                (moving[k] + velocity[k] + drag[k] + joint.reflected_inertia() * acc[k]) / i,
                 -gravity[k] / i,
-                joint.shaft.torque(rotor_speed[k]) + held + losses.gear_at_rotor[k] + joint.friction.torque(w[k]) / i,
+                joint.shaft.torque(rotor_speed[k]) + held + losses.gear_at_rotor[k] + (joint.friction.torque(w[k]) - drag[k]) / i,
             ];
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
