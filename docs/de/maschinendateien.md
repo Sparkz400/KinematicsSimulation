@@ -10,6 +10,8 @@ Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
 - [Eine Maschinendatei verwenden](#eine-maschinendatei-verwenden)
 - [Durchgerechnetes Beispiel: ein H-Bot](#durchgerechnetes-beispiel-ein-h-bot)
 - [Die Knoten](#die-knoten)
+- [Motoren, die sich unterscheiden](#motoren-die-sich-unterscheiden)
+- [Die anderen Beispiele: ein CoreXY und ein XYZ-Portal](#die-anderen-beispiele-ein-corexy-und-ein-xyz-portal)
 - [Was geprüft wird, und wie Fehler lauten](#was-geprüft-wird-und-wie-fehler-lauten)
 - [Das Modell dahinter](#das-modell-dahinter)
 - [Was Maschinendateien noch nicht können](#was-maschinendateien-noch-nicht-können)
@@ -45,25 +47,31 @@ funktioniert alles andere mit einer Maschinendatei so, wie es ist: die Parameter
 kann einen solchen Wert über seinen Pfad nennen (`radius_m = "geometry.pulley_radius_m"`); dann ändert eine Änderung
 des Werts die Maschine. Eine Zahl selbst bleibt fest.
 
-In `machines/` liegen drei Dateien:
+In `machines/` liegen fünf Dateien:
 
 | Datei | was sie ist |
 | ----- | ----------- |
 | `machines/single-axis.toml` | die Einzelachse aus `crates/machine-single-axis`, als Netzliste neu verschaltet |
-| `machines/t-gantry.toml` | das T-Portal aus `crates/machine-t-gantry`, als Netzliste neu verschaltet (ohne Rahmennachgiebigkeit und Werkzeugbiegung, siehe [unten](#was-maschinendateien-noch-nicht-können)) |
+| `machines/t-gantry.toml` | das T-Portal aus `crates/machine-t-gantry`, als Netzliste neu verschaltet, mit seinen Umlenkrollen, seinem Rahmen, seiner Energiekette und seinen Riementrumen (die Werkzeugbiegung gibt es in Maschinendateien nicht, siehe [unten](#was-maschinendateien-noch-nicht-können)) |
 | `machines/h-bot.toml` | das Beispiel unten: ein X-Y-Tisch, keine reale Maschine |
+| `machines/corexy.toml` | ein CoreXY-Tisch: zwei feste Motoren, zwei gekreuzte Riemen ([unten](#die-anderen-beispiele-ein-corexy-und-ein-xyz-portal)) |
+| `machines/xyz-portal.toml` | ein dreiachsiges kartesisches Portal, X, Y und Z je auf eigenem Riemen, mit einem kleineren eigenen Z-Motor |
 
 Am schnellsten kommt man zu einer neuen Maschine, indem man die ähnlichste kopiert und `[machine]` ändert.
 
 ## Eine Maschinendatei verwenden
 
-Kommandozeile: `--machine-file DATEI` tritt an die Stelle der Kennung der Maschine, bei jedem Befehl außer `fmu`.
+Kommandozeile: `--machine-file DATEI` tritt an die Stelle der Kennung der Maschine, bei jedem Befehl.
 
 ```
 sim-cli verdicts --machine-file machines/h-bot.toml
 sim-cli run --machine-file machines/t-gantry.toml --cycle --time 2 --out run.csv
 sim-cli verdicts --machine-file machines/t-gantry.toml --bands --set belt.pretension_n=350
+sim-cli fmu --machine-file machines/h-bot.toml --fmi 3 --out h-bot.fmu
 ```
+
+Eine FMU einer Maschinendatei trägt die Datei unter ihren Ressourcen (`resources/machine.toml`) und baut die Maschine
+beim Instanziieren daraus, für FMI 2.0 wie 3.0; das Werkzeug, das sie einliest, braucht sonst nichts.
 
 App: **Öffnen** in der Zeile der Konfigurationsdatei (oder **Öffnen…** für den Dateidialog) öffnet eine Maschinendatei wie eine Konfiguration, und die
 Maschine wechselt mit. **Speichern** schreibt die geänderten Werte in die Datei zurück und behält ihre Kommentare; über
@@ -238,8 +246,74 @@ Motorsignale und von `--motor N`.
 | | `lever_axis` | | eine Achse, deren Weg den Hebel verkürzt |
 | | `side_load` | | die Führung trägt auch die Trägheitskraft m a des Überhangs; Vorgabe false |
 
-Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `guide` darf fehlen (keine
-Führungsreibung).
+| `axis` | `cable_chain` | | die Achse schleppt eine am Ende 0 befestigte Energiekette (`effects.cable_chain`, Werte in `[cable_chain]`); Vorgabe false |
+| `pulley` | `at_m` | | wo die 3D-Ansicht sie zeichnet, `[x, y, z]`, m; Vorgabe an einem Ende der ersten Achse |
+| `section` | `route` | | die Scheiben, Umlenkrollen und Körper (eine Klemme daran), an denen der Abschnitt vorbeiläuft, der Reihe nach, für die 3D-Ansicht; Vorgabe seine Scheiben und der Körper, an dem er geklemmt ist |
+| `idler` | `speed` | Pflicht | Riemengeschwindigkeit an ihr je Geschwindigkeit jeder Achse, m/s je m/s (`effects.idlers`) |
+| | `radius_m`, `inertia_kgm2`, `friction_nm` | Pflicht | ihr Radius, ihre Trägheit und ihr Lagerreibmoment |
+| | `body`, `at_m` | | ein Körper, auf dem sie mitfährt, und wo die 3D-Ansicht sie zeichnet (von diesem Körper aus) |
+| `frame` | `axis` | Pflicht | die waagrechte Achse, entlang der der Rahmen schwingt (`effects.frame_compliance`, elastisches Modell); höchstens einer |
+| | `mass_kg`, `stiffness_n_m`, `damping_n_s_m` | Pflicht | Masse, Steifigkeit und Dämpfung des Rahmens in seiner Schwingung |
+| `span` | `section` | Pflicht | ein freies Riementrum dieses Abschnitts, für seine Querschwingung (`effects.belt_span_vibration`) |
+| | `length_m` | Pflicht | seine Länge bei allen Achsen auf 0, m |
+| | `axes` | | wie viel länger es je Meter jeder Achse wird |
+
+Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `guide`, `idler`, `frame` und
+`span` dürfen fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
+`belt_span_vibration` ohne `span`), lehnt die Datei mit `machine.<Liste>` ab.
+
+## Motoren, die sich unterscheiden
+
+`[motor]`, `[gearbox]`, `[drive]`, `[ratings]` und `[parts]` gelten für jeden Motor. Eine Tabelle
+`[<Tabelle>.<Motor-id>]` gibt einem Motor eigene Werte darüber, Schlüssel für Schlüssel; sie darf nur Schlüssel haben,
+die die gemeinsame Tabelle hat:
+
+```toml
+[gearbox.mz]          # der Z-Motor aus machines/xyz-portal.toml hat eine eigene Getriebeübersetzung
+ratio = 10.0
+
+[motor.mz]            # und einen kleineren Motor
+rotor_inertia_kgm2 = 0.15e-4
+rated_current_a = 1.411
+
+[drive.mz]            # seinen Antrieb dafür eingestellt
+peak_torque_nm = 1.9
+rated_torque_nm = 0.635
+velocity_kp_nm_s_rad = 0.01
+
+[ratings.mz]          # und was sein kleineres Getriebe und sein Antrieb erlauben
+gearbox_rated_torque_nm = 18.0
+drive_rated_current_a = 1.5
+
+[parts.mz]            # oder Motor, Getriebe und Antrieb aus dem Katalog, nur für diesen Motor
+motor = "1FK2203-2AG"
+```
+
+Der Antriebsstrang dieses Motors in der Maschine (Läufer, Getriebe, Motorreibung, Welligkeit, Bremse), sein Antrieb im
+Regler (Strom- und Drehzahlregler, Drehmoment-Drehzahl-Kennlinie, Wicklung, Zwischenkreis) und seine Urteile (Motor,
+Antriebsstrom, Getriebe, Lager, Riemenzähne, Bremsen) nehmen seine eigenen Werte; die Prüfungen der ganzen Maschine
+behalten die gemeinsamen. Ein in `[parts.<id>]` genanntes Teil setzt die Werte dieses Motors über die Zahlen, wie
+`[parts]` es tut; `belt` und `axis` gehören der Maschine und werden dort abgelehnt. Gemeinsam bleiben: die Taktzeiten
+der Antriebe, der Rauschstartwert, ein gemeinsamer Zwischenkreis und das Bremsmodul. `sim-cli catalog` sucht den
+gemeinsamen Motor; ein Motor mit eigenem `[parts.<id>]` behält sein Teil bei der Suche. Der zeitoptimale Bahnplaner
+nimmt für jeden Motor die Kennlinie des gemeinsamen `[drive]`.
+
+## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
+
+`machines/corexy.toml` ist ein CoreXY-Tisch. Seine beiden Motoren stehen an den vorderen Ecken; jeder treibt einen
+Riemen, der an beiden Enden am Kopf geklemmt ist, also teilt die Scheibe jedes Motors ihren Riemen in zwei Abschnitte.
+Riemen A wird auf einer Seite seiner Scheibe um x + y länger, Riemen B um x - y, also sind die Scheibenwinkel
+a = (x + y) / r und b = (x - y) / r: der Lader findet das allein aus den Abschnitten, und ein Motor allein bewegt den
+Kopf diagonal. Die Brücke fährt in Y, der Kopf darauf in X. Seine Umlenkrollen (vier, als Vorgabe aus) und die `route`
+jedes Abschnitts zeichnet die 3D-Ansicht.
+
+`machines/xyz-portal.toml` ist ein Dreiachsportal: X, Y und Z je auf einer eigenen Riemenschleife um die Scheibe ihres
+Motors und eine Umlenkrolle am fernen Ende, an ihrem Schlitten geklemmt, Z senkrecht. Sein Z-Motor ist kleiner, mit
+einem Getriebe der Übersetzung 10, einem dafür eingestellten Antrieb und eigenen Grenzwerten ([oben](#motoren-die-sich-unterscheiden));
+er hält Schlitten und Nutzlast, m g r / i = 3,5 kg · 9,81 m/s² · 0,02 m / 10 = 0,0686 N m.
+
+Beide bestehen mit den Platzhalterwerten des T-Portals jedes Urteil ihres Zyklus (`sim-cli verdicts --machine-file ...`);
+keine ist eine reale Maschine.
 
 ## Was geprüft wird, und wie Fehler lauten
 
@@ -290,25 +364,46 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   m_i g sin(Neigung_i).
 - Getriebe (Lose, Steifigkeit, Wirkungsgrad), Motorreibung, Drehmomentwelligkeit und Rastmoment, Zahneingriff,
   Haltebremse, Endanschläge an beiden Enden jedes Hubs, LuGre-Führungsreibung mit Lastabhängigkeit: die Bauteile aus
-  `sim-components::mech`, wie die Crates sie verwenden.
+  `sim-components::mech`, wie die Crates sie verwenden. Jeder Motor aus seiner eigenen Konfiguration
+  ([oben](#motoren-die-sich-unterscheiden)).
+- Umlenkrollen (`machine.idler`, `effects.idlers`): Rolle d lässt Riemen mit s_d · v durch (ihr `speed`), ihre Trägheit
+  J / r² kommt also als m_d s_d s_d^T zur Massenmatrix der Achsen (die dann voll ist), und ihr Lager zieht die Achsen
+  mit F_d tanh(s_d · v / (w r)) s_d zurück, F_d ihr Reibmoment durch ihren Radius. Sie tragen kein Gewicht.
+- Eine Energiekette an einer Achse: ihre bewegte Masse m(q) = mu (L0 + q / 2) braucht m dv/dt + m' v² / 2, und sie
+  schleppt.
+- Eine Prozesskraft je Achse, `process.force_<Achse>_n`, auf das Werkzeug, solange der Zyklus verweilt.
+- Der Rahmen (`machine.frame`, elastisches Modell): er schwingt um u entlang einer waagrechten Achse f; die Körper
+  bewegen sich über Grund mit v + e_f du/dt, und der Rahmen nimmt die Kräfte zurück, die sein Riemen, seine Führungen,
+  Umlenkrollen, Kette und Anschläge auf sie geben, nicht aber die Prozesskraft, die das Werkstück auf dem Boden nimmt.
+  Das Werkzeug bewegt sich mit dem Rahmen.
+- Thermische Rückwirkung: der Wirkungsgrad jedes Getriebes und die viskose Reibung jeder Führung folgen ihrer
+  Temperatur, die Steifigkeit des Riemens der Umgebung (`mech::ThermalFeedback`).
+- Zahnsprung (elastisches Modell): an jeder Motorscheibe zwischen dem Abschnitt, den sie speist, und dem, aus dem sie
+  nimmt (`mech::ToothJump`); eine Scheibe mit einem Abschnitt nur auf einer Seite (eine Trommel) lehnt den Effekt ab.
+- Trumschwingung (`machine.span`): die erste Querschwingung jedes Trums bei der Spannung seines Abschnitts, gegen das,
+  was die Antriebe anregen (`mech::span_frequency`).
+- Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
+  Riemens bei festgehaltenen Scheiben, K = Σ_s EA / L_s c_s c_s^T, gegen ihre Massenmatrix; die niedrigste ist
+  `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
+  Form (auf 1 m Werkzeugweg skaliert).
 
 Regler, Antriebe, Zwischenkreis, Wicklungserwärmung, Analysen, Urteile, Sensitivität und Fehlerbänder sind die jeder
 Maschine; an ihnen ist nichts besonders für Maschinendateien.
 
 ## Was Maschinendateien noch nicht können
 
-- Diese Effekte: `frame_compliance`, `tool_flex`, `idlers`, `cable_chain`, `process_force`, `thermal_feedback`,
-  `belt_tooth_jump`, `belt_span_vibration`. Eine Datei, die einen einschaltet, wird abgelehnt (`effects.<Name> (not in
-  machine files yet)`), damit ein Ergebnis nie einen verlangten Effekt auslässt. `part_heating` geht (es zeigt nur an).
+- `tool_flex`: die Z-Achse des T-Portals, die sich am Wagen neigt. Dafür braucht es, wo Schwerpunkt und Werkzeugspitze
+  dieser Achse unter ihrer Führung liegen und wie sich das mit ihrem Weg ändert, eine Geometrie, die eine Netzliste aus
+  Riemen und Körpern nicht hat; ein Knoten dafür wäre der Sonderfall des T-Portals. Eine Datei, die ihn einschaltet,
+  wird abgelehnt (`effects.tool_flex (not in machine files yet)`), damit ein Ergebnis nie einen verlangten Effekt
+  auslässt.
 - Andere Mechanismen als Riemen: Spindeln, Zahnstangen, Koppelgetriebe, Drehgelenke. Es gibt die Knotenarten oben.
-- Verschiedene Motoren, Getriebe oder Antriebe je Achse: `[motor]`, `[gearbox]` und `[drive]` gelten für alle.
-- Eine Strukturresonanz: die Maschine meldet keine, darum behält `effects.shaper_follows_pose` die feste
-  Shaper-Frequenz, und die App hat keine Eigenform zu zeigen.
-- Abschnittslängen sind Zahlen (oder Pfade), keine Formeln: ein Abschnitt, dessen Länge von einem Hub abhängt, folgt
-  einer Änderung dieses Hubs nicht von selbst.
-- Die 3D-Ansicht zeichnet eine schlichte Maschine (einen Balken, einen Quader je Körper, eine Antriebseinheit je Motor),
-  nicht den Riemen.
-- `sim-cli fmu` lehnt eine Maschinendatei ab: die FMU sucht ihre Maschine unter den eingetragenen.
+- Andere Eigenformen als die des Riemens: der Rahmen geht in die des Riemens ein, wo er schwingt, die eigene
+  Steifigkeit der Führungen und Motoren nicht, und die Biegung eines Körpers ist nicht modelliert.
+- Abschnitts- und Trumlängen sind Zahlen (oder Pfade), keine Formeln: eine, die von einem Hub abhängt, folgt einer
+  Änderung dieses Hubs nicht von selbst.
+- Die 3D-Ansicht zeichnet den Riemen als gerade Streifen von Punkt zu Punkt der Route jedes Abschnitts, nicht um seine
+  Scheiben herum.
 - `sim-cli list` und die Maschinenliste der App zeigen nur die eingetragenen Maschinen; eine Datei wird geöffnet, nicht
   aufgeführt.
 
@@ -330,9 +425,19 @@ gegen ihre Crates:
   tragen das weiter: das Crate mit einem um 1e-9 schwereren Wagen streut in ihrer höchsten Bremsleistung um 0,5 %, und
   die Datei muss innerhalb der dreifachen eigenen Streuung des Crates liegen, oder innerhalb 1e-4.
 
-Der H-Bot hat kein Crate, gegen das er gehalten werden könnte. Alle drei Dateien bestehen die Standardprüfung, die jede
+Derselbe Vergleich läuft mit jedem Effekt, den Maschinendateien seit dem 13. November haben, eingeschaltet (Rahmen,
+Umlenkrollen, Energiekette, Prozesskraft, thermische Rückwirkung mit warmen Teilen, Zahnsprung, Trumschwingung),
+elastisch und starr, und mit allen zugleich: die Datei des T-Portals nennt ihre fünf Umlenkrollen, ihren Rahmen und
+acht Trume und gibt die Zahlen des Crates auf 1e-9 (`the_effects_of_a_machine_file_are_its_crates`). Die
+Handrechnungen der Effekte selbst sind die des Crates.
+
+Der H-Bot, der CoreXY und das Portal haben kein Crate, gegen das sie gehalten werden könnten. Alle fünf Dateien bestehen die Standardprüfung, die jede
 Maschine besteht (Hin- und Rückrechnung, statisches Halten, Determinismus, Energieerhaltung ohne Verluste, die
-Verlustbilanz mit ihnen), und Motorwinkel und -momente des H-Bots werden gegen eine Handrechnung geprüft. Bei seiner
+Verlustbilanz mit ihnen), und Handrechnungen prüfen Motorwinkel und -momente des H-Bots und des CoreXY, die eigene Getriebeübersetzung des
+Portals (im Winkel und in der Drehzahl seines Z-Motors), das Moment, mit dem sein Z-Motor den Schlitten hält, den
+eigenen Antrieb und die eigenen Grenzwerte seines Z-Motors, die Eigenform des Riemens der Einzelachse und die
+Riemenstreifen, die die 3D-Ansicht zeichnet. CoreXY und Portal liegen (in X und Y) flach wie der H-Bot und laufen die
+Standardprüfung aus demselben Grund ohne Lose. Bei seiner
 Standardprüfung ist die Getriebelose aus: nichts zieht seine Getriebe an eine Flanke, und der kleine Impuls der
 Prüfung schlägt sie durch die Lose, was die Energie um 0,17 % driften lässt, mehr als die erlaubten 0,1 %. Das liegt
 am Getriebekontakt bei der Schrittweite der Prüfung, nicht an der Netzliste: das Crate T-Portal ohne Schwerkraft driftet
@@ -382,3 +487,8 @@ Reihenfolge der Knoten außer der Reihenfolge der Motoren und Achsen.
   Konfiguration.
 - `sim_netlist::Netlist::parse(&Config)`, `ConfigMachine::new(&Config, &Netlist)`, `json_schema()` (als Wert; `sim_machines::json_schema()` schreibt ihn),
   `line_of(text, path)`.
+- `sim_components::catalog::motor_config(&Config, motor_id)`: die Konfiguration, die ein Motor sieht
+  ([Motoren, die sich unterscheiden](#motoren-die-sich-unterscheiden)); `Controller::drive_params_of(k)` ist sein
+  Antrieb.
+- `sim_machines::load_text(toml_text, id)`: der Text einer Maschinendatei, wie `load_file` ihn liest (das, was eine FMU
+  mit ihrer `resources/machine.toml` tut).

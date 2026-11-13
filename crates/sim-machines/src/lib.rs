@@ -50,6 +50,13 @@ pub fn load_file(path: &Path) -> Result<&'static MachineEntry, FileError> {
     sim_netlist::from_text(&toml_text, !json, stem, &known).map_err(|(error, line)| fail(error, line))
 }
 
+/// A machine file's TOML text, checked as `load_file` checks a file, with `id` where `machine.id` names none: for an
+/// FMU, which carries the file among its resources. Each call leaks one entry, as `load_file` does.
+pub fn load_text(toml_text: &str, id: &str) -> Result<&'static MachineEntry, ConfigError> {
+    let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
+    sim_netlist::from_text(toml_text, false, id, &known).map_err(|(error, _)| error)
+}
+
 /// A JSON machine file as the TOML text of the same config.
 fn json_to_toml(text: &str) -> Result<String, ConfigError> {
     let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| ConfigError::Parse(format!("line {}: {e}", e.line())))?;

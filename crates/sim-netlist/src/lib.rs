@@ -105,6 +105,22 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
         axes.insert(a.id.clone(), axis.clone());
     }
     all.insert("axis".into(), Value::Table(axes));
+    // A motor's own tables (`catalog::motor_config`), laid out as the shared ones; a process force per axis.
+    for table in sim_components::catalog::PER_MOTOR_TABLES {
+        if let Some(Value::Table(shared)) = all.get(table).cloned() {
+            let plain: Table = shared.into_iter().filter(|(_, v)| !v.is_table()).collect();
+            if let Some(Value::Table(t)) = all.get_mut(table) {
+                for m in &net.motors {
+                    t.insert(m.id.clone(), Value::Table(plain.clone()));
+                }
+            }
+        }
+    }
+    if let Some(Value::Table(process)) = all.get_mut("process") {
+        for a in &net.axes {
+            process.insert(format!("force_{}_n", a.id), Value::Float(0.0));
+        }
+    }
     for g in &net.guides {
         // At a dotted path ("friction.x") as nested tables; where a known value is in the way, the file's table there
         // stays unknown and is refused by name.

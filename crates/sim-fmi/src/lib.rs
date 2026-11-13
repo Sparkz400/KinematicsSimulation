@@ -8,6 +8,8 @@
 //!
 //! The FMU carries one generic binary (`sim_fmi.dll`, `sim_fmi.so`) for every machine; which machine and which
 //! config it runs come from its resources (`resources/model.txt`: machine id and language; `resources/config.toml`).
+//! A machine from a machine file (docs/machine-files.md) is not registered: its file goes along as
+//! `resources/machine.toml`, and the FMU builds the machine from it when it is instantiated.
 //! The model description is generated from the machine's signal list and config, never written per machine:
 //!
 //! | variable                    | type    | causality   | meaning                                               |
@@ -124,11 +126,29 @@ impl Model {
 
     /// The files of the FMU apart from its binaries, as (path in the archive, content).
     pub fn files(&self) -> Vec<(String, Vec<u8>)> {
-        vec![
+        let mut out = vec![
             ("modelDescription.xml".into(), self.xml.clone().into_bytes()),
             ("resources/model.txt".into(), format!("{}\n{}\n", self.entry.id, self.lang).into_bytes()),
             ("resources/config.toml".into(), self.config_text.clone().into_bytes()),
-        ]
+        ];
+        if !is_registered(self.entry) {
+            out.push(("resources/machine.toml".into(), self.entry.default_config.as_bytes().to_vec()));
+        }
+        out
+    }
+}
+
+/// Whether `entry` is one of `sim_machines::MACHINES`, not a machine from a file.
+pub fn is_registered(entry: &MachineEntry) -> bool {
+    sim_machines::find(entry.id).is_some_and(|known| std::ptr::eq(known, entry))
+}
+
+/// The machine of an FMU's resources: from `machine.toml` where it carries a machine file, else the registered one
+/// of that id.
+pub fn machine_of(resources: &std::path::Path, id: &str) -> Result<&'static MachineEntry, ConfigError> {
+    match std::fs::read_to_string(resources.join("machine.toml")) {
+        Ok(text) => sim_machines::load_text(&text, id),
+        Err(_) => sim_machines::find(id).ok_or_else(|| ConfigError::Missing(id.into())),
     }
 }
 

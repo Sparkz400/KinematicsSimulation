@@ -31,7 +31,7 @@ sim-cli COMMAND MACHINE [options]
 
 | Option | Effect |
 | --- | --- |
-| `--machine-file FILE` | In place of `MACHINE`: a machine defined in a TOML or JSON file, wired together from components without Rust code (not for `fmu`). See [machine files](machine-files.md) |
+| `--machine-file FILE` | In place of `MACHINE`: a machine defined in a TOML or JSON file, wired together from components without Rust code (an FMU of it carries the file). See [machine files](machine-files.md) |
 | `--config FILE` | Use this config instead of the machine's default. The EXCT-30 config is `crates/machine-t-gantry/exct-30.toml` |
 | `--motor ARTICLE` | Put a motor of the Siemens S210 catalogue into the config, e.g. `1FK2205-4AF`. Sets `parts.motor` |
 | `--supply 230v` or `400v` | The supply the motor data is for. Sets `parts.motor_supply`. Default as in the config |
@@ -1148,7 +1148,7 @@ What is in the FMU:
 | `resources/model.txt` | Machine id and language |
 | `binaries/win64/sim_fmi.dll` | The simulator. One binary for every machine; the resources say which machine it runs |
 
-By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_fmi.dll`, on Linux `libsim_fmi.so`); without it, it stops and says how to build it. `--binary FILE` names it instead and may repeat: a `.dll` goes to `binaries/win64`, a `.so` to `binaries/linux64`, a `.dylib` to `binaries/darwin64` (the extension in any case: `SIM_FMI.DLL` is stored as `sim_fmi.dll`); two for the same platform are refused. An FMU for Windows and Linux is made by building `sim-fmi` on Linux (`cargo build --release -p sim-fmi`) and passing both files: `--binary sim_fmi.dll --binary libsim_fmi.so`.
+By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_fmi.dll`, on Linux `libsim_fmi.so`); without it, it stops and says how to build it. `--binary FILE` names it instead and may repeat: a `.dll` goes to `binaries/win64`, a `.so` to `binaries/linux64`, a `.dylib` to `binaries/darwin64` (the extension in any case: `SIM_FMI.DLL` is stored as `sim_fmi.dll`); two for the same platform are refused. An FMU for Windows and Linux is made by building `sim-fmi` on Linux (`cargo build --release -p sim-fmi`) and passing both files: `--binary sim_fmi.dll --binary libsim_fmi.so`. A machine file (`--machine-file`) goes into the FMU as `resources/machine.toml`, and the FMU builds its machine from it.
 
 | Variable | Type | Causality | Meaning |
 | --- | --- | --- | --- |

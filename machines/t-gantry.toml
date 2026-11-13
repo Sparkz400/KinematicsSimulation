@@ -1,6 +1,7 @@
 # The T-gantry of crates/machine-t-gantry as a machine file: the same values, with the machine wired up in [machine]
-# at the end instead of in Rust. crates/sim-machines/tests/machine_files.rs checks it against the crate with frame_compliance and tool_flex off,
-# which machine files do not have yet (so the frame, tool flex and idler tables are left out).
+# at the end instead of in Rust. crates/sim-machines/tests/machine_files.rs checks it against the crate, with each of
+# the effects off by default switched on too. The crate has its frame on, and its tool flex, which machine files do not
+# have (so the tool flex table is left out); here the frame is off, as compared.
 # Placeholder values; units are in the field names. See docs/machine-files.md.
 format_version = 1
 # Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), or as
@@ -44,6 +45,12 @@ gearbox_backlash = true
 gearbox_efficiency = true
 torque_ripple = true
 tooth_meshing = true
+# The frame sways along X on its spring ([frame], machine.frame); elastic model only.
+frame_compliance = false
+# The Z axis leaning on its carriage: not in machine files (see docs/machine-files.md); has to stay off.
+tool_flex = false
+# The idlers' inertia and bearing friction ([idler], machine.idler).
+idlers = false
 cable_chain = false
 process_force = false
 hard_stops = true
@@ -199,6 +206,19 @@ inertia_at_input_kgm2 = 0.0
 
 [pulley]
 inertia_kgm2 = 1.0e-4
+
+# With effects.frame_compliance: the frame (beam and posts) sways along X on its own spring; machine.frame names these.
+[frame]
+mass_kg = 30.0
+stiffness_n_m = 7.4e5
+damping_n_s_m = 190.0
+
+# With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
+# with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
+[idler]
+inertia_kgm2 = 2.0e-6
+radius_m = 0.012
+friction_nm = 0.002
 
 # With effects.cable_chain: the chain is fixed at the x = 0 end, so half of every metre the carriage
 # travels joins the run that moves with it. It drags with a constant force.
@@ -511,9 +531,11 @@ version = 1
 id = "t-gantry-file"
 name = "machine-t-gantry"
 
+# The X carriage drags the cable chain (effects.cable_chain).
 [[machine.axis]]
 id = "x"
 stroke_m = "geometry.stroke_x_m"
+cable_chain = true
 pos = [600, 0]
 
 # Z rises with z: gravity pulls it towards 0.
@@ -561,6 +583,7 @@ id = "1"
 length_m = 0.3
 axes = { x = 1, z = 1 }
 pulleys = { pulley_a = 1 }
+route = ["z_axis", "upper_left", "pulley_a"]
 pos = [450, -80]
 
 # Motor A around the Z axis to motor B: 4 span_min_m + stroke_x + 2 stroke_z - 2 z.
@@ -569,6 +592,7 @@ id = "2"
 length_m = 2.6
 axes = { z = -2 }
 pulleys = { pulley_a = -1, pulley_b = 1 }
+route = ["pulley_a", "lower_left", "bottom", "lower_right", "pulley_b"]
 pos = [450, 150]
 
 # Motor B to clamp: 2 span_min_m + stroke_x - x + z.
@@ -577,6 +601,7 @@ id = "3"
 length_m = 1.3
 axes = { x = -1, z = 1 }
 pulleys = { pulley_b = -1 }
+route = ["pulley_b", "upper_right", "z_axis"]
 pos = [450, 380]
 
 [[machine.body]]
@@ -618,3 +643,117 @@ lever_axis = "z"
 spacing_m = "geometry.guide_spacing_m"
 side_load = true
 pos = [900, 300]
+
+# The idlers (effects.idlers), with the belt speed past each per speed of X and Z (crates/machine-t-gantry/src/lib.rs):
+# the two upper carriage idlers pass the belt that follows the clamp, at vz; the lower ones the runs coming back from
+# the motors, at 2 vx + vz and 2 vx - vz; the one at the bottom of the Z axis, which rises with z, at 2 vx.
+[[machine.idler]]
+id = "upper_left"
+speed = { z = 1 }
+radius_m = "idler.radius_m"
+inertia_kgm2 = "idler.inertia_kgm2"
+friction_nm = "idler.friction_nm"
+body = "carriage"
+at_m = [-0.042, -0.02, 0.032]
+pos = [1050, -80]
+
+[[machine.idler]]
+id = "upper_right"
+speed = { z = 1 }
+radius_m = "idler.radius_m"
+inertia_kgm2 = "idler.inertia_kgm2"
+friction_nm = "idler.friction_nm"
+body = "carriage"
+at_m = [0.042, -0.02, 0.032]
+pos = [1050, 0]
+
+[[machine.idler]]
+id = "lower_left"
+speed = { x = 2, z = 1 }
+radius_m = "idler.radius_m"
+inertia_kgm2 = "idler.inertia_kgm2"
+friction_nm = "idler.friction_nm"
+body = "carriage"
+at_m = [-0.042, -0.02, -0.032]
+pos = [1050, 80]
+
+[[machine.idler]]
+id = "lower_right"
+speed = { x = 2, z = -1 }
+radius_m = "idler.radius_m"
+inertia_kgm2 = "idler.inertia_kgm2"
+friction_nm = "idler.friction_nm"
+body = "carriage"
+at_m = [0.042, -0.02, -0.032]
+pos = [1050, 160]
+
+[[machine.idler]]
+id = "bottom"
+speed = { x = 2 }
+radius_m = "idler.radius_m"
+inertia_kgm2 = "idler.inertia_kgm2"
+friction_nm = "idler.friction_nm"
+body = "z_axis"
+at_m = [0.0, -0.02, -0.08]
+pos = [1050, 300]
+
+# The frame sways along X (effects.frame_compliance).
+[[machine.frame]]
+id = "frame"
+axis = "x"
+mass_kg = "frame.mass_kg"
+stiffness_n_m = "frame.stiffness_n_m"
+damping_n_s_m = "frame.damping_n_s_m"
+pos = [900, 450]
+
+# The free spans (effects.belt_span_vibration), from the left clamp: section 1 runs clamp to upper idler (span_min_m
+# + z) and idler to motor A (span_min_m + x); section 2 motor A to lower idler, down the Z axis and up again
+# (span_min_m + stroke_z_m - z each), lower idler to motor B (span_min_m + stroke_x_m - x); section 3 motor B to idler
+# and idler to clamp.
+[[machine.span]]
+id = "span_1"
+section = "1"
+length_m = "geometry.span_min_m"
+axes = { z = 1 }
+
+[[machine.span]]
+id = "span_2"
+section = "1"
+length_m = "geometry.span_min_m"
+axes = { x = 1 }
+
+[[machine.span]]
+id = "span_3"
+section = "2"
+length_m = "geometry.span_min_m"
+axes = { x = 1 }
+
+[[machine.span]]
+id = "span_4"
+section = "2"
+length_m = 0.65
+axes = { z = -1 }
+
+[[machine.span]]
+id = "span_5"
+section = "2"
+length_m = 0.65
+axes = { z = -1 }
+
+[[machine.span]]
+id = "span_6"
+section = "2"
+length_m = 1.15
+axes = { x = -1 }
+
+[[machine.span]]
+id = "span_7"
+section = "3"
+length_m = 1.15
+axes = { x = -1 }
+
+[[machine.span]]
+id = "span_8"
+section = "3"
+length_m = "geometry.span_min_m"
+axes = { z = 1 }

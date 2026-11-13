@@ -31,6 +31,10 @@ pub enum Kind {
     Coefficients(&'static str),
     /// Where an editor draws the node, [x, y]; the simulation does not read it.
     Position,
+    /// Where the 3D view draws the node, [x, y, z] in metres.
+    Point,
+    /// Ids of nodes of any of the named lists, in an order that means something (a belt's way past them).
+    Route(&'static [&'static str]),
 }
 
 pub struct Field {
@@ -57,12 +61,13 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("key", Kind::Key, false, "Translation key of its name; default axis-<id>."),
             field("stroke_m", Kind::Number, true, "Stroke, m."),
             field("incline_deg", Kind::Number, false, "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0."),
+            field("cable_chain", Kind::Bool, false, "The axis drags a cable chain fixed at its 0 end (effects.cable_chain, values in [cable_chain]). Default false."),
             POS,
         ],
     ),
     (
         "motor",
-        "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors.",
+        "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors; [motor.<id>], [drive.<id>], [gearbox.<id>], [ratings.<id>] and [parts.<id>] give one motor its own.",
         &[ID, field("key", Kind::Key, false, "Translation key of its name; default motor-<id>."), POS],
     ),
     (
@@ -78,6 +83,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
             field("radius_m", Kind::Number, true, "Pitch radius, m."),
             field("inertia_kgm2", Kind::Number, true, "Inertia without the belt, kg m^2."),
+            field("at_m", Kind::Point, false, "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis."),
             POS,
         ],
     ),
@@ -90,6 +96,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("length_m", Kind::Number, true, "Length with every axis at 0, m."),
             field("axes", Kind::Coefficients("axis"), true, "How much longer the section gets per metre of each axis."),
             field("pulleys", Kind::Coefficients("pulley"), true, "+1 for a pulley whose forward turn feeds belt into the section, -1 for one that takes belt out of it."),
+            field("route", Kind::Route(&["pulley", "idler", "body"]), false, "The pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to."),
             POS,
         ],
     ),
@@ -121,6 +128,43 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "idler",
+        "A free pulley the belt runs over (effects.idlers): its inertia and bearing friction, at the belt speed past it.",
+        &[
+            ID,
+            field("speed", Kind::Coefficients("axis"), true, "Belt speed past it per speed of each axis (m/s per m/s)."),
+            field("radius_m", Kind::Number, true, "Radius, m."),
+            field("inertia_kgm2", Kind::Number, true, "Inertia, kg m^2."),
+            field("friction_nm", Kind::Number, true, "Bearing friction torque, N m."),
+            field("body", Kind::Ref("body"), false, "A body it rides on, for the 3D view: at_m is then from that body."),
+            field("at_m", Kind::Point, false, "Where the 3D view draws it, [x, y, z], m (from its body where it has one)."),
+            POS,
+        ],
+    ),
+    (
+        "frame",
+        "The machine frame swaying along a horizontal axis on its own spring (effects.frame_compliance, elastic model only). At most one.",
+        &[
+            ID,
+            field("axis", Kind::Ref("axis"), true, "The axis the frame sways along; it has to be horizontal."),
+            field("mass_kg", Kind::Number, true, "The frame's mass in its sway, kg; bodies that do not move along the axis ride on it too."),
+            field("stiffness_n_m", Kind::Number, true, "Its stiffness, N/m."),
+            field("damping_n_s_m", Kind::Number, true, "Its damping, N s/m."),
+            POS,
+        ],
+    ),
+    (
+        "span",
+        "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration).",
+        &[
+            ID,
+            field("section", Kind::Ref("section"), true, "The section it is part of: its tension."),
+            field("length_m", Kind::Number, true, "Length with every axis at 0, m."),
+            field("axes", Kind::Coefficients("axis"), false, "How much longer it gets per metre of each axis."),
+            POS,
+        ],
+    ),
 ];
 
 pub struct AxisNode {
@@ -128,6 +172,7 @@ pub struct AxisNode {
     pub key: String,
     pub stroke: f64,
     pub incline_deg: f64,
+    pub cable_chain: bool,
 }
 
 pub struct MotorNode {
@@ -137,6 +182,7 @@ pub struct MotorNode {
     pub radius: f64,
     pub inertia: f64,
     pub pulley: String,
+    pub at: Option<[f64; 3]>,
 }
 
 pub struct SectionNode {
@@ -146,9 +192,45 @@ pub struct SectionNode {
     /// Per axis, and per motor (the pulley that motor turns).
     pub axes: Vec<f64>,
     pub pulleys: Vec<f64>,
+    /// The 3D view's way of the section, empty for the default.
+    pub route: Vec<Waypoint>,
+}
+
+/// A point a section's belt runs past in the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Waypoint {
+    /// The pulley of the motor with this index.
+    Pulley(usize),
+    Idler(usize),
+    Body(usize),
+}
+
+pub struct IdlerNode {
+    pub id: String,
+    pub speed: Vec<f64>,
+    pub radius: f64,
+    pub inertia: f64,
+    pub friction: f64,
+    pub body: Option<usize>,
+    pub at: Option<[f64; 3]>,
+}
+
+pub struct FrameNode {
+    pub axis: usize,
+    pub mass: f64,
+    pub stiffness: f64,
+    pub damping: f64,
+}
+
+pub struct SpanNode {
+    pub id: String,
+    pub section: usize,
+    pub length: f64,
+    pub axes: Vec<f64>,
 }
 
 pub struct BodyNode {
+    pub id: String,
     pub mass: f64,
     pub payload: f64,
     pub axes: Vec<bool>,
@@ -178,6 +260,9 @@ pub struct Netlist {
     pub sections: Vec<SectionNode>,
     pub bodies: Vec<BodyNode>,
     pub guides: Vec<GuideNode>,
+    pub idlers: Vec<IdlerNode>,
+    pub frame: Option<FrameNode>,
+    pub spans: Vec<SpanNode>,
     /// Every dotted path a number field named: these keys of the file are in use.
     pub refs: Vec<String>,
 }
@@ -205,6 +290,15 @@ impl Node<'_> {
     }
     fn bool(&self, name: &str) -> Result<bool> {
         self.get(name).map_or(Ok(false), |v| v.as_bool().ok_or_else(|| ConfigError::Type(self.at(name))))
+    }
+    /// An optional [x, y, z] of numbers.
+    fn point(&self, name: &str) -> Result<Option<[f64; 3]>> {
+        let Some(value) = self.get(name) else { return Ok(None) };
+        let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| p.iter().map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|f| f.is_finite())).collect());
+        match numbers.as_deref() {
+            Some(&[x, y, z]) => Ok(Some([x, y, z])),
+            _ => Err(ConfigError::Type(self.at(name))),
+        }
     }
     fn id_list(&self, name: &str) -> Result<Vec<&str>> {
         let Some(value) = self.get(name) else { return Ok(Vec::new()) };
@@ -288,7 +382,7 @@ impl Netlist {
             }
             lists.push(nodes);
         }
-        let [axes, motors, gearboxes, pulleys, sections, bodies, guides] = <[Vec<Node>; 7]>::try_from(lists).ok().expect("one list per entry of NODES");
+        let [axes, motors, gearboxes, pulleys, sections, bodies, guides, idlers, frames, spans] = <[Vec<Node>; 10]>::try_from(lists).ok().expect("one list per entry of NODES");
         for (list, nodes) in [("axis", &axes), ("motor", &motors), ("pulley", &pulleys), ("section", &sections), ("body", &bodies)] {
             if nodes.is_empty() {
                 return Err(ConfigError::Missing(format!("machine.{list}")));
@@ -310,7 +404,7 @@ impl Netlist {
                 return Err(ConfigError::Invalid(node.at("stroke_m")));
             }
             let key = node.text("key")?.map_or_else(|| format!("axis-{id}"), str::to_string);
-            axis_nodes.push(AxisNode { id, key, stroke, incline_deg: incline });
+            axis_nodes.push(AxisNode { id, key, stroke, incline_deg: incline, cable_chain: node.bool("cable_chain")? });
         }
 
         // Each motor turns one gearbox, and each gearbox one pulley: the drive trains, in the order of the motors.
@@ -328,7 +422,7 @@ impl Netlist {
                 return Err(ConfigError::Invalid(pulley.at(if radius <= 0.0 { "radius_m" } else { "inertia_kgm2" })));
             }
             let key = motor.text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
-            motor_nodes.push(MotorNode { id, key, radius, inertia, pulley: id_of(pulley) });
+            motor_nodes.push(MotorNode { id, key, radius, inertia, pulley: id_of(pulley), at: pulley.point("at_m")? });
         }
         for gearbox in &gearboxes {
             find(&motors, gearbox, "motor", gearbox.text("motor")?.unwrap_or_default())?;
@@ -364,8 +458,26 @@ impl Netlist {
                 }
             }
             let key = node.text("key")?.map_or_else(|| format!("belt-section-{id}"), str::to_string);
-            section_nodes.push(SectionNode { id, key, length, axes: along, pulleys: fed });
+            let mut route = Vec::new();
+            for target in node.id_list("route")? {
+                let found = motor_nodes.iter().position(|m| m.pulley == target).map(Waypoint::Pulley);
+                let found = found.or_else(|| idlers.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Idler));
+                let found = found.or_else(|| bodies.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Body));
+                route.push(found.ok_or_else(|| ConfigError::Invalid(format!("{} = \"{target}\"", node.at("route"))))?);
+            }
+            section_nodes.push(SectionNode { id, key, length, axes: along, pulleys: fed, route });
         }
+        // Per axis, the coefficients of a node's table field (`speed = { x = 2 }`).
+        let coefficients = |node: &Node, name: &str, refs: &mut Vec<String>| -> Result<Vec<f64>> {
+            let mut out = vec![0.0; axis_nodes.len()];
+            let Some(value) = node.get(name) else { return Ok(out) };
+            for (target, value) in value.as_table().ok_or_else(|| ConfigError::Type(node.at(name)))? {
+                let at = format!("{}.{target}", node.at(name));
+                let i = axis_nodes.iter().position(|a| &a.id == target).ok_or_else(|| ConfigError::Invalid(at.clone()))?;
+                out[i] = number(cfg, value, &at, refs)?;
+            }
+            Ok(out)
+        };
 
         let mut body_nodes = Vec::new();
         for node in &bodies {
@@ -381,7 +493,7 @@ impl Netlist {
             if !moves.contains(&true) {
                 return Err(ConfigError::Missing(node.at("axes")));
             }
-            body_nodes.push(BodyNode { mass, payload, axes: moves });
+            body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves });
         }
 
         let mut guide_nodes: Vec<GuideNode> = Vec::new();
@@ -422,13 +534,54 @@ impl Netlist {
             };
             guide_nodes.push(GuideNode { id: id_of(node), axis, friction, carries, overhang });
         }
+
+        let mut idler_nodes = Vec::new();
+        for node in &idlers {
+            let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+            let (radius, inertia, friction) = (value("radius_m", &mut refs)?, value("inertia_kgm2", &mut refs)?, value("friction_nm", &mut refs)?);
+            if radius <= 0.0 || inertia < 0.0 || friction < 0.0 {
+                return Err(ConfigError::Invalid(node.at(if radius <= 0.0 { "radius_m" } else if inertia < 0.0 { "inertia_kgm2" } else { "friction_nm" })));
+            }
+            let speed = coefficients(node, "speed", &mut refs)?;
+            let body = node.text("body")?.map(|id| find(&bodies, node, "body", id)).transpose()?;
+            idler_nodes.push(IdlerNode { id: id_of(node), speed, radius, inertia, friction, body, at: node.point("at_m")? });
+        }
+
+        let frame = match &frames[..] {
+            [] => None,
+            [node] => {
+                let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
+                // A frame swaying along a sloped axis would move the bodies' weight with it.
+                if axis_nodes[axis].incline_deg != 0.0 {
+                    return Err(ConfigError::Invalid(format!("{} (the frame sways along a horizontal axis)", node.at("axis"))));
+                }
+                let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+                let (mass, stiffness, damping) = (value("mass_kg", &mut refs)?, value("stiffness_n_m", &mut refs)?, value("damping_n_s_m", &mut refs)?);
+                if mass <= 0.0 || stiffness <= 0.0 || damping < 0.0 {
+                    return Err(ConfigError::Invalid(node.at(if mass <= 0.0 { "mass_kg" } else if stiffness <= 0.0 { "stiffness_n_m" } else { "damping_n_s_m" })));
+                }
+                Some(FrameNode { axis, mass, stiffness, damping })
+            }
+            [_, second, ..] => return Err(ConfigError::Invalid(format!("{} (one frame at most)", second.path))),
+        };
+
+        let mut span_nodes = Vec::new();
+        for node in &spans {
+            let section = find(&sections, node, "section", node.text("section")?.unwrap_or_default())?;
+            let length = number(cfg, node.required("length_m")?, &node.at("length_m"), &mut refs)?;
+            if length <= 0.0 {
+                return Err(ConfigError::Invalid(node.at("length_m")));
+            }
+            span_nodes.push(SpanNode { id: id_of(node), section, length, axes: coefficients(node, "axes", &mut refs)? });
+        }
         // Checked here: a field of the schema with the wrong type that the reading above passed over.
-        for node in axes.iter().chain(&motors).chain(&gearboxes).chain(&pulleys).chain(&sections).chain(&bodies).chain(&guides) {
+        for node in [&axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans].into_iter().flatten() {
             for f in node.fields {
                 let Some(value) = node.get(f.name) else { continue };
                 let ok = match f.kind {
                     Kind::Id | Kind::Key | Kind::Table | Kind::Ref(_) => value.is_str(),
                     Kind::Bool => value.is_bool(),
+                    Kind::Refs(_) | Kind::Route(_) => value.is_array(),
                     _ => true,
                 };
                 if !ok {
@@ -450,7 +603,7 @@ impl Netlist {
         if motor_nodes.len() != axis_nodes.len() {
             return Err(ConfigError::Invalid("machine.motor (as many motors as axes)".into()));
         }
-        Ok(Self { axes: axis_nodes, motors: motor_nodes, sections: section_nodes, bodies: body_nodes, guides: guide_nodes, refs })
+        Ok(Self { axes: axis_nodes, motors: motor_nodes, sections: section_nodes, bodies: body_nodes, guides: guide_nodes, idlers: idler_nodes, frame, spans: span_nodes, refs })
     }
 }
 
@@ -477,6 +630,8 @@ pub fn json_schema() -> Value {
                 Kind::Number => (number.clone(), None),
                 Kind::Bool => (obj([("type", text("boolean"))]), None),
                 Kind::Position => (obj([("type", text("array")), ("items", obj([("type", text("number"))])), ("minItems", Value::Integer(2)), ("maxItems", Value::Integer(2))]), None),
+                Kind::Point => (obj([("type", text("array")), ("items", obj([("type", text("number"))])), ("minItems", Value::Integer(3)), ("maxItems", Value::Integer(3))]), None),
+                Kind::Route(targets) => (obj([("type", text("array")), ("items", obj([("type", text("string"))]))]), Some(format!("Ids of {} nodes.", targets.iter().map(|t| format!("machine.{t}")).collect::<Vec<_>>().join(", ")))),
             };
             let mut schema = schema.as_table().cloned().unwrap_or_default();
             schema.insert("description".into(), text(&about.map_or_else(|| f.doc.to_string(), |a| format!("{} {a}", f.doc))));

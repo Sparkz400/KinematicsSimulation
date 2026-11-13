@@ -261,7 +261,8 @@ impl Instance {
         }
         let find = |kind: Kind| self.model.variables.iter().position(|v| v.kind == kind).unwrap_or(0);
         let machine = self.text_value(find(Kind::Machine));
-        let entry = sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))?;
+        // The FMU's own machine, which may come from a machine file; another one by its id among the registered.
+        let entry = if machine == self.model.entry.id { self.model.entry } else { sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))? };
         let file = self.text_value(find(Kind::ConfigFile));
         let text = if file.is_empty() { self.model.config_text.clone() } else { std::fs::read_to_string(&file).map_err(|e| ("fmi-error-config", format!("{file}: {e}")))? };
         let refused = |e: sim_core::ConfigError| ("fmi-error-config", self.tr.tr_arg(e.key(), e.detail()));
@@ -585,7 +586,7 @@ pub(crate) fn instantiate(name: &str, logger: Logger, environment: *mut c_void, 
         };
         let mut lines = about.lines();
         let (id, lang) = (lines.next().unwrap_or("").trim(), lines.next().unwrap_or("en").trim());
-        let Some(entry) = sim_machines::find(id) else { return Err((tr, ("fmi-error-resources", id.into()))) };
+        let Ok(entry) = crate::machine_of(resources, id) else { return Err((tr, ("fmi-error-resources", id.into()))) };
         let tr = texts(lang, entry);
         let model = match Model::with_fmi(entry, &config_text, lang, fmi) {
             Ok(model) => model,

@@ -1171,3 +1171,76 @@ Left open:
   stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
   has gone `CREEP` (1 um) further in, not on their torque or following error.
 - The PLC test's crash and reset run against the wall clock like the other PLC tests.
+
+## Machine files: per-motor parts, the eight effects, belt mode, FMU, belt drawing, two new files (13 November)
+
+What, how, test:
+
+- **Different motors per motor.** `catalog::motor_config(cfg, id)` lays `[motor.<id>]`, `[gearbox.<id>]`,
+  `[drive.<id>]`, `[ratings.<id>]` and `[parts.<id>]` over the shared tables (only keys the shared table has; a part
+  named there is applied from the catalogue, `belt` and `axis` refused). The `ConfigMachine` reads each motor's drive
+  train from it (ratio, rotor, gearbox, motor friction, ripple, brake; `ratio` and `j_rotor` are per motor now), the
+  `Controller` keeps one `DriveParams` per motor (`drive_params_of(k)`, `motor_torque_curve`) for its loops, windings
+  and DC links, and `analysis` takes each motor's for utilisation, winding rise and thermal utilisation. `MotorLoad`
+  has the motor's `id`, and `verdicts` judges each motor's checks with its own config. The loader's key schema has
+  the per-motor tables of each motor. Test: `the_portal_moves_and_holds_as_worked_out_by_hand` (Z motor angle and
+  speed with ratio 10 against 5: 50 rad and 100 rad/s at 0.1 m and 0.2 m/s against 25 and 50; its own rated torque
+  0.635 against 1.27; drive-current limit 1.5 A and gearbox-continuous 18 N m against 3 A and 40 N m; every verdict
+  passes), `a_motors_own_tables_are_checked` (a misspelt key refused by name, a belt in `[parts.mz]` refused).
+- **The eight refused effects.** Seven implemented for any routing, as the T-gantry crate does them:
+  `frame_compliance` (node `frame`: a horizontal axis, mass, stiffness, damping; elastic model; bodies not moving
+  along it ride on the frame; the tool moves with it), `idlers` (node `idler`: belt speed per axis speed, radius,
+  inertia, friction; mass m s s^T, which makes the axes' mass matrix full, and the elastic model now solves it),
+  `cable_chain` (an axis's `cable_chain = true`), `process_force` (`process.force_<axis>_n`), `thermal_feedback`
+  (`set_part_temperatures`: each gearbox's efficiency per its own law, each guide's viscous friction),
+  `belt_tooth_jump` (per motor pulley between its +1 and -1 section; a drum refuses it) and `belt_span_vibration`
+  (node `span`: section, length, axes). Switches left out of an older file read as off. `tool_flex` stays refused:
+  it needs where the leaning axis's centre of mass and tool tip sit below its guide as it travels, geometry the
+  netlist has not. `machines/t-gantry.toml` names the crate's five idlers (speeds z, z, 2x + z, 2x - z, 2x), its frame,
+  its cable chain on X and its eight spans, and has `[frame]` and `[idler]`. Test:
+  `the_effects_of_a_machine_file_are_its_crates`: each effect on (thermal feedback with the parts 10 to 40 K warm), and
+  all together, elastic and rigid: kinematics, rest state, derivatives, energy, feedforward, rigid tensions, every
+  shared signal and the eight span frequencies agree with the crate to 1e-9 (the crate's own tests hold the hand
+  checks). Before writing it, `sim-cli verdicts` of the crate and the file gave the same digits with each effect on
+  (encoder counts off); idlers and chain first differed in the fourth digit, because the overhang's commanded
+  acceleration took their mass, which the crate does not: now it does not either.
+- **Structural resonance.** `resonance_hz` and `mode_shape` (elastic model): the axes, and the frame where it sways,
+  on K = sum EA / L_s c_s c_s^T with the pulleys held, against their mass matrix; Cholesky and Jacobi for the lowest
+  mode, scaled to 1 m of the tool's largest travel. Test: `a_machine_file_reports_its_belt_mode` (single axis at
+  x = 0.5 m: sqrt(5e5 (1/0.65 + 1/1.95) / 6 kg) / 2 pi = 65.80 Hz; none in the rigid model; the T-gantry file's mode
+  drops with the frame swaying).
+- **FMU.** `Model::files` adds `resources/machine.toml` for a machine that is not registered; instantiation
+  (`machine_of`) builds it with `sim_machines::load_text`; `ensure_sim` takes the FMU's own entry. `sim-cli fmu
+  --machine-file` no longer refuses (its message removed). `tools/check_fmu.py` takes a machine file in place of the
+  id; ci.yml checks the H-bot's FMI 3.0 FMU. Test: both FMI move tests run on the H-bot, CoreXY and portal files too
+  (bit for bit against a plain `Sim`), `a_machine_file_is_run_judged_and_checked` writes the FMU and finds the file in it.
+- **Belt drawing.** The scene draws each section as strips through its `route` (pulleys, idlers, bodies), else its
+  pulleys and the body it is clamped to; pulleys at `at_m`, idlers at theirs (from their body). Test:
+  `the_3d_view_draws_the_belt_of_a_machine_file` (H-bot 4 strips, T-gantry 2 + 4 + 2 and five idlers).
+- **Two files.** `machines/corexy.toml` (a = (x + y) / r, b = (x - y) / r; gantry in Y, head in X; four idler nodes)
+  and `machines/xyz-portal.toml` (three belt loops; Z vertical with `[motor.mz]`, `[drive.mz]`, `[gearbox.mz]` ratio 10,
+  `[ratings.mz]`). Both pass every verdict (`sim-cli verdicts --machine-file`). Tests:
+  `the_corexy_moves_as_worked_out_by_hand` (100 and 50 rad at (0.3, 0.1); a diagonal 1 m/s2 asks motor B for
+  0.02 / 10 (4 - 8) = -0.008 N m), the portal's holding torque 3.5 * 9.80665 * 0.02 / 10 = 0.0686466 N m, and both in
+  `every_machine_file_passes_the_standard_suite` (without backlash, lying flat like the H-bot). The H-bot's `[process]`
+  has `force_y_n` in place of the unused `force_z_n`.
+- Docs: machine-files.md and maschinendateien.md (nodes, "Motors that differ", the two examples, the model, what is
+  left), config reference (`[frame]`, `[idler]`, `force_<axis>_n`, a motor's own tables), user guide EN/DE, fmi.md EN/DE,
+  validation.md. `schema/machine-file.schema.json` regenerated.
+
+Not run here (the coordinating session runs the suites): the tests above. `fmpy` is not installed here, so the CI line
+of the FMU check was not run either.
+
+Left open:
+
+- `tool_flex` in machine files (see above).
+- The time-optimal planner (`path::plan_time_optimal`, planner-topp's area) and `report`'s torque-curve plot take the
+  shared `[drive]` for every motor; a smaller motor of its own can be over-asked by a time-optimal plan.
+- `sim-cli catalog`'s search sizes the shared motor only; a motor with its own part keeps it, but is not searched.
+- The drives' cycle times, noise seed, shared DC link and braking module stay shared; a part named in `[parts.<id>]`
+  does not retune that motor's velocity gain (set `drive.<id>.velocity_kp_nm_s_rad` with it).
+- A chain on the axis the frame sways along takes its inertia from the axis speed relative to the frame in the rigid
+  sense only as the crate does (the crate's own shortcut); idler inertia rides on the axes' speed over ground.
+- The belt mode holds the pulleys and leaves out the guides' and motors' own stiffness; the CoreXY's idler nodes are
+  one per corner for both belts.
+- The belt is drawn as straight strips through the route, not round the pulleys.

@@ -971,7 +971,15 @@ fn a_machine_file_is_run_judged_and_checked() {
     let refused = cli(&["verdicts", "--machine-file", broken.to_str().unwrap()]);
     assert_eq!(refused.status.code(), Some(2));
     assert!(text(&refused.stderr).contains(&format!("broken.toml:{line}: machine.guide[guide_y].fricton")), "{}", text(&refused.stderr));
-    assert_eq!(cli(&["fmu", "--machine-file", file, "--out", dir.join("x.fmu").to_str().unwrap()]).status.code(), Some(2));
+    // An FMU of it carries the file among its resources, and the model description names its machine.
+    let (fmu, dll) = (dir.join("x.fmu"), dir.join("sim_fmi.dll"));
+    std::fs::write(&dll, b"windows binary").unwrap();
+    let out = cli(&["fmu", "--machine-file", file, "--binary", dll.to_str().unwrap(), "--out", fmu.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let files = unzip(&std::fs::read(&fmu).unwrap());
+    let carried = files.iter().find(|(name, _)| name == "resources/machine.toml").map(|(_, bytes)| text(bytes));
+    assert_eq!(carried.as_deref(), Some(original.as_str()));
+    assert!(text(&files[0].1).contains(r#"modelName="h-bot""#));
     std::fs::remove_dir_all(dir).ok();
 }
 

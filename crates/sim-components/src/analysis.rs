@@ -8,6 +8,8 @@ use sim_core::{Config, ConfigError, LOSS_PREFIX, MachineEntry, RatingCheck, Rk4,
 /// The load on one motor over one pass of the cycle.
 #[derive(Debug, Clone, Default)]
 pub struct MotorLoad {
+    /// The motor's id, whose own values (`catalog::motor_config`) its verdicts are judged with; "" for the shared ones.
+    pub id: String,
     pub peak_torque: f64,
     pub rms_torque: f64,
     /// The torque gearbox makers size a gearbox's continuous rating with: the cube root of the mean of the
@@ -347,7 +349,7 @@ impl Tally {
             guides,
             slack_start: 0.0,
             cubic: vec![(0.0, 0.0); motors],
-            loads: vec![MotorLoad::default(); motors],
+            loads: sim.machine.motors().iter().map(|m| MotorLoad { id: m.id.to_string(), ..MotorLoad::default() }).collect(),
             pos: { let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]); sim.machine.motor_state(&sim.state, &mut pos, &mut speed); pos },
             speed: vec![0.0; motors],
             steps: 0,
@@ -523,7 +525,7 @@ impl Tally {
             load.peak_speed = load.peak_speed.max(self.speed[k].abs());
             // What the velocity loop asks for, not what the drive delivers: a drive on its torque limit
             // delivers the curve and no more, so the delivered torque would never show a cycle beyond it.
-            let (low, high) = sim.control.torque_curve(self.speed[k]);
+            let (low, high) = sim.control.motor_torque_curve(k, self.speed[k]);
             let demand = drive.torque_demand;
             let available = if demand >= 0.0 { high } else { -low };
             load.utilisation = load.utilisation.max(demand.abs() / available.max(1e-9));
@@ -553,8 +555,8 @@ impl Tally {
             load.gearbox_torque_by_speed = std::mem::take(&mut self.gear_bands[k]);
             let (cubed, weight) = self.radial_sums[k];
             load.radial_load_equivalent = self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
-            load.winding_rise = sim.control.drive_params().settled_rise(load.rms_current);
-            load.thermal_utilisation = load.rms_torque / sim.control.rated_torque();
+            load.winding_rise = sim.control.drive_params_of(k).settled_rise(load.rms_current);
+            load.thermal_utilisation = load.rms_torque / sim.control.drive_params_of(k).rated_torque;
             load.torque_parts = self.parts[k].map(|_| self.part_sums[k].map(|(peak, squares)| (peak, (squares / steps).sqrt())));
             // A tripped drive's DC link stays where it tripped, also when that was before the measured pass.
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(sim.control.drives[k].dc_voltage);
@@ -635,7 +637,7 @@ impl Tally {
 fn stored_electrically(sim: &Sim) -> (f64, f64) {
     let p = sim.control.drive_params();
     let drives = &sim.control.drives;
-    let windings = drives.iter().map(|d| 0.5 * p.inductance * d.current * d.current).sum();
+    let windings = drives.iter().enumerate().map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current).sum();
     (windings, if p.dc_link { drives.iter().map(|d| 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage).sum() } else { 0.0 })
 }
 
@@ -779,20 +781,25 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     let cfg = &crate::catalog::parts_applied(cfg)?;
     // A rating that is no number (NaN) would otherwise count as left out, and not be judged.
     // The belt's tooth load table is two arrays; `belt_tooth_utilisation` checks them.
+    // A table there is a motor's own ratings (`catalog::motor_config`), checked with that motor.
     for (name, value) in cfg.get("ratings").ok().and_then(|ratings| ratings.as_table()).into_iter().flatten() {
-        if !value.is_array() {
+        if !value.is_array() && !value.is_table() {
             cfg.f64(&format!("ratings.{name}"))?;
         }
     }
     let rating = |name: &str| cfg.f64(&format!("ratings.{name}")).ok();
     let simulated = cfg.bool("effects.dc_link")?;
-    let (bus, rated_rise) = (cfg.positive("drive.bus_voltage_v")?, cfg.positive("motor.rated_temperature_rise_k")?);
     let mut out = Vec::new();
     // An S120 line-up brakes through one Braking Module for all its axes (`drive.braking_module`): their braking power
     // is judged together, after the axes. An S210 has a resistor of its own and is judged per axis.
     let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
     let mut line_up_brakes = false;
+    let shared = cfg;
     for (k, m) in load.motors.iter().enumerate() {
+        // Each motor against its own motor, drive and ratings.
+        let cfg = &crate::catalog::motor_config(shared, &m.id)?;
+        let rating = |name: &str| cfg.f64(&format!("ratings.{name}")).ok();
+        let (bus, rated_rise) = (cfg.positive("drive.bus_voltage_v")?, cfg.positive("motor.rated_temperature_rise_k")?);
         // Peak torque against the torque-speed curve, and the settled winding temperature against the rated rise.
         out.push(at_most("motor-peak", Some(k), m.utilisation, 1.0));
         out.push(at_most("motor-thermal", Some(k), m.winding_rise, rated_rise));
@@ -2003,7 +2010,7 @@ pub fn velocity_loop_response(entry: &MachineEntry, cfg: &Config, motor: usize, 
             if due {
                 // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
                 sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
-                let (low, high) = sim.control.drive_params().torque_range(speed[motor]);
+                let (low, high) = sim.control.drive_params_of(motor).torque_range(speed[motor]);
                 let drive = &sim.control.drives[motor];
                 let e = drive.torque_demand + drive.torque_injection;
                 limited |= !(low < e && e < high);

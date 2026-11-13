@@ -14,6 +14,15 @@ item are in [PROGRESS.md](PROGRESS.md).
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and
   key in every error, with a generated JSON Schema (`schema/machine-file.schema.json`). The single axis and the
   T-gantry as machine files reproduce their crates (`machines/`, `docs/machine-files.md`).
+- Machine files: a motor's own `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]` and `[parts.<id>]`
+  over the shared tables, for its drive train, its drive and its verdicts (`catalog::motor_config`).
+- Machine files: the effects frame compliance, idlers, cable chain, process force, thermal feedback, belt tooth jump and
+  span vibration, with the node kinds `idler`, `frame` and `span` and an axis's `cable_chain`; tool flex stays refused.
+- Machine files report the belt's lowest mode per pose (`resonance_hz`, `mode_shape`), so `shaper_follows_pose` works
+  and the app shows it; the 3D view draws their belt (`route`, `at_m`).
+- `sim-cli fmu --machine-file`: the FMU carries the file (`resources/machine.toml`) and builds its machine from it, FMI
+  2.0 and 3.0; `tools/check_fmu.py` takes a machine file, and CI checks the H-bot's FMU.
+- `machines/corexy.toml` (CoreXY) and `machines/xyz-portal.toml` (three-axis portal with a smaller Z motor).
 - Licence: dual MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`), and `THIRD-PARTY-LICENSES.md` generated from
   `cargo metadata` by `tools/third_party_licenses.py`.
 - `CONTRIBUTING.md`, `ROADMAP.md`, this changelog.

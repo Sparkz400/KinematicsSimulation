@@ -230,7 +230,7 @@ Between motor shaft and pulley. Stiffness, damping and backlash are given at the
 
 ## `[frame]`
 
-T-gantry only. With `effects.frame_compliance`: the beam and its mounting as one mass on a spring in X.
+T-gantry, and machine files whose `machine.frame` names these values. With `effects.frame_compliance`: the beam and its mounting as one mass on a spring in X.
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
@@ -250,7 +250,7 @@ T-gantry only. With `effects.tool_flex`: the guide of the Z axis gives way sidew
 
 ## `[idler]`
 
-T-gantry only. With `effects.idlers`: the four carriage idlers and the one at the bottom of the Z axis, all alike. The table has to be present and `radius_m` positive even with the effect off.
+T-gantry, and machine files whose `machine.idler` nodes name these values. With `effects.idlers`: the four carriage idlers and the one at the bottom of the Z axis, all alike. The table has to be present and `radius_m` positive even with the effect off.
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
@@ -276,6 +276,15 @@ With `effects.process_force`: a force on the tool tip (single axis: on the carri
 | --- | --- | --- | --- | --- |
 | `force_x_n` | T E S | N | Force on the tool in X. May be negative | choice |
 | `force_z_n` | T E | N | Force on the tool in Z (positive is upwards) | choice |
+| `force_<axis>_n` | machine files | N | Force on the tool along each axis of a machine file (`force_y_n` on the H-bot, the CoreXY and the portal). Read only with the effect on | choice |
+
+## A motor's own tables
+
+In a machine file, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]` and `[parts.<id>]` give the motor
+`<id>` its own values over the shared tables, key by key; each key has to be one the shared table has, with its meaning,
+unit and mark there. `[parts.<id>]` takes `motor`, `motor_supply`, `gearbox` and `drive` (not `belt` or `axis`, which
+are the machine's). See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
+has them for its Z motor; no other config has any.
 
 ## `[hard_stop]`
 

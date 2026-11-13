@@ -381,7 +381,7 @@ impl Sim {
     /// shaft's work come from the same stages as the motion. The core's integrator sees one state vector.
     fn advance_with_windings(&mut self) {
         let Self { machine, control, state, torque, rk_joint, joint, motor_buffers: [angle, speed, stage_torque], dt, substeps, .. } = self;
-        let (n, p, drives) = (state.len(), control.drive_params(), &control.drives);
+        let (n, drives) = (state.len(), &control.drives);
         joint.clear();
         joint.extend_from_slice(state);
         for d in drives {
@@ -394,7 +394,7 @@ impl Sim {
                     let ((mech, windings), (dmech, dwindings)) = (y.split_at(n), dy.split_at_mut(n));
                     machine.motor_state(mech, angle, speed);
                     for (k, d) in drives.iter().enumerate() {
-                        let i = windings[WINDING_STATES * k];
+                        let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
                         stage_torque[k] = p.torque_of(i);
                         dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(d.voltage, d.winding_resistance(p), i, speed[k]));
                     }
@@ -509,10 +509,9 @@ impl Sim {
                 part.heat = Some(heat as f32);
             }
         };
-        let drive = self.control.drive_params();
-        if drive.heating {
+        if self.control.drive_params().heating {
             for (k, d) in self.control.drives.iter().enumerate() {
-                colour(sim_core::scene::MOTOR_PART, k, d.temperature_rise / drive.rated_rise);
+                colour(sim_core::scene::MOTOR_PART, k, d.temperature_rise / self.control.drive_params_of(k).rated_rise);
             }
         }
         if self.part_heating {

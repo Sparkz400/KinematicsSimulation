@@ -70,6 +70,8 @@ enum Motion {
 
 pub struct Controller {
     params: DriveParams,
+    /// Each motor's drive: `params` with that motor's own values (`catalog::motor_config`).
+    motor_params: Vec<DriveParams>,
     /// Loop cycles in base steps.
     n_velocity: u64,
     n_position: u64,
@@ -149,6 +151,7 @@ impl Controller {
         let (axes, motors) = (machine.axes().len(), machine.motors().len());
         let mut c = Self {
             params: DriveParams::from_config(cfg, 1.0, 1.0)?,
+            motor_params: Vec::new(),
             n_velocity: 1,
             n_position: 1,
             n_profile: 1,
@@ -216,9 +219,9 @@ impl Controller {
         // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
         // if a budget across an enable ever needs to close there.
         let kept: Vec<(f64, f64)> = self.drives.iter().map(|d| (d.temperature_rise, d.dc_voltage)).collect();
-        self.drives = (0..motors).map(|k| Drive::at_rest(&self.params, self.motor_pos[k], hold[k], ff[k])).collect();
-        let p = &self.params;
-        for (drive, (rise, voltage)) in self.drives.iter_mut().zip(kept) {
+        self.drives = (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
+        for (k, (drive, (rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
+            let p = &self.motor_params[k];
             drive.temperature_rise = rise;
             if p.dc_link {
                 drive.dc_voltage = (voltage * voltage - p.inductance * drive.current * drive.current / p.dc_capacitance).max(0.0).sqrt();
@@ -246,6 +249,7 @@ impl Controller {
         let profile_cycle = n_profile as f64 * dt;
         let setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", profile_cycle)?;
         let params = DriveParams::from_config(cfg, dt, n_velocity as f64 * dt)?;
+        let motor_params = machine.motors().iter().map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt)).collect::<Result<Vec<_>>>()?;
         let (mut shaper, mut shaper_follows) = (None, None);
         let (frequency, damping) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
         if damping >= 1.0 {
@@ -331,6 +335,7 @@ impl Controller {
         self.cycle = self.cycle.and_then(|i| Some(i.min(segments.len().checked_sub(1)?)));
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
+        self.motor_params = motor_params;
         self.blend_time = blend_time;
         (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
@@ -510,6 +515,11 @@ impl Controller {
         self.params.torque_curve(speed)
     }
 
+    /// The torque motor `k`'s drive can give at a motor speed: (lowest, highest).
+    pub fn motor_torque_curve(&self, k: usize, speed: f64) -> (f64, f64) {
+        self.drive_params_of(k).torque_curve(speed)
+    }
+
     /// How far a dwell of the cycle has run, from 0 to 1; `None` outside a dwell.
     pub fn dwell_progress(&self) -> Option<f64> {
         let (Motion::Dwell { until_tick }, Some(i)) = (&self.motion, self.cycle) else { return None };
@@ -542,6 +552,11 @@ impl Controller {
         &self.params
     }
 
+    /// Motor and drive data of motor `k`: `drive_params` with that motor's own values (`catalog::motor_config`).
+    pub fn drive_params_of(&self, k: usize) -> &DriveParams {
+        self.motor_params.get(k).unwrap_or(&self.params)
+    }
+
     /// The motors stand `shift` from where they stood without having turned there: the machine's model was
     /// exchanged, and belt stretch and gear twist came or went with it, or its ratio changed. The encoders'
     /// last readings move along, so that the step does not read as speed, and so do the position setpoints
@@ -564,8 +579,8 @@ impl Controller {
     pub fn update(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
         if !self.enabled {
-            for (drive, torque) in self.drives.iter_mut().zip(torque) {
-                drive.disabled_step(&self.params);
+            for (k, (drive, torque)) in self.drives.iter_mut().zip(torque).enumerate() {
+                drive.disabled_step(&self.motor_params[k]);
                 *torque = 0.0;
             }
             if self.params.shared_dc_link {
@@ -577,8 +592,8 @@ impl Controller {
             self.profile_tick(self.tick + 1, machine);
         }
         if step % self.n_position == 0 {
-            for (drive, pos) in self.drives.iter_mut().zip(&self.motor_pos) {
-                drive.position_loop(&self.params, *pos);
+            for (k, (drive, pos)) in self.drives.iter_mut().zip(&self.motor_pos).enumerate() {
+                drive.position_loop(&self.motor_params[k], *pos);
             }
             // Following error per motor, transformed back to the tool axes for display.
             let (set, actual): (Vec<f64>, Vec<f64>) = self.drives.iter().map(|d| (d.pos_set, d.pos_set - d.following_error)).unzip();
@@ -591,17 +606,17 @@ impl Controller {
         }
         for (k, drive) in self.drives.iter_mut().enumerate() {
             if step % self.n_velocity == 0 {
-                drive.velocity_loop(&self.params, self.motor_pos[k], self.motor_vel[k]);
+                drive.velocity_loop(&self.motor_params[k], self.motor_pos[k], self.motor_vel[k]);
             }
-            drive.current_control(&self.params, self.motor_vel[k]);
+            drive.current_control(&self.motor_params[k], self.motor_vel[k]);
         }
     }
 
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
     /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64]) {
-        for (drive, w) in self.drives.iter_mut().zip(windings.chunks_exact(4)) {
-            drive.winding_stepped(&self.params, w[0], [w[1], w[2], w[3]]);
+        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.chunks_exact(4)).enumerate() {
+            drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
         }
         if self.params.shared_dc_link {
             shared_dc_link(&self.params, &mut self.drives);
