@@ -1544,11 +1544,12 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     let lifts = lifts(cfg, cfg.non_negative("profile.min_clearance_m")?)?;
     let (cycle_s, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
     let axis_infos = probe.machine.axes().to_vec();
-    let axes: Vec<&'static str> = probe.machine.axes().iter().map(|a| a.id).collect();
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
     let (first, configured) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
     let second_frequency = if configured > 0.0 { Some(configured) } else { resonance.filter(|f| (f / first - 1.0).abs() > 0.1) };
-    let limits = ["max_velocity_m_s", "max_acceleration_m_s2", "max_jerk_m_s3"];
+    // In the axis's own unit: `axis.x.max_velocity_m_s`, `axis.c.max_velocity_rad_s` (with metres alone, a machine with an
+    // axis in rad could not be built and its cycle was said to fail a verdict).
+    let limits = ["max_velocity_{unit}_s", "max_acceleration_{unit}_s2", "max_jerk_{unit}_s3"];
     // A candidate: the factor on each of the three limits, the switches, and per lift its height and via point.
     #[derive(Clone, PartialEq)]
     struct Setting {
@@ -1562,9 +1563,9 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     }
     let build = |setting: &Setting| -> Result<Config, ConfigError> {
         let mut changed = cfg.clone();
-        for axis in &axes {
+        for axis in &axis_infos {
             for (limit, factor) in limits.iter().zip(setting.factors) {
-                let path = format!("axis.{axis}.{limit}");
+                let path = format!("axis.{}.{}", axis.id, limit.replace("{unit}", axis.unit));
                 changed.set_text(&format!("{path} = {:?}", cfg.positive(&path)? * factor))?;
             }
         }

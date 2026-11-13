@@ -77,6 +77,7 @@ impl SCurve {
 #[derive(Debug, Clone)]
 pub struct Move {
     start: Vec<f64>,
+    target: Vec<f64>,
     delta: Vec<f64>,
     curve: SCurve,
 }
@@ -93,7 +94,7 @@ impl Move {
         } else {
             SCurve::default()
         };
-        Self { start: start.to_vec(), delta, curve }
+        Self { start: start.to_vec(), target: target.to_vec(), delta, curve }
     }
 
     pub fn duration(&self) -> f64 {
@@ -111,7 +112,9 @@ impl Move {
     pub fn at(&self, t: f64, pos: &mut [f64], vel: &mut [f64], acc: &mut [f64]) {
         let (s, v, a, _) = if self.curve.dist > 0.0 { self.curve.at(t) } else { (0.0, 0.0, 0.0, 0.0) };
         for i in 0..pos.len() {
-            pos[i] = self.start[i] + self.delta[i] * s;
+            // At the end the target itself: start + (target - start) can be a rounding beyond it, and beyond the end of
+            // a stroke, where a path planned from there was refused (2.1000000000000005 rad for 2.1 on an arm's joint).
+            pos[i] = if s >= 1.0 { self.target[i] } else { self.start[i] + self.delta[i] * s };
             vel[i] = self.delta[i] * v;
             acc[i] = self.delta[i] * a;
         }

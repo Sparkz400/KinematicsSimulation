@@ -434,8 +434,11 @@ impl Controller {
                 let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
                 // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
                 // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
-                // path from there starts that far outside the range (`near_start`).
-                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &self.raw_pos, pose)) {
+                // path from there starts that far outside the range (`near_start`). Judged from the path's own start,
+                // which may be up to that slack off this setpoint (below): a path planned by another simulation from
+                // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
+                // stop where this setpoint is on it, and was refused.
+                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose)) {
                     return Err(CommandError { key: "error-trajectory" });
                 }
                 // A path that starts elsewhere would make the setpoint jump.
@@ -696,7 +699,9 @@ impl Controller {
                         };
                     }
                 } else {
-                    let i = points.partition_point(|(time, _)| *time <= t) - 1;
+                    // A point a rounding error after `t` counts as at `t`: at a point the cubic that starts there is
+                    // taken, not by the rounding of the two times the end of the one before, whose acceleration differs.
+                    let i = (points.partition_point(|(time, _)| *time <= t + 1e-6 * dt) - 1).min(last - 1);
                     let h = points[i + 1].0 - points[i].0;
                     let s = (t - points[i].0) / h;
                     // Cubic through both points with the speeds there: position, and its first and second rate.
@@ -885,13 +890,26 @@ impl Controller {
 }
 
 /// A path given as poses at times as the controller runs it: a cubic through them, with the speed at each point the
-/// slope between its neighbours, at rest at both ends.
+/// slope between its neighbours (of the four around it where they are evenly spaced), at rest at both ends.
 fn trajectory(points: Vec<(f64, Vec<f64>)>) -> Motion {
     let axes = points[0].1.len();
     let mut speeds = vec![vec![0.0; axes]; points.len()];
-    for i in 1..points.len() - 1 {
+    let n = points.len();
+    for i in 1..n - 1 {
+        // Evenly spaced on both sides (rows of a trace, a plan's profile cycles): the slope of the five points around it,
+        // exact for a cubic, so that the acceleration at each point is the curve's own. The slope of the two neighbours
+        // is off by jerk x spacing^2 / 6, which put the acceleration off by jerk x spacing.
+        let even = i >= 2 && i + 2 < n && {
+            let h = points[i + 1].0 - points[i].0;
+            (1..=4).all(|k| ((points[i + k - 2].0 - points[i + k - 3].0) - h).abs() <= 1e-6 * h)
+        };
         for a in 0..axes {
-            speeds[i][a] = (points[i + 1].1[a] - points[i - 1].1[a]) / (points[i + 1].0 - points[i - 1].0);
+            speeds[i][a] = if even {
+                let p = |k: usize| points[k].1[a];
+                (p(i - 2) - 8.0 * p(i - 1) + 8.0 * p(i + 1) - p(i + 2)) / (3.0 * (points[i + 2].0 - points[i - 2].0))
+            } else {
+                (points[i + 1].1[a] - points[i - 1].1[a]) / (points[i + 1].0 - points[i - 1].0)
+            };
         }
     }
     Motion::Trajectory { points, speeds, start_tick: u64::MAX }

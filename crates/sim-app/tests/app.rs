@@ -8,6 +8,12 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::{LANGUAGES, MACHINES};
 use std::time::{Duration, Instant};
 
+/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload or the
+/// rotary table's payload inertia (the slides have one; the arms and the table have none).
+fn payload_key(cfg: &Config) -> &'static str {
+    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2"].into_iter().find(|k| cfg.get(k).is_ok()).unwrap()
+}
+
 /// Polls until the simulation thread has delivered samples and a scene.
 fn wait_for_data(model: &mut Model) {
     let start = Instant::now();
@@ -36,10 +42,11 @@ fn every_machine_runs_in_the_same_app_model() {
         assert_eq!(on_scopes, (1..signals).collect::<Vec<_>>(), "{}", entry.id);
         assert!(model.scopes.iter().any(|s| s.visible));
         // Setpoints and commands share a scope with the value they ask for, as dashed references.
+        // A quantity has a scope per unit (the SCARA's positions in rad and its quill's in m), so they are counted over all.
         for (quantity, references) in [("quantity-position", model.session.axes.len()), ("quantity-torque", model.session.motors.len())] {
-            let scope = model.scopes.iter().find(|s| s.quantity_key == quantity).unwrap();
-            assert_eq!(scope.lines.iter().filter(|l| l.reference).count(), references, "{}: {quantity}", entry.id);
-            assert_eq!(scope.lines.iter().filter(|l| !l.reference).count(), references, "{}: {quantity}", entry.id);
+            let lines: Vec<_> = model.scopes.iter().filter(|s| s.quantity_key == quantity).flat_map(|s| &s.lines).collect();
+            assert_eq!(lines.iter().filter(|l| l.reference).count(), references, "{}: {quantity}", entry.id);
+            assert_eq!(lines.iter().filter(|l| !l.reference).count(), references, "{}: {quantity}", entry.id);
         }
         assert!(!model.scene.labels.is_empty(), "{}: no live values in the 3D view", entry.id);
         assert_eq!(model.target.len(), model.session.axes.len());
@@ -186,9 +193,16 @@ fn demanding(entry: &MachineEntry) -> Config {
         machine.equilibrium(&cfg.f64s("start.pose").unwrap(), &mut Vec::new(), &mut torque);
         torque.iter().fold(0.0f64, |m, t| m.max(t.abs()))
     };
-    cfg.set_text(&format!("drive.peak_torque_nm = {:?}", f64::max(0.3, 1.5 * hold))).unwrap();
-    // 100 V at the winding.
-    cfg.set_text("drive.bus_voltage_v = 81.65").unwrap();
+    // And at least half the smallest motor peak of the default cycle, so that the drive still moves a machine whose
+    // friction takes more than 0.3 N m (the screw's nut and guides) or whose motor values are in N (the linear motor).
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &entry.config()).unwrap()).unwrap();
+    let peak = load.motors.iter().map(|m| m.peak_torque).fold(f64::INFINITY, f64::min);
+    cfg.set_text(&format!("drive.peak_torque_nm = {:?}", 0.3f64.max(1.5 * hold).max(0.5 * peak))).unwrap();
+    // 100 V at the winding; or the DC link that gives three quarters of the back EMF at the cycle's top motor speed, where
+    // 100 V would hold the motor far below it all the time (the screw's 251 rad/s need 220 V), so that no switch shows.
+    let top = load.motors.iter().map(|m| m.peak_speed).fold(0.0, f64::max);
+    let emf = cfg.f64("motor.torque_constant_nm_a").unwrap() * top / 1.5f64.sqrt();
+    cfg.set_text(&format!("drive.bus_voltage_v = {:?}", 81.65f64.max(0.75 * emf))).unwrap();
     cfg
 }
 
@@ -223,7 +237,21 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash"];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Runner::new(entry, &base).unwrap().sim.machine.motors().len() < 2;
-        let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link")).collect();
+        // Nor does backlash or a gearbox's loss act where the config has none (the screw's and the linear motor's couplings;
+        // the screw's own loss is under the same switch), motor friction where the motor has none (the linear motor: no
+        // bearings of its own), gravity along a horizontal slide (the screw, rack and linear motor axes) or on the table
+        // about its vertical axis, or part heating and its feedback where there is no gearbox to warm and no belt (a
+        // coupling of ratio 1).
+        let machine = (entry.build)(&base).unwrap();
+        let tight = base.f64("gearbox.backlash_rad").is_ok_and(|b| b == 0.0);
+        let lossless = base.f64("gearbox.efficiency").is_ok_and(|e| e == 1.0) && base.get("screw").is_err() && base.get("rack").is_err();
+        let level = base.f64("slide.incline_deg").is_ok_and(|i| i == 0.0) || base.get("table").is_ok();
+        let frictionless = ["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"].iter().all(|k| base.f64(k).is_ok_and(|f| f == 0.0));
+        let cold = machine.thermal_parts().is_empty() && machine.belt_sections().is_empty();
+        let effects: Vec<String> = effects
+            .into_iter()
+            .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !(tight && e == "effects.gearbox_backlash") && !(lossless && e == "effects.gearbox_efficiency") && !(frictionless && e == "effects.motor_friction") && !(level && e == "effects.gravity") && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback")))
+            .collect();
         for effect in effects {
             let mut runners = [Runner::new(entry, &base).unwrap(), Runner::new(entry, &base).unwrap()];
             let mut events = [Vec::new(), Vec::new()];
@@ -423,6 +451,7 @@ fn tuning_measures_the_axis_with_the_current_gains() {
 }
 
 /// Polls until the analysis jobs have answered, whatever they say.
+#[track_caller]
 fn wait_for_jobs(model: &mut Model) {
     let start = Instant::now();
     while model.analysis_running() && start.elapsed() < Duration::from_secs(300) {
@@ -433,6 +462,7 @@ fn wait_for_jobs(model: &mut Model) {
 }
 
 /// Polls until the analysis jobs have answered, with a result and no complaint.
+#[track_caller]
 fn wait_for_analysis(model: &mut Model) {
     wait_for_jobs(model);
     assert!(model.messages.iter().all(|m| m.0.starts_with("limit-")), "{:?}", model.messages);
@@ -530,8 +560,12 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         assert_eq!(motors[0][0], "Figure");
         assert_eq!(motors[0][1..], model.session.motors.iter().map(|info| model.tr.tr(info.key).to_string()).collect::<Vec<_>>());
         // And the lives in hours and the belt's tooth load, which both belt machines' default configs have; the delta has the
-        // gearbox's life alone.
-        assert_eq!(motors.len(), if belted { 14 } else { 12 }, "{}", entry.id);
+        // gearbox's life alone, a machine without a rated gearbox (the screw's coupling) none.
+        let lives = {
+            let (cfg, m) = (entry.config(), &load.motors[0]);
+            [sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()].iter().filter(|l| l.is_some()).count()
+        };
+        assert_eq!(motors.len(), if belted { 14 } else { 11 + lives }, "{}", entry.id);
         assert!(row(motors, "Fed back into the mains [J]").iter().all(|cell| shows(cell, 0.0)), "{motors:?}");
         for (k, m) in load.motors.iter().enumerate() {
             let figures = [
@@ -566,7 +600,8 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             assert_eq!(row[0], model.tr.tr(&format!("check-{}", v.check)));
             assert!(model.tr.has(&format!("check-{}", v.check)), "no label for {}", v.check);
             assert_eq!(row[1].is_empty(), v.motor.is_none());
-            assert!((number(&row[2]) - v.value).abs() <= 0.01 * v.value.abs() && (number(&row[3]) - v.limit).abs() <= 0.01 * v.limit.abs(), "{row:?} against {v:?}");
+            // To the digits the tables give (an arm's wrist motor uses 0.011 of its curve, shown with three decimals).
+            assert!(shows(&row[2], v.value) && shows(&row[3], v.limit), "{row:?} against {v:?}");
             assert_eq!(row[4], if v.ok { "ok" } else { "FAIL" });
         }
         assert!(checks.iter().any(|row| row[0] == "Winding rise, settled [K]") && checks.iter().any(|row| row[0] == "Off target while dwelling [m]"));
@@ -651,18 +686,23 @@ fn the_app_optimises_the_cycle_and_applies_the_settings() {
         // The optimiser starts only from a cycle that passes every verdict, which the delta's does not (`settling`).
         let cfg = entry.config();
         let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
-        if !sim_components::analysis::verdicts(&cfg, &load).unwrap().iter().all(|v| v.ok) {
+        let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
+        if !judged.iter().all(|v| v.ok) {
             wait_for_jobs(&mut model);
             assert!(model.messages.iter().any(|m| m.0 == "error-config-invalid"), "{}: {:?}", entry.id, model.messages);
             continue;
         }
+        // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
+        // a faster move uses up (the screw's 46 of 50 um: 2.9 % shorter by acceleration and jerk alone).
+        let settling = judged.iter().find(|v| v.check == "settling").unwrap();
+        let shorter = if settling.value > 0.9 * settling.limit { 0.98 } else { 0.95 };
         wait_for_analysis(&mut model);
         let table = model.optimised_table().unwrap();
         let found = model.optimised.clone().unwrap();
         assert_eq!(table[0], ["Setting", "Before", "After"]);
         assert_eq!(table[1][0], "Cycle time [s]");
         let (before, after) = (number(&table[1][1]), number(&table[1][2]));
-        assert!(after < 0.95 * before && (before - cycle_time(entry, &entry.config())).abs() < 2e-3, "{}: {before} s to {after} s", entry.id);
+        assert!(after < shorter * before && (before - cycle_time(entry, &entry.config())).abs() < 2e-3, "{}: {before} s to {after} s", entry.id);
         let cycle = found.changes.iter().filter(|c| c.0 == "cycle.segment").count();
         let lift_rows = found.lifts.len() + found.lifts.iter().filter(|l| l.via.is_some()).count();
         assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len() - cycle + lift_rows);
@@ -670,15 +710,16 @@ fn the_app_optimises_the_cycle_and_applies_the_settings() {
 
         // An edit made since the optimiser ran: its settings, absolute values, used to be written over it
         // without a word. Now nothing is applied, with a message, until the edit is taken back.
-        let payload = model.config.f64("mass.payload_kg").unwrap();
-        model.set_param("mass.payload_kg", toml::Value::Float(payload + 0.5));
+        let key = payload_key(&model.config);
+        let payload = model.config.f64(key).unwrap();
+        model.set_param(key, toml::Value::Float(payload + 0.5));
         model.apply_optimised();
         assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{}", entry.id);
         assert!(model.optimised_table().is_some());
         for (path, before, _) in &found.changes {
             assert_eq!(&model.config.get(path).unwrap().to_string(), before, "{path} was applied over a changed config");
         }
-        model.set_param("mass.payload_kg", toml::Value::Float(payload));
+        model.set_param(key, toml::Value::Float(payload));
 
         model.apply_optimised();
         assert!(model.optimised_table().is_none());
@@ -896,10 +937,11 @@ fn the_checks_get_error_bands_in_the_app() {
 
         // The result is of the config it was computed for, and says so once that has changed.
         assert!(!model.outdated(Analysis::Cycle));
-        let payload = model.config.f64("mass.payload_kg").unwrap();
-        model.set_param("mass.payload_kg", toml::Value::Float(payload + 0.5));
+        let key = payload_key(&model.config);
+        let payload = model.config.f64(key).unwrap();
+        model.set_param(key, toml::Value::Float(payload + 0.5));
         assert!(model.outdated(Analysis::Cycle) && !model.outdated(Analysis::Search));
-        model.set_param("mass.payload_kg", toml::Value::Float(payload));
+        model.set_param(key, toml::Value::Float(payload));
         assert!(!model.outdated(Analysis::Cycle));
         // With a number of samples the bands are those of `verdict_bands_sampled` with the seed 1.
         model.inputs.samples = 6;
@@ -932,6 +974,9 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         std::thread::sleep(Duration::from_millis(150));
         model.poll();
     };
+    // What the running simulation says of a motor too weak for the machine: its limits, and on an arm that falls with it
+    // the drive's trip (its DC link takes what the falling arm feeds back).
+    let weak = |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-drive-tripped";
     for entry in MACHINES.iter().copied() {
         let mut model = Model::new(entry, "en");
         assert!(model.search_table().is_none());
@@ -964,11 +1009,14 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
             }
         }
         // A 2000 r/min motor is too slow for the axis speed by its catalogue numbers alone: it is listed as
-        // failed with that reason, and no cycle is simulated for it.
+        // failed with that reason, and no cycle is simulated for it. Not on the linear motor, whose motor values are in N
+        // and m: the catalogue's rotary motors are no motors for it (the search tries them all the same).
         model.inputs.series = "1FK2208-3AC".into();
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
-        assert_eq!(model.search_table().unwrap()[1][5..], ["FAIL", "Motor speed at the highest axis speed", ""]);
+        if model.config.get("linear_motor").is_err() {
+            assert_eq!(model.search_table().unwrap()[1][5..], ["FAIL", "Motor speed at the highest axis speed", ""], "{}", entry.id);
+        }
         model.inputs.series = series.into();
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
@@ -977,7 +1025,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         model.use_candidate(0);
         settle(&mut model);
         assert_eq!((part(&model, "motor"), part(&model, "motor_supply"), part(&model, "gearbox")), (found[0].article.to_string(), "400v".to_string(), String::new()));
-        assert!(model.messages.iter().all(|m| m.0.starts_with("limit-")), "{:?}", model.messages);
+        assert!(model.messages.iter().all(weak), "{}: {:?}", entry.id, model.messages);
         // Naming a motor does not outdate the search, which put its own motors in: another row can follow.
         assert!(!model.outdated(Analysis::Search));
         model.use_candidate(1);
@@ -987,14 +1035,15 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         model.use_candidate(found.len());
         assert_eq!(part(&model, "motor"), found[1].article);
         // Any other change does: the motors passed or failed on another machine, so none of them is applied.
-        let payload = model.config.f64("mass.payload_kg").unwrap();
-        model.set_param("mass.payload_kg", toml::Value::Float(payload + 0.5));
+        let key = payload_key(&model.config);
+        let payload = model.config.f64(key).unwrap();
+        model.set_param(key, toml::Value::Float(payload + 0.5));
         assert!(model.outdated(Analysis::Search));
         model.use_candidate(0);
         settle(&mut model);
         // (Not counting what the running simulation says about the motor's limits meanwhile: the delta's 1FK2104 is too
         // weak for its axis limits.)
-        let said = model.messages.iter().rev().find(|m| !m.0.starts_with("limit-")).map(|m| m.0);
+        let said = model.messages.iter().rev().find(|m| !weak(m)).map(|m| m.0);
         assert_eq!((said, part(&model, "motor")), (Some("ui-analysis-stale"), found[1].article.to_string()));
         model.clear(Analysis::Search);
         assert!(model.search_table().is_none() && !model.outdated(Analysis::Search));
@@ -1075,7 +1124,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         }
         // The planned path for the plot: every pose, from where the machine stood to the end of the file.
         let (across, up, line) = model.path_plot().unwrap();
-        assert!(!across.is_empty() && up.ends_with("[m]") && line.len().abs_diff(points.len()) <= 1, "{across}, {up}, {} points", line.len());
+        // In the unit of the axis drawn upwards: m, or rad on the rotary table.
+        assert!(!across.is_empty() && (up.ends_with("[m]") || up.ends_with("[rad]")) && line.len().abs_diff(points.len()) <= 1, "{across}, {up}, {} points", line.len());
         let (first, last) = (line[0], line[line.len() - 1]);
         // The plan starts at the setpoint at rest, up to the machine's slack from the start pose (the delta's sag).
         let slack = (entry.build)(&entry.config()).unwrap().setpoint_slack();
@@ -1085,31 +1135,39 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             assert!((first[0] - home[0]).abs() < slack && (last[0] - point(0.75)[0]).abs() < 1e-9 && (last[1] - point(0.75)[1]).abs() < 1e-9, "{first:?} to {last:?}");
         }
         // The same path as places in the 3D scene, from where the scene draws the tool now to where the
-        // machine's own mapping puts the end of the file.
+        // machine's own mapping puts the end of the file. A machine without that mapping has no line and no trail (the
+        // rotary table: its tool pose is an angle, no point).
         let run = model.path_run.as_ref().unwrap();
         let apart = |a: [f64; 3], b: [f64; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt();
-        assert_eq!(run.scene_line.len(), run.points.len(), "{}", entry.id);
-        let (planned_start, planned_end) = (run.scene_line[0], run.scene_line[run.scene_line.len() - 1]);
-        assert!(apart(planned_end, sim.machine.scene_point(&point(0.75)).unwrap()) < 1e-9 && apart(planned_start, planned_end) > 0.1, "{}", entry.id);
-        // The trail starts once the machine has taken the path, not when it is sent.
-        let sent = Instant::now();
-        while model.trail.is_none() && sent.elapsed() < Duration::from_secs(60) {
-            model.poll();
-            std::thread::sleep(Duration::from_millis(1));
+        if let Some(end) = sim.machine.scene_point(&point(0.75)) {
+            assert_eq!(run.scene_line.len(), run.points.len(), "{}", entry.id);
+            let (planned_start, planned_end) = (run.scene_line[0], run.scene_line[run.scene_line.len() - 1]);
+            assert!(apart(planned_end, end) < 1e-9 && apart(planned_start, planned_end) > 0.1, "{}", entry.id);
+            let twist = twist_in_scene(sim.machine.as_ref(), &home);
+            // The trail starts once the machine has taken the path, not when it is sent.
+            let sent = Instant::now();
+            while model.trail.is_none() && sent.elapsed() < Duration::from_secs(60) {
+                model.poll();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(model.trail.is_some(), "{}", entry.id);
+            // And the machine in the app has been sent on its way: it arrives.
+            simulate(&mut model, load.duration);
+            assert!((latest(&model, &position) - point(0.75)[0]).abs() < 1e-3, "{}: the machine stands at {}", entry.id, latest(&model, &position));
+            // The path the tool took, as the scenes reported it on the way: from the start of the planned line to
+            // its end, never far from it.
+            let trail = model.trail.clone().unwrap();
+            let line = &model.path_run.as_ref().unwrap().scene_line;
+            let off = trail.iter().map(|p| line.iter().map(|q| apart(*p, *q)).fold(f64::INFINITY, f64::min)).fold(0.0, f64::max);
+            // A point per 0.1 mm of travel whatever the frame rate: no two further apart than that and one step.
+            let widest = trail.windows(2).map(|w| apart(w[0], w[1])).fold(0.0, f64::max);
+            assert!(widest < 3e-4, "{}: {widest} m between two points of the trail", entry.id);
+            assert!(trail.len() >= 3 && apart(trail[0], planned_start) < slack.max(1e-3) + twist && apart(trail[trail.len() - 1], planned_end) < 2e-3 + twist && off < 5e-3 + twist, "{}: {} points, {off} m off the planned line, {} m from its start, {} m from its end", entry.id, trail.len(), apart(trail[0], planned_start), apart(trail[trail.len() - 1], planned_end));
+        } else {
+            assert!(run.scene_line.is_empty(), "{}", entry.id);
+            simulate(&mut model, load.duration);
+            assert!(model.trail.is_none() && (latest(&model, &position) - point(0.75)[0]).abs() < 1e-3, "{}: the machine stands at {}", entry.id, latest(&model, &position));
         }
-        assert!(model.trail.is_some(), "{}", entry.id);
-        // And the machine in the app has been sent on its way: it arrives.
-        simulate(&mut model, load.duration);
-        assert!((latest(&model, &position) - point(0.75)[0]).abs() < 1e-3, "{}: the machine stands at {}", entry.id, latest(&model, &position));
-        // The path the tool took, as the scenes reported it on the way: from the start of the planned line to
-        // its end, never far from it.
-        let trail = model.trail.clone().unwrap();
-        let line = &model.path_run.as_ref().unwrap().scene_line;
-        let off = trail.iter().map(|p| line.iter().map(|q| apart(*p, *q)).fold(f64::INFINITY, f64::min)).fold(0.0, f64::max);
-        // A point per 0.1 mm of travel whatever the frame rate: no two further apart than that and one step.
-        let widest = trail.windows(2).map(|w| apart(w[0], w[1])).fold(0.0, f64::max);
-        assert!(widest < 3e-4, "{}: {widest} m between two points of the trail", entry.id);
-        assert!(trail.len() >= 3 && apart(trail[0], planned_start) < slack.max(1e-3) && apart(trail[trail.len() - 1], planned_end) < 2e-3 && off < 5e-3, "{}: {} points, {off} m off the planned line, {} m from its start, {} m from its end", entry.id, trail.len(), apart(trail[0], planned_start), apart(trail[trail.len() - 1], planned_end));
 
         // Poses at times: the same path backwards, from where the machine stands now.
         let back: String = points.iter().zip(points.iter().rev()).map(|((time, _), (_, pose))| format!("{time:?},{}\n", text(pose))).collect();
@@ -1146,15 +1204,16 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         (model.inputs.path_file, model.inputs.time_optimal) = (lines.clone(), true);
         model.messages.clear();
         model.run_analysis(Analysis::Path);
-        let payload = model.config.f64("mass.payload_kg").unwrap();
-        model.set_param("mass.payload_kg", toml::Value::Float(payload + 0.5));
+        let key = payload_key(&model.config);
+        let payload = model.config.f64(key).unwrap();
+        model.set_param(key, toml::Value::Float(payload + 0.5));
         wait_for_jobs(&mut model);
         assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{:?}", model.messages);
         let fast = number(&row(&model.path_tables()[0], "Duration [s]")[0]);
         assert!(fast < slow && model.outdated(Analysis::Path), "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits", entry.id);
         simulate(&mut model, 0.5);
         assert!((latest(&model, &position) - home[0]).abs() < 1e-3, "{}: the machine ran a path planned for another config", entry.id);
-        model.set_param("mass.payload_kg", toml::Value::Float(payload));
+        model.set_param(key, toml::Value::Float(payload));
         assert!(!model.outdated(Analysis::Path));
         model.clear(Analysis::Path);
         assert!(model.path_tables().is_empty() && model.path_plot().is_none());
@@ -1183,7 +1242,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             model.run_analysis(Analysis::Path);
             wait_for_analysis(&mut model);
             simulate(&mut model, 4.0);
-            assert!((latest(&model, &position) - to[0]).abs() < 1e-3, "{}: {name}: the machine stands at {}", entry.id, latest(&model, &position));
+            assert!((latest(&model, &position) - to[0]).abs() < 1e-3, "{}: {name}: the machine stands at {} ({:?})", entry.id, latest(&model, &position), model.messages);
         }
 
         // Transition curves, where the machine has the two axes they are worked out in: a line, a quarter turn of
@@ -1219,6 +1278,18 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
     }
 }
 
+/// Where an arm's tool is drawn off its pose by the gears' twist under its weight: the distance in the scene of the tool
+/// at `pose` and with every axis the machine's setpoint slack further. An arm's poses are joint angles, so its slack of
+/// some mrad is some mm at its tool. 0 on a machine whose axes are all in metres, where the slack is a distance already.
+fn twist_in_scene(machine: &dyn sim_core::Machine, pose: &[f64]) -> f64 {
+    if machine.axes().iter().all(|a| a.unit == "m") {
+        return 0.0;
+    }
+    let off: Vec<f64> = pose.iter().map(|p| p + machine.setpoint_slack()).collect();
+    let (a, b) = (machine.scene_point(pose).unwrap(), machine.scene_point(&off).unwrap());
+    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt()
+}
+
 /// Trace replay and fit in the app, as `sim-cli replay` and `fit --trace`: a trace the simulator wrote itself
 /// replays onto itself and fits the config's own values, with the advice in the chosen language. A file
 /// that is no trace is refused with a message.
@@ -1233,8 +1304,11 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         }
         // A trace as a run writes it: one pass of the cycle, a row per millisecond. The gripper stays
         // empty, because a trace does not say when a payload comes and goes.
+        // And the encoders count without steps: their quantisation noise is not replayed sample by sample (the linear
+        // motor's 1 um scale under its stiff velocity loop makes some 10 N of it).
         let mut cfg = entry.config();
         cfg.set_text("effects.payload = false").unwrap();
+        cfg.set_text("effects.encoder_resolution = false").unwrap();
         let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
         sim.command(Command::StartCycle).unwrap();
         let header: Vec<String> = sim.signal_infos().iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
@@ -1253,6 +1327,7 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         let mut model = Model::new(entry, "en");
         assert!(model.trace_tables().is_empty() && model.trace_advice().is_empty());
         model.set_param("effects.payload", toml::Value::Boolean(false));
+        model.set_param("effects.encoder_resolution", toml::Value::Boolean(false));
         model.inputs.trace_file = file.clone();
         model.run_analysis(Analysis::Trace);
         wait_for_analysis(&mut model);
@@ -1357,8 +1432,14 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
     let trailed = |events: &[Event]| events.iter().filter_map(|e| if let Event::Trail(points) = e { Some(points.clone()) } else { None }).flatten().collect::<Vec<_>>();
     for entry in MACHINES.iter().copied() {
         let mut runner = Runner::new(entry, &entry.config()).unwrap();
+        // A trail needs the tool as a point in the scene, which a machine may not have (the rotary table: an angle).
+        if runner.sim.tool_point().is_none() {
+            continue;
+        }
         let axes = runner.sim.machine.axes().to_vec();
         let far: Vec<f64> = axes.iter().map(|a| a.min + 0.75 * (a.max - a.min)).collect();
+        // The tool at rest is off its pose by what the gears give way (an arm's twist, some mm at its tool).
+        let twist = twist_in_scene(runner.sim.machine.as_ref(), &far);
         let points = runner.sim.plan_path(&[sim_components::path::Piece::Line(far.clone())], false).unwrap();
         let duration = points[points.len() - 1].0;
 
@@ -1383,7 +1464,7 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
         // the delta.
         let step = axes.iter().map(|a| a.max_vel * a.max_vel).sum::<f64>().sqrt() * runner.sim.dt;
         assert!(widest > 1e-4 && widest < f64::max(2e-4, 1e-4 + step), "{}: {widest} m between two points", entry.id);
-        assert!(trail.len() as f64 > 0.9 * apart(from, to) / 2e-4 && apart(trail[trail.len() - 1], to) < 1e-3, "{}: {} points over {} m", entry.id, trail.len(), apart(from, to));
+        assert!(trail.len() as f64 > 0.9 * apart(from, to) / 2e-4 && apart(trail[trail.len() - 1], to) < 1e-3 + twist, "{}: {} points over {} m, {} m from its end", entry.id, trail.len(), apart(from, to), apart(trail[trail.len() - 1], to));
 
         // The trail ends with the path: a move after it adds no points and says nothing, and the finished
         // trail stays until the reconfigure below.
@@ -1416,7 +1497,7 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
             let trail = trailed(&events);
             assert!(before > 10 && starts(&events).len() == 1, "{}: {command:?}", entry.id);
             if runs_on {
-                assert!(apart(trail[trail.len() - 1], to) < 1e-3, "{}: the trail ends {} m before the path's end after {command:?}", entry.id, apart(trail[trail.len() - 1], to));
+                assert!(apart(trail[trail.len() - 1], to) < 1e-3 + twist, "{}: the trail ends {} m before the path's end after {command:?}", entry.id, apart(trail[trail.len() - 1], to));
             } else {
                 assert!(trail.len() == at_command && apart(trail[trail.len() - 1], to) > 0.01, "{}: {} points after {command:?}", entry.id, trail.len() - at_command);
             }
@@ -1471,8 +1552,9 @@ fn a_config_file_is_opened_changed_saved_and_opened_again() {
         wait_for_data(&mut model);
 
         // A value and an effect switch changed in the panels.
-        let payload = model.config.f64("mass.payload_kg").unwrap() + 0.75;
-        model.set_param("mass.payload_kg", toml::Value::Float(payload));
+        let key = payload_key(&model.config);
+        let payload = model.config.f64(key).unwrap() + 0.75;
+        model.set_param(key, toml::Value::Float(payload));
         let (switch, _, on) = model.effects().into_iter().next().unwrap();
         model.set_param(&switch, toml::Value::Boolean(!on));
         let changed = model.config.clone();
@@ -1483,11 +1565,11 @@ fn a_config_file_is_opened_changed_saved_and_opened_again() {
         assert_eq!(text.lines().count(), entry.default_config.lines().count(), "{text}");
         let differ: Vec<(&str, &str)> = entry.default_config.lines().zip(text.lines()).filter(|(a, b)| a != b).collect();
         assert_eq!(differ.len(), 2, "{}: {differ:?}", entry.id);
-        assert!(differ.iter().any(|(_, line)| line.starts_with("payload_kg = ")), "{differ:?}");
+        assert!(differ.iter().any(|(_, line)| line.starts_with(&format!("{} = ", key.rsplit('.').next().unwrap()))), "{differ:?}");
 
         // Opened again, it is the config as it was changed.
         model.open_config(&saved);
-        assert!(model.config == changed && model.config.f64("mass.payload_kg").unwrap() == payload, "{}", entry.id);
+        assert!(model.config == changed && model.config.f64(key).unwrap() == payload, "{}", entry.id);
         wait_for_data(&mut model);
         assert!(model.messages.iter().all(|m| m.0.starts_with("limit-") || m.0.starts_with("ui-config-")), "{:?}", model.messages);
 
@@ -1928,7 +2010,9 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
                 assert!((force - parts.iter().sum::<f64>()).abs() < 1e-12 && (0..3).all(|p| view.curves[p + 1].1[k][1] == parts[p]), "{} at {v} m/s", entry.id);
             }
             let split = ["coulomb", "viscous", "stiction"].map(get);
-            assert!((split.iter().sum::<f64>() - latest(&model, &format!("{}.friction", contact.id))).abs() < 1e-9);
+            // The parts add up to the total, where the machine reports one (a guide's; a joint's friction has its parts alone).
+            let total = format!("{}.friction", contact.id);
+            assert!(model.session.signals.iter().all(|s| s.id != total) || (split.iter().sum::<f64>() - latest(&model, &total)).abs() < 1e-9);
             assert_eq!(view.now, Some([get("speed"), split.iter().sum::<f64>()]));
             assert!(shows(&row(&view.table, "Coulomb friction [N]")[0], split[0]) && shows(&row(&view.table, "Friction force [N]")[0], split.iter().sum()), "{:?}", view.table);
         }

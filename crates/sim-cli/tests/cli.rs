@@ -11,6 +11,18 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload or the
+/// rotary table's payload inertia (the slides have one; the arms and the table have none).
+fn payload_key(cfg: &sim_core::Config) -> &'static str {
+    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2"].into_iter().find(|k| cfg.get(k).is_ok()).unwrap()
+}
+
+/// Whether the config rates a gearbox, so that `verdicts` judges `gearbox-peak` (a screw's or a linear motor's coupling
+/// of ratio 1 is not rated).
+fn has_gearbox_ratings(cfg: &sim_core::Config) -> bool {
+    cfg.get("ratings.gearbox_max_torque_nm").is_ok()
+}
+
 #[test]
 fn list_names_every_machine_in_both_languages() {
     let (en, de) = (cli(&["list"]), cli(&["list", "--lang", "de"]));
@@ -27,7 +39,12 @@ fn list_names_every_machine_in_both_languages() {
 fn run_writes_every_signal_as_csv_for_every_machine() {
     for entry in MACHINES {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-        let target: Vec<String> = sim.machine.axes().iter().map(|a| format!("{}", 0.5 * (a.min + a.max))).collect();
+        // The middle of each axis; three quarters of the first where it starts in the middle (the SCARA's j1 at 0 rad).
+        let home = entry.config().f64s("start.pose").unwrap();
+        let target: Vec<String> = sim.machine.axes().iter().enumerate().map(|(i, a)| {
+            let middle = 0.5 * (a.min + a.max);
+            format!("{}", if i == 0 && (middle - home[0]).abs() < 0.02 { a.min + 0.75 * (a.max - a.min) } else { middle })
+        }).collect();
         let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}.csv", entry.id));
         let out = cli(&["run", entry.id, "--move", &target.join(","), "--time", "0.5", "--out", path.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
@@ -43,7 +60,7 @@ fn run_writes_every_signal_as_csv_for_every_machine() {
         assert!((rows[500][0] - 0.5).abs() < 1e-12);
         // The first axis moved towards its target.
         let position = sim.signal_index(&format!("axis.{}.position", sim.machine.axes()[0].id)).unwrap();
-        assert!((rows[500][position] - rows[0][position]).abs() > 0.01);
+        assert!((rows[500][position] - rows[0][position]).abs() > 0.01, "{}: {} to {}", entry.id, rows[0][position], rows[500][position]);
     }
 }
 
@@ -179,11 +196,15 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
         assert_eq!(table(&["bode", entry.id, "--axis-index", &last, "--from", "2", "--to", "50", "--count", "4"]).lines().count(), 5);
         let tuning = table(&["tuning", entry.id]);
         assert_eq!(tuning.lines().count(), 1 + axes);
+        // An arm's joints carry their links on elastic gears, six joints of different inertia with one set of drive gains:
+        // the band is not Kv's alone (the six-axis arm's j2 has 3.97 Hz, its j1 17 Hz with 27 % overshoot, at velocity
+        // loops of some 80 Hz). There half the lower bound is asked.
+        let lowest = if entry.config().get("arm.urdf_file").is_ok() { 2.0 } else { 4.0 };
         for row in tuning.lines().skip(1) {
             let cells: Vec<&str> = row.split(',').collect();
             let band: f64 = cells[4].parse().unwrap();
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
-            assert!(band > 4.0 && band < 20.0, "{}: {row}", entry.id);
+            assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
         // The margins of the config as it is: one row per motor, the figures of `velocity_loop_margins`.
         let margins = table(&["margins", entry.id]);
@@ -196,10 +217,11 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
         assert_eq!(margins.lines().count(), 1 + found[0].1.len());
     }
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
-    // (10 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25.)
+    // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
+    // at 10 times the screw's loop is still stable, by 6 degrees.)
     for entry in MACHINES {
         let shipped = entry.config().f64("drive.velocity_kp_nm_s_rad").unwrap();
-        let gain = if 7.5 * shipped <= 0.3 { 0.3 } else { 10.0 * shipped };
+        let gain = if 7.5 * shipped <= 0.3 { 0.3 } else { 12.0 * shipped };
         let out = cli(&["margins", entry.id, "--set", &format!("drive.velocity_kp_nm_s_rad={gain}")]);
         let unstable = text(&out.stdout);
         assert!(out.status.success() && unstable.lines().count() > 1 && unstable.lines().skip(1).all(|row| row.ends_with(",FAIL")), "{}: {unstable}", entry.id);
@@ -248,21 +270,28 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
 #[test]
 fn sensitivity_writes_one_ranked_row_per_parameter() {
     for entry in MACHINES {
-        let run = cli(&["sensitivity", entry.id, "--group", "mass", "--delta", "0.1"]);
+        // The table that holds the payload: [mass], or the rotary table's [table]. An arm's [arm] has one number beside
+        // its lists and its URDF, so there its joints' [joint] comes along.
+        let cfg = entry.config();
+        let groups: &[&str] = match payload_key(&cfg).split('.').next().unwrap() {
+            "arm" => &["arm", "joint"],
+            group => &[group],
+        };
+        let run = cli(&[&["sensitivity", entry.id, "--delta", "0.1"][..], &groups.iter().flat_map(|g| ["--group", g]).collect::<Vec<_>>()].concat());
         assert!(run.status.success(), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let mut lines = out.lines();
         assert!(lines.next().unwrap().starts_with("parameter,value,low,high,peak_torque_low,peak_torque_high"), "{out}");
         let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
-        assert!(rows.len() >= 2 && rows.iter().all(|r| r[0].starts_with("mass.") && r.len() == 12), "{}: {out}", entry.id);
-        let cfg = entry.config();
+        assert!(rows.len() >= 2 && rows.iter().all(|r| groups.contains(&r[0].split('.').next().unwrap()) && r.len() == 12), "{}: {out}", entry.id);
         let strength = |r: &Vec<&str>| r[4..10].iter().map(|v| v.parse::<f64>().unwrap().abs()).fold(0.0, f64::max);
         assert!(rows.windows(2).all(|w| strength(&w[0]) >= strength(&w[1]) - 1e-4), "{}: not ranked: {out}", entry.id);
         // Without bounds in the config the low and high values are the value less and plus 10 %; with bounds, the bounds
         // (the delta bounds its estimated masses).
         let number = |cell: &str| cell.parse::<f64>().unwrap();
         let expected = |r: &Vec<&str>| cfg.f64s(&format!("bounds.{}", r[0])).map_or((0.9 * number(r[1]), 1.1 * number(r[1])), |b| (b[0], b[1]));
-        assert!(rows.iter().all(|r| (number(r[2]) - expected(r).0).abs() < 1e-9 * number(r[1]) && (number(r[3]) - expected(r).1).abs() < 1e-9 * number(r[1])), "{out}");
+        // (An arm's joint angle limits are below zero.)
+        assert!(rows.iter().all(|r| (number(r[2]) - expected(r).0).abs() < 1e-9 * number(r[1]).abs() && (number(r[3]) - expected(r).1).abs() < 1e-9 * number(r[1]).abs()), "{out}");
         // With bounds, they are the bounds: 10 N to 20 N for the Coulomb friction of both belt machines' guides.
         if cfg.get("friction_x").is_err() {
             continue;
@@ -286,7 +315,9 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
         // The belt's tension where the machine has belts.
         let belted = !sim_components::Sim::new(entry, &entry.config()).unwrap().machine.belt_sections().is_empty();
-        for check in ["motor-peak", "motor-thermal", "gearbox-peak", "dc-link-energy", "belt-tension"].into_iter().filter(|c| belted || *c != "belt-tension") {
+        // And the gearbox's peak where the config rates a gearbox.
+        let geared = has_gearbox_ratings(&entry.config());
+        for check in ["motor-peak", "motor-thermal", "gearbox-peak", "dc-link-energy", "belt-tension"].into_iter().filter(|c| (belted || *c != "belt-tension") && (geared || *c != "gearbox-peak")) {
             assert!(rows.iter().any(|r| r[0] == check), "{}: no {check} in {out}", entry.id);
         }
         // As the library judges the cycle: the belt machines pass every check, the delta's catalogue gearboxes fail
@@ -311,7 +342,8 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         assert!(banded.len() >= rows.len() && banded.iter().zip(&rows).all(|(b, r)| b[..5] == r[..]), "{}: {out}", entry.id);
         let number = |cell: &str| cell.parse::<f64>().unwrap();
         assert!(banded.iter().all(|b| b.len() == 8 && number(b[5]) <= number(b[2]) && number(b[2]) <= number(b[6])), "{}: {out}", entry.id);
-        let peak = banded.iter().find(|b| b[0] == "gearbox-peak").unwrap();
+        // The gearbox's peak torque, or the motor's where no gearbox is rated.
+        let peak = banded.iter().find(|b| b[0] == if geared { "gearbox-peak" } else { "motor-peak" }).unwrap();
         assert!(number(peak[6]) > 1.02 * number(peak[5]) && peak[7] == "ok", "{}: {peak:?}", entry.id);
 
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
@@ -322,8 +354,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         };
         let out = sampled("1");
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case,pass_share");
-        let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
-        assert!(rows.iter().zip(&banded).all(|(s, b)| s[..5] == b[..5]) && rows.iter().all(|s| s.len() == 9 && (0.0..=1.0).contains(&number(s[8]))), "{}: {out}", entry.id);
+        let samples: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        // The rows of the checks the config's own cycle has come first and are its own. A check that only some runs have
+        // (the SCARA's motor 3 brakes into its resistor only in some) follows, with the value of the first run that has it.
+        assert!(samples.len() >= rows.len() && samples.iter().zip(&rows).all(|(s, r)| s[..5] == r[..]), "{}: {out}", entry.id);
+        assert!(samples.iter().all(|s| s.len() == 9 && (0.0..=1.0).contains(&number(s[8]))), "{}: {out}", entry.id);
         assert!(out == sampled("1") && out != sampled("2"), "{}", entry.id);
         // Samples without bands, no samples at all, half a sample and a seed without samples are refused.
         for bad in [&["--samples", "6"][..], &["--bands", "--samples", "0"], &["--bands", "--samples", "2.5"], &["--bands", "--seed", "3"], &["--bands", "--samples"]] {
@@ -396,14 +431,16 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect()
         };
         // One pass of the cycle moves every axis in both directions. The gripper stays empty, because
-        // a trace does not say when a payload comes and goes.
-        let no_payload = ["--set", "effects.payload=false"];
+        // a trace does not say when a payload comes and goes. And the encoders count without steps: their quantisation noise
+        // is not replayed sample by sample (the linear motor's 1 um scale under its stiff velocity loop makes some 10 N of it).
+        let no_payload = ["--set", "effects.payload=false", "--set", "effects.encoder_resolution=false"];
         table(&[&["run", entry.id, "--cycle", "--time", "6.2", "--out", &trace], &no_payload[..]].concat());
 
         let summary = table(&[&["replay", entry.id, "--trace", &trace, "--out", &overlay], &no_payload[..]].concat());
         // The overlay file is `overlay_csv`, which the app exports too.
         let mut cfg = entry.config();
         cfg.set_text("effects.payload = false").unwrap();
+        cfg.set_text("effects.encoder_resolution = false").unwrap();
         let measured = sim_components::trace::Trace::parse(&std::fs::read_to_string(&trace).unwrap(), sim.machine.motors()).unwrap();
         let simulated = sim_components::trace::replay(entry, &cfg, &measured).unwrap();
         let ids: Vec<&str> = sim.machine.motors().iter().map(|m| m.id).collect();
@@ -426,7 +463,18 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             assert!(config > 0.0 && (fitted / config - 1.0).abs() < 0.02, "{}: {row:?}", entry.id);
         }
 
-        // Stage 2 on a sweep of the config itself: the dip is where the config has it.
+        // A file that is no trace is refused, in the chosen language.
+        let (en, de) = (cli(&["replay", entry.id, "--trace", &overlay]), cli(&["replay", entry.id, "--trace", &overlay, "--lang", "de"]));
+        assert_eq!(en.status.code(), Some(2));
+        assert!(text(&en.stderr).contains("angle_setpoint") && text(&de.stderr).contains("angle_setpoint") && text(&en.stderr) != text(&de.stderr));
+
+        // Stage 2 on a sweep of the config itself: the dip is where the config has it. Where the first motor has no dip in
+        // this range (a belt's is there; the screw's, the table's gear's and a linear motor without transmission are not),
+        // stage 2 has nothing to fit.
+        let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
+        if sim_components::identify::resonance(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap()).is_none() {
+            continue;
+        }
         let sweep = file("sweep");
         let large = ["--amplitude", "1.5"];
         table(&[&["sweep", entry.id, "--from", "50", "--to", "130", "--count", "30", "--out", &sweep], &large[..]].concat());
@@ -446,10 +494,6 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         let falling = file("sweep-falling");
         std::fs::write(&falling, lines.join("\n")).unwrap();
         assert_eq!(table(&[&["fit", entry.id, "--sweep", &falling], &large[..]].concat()), fit, "{}", entry.id);
-
-        let (en, de) = (cli(&["replay", entry.id, "--trace", &overlay]), cli(&["replay", entry.id, "--trace", &overlay, "--lang", "de"]));
-        assert_eq!(en.status.code(), Some(2));
-        assert!(text(&en.stderr).contains("angle_setpoint") && text(&de.stderr).contains("angle_setpoint") && text(&en.stderr) != text(&de.stderr));
     }
 }
 
@@ -458,15 +502,19 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
 #[test]
 fn parts_are_named_on_the_command_line() {
     for entry in MACHINES {
+        // A machine without a rated gearbox (a screw's or a linear motor's coupling of ratio 1) has no gearbox to exchange
+        // and no `gearbox-peak`: there the motor alone is named, and the use of its curve changes.
+        let geared = has_gearbox_ratings(&entry.config());
         let ratio = |extra: &[&str]| -> f64 {
             let out = cli(&[&["verdicts", entry.id], extra].concat());
             assert!(out.status.success(), "{}", text(&out.stderr));
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
             let value = |check: &str| table.lines().find(|l| l.starts_with(check)).unwrap().split(',').nth(2).unwrap().parse::<f64>().unwrap();
-            value("gearbox-peak") / value("motor-peak")
+            if geared { value("gearbox-peak") / value("motor-peak") } else { value("motor-peak") }
         };
-        let (own, named) = (ratio(&[]), ratio(&["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"]));
+        let parts: &[&str] = if geared { &["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"] } else { &["--motor", "1FK2104-5AK"] };
+        let (own, named) = (ratio(&[]), ratio(parts));
         assert!(named > 0.0 && (named / own - 1.0).abs() > 0.1, "{}: {own} and {named}", entry.id);
         let (en, de) = (cli(&["run", entry.id, "--motor", "1FK9999-0AA"]), cli(&["run", entry.id, "--motor", "1FK9999-0AA", "--lang", "de"]));
         assert_eq!(en.status.code(), Some(2));
@@ -592,8 +640,11 @@ fn a_config_file_with_a_key_the_machine_does_not_know_is_refused() {
         };
         let good = file("config", entry.default_config);
         assert!(cli(&["run", entry.id, "--config", &good, "--time", "0.01"]).status.success());
-        let misspelt = file("misspelt", &entry.default_config.replacen("payload_kg = ", "payload_kq = ", 1));
-        refused(&["run", entry.id, "--config", &misspelt, "--time", "0.01"], "mass.payload_kq");
+        // The payload's key misspelt, in whichever table the machine has it.
+        let key = payload_key(&entry.config());
+        let leaf = key.rsplit('.').next().unwrap();
+        let misspelt = file("misspelt", &entry.default_config.replacen(&format!("{leaf} = "), &format!("{leaf}x = "), 1));
+        refused(&["run", entry.id, "--config", &misspelt, "--time", "0.01"], &format!("{key}x"));
     }
 }
 
@@ -703,20 +754,24 @@ fn compare_writes_the_cycle_with_an_effect_on_and_off() {
     for entry in MACHINES {
         let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
         let (traces, differences) = (dir.join(format!("{}-compare.csv", entry.id)), dir.join(format!("{}-differences.csv", entry.id)));
-        let motor = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.motors()[0].id;
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let motor = sim.machine.motors()[0].id;
         let torque = format!("motor.{motor}.torque");
+        // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
+        let position = format!("axis.{}.position", sim.machine.axes()[0].id);
+        let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
         // The friction the machine has: of its guides, or of its arms' joints.
         let effect = if entry.config().bool("effects.guide_friction").is_ok() { "guide_friction" } else { "joint_friction" };
-        let out = cli(&["compare", entry.id, "--effect", effect, "--signal", &torque, "--signal", "axis.x.position", "--out", traces.to_str().unwrap(), "--differences", differences.to_str().unwrap()]);
+        let out = cli(&["compare", entry.id, "--effect", effect, "--signal", &torque, "--signal", &position, "--out", traces.to_str().unwrap(), "--differences", differences.to_str().unwrap()]);
         assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
         let found = compare_effect(entry, &entry.config(), effect).unwrap();
         let place = |id: &str| found.signals.iter().position(|s| s.id == id).unwrap();
         let written = std::fs::read_to_string(&traces).unwrap();
         let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines[0], format!("time[s],{torque}.on[N m],{torque}.off[N m],axis.x.position.on[m],axis.x.position.off[m]"));
+        assert_eq!(lines[0], format!("time[s],{torque}.on[N m],{torque}.off[N m],{position}.on[{unit}],{position}.off[{unit}]"));
         assert_eq!(lines.len(), 1 + found.on.len().min(found.off.len()));
         let (on, off) = (&found.on[100], &found.off[100]);
-        let (t, p) = (place(&torque), place("axis.x.position"));
+        let (t, p) = (place(&torque), place(&position));
         assert_eq!(lines[101], format!("{:.4},{:.9e},{:.9e},{:.9e},{:.9e}", on[0], on[t], off[t], on[p], off[p]));
         let (peak, rms) = found.difference(t);
         let written = std::fs::read_to_string(&differences).unwrap();
@@ -790,14 +845,15 @@ fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
     std::fs::write(&so, b"linux binary").unwrap();
     for entry in MACHINES {
         let path = dir.join(format!("{}.fmu", entry.id));
-        let out = cli(&["fmu", entry.id, "--set", "mass.payload_kg=2.5", "--binary", dll.to_str().unwrap(), "--binary", so.to_str().unwrap(), "--out", path.to_str().unwrap()]);
+        let key = payload_key(&entry.config());
+        let out = cli(&["fmu", entry.id, "--set", &format!("{key}=2.5"), "--binary", dll.to_str().unwrap(), "--binary", so.to_str().unwrap(), "--out", path.to_str().unwrap()]);
         assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
         let files = unzip(&std::fs::read(&path).unwrap());
         let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["modelDescription.xml", "resources/model.txt", "resources/config.toml", "binaries/win64/sim_fmi.dll", "binaries/linux64/sim_fmi.so"]);
         assert_eq!(files[3].1, b"windows binary");
         assert_eq!(files[2].1, sim_core::Config::parse(&text(&files[2].1)).unwrap().to_text().unwrap().into_bytes());
-        assert!(text(&files[2].1).contains("payload_kg = 2.5"), "the config as set on the command line");
+        assert!(text(&files[2].1).contains(&format!("{} = 2.5", key.rsplit('.').next().unwrap())), "the config as set on the command line");
 
         let xml = text(&files[0].1);
         let elements = xml_elements(&xml);

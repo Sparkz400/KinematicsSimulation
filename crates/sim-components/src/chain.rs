@@ -557,9 +557,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         out.extend(self.losses(s, torque).powers);
     }
 
-    /// Each joint's friction (Coulomb and viscous, no stiction).
+    /// Each joint's friction (Coulomb and viscous, no stiction), owned by the joint's axis: the friction view spans that
+    /// axis's speed limit (with the joint's own key it found no axis and spanned 1 m/s or rad/s).
     fn friction_contacts(&self) -> Vec<FrictionContact> {
-        self.joints.iter().map(|j| FrictionContact { id: j.id_signal(), owner_key: j.key }).collect()
+        self.joints.iter().zip(&self.axes).map(|(j, axis)| FrictionContact { id: j.id_signal(), owner_key: axis.key }).collect()
     }
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
         let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
