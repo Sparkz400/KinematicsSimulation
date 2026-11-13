@@ -1,6 +1,7 @@
 //! Fitting a config to a measured machine, in stages: first the rigid values of each axis from a drive
-//! trace, then the load's resonance on the belt from a frequency sweep. Nothing here edits a config; the
-//! results say what the config would have to be.
+//! trace (or, where the motors do not turn in proportion to the axes, of each motor: `fit_joints`), then the
+//! load's resonance on the belt from a frequency sweep, or its stiffness from a move's trace
+//! (`fit_move_stiffness`). Nothing here edits a config; the results say what the config would have to be.
 //!
 //! Every stage runs the same estimate on the measurement and on the config's own simulation of the same
 //! run, and reports the two side by side. What the simple estimate gets wrong (gearbox losses that grow
@@ -186,7 +187,7 @@ impl JointFit {
                 match v.quantity {
                     "payload_factor" => ("fit-payload", format!("× {:.3} ± {:.3}", v.fitted / v.config, v.error / v.config)),
                     "added_inertia_kg_m2" => ("fit-joint-inertia", format!("{}: {:+.3e} kg m² ± {:.1e}", v.of, v.fitted - v.config, v.error)),
-                    "viscous_friction_nm_s_rad" => ("fit-joint-viscous", change("N m s/rad")),
+                    "viscous_friction_nm_s_rad" => ("fit-joint-viscous", format!("{}: {:+.2e} N m s/rad ± {:.1e}", v.of, v.fitted - v.config, v.error)),
                     "coulomb_friction_nm" => ("fit-joint-coulomb", change("N m")),
                     _ => ("fit-joint-constant", change("N m")),
                 }
@@ -328,8 +329,9 @@ pub struct Resonance {
 /// motor hardly moves, which shows as a dip. Its frequency squared is stiffness over load mass, so with
 /// the masses right, measured over config frequency, squared, is the factor the stiffness is off by.
 ///
-/// A trace of a move does not do for this: the closed loops and friction damp the ringing, and the belt's
-/// stiffness changes along the way. A sweep that does not have the dip and both its flanks gives `None`.
+/// The dip is not read off a move's trace: the closed loops and friction damp the ringing, and the belt's stiffness
+/// changes along the way; `fit_move_stiffness` replays such a trace instead. A sweep that does not have the dip and
+/// both its flanks gives `None`.
 ///
 /// A machine with more than one spring shows more than one dip (the first default machine has three,
 /// near 22, 62 and 107 Hz); this is the lowest in frequency, the load swinging on the whole drive train, so that the config's
@@ -413,9 +415,9 @@ pub struct MoveStiffness {
 }
 
 impl MoveStiffness {
-    /// What to change in the config, as a translation key with its argument: the same advice as from a sweep.
+    /// What to change in the config, as a translation key with its argument.
     pub fn advice(&self) -> (&'static str, String) {
-        ("fit-stiffness", format!("× {:.3} ± {:.3}", self.factor, self.error))
+        ("fit-move-stiffness", format!("× {:.3} ± {:.3}", self.factor, self.error))
     }
 }
 
@@ -441,9 +443,12 @@ fn ringing(trace: &Trace) -> Vec<f64> {
 /// torque took the drive's own lag, at 51 Hz on the single axis, for the belt. The masses have to be right first (stage
 /// 1), as for a sweep.
 ///
-/// The factor is searched from 1/4 to 4 (nine replays a factor of 1.41 apart, then golden sections to 0.2 %); its
-/// standard error from the curvature of the sum of squares there, σ² = S / (N − 1) widened by (1 + ρ) / (1 − ρ) for
-/// the lag-one correlation ρ of the residuals (the ringing of neighbouring rows is not independent).
+/// The factor is searched from 1/4 to 4: nine replays a factor of 1.41 apart, then a parabola through seven replays
+/// between the neighbours of the best, and another through seven within ±10 % of its vertex (24 replays in all). Its
+/// standard error from the curvature 2 a of the last parabola: var(ln factor) = 2 σ² / (2 a), σ² = S / (N − 1) widened
+/// by (1 + ρ) / (1 − ρ) for the lag-one correlation ρ of the residuals (the ringing of neighbouring rows is not
+/// independent), plus the variance of the vertex from the points' scatter about the parabola (on a trace without noise
+/// that is all there is: 0.70 on the single axis came out 0.681 ± 0.001 without it).
 ///
 /// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor or the best
 /// factor lies at an end of the range: the trace's moves did not ring the load enough against its noise (a gentle
@@ -464,32 +469,38 @@ pub fn fit_move_stiffness(entry: &MachineEntry, cfg: &Config, trace: &Trace, key
     if best == 0 || best + 1 == grid.len() {
         return Err(not_excited(format!("× {:.2}", grid[best].exp())));
     }
-    // Golden sections between the neighbours of the best point of the grid.
-    let golden = 0.5 * (5f64.sqrt() - 1.0);
-    let (mut low, mut high) = (grid[best - 1], grid[best + 1]);
-    let (mut a, mut b) = (high - golden * (high - low), low + golden * (high - low));
-    let (mut ca, mut cb) = (cost(a)?.0, cost(b)?.0);
-    while high - low > 0.002 {
-        if ca < cb {
-            (high, b, cb) = (b, a, ca);
-            a = high - golden * (high - low);
-            ca = cost(a)?.0;
-        } else {
-            (low, a, ca) = (a, b, cb);
-            b = low + golden * (high - low);
-            cb = cost(b)?.0;
+    // Parabolas through evenly spaced replays, not golden sections: the sum of squares is jagged on a small scale (a belt
+    // tooth or the gearbox's play meets a little earlier or later), which a parabola through several points averages
+    // over. First between the grid's neighbours of its best point, then ±0.1 about that vertex.
+    // Vertex, curvature (twice the square term) and the vertex's standard error from how far the points scatter about
+    // the parabola: σ_p² (AᵀA)⁻¹ for the linear term over twice the square term, squared.
+    let parabola = |from: f64, to: f64| -> Result<Option<(f64, f64, f64)>, TraceError> {
+        let mid = 0.5 * (from + to);
+        let points = (0..7).map(|i| from + (to - from) * i as f64 / 6.0).map(|u| cost(u).map(|c| (u - mid, c.0))).collect::<Result<Vec<_>, _>>()?;
+        let (mut a, mut b) = (vec![0.0; 9], vec![0.0; 3]);
+        for (x, c) in &points {
+            let row = [1.0, *x, x * x];
+            for r in 0..3 {
+                b[r] += row[r] * c;
+                (0..3).for_each(|k| a[3 * r + k] += row[r] * row[k]);
+            }
         }
-    }
-    let u = 0.5 * (low + high);
-    let ((s, residuals), h) = (cost(u)?, 0.05);
-    let curvature = (cost(u + h)?.0 - 2.0 * s + cost(u - h)?.0) / (h * h);
+        let Some(v) = crate::chain::solve(&a, &b).filter(|v| v[2] > 0.0) else { return Ok(None) };
+        let scatter = points.iter().map(|(x, c)| (c - v[0] - v[1] * x - v[2] * x * x).powi(2)).sum::<f64>() / (points.len() - 3) as f64;
+        let linear = crate::chain::solve(&a, &[0.0, 1.0, 0.0]).map_or(f64::INFINITY, |column| column[1]);
+        Ok(Some(((mid - 0.5 * v[1] / v[2]).clamp(from, to), 2.0 * v[2], (scatter * linear).sqrt() / (2.0 * v[2]))))
+    };
+    let curved = |found: Option<(f64, f64, f64)>| found.ok_or_else(|| not_excited(format!("× {:.2} ± inf", grid[best].exp())));
+    let (first, ..) = curved(parabola(grid[best - 1], grid[best + 1])?)?;
+    let (u, curvature, jagged) = curved(parabola(first - 0.1, first + 0.1)?)?;
+    let (s, residuals) = cost(u)?;
     let rho = (residuals.windows(2).map(|w| w[0] * w[1]).sum::<f64>() / s.max(f64::MIN_POSITIVE)).clamp(0.0, 0.98);
     let variance = s / (residuals.len() - 1) as f64 * (1.0 + rho) / (1.0 - rho);
     let factor = u.exp();
-    let error = factor * (2.0 * variance / curvature).sqrt();
+    let error = factor * (2.0 * variance / curvature + jagged * jagged).sqrt();
     let rms = |x: &[f64]| (x.iter().map(|v| v * v).sum::<f64>() / x.len().max(1) as f64).sqrt();
-    if !(curvature > 0.0 && error <= MOVE_STIFFNESS_LIMIT * factor) {
-        return Err(not_excited(format!("× {factor:.2} ± {:.2}", if curvature > 0.0 { error } else { f64::INFINITY })));
+    if !(error <= MOVE_STIFFNESS_LIMIT * factor) {
+        return Err(not_excited(format!("× {factor:.2} ± {error:.2}")));
     }
     Ok(MoveStiffness { factor, error, ringing: rms(&measured), residual: rms(&residuals) })
 }

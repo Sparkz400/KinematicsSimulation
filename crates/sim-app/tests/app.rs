@@ -1292,16 +1292,12 @@ fn twist_in_scene(machine: &dyn sim_core::Machine, pose: &[f64]) -> f64 {
 
 /// Trace replay and fit in the app, as `sim-cli replay` and `fit --trace`: a trace the simulator wrote itself
 /// replays onto itself and fits the config's own values, with the advice in the chosen language. A file
-/// that is no trace is refused with a message.
+/// that is no trace is refused with a message. Since 13 November also the delta, the SCARA and the arm, which are
+/// fitted in their motors' coordinates (`identify::fit_joints`).
 #[test]
 fn a_trace_is_replayed_and_fitted_in_the_app() {
     for entry in MACHINES.iter().copied() {
-        // Replay and fit take a motor angle per axis travel that is the same everywhere (`identify`): not a machine
-        // whose transformation is not linear (the delta), which `replay` refuses.
-        let machine = (entry.build)(&entry.config()).unwrap();
-        if !sim_components::trace::linear_transformation(machine.as_ref()) {
-            continue;
-        }
+        let per_axis = sim_components::trace::per_axis_fit((entry.build)(&entry.config()).unwrap().as_ref());
         // A trace as a run writes it: one pass of the cycle, a row per millisecond. The gripper stays
         // empty, because a trace does not say when a payload comes and goes.
         // And the encoders count without steps: their quantisation noise is not replayed sample by sample (the linear
@@ -1343,19 +1339,25 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         }
         // Per axis the four fitted values next to the config's own: on its own trace the fit finds them.
         assert_eq!(fitted[0], ["Quantity", "Configuration", "Fitted", "Standard error"]);
-        assert_eq!(fitted.len(), 1 + 4 * model.session.axes.len(), "{}: {fitted:?}", entry.id);
-        for axis in &model.session.axes {
-            for quantity in ["Moved mass [kg]", "Coulomb friction [N]"] {
-                let cells = row(fitted, &format!("{} · {quantity}", model.tr.tr(axis.key)));
+        // Per axis four values; in the motors' coordinates four per motor (no payload's factor: the gripper is empty).
+        let (owners, quantities, first) = if per_axis {
+            (model.session.axes.iter().map(|a| a.key).collect::<Vec<_>>(), ["Moved mass [kg]", "Coulomb friction [N]"], ("Moved mass, axis ", "Bewegte Masse, Achse "))
+        } else {
+            (model.session.motors.iter().map(|m| m.key).collect(), ["Coulomb friction [N m]"; 2], ("Inertia at motor ", "Trägheit an Motor "))
+        };
+        assert_eq!(fitted.len(), 1 + 4 * owners.len(), "{}: {fitted:?}", entry.id);
+        for owner in &owners {
+            for quantity in quantities {
+                let cells = row(fitted, &format!("{} · {quantity}", model.tr.tr(owner)));
                 let (config, fit) = (number(&cells[0]), number(&cells[1]));
                 assert!(config > 0.0 && (fit / config - 1.0).abs() < 0.02 && number(&cells[2]) > 0.0, "{}: {quantity} {cells:?}", entry.id);
             }
         }
-        // What to change in the config, four lines per axis, in the chosen language.
+        // What to change in the config, four lines per axis or motor, in the chosen language.
         let advice = model.trace_advice();
-        assert!(advice.len() == 4 * model.session.axes.len() && advice[0].starts_with("Moved mass, axis ") && advice[0].contains(" kg ± "), "{advice:?}");
+        assert!(advice.len() == 4 * owners.len() && advice[0].starts_with(first.0) && advice[0].contains(" ± "), "{advice:?}");
         model.set_language("de");
-        assert!(model.trace_advice()[0].starts_with("Bewegte Masse, Achse ") && model.trace_tables()[1][0][0] == "Größe" && model.trace_tables()[0][1][0] == "Moment, Effektivwert [N m]");
+        assert!(model.trace_advice()[0].starts_with(first.1) && model.trace_tables()[1][0][0] == "Größe" && model.trace_tables()[0][1][0] == "Moment, Effektivwert [N m]");
         assert!(!model.outdated(Analysis::Trace));
         model.set_param("effects.payload", toml::Value::Boolean(true));
         assert!(model.outdated(Analysis::Trace));
@@ -1735,11 +1737,8 @@ fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() 
 /// (`trace::overlay_csv`, which `cli.rs` checks against the command line's file).
 #[test]
 fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
+    // Since 13 November the delta too: replay takes a transformation that is not linear.
     for entry in MACHINES.iter().copied() {
-        // Replay refuses a transformation that is not linear (the delta).
-        if !sim_components::trace::linear_transformation((entry.build)(&entry.config()).unwrap().as_ref()) {
-            continue;
-        }
         let mut cfg = entry.config();
         cfg.set_text("effects.payload = false").unwrap();
         let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();

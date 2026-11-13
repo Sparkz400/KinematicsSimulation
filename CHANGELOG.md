@@ -9,6 +9,13 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Fit of a delta, SCARA or arm from a drive trace, in the motors' coordinates: the payload's mass (a factor) and per
+  motor added inertia, viscous and Coulomb friction and constant torque, by least squares on the machine's own rigid
+  model (`identify::fit_joints`, `Machine::rigid_motor_torque`), with the pairs the trace cannot tell apart; `sim-cli
+  fit --trace` and the app's trace panel. Trace replay takes the delta.
+- The belts' stiffness from an ordinary move's trace, without a sweep: `sim-cli fit --trace FILE --stiffness
+  [--stiffness-key KEY]` and a checkbox in the app's trace panel (`identify::fit_move_stiffness`), refused with a
+  reason where the moves do not ring the belt enough.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

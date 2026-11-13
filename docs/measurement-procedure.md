@@ -136,6 +136,32 @@ its setpoint so closely that only a dead time is left; that is the expected resu
 The machine's real cycle without payload changes, for `sim-cli replay` and `fit`, which compare the trace
 with the simulator's config of the machine. The config's start pose has to be where the trace starts.
 
+### swing: a delta, a SCARA or an arm
+
+Where the motors do not turn in proportion to the axes (the delta's arms), or the inertia a motor turns changes
+with the pose (a SCARA's or an arm's elbow), `fit` regresses the motor torques on the machine's own rigid model
+(τ = Y(q, q̇, q̈) θ, in the motors' coordinates) and fits the payload's mass (a factor), and per motor an added
+inertia, viscous and Coulomb friction and a constant torque. The same cycle as above does, but better is a
+swing: every axis about the start pose with its own amplitude and frequency (on the delta 0.2 m across at 0.6
+and 0.9 Hz and 0.06 m up and down at 1.1 Hz; on the SCARA 0.8, 0.35 and 0.8 rad and 40 mm at 0.5 to 1.1 Hz),
+faded in and out over a second, 8 s, with the payload held. Over much of the range, so that gravity changes
+with the pose; at several frequencies, so that inertia and friction are told apart. The values the trace cannot
+tell apart (their estimates correlate by more than 0.95) are named on the error stream: only their sum is
+known. A rotor and its arm's own inertia about the joint are always one value.
+
+### moves: belt stiffness without a sweep
+
+`fit --trace FILE --stiffness` fits the belts' stiffness (`belt.stiffness_ea_n`, or the spring named with
+`--stiffness-key`) to how the trace's own moves ring: the config is replayed with the stiffness times a factor,
+and the factor is the one whose motor torques, less their mean over ±10 ms, match the trace's. The config's
+loops, filters and friction damp the ringing in the replay as they do on the machine, so a cycle or a few
+ordinary moves at the machine's limits do; the masses have to be right first. What rings the belt is the jerk
+at the ramps and, at speed, the motor's ripple and cogging sweeping through the mode. The fit is refused
+(`fit-move-not-excited`) where the factor's standard error is above a tenth of it, or the best factor lies at an
+end of 0.25 to 4: on the single axis a move of 2 mm at 1 m/s³ and 0.2 m/s² is refused, two moves of 0.8 m at the
+config's limits give 0.708 ± 0.015 for a belt of 0.7. A sweep stays the better measurement where the drive
+offers it.
+
 ## 5. Exporting and mapping
 
 | Format | Export | Read as | What is confirmed |
@@ -159,6 +185,8 @@ sim-cli identify --trace trace.csv --map map.toml --out report.csv --overlay ove
 sim-cli identify --trace step.csv --map map.toml --step-from 0.05 --step-to 0.25 --motor-inertia 3.6e-5
 sim-cli identify --sweep response.csv
 sim-cli fit MACHINE --trace cycle.csv --map map.toml
+sim-cli fit delta-d3 --trace swing.csv --map map.toml
+sim-cli fit MACHINE --trace cycle.csv --map map.toml --stiffness
 ```
 
 `--motor N` picks the motor of a multi-motor trace for `identify`.
@@ -194,6 +222,15 @@ friction_model_fit_percent,m,9.839305e1,,,
 What the values are in the simulator's config: the total inertia is the rotor plus everything reflected to
 the motor (`mass.*`, pulley and gearbox inertia); the friction values are the sum of the guide, the gearbox
 and the motor bearings at the motor shaft. `sim-cli fit MACHINE` splits them by axis against a config.
+
+`fit` writes the config's value, the fitted one and its standard error side by side, the config's from the
+same estimate on its own replay of the trace, so that what the estimate gets wrong on both sides drops out. On a
+delta, SCARA or arm the rows are `payload_factor` (1 for the config) and per motor `added_inertia_kg_m2`
+(near 0 for the config), `viscous_friction_nm_s_rad`, `coulomb_friction_nm` and `constant_torque_nm`, at the
+motor shaft with the gearbox's losses in them; the advice says the change. Strain wave gears lose a quarter of
+what passes them, and more on a heavier payload: that shows as more Coulomb friction on the joint that carries
+it, and cannot be told from it. `--stiffness` adds `stiffness_factor` with its standard error and the RMS of
+the ringing in the trace and of what the fitted replay leaves of it (the noise, where the fit is good).
 
 ## 7. What it does not do
 

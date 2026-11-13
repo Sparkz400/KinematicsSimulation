@@ -575,7 +575,7 @@ With `--bands` every check but `settling` passes at both bounds of every estimat
 
 To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
 
-What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
+What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, and a friction view for its joints (their losses are in the energy budget). Trace replay and fit take it since 13 November, the fit in its motors' coordinates (see [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
 
 ## Run a path and read path error
 
@@ -893,6 +893,25 @@ Constant force, axis x: +0.002 N ± 0.063. The measured axis needs this much mor
 
 Per axis, a least-squares fit of force = mass × acceleration + viscous × speed + Coulomb × sign(speed) + constant. The same estimate is run on the trace (`fitted`) and on the config's own simulation of the same setpoints (`config`). The difference between the two is what the config is off by: here +1.514 kg, for a true 1.5 kg. The advice lines go to the error stream. No config is edited.
 
+**Fit, stage 1 in the motors' coordinates: the delta, the SCARA, the arm.** Where the motors do not turn in proportion to the axes (the delta's arms), or the inertia a motor turns changes with the pose (a SCARA's or an arm's elbow; `trace::per_axis_fit` decides), `fit --trace` regresses the motor torques on the machine's own rigid model in regressor form, τ = Y(q, q̇, q̈) θ: per motor k, τ_k − τ_k,rigid = (θ_payload − 1) × (the payload's share of τ_k,rigid) + ΔJ_k q̈_k + b_k q̇_k + c_k sign(q̇_k) + τ0_k, the rigid torques from `Machine::rigid_motor_torque` at the trace's angles, speeds and accelerations (the acceleration from the angle, which an encoder measures far more precisely than the speed it differentiates). A trace that swings every axis at several frequencies (here a file of poses at times: the delta 0.2 m across at 0.6 and 0.9 Hz, 0.06 m up and down at 1.1 Hz, 8 s), of a delta with 4 kg of payload for the config's 3 and twice the joints' friction:
+
+```text
+$ sim-cli run delta-d3 --trajectory swing.csv --time 8 --out swing-trace.csv --set mass.payload_kg=4 --set joint.friction_coulomb_nm=0.6 --set joint.friction_viscous_nm_s_rad=0.1
+$ sim-cli fit delta-d3 --trace swing-trace.csv
+quantity,of,config,fitted,standard_error
+payload_factor,payload,9.901409e-1,1.316522e0,1.386e-2
+added_inertia_kg_m2,1,3.620213e-7,6.758257e-6,1.287e-5
+viscous_friction_nm_s_rad,1,2.699452e-4,3.362585e-4,1.273e-4
+coulomb_friction_nm,1,9.444131e-2,1.151706e-1,2.714e-3
+constant_torque_nm,1,-6.212870e-3,-9.119716e-3,4.562e-3
+...
+Payload: × 1.330 ± 0.014. Scale the payload's mass by this factor.
+Coulomb friction at motor 1: +0.0207 N m ± 0.0027. Add this, at the motor shaft, to the Coulomb friction of the motor and its joint; the trace cannot tell it from gearbox losses.
+...
+```
+
+The payload's factor is 1.316 / 0.990 = 1.330 for a true 4 / 3; the joints' Coulomb friction, doubled from 0.3 to 0.6 N m at the joint, is +0.015 N m at the motor behind the gearbox of 20 (0.3 / 20 / 0.96), and comes out 0.019 to 0.021 ± 0.003, the heavier payload loading the joints a little more. Pairs of values whose estimates correlate by more than 0.95 are named on the error stream (`Not told apart by this trace: ...`): only their sum is known. A factor on the rest of the rigid model (arms, platform) is not fitted: on the delta it was one with the motors' added inertias and constant torques. A rotor and its arm's own inertia about the joint are one added inertia. On strain wave gears (the SCARA's, efficiency 0.75) the losses grow with a heavier payload's torque and show as Coulomb friction on the joint that carries it.
+
 **Fit, stage 2: belt stiffness from a frequency sweep.**
 
 ```text
@@ -906,6 +925,22 @@ Stiffness between motor and load: × 0.734 ± 0.026. Scale the belt stiffness by
 
 The sweep file needs the columns `frequency_hz` and `gain_rad_s_per_nm` (motor torque to motor speed). `fit` runs the same sweep on the config, at the frequencies of the file, on motor `--sweep-motor N` (default 0) with `--amplitude NM` (default as for `sweep`), and compares where the dip is. Where the response has more than one dip (the T-gantry has three, near 22, 62 and 107 Hz), the one lowest in frequency is compared, in both. The "measured" belt here has 0.7 times the stiffness; the fit says 0.734 ± 0.026.
 
+**Fit, stage 2 without a sweep: belt stiffness from the moves.**
+
+```text
+$ sim-cli run single-axis --cycle --time 3 --out cycle.csv --set belt.stiffness_ea_n=3.5e5 --set effects.payload=false
+$ sim-cli fit single-axis --trace cycle.csv --stiffness --set effects.payload=false
+quantity,of,config,fitted,standard_error
+...
+stiffness_factor,belt.stiffness_ea_n,1.000000e0,6.937900e-1,2.405e-3
+ringing_rms_nm,belt.stiffness_ea_n,,6.790983e-3,
+ringing_left_rms_nm,belt.stiffness_ea_n,,8.385708e-5,
+...
+Stiffness between motor and load, from the moves: × 0.694 ± 0.002. ...
+```
+
+`--stiffness` replays the trace with the belts' stiffness (`belt.stiffness_ea_n`, or the key `--stiffness-key` names) times a factor and takes the factor whose motor torques ring as the trace's do: torques less their mean over ±10 ms, least squares over all motors and rows; nine replays from 0.25 to 4, then parabolas through seven replays twice (24 in all, about 1 s on the single axis). The replay has the config's loops, filters and friction, which damp the ringing as they do on the machine. The standard error comes from the curvature of the sum of squares and from how far the replays scatter about the parabola. The rows `ringing_rms_nm` and `ringing_left_rms_nm` are the ringing in the trace and what the fitted replay leaves of it. A trace whose moves do not ring the belt enough is refused, exit code 2: `No stiffness from this trace: its moves do not ring the load on its springs enough against the noise ...`, where the standard error is above a tenth of the factor or the best factor lies at an end of 0.25 to 4. On the single axis with noise a move of 2 mm at 1 m/s³ and 0.2 m/s² is refused; two moves of 0.8 m at the config's limits give 0.708 ± 0.015 for 0.7.
+
 What the fit can and cannot recover:
 
 | Recovered | Not recovered, or not told apart |
@@ -913,8 +948,9 @@ What the fit can and cannot recover:
 | Moved mass per axis (rotors and pulleys counted as mass at the axis) | Load mass from rotor and pulley inertia |
 | Viscous friction per axis | Guide friction from motor shaft friction |
 | Coulomb friction per axis | The belt's damping from friction (the damping of the dip includes friction and the gearbox) |
-| Constant force per axis (weight, incline, cable pull) | Stiffness from a move's trace: the loops and friction damp the ringing, a sweep is required |
-| One factor on the stiffness between motor and load, from a sweep | Which spring between motor and load is off: the factor counts all of them |
+| Constant force per axis (weight, incline, cable pull) | A rotor from its arm or link on a delta, SCARA or arm: one added inertia per motor |
+| One factor on the stiffness between motor and load, from a sweep or from the moves of a trace (`--stiffness`) | Which spring between motor and load is off: the factor counts all of them |
+| On a delta, SCARA or arm: the payload's mass as a factor, per motor added inertia, viscous and Coulomb friction and constant torque at the shaft | A factor on the arms' and platform's masses (it is one with the motors' inertias and constant torques); friction from gearbox losses |
 | | Drive delays and filters: per motor with `sim-cli identify` (below), not per axis |
 | | Backlash, tooth stiffness, frame and Z-axis stiffness |
 
@@ -1226,7 +1262,7 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Analysis: Optimise the cycle | The optimiser. "Apply these settings to the running machine" puts its result into the config |
 | Motor search | Supply (230v, 400v or s120), how the article numbers start (empty: every motor of the catalogue) and optionally a gearbox series such as `NRK` or `NRK070`; ticked, "Every axis of the catalogue" tries each motor on every catalogue axis of the machine's kind as well (`--axes`). "Search" runs every such motor on the cycle and lists them, passing ones first, cheapest first (installed mass stands in for the price), with gearbox, axis, the mass of motor and gearbox, the installed mass, and the check nearest to its limit or the reason a motor or an axis was not run. "Use" in a row names that motor, its supply, its gearbox, its drive and its axis in `[parts]` of the running config. The same as `sim-cli search` |
 | Path | A file name, typed in. "Lines, arcs and splines" is a path file, planned within the axis limits or, ticked, "As fast as the motors allow"; "Poses at times" is a trajectory file. "Plan, run and analyse" plans the path from where the machine stands, analyses it on a simulation of its own (duration, deviation by transition curves, path error, distance behind the setpoint, loads, checks), draws the planned path as a plot in the panel and as a line in the 3D view, and has the machine in the 3D view run it. The same as `sim-cli analyze --path` or `--trajectory` |
-| Trace, Mapping | A file name, typed in, and for a vendor's export its mapping file (as `--map` takes it; empty for a trace in the simulator's columns). "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), per axis the fitted mass, friction and constant force next to the config's, with what to change in the config, and per motor what the trace says by itself: inertia, friction, the loops' lags, each with its standard error and 95 % interval, and how well each model reproduces the trace. The same as `sim-cli replay`, `fit --trace` and `identify --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |
+| Trace, Mapping | A file name, typed in, and for a vendor's export its mapping file (as `--map` takes it; empty for a trace in the simulator's columns). "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), per axis the fitted mass, friction and constant force next to the config's (on the delta, the SCARA and the arm the payload's factor and per motor added inertia, friction and constant torque), with what to change in the config; ticked, "Belt stiffness from the moves" adds the factor on the belts' stiffness (`fit --stiffness`, some twenty replays more); and per motor what the trace says by itself: inertia, friction, the loops' lags, each with its standard error and 95 % interval, and how well each model reproduces the trace. The same as `sim-cli replay`, `fit --trace` and `identify --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |
 | Frequency response of the mechanics | From, to, frequencies and torque amplitude as `sim-cli sweep` takes them (5 to 500 Hz, 120, and 1.5 N m or 40 % of the drive's peak torque where that is less, at the start). "Measure every motor" measures the open-loop response from each motor's torque to its speed, as `sim-cli sweep --motor N` does for one: gain in dB and phase over the frequency, one line per motor, and per motor the dip where the load swings on the belt (resonance and damping ratio of the dip lowest in frequency; empty where the range does not hold a dip with both its flanks). The defaults show it on every motor of the default machines. Before, they did not: the amplitude was 0.05 N m, at which stiction holds the motors, not the range. Switching machine or opening a config sets the amplitude to that config's default unless another one was typed |
 | Frequency response: Measured response, taken on, Fit the belt stiffness | A file as `sim-cli sweep` writes it (the columns `frequency_hz` and `gain_rad_s_per_nm`), measured on the motor ticked with the torque amplitude above. "Fit the belt stiffness" runs the config's own response at the file's frequencies and shows resonance and damping ratio of both, and what to change in the config: the factor on the belt stiffness. The same as `sim-cli fit --sweep FILE --sweep-motor N --amplitude A` |
 | Tuning: Measure step and frequency response | Step response and closed-loop response of one axis, with rise time, overshoot, settling time and bandwidth |
