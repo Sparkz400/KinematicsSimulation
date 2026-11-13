@@ -8,7 +8,7 @@
 //! Belt force on the carriage: T2 - T1. Belt torque on the pulley: r (T1 - T2).
 
 use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, Lugre, Ripple, SectionForce, ShaftFriction, ToothMesh};
-use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, Label, MotorInfo, Part, Scene, Shape, SignalInfo};
+use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "single-axis",
@@ -60,6 +60,7 @@ fn suite_configs() -> Vec<Config> {
         // belt with and without, and the chain where its weight counts.
         cfg.set_text(&format!("effects.belt_tooth_stiffness = {}", incline > 0.0)).unwrap();
         cfg.set_text(&format!("effects.cable_chain = {}", incline > 0.0)).unwrap();
+        cfg.set_text(&format!("effects.part_heating = {}", incline > 0.0)).unwrap();
         cfg.set_text(&format!("effects.belt_stretch = {elastic}")).unwrap();
         cfg.set_text(&format!("geometry.incline_deg = {incline:.1}")).unwrap();
         out.push(cfg);
@@ -105,8 +106,8 @@ pub struct SingleAxis {
 // Elastic state: [x, a, p, vx, va, wp, s, slack, brake]. a: pulley angle, p: motor shaft angle, s: friction
 // state, slack: seconds a belt section has spent without tension, brake: deflection of the holding brake.
 const N_ELASTIC: usize = 9;
-// Rigid state: [x, v, s].
-const N_RIGID: usize = 3;
+// Rigid state: [x, v, s, brake].
+const N_RIGID: usize = 4;
 
 impl SingleAxis {
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
@@ -225,15 +226,17 @@ impl SingleAxis {
         out[7] = if sec.iter().any(|f| f.tension <= 0.0) { 1.0 } else { 0.0 };
     }
 
-    /// Rigid model: acceleration, guide friction force, friction state rate and the torque at the gearbox output.
+    /// Rigid model: acceleration, guide friction force, friction state rate, the torque at the gearbox output and
+    /// the torque that goes into it before its loss.
     ///
     /// The gearbox loses torque only on what it transmits, which is the motor torque minus what
     /// accelerates the rotor itself; the second pass uses the acceleration from the first for that.
-    fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (f64, f64, f64, f64) {
+    fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (f64, f64, f64, f64, f64) {
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (angle, speed) = (ratio * s[0] / r, ratio * s[1] / r);
-        // Belt force the motor would give with a loss-free gearbox and a massless rotor.
-        let drive = ratio * (self.ripple.apply(torque[0], angle) - self.shaft.torque(speed)) / r;
+        // Belt force the motor would give with a loss-free gearbox and a massless rotor; a brake holds the rotor.
+        let brake = self.brake.torque(self.brake_engaged, speed, s[3]).0;
+        let drive = ratio * (self.ripple.apply(torque[0], angle) - self.shaft.torque(speed) - brake) / r;
         let (ff, ds) = self.friction.eval(s[1], s[2], self.load_scale());
         let m = self.m() + self.chain.mass(s[0]).0;
         let load = self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
@@ -243,7 +246,117 @@ impl SingleAxis {
         let loss = self.gearbox.loss_factor(through_gear * r, s[1] / r);
         let a = solve(loss);
         // The gearbox output carries what the rotor's own acceleration and the losses leave of the motor's torque.
-        (a, ff, ds, loss * (drive - rotor * a) * r)
+        (a, ff, ds, loss * (drive - rotor * a) * r, (drive - rotor * a) * r)
+    }
+
+    /// Kinetic, potential and elastic energy (see `ENERGY_PARTS`).
+    fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
+        // The chain's moving run weighs mass_per_m (length0 + x / 2): lifted from 0 to x, that integrates to this.
+        let chain_height = self.chain.mass_per_m * (self.chain.length0 * s[0] + 0.25 * s[0] * s[0]);
+        let potential = (self.m() * s[0] + chain_height) * self.g_along;
+        let (chain, stops) = (self.chain.mass(s[0]).0, self.stops.energy(s[0], self.axes[0].max));
+        if !self.elastic {
+            return [0.5 * (self.m_total() + chain) * s[1] * s[1], potential, stops];
+        }
+        let (geo, mat) = (self.geo(s[0]), self.mat(s[1]));
+        let kinetic = 0.5 * (self.m() + chain) * s[3] * s[3] + 0.5 * self.j_pulley * s[4] * s[4] + 0.5 * self.j_rotor * s[5] * s[5];
+        [kinetic, potential, stops + self.belt.energy(geo[0], mat[0]) + self.belt.energy(geo[1], mat[1]) + self.gearbox.energy(s[2], s[1])]
+    }
+
+    /// The loss powers in the order of `effect_infos`, the gearbox loss as a torque at the rotor and the brake torque,
+    /// which the torque breakdown takes too. No derivatives: cheap enough for every step.
+    fn losses(&self, s: &[f64], torque: &[f64]) -> ([f64; 7], f64, f64) {
+        let (r, ratio) = (self.r, self.gearbox.ratio);
+        let (x, v, state) = if self.elastic { (s[0], s[3], s[6]) } else { (s[0], s[1], s[2]) };
+        let ff = self.friction.eval(v, state, self.load_scale()).0;
+        let drag = self.chain.drag(v, self.friction.stribeck_v);
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        self.motor_state(s, &mut angle, &mut speed);
+        let (angle, speed) = (angle[0], speed[0]);
+        // Gearbox loss at the rotor and as power, brake, power of the tooth meshing put in, belt damping.
+        let (gear_loss, gear_power, brake, mesh_in, belt) = if self.elastic {
+            let gear = self.gearbox.torque(s[2], s[5], s[1], s[4]);
+            let (geo, mat) = (self.geo(x), self.mat(s[1]));
+            let belt = self.belt.loss_power(geo[0], mat[0], v, self.r_mat * s[4]) + self.belt.loss_power(geo[1], mat[1], -v, -self.r_mat * s[4]);
+            let brake = self.brake.torque(self.brake_engaged, s[5], s[8]).0;
+            (gear.rotor - gear.output / ratio, self.gearbox.loss_power(s[2], s[5], s[1], s[4]), brake, r * self.mesh.force(r * s[1]) * s[4], belt)
+        } else {
+            let (_, _, _, out, into) = self.rigid_solve(s, torque);
+            let loss = (into - out) / ratio;
+            (loss, loss * speed, self.brake.torque(self.brake_engaged, speed, s[3]).0, self.mesh.force(x) * v, 0.0)
+        };
+        let process_in = if self.dwelling { self.process * v } else { 0.0 };
+        let other = (torque[0] - self.ripple.apply(torque[0], angle)) * speed - mesh_in - process_in;
+        let stops = self.stops.loss_power(x, v, self.axes[0].max);
+        ([ff * v, drag * v, (self.shaft.torque(speed) + brake) * speed, gear_power, belt, stops, other], gear_loss, brake)
+    }
+
+    /// The signals of the effect views, in the order of `effect_infos`, with the transpose r / i:
+    /// inertia = r / i ((m + J / r^2) a + m' v^2 / 2), a the carriage's acceleration and J pulley and rotor seen at the
+    /// pulley, as a rigid machine would turn them; gravity = r / i * m g sin(incline); friction = shaft friction +
+    /// brake + gearbox loss at the rotor + r / i (guide friction + chain drag); rest = motor torque less these.
+    fn view_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        let (r, ratio) = (self.r, self.gearbox.ratio);
+        let (x, v, state) = if self.elastic { (s[0], s[3], s[6]) } else { (s[0], s[1], s[2]) };
+        let scale = self.load_scale();
+        let ff = self.friction.eval(v, state, scale).0;
+        let drag = self.chain.drag(v, self.friction.stribeck_v);
+        let (chain_mass, chain_growth) = self.chain.mass(x);
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        self.motor_state(s, &mut angle, &mut speed);
+        let speed = speed[0];
+        let (powers, gear_loss, brake) = self.losses(s, torque);
+        // Carriage acceleration.
+        let acc = if self.elastic {
+            let mut d = [0.0; N_ELASTIC];
+            self.elastic_derivatives(s, torque, &mut d);
+            d[3]
+        } else {
+            self.rigid_solve(s, torque).0
+        };
+        let m = self.m() + chain_mass;
+        let parts = [
+            r / ratio * ((m + self.j() / (r * r)) * acc + 0.5 * chain_growth * v * v),
+            r / ratio * m * self.g_along,
+            self.shaft.torque(speed) + brake + gear_loss + r / ratio * (ff + drag),
+        ];
+        out.extend(parts);
+        out.push(torque[0] - parts.iter().sum::<f64>());
+        out.extend(powers);
+        out.extend(self.energy_parts(s));
+        out.push(v);
+        out.extend(self.friction.split(v, state, scale));
+        out.push(scale);
+        // Stretch per belt section: its length less its unstretched belt; in the rigid model that of pretension.
+        let geo = self.geo(x);
+        let mat = if self.elastic { self.mat(s[1]) } else { geo.map(|g| self.belt.rest_length(g)) };
+        out.extend([geo[0] - mat[0], geo[1] - mat[1]]);
+    }
+
+    /// The signal list of `effect_signals`.
+    fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
+        let (motor, axis) = (&self.motors[0], self.axes[0].key);
+        out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+        let powers = [
+            ("guide_x", axis, "quantity-friction-power"),
+            ("cable_chain", "group-cable_chain", "quantity-friction-power"),
+            ("shaft_m", motor.key, "quantity-shaft-friction-power"),
+            ("gearbox_m", motor.key, if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" }),
+            ("belt", "group-belt", "quantity-damping-power"),
+            ("hard_stops", "group-hard_stop", "quantity-damping-power"),
+            ("other", "loss-other", "quantity-power-given-off"),
+        ];
+        out.extend(powers.map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")));
+        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        for part in FRICTION_SIGNALS {
+            let unit = match part {
+                "speed" => "m/s",
+                "load_scale" => "",
+                _ => "N",
+            };
+            out.push(SignalInfo::new(format!("axis.x.friction_{part}"), axis, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+        }
+        out.extend(self.belt_sections().iter().map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")));
     }
 }
 
@@ -270,7 +383,7 @@ impl Machine for SingleAxis {
         let (x, r, ratio) = (tool[0], self.r, self.gearbox.ratio);
         let weight = (self.m() + self.chain.mass(x).0) * self.g_along;
         if !self.elastic {
-            *state = vec![x, 0.0, 0.0];
+            *state = vec![x, 0.0, 0.0, 0.0];
             let shaft = (weight - self.mesh.force(x)) * r / ratio;
             torque[0] = self.ripple.invert(shaft, ratio * x / r);
             return;
@@ -290,8 +403,9 @@ impl Machine for SingleAxis {
         if self.elastic {
             return self.elastic_derivatives(s, torque, out);
         }
-        let (a, _, ds, _) = self.rigid_solve(s, torque);
-        out.copy_from_slice(&[s[1], a, ds]);
+        let (a, _, ds, ..) = self.rigid_solve(s, torque);
+        let brake_rate = self.brake.torque(self.brake_engaged, self.gearbox.ratio * s[1] / self.r, s[3]).1;
+        out.copy_from_slice(&[s[1], a, ds, brake_rate]);
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
@@ -321,21 +435,7 @@ impl Machine for SingleAxis {
     }
 
     fn energy(&self, s: &[f64]) -> f64 {
-        // The chain's moving run weighs mass_per_m (length0 + x / 2): lifted from 0 to x, that integrates to this.
-        let chain_height = self.chain.mass_per_m * (self.chain.length0 * s[0] + 0.25 * s[0] * s[0]);
-        let height = (self.m() * s[0] + chain_height) * self.g_along + self.stops.energy(s[0], self.axes[0].max);
-        let chain = self.chain.mass(s[0]).0;
-        if !self.elastic {
-            return 0.5 * (self.m_total() + chain) * s[1] * s[1] + height;
-        }
-        let (geo, mat) = (self.geo(s[0]), self.mat(s[1]));
-        0.5 * (self.m() + chain) * s[3] * s[3]
-            + 0.5 * self.j_pulley * s[4] * s[4]
-            + 0.5 * self.j_rotor * s[5] * s[5]
-            + self.belt.energy(geo[0], mat[0])
-            + self.belt.energy(geo[1], mat[1])
-            + self.gearbox.energy(s[2], s[1])
-            + height
+        self.energy_parts(s).iter().sum()
     }
 
     fn set_payload_attached(&mut self, attached: bool) {
@@ -350,7 +450,7 @@ impl Machine for SingleAxis {
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let key = self.axes[0].key;
-        vec![
+        let mut out = vec![
             SignalInfo::new("belt.1.tension", "belt-section-1", "quantity-tension", "N"),
             SignalInfo::new("belt.2.tension", "belt-section-2", "quantity-tension", "N"),
             SignalInfo::new("axis.x.belt_stretch", key, "quantity-belt-stretch", "m"),
@@ -359,7 +459,30 @@ impl Machine for SingleAxis {
             SignalInfo::new("pulley.m.radial_load", self.motors[0].key, "quantity-radial-load", "N"),
             SignalInfo::new("axis.x.guide_load", key, "quantity-guide-load", "N"),
             SignalInfo::new("gearbox.m.output_torque", self.motors[0].key, "quantity-gearbox-torque", "N m"),
-        ]
+        ];
+        self.effect_infos(&mut out);
+        out
+    }
+
+    fn friction_contacts(&self) -> Vec<FrictionContact> {
+        vec![FrictionContact { id: "axis.x", owner_key: self.axes[0].key }]
+    }
+    fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
+        if i == 0 { self.friction.steady(speed, load_scale) } else { [0.0; 3] }
+    }
+
+    /// The two belt sections, in the order of the signals `belt.<i>.tension`.
+    fn belt_sections(&self) -> Vec<BeltSection> {
+        let pretension = self.belt.pretension;
+        vec![BeltSection { id: "belt.1", owner_key: "belt-section-1", pretension }, BeltSection { id: "belt.2", owner_key: "belt-section-2", pretension }]
+    }
+
+    /// The gearbox, where there is one (not on a direct drive, see `Gearbox::is_coupling`), and the guide, shown by
+    /// the carriage.
+    fn thermal_parts(&self) -> Vec<ThermalPart> {
+        let gearbox = ThermalPart { id: "gearbox_m", kind: "gearbox", owner_key: self.motors[0].key, scene_part: "gearbox", scene_index: 0 };
+        let guide = ThermalPart { id: "guide_x", kind: "guide", owner_key: self.axes[0].key, scene_part: "carriage", scene_index: 0 };
+        if self.gearbox.is_coupling() { vec![guide] } else { vec![gearbox, guide] }
     }
 
     /// The rigid model has no belt stretch: it reports pretension and zero stretch. The belt wraps the motor
@@ -367,7 +490,7 @@ impl Machine for SingleAxis {
     /// their tensions. The guide carries the weight of what it moves. The gearbox torque is the one at its
     /// output, positive where it drives the carriage towards +x: in the elastic model what the gear's spring
     /// passes on to the pulley, in the rigid one what its solver works out.
-    fn signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+    fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         if self.elastic {
             let sec = self.sections(s);
             let (ff, _) = self.friction.eval(s[3], s[6], self.load_scale());
@@ -378,6 +501,12 @@ impl Machine for SingleAxis {
         }
         out.push(self.m() * self.g_normal);
         out.push(if self.elastic { self.gearbox.torque(s[2], s[5], s[1], s[4]).output } else { self.rigid_solve(s, torque).3 });
+    }
+    fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        self.view_signals(s, torque, out);
+    }
+    fn loss_powers(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        out.extend(self.losses(s, torque).0);
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {

@@ -1,9 +1,9 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
 //! Every message comes from the translation files; see `cli-usage` there for the commands.
 
-use sim_components::analysis::{analyse_cycle, analyse_trajectory, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response};
-use sim_components::identify::{fit_rigid, resonance};
-use sim_components::trace::{Trace, TraceError, columns, difference};
+use sim_components::analysis::{SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
+use sim_components::identify::{fit_rigid, fit_sweep, parse_sweep};
+use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
@@ -38,7 +38,7 @@ struct Args(Vec<String>);
 /// Options every command takes, each with a value.
 const COMMON: [&str; 7] = ["--config", "--motor", "--supply", "--gearbox", "--set", "--out", "--lang"];
 /// Options without a value.
-const FLAGS: [&str; 3] = ["--cycle", "--time-optimal", "--bands"];
+const FLAGS: [&str; 4] = ["--cycle", "--time-optimal", "--bands", "--worst"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -113,17 +113,20 @@ fn main() {
 fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let known: &[&str] = match args.positional(0) {
         Some("run") => &["--move", "--cycle", "--trajectory", "--path", "--time-optimal", "--time", "--disable-at", "--every"],
-        Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points"],
+        Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs"],
         Some("search") => &["--series", "--gearboxes"],
-        Some("verdicts") => &["--bands", "--samples", "--seed"],
+        Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis", "--size", "--time"],
         Some("bode") => &["--axis", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
+        Some("margins") => &["--bands"],
         Some("replay") => &["--trace"],
         Some("fit") => &["--trace", "--sweep", "--sweep-motor", "--amplitude"],
+        Some("compare") => &["--effect", "--signal", "--differences"],
+        Some("fmu") => &["--binary"],
         _ => &[],
     };
     args.check(known)?;
@@ -139,14 +142,17 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("analyze") => analyze(args, tr),
         Some("sweep") => sweep(args),
         Some("sensitivity") => sensitivity(args),
-        Some("verdicts") => verdicts(args),
+        Some("verdicts") => verdicts(args, tr),
         Some("search") => search(args, tr),
         Some("optimise") => optimise(args),
         Some("step") => step(args),
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
+        Some("margins") => margins(args),
         Some("replay") => replay(args),
         Some("fit") => fit(args, tr),
+        Some("compare") => compare(args),
+        Some("fmu") => fmu(args),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -209,7 +215,7 @@ fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, V
     let Some(file) = args.option("--path") else { return Ok(None) };
     let pieces = sim_components::path::parse(&read(file)?).map_err(|line| unreadable(file, line))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
-    let deviation = sim.path_deviation(&pieces).map_err(refused)?;
+    let deviation = sim.path_deviation(&pieces, args.flag("--time-optimal")).map_err(refused)?;
     // Not below what the figure can show: an arc with decimally rounded end coordinates is some 10 nm off.
     let shown = format!("{:.4}", deviation * 1e3);
     if shown != "0.0000" {
@@ -231,26 +237,14 @@ fn replay(args: &Args) -> Result<(), Failure> {
     let motors = (entry.build)(&cfg)?.motors().to_vec();
     let measured = Trace::parse(&read(args.option("--trace").ok_or(Failure("cli-usage", String::new()))?)?, &motors)?;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
-    let pairs = || measured.motors.iter().zip(&simulated.motors);
-    let errors: Vec<(Vec<f64>, Vec<f64>)> = pairs().map(|(m, s)| (m.following_error(), s.following_error())).collect();
     println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
-    for ((motor, (m, s)), (m_error, s_error)) in motors.iter().zip(pairs()).zip(&errors) {
-        let (torque, error) = (difference(&m.torque, &s.torque), difference(m_error, s_error));
-        println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, torque.0, torque.1, error.0, error.1);
+    for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
+        println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, d[0], d[1], d[2], d[3]);
     }
     if args.option("--out").is_some() {
         let mut out = output(args, "--out")?;
-        let names = ["torque", "speed", "following_error"];
-        let header: Vec<String> = motors.iter().flat_map(|m| names.map(|n| format!("motor.{0}.{n}_measured,motor.{0}.{n}_simulated", m.id))).collect();
-        writeln!(out, "time,{}", header.join(",")).map_err(io)?;
-        for (row, time) in measured.time.iter().enumerate() {
-            let values: Vec<String> = pairs()
-                .zip(&errors)
-                .flat_map(|((m, s), (m_error, s_error))| [m.torque[row], s.torque[row], m.speed[row], s.speed[row], m_error[row], s_error[row]])
-                .map(|v| format!("{v:.9e}"))
-                .collect();
-            writeln!(out, "{time:.9e},{}", values.join(",")).map_err(io)?;
-        }
+        let ids: Vec<&str> = motors.iter().map(|m| m.id).collect();
+        out.write_all(overlay_csv(&ids, &measured, &simulated).as_bytes()).map_err(io)?;
         out.flush().map_err(io)?;
     }
     Ok(())
@@ -283,20 +277,18 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
     }
     if let Some(path) = args.option("--sweep") {
-        let table = columns(&read(path)?, &["frequency_hz".to_string(), "gain_rad_s_per_nm".to_string()])?;
-        let measured: Vec<_> = table[0].iter().zip(&table[1]).map(|(&frequency, &gain)| sim_components::analysis::SweepPoint { frequency, gain, phase_deg: 0.0 }).collect();
+        let measured = parse_sweep(&read(path)?)?;
         let motor = number(args, "--sweep-motor", 0.0)? as usize;
-        let config = frequency_sweep(entry, &cfg, motor, &table[0], number(args, "--amplitude", 0.05)?)?;
-        match (resonance(&config), resonance(&measured)) {
-            (Some(config), Some(fitted)) => {
-                let id = machine.motors()[motor].id;
+        match fit_sweep(entry, &cfg, motor, &measured, number(args, "--amplitude", default_sweep_amplitude(entry, &cfg)?)?)? {
+            Some(fit) => {
+                let (id, (config, fitted)) = (machine.motors()[motor].id, (fit.config, fit.fitted));
                 writeln!(out, "resonance_hz,{id},{:.6e},{:.6e},{:.3e}", config.frequency, fitted.frequency, fitted.frequency_error).map_err(io)?;
                 writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},", config.damping, fitted.damping).map_err(io)?;
-                let stiffness = (fitted.frequency / config.frequency).powi(2);
-                advice.push(tr.tr_arg("cli-fit-stiffness", &format!("× {stiffness:.3} ± {:.3}", 2.0 * stiffness * fitted.frequency_error / fitted.frequency)));
+                let (key, detail) = fit.advice();
+                advice.push(tr.tr_arg(key, &detail));
             }
             // A failure like any other, after what the trace gave has been written.
-            _ => result = Err(Failure("cli-fit-no-resonance", String::new())),
+            None => result = Err(Failure("fit-no-resonance", String::new())),
         }
     }
     out.flush().map_err(io)?;
@@ -367,11 +359,30 @@ fn significant(value: f64) -> String {
 /// parameters with `[bounds]` in the config are at their bounds, one at a time, and the worst-case result.
 /// `--bands --samples N` runs the cycle N times with all of them between their bounds at once instead (see
 /// `verdict_bands_sampled`; `--seed S` picks another set of samples, 1 by default) and adds the share of
-/// the runs in which each check passed.
-fn verdicts(args: &Args) -> Result<(), Failure> {
-    use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled};
+/// the runs in which each check passed. `--bands --worst` searches per check for the worst corner of the bounds
+/// instead (`verdict_worst`) and prints its value, its result and which parameters are at their high and which at
+/// their low bound there; the number of cycles it simulated goes to the error stream.
+fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled, verdict_worst};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
+    if args.flag("--worst") {
+        if !args.flag("--bands") || args.option("--samples").is_some() || args.option("--seed").is_some() {
+            return Err(Failure("cli-error-worst", String::new()));
+        }
+        let bounded = bounds(&cfg)?;
+        let (worst, runs) = verdict_worst(entry, &cfg, &bounded)?;
+        eprintln!("{}", tr.tr_arg("cli-worst-runs", &runs.to_string()));
+        let mut out = output(args, "--out")?;
+        writeln!(out, "check,motor,worst,limit,worst_case,at_high_bound,at_low_bound").map_err(io)?;
+        for w in &worst {
+            let v = &w.verdict;
+            let at = |high: bool| bounded.iter().zip(&w.high).filter(|(_, h)| **h == Some(high)).map(|(b, _)| b.0.as_str()).collect::<Vec<_>>().join(";");
+            let result = if v.ok { "ok" } else { "FAIL" };
+            writeln!(out, "{},{},{},{},{result},{},{}", v.check, v.motor.map_or("", |k| motors[k].id), significant(v.value), significant(v.limit), at(true), at(false)).map_err(io)?;
+        }
+        return out.flush().map_err(io);
+    }
     // Whole numbers: at least one sample, and any seed from 0 on.
     let whole = |name: &str, least: f64| -> Result<Option<f64>, Failure> {
         let value = args.number(name)?;
@@ -434,17 +445,21 @@ fn sensitivity(args: &Args) -> Result<(), Failure> {
 }
 
 /// `analyze <machine>`: peak and RMS torque, peak speed and use of the torque-speed curve per motor
-/// over one pass of the cycle, or over a trajectory or path (see `poses`). `--points FILE` also writes the operating points.
+/// over one pass of the cycle, or over a trajectory or path (see `poses`). `--points FILE` also writes the operating points,
+/// `--breakdown FILE` the peak and RMS of each part of each motor's torque (inertia, gravity, friction, rest, and the
+/// torque itself), `--budget FILE` where the energy drawn from the supply went, in joules and as a share of it.
 fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let mut sim = Sim::new(entry, &cfg)?;
+    // The effect views cost a machine evaluation per step: only when they are written.
+    let views = args.option("--breakdown").is_some() || args.option("--budget").is_some();
     let load = match poses(args, &sim, tr)? {
-        Some(points) => analyse_trajectory(&mut sim, points),
-        None => analyse_cycle(&mut sim),
+        Some(points) => analyse_trajectory_with(&mut sim, points, views),
+        None => analyse_cycle_with(&mut sim, views),
     }
     .map_err(|e| Failure(e.key, String::new()))?;
     let mut out = output(args, "--out")?;
-    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km").map_err(io)?;
+    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation").map_err(io)?;
     // Empty where the machine does not report the signal or the config has no load rating for the guide.
     let or_empty = |value: Option<f64>| value.map_or(String::new(), |v| format!("{v:.4e}"));
     let machine_wide = format!("{},{},{},{}", or_empty(load.belt_slack_time), or_empty(load.radial_load_peak), or_empty(load.guide_load.map(|g| g.0)), or_empty(sim_components::analysis::guide_life_km(&cfg, &load)));
@@ -452,7 +467,11 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let belt = load.belt_tension.map_or(String::from(","), |(low, high)| format!("{low:.2},{high:.2}"));
         let electrical = format!("{:.4},{:.2},{:.3},{:.3},{:.2},{:.3}", m.rms_current, m.winding_rise, m.energy_in, m.energy_regenerated, m.peak_regenerated_power, m.largest_regeneration);
         let electrical = format!("{electrical},{:.3e},{:.3e},{:.3e},{:.3e}", load.path_error_peak, load.path_error_rms, load.tracking_error_peak, load.dwell_error_peak);
-        let electrical = format!("{electrical},{:.6},{:.3},{:.3},{:.2},{machine_wide}", m.cubic_mean_torque, m.resistor_energy, m.resistor_energy / load.duration, m.peak_dc_link_voltage);
+        let electrical = format!("{electrical},{:.6},{:.3},{:.3},{:.2},{machine_wide},{:.3}", m.cubic_mean_torque, m.resistor_energy, m.resistor_energy / load.duration, m.peak_dc_link_voltage, m.mains_energy);
+        // Lives in hours and the belt's tooth load; empty where the machine or the config lacks what they need.
+        let tooth = sim_components::analysis::belt_tooth_utilisation(&cfg, m)?;
+        let lives = [sim_components::analysis::guide_life_h(&cfg, &load), sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), tooth];
+        let electrical = format!("{electrical},{}", lives.map(or_empty).join(","));
         writeln!(out, "{},{:.6},{:.6},{:.6},{:.4},{:.4},{:.4},{belt},{electrical}", motor.id, load.duration, m.peak_torque, m.rms_torque, m.peak_speed, m.utilisation, m.thermal_utilisation)
             .map_err(io)?;
     }
@@ -467,6 +486,28 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         out.flush().map_err(io)?;
     }
+    if args.option("--breakdown").is_some() {
+        let mut out = output(args, "--breakdown")?;
+        writeln!(out, "motor,part,peak_torque_nm,rms_torque_nm").map_err(io)?;
+        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+            for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.iter().flatten()) {
+                writeln!(out, "{},{part},{peak:.6e},{rms:.6e}", motor.id).map_err(io)?;
+            }
+            writeln!(out, "{},torque,{:.6e},{:.6e}", motor.id, m.peak_torque, m.rms_torque).map_err(io)?;
+        }
+        out.flush().map_err(io)?;
+    }
+    if args.option("--budget").is_some() {
+        let mut out = output(args, "--budget")?;
+        writeln!(out, "item,energy_j,share").map_err(io)?;
+        if let Some(budget) = &load.budget {
+            let rows = budget.rows.iter().map(|r| (r.id.as_str(), r.energy));
+            for (item, energy) in std::iter::once(("supply", budget.supply)).chain(rows).chain([("unaccounted", budget.unaccounted())]) {
+                writeln!(out, "{item},{energy:.6e},{:.6}", energy / budget.supply).map_err(io)?;
+            }
+        }
+        out.flush().map_err(io)?;
+    }
     Ok(())
 }
 
@@ -474,8 +515,8 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
 fn sweep(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let number = |name: &str, default: f64| args.number(name).map(|v| v.unwrap_or(default));
-    let frequencies = log_spaced(number("--from", 5.0)?, number("--to", 500.0)?, number("--count", 60.0)? as usize);
-    let points = frequency_sweep(entry, &cfg, number("--motor", 0.0)? as usize, &frequencies, number("--amplitude", 0.05)?)?;
+    let frequencies = log_spaced(number("--from", 5.0)?, number("--to", 500.0)?, number("--count", SWEEP_POINTS as f64)? as usize);
+    let points = frequency_sweep(entry, &cfg, number("--motor", 0.0)? as usize, &frequencies, number("--amplitude", default_sweep_amplitude(entry, &cfg)?)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "frequency_hz,gain_rad_s_per_nm,phase_deg").map_err(io)?;
     for p in points {
@@ -528,6 +569,25 @@ fn tuning(args: &Args) -> Result<(), Failure> {
     out.flush().map_err(io)
 }
 
+/// `margins <machine> [--bands]`: per motor the stability margins of its velocity loop (`velocity_loop_margins`), for
+/// the config as it is and with `--bands` with each value of `[bounds]` at its low and at its high bound. A row whose
+/// loop is unstable or whose measurement is not valid (`LoopMargins::stable`) says FAIL.
+fn margins(args: &Args) -> Result<(), Failure> {
+    use sim_components::analysis::{bounds, velocity_loop_margins};
+    let (entry, cfg) = machine_and_config(args)?;
+    let motors = (entry.build)(&cfg)?.motors().to_vec();
+    let runs = velocity_loop_margins(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result").map_err(io)?;
+    for (run, margins) in &runs {
+        for (motor, m) in motors.iter().zip(margins) {
+            let result = if m.stable() { "ok" } else { "FAIL" };
+            writeln!(out, "{run},{},{:.1},{:.1},{:.2},{:.3},{:.1},{result}", motor.id, m.crossover_hz, m.phase_margin_deg, m.gain_margin_db, m.peak_sensitivity, m.peak_frequency_hz).map_err(io)?;
+        }
+    }
+    out.flush().map_err(io)
+}
+
 /// `run <machine>`: simulate a move or the cycle and write every signal as CSV. `--disable-at SECONDS`
 /// switches the drives off at that time, to show the axes held by the brakes, coasting or falling.
 fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
@@ -542,8 +602,10 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     for step in 0..=(seconds / sim.dt).round() as u64 {
         if step % every == 0 {
             sim.sample(&mut sample);
-            let row: Vec<String> = sample.iter().map(|v| format!("{v:.9e}")).collect();
-            writeln!(out, "{}", row.join(",")).map_err(io)?;
+            for (i, v) in sample.iter().enumerate() {
+                write!(out, "{}{v:.9e}", if i == 0 { "" } else { "," }).map_err(io)?;
+            }
+            writeln!(out).map_err(io)?;
         }
         if Some(step) == disable_at {
             sim.command(Command::Disable).map_err(|e| Failure(e.key, String::new()))?;
@@ -551,4 +613,64 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
         sim.step();
     }
     out.flush().map_err(io)
+}
+
+/// `fmu <machine> --out FILE.fmu`: the machine with its config as an FMI 2.0 Co-Simulation FMU (see `sim_fmi`), with
+/// the descriptions in the language of `--lang`. Its binaries are the files `--binary` names (it may repeat: a .dll goes
+/// to win64, a .so to linux64, a .dylib to darwin64), or else the sim-fmi library built next to this program.
+fn fmu(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
+    let model = sim_fmi::Model::new(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"))?;
+    let mut binaries: Vec<std::path::PathBuf> = args.options("--binary").into_iter().map(Into::into).collect();
+    if binaries.is_empty() {
+        let name = format!("{}{}{}", std::env::consts::DLL_PREFIX, sim_fmi::MODEL_IDENTIFIER, std::env::consts::DLL_SUFFIX);
+        let beside = std::env::current_exe().map_err(io)?.with_file_name(name);
+        binaries.push(beside);
+    }
+    let mut files = model.files();
+    let mut platforms: Vec<(String, &std::path::PathBuf)> = Vec::new();
+    for binary in &binaries {
+        let file_name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let inside = sim_fmi::binary_path(file_name).ok_or_else(|| Failure("cli-error-bad-argument", format!("--binary {}", binary.display())))?;
+        // Two binaries for one platform would be two entries of one name in the archive.
+        if let Some((_, other)) = platforms.iter().find(|(path, _)| *path == inside) {
+            return Err(Failure("cli-error-conflict", format!("--binary {} --binary {}", other.display(), binary.display())));
+        }
+        let bytes = std::fs::read(binary).map_err(|e| Failure("cli-error-fmu-binary", format!("{}: {e}", binary.display())))?;
+        platforms.push((inside.clone(), binary));
+        files.push((inside, bytes));
+    }
+    std::fs::write(path, sim_fmi::zip(&files)).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))
+}
+
+/// `compare <machine> --effect NAME`: the cycle run with `effects.NAME` on and with it off (`compare_effect`). Writes
+/// every signal, or those `--signal ID` names (it may repeat), once per millisecond of the measured pass, on and off
+/// side by side; `--differences FILE` the peak and the RMS of on less off per signal.
+fn compare(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let effect = args.option("--effect").ok_or(Failure("cli-error-missing-value", "--effect".into()))?;
+    let found = sim_components::analysis::compare_effect(entry, &cfg, effect)?;
+    let named = args.options("--signal");
+    let place = |id: &str| found.signals.iter().position(|s| s.id == id).ok_or(Failure("cli-error-bad-argument", format!("--signal {id}")));
+    // Every signal but the time, which is the first column anyway.
+    let chosen: Vec<usize> = if named.is_empty() { (1..found.signals.len()).collect() } else { named.into_iter().map(place).collect::<Result<_, _>>()? };
+    let mut out = output(args, "--out")?;
+    let header: Vec<String> = chosen.iter().map(|&i| &found.signals[i]).map(|s| format!("{0}.on[{1}],{0}.off[{1}]", s.id, s.unit)).collect();
+    writeln!(out, "time[s],{}", header.join(",")).map_err(io)?;
+    for (on, off) in found.on.iter().zip(&found.off) {
+        let cells: Vec<String> = chosen.iter().map(|&i| format!("{:.9e},{:.9e}", on[i], off[i])).collect();
+        writeln!(out, "{:.4},{}", on[0], cells.join(",")).map_err(io)?;
+    }
+    out.flush().map_err(io)?;
+    if args.option("--differences").is_some() {
+        let mut out = output(args, "--differences")?;
+        writeln!(out, "signal,unit,peak_difference,rms_difference").map_err(io)?;
+        for &i in &chosen {
+            let (peak, rms) = found.difference(i);
+            writeln!(out, "{},{},{peak:.6e},{rms:.6e}", found.signals[i].id, found.signals[i].unit).map_err(io)?;
+        }
+        out.flush().map_err(io)?;
+    }
+    Ok(())
 }

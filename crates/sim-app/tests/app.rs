@@ -457,6 +457,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             ("Radial load on a pulley shaft, peak [N]", load.radial_load_peak),
             ("Highest guide load [N]", load.guide_load.map(|g| g.0)),
             ("Guide life by the catalogue formula [km]", life),
+            ("Guide life at the cycle's mean speed [h]", sim_components::analysis::guide_life_h(&entry.config(), &load)),
         ];
         assert!(expected.iter().all(|(_, value)| value.is_some()) && load.radial_load_peak.unwrap() > 100.0 && life.unwrap() > 1.0, "{}: {expected:?}", entry.id);
         assert_eq!(summary.len(), 1 + expected.len(), "{}: {summary:?}", entry.id);
@@ -464,10 +465,13 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             assert!(shows(&row(summary, label)[0], value.unwrap()), "{}: {label} {value:?} in {summary:?}", entry.id);
         }
         // One row per figure and one column per motor: peak, RMS and cubic-mean torque, winding rise, energy
-        // drawn and fed back, the braking resistor's energy and mean power and the highest DC link voltage.
+        // drawn and fed back, the braking resistor's energy and mean power, the highest DC link voltage and the energy
+        // fed back into the mains (zero without the regenerative supply).
         assert_eq!(motors[0][0], "Figure");
         assert_eq!(motors[0][1..], model.session.motors.iter().map(|info| model.tr.tr(info.key).to_string()).collect::<Vec<_>>());
-        assert_eq!(motors.len(), 10);
+        // And the lives in hours and the belt's tooth load, which both default configs have.
+        assert_eq!(motors.len(), 14);
+        assert!(row(motors, "Fed back into the mains [J]").iter().all(|cell| shows(cell, 0.0)), "{motors:?}");
         for (k, m) in load.motors.iter().enumerate() {
             let figures = [
                 ("Peak torque [N m]", m.peak_torque),
@@ -483,6 +487,15 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             }
             assert!(m.cubic_mean_torque > m.rms_torque && m.peak_dc_link_voltage > entry.config().f64("drive.bus_voltage_v").unwrap());
             assert!(shows(&row(motors, "Braking resistor, energy [J]")[k], m.resistor_energy) && shows(&row(motors, "Braking resistor, mean power [W]")[k], m.resistor_energy / load.duration));
+            let cfg = entry.config();
+            let lives = [
+                ("Pulley shaft bearing, rating life [h]", sim_components::analysis::pulley_bearing_life_h(&cfg, m)),
+                ("Gearbox planet bearings, life [h]", sim_components::analysis::gearbox_life_h(&cfg, m)),
+                ("Belt tooth load, share of its rating", sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()),
+            ];
+            for (label, value) in lives {
+                assert!(shows(&row(motors, label)[k], value.unwrap()), "{}: {label} {value:?} in {motors:?}", entry.id);
+            }
         }
         // One row per check: label, motor, value, limit, result. The default cycles pass every check.
         assert_eq!(checks.len(), 1 + verdicts.len());
@@ -506,6 +519,36 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         assert!(checks.iter().any(|row| row[0].starts_with("Übertemperatur der Wicklung") && row[4] == "NICHT BESTANDEN"), "{checks:?}");
         model.clear_analysis();
         assert!(model.cycle_tables().is_empty());
+    }
+}
+
+/// With the regenerative supply switched on in the app, its tables show what the analysis computes: per motor the energy
+/// fed back into the mains, the two line module checks, and the rows "fed back into the mains" and "line module loss"
+/// of the energy budget; in German too.
+#[test]
+fn the_regenerative_supply_shows_in_the_apps_tables() {
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        model.set_param("effects.regenerative_supply", toml::Value::Boolean(true));
+        model.run_analysis(Analysis::Cycle);
+        wait_for_analysis(&mut model);
+        let cfg = model.config.clone();
+        let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
+        let tables = model.cycle_tables();
+        let (motors, checks) = (&tables[1], &tables[2]);
+        for (k, m) in load.motors.iter().enumerate() {
+            assert!(m.mains_energy > 0.0 && shows(&row(motors, "Fed back into the mains [J]")[k], m.mains_energy), "{}: {motors:?}", entry.id);
+        }
+        assert!(["Line module, mean power either way [W]", "Line module, highest power either way [W]"].iter().all(|label| checks.iter().filter(|row| row[0] == *label && row[4] == "ok").count() == load.motors.len()), "{}: {checks:?}", entry.id);
+        let budget = load.budget.unwrap();
+        let shown = model.budget_table().unwrap();
+        for (id, label) in [("mains", "Drive · Fed back into the mains"), ("line_module", "Drive · Line module loss while feeding back")] {
+            let energy = budget.rows.iter().find(|r| r.id == id).unwrap().energy;
+            assert!(energy > 0.0 && shows(&row(&shown, label)[0], energy), "{}: {label} {energy} in {shown:?}", entry.id);
+        }
+        model.set_language("de");
+        assert!(row(&model.cycle_tables()[1], "Ins Netz zurückgespeist [J]").len() == load.motors.len());
+        assert!(model.budget_table().unwrap().iter().any(|cells| cells[0].ends_with("In das Netz zurückgespeist")));
     }
 }
 
@@ -663,6 +706,46 @@ fn a_refused_config_value_is_rolled_back_and_reported_once() {
     model.command(Command::MoveTo(Vec::new()));
     wait(&mut model);
     assert_eq!(model.messages.iter().filter(|m| m.0 == "error-target-out-of-range").count(), 1, "{:?}", model.messages);
+}
+
+/// The worst corner of the bounds, as `sim-cli verdicts --bands --worst` gives it: with both options on, the cycle
+/// analysis also searches it (`verdict_worst`) and shows per check the worst value found, its limit, the result
+/// and which bounded values are at their high and which at their low bound; in both languages. Without the option,
+/// or without the bands, there is no such table. On the machine with the fewest bounded values (some 300 cycles).
+#[test]
+fn the_app_searches_the_worst_corner_of_the_bounds() {
+    use sim_components::analysis::{bounds, verdict_worst};
+    // The machine with the fewest bounded values, so that the search stays short.
+    let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    let mut model = Model::new(entry, "en");
+    model.inputs.worst = true;
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    assert!(model.worst_table().is_none(), "searched without the bands");
+    model.inputs.bands = true;
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    let cfg = entry.config();
+    let bounded = bounds(&cfg).unwrap();
+    let (worst, _) = verdict_worst(entry, &cfg, &bounded).unwrap();
+    let table = model.worst_table().unwrap();
+    assert_eq!(table[0], ["Check", "Motor", "Worst value", "Limit", "Result", "At the high bound", "At the low bound"]);
+    assert_eq!(table.len(), 1 + worst.len());
+    for (row, w) in table[1..].iter().zip(&worst) {
+        assert_eq!(row[0], model.tr.tr(&format!("check-{}", w.verdict.check)));
+        assert!(shows(&row[2], w.verdict.value) && shows(&row[3], w.verdict.limit) && row[4] == if w.verdict.ok { "ok" } else { "FAIL" }, "{row:?} against {w:?}");
+        // Every bounded value at a bound is named once, at that bound; one as configured is not named.
+        for (bound, high) in bounded.iter().zip(&w.high) {
+            let named = |cell: &str| cell.split(", ").any(|path| path == bound.0);
+            assert!(named(&row[5]) == (*high == Some(true)) && named(&row[6]) == (*high == Some(false)), "{}: {row:?}", bound.0);
+        }
+    }
+    model.set_language("de");
+    assert_eq!(model.worst_table().unwrap()[0][2..], ["Ungünstigster Wert", "Grenze", "Ergebnis", "An der oberen Grenze", "An der unteren Grenze"]);
+    model.inputs.worst = false;
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    assert!(model.worst_table().is_none());
 }
 
 /// Verdicts with error bands, as `sim-cli verdicts --bands` gives them: with the option on, the cycle analysis
@@ -1005,7 +1088,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         };
         let mut blended = entry.config();
         blended.set_text("profile.path_tolerance_m = 1.0e-4").unwrap();
-        let reported = sim_components::Sim::new(entry, &blended).unwrap().path_deviation(&sim_components::path::parse(&pieces).unwrap()).unwrap();
+        let reported = sim_components::Sim::new(entry, &blended).unwrap().path_deviation(&sim_components::path::parse(&pieces).unwrap(), false).unwrap();
         let ((given, none), (shorter, off)) = (planned(0.0), planned(1e-4));
         assert!(none == 0.0 && (reported - 1e-4).abs() < 1e-9 && (off - reported * 1e3).abs() < 1e-3, "{}: off by {off} mm, reported {reported} m", entry.id);
         assert!(shorter < 0.95 * given, "{}: {shorter} s with transition curves, {given} s without", entry.id);
@@ -1238,4 +1321,626 @@ fn the_travelled_path_follows_every_step_and_starts_and_ends_with_the_path() {
     assert!(matches!(events[0], Event::TrailStart(Some(_))) && events.iter().filter(|e| matches!(e, Event::Trail(_))).count() == 1);
     let waiting = trailed(&events);
     assert_eq!((waiting.len(), waiting[0][0], waiting[TRAIL - 1][0]), (TRAIL, 2000.0, (TRAIL + 1999) as f64));
+}
+
+/// A config file in the app, as `--config FILE` on the command line: opened, it replaces the running config
+/// as switching machine does; saved, it holds every value changed in the panels, with the comments and the
+/// layout of the file it was read from; opened again, it is the same config. A file that cannot be read, or
+/// that the machine refuses, is reported in words and the running config stays.
+#[test]
+fn a_config_file_is_opened_changed_saved_and_opened_again() {
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        let (original, saved) = (temp_file(entry, "config.toml"), temp_file(entry, "saved.toml"));
+        std::fs::write(&original, entry.default_config).unwrap();
+        model.open_config(&original);
+        assert_eq!((model.config == entry.config(), model.inputs.config_file.as_str()), (true, original.as_str()));
+        assert_eq!(model.messages.last(), Some(&("ui-config-opened", original.clone())));
+        wait_for_data(&mut model);
+
+        // A value and an effect switch changed in the panels.
+        let payload = model.config.f64("mass.payload_kg").unwrap() + 0.75;
+        model.set_param("mass.payload_kg", toml::Value::Float(payload));
+        let (switch, _, on) = model.effects().into_iter().next().unwrap();
+        model.set_param(&switch, toml::Value::Boolean(!on));
+        let changed = model.config.clone();
+        model.save_config(&saved);
+        assert_eq!(model.messages.last(), Some(&("ui-config-saved", saved.clone())));
+        // Line for line the file it was read from, but for the two values.
+        let text = std::fs::read_to_string(&saved).unwrap();
+        assert_eq!(text.lines().count(), entry.default_config.lines().count(), "{text}");
+        let differ: Vec<(&str, &str)> = entry.default_config.lines().zip(text.lines()).filter(|(a, b)| a != b).collect();
+        assert_eq!(differ.len(), 2, "{}: {differ:?}", entry.id);
+        assert!(differ.iter().any(|(_, line)| line.starts_with("payload_kg = ")), "{differ:?}");
+
+        // Opened again, it is the config as it was changed.
+        model.open_config(&saved);
+        assert!(model.config == changed && model.config.f64("mass.payload_kg").unwrap() == payload, "{}", entry.id);
+        wait_for_data(&mut model);
+        assert!(model.messages.iter().all(|m| m.0.starts_with("limit-") || m.0.starts_with("ui-config-")), "{:?}", model.messages);
+
+        // A changed array is not written over the old text: the file is written plainly and still reads back.
+        let mut moved = model.config.clone();
+        let pose: Vec<f64> = moved.f64s("start.pose").unwrap().iter().map(|p| p + 0.01).collect();
+        moved.set_text(&format!("start.pose = {pose:?}")).unwrap();
+        std::fs::write(&original, moved.to_text().unwrap()).unwrap();
+        model.open_config(&original);
+        assert!(model.config == moved, "{}: {:?}", entry.id, model.messages);
+
+        // Files that do not load: a misspelt key, a value the machine refuses, a file that is not there. The
+        // message says why in the user's language, and the config that runs stays.
+        let mut refused = entry.config();
+        refused.set_text(&format!("start.pose = {:?}", vec![1000.0; pose.len()])).unwrap();
+        let bad_files = [
+            ("format_version = 1\n[mass]\npayload_kgg = 1.0\n".to_string(), "error-config-unknown"),
+            (refused.to_text().unwrap(), "error-config-invalid"),
+            (String::new(), "ui-file-unreadable"),
+        ];
+        for (text, key) in bad_files {
+            let broken = temp_file(entry, "broken.toml");
+            let _ = std::fs::remove_file(&broken);
+            if !text.is_empty() {
+                std::fs::write(&broken, text).unwrap();
+            }
+            model.open_config(&broken);
+            assert_eq!(model.messages.last().map(|m| m.0), Some(key), "{:?}", model.messages);
+            assert!(model.config == moved && model.inputs.config_file == original, "{}", entry.id);
+            for lang in LANGUAGES {
+                model.set_language(lang);
+                assert!(model.tr.has(key));
+            }
+            model.set_language("en");
+        }
+        // The simulation that was running runs on.
+        wait_for_data(&mut model);
+        let before = model.history.back().unwrap()[0];
+        simulate(&mut model, 0.05);
+        assert!(model.history.back().unwrap()[0] > before);
+    }
+}
+
+/// Switching machine forgets the config file: Save wrote the new machine's config over the file of the machine
+/// left. And a file that holds another machine's config is not overwritten, also when it is typed in: the
+/// message says so in words and the file stays as it was.
+#[test]
+fn saving_after_a_machine_switch_does_not_overwrite_the_other_machines_file() {
+    let (first, second) = (MACHINES[0], MACHINES[1]);
+    let file = temp_file(first, "own-config.toml");
+    std::fs::write(&file, first.default_config).unwrap();
+    let mut model = Model::new(first, "en");
+    model.open_config(&file);
+    assert_eq!(model.inputs.config_file, file);
+    model.set_machine(second);
+    assert_eq!(model.inputs.config_file, "", "the file of the machine left is still in the field");
+    model.save_config(&file);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), first.default_config, "the other machine's file was overwritten");
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-config-other-machine"), "{:?}", model.messages);
+    for lang in LANGUAGES {
+        model.set_language(lang);
+        assert!(model.tr.has("ui-config-other-machine"));
+    }
+    // A file of the machine's own, or one that is no config, is written as before.
+    let own = temp_file(second, "own-config.toml");
+    std::fs::write(&own, "not a config").unwrap();
+    model.save_config(&own);
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-config-saved"));
+    model.save_config(&own);
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-config-saved"));
+}
+
+/// The motor a measured response was taken on is a number of the machine shown: switched to a machine with
+/// fewer motors, it is one that machine has. It stayed at the old number, and the fit was refused with
+/// `error-config-invalid` "motor".
+#[test]
+fn switching_to_a_machine_with_fewer_motors_keeps_the_sweep_motor_in_range() {
+    let motors = |entry: &'static sim_core::MachineEntry| Model::new(entry, "en").session.motors.len();
+    let many = MACHINES.iter().copied().max_by_key(|m| motors(*m)).unwrap();
+    let few = MACHINES.iter().copied().min_by_key(|m| motors(*m)).unwrap();
+    assert!(motors(many) > motors(few));
+    let mut model = Model::new(many, "en");
+    model.inputs.sweep_motor = motors(many) - 1;
+    model.set_machine(few);
+    assert!(model.inputs.sweep_motor < model.session.motors.len(), "motor {} of {}", model.inputs.sweep_motor, model.session.motors.len());
+}
+
+/// Parts typed by name, as `--motor`, `--supply` and `--gearbox` on the command line: the config they give
+/// is the one the command line runs, and the one the motor search's button gives for the same motor. Names
+/// the catalogue does not have are refused in words, and so is any name in a config without `[parts]`.
+#[test]
+fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() {
+    use sim_components::catalog::resolve;
+    let entry = MACHINES[0];
+    let motor = "1FK2104-5AK";
+    let mut typed = Model::new(entry, "en");
+    assert_eq!(typed.inputs.parts, ["", "400v", ""].map(String::from));
+    typed.inputs.parts = [motor, "400v", ""].map(String::from);
+    typed.apply_parts();
+    // The command line: `--motor 1FK2104-5AK --supply 400v`, the parts put in by `resolve`.
+    let mut cli = entry.config();
+    cli.set_text(&format!("parts.motor = {motor:?}")).unwrap();
+    cli.set_text(r#"parts.motor_supply = "400v""#).unwrap();
+    assert!(resolve(entry, &typed.config).unwrap() == resolve(entry, &cli).unwrap());
+    // The search's button, for the same motor.
+    let mut searched = Model::new(entry, "en");
+    searched.inputs.series = motor.into();
+    searched.run_analysis(Analysis::Search);
+    wait_for_analysis(&mut searched);
+    assert_eq!(searched.search_table().unwrap()[1][0], motor);
+    searched.use_candidate(0);
+    assert!(searched.config == typed.config, "{:?}", searched.messages);
+    assert_eq!(searched.inputs.parts, typed.inputs.parts);
+    // The running simulation takes it.
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(300) {
+        typed.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(typed.messages.iter().all(|m| m.0.starts_with("limit-")), "{:?}", typed.messages);
+    // A gearbox too, and then none again.
+    typed.inputs.parts[2] = "NRK070-04-5".into();
+    typed.apply_parts();
+    cli.set_text(r#"parts.gearbox = "NRK070-04-5""#).unwrap();
+    assert!(resolve(entry, &typed.config).unwrap() == resolve(entry, &cli).unwrap());
+    typed.inputs.parts[2] = String::new();
+    typed.apply_parts();
+    assert_eq!(typed.config.get("parts.gearbox").unwrap().as_str(), Some(""));
+
+    // Names the catalogue does not have, and a supply it has no data for: refused, the config stays.
+    let before = typed.config.clone();
+    for (parts, (key, name)) in [
+        (["1FK9999-9XX", "400v", ""], ("error-config-part-motor", "1FK9999-9XX")),
+        ([motor, "400v", "NRK999-04-5"], ("error-config-part-gearbox", "NRK999-04-5")),
+        ([motor, "110v", ""], ("ui-search-bad-supply", "110v")),
+    ] {
+        typed.inputs.parts = parts.map(String::from);
+        typed.apply_parts();
+        assert_eq!(typed.messages.last(), Some(&(key, name.to_string())));
+        assert!(typed.config == before && typed.tr.tr_arg(key, name).contains(name));
+    }
+    // A config without `[parts]` takes no names, as on the command line.
+    let mut table: toml::Table = entry.default_config.parse().unwrap();
+    table.remove("parts");
+    let file = temp_file(entry, "no-parts.toml");
+    std::fs::write(&file, toml::to_string(&table).unwrap()).unwrap();
+    typed.open_config(&file);
+    assert_eq!(typed.inputs.parts, ["", "", ""].map(String::from));
+    let opened = typed.config.clone();
+    typed.inputs.parts[0] = motor.into();
+    typed.apply_parts();
+    assert_eq!(typed.messages.last(), Some(&("error-config-missing", "parts.motor".to_string())));
+    assert!(typed.config == opened);
+}
+
+/// The overlay of a replay in the app, as `sim-cli replay --out` writes it: per quantity and motor the trace and
+/// the simulation of its setpoints, and exported as CSV the same file the command line writes
+/// (`trace::overlay_csv`, which `cli.rs` checks against the command line's file).
+#[test]
+fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
+    for entry in MACHINES.iter().copied() {
+        let mut cfg = entry.config();
+        cfg.set_text("effects.payload = false").unwrap();
+        let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+        sim.command(Command::StartCycle).unwrap();
+        let mut measured = sim_components::trace::Trace::default();
+        for step in 0..=(3.0 / sim.dt).round() as u64 {
+            if step % 4 == 0 {
+                measured.record(&sim);
+            }
+            sim.step();
+        }
+        let ids: Vec<&str> = sim.machine.motors().iter().map(|m| m.id).collect();
+        let file = temp_file(entry, "overlay-trace.csv");
+        let mut text = String::from("time");
+        for id in &ids {
+            text += &["angle_setpoint", "angle", "speed", "torque"].map(|n| format!(",motor.{id}.{n}")).concat();
+        }
+        for (row, time) in measured.time.iter().enumerate() {
+            text += &format!("\n{time:.9e}");
+            for m in &measured.motors {
+                text += &[m.setpoint[row], m.angle[row], m.speed[row], m.torque[row]].map(|v| format!(",{v:.9e}")).concat();
+            }
+        }
+        std::fs::write(&file, &text).unwrap();
+        let measured = sim_components::trace::Trace::parse(&text, sim.machine.motors()).unwrap();
+        let simulated = sim_components::trace::replay(entry, &cfg, &measured).unwrap();
+
+        let mut model = Model::new(entry, "en");
+        assert!(model.overlay().is_empty());
+        model.set_param("effects.payload", toml::Value::Boolean(false));
+        model.inputs.trace_file = file;
+        model.run_analysis(Analysis::Trace);
+        wait_for_analysis(&mut model);
+        let overlay = model.overlay();
+        assert_eq!(overlay.iter().map(|(key, _)| *key).collect::<Vec<_>>(), ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"]);
+        for (q, (_, motors)) in overlay.iter().enumerate() {
+            assert_eq!(motors.len(), ids.len());
+            for (k, [m, s]) in motors.iter().enumerate() {
+                let column = |t: &sim_components::trace::MotorTrace| [t.torque.clone(), t.speed.clone(), t.following_error()][q].clone();
+                let line = |values: Vec<f64>| measured.time.iter().zip(values).map(|(t, v)| [*t, v]).collect::<Vec<_>>();
+                assert!(*m == line(column(&measured.motors[k])) && *s == line(column(&simulated.motors[k])), "{}: quantity {q}, motor {k}", entry.id);
+            }
+        }
+        // The replay is close to the trace, and not the same: the drawn lines are two.
+        assert!(overlay[0].1[0][0] != overlay[0].1[0][1]);
+        let exported = temp_file(entry, "overlay.csv");
+        model.export_overlay(std::path::Path::new(&exported));
+        assert_eq!(model.messages.last().unwrap().0, "ui-overlay-exported");
+        let written = std::fs::read_to_string(&exported).unwrap();
+        assert!(written == sim_components::trace::overlay_csv(&ids, &measured, &simulated), "{}", entry.id);
+        assert!(written.starts_with(&format!("time,motor.{0}.torque_measured,motor.{0}.torque_simulated,motor.{0}.speed_measured", ids[0])) && written.lines().count() == 1 + measured.time.len());
+        model.clear(Analysis::Trace);
+        assert!(model.overlay().is_empty());
+    }
+}
+
+/// The operating points in the app, as `sim-cli analyze --points` writes them (`MotorLoad::points`, which
+/// `cli.rs` checks against the command line's file), over the torque-speed curve. The curve by hand: the peak
+/// torque both ways up to the rated speed, falling straight to nothing at the no-load speed in the direction
+/// of motion, and the peak torque against the motion at every speed.
+#[test]
+fn the_operating_points_are_shown_over_the_torque_speed_curve() {
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        assert!(model.points_plot().is_none() && model.points_table(0..10).is_none());
+        model.run_analysis(Analysis::Cycle);
+        wait_for_analysis(&mut model);
+        let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &entry.config()).unwrap()).unwrap();
+        let all: Vec<(usize, (f64, f64))> = load.motors.iter().enumerate().flat_map(|(k, m)| m.points.iter().map(move |p| (k, *p))).collect();
+        let (count, table) = model.points_table(0..all.len()).unwrap();
+        assert!(count == all.len() && count > 1000 * load.motors.len(), "{}: {count} points", entry.id);
+        assert_eq!(table[0], ["Motor", "Motor speed [rad/s]", "Motor torque [N m]"]);
+        for (row, (k, (speed, torque))) in table[1..].iter().zip(&all) {
+            assert!(row[0] == model.tr.tr(model.session.motors[*k].key) && shows(&row[1], *speed) && shows(&row[2], *torque), "{}: {row:?} against {speed}, {torque}", entry.id);
+        }
+        // A window of the rows, as the window draws them: the header and the rows asked for.
+        let (_, window) = model.points_table(count - 3..count + 5).unwrap();
+        assert!(window.len() == 4 && shows(&window[3][2], all[count - 1].1.1), "{window:?}");
+
+        let (points, [high, low]) = model.points_plot().unwrap();
+        for (k, m) in load.motors.iter().enumerate() {
+            assert_eq!(points[k], m.points.iter().map(|(s, t)| [*s, *t]).collect::<Vec<_>>());
+        }
+        let resolved = sim_components::catalog::resolve(entry, &entry.config()).unwrap();
+        let [peak, rated, no_load] = ["drive.peak_torque_nm", "drive.rated_speed_rad_s", "drive.no_load_speed_rad_s"].map(|path| resolved.f64(path).unwrap());
+        assert_eq!(high, [[-no_load, peak], [-rated, peak], [0.0, peak], [rated, peak], [no_load, 0.0]]);
+        assert_eq!(low, [[-no_load, 0.0], [-rated, -peak], [0.0, -peak], [rated, -peak], [no_load, -peak]]);
+        // The cycle runs inside the curve.
+        assert!(all.iter().all(|(_, (speed, torque))| speed.abs() < rated && torque.abs() <= peak), "{}", entry.id);
+        model.set_language("de");
+        assert_eq!(model.points_table(0..1).unwrap().1[0][1], "Motordrehzahl [rad/s]");
+        model.clear_analysis();
+        assert!(model.points_plot().is_none());
+    }
+}
+
+/// A frequency response as `sim-cli sweep` writes it.
+fn sweep_csv(points: &[sim_components::analysis::SweepPoint]) -> String {
+    let rows: Vec<String> = points.iter().map(|p| format!("{:.4},{:.6e},{:.3}", p.frequency, p.gain, p.phase_deg)).collect();
+    format!("frequency_hz,gain_rad_s_per_nm,phase_deg\n{}\n", rows.join("\n"))
+}
+
+/// The open-loop frequency response in the app, as `sim-cli sweep` gives it (`frequency_sweep`, which `cli.rs`
+/// checks against the command line's output): every motor at the frequencies and amplitude typed, the numbers
+/// the same, and the dip of the load on the belt read off each (`identify::resonance`). A sweep from 0 Hz is
+/// refused.
+#[test]
+fn the_frequency_response_is_measured_in_the_app() {
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        assert!(model.sweep_table().is_none());
+        // The defaults of `sim-cli sweep`.
+        let defaults = (5.0, 500.0, sim_components::analysis::SWEEP_POINTS, sim_components::analysis::default_sweep_amplitude(entry, &entry.config()).unwrap());
+        assert_eq!((model.inputs.sweep_from, model.inputs.sweep_to, model.inputs.sweep_count, model.inputs.sweep_amplitude), defaults);
+        (model.inputs.sweep_from, model.inputs.sweep_to, model.inputs.sweep_count, model.inputs.sweep_amplitude) = (50.0, 130.0, 30, 1.5);
+        model.run_analysis(Analysis::Sweep);
+        assert!(model.running(Analysis::Sweep));
+        let before = model.history.len();
+        wait_for_analysis(&mut model);
+        assert!(model.history.len() > before, "{}: the simulation stood still meanwhile", entry.id);
+        let sweeps = model.sweeps.as_ref().unwrap();
+        assert_eq!(sweeps.len(), model.session.motors.len());
+        let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
+        let table = model.sweep_table().unwrap();
+        assert_eq!(table[0][0], "Figure");
+        for (k, points) in sweeps.iter().enumerate() {
+            let expected = sim_components::analysis::frequency_sweep(entry, &entry.config(), k, &frequencies, 1.5).unwrap();
+            assert!(points.len() == 30 && points.iter().zip(&expected).all(|(a, b)| (a.frequency, a.gain, a.phase_deg) == (b.frequency, b.gain, b.phase_deg)), "{}: motor {k}", entry.id);
+            match sim_components::identify::resonance(&expected) {
+                Some(r) => assert!(shows(&row(&table, "Resonance [Hz]")[k], r.frequency) && shows(&row(&table, "Damping ratio")[k], r.damping), "{}: {table:?}", entry.id),
+                None => assert!(row(&table, "Resonance [Hz]")[k].is_empty()),
+            }
+        }
+        // The first motor has its dip in this range on both machines (59.9 Hz and 84.5 Hz).
+        assert!(number(&row(&table, "Resonance [Hz]")[0]) > 55.0, "{}: {table:?}", entry.id);
+        // The range typed from high to low gives the same dip. Its damping came out negative.
+        let rising = sim_components::identify::resonance(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap()).unwrap();
+        (model.inputs.sweep_from, model.inputs.sweep_to) = (130.0, 50.0);
+        model.run_analysis(Analysis::Sweep);
+        wait_for_analysis(&mut model);
+        let falling = model.sweep_table().unwrap();
+        assert!(shows(&row(&falling, "Resonance [Hz]")[0], rising.frequency) && shows(&row(&falling, "Damping ratio")[0], rising.damping), "{}: {falling:?}", entry.id);
+        model.set_language("de");
+        assert_eq!(model.sweep_table().unwrap()[1][0], "Resonanz [Hz]");
+        model.set_param("belt.stiffness_ea_n", toml::Value::Float(4.0e5));
+        assert!(model.outdated(Analysis::Sweep));
+
+        model.inputs.sweep_from = 0.0;
+        model.run_analysis(Analysis::Sweep);
+        wait_for_jobs(&mut model);
+        assert_eq!(model.messages.last().unwrap(), &("error-config-invalid", "frequency".to_string()));
+        model.clear(Analysis::Sweep);
+        assert!(model.sweep_table().is_none());
+    }
+}
+
+/// Stage 2 of the fit in the app, as `sim-cli fit --sweep` gives it (`identify::fit_sweep`, which `cli.rs` checks
+/// against the command line's output). The measured response is that of the default machine, whose belt has
+/// EA = 500 kN; the app's config says 400 kN. By hand the stiffness is off by 500 / 400 = 1.25, and the fit
+/// says so within its standard error. A file without a dip, a missing one and one that is no sweep are refused.
+#[test]
+fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app() {
+    for entry in MACHINES.iter().copied() {
+        let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
+        let file = temp_file(entry, "sweep.csv");
+        let text = sweep_csv(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap());
+        std::fs::write(&file, &text).unwrap();
+
+        let mut model = Model::new(entry, "en");
+        assert!(model.sweep_fit_table().is_none() && model.sweep_fit_advice().is_none());
+        model.set_param("belt.stiffness_ea_n", toml::Value::Float(4.0e5));
+        (model.inputs.sweep_file, model.inputs.sweep_amplitude, model.inputs.sweep_motor) = (file.clone(), 1.5, 0);
+        model.run_analysis(Analysis::SweepFit);
+        wait_for_analysis(&mut model);
+        let measured = sim_components::identify::parse_sweep(&text).unwrap();
+        let fit = sim_components::identify::fit_sweep(entry, &model.config, 0, &measured, 1.5).unwrap().unwrap();
+        let table = model.sweep_fit_table().unwrap();
+        assert_eq!(table[0], ["Quantity", "Configuration", "Fitted", "Standard error"]);
+        let motor = model.tr.tr(model.session.motors[0].key).to_string();
+        let resonance = row(&table, &format!("{motor} · Resonance [Hz]"));
+        assert!(shows(&resonance[0], fit.config.frequency) && shows(&resonance[1], fit.fitted.frequency) && shows(&resonance[2], fit.fitted.frequency_error), "{table:?}");
+        let damping = row(&table, &format!("{motor} · Damping ratio"));
+        assert!(shows(&damping[0], fit.config.damping) && shows(&damping[1], fit.fitted.damping) && damping[2].is_empty(), "{table:?}");
+        let (factor, error) = fit.stiffness();
+        assert!((factor - 1.25).abs() < error && error < 0.05, "{}: x {factor} +- {error}", entry.id);
+        let advice = model.sweep_fit_advice().unwrap();
+        assert!(advice == model.tr.tr_arg("fit-stiffness", &format!("× {factor:.3} ± {error:.3}")) && advice.starts_with("Stiffness between motor and load: × 1.2"), "{advice}");
+        model.set_language("de");
+        assert!(model.sweep_fit_advice().unwrap().starts_with("Steifigkeit zwischen Motor und Last: × 1.2"));
+
+        let refused = |model: &mut Model, file: String| {
+            model.inputs.sweep_file = file;
+            model.run_analysis(Analysis::SweepFit);
+            wait_for_jobs(model);
+            model.messages.last().unwrap().0
+        };
+        // The same response from 90 Hz on has no lower flank to its dip.
+        let other = temp_file(entry, "sweep-without-dip.csv");
+        std::fs::write(&other, sweep_csv(&measured.iter().copied().filter(|p| p.frequency > 90.0).collect::<Vec<_>>())).unwrap();
+        assert_eq!(refused(&mut model, other.clone()), "fit-no-resonance");
+        assert_eq!(refused(&mut model, temp_file(entry, "no-such-sweep.csv")), "ui-file-unreadable");
+        std::fs::write(&other, "line,0.5\n").unwrap();
+        assert_eq!(refused(&mut model, other), "error-trace-column");
+        // The result that was there stays.
+        assert!(model.sweep_fit_table().is_some());
+    }
+}
+
+/// The effect views on every machine, against the analysis and the machine they come from. Live: per motor the
+/// four parts of its torque and the torque itself over the scopes' window, the parts adding up to the torque at
+/// every point. Over the analysed cycle: the peak and RMS of each part as `analyse_cycle` has them, and the energy
+/// budget row by row, with what is not accounted for below `BUDGET_TOLERANCE` of the supply. Per friction contact:
+/// the curve is the machine's `friction_curve` at the guide load of the newest sample, over the axis's speed limit
+/// both ways, and the point is the newest speed and friction force, which the three parts add up to.
+#[test]
+fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
+    use sim_components::analysis::{BUDGET_TOLERANCE, analyse_cycle};
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        assert!(model.breakdown_table().is_none() && model.budget_table().is_none());
+        model.command(Command::StartCycle);
+        simulate(&mut model, 1.0);
+        let lines = model.breakdown_lines();
+        assert_eq!(lines.len(), model.session.motors.len());
+        for ((title, parts), motor) in lines.iter().zip(&model.session.motors) {
+            assert_eq!(title, &format!("{} [N m]", model.tr.tr(motor.key)));
+            assert_eq!(parts.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), ["Torque to inertia", "Torque to gravity", "Torque to friction", "Torque to belt and the rest", "Torque"]);
+            let torque = &parts[4].1;
+            assert!(torque.len() > 500, "{}: {} points", entry.id, torque.len());
+            for (j, [time, total]) in torque.iter().enumerate() {
+                let sum: f64 = parts[..4].iter().map(|p| p.1[j][1]).sum();
+                assert!(parts[..4].iter().all(|p| p.1[j][0] == *time) && (sum - total).abs() < 1e-9 * total.abs().max(1.0), "{} at {time} s: {sum} against {total}", entry.id);
+            }
+            assert_eq!(torque.last().unwrap()[1], latest(&model, &format!("motor.{}.torque", motor.id)));
+        }
+
+        // The friction view, from the same newest sample.
+        let machine = (entry.build)(&entry.config()).unwrap();
+        let views = model.friction_views();
+        assert_eq!(views.len(), machine.friction_contacts().len());
+        assert!(!views.is_empty());
+        for (i, (view, contact)) in views.iter().zip(machine.friction_contacts()).enumerate() {
+            let get = |part: &str| latest(&model, &format!("{}.friction_{part}", contact.id));
+            let scale = get("load_scale");
+            let top = model.session.axes.iter().find(|a| a.key == contact.owner_key).unwrap().max_vel;
+            assert_eq!(view.title, model.tr.tr(contact.owner_key));
+            let curve = &view.curves[0].1;
+            assert!(curve.len() == 200 && curve[0][0] == -top && curve[199][0] == top && curve.windows(2).all(|w| w[0][0] < w[1][0] && w[0][0] * w[1][0] > 0.0 || w[0][0] < 0.0 && w[1][0] > 0.0));
+            for (k, [v, force]) in curve.iter().enumerate() {
+                let parts = machine.friction_curve(i, *v, scale);
+                assert!((force - parts.iter().sum::<f64>()).abs() < 1e-12 && (0..3).all(|p| view.curves[p + 1].1[k][1] == parts[p]), "{} at {v} m/s", entry.id);
+            }
+            let split = ["coulomb", "viscous", "stiction"].map(get);
+            assert!((split.iter().sum::<f64>() - latest(&model, &format!("{}.friction", contact.id))).abs() < 1e-9);
+            assert_eq!(view.now, Some([get("speed"), split.iter().sum::<f64>()]));
+            assert!(shows(&row(&view.table, "Coulomb friction [N]")[0], split[0]) && shows(&row(&view.table, "Friction force [N]")[0], split.iter().sum()), "{:?}", view.table);
+        }
+
+        // Over the analysed cycle.
+        model.run_analysis(Analysis::Cycle);
+        wait_for_analysis(&mut model);
+        let load = analyse_cycle(&mut sim_components::Sim::new(entry, &entry.config()).unwrap()).unwrap();
+        let table = model.breakdown_table().unwrap();
+        let motor = |k: usize| model.tr.tr(model.session.motors[k].key).to_string();
+        assert_eq!(table[0][..3], ["Part".to_string(), format!("{} · peak", motor(0)), format!("{} · RMS", motor(0))]);
+        assert_eq!(table.len(), 6);
+        for (k, m) in load.motors.iter().enumerate() {
+            let parts = m.torque_parts.unwrap();
+            for (i, (peak, rms)) in parts.iter().chain([&(m.peak_torque, m.rms_torque)]).enumerate() {
+                assert!(shows(&table[1 + i][1 + 2 * k], *peak) && shows(&table[1 + i][2 + 2 * k], *rms), "{}: {:?} against {peak}, {rms}", entry.id, table[1 + i]);
+            }
+        }
+        let budget = load.budget.unwrap();
+        let shown = model.budget_table().unwrap();
+        assert_eq!(shown[0], ["Where it went", "Energy [J]", "Share of the supply [%]"]);
+        assert!(shown[1][0] == "Drawn from the supply" && shows(&shown[1][1], budget.supply) && shown[1][2] == "100.0", "{:?}", shown[1]);
+        let rows: Vec<_> = budget.rows.iter().filter(|r| r.energy != 0.0).collect();
+        assert_eq!(shown.len(), 3 + rows.len());
+        for (cells, r) in shown[2..].iter().zip(rows) {
+            assert!(cells[0] == format!("{} · {}", model.tr.tr(&r.owner_key), model.tr.tr(&r.quantity_key)) && shows(&cells[1], r.energy), "{cells:?} against {r:?}");
+        }
+        let last = shown.last().unwrap();
+        assert!(last[0] == "Not accounted for" && shows(&last[1], budget.unaccounted()) && budget.unaccounted().abs() < BUDGET_TOLERANCE * budget.supply, "{last:?}");
+        assert!(rows_named(&shown, "Copper loss") == model.session.motors.len() && rows_named(&shown, "Friction loss") >= 1, "{shown:?}");
+
+        model.set_language("de");
+        assert_eq!(model.breakdown_table().unwrap()[0][0], "Anteil");
+        assert_eq!(model.budget_table().unwrap()[1][0], "Aus der Einspeisung bezogen");
+        assert_eq!(model.breakdown_lines()[0].1[0].0, "Moment für die Trägheit");
+        assert_eq!(model.friction_views()[0].curves[0].0, "Reibkraft");
+        model.clear_analysis();
+        assert!(model.breakdown_table().is_none() && model.budget_table().is_none());
+    }
+}
+
+/// How many rows of a table have a label that ends with `quantity`.
+fn rows_named(table: &[Vec<String>], quantity: &str) -> usize {
+    table.iter().filter(|row| row[0].ends_with(quantity)).count()
+}
+
+/// The thermal, belt and comparison views show what the simulation has, in its own numbers; the 3D view's colours
+/// follow the heat and tension scales the views draw as their legends.
+#[test]
+fn the_thermal_belt_and_comparison_views_show_the_simulation() {
+    use sim_app::model::{heat_color, part_color};
+    use toml::Value;
+    // Belt: its own colour at pretension, red at twice it, blue at none. Heat: blue cold, yellow at half the rated
+    // rise, red at it, magenta beyond; it takes the place of the part's own colour.
+    let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+    let own = [0.1, 0.2, 0.3];
+    assert!(close(part_color(own, 0.0, None), own) && close(part_color(own, 1.0, None), [1.0, 0.1, 0.1]) && close(part_color(own, -1.0, None), [0.1, 0.3, 1.0]));
+    for (heat, color) in [(0.0, [0.15, 0.3, 0.75]), (0.5, [0.95, 0.8, 0.1]), (1.0, [0.95, 0.1, 0.05]), (1.5, [0.9, 0.2, 0.9])] {
+        assert!(close(heat_color(heat), color), "{heat}: {:?}", heat_color(heat));
+    }
+    assert_eq!(part_color(own, 0.7, Some(0.5)), heat_color(0.5));
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        // Without heating the view says that nothing warms.
+        model.set_param("effects.winding_heating", Value::Boolean(false));
+        assert!(model.thermal_view().off);
+        model.set_param("effects.winding_heating", Value::Boolean(true));
+        model.set_param("effects.part_heating", Value::Boolean(true));
+        model.set_param("thermal.guide_time_constant_s", Value::Float(0.5));
+        model.command(Command::StartCycle);
+        simulate(&mut model, 1.5);
+        let machine = (entry.build)(&model.config).unwrap();
+        let parts = machine.thermal_parts();
+        let view = model.thermal_view();
+        assert!(!view.off && view.lines.len() == model.session.motors.len() + parts.len() && view.table.len() == 1 + view.lines.len(), "{}: {:?}", entry.id, view.table);
+        assert_eq!(view.table[0], ["Part", "Now [K]", "Settles at on the cycle [K]", "Rated rise [K]", "Settled, of the rating [%]"]);
+        for (k, motor) in model.session.motors.iter().enumerate() {
+            let id = format!("motor.{}.winding_temperature", motor.id);
+            let cells = row(&view.table, &format!("{} · Winding temperature rise", model.tr.tr(motor.key)));
+            assert!(shows(&cells[0], latest(&model, &id)) && cells[2] == "100.0" && view.lines[k].1.last().unwrap()[1] == latest(&model, &id), "{cells:?}");
+        }
+        for part in &parts {
+            let id = format!("temperature.{}", part.id);
+            let rise = latest(&model, &id);
+            let cells = row(&view.table, &format!("{} · {}", model.tr.tr(part.owner_key), model.tr.tr(&format!("quantity-{}-temperature", part.kind))));
+            assert!(shows(&cells[0], rise) && shows(&cells[2], model.config.f64(&format!("thermal.{}_max_rise_k", part.kind)).unwrap()), "{cells:?}");
+            if part.kind == "guide" {
+                assert!(rise > 0.0, "{}: the guide {} has not warmed", entry.id, part.id);
+            }
+        }
+
+        // The belt sections: tension and stretch now, against pretension and rating.
+        let belt = model.belt_view().unwrap();
+        let sections = machine.belt_sections();
+        assert!(belt.tension.len() == sections.len() && belt.stretch.len() == sections.len() && belt.pretension == 300.0 && belt.rating == Some(1500.0));
+        assert_eq!((belt.titles.clone(), belt.scale.clone()), (["Tension [N]".to_string(), "Stretch [mm]".into()], ["slack 0 N".to_string(), "twice the pretension 600 N".into()]));
+        assert_eq!(belt.table[0], ["Section", "Tension [N]", "Pretension [N]", "Allowed [N]", "Of the rating [%]", "Stretch [mm]"]);
+        for (i, section) in sections.iter().enumerate() {
+            let (tension, stretch) = (latest(&model, &format!("{}.tension", section.id)), latest(&model, &format!("{}.stretch", section.id)));
+            let cells = row(&belt.table, model.tr.tr(section.owner_key));
+            assert!(shows(&cells[0], tension) && cells[1] == "300.0" && shows(&cells[3], 100.0 * tension / 1500.0) && shows(&cells[4], stretch * 1e3), "{cells:?}");
+            assert!(belt.tension[i].1.last().unwrap()[1] == tension && belt.stretch[i].1.last().unwrap()[1] == stretch * 1e3);
+        }
+
+        // Over the analysed cycle: where windings and parts settle.
+        model.run_analysis(Analysis::Cycle);
+        model.inputs.compare_effect = "guide_friction".into();
+        model.run_analysis(Analysis::Compare);
+        wait_for_analysis(&mut model);
+        let view = model.thermal_view();
+        let (load, ..) = model.cycle_report.as_ref().unwrap();
+        for (k, motor) in model.session.motors.iter().enumerate() {
+            assert!(shows(&row(&view.table, &format!("{} · Winding temperature rise", model.tr.tr(motor.key)))[1], load.motors[k].winding_rise));
+        }
+        let budget = load.budget.as_ref().unwrap();
+        for part in &parts {
+            let lost = budget.rows.iter().find(|r| r.id == format!("power.{}", part.id)).unwrap().energy / load.duration;
+            let settles = lost * model.config.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap();
+            let cells = row(&view.table, &format!("{} · {}", model.tr.tr(part.owner_key), model.tr.tr(&format!("quantity-{}-temperature", part.kind))));
+            assert!(shows(&cells[1], settles), "{}: {cells:?} against {settles} K", entry.id);
+        }
+
+        // The comparison: one line per motor for the torque, on and off, and the difference of each.
+        let compare = model.compare_view().unwrap();
+        let (effect, found) = model.comparison.as_ref().unwrap();
+        assert!(effect == "guide_friction" && compare.effect == "Guide friction" && compare.title == "Torque [N m]", "{} {}", compare.effect, compare.title);
+        assert_eq!(compare.lines.len(), model.session.motors.len());
+        assert_eq!(compare.table[0], ["Signal", "Peak of on − off [N m]", "RMS of on − off [N m]"]);
+        for ((name, on, off), motor) in compare.lines.iter().zip(&model.session.motors) {
+            let i = found.signals.iter().position(|s| s.id == format!("motor.{}.torque", motor.id)).unwrap();
+            let (peak, rms) = found.difference(i);
+            let cells = row(&compare.table, name);
+            assert!(shows(&cells[0], peak) && shows(&cells[1], rms) && peak > 0.0 && on != off, "{cells:?}");
+        }
+        model.set_language("de");
+        assert_eq!(model.thermal_view().table[0][0], "Bauteil");
+        assert_eq!(model.belt_view().unwrap().table[0][0], "Abschnitt");
+        assert_eq!(model.compare_view().unwrap().effect, "Führungsreibung");
+        model.clear(Analysis::Compare);
+        assert!(model.compare_view().is_none());
+    }
+}
+
+/// The thermal table's share of the rating is that of the rise where a part settles on the analysed cycle, not of
+/// the rise now (minutes into a climb of many minutes it is a few percent), and it is marked above 100 %; the checks
+/// table judges the same settled rise. A guide of 20 K/W settles far above its rating.
+#[test]
+fn the_thermal_share_is_that_of_the_settled_rise_and_marked_above_the_rating() {
+    use toml::Value;
+    for entry in MACHINES.iter().copied() {
+        let mut model = Model::new(entry, "en");
+        model.set_param("effects.part_heating", Value::Boolean(true));
+        model.set_param("thermal.guide_resistance_k_w", Value::Float(20.0));
+        model.command(Command::StartCycle);
+        simulate(&mut model, 0.5);
+        model.run_analysis(Analysis::Cycle);
+        wait_for_analysis(&mut model);
+        let view = model.thermal_view();
+        let (load, ..) = model.cycle_report.as_ref().unwrap();
+        let rated = model.config.f64("thermal.guide_max_rise_k").unwrap();
+        let (_, settles) = load.part_rises.iter().find(|(part, _)| part.id == "guide_x").unwrap();
+        let owner = (entry.build)(&model.config).unwrap().thermal_parts().into_iter().find(|part| part.id == "guide_x").unwrap().owner_key;
+        let cells = row(&view.table, &format!("{} · Guide temperature rise", model.tr.tr(owner)));
+        let share = 100.0 * settles / rated;
+        assert!(share > 100.0 && number(&cells[0]) < 0.1 * settles, "{}: {cells:?}", entry.id);
+        assert!(shows(&cells[1], *settles) && cells[3] == format!("{} (above the rating)", cells[3].split(' ').next().unwrap()) && shows(cells[3].split(' ').next().unwrap(), share), "{}: {cells:?} against {share} %", entry.id);
+        // The checks table: the hottest guide where it settles, against its rated rise.
+        let checks = &model.cycle_tables()[2];
+        let check = row(checks, "Guide temperature rise, settled [K]");
+        let hottest = load.part_rises.iter().filter(|(part, _)| part.kind == "guide").map(|(_, rise)| *rise).fold(0.0, f64::max);
+        assert!(shows(&check[1], hottest) && shows(&check[2], rated) && check[3] == "FAIL", "{}: {check:?}", entry.id);
+    }
 }

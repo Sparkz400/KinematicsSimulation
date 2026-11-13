@@ -11,7 +11,9 @@ Diese Seite ist die deutsche Einstiegsseite. Die vollständige Projektbeschreibu
 Für eine Maschine, die in einer Konfigurationsdatei beschrieben ist, liefert es:
 
 - Spitzenmoment, Effektivmoment und kubisches Mittel des Moments, Drehzahl, Strom, Übertemperatur der Wicklung und Energie je Motor über einen Zyklus oder eine Bahn
-- ob dieser Zyklus die Grenzwerte der Bauteile in der Konfiguration einhält (Drehmoment-Drehzahl-Kennlinie, Wicklungstemperatur, Getriebe, Riemenkraft und schlaffes Trum, Zwischenkreis und Bremswiderstand, Führungsbelastung und Radialkraft auf die Welle, Einschwingen an der Greifposition)
+- wie viel vom Moment jedes Motors auf Trägheit, Schwerkraft, Reibung und Riemen entfällt, wo die Energie eines Zyklus verloren geht (jede Führung, Welle, jedes Getriebe, jeder Dämpfer, die Wicklungen, der Bremswiderstand) und was die Reibung jeder Führung an ihrem Arbeitspunkt tut
+- ob dieser Zyklus die Grenzwerte der Bauteile in der Konfiguration einhält (Drehmoment-Drehzahl-Kennlinie, Wicklungstemperatur, Getriebe, Riemenkraft, schlaffes Trum und Zahnbelastung, Zwischenkreis und Bremswiderstand, Führungsbelastung und Radialkraft auf die Welle, Einschwingen an der Greifposition)
+- wie viele Stunden die Lager der Scheibenwellen, die Planetenlager des Getriebes und die Führungen in diesem Zyklus halten, gegen eine geforderte Lebensdauer (ISO 281, die Getriebeformel von Siemens, die Formel der Führungshersteller; für den Riemen gibt es stattdessen eine zulässige Zahnbelastung, weil kein Riemenhersteller eine Lebensdauer veröffentlicht)
 - wie sich diese Ergebnisse verschieben, wenn ein unsicherer Wert an seiner unteren oder oberen Grenze liegt
 - wie weit die Werkzeugspitze von ihrer Bahn entfernt ist und was Reglerverstärkungen, Überschleifen und Input Shaping daran ändern
 - welcher Katalogmotor (und welches Getriebe) der leichteste ist, der besteht
@@ -24,8 +26,9 @@ Weitere Grenzen, die zählen:
 
 - Die Standardkonfigurationen beider Maschinen sind erfundene Platzhaltermaschinen, keine Produkte.
 - Der Motor ist eine einzige Ersatzwicklung (R, L, Gegen-EMK), die den Effektivwert des Strangstroms führt und höchstens das sqrt(3/2)-Fache der Zwischenkreisspannung erhält. Es gibt kein Drehstrommodell, keine PWM und keine Feldschwächung.
-- Die Lebensdauer der Führung ist die Katalogformel und nicht mehr. Sie ist nicht validiert.
+- Die Lebensdauern sind die Formeln der Hersteller und nicht mehr: keine Lebensdauerbeiwerte, ein Lager je Scheibenwelle, Tragzahlen, die zum Teil Schätzungen sind (Festo veröffentlicht für die EXCT keine). Sie sind nicht validiert.
 - Die OPC-UA-Anbindung wurde gegen einen Client geprüft, der mit derselben Bibliothek geschrieben ist, nicht gegen eine SPS.
+- Die FMU wurde geprüft, indem ihre Funktionen aus Rust und Python aufgerufen wurden; in Simulink, OpenModelica oder Dymola importiert oder mit einem unabhängigen FMI-Werkzeug geprüft wurde sie nicht.
 - Die Mausbedienung der App (Kamera, Bedienfelder) hat kein Mensch geprüft; Bildschirmfotos wurden geprüft.
 - Das Einlesen von Antriebsaufzeichnungen und die Parameteranpassung wurden an Aufzeichnungen geprüft, die der Simulator selbst erzeugt hat.
 
@@ -37,6 +40,7 @@ Benötigt wird eine stabile Rust-Toolchain, die die Edition 2024 unterstützt. A
 cargo run --release -p sim-app                    # die Desktop-App
 cargo run -q --release -p sim-cli -- list         # das Befehlszeilenprogramm
 cargo run --release -p sim-opcua -- t-gantry      # der OPC-UA-Server unter opc.tcp://127.0.0.1:4840/
+cargo build --release -p sim-cli -p sim-fmi       # dann: target/release/sim-cli fmu t-gantry --out t-gantry.fmu
 cargo test --workspace                            # alle Tests
 ```
 

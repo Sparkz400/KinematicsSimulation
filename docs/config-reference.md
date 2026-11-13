@@ -90,7 +90,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `cable_chain` | T E S | off | A cable chain whose moving mass grows with x, plus drag. On an inclined single axis the moving run is lifted too |
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
-| `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled. Elastic model only |
+| `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled, in the elastic and in the rigid model |
 | `temperature` | T E S | off | Scale factors on friction and belt stiffness, set by hand in `[temperature]` |
 
 **Drive and control**
@@ -107,11 +107,14 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `back_emf` | T E S | on | Back-EMF of the turning rotor in the winding |
 | `voltage_limit` | T E S | on | The winding voltage is limited to sqrt(3/2) times the DC link voltage |
 | `winding_heating` | T E S | on | The winding warms with its copper loss and its resistance rises with it |
+| `part_heating` | T E S | off | Each gearbox and guide warms with its loss power, as one thermal mass with the values of `[thermal]`. Only computed and shown (signals `temperature.<part>`, the thermal view, the 3D colours); nothing feeds back |
 | `torque_saturation` | T E S | on | The torque constant falls towards the maximum current |
 | `drive_delay` | T E S | on | Computation delay of the current and the velocity loop, in whole cycles |
 | `dc_link` | T E S | on | A simulated DC link per drive with capacitance, braking chopper, resistor and overvoltage trip, built from `[ratings]`. The ratings of T and S are placeholders. Off, the DC link voltage stays at `drive.bus_voltage_v` and the braking checks are estimates |
 | `shared_dc_link` | T E S | off | With `dc_link`: the drives of the machine share one DC link (one Line Module, as on a SINAMICS S120). What a braking motor feeds back a motoring one draws. The link has the capacitance of all drives together (each brings `ratings.dc_link_capacitance_uf`), one chopper with one braking resistor of the `[ratings]` powers, and one trip; every motor reports the same voltage and resistor power. Switched on while the machine runs, links that differ put their energies together. Changes nothing on a machine with one drive |
+| `regenerative_supply` | T E S | off | With `dc_link`: a regenerative supply (an Active Line Module, as on a SINAMICS S120). Above the bus level it feeds the DC link's energy back into the mains, up to `ratings.line_module_max_power_w`, of which `ratings.line_module_efficiency` arrives there; the braking resistor takes only what is beyond that power. Reported as energy fed back into the mains and as line module loss (analysis, budget, `analyze` column `mains_energy_j`, the app), and judged by `line-module-continuous` and `line-module-peak`. Off by default, so that earlier results stay as they were |
 | `fieldbus_delay` | T E S | off | The motor setpoints reach the drives some profile cycles late |
+| `fieldbus_jitter` | T E S | off | Each frame of motor setpoints takes from 0 to `profile.fieldbus_jitter_cycles` more cycles than the delay, evenly and pseudo-random from `drive.noise_seed` (every run the same); the drives use the newest frame that has arrived, so a late frame leaves them the one before. Works with or without `fieldbus_delay`. Off by default, so that earlier results stay as they were |
 | `sensor_noise` | T E S | off | Gaussian noise on the measured position and current, repeatable from a seed |
 
 **Motion planning**
@@ -282,6 +285,21 @@ Applied only with `effects.temperature` on. A cold machine has more friction and
 | `friction_scale` | T E S | factor | On the Coulomb, stiction and viscous levels of the guides | estimate |
 | `belt_stiffness_scale` | T E S | factor | On `belt.stiffness_ea_n` | estimate |
 
+## `[thermal]`
+
+With `effects.part_heating`. Each gearbox and guide is one thermal mass behind a thermal resistance to the air: under a steady loss P its temperature rise settles at resistance × P, with the time constant (see the [model reference](model-reference.md#thermal-model-and-view)). The rated rise is the limit of the checks `gearbox-thermal` and `guide-thermal` (judged only with the effect on), where the 3D view's heat colour reaches red and what the thermal view's share is of. Estimates: no maker of the parts in the configs publishes them. T and S: a size 60 to 70 planetary gearbox (surface about 0.04 m² at 15 W/(m² K) gives 1.7 K/W; 1.5 kg of steel and aluminium, about 800 J/K, gives 20 minutes) and a size 15 ball guide with its rail and the aluminium profile the rail is bolted to: the carriage runs over the whole stroke and spreads its heat along the rail, so about 0.35 m² of profile at 10 W/(m² K) (still air and radiation) with a fin efficiency of about 0.6 gives 0.5 K/W, and about 5 kg of aluminium and steel (5 kJ/K) 40 minutes. The first estimate, the carriage with a piece of rail at 2 K/W, put the guides of two of the three shipped configs above their rated rise (EXCT-30 X guide 101 K, single axis 50 K, against 40 K; default T-gantry 16.8 K). E: the same values; the EXCT has no gearbox (ratio 1: `[gearbox]` is the coupling), so no gearbox warms and its gearbox values are only there for a gearbox put in.
+
+| Key | In | Unit | Meaning | Source | Bounds (T S E) |
+| --- | --- | --- | --- | --- | --- |
+| `gearbox_resistance_k_w` | T E S | K/W | Thermal resistance of a gearbox to the air | estimate | 0.8 to 3.0 |
+| `gearbox_time_constant_s` | T E S | s | Thermal time constant of a gearbox | estimate | 600 to 2400 |
+| `gearbox_max_rise_k` | T E S | K | Rated rise of a gearbox: 90 °C on the housing at 40 °C around | estimate (typical maker limit) | none: a limit, like `[ratings]` |
+| `guide_resistance_k_w` | T E S | K/W | Thermal resistance of a guide (rail and the profile it is bolted to) to the air. 0.5 | estimate | 0.25 to 1.0 |
+| `guide_time_constant_s` | T E S | s | Thermal time constant of a guide. 2400 | estimate | 1200 to 4800 |
+| `guide_max_rise_k` | T E S | K | Rated rise of a guide: 80 °C at 40 °C around | estimate (typical maker limit) | none |
+
+With `effects.part_heating` the resistances move the two thermal checks and have bands; the time constants move no verdict. Without the effect nothing depends on these values, and their bounds get no runs: `verdicts --bands` and the sensitivity leave them out.
+
 ## `[axis.x]` and `[axis.z]`
 
 Limits of the motion planner per tool axis. `[axis.z]` exists on the T-gantry only (T E).
@@ -306,7 +324,7 @@ One drive per motor, all with the same settings.
 | `current_delay_cycles` | T E S | cycles | Current-loop cycles between computing the voltage and it acting. Whole number, 0 to 1000 | estimate | `drive_delay` |
 | `velocity_delay_cycles` | T E S | cycles | Velocity-loop cycles between computing the torque setpoint and it acting | estimate | `drive_delay` |
 | `kv_1_s` | T E S | 1/s | Position gain Kv | choice | always |
-| `velocity_kp_nm_s_rad` | T E S | N m s/rad | Velocity loop gain Kp. 0.08 in T and S, 0.6 in E. Stated for the rotor, gearbox and masses the config has as numbers; a part by name retunes it from there (see [`[parts]`](#parts)) | choice | always |
+| `velocity_kp_nm_s_rad` | T E S | N m s/rad | Velocity loop gain Kp. 0.04 in T, 0.025 in S (tuned with `sim-cli margins --bands` for at least 35° phase and 6 dB gain margin in every bounds run, with friction as configured and off; 0.08 before, which left T 12° and S 1°), 0.45 in E (tuned the same way: at least 38.6° and 8.3 dB; 0.6 before, 29.6° and 5.8 dB). Stated for the rotor, gearbox and masses the config has as numbers; a part by name retunes it from there (see [`[parts]`](#parts)) | choice | always |
 | `velocity_tn_s` | T E S | s | Velocity loop integral time Tn | choice | always |
 | `velocity_feedforward_factor` | T E S | factor | Weight of the velocity feedforward | choice | `velocity_feedforward` |
 | `torque_feedforward_factor` | T E S | factor | Weight of the torque feedforward | choice | `torque_feedforward` |
@@ -324,11 +342,11 @@ One drive per motor, all with the same settings.
 | `notch_bandwidth_hz` | T E S | Hz | Width of the notch | choice | `notch_filter` |
 | `encoder_noise_counts` | T E S | counts | Standard deviation of the noise on the measured position | estimate | `sensor_noise` |
 | `current_noise_a` | T E S | A | Standard deviation of the noise on the measured current | estimate | `sensor_noise` |
-| `noise_seed` | T E S | – | Seed of the noise. A whole number, not negative. Each motor has a stream of its own | choice | `sensor_noise` |
+| `noise_seed` | T E S | – | Seed of the noise and of the fieldbus jitter. A whole number, not negative. Each motor has a stream of its own, and the jitter one more | choice | `sensor_noise`, `fieldbus_jitter` |
 
 ## `[ratings]`
 
-What the parts allow. `sim-cli verdicts` judges a cycle against these. **A rating that is left out is not judged.** With `effects.dc_link` the capacitance, the braking threshold, the resistor's peak power and the trip level are required, because the simulated DC link is built from them, and the threshold has to lie between `drive.bus_voltage_v` and `dc_link_overvoltage_v`. `verdicts` refuses a threshold at or below `drive.bus_voltage_v` with the effect off as well: it would leave the capacitors a negative room.
+What the parts allow. `sim-cli verdicts` judges a cycle against these. **A rating that is left out is not judged.** With `effects.dc_link` the capacitance, the braking threshold, the resistor's peak power, the trip level and the discharge time constant are required, because the simulated DC link is built from them (with `effects.regenerative_supply` also the line module's maximum power and efficiency), and the threshold has to lie between `drive.bus_voltage_v` and `dc_link_overvoltage_v`. `verdicts` refuses a threshold at or below `drive.bus_voltage_v` with the effect off as well: it would leave the capacitors a negative room.
 
 | Key | In | Unit | Meaning | Judged by | Source in the shipped configs |
 | --- | --- | --- | --- | --- | --- |
@@ -341,12 +359,23 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `gearbox_max_input_speed_rpm` | T S | r/min | Highest speed at the gearbox input. Not in the catalogue's gearbox files | `gearbox-input-speed` | placeholder |
 | `shaft_max_radial_load_n` | T E S | N | Radial load the belt may put on a pulley shaft. Not in the gearbox files; not published by Festo | `gearbox-radial-load` | placeholder (T S), estimate (E) |
 | `guide_max_load_n` | T E S | N | Highest load on a guide | `guide-load` | placeholder (T S), estimate (E) |
-| `guide_dynamic_load_rating_n` | T E S | N | Dynamic load rating C of the life estimate L10 = (C / P)³ · 50 km | `guide_life_km` of `analyze` | placeholder (T S), estimate (E) |
+| `guide_dynamic_load_rating_n` | T E S | N | Dynamic load rating C of the life estimate L10 = (C / P)³ · 50 km | `guide_life_km` of `analyze`; in hours `guide-life` | placeholder (T S), estimate (E) |
+| `required_life_h` | T E S | h | The life bearings, gearbox and guide are to last. 20000 h in all three, the life Siemens rates its planetary gearboxes' planet bearings for | `pulley-bearing-life`, `gearbox-life`, `guide-life` (each passes at or above it) | choice |
+| `pulley_bearing_load_rating_n` | T E S | N | Dynamic load rating C of the bearing that takes the belt's pull on a pulley shaft, for the rating life (C / P)³ · 10⁶ / (60 n) h. T S: 8469 N, the output bearing of a Siemens NRB120 (1500 N for 30000 h at 100 r/min, Table 7-14 of the planetary gearbox configuration manual 01/2023; the NRB060 whose torques T S take would allow 340 N, less than their 600 N of pretension on the shaft). E: 9500 N for two deep-groove ball bearings of about 5.85 kN that share the pull (a pair lasts as one bearing of 1.62 C) | `pulley-bearing-life` | placeholder from the catalogue (T S); estimate (E), bounds 8000 to 12000 N |
+| `gearbox_reference_speed_rpm` | T E S | r/min | Output speed at which a planetary gearbox's planet bearings last 20000 h at the rated torque, for Siemens' life formula. 175 r/min, the NRB060 with ratio 5 (Table 7-15). A gearbox by name does not set it. In E not used: no gearbox and no `gearbox_rated_torque_nm` | `gearbox-life` | catalogue |
+| `belt_tooth_load_rpm`, `belt_tooth_load_n_cm` | T E S | r/min, N/cm | Two arrays of the same length, speeds rising: the specific tooth load the belt's teeth allow per cm of width and tooth in mesh, at the pulley's speed; interpolated, held beyond the ends. Megadyne's table for open-ended AT5 (MEGALINEAR handbook 02.2026, page 52). Not in the parameter panel (arrays) | `belt-tooth-load` | catalogue (E); placeholder (T S) |
+| `belt_width_mm` | T E S | mm | Belt width. E: 30 mm (Festo); T S: 25 mm | `belt-tooth-load` | catalogue (E), placeholder (T S) |
+| `belt_service_factor` | T E S | – | Factor on the effective pull at the pulley. 1.4, Megadyne's factor for low shock loads (Table 4 of the handbook) | `belt-tooth-load` | choice |
+| `belt_teeth_in_mesh` | T E S | – | Teeth in mesh on a driven pulley; at most 12 count, as the handbook says. 10 in all three (half of the EXCT-30's 20-tooth pulley) | `belt-tooth-load` | estimate, bounds 6 to 12 (T S), 7 to 12 (E) |
 | `dc_link_capacitance_uf` | T E S | µF | DC link capacitance of one drive | `dc-link-energy` | placeholder (T S); estimate from S120 data (E) |
 | `braking_threshold_v` | T E S | V | DC link voltage at which the chopper switches the braking resistor in. T S: 224.65 V. A motor by name scales it with the DC link voltage | `dc-link-energy` | placeholder (T S); estimate (E) |
 | `braking_resistor_continuous_w` | T E S | W | Continuous power of the braking resistor | `braking-resistor-continuous` | placeholder (T S); estimate (E) |
 | `braking_resistor_peak_w` | T E S | W | Peak power of the braking resistor. The simulated resistor never takes more | `braking-resistor-peak` | placeholder (T S); estimate (E) |
 | `dc_link_overvoltage_v` | T E S | V | DC link voltage at which the drive trips. T S: 257.6 V. A motor by name scales it with the DC link voltage | `dc-link-overvoltage` (only with `effects.dc_link`) | placeholder (T S); estimate (E) |
+| `dc_link_discharge_time_constant_s` | T E S | s | With `effects.dc_link`: time constant R C with which a disabled drive's DC link discharges through its bleeder and the drive's own consumption, down to the bus level the rectifier holds. 130 s in all three: Siemens asks to wait 5 minutes after switching off for the DC link to discharge, taken as 600 V falling to 60 V, 300 s / ln 10. Required with `effects.dc_link`. No cycle uses it, so its bounds get no runs | none | estimate, bounds 30 to 300 s |
+| `line_module_rated_power_w` | T E S | W | With `effects.regenerative_supply`: rated power of the line module. 16 kW, the smallest S120 Active Line Module 6SL3130-7TE21-6AA4 in [`line_modules_s120.csv`](../catalog/siemens/line_modules_s120.csv) | `line-module-continuous`: the mean power through it, drawn and fed back | catalogue |
+| `line_module_max_power_w` | T E S | W | With `effects.regenerative_supply`: the most it feeds back; the simulated line module never feeds back more. 35 kW, the same module's maximum power. Required with the effect | `line-module-peak`: the highest power through it either way | catalogue |
+| `line_module_efficiency` | T E S | fraction | With `effects.regenerative_supply`: the share of what it feeds back that arrives in the mains; the rest is its loss. Above 0, at most 1. 0.98 from the catalogue's 0.28 kW loss at 16 kW; at the small powers of these machines a guess. Required with the effect; its bounds get runs only with it | none | estimate, bounds 0.95 to 0.99 |
 
 The DC link ratings of T and S are placeholders for the drive those configs were written for: a DC link of 155.13 V, with 6.2 J of room in 470 µF up to the threshold. When a catalogue motor goes into such a config, the threshold and the trip level keep their ratio to the DC link voltage (782 V and 897 V at 540 V); capacitance and resistor powers stay. See the [user guide](user-guide.md#check-a-real-catalogue-machine).
 
@@ -356,12 +385,15 @@ The DC link ratings of T and S are placeholders for the drive those configs were
 | --- | --- | --- | --- | --- | --- |
 | `cycle_s` | T E S | s | Cycle of the profile generator. Can be changed while a motion is under way | choice | always |
 | `fieldbus_delay_cycles` | T E S | cycles | Whole profile cycles between the controller computing the motor setpoints and the drives using them. 0 to 1000 | datasheet, measurement | `fieldbus_delay` |
+| `fieldbus_jitter_cycles` | T E S | cycles | The most whole profile cycles a frame can take beyond the delay; each frame takes 0 to this many, evenly. 0 to 1000; 1 in all three files | measurement | `fieldbus_jitter` |
 | `setpoint_interval_s` | T E S | s | Setpoints from the PLC are interpolated over this interval. A whole multiple of `cycle_s` | choice | always (OPC UA) |
 | `blend_time_s` | T E S | s | How long before the end of a cycle segment the next one may start | choice | `corner_blending` |
 | `shaper_frequency_hz` | T E S | Hz | Resonance the input shaper is set to | measurement, or the machine's own figure | `input_shaping` |
 | `shaper_damping` | T E S | fraction | Damping ratio of that resonance. From 0 to below 1 | estimate, measurement | `input_shaping` |
+| `shaper2_frequency_hz` | T E S | Hz | A second resonance: a second ZVD shaper at this frequency is convolved with the first, so that both are suppressed; each move then takes both periods longer. Not negative; 0 for none (T S). E: 17.5 Hz, the peak of the tool's response, so that the worst corner of the bounds passes `settling` (0.095 mm against 0.115 mm with the 25 Hz shaper alone). It does not follow the pose | measurement (`sim-cli sweep`), or the machine's own figure | `input_shaping` |
+| `shaper2_damping` | T E S | fraction | Damping ratio of the second resonance. From 0 to below 1 | estimate, measurement | `input_shaping`, with `shaper2_frequency_hz` above 0 |
 | `torque_reserve` | T E S | fraction | Share of the torque-speed curve a time-optimal path may use. Above 0, at most 1 | choice | `--time-optimal` |
-| `path_tolerance_m` | T E S | m | How far a planned path of lines and arcs may leave them, so that transition curves can take it from a line into an arc at speed. The deviation is L² / (24 r) for curves of length L at an arc of radius r, and is reported. Not negative; 0 (in all three files) plans the path as given | choice | `--path`, and the app's Path |
+| `path_tolerance_m` | T E S | m | How far a planned path may leave the lines, arcs and splines of its file, so that transition curves can take it from a line into an arc at speed, and a spline's end can be eased to the curvature of the line or arc it meets. The deviation is L² / (24 r) for curves of length L at an arc of radius r, 0.01728 dk l² for a spline eased over l against a step dk of the curvature, and is reported. Not negative; 0 (in all three files) plans the path as given | choice | `--path`, and the app's Path |
 
 ## `[bounds]`
 
@@ -374,15 +406,15 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 
 | Config | Bounded values | What is bounded | What is not |
 | --- | --- | --- | --- |
-| T | 22 | Belt stiffness, pretension, damping, tooth force; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values | Masses, inertias, backlash; values of effects that are off by default; the shape of the friction curve (Stribeck speed, bristles, preload) |
-| S | 14 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
-| E | 61 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise and the estimated ratings | The ripple and cogging orders and the loop gains; all `[catalogue]` values |
+| T | 29 | Belt stiffness, pretension, damping, tooth force; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values; the thermal resistances and time constants of `[thermal]`; the DC link's discharge time constant and the line module's efficiency; the belt's teeth in mesh | Masses, inertias, backlash; values of effects that are off by default, but for `[thermal]`; the shape of the friction curve (Stribeck speed, bristles, preload); the rated rises of `[thermal]` |
+| S | 21 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
+| E | 69 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them) and the thermal resistances and time constants | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]` |
 
 Keys with bounds in one config only:
 
 | Bounded in T and S, not in E | Bounded in E only |
 | --- | --- |
-| `belt.stiffness_ea_n` (a catalogue value in E), `gearbox.efficiency` (1.0 in E) | `geometry.span_min_m`, `.z_com_drop_m`, `.guide_spacing_m`, `.z_tool_drop_m`; `belt.mass_kg_m`, `.tooth_mesh_stiffness_n_m`, `.damping_time_s`; `friction_x` and `friction_z`: `.stribeck_m_s`, `.bristle_stiffness_n_m`, `.bristle_damping_n_s_m`, `.preload_n`; `motor.friction_smoothing_rad_s`, `.resistance_ohm`, `.inductance_h`, `.brake_torque_nm`; `pulley.inertia_kgm2`; `frame.mass_kg`; all of `idler`, `cable_chain`, `process`, `hard_stop`; `drive.encoder_noise_counts`, `.current_noise_a`; `ratings.dc_link_capacitance_uf`, `.braking_threshold_v`, `.braking_resistor_continuous_w`, `.braking_resistor_peak_w`, `.dc_link_overvoltage_v`, `.shaft_max_radial_load_n`, `.guide_max_load_n`, `.guide_dynamic_load_rating_n` |
+| `belt.stiffness_ea_n` (a catalogue value in E), `gearbox.efficiency` (1.0 in E) | `geometry.span_min_m`, `.z_com_drop_m`, `.guide_spacing_m`, `.z_tool_drop_m`; `belt.mass_kg_m`, `.tooth_mesh_stiffness_n_m`, `.damping_time_s`; `friction_x` and `friction_z`: `.stribeck_m_s`, `.bristle_stiffness_n_m`, `.bristle_damping_n_s_m`, `.preload_n`; `motor.friction_smoothing_rad_s`, `.resistance_ohm`, `.inductance_h`, `.brake_torque_nm`; `pulley.inertia_kgm2`; `frame.mass_kg`; all of `idler`, `cable_chain`, `process`, `hard_stop`; `drive.encoder_noise_counts`, `.current_noise_a`; `ratings.dc_link_capacitance_uf`, `.braking_threshold_v`, `.braking_resistor_continuous_w`, `.braking_resistor_peak_w`, `.dc_link_overvoltage_v`, `.shaft_max_radial_load_n`, `.guide_max_load_n`, `.guide_dynamic_load_rating_n`, `.pulley_bearing_load_rating_n` |
 
 ## `[start]`
 

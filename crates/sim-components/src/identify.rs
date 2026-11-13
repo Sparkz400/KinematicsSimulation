@@ -9,7 +9,7 @@
 
 use crate::analysis::SweepPoint;
 use crate::trace::{Trace, TraceError, replay};
-use sim_core::{Config, Machine, MachineEntry};
+use sim_core::{Config, ConfigError, Machine, MachineEntry};
 
 /// Rows on either side of a row that are averaged with it: 11 rows in all, 11 ms in a trace from a run.
 /// Long enough to average the belt's ringing and the noise, short against a ramp of the profile.
@@ -159,15 +159,25 @@ pub struct Resonance {
 ///
 /// A trace of a move does not do for this: the closed loops and friction damp the ringing, and the belt's
 /// stiffness changes along the way. A sweep that does not have the dip and both its flanks gives `None`.
+///
+/// A machine with more than one spring shows more than one dip (the first default machine has three,
+/// near 22, 62 and 107 Hz); this is the lowest in frequency, the load swinging on the whole drive train, so that the config's
+/// sweep and the measured one are compared at the same dip. The points may come in any order.
 pub fn resonance(sweep: &[SweepPoint]) -> Option<Resonance> {
+    let mut sweep = sweep.to_vec();
+    sweep.sort_by(|a, b| a.frequency.total_cmp(&b.frequency));
     // Gain times frequency is level for a pure inertia, so the dip is not hidden in the 1 / f slope.
     let level: Vec<f64> = sweep.iter().map(|p| p.gain * p.frequency).collect();
-    let lowest = (0..level.len()).min_by(|&a, &b| level[a].total_cmp(&level[b]))?;
     // The flanks, where the response has twice the power of the lowest point, are steep: noise moves
     // them little, where it can move the lowest point by a whole step.
-    let limit = level[lowest] * std::f64::consts::SQRT_2;
-    let below = (0..lowest).rev().find(|&i| level[i] > limit)?;
-    let above = (lowest + 1..level.len()).find(|&i| level[i] > limit)?;
+    let flanks = |lowest: usize| {
+        let limit = level[lowest] * std::f64::consts::SQRT_2;
+        let below = (0..lowest).rev().find(|&i| level[i] > limit)?;
+        let above = (lowest + 1..level.len()).find(|&i| level[i] > limit)?;
+        // Not a dip of its own where a deeper point lies between its flanks.
+        level[below..=above].iter().all(|&l| l >= level[lowest]).then_some((limit, below, above))
+    };
+    let (limit, below, above) = (0..level.len()).find_map(flanks)?;
     let crossing = |outside: usize, inside: usize| {
         let share = (limit - level[inside]) / (level[outside] - level[inside]);
         sweep[inside].frequency + share * (sweep[outside].frequency - sweep[inside].frequency)
@@ -176,6 +186,42 @@ pub fn resonance(sweep: &[SweepPoint]) -> Option<Resonance> {
     let frequency = (low * high).sqrt();
     let step = (sweep[below + 1].frequency - sweep[below].frequency).max(sweep[above].frequency - sweep[above - 1].frequency);
     Some(Resonance { frequency, damping: (high - low) / (2.0 * frequency), frequency_error: 0.5 * step })
+}
+
+/// A frequency response as `sim-cli sweep` writes it: the columns `frequency_hz` and `gain_rad_s_per_nm`. A
+/// phase is not read; the fit does not use it.
+pub fn parse_sweep(text: &str) -> Result<Vec<SweepPoint>, TraceError> {
+    let table = crate::trace::columns(text, &["frequency_hz".to_string(), "gain_rad_s_per_nm".to_string()])?;
+    Ok(table[0].iter().zip(&table[1]).map(|(&frequency, &gain)| SweepPoint { frequency, gain, phase_deg: 0.0 }).collect())
+}
+
+/// Stage 2 done: the resonance of the config's own sweep and that of the measured one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SweepFit {
+    pub config: Resonance,
+    pub fitted: Resonance,
+}
+
+impl SweepFit {
+    /// The factor the belt stiffness is off by, measured over config frequency squared, and its standard error.
+    pub fn stiffness(&self) -> (f64, f64) {
+        let factor = (self.fitted.frequency / self.config.frequency).powi(2);
+        (factor, 2.0 * factor * self.fitted.frequency_error / self.fitted.frequency)
+    }
+
+    /// What to change in the config, as a translation key with its argument.
+    pub fn advice(&self) -> (&'static str, String) {
+        let (factor, error) = self.stiffness();
+        ("fit-stiffness", format!("× {factor:.3} ± {error:.3}"))
+    }
+}
+
+/// Stage 2 on a measured sweep, taken on `motor` with a torque `amplitude`: the config's own sweep at the same
+/// frequencies, and the resonance of both. `None` where either shows no dip with both flanks.
+pub fn fit_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, measured: &[SweepPoint], amplitude: f64) -> Result<Option<SweepFit>, ConfigError> {
+    let frequencies: Vec<f64> = measured.iter().map(|p| p.frequency).collect();
+    let config = crate::analysis::frequency_sweep(entry, cfg, motor, &frequencies, amplitude)?;
+    Ok(resonance(&config).zip(resonance(measured)).map(|(config, fitted)| SweepFit { config, fitted }))
 }
 
 #[cfg(test)]
@@ -196,5 +242,23 @@ mod tests {
         assert!((found.damping - d).abs() < 0.05 * d, "{found:?}");
         // Half a dip is none.
         assert_eq!(resonance(&sweep[..25]), None);
+        // From high to low frequency, the same dip. The damping came out negative.
+        let falling: Vec<SweepPoint> = sweep.iter().rev().copied().collect();
+        assert_eq!(resonance(&falling), Some(found));
+    }
+
+    /// Of two dips the lowest in frequency is reported, also where the one above it is deeper: the first default machine's
+    /// dips at 22 and 62 Hz are about as deep, and which was the deepest changed with the amplitude and the
+    /// stiffness, so a fit could compare the config's one dip with the other one measured.
+    #[test]
+    fn of_two_dips_the_lowest_in_frequency_is_reported() {
+        let dip = |f: f64, fa: f64, d: f64| (fa * fa - f * f).hypot(2.0 * d * fa * f) / (fa * fa);
+        let sweep: Vec<SweepPoint> = crate::analysis::log_spaced(10.0, 200.0, 200)
+            .into_iter()
+            .map(|f| SweepPoint { frequency: f, gain: 1000.0 * dip(f, 22.0, 0.05).min(1.0) * dip(f, 62.0, 0.01).min(1.0) / f, phase_deg: 0.0 })
+            .collect();
+        // The dip at 62 Hz goes down to 0.02, the one at 22 Hz to 0.1.
+        let found = resonance(&sweep).unwrap();
+        assert!((found.frequency - 22.0).abs() < 0.5 && (found.damping - 0.05).abs() < 0.01, "{found:?}");
     }
 }

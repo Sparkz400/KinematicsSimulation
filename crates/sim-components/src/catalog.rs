@@ -3,7 +3,7 @@
 //!
 //! The data files of `catalog/` are compiled in, so a front end needs no path to them.
 
-use crate::analysis::{CycleLoad, Verdict, analyse_cycle, verdicts};
+use crate::analysis::{CycleLoad, Verdict, analyse_cycle_with, verdicts};
 use crate::sim::Sim;
 use sim_core::{Config, ConfigError, MachineEntry};
 use std::collections::HashMap;
@@ -201,8 +201,8 @@ impl Candidate {
         self.result.as_ref().is_some_and(|(_, verdicts)| verdicts.iter().all(|v| v.ok))
     }
 
-    /// The check closest to (or furthest beyond) its limit, with value over limit. Only checks whose
-    /// value must stay below a positive limit count. Two checks of the DC link do not count while they
+    /// The check closest to (or furthest beyond) its limit, with value over limit (`analysis::utilisation`: for a
+    /// life limit over value). The belt's slack does not count. Two checks of the DC link do not count while they
     /// pass, because their ratio is no measure of how close the cycle is to failing: with a braking resistor
     /// behind them the capacitors fill to their limit by design, in every cycle that brakes hard enough, and
     /// the resistor's checks say what that costs; and the voltage is never below the bus, so its ratio to
@@ -217,7 +217,7 @@ impl Candidate {
         }
         let resistor = |v: &Verdict| verdicts.iter().any(|w| w.motor == v.motor && w.check.starts_with("braking-resistor"));
         let by_design = |v: &Verdict| v.ok && (v.check == "dc-link-overvoltage" || v.check == "dc-link-energy" && resistor(v));
-        verdicts.iter().filter(|v| v.limit > 0.0 && v.check != "belt-slack" && !by_design(v)).map(|v| (v.check, v.value / v.limit)).max_by(|a, b| a.1.total_cmp(&b.1))
+        verdicts.iter().filter(|v| v.limit > 0.0 && v.check != "belt-slack" && !by_design(v)).map(|v| (v.check, crate::analysis::utilisation(v))).max_by(|a, b| a.1.total_cmp(&b.1))
     }
 }
 
@@ -311,7 +311,7 @@ pub fn search_motors(entry: &MachineEntry, cfg: &Config, supply: &str, wanted: &
                 Err(_) => candidate.refused = "config",
                 // The axis limits ask for more speed or torque than this motor has.
                 Ok(sim) if !sim.limit_violations.is_empty() => candidate.refused = sim.limit_violations[0].key,
-                Ok(mut sim) => match analyse_cycle(&mut sim) {
+                Ok(mut sim) => match analyse_cycle_with(&mut sim, false) {
                     Err(e) => candidate.refused = e.key,
                     Ok(load) => match verdicts(&with_parts, &load) {
                         Ok(v) => candidate.result = Some((load, v)),

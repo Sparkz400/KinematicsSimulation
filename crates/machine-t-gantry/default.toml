@@ -54,6 +54,8 @@ input_shaping = false
 back_emf = true
 voltage_limit = true
 winding_heating = true
+# Gearboxes and guides warm with their losses (see [thermal]). Only computed and shown; nothing feeds back.
+part_heating = false
 torque_saturation = true
 drive_delay = true
 # The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.
@@ -65,8 +67,16 @@ dc_link = true
 # braking motor feeds back, a motoring one draws. The link has the capacitance of all drives together, one
 # chopper with one braking resistor of the [ratings] powers, and one trip.
 shared_dc_link = false
+# With dc_link: a regenerative supply (an Active Line Module, as on a SINAMICS S120) holds the DC link at the bus
+# level from above too and feeds what the motors give back into the mains, up to its maximum power, instead of
+# the braking resistor. Its values are in [ratings]. Off by default, so that earlier results stay as they were.
+regenerative_supply = false
 # The motor setpoints reach the drives some profile cycles late.
 fieldbus_delay = false
+# Each frame of motor setpoints takes up to profile.fieldbus_jitter_cycles more than the delay, pseudo-random from
+# drive.noise_seed (every run the same); a late frame leaves the drives the one before. Off by default, so that
+# earlier results stay as they were.
+fieldbus_jitter = false
 # Noise on the measured position and current.
 sensor_noise = false
 # With input_shaping: the shaper is set to the resonance the machine reports for the planned pose.
@@ -146,7 +156,7 @@ start_temperature_rise_k = 0.0
 max_current_a = 9.5
 torque_constant_at_max_current_nm_a = 0.40
 # With effects.holding_brake: while the drives are disabled, a brake holds each motor shaft up to this
-# torque and slips with it beyond. Elastic model only.
+# torque and slips with it beyond.
 brake_torque_nm = 1.0
 
 [gearbox]
@@ -202,6 +212,22 @@ damping_n_s_m = 5.0e3
 friction_scale = 1.5
 belt_stiffness_scale = 1.1
 
+# With effects.part_heating: each gearbox and guide is one thermal mass that warms with its loss power (the signals
+# power.gearbox_*, power.guide_*) through a thermal resistance to the air: its rise settles at resistance times the
+# mean loss, with the time constant. The rated rises are the limits the 3D view colours up to. Nothing feeds back:
+# friction and efficiency stay as they are. Estimates for a size 60 to 70 planetary gearbox and a size 15 ball guide.
+# The guide's heat goes into its rail and the aluminium profile the rail is bolted to, over the whole stroke: about
+# 0.35 m2 of profile at 10 W/(m2 K) (still air and radiation) with a fin efficiency of about 0.6 gives 0.5 K/W, and
+# about 5 kg of aluminium and steel (5 kJ/K) gives 40 minutes. The carriage alone would give 2 K/W, which put the
+# guides of two of the three shipped configs above their rated rise (see docs/config-reference.md).
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+guide_resistance_k_w = 0.5
+guide_time_constant_s = 2400.0
+guide_max_rise_k = 40.0
+
 [axis.x]
 max_velocity_m_s = 0.8
 max_acceleration_m_s2 = 8.0
@@ -222,7 +248,13 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-velocity_kp_nm_s_rad = 0.08
+# Velocity loop gain, tuned with `sim-cli margins t-gantry --bands` (the open-loop response of each motor's velocity
+# loop, with every [bounds] value at its low and at its high bound) for a phase margin of at least 35 degrees and a
+# gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise
+# friction adds no damping to the loop). Found: at least 47.4 degrees and 8.2 dB (config as it is: 54 degrees,
+# 9.0 dB); friction off at least 39.1 degrees and 7.3 dB. 0.08 left 12 degrees and 2 dB: motor B hunted in the
+# gearbox backlash at a cruise.
+velocity_kp_nm_s_rad = 0.04
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -247,6 +279,7 @@ notch_bandwidth_hz = 20.0
 # and on the measured current. Pseudo-random from the seed, so every run is the same; each motor has a stream of its own.
 encoder_noise_counts = 1.0
 current_noise_a = 0.01
+# The seed also draws the fieldbus jitter (effects.fieldbus_jitter), from a stream of its own.
 noise_seed = 1
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
@@ -270,6 +303,16 @@ braking_resistor_peak_w = 500.0
 # With effects.dc_link the four values above are also what the simulated DC link is built from, and the
 # drive trips when the voltage passes this one.
 dc_link_overvoltage_v = 257.6
+# With effects.dc_link: a disabled drive's DC link discharges through its bleeder and the drive's own consumption
+# with this time constant, down to the bus level the rectifier holds. An estimate: Siemens asks to wait 5 minutes
+# after switching off for the DC link to discharge, taken as 600 V falling to 60 V, 300 s / ln 10.
+dc_link_discharge_time_constant_s = 130.0
+# With effects.regenerative_supply: the line module that feeds back, the smallest SINAMICS S120 Active Line Module
+# 6SL3130-7TE21-6AA4 of catalog/siemens/line_modules_s120.csv (rated 16 kW, 35 kW maximum). Its efficiency is an
+# estimate from the catalogue's 0.28 kW loss at rated power; at the small powers of this machine it is a guess.
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
 # Placeholders: neither is in the catalogue's gearbox files. Highest speed at the gearbox input, and the
 # radial load its output shaft takes from the belt.
 gearbox_max_input_speed_rpm = 13000.0
@@ -278,12 +321,39 @@ shaft_max_radial_load_n = 1500.0
 # life estimate L10 = (C / P)^3 * 50 km.
 guide_max_load_n = 2000.0
 guide_dynamic_load_rating_n = 5000.0
+# The life the parts are to last, against which the lives below are judged: 20000 h, the life Siemens rates its
+# planetary gearboxes' planet bearings for.
+required_life_h = 20000.0
+# Dynamic load rating C of the bearing that takes the belt's pull on a pulley shaft (here the gearbox output),
+# for its rating life (C / P)^3 * 10^6 / (60 n) h. Placeholder: the output bearing of a Siemens NRB120, whose
+# 1500 N of average radial force for 30000 h at 100 r/min in the middle of the shaft (Table 7-14 of the
+# configuration manual "Planetary gearboxes for S-1FK2 and S-1FT2 servomotors", 01/2023) give
+# C = 1500 N * (30000 * 60 * 100 / 10^6)^(1/3) = 8469 N. The NRB060 whose torques are taken above allows 340 N
+# there (C = 1920 N), the NRB080 650 N (C = 3670 N): less than the 600 N the belt's pretension alone puts on
+# the shaft; on this cycle they would last about 2500 h and 17000 h.
+pulley_bearing_load_rating_n = 8469.0
+# The output speed at which the planet bearings last 20000 h at the rated torque, for the gearbox life
+# 20000 h * (n2B / n2) * (M2N / M2eq)^(10/3): 175 r/min for the NRB060 with ratio 5 (Table 7-15 of the manual).
+# A gearbox named in [parts] does not set it.
+gearbox_reference_speed_rpm = 175.0
+# The belt's teeth, by Megadyne's MEGALINEAR handbook (02.2026, page 9): the effective pull at a pulley times a
+# service factor against the specific tooth load the teeth allow at the pulley's speed, times the width and the
+# teeth in mesh. Placeholders for a 25 mm AT5 steel-cord belt: the handbook's table for open-ended AT5 (page 52,
+# N/cm per tooth at the pulley's r/min), the factor for low shock loads (1.4, its Table 4), and 10 of the
+# pulley's 25 teeth in mesh (an estimate; the handbook counts at most 12).
+belt_tooth_load_rpm = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 200.0, 300.0, 400.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 5000.0, 8000.0]
+belt_tooth_load_n_cm = [35.0, 35.0, 35.0, 34.0, 34.0, 34.0, 32.0, 31.0, 30.0, 29.0, 27.0, 26.0, 24.0, 22.0, 19.0, 18.0, 16.0, 13.0]
+belt_width_mm = 25.0
+belt_service_factor = 1.4
+belt_teeth_in_mesh = 10.0
 
 [profile]
 cycle_s = 1.0e-3
 # With effects.fieldbus_delay: whole profile cycles between the controller computing the motor setpoints
 # (position, speed, torque feedforward) and the drives using them.
 fieldbus_delay_cycles = 1
+# With effects.fieldbus_jitter: the most whole profile cycles a frame can take beyond the delay, evenly from 0 to it.
+fieldbus_jitter_cycles = 1
 # Setpoints from the PLC are interpolated over this interval.
 setpoint_interval_s = 10.0e-3
 # With effects.corner_blending on: how long before the end of a cycle segment the next one may
@@ -293,6 +363,10 @@ blend_time_s = 0.15
 # so that the swings they start cancel. Tuned to one resonance; each move takes one period longer.
 shaper_frequency_hz = 25.0
 shaper_damping = 0.03
+# With effects.input_shaping: a second ZVD shaper, convolved with the first, for a second resonance (nine copies of
+# the plan; each move takes the periods of both longer). 0: none.
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
 # For a path timed as fast as the motors allow: the share of the torque-speed curve the plan may use (the
 # rest is for friction and elasticity, which the plan leaves out).
 torque_reserve = 0.8
@@ -304,7 +378,9 @@ path_tolerance_m = 0.0
 # `sim-cli verdicts --bands` runs the cycle with each at its low and at its high bound, one at a time,
 # and `sim-cli sensitivity` uses the bounds in place of its flat percentage.
 # Not bounded: the masses, inertias and the backlash (datasheet-type values), the values of effects that
-# are off by default, and the shape of the friction curve (Stribeck speed, bristles, preload).
+# are off by default, and the shape of the friction curve (Stribeck speed, bristles, preload). Bounded but
+# without runs while they change nothing: [thermal] and the line module's efficiency with their effects off, and
+# the DC link's discharge, which acts only while the drives are disabled.
 [bounds]
 belt.stiffness_ea_n = [4.0e5, 6.0e5]
 belt.pretension_n = [200.0, 400.0]
@@ -328,6 +404,13 @@ frame.damping_n_s_m = [95.0, 380.0]
 tool_flex.lateral_stiffness_n_m = [1.0e7, 4.0e7]
 tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
 tool_flex.damping_n_s_m = [40.0, 160.0]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+thermal.guide_resistance_k_w = [0.25, 1.0]
+thermal.guide_time_constant_s = [1200.0, 4800.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+ratings.belt_teeth_in_mesh = [6.0, 12.0]
 
 [start]
 pose = [0.1, 0.35]

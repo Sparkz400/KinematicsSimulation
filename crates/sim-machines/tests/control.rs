@@ -562,3 +562,51 @@ fn a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine() {
         println!("{}: highest DC link voltage {separate} V separate, {shared} V shared", entry.id);
     }
 }
+
+/// The shipped configs' velocity loops keep their stability margins over the whole range of their `[bounds]` (each
+/// value at its low and at its high bound), with friction as configured and with motor and guide friction off (in a
+/// cruise friction adds no damping to the loop). All three were tuned for at least 35 degrees and 6 dB (measured at
+/// least 37.8 degrees and 7.3 dB on the default configs, 38.6 degrees and 8.3 dB on the EXCT-30 at 0.45 N m s/rad). Every
+/// measurement has to be valid and the loop stable (`LoopMargins::stable`).
+#[test]
+fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
+    use sim_components::analysis::{bounds, velocity_loop_margins};
+    let mut configs: Vec<(String, Config, &MachineEntry, f64, f64)> = MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e, 35.0, 6.0)).collect();
+    let exct = &machine_t_gantry::ENTRY;
+    configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct, 35.0, 6.0));
+    for (name, cfg, entry, phase, gain) in configs {
+        for friction in [true, false] {
+            let cfg = config_of(&cfg, &[&format!("effects.motor_friction = {friction}"), &format!("effects.guide_friction = {friction}")]);
+            for (run, margins) in velocity_loop_margins(entry, &cfg, &bounds(&cfg).unwrap()).unwrap() {
+                for (k, m) in margins.iter().enumerate() {
+                    assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");
+                }
+            }
+        }
+    }
+}
+
+fn config_of(cfg: &Config, edit: &[&str]) -> Config {
+    let mut cfg = cfg.clone();
+    for e in edit {
+        cfg.set_text(e).unwrap();
+    }
+    cfg
+}
+
+/// The time-optimal plan and its deviation refuse the same paths: with a torque reserve of 0.1 % of the curve, where a
+/// motor holds the load against gravity it has no torque left for the path, and the plan was refused with
+/// `error-path-torque` while the deviation was reported for it all the same.
+#[test]
+fn the_time_optimal_deviation_refuses_what_the_plan_refuses() {
+    let mut refused = 0;
+    for entry in MACHINES {
+        let sim = Sim::new(entry, &config(entry, &["profile.torque_reserve = 0.001", "profile.path_tolerance_m = 1e-4"])).unwrap();
+        let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
+        let pieces = [sim_components::path::Piece::Line(middle)];
+        let (plan, deviation) = (sim.plan_path(&pieces, true).err().map(|e| e.key), sim.path_deviation(&pieces, true).err().map(|e| e.key));
+        assert_eq!(plan, deviation, "{}", entry.id);
+        refused += (plan == Some("error-path-torque")) as usize;
+    }
+    assert!(refused > 0, "no machine refused the path");
+}

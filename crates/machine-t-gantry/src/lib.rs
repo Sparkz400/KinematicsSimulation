@@ -26,7 +26,7 @@
 //! with z, at 2 vx.
 
 use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, Lugre, Ripple, SectionForce, ShaftFriction, ToothMesh};
-use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, Label, MotorInfo, Part, Scene, Shape, SignalInfo};
+use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "t-gantry",
@@ -81,7 +81,7 @@ fn suite_configs() -> Vec<Config> {
     let mut rigid = lossless_config();
     rigid.set_text("effects.belt_stretch = false").unwrap();
     let mut loaded = lossless_config();
-    for effect in ["belt_tooth_stiffness", "idlers", "cable_chain"] {
+    for effect in ["belt_tooth_stiffness", "idlers", "cable_chain", "part_heating"] {
         loaded.set_text(&format!("effects.{effect} = true")).unwrap();
     }
     vec![rigid, lossless_config(), loaded]
@@ -164,8 +164,9 @@ const S: usize = 16;
 const SLACK: usize = 18;
 const BRAKE: usize = 19;
 const N_ELASTIC: usize = 21;
-// Rigid state: [x, z, vx, vz, sx, sz].
-const N_RIGID: usize = 6;
+// Rigid state: [x, z, vx, vz, sx, sz], and the deflections of the two brakes.
+const RIGID_BRAKE: usize = 6;
+const N_RIGID: usize = 8;
 
 impl TGantry {
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
@@ -433,20 +434,22 @@ impl TGantry {
         out[SLACK] = if sec.iter().any(|f| f.tension <= 0.0) { 1.0 } else { 0.0 };
     }
 
-    /// Rigid model: accelerations, guide friction forces, friction state rates and the torques at the two
-    /// gearbox outputs, [ax, az, ffx, ffz, dsx, dsz, gear a, gear b].
+    /// Rigid model: accelerations, guide friction forces, friction state rates, the torques at the two
+    /// gearbox outputs and the torques that go into them before their losses,
+    /// [ax, az, ffx, ffz, dsx, dsz, gear a, gear b, into gear a, into gear b].
     ///
     /// The gearbox loses torque only on what it transmits, which is the motor torque minus what
     /// accelerates the rotor itself. That depends on the acceleration being solved for; three passes
     /// settle it.
-    fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> [f64; 8] {
+    fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> [f64; 10] {
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
         self.inverse(&s[0..2], &mut pos);
         self.inverse(&s[2..4], &mut vel);
-        // Belt force each motor would give with a loss-free gearbox and a massless rotor.
+        // Belt force each motor would give with a loss-free gearbox and a massless rotor; a brake holds the rotor.
+        let brake: [f64; 2] = std::array::from_fn(|k| self.brake.torque(self.brake_engaged, vel[k], s[RIGID_BRAKE + k]).0);
         let drive: [f64; 2] =
-            std::array::from_fn(|k| ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft.torque(vel[k])) / r);
+            std::array::from_fn(|k| ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft.torque(vel[k]) - brake[k]) / r);
         let mesh: [f64; 2] = std::array::from_fn(|k| self.mesh.force(r * pos[k] / ratio));
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let pulleys = 2.0 * self.j_pulley / (r * r);
@@ -458,7 +461,7 @@ impl TGantry {
         let [process_x, process_z] = self.process_force();
         let extra_x = process_x + self.stop_force(0, s[0], s[2]) - idler_x - self.chain_drag(s[2]) - 0.5 * chain_growth * s[2] * s[2];
         let extra_z = process_z + self.stop_force(1, s[1], s[3]) - idler_z;
-        let (mut loss, mut out) = ([1.0; 2], [0.0; 8]);
+        let (mut loss, mut out) = ([1.0; 2], [0.0; 10]);
         for _ in 0..3 {
             let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x;
             let bz = loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.m_z() * self.g + extra_z;
@@ -468,7 +471,7 @@ impl TGantry {
             let (ax, az) = ((bx * (mz + p) - q * bz) / det, ((mx + p) * bz - q * bx) / det);
             let through_gear = [drive[0] - rotor * (ax + az), drive[1] - rotor * (ax - az)];
             // The gearbox outputs carry what the rotors' own acceleration and the losses of this pass leave.
-            out = [ax, az, ffx, ffz, dsx, dsz, loss[0] * through_gear[0] * r, loss[1] * through_gear[1] * r];
+            out = [ax, az, ffx, ffz, dsx, dsz, loss[0] * through_gear[0] * r, loss[1] * through_gear[1] * r, through_gear[0] * r, through_gear[1] * r];
             loss = std::array::from_fn(|k| self.gearbox.loss_factor(through_gear[k] * r, vel[k] / ratio));
         }
         out
@@ -476,7 +479,176 @@ impl TGantry {
 
     fn rigid_derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
         let [ax, az, _, _, dsx, dsz, ..] = self.rigid_solve(s, torque);
-        out.copy_from_slice(&[s[2], s[3], ax, az, dsx, dsz]);
+        let (mut vel, mut brake) = ([0.0; 2], [0.0; 2]);
+        self.inverse(&s[2..4], &mut vel);
+        for k in 0..2 {
+            brake[k] = self.brake.torque(self.brake_engaged, vel[k], s[RIGID_BRAKE + k]).1;
+        }
+        out.copy_from_slice(&[s[2], s[3], ax, az, dsx, dsz, brake[0], brake[1]]);
+    }
+
+    /// Kinetic, potential and elastic energy (see `ENERGY_PARTS`).
+    fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
+        let potential = self.m_z() * self.g * s[Z];
+        if !self.elastic {
+            let kinetic = 0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0) * s[2] * s[2]
+                + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3];
+            return [kinetic, potential, self.stop_energy(s[0], s[1])];
+        }
+        let (geo, mat) = (self.geo(s[X], s[Z]), self.mat(s[A], s[A + 1]));
+        let belt: f64 = (0..3).map(|i| self.belt.energy(geo[i], mat[i])).sum();
+        let gears: f64 = (0..2).map(|k| self.gearbox.energy(s[PA + k], s[A + k])).sum();
+        let turning: f64 = (0..2).map(|k| 0.5 * self.j_pulley * s[V + A + k].powi(2) + 0.5 * self.j_rotor * s[V + PA + k].powi(2)).sum();
+        let frame = self.frame.as_ref().map_or([0.0; 2], |f| [0.5 * f.mass * s[V + Q].powi(2), 0.5 * f.stiffness * s[Q].powi(2)]);
+        let v_carriage = s[V + X] + s[V + Q];
+        let kinetic = 0.5 * (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(s[X]).0) * v_carriage.powi(2)
+            + 0.5 * self.m_z() * (v_carriage + s[V + U]).powi(2)
+            + 0.5 * (self.m_z() + self.m_idlers[1]) * s[V + Z].powi(2)
+            + turning
+            + frame[0];
+        let elastic = 0.5 * self.flex_at(s[Z]).0 * s[U] * s[U] + self.stop_energy(s[X], s[Z]) + belt + gears + frame[1];
+        [kinetic, potential, elastic]
+    }
+
+    /// The loss powers in the order of `effect_infos`, and per motor the gearbox loss as a torque at the rotor and the
+    /// brake torque, which the torque breakdown takes too. No derivatives: cheap enough for every step.
+    fn losses(&self, s: &[f64], torque: &[f64]) -> ([f64; 13], [f64; 2], [f64; 2]) {
+        let (r, ratio) = (self.r, self.gearbox.ratio);
+        let v = if self.elastic { V } else { 2 };
+        let (z, vx, vz) = (s[Z], s[v + X], s[v + Z]);
+        let (sx, sz) = if self.elastic { (s[S], s[S + 1]) } else { (s[4], s[5]) };
+        let (ffx, ffz, ..) = self.guide_friction(z, vx, vz, sx, sz, torque);
+        let (idler_x, idler_z) = self.idler_friction(vx, vz);
+        let drag = self.chain_drag(vx);
+        let [process_x, process_z] = self.process_force();
+        let (mut angle, mut speed) = ([0.0; 2], [0.0; 2]);
+        self.motor_state(s, &mut angle, &mut speed);
+        // Per motor: gearbox loss as a torque at the rotor and as a power, brake torque, and the power the tooth
+        // meshing puts in; the damping losses.
+        let (mut gear_loss, mut gear_power, mut brake, mut mesh_in) = ([0.0; 2], [0.0; 2], [0.0; 2], 0.0);
+        let (process_in, damping) = if self.elastic {
+            for k in 0..2 {
+                let (theta, w_theta, phi, w_phi) = (s[A + k], s[V + A + k], s[PA + k], s[V + PA + k]);
+                let gear = self.gearbox.torque(phi, w_phi, theta, w_theta);
+                gear_loss[k] = gear.rotor - gear.output / ratio;
+                gear_power[k] = self.gearbox.loss_power(phi, w_phi, theta, w_theta);
+                brake[k] = self.brake.torque(self.brake_engaged, w_phi, s[BRAKE + k]).0;
+                mesh_in += r * self.mesh.force(r * theta) * w_theta;
+            }
+            // The rates of `sections`.
+            let (rm, (geo, mat)) = (self.r_mat, (self.geo(s[X], z), self.mat(s[A], s[A + 1])));
+            let (geo_rate, mat_rate) = ([vx + vz, -2.0 * vz, vz - vx], [rm * s[V + A], rm * (s[V + A + 1] - s[V + A]), -rm * s[V + A + 1]]);
+            let belt: f64 = (0..3).map(|i| self.belt.loss_power(geo[i], mat[i], geo_rate[i], mat_rate[i])).sum();
+            let frame = self.frame.as_ref().map_or(0.0, |f| f.damping * s[V + Q].powi(2));
+            let flex = self.flex.as_ref().map_or(0.0, |f| f.damping * s[V + U].powi(2));
+            let tool_vx = vx + s[V + Q] + self.flex_at(z).2 * s[V + U];
+            (process_x * tool_vx + process_z * vz, [belt, frame, flex])
+        } else {
+            let solved = self.rigid_solve(s, torque);
+            for k in 0..2 {
+                let sign = [1.0, -1.0][k];
+                brake[k] = self.brake.torque(self.brake_engaged, speed[k], s[RIGID_BRAKE + k]).0;
+                gear_loss[k] = (solved[8 + k] - solved[6 + k]) / ratio;
+                gear_power[k] = gear_loss[k] * speed[k];
+                mesh_in += self.mesh.force(r * angle[k] / ratio) * (vx + sign * vz);
+            }
+            (process_x * vx + process_z * vz, [0.0; 3])
+        };
+        let shaft: [f64; 2] = std::array::from_fn(|k| (self.shaft.torque(speed[k]) + brake[k]) * speed[k]);
+        let ripple: f64 = (0..2).map(|k| (torque[k] - self.ripple.apply(torque[k], angle[k])) * speed[k]).sum();
+        let stops = self.stops.loss_power(s[X], vx, self.axes[0].max) + self.stops.loss_power(z, vz, self.axes[1].max);
+        let [belt, frame, flex] = damping;
+        let powers = [ffx * vx, ffz * vz, idler_x * vx + idler_z * vz, drag * vx, shaft[0], shaft[1], gear_power[0], gear_power[1], belt, frame, flex, stops, ripple - mesh_in - process_in];
+        (powers, gear_loss, brake)
+    }
+
+    /// The signals of the effect views, in the order of `effect_infos`: per motor the parts of its torque, the
+    /// loss powers, the energy parts and per guide its friction split.
+    ///
+    /// Torque parts. Per motor k = A, B with s_k = +1, -1 and the rigid model's transpose k_r = r / (2 i):
+    /// inertia = k_r (I_x + s_k I_z), with I what accelerates every moved mass at its own acceleration (carriage,
+    /// leaning Z axis, idlers, chain with what picking it up costs) and both rotors and pulleys at the acceleration
+    /// of the carriage along the beam and of the Z axis, as a rigid machine would turn them; gravity = s_k k_r m_z g;
+    /// friction = shaft friction + brake + gearbox loss at the rotor + k_r (F_x + s_k F_z), F the guide, idler and
+    /// chain drag forces; rest = motor torque less these. So rotors and pulleys ringing against the load on the belt
+    /// and in the gearbox backlash are in the rest.
+    fn view_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        let kr = self.r / (2.0 * self.gearbox.ratio);
+        let v = if self.elastic { V } else { 2 };
+        let (z, vx, vz) = (s[Z], s[v + X], s[v + Z]);
+        let (sx, sz) = if self.elastic { (s[S], s[S + 1]) } else { (s[4], s[5]) };
+        let (scales, (ffx, ffz, ..)) = (self.load_scales(z, self.commanded_ax(torque)), self.guide_friction(z, vx, vz, sx, sz, torque));
+        let (idler_x, idler_z) = self.idler_friction(vx, vz);
+        let drag = self.chain_drag(vx);
+        let (chain_mass, chain_growth) = self.chain.mass(s[X]);
+        let (mut angle, mut speed) = ([0.0; 2], [0.0; 2]);
+        self.motor_state(s, &mut angle, &mut speed);
+        let (powers, gear_loss, brake) = self.losses(s, torque);
+        // The inertia forces in X and Z.
+        let (motors, idlers) = (self.m_motors(), self.m_idlers);
+        let inertia = if self.elastic {
+            let mut d = [0.0; N_ELASTIC];
+            self.elastic_derivatives(s, torque, &mut d);
+            let (ax, az, aq, au) = (d[V + X], d[V + Z], d[V + Q], d[V + U]);
+            let w = vx + s[V + Q];
+            let m_carriage = self.m_x() - self.m_z() + idlers[0] + chain_mass;
+            let inertia_x = m_carriage * (ax + aq) + self.m_z() * (ax + aq + au) + motors * ax + chain_growth * w * (vx - 0.5 * w);
+            [inertia_x, (self.m_z() + idlers[1] + motors) * az]
+        } else {
+            let solved = self.rigid_solve(s, torque);
+            let inertia_x = (self.m_x() + motors + idlers[0] + chain_mass) * solved[0] + 0.5 * chain_growth * vx * vx;
+            [inertia_x, (self.m_z() + motors + idlers[1]) * solved[1]]
+        };
+        let friction = [ffx + idler_x + drag, ffz + idler_z];
+        for k in 0..2 {
+            let sign = [1.0, -1.0][k];
+            let parts = [
+                kr * (inertia[0] + sign * inertia[1]),
+                sign * kr * self.m_z() * self.g,
+                self.shaft.torque(speed[k]) + brake[k] + gear_loss[k] + kr * (friction[0] + sign * friction[1]),
+            ];
+            out.extend(parts);
+            out.push(torque[k] - parts.iter().sum::<f64>());
+        }
+        out.extend(powers);
+        out.extend(self.energy_parts(s));
+        for (friction, v, state, scale) in [(&self.friction_x, vx, sx, scales.0), (&self.friction_z, vz, sz, scales.1)] {
+            out.push(v);
+            out.extend(friction.split(v, state, scale));
+            out.push(scale);
+        }
+        // Stretch per belt section: its length less its unstretched belt; in the rigid model that of pretension.
+        let geo = self.geo(s[X], z);
+        let mat = if self.elastic { self.mat(s[A], s[A + 1]) } else { geo.map(|g| self.belt.rest_length(g)) };
+        out.extend((0..3).map(|i| geo[i] - mat[i]));
+    }
+
+    /// The signal list of `effect_signals`.
+    fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
+        for motor in &self.motors {
+            out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+        }
+        let friction = "quantity-friction-power";
+        let mut powers = vec![("guide_x", "axis-x", friction), ("guide_z", "axis-z", friction), ("idlers", "group-idler", friction), ("cable_chain", "group-cable_chain", friction)];
+        powers.extend([("shaft_a", "motor-a", "quantity-shaft-friction-power"), ("shaft_b", "motor-b", "quantity-shaft-friction-power")]);
+        let gear = if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+        powers.extend([("gearbox_a", "motor-a", gear), ("gearbox_b", "motor-b", gear)]);
+        let damping = "quantity-damping-power";
+        powers.extend([("belt", "group-belt", damping), ("frame", "frame", damping), ("tool_flex", "group-tool_flex", damping), ("hard_stops", "group-hard_stop", damping)]);
+        powers.push(("other", "loss-other", "quantity-power-given-off"));
+        out.extend(powers.into_iter().map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")));
+        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        for contact in self.friction_contacts() {
+            for part in FRICTION_SIGNALS {
+                let unit = match part {
+                    "speed" => "m/s",
+                    "load_scale" => "",
+                    _ => "N",
+                };
+                out.push(SignalInfo::new(format!("{}.friction_{part}", contact.id), contact.owner_key, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+            }
+        }
+        out.extend(self.belt_sections().iter().map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")));
     }
 }
 
@@ -506,7 +678,7 @@ impl Machine for TGantry {
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
         let (x, z, r, ratio) = (tool[0], tool[1], self.r, self.gearbox.ratio);
         if !self.elastic {
-            *state = vec![x, z, 0.0, 0.0, 0.0, 0.0];
+            *state = vec![x, z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
             let mut angle = [0.0; 2];
             self.inverse(tool, &mut angle);
             let lift = self.m_z() * self.g * r / 2.0;
@@ -579,32 +751,7 @@ impl Machine for TGantry {
     }
 
     fn energy(&self, s: &[f64]) -> f64 {
-        if !self.elastic {
-            return 0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0) * s[2] * s[2]
-                + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3]
-                + self.m_z() * self.g * s[1]
-                + self.stop_energy(s[0], s[1]);
-        }
-        let (geo, mat) = (self.geo(s[X], s[Z]), self.mat(s[A], s[A + 1]));
-        let belt: f64 = (0..3).map(|i| self.belt.energy(geo[i], mat[i])).sum();
-        let motors: f64 = (0..2)
-            .map(|k| {
-                0.5 * self.j_pulley * s[V + A + k].powi(2)
-                    + 0.5 * self.j_rotor * s[V + PA + k].powi(2)
-                    + self.gearbox.energy(s[PA + k], s[A + k])
-            })
-            .sum();
-        let frame = self.frame.as_ref().map_or(0.0, |f| 0.5 * f.mass * s[V + Q].powi(2) + 0.5 * f.stiffness * s[Q].powi(2));
-        let v_carriage = s[V + X] + s[V + Q];
-        0.5 * (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(s[X]).0) * v_carriage.powi(2)
-            + 0.5 * self.m_z() * (v_carriage + s[V + U]).powi(2)
-            + 0.5 * self.flex_at(s[Z]).0 * s[U] * s[U]
-            + 0.5 * (self.m_z() + self.m_idlers[1]) * s[V + Z].powi(2)
-            + self.m_z() * self.g * s[Z]
-            + self.stop_energy(s[X], s[Z])
-            + belt
-            + motors
-            + frame
+        self.energy_parts(s).iter().sum()
     }
 
     /// The Z axis leaning on its guide while the belt holds the carriage: two masses in a row. The carriage
@@ -652,7 +799,31 @@ impl Machine for TGantry {
         for motor in &self.motors {
             out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
         }
+        self.effect_infos(&mut out);
         out
+    }
+
+    /// The two guides. Their speeds are those of the carriage along the beam and of the Z axis.
+    fn friction_contacts(&self) -> Vec<FrictionContact> {
+        vec![FrictionContact { id: "axis.x", owner_key: "axis-x" }, FrictionContact { id: "axis.z", owner_key: "axis-z" }]
+    }
+    fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
+        [&self.friction_x, &self.friction_z].get(i).map_or([0.0; 3], |f| f.steady(speed, load_scale))
+    }
+
+    /// The three belt sections, in the order of the signals `belt.<i>.tension`.
+    fn belt_sections(&self) -> Vec<BeltSection> {
+        ["belt-section-1", "belt-section-2", "belt-section-3"].iter().zip(["belt.1", "belt.2", "belt.3"]).map(|(&owner_key, id)| BeltSection { id, owner_key, pretension: self.belt.pretension }).collect()
+    }
+
+    /// Both gearboxes, where there are gearboxes (not on a direct drive, see `Gearbox::is_coupling`), and both guides.
+    /// The X guide is shown by the carriage, the Z guide by the Z axis's column.
+    fn thermal_parts(&self) -> Vec<ThermalPart> {
+        let part = |id, kind, owner_key, scene_part, scene_index| ThermalPart { id, kind, owner_key, scene_part, scene_index };
+        let gearboxes = [part("gearbox_a", "gearbox", "motor-a", "gearbox", 0), part("gearbox_b", "gearbox", "motor-b", "gearbox", 1)];
+        let mut parts = if self.gearbox.is_coupling() { Vec::new() } else { gearboxes.to_vec() };
+        parts.extend([part("guide_x", "guide", "axis-x", "carriage", 0), part("guide_z", "guide", "axis-z", "z-axis", 0)]);
+        parts
     }
 
     /// The rigid model has no belt stretch: it reports pretension, zero stretch, zero deflection and no slack.
@@ -660,10 +831,10 @@ impl Machine for TGantry {
     /// the same way: the radial load is the sum of their tensions. The gearbox torques are those at the
     /// outputs, positive where they turn the pulley forwards: in the elastic model what the gear's spring
     /// passes on to the pulley, in the rigid one what its solver works out.
-    fn signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+    fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let (load_x, load_z) = self.guide_loads(s[Z], self.commanded_ax(torque));
         if !self.elastic {
-            let [_, _, ffx, ffz, _, _, gear_a, gear_b] = self.rigid_solve(s, torque);
+            let [_, _, ffx, ffz, _, _, gear_a, gear_b, ..] = self.rigid_solve(s, torque);
             out.extend([self.belt.pretension; 3]);
             out.extend([0.0, ffx, 0.0, ffz, 0.0, 0.0, 0.0]);
             out.extend([2.0 * self.belt.pretension, 2.0 * self.belt.pretension, load_x, load_z, gear_a, gear_b]);
@@ -676,6 +847,12 @@ impl Machine for TGantry {
         out.extend([s[X] - self.r / 2.0 * (a + b), ffx, s[Z] - self.r / 2.0 * (a - b), ffz, s[Q], self.flex_at(s[Z]).2 * s[U], s[SLACK]]);
         out.extend([sec[0].tension + sec[1].tension, sec[1].tension + sec[2].tension, load_x, load_z]);
         out.extend((0..2).map(|k| self.gearbox.torque(s[PA + k], s[V + PA + k], s[A + k], s[V + A + k]).output));
+    }
+    fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        self.view_signals(s, torque, out);
+    }
+    fn loss_powers(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        out.extend(self.losses(s, torque).0);
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {

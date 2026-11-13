@@ -1,3 +1,6 @@
 /target
 /.venv
 /pki
+/cad-source
+/crates/sim-app/assets/meshes
+__pycache__/

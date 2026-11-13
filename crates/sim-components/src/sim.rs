@@ -1,7 +1,42 @@
 //! A machine, its controller and the integrator, stepped together. Every front end runs this.
 
 use crate::control::{Command, CommandError, Controller, LimitViolation, check_limits, in_range};
-use sim_core::{Config, ConfigError, Machine, MachineEntry, Rk4, Scene, SignalInfo, advance};
+use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Rk4, Scene, SignalInfo, TEMPERATURE_PREFIX, ThermalPart, advance};
+
+/// A part of the machine that warms with its loss power (`Machine::thermal_parts`, effects.part_heating): one thermal
+/// mass with a thermal resistance R to its surroundings, so that its temperature rise follows
+/// tau d(rise)/dt = R P - rise and settles at R P under a steady loss P.
+#[derive(Debug, Clone)]
+pub struct HeatedPart {
+    pub part: ThermalPart,
+    /// Where its loss power is among the machine's loss powers (`Machine::loss_powers`).
+    loss: usize,
+    /// Its loss power at the end of the last step, W; kept up to date only while it warms (effects.part_heating).
+    pub loss_power: f64,
+    /// K/W, s, and the rise it is rated for, K.
+    pub resistance: f64,
+    pub time_constant: f64,
+    pub max_rise: f64,
+    /// Temperature above the surroundings, K.
+    pub rise: f64,
+}
+
+/// The parts of `machine` that warm, with their values from the config; the rises start at zero.
+fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, ConfigError> {
+    let infos: Vec<SignalInfo> = machine.signal_infos().into_iter().filter(|s| s.id.starts_with(LOSS_PREFIX)).collect();
+    let mut parts = Vec::new();
+    for part in machine.thermal_parts() {
+        let key = |name: &str| format!("thermal.{}_{name}", part.kind);
+        let loss = infos.iter().position(|s| s.id == format!("{LOSS_PREFIX}{}", part.id)).ok_or_else(|| ConfigError::Invalid(format!("{LOSS_PREFIX}{}", part.id)))?;
+        let (resistance, time_constant, max_rise) = (cfg.non_negative(&key("resistance_k_w"))?, cfg.positive(&key("time_constant_s"))?, cfg.positive(&key("max_rise_k"))?);
+        parts.push(HeatedPart { part, loss, loss_power: 0.0, resistance, time_constant, max_rise, rise: 0.0 });
+    }
+    Ok(parts)
+}
+
+/// Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
+/// copper loss and the work on the shaft.
+const WINDING_STATES: usize = 4;
 
 pub struct Sim {
     pub machine: Box<dyn Machine>,
@@ -12,9 +47,24 @@ pub struct Sim {
     pub dt: f64,
     substeps: u32,
     rk: Rk4,
+    /// For the steps with the drives enabled: the machine's state and per drive its winding current and the energies
+    /// of the step (`DriveParams::winding_rates`), integrated together; with the motors' angles and speeds and
+    /// torques at a stage of the integration.
+    rk_joint: Rk4,
+    joint: Vec<f64>,
+    motor_buffers: [Vec<f64>; 3],
     payload_attached: bool,
+    /// What switching the payload has added to the machine's energy since the start: a payload picked up brings
+    /// its energy along, one put down takes it away. For the energy budget.
+    pub payload_energy: f64,
     /// Axis limits that exceed what the drives allow, found when the config was applied.
     pub limit_violations: Vec<LimitViolation>,
+    /// The parts that warm with their losses, and whether they do (effects.part_heating). Their rises are signals
+    /// whether or not; switched off they stay as they are.
+    pub heated: Vec<HeatedPart>,
+    pub part_heating: bool,
+    /// The machine's loss powers, for the heated parts.
+    losses: Vec<f64>,
 }
 
 fn timing(cfg: &Config) -> Result<(f64, u32), ConfigError> {
@@ -54,7 +104,27 @@ impl Sim {
         machine.equilibrium(&start, &mut state, &mut torque);
         let control = Controller::new(cfg, machine.as_ref(), &state)?;
         let limit_violations = check_limits(machine.as_ref(), cfg)?;
-        Ok(Self { rk: Rk4::new(state.len()), machine, control, state, torque, step: 0, dt, substeps, payload_attached: true, limit_violations })
+        let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, cfg.bool("effects.part_heating")?);
+        let motors = torque.len();
+        Ok(Self {
+            rk: Rk4::new(state.len()),
+            rk_joint: Rk4::new(state.len() + WINDING_STATES * motors),
+            joint: Vec::new(),
+            motor_buffers: std::array::from_fn(|_| vec![0.0; motors]),
+            machine,
+            control,
+            state,
+            torque,
+            step: 0,
+            dt,
+            substeps,
+            payload_attached: true,
+            payload_energy: 0.0,
+            limit_violations,
+            heated,
+            part_heating,
+            losses: Vec::new(),
+        })
     }
 
     /// Applies a changed config to the running simulation: parameters and effect switches take
@@ -81,7 +151,15 @@ impl Sim {
         }
         self.control.motors_shifted(&after);
         self.rk = Rk4::new(self.state.len());
+        self.rk_joint = Rk4::new(self.state.len() + WINDING_STATES * motors);
+        self.motor_buffers = std::array::from_fn(|_| vec![0.0; motors]);
         self.limit_violations = check_limits(machine.as_ref(), cfg)?;
+        // A part that is still there keeps its warmth.
+        let mut heated = heated_parts(cfg, machine.as_ref())?;
+        for part in &mut heated {
+            part.rise = self.heated.iter().find(|old| old.part.id == part.part.id).map_or(0.0, |old| old.rise);
+        }
+        (self.heated, self.part_heating) = (heated, cfg.bool("effects.part_heating")?);
         self.machine = machine;
         self.substeps = substeps;
         Ok(())
@@ -101,21 +179,73 @@ impl Sim {
     }
 
     /// How far that planned path is from the pieces as given, at most.
-    pub fn path_deviation(&self, pieces: &[crate::path::Piece]) -> Result<f64, CommandError> {
-        self.control.path_deviation(self.machine.as_ref(), pieces)
+    pub fn path_deviation(&self, pieces: &[crate::path::Piece], time_optimal: bool) -> Result<f64, CommandError> {
+        self.control.path_deviation(self.machine.as_ref(), pieces, time_optimal)
     }
 
-    /// One base step: controller, then physics with the torques held.
+    /// One base step: the controller sets the windings' voltages, then windings and mechanics go through the step
+    /// together (with the drives disabled, the mechanics alone without torque).
     pub fn step(&mut self) {
         self.control.update(self.step, self.machine.as_ref(), &self.state, &mut self.torque);
         if self.control.payload_attached != self.payload_attached {
             self.payload_attached = self.control.payload_attached;
+            let before = self.machine.energy(&self.state);
             self.machine.set_payload_attached(self.payload_attached);
+            self.payload_energy += self.machine.energy(&self.state) - before;
         }
         self.machine.set_dwelling(self.control.dwell_progress().is_some());
         self.machine.set_brake_engaged(!self.control.enabled());
-        advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+        if self.control.enabled() {
+            self.advance_with_windings();
+        } else {
+            advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+        }
+        if self.part_heating && !self.heated.is_empty() {
+            // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
+            self.losses.clear();
+            self.machine.loss_powers(&self.state, &self.torque, &mut self.losses);
+            for part in &mut self.heated {
+                part.loss_power = self.losses[part.loss];
+                let settled = part.resistance * part.loss_power;
+                part.rise += (1.0 - (-self.dt / part.time_constant).exp()) * (settled - part.rise);
+            }
+        }
         self.step += 1;
+    }
+
+    /// Windings and mechanics over one base step in one integration, the voltages held as the controller set them: the
+    /// motor torque follows the winding current within the step, and the electrical power, the copper loss and the
+    /// shaft's work come from the same stages as the motion. The core's integrator sees one state vector.
+    fn advance_with_windings(&mut self) {
+        let Self { machine, control, state, torque, rk_joint, joint, motor_buffers: [angle, speed, stage_torque], dt, substeps, .. } = self;
+        let (n, p, drives) = (state.len(), control.drive_params(), &control.drives);
+        joint.clear();
+        joint.extend_from_slice(state);
+        for d in drives {
+            joint.extend([d.current, 0.0, 0.0, 0.0]);
+        }
+        let h = *dt / *substeps as f64;
+        for _ in 0..*substeps {
+            rk_joint.step(
+                |y, dy| {
+                    let ((mech, windings), (dmech, dwindings)) = (y.split_at(n), dy.split_at_mut(n));
+                    machine.motor_state(mech, angle, speed);
+                    for (k, d) in drives.iter().enumerate() {
+                        let i = windings[WINDING_STATES * k];
+                        stage_torque[k] = p.torque_of(i);
+                        dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(d.voltage, d.winding_resistance(p), i, speed[k]));
+                    }
+                    machine.derivatives(mech, stage_torque, dmech);
+                },
+                joint,
+                h,
+            );
+        }
+        state.copy_from_slice(&joint[..n]);
+        control.winding_stepped(&joint[n..]);
+        for (torque, d) in torque.iter_mut().zip(&control.drives) {
+            *torque = d.torque;
+        }
     }
 
     pub fn run(&mut self, seconds: f64, mut each: impl FnMut(&Self)) {
@@ -165,6 +295,7 @@ impl Sim {
             }
         }
         out.extend(self.machine.signal_infos());
+        out.extend(self.heated.iter().map(|h| SignalInfo::new(format!("{TEMPERATURE_PREFIX}{}", h.part.id), h.part.owner_key, &format!("quantity-{}-temperature", h.part.kind), "K")));
         out
     }
 
@@ -185,6 +316,7 @@ impl Sim {
             out.extend([angle[k], speed[k], d.torque, d.torque_command, d.current, d.voltage, d.power, d.temperature_rise, d.dc_voltage, d.resistor_power, d.speed_command, d.following_error, d.pos_set]);
         }
         self.machine.signals(&self.state, &self.torque, out);
+        out.extend(self.heated.iter().map(|h| h.rise));
     }
 
     /// Position of a signal in a sample.
@@ -193,9 +325,28 @@ impl Sim {
     }
 
     /// The machine's scene, with where the tool is in it.
+    /// Where the windings warm (effects.winding_heating), the k-th motor housing (`scene::MOTOR_PART`) is coloured by
+    /// motor k's winding rise over its rise at rated current; where the parts warm, each heated part by its rise over
+    /// its rated rise.
     pub fn scene(&self, out: &mut Scene) {
         self.machine.scene(&self.state, out);
         out.tool = self.tool_point();
+        let mut colour = |id: &str, index: usize, heat: f64| {
+            if let Some(part) = out.parts.iter_mut().filter(|p| p.id == id).nth(index) {
+                part.heat = Some(heat as f32);
+            }
+        };
+        let drive = self.control.drive_params();
+        if drive.heating {
+            for (k, d) in self.control.drives.iter().enumerate() {
+                colour(sim_core::scene::MOTOR_PART, k, d.temperature_rise / drive.rated_rise);
+            }
+        }
+        if self.part_heating {
+            for h in &self.heated {
+                colour(h.part.scene_part, h.part.scene_index, h.rise / h.max_rise);
+            }
+        }
     }
 
     /// Where the tool is in the scene right now; `None` where the machine has no mapping.

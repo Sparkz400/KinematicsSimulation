@@ -1,0 +1,16 @@
+fmi-setpoint = Lagesollwert
+fmi-enable = Antriebe eingeschaltet (false schaltet sie ab, Bremsen zu)
+fmi-machine = Maschine der Registrierliste
+fmi-config-file = Konfigurationsdatei statt der in der FMU (leer: die in der FMU)
+fmi-error-type = Diese FMU kann nur Co-Simulation
+fmi-error-guid = Die GUID gehört nicht zu dieser FMU
+fmi-error-resources = Die Ressourcen der FMU sind nicht lesbar: { $arg }
+fmi-error-config = Die Konfiguration wird abgelehnt: { $arg }
+fmi-error-variables = Diese Konfiguration ergibt andere Variablen als die Modellbeschreibung der FMU; bitte eine neue FMU exportieren: { $arg }
+fmi-error-state = Dieser Aufruf ist jetzt nicht erlaubt: { $arg }
+fmi-error-reference = Keine Variable dieses Typs hat diese Wertreferenz: { $arg }
+fmi-error-unsupported = Von dieser FMU nicht unterstützt: { $arg }
+fmi-error-step = Der Kommunikationsschritt ist kein ganzzahliges Vielfaches des Grundschritts des Simulators (sim.dt_s) oder länger als 4294967295 Grundschritte: { $arg }
+fmi-error-experiment = Startzeit, Stoppzeit und Toleranz müssen endliche Zahlen sein: { $arg }
+fmi-error-time = Der Kommunikationszeitpunkt ist nicht dort, wo die Simulation steht: { $arg }
+fmi-refused = Befehl abgelehnt: { $arg }

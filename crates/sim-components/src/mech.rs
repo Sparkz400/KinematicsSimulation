@@ -83,6 +83,14 @@ impl Belt {
         if self.slack && e < 0.0 { 0.0 } else { 0.5 * self.ea * e * e / mat }
     }
 
+    /// Power the damping of a section takes, W: what goes into it (the tension on the length, less the material
+    /// force on the belt fed in) less what its stored energy gains. c (rate)^2 while it is taut.
+    pub fn loss_power(&self, geo: f64, mat: f64, geo_rate: f64, mat_rate: f64) -> f64 {
+        let (f, e) = (self.section(geo, mat, geo_rate, mat_rate), geo - mat);
+        let stored = if self.slack && e < 0.0 { 0.0 } else { self.ea * e / mat * (geo_rate - mat_rate) - 0.5 * self.ea * e * e / (mat * mat) * mat_rate };
+        f.tension * geo_rate - f.material * mat_rate - stored
+    }
+
     /// Material per section at rest, when section i carries `base + offsets[i]` and the sections
     /// share `total` of belt. The base tension follows from the total; found by bisection.
     pub fn static_material(&self, geo: &[f64], offsets: &[f64], total: f64) -> Vec<f64> {
@@ -130,6 +138,11 @@ impl HardStop {
 
     pub fn energy(&self, pos: f64, stroke: f64) -> f64 {
         0.5 * self.stiffness * Self::beyond(pos, stroke).powi(2)
+    }
+
+    /// Power the stops take, W: what the axis loses to them less what their springs store.
+    pub fn loss_power(&self, pos: f64, vel: f64, stroke: f64) -> f64 {
+        -(self.force(pos, vel, stroke) + self.stiffness * Self::beyond(pos, stroke)) * vel
     }
 }
 
@@ -280,6 +293,34 @@ impl Lugre {
         let s_dot = v - BRISTLE_RATE_MAX * s;
         (self.sigma0 * s * BRISTLE_RATE_MAX / rate + self.sigma1 * s_dot + self.viscous * v, s_dot)
     }
+
+    /// Steady sliding at v, g(v) sign(v) + b v, split into [Coulomb, viscous, stiction]: the Coulomb level, b v,
+    /// and what the Stribeck curve adds to the Coulomb level, (Fs - Fc) exp(-(v/vs)^2), each times the load scale.
+    /// Zero with the effect off.
+    pub fn steady(&self, v: f64, load_scale: f64) -> [f64; 3] {
+        if !self.on {
+            return [0.0; 3];
+        }
+        let (sign, coulomb) = (if v == 0.0 { 0.0 } else { v.signum() }, load_scale * self.coulomb);
+        [coulomb * sign, self.viscous * v, (self.level(v, load_scale) - coulomb) * sign]
+    }
+
+    /// The force of `eval` split into [Coulomb, viscous, stiction]: b v, and the bristle force (all the rest) shared
+    /// in the proportion of the Coulomb level to what the Stribeck curve adds to it at this speed. In steady
+    /// sliding these are the parts of `steady`; at rest the bristles hold with the shares of the stiction level.
+    pub fn split(&self, v: f64, s: f64, load_scale: f64) -> [f64; 3] {
+        if !self.on {
+            return [0.0; 3];
+        }
+        let (viscous, level) = (self.viscous * v, self.level(v, load_scale));
+        // No level (a load scale of 0): nothing for the bristles to hold, and no share to split by.
+        if level == 0.0 {
+            return [0.0, viscous, 0.0];
+        }
+        let coulomb = load_scale * self.coulomb / level;
+        let bristles = self.eval(v, s, load_scale).0 - viscous;
+        [bristles * coulomb, viscous, bristles * (1.0 - coulomb)]
+    }
 }
 
 /// The fastest the bristles of a friction contact settle, 1/s. The bristle state settles at the rate
@@ -414,6 +455,12 @@ impl Gearbox {
         })
     }
 
+    /// A ratio of 1 is a direct drive: the table describes the coupling between motor and pulley, there is no
+    /// gearbox, and what `loss_power` gives is the coupling's damping.
+    pub fn is_coupling(&self) -> bool {
+        self.ratio == 1.0
+    }
+
     /// Twist beyond the dead zone.
     fn engaged_twist(&self, twist: f64) -> f64 {
         twist - twist.clamp(-self.half_backlash, self.half_backlash)
@@ -444,6 +491,14 @@ impl Gearbox {
 
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
         0.5 * self.stiffness * self.engaged_twist(rotor_angle / self.ratio - out_angle).powi(2)
+    }
+
+    /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what the spring
+    /// stores. The efficiency loss and the damping.
+    pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
+        let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
+        let twist = self.engaged_twist(rotor_angle / self.ratio - out_angle);
+        t.rotor * rotor_speed - t.output * out_speed - self.stiffness * twist * (rotor_speed / self.ratio - out_speed)
     }
 }
 
@@ -581,6 +636,55 @@ mod tests {
         let (slow, s) = (0.1, 1e-5);
         let s_dot = slow - 1e6 * slow * s / l.level(slow, 1.0);
         assert_eq!(l.eval(slow, s, 1.0), (1e6 * s + 1500.0 * s_dot + 20.0 * slow, s_dot));
+    }
+
+    /// The friction view's curve, by hand for the test contact (Fc 15 N, Fs 20 N, b 20 N s/m, vs 0.01 m/s), as
+    /// [Coulomb, viscous, stiction]: at 0.5 m/s 15, 10 and 5 exp(-2500) = 0 N; at 0.01 m/s 15, 0.2 and 5 / e =
+    /// 1.83940 N; at -0.005 m/s -15, -0.1 and -5 exp(-0.25) = -3.89400 N. With the load scale 2 both levels double:
+    /// 30, 0.2 and 3.67879 N at 0.01 m/s. In steady sliding the live split is the curve; held at rest by a bristle
+    /// deflection of 1e-5 m (5 N) it is 5 * 15 / 20 = 3.75 N Coulomb and 1.25 N stiction.
+    #[test]
+    fn lugre_steady_curve_and_live_split_follow_the_formula() {
+        let f = lugre();
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1e-5);
+        for (v, scale, expected) in [(0.5, 1.0, [15.0, 10.0, 0.0]), (0.01, 1.0, [15.0, 0.2, 1.83940]), (-0.005, 1.0, [-15.0, -0.1, -3.89400]), (0.01, 2.0, [30.0, 0.2, 3.67879])] {
+            let steady = f.steady(v, scale);
+            assert!(close(steady, expected), "{v} m/s: {steady:?}");
+            let s = f.level(v, scale) * v.signum() / f.sigma0;
+            assert!(close(f.split(v, s, scale), steady), "{v} m/s: {:?}", f.split(v, s, scale));
+            assert!((f.split(v, s, scale).iter().sum::<f64>() - f.eval(v, s, scale).0).abs() < 1e-9);
+        }
+        assert!(close(f.split(0.0, 1e-5, 1.0), [3.75, 0.0, 1.25]), "{:?}", f.split(0.0, 1e-5, 1.0));
+        assert_eq!(Lugre { on: false, ..lugre() }.steady(0.5, 1.0), [0.0; 3]);
+    }
+
+    /// A load scale of 0 leaves no friction level: the split is the viscous part alone, not NaN from 0 / 0.
+    #[test]
+    fn the_split_without_a_friction_level_is_the_viscous_part() {
+        let f = lugre();
+        assert_eq!(f.split(0.0, 0.0, 0.0), [0.0; 3]);
+        assert_eq!(f.split(0.5, 1e-5, 0.0), [0.0, 10.0, 0.0]);
+    }
+
+    /// Loss powers by hand. Belt damping 100 N s/m stretched at 0.3 m/s: 100 * 0.3^2 = 9 W, whatever the stretch.
+    /// Gearbox 5:1 at 90 % passing 2 N m at 50 rad/s out: 2 * 50 * 0.1 = 10 W; driven back, 2 / 0.9 * 50 - 2 * 50
+    /// = 11.11 W; loss-free with 5 N m s/rad damping and the rotor 1 rad/s ahead at the output: 5 W. End stop with
+    /// 200 N s/m, 1 mm beyond and moving on out at 0.1 m/s: 200 * 0.01 = 2 W.
+    #[test]
+    fn loss_powers_are_the_hand_calculated_ones() {
+        let mut b = belt();
+        b.damping = 100.0;
+        let mat = b.rest_length(1.0);
+        assert!((b.loss_power(1.0, mat, 0.5, 0.2) - 9.0).abs() < 1e-9 && (b.loss_power(1.003, mat, -0.1, 0.2) - 9.0).abs() < 1e-9);
+        let mut g = gearbox();
+        g.efficiency = 0.9;
+        let twist = 5.0 * g.static_twist(2.0);
+        assert!((g.loss_power(twist, 250.0, 0.0, 50.0) - 10.0).abs() < 1e-9, "{}", g.loss_power(twist, 250.0, 0.0, 50.0));
+        assert!((g.loss_power(twist, -250.0, 0.0, -50.0) - (2.0 / 0.9 - 2.0) * 50.0).abs() < 1e-9);
+        let g = Gearbox { damping: 5.0, half_backlash: 0.0, ..gearbox() };
+        assert!((g.loss_power(5.0 * 1e-4, 5.0, 0.0, 0.0) - 5.0).abs() < 1e-9);
+        let stop = HardStop { stiffness: 1e6, damping: 200.0 };
+        assert!((stop.loss_power(1.001, 0.1, 1.0) - 2.0).abs() < 1e-9 && stop.loss_power(0.5, 0.1, 1.0) == 0.0);
     }
 
     #[test]

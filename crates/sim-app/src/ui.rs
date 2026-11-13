@@ -1,10 +1,10 @@
 //! The panels: machine and language pickers, run controls, view presets, motion commands, effect
-//! switches, the parameter panel, the scopes, the tuning help and the analysis tables. Everything shown comes from the model and the
+//! switches, the parameter panel, the scopes, the tuning help, the analysis tables and the effect views. Everything shown comes from the model and the
 //! translation files; no text for the user is written here.
 
-use bevy_egui::egui::{Checkbox, CollapsingHeader, Color32, ComboBox, DragValue, Grid, ScrollArea, Slider, TextEdit, Ui};
-use egui_plot::{Legend, Line, LineStyle, Plot};
-use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale};
+use bevy_egui::egui::{Checkbox, CollapsingHeader, Color32, ComboBox, DragValue, Grid, Label, Rect, RichText, ScrollArea, Sense, Slider, TextEdit, TextWrapMode, Ui, vec2};
+use egui_plot::{GridMark, HLine, Legend, Line, LineStyle, Plot, Points, log_grid_spacer};
+use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color};
 use sim_components::Command;
 use sim_core::MachineEntry;
 use sim_machines::{LANGUAGES, MACHINES};
@@ -26,6 +26,8 @@ pub enum Action {
     Window(f64),
     Freeze(bool),
     Export,
+    /// The overlay of the replayed trace goes to a CSV file.
+    ExportOverlay,
     TuningAxis(usize),
     RunTuning,
     CloseTuning,
@@ -35,6 +37,11 @@ pub enum Action {
     ApplyOptimised,
     /// A row of the motor search goes into the config.
     UseCandidate(usize),
+    /// The config file field: open it, or save the config to it; with `true`, a file dialog asks for the file first.
+    OpenConfig(bool),
+    SaveConfig(bool),
+    /// The typed part names go into the config.
+    ApplyParts,
     CloseAnalysis,
     Clear(Analysis),
     ClearMessages,
@@ -179,7 +186,7 @@ fn number(value: f64) -> String {
 /// The scopes: one plot per quantity with actual values solid and their setpoints dashed, one
 /// colour per axis or motor, a shared time axis and cursor, readable units, and what each trace
 /// did in the window. All of it is built from the signal list.
-pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>, scroll: Option<f32>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let signals = &model.session.signals;
     // Owners in order of first appearance; their place decides the colour.
@@ -205,7 +212,10 @@ pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             actions.push(Action::Export);
         }
     });
-    ScrollArea::vertical().show(ui, |ui| {
+    // `scroll`: the screenshot hook's way to get a part further down into the picture.
+    let area = ScrollArea::vertical();
+    let area = if let Some(offset) = scroll { area.vertical_scroll_offset(offset) } else { area };
+    area.show(ui, |ui| {
         ui.collapsing(tr("ui-scopes"), |ui| {
             for (i, scope) in model.scopes.iter().enumerate() {
                 let mut visible = scope.visible;
@@ -217,10 +227,13 @@ pub fn scopes(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         // Everything else folds away, so that every part of the panel can be reached at any window size.
         let has = |kinds: &[Analysis]| kinds.iter().any(|kind| model.has_result(*kind));
         let mut inputs = model.inputs.clone();
+        section(ui, "ui-config", model, !model.inputs.config_file.is_empty(), |ui| config(ui, model, &mut inputs, actions));
         section(ui, "ui-analysis", model, has(&[Analysis::Cycle, Analysis::Sensitivity, Analysis::Optimise]), |ui| analysis(ui, model, &mut inputs, actions));
+        section(ui, "ui-effect-views", model, has(&[Analysis::Cycle, Analysis::Compare]), |ui| effects(ui, model, &mut inputs, actions));
         section(ui, "ui-search", model, has(&[Analysis::Search]), |ui| search(ui, model, &mut inputs, actions));
         section(ui, "ui-path", model, has(&[Analysis::Path]), |ui| path(ui, model, &mut inputs, actions));
         section(ui, "ui-trace", model, has(&[Analysis::Trace]), |ui| trace(ui, model, &mut inputs, actions));
+        section(ui, "ui-sweep", model, has(&[Analysis::Sweep, Analysis::SweepFit]), |ui| sweep(ui, model, &mut inputs, actions));
         section(ui, "ui-tuning", model, model.tuning.is_some(), |ui| tuning(ui, model, actions));
         if inputs != model.inputs {
             actions.push(Action::Inputs(inputs));
@@ -337,6 +350,7 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
         ui.checkbox(&mut inputs.bands, tr("ui-analysis-bands"));
         ui.add_enabled(inputs.bands, DragValue::new(&mut inputs.samples).range(0..=1000)).on_hover_text(tr("ui-analysis-samples-hint"));
         ui.label(tr("ui-analysis-samples"));
+        ui.add_enabled(inputs.bands, Checkbox::new(&mut inputs.worst, tr("ui-analysis-worst"))).on_hover_text(tr("ui-analysis-worst-hint"));
         run_button(ui, model, "ui-analysis-run-sensitivity", Analysis::Sensitivity, actions);
         run_button(ui, model, "ui-analysis-run-optimise", Analysis::Optimise, actions);
         if (!tables.is_empty() || ranking.is_some() || optimised.is_some()) && ui.button(tr("ui-clear")).clicked() {
@@ -348,6 +362,11 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
         heading(ui, model, key, Analysis::Cycle);
         table(ui, key, rows, None);
     }
+    if let Some(rows) = model.worst_table() {
+        heading(ui, model, "ui-analysis-worst-corners", Analysis::Cycle);
+        table(ui, "ui-analysis-worst-corners", &rows, None);
+    }
+    points(ui, model);
     if let Some(rows) = &ranking {
         heading(ui, model, "ui-analysis-sensitivity", Analysis::Sensitivity);
         table(ui, "ui-analysis-sensitivity", rows, None);
@@ -359,6 +378,228 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
             actions.push(Action::ApplyOptimised);
         }
     }
+}
+
+/// What the lines of the plot below are, each in its colour, dashed ones marked so: in place of a legend in the plot,
+/// which would cover the lines.
+fn key_row(ui: &mut Ui, keys: &[(String, Color32, bool)]) {
+    ui.horizontal_wrapped(|ui| {
+        for (label, color, dashed) in keys {
+            // Each name whole on its line: the row wraps between names, not inside one.
+            ui.add(Label::new(RichText::new(format!("{} {label}", if *dashed { "- -" } else { "—" })).color(*color)).wrap_mode(TextWrapMode::Extend));
+        }
+    });
+}
+
+/// A colour scale as a bar between two labels.
+fn scale_bar(ui: &mut Ui, low: &str, high: &str, color: impl Fn(f32) -> [f32; 3]) {
+    ui.horizontal(|ui| {
+        ui.weak(low);
+        let (rect, _) = ui.allocate_exact_size(vec2(160.0, 12.0), Sense::hover());
+        const STEPS: usize = 40;
+        for i in 0..STEPS {
+            let [r, g, b] = color((i as f32 + 0.5) / STEPS as f32).map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
+            let left = rect.left() + rect.width() * i as f32 / STEPS as f32;
+            let piece = Rect::from_min_max([left, rect.top()].into(), [left + rect.width() / STEPS as f32 + 0.5, rect.bottom()].into());
+            ui.painter().rect_filled(piece, 0.0, Color32::from_rgb(r, g, b));
+        }
+        ui.weak(high);
+    });
+}
+
+/// The effect views: the parts of each motor's torque, live over the scopes' window and over the analysed cycle;
+/// where the energy of the analysed cycle went; per friction contact its curve of steady sliding with the point
+/// it is at now; the temperatures; the belt sections; and the comparison of the cycle with an effect on and off.
+fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    run_button(ui, model, "ui-analysis-run-cycle", Analysis::Cycle, actions);
+    let lines = model.breakdown_lines();
+    if !lines.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(tr("ui-effects-breakdown"));
+            ui.weak(tr("ui-effects-breakdown-hint"));
+        });
+    }
+    for (title, parts) in lines {
+        ui.label(&title);
+        let keys: Vec<_> = parts.iter().enumerate().map(|(i, (label, _))| if i == TOTAL { (label.clone(), Color32::GRAY, true) } else { (label.clone(), PALETTE[i], false) }).collect();
+        key_row(ui, &keys);
+        Plot::new(("breakdown", &title)).height(150.0).link_axis("scopes", [true, false]).link_cursor("scopes", [true, false]).x_axis_label(tr("ui-time")).show(ui, |plot| {
+            for (i, (label, points)) in parts.into_iter().enumerate() {
+                // The torque itself, which the parts add up to, dashed.
+                let line = Line::new(label, points);
+                plot.line(if i == TOTAL { line.color(Color32::GRAY).style(LineStyle::dashed_dense()).width(1.5) } else { line.color(PALETTE[i]).width(1.6) });
+            }
+        });
+    }
+    for (rows, key) in [(model.breakdown_table(), "ui-effects-breakdown-cycle"), (model.budget_table(), "ui-effects-budget")] {
+        if let Some(rows) = rows {
+            heading(ui, model, key, Analysis::Cycle);
+            table(ui, key, &rows, None);
+        }
+    }
+    let views = model.friction_views();
+    if !views.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(tr("ui-effects-friction"));
+            ui.weak(tr("ui-effects-friction-hint"));
+        });
+    }
+    for view in views {
+        ui.label(&view.title);
+        let mut keys: Vec<_> = view.curves.iter().enumerate().map(|(i, (label, _))| (label.clone(), PALETTE[(i + 1) % PALETTE.len()], i > 0)).collect();
+        keys.push((tr("ui-effects-now"), PALETTE[0], false));
+        key_row(ui, &keys);
+        // Powers of five on the speed axis: with powers of ten a speed limit of 0.8 m/s has no labelled tick but 0.
+        Plot::new(("friction", &view.title)).height(180.0).x_grid_spacer(log_grid_spacer(5)).x_axis_label(tr("ui-effects-speed")).y_axis_label(tr("ui-effects-force")).show(ui, |plot| {
+            for (i, (label, points)) in view.curves.into_iter().enumerate() {
+                // The friction force solid, its parts dashed.
+                let line = Line::new(label, points).color(PALETTE[(i + 1) % PALETTE.len()]);
+                plot.line(if i == 0 { line.width(2.0) } else { line.style(LineStyle::dashed_dense()).width(1.0) });
+            }
+            if let Some(now) = view.now {
+                plot.points(Points::new(tr("ui-effects-now"), vec![now]).color(PALETTE[0]).radius(5.0));
+            }
+        });
+        table(ui, &format!("friction-{}", view.title), &view.table, None);
+    }
+    thermal(ui, model);
+    belt(ui, model);
+    compare(ui, model, inputs, actions);
+}
+
+/// The temperatures of windings, gearboxes and guides over the scopes' window, the table of where they are and settle,
+/// and the scale the 3D view colours them by.
+fn thermal(ui: &mut Ui, model: &Model) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let view = model.thermal_view();
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-effects-thermal"));
+        ui.weak(tr(if view.off { "ui-effects-thermal-off" } else { "ui-effects-thermal-hint" }));
+    });
+    key_row(ui, &view.lines.iter().zip(PALETTE.iter().cycle()).map(|((label, _), color)| (label.clone(), *color, false)).collect::<Vec<_>>());
+    Plot::new("thermal").height(150.0).link_axis("scopes", [true, false]).link_cursor("scopes", [true, false]).x_axis_label(tr("ui-time")).y_axis_label(tr("ui-effects-rise")).show(ui, |plot| {
+        for ((label, points), color) in view.lines.into_iter().zip(PALETTE.iter().cycle()) {
+            plot.line(Line::new(label, points).color(*color).width(1.8));
+        }
+    });
+    table(ui, "thermal", &view.table, None);
+    ui.horizontal(|ui| {
+        scale_bar(ui, &tr("ui-effects-cold"), &tr("ui-effects-rated"), heat_color);
+        let [r, g, b] = heat_color(2.0).map(|c| (c * 255.0) as u8);
+        ui.colored_label(Color32::from_rgb(r, g, b), format!("■ {}", tr("ui-effects-above")));
+    });
+}
+
+/// Tension and stretch of each belt section over the scopes' window, against pretension and rating, the table of the
+/// newest sample, and the scale the 3D view colours the belt by.
+fn belt(ui: &mut Ui, model: &Model) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let Some(view) = model.belt_view() else { return };
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-effects-belt"));
+        ui.weak(tr("ui-effects-belt-hint"));
+    });
+    let mut keys: Vec<_> = view.tension.iter().zip(PALETTE.iter().cycle()).map(|((label, _), color)| (label.clone(), *color, false)).collect();
+    // The rating is in the table, not in the plot: at five times the pretension it would flatten the lines.
+    keys.push((tr("ui-effects-pretension"), Color32::GRAY, true));
+    ui.label(&view.titles[0]);
+    key_row(ui, &keys);
+    Plot::new("belt-tension").height(150.0).link_axis("scopes", [true, false]).link_cursor("scopes", [true, false]).x_axis_label(tr("ui-time")).show(ui, |plot| {
+        for ((label, points), color) in view.tension.into_iter().zip(PALETTE.iter().cycle()) {
+            plot.line(Line::new(label, points).color(*color).width(1.8));
+        }
+        plot.hline(HLine::new(tr("ui-effects-pretension"), view.pretension).color(Color32::GRAY).style(LineStyle::dashed_dense()));
+    });
+    ui.label(&view.titles[1]);
+    Plot::new("belt-stretch").height(130.0).link_axis("scopes", [true, false]).link_cursor("scopes", [true, false]).x_axis_label(tr("ui-time")).show(ui, |plot| {
+        for ((label, points), color) in view.stretch.into_iter().zip(PALETTE.iter().cycle()) {
+            plot.line(Line::new(label, points).color(*color).width(1.8));
+        }
+    });
+    table(ui, "belt", &view.table, None);
+    // The 3D view's belt colour: from no tension through pretension (the belt's own colour) to twice the pretension.
+    scale_bar(ui, &view.scale[0], &view.scale[1], |f| part_color(sim_core::scene::BELT_COLOR, 2.0 * f - 1.0, None));
+}
+
+/// The cycle with one effect on and off: the effect and the quantity to overlay, the overlay (off dashed) and the
+/// difference per line.
+fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let view = model.compare_view();
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-effects-compare"));
+        ui.weak(tr("ui-effects-compare-hint"));
+    });
+    ui.horizontal_wrapped(|ui| {
+        let effect_label = |name: &str| tr(&format!("effect-{name}"));
+        ui.label(tr("ui-effects-effect"));
+        ComboBox::from_id_salt("compare-effect").selected_text(effect_label(&inputs.compare_effect)).width(180.0).show_ui(ui, |ui| {
+            for (path, key, _) in model.effects() {
+                ui.selectable_value(&mut inputs.compare_effect, path["effects.".len()..].to_string(), tr(&key));
+            }
+        });
+        ui.label(tr("ui-effects-quantity"));
+        ComboBox::from_id_salt("compare-quantity").selected_text(tr(&inputs.compare_quantity)).width(140.0).show_ui(ui, |ui| {
+            for scope in &model.scopes {
+                ui.selectable_value(&mut inputs.compare_quantity, scope.quantity_key.clone(), format!("{} [{}]", tr(&scope.quantity_key), scope.unit));
+            }
+        });
+        run_button(ui, model, "ui-effects-run-compare", Analysis::Compare, actions);
+        if view.is_some() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::Compare));
+        }
+    });
+    let Some(view) = view else { return };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("{} · {}", view.effect, view.title));
+        if model.outdated(Analysis::Compare) {
+            ui.colored_label(NOTE, tr("ui-analysis-outdated"));
+        }
+    });
+    let mut keys: Vec<_> = view.lines.iter().zip(PALETTE.iter().cycle()).map(|((label, ..), color)| (label.clone(), *color, false)).collect();
+    keys.push((tr("ui-effects-off"), Color32::GRAY, true));
+    key_row(ui, &keys);
+    Plot::new("compare").height(170.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
+        for ((label, on, off), color) in view.lines.into_iter().zip(PALETTE.iter().cycle()) {
+            plot.line(Line::new(label.clone(), on).color(*color).width(1.8));
+            plot.line(Line::new(label, off).color(*color).style(LineStyle::dashed_dense()).width(1.2));
+        }
+    });
+    table(ui, "compare", &view.table, None);
+}
+
+/// Where the torque itself is among the breakdown's lines, after its parts.
+const TOTAL: usize = 4;
+
+/// The config file: open one for the machine shown, or save the config as edited; and the parts it names,
+/// typed by name.
+fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-path-file"));
+        ui.add(TextEdit::singleline(&mut inputs.config_file).desired_width(260.0));
+        for (key, action) in [("ui-config-open", Action::OpenConfig(false)), ("ui-config-save", Action::SaveConfig(false)), ("ui-config-open-dialog", Action::OpenConfig(true)), ("ui-config-save-dialog", Action::SaveConfig(true))] {
+            if ui.button(tr(key)).clicked() {
+                actions.push(action);
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        let [motor, supply, gearbox] = &mut inputs.parts;
+        ui.label(tr("ui-parts-motor"));
+        ui.add(TextEdit::singleline(motor).desired_width(110.0));
+        ui.label(tr("ui-search-supply"));
+        ui.add(TextEdit::singleline(supply).desired_width(40.0));
+        ui.label(tr("ui-search-gearbox"));
+        ui.add(TextEdit::singleline(gearbox).desired_width(100.0));
+        if ui.button(tr("ui-parts-apply")).clicked() {
+            actions.push(Action::ApplyParts);
+        }
+    });
 }
 
 /// The motor search: every catalogue motor the fields ask for on the cycle, and a button per motor that
@@ -435,6 +676,130 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
     for line in model.trace_advice() {
         ui.label(line);
     }
+    let overlay = model.overlay();
+    if !overlay.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            heading(ui, model, "ui-overlay", Analysis::Trace);
+            ui.weak(tr("ui-overlay-dashed"));
+            if ui.button(tr("ui-export")).clicked() {
+                actions.push(Action::ExportOverlay);
+            }
+        });
+    }
+    for (key, motors) in overlay {
+        ui.strong(tr(key));
+        let plot = Plot::new(key).height(150.0).legend(Legend::default()).link_axis("overlay", [true, false]).link_cursor("overlay", [true, false]);
+        plot.x_axis_label(tr("ui-time")).show(ui, |plot| {
+            for ((motor, [measured, simulated]), color) in model.session.motors.iter().zip(motors).zip(PALETTE.iter().cycle()) {
+                // Both carry the motor's name: one legend entry switches both.
+                plot.line(Line::new(tr(motor.key), measured).color(*color).width(1.8));
+                plot.line(Line::new(tr(motor.key), simulated).color(*color).style(LineStyle::dashed_dense()).width(1.2));
+            }
+        });
+    }
+}
+
+/// The operating points of the analysed cycle over the motors' torque-speed curve, and as a table.
+fn points(ui: &mut Ui, model: &Model) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let Some((points, [high, low])) = model.points_plot() else { return };
+    heading(ui, model, "ui-points", Analysis::Cycle);
+    Plot::new("ui-points").height(220.0).legend(Legend::default()).x_axis_label(tr("ui-points-speed")).y_axis_label(tr("ui-points-torque")).show(ui, |plot| {
+        for ((motor, points), color) in model.session.motors.iter().zip(points).zip(PALETTE.iter().cycle()) {
+            plot.points(Points::new(tr(motor.key), points).color(*color).radius(1.0));
+        }
+        for line in [high, low] {
+            plot.line(Line::new(tr("ui-points-curve"), line).color(Color32::GRAY).style(LineStyle::dashed_dense()).width(1.5));
+        }
+    });
+    // Thousands of rows: only those in sight are made. Row 0 is the header.
+    let Some((count, _)) = model.points_table(0..0) else { return };
+    let height = ui.text_style_height(&bevy_egui::egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+    ScrollArea::vertical().id_salt("points-table").max_height(160.0).auto_shrink([false, true]).min_scrolled_height(160.0).show_rows(ui, height, count + 1, |ui, rows| {
+        if let Some((_, shown)) = model.points_table(rows.start.saturating_sub(1)..rows.end.saturating_sub(1)) {
+            let body = if rows.start == 0 { shown } else { shown[1..].to_vec() };
+            table(ui, "points-rows", &body, None);
+        }
+    });
+}
+
+/// Frequency on a logarithmic axis: the plot runs over log10(f) and the ticks show f.
+fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
+    format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// A phase over log10(f), unwrapped, so that a lag beyond half a turn does not jump to the top of the plot.
+fn phase_line(points: &[sim_components::analysis::SweepPoint]) -> Vec<[f64; 2]> {
+    let mut last = 0.0;
+    points
+        .iter()
+        .map(|p| {
+            let mut phase = p.phase_deg;
+            while phase > last + 180.0 {
+                phase -= 360.0;
+            }
+            last = phase;
+            [p.frequency.log10(), phase]
+        })
+        .collect()
+}
+
+/// The open-loop frequency response of the mechanics per motor, its resonance, and the belt stiffness fitted
+/// to a measured response from a file.
+fn sweep(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let found = model.sweep_table();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-sweep-from"));
+        ui.add(DragValue::new(&mut inputs.sweep_from).speed(0.5).range(0.1..=10000.0));
+        ui.label(tr("ui-sweep-to"));
+        ui.add(DragValue::new(&mut inputs.sweep_to).speed(1.0).range(0.1..=10000.0));
+        ui.label(tr("ui-sweep-count"));
+        ui.add(DragValue::new(&mut inputs.sweep_count).range(2..=400));
+        ui.label(tr("ui-sweep-amplitude"));
+        ui.add(DragValue::new(&mut inputs.sweep_amplitude).speed(0.01).range(1e-4..=100.0));
+        run_button(ui, model, "ui-sweep-run", Analysis::Sweep, actions);
+        if found.is_some() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::Sweep));
+        }
+    });
+    if let (Some(sweeps), Some(rows)) = (&model.sweeps, &found) {
+        heading(ui, model, "ui-sweep-gain", Analysis::Sweep);
+        Plot::new("sweep-gain").height(160.0).legend(Legend::default()).link_axis("sweep", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
+                let line: Vec<[f64; 2]> = points.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
+                plot.line(Line::new(tr(motor.key), line).color(*color).width(1.8));
+            }
+        });
+        ui.strong(format!("{} [°], {} [{}]", tr("ui-tuning-phase"), tr("ui-tuning-frequency"), tr("unit-hz")));
+        Plot::new("sweep-phase").height(120.0).legend(Legend::default()).link_axis("sweep", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(tr(motor.key), phase_line(points)).color(*color).width(1.8));
+            }
+        });
+        heading(ui, model, "ui-sweep-found", Analysis::Sweep);
+        table(ui, "ui-sweep-found", rows, None);
+    }
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-sweep-file"));
+        ui.add(TextEdit::singleline(&mut inputs.sweep_file).desired_width(260.0));
+        ui.label(tr("ui-sweep-motor"));
+        for (i, motor) in model.session.motors.iter().enumerate() {
+            ui.radio_value(&mut inputs.sweep_motor, i, tr(motor.key));
+        }
+        run_button(ui, model, "ui-sweep-fit-run", Analysis::SweepFit, actions);
+        if model.sweep_fit.is_some() && ui.button(tr("ui-clear")).clicked() {
+            actions.push(Action::Clear(Analysis::SweepFit));
+        }
+    });
+    if let Some(rows) = model.sweep_fit_table() {
+        heading(ui, model, "ui-sweep-fit", Analysis::SweepFit);
+        table(ui, "ui-sweep-fit", &rows, None);
+    }
+    if let Some(line) = model.sweep_fit_advice() {
+        ui.label(line);
+    }
 }
 
 /// Tuning help: step response and closed-loop frequency response of one axis's position loop,
@@ -480,8 +845,6 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             let points: Vec<[f64; 2]> = result.step.trace.iter().map(|(t, y)| [*t, y * scale]).collect();
             plot.line(Line::new(tr("quantity-position"), points).color(PALETTE[1]).width(1.8));
         });
-        // Frequency on a logarithmic axis: the plot runs over log10(f) and the ticks show f.
-        let hertz = |mark: egui_plot::GridMark, _: &std::ops::RangeInclusive<f64>| format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string();
         ui.strong(format!("{} · {} [{}]", tr(axis.key), tr("ui-tuning-gain"), tr("unit-db")));
         Plot::new("tuning-gain").height(130.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
             let limit = [result.response.first(), result.response.last()].map(|p| [p.map_or(0.0, |p| p.frequency.log10()), -3.0]);
@@ -491,21 +854,7 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         });
         ui.strong(format!("{} · {} [°], {} [{}]", tr(axis.key), tr("ui-tuning-phase"), tr("ui-tuning-frequency"), tr("unit-hz")));
         Plot::new("tuning-phase").height(110.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
-            // Unwrapped, so that a lag beyond half a turn does not jump to the top of the plot.
-            let mut last = 0.0;
-            let points: Vec<[f64; 2]> = result
-                .response
-                .iter()
-                .map(|p| {
-                    let mut phase = p.phase_deg;
-                    while phase > last + 180.0 {
-                        phase -= 360.0;
-                    }
-                    last = phase;
-                    [p.frequency.log10(), phase]
-                })
-                .collect();
-            plot.line(Line::new(tr("ui-tuning-phase"), points).color(PALETTE[2]).width(1.8));
+            plot.line(Line::new(tr("ui-tuning-phase"), phase_line(&result.response)).color(PALETTE[2]).width(1.8));
         });
     }
 }

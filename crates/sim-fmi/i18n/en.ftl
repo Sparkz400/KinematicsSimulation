@@ -1,0 +1,16 @@
+fmi-setpoint = Position setpoint
+fmi-enable = Drives enabled (false switches them off, brakes on)
+fmi-machine = Machine of the registry
+fmi-config-file = Config file used instead of the one in the FMU (empty: the one in the FMU)
+fmi-error-type = This FMU supports co-simulation only
+fmi-error-guid = The GUID does not belong to this FMU
+fmi-error-resources = The FMU's resources cannot be read: { $arg }
+fmi-error-config = The config is refused: { $arg }
+fmi-error-variables = This config gives other variables than the FMU's model description; export a new FMU: { $arg }
+fmi-error-state = This call is not allowed now: { $arg }
+fmi-error-reference = No variable of this type has this value reference: { $arg }
+fmi-error-unsupported = Not supported by this FMU: { $arg }
+fmi-error-step = The communication step is not a whole multiple of the simulator's base step (sim.dt_s), or longer than 4294967295 base steps: { $arg }
+fmi-error-experiment = Start time, stop time and tolerance must be finite numbers: { $arg }
+fmi-error-time = The communication point is not where the simulation stands: { $arg }
+fmi-refused = Command refused: { $arg }

@@ -81,7 +81,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let out = cli(&["analyze", entry.id, "--points", points.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         let table = text(&out.stdout);
-        assert_eq!(table.lines().next().unwrap(), "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km");
+        assert_eq!(table.lines().next().unwrap(), "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation");
         let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
         assert_eq!(rows.len(), motors);
         for row in &rows {
@@ -89,12 +89,34 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
             assert!(peak > rms && rms > 0.0 && use_ > 0.0 && use_ < 1.0, "{row:?}");
         }
         assert!(std::fs::read_to_string(&points).unwrap().lines().count() > 1000 * motors);
+        // The operating points are those of `analyse_cycle`, which the app shows too.
+        let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
+        let mut expected = String::from("motor,speed_rad_s,torque_nm
+");
+        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+            m.points.iter().for_each(|(speed, torque)| expected += &format!("{},{speed:.6e},{torque:.6e}
+", motor.id));
+        }
+        assert!(std::fs::read_to_string(&points).unwrap() == expected, "{}: the operating points differ from analyse_cycle's", entry.id);
+        // The lives and the tooth load, as the library gives them for the same cycle.
+        let cfg = entry.config();
+        for (row, m) in rows.iter().zip(&load.motors) {
+            let lives = [sim_components::analysis::guide_life_h(&cfg, &load), sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()];
+            for (cell, life) in row[28..].iter().zip(lives) {
+                assert_eq!(*cell, format!("{:.4e}", life.unwrap()), "{}: {row:?}", entry.id);
+            }
+        }
 
         let out = cli(&["sweep", entry.id, "--from", "10", "--to", "100", "--count", "4"]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         let table = text(&out.stdout);
         assert_eq!(table.lines().count(), 5);
         assert!(table.lines().skip(1).all(|l| l.split(',').all(|v| v.parse::<f64>().is_ok_and(f64::is_finite))));
+        // The numbers of `frequency_sweep` at the shared default amplitude, which the app shows too.
+        let swept = sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &sim_components::analysis::log_spaced(10.0, 100.0, 4), sim_components::analysis::default_sweep_amplitude(entry, &entry.config()).unwrap()).unwrap();
+        let rows: Vec<String> = swept.iter().map(|p| format!("{:.4},{:.6e},{:.3}", p.frequency, p.gain, p.phase_deg)).collect();
+        assert_eq!(table.lines().skip(1).collect::<Vec<_>>(), rows, "{}", entry.id);
     }
 }
 
@@ -121,6 +143,21 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > 4.0 && band < 20.0, "{}: {row}", entry.id);
         }
+        // The margins of the config as it is: one row per motor, the figures of `velocity_loop_margins`.
+        let margins = table(&["margins", entry.id]);
+        let found = sim_components::analysis::velocity_loop_margins(entry, &entry.config(), &[]).unwrap();
+        assert_eq!(margins.lines().next().unwrap(), "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result");
+        for (row, m) in margins.lines().skip(1).zip(&found[0].1) {
+            assert_eq!(row.split(',').nth(3).unwrap(), format!("{:.1}", m.phase_margin_deg), "{}: {row}", entry.id);
+            assert!(m.valid && m.phase_margin_deg > 35.0 && m.gain_margin_db > 6.0 && row.ends_with(",ok"), "{}: {row}", entry.id);
+        }
+        assert_eq!(margins.lines().count(), 1 + found[0].1.len());
+    }
+    // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
+    for entry in MACHINES {
+        let out = cli(&["margins", entry.id, "--set", "drive.velocity_kp_nm_s_rad=0.3"]);
+        let unstable = text(&out.stdout);
+        assert!(out.status.success() && unstable.lines().count() > 1 && unstable.lines().skip(1).all(|row| row.ends_with(",FAIL")), "{}: {unstable}", entry.id);
     }
 }
 
@@ -237,6 +274,42 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
     }
 }
 
+/// `verdicts --bands --worst` prints per check what `verdict_worst` finds: the worst value, its limit, the result and
+/// the bounded values at their high and at their low bound, each named once; the number of cycles goes to the error
+/// stream, in German with `--lang de`. Without `--bands`, or with `--samples` or `--seed`, it is refused. On the
+/// machine with the fewest bounded values (some 300 cycles).
+#[test]
+fn verdicts_search_the_worst_corner_of_the_bounds() {
+    use sim_components::analysis::{bounds, verdict_worst};
+    // The machine with the fewest bounded values, so that the search stays short.
+    let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    let run = cli(&["verdicts", entry.id, "--bands", "--worst"]);
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let (out, cfg) = (text(&run.stdout), entry.config());
+    let bounded = bounds(&cfg).unwrap();
+    let (worst, runs) = verdict_worst(entry, &cfg, &bounded).unwrap();
+    assert_eq!(text(&run.stderr).trim(), format!("Cycles simulated in the search for the worst corners: {runs}"));
+    let mut lines = out.lines();
+    assert_eq!(lines.next().unwrap(), "check,motor,worst,limit,worst_case,at_high_bound,at_low_bound");
+    let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
+    assert_eq!(rows.len(), worst.len(), "{out}");
+    for (row, w) in rows.iter().zip(&worst) {
+        let number = |cell: &str| cell.parse::<f64>().unwrap();
+        assert!(row.len() == 7 && row[0] == w.verdict.check && (number(row[2]) / w.verdict.value - 1.0).abs() < 1e-3, "{row:?} against {w:?}");
+        assert_eq!(row[4], if w.verdict.ok { "ok" } else { "FAIL" });
+        for (bound, high) in bounded.iter().zip(&w.high) {
+            let named = |cell: &str| cell.split(';').any(|path| path == bound.0);
+            assert!(named(row[5]) == (*high == Some(true)) && named(row[6]) == (*high == Some(false)), "{}: {row:?}", bound.0);
+        }
+    }
+    let german = cli(&["verdicts", entry.id, "--bands", "--worst", "--lang", "de"]);
+    assert!(text(&german.stderr).starts_with("Für die Suche nach den ungünstigsten Ecken simulierte Zyklen: ") && text(&german.stdout) == out);
+    for bad in [&["--worst"][..], &["--bands", "--worst", "--samples", "6"], &["--bands", "--worst", "--seed", "2"]] {
+        let run = cli(&[&["verdicts", entry.id], bad].concat());
+        assert!(run.status.code() == Some(2) && run.stdout.is_empty() && text(&run.stderr).contains("--worst"), "{bad:?}: {}", text(&run.stderr));
+    }
+}
+
 /// A trace written by `run` replays onto itself: simulated torque and following error stay within 0.5 % (RMS)
 /// and 5 % (peak) of the largest measured value. Fitted against the config that made it, the fit finds the
 /// config's own masses and friction, and in a sweep of the config its own resonance. And a file that is no
@@ -258,6 +331,13 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         table(&[&["run", entry.id, "--cycle", "--time", "6.2", "--out", &trace], &no_payload[..]].concat());
 
         let summary = table(&[&["replay", entry.id, "--trace", &trace, "--out", &overlay], &no_payload[..]].concat());
+        // The overlay file is `overlay_csv`, which the app exports too.
+        let mut cfg = entry.config();
+        cfg.set_text("effects.payload = false").unwrap();
+        let measured = sim_components::trace::Trace::parse(&std::fs::read_to_string(&trace).unwrap(), sim.machine.motors()).unwrap();
+        let simulated = sim_components::trace::replay(entry, &cfg, &measured).unwrap();
+        let ids: Vec<&str> = sim.machine.motors().iter().map(|m| m.id).collect();
+        assert!(std::fs::read_to_string(&overlay).unwrap() == sim_components::trace::overlay_csv(&ids, &measured, &simulated), "{}: overlay", entry.id);
         let rows: Vec<Vec<f64>> = std::fs::read_to_string(&overlay).unwrap().lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect();
         assert_eq!((summary.len(), rows.len()), (sim.machine.motors().len(), 6201));
         for (k, motor) in summary.iter().enumerate() {
@@ -284,6 +364,18 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         assert_eq!((fit.len(), fit[0][0].as_str(), fit[1][0].as_str()), (2, "resonance_hz", "resonance_damping"), "{}: {fit:?}", entry.id);
         let (config, fitted): (f64, f64) = (fit[0][2].parse().unwrap(), fit[0][3].parse().unwrap());
         assert!(config > 50.0 && config < 130.0 && (fitted / config - 1.0).abs() < 1e-3, "{}: {fit:?}", entry.id);
+        // The numbers of `fit_sweep`, which the app shows too.
+        let measured = sim_components::identify::parse_sweep(&std::fs::read_to_string(&sweep).unwrap()).unwrap();
+        let shared = sim_components::identify::fit_sweep(entry, &entry.config(), 0, &measured, 1.5).unwrap().unwrap();
+        assert_eq!(fit[0][2..], [format!("{:.6e}", shared.config.frequency), format!("{:.6e}", shared.fitted.frequency), format!("{:.3e}", shared.fitted.frequency_error)]);
+        assert_eq!(fit[1][2..], [format!("{:.6e}", shared.config.damping), format!("{:.6e}", shared.fitted.damping), String::new()]);
+        // The same file with its rows from high to low frequency gives the same fit. It gave a negative damping.
+        let written = std::fs::read_to_string(&sweep).unwrap();
+        let mut lines: Vec<&str> = written.lines().collect();
+        lines[1..].reverse();
+        let falling = file("sweep-falling");
+        std::fs::write(&falling, lines.join("\n")).unwrap();
+        assert_eq!(table(&[&["fit", entry.id, "--sweep", &falling], &large[..]].concat()), fit, "{}", entry.id);
 
         let (en, de) = (cli(&["replay", entry.id, "--trace", &overlay]), cli(&["replay", entry.id, "--trace", &overlay, "--lang", "de"]));
         assert_eq!(en.status.code(), Some(2));
@@ -469,11 +561,219 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
         let rounded = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-rounded-end.csv", entry.id)).to_str().unwrap().to_string();
         let on_circle = [corner[0] + 0.025 * dx, end[1] - 0.0433013 * dz];
         std::fs::write(&rounded, format!("line,{},{}\narc,{:.7},{:.7},{},{},{turn}\n", corner[0], corner[1], on_circle[0], on_circle[1], corner[0], end[1])).unwrap();
-        let off = sim.path_deviation(&sim_components::path::parse(&std::fs::read_to_string(&rounded).unwrap()).unwrap()).unwrap();
+        let off = sim.path_deviation(&sim_components::path::parse(&std::fs::read_to_string(&rounded).unwrap()).unwrap(), false).unwrap();
         let out = cli(&["analyze", entry.id, "--path", &rounded]);
         assert!(off > 1e-9 && off < 5e-8 && out.status.success() && text(&out.stderr).is_empty(), "{}: off by {off} m, said {:?}", entry.id, text(&out.stderr));
         // A tolerance below zero is no tolerance.
         let refused = cli(&["analyze", entry.id, "--path", &path, "--set", "profile.path_tolerance_m=-0.001"]);
         assert!(refused.status.code() == Some(2) && text(&refused.stderr).contains("profile.path_tolerance_m"), "{}", text(&refused.stderr));
     }
+}
+
+/// `analyze --breakdown` and `--budget` write what `analyse_cycle` computes, for every machine: per motor the peak
+/// and RMS of each torque part and of the torque, and the energy budget from the supply to what is not accounted
+/// for, each with its share of the supply. The budget closes within `BUDGET_TOLERANCE`.
+#[test]
+fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
+    use sim_components::analysis::{BUDGET_TOLERANCE, analyse_cycle};
+    for entry in MACHINES {
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+        let (breakdown, budget) = (dir.join(format!("{}-breakdown.csv", entry.id)), dir.join(format!("{}-budget.csv", entry.id)));
+        let out = cli(&["analyze", entry.id, "--breakdown", breakdown.to_str().unwrap(), "--budget", budget.to_str().unwrap()]);
+        assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+        let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let load = analyse_cycle(&mut sim).unwrap();
+        let mut expected = String::from("motor,part,peak_torque_nm,rms_torque_nm\n");
+        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+            for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.unwrap()) {
+                expected += &format!("{},{part},{peak:.6e},{rms:.6e}\n", motor.id);
+            }
+            expected += &format!("{},torque,{:.6e},{:.6e}\n", motor.id, m.peak_torque, m.rms_torque);
+        }
+        assert_eq!(std::fs::read_to_string(&breakdown).unwrap(), expected, "{}", entry.id);
+        let b = load.budget.unwrap();
+        let written = std::fs::read_to_string(&budget).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 3 + b.rows.len());
+        assert_eq!((lines[0], lines[1]), ("item,energy_j,share", format!("supply,{:.6e},1.000000", b.supply).as_str()));
+        for (line, r) in lines[2..].iter().zip(&b.rows) {
+            assert_eq!(*line, format!("{},{:.6e},{:.6}", r.id, r.energy, r.energy / b.supply));
+        }
+        let unaccounted: f64 = lines.last().unwrap().strip_prefix("unaccounted,").unwrap().split(',').next().unwrap().parse().unwrap();
+        assert!(unaccounted.abs() < BUDGET_TOLERANCE * b.supply, "{}: {unaccounted} J", entry.id);
+        let copper = lines.iter().filter(|l| l.starts_with("copper.")).count();
+        assert!(copper == sim.machine.motors().len() && lines.iter().any(|l| l.starts_with("power.guide_x,")), "{}: {written}", entry.id);
+        assert!(!lines.iter().any(|l| l.starts_with("mains,")), "{}: {written}", entry.id);
+
+        // With the regenerative supply, the column `mains_energy_j` of `analyze` is each motor's energy fed back into the mains,
+        // and the budget has the rows `mains` and `line_module`.
+        let out = cli(&["analyze", entry.id, "--set", "effects.regenerative_supply=true", "--budget", budget.to_str().unwrap()]);
+        assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+        let mut cfg = entry.config();
+        cfg.set_text("effects.regenerative_supply = true").unwrap();
+        let load = analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
+        for (line, m) in text(&out.stdout).lines().skip(1).zip(&load.motors) {
+            assert!(m.mains_energy > 0.0 && line.split(',').nth(27) == Some(format!("{:.3}", m.mains_energy).as_str()), "{}: {line}", entry.id);
+        }
+        let written = std::fs::read_to_string(&budget).unwrap();
+        let b = load.budget.unwrap();
+        for id in ["mains", "line_module"] {
+            let energy = b.rows.iter().find(|r| r.id == id).unwrap().energy;
+            assert!(written.lines().any(|l| l == format!("{id},{energy:.6e},{:.6}", energy / b.supply)), "{}: {written}", entry.id);
+        }
+    }
+}
+
+/// `compare` writes the cycle with an effect on and off side by side, and the differences as `Comparison` has them.
+#[test]
+fn compare_writes_the_cycle_with_an_effect_on_and_off() {
+    use sim_components::analysis::compare_effect;
+    for entry in MACHINES {
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+        let (traces, differences) = (dir.join(format!("{}-compare.csv", entry.id)), dir.join(format!("{}-differences.csv", entry.id)));
+        let motor = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.motors()[0].id;
+        let torque = format!("motor.{motor}.torque");
+        let out = cli(&["compare", entry.id, "--effect", "guide_friction", "--signal", &torque, "--signal", "axis.x.position", "--out", traces.to_str().unwrap(), "--differences", differences.to_str().unwrap()]);
+        assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+        let found = compare_effect(entry, &entry.config(), "guide_friction").unwrap();
+        let place = |id: &str| found.signals.iter().position(|s| s.id == id).unwrap();
+        let written = std::fs::read_to_string(&traces).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines[0], format!("time[s],{torque}.on[N m],{torque}.off[N m],axis.x.position.on[m],axis.x.position.off[m]"));
+        assert_eq!(lines.len(), 1 + found.on.len().min(found.off.len()));
+        let (on, off) = (&found.on[100], &found.off[100]);
+        let (t, p) = (place(&torque), place("axis.x.position"));
+        assert_eq!(lines[101], format!("{:.4},{:.9e},{:.9e},{:.9e},{:.9e}", on[0], on[t], off[t], on[p], off[p]));
+        let (peak, rms) = found.difference(t);
+        let written = std::fs::read_to_string(&differences).unwrap();
+        assert_eq!(written.lines().nth(1).unwrap(), format!("{torque},N m,{peak:.6e},{rms:.6e}"));
+        // An effect the config does not have is refused by name.
+        let out = cli(&["compare", entry.id, "--effect", "no_such_effect"]);
+        assert!(!out.status.success() && text(&out.stderr).contains("effects.no_such_effect"), "{}", text(&out.stderr));
+    }
+}
+
+/// The XML elements of a text, checked for balance: (name, attributes) of every opening and empty one.
+fn xml_elements(xml: &str) -> Vec<(String, String)> {
+    let (mut open, mut out) = (Vec::new(), Vec::new());
+    for tag in xml.split('<').skip(1).map(|t| t.split_once('>').expect("every tag closes").0) {
+        if tag.starts_with('?') {
+            continue;
+        }
+        if let Some(name) = tag.strip_prefix('/') {
+            assert_eq!(open.pop().as_deref(), Some(name), "unbalanced </{name}>");
+            continue;
+        }
+        let (name, attributes) = tag.trim_end_matches('/').split_once(' ').unwrap_or((tag.trim_end_matches('/'), ""));
+        out.push((name.to_string(), attributes.to_string()));
+        if !tag.ends_with('/') {
+            open.push(name.to_string());
+        }
+    }
+    assert!(open.is_empty(), "not closed: {open:?}");
+    out
+}
+
+fn attribute<'a>(attributes: &'a str, name: &str) -> Option<&'a str> {
+    attributes.split_once(&format!(" {name}=\"")).or_else(|| attributes.strip_prefix(&format!("{name}=\"")).map(|rest| ("", rest))).map(|(_, rest)| rest.split('"').next().unwrap())
+}
+
+/// The files of a zip archive of stored entries, read through its local headers and checked against its central directory.
+fn unzip(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]) as usize;
+    let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+    let (mut files, mut at) = (Vec::new(), 0);
+    while u32_at(at) == 0x0403_4b50 {
+        assert_eq!(u16_at(at + 8), 0, "stored, not compressed");
+        let (crc, size, name_len, extra) = (u32_at(at + 14), u32_at(at + 18) as usize, u16_at(at + 26), u16_at(at + 28));
+        let name = String::from_utf8(bytes[at + 30..at + 30 + name_len].to_vec()).unwrap();
+        let data = bytes[at + 30 + name_len + extra..at + 30 + name_len + extra + size].to_vec();
+        assert_eq!(sim_fmi::crc32(&data), crc, "{name}");
+        files.push((name, data));
+        at += 30 + name_len + extra + size;
+    }
+    let end = bytes.len() - 22;
+    assert_eq!(u32_at(end), 0x0605_4b50, "end of central directory");
+    assert_eq!((u16_at(end + 10), u32_at(end + 16) as usize), (files.len(), at), "central directory");
+    let mut central = at;
+    for (name, _) in &files {
+        assert_eq!(u32_at(central), 0x0201_4b50);
+        let name_len = u16_at(central + 28);
+        assert_eq!(&bytes[central + 46..central + 46 + name_len], name.as_bytes());
+        central += 46 + name_len;
+    }
+    assert_eq!(central, end);
+    files
+}
+
+/// `fmu` writes a zip with the FMI layout, and its model description lists every signal with a unique value reference
+/// and its unit, the setpoint inputs and the parameters.
+#[test]
+fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let (dll, so) = (dir.join("sim_fmi.dll"), dir.join("libsim_fmi.so"));
+    std::fs::write(&dll, b"windows binary").unwrap();
+    std::fs::write(&so, b"linux binary").unwrap();
+    for entry in MACHINES {
+        let path = dir.join(format!("{}.fmu", entry.id));
+        let out = cli(&["fmu", entry.id, "--set", "mass.payload_kg=2.5", "--binary", dll.to_str().unwrap(), "--binary", so.to_str().unwrap(), "--out", path.to_str().unwrap()]);
+        assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+        let files = unzip(&std::fs::read(&path).unwrap());
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["modelDescription.xml", "resources/model.txt", "resources/config.toml", "binaries/win64/sim_fmi.dll", "binaries/linux64/sim_fmi.so"]);
+        assert_eq!(files[3].1, b"windows binary");
+        assert_eq!(files[2].1, sim_core::Config::parse(&text(&files[2].1)).unwrap().to_text().unwrap().into_bytes());
+        assert!(text(&files[2].1).contains("payload_kg = 2.5"), "the config as set on the command line");
+
+        let xml = text(&files[0].1);
+        let elements = xml_elements(&xml);
+        let root = &elements[0];
+        assert_eq!((root.0.as_str(), attribute(&root.1, "fmiVersion")), ("fmiModelDescription", Some("2.0")));
+        let model = sim_fmi::Model::new(entry, &text(&files[2].1), "en").unwrap();
+        assert_eq!(attribute(&root.1, "guid"), Some(model.guid.as_str()));
+        let units: Vec<&str> = elements.iter().filter(|(n, _)| n == "Unit").filter_map(|(_, a)| attribute(a, "name")).collect();
+        // (name, value reference, causality) of each variable, and the unit of its type element.
+        let mut variables = Vec::new();
+        for (i, (name, attributes)) in elements.iter().enumerate().filter(|(_, (n, _))| n == "ScalarVariable") {
+            let vr: usize = attribute(attributes, "valueReference").unwrap().parse().unwrap();
+            let unit = attribute(&elements[i + 1].1, "unit").unwrap_or("");
+            assert!(unit.is_empty() || units.contains(&unit), "{name}: unit {unit} not defined");
+            variables.push((attribute(attributes, "name").unwrap().to_string(), vr, attribute(attributes, "causality").unwrap().to_string(), unit.to_string()));
+        }
+        let mut refs: Vec<usize> = variables.iter().map(|v| v.1).collect();
+        refs.sort();
+        refs.dedup();
+        assert_eq!(refs.len(), variables.len(), "value references are unique");
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        for (k, signal) in sim.signal_infos().iter().enumerate() {
+            let v = variables.iter().find(|v| v.0 == signal.id).unwrap_or_else(|| panic!("{}: no variable {}", entry.id, signal.id));
+            assert_eq!((v.2.as_str(), v.3.as_str()), (if k == 0 { "independent" } else { "output" }, signal.unit.as_str()), "{}", signal.id);
+        }
+        for axis in sim.machine.axes() {
+            assert!(variables.iter().any(|v| v.0 == format!("command.setpoint.{}", axis.id) && v.2 == "input"));
+        }
+        assert!(variables.iter().any(|v| v.0 == "config_file" && v.2 == "parameter"));
+        // Outputs name exactly the output variables, by their place counted from one.
+        let structure = xml.split("<Outputs>").nth(1).unwrap().split("</Outputs>").next().unwrap();
+        let outputs: Vec<usize> = xml_elements(structure).iter().map(|(_, a)| attribute(a, "index").unwrap().parse().unwrap()).collect();
+        assert_eq!(outputs.len(), sim.signal_infos().len() - 1);
+        assert!(outputs.iter().all(|i| variables[i - 1].2 == "output"));
+    }
+    // Without --binary, the library built next to the program, or a message that says how to build it.
+    let path = dir.join("default.fmu");
+    let out = cli(&["fmu", MACHINES[0].id, "--out", path.to_str().unwrap()]);
+    let beside = std::path::Path::new(env!("CARGO_BIN_EXE_sim-cli")).with_file_name(format!("{}sim_fmi{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX));
+    assert_eq!(out.status.success(), beside.exists(), "{}", text(&out.stderr));
+    assert!(out.status.success() || text(&out.stderr).contains("-p sim-fmi"));
+    // A binary of no known platform, and no output file.
+    refused(&["fmu", MACHINES[0].id, "--binary", "sim_fmi.txt", "--out", path.to_str().unwrap()], "sim_fmi.txt");
+    refused(&["fmu", MACHINES[0].id], "--out");
+    // Two binaries for one platform, which went into the archive as two entries of one name.
+    let other = dir.join("other").join("sim_fmi.dll");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    std::fs::write(&other, b"another windows binary").unwrap();
+    let twice = dir.join("twice.fmu");
+    let _ = std::fs::remove_file(&twice);
+    refused(&["fmu", MACHINES[0].id, "--binary", dll.to_str().unwrap(), "--binary", other.to_str().unwrap(), "--out", twice.to_str().unwrap()], "--binary");
+    assert!(!twice.exists());
 }

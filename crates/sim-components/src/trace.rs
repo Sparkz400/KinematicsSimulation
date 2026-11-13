@@ -134,6 +134,35 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     Ok(out)
 }
 
+/// Per motor how far a replay is from its trace: RMS and peak of the difference of the torques, then of the
+/// following errors.
+pub fn differences(measured: &Trace, simulated: &Trace) -> Vec<[f64; 4]> {
+    let apart = |(m, s): (&MotorTrace, &MotorTrace)| {
+        let (torque, error) = (difference(&m.torque, &s.torque), difference(&m.following_error(), &s.following_error()));
+        [torque.0, torque.1, error.0, error.1]
+    };
+    measured.motors.iter().zip(&simulated.motors).map(apart).collect()
+}
+
+/// Measured and simulated torque, speed and following error side by side, per motor named in `ids`, one line
+/// per row of the trace, as CSV with a header.
+pub fn overlay_csv(ids: &[&str], measured: &Trace, simulated: &Trace) -> String {
+    let names = ["torque", "speed", "following_error"];
+    let header: Vec<String> = ids.iter().flat_map(|id| names.map(|n| format!("motor.{id}.{n}_measured,motor.{id}.{n}_simulated"))).collect();
+    let mut out = format!("time,{}\n", header.join(","));
+    let pairs = || measured.motors.iter().zip(&simulated.motors);
+    let errors: Vec<(Vec<f64>, Vec<f64>)> = pairs().map(|(m, s)| (m.following_error(), s.following_error())).collect();
+    for (row, time) in measured.time.iter().enumerate() {
+        let values: Vec<String> = pairs()
+            .zip(&errors)
+            .flat_map(|((m, s), (m_error, s_error))| [m.torque[row], s.torque[row], m.speed[row], s.speed[row], m_error[row], s_error[row]])
+            .map(|v| format!("{v:.9e}"))
+            .collect();
+        out += &format!("{time:.9e},{}\n", values.join(","));
+    }
+    out
+}
+
 /// RMS and peak of the difference between two columns.
 pub fn difference(a: &[f64], b: &[f64]) -> (f64, f64) {
     let squares: f64 = a.iter().zip(b).map(|(a, b)| (a - b).powi(2)).sum();

@@ -3,8 +3,16 @@
 
 mod ui;
 
+use bevy::anti_alias::smaa::Smaa;
+use bevy::asset::io::file::FileAssetReader;
+use bevy::gltf::GltfAssetLabel;
+use bevy::world_serialization::WorldAssetRoot;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{CameraOutputMode, Viewport};
+use bevy::camera::{CameraOutputMode, Hdr, Viewport};
+use bevy::light::CascadeShadowConfigBuilder;
+use bevy::pbr::ScreenSpaceAmbientOcclusion;
+use bevy::post_process::bloom::Bloom;
+use bevy::render::view::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
@@ -33,9 +41,13 @@ struct State {
     part_ids: Vec<&'static str>,
     /// The floor under the machine, placed when the machine's first scene arrives.
     floor: Option<Entity>,
+    /// The config file the drawn parts were made for, which decides which CAD meshes they use (`cad_mesh`).
+    mesh_config: String,
     /// The 3D view's rectangle in logical pixels: (left, top, right, bottom).
     view_rect: [f32; 4],
     frame: u32,
+    /// Where the screenshot hook scrolls the right panel to, in pixels from its top.
+    scroll: Option<f32>,
 }
 
 #[derive(Resource)]
@@ -58,26 +70,42 @@ fn main() {
             orbit: Orbit { yaw: 0.35, pitch: 0.2, distance: 2.5, target: Vec3::ZERO },
             parts: Vec::new(),
             floor: None,
+            mesh_config: String::new(),
             part_ids: Vec::new(),
             view_rect: [0.0; 4],
             frame: 0,
+            scroll: None,
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (sync_scene, draw_paths, orbit_camera, developer_hooks).chain())
+        .add_systems(Update, (sync_scene, paint_cad_parts, draw_paths, orbit_camera, developer_hooks).chain())
         .add_systems(EguiPrimaryContextPass, panels)
         .run();
 }
 
-fn setup(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>, mut meshes: ResMut<Assets<Mesh>>) {
+fn setup(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>, mut meshes: ResMut<Assets<Mesh>>, mut images: ResMut<Assets<Image>>) {
     // The panels get their own camera on top, so the 3D camera can be confined to the free area.
     egui_settings.auto_create_primary_context = false;
     commands.insert_resource(Shapes {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         cylinder: meshes.add(Cylinder::new(0.5, 1.0)),
     });
-    commands.spawn((WorldCamera, Camera3d::default(), Transform::default()));
+    // A workshop look: soft sky light from all sides for the metal to reflect, contact shadows (SSAO, which
+    // needs MSAA off, so SMAA smooths the edges instead), film-like tone mapping and a faint glow on highlights.
+    let sky = EnvironmentMapLight::hemispherical_gradient(&mut images, Color::srgb(0.75, 0.8, 0.9), Color::srgb(0.45, 0.45, 0.47), Color::srgb(0.12, 0.12, 0.13));
+    commands.spawn((
+        WorldCamera,
+        Camera3d::default(),
+        Transform::default(),
+        Hdr,
+        Msaa::Off,
+        Smaa::default(),
+        ScreenSpaceAmbientOcclusion::default(),
+        Tonemapping::TonyMcMapface,
+        Bloom::NATURAL,
+        sky.with_intensity(1500.0),
+    ));
     commands.spawn((
         PrimaryEguiContext,
         Camera2d,
@@ -92,8 +120,11 @@ fn setup(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>, 
     commands.spawn((
         DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(2.0, 4.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // The machine is a few metres across: spend the shadow map's resolution there, for crisp shadows.
+        CascadeShadowConfigBuilder { first_cascade_far_bound: 3.0, maximum_distance: 15.0, ..default() }.build(),
     ));
-    commands.spawn((DirectionalLight { illuminance: 3000.0, ..default() }, Transform::from_xyz(-3.0, 2.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    // The sky light fills the shade now, so the back light only rims the edges.
+    commands.spawn((DirectionalLight { illuminance: 1500.0, ..default() }, Transform::from_xyz(-3.0, 2.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y)));
 }
 
 /// Scene coordinates (x right, y into the depth, z up) to Bevy's (x right, y up, z towards the viewer).
@@ -121,13 +152,62 @@ fn part_transform(part: &Part) -> Transform {
     }
 }
 
-/// Belt stretch made visible: tension above pretension shifts the colour to red, below to blue.
+/// A part drawn from a vendor CAD mesh instead of a box: the index of its part in the scene.
+#[derive(Component)]
+struct CadPart(usize);
+
+/// The CAD mesh for a part, if there is one: `assets/meshes/<config file name>/<part id>.glb`, made by
+/// `catalog/tools/step_to_glb.py`. Without a config file, or without that file, the part stays a box.
+/// shortcut: the mesh has the size of the config as it was converted (stroke, Z length); edit those in the
+/// app and the mesh no longer matches. Upgrade to checking the stroke when someone edits them often.
+fn cad_mesh(config_file: &str, part_id: &str) -> Option<String> {
+    let name = std::path::Path::new(config_file).file_stem()?.to_str()?;
+    let file = ["meshes", name, &format!("{part_id}.glb")].join("/");
+    FileAssetReader::get_base_path().join("assets").join(&file).is_file().then_some(file)
+}
+
+/// A CAD mesh's own material, kept while the part is painted in its scene colour.
+#[derive(Component)]
+struct VendorMaterial(Handle<StandardMaterial>);
+
+/// Keeps the vendor's colours on a CAD part, except where it has none (a STEP file through FreeCAD without
+/// its window: the glTF's default material) or while the heat or belt view colours it: then the part's own
+/// material paints it. Runs every frame, since a glTF's meshes arrive some frames after the part is spawned.
+fn paint_cad_parts(
+    state: Res<State>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    cad_parts: Query<(Entity, &CadPart)>,
+    children: Query<&Children>,
+    mut meshes: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&VendorMaterial>)>,
+) {
+    let colourless = GltfAssetLabel::DefaultMaterial.to_string();
+    for (root, CadPart(index)) in &cad_parts {
+        let (Some(part), Some((_, ours))) = (state.model.scene.parts.get(*index), state.parts.get(*index)) else { continue };
+        let coloured = part.heat.is_some() || part.highlight != 0.0;
+        for entity in children.iter_descendants(root) {
+            let Ok((mut material, vendor)) = meshes.get_mut(entity) else { continue };
+            let own = vendor.map_or(&material.0, |v| &v.0);
+            let plain = asset_server.get_path(own).is_some_and(|p| p.label() == Some(colourless.as_str()));
+            match (coloured || plain, vendor) {
+                (true, None) => {
+                    commands.entity(entity).insert(VendorMaterial(std::mem::replace(&mut material.0, ours.clone())));
+                }
+                (true, Some(_)) if material.0 != *ours => material.0 = ours.clone(),
+                (false, Some(VendorMaterial(own))) => {
+                    material.0 = own.clone();
+                    commands.entity(entity).remove::<VendorMaterial>();
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Belt stretch and warmth made visible (`model::part_color`).
 fn part_color(part: &Part) -> Color {
-    let [r, g, b] = part.color;
-    let h = part.highlight.clamp(-1.0, 1.0);
-    let (toward, amount) = if h >= 0.0 { ([1.0, 0.1, 0.1], h) } else { ([0.1, 0.3, 1.0], -h) };
-    let mix = |from: f32, to: f32| from + (to - from) * amount;
-    Color::srgb(mix(r, toward[0]), mix(g, toward[1]), mix(b, toward[2]))
+    let [r, g, b] = sim_app::model::part_color(part.color, part.highlight, part.heat);
+    Color::srgb(r, g, b)
 }
 
 /// The planned path as a line in the 3D view, and over it the path the tool has really travelled since.
@@ -146,7 +226,8 @@ fn sync_scene(
     mut commands: Commands,
     shapes: Res<Shapes>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut transforms: Query<&mut Transform, Without<WorldCamera>>,
+    asset_server: Res<AssetServer>,
+    mut transforms: Query<(&mut Transform, Has<CadPart>), Without<WorldCamera>>,
 ) {
     let state = &mut *state;
     state.model.poll();
@@ -156,17 +237,46 @@ fn sync_scene(
     if state.view_rect[2] <= state.view_rect[0] {
         return;
     }
-    if ids != state.part_ids {
-        // Another machine, or a part came or went (the payload): rebuild the drawn parts.
-        for (entity, _) in state.parts.drain(..) {
-            commands.entity(entity).despawn();
+    if ids != state.part_ids || state.model.inputs.config_file != state.mesh_config {
+        // Another machine or config file, or a part came or went (the payload): rebuild the drawn parts.
+        // The CAD parts stay, matched again by id: the belt reorders its parts nearly every frame, and a CAD
+        // mesh spawned anew takes some frames to load.
+        let same_config = state.model.inputs.config_file == state.mesh_config;
+        let mut cad_kept = Vec::new();
+        for (old_index, (entity, material)) in state.parts.drain(..).enumerate() {
+            if same_config && transforms.get(entity).is_ok_and(|(_, cad)| cad) {
+                cad_kept.push((state.part_ids[old_index], entity, material));
+            } else {
+                commands.entity(entity).despawn();
+            }
         }
-        for part in &scene.parts {
-            let metallic = if matches!(part.shape, Shape::Cylinder { .. }) { 0.6 } else { 0.1 };
-            let material = materials.add(StandardMaterial { base_color: part_color(part), perceptual_roughness: 0.5, metallic, ..default() });
+        state.mesh_config = state.model.inputs.config_file.clone();
+        for (index, part) in scene.parts.iter().enumerate() {
+            if let Some(kept) = cad_kept.iter().position(|(id, ..)| *id == part.id) {
+                let (_, entity, material) = cad_kept.remove(kept);
+                commands.entity(entity).insert(CadPart(index));
+                state.parts.push((entity, material));
+                continue;
+            }
+            // Turned steel for round parts, matt rubber for the belt, satin anodised or painted for the rest.
+            let (metallic, perceptual_roughness) = match part.shape {
+                Shape::Cylinder { .. } => (0.9, 0.3),
+                _ if part.id.starts_with("belt") => (0.0, 0.85),
+                _ => (0.3, 0.45),
+            };
+            let material = materials.add(StandardMaterial { base_color: part_color(part), perceptual_roughness, metallic, ..default() });
+            if let Some(file) = cad_mesh(&state.mesh_config, part.id) {
+                let at = part_transform(part).with_scale(Vec3::ONE);
+                let entity = commands.spawn((WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))), at, CadPart(index))).id();
+                state.parts.push((entity, material));
+                continue;
+            }
             let mesh = if matches!(part.shape, Shape::Cylinder { .. }) { shapes.cylinder.clone() } else { shapes.cube.clone() };
             let entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), part_transform(part))).id();
             state.parts.push((entity, material));
+        }
+        for (_, entity, _) in cad_kept {
+            commands.entity(entity).despawn();
         }
         if state.part_ids.is_empty() && !scene.parts.is_empty() {
             // First scene of a machine: aim the camera at its middle and fit it in.
@@ -180,8 +290,7 @@ fn sync_scene(
             let aspect = if view_bottom > view_top && view_right > view_left { (view_right - view_left) / (view_bottom - view_top) } else { 1.0 };
             let size = high - low;
             let half_view = (size.y / 2.0).max(size.x / 2.0 / aspect) * 1.45 + 0.1;
-            state.orbit.distance = half_view / (std::f32::consts::FRAC_PI_8).tan() + size.z / 2.0;
-            // A floor under the lowest part, for the shadows to fall on.
+            state.orbit.distance = half_view / (std::f32::consts::FRAC_PI_8).tan() + size.z / 2.0;            // A floor under the lowest part, for the shadows to fall on.
             if let Some(old) = state.floor.take() {
                 commands.entity(old).despawn();
             }
@@ -194,13 +303,16 @@ fn sync_scene(
         return;
     }
     for (part, (entity, material)) in scene.parts.iter().zip(&state.parts) {
-        if let Ok(mut transform) = transforms.get_mut(*entity) {
-            *transform = part_transform(part);
+        if let Ok((mut transform, cad)) = transforms.get_mut(*entity) {
+            // A CAD mesh is drawn at its true size; only the boxes are stretched to the part.
+            *transform = if cad { part_transform(part).with_scale(Vec3::ONE) } else { part_transform(part) };
         }
-        if part.highlight != 0.0
+        // Only where the colour changed, so that the other materials are not sent to the graphics card again.
+        let color = part_color(part);
+        if materials.get(material).is_some_and(|m| m.base_color != color)
             && let Some(mut material) = materials.get_mut(material)
         {
-            material.base_color = part_color(part);
+            material.base_color = color;
         }
     }
 }
@@ -241,7 +353,7 @@ fn panels(
     let mut actions = Vec::new();
     let mut root = egui::Ui::new(ctx.clone(), "root".into(), egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()));
     let left = egui::Panel::left("controls").resizable(true).default_size(320.0).show(&mut root, |ui| ui::controls(ui, &state.model, &mut actions)).response.rect;
-    let right = egui::Panel::right("scopes").resizable(true).default_size(720.0).show(&mut root, |ui| ui::scopes(ui, &state.model, &mut actions)).response.rect;
+    let right = egui::Panel::right("scopes").resizable(true).default_size(720.0).show(&mut root, |ui| ui::scopes(ui, &state.model, &mut actions, state.scroll)).response.rect;
 
     // The 3D camera draws into what the panels leave free.
     let scale = window.scale_factor();
@@ -293,6 +405,7 @@ fn panels(
                 let time = model.visible_rows().last().map_or(0.0, |row| row[0]);
                 model.export_traces(std::path::Path::new(&format!("traces-{time:.3}.csv")));
             }
+            Action::ExportOverlay => model.export_overlay(std::path::Path::new("replay-overlay.csv")),
             Action::TuningAxis(axis) => model.tuning_axis = axis,
             Action::RunTuning => model.run_tuning(model.tuning_axis),
             Action::CloseTuning => model.tuning = None,
@@ -300,12 +413,43 @@ fn panels(
             Action::RunAnalysis(kind) => model.run_analysis(kind),
             Action::ApplyOptimised => model.apply_optimised(),
             Action::UseCandidate(row) => model.use_candidate(row),
+            Action::OpenConfig(dialog) => {
+                if let Some(path) = config_path(model, dialog, false) {
+                    model.open_config(&path);
+                    // Forget the drawn parts, so the camera frames the machine as the file sets it up.
+                    state.part_ids.clear();
+                }
+            }
+            Action::SaveConfig(dialog) => {
+                if let Some(path) = config_path(model, dialog, true) {
+                    model.save_config(&path);
+                }
+            }
+            Action::ApplyParts => model.apply_parts(),
             Action::CloseAnalysis => model.clear_analysis(),
             Action::Clear(kind) => model.clear(kind),
             Action::ClearMessages => model.messages.clear(),
         }
     }
     Ok(())
+}
+
+/// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting
+/// where the field points); `None` where it is cancelled. The dialog holds up the window until it is closed.
+fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
+    let typed = std::path::Path::new(&model.inputs.config_file);
+    if !dialog {
+        return Some(model.inputs.config_file.clone());
+    }
+    let mut files = rfd::FileDialog::new().add_filter("toml", &["toml"]);
+    if let Some(folder) = typed.parent().filter(|folder| folder.is_dir()) {
+        files = files.set_directory(folder);
+    }
+    if let Some(name) = typed.file_name() {
+        files = files.set_file_name(name.to_string_lossy());
+    }
+    let picked = if save { files.save_file() } else { files.pick_file() };
+    picked.map(|path| path.display().to_string())
 }
 
 /// "Motor A  1250 1/min"
@@ -317,14 +461,24 @@ fn label_text(model: &Model, label: &Label) -> String {
 /// starts the cycle, measures the tuning of the first axis, runs the three analyses (the cycle with its
 /// error bands), saves one screenshot a second after they are done (after nine seconds at the earliest) and
 /// exits a second later. To get another part of the panel into the picture, one of SIM_APP_SEARCH (how the
-/// article numbers start), SIM_APP_PATH and SIM_APP_TRACE (a file each) runs that part in their place.
+/// article numbers start), SIM_APP_PATH and SIM_APP_TRACE (a file each) runs that part in their place, and
+/// SIM_APP_SWEEP (a measured frequency response, or nothing) runs the frequency response from 50 to 130 Hz
+/// with 1.5 N m and, with a file, its fit. SIM_APP_POINTS runs the cycle alone, for its operating points.
+/// SIM_APP_EFFECTS starts the cycle and analyses it, for the effect views; SIM_APP_COMPARE (an effect's name in
+/// `[effects]`) runs the effect comparison with it as well. SIM_APP_CONFIG (a file) opens that config
+/// file first. SIM_APP_SCROLL (pixels) scrolls the right panel down.
 fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: MessageWriter<AppExit>) {
     let Ok(path) = std::env::var("SIM_APP_SCREENSHOT") else { return };
     state.frame += 1;
     match state.frame {
         30 => {
-            let model = &mut state.model;
             let asked = |name: &str| std::env::var(name).ok();
+            if let Some(file) = asked("SIM_APP_CONFIG") {
+                state.model.open_config(&file);
+                state.part_ids.clear();
+            }
+            state.scroll = asked("SIM_APP_SCROLL").and_then(|pixels| pixels.parse().ok());
+            let model = &mut state.model;
             let inputs = &mut model.inputs;
             let parts = [(asked("SIM_APP_SEARCH"), &mut inputs.series, Analysis::Search), (asked("SIM_APP_PATH"), &mut inputs.path_file, Analysis::Path), (asked("SIM_APP_TRACE"), &mut inputs.trace_file, Analysis::Trace)];
             let mut kinds = Vec::new();
@@ -333,6 +487,26 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
                     *field = value;
                     kinds.push(kind);
                 }
+            }
+            if let Some(file) = asked("SIM_APP_SWEEP") {
+                (inputs.sweep_from, inputs.sweep_to, inputs.sweep_count, inputs.sweep_amplitude) = (50.0, 130.0, 30, 1.5);
+                kinds.push(Analysis::Sweep);
+                if !file.is_empty() {
+                    inputs.sweep_file = file;
+                    kinds.push(Analysis::SweepFit);
+                }
+            }
+            if asked("SIM_APP_POINTS").is_some() {
+                kinds.push(Analysis::Cycle);
+            }
+            // The effect views: their live parts need the machine moving.
+            if asked("SIM_APP_EFFECTS").is_some() {
+                model.command(sim_components::Command::StartCycle);
+                kinds.push(Analysis::Cycle);
+            }
+            if let Some(effect) = asked("SIM_APP_COMPARE") {
+                model.inputs.compare_effect = effect;
+                kinds.push(Analysis::Compare);
             }
             if kinds.is_empty() {
                 model.command(sim_components::Command::StartCycle);

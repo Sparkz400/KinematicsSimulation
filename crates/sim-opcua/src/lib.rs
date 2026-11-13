@@ -13,13 +13,20 @@
 //! | `command.cycle`                               | Boolean | write  | true starts the cycle, false stops it     |
 //! | `command.disable`                             | Boolean | write  | true switches the drives off (brakes on)  |
 //! | `command.enable`                              | Boolean | write  | true switches the drives on again         |
-//! | `status.busy`                                 | Boolean | read   | a move or the cycle is under way          |
+//! | `command.path`                                | String  | write  | a path, in the text of a path file        |
+//! | `command.path_time_optimal`                   | Boolean | write  | plan the path as fast as the motors allow |
+//! | `command.run_path`                            | Boolean | write  | true plans `command.path` and runs it     |
+//! | `status.busy`                                 | Boolean | read   | a move, path or the cycle is under way    |
 //! | `status.refused`                              | String  | read   | key of the last refused command, or empty |
 //!
 //! An axis the PLC does not write stays where it is: `command.target.<axis id>` reads the planned position
 //! until it is written, and again after the move it was written for; `command.setpoint.<axis id>` reads the
 //! setpoint the controller follows, which is the planned position whenever no setpoint is on its way. So a
 //! write to one axis never carries an old value for the others.
+//!
+//! The path is planned from where the machine stands when `command.run_path` arrives, as
+//! `Sim::plan_path` plans it (format: see `sim_components::path`). A path that cannot be read is refused with
+//! `opcua-error-path-line`; one that cannot be planned or run with the key the planner or the controller gives.
 //!
 //! `status.refused` keeps a refusal until a command of the same kind (move, setpoint, cycle start, ...) is
 //! accepted. Accepted commands of another kind, such as a stream of setpoints, do not wipe it.
@@ -54,6 +61,9 @@ enum Input {
     Cycle(bool),
     Disable,
     Enable,
+    Path(String),
+    PathTimeOptimal(bool),
+    RunPath,
 }
 
 pub struct Link {
@@ -77,6 +87,10 @@ fn number(value: &DataValue) -> Option<f64> {
         Variant::Int64(v) => Some(*v as f64),
         _ => None,
     }
+}
+
+fn text(value: &DataValue) -> Option<String> {
+    if let Some(Variant::String(s)) = &value.value { Some(s.as_ref().to_string()) } else { None }
 }
 
 fn flag(value: &DataValue) -> Option<bool> {
@@ -137,6 +151,9 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
             ("command.cycle", "opcua-cycle", DataTypeId::Boolean, Variant::from(false), true),
             ("command.disable", "opcua-disable", DataTypeId::Boolean, Variant::from(false), true),
             ("command.enable", "opcua-enable", DataTypeId::Boolean, Variant::from(false), true),
+            ("command.path", "opcua-path", DataTypeId::String, Variant::from(""), true),
+            ("command.path_time_optimal", "opcua-path-time-optimal", DataTypeId::Boolean, Variant::from(false), true),
+            ("command.run_path", "opcua-run-path", DataTypeId::Boolean, Variant::from(false), true),
             ("status.busy", "opcua-busy", DataTypeId::Boolean, Variant::from(false), false),
             ("status.refused", "opcua-refused", DataTypeId::String, Variant::from(""), false),
         ] {
@@ -158,6 +175,9 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
     on_write("command.cycle".into(), |v, _| Some(Input::Cycle(flag(v)?)), 0, inputs.clone());
     on_write("command.disable".into(), |v, _| flag(v)?.then_some(Input::Disable), 0, inputs.clone());
     on_write("command.enable".into(), |v, _| flag(v)?.then_some(Input::Enable), 0, inputs.clone());
+    on_write("command.path".into(), |v, _| Some(Input::Path(text(v)?)), 0, inputs.clone());
+    on_write("command.path_time_optimal".into(), |v, _| Some(Input::PathTimeOptimal(flag(v)?)), 0, inputs.clone());
+    on_write("command.run_path".into(), |v, _| flag(v)?.then_some(Input::RunPath), 0, inputs.clone());
 
     tokio::spawn(server.run_with(listener));
     tokio::spawn(simulate(SimLoop { sim, inbox, handle: handle.clone(), namespace, axes }));
@@ -182,12 +202,15 @@ async fn simulate(mut s: SimLoop) {
     let mut target_written = vec![false; target.len()];
     // The last refusal: the kind of command and why.
     let mut refused: Option<(std::mem::Discriminant<Command>, &'static str)> = None;
+    // The path the PLC has written, and whether to plan it as fast as the motors allow.
+    let (mut path, mut time_optimal) = (String::new(), false);
     let mut sample = Vec::new();
     let mut tick = tokio::time::interval(Duration::from_millis(10));
     let mut last = Instant::now();
     let mut owed = 0.0;
     while !s.handle.token().is_cancelled() {
         tick.tick().await;
+        // In the order they arrived; `None` is a path to run, planned when its turn comes.
         let mut commands = Vec::new();
         let mut new_setpoint = false;
         for input in s.inbox.try_iter() {
@@ -198,19 +221,41 @@ async fn simulate(mut s: SimLoop) {
                     new_setpoint = true;
                 }
                 Input::Move => {
-                    commands.push(Command::MoveTo(target.clone()));
+                    commands.push(Some(Command::MoveTo(target.clone())));
                     target_written.fill(false);
                 }
-                Input::Cycle(on) => commands.push(if on { Command::StartCycle } else { Command::Stop }),
-                Input::Disable => commands.push(Command::Disable),
-                Input::Enable => commands.push(Command::Enable),
+                Input::Cycle(on) => commands.push(Some(if on { Command::StartCycle } else { Command::Stop })),
+                Input::Disable => commands.push(Some(Command::Disable)),
+                Input::Enable => commands.push(Some(Command::Enable)),
+                Input::Path(text) => path = text,
+                Input::PathTimeOptimal(on) => time_optimal = on,
+                Input::RunPath => commands.push(None),
             }
         }
         // Axes written together arrive together: one setpoint command per tick.
         if new_setpoint {
-            commands.push(Command::Setpoint(setpoint.clone()));
+            commands.push(Some(Command::Setpoint(setpoint.clone())));
         }
+        let trajectory = std::mem::discriminant(&Command::Trajectory(Vec::new()));
         for command in commands {
+            // The path written last, also later in the same write, planned from where the commands before
+            // left the machine; refused like the trajectory it would become.
+            let command = match command {
+                Some(command) => command,
+                None => match sim_components::path::parse(&path) {
+                    Err(_) => {
+                        refused = Some((trajectory, "opcua-error-path-line"));
+                        continue;
+                    }
+                    Ok(pieces) => match s.sim.plan_path(&pieces, time_optimal) {
+                        Ok(points) => Command::Trajectory(points),
+                        Err(e) => {
+                            refused = Some((trajectory, e.key));
+                            continue;
+                        }
+                    },
+                },
+            };
             let kind = std::mem::discriminant(&command);
             match s.sim.command(command) {
                 Err(e) => refused = Some((kind, e.key)),
@@ -245,6 +290,8 @@ async fn simulate(mut s: SimLoop) {
             values.push((node(format!("command.target.{axis}")), DataValue::new_now(target[i])));
             values.push((node(format!("command.setpoint.{axis}")), DataValue::new_now(setpoint[i])));
         }
+        values.push((node("command.path".into()), DataValue::new_now(path.as_str())));
+        values.push((node("command.path_time_optimal".into()), DataValue::new_now(time_optimal)));
         values.push((node("status.busy".into()), DataValue::new_now(s.sim.control.busy())));
         values.push((node("status.refused".into()), DataValue::new_now(refused.map_or("", |(_, key)| key))));
         let _ = manager.set_values(s.handle.subscriptions(), values.iter().map(|(id, value)| (id, None, value.clone())));

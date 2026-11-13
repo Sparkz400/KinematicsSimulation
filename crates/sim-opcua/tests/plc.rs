@@ -305,3 +305,161 @@ async fn a_refusal_stays_until_a_command_of_its_kind_is_accepted() {
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
     }
 }
+
+/// Commands written in one write are carried out in the order written: enabling a machine that coasted
+/// while disabled, then a path, then running it, plans the path from where the machine stands once enabled.
+/// The path used to be planned before the enable was carried out, from where the machine stood when it was
+/// disabled, and was refused with `error-trajectory-start`.
+#[tokio::test(flavor = "multi_thread")]
+async fn enable_path_and_run_in_one_write_run_the_path() {
+    for entry in MACHINES.iter().copied() {
+        let plc = connect(entry, &format!("enable-path-{}", entry.id)).await;
+        let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().to_vec();
+        let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+        let set = |name: &str| (name.to_string(), Variant::Boolean(true));
+        // Disabled in the middle of the cycle, the machine coasts away from its last setpoint.
+        plc.write(vec![set("command.cycle")]).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        plc.write(vec![set("command.disable")]).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let middle = axes.iter().map(|a| format!("{}", 0.5 * (a.min + a.max))).collect::<Vec<_>>().join(",");
+        let written = plc.write(vec![set("command.enable"), ("command.path".into(), Variant::from(format!("line,{middle}").as_str())), set("command.run_path")]).await;
+        assert!(written.iter().all(|s| s.is_good()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
+        assert!(plc.busy().await, "{}: the path does not run", entry.id);
+    }
+}
+
+/// `command.run_path` written together with `command.path` runs that path, whichever comes first in the
+/// write. With the path after it, the path written before was run while `command.path` read the new one.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_path_written_before_the_path_runs_the_new_path() {
+    for entry in MACHINES.iter().copied() {
+        let plc = connect(entry, &format!("run-then-path-{}", entry.id)).await;
+        let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().to_vec();
+        let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // The old path cannot be read: run, it is refused.
+        plc.write(vec![("command.path".into(), Variant::from("line,0.5\ncircle,1,2"))]).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let middle = axes.iter().map(|a| format!("{}", 0.5 * (a.min + a.max))).collect::<Vec<_>>().join(",");
+        let new = format!("line,{middle}");
+        plc.write(vec![("command.run_path".into(), Variant::Boolean(true)), ("command.path".into(), Variant::from(new.as_str()))]).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(refused().await, Variant::from(""), "{}: the old path was run", entry.id);
+        assert!(plc.busy().await, "{}: the new path does not run", entry.id);
+        assert_eq!(plc.read(&["command.path".to_string()]).await[0], Variant::from(new.as_str()));
+    }
+}
+
+/// How far `pose` is from the polyline through `points`.
+fn off_path(points: &[(f64, Vec<f64>)], pose: &[f64]) -> f64 {
+    let segment = |a: &[f64], b: &[f64]| {
+        let (ab, ap): (Vec<f64>, Vec<f64>) = (a.iter().zip(b).map(|(a, b)| b - a).collect(), a.iter().zip(pose).map(|(a, p)| p - a).collect());
+        let length = ab.iter().map(|d| d * d).sum::<f64>();
+        let along = if length > 0.0 { (ab.iter().zip(&ap).map(|(d, p)| d * p).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
+        ab.iter().zip(&ap).map(|(d, p)| (p - along * d).powi(2)).sum::<f64>().sqrt()
+    };
+    points.windows(2).map(|w| segment(&w[0].1, &w[1].1)).fold(f64::INFINITY, f64::min)
+}
+
+/// Runs `text` as a path from the PLC and polls until it is over: the poses read on the way and the time the
+/// simulator was busy with it.
+async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]) -> (Vec<Vec<f64>>, f64) {
+    let writes = vec![
+        ("command.path".to_string(), Variant::from(text)),
+        ("command.path_time_optimal".to_string(), Variant::Boolean(time_optimal)),
+        ("command.run_path".to_string(), Variant::Boolean(true)),
+    ];
+    assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
+    let mut names = position.to_vec();
+    names.push("signal.time".into());
+    let (mut poses, mut started, mut polls) = (Vec::new(), None, 0);
+    loop {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let busy = plc.busy().await;
+        let mut read = plc.numbers(&names).await;
+        let time = read.pop().unwrap();
+        poses.push(read);
+        polls += 1;
+        assert!(polls < 1000, "the path did not start and finish within ten seconds");
+        match (busy, started) {
+            (true, None) => started = Some(time),
+            (false, Some(start)) => return (poses, time - start),
+            _ => {}
+        }
+    }
+}
+
+/// Paths over OPC UA: the PLC writes the text of a path file and starts it; the simulator plans it from where
+/// the machine stands, as `Sim::plan_path` does, and runs it in real time. The poses the PLC reads lie on the
+/// planned path within the path error the analysis gives for it, and the end is reached within the settling
+/// tolerance. Paths that cannot be read, planned or run are refused with the reason, and nothing moves.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_path_from_the_plc_is_planned_and_run() {
+    for entry in MACHINES.iter().copied() {
+        let plc = connect(entry, &format!("path-{}", entry.id)).await;
+        let cfg = entry.config();
+        let sim = Sim::new(entry, &cfg).unwrap();
+        let axes = sim.machine.axes();
+        let position: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect();
+        let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
+        let point = |share: f64| axes.iter().map(|a| format!("{}", a.min + share * (a.max - a.min))).collect::<Vec<_>>().join(",");
+        let text = format!("# two lines\nline,{}\nline,{}\n", point(0.5), point(0.75));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let at_rest = plc.numbers(&position).await;
+
+        // Refused, with the reason, and the machine stays: a line that cannot be read, a path out of the
+        // stroke, an arc on a machine with one axis.
+        let beyond = axes.iter().map(|a| format!("{}", a.max + 0.1)).collect::<Vec<_>>().join(",");
+        let mut bad = vec![("line,0.5\ncircle,1,2".to_string(), "opcua-error-path-line"), (format!("line,{beyond}"), "error-path-range")];
+        if axes.len() == 1 {
+            bad.push(("arc,0.6,0.25,0.5,0.25,cw".into(), "error-path"));
+        }
+        for (path, key) in bad {
+            let written = plc.write(vec![("command.path".into(), Variant::from(path.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
+            assert!(written.iter().all(|s| s.is_good()));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(refused().await, Variant::from(key), "{}: {path}", entry.id);
+            assert!(!plc.busy().await, "{}: {path}", entry.id);
+            let now = plc.numbers(&position).await;
+            assert!(now.iter().zip(&at_rest).all(|(n, r)| (n - r).abs() < 1e-6), "{}: moved to {now:?} from {at_rest:?} on {path}", entry.id);
+        }
+        assert!(!plc.write(vec![("command.path".into(), Variant::Double(1.0))]).await[0].is_good(), "a number is not a path");
+
+        // The same path the simulator would plan, and the path error the analysis gives for it.
+        let pieces = sim_components::path::parse(&text).unwrap();
+        let planned = sim.plan_path(&pieces, false).unwrap();
+        let path_error = sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap().path_error_peak;
+        let (poses, slow) = run_path(&plc, &text, false, &position).await;
+        assert_eq!(refused().await, Variant::from(""), "{}: an accepted path leaves a refusal", entry.id);
+        assert_eq!(plc.read(&["command.path".to_string()]).await[0], Variant::from(text.as_str()), "the path reads back what was written");
+        assert!(poses.len() > 20, "{}: {} poses read", entry.id, poses.len());
+        let worst = poses.iter().map(|p| off_path(&planned, p)).fold(0.0, f64::max);
+        assert!(worst <= path_error, "{}: {worst} m off the planned path, the analysis gives {path_error} m", entry.id);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let end = &planned.last().unwrap().1;
+        let reached = plc.numbers(&position).await;
+        let tolerance = cfg.f64("ratings.settling_tolerance_m").unwrap();
+        assert!(reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance), "{}: at {reached:?}, the path ends at {end:?}", entry.id);
+        assert!((slow - planned.last().unwrap().0).abs() < 0.05, "{}: busy for {slow} s, planned {} s", entry.id, planned.last().unwrap().0);
+
+        // Busy: a path started while one runs is refused.
+        let back = format!("line,{}", at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(","));
+        plc.write(vec![("command.path".into(), Variant::from(back.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(plc.busy().await, "{}: not on the way back", entry.id);
+        plc.write(vec![("command.run_path".into(), Variant::Boolean(true))]).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(refused().await, Variant::from("error-busy"), "{}", entry.id);
+        move_done(&plc).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Time-optimal: the same path from the same pose finishes sooner, as in the command-line tool.
+        let fast_plan = sim.plan_path(&pieces, true).unwrap();
+        let (_, fast) = run_path(&plc, &text, true, &position).await;
+        assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
+        assert!(fast < slow - 0.05 && (fast - fast_plan.last().unwrap().0).abs() < 0.05, "{}: {fast} s time-optimal (planned {} s), {slow} s within the axis limits", entry.id, fast_plan.last().unwrap().0);
+    }
+}

@@ -36,6 +36,60 @@ impl SignalInfo {
     }
 }
 
+/// The parts of a motor's torque that a machine can report as the signals `motor.<id>.torque_<part>` (N m), with
+/// the quantity keys `quantity-torque-<part>`: what accelerates the moved masses and the rotors, what holds them
+/// against gravity, what friction takes (guides, shafts, gearbox losses, idlers, cable chain), and the rest (belt
+/// elasticity and vibration, ripple, tooth meshing, process force, end stops). The rest is the motor torque less
+/// the other three, so the four add up to the motor torque.
+pub const TORQUE_PARTS: [&str; 4] = ["inertia", "gravity", "friction", "rest"];
+/// Signals whose id starts with this are powers lost (W) in one place of the machine: a friction contact, a damper,
+/// the gearbox. Together with the energy signals they close the machine's energy balance: the work of the motor
+/// torques equals the change of `energy.*` plus the time integral of every `power.*`.
+pub const LOSS_PREFIX: &str = "power.";
+/// The machine's energy split, as the signals `energy.<part>` (J), quantity keys `quantity-energy-<part>`. They add up
+/// to `Machine::energy`.
+pub const ENERGY_PARTS: [&str; 3] = ["kinetic", "potential", "elastic"];
+/// What the signals of a friction contact end with, after its id (`<id>.friction_<part>`): its sliding speed, its
+/// force split into Coulomb, viscous and stiction parts (they add up to the signal `<id>.friction`), and the factor
+/// its levels are scaled with by the load.
+pub const FRICTION_SIGNALS: [&str; 5] = ["speed", "coulomb", "viscous", "stiction", "load_scale"];
+
+/// A friction contact with a Coulomb, viscous and Stribeck model, for the friction view: the id its signals start
+/// with (see `FRICTION_SIGNALS`) and who it belongs to, as a translation key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrictionContact {
+    pub id: &'static str,
+    pub owner_key: &'static str,
+}
+
+/// A belt section for the belt view: the id its signals start with, `<id>.tension` (N) and `<id>.stretch` (m, its
+/// length less that of its belt unstretched), who it is as a translation key, and the tension it has at rest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeltSection {
+    pub id: &'static str,
+    pub owner_key: &'static str,
+    pub pretension: f64,
+}
+
+/// The kinds of part that can warm with their loss power (`ThermalPart`); each has the config keys
+/// `thermal.<kind>_resistance_k_w`, `thermal.<kind>_time_constant_s` and `thermal.<kind>_max_rise_k`, and the quantity
+/// key `quantity-<kind>-temperature`.
+pub const THERMAL_KINDS: [&str; 2] = ["gearbox", "guide"];
+/// What the simulation calls the temperature rise of a `ThermalPart` (`temperature.<id>`, K).
+pub const TEMPERATURE_PREFIX: &str = "temperature.";
+
+/// A part that warms with one of the machine's loss powers, `power.<id>`, with effects.part_heating: of which kind
+/// (`THERMAL_KINDS`), who it belongs to as a translation key, and which part of the scene shows it: the
+/// `scene_index`-th part with the id `scene_part`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThermalPart {
+    pub id: &'static str,
+    pub kind: &'static str,
+    pub owner_key: &'static str,
+    pub scene_part: &'static str,
+    pub scene_index: usize,
+}
+
 pub trait Machine: Send {
     fn axes(&self) -> &[AxisInfo];
     fn motors(&self) -> &[MotorInfo];
@@ -68,14 +122,48 @@ pub trait Machine: Send {
         None
     }
 
-    /// Signals beyond axis and motor positions, speeds and torques, which every machine gets for free.
+    /// Signals beyond axis and motor positions, speeds and torques, which every machine gets for free: first those
+    /// of `base_signals`, then those of `effect_signals`.
     fn signal_infos(&self) -> Vec<SignalInfo>;
-    fn signals(&self, state: &[f64], torque: &[f64], out: &mut Vec<f64>);
+    /// The machine's own signals but those of the effect views; cheap enough to be asked for every step.
+    fn base_signals(&self, state: &[f64], torque: &[f64], out: &mut Vec<f64>);
+    /// The signals of the effect views (`TORQUE_PARTS`, `LOSS_PREFIX`, `ENERGY_PARTS`, `FRICTION_SIGNALS`, belt
+    /// stretch), appended after those of `base_signals`. They cost about one more evaluation of the machine's
+    /// derivatives, so they are asked for only where they are recorded or added up.
+    fn effect_signals(&self, _state: &[f64], _torque: &[f64], _out: &mut Vec<f64>) {}
+    /// The loss powers alone, the signals `power.*` in their order among the signals, without the rest of
+    /// `effect_signals`: what warms the parts every step (`thermal_parts`). Empty where the machine reports none.
+    fn loss_powers(&self, _state: &[f64], _torque: &[f64], _out: &mut Vec<f64>) {}
+    /// Every signal of `signal_infos`.
+    fn signals(&self, state: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        self.base_signals(state, torque, out);
+        self.effect_signals(state, torque, out);
+    }
     fn scene(&self, state: &[f64], out: &mut Scene);
     /// Where the scene draws the tool when it is at `tool_pose`, in scene coordinates, so that a front end can
     /// draw a path of the tool into the scene. `None` for a machine that has no such mapping.
     fn scene_point(&self, _tool_pose: &[f64]) -> Option<[f64; 3]> {
         None
+    }
+
+    /// The friction contacts for the friction view. Empty where the machine tells none.
+    fn friction_contacts(&self) -> Vec<FrictionContact> {
+        Vec::new()
+    }
+    /// The steady sliding force of contact `i` at `speed`, with its levels scaled by `load_scale`, split into
+    /// [Coulomb, viscous, stiction]. It opposes a positive speed.
+    fn friction_curve(&self, _i: usize, _speed: f64, _load_scale: f64) -> [f64; 3] {
+        [0.0; 3]
+    }
+
+    /// The belt sections for the belt view. Empty where the machine tells none.
+    fn belt_sections(&self) -> Vec<BeltSection> {
+        Vec::new()
+    }
+
+    /// The parts that warm with a loss power, for the thermal model and view. Empty where the machine tells none.
+    fn thermal_parts(&self) -> Vec<ThermalPart> {
+        Vec::new()
     }
 
     /// Carries a running state over to a machine rebuilt from a changed config.

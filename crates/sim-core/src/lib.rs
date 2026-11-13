@@ -10,5 +10,5 @@ pub mod testkit;
 pub use config::{Config, ConfigError};
 pub use i18n::Translations;
 pub use integrate::{Rk4, advance};
-pub use machine::{AxisInfo, Machine, MachineEntry, MotorInfo, SignalInfo};
+pub use machine::{AxisInfo, BeltSection, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Machine, MachineEntry, MotorInfo, SignalInfo, TEMPERATURE_PREFIX, THERMAL_KINDS, ThermalPart, TORQUE_PARTS};
 pub use scene::{Label, Part, Scene, Shape};

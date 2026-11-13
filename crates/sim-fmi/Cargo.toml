@@ -1,0 +1,13 @@
+[package]
+name = "sim-fmi"
+version.workspace = true
+edition.workspace = true
+
+# The cdylib is the binary inside the FMU; the rlib serves the CLI (which writes the FMU) and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sim-core.workspace = true
+sim-components.workspace = true
+sim-machines.workspace = true

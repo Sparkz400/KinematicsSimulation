@@ -21,11 +21,14 @@ pub struct Part {
     pub color: [f32; 3],
     /// -1..1, drawn as a colour shift: belt tension below or above pretension.
     pub highlight: f32,
+    /// Temperature rise as a share of the part's rated limit, where it is computed: drawn from cold to hot in place
+    /// of the part's colour. Set by the simulation, not by the machine.
+    pub heat: Option<f32>,
 }
 
 impl Part {
     pub fn new(id: &'static str, shape: Shape, pos: [f64; 3], color: [f32; 3]) -> Self {
-        Self { id, shape, pos, angle: 0.0, color, highlight: 0.0 }
+        Self { id, shape, pos, angle: 0.0, color, highlight: 0.0, heat: None }
     }
     pub fn turned(mut self, angle: f64) -> Self {
         self.angle = angle;
@@ -62,6 +65,9 @@ pub fn on_circle(centre: [f64; 2], radius: f64, turn: f64) -> [f64; 2] {
     [centre[0] + radius * turn.cos(), centre[1] + radius * turn.sin()]
 }
 
+/// The colour of a belt strip at pretension; its highlight shifts it.
+pub const BELT_COLOR: [f32; 3] = [0.08, 0.08, 0.09];
+
 /// Draws a belt along a path in the x-z plane at depth `y`: one strip per path segment, and teeth
 /// at a fixed spacing of belt length counted from the start of the path.
 ///
@@ -69,7 +75,7 @@ pub fn on_circle(centre: [f64; 2], radius: f64, turn: f64) -> [f64; 2] {
 /// when the path changes with the pose they travel along it and around the pulleys by themselves.
 /// `shade(i)` is the highlight of the strip from point i to point i + 1.
 pub fn belt(out: &mut Vec<Part>, path: &[[f64; 2]], y: f64, width: f64, tooth_spacing: f64, shade: impl Fn(usize) -> f32) {
-    let (strip, tooth) = ([0.08, 0.08, 0.09], [0.75, 0.75, 0.7]);
+    let (strip, tooth) = (BELT_COLOR, [0.75, 0.75, 0.7]);
     let mut along = 0.0;
     let mut next_tooth = tooth_spacing / 2.0;
     for (i, pair) in path.windows(2).enumerate() {
@@ -90,13 +96,17 @@ pub fn belt(out: &mut Vec<Part>, path: &[[f64; 2]], y: f64, width: f64, tooth_sp
     }
 }
 
+/// The id of a motor's housing in the scene (`drive_unit`): the k-th such part is motor k's, and the simulation
+/// colours it by the warmth of that motor's winding.
+pub const MOTOR_PART: &str = "motor";
+
 /// Draws a motor with gearbox and belt pulley at `centre` (x, z), the pulley in the belt plane
 /// at depth `y` and the motor behind it. A cross on the pulley turns with the pulley, a bar on
 /// the hub turns with the motor shaft, so both speeds can be seen.
 pub fn drive_unit(out: &mut Vec<Part>, centre: [f64; 2], y: f64, radius: f64, pulley_angle: f64, rotor_angle: f64, color: [f32; 3]) {
     let at = |depth: f64| [centre[0], y + depth, centre[1]];
     out.extend([
-        Part::new("motor", Shape::Box { size: [0.075, 0.13, 0.075] }, at(0.15), color),
+        Part::new(MOTOR_PART, Shape::Box { size: [0.075, 0.13, 0.075] }, at(0.15), color),
         Part::new("gearbox", Shape::Cylinder { radius: 0.035, length: 0.07 }, at(0.05), [0.25, 0.25, 0.28]),
         Part::new("pulley", Shape::Cylinder { radius, length: 0.03 }, at(0.0), [0.55, 0.55, 0.6]),
         Part::new("pulley-spoke", Shape::Box { size: [1.8 * radius, 0.004, 0.22 * radius] }, at(-0.017), [0.95, 0.95, 0.95]).turned(pulley_angle),

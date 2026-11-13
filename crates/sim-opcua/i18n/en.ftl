@@ -10,3 +10,7 @@ opcua-error-start = The OPC UA server could not start: { $arg }
 opcua-listening = OPC UA server listening at { $arg }
 opcua-disable = Disable the drives
 opcua-enable = Enable the drives
+opcua-path = Path, as in a path file
+opcua-path-time-optimal = Plan the path as fast as the motors allow
+opcua-run-path = Run the path
+opcua-error-path-line = The path has a line that cannot be read: each line is `line`, `arc` or `spline` with its numbers.

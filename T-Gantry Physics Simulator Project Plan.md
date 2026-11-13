@@ -52,7 +52,7 @@ Each layer uses only the layer below it. The T-gantry module is the single place
 
 | Layer | Crates | Owns | Must not know |
 | --- | --- | --- | --- |
-| Front ends | sim-app, sim-cli, sim-opcua | Windows, 3D rendering, scopes, both interface languages, files, the PLC connection | Any machine by name |
+| Front ends | sim-app, sim-cli, sim-opcua, sim-fmi | Windows, 3D rendering, scopes, both interface languages, files, the PLC connection, the FMU | Any machine by name |
 | Machines | machine-t-gantry, machine-single-axis | Transformation, which components it has and how they connect, its 3D scene description, default config | How time stepping or the interface works |
 | Components | sim-components | Belt span, friction contact, gearbox, motor, drive, profile generator, encoder | Which machine they sit in |
 | Core | sim-core | Fixed-step integrator, state vector, signals with names and units, config loading, test harness | Any physics |
@@ -387,12 +387,12 @@ Belt-driven machines reuse the existing components. Machines with arms need one 
 
 The goal is that a user can look at one physical effect alone, instead of reading it out of the torque trace.
 
-- [ ] Friction view: force-over-speed curve per contact with the live operating point, and the split into Coulomb, viscous and stiction
-- [ ] Thermal view: temperatures of windings, gearboxes and guides over time, plus colour on the 3D model
-- [ ] Belt view: tension and stretch per span, drawn as colour on the belt
-- [ ] Torque breakdown: how much of each motor's torque goes to inertia, gravity, friction and belt forces
-- [ ] Loss budget: energy per cycle lost to each friction contact, belt damping and the motors
-- [ ] Effect comparison: the same move with one effect on and off, overlaid in one scope
+- [x] Friction view: force-over-speed curve per contact with the live operating point, and the split into Coulomb, viscous and stiction
+- [x] Thermal view: temperatures of windings, gearboxes and guides over time, plus colour on the 3D model
+- [x] Belt view: tension and stretch per span, drawn as colour on the belt
+- [x] Torque breakdown: how much of each motor's torque goes to inertia, gravity, friction and belt forces
+- [x] Loss budget: energy per cycle lost to each friction contact, belt damping and the motors
+- [x] Effect comparison: the same move with one effect on and off, overlaid in one scope
 
 **Visual extras**
 
@@ -414,7 +414,7 @@ Six additions take the simulator from a personal tool to a public open-source pr
 
 - [ ] Energy and electrical: consumption per cycle, DC link, braking resistor sizing
 - [ ] Lifetime estimates: belts, bearings and guides from the simulated loads
-- [ ] FMI export, so the models plug into Simulink and other simulation tools
+- [x] FMI export, so the models plug into Simulink and other simulation tools (FMI 2.0 Co-Simulation, crate `sim-fmi`, `sim-cli fmu`; not yet imported into Simulink or checked with an independent FMI tool)
 
 **Where each one fits in the architecture**
 

@@ -30,14 +30,16 @@ fn deps(manifest: &Table) -> Vec<(String, Value)> {
         .collect()
 }
 
-/// core 0, components 1, machines 2, registration list 3, front ends 4.
+/// core 0, components 1, machines 2, registration list 3, front ends 4 and 5. The FMI export is the one front end
+/// another may use: the command line writes the FMU from the same code as the FMU's binary.
 fn layer(name: &str) -> u32 {
     match name {
         "sim-core" => 0,
         "sim-components" => 1,
         n if n.starts_with("machine-") => 2,
         "sim-machines" => 3,
-        _ => 4,
+        "sim-fmi" => 4,
+        _ => 5,
     }
 }
 

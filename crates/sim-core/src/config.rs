@@ -137,6 +137,11 @@ impl Config {
         self.set(path.trim(), parsed["v"].clone())
     }
 
+    /// The config as TOML text, which `parse` reads back to the same config. Comments are not kept.
+    pub fn to_text(&self) -> Result<String> {
+        toml::to_string(&self.0).map_err(|e| ConfigError::Parse(e.to_string()))
+    }
+
     /// Every scalar value with its dotted path, for the parameter panel and the translation check.
     pub fn leaves(&self) -> Vec<(String, Value)> {
         fn walk(prefix: &str, table: &Table, out: &mut Vec<(String, Value)>) {

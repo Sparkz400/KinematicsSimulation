@@ -10,3 +10,7 @@ opcua-error-start = Der OPC-UA-Server konnte nicht starten: { $arg }
 opcua-listening = OPC-UA-Server erreichbar unter { $arg }
 opcua-disable = Antriebe sperren
 opcua-enable = Antriebe freigeben
+opcua-path = Bahn, wie in einer Bahndatei
+opcua-path-time-optimal = Bahn so schnell auslegen, wie die Motoren erlauben
+opcua-run-path = Bahn fahren
+opcua-error-path-line = Die Bahn hat eine Zeile, die sich nicht lesen lässt: Jede Zeile ist `line`, `arc` oder `spline` mit ihren Zahlen.

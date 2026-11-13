@@ -4,6 +4,9 @@
 //! The current controller works on the motor winding as a resistance and an inductance with the
 //! back-EMF of the turning rotor: L di/dt = u - R i - ke w, torque = kt i, and |u| limited by the
 //! DC link. With Kp = L / T and Tn = L / R the current follows its setpoint with time constant T.
+//! The controller holds its voltage over a base step, as an inverter holds it over a PWM period; the
+//! winding current is integrated over the step together with the mechanics (`Sim::step`), so that the
+//! electrical power and the work on the shaft come from the same integration.
 //!
 //! The one winding stands for the three phases: its current is the RMS phase current and u i is the
 //! electrical power, so u is three times the RMS phase voltage. A DC link U gives a phase amplitude of
@@ -24,11 +27,9 @@ pub struct DriveParams {
     /// Feedforward weights; 0 when switched off.
     pub velocity_ff: f64,
     pub torque_ff: f64,
-    /// Motor winding: torque per current, resistance, and the share of the current that is left
-    /// after one base step with the terminals shorted, exp(-R dt / L).
+    /// Motor winding: torque per current and resistance (the inductance is below).
     pub kt: f64,
     pub resistance: f64,
-    pub winding_decay: f64,
     /// Back-EMF per speed; 0 when switched off. In SI units it equals the torque constant.
     pub ke: f64,
     /// Highest voltage at the winding, `WINDING_PER_DC_LINK` times the DC link voltage; infinite when the
@@ -78,6 +79,14 @@ pub struct DriveParams {
     pub braking_threshold: f64,
     pub resistor_peak: f64,
     pub overvoltage: f64,
+    /// Time constant R C with which a disabled drive's DC link discharges through its bleeder and the drive's own
+    /// consumption, down to the bus level the rectifier holds.
+    pub discharge_time_constant: f64,
+    /// Regenerative supply (`regenerative_supply`, only with `dc_link`): above the bus level the line module feeds
+    /// the DC link's energy back into the mains, up to `line_max_power`, of which `line_efficiency` arrives there.
+    pub regenerative: bool,
+    pub line_max_power: f64,
+    pub line_efficiency: f64,
     /// Sensor noise, as standard deviations: on the measured position in rad and on the measured current.
     /// 0 when switched off.
     pub encoder_noise: f64,
@@ -146,6 +155,13 @@ impl DriveParams {
         if seed < 0.0 || seed.fract() != 0.0 {
             return Err(ConfigError::Invalid("drive.noise_seed".into()));
         }
+        // The line module's ratings are needed only where it feeds back.
+        let regenerative = dc_link && on("regenerative_supply")?;
+        let line = |leaf: &str| if regenerative { cfg.positive(&format!("ratings.{leaf}")) } else { Ok(1.0) };
+        let line_efficiency = line("line_module_efficiency")?;
+        if line_efficiency > 1.0 {
+            return Err(ConfigError::Invalid("ratings.line_module_efficiency".into()));
+        }
         Ok(Self {
             dc_link,
             shared_dc_link: dc_link && on("shared_dc_link")?,
@@ -154,12 +170,15 @@ impl DriveParams {
             braking_threshold,
             resistor_peak: rating("braking_resistor_peak_w")?,
             overvoltage,
+            discharge_time_constant: rating("dc_link_discharge_time_constant_s")?,
+            regenerative,
+            line_max_power: line("line_module_max_power_w")?,
+            line_efficiency,
             encoder_noise: noise("encoder_noise_counts")? * TAU / cfg.positive("drive.encoder_counts_per_rev")?,
             current_noise: noise("current_noise_a")?,
             noise_seed: seed as u64,
             kt,
             resistance,
-            winding_decay: (-resistance * dt / cfg.positive("motor.inductance_h")?).exp(),
             ke: if on("back_emf")? { kt } else { 0.0 },
             max_voltage: if on("voltage_limit")? { WINDING_PER_DC_LINK * bus_voltage } else { f64::INFINITY },
             current_kp,
@@ -235,6 +254,14 @@ impl DriveParams {
         self.ke * speed * (1.0 - self.saturation * (current / self.max_current).powi(2).min(1.0))
     }
 
+    /// The winding's rates at a moment of a base step, for the integrator (`Sim::step`), with the voltage and the
+    /// resistance held over the step: [di/dt, electrical power u i, copper loss R i^2, shaft power torque w]. With
+    /// the back-EMF on, u i = R i^2 + L i di/dt + torque w at every moment, so the winding's energy closes.
+    pub fn winding_rates(&self, voltage: f64, resistance: f64, current: f64, speed: f64) -> [f64; 4] {
+        let rate = (voltage - resistance * current - self.back_emf(current, speed)) / self.inductance;
+        [rate, voltage * current, resistance * current * current, self.torque_of(current) * speed]
+    }
+
     /// The temperature rise the winding settles at when a cycle with this RMS current repeats for long:
     /// the copper loss, with the resistance at that temperature, against the loss at the rated current.
     pub fn settled_rise(&self, rms_current: f64) -> f64 {
@@ -273,12 +300,18 @@ pub struct Drive {
     /// What the velocity loop asks for, before the torque limit; `torque_command` is what the limit leaves of it.
     pub torque_demand: f64,
     pub torque_command: f64,
+    /// A test signal added to what the velocity loop asks for, before the limit: the loop is measured by it
+    /// (`analysis::velocity_loop_response`). Zero otherwise.
+    pub torque_injection: f64,
     pub torque: f64,
     /// Winding current and the voltage the current controller applies.
     pub current: f64,
     pub voltage: f64,
-    /// Electrical power into the winding; negative while the motor feeds back.
+    /// Electrical power into the winding, the mean u i over the last base step; negative while the motor feeds back.
     pub power: f64,
+    /// Copper loss and the power the torque gave the shaft, means over the last step like `power`.
+    pub copper_loss: f64,
+    pub shaft_power: f64,
     /// Temperature of the winding above its surroundings.
     pub temperature_rise: f64,
     /// DC link voltage, the power the braking resistor burns, and whether the drive has tripped on
@@ -286,6 +319,11 @@ pub struct Drive {
     pub dc_voltage: f64,
     pub resistor_power: f64,
     pub tripped: bool,
+    /// With the DC link simulated: the power drawn from the line into the DC link, and with the regenerative supply
+    /// the power fed back into the mains and what the line module lost doing so, over the last step.
+    pub rectifier_power: f64,
+    pub mains_power: f64,
+    pub line_loss: f64,
     /// The drive's own stream of sensor noise.
     pub noise: Noise,
     current_integral: f64,
@@ -386,15 +424,16 @@ impl Drive {
         }
         let (low, high) = p.torque_range(self.speed);
         self.torque_demand = out;
-        self.torque_command = delayed(&mut self.torque_queue, out.clamp(low, high), p.velocity_delay);
+        self.torque_command = delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
         // Anti-windup: the integrator stops while it would push further into the limit.
         if (out <= high || error < 0.0) && (out >= low || error > 0.0) {
             self.integral += p.ki * error * p.velocity_cycle;
         }
     }
 
-    /// Current loop: PI on the winding current, then the winding itself for one base step.
-    pub fn current_loop(&mut self, p: &DriveParams, speed: f64) {
+    /// Current loop: PI on the winding current. The voltage it sets is held over the next base step, in which the
+    /// integrator takes the winding through it (`DriveParams::winding_rates`); then `winding_stepped`.
+    pub fn current_control(&mut self, p: &DriveParams, speed: f64) {
         let measured = self.current + if p.current_noise > 0.0 { p.current_noise * self.noise.next() } else { 0.0 };
         let error = p.current_for(self.torque_command) - measured;
         // The drive adds the back-EMF it expects at this speed, as real drives do. Without that the
@@ -409,54 +448,105 @@ impl Drive {
         if wanted == limited {
             self.current_integral += p.current_ki * error * p.current_cycle;
         }
-        // The winding with the voltage held and the back-EMF of the speed at the start of the step:
-        // the current runs towards (u - ke w) / R with the time constant L / R.
-        let (resistance, decay) = if p.heating {
-            let r = p.resistance_at(self.temperature_rise);
-            (r, (-r * p.current_cycle / p.inductance).exp())
-        } else {
-            (p.resistance, p.winding_decay)
-        };
-        let settled = (self.voltage - back_emf) / resistance;
-        let before = self.current;
-        self.current = settled + (self.current - settled) * decay;
-        self.torque = p.torque_of(self.current);
-        self.power = self.voltage * 0.5 * (before + self.current);
+    }
+
+    /// The winding's resistance over the next base step: at the temperature the step starts with.
+    pub fn winding_resistance(&self, p: &DriveParams) -> f64 {
+        if p.heating { p.resistance_at(self.temperature_rise) } else { p.resistance }
+    }
+
+    /// The base step done: the integrator has taken the winding through it (`DriveParams::winding_rates`) and left
+    /// the current at its end and the electrical energy, the copper loss and the work on the shaft over it. Then the
+    /// DC link of its own and the winding's heating.
+    pub fn winding_stepped(&mut self, p: &DriveParams, current: f64, [electrical, copper, work]: [f64; 3]) {
+        let dt = p.current_cycle;
+        (self.current, self.torque) = (current, p.torque_of(current));
+        (self.power, self.copper_loss, self.shaft_power) = (electrical / dt, copper / dt, work / dt);
         // A DC link of its own. A shared one is stepped once all drives have had this step (`shared_dc_link`).
         if p.dc_link && !p.shared_dc_link {
-            let stored = 0.5 * p.dc_capacitance * self.dc_voltage * self.dc_voltage;
-            (self.dc_voltage, self.resistor_power) = dc_link_step(p, p.dc_capacitance, stored, self.power);
-            self.tripped |= self.dc_voltage > p.overvoltage;
+            self.own_dc_link(p);
         }
+        self.warm(p);
+    }
+
+    /// A base step with the drive disabled: no current, no torque. The winding cools and the DC link discharges
+    /// through its bleeder, a shared one once all drives have had this step (`shared_dc_link`).
+    ///
+    /// A current still in the winding when the pulses stop freewheels through the inverter's diodes into the DC link,
+    /// against its voltage: it is gone within microseconds, well inside the step, and its energy L i^2 / 2 goes to
+    /// the DC link (as power fed back over this step; without the DC link simulated, back to the supply).
+    pub fn disabled_step(&mut self, p: &DriveParams) {
+        let freewheeling = 0.5 * p.inductance * self.current * self.current;
+        (self.torque, self.torque_command, self.torque_demand, self.current, self.voltage) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        (self.power, self.copper_loss, self.shaft_power) = (-freewheeling / p.current_cycle, 0.0, 0.0);
+        self.warm(p);
+        if p.dc_link {
+            // C dU/dt = -U / R_b: the voltage falls by exp(-dt / (R_b C)) per step, exactly. The rectifier catches it
+            // at the bus level, a regenerative supply takes what is above.
+            self.dc_voltage *= (-p.current_cycle / p.discharge_time_constant).exp();
+            if !p.shared_dc_link {
+                self.own_dc_link(p);
+            }
+        }
+    }
+
+    /// One step of a DC link of its own, with the electrical power of the step.
+    fn own_dc_link(&mut self, p: &DriveParams) {
+        let stored = 0.5 * p.dc_capacitance * self.dc_voltage * self.dc_voltage;
+        self.set_dc_link(p, dc_link_step(p, p.dc_capacitance, stored, self.power));
+    }
+
+    fn set_dc_link(&mut self, p: &DriveParams, step: DcLinkStep) {
+        (self.dc_voltage, self.resistor_power, self.rectifier_power, self.mains_power, self.line_loss) = (step.voltage, step.resistor, step.drawn, step.mains, step.line_loss);
+        self.tripped |= self.dc_voltage > p.overvoltage;
+    }
+
+    /// The copper loss of the step warms the winding; at the rated current it balances at the rated rise. Without
+    /// current (a disabled drive) the same model cools it.
+    fn warm(&mut self, p: &DriveParams) {
         if p.heating {
-            // The copper loss warms the winding; at the rated current it balances at the rated rise.
             let rated_loss = p.resistance_at(p.rated_rise) * p.rated_current * p.rated_current;
-            let heating = p.rated_rise * resistance * self.current * self.current / rated_loss;
+            let heating = p.rated_rise * self.copper_loss / rated_loss;
             self.temperature_rise += p.current_cycle / p.thermal_time_constant * (heating - self.temperature_rise);
         }
     }
 }
 
+/// What a DC link did over one base step: its voltage after it, and the powers over it of the braking resistor, of
+/// the rectifier (drawn from the line), fed back into the mains and lost in the line module while feeding back.
+#[derive(Debug, Clone, Copy)]
+struct DcLinkStep {
+    voltage: f64,
+    resistor: f64,
+    drawn: f64,
+    mains: f64,
+    line_loss: f64,
+}
+
 /// One base step of a DC link of `capacitance` that holds the energy `stored` and takes `power` out (negative:
-/// a motor feeds back): the voltage after it and the power the braking resistor burns.
-fn dc_link_step(p: &DriveParams, capacitance: f64, stored: f64, power: f64) -> (f64, f64) {
+/// a motor feeds back).
+fn dc_link_step(p: &DriveParams, capacitance: f64, stored: f64, power: f64) -> DcLinkStep {
     // The capacitors take what the motors feed back and give what they draw: C U dU/dt = -P.
     // In energy, C U^2 / 2, that is exact for any step; `at` is the energy at a voltage.
-    let at = |voltage: f64| 0.5 * capacitance * voltage * voltage;
-    let energy = stored - power * p.current_cycle;
+    let (at, dt) = (|voltage: f64| 0.5 * capacitance * voltage * voltage, p.current_cycle);
+    let energy = stored - power * dt;
+    // A regenerative supply holds the bus level from above too: it feeds the excess back into the mains as far as its
+    // power goes, and of that its efficiency arrives there.
+    let fed = if p.regenerative { (energy - at(p.bus_voltage)).clamp(0.0, p.line_max_power * dt) } else { 0.0 };
     // Above the threshold the chopper switches the braking resistor in, which burns the excess
     // as far as its peak power goes. Beyond that the voltage keeps rising.
-    let burned = (energy - at(p.braking_threshold)).clamp(0.0, p.resistor_peak * p.current_cycle);
+    let burned = (energy - fed - at(p.braking_threshold)).clamp(0.0, p.resistor_peak * dt);
     // The rectifier feeds from the line as soon as the voltage would fall below the bus level.
-    let left = energy - burned;
-    (if left > at(p.bus_voltage) { (2.0 * left / capacitance).sqrt() } else { p.bus_voltage }, burned / p.current_cycle)
+    let left = energy - fed - burned;
+    let (voltage, drawn) = if left > at(p.bus_voltage) { ((2.0 * left / capacitance).sqrt(), 0.0) } else { (p.bus_voltage, at(p.bus_voltage) - left) };
+    DcLinkStep { voltage, resistor: burned / dt, drawn: drawn / dt, mains: p.line_efficiency * fed / dt, line_loss: (1.0 - p.line_efficiency) * fed / dt }
 }
 
 /// One base step of the DC link that all `drives` share, after their current loops: one Line Module, one DC
 /// link, as on a SINAMICS S120. What a braking motor feeds back, a motoring one draws; only the net power
 /// charges the capacitors. The link has the capacitance of all drives together (each brings
 /// `ratings.dc_link_capacitance_uf`), one chopper with one braking resistor of the `[ratings]` powers, and one
-/// trip. Every drive shows the link's voltage, the resistor's power and the trip as its own.
+/// trip. Every drive shows the link's voltage, the powers of resistor, rectifier and line module and the trip as its own.
 ///
 /// Links that were apart until now (the switch came on a running machine) put their energies together.
 pub fn shared_dc_link(p: &DriveParams, drives: &mut [Drive]) {
@@ -465,10 +555,9 @@ pub fn shared_dc_link(p: &DriveParams, drives: &mut [Drive]) {
     }
     let stored: f64 = drives.iter().map(|d| 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage).sum();
     let power: f64 = drives.iter().map(|d| d.power).sum();
-    let (voltage, resistor_power) = dc_link_step(p, p.dc_capacitance * drives.len() as f64, stored, power);
+    let step = dc_link_step(p, p.dc_capacitance * drives.len() as f64, stored, power);
     for drive in drives {
-        (drive.dc_voltage, drive.resistor_power) = (voltage, resistor_power);
-        drive.tripped |= voltage > p.overvoltage;
+        drive.set_dc_link(p, step);
     }
 }
 
@@ -489,7 +578,6 @@ mod tests {
             torque_ff: 0.0,
             kt: 0.45,
             resistance: 4.0,
-            winding_decay: (-4.0f64 * 62.5e-6 / 0.010).exp(),
             ke: 0.45,
             max_voltage: 190.0,
             // Kp = L / T and Tn = L / R for T = 0.25 ms.
@@ -523,9 +611,28 @@ mod tests {
             braking_threshold: 250.0,
             resistor_peak: 500.0,
             overvoltage: 280.0,
+            discharge_time_constant: 130.0,
+            regenerative: false,
+            line_max_power: 35000.0,
+            line_efficiency: 0.98,
             encoder_noise: 0.0,
             current_noise: 0.0,
             noise_seed: 1,
+        }
+    }
+
+    impl Drive {
+        /// The current loop and the winding at a speed held, as `Sim::step` takes the winding through a base step
+        /// with the mechanics: four RK4 sub-steps of the same rates.
+        fn current_loop(&mut self, p: &DriveParams, speed: f64) {
+            self.current_control(p, speed);
+            let (voltage, resistance) = (self.voltage, self.winding_resistance(p));
+            let mut y = [self.current, 0.0, 0.0, 0.0];
+            let mut rk = sim_core::Rk4::new(4);
+            for _ in 0..4 {
+                rk.step(|y, dy| dy.copy_from_slice(&p.winding_rates(voltage, resistance, y[0], speed)), &mut y, p.current_cycle / 4.0);
+            }
+            self.winding_stepped(p, y[0], [y[1], y[2], y[3]]);
         }
     }
 
@@ -625,6 +732,31 @@ mod tests {
         // Switched off, the voltage stays at the bus level and nothing trips.
         let (d, ..) = brake(&DriveParams { dc_link: false, resistor_peak: 20.0, ..params() }, 0.34);
         assert!(d.dc_voltage == 190.0 && d.resistor_power == 0.0 && !d.tripped);
+    }
+
+    /// The regenerative supply against a hand calculation. The motor brakes as in the test above and feeds back 41 W. The
+    /// line module holds the DC link at 190 V and feeds them into the mains: 98 % of 41 W for 0.1 s is 4.018 J there and
+    /// 0.082 J lost, and neither the capacitors nor the resistor take anything. With the line module's power limited to
+    /// 20 W it feeds back 20 W (1.96 J of 2 J arrive) and the other 21 W charge the capacitors: 2.1 J more than 8.4835 J
+    /// is sqrt(2 * 10.5835 J / 470 uF) = 212.217 V. Motoring, the rectifier draws what the motor takes: 49 W.
+    #[test]
+    fn a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power() {
+        let run = |p: &DriveParams, torque: f64| {
+            let mut d = Drive::at_rest(p, 0.0, torque, 0.0);
+            let (mut mains, mut lost, mut burned, mut drawn) = (0.0, 0.0, 0.0, 0.0);
+            for _ in 0..1600 {
+                d.current_loop(p, 100.0);
+                (mains, lost, burned, drawn) = (mains + d.mains_power * p.current_cycle, lost + d.line_loss * p.current_cycle, burned + d.resistor_power * p.current_cycle, drawn + d.rectifier_power * p.current_cycle);
+            }
+            (d, mains, lost, burned, drawn)
+        };
+        let p = DriveParams { dc_link: true, regenerative: true, ..params() };
+        let (d, mains, lost, burned, drawn) = run(&p, -0.45);
+        assert!(d.dc_voltage == 190.0 && (mains - 4.018).abs() < 1e-9 && (lost - 0.082).abs() < 1e-9 && burned == 0.0 && drawn == 0.0, "{} V, {mains} J, {lost} J", d.dc_voltage);
+        let (d, mains, _, burned, _) = run(&DriveParams { line_max_power: 20.0, ..p.clone() }, -0.45);
+        assert!((d.dc_voltage - 212.217).abs() < 1e-3 && (mains - 1.96).abs() < 1e-9 && burned == 0.0, "{} V, {mains} J", d.dc_voltage);
+        let (d, mains, _, _, drawn) = run(&p, 0.45);
+        assert!(d.dc_voltage == 190.0 && mains == 0.0 && (drawn - 4.9).abs() < 1e-9, "{drawn} J drawn");
     }
 
     /// Sensor noise against a hand calculation. Each encoder reading is off by an independent error with

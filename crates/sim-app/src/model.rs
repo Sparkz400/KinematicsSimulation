@@ -3,14 +3,14 @@
 //! this and calls its methods.
 
 use crate::session::{Event, Request, Session, extend_trail};
-use sim_components::analysis::{Band, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict};
-use sim_components::analysis::{StepResponse, SweepPoint, bandwidth, closed_loop_response, log_spaced, step_response};
-use sim_components::analysis::{analyse_cycle, analyse_trajectory, bounds, guide_life_km, optimise_cycle, sensitivity, verdict_bands, verdict_bands_sampled, verdicts};
+use sim_components::analysis::{Band, Comparison, CycleLoad, MotorLoad, Optimised, Sensitivity, Verdict, compare_effect};
+use sim_components::analysis::{SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
+use sim_components::analysis::{Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_life_h, guide_life_h, guide_life_km, optimise_cycle, pulley_bearing_life_h, sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst, verdicts};
 use sim_components::catalog::{Candidate, search_motors};
-use sim_components::identify::{AxisFit, fit_rigid};
-use sim_components::trace::{Trace, TraceError, difference, replay};
+use sim_components::identify::{AxisFit, SweepFit, fit_rigid, fit_sweep, parse_sweep, resonance};
+use sim_components::trace::{Trace, TraceError, differences, overlay_csv, replay};
 use sim_components::{Command, CommandError, Sim, path};
-use sim_core::{Config, ConfigError, MachineEntry, Scene, SignalInfo, Translations};
+use sim_core::{Config, ConfigError, Machine, MachineEntry, Scene, SignalInfo, TEMPERATURE_PREFIX, TORQUE_PARTS, Translations};
 use sim_machines::{MACHINES, translations};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -76,6 +76,12 @@ pub enum Analysis {
     Path,
     /// A drive trace from a file: replayed, and the config fitted to it.
     Trace,
+    /// The open-loop frequency response of the mechanics, from each motor's torque to its speed.
+    Sweep,
+    /// The belt stiffness fitted to a measured frequency response from a file.
+    SweepFit,
+    /// The cycle with one effect on and off, overlaid.
+    Compare,
 }
 
 /// What the analysis panel is asked with, as typed.
@@ -86,6 +92,8 @@ pub struct Inputs {
     /// For the error bands: how often the cycle is run with all bounded values between their bounds at once.
     /// 0: each value alone at its low and at its high bound.
     pub samples: usize,
+    /// With the error bands: also search per check for the worst corner of the bounds (`verdict_worst`).
+    pub worst: bool,
     /// Motor search: "230v" or "400v", how the article numbers start, and a gearbox series or nothing.
     pub supply: String,
     pub series: String,
@@ -96,6 +104,22 @@ pub struct Inputs {
     pub path_timed: bool,
     pub time_optimal: bool,
     pub trace_file: String,
+    /// The config file to open or save.
+    pub config_file: String,
+    /// Part names as typed, in the order of `PARTS`: motor article, supply and gearbox; "" for none.
+    pub parts: [String; 3],
+    /// Frequency response: lowest and highest frequency in Hz, number of frequencies and torque amplitude in
+    /// N m, as `sim-cli sweep` takes them. The amplitude is also the one a measured sweep was taken with.
+    pub sweep_from: f64,
+    pub sweep_to: f64,
+    pub sweep_count: usize,
+    pub sweep_amplitude: f64,
+    /// A measured frequency response (`frequency_hz`, `gain_rad_s_per_nm`) and the motor it was taken on.
+    pub sweep_file: String,
+    pub sweep_motor: usize,
+    /// The effect comparison: the effect switched (its name in `[effects]`), and the quantity of the scope overlaid.
+    pub compare_effect: String,
+    pub compare_quantity: String,
 }
 
 /// The supplies the motor catalogue has data for.
@@ -115,21 +139,30 @@ pub struct PathRun {
 
 /// A trace replayed and fitted: per motor the RMS and peak difference between the trace and its replay, of
 /// torque and of following error, and per axis the fit (none for an axis the trace does not move both ways).
+/// With the trace and its replay, for the overlay.
 pub struct TraceFit {
     pub differences: Vec<[f64; 4]>,
     pub fits: Vec<Option<AxisFit>>,
+    pub measured: Trace,
+    pub simulated: Trace,
 }
 
 enum Report {
     /// With the error bands, where they were asked for, and the number of samples they are of (0: each
     /// bounded value alone at its bounds).
-    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize),
+    /// And the worst corners, where they were searched, with the paths of the bounds they name.
+    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize, Vec<[f64; 3]>, Option<(Vec<Worst>, Vec<String>)>),
     Sensitivity(CycleLoad, Vec<Sensitivity>),
     Optimised(Optimised),
     /// With the supply that was searched.
     Search(Vec<Candidate>, String),
     Path(PathRun),
     Trace(TraceFit),
+    Sweep(Vec<Vec<SweepPoint>>),
+    /// With the motor the sweep was taken on.
+    SweepFit(usize, SweepFit),
+    /// With the effect that was switched.
+    Compare(String, Comparison),
 }
 
 type Job<T> = Mutex<Receiver<Result<T, Message>>>;
@@ -148,7 +181,7 @@ fn answer<T>(job: &Job<T>) -> Option<Result<T, Message>> {
 pub type Table = Vec<Vec<String>>;
 
 /// The table headers of the analysis panel, as translation keys.
-const CYCLE_KEYS: [&str; 11] = [
+const CYCLE_KEYS: [&str; 12] = [
     "ui-analysis-cycle-time",
     "ui-analysis-duration",
     "ui-analysis-path-deviation",
@@ -160,9 +193,10 @@ const CYCLE_KEYS: [&str; 11] = [
     "ui-analysis-radial-load",
     "ui-analysis-guide-load",
     "ui-analysis-guide-life",
+    "ui-analysis-guide-life-h",
 ];
 /// One row per figure, one column per motor.
-const MOTOR_KEYS: [&str; 9] = [
+const MOTOR_KEYS: [&str; 10] = [
     "ui-analysis-peak-torque",
     "ui-analysis-rms-torque",
     "ui-analysis-cubic-torque",
@@ -172,16 +206,30 @@ const MOTOR_KEYS: [&str; 9] = [
     "ui-analysis-resistor-energy",
     "ui-analysis-resistor-power",
     "ui-analysis-dc-link-peak",
+    "ui-analysis-mains-energy",
 ];
+/// Rows of the motor table that a machine or a config may lack: the lives in hours and the belt's tooth load.
+const LIFE_KEYS: [&str; 3] = ["ui-analysis-pulley-bearing-life", "ui-analysis-gearbox-life", "ui-analysis-belt-tooth"];
 const VERDICT_KEYS: [&str; 5] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-value", "ui-analysis-limit", "ui-analysis-result"];
 const BAND_KEYS: [&str; 6] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-band-low", "ui-analysis-band-high", "ui-analysis-band-worst", "ui-analysis-band-share"];
+const WORST_KEYS: [&str; 7] = ["ui-analysis-check", "ui-analysis-motor", "ui-analysis-worst-value", "ui-analysis-limit", "ui-analysis-result", "ui-analysis-worst-high", "ui-analysis-worst-low"];
 const SEARCH_KEYS: [&str; 6] = ["ui-analysis-motor", "ui-search-gearbox", "ui-search-mass", "ui-analysis-result", "ui-search-tightest", "ui-search-share"];
 const TRACE_KEYS: [&str; 4] = ["ui-trace-torque-rms", "ui-trace-torque-peak", "ui-trace-error-rms", "ui-trace-error-peak"];
 const FIT_KEYS: [&str; 4] = ["ui-trace-quantity", "ui-trace-config", "ui-trace-fitted", "ui-trace-error"];
 /// The four values of `AxisFit`, in its order.
 const FIT_QUANTITIES: [&str; 4] = ["ui-trace-mass", "ui-trace-viscous", "ui-trace-coulomb", "ui-trace-constant"];
+/// Rows of the frequency response's table and of its fit.
+const SWEEP_KEYS: [&str; 2] = ["ui-sweep-resonance", "ui-sweep-damping"];
+/// The operating points: motor, speed, torque.
+const POINTS_KEYS: [&str; 3] = ["ui-analysis-motor", "ui-points-speed", "ui-points-torque"];
+/// The overlay's quantities, in the order of `Model::overlay`.
+const OVERLAY_KEYS: [&str; 3] = ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"];
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
-const NOTES: [&str; 14] = [
+const NOTES: [&str; 18] = [
+    "ui-overlay-exported",
+    "ui-config-opened",
+    "ui-config-saved",
+    "ui-config-save-failed",
     "ui-simulation-ended",
     "ui-job-ended",
     "ui-analysis-stale",
@@ -203,7 +251,7 @@ const SENSITIVITY_KEYS: [&str; 6] =
     ["ui-analysis-parameter", "ui-analysis-low", "ui-analysis-high", "ui-analysis-peak-change", "ui-analysis-rms-change", "ui-analysis-time-change"];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 15] = [
+const CHECKS: [&str; 23] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -219,7 +267,150 @@ const CHECKS: [&str; 15] = [
     "gearbox-radial-load",
     "guide-load",
     "dc-link-overvoltage",
+    "gearbox-thermal",
+    "guide-thermal",
+    "line-module-continuous",
+    "line-module-peak",
+    "pulley-bearing-life",
+    "gearbox-life",
+    "guide-life",
+    "belt-tooth-load",
 ];
+/// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
+const BREAKDOWN_KEYS: [&str; 5] = ["quantity-torque-inertia", "quantity-torque-gravity", "quantity-torque-friction", "quantity-torque-rest", "quantity-torque"];
+/// The parts of a friction force, in the order of `Machine::friction_curve`.
+const FRICTION_KEYS: [&str; 3] = ["quantity-friction-coulomb", "quantity-friction-viscous", "quantity-friction-stiction"];
+/// The labels of the effect view's tables and of the rows of an energy budget that the machine does not name.
+const EFFECT_KEYS: [&str; 19] = [
+    "ui-effects-part",
+    "ui-effects-peak",
+    "ui-effects-rms",
+    "ui-effects-item",
+    "ui-effects-energy",
+    "ui-effects-share",
+    "ui-effects-now",
+    "ui-effects-total",
+    "quantity-friction-speed",
+    "quantity-friction-load-scale",
+    "budget-supply",
+    "budget-unaccounted",
+    "budget-copper",
+    "budget-resistor",
+    "budget-windings",
+    "budget-capacitors",
+    "budget-mains",
+    "budget-line-module",
+    "budget-payload",
+];
+
+/// The labels of the thermal, belt and comparison views.
+const VIEW_KEYS: [&str; 30] = [
+    "ui-effects-component",
+    "ui-effects-signal",
+    "ui-effects-thermal",
+    "ui-effects-thermal-hint",
+    "ui-effects-thermal-off",
+    "ui-effects-rise",
+    "ui-effects-settles",
+    "ui-effects-rated",
+    "ui-effects-of-rated",
+    "ui-effects-over-rating",
+    "ui-effects-settled-of-rated",
+    "ui-effects-cold",
+    "ui-effects-above",
+    "ui-effects-belt",
+    "ui-effects-belt-hint",
+    "ui-effects-section",
+    "ui-effects-tension",
+    "ui-effects-pretension",
+    "ui-effects-rating",
+    "ui-effects-stretch",
+    "ui-effects-slack",
+    "ui-effects-double",
+    "ui-effects-compare",
+    "ui-effects-compare-hint",
+    "ui-effects-effect",
+    "ui-effects-quantity",
+    "ui-effects-run-compare",
+    "ui-effects-difference-peak",
+    "ui-effects-difference-rms",
+    "ui-effects-off",
+];
+
+/// The colour of the heat scale at a temperature rise of `heat` times the rated one: cold blue, yellow at half, red at
+/// the rated rise, and magenta beyond it.
+pub fn heat_color(heat: f32) -> [f32; 3] {
+    const SCALE: [[f32; 3]; 3] = [[0.15, 0.3, 0.75], [0.95, 0.8, 0.1], [0.95, 0.1, 0.05]];
+    if heat > 1.0 {
+        return [0.9, 0.2, 0.9];
+    }
+    let at = 2.0 * heat.max(0.0);
+    let (i, f) = if at < 1.0 { (0, at) } else { (1, at - 1.0) };
+    std::array::from_fn(|c| SCALE[i][c] + (SCALE[i + 1][c] - SCALE[i][c]) * f)
+}
+
+/// The colour the 3D view draws a part in: where its warmth is computed (`Part::heat`) the heat scale in its place;
+/// otherwise its own colour, shifted towards red by belt tension above pretension (`highlight` up to 1, at twice the
+/// pretension) and towards blue below it (-1 at no tension).
+pub fn part_color(color: [f32; 3], highlight: f32, heat: Option<f32>) -> [f32; 3] {
+    if let Some(heat) = heat {
+        return heat_color(heat);
+    }
+    let h = highlight.clamp(-1.0, 1.0);
+    let (toward, amount) = if h >= 0.0 { ([1.0, 0.1, 0.1], h) } else { ([0.1, 0.3, 1.0], -h) };
+    std::array::from_fn(|c| color[c] + (toward[c] - color[c]) * amount)
+}
+
+/// The temperatures in the effect view: one line per winding and, with effects.part_heating, per heated part, over the
+/// scopes' window, and the table of where each is now, where it settles on the analysed cycle and what it is rated for.
+pub struct ThermalView {
+    /// Per motor winding and heated part its name and the points (time, temperature rise in K).
+    pub lines: Vec<(String, Vec<[f64; 2]>)>,
+    pub table: Table,
+    /// Neither the windings nor the parts warm (effects.winding_heating and effects.part_heating off).
+    pub off: bool,
+}
+
+/// The belt sections in the effect view: tension and stretch per section over the scopes' window, the pretension and
+/// the rating to compare them with, and the table of the newest sample.
+pub struct BeltView {
+    /// Per section its name and the points (time, tension in N) and (time, stretch in mm).
+    pub tension: Vec<(String, Vec<[f64; 2]>)>,
+    pub stretch: Vec<(String, Vec<[f64; 2]>)>,
+    pub pretension: f64,
+    /// `ratings.belt_max_tension_n`, where the config has it.
+    pub rating: Option<f64>,
+    pub table: Table,
+    /// The titles of the two plots with their units, and the ends of the 3D view's colour scale (no tension, twice
+    /// the pretension) with their numbers.
+    pub titles: [String; 2],
+    pub scale: [String; 2],
+}
+
+/// The effect comparison: one scope's quantity with the effect on (solid) and off (dashed), and per line the peak and
+/// RMS of the difference.
+pub struct CompareView {
+    /// The effect's label, and the quantity with its unit.
+    pub effect: String,
+    pub title: String,
+    /// Per signal of the quantity its owner's name and the points (time, value) on and off.
+    pub lines: Vec<(String, Vec<[f64; 2]>, Vec<[f64; 2]>)>,
+    pub table: Table,
+}
+
+/// One friction contact in the effect view.
+pub struct FrictionView {
+    /// Whose it is, translated.
+    pub title: String,
+    /// Steady sliding over the speed, with the levels at the guide load of the newest sample: the friction force
+    /// and its Coulomb, viscous and stiction parts, each with its label.
+    pub curves: [(String, Vec<[f64; 2]>); 4],
+    /// Where the contact is now, by the newest sample: (speed, friction force).
+    pub now: Option<[f64; 2]>,
+    /// The newest sample as a table: speed, the three parts, the friction force and the load factor.
+    pub table: Table,
+}
+
 /// Rows of the sensitivity ranking that are shown: the parameters that matter most.
 const TOP_ROWS: usize = 8;
 
@@ -239,6 +430,9 @@ pub struct Model {
     pub tr: Translations,
     /// The config as edited. The simulation may yet refuse the last edits.
     pub config: Config,
+    /// The text the config was read from (the machine's default or a file), whose comments and layout a
+    /// saved file keeps.
+    config_text: String,
     /// The last config the simulation took, to go back to when it refuses one, and the configs sent to it
     /// that it has not answered yet, oldest first.
     accepted: Config,
@@ -263,11 +457,15 @@ pub struct Model {
     tuning_job: Option<Job<Tuning>>,
     pub inputs: Inputs,
     /// Results of the analysis panel, each for the config as it was when it was asked for.
-    pub cycle_report: Option<(CycleLoad, Vec<Verdict>)>,
+    /// With the motors' torque-speed curve as corners (speed, lowest torque, highest torque), from the highest
+    /// speed backwards to the highest forwards, to plot the operating points over.
+    pub cycle_report: Option<(CycleLoad, Vec<Verdict>, Vec<[f64; 3]>)>,
     /// The checks of the cycle with their error bands, where the cycle was analysed with them.
     pub bands: Option<Vec<Band>>,
     /// How many samples those bands are of; 0: each bounded value alone at its low and at its high bound.
     pub band_samples: usize,
+    /// Per check the worst corner of the bounds found, and the paths of the bounds in the order its `high` has them.
+    pub worst: Option<(Vec<Worst>, Vec<String>)>,
     /// The cycle as configured and the varied parameters, strongest first.
     pub sensitivity: Option<(CycleLoad, Vec<Sensitivity>)>,
     pub optimised: Option<Optimised>,
@@ -279,9 +477,15 @@ pub struct Model {
     /// before the machine has taken a path (it may refuse it), and after a reconfigure or the start of a cycle.
     pub trail: Option<Vec<[f64; 3]>>,
     pub trace_fit: Option<TraceFit>,
+    /// Per motor the frequency response, at the frequencies `inputs` gave when it was asked for.
+    pub sweeps: Option<Vec<Vec<SweepPoint>>>,
+    /// The measured response's fit, and the motor it was taken on.
+    pub sweep_fit: Option<(usize, SweepFit)>,
+    /// The effect comparison, with the effect that was switched.
+    pub comparison: Option<(String, Comparison)>,
     /// Per kind of analysis (`Analysis as usize`) the config its result was computed for. A result says
     /// nothing about another config: it is marked (`outdated`), and nothing of it is applied to one.
-    computed_for: [Option<Config>; 6],
+    computed_for: [Option<Config>; 9],
     /// The jobs under way, each with the config it was started with.
     analysis_jobs: Vec<(Analysis, Config, Job<Report>)>,
 }
@@ -294,6 +498,34 @@ fn without_parts(config: &Config) -> Config {
         let _ = out.set_text(&format!("parts.{key} = \"\""));
     }
     out
+}
+
+/// The config as a file: `text`, the file it was read from, with every value the config has changed written
+/// in place, so that its comments and layout stay. Where that does not give the config back (an array was
+/// changed), the config is written plainly, without comments.
+fn saved_text(config: &Config, text: &str) -> Result<String, Message> {
+    let plain = config.to_text().map_err(|e| (e.key(), e.detail().to_string()))?;
+    let (Ok(mut doc), Ok(old)) = (text.parse::<toml_edit::DocumentMut>(), Config::parse(text)) else { return Ok(plain) };
+    for (path, value) in config.leaves() {
+        if old.get(&path).ok() == Some(&value) {
+            continue;
+        }
+        let new = match value {
+            Value::Float(x) => toml_edit::Value::from(x),
+            Value::Integer(n) => toml_edit::Value::from(n),
+            Value::Boolean(on) => toml_edit::Value::from(on),
+            Value::String(name) => toml_edit::Value::from(name),
+            _ => return Ok(plain),
+        };
+        let item = path.split('.').fold(doc.as_item_mut(), |item, key| &mut item[key]);
+        match item.as_value_mut() {
+            // The comment behind the value stays with it.
+            Some(old) => *old = new.decorated(old.decor().prefix().cloned().unwrap_or_default(), old.decor().suffix().cloned().unwrap_or_default()),
+            None => return Ok(plain),
+        }
+    }
+    let kept = doc.to_string();
+    Ok(if Config::parse(&kept).as_ref() == Ok(config) { kept } else { plain })
 }
 
 fn texts(lang: &str, entry: &MachineEntry) -> Translations {
@@ -338,8 +570,13 @@ pub fn display_scale(peak: f64, unit: &str) -> (f64, &'static str) {
 
 impl Model {
     pub fn new(entry: &'static MachineEntry, lang: &'static str) -> Self {
-        let config = entry.config();
-        let session = Session::start(entry, &config).expect("default config of a registered machine must run");
+        Self::with_config(entry, lang, entry.config(), entry.default_config.into()).expect("default config of a registered machine must run")
+    }
+
+    /// The machine running `config`, which was read from `text`.
+    fn with_config(entry: &'static MachineEntry, lang: &'static str, config: Config, text: String) -> Result<Self, ConfigError> {
+        let session = Session::start(entry, &config)?;
+        let sweep_amplitude = default_sweep_amplitude(entry, &config)?;
         let mut model = Self {
             entry,
             lang,
@@ -348,6 +585,7 @@ impl Model {
             accepted: config.clone(),
             sent: VecDeque::new(),
             config,
+            config_text: text,
             session,
             ended: false,
             history: VecDeque::new(),
@@ -361,30 +599,113 @@ impl Model {
             tuning_axis: 0,
             tuning: None,
             tuning_job: None,
-            inputs: Inputs { bands: false, samples: 0, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new() },
+            inputs: Inputs { bands: false, samples: 0, worst: false, supply: SUPPLIES[1].into(), series: String::new(), gearboxes: String::new(), path_file: String::new(), path_timed: false, time_optimal: false, trace_file: String::new(), config_file: String::new(), parts: Default::default(), sweep_from: 5.0, sweep_to: 500.0, sweep_count: SWEEP_POINTS, sweep_amplitude, sweep_file: String::new(), sweep_motor: 0, compare_effect: String::new(), compare_quantity: "quantity-torque".into() },
             cycle_report: None,
             bands: None,
             band_samples: 0,
+            worst: None,
             sensitivity: None,
             optimised: None,
             candidates: None,
             path_run: None,
             trail: None,
             trace_fit: None,
+            sweeps: None,
+            sweep_fit: None,
+            comparison: None,
             computed_for: Default::default(),
             analysis_jobs: Vec::new(),
         };
         model.target = model.config.f64s("start.pose").unwrap_or_default();
-        model
+        model.show_parts();
+        // Guide friction to compare where the config has it, else the first effect.
+        let effects: Vec<String> = model.effects().into_iter().map(|(path, ..)| path["effects.".len()..].to_string()).collect();
+        model.inputs.compare_effect = effects.iter().find(|e| *e == "guide_friction").or(effects.first()).cloned().unwrap_or_default();
+        Ok(model)
     }
 
     /// Switching machine restarts the simulation with that machine's default config.
     pub fn set_machine(&mut self, entry: &'static MachineEntry) {
-        let (lang, paused, speed, window, inputs) = (self.lang, self.paused, self.speed, self.window_s, self.inputs.clone());
-        *self = Self::new(entry, lang);
-        (self.window_s, self.inputs) = (window, inputs);
+        let fresh = Self::new(entry, self.lang);
+        self.restart(fresh);
+    }
+
+    /// Puts a freshly started model in place of this one, keeping how the window is set up and the fields as
+    /// typed, except those that belong to the machine and config left: the config file (Save would write the
+    /// new config over it), a motor number the new machine may not have, and the sweep amplitude where it is
+    /// still the default for the old motors.
+    fn restart(&mut self, fresh: Self) {
+        let (paused, speed, window, inputs) = (self.paused, self.speed, self.window_s, self.inputs.clone());
+        let old_amplitude = default_sweep_amplitude(self.entry, &self.config).ok();
+        *self = fresh;
+        let parts = std::mem::take(&mut self.inputs.parts);
+        let sweep_motor = inputs.sweep_motor.min(self.session.motors.len().saturating_sub(1));
+        let sweep_amplitude = if old_amplitude == Some(inputs.sweep_amplitude) { self.inputs.sweep_amplitude } else { inputs.sweep_amplitude };
+        let config_file = String::new();
+        let compare_effect = if self.config.bool(&format!("effects.{}", inputs.compare_effect)).is_ok() { inputs.compare_effect.clone() } else { self.inputs.compare_effect.clone() };
+        (self.window_s, self.inputs) = (window, Inputs { parts, config_file, sweep_motor, sweep_amplitude, compare_effect, ..inputs });
         self.set_paused(paused);
         self.set_speed(speed);
+    }
+
+    /// The part fields show the parts the config names.
+    fn show_parts(&mut self) {
+        for (field, key) in self.inputs.parts.iter_mut().zip(PARTS) {
+            *field = self.config.get(&format!("parts.{key}")).ok().and_then(|name| name.as_str()).unwrap_or("").to_string();
+        }
+    }
+
+    /// Opens a config file for the machine shown: it replaces the running config, as switching machine does.
+    /// A file that cannot be read, or that the machine refuses, is reported and the running config stays.
+    pub fn open_config(&mut self, path: &str) {
+        let opened = std::fs::read_to_string(path).map_err(|e| ("ui-file-unreadable", format!("{path}: {e}"))).and_then(|text| {
+            let config = sim_components::load_config(self.entry, &text).map_err(|e| (e.key(), e.detail().to_string()))?;
+            Self::with_config(self.entry, self.lang, config, text).map_err(|e| (e.key(), e.detail().to_string()))
+        });
+        match opened {
+            Ok(fresh) => {
+                self.restart(fresh);
+                self.inputs.config_file = path.into();
+                self.say(("ui-config-opened", path.into()));
+            }
+            Err(message) => self.say(message),
+        }
+    }
+
+    /// Writes the config as edited to a file: over the text it was read from, so that the comments and layout
+    /// of that file stay, wherever only values have changed.
+    /// A file that holds a config of another machine is not overwritten.
+    pub fn save_config(&mut self, path: &str) {
+        let other_machine = std::fs::read_to_string(path).ok().filter(|old| sim_components::load_config(self.entry, old).is_err()).and_then(|old| {
+            MACHINES.iter().find(|m| m.id != self.entry.id && sim_components::load_config(m, &old).is_ok())
+        });
+        if let Some(other) = other_machine {
+            let name = self.tr.tr(other.key).to_string();
+            return self.say(("ui-config-other-machine", format!("{path}: {name}")));
+        }
+        let written = saved_text(&self.config, &self.config_text).and_then(|text| {
+            std::fs::write(path, &text).map_err(|e| ("ui-config-save-failed", format!("{path}: {e}")))?;
+            Ok(text)
+        });
+        match written {
+            Ok(text) => {
+                self.config_text = text;
+                self.inputs.config_file = path.into();
+                self.say(("ui-config-saved", path.into()));
+            }
+            Err(message) => self.say(message),
+        }
+    }
+
+    /// Names the parts typed in `inputs.parts` in the config and applies it to the running simulation, as
+    /// the motor search's button does. A name the catalogue does not have is refused, and so is any name in a
+    /// config without `[parts]`, as on the command line.
+    pub fn apply_parts(&mut self) {
+        let [motor, supply, gearbox] = self.inputs.parts.clone().map(|name| name.trim().to_string());
+        if !supply.is_empty() && !SUPPLIES.contains(&supply.as_str()) {
+            return self.say(("ui-search-bad-supply", supply));
+        }
+        self.name_parts([&motor, &supply, &gearbox]);
     }
 
     pub fn set_language(&mut self, lang: &'static str) {
@@ -502,9 +823,9 @@ impl Model {
             };
             let tripped = |load: &CycleLoad| load.tripped.then_some(("ui-analysis-tripped", String::new()));
             let note = match report {
-                Report::Cycle(load, verdicts, bands, samples) => {
+                Report::Cycle(load, verdicts, bands, samples, curve, worst) => {
                     let note = tripped(&load);
-                    (self.cycle_report, self.bands, self.band_samples) = (Some((load, verdicts)), bands, samples);
+                    (self.cycle_report, self.bands, self.band_samples, self.worst) = (Some((load, verdicts, curve)), bands, samples, worst);
                     note
                 }
                 Report::Sensitivity(nominal, rows) => {
@@ -532,6 +853,18 @@ impl Model {
                 }
                 Report::Trace(fit) => {
                     self.trace_fit = Some(fit);
+                    None
+                }
+                Report::Sweep(sweeps) => {
+                    self.sweeps = Some(sweeps);
+                    None
+                }
+                Report::SweepFit(motor, fit) => {
+                    self.sweep_fit = Some((motor, fit));
+                    None
+                }
+                Report::Compare(effect, comparison) => {
+                    self.comparison = Some((effect, comparison));
                     None
                 }
             };
@@ -656,7 +989,12 @@ impl Model {
             let run = || -> Result<Report, Message> {
                 Ok(match kind {
                     Analysis::Cycle => {
-                        let load = analyse_cycle(&mut Sim::new(entry, &config).map_err(refused)?).map_err(command)?;
+                        let mut sim = Sim::new(entry, &config).map_err(refused)?;
+                        let load = analyse_cycle(&mut sim).map_err(command)?;
+                        // The curve is straight between these speeds (`DriveParams::torque_curve`).
+                        let drive = sim.control.drive_params();
+                        let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
+                        let curve = corners.iter().map(|&speed| [speed, drive.torque_curve(speed).0, drive.torque_curve(speed).1]).collect();
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
                         // Two more cycles per bounded value, or one per sample (always with the same seed, so
                         // that asking again gives the same bands).
@@ -665,7 +1003,15 @@ impl Model {
                             samples => verdict_bands_sampled(entry, &config, &bounds, samples, 1),
                         };
                         let bands = if inputs.bands { Some(banded(bounds(&config).map_err(refused)?).map_err(refused)?) } else { None };
-                        Report::Cycle(load, verdicts, bands, inputs.samples)
+                        // The search for the worst corners, beside the bands.
+                        let worst = if inputs.bands && inputs.worst {
+                            let bounded = bounds(&config).map_err(refused)?;
+                            let (worst, _) = verdict_worst(entry, &config, &bounded).map_err(refused)?;
+                            Some((worst, bounded.into_iter().map(|bound| bound.0).collect()))
+                        } else {
+                            None
+                        };
+                        Report::Cycle(load, verdicts, bands, inputs.samples, curve, worst)
                     }
                     Analysis::Sensitivity => {
                         // The values the config calls uncertain: those it gives bounds. Two cycles each.
@@ -700,7 +1046,7 @@ impl Model {
                             (path::parse_trajectory(&text).map_err(unreadable)?, 0.0)
                         } else {
                             let pieces = path::parse(&text).map_err(unreadable)?;
-                            (sim.plan_path(&pieces, inputs.time_optimal).map_err(command)?, sim.path_deviation(&pieces).map_err(command)?)
+                            (sim.plan_path(&pieces, inputs.time_optimal).map_err(command)?, sim.path_deviation(&pieces, inputs.time_optimal).map_err(command)?)
                         };
                         let scene_line = points.iter().filter_map(|(_, pose)| sim.machine.scene_point(pose)).collect();
                         let load = analyse_trajectory(&mut sim, points.clone()).map_err(command)?;
@@ -711,13 +1057,20 @@ impl Model {
                         let unfit = |e: TraceError| (e.key, e.detail);
                         let measured = Trace::parse(&read(&inputs.trace_file)?, &motors).map_err(unfit)?;
                         let simulated = replay(entry, &config, &measured).map_err(unfit)?;
-                        let apart = |(m, s): (&sim_components::trace::MotorTrace, &sim_components::trace::MotorTrace)| {
-                            let (torque, error) = (difference(&m.torque, &s.torque), difference(&m.following_error(), &s.following_error()));
-                            [torque.0, torque.1, error.0, error.1]
-                        };
-                        let differences = measured.motors.iter().zip(&simulated.motors).map(apart).collect();
-                        Report::Trace(TraceFit { differences, fits: fit_rigid(entry, &config, &measured).map_err(unfit)? })
+                        let fits = fit_rigid(entry, &config, &measured).map_err(unfit)?;
+                        Report::Trace(TraceFit { differences: differences(&measured, &simulated), fits, measured, simulated })
                     }
+                    Analysis::Sweep => {
+                        let frequencies = log_spaced(inputs.sweep_from, inputs.sweep_to, inputs.sweep_count);
+                        let sweep = |motor: usize| frequency_sweep(entry, &config, motor, &frequencies, inputs.sweep_amplitude);
+                        Report::Sweep((0..motors.len()).map(sweep).collect::<Result<_, _>>().map_err(refused)?)
+                    }
+                    Analysis::SweepFit => {
+                        let measured = parse_sweep(&read(&inputs.sweep_file)?).map_err(|e| (e.key, e.detail))?;
+                        let fit = fit_sweep(entry, &config, inputs.sweep_motor, &measured, inputs.sweep_amplitude).map_err(refused)?;
+                        Report::SweepFit(inputs.sweep_motor, fit.ok_or(("fit-no-resonance", String::new()))?)
+                    }
+                    Analysis::Compare => Report::Compare(inputs.compare_effect.clone(), compare_effect(entry, &config, &inputs.compare_effect).map_err(refused)?),
                 })
             };
             let _ = result.send(run());
@@ -728,12 +1081,15 @@ impl Model {
     /// Forgets the result of one kind of analysis.
     pub fn clear(&mut self, kind: Analysis) {
         match kind {
-            Analysis::Cycle => (self.cycle_report, self.bands) = (None, None),
+            Analysis::Cycle => (self.cycle_report, self.bands, self.worst) = (None, None, None),
             Analysis::Sensitivity => self.sensitivity = None,
             Analysis::Optimise => self.optimised = None,
             Analysis::Search => self.candidates = None,
             Analysis::Path => (self.path_run, self.trail) = (None, None),
             Analysis::Trace => self.trace_fit = None,
+            Analysis::Sweep => self.sweeps = None,
+            Analysis::SweepFit => self.sweep_fit = None,
+            Analysis::Compare => self.comparison = None,
         }
         self.computed_for[kind as usize] = None;
     }
@@ -754,13 +1110,20 @@ impl Model {
         }
         // A candidate without a gearbox of its own ran with the one the searched config names.
         let own = searched.get("parts.gearbox").ok().and_then(|name| name.as_str()).unwrap_or("");
-        let names = [candidate.article, supply.as_str(), if candidate.gearbox.is_empty() { own } else { &candidate.gearbox }];
+        let names = [candidate.article, supply.as_str(), if candidate.gearbox.is_empty() { own } else { &candidate.gearbox }].map(String::from);
+        self.name_parts([&names[0], &names[1], &names[2]]);
+    }
+
+    /// Names motor, supply and gearbox in `[parts]` of the config and applies it to the running simulation.
+    /// Names the catalogue does not have are refused here, before the config changes.
+    fn name_parts(&mut self, names: [&str; 3]) {
         let mut config = self.config.clone();
         let named = PARTS.iter().zip(names).try_for_each(|(key, name)| config.set_text(&format!("parts.{key} = {name:?}")));
-        match named {
-            Ok(()) => {
+        match named.and_then(|()| sim_components::catalog::resolve(self.entry, &config)) {
+            Ok(_) => {
                 self.config = config;
                 self.reconfigure();
+                self.show_parts();
             }
             Err(e) => self.say((e.key(), e.detail().into())),
         }
@@ -814,7 +1177,9 @@ impl Model {
     fn load_tables(&self, kind: Analysis, load: &CycleLoad, verdicts: &[Verdict], bands: Option<&[Band]>, deviation: Option<f64>) -> Vec<Table> {
         let tr = |key: &str| self.tr.tr(key).to_string();
         let path = deviation.is_some();
-        let life = guide_life_km(self.computed_for[kind as usize].as_ref().unwrap_or(&self.config), load);
+        // The lives read the ratings of the parts the config names, as the verdicts do.
+        let resolved = sim_components::catalog::resolve(self.entry, self.computed_for[kind as usize].as_ref().unwrap_or(&self.config)).ok();
+        let life = resolved.as_ref().and_then(|cfg| guide_life_km(cfg, load));
         // In the order of `CYCLE_KEYS`; lengths in mm.
         let figures = [
             (!path).then_some(load.duration),
@@ -828,14 +1193,26 @@ impl Model {
             load.radial_load_peak,
             load.guide_load.map(|(peak, _)| peak),
             life,
+            resolved.as_ref().and_then(|cfg| guide_life_h(cfg, load)),
         ];
         let mut summary = vec![self.header(&["ui-analysis-figure", "ui-analysis-value"])];
         summary.extend(CYCLE_KEYS.iter().zip(figures).filter_map(|(key, value)| Some(vec![tr(key), short(value?)])));
         // In the order of `MOTOR_KEYS`.
-        let values = |m: &MotorLoad| [m.peak_torque, m.rms_torque, m.cubic_mean_torque, m.winding_rise, m.energy_in, m.energy_regenerated, m.resistor_energy, m.resistor_energy / load.duration, m.peak_dc_link_voltage];
+        let values = |m: &MotorLoad| [m.peak_torque, m.rms_torque, m.cubic_mean_torque, m.winding_rise, m.energy_in, m.energy_regenerated, m.resistor_energy, m.resistor_energy / load.duration, m.peak_dc_link_voltage, m.mains_energy];
         let mut motors = vec![self.per_motor()];
         for (i, key) in MOTOR_KEYS.iter().enumerate() {
             motors.push([vec![tr(key)], load.motors.iter().map(|m| short(values(m)[i])).collect()].concat());
+        }
+        // In the order of `LIFE_KEYS`; a row only where some motor has the figure.
+        let lives = |m: &MotorLoad| -> [Option<f64>; 3] {
+            let Some(cfg) = &resolved else { return [None; 3] };
+            [pulley_bearing_life_h(cfg, m), gearbox_life_h(cfg, m), belt_tooth_utilisation(cfg, m).ok().flatten()]
+        };
+        for (i, key) in LIFE_KEYS.iter().enumerate() {
+            let row: Vec<Option<f64>> = load.motors.iter().map(|m| lives(m)[i]).collect();
+            if row.iter().any(Option::is_some) {
+                motors.push([vec![tr(key)], row.into_iter().map(|v| v.map_or(String::new(), short)).collect()].concat());
+            }
         }
         let motor = |k: usize| tr(self.session.motors[k].key);
         let named = |v: &Verdict| vec![tr(&format!("check-{}", v.check)), v.motor.map_or(String::new(), motor)];
@@ -852,8 +1229,24 @@ impl Model {
 
     /// The analysed cycle as the tables of `load_tables`. Empty until a cycle was analysed.
     pub fn cycle_tables(&self) -> Vec<Table> {
-        let Some((load, verdicts)) = &self.cycle_report else { return Vec::new() };
+        let Some((load, verdicts, _)) = &self.cycle_report else { return Vec::new() };
         self.load_tables(Analysis::Cycle, load, verdicts, self.bands.as_deref(), None)
+    }
+
+    /// The worst corners of the bounds, where the cycle was analysed with that search: per check and motor the worst
+    /// value found, its limit there and the result, and which bounded values are at their high and which at their
+    /// low bound (their config paths, separated by commas).
+    pub fn worst_table(&self) -> Option<Table> {
+        let (worst, paths) = self.worst.as_ref()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let mut rows = vec![self.header(&WORST_KEYS)];
+        for w in worst {
+            let v = &w.verdict;
+            let at = |high: bool| paths.iter().zip(&w.high).filter(|(_, h)| **h == Some(high)).map(|(path, _)| path.as_str()).collect::<Vec<_>>().join(", ");
+            let motor = v.motor.map_or(String::new(), |k| tr(self.session.motors[k].key));
+            rows.push(vec![tr(&format!("check-{}", v.check)), motor, short(v.value), short(v.limit), self.result(v.ok), at(true), at(false)]);
+        }
+        Some(rows)
     }
 
     /// The motors of the search as ranked: passing ones first, lightest first. Per motor its gearbox (empty:
@@ -920,6 +1313,259 @@ impl Model {
             None => vec![("fit-axis-skipped", axis.id.to_string())],
         });
         lines.map(|(key, detail)| self.tr.tr_arg(key, &detail)).collect()
+    }
+
+    /// Measured against simulated, per quantity of `OVERLAY_KEYS` (torque, speed, following error at the motor)
+    /// and per motor: (time, measured value) and (time, simulated value). Empty until a trace was replayed.
+    pub fn overlay(&self) -> Vec<(&'static str, Vec<[Vec<[f64; 2]>; 2]>)> {
+        let Some(fit) = &self.trace_fit else { return Vec::new() };
+        let time = &fit.measured.time;
+        let line = |values: &[f64]| time.iter().zip(values).map(|(t, v)| [*t, *v]).collect::<Vec<_>>();
+        let columns = |m: &sim_components::trace::MotorTrace| [m.torque.clone(), m.speed.clone(), m.following_error()];
+        let pairs: Vec<_> = fit.measured.motors.iter().zip(&fit.simulated.motors).map(|(m, s)| (columns(m), columns(s))).collect();
+        OVERLAY_KEYS.iter().enumerate().map(|(q, key)| (*key, pairs.iter().map(|(m, s)| [line(&m[q]), line(&s[q])]).collect())).collect()
+    }
+
+    /// Writes the overlay as `sim-cli replay --out` does.
+    pub fn export_overlay(&mut self, path: &std::path::Path) {
+        let Some(fit) = &self.trace_fit else { return };
+        let ids: Vec<&str> = self.session.motors.iter().map(|m| m.id).collect();
+        let message = match std::fs::write(path, overlay_csv(&ids, &fit.measured, &fit.simulated)) {
+            Ok(()) => ("ui-overlay-exported", path.display().to_string()),
+            Err(e) => ("ui-export-failed", e.to_string()),
+        };
+        self.say(message);
+    }
+
+    /// The operating points of the analysed cycle, as `sim-cli analyze --points` writes them, motor after motor:
+    /// how many there are, and the header with the rows in `rows`. `None` until a cycle was analysed.
+    pub fn points_table(&self, rows: std::ops::Range<usize>) -> Option<(usize, Table)> {
+        let (load, _, _) = self.cycle_report.as_ref()?;
+        let all = self.session.motors.iter().zip(&load.motors).flat_map(|(motor, m)| m.points.iter().map(move |p| (motor, p)));
+        let shown = all.clone().skip(rows.start).take(rows.len()).map(|(motor, (speed, torque))| vec![self.tr.tr(motor.key).to_string(), short(*speed), short(*torque)]);
+        Some((all.count(), [vec![self.header(&POINTS_KEYS)], shown.collect()].concat()))
+    }
+
+    /// The operating points per motor as (speed, torque), and the torque-speed curve as two lines: highest and
+    /// lowest torque over the speed.
+    pub fn points_plot(&self) -> Option<(Vec<Vec<[f64; 2]>>, [Vec<[f64; 2]>; 2])> {
+        let (load, _, curve) = self.cycle_report.as_ref()?;
+        let points = load.motors.iter().map(|m| m.points.iter().map(|(speed, torque)| [*speed, *torque]).collect()).collect();
+        Some((points, [curve.iter().map(|c| [c[0], c[2]]).collect(), curve.iter().map(|c| [c[0], c[1]]).collect()]))
+    }
+
+    /// The parts of each motor's torque over the scopes' time window: per motor its name with the unit, and per
+    /// part of `TORQUE_PARTS` and then the torque itself the label and the points (time, torque). Empty for a machine
+    /// that does not report the parts.
+    pub fn breakdown_lines(&self) -> Vec<(String, Vec<(String, Vec<[f64; 2]>)>)> {
+        let signals = &self.session.signals;
+        let rows: Vec<&Vec<f64>> = self.visible_rows().collect();
+        // At most about three thousand points per line, as in the scopes.
+        let stride = (rows.len() / 3000).max(1);
+        let lines = |motor: &sim_core::MotorInfo| -> Option<(String, Vec<(String, Vec<[f64; 2]>)>)> {
+            let ids = TORQUE_PARTS.iter().map(|part| format!("motor.{}.torque_{part}", motor.id)).chain([format!("motor.{}.torque", motor.id)]);
+            let places: Vec<usize> = ids.map(|id| signals.iter().position(|s| s.id == id)).collect::<Option<_>>()?;
+            let title = format!("{} [{}]", self.tr.tr(motor.key), signals[places[4]].unit);
+            Some((title, places.iter().zip(BREAKDOWN_KEYS).map(|(&i, key)| (self.tr.tr(key).to_string(), rows.iter().step_by(stride).map(|row| [row[0], row[i]]).collect())).collect()))
+        };
+        self.session.motors.iter().filter_map(lines).collect()
+    }
+
+    /// The parts of each motor's torque over the analysed cycle: one row per part and one for the torque itself, per
+    /// motor its peak and its RMS in N m. `None` until a cycle was analysed, and for a machine that does not report the
+    /// parts.
+    pub fn breakdown_table(&self) -> Option<Table> {
+        let (load, _, _) = self.cycle_report.as_ref()?;
+        let parts: Vec<[(f64, f64); 4]> = load.motors.iter().map(|m| m.torque_parts).collect::<Option<_>>()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let mut header = vec![tr("ui-effects-part")];
+        for motor in &self.session.motors {
+            header.extend(["ui-effects-peak", "ui-effects-rms"].map(|key| format!("{} · {}", tr(motor.key), tr(key))));
+        }
+        let mut table = vec![header];
+        for (i, key) in BREAKDOWN_KEYS.iter().enumerate() {
+            let cells = load.motors.iter().zip(&parts).flat_map(|(m, p)| {
+                let (peak, rms) = p.get(i).copied().unwrap_or((m.peak_torque, m.rms_torque));
+                [short(peak), short(rms)]
+            });
+            table.push([vec![tr(key)], cells.collect()].concat());
+        }
+        Some(table)
+    }
+
+    /// Where the energy drawn from the supply over the analysed cycle went: the supply, every row of the budget that
+    /// is not exactly zero (an effect that is off), and what is not accounted for; in J and in percent of the supply.
+    /// `None` until a cycle was analysed, and for a machine that does not report its losses.
+    pub fn budget_table(&self) -> Option<Table> {
+        let budget = self.cycle_report.as_ref()?.0.budget.as_ref()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let line = |label: String, energy: f64| vec![label, short(energy), short(100.0 * energy / budget.supply)];
+        let mut table = vec![self.header(&["ui-effects-item", "ui-effects-energy", "ui-effects-share"]), line(tr("budget-supply"), budget.supply)];
+        table.extend(budget.rows.iter().filter(|r| r.energy != 0.0).map(|r| line(format!("{} · {}", tr(&r.owner_key), tr(&r.quantity_key)), r.energy)));
+        table.push(line(tr("budget-unaccounted"), budget.unaccounted()));
+        Some(table)
+    }
+
+    /// Per friction contact of the machine its curve of steady sliding and where it is now (see `FrictionView`). The
+    /// curve runs over the axis's speed limit both ways, with its points closer together near standstill, where the
+    /// Stribeck drop is. Empty for a machine that tells no contacts, or a config it does not build.
+    pub fn friction_views(&self) -> Vec<FrictionView> {
+        let Ok(machine) = sim_components::catalog::resolve(self.entry, &self.config).and_then(|cfg| (self.entry.build)(&cfg)) else { return Vec::new() };
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let value = |id: String| -> Option<f64> { Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?]) };
+        let views = machine.friction_contacts().into_iter().enumerate().map(|(i, contact)| {
+            let get = |part: &str| value(format!("{}.friction_{part}", contact.id));
+            let scale = get("load_scale").unwrap_or(1.0);
+            let top = self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(1.0, |a| a.max_vel);
+            let speeds = (1..=100).rev().map(|j| -top * (j as f64 / 100.0).powi(3)).chain((1..=100).map(|j| top * (j as f64 / 100.0).powi(3)));
+            let mut points: [Vec<[f64; 2]>; 4] = Default::default();
+            for v in speeds {
+                let parts = machine.friction_curve(i, v, scale);
+                points[0].push([v, parts.iter().sum()]);
+                (0..3).for_each(|k| points[k + 1].push([v, parts[k]]));
+            }
+            let labels = [tr("ui-effects-total")].into_iter().chain(FRICTION_KEYS.map(tr));
+            let split: Option<Vec<f64>> = ["coulomb", "viscous", "stiction"].iter().map(|part| get(part)).collect();
+            let (speed, total) = (get("speed"), split.as_ref().map(|s| s.iter().sum::<f64>()));
+            let mut table = vec![self.header(&["ui-effects-part", "ui-effects-now"])];
+            let cell = |value: Option<f64>| value.map_or(String::new(), short);
+            table.push(vec![format!("{} [m/s]", tr("quantity-friction-speed")), cell(speed)]);
+            for (k, key) in FRICTION_KEYS.iter().enumerate() {
+                table.push(vec![format!("{} [N]", tr(key)), cell(split.as_ref().map(|s| s[k]))]);
+            }
+            table.push(vec![format!("{} [N]", tr("ui-effects-total")), cell(total)]);
+            table.push(vec![tr("quantity-friction-load-scale"), cell(get("load_scale"))]);
+            let mut curves = labels.zip(points);
+            FrictionView { title: tr(contact.owner_key), curves: std::array::from_fn(|_| curves.next().unwrap()), now: speed.zip(total).map(|(v, f)| [v, f]), table }
+        });
+        views.collect()
+    }
+
+    /// The machine as the config builds it, for what it tells the views; `None` for a config it does not build.
+    fn machine(&self) -> Option<Box<dyn Machine>> {
+        sim_components::catalog::resolve(self.entry, &self.config).and_then(|cfg| (self.entry.build)(&cfg)).ok()
+    }
+
+    /// The newest sample of a signal, by its id.
+    fn latest(&self, id: &str) -> Option<f64> {
+        Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?])
+    }
+
+    /// The points (time, value times `scale`) of a signal over the scopes' window, at most about three thousand.
+    fn line_of(&self, id: &str, scale: f64) -> Vec<[f64; 2]> {
+        let Some(i) = self.session.signals.iter().position(|s| s.id == id) else { return Vec::new() };
+        let rows: Vec<&Vec<f64>> = self.visible_rows().collect();
+        rows.iter().step_by((rows.len() / 3000).max(1)).map(|row| [row[0], row[i] * scale]).collect()
+    }
+
+    /// The thermal view (see `ThermalView`). The windings are rated for `motor.rated_temperature_rise_k`, the parts
+    /// for `thermal.<kind>_max_rise_k`; a part settles at its thermal resistance times its mean loss over the analysed
+    /// cycle (`CycleLoad::part_rises`), a winding at `MotorLoad::winding_rise`. The share of the rating is that of the
+    /// settled rise, which is what the verdicts judge (the rise now is a climb of many minutes); above 100 % it is
+    /// marked.
+    pub fn thermal_view(&self) -> ThermalView {
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let on = |effect: &str| self.config.bool(&format!("effects.{effect}")).unwrap_or(false);
+        let load = self.cycle_report.as_ref().map(|r| &r.0);
+        let kelvin = |key: &str, unit: &str| format!("{} [{unit}]", tr(key));
+        let mut table = vec![vec![tr("ui-effects-component"), kelvin("ui-effects-now", "K"), kelvin("ui-effects-settles", "K"), kelvin("ui-effects-rated", "K"), kelvin("ui-effects-settled-of-rated", "%")]];
+        let mut lines = Vec::new();
+        let mut add = |name: String, id: String, settles: Option<f64>, rated: Option<f64>| {
+            let now = self.latest(&id);
+            let share = settles.zip(rated).map(|(settles, rated)| 100.0 * settles / rated);
+            let mut row: Vec<String> = [name.clone()].into_iter().chain([now, settles, rated, share].map(|v| v.map_or(String::new(), short))).collect();
+            if share.is_some_and(|share| share > 100.0) {
+                row[4] = format!("{} {}", row[4], tr("ui-effects-over-rating"));
+            }
+            table.push(row);
+            lines.push((name, self.line_of(&id, 1.0)));
+        };
+        let winding_rated = self.config.positive("motor.rated_temperature_rise_k").ok();
+        for (k, motor) in self.session.motors.iter().enumerate() {
+            let settles = load.and_then(|l| l.motors.get(k)).map(|m| m.winding_rise);
+            add(format!("{} · {}", tr(motor.key), tr("quantity-winding-temperature")), format!("motor.{}.winding_temperature", motor.id), settles, winding_rated);
+        }
+        if on("part_heating") {
+            for part in self.machine().map(|m| m.thermal_parts()).unwrap_or_default() {
+                let key = |name: &str| format!("thermal.{}_{name}", part.kind);
+                let settles = load.and_then(|l| l.part_rises.iter().find(|(p, _)| p.id == part.id)).map(|(_, rise)| *rise);
+                let name = format!("{} · {}", tr(part.owner_key), tr(&format!("quantity-{}-temperature", part.kind)));
+                add(name, format!("{TEMPERATURE_PREFIX}{}", part.id), settles, self.config.positive(&key("max_rise_k")).ok());
+            }
+        }
+        ThermalView { lines, table, off: !on("winding_heating") && !on("part_heating") }
+    }
+
+    /// The belt view (see `BeltView`); `None` for a machine that tells no belt sections. Stretch in mm.
+    pub fn belt_view(&self) -> Option<BeltView> {
+        let sections = self.machine()?.belt_sections();
+        let pretension = sections.first()?.pretension;
+        let rating = self.config.positive("ratings.belt_max_tension_n").ok();
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let unit = |key: &str, unit: &str| format!("{} [{unit}]", tr(key));
+        let mut table = vec![vec![tr("ui-effects-section"), unit("ui-effects-tension", "N"), unit("ui-effects-pretension", "N"), unit("ui-effects-rating", "N"), unit("ui-effects-of-rated", "%"), unit("ui-effects-stretch", "mm")]];
+        let (mut tension, mut stretch) = (Vec::new(), Vec::new());
+        for section in &sections {
+            let (pull, long) = (format!("{}.tension", section.id), format!("{}.stretch", section.id));
+            let now = self.latest(&pull);
+            let cells = [now, Some(section.pretension), rating, now.zip(rating).map(|(t, r)| 100.0 * t / r), self.latest(&long).map(|e| e * 1e3)];
+            table.push([tr(section.owner_key)].into_iter().chain(cells.map(|v| v.map_or(String::new(), short))).collect());
+            tension.push((tr(section.owner_key), self.line_of(&pull, 1.0)));
+            stretch.push((tr(section.owner_key), self.line_of(&long, 1e3)));
+        }
+        let titles = [unit("ui-effects-tension", "N"), unit("ui-effects-stretch", "mm")];
+        let scale = [format!("{} 0 N", tr("ui-effects-slack")), format!("{} {:.0} N", tr("ui-effects-double"), 2.0 * pretension)];
+        Some(BeltView { tension, stretch, pretension, rating, table, titles, scale })
+    }
+
+    /// The effect comparison (see `CompareView`) for the quantity `inputs.compare_quantity`; `None` before one was run,
+    /// and for a quantity the comparison has no signal of.
+    pub fn compare_view(&self) -> Option<CompareView> {
+        let (effect, found) = self.comparison.as_ref()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let scope = scopes_for(&found.signals).into_iter().find(|s| s.quantity_key == self.inputs.compare_quantity)?;
+        let unit = |key: &str| format!("{} [{}]", tr(key), scope.unit);
+        let mut table = vec![vec![tr("ui-effects-signal"), unit("ui-effects-difference-peak"), unit("ui-effects-difference-rms")]];
+        let mut lines = Vec::new();
+        let stride = (found.on.len() / 3000).max(1);
+        for line in scope.lines.iter().filter(|l| !l.reference) {
+            let i = line.signal;
+            let points = |rows: &Vec<Vec<f64>>| rows.iter().step_by(stride).map(|row| [row[0], row[i]]).collect::<Vec<_>>();
+            let name = tr(&found.signals[i].owner_key);
+            let (peak, rms) = found.difference(i);
+            table.push(vec![name.clone(), short(peak), short(rms)]);
+            lines.push((name, points(&found.on), points(&found.off)));
+        }
+        Some(CompareView { effect: tr(&format!("effect-{effect}")), title: format!("{} [{}]", tr(&scope.quantity_key), scope.unit), lines, table })
+    }
+
+    /// One row per figure, one column per motor: the resonance of the load on the belt in each frequency
+    /// response (`identify::resonance`), and its damping ratio. Empty where a response has no dip with both
+    /// flanks. `None` until a sweep was run.
+    pub fn sweep_table(&self) -> Option<Table> {
+        let sweeps = self.sweeps.as_ref()?;
+        let found: Vec<_> = sweeps.iter().map(|points| resonance(points)).collect();
+        let cells = |value: fn(&sim_components::identify::Resonance) -> f64| found.iter().map(move |r| r.as_ref().map_or(String::new(), |r| short(value(r))));
+        let rows = [(SWEEP_KEYS[0], cells(|r| r.frequency).collect::<Vec<_>>()), (SWEEP_KEYS[1], cells(|r| r.damping).collect())];
+        Some([vec![self.per_motor()], rows.into_iter().map(|(key, cells)| [vec![self.tr.tr(key).to_string()], cells].concat()).collect()].concat())
+    }
+
+    /// The fit of a measured frequency response, as `sim-cli fit --sweep` writes it: resonance and damping of
+    /// the config's own response and of the measured one, and the standard error of the frequency.
+    pub fn sweep_fit_table(&self) -> Option<Table> {
+        let (motor, fit) = self.sweep_fit.as_ref()?;
+        let name = |key: &str| format!("{} · {}", self.tr.tr(self.session.motors[*motor].key), self.tr.tr(key));
+        Some(vec![
+            self.header(&FIT_KEYS),
+            vec![name(SWEEP_KEYS[0]), short(fit.config.frequency), short(fit.fitted.frequency), short(fit.fitted.frequency_error)],
+            vec![name(SWEEP_KEYS[1]), short(fit.config.damping), short(fit.fitted.damping), String::new()],
+        ])
+    }
+
+    /// What the fit of a measured frequency response says to change in the config.
+    pub fn sweep_fit_advice(&self) -> Option<String> {
+        let (key, detail) = self.sweep_fit.as_ref()?.1.advice();
+        Some(self.tr.tr_arg(key, &detail))
     }
 
     /// The parameters the cycle depends on most, strongest first: the low and high value each was run
@@ -991,10 +1637,12 @@ impl Model {
             keys.push(group.key);
             keys.extend(group.params.into_iter().map(|(_, key, _)| key));
         }
-        let headers = [&CYCLE_KEYS[..], &MOTOR_KEYS, &VERDICT_KEYS, &BAND_KEYS, &SENSITIVITY_KEYS, &OPTIMISED_KEYS, &SEARCH_KEYS, &TRACE_KEYS, &FIT_KEYS, &FIT_QUANTITIES, &NOTES];
+        let headers = [&CYCLE_KEYS[..], &MOTOR_KEYS, &LIFE_KEYS, &VERDICT_KEYS, &BAND_KEYS, &WORST_KEYS, &SENSITIVITY_KEYS, &OPTIMISED_KEYS, &SEARCH_KEYS, &TRACE_KEYS, &FIT_KEYS, &FIT_QUANTITIES, &NOTES, &SWEEP_KEYS, &POINTS_KEYS, &OVERLAY_KEYS, &BREAKDOWN_KEYS, &FRICTION_KEYS, &EFFECT_KEYS, &VIEW_KEYS];
         keys.extend(headers.concat().into_iter().map(String::from));
-        keys.extend(["ui-analysis-ok", "ui-analysis-fail", "fit-axis-skipped", "fit-mass", "fit-viscous", "fit-coulomb", "fit-constant"].map(String::from));
+        keys.extend(["ui-analysis-ok", "ui-analysis-fail", "fit-axis-skipped", "fit-mass", "fit-viscous", "fit-coulomb", "fit-constant", "fit-stiffness", "fit-no-resonance"].map(String::from));
         keys.extend(CHECKS.iter().map(|check| format!("check-{check}")));
+        let budget = self.cycle_report.as_ref().and_then(|(load, ..)| load.budget.as_ref());
+        keys.extend(budget.into_iter().flat_map(|b| b.rows.iter().flat_map(|r| [r.owner_key.clone(), r.quantity_key.clone()])));
         keys
     }
 }

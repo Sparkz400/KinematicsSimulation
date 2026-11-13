@@ -1,7 +1,7 @@
 //! Motion controller: plans in tool coordinates, transforms to motor setpoints, and runs one drive
 //! per motor. It works on any machine through the machine interface.
 
-use crate::drive::{Drive, DriveParams, delayed, shared_dc_link};
+use crate::drive::{Drive, DriveParams, shared_dc_link};
 use crate::path::{self, Piece};
 use crate::profile::Move;
 use sim_core::{Config, ConfigError, Machine};
@@ -95,19 +95,25 @@ pub struct Controller {
     raw_pos: Vec<f64>,
     raw_vel: Vec<f64>,
     raw_acc: Vec<f64>,
-    /// Input shaper: (amplitude ratio K of successive steps, half the damped period in profile cycles).
-    shaper: Option<(f64, f64)>,
+    /// Input shaper: (amplitude ratio K of successive steps, half the damped period in profile cycles), and the same
+    /// of a second shaper convolved with it, (0, 0) without one.
+    shaper: Option<(f64, f64, f64, f64)>,
     /// With the shaper following the pose: half the damped period in profile cycles, times the frequency.
     shaper_follows: Option<f64>,
     /// A shaper setting (`shaper`, `shaper_follows`) from a changed config, waiting for the plan to stand
     /// still: taken under a moving plan it would make the setpoint jump.
-    pending_shaper: Option<(Option<(f64, f64)>, Option<f64>)>,
+    pending_shaper: Option<(Option<(f64, f64, f64, f64)>, Option<f64>)>,
     /// How many cycles of `history` the shaper has needed so far.
     shaper_reach: usize,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
-    /// setpoints on their way, oldest first: per motor position, speed, acceleration and torque feedforward.
+    /// setpoints on their way, oldest first, each with the cycles it takes: per motor position, speed,
+    /// acceleration and torque feedforward.
     fieldbus_delay: usize,
-    fieldbus: std::collections::VecDeque<Vec<[f64; 4]>>,
+    fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 4]>)>,
+    /// Fieldbus jitter: a frame takes up to this many cycles more than the delay, drawn evenly from 0 to it per frame
+    /// from its own pseudo-random stream; 0 with the jitter off.
+    fieldbus_jitter: usize,
+    jitter: sim_core::testkit::Noise,
     /// The profile cycle under way, counted here: the base step counter would count in another unit once
     /// `profile.cycle_s` changes.
     tick: u64,
@@ -159,6 +165,8 @@ impl Controller {
             shaper_reach: 0,
             fieldbus_delay: 0,
             fieldbus: Default::default(),
+            fieldbus_jitter: 0,
+            jitter: Default::default(),
             tick: 0,
             history: Default::default(),
         };
@@ -186,16 +194,25 @@ impl Controller {
         let (mut hold, mut ff) = (vec![0.0; motors], vec![0.0; motors]);
         machine.equilibrium(&self.set_pos, &mut Vec::new(), &mut hold);
         machine.feedforward_torque(&self.set_pos, &self.set_acc, &mut ff);
-        // A winding that was warm stays warm.
-        let warm: Vec<f64> = self.drives.iter().map(|d| d.temperature_rise).collect();
+        // A winding that was warm stays warm, and a DC link keeps its charge. The current that holds the load comes
+        // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step.
+        // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
+        // if a budget across an enable ever needs to close there.
+        let kept: Vec<(f64, f64)> = self.drives.iter().map(|d| (d.temperature_rise, d.dc_voltage)).collect();
         self.drives = (0..motors).map(|k| Drive::at_rest(&self.params, self.motor_pos[k], hold[k], ff[k])).collect();
-        for (drive, rise) in self.drives.iter_mut().zip(warm) {
+        let p = &self.params;
+        for (drive, (rise, voltage)) in self.drives.iter_mut().zip(kept) {
             drive.temperature_rise = rise;
+            if p.dc_link {
+                drive.dc_voltage = (voltage * voltage - p.inductance * drive.current * drive.current / p.dc_capacitance).max(0.0).sqrt();
+            }
         }
         // Every drive has noise of its own; the multiplier spreads neighbouring seeds over the generator's cycle.
         for (k, drive) in self.drives.iter_mut().enumerate() {
             drive.noise.0 = self.params.noise_seed.wrapping_add(k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         }
+        // The fieldbus jitter's stream, beside the drives' (no machine has a million motors).
+        self.jitter.0 = self.params.noise_seed.wrapping_add(1 << 20).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
 
     /// Re-reads gains, switches, cycle times and the cycle; keeps the loops' running state.
@@ -217,9 +234,19 @@ impl Controller {
         if damping >= 1.0 {
             return Err(ConfigError::Invalid("profile.shaper_damping".into()));
         }
+        let (frequency2, damping2) = (cfg.non_negative("profile.shaper2_frequency_hz")?, cfg.non_negative("profile.shaper2_damping")?);
+        if damping2 >= 1.0 {
+            return Err(ConfigError::Invalid("profile.shaper2_damping".into()));
+        }
+        // K and half the damped period in profile cycles of a ZVD shaper.
+        let zvd = |frequency: f64, damping: f64| {
+            let root = (1.0 - damping * damping).sqrt();
+            ((-damping * std::f64::consts::PI / root).exp(), 0.5 / (frequency * root) / profile_cycle)
+        };
         if cfg.bool("effects.input_shaping")? {
             let root = (1.0 - damping * damping).sqrt();
-            shaper = Some(((-damping * std::f64::consts::PI / root).exp(), 0.5 / (frequency * root) / profile_cycle));
+            let ((k, half), (k2, half2)) = (zvd(frequency, damping), if frequency2 > 0.0 { zvd(frequency2, damping2) } else { (0.0, 0.0) });
+            shaper = Some((k, half, k2, half2));
             shaper_follows = cfg.bool("effects.shaper_follows_pose")?.then_some(0.5 / root / profile_cycle);
         }
         let fieldbus_delay = cfg.f64("profile.fieldbus_delay_cycles")?;
@@ -227,6 +254,11 @@ impl Controller {
             return Err(ConfigError::Invalid("profile.fieldbus_delay_cycles".into()));
         }
         let fieldbus_delay = if cfg.bool("effects.fieldbus_delay")? { fieldbus_delay as usize } else { 0 };
+        let fieldbus_jitter = cfg.f64("profile.fieldbus_jitter_cycles")?;
+        if fieldbus_jitter < 0.0 || fieldbus_jitter.fract() != 0.0 || fieldbus_jitter > 1000.0 {
+            return Err(ConfigError::Invalid("profile.fieldbus_jitter_cycles".into()));
+        }
+        let fieldbus_jitter = if cfg.bool("effects.fieldbus_jitter")? { fieldbus_jitter as usize } else { 0 };
         let blend_time = cfg.non_negative("profile.blend_time_s")?;
         let blend_time = if cfg.bool("effects.corner_blending")? { blend_time } else { 0.0 };
         let torque_reserve = cfg.positive("profile.torque_reserve")?;
@@ -258,7 +290,7 @@ impl Controller {
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
         self.blend_time = blend_time;
         (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
-        (self.pending_shaper, self.fieldbus_delay) = (Some((shaper, shaper_follows)), fieldbus_delay);
+        (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) = (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
         Ok(())
     }
 
@@ -268,7 +300,7 @@ impl Controller {
     fn rescale_ticks(&mut self, ratio: f64) {
         let now = self.tick;
         // The shaper in use counts its period in cycles too. (A pending one was worked out for the new cycle.)
-        self.shaper = self.shaper.map(|(k, half)| (k, half * ratio));
+        self.shaper = self.shaper.map(|(k, half, k2, half2)| (k, half * ratio, k2, half2 * ratio));
         self.shaper_follows = self.shaper_follows.map(|per_hz| per_hz * ratio);
         self.tick = (now as f64 * ratio).round() as u64;
         let new_now = self.tick as f64;
@@ -404,9 +436,16 @@ impl Controller {
     }
 
     /// How far the path `plan_path` plans for these pieces is from the pieces as given, at most (see
-    /// `path::deviation`): zero unless `profile.path_tolerance_m` allows transition curves.
-    pub fn path_deviation(&self, machine: &dyn Machine, pieces: &[Piece]) -> std::result::Result<f64, CommandError> {
-        path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance)
+    /// `path::deviation`): zero unless `profile.path_tolerance_m` allows transition curves. The time-optimal plan's
+    /// curves are as long as the motors' speeds need, so its deviation can differ. A path `plan_path` refuses is
+    /// refused here the same way (it is planned for that).
+    pub fn path_deviation(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<f64, CommandError> {
+        self.plan_path(machine, pieces, time_optimal)?;
+        if time_optimal {
+            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, &self.raw_pos, pieces, self.path_tolerance)
+        } else {
+            path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance)
+        }
     }
 
     /// True while a move, a dwell or the cycle is under way.
@@ -475,22 +514,25 @@ impl Controller {
         for (k, (drive, by)) in self.drives.iter_mut().zip(shift).enumerate() {
             drive.shift_encoder(*by);
             drive.pos_set += by;
-            for setpoints in &mut self.fieldbus {
+            for (_, setpoints) in &mut self.fieldbus {
                 setpoints[k][0] += by;
             }
         }
     }
 
-    /// One base step: runs whichever loops are due and writes the motor torques.
+    /// One base step: runs whichever loops are due and sets the voltages the windings get over the step. Enabled, the
+    /// simulation then takes windings and mechanics through the step together and hands the windings back
+    /// (`winding_stepped`). Disabled, the drives give no torque, their windings cool and their DC links discharge,
+    /// and `torque` is zero.
     pub fn update(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
         if !self.enabled {
-            // shortcut: a disabled drive's winding keeps its temperature instead of cooling; model the cooling when long stops matter.
             for (drive, torque) in self.drives.iter_mut().zip(torque) {
-                (drive.torque, drive.torque_command, drive.current, drive.voltage, drive.power) = (0.0, 0.0, 0.0, 0.0, 0.0);
-                drive.torque_demand = 0.0;
-                drive.resistor_power = 0.0;
+                drive.disabled_step(&self.params);
                 *torque = 0.0;
+            }
+            if self.params.shared_dc_link {
+                shared_dc_link(&self.params, &mut self.drives);
             }
             return;
         }
@@ -514,14 +556,22 @@ impl Controller {
             if step % self.n_velocity == 0 {
                 drive.velocity_loop(&self.params, self.motor_pos[k], self.motor_vel[k]);
             }
-            drive.current_loop(&self.params, self.motor_vel[k]);
-            torque[k] = drive.torque;
+            drive.current_control(&self.params, self.motor_vel[k]);
+        }
+    }
+
+    /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
+    /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
+    pub fn winding_stepped(&mut self, windings: &[f64]) {
+        for (drive, w) in self.drives.iter_mut().zip(windings.chunks_exact(4)) {
+            drive.winding_stepped(&self.params, w[0], [w[1], w[2], w[3]]);
         }
         if self.params.shared_dc_link {
             shared_dc_link(&self.params, &mut self.drives);
         }
         // A drive that trips on DC link overvoltage takes all drives off, as `Command::Disable` does. Its
-        // `tripped` and its DC link voltage stay as they are until `Command::Enable`.
+        // `tripped` stays until `Command::Enable`; its DC link discharges as a disabled drive's does, and an enable
+        // keeps what charge is left (`hold_here`).
         if self.drives.iter().any(|d| d.tripped) {
             self.disable();
         }
@@ -567,7 +617,7 @@ impl Controller {
                 // dwells, both wait for the setpoint: the tool is not there before.
                 let waits = self.cycle.is_some_and(|i| self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached);
                 // The shaper's oldest copy is a whole period old, read between two stored cycles.
-                let lag = if waits { self.shaper_half(machine, &self.set_pos).map_or(0.0, |half| (2.0 * half).ceil()) } else { 0.0 };
+                let lag = if waits { self.shaper_half(machine, &self.set_pos).map_or(0.0, |half| (2.0 * half + 2.0 * self.shaper_half2()).ceil()) } else { 0.0 };
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
@@ -668,9 +718,17 @@ impl Controller {
         machine.inverse(&shifted(1.0), &mut acc_ahead);
         machine.inverse(&shifted(-1.0), &mut acc_behind);
         let setpoints = (0..motors).map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), (acc_ahead[k] - acc_behind[k]) / (2.0 * h), ff[k]]).collect();
-        // Fieldbus: the drives get what the controller computed some cycles ago.
-        let setpoints = delayed(&mut self.fieldbus, setpoints, self.fieldbus_delay);
-        for (drive, [pos, vel, acc, ff]) in self.drives.iter_mut().zip(setpoints) {
+        // Fieldbus: the drives get the newest frame that has arrived, one the controller computed some cycles ago. With
+        // jitter each frame takes its own number of cycles, and a late one leaves the drives the frame before. Frames
+        // older than the longest delay have arrived and are dropped; before any has arrived, the oldest.
+        let late = if self.fieldbus_jitter > 0 { (self.jitter.uniform() * (self.fieldbus_jitter + 1) as f64) as usize } else { 0 };
+        self.fieldbus.push_back((self.fieldbus_delay + late, setpoints));
+        while self.fieldbus.len() > self.fieldbus_delay + self.fieldbus_jitter + 1 {
+            self.fieldbus.pop_front();
+        }
+        let newest = self.fieldbus.len() - 1;
+        let arrived = (0..=newest).find(|&age| self.fieldbus[newest - age].0 <= age).map_or(0, |age| newest - age);
+        for (drive, &[pos, vel, acc, ff]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
             drive.since_setpoint = 0.0;
         }
@@ -679,16 +737,23 @@ impl Controller {
     /// Half the shaper's period in profile cycles with the plan at `pose`: as configured, or that of the
     /// resonance the machine reports there when the shaper follows the pose. `None` with the shaper off.
     fn shaper_half(&self, machine: &dyn Machine, pose: &[f64]) -> Option<f64> {
-        let (_, half) = self.shaper?;
+        let (_, half, ..) = self.shaper?;
         Some(match (self.shaper_follows, machine.resonance_hz(pose)) {
             (Some(per_hz), Some(resonance)) => per_hz / resonance,
             _ => half,
         })
     }
 
+    /// Half the period of the second shaper in profile cycles; 0 without one.
+    fn shaper_half2(&self) -> f64 {
+        self.shaper.map_or(0.0, |(.., half2)| half2)
+    }
+
     /// Input shaping (ZVD): the setpoints become the sum of three copies of the plan, now, half a period
     /// and a whole period ago, weighted 1 : 2K : K^2. The vibration each copy starts is cancelled by the
-    /// others, also when the resonance is some percent off the frequency the shaper was set to.
+    /// others, also when the resonance is some percent off the frequency the shaper was set to. A second shaper
+    /// is convolved with the first: nine copies, at the sums of the delays with the products of the weights, so
+    /// that the vibration of each of the two resonances is cancelled. Without one its weights are 1 : 0 : 0.
     ///
     /// Following the pose, the half period is that of the resonance the machine reports where the plan
     /// stands. The weights always add up to one, so once the plan has stood still for a whole period the
@@ -697,14 +762,14 @@ impl Controller {
         // shortcut: while the period changes, the speed and acceleration setpoints are the delayed plan's,
         // not the exact rates of the shaped position (off by the rate of the delay, a few percent in a Z
         // move); they are feedforward only. Shape the position alone and difference it if that matters.
-        let (Some((k, _)), Some(half)) = (self.shaper, self.shaper_half(machine, &self.raw_pos)) else {
+        let (Some((k, _, k2, half2)), Some(half)) = (self.shaper, self.shaper_half(machine, &self.raw_pos)) else {
             self.history.clear();
             self.shaper_reach = 0;
             return;
         };
         self.history.push_back([self.raw_pos.clone(), self.raw_vel.clone(), self.raw_acc.clone()]);
         // The store keeps the longest period met so far: a period that grows again finds its past.
-        self.shaper_reach = self.shaper_reach.max((2.0 * half).ceil() as usize + 2);
+        self.shaper_reach = self.shaper_reach.max((2.0 * half + 2.0 * half2).ceil() as usize + 2);
         while self.history.len() > self.shaper_reach {
             self.history.pop_front();
         }
@@ -715,8 +780,9 @@ impl Controller {
             let at = |n: usize| self.history[newest - n.min(newest)][which][axis];
             at(whole) * (1.0 - part) + at(whole + 1) * part
         };
-        let sum = (1.0 + k) * (1.0 + k);
-        let shaped = |which: usize, axis: usize| (ago(which, axis, 0.0) + 2.0 * k * ago(which, axis, half) + k * k * ago(which, axis, 2.0 * half)) / sum;
+        let sum = (1.0 + k) * (1.0 + k) * (1.0 + k2) * (1.0 + k2);
+        let (first, second) = ([(0.0, 1.0), (half, 2.0 * k), (2.0 * half, k * k)], [(0.0, 1.0), (half2, 2.0 * k2), (2.0 * half2, k2 * k2)]);
+        let shaped = |which: usize, axis: usize| first.iter().flat_map(|a| second.iter().map(move |b| (a.0 + b.0, a.1 * b.1))).map(|(delay, weight)| weight * ago(which, axis, delay)).sum::<f64>() / sum;
         let axes = self.set_pos.len();
         let (pos, vel, acc): (Vec<f64>, Vec<f64>, Vec<f64>) =
             ((0..axes).map(|a| shaped(0, a)).collect(), (0..axes).map(|a| shaped(1, a)).collect(), (0..axes).map(|a| shaped(2, a)).collect());

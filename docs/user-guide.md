@@ -12,8 +12,10 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)
 - [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)
+- [See where torque and energy go](#see-where-torque-and-energy-go)
 - [Record raw signals, switch the drives off](#record-raw-signals-switch-the-drives-off)
 - [Connect a PLC over OPC UA](#connect-a-plc-over-opc-ua)
+- [Use the model in Simulink / Modelica via FMI](#use-the-model-in-simulink--modelica-via-fmi)
 - [Use the app](#use-the-app)
 
 The examples write `sim-cli` for `cargo run -q --release -p sim-cli --`. All output shown was produced by the commands shown.
@@ -40,7 +42,7 @@ Rules that are easy to trip over:
 
 - `--set` only changes values that exist. A misspelt key is refused (`Configuration value is missing: mass.cariage_kg`), and so is a value of the wrong type.
 - `--motor`, `--supply` and `--gearbox` need a `[parts]` table in the config. All three shipped configs have one.
-- Every option except `--cycle`, `--time-optimal` and `--bands` takes a value. An option without its value is refused (`This option needs a value: --time`), and so is an option the command does not know, such as a misspelt one (`This command has no such option: --cylce`). A number has to be finite: `--time inf` is refused.
+- Every option except `--cycle`, `--time-optimal`, `--bands` and `--worst` takes a value. An option without its value is refused (`This option needs a value: --time`), and so is an option the command does not know, such as a misspelt one (`This command has no such option: --cylce`). A number has to be finite: `--time inf` is refused.
 - `--cycle`, `--move`, `--trajectory` and `--path` exclude each other (`Only one of these options can be given at a time: --cycle --move`).
 - A config file may only have keys that the machine's default config has: a misspelt key is refused (`Configuration has a value this machine does not know: mass.cariage_kg`). The exceptions are `[bounds]`, which has its own check, and `ratings.pulley_max_torque_nm`.
 - Numbers are checked when a config is read. NaN and infinity are refused for every value, a negative number where the quantity cannot be negative (a payload, a damping, a backlash, the belt pretension), and a start pose outside the axis ranges. The message names the key: `Configuration value is out of range: gearbox.backlash_rad`.
@@ -61,9 +63,9 @@ The cycle is the list of `[[cycle.segment]]` in the config: target pose, dwell t
 
 ```text
 $ sim-cli analyze t-gantry
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km
-a,6.080000,0.644237,0.166790,200.2390,0.1709,0.1313,202.62,334.58,0.3708,1.25,85.244,10.435,29.12,5.954,1.319e-4,4.409e-5,1.559e-4,4.588e-5,0.198428,0.000,0.000,222.98,0.0000e0,6.4544e2,1.8007e2,4.6452e6
-b,6.080000,0.466063,0.154163,200.2192,0.1227,0.1214,202.62,334.58,0.3427,1.07,74.769,15.322,35.58,7.241,1.319e-4,4.409e-5,1.559e-4,4.588e-5,0.176294,5.281,0.869,224.65,0.0000e0,6.4544e2,1.8007e2,4.6452e6
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation
+a,6.080000,0.559623,0.165360,200.4514,0.1476,0.1302,204.64,334.35,0.3676,1.23,85.026,10.095,28.21,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1252e5,6.7359e9,1.9095e-1
+b,6.080000,0.460106,0.153385,200.4378,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.03,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175176,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1222e5,1.0201e10,1.5154e-1
 ```
 
 The simulator starts the cycle, lets the first pass go by, and measures the second. One row per motor. Columns that describe the machine, not one motor, repeat in every row.
@@ -94,6 +96,11 @@ The simulator starts the cycle, lets the first pass go by, and measures the seco
 | `radial_load_peak_n` | N | Highest pull of the belt on a pulley shaft. Machine-wide |
 | `guide_load_peak_n` | N | Highest load on the guide with the highest equivalent load. Machine-wide |
 | `guide_life_km` | km | L10 = (C / P)³ · 50 km for that guide. Empty without `ratings.guide_dynamic_load_rating_n` |
+| `mains_energy_j` | J | With `effects.regenerative_supply`: energy the line module fed back into the mains over the pass (after its efficiency). 0 without |
+| `guide_life_h` | h | `guide_life_km` over the mean speed of that guide's axis. Machine-wide |
+| `pulley_bearing_life_h` | h | Rating life of the bearing that takes the belt's pull on this motor's pulley shaft: (C / P)³ · 10⁶ / (60 n), C = `ratings.pulley_bearing_load_rating_n`, P the cubic mean of the radial load weighted with the speed, n the pulley's mean speed in r/min |
+| `gearbox_life_h` | h | Life of the gearbox's planet bearings by Siemens' formula, 20000 h · (n2B / n2) · (M2N / M2eq)^(10/3). Empty without `ratings.gearbox_rated_torque_nm` and `gearbox_reference_speed_rpm` (the EXCT-30 has no gearbox) |
+| `belt_tooth_utilisation` | fraction | The belt's tooth load on this motor's pulley over what its teeth allow at the pulley's speed (Megadyne's method, with `ratings.belt_service_factor`), the highest over the cycle. Not a life: no belt maker publishes one |
 
 The exact definitions are in the [model reference](model-reference.md#analysis-quantities).
 
@@ -104,19 +111,23 @@ Then judge the cycle:
 ```text
 $ sim-cli verdicts t-gantry
 check,motor,value,limit,result
-motor-peak,a,0.1709,1.000,ok
-motor-thermal,a,1.248,100.0,ok
-gearbox-continuous,a,0.7995,40.00,ok
-gearbox-input-speed,a,1912,13000,ok
-gearbox-peak,a,2.228,64.00,ok
-dc-link-energy,a,6.029,6.205,ok
-dc-link-overvoltage,a,223.0,257.6,ok
+motor-peak,a,0.1476,1.000,ok
+motor-thermal,a,1.227,100.0,ok
+gearbox-continuous,a,0.7955,40.00,ok
+gearbox-input-speed,a,1914,13000,ok
+gearbox-peak,a,2.175,64.00,ok
+pulley-bearing-life,a,212521,20000,ok
+gearbox-life,a,6735878139,20000,ok
+belt-tooth-load,a,0.1910,1.000,ok
+dc-link-energy,a,5.865,6.205,ok
+dc-link-overvoltage,a,221.4,257.6,ok
 ...
-settling,,0.00004588,0.0001000,ok
-belt-tension,,334.6,1500,ok
-belt-slack,,202.6,0,ok
-gearbox-radial-load,,645.4,1500,ok
-guide-load,,180.1,2000,ok
+settling,,0.00004734,0.0001000,ok
+belt-tension,,334.4,1500,ok
+belt-slack,,204.6,0,ok
+gearbox-radial-load,,644.8,1500,ok
+guide-load,,177.8,2000,ok
+guide-life,,4994954,20000,ok
 ```
 
 | Check | Value | Limit | Unit |
@@ -136,11 +147,18 @@ guide-load,,180.1,2000,ok
 | `belt-slack` | lowest belt tension | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |
 | `guide-load` | `guide_load_peak_n` | `ratings.guide_max_load_n` | N |
+| `pulley-bearing-life` | `pulley_bearing_life_h` | `ratings.required_life_h` | h |
+| `gearbox-life` | `gearbox_life_h` | `ratings.required_life_h` | h |
+| `guide-life` | `guide_life_h` | `ratings.required_life_h` | h |
+| `belt-tooth-load` | `belt_tooth_utilisation` | 1 | fraction |
+| `gearbox-thermal` | where the hottest gearbox settles on the cycle (only with `effects.part_heating`; none on a direct drive) | `thermal.gearbox_max_rise_k` | K |
+| `guide-thermal` | where the hottest guide settles on the cycle (only with `effects.part_heating`) | `thermal.guide_max_rise_k` | K |
 
 Limits for this task:
 
-- A rating that the config leaves out is not judged. No row is not a pass.
-- `belt-slack` is the one check where the value has to stay above the limit. It also fails if any section spent any time without tension.
+- A rating that the config leaves out is not judged. No row is not a pass. The same holds for `gearbox-thermal` and `guide-thermal` with `effects.part_heating` off. With it on, the EXCT-30's X guide settles at 25 K of 40 K and fails the worst case of `--bands` (51 K at the high bound of its thermal resistance); the thermal resistances are estimates (see the config reference).
+- `belt-slack` and the three lives are the checks where the value has to stay above the limit. `belt-slack` also fails if any section spent any time without tension.
+- The lives are the makers' formulas with ratings that are partly estimates; see the [model reference](model-reference.md#analysis-quantities) for what they leave out. The motors' own bearings are not estimated: in these configs the belt does not pull on a motor shaft.
 - `dc-link-energy` is `ok` whenever the config has a braking resistor to fall back on, even when the value is at or above the limit. The two resistor rows appear only when the resistor is needed. All three default configs simulate the DC link (`effects.dc_link = true`); with it off the braking rows are estimates from what the motor feeds back.
 - A braking threshold at or below `drive.bus_voltage_v` is refused (`Configuration value is out of range: ratings.braking_threshold_v`), simulated or not: it is a rating for another DC link voltage.
 - Values are printed with four significant digits and no exponent, so `settling` shows as `0.00004588`.
@@ -154,15 +172,17 @@ Limits for this task:
 ```text
 $ sim-cli verdicts t-gantry --set effects.shared_dc_link=true
 ...
-dc-link-energy,a,6.142,6.205,ok
-dc-link-overvoltage,a,224.1,257.6,ok
+dc-link-energy,a,6.166,6.205,ok
+dc-link-overvoltage,a,224.3,257.6,ok
 ...
-dc-link-energy,b,6.142,6.205,ok
-dc-link-overvoltage,b,224.1,257.6,ok
+dc-link-energy,b,6.166,6.205,ok
+dc-link-overvoltage,b,224.3,257.6,ok
 ...
 ```
 
-On the default cycle the highest DC link voltage is 224.65 V with separate links (motor B, at the chopper's threshold) and 224.06 V with the shared one. The resistor is not needed then, so its two rows are gone.
+On the default cycle the highest DC link voltage is 224.65 V with separate links (motor B, at the chopper's threshold) and 224.05 V with the shared one. The resistor is not needed then, so its two rows are gone.
+
+**Feeding back into the mains.** `effects.regenerative_supply` (off by default, needs `effects.dc_link`) puts a regenerative line module in place of the plain rectifier, as an Active Line Module on a SINAMICS S120: it holds the DC link at the bus level from above too and feeds what the motors give back into the mains, up to `ratings.line_module_max_power_w`, of which `ratings.line_module_efficiency` arrives there. The braking resistor then takes only what is beyond the line module's power. `analyze` reports the energy fed back per motor (last column, `mains_energy_j`), the energy budget gets the rows `mains` and `line_module` (its loss), the app shows both, and two checks judge the line module: `line-module-continuous` (its mean power, drawn and fed back, against `line_module_rated_power_w`) and `line-module-peak` (its highest power against `line_module_max_power_w`). The shipped values are the smallest S120 Active Line Module, 16 kW rated and 35 kW at most, far above what these machines need. On the default T-gantry 25.2 J of the 25.8 J the motors regenerate per cycle go back into the mains; the resistor burns nothing and the DC link stays at 155.13 V.
 
 ## Check a real catalogue machine
 
@@ -171,18 +191,18 @@ A config can describe a real machine with its values taken from the catalogue. [
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-a,1.934000,4.060260,1.547724,157.1821,0.3251,0.3365,239.14,558.35,1.2137,7.76,...
-b,1.934000,3.353654,1.483132,157.1735,0.2686,0.3224,239.14,558.35,1.1628,7.11,...
+a,2.048000,3.659797,1.459734,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
+b,2.048000,3.036510,1.391431,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
 ```
 
-Four values in this config are choices of the designer, made so that every check passes in the worst case of the error bands ([below](#see-which-unknown-parameters-matter-and-judge-with-error-bands)): a belt pretension of 450 N, an X jerk limit of 150 m/s³, input shaping at a fixed 25 Hz, and corner blending. The comments in the file give the reasons.
+Five values in this config are choices of the designer, made so that the checks pass in the worst case of the error bands ([below](#see-which-unknown-parameters-matter-and-judge-with-error-bands)): a belt pretension of 450 N, an X jerk limit of 150 m/s³, input shaping at a fixed 25 Hz with a second shaper at 17.5 Hz, and corner blending. The comments in the file give the reasons.
 
 Like the default configs, this one has `effects.dc_link = true`, so the braking rows of `verdicts` are simulated, not estimated: the DC link voltage rises to the chopper threshold of 770 V and the resistor burns the rest.
 
 ```text
 dc-link-energy,a,9.943,9.943,ok
-braking-resistor-continuous,a,8.859,100.0,ok
-braking-resistor-peak,a,213.7,3000,ok
+braking-resistor-continuous,a,8.303,100.0,ok
+braking-resistor-peak,a,200.5,3000,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ```
 
@@ -198,20 +218,20 @@ What a part by name does **not** set, and what follows from that:
 
 - **Winding resistance and inductance.** Siemens does not publish them for the 1FK2 and 1FT2. The config's values stay, and the current controller's gains with them.
 - **The DC link capacitance and the braking resistor's powers.** They stay as the config has them. The braking threshold and the trip level keep their ratio to the DC link voltage, which is sound for placeholders and no more: set all five DC link ratings for the real drive before trusting the braking rows.
-- **Gearbox input speed and radial load.** The gearbox files do not have them. `ratings.gearbox_max_input_speed_rpm` and `ratings.shaft_max_radial_load_n` stay as the config has them.
+- **Gearbox input speed, radial load and life.** The gearbox files do not have them. `ratings.gearbox_max_input_speed_rpm`, `ratings.shaft_max_radial_load_n`, `ratings.pulley_bearing_load_rating_n` and `ratings.gearbox_reference_speed_rpm` stay as the config has them.
 
 **The velocity gain is retuned.** A motor with a much lighter rotor oscillates with a gain tuned for a heavier one, which is a failure of the tuning, not of the motor. So wherever a part is named (`[parts]`, `--motor`, `--gearbox`, the search), `drive.velocity_kp_nm_s_rad` is scaled by the square root of (ratio of the inertia the motors turn) × (ratio of the rotor inertias, the gearbox's own included). The reference is the config's own numbers as the file states them before the part goes in: the gain in a config is taken to be tuned for the rotor, gearbox and masses written in that config. `--set drive.velocity_kp_nm_s_rad=...` on the command line is applied after the parts and overrides the retuned gain.
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2204-6AF
-motor-peak,a,0.4001,1.000,ok
-motor-thermal,a,13.38,100.0,ok
+motor-peak,a,0.3636,1.000,ok
+motor-thermal,a,12.07,100.0,ok
 ...
-settling,,0.00003980,0.0001000,ok
-belt-slack,,236.9,0,ok
+settling,,0.00004415,0.0001000,ok
+belt-slack,,252.0,0,ok
 ```
 
-The rotor of the 1FK2204-6AF has a third of the inertia of the config's 1FK2205-4AF; the gain goes from 0.6 to 0.31 N m s/rad. With the gain left at 0.6 the same motor oscillates and its winding would settle thousands of kelvin up.
+The rotor of the 1FK2204-6AF has a third of the inertia of the config's 1FK2205-4AF; the gain goes from 0.45 to 0.23 N m s/rad. (0.45 happens to be calm for this motor too.) The 1FK2104-5AF has a ninth of the inertia: with the gain left at 0.45 it oscillates and its winding never settles, retuned to 0.13 it runs the cycle with 1.22 N m RMS.
 
 An unknown article is refused: `The catalogue has no such part: motor 1FK9`. A motor that the catalogue does not offer at the chosen supply is refused the same way.
 
@@ -221,19 +241,21 @@ An unknown article is refused: `The catalogue has no such part: motor 1FK9`. A m
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
 motor,gearbox,mass_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-1FK2104-5AF,,2.85,ok,settling,0.5083,3.5749,22.73
-1FK2104-5AK,,2.85,ok,settling,0.5081,3.5812,46.58
-1FK2204-5AF,,2.90,ok,motor-peak,0.5260,3.7239,23.92
-1FK2104-6AF,,3.40,ok,gearbox-radial-load,0.5026,3.6284,12.40
-1FK2204-6AF,,3.50,ok,gearbox-radial-load,0.5030,3.7905,13.38
-1FK2205-2AF,,3.75,ok,gearbox-radial-load,0.5026,3.9032,16.44
-1FK2205-4AF,,5.20,ok,gearbox-radial-load,0.5025,4.0603,7.76
+1FK2104-5AF,,2.85,ok,pulley-bearing-life,0.6309,3.2886,20.44
+1FK2104-5AK,,2.85,ok,pulley-bearing-life,0.6309,3.2977,41.56
+1FK2204-5AF,,2.90,ok,pulley-bearing-life,0.6310,3.4296,21.55
+1FK2104-6AF,,3.40,ok,pulley-bearing-life,0.6311,3.3446,11.27
+1FK2204-6AF,,3.50,ok,pulley-bearing-life,0.6311,3.4468,12.07
+1FK2205-2AF,,3.75,ok,pulley-bearing-life,0.6311,3.5158,14.67
+1FK2205-4AF,,5.20,ok,pulley-bearing-life,0.6310,3.6598,6.88
 ...
-1FK2204-5AK,,2.90,FAIL,motor-thermal,1.9796,3.7279,197.96
+1FK2204-5AK,,2.90,FAIL,motor-thermal,1.6796,3.4378,167.96
 1FK2103-2AH,,1.18,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
 1FK2208-3AC,,12.60,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
+
+On the EXCT-30 every passing motor has the same tightest check, the life of the pulley shaft bearings (20000 h required of about 31700 h), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`.
 
 The search runs every motor of the S210 catalogue ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) that is offered at the supply on the config's cycle. Passing motors come first, lightest first. Failing ones follow, nearest to passing first. A candidate whose drives trip on DC link overvoltage comes after all of these, with `inf` as its `tightest_utilisation`: its figures end at the trip.
 
@@ -263,9 +285,9 @@ With gearboxes, on the single axis:
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 12 / 35 candidates
 motor,gearbox,mass_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-1FK2104-4AF,NRK070-04-3,2.05,ok,settling,0.4749,0.8992,3.97
-1FK2104-4AF,NRK070-04-4,2.05,ok,settling,0.4632,0.7356,2.50
-1FK2104-4AF,NRK070-04-5,2.05,ok,settling,0.4814,0.5543,1.91
+1FK2104-4AF,NRK070-04-3,2.05,ok,gearbox-radial-load,0.4188,0.7670,3.85
+1FK2104-4AF,NRK070-04-4,2.05,ok,settling,0.4568,0.6009,2.50
+1FK2104-4AF,NRK070-04-5,2.05,ok,settling,0.4637,0.5294,1.91
 ...
 1FK2104-4AF,NRK070-04-7,2.05,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
@@ -294,15 +316,15 @@ friction_x.coulomb_n = [12.0, 26.0]
 ```text
 $ sim-cli sensitivity t-gantry --config crates/machine-t-gantry/exct-30.toml --group mass --group friction_x --group belt
 parameter,value,low,high,peak_torque_low,peak_torque_high,rms_torque_low,rms_torque_high,cycle_time_low,cycle_time_high,belt_tension_min_low_n,belt_tension_min_high_n
-mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0672,+0.0671,-0.0673,+0.0688,+0.0000,+0.0000,251.36,227.13
-friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0341,+0.0683,-0.0161,+0.0444,+0.0000,+0.0000,247.11,223.14
-mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0645,+0.0652,-0.0463,+0.0483,+0.0000,+0.0000,254.50,224.13
-mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0364,+0.0358,-0.0272,+0.0275,+0.0000,+0.0000,247.00,231.17
-friction_x.coulomb_n,20.0,12.0,26.0,-0.0222,+0.0167,-0.0086,+0.0072,+0.0000,+0.0000,244.57,235.20
+friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0435,+0.0869,-0.0172,+0.0469,+0.0000,+0.0000,264.84,242.04
+mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0620,+0.0622,-0.0675,+0.0689,+0.0000,+0.0000,268.68,246.11
+mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0540,+0.0549,-0.0472,+0.0487,+0.0000,+0.0000,272.14,243.18
+mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0342,+0.0343,-0.0279,+0.0283,+0.0000,+0.0000,265.01,250.05
+friction_x.coulomb_n,20.0,12.0,26.0,-0.0188,+0.0142,-0.0096,+0.0078,+0.0000,+0.0000,263.44,253.31
 ...
-belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0002,+0.0000,-0.0000,+0.0000,+0.0000,139.15,339.14
+belt.pretension_n,450.0,350.0,550.0,+0.0001,-0.0001,+0.0000,-0.0000,+0.0000,+0.0000,157.78,357.77
 ...
-belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,239.14,239.14
+belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,257.77,257.77
 ```
 
 | Column | Meaning |
@@ -319,60 +341,92 @@ belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.
 | `--group TABLE` | Only vary this config table. Repeatable. Without it every table is varied except `sim`, `effects`, `drive`, `profile`, `start`, `axis` and `temperature` |
 | `--delta FRACTION` | Width for values without bounds. Default 0.2 |
 
-The masses in the example have no bounds in the config, so they were varied by 20 %. A parameter whose changed value the machine refuses is left out of the table. The pretension hardly moves the torques, so it stands far down, but it sets the lowest belt tension: 139 N at its low bound. The last row shows a parameter of an effect that is switched off: it changes nothing.
+The masses in the example have no bounds in the config, so they were varied by 20 %. A parameter whose changed value the machine refuses is left out of the table. The pretension hardly moves the torques, so it stands far down, but it sets the lowest belt tension: 158 N at its low bound. The last row shows a parameter of an effect that is switched off: it changes nothing.
 
 **Error bands on the verdicts.**
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands
 check,motor,value,limit,result,low,high,worst_case
-motor-peak,a,0.3251,1.000,ok,0.3162,0.3450,ok
-motor-thermal,a,7.764,100.0,ok,7.508,8.494,ok
-pulley-torque,a,3.405,12.50,ok,3.294,3.635,ok
-dc-link-energy,a,9.943,9.943,ok,4.971,23.16,ok
-braking-resistor-continuous,a,8.859,100.0,ok,4.999,14.00,ok
-braking-resistor-peak,a,213.7,3000,ok,185.9,228.6,ok
-dc-link-overvoltage,a,770.0,820.0,ok,708.6,790.0,ok
+motor-peak,a,0.2930,1.000,ok,0.2826,0.3151,ok
+motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
+pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
+pulley-bearing-life,a,31788,20000,ok,17349,67792,FAIL
+belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
+dc-link-energy,a,9.943,9.943,ok,4.971,23.24,ok
+braking-resistor-continuous,a,8.303,100.0,ok,4.537,13.16,ok
+braking-resistor-peak,a,200.5,3000,ok,138.7,218.2,ok
+dc-link-overvoltage,a,770.0,820.0,ok,709.1,790.0,ok
 ...
-settling,,0.00003505,0.0001000,ok,0.00003164,0.00004055,ok
-belt-tension,,558.4,2140,ok,458.4,658.3,ok
-belt-slack,,239.1,0,ok,139.1,339.1,ok
-gearbox-radial-load,,1005,2000,ok,805.1,1205,ok
-guide-load,,185.3,2000,ok,177.3,286.6,ok
+settling,,0.00003947,0.0001000,ok,0.00003446,0.00004434,ok
+belt-tension,,555.0,2140,ok,455.0,655.0,ok
+belt-slack,,257.8,0,ok,157.8,357.8,ok
+gearbox-radial-load,,1000,2000,ok,800.4,1200,ok
+guide-load,,185.0,2000,ok,177.0,276.7,ok
+guide-life,,3024172,20000,ok,378021,24193374,ok
 ```
 
-`low` and `high` are the lowest and highest value the check took over all runs: the config as it is, and each bounded parameter at its low and at its high bound. `worst_case` is `ok` only if the check passed in every run. Here every check passes in every run: with the belt set to its low bound of 350 N the slackest section keeps 139 N, the tool is at most 0.041 mm off its target in the dwell, and the belt pulls a pulley shaft with at most 1205 N. This run simulated 123 cycles (61 bounded values) on all processor cores and took about 2 s on the machine this guide was written on.
+`low` and `high` are the lowest and highest value the check took over all runs: the config as it is, and each bounded parameter at its low and at its high bound. `worst_case` is `ok` only if the check passed in every run. Here every check passes in every run but one: with the belt set to its low bound of 350 N the slackest section keeps 158 N, the tool is at most 0.044 mm off its target in the dwell, and the belt pulls a pulley shaft with at most 1200 N. The pulley shaft bearings fail: 31800 h as written, 17300 h with the belt set 100 N high, against 20000 h required. Their load rating is an estimate (Festo publishes none; see the config's comment), so this says that the bearings are the part to ask Festo about, not that the axis wears out. This run simulated 127 cycles (63 bounded values) on all processor cores and took about 2.6 s on the machine this guide was written on.
 
-An earlier state of this config failed here: with 300 N of pretension a belt set to 200 N went slack, and with the frame at the soft end of its bounds the tool was 0.16 mm off in the dwell, against a tolerance of 0.1 mm (the tool position counts the frame's sway). The pretension was raised to 450 N, the X jerk limit lowered from 500 to 150 m/s³, and input shaping and corner blending were switched on. The cycle takes 1.934 s now, against 2.136 s before.
+An earlier state of this config failed here: with 300 N of pretension a belt set to 200 N went slack, and with the frame at the soft end of its bounds the tool was 0.16 mm off in the dwell, against a tolerance of 0.1 mm (the tool position counts the frame's sway). The pretension was raised to 450 N, the X jerk limit lowered from 500 to 150 m/s³, and input shaping and corner blending were switched on; later a second shaper at 17.5 Hz was added for the worst corner (below). The cycle takes 2.048 s now, against 2.136 s before.
 
 **All bounded values at once.** With `--samples N` the cycle is run N times, each time with all bounded values between their bounds:
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 check,motor,value,limit,result,low,high,worst_case,pass_share
-motor-peak,a,0.3251,1.000,ok,0.3063,0.3791,ok,1.000
-motor-thermal,a,7.764,100.0,ok,7.310,9.353,ok,1.000
-pulley-torque,a,3.405,12.50,ok,3.170,3.992,ok,1.000
-dc-link-energy,a,9.943,9.943,ok,4.812,29.92,ok,1.000
-braking-resistor-continuous,a,8.859,100.0,ok,0.1327,14.76,ok,1.000
-braking-resistor-peak,a,213.7,3000,ok,20.14,240.7,ok,1.000
-dc-link-overvoltage,a,770.0,820.0,ok,658.5,789.9,ok,1.000
+motor-peak,a,0.2930,1.000,ok,0.2799,0.3435,ok,1.000
+motor-thermal,a,6.882,100.0,ok,6.421,8.347,ok,1.000
+pulley-torque,a,3.126,12.50,ok,2.959,3.719,ok,1.000
+pulley-bearing-life,a,31788,20000,ok,11887,126380,FAIL,0.860
+belt-tooth-load,a,0.3529,1.000,ok,0.2876,0.5665,ok,1.000
+dc-link-energy,a,9.943,9.943,ok,4.781,28.61,ok,1.000
+braking-resistor-continuous,a,8.303,100.0,ok,0.03481,13.44,ok,1.000
+braking-resistor-peak,a,200.5,3000,ok,6.788,231.5,ok,1.000
+dc-link-overvoltage,a,770.0,820.0,ok,675.3,789.5,ok,1.000
 ...
-settling,,0.00003505,0.0001000,ok,0.00002482,0.00005487,ok,1.000
-belt-tension,,558.4,2140,ok,450.8,668.9,ok,1.000
-belt-slack,,239.1,0,ok,121.6,340.1,ok,1.000
-gearbox-radial-load,,1005,2000,ok,802.3,1215,ok,1.000
-guide-load,,185.3,2000,ok,172.1,324.2,ok,1.000
+settling,,0.00003947,0.0001000,ok,0.00002569,0.00005131,ok,1.000
+belt-tension,,555.0,2140,ok,445.9,665.0,ok,1.000
+belt-slack,,257.8,0,ok,139.6,357.9,ok,1.000
+gearbox-radial-load,,1000,2000,ok,797.3,1209,ok,1.000
+guide-load,,185.0,2000,ok,173.1,308.7,ok,1.000
+guide-life,,3024172,20000,ok,291334,22756879,ok,1.000
 ```
 
-The values are drawn as a Latin hypercube: each value's range is cut into N equal parts, each part is used in exactly one run, and the order of the parts is random per value. The random numbers come from `--seed S` (default 1), so the same call gives the same table. `low`, `high` and `worst_case` are the envelope of these runs and the config as it is. `pass_share` is the share of the runs, the config as it is included, in which the check passed. Here the bands are wider than one at a time (122 N instead of 139 N in the slackest section, 0.055 mm instead of 0.041 mm off in the dwell, 1215 N on a pulley shaft), and every check still passes in all 201 runs. That took about 4 s.
+The values are drawn as a Latin hypercube: each value's range is cut into N equal parts, each part is used in exactly one run, and the order of the parts is random per value. The random numbers come from `--seed S` (default 1), so the same call gives the same table. `low`, `high` and `worst_case` are the envelope of these runs and the config as it is. `pass_share` is the share of the runs, the config as it is included, in which the check passed. Here the bands are wider than one at a time (140 N instead of 158 N in the slackest section, 0.051 mm instead of 0.044 mm off in the dwell, 1209 N on a pulley shaft), and every check passes in all 201 runs but the pulley shaft bearings, which last less than 20000 h in 14 % of them (11900 h at least). That took about 4 s.
 
 `--samples` without `--bands`, 0 samples, a fraction, and `--seed` without `--samples` are refused (exit code 2). The runs of both kinds use all processor cores.
+
+**The worst corner.** With `--worst` the bands search, per check, for the combination of bounds that makes it worst:
+
+```text
+$ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --worst
+Cycles simulated in the search for the worst corners: 2428
+check,motor,worst,limit,worst_case,at_high_bound,at_low_bound
+motor-peak,a,0.4109,1.000,ok,...
+...
+pulley-bearing-life,a,10258,20000,FAIL,...
+...
+dc-link-energy,a,35.66,36.57,ok,...
+...
+settling,,0.00009484,0.0001000,ok,...
+belt-tension,,687.7,2140,ok,...
+belt-slack,,86.89,0,ok,...
+gearbox-radial-load,,1231,1500,ok,...
+guide-load,,354.9,1000,ok,...
+guide-life,,115600,20000,ok,...
+```
+
+It starts from the one-at-a-time runs: each check gets the corner where every bounded value is at the bound that made that check worse alone. Then, up to three times, each value that moved the check is flipped to its other bound, one at a time, and what made it worse is kept (all such flips together, or the best one alone, whichever is worse). The last two columns name the values at their high and at their low bound, separated by `;`. "Worse" is judged by the margin to the limit, because some limits are bounded themselves: in this config the DC link's capacitance and threshold, so the `limit` column shows the limit at that corner. `dc-link-energy` is judged by the energy instead: it fails only where the braking resistor is needed and has no rating, and with a resistor the link fills up to its room at every corner that brakes hard, so its margin says nothing (here 35.66 J of 36.57 J of room, with the capacitance at its high bound; 9.94 J as configured). The one-at-a-time runs and the config as it is count as candidates too, so the worst is never better than the bands; where one of them is the worst, the values it leaves as configured are named in neither column. The search took 2428 cycles and 50 s here.
+
+On the EXCT-30 it found what neither band mode found: with the 25 Hz shaper alone and all values at their worst at once the tool was 0.115 mm off its target in the dwell, against 0.1 mm allowed (0.043 mm one at a time, 0.053 mm in 200 samples). A second shaper at 17.5 Hz, the peak of the tool's response, brings it to 0.095 mm (the comment of `profile.shaper2_frequency_hz` in the file lists what else was tried). The belt keeps 87 N in its slackest section and the shafts carry 1231 N of their 1500 N at the lowest rating bound. The pulley shaft bearings last 10300 h at their worst corner.
+
+`--worst` without `--bands`, or with `--samples` or `--seed`, is refused (exit code 2). The app has it as "worst corner" beside the error bands.
 
 Limits for this task:
 
 - **Plain `--bands` is one at a time.** Two values that are both off can take a result beyond its band. `--samples` shows that.
-- **Samples do not find the worst corner.** A sample never sits exactly on a bound (plain `--bands` does that), and a few dozen runs do not find the worst combination of many values. Run both.
+- **Samples do not find the worst corner.** A sample never sits exactly on a bound (plain `--bands` does that), and a few dozen runs do not find the worst combination of many values. `--worst` searches for it, but it is a search, not a proof: a worst case that no chain of single flips from the corner of the one-at-a-time signs reaches, or one between the bounds (a stiffness that puts a resonance on the cycle), can be missed. Run all three.
 - The bounds are themselves estimates. In the default configs only friction, damping, stiffness, pretension, ripple and gearbox efficiency are bounded, not the masses, inertias and backlash.
 - Where a bound changes a rating (the EXCT-30 config bounds its DC link ratings), the `limit` column still shows the nominal limit.
 - A bound on a key that the config does not have is refused. So is a pair where low is above high.
@@ -382,8 +436,8 @@ Limits for this task:
 ```text
 $ sim-cli optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
-cycle_s,1.9340,1.4920
-dwell_error_peak_m,3.505e-5,6.965e-5
+cycle_s,2.0480,1.4920
+dwell_error_peak_m,3.947e-5,9.462e-5
 axis.x.max_acceleration_m_s2,25.0,53.99999999999999
 axis.x.max_jerk_m_s3,150.0,337.5
 axis.x.max_velocity_m_s,2.5,3.0
@@ -393,9 +447,9 @@ axis.z.max_velocity_m_s,1.5,1.7999999999999998
 effects.input_shaping,true,false
 ```
 
-The optimiser tries corner blending and higher velocity, acceleration and jerk limits (all axes together, in steps of ×1.5 and ×1.2). It keeps a change if the cycle gets shorter and every verdict still passes, among them `settling`, so a faster move that leaves the tool swinging at the pick does not count. Input shaping makes no cycle shorter by itself, because every stop waits one period of the shaper. So it is tried where it can help: a faster setting that fails on `settling` alone is run again with the shaper (and with `effects.shaper_follows_pose` where the machine reports a resonance) and taken if it then passes and is shorter. Where the shaper is on already, switching it off is tried too. The first two rows are the cycle time and the dwell error before and after. The other rows are what to change in the config. No config file is edited.
+The optimiser tries corner blending and higher velocity, acceleration and jerk limits (all axes together, in steps of ×1.5 and ×1.2). It keeps a change if the cycle gets shorter and every verdict still passes, among them `settling`, so a faster move that leaves the tool swinging at the pick does not count. Input shaping makes no cycle shorter by itself, because every stop waits one period of the shaper. So it is tried where it can help: a faster setting that fails on `settling` alone is run again with the shaper (and with `effects.shaper_follows_pose` where the machine reports a resonance) and taken if it then passes and is shorter; one that still fails on `settling` alone with the shaper is run again with a second shaper (see [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)). Where the shaper is on already, switching it off is tried too. The first two rows are the cycle time and the dwell error before and after. The other rows are what to change in the config. No config file is edited.
 
-The EXCT-30 config has corner blending and the shaper on already, so here the optimiser raises the limits and switches the shaper off: the cycle falls from 1.93 s to 1.49 s, and the tool is 0.070 mm off in the dwell instead of 0.035 mm.
+The EXCT-30 config has corner blending and the shaper on already, so here the optimiser raises the limits and switches the shaper off (both shapers): the cycle falls from 2.05 s to 1.49 s, and the tool is 0.095 mm off in the dwell instead of 0.039 mm.
 
 `--runs N` limits the number of cycles simulated (default 40).
 
@@ -438,10 +492,10 @@ A spline can swing past its via points: between them the curve bulges outwards, 
 ```text
 $ sim-cli analyze t-gantry --path corner.path
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.128000,0.627751,...,1.545e-4,5.518e-5,1.545e-4,0.000e0,...
+a,2.128000,0.547780,...,1.579e-4,5.575e-5,1.679e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path corner.path --time-optimal
-a,1.729000,0.663606,...,1.854e-4,6.665e-5,1.854e-4,0.000e0,...
+a,1.729000,0.639460,...,1.915e-4,6.738e-5,1.915e-4,0.000e0,...
 ```
 
 For a path, `cycle_s` is the planned duration plus 0.3 s of rest at the end, so that the settling of the tool counts.
@@ -455,7 +509,7 @@ Two planners time the path:
 | At a corner (direction turns by more than 1 mrad) | Stops | Stops |
 | Where a line meets an arc | Slows down so far that the step in acceleration stays within half the jerk limit; with `profile.path_tolerance_m` a transition curve takes the path into the arc at speed (below) | The same |
 | On a spline | Each span between two via points gets one speed, one acceleration and one jerk limit, from its tightest curvature and the fastest change of curvature on it (sampled at 257 places, raised by 5 % as margin), shared out as on arcs | The same, from what the motors allow |
-| Where a spline meets a line or an arc | The curvature steps, so it slows down as from a line into an arc. No transition curve is put there | The same |
+| Where a spline meets a line or an arc | The curvature steps, so it slows down as from a line into an arc; with `profile.path_tolerance_m` the spline's end is eased to the curvature of its neighbour, and the junction is passed at speed (below) | The same |
 | Model used to plan | None, only the axis limits | The rigid model: no friction, no belt stretch |
 
 The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.78 s plus rest at 2000 m/s³).
@@ -472,7 +526,7 @@ Reading the result:
 $ sim-cli analyze t-gantry --path corner.path --set profile.path_tolerance_m=0.0001
 The planned path is off the given lines and arcs by up to 0.1000 mm (transition curves, and arcs that end beside their stated end).
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,...
-a,1.890000,0.627751,...,1.133e-4,...
+a,1.890000,0.547780,...,1.120e-4,...
 ```
 
 1.89 s instead of 2.13 s, with every axis still within its velocity, acceleration and jerk limit. The rules:
@@ -484,7 +538,7 @@ a,1.890000,0.627751,...,1.133e-4,...
 | Speed on a curve that is shorter than needed | v = (0.4 j L / dk)^(1/3) |
 | Example above (r = 0.1 m, 100 m/s³, arc at 0.4 m/s) | Needed 16 mm, allowed sqrt(24 · 0.0001 · 0.1) = 15.5 mm: the arc moves in by the full 0.1 mm and is entered at 0.396 m/s instead of 0.071 m/s. With a tolerance of 1 mm the curves are the 16 mm they need, and the path is off by 0.107 mm |
 
-One length serves all curves of a path. An arc at a corner, or at the start or end of the path, keeps its radius (it has to end where the file says) and so gets no curve towards a line. If a piece is too short for its curves, or a curve would turn half a circle or more (a tolerance that is large against the radius of a tight arc), the length is halved for the whole path, up to eight times; after that the path is planned as given. With a tolerance of 0 (the default) nothing changes.
+One length serves all curves of a path. An arc at a corner, at the start or end of the path, or next to a spline has to end there where the file says. If its other end meets a line, it still gets its curve: its circle shrinks and moves towards the fixed end so that it passes through that end in the same direction, and leaves the room for the curve at the line (for arcs of up to half a turn). An arc fixed at both ends keeps its radius. If a piece is too short for its curves, or a curve would turn half a circle or more (a tolerance that is large against the radius of a tight arc), the length is halved for the whole path, up to eight times; after that the path is planned as given. With a tolerance of 0 (the default) nothing changes.
 
 **A path with a spline.** Two via points between two lines:
 
@@ -499,13 +553,13 @@ line,0.55,0.05
 ```text
 $ sim-cli analyze t-gantry --path curve.path
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.101000,0.626580,...,1.590e-4,5.564e-5,1.590e-4,0.000e0,...
+a,2.101000,0.547145,...,1.646e-4,5.616e-5,1.679e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path curve.path --time-optimal
-a,1.974000,0.662041,...,1.703e-4,6.001e-5,1.703e-4,0.000e0,...
+a,1.974000,0.586259,...,1.722e-4,6.077e-5,1.722e-4,0.000e0,...
 ```
 
-2.101 s within the axis limits and 1.974 s as fast as the motors allow, both with 0.3 s of rest. The curve leaves the first line horizontally and arrives on the last one going straight down. `profile.path_tolerance_m` changes nothing on this path: it has no arc, and splines get no transition curves.
+2.101 s within the axis limits and 1.974 s as fast as the motors allow, both with 0.3 s of rest. The curve leaves the first line horizontally and arrives on the last one going straight down, but with the curvature its via points ask for, so the path slows down at both junctions as into an arc. With `--set profile.path_tolerance_m=0.0001` the spline's ends are eased: near each junction the spline is bent so that its curvature there is that of the line (0), over a length l = sqrt(tolerance / (0.01728 dk)) for a step dk of the curvature, at most half the span, and only as long as the speed needs. The via points stay where they are; the spline moves by at most the tolerance. Here: 1.985 s within the axis limits and 1.809 s as fast as the motors allow. The eased part changes its curvature about nine times as fast as a clothoid of the same length would, so it is passed more slowly than a transition curve between a line and an arc (see the [model reference](model-reference.md#transition-curves-profilepath_tolerance_m)).
 
 Other ways to give a path:
 
@@ -515,14 +569,14 @@ Other ways to give a path:
 Limits for this task:
 
 - Without a path tolerance a rounded corner is slow with the default planner: 0.07 m/s into an arc of 0.1 m radius at 100 m/s³.
-- Splines: where one joins a line or an arc the curvature steps, so the path passes that junction slowly, like a line into an arc without tolerance. Splines get no transition curves; `profile.path_tolerance_m` leaves them, and the arcs next to them, as given. A span has one limit, from its tightest place, so a span with one tight bend is slow along its whole length.
-- Transition curves: one length for the whole path, none at an arc that touches a corner or an end of the path, and their length is worked out with the speeds of the axis limits, also for the time-optimal plan (the example takes 1.499 s with a tolerance of 0.1 mm, 1.729 s without).
+- Splines: without a path tolerance, where one joins a line or an arc the curvature steps, so the path passes that junction slowly, like a line into an arc. With one, the eased junction is passed at speed, but more slowly than a clothoid would allow for the same deviation. A span has one limit, from its tightest place, so a span with one tight bend is slow along its whole length.
+- Transition curves between lines and arcs: one length for the whole path, so an arc whose junctions need less still moves in by what that length asks. None at an arc fixed at both ends (between two corners, or a corner and a spline), or at an arc fixed at one end with an arc at the other, or that turns more than half a circle. Their length follows the speeds the plan allows: the axis limits, or for `--time-optimal` the motors (the example takes 1.499 s with a tolerance of 0.1 mm, 1.729 s without).
 - The time-optimal plan does not know the belt, the guides or the DC link. Run `analyze` or `verdicts` on it.
 - The time-optimal plan is not the fastest one possible. It has one speed and one acceleration limit per piece, and on an arc it shares the motors' limits out between the directions along the path and towards the centre, which leaves a part unused. On the full model the motors pass the rated speed by what the control loops add (0.1 % in the example).
 - A machine that stands on an end of a stroke has its setpoint some hundredths of a millimetre beyond it: the setpoint is where the motors stand, under belt stretch and gear twist. A path from there starts that far outside the travel range and is run. Poses more than 0.1 mm outside the range are refused (`The path leaves the travel range. ...` for a path of pieces, `The trajectory needs at least two points inside the travel range, at rising times from 0.` for poses at times).
 - The payload is as the machine has it when planning (attached, at the start).
 - `verdicts`, `optimise`, `search` and `sensitivity` work on the cycle only, not on a path.
-- Paths are not available over OPC UA. In the app they are under "Path" (see [Use the app](#use-the-app)).
+- In the app paths are under "Path" (see [Use the app](#use-the-app)); a PLC sends them over OPC UA (see [Connect a PLC over OPC UA](#connect-a-plc-over-opc-ua)).
 
 ## Tune gains and use input shaping
 
@@ -533,13 +587,13 @@ The gains are in `[drive]`: `kv_1_s` (position), `velocity_kp_nm_s_rad` and `vel
 ```text
 $ sim-cli tuning t-gantry
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.02900,0.0625,0.49450,9.507
-z,0.04300,0.0000,0.08525,8.625
+x,0.02875,0.0644,0.44750,10.649
+z,0.04325,0.0000,0.08550,9.200
 
 $ sim-cli tuning t-gantry --set drive.kv_1_s=150
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.01450,0.2691,0.49725,21.961
-z,0.00525,0.0691,0.03100,74.895
+x,0.01150,0.3004,0.49875,22.161
+z,0.00575,0.1603,0.04175,59.778
 ```
 
 | Column | Unit | Meaning |
@@ -549,7 +603,35 @@ z,0.00525,0.0691,0.03100,74.895
 | `settling_time_s` | s | After this time the tool stays within 2 % of the step |
 | `bandwidth_hz` | Hz | Where the closed-loop gain first falls below 1/√2. Empty if it never does up to 200 Hz |
 
-With Kv = 50 1/s the position loop behaves like a first-order lag with time constant 1/Kv: bandwidth about Kv / 2π = 8 Hz. Z shows that plainly. In X the tool position counts the frame's sway: the step sets the lightly damped frame mode (about 21 Hz) ringing, which is the 6 % of overshoot and the half second until the tool stays within 2 %. Tripling Kv makes X overshoot by 27 %.
+With Kv = 50 1/s the position loop behaves like a first-order lag with time constant 1/Kv: bandwidth about Kv / 2π = 8 Hz. Z shows that plainly. In X the tool position counts the frame's sway: the step sets the lightly damped frame mode (about 21 Hz) ringing, which is the 6 % of overshoot and the 0.45 s until the tool stays within 2 %. Tripling Kv makes X overshoot by 30 %.
+
+**Stability margins of the velocity loops.** `margins` measures each motor's velocity loop open: a sine torque is added to what the loop asks for, with the machine holding its start pose, and the loop's answer gives the open-loop response L at 60 frequencies from 10 Hz to 2 kHz (a drive's own measurement function works this way):
+
+```text
+$ sim-cli margins t-gantry
+run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result
+,a,188.1,56.8,9.05,1.897,277.3,ok
+,b,182.1,54.0,8.95,1.895,277.3,ok
+
+$ sim-cli margins single-axis --bands
+run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result
+,m,185.6,57.9,11.15,1.665,253.5,ok
+belt.damping_n_s_m=50.0,m,190.6,52.1,11.18,1.717,231.7,ok
+belt.damping_n_s_m=200.0,m,178.8,65.1,10.97,1.664,253.5,ok
+...
+```
+
+| Column | Unit | Meaning |
+| --- | --- | --- |
+| `run` | | Empty for the config as it is; with `--bands` one row per motor for each value of `[bounds]` at its low and at its high bound |
+| `crossover_hz` | Hz | Where \|L\| = 1, the crossover with the smallest phase margin |
+| `phase_margin_deg` | ° | 180° plus the phase of L there (the phase followed without jumps, taken between −360° and 0° at the first crossover); negative: the loop is unstable |
+| `gain_margin_db` | dB | By how much the gain may rise before L reaches −1, at the worst place where the phase falls through −180° that a later rise through −180° with \|L\| > 1 does not undo (a Nyquist count; a fall and rise beyond −1 below the crossover is conditionally stable and not counted); negative where \|L\| > 1 there (unstable); `inf` if no such place up to 2 kHz |
+| `peak_sensitivity` | | The highest \|1 / (1 + L)\|: 1 over the shortest distance of L from −1. Up to 2 means at least 6 dB and 29° |
+| `peak_frequency_hz` | Hz | Where it is highest |
+| `result` | | `ok`, or `FAIL` where a margin is negative or the measurement is not valid: the loop ran into its torque limit or moved on its own (oscillated) during it. Then the loop is unstable and its margins are `NaN` |
+
+The default configs' velocity gains were chosen with it: at least 35° of phase margin and 6 dB of gain margin in every run of `--bands`, also with `--set effects.motor_friction=false --set effects.guide_friction=false` (friction damps the loop near standstill, as the measurement holds the machine, but not in a cruise). Found: T-gantry 0.04 N m s/rad, at least 47.4° and 8.2 dB, 39.1° and 7.3 dB with friction off; single axis 0.025, at least 48.6° and 10.4 dB, 37.8° and 9.6 dB with friction off. The gain of 0.08 the configs had before left the T-gantry 12° and 2 dB (motor B hunted in its gearbox backlash in a cruise) and the single axis 1° and 0.3 dB (it went unstable with the belt at its stiffest bound). The EXCT-30 was tuned the same way, from 0.6 (34.9° and 6.6 dB, 29.6° and 5.8 dB with friction off) to 0.45: at least 47.3° and 9.1 dB, 38.6° and 8.3 dB with friction off (the figures for the gains in use as measured since 13 November, with the phase unwrapped; those for the earlier gains are from before).
 
 **The step response as a trace:**
 
@@ -557,8 +639,8 @@ With Kv = 50 1/s the position loop behaves like a first-order lag with time cons
 $ sim-cli step t-gantry --axis 0
 time_s,setpoint,response
 0.000000,1.000000000e-3,0.000000000e0
-0.000250,1.000000000e-3,3.343570421e-10
-0.000500,1.000000000e-3,1.406628745e-8
+0.000250,1.000000000e-3,-3.611875521e-10
+0.000500,1.000000000e-3,2.716861028e-9
 ...
 ```
 
@@ -569,27 +651,27 @@ time_s,setpoint,response
 ```text
 $ sim-cli bode t-gantry --axis 0 --count 8
 frequency_hz,gain,gain_db,phase_deg
-1.0000,9.750295e-1,-0.220,-10.436
-2.1317,9.597195e-1,-0.357,-18.626
-4.5440,8.808630e-1,-1.102,-34.525
-9.6863,7.038070e-1,-3.051,-59.107
-20.6478,1.292231e0,2.227,169.624
+1.0000,9.820613e-1,-0.157,-10.626
+2.1317,9.730009e-1,-0.238,-19.226
+4.5440,8.970231e-1,-0.944,-36.183
+9.6863,7.278681e-1,-2.759,-62.980
+20.6478,7.982035e-1,-1.958,160.711
 ...
 ```
 
-`gain` is tool amplitude over setpoint amplitude. The gain above 1 at 20.6 Hz is the frame mode, which the tool position counts. Options: `--from HZ` (1), `--to HZ` (200), `--count N` (40), `--amplitude M` (0.0005 m). Frequencies have to be above zero here too.
+`gain` is tool amplitude over setpoint amplitude. The phase turning past 160° at 20.6 Hz is the frame mode, which the tool position counts. Options: `--from HZ` (1), `--to HZ` (200), `--count N` (40), `--amplitude M` (0.0005 m). Frequencies have to be above zero here too.
 
 **The mechanics without control:**
 
 ```text
 $ sim-cli sweep single-axis --from 20 --to 200 --count 12
 frequency_hz,gain_rad_s_per_nm,phase_deg
-20.0000,2.376702e1,34.641
+20.0000,5.522398e1,-82.358
 ...
-131.5866,5.087283e1,-29.235
+131.5866,9.881837e1,-60.793
 ```
 
-A sine torque on one motor on top of the holding torques, measured at that motor's speed. Belt resonances show as peaks; the load swinging against the held motor shows as a dip. Options: `--motor N` (index, 0 is the first), `--from` (5), `--to` (500), `--count` (60), `--amplitude NM` (0.05). Frequencies have to be above zero: `--from 0` is refused (`Configuration value is out of range: frequency`). With friction on, a small amplitude mostly measures stiction; the tests use 1.5 N m to find the belt dip.
+A sine torque on one motor on top of the holding torques, measured at that motor's speed. Belt resonances show as peaks; the load swinging against the held motor shows as a dip. Options: `--motor N` (index, 0 is the first), `--from` (5), `--to` (500), `--count` (120), `--amplitude NM` (1.5 N m, or 40 % of the drive's peak torque where that is less). Frequencies have to be above zero: `--from 0` is refused (`Configuration value is out of range: frequency`). With friction on, a small amplitude mostly measures stiction: at 0.05 N m neither default machine shows a dip. The default amplitude finds it on every motor of both default configs and of `exct-30.toml` (21.6 Hz on the T-gantry, 20.8 Hz on the EXCT-30, 84.3 Hz on the single axis). A larger one is no better: at 2 N m the single axis shows a second, false dip at 62 Hz. The rows may be in any order of frequency, and `--from` may be above `--to`.
 
 **The notch filter:** `--set effects.notch_filter=true`, with `drive.notch_frequency_hz` and `drive.notch_bandwidth_hz`. It acts on the torque setpoint.
 
@@ -601,29 +683,34 @@ A sine torque on one motor on top of the holding torques, measured at that motor
 
 Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The machine reports the lower mode of carriage-on-belt and Z-axis-on-guide (24.6 Hz at z = 0.05 m and 35.6 Hz at z = 0.15 m for the default config at x = 0.9 m). The single axis reports no resonance, so there the shaper stays at the fixed frequency.
 
-What it does on the EXCT-30 cycle. The config has the shaper on, at a fixed 25 Hz; the first run switches it off:
+What it does on the EXCT-30 cycle. The config has the shaper on, at a fixed 25 Hz with a second one at 17.5 Hz; the first run switches both off:
 
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml --set effects.input_shaping=false
 motor,cycle_s,...,path_error_peak_m,...,dwell_error_peak_m
-a,1.852000,...,5.979e-4,...,7.036e-5
+a,1.852000,...,6.167e-4,...,5.825e-5
 
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
-a,1.934000,...,5.580e-4,...,3.505e-5
+a,2.048000,...,5.378e-4,...,3.947e-5
 ```
 
-With the shaper the tool is 0.035 mm off its target in the dwell instead of 0.070 mm.
+With the shapers the tool is 0.039 mm off its target in the dwell instead of 0.058 mm, and the cycle takes 2.048 s instead of 1.852 s.
 
 The tool swing after a traverse is the signal `axis.x.tool_deflection` of `run`.
+
+**A second resonance.** `--set profile.shaper2_frequency_hz=62` adds a second ZVD shaper (damping `profile.shaper2_damping`), convolved with the first: nine copies of the plan instead of three, and each move ends both periods later. A shaper at f_s leaves cos²(π f / (2 f_s)) of an undamped mode at f: one at 25 Hz leaves 53 % of a mode at 62 Hz, and the two together leave nothing of either (the test `a_second_shaper_suppresses_a_second_resonance_by_the_zvd_formula`). 0, as in the two default configs, is no second shaper; the EXCT-30 has one at 17.5 Hz. It stays at its frequency when the first follows the pose. `optimise` tries it where a faster setting with the shaper still fails `settling` alone, at this frequency or, where it is 0, at the resonance the machine reports at the start pose if that is more than 10 % off the first shaper's.
+
+**Fieldbus delay and jitter.** `--set effects.fieldbus_delay=true` makes the drives use the motor setpoints `profile.fieldbus_delay_cycles` profile cycles late. `--set effects.fieldbus_jitter=true` makes each frame take 0 to `profile.fieldbus_jitter_cycles` cycles more, drawn evenly and the same in every run (from `drive.noise_seed`); a late frame leaves the drives the one before. At 1 m/s on the single axis one cycle of jitter puts the drive's position setpoint 0 or 0.25 rad behind, half the time each: an RMS of 0.18 rad. It works with or without the delay.
 
 Limits for this task:
 
 - The step is 1 mm. With friction on it also shows stiction.
-- The shaper handles one resonance. The frame mode and the stiffness of the control loops are not in the frequency the machine reports.
+- The shaper handles two resonances at most (`profile.shaper2_frequency_hz`, below). The frame mode and the stiffness of the control loops are not in the frequency the machine reports.
 - Each move's setpoint ends one vibration period later. Where the cycle dwells or the gripper acts, both wait for the shaped setpoint, so the cycle above is 82 ms longer: two dwells, 41 ms each. Segments without a dwell and without a gripper action go on with the plan.
-- Most of the path error on the EXCT-30 is the frame giving way under the acceleration forces (0.60 mm peak without the shaper, 0.56 mm with it), which a shaper set to the tool's resonance does little about.
-- No real drive has been compared. Drive vendors do not document their internal filters, and the delays here are whole cycles without jitter.
-- A gain that is fine at the nominal values can be unstable when rotor inertia, belt stiffness or inductance are off. That was found on the EXCT-30 config, whose velocity gain was lowered from 1.4 to 0.6 for it. Run `sensitivity` after tuning.
+- Most of the path error on the EXCT-30 is the frame giving way under the acceleration forces (0.62 mm peak without the shaper, 0.57 mm with it), which a shaper set to the tool's resonance does little about.
+- No real drive has been compared. Drive vendors do not document their internal filters, and the delays here are whole cycles. The fieldbus can have jitter (below), the drives' own loops have none.
+- The margins are measured with a tenth of the rated torque. Near standstill the motor's Coulomb friction (smoothed over 0.5 rad/s) damps the loop at that amplitude, so the margins are larger with friction on; take the ones with friction off for a cruise.
+- A gain that is fine at the nominal values can be unstable when rotor inertia, belt stiffness or inductance are off. That was found on the EXCT-30 config, whose velocity gain was lowered from 1.4 to 0.6 for it (and later to 0.45 for the margins above). Run `sensitivity` after tuning.
 
 ## Replay a drive trace and fit parameters
 
@@ -645,7 +732,7 @@ Limits for this task:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.290489e-2,7.933285e-2,1.856409e-4,1.384926e-3
+m,2.266321e-2,6.778671e-2,6.425452e-4,3.661569e-3
 ```
 
 Here the "measured" machine is the simulator with a carriage 1.5 kg heavier than the config. The table gives, per motor, the RMS and the peak of the difference between measured and simulated torque and following error. `--out` writes both side by side, one line per row of the trace:
@@ -659,14 +746,14 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.546751e0,8.060483e0,2.277e-2
-viscous_friction_n_s_m,x,2.697711e1,2.633275e1,3.071e-1
-coulomb_friction_n,x,2.117146e1,2.185140e1,2.736e-1
-constant_force_n,x,3.237100e-3,9.376128e-3,8.854e-2
-Moved mass, axis x: +1.514 kg ± 0.023. Add this to the masses that move with the axis. The trace cannot tell load mass from rotor and pulley inertia.
-Viscous friction, axis x: × 0.976 ± 0.011. Scale the viscous friction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
-Coulomb friction, axis x: × 1.032 ± 0.013. Scale the Coulomb friction and stiction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
-Constant force, axis x: +0.006 N ± 0.089. The measured axis needs this much more than the config gives: a weight, an incline or a cable pull the config lacks.
+moved_mass_kg,x,6.549761e0,8.067588e0,1.618e-2
+viscous_friction_n_s_m,x,2.681992e1,2.621072e1,2.192e-1
+coulomb_friction_n,x,2.131795e1,2.196390e1,1.953e-1
+constant_force_n,x,-2.163662e-4,2.050984e-3,6.293e-2
+Moved mass, axis x: +1.518 kg ± 0.016. Add this to the masses that move with the axis. The trace cannot tell load mass from rotor and pulley inertia.
+Viscous friction, axis x: × 0.977 ± 0.008. Scale the viscous friction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
+Coulomb friction, axis x: × 1.030 ± 0.009. Scale the Coulomb friction and stiction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
+Constant force, axis x: +0.002 N ± 0.063. The measured axis needs this much more than the config gives: a weight, an incline or a cable pull the config lacks.
 ```
 
 Per axis, a least-squares fit of force = mass × acceleration + viscous × speed + Coulomb × sign(speed) + constant. The same estimate is run on the trace (`fitted`) and on the config's own simulation of the same setpoints (`config`). The difference between the two is what the config is off by: here +1.514 kg, for a true 1.5 kg. The advice lines go to the error stream. No config is edited.
@@ -682,7 +769,7 @@ resonance_damping,m,7.932269e-2,7.912026e-2,
 Stiffness between motor and load: × 0.734 ± 0.026. Scale the belt stiffness by this factor. It holds only once the masses are right, so correct those first and sweep again.
 ```
 
-The sweep file needs the columns `frequency_hz` and `gain_rad_s_per_nm` (motor torque to motor speed). `fit` runs the same sweep on the config, at the frequencies of the file, on motor `--sweep-motor N` (default 0) with `--amplitude NM` (default 0.05), and compares where the dip is. The "measured" belt here has 0.7 times the stiffness; the fit says 0.734 ± 0.026.
+The sweep file needs the columns `frequency_hz` and `gain_rad_s_per_nm` (motor torque to motor speed). `fit` runs the same sweep on the config, at the frequencies of the file, on motor `--sweep-motor N` (default 0) with `--amplitude NM` (default as for `sweep`), and compares where the dip is. Where the response has more than one dip (the T-gantry has three, near 22, 62 and 107 Hz), the one lowest in frequency is compared, in both. The "measured" belt here has 0.7 times the stiffness; the fit says 0.734 ± 0.026.
 
 What the fit can and cannot recover:
 
@@ -703,8 +790,99 @@ Limits for this task:
 - An axis that the trace does not move in both directions is not fitted (`Axis x: not fitted. The trace has to move it in both directions.`). One direction cannot tell Coulomb friction from a constant force.
 - A wrong friction shows as a few percent of wrong mass and the other way round, because of gearbox losses. Change the config and fit again.
 - The stiffness factor holds only once the masses are right.
-- A sweep with a small amplitude finds no dip when friction is on. The same sweep at the default 0.05 N m gives `No stiffness fitted: the measured sweep or the config's own shows no dip with both flanks inside the swept range.` That is a failure like any other: `fit` ends with exit code 2, after writing what a trace gave. The sweep also has to contain the dip and both its flanks. Its frequencies have to be above zero.
+- A sweep with a small amplitude finds no dip when friction is on. A sweep at 0.05 N m gives `No stiffness fitted: the measured sweep or the config's own shows no dip with both flanks inside the swept range.` That is a failure like any other: `fit` ends with exit code 2, after writing what a trace gave. The sweep also has to contain the dip and both its flanks. Its frequencies have to be above zero.
 - All of this was tested on traces the simulator made, with added noise. No trace of a real drive has been read. Real exports will need their columns renamed and their units converted to rad, rad/s and N m at the motor shaft.
+
+## See where torque and energy go
+
+Six views take one effect apart instead of leaving it in the torque trace: where each motor's torque goes, where the energy of a cycle goes, what each guide's friction does, how warm windings, gearboxes and guides get, what each belt section carries, and what one effect changes when it is switched off. How each figure is computed is in the [model reference](model-reference.md#effect-views).
+
+**Torque breakdown.** `--breakdown FILE` writes, per motor, the peak and the RMS over the analysed pass of the four parts of its torque, and of the torque itself:
+
+```text
+$ cargo run -q --release -p sim-cli -- analyze t-gantry --breakdown breakdown.csv
+$ cat breakdown.csv
+motor,part,peak_torque_nm,rms_torque_nm
+a,inertia,2.955173e-1,6.164674e-2
+a,gravity,1.372931e-1,1.193030e-1
+a,friction,1.403381e-1,8.273484e-2
+a,rest,6.341280e-2,1.184636e-2
+a,torque,5.596234e-1,1.653596e-1
+b,...
+```
+
+- **inertia**: what accelerates every moved mass, and the rotors and pulleys turning with the load.
+- **gravity**: what holds the load against its weight. On the T-gantry each motor holds m_z g r / (2 i) = 0.137 N m, one up, one down.
+- **friction**: guides, motor shafts and brakes, gearbox losses, idlers, cable chain.
+- **rest**: everything else, mostly the belt and gearbox: the load lagging behind the motors on the belt, ringing, backlash. Also ripple and cogging, tooth meshing, the process force and the end stops.
+
+At every moment the four parts add up to the motor torque. Their peaks and RMS values do not: they come at different times. A rest that is large against the torque means the belt or the gearbox is doing a lot of the work; on the rigid model it is nearly zero.
+
+**Energy budget.** `--budget FILE` writes where the energy drawn from the supply over the pass went, in joules and as a share of the supply:
+
+```text
+$ cargo run -q --release -p sim-cli -- analyze t-gantry --budget budget.csv
+$ cat budget.csv
+item,energy_j,share
+supply,1.393495e2,1.000000
+copper.a,3.287117e0,0.023589
+copper.b,2.827614e0,0.020292
+resistor,5.343855e0,0.038349
+power.guide_x,5.101324e1,0.366081
+power.guide_z,1.911054e1,0.137141
+...
+power.shaft_a,2.454226e1,0.176120
+power.shaft_b,2.454228e1,0.176120
+power.gearbox_a,4.378065e0,0.031418
+power.gearbox_b,4.305584e0,0.030898
+power.belt,2.860734e-3,0.000021
+...
+windings,4.348351e-7,0.000000
+capacitors,3.313464e-5,0.000000
+energy.kinetic,2.731025e-8,0.000000
+energy.potential,-1.018865e-7,-0.000000
+energy.elastic,-2.145527e-7,-0.000000
+payload,-2.304748e-4,-0.000002
+unaccounted,-8.388325e-4,-0.000006
+```
+
+| Item | What |
+| --- | --- |
+| `supply` | Energy from the supply. With `effects.dc_link` what the rectifier (or the line module) drew from the line into the DC link; without, what the drives drew less what they fed back |
+| `copper.<motor>` | Copper loss in each winding |
+| `resistor` | The braking resistor (with `effects.dc_link`) |
+| `mains`, `line_module` | With `effects.regenerative_supply`: what the line module fed back into the mains, and what it lost doing so |
+| `power.<place>` | Each loss of the machine: guide friction per guide, idlers, cable chain, shaft friction and brake per motor, gearbox per motor, belt damping, frame and Z guide damping, end stops, and `power.other` for ripple, cogging, tooth meshing and the process force (these can give energy as well as take it) |
+| `windings`, `capacitors` | What the windings' inductance and the DC link capacitors hold more at the end than at the start |
+| `energy.kinetic`, `.potential`, `.elastic` | What the machine holds more at the end of the pass than at the start; near zero for a repeating cycle |
+| `payload` | Energy that left with the payload put down, less what came with the one picked up |
+| `unaccounted` | What the rows leave of the supply. Below 0.1 % of it on every config, the loss-free ones included. The electrical side alone (supply against copper, resistor, mains, line module, windings, capacitors and the work of the torques on the shafts) is checked to a millionth of the supply: the winding current is integrated together with the mechanics |
+
+On the default T-gantry the guides take half the supply, the motor shafts a third, gearboxes, windings and the braking resistor a few percent each; the belt's damping takes almost nothing.
+
+**Friction per guide.** The app draws, per guide, the friction force of steady sliding over the speed (Coulomb level, viscous part and the Stribeck rise towards standstill) at the guide load of the moment, and the point where the guide is now. A point off the curve is a guide that is not sliding steadily: breaking away, reversing, or held. The command line has no such view; `sim-cli run` writes the same signals (`axis.<id>.friction_speed`, `_coulomb`, `_viscous`, `_stiction`, `_load_scale`).
+
+The torque parts, the loss powers and the energy parts are signals too, so `sim-cli run` writes them, the scopes of the app can show them and a PLC can read them.
+
+**Temperatures.** The app draws the temperature rise of each motor winding over the scopes' window and, with the effect "Gearbox and guide heating" (`effects.part_heating`, off by default) on, of each gearbox and guide. Each of these warms with its own loss (`power.gearbox_*`, `power.guide_*`) through a thermal resistance, with a time constant and up to a rated rise, all three in `[thermal]` of the config. The table gives each one's rise now, where it settles when the analysed cycle repeats for long (for a part: thermal resistance times its mean loss), its rated rise and the share of the rating where it settles, marked "(above the rating)" over 100 %. The share is that of the settled rise, because the rise now is a few percent of it for many minutes; the checks `gearbox-thermal` and `guide-thermal` judge the same settled rise. On a direct drive (EXCT-30: gearbox ratio 1) there is no gearbox to warm; its `power.gearbox_*` is the coupling's damping and is labelled so. In the 3D view the motor housings, gearboxes, the carriage and (T-gantry) the Z axis take the colour of their rise against their rated rise: blue cold, yellow at half, red at the rating, magenta above it; the view draws this scale. With the default time constants of 20 to 40 minutes, a minute of the scopes shows a slow climb; to watch a part settle, shorten its time constant. Nothing feeds back: friction and efficiency do not change with the temperature. The command line writes the rises with `run` (signals `motor.<id>.winding_temperature`, `temperature.<part>`).
+
+**Belt sections.** Per section the tension (the pretension dashed) and the stretch in mm over the scopes' window, and a table of both now with the tension allowed (`ratings.belt_max_tension_n`) and the share of it. The rating is not drawn: at five times the pretension it would flatten the lines. The stretch is the section's length less its unstretched belt, so a section at pretension is stretched too (0.18 mm on 0.3 m at 300 N and EA = 5·10⁵ N). The 3D view colours each section by the same tension: the belt's own dark grey at pretension, towards red above it (red at twice the pretension), towards blue below it (blue when slack); the view draws this scale with its numbers. `sim-cli run` writes the signals `belt.<i>.tension` and `belt.<i>.stretch`.
+
+**An effect on and off.** `compare --effect NAME` runs the analysed pass of the cycle twice, with `effects.NAME` on and off, whatever the config has it at, and writes the chosen signals side by side, once per millisecond; `--differences FILE` writes the peak and the RMS of on less off per signal:
+
+```text
+$ cargo run -q --release -p sim-cli -- compare t-gantry --effect guide_friction --signal motor.a.torque --signal motor.b.torque --out compare.csv --differences diff.csv
+$ head -3 compare.csv
+time[s],motor.a.torque.on[N m],motor.a.torque.off[N m],motor.b.torque.on[N m],motor.b.torque.off[N m]
+0.0000,5.644133914e-2,1.035313264e-1,-1.450023784e-1,-1.152924340e-1
+0.0010,5.731815816e-2,1.039299274e-1,-1.441924234e-1,-1.149019169e-1
+$ cat diff.csv
+signal,unit,peak_difference,rms_difference
+motor.a.torque,N m,9.628014e-2,4.599526e-2
+motor.b.torque,N m,9.224554e-2,4.627908e-2
+```
+
+Without `--signal` every signal is written. In the app, the part "Effect on and off" of the effect views picks the effect and one quantity of the scopes (torque, speed, following error, ...), runs the comparison in the background on the config as it is, and overlays both runs: on solid, off dashed in the same colour, one colour per axis or motor, with a table of the difference. An effect that changes the cycle's timing (corner blending, input shaping) is compared only over the time both passes have.
 
 ## Record raw signals, switch the drives off
 
@@ -749,13 +927,13 @@ The signals:
 | `frame.deflection` | m | Frame deflection in X (T-gantry) |
 | `axis.x.tool_deflection` | m | Tool tip against the carriage in X (T-gantry) |
 
-**Drives off.** With `--disable-at` the drives give no torque from that time. The motor holding brakes engage (`effects.holding_brake`, on both machines, in the elastic model only):
+**Drives off.** With `--disable-at` the drives give no torque from that time. The motor holding brakes engage (`effects.holding_brake`, on both machines, in the elastic and in the rigid model):
 
 ```text
 $ sim-cli run t-gantry --move 0.5,0.2 --time 1.5 --disable-at 0.5 --out disable.csv
 ```
 
-In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m at 1.498 s: a brake that engages at speed slips with its torque (`motor.brake_torque_nm`) and no more until the axis stands. With `--set effects.holding_brake=false` it falls to the lower hard stop (z = −0.00008 m at 1.498 s). A move or cycle under way is dropped, not resumed.
+In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m at 1.498 s: a brake that engages at speed slips with its torque (`motor.brake_torque_nm`) and no more until the axis stands. With `--set effects.holding_brake=false` it falls to the lower hard stop (z = −0.00008 m at 1.498 s). A move or cycle under way is dropped, not resumed. While the drives are off their windings cool (with `effects.winding_heating`, by the factor e every `motor.thermal_time_constant_s`), and a DC link above the bus level, after a trip, discharges through its bleeder with `ratings.dc_link_discharge_time_constant_s` (130 s, an estimate) down to the bus level.
 
 ## Connect a PLC over OPC UA
 
@@ -782,7 +960,10 @@ This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the 
 | `command.cycle` | Boolean | write | `true` starts the cycle, `false` stops it after the segment under way |
 | `command.disable` | Boolean | write | `true` switches the drives off; brakes engage |
 | `command.enable` | Boolean | write | `true` switches the drives on again |
-| `status.busy` | Boolean | read | A move or the cycle is under way |
+| `command.path` | String | write | A path in the text of a path file (see [Run a path](#run-a-path-and-read-path-error)), one piece per line. Reads back what was written |
+| `command.path_time_optimal` | Boolean | write | `true` plans the path as fast as the motors allow (as `--time-optimal`), `false` within the axis limits (the default) |
+| `command.run_path` | Boolean | write | `true` plans `command.path` from where the machine stands and runs it |
+| `status.busy` | Boolean | read | A move, a path or the cycle is under way |
 | `status.refused` | String | read | Key of the last refused command, or empty |
 
 How commands behave:
@@ -791,7 +972,8 @@ How commands behave:
 - Numbers may be written as Double, Float, Int16, Int32 or Int64. Anything else is answered with `BadTypeMismatch`.
 - Setpoints of several axes written within the same 10 ms are taken together as one setpoint.
 - An axis that is not written stays where it is. `command.target.<axis id>` reads the planned position until it is written, and again once the move it was written for has been commanded. `command.setpoint.<axis id>` reads the setpoint the controller follows, which is the planned position whenever no setpoint is on its way. So after a move or a cycle, a write to one axis does not send the others back to where they were before.
-- `status.refused` holds a key such as `error-busy`, `error-target-out-of-range`, `error-setpoint-too-far` or `error-disabled`. It stays until a command of the same kind (move, setpoint, cycle start, stop, disable, enable) is accepted. Accepted commands of another kind, such as a stream of setpoints, leave it.
+- A path is written first and then started: write `command.path` (and `command.path_time_optimal`) together with `command.run_path`, or before it. Written together, `command.path` and `command.path_time_optimal` count in whichever order they come in the write: the path run is the one written last. The commands of one write are carried out in the order written, and the path is planned when its turn comes, from where the machine stands then (after a `command.enable` written before it, for example), exactly as `sim-cli run --path` plans it, and runs in real time.
+- `status.refused` holds a key such as `error-busy`, `error-target-out-of-range`, `error-setpoint-too-far` or `error-disabled`. For a path: `opcua-error-path-line` (a line that cannot be read), `error-path` (e.g. an arc on a machine with one axis), `error-path-first-arc`, `error-path-range` (outside the stroke), `error-path-torque` (time-optimal only), `error-busy`, `error-disabled`. It stays until a command of the same kind (move, path, setpoint, cycle start, stop, disable, enable) is accepted. Accepted commands of another kind, such as a stream of setpoints, leave it.
 - A streamed setpoint is refused while a move or the cycle runs.
 - A setpoint further from the last one (or, with none on its way, from where the axis stands) than the axis travels at its speed limit in one `profile.setpoint_interval_s` (8 mm for the T-gantry's X axis) is refused with `error-setpoint-too-far` and not carried out. A PLC that has fallen further behind catches up with a move. A stream of one setpoint per interval is followed at its own speed, up to the speed limit; a setpoint that comes early finds the axis short of the last one and is followed that much faster.
 - If the host cannot keep up with real time, the simulation falls behind instead of piling up work.
@@ -800,8 +982,58 @@ Limits for this task:
 
 - **Not tested against a real PLC.** The client in the tests is written with the same library as the server. Interoperability with Siemens, Beckhoff or CODESYS clients, their data types, security settings and cycle jitter are untested.
 - The server binds to 127.0.0.1 only and serves the machine's default config only. There is no `--config` and no `--set`.
-- No security profiles, no user accounts, no methods, no config changes, no paths over OPC UA.
+- No security profiles, no user accounts, no methods, no config changes.
+- Paths: `status.refused` names the key, not the line that could not be read, and there is no `--trajectory` (poses at times) over OPC UA. A path is planned inside the simulation's 10 ms tick: a long time-optimal path that takes longer to plan makes the simulation fall behind real time for that moment.
 - The server writes its keys into a folder `pki` in the working directory.
+
+## Use the model in Simulink / Modelica via FMI
+
+```sh
+cargo build --release -p sim-fmi                                   # the FMU's binary, target/release/sim_fmi.dll
+sim-cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml --out exct30.fmu
+```
+
+`fmu` writes the machine with its config (the default, or `--config`, `--motor`, `--supply`, `--gearbox` and `--set` as for every command) as an FMI 2.0 Co-Simulation FMU. The FMU runs the same simulation as `sim-cli run`: drives, controller, every switched-on effect. Import it in Simulink (FMU block), OpenModelica (`File > Import > FMU`, or `importFMU`), Dymola (`File > Import > FMU`) or any other FMI 2.0 tool; a controller or PLC model there sends the position setpoints and reads back the signals. FMI 2.0 and not 3.0, because every one of those tools imports 2.0 Co-Simulation and the simulator needs nothing that only 3.0 has.
+
+What is in the FMU:
+
+| File | Content |
+| --- | --- |
+| `modelDescription.xml` | The variables below, generated from the machine's signal list and config, with units and descriptions in the language of `--lang` |
+| `resources/config.toml` | The config as given on the command line, catalogue parts filled in |
+| `resources/model.txt` | Machine id and language |
+| `binaries/win64/sim_fmi.dll` | The simulator. One binary for every machine; the resources say which machine it runs |
+
+By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_fmi.dll`, on Linux `libsim_fmi.so`); without it, it stops and says how to build it. `--binary FILE` names it instead and may repeat: a `.dll` goes to `binaries/win64`, a `.so` to `binaries/linux64`, a `.dylib` to `binaries/darwin64` (the extension in any case: `SIM_FMI.DLL` is stored as `sim_fmi.dll`); two for the same platform are refused. An FMU for Windows and Linux is made by building `sim-fmi` on Linux (`cargo build --release -p sim-fmi`) and passing both files: `--binary sim_fmi.dll --binary libsim_fmi.so`.
+
+| Variable | Type | Causality | Meaning |
+| --- | --- | --- | --- |
+| `time` | Real | independent | Simulated time, s, from the start time of the experiment |
+| every other signal of the [signal table](#record-raw-signals-switch-the-drives-off) | Real | output | E.g. `axis.x.position`, `motor.a.torque`, `belt.1.tension`, with its unit |
+| `command.setpoint.<axis id>` | Real | input | Position setpoint, as `command.setpoint.<axis id>` over OPC UA. Start value: the start pose |
+| `command.enable` | Boolean | input | `false` switches the drives off (brakes engage), `true` on again. Start value `true` |
+| `machine` | String | parameter | The machine id |
+| `config_file` | String | parameter | A config file to use instead of the one in the FMU; empty (the start value) for the one in the FMU |
+| `effects.<name>` | Boolean | parameter | Each effect switch, start value as in the config; a value set here wins over the config file's |
+
+The names are the signal ids as in the CSV columns (naming convention "flat"). The value reference of a variable is its place in the list.
+
+How a step works:
+
+- The FMU steps by itself in its base step `sim.dt_s` (62.5 µs in the shipped configs) with its own integrator. A communication step that is not a whole multiple of it is refused (`fmi2Error`, with a message), as is a step from another time than where the simulation stands, a time or step size that is not a finite number, and a step of more than 4294967295 base steps (about 3 days of simulated time at 62.5 µs). `fmi2SetupExperiment` refuses a start time, and a stop time or tolerance it is told is defined, that is not a finite number. Nothing is interpolated. Outputs are read from initialisation mode on, as FMI 2.0 has it; `fmi2GetReal` before is refused.
+- At the start of each communication step a changed setpoint input goes to the controller as one setpoint, which it interpolates towards over `profile.setpoint_interval_s` (10 ms), exactly as a PLC's setpoint over OPC UA. The communication step should therefore be that interval: it is the step size of the model description's default experiment. With shorter steps each new setpoint starts a new interpolation from where the last one had got to, which follows the stream with some lag; with `profile.setpoint_interval_s` set to the communication step in the config the two agree.
+- A setpoint the controller refuses (too far for one interval, `error-setpoint-too-far`; outside the stroke) is logged as a warning, the step runs without it, and `fmi2DoStep` returns `fmi2Warning`. An axis whose input is not set stays where the controller has it.
+- Parameters can be set until initialisation ends. A config file that changes the list of signals or their units is refused when initialisation ends, with the first signal that differs: export a new FMU for that config.
+- Its signals are bit for bit those of `sim-cli run` with the same setpoints at the same times (tested).
+- After a DC-link overvoltage trip with a braking resistor too small for the braking energy, `command.enable` set back to `true` right away trips again, and again, until the axis coasting after the trip has stopped: its kinetic energy still flows into the DC link as soon as the drives brake it. Observed 7 to 57 trips again over 6 to 60 ms before the link settles at the bus level and the drives stay on. That is the physics of an undersized resistor, not a defect of the FMU; wait until the axis stands, or size the resistor (`sim-cli verdicts`).
+
+Limits for this task:
+
+- **Not checked with an independent FMI tool.** No FMI tool was available here (`fmpy` is not installed in the project). The tests call the FMU's functions from Rust and compare with the simulator; the archive and model description were also read with Python's `zipfile` and XML parser and the binary driven through `ctypes`. Import into Simulink, OpenModelica or Dymola is untested.
+- Co-Simulation only, no Model Exchange. No FMU state (`fmi2GetFMUstate` and its kind return `fmi2Error`), so tools that roll back a step cannot use it; no directional derivatives, no asynchronous steps.
+- Inputs are position setpoints only: no move targets, cycle or path commands, and no torque input. The servo loops stay inside the FMU.
+- Messages and descriptions in one language, the one of `--lang` when the FMU was written.
+- A 64-bit Windows binary unless a Linux one is added as above; no 32-bit binaries.
 
 ## Use the app
 
@@ -839,17 +1071,24 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Freeze | Keeps the traces as they are; the simulation runs on |
 | Export CSV | Writes every signal over the visible window to `traces-<time>.csv` in the working directory |
 | Scopes (heading) | Which quantities are plotted |
+| Config file: File, Open, Save | A file name, typed in. "Open" loads it as a config of the machine shown, as `--config FILE` does: it replaces the running config and restarts the simulation, as switching machine does. A file that cannot be read or that the machine refuses (a misspelt key, a value out of range) is answered under Messages, and the running config stays. "Save" writes the config as it is now, every change of the Effects and Parameters panels and of the part names included. Where only values were changed, the file keeps the comments and the layout of the file the config was read from (the opened file, or the machine's default config); where an array was changed it is written plainly, without comments. Switching machine empties the file field, and "Save" does not write over a file that holds another machine's config: it says so under Messages and leaves the file as it is |
+| Config file: Open…, Save as… | The same with the system's file dialog, which starts where the field points. The window waits while the dialog is open |
+| Config file: Motor article, Supply, Gearbox, Use parts | The parts `[parts]` of the config names, shown as the config has them. "Use parts" names what is typed there in the running config, as `--motor`, `--supply` and `--gearbox` do and as "Use" of the motor search does: a motor by its article number (`1FK2104-5AK`), the supply `230v` or `400v`, a gearbox as size-frame-ratio (`NRK070-04-5`); an empty field names none. A name the catalogue does not have is refused under Messages, and so is any name in a config without `[parts]` |
 | Analysis: Analyse and judge the cycle | The cycle analysis and the verdicts, as three tables: the figures of the machine (cycle time, path error, off target while dwelling, lowest belt tension, slack time, radial load, guide load, guide life), the load on each motor (peak, RMS and cubic-mean torque, winding rise, energy drawn and fed back, the braking resistor's energy and mean power, highest DC link voltage) and one row per check |
-| Analysis: with error bands, samples | Ticked, "Analyse and judge the cycle" also runs the cycle with every value of `[bounds]` at its low and its high bound (two more cycles per value) and adds a fourth table: per check the lowest and the highest value, the worst-case result and "Runs passed [%]". The same as `sim-cli verdicts --bands`. With a number above 0 in the field "samples" beside the tick box, the cycle is instead run that often with all values of `[bounds]` between their bounds at once, and the table is headed "The checks with all uncertain values between their bounds at once". The same as `--bands --samples N`; the app always uses seed 1 |
+| Analysis: with error bands, samples | Ticked, "Analyse and judge the cycle" also runs the cycle with every value of `[bounds]` at its low and its high bound (two more cycles per value) and adds a fourth table: per check the lowest and the highest value, the worst-case result and "Runs passed [%]". The same as `sim-cli verdicts --bands`. With a number above 0 in the field "samples" beside the tick box, the cycle is instead run that often with all values of `[bounds]` between their bounds at once, and the table is headed "The checks with all uncertain values between their bounds at once". The same as `--bands --samples N`; the app always uses seed 1. With "worst corner" (only together with the error bands) it also searches per check for the worst corner of the bounds and shows a table of the worst value, the limit there, the result and the values at their high and at their low bound. The same as `--bands --worst`; it takes many more cycles |
+| Analysis: operating points | After "Analyse and judge the cycle": the motor torque over the motor speed once per millisecond of the cycle, one colour per motor, over the motors' torque-speed curve (dashed: the peak torque both ways up to the rated speed, falling to nothing at the no-load speed), and below it the same points as a table that scrolls. The same as `sim-cli analyze --points` |
+| Effect views | Opens when a cycle has been analysed; its own button "Analyse and judge the cycle" does the same as the Analysis part's. "Where each motor's torque goes": per motor a plot over the scopes' time window of the four parts of its torque (inertia, gravity, friction, belt and the rest) and, dashed, the torque itself, which they add up to; it shares the scopes' time axis and cursor. "Torque parts over the analysed cycle": per part and motor the peak and the RMS, as `sim-cli analyze --breakdown` writes them. "Energy budget of the analysed cycle": the supply, every loss and store that is not exactly zero, and what is not accounted for, in J and in percent of the supply, as `--budget` writes it. "Friction per guide": per guide the friction force of steady sliding over the speed (solid) and its Coulomb, viscous and stiction parts (dashed) at the guide load of the moment, the point where the guide is now, and a table of the speed, the three parts, the force and the load factor now. "Temperatures": the rise of each winding and, with gearbox and guide heating on, of each gearbox and guide over the scopes' window, the table of now, where each settles on the analysed cycle, its rated rise and the share of the rating where it settles, and the colour scale of the 3D view. "Belt sections": tension (pretension dashed) and stretch per section, the table of both now, and the belt's colour scale. "Effect on and off": an effect, a quantity and "Compare"; both runs overlaid, off dashed, and per line the peak and RMS of the difference. Above each plot, its lines' names in their colours. See [See where torque and energy go](#see-where-torque-and-energy-go) |
 | Analysis: Sensitivity | The eight parameters with `[bounds]` that the cycle depends on most |
 | Analysis: Optimise the cycle | The optimiser. "Apply these settings to the running machine" puts its result into the config |
 | Motor search | Supply (230v or 400v), how the article numbers start (empty: every motor of the catalogue, which takes minutes) and optionally a gearbox series such as `NRK` or `NRK070`. "Search" runs every such motor on the cycle and lists them, passing ones first, lightest first, with the check nearest to its limit or the reason a motor was not run. "Use" in a row names that motor, its supply and its gearbox in `[parts]` of the running config. The same as `sim-cli search` |
 | Path | A file name, typed in. "Lines, arcs and splines" is a path file, planned within the axis limits or, ticked, "As fast as the motors allow"; "Poses at times" is a trajectory file. "Plan, run and analyse" plans the path from where the machine stands, analyses it on a simulation of its own (duration, deviation by transition curves, path error, distance behind the setpoint, loads, checks), draws the planned path as a plot in the panel and as a line in the 3D view, and has the machine in the 3D view run it. The same as `sim-cli analyze --path` or `--trajectory` |
-| Trace | A file name, typed in. "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), and per axis the fitted mass, friction and constant force next to the config's, with what to change in the config. The same as `sim-cli replay` and `fit --trace`. The config's start pose has to be where the trace starts |
+| Trace | A file name, typed in. "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), and per axis the fitted mass, friction and constant force next to the config's, with what to change in the config. The same as `sim-cli replay` and `fit --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |
+| Frequency response of the mechanics | From, to, frequencies and torque amplitude as `sim-cli sweep` takes them (5 to 500 Hz, 120, and 1.5 N m or 40 % of the drive's peak torque where that is less, at the start). "Measure every motor" measures the open-loop response from each motor's torque to its speed, as `sim-cli sweep --motor N` does for one: gain in dB and phase over the frequency, one line per motor, and per motor the dip where the load swings on the belt (resonance and damping ratio of the dip lowest in frequency; empty where the range does not hold a dip with both its flanks). The defaults show it on every motor of the default machines. Before, they did not: the amplitude was 0.05 N m, at which stiction holds the motors, not the range. Switching machine or opening a config sets the amplitude to that config's default unless another one was typed |
+| Frequency response: Measured response, taken on, Fit the belt stiffness | A file as `sim-cli sweep` writes it (the columns `frequency_hz` and `gain_rad_s_per_nm`), measured on the motor ticked with the torque amplitude above. "Fit the belt stiffness" runs the config's own response at the file's frequencies and shows resonance and damping ratio of both, and what to change in the config: the factor on the belt stiffness. The same as `sim-cli fit --sweep FILE --sweep-motor N --amplitude A` |
 | Tuning: Measure step and frequency response | Step response and closed-loop response of one axis, with rise time, overshoot, settling time and bandwidth |
 | Scope plots | One plot per quantity, one line per axis or motor. Setpoints are dashed in the colour of their actual value. Shared time axis and cursor; min, max, span and RMS per trace; units switch to mm and µm by themselves |
 
-The right panel scrolls as a whole, and each of its parts (Scopes, Analysis, Motor search, Path, Trace, Tuning) folds away under its heading. A part opens by itself when its result arrives. The tables are laid out for the panel's default width: long names wrap, and numbers have four digits.
+The right panel scrolls as a whole, and each of its parts (Scopes, Config file, Analysis, Effect views, Motor search, Path, Trace, Frequency response of the mechanics, Tuning) folds away under its heading. A part opens by itself when its result arrives. The tables are laid out for the panel's default width: long names wrap, and numbers have four digits.
 
 The buttons of these parts run in the background on simulations of their own, with the config as it is at that moment; a spinner stands in for the button meanwhile. The running machine is not disturbed. A result is not redone when a parameter changes afterwards. It is marked "computed for an earlier configuration" instead, and nothing of it is applied to the changed config: "Apply these settings", "Use" and the run of a planned path answer with a message then (take the change back, or compute again). Naming a motor with "Use" does not outdate the search it came from, so another row can be tried after it.
 
@@ -867,12 +1106,12 @@ Messages: one that only repeats the last one is not added. If the simulation or 
 
 Limits for this task:
 
-- The app starts with the default configs only. It cannot load a config file, so the EXCT-30 config is not available in it.
-- Parts by name are set by the motor search only; there is no field to type one in. A number of a named part that is changed in the parameter panel is overwritten again.
+- The app starts with the machine's default config; another one, such as the EXCT-30 config `crates/machine-t-gantry/exct-30.toml`, is opened under Config file. There is no `--set`: values are changed in the parameter panel.
+- A number of a named part that is changed in the parameter panel is overwritten again.
 - The cycle itself cannot be edited in the app.
-- Not in the app, only on the command line: the frequency sweep of the mechanics, the fit of the belt stiffness from a sweep (`fit --sweep`), the overlay file of a replay (`replay --out`), the operating points (`analyze --points`), and a sensitivity run over tables without `[bounds]`.
+- Not in the app, only on the command line: a sensitivity run over tables without `[bounds]`, and the operating points of a path (the app shows those of the cycle).
 - The search table shows the tightest check only; peak torque and winding rise of a candidate are in `sim-cli search`, or in the cycle analysis after "Use".
-- File names are typed; there is no file dialog. A relative name is relative to the directory the app was started in.
+- File names of paths, traces and measured frequency responses are typed; only the config file has a file dialog. A relative name is relative to the directory the app was started in.
 - The lines of the planned and the travelled path in the 3D view were not checked on screen by a person.
 - A path is analysed from where the machine stands when the button is pressed. A machine that is moving then will refuse the run.
 - The base time step `sim.dt_s` cannot be changed while running.

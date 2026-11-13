@@ -14,11 +14,15 @@ sim-core = { path = "crates/sim-core" }
 sim-components = { path = "crates/sim-components" }
 sim-machines = { path = "crates/sim-machines" }
 toml = "=1.2.1"
-# Only the app may depend on these three.
+# Only the app may depend on these five.
 bevy = { version = "=0.20.1", default-features = false, features = ["3d"] }
 bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
 # egui_plot 0.37 is the release that shares egui 0.36 with bevy_egui 0.43.
 egui_plot = "=0.37.0"
+# The native file dialog of the app's config file buttons.
+rfd = "=0.18.0"
+# Writes a changed config over the file it came from, keeping its comments; already built for Bevy's macros.
+toml_edit = "=0.25.19"
 # Only the PLC link may depend on these two.
 async-opcua = "=0.19.0"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
