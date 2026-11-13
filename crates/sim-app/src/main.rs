@@ -1042,6 +1042,13 @@ fn panels(
                 model.export_traces(std::path::Path::new(&format!("traces-{time:.3}.csv")));
             }
             Action::ExportOverlay => model.export_overlay(std::path::Path::new("replay-overlay.csv")),
+            Action::ExportReport => {
+                // The dialog holds up the window until it is closed, as the config's does.
+                let picked = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("HTML", &["html"]).set_file_name("sizing-report.pdf").save_file();
+                if let Some(path) = picked {
+                    model.export_report(&path.display().to_string());
+                }
+            }
             Action::TuningAxis(axis) => model.tuning_axis = axis,
             Action::RunTuning => model.run_tuning(model.tuning_axis),
             Action::CloseTuning => model.tuning = None,

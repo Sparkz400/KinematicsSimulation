@@ -130,6 +130,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("identify") => &["--trace", "--map", "--from", "--to", "--sweep", "--step-from", "--step-to", "--motor-inertia", "--overlay"],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary", "--fmi"],
+        Some("report") => &["--bands"],
         _ => &[],
     };
     args.check(known)?;
@@ -158,6 +159,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("check-dataset") => check_dataset(args, tr),
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
+        Some("report") => report(args, tr),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -179,6 +181,17 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
+    let (entry, cfg) = named_config(args)?;
+    // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
+    let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
+    for assignment in args.options("--set") {
+        cfg.set_text(assignment)?;
+    }
+    Ok((entry, cfg))
+}
+
+/// The machine and its config with the parts the command line names in `[parts]`, before they are resolved.
+fn named_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
     let entry = machine(args)?;
     let mut cfg = match args.option("--config") {
         Some(path) => sim_components::load_config(entry, &read(path)?)?,
@@ -191,11 +204,6 @@ fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Fa
         if let Some(name) = name {
             cfg.set_text(&format!("parts.{key} = {name:?}"))?;
         }
-    }
-    // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
-    let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
-    for assignment in args.options("--set") {
-        cfg.set_text(assignment)?;
     }
     Ok((entry, cfg))
 }
@@ -868,6 +876,23 @@ fn fmu(args: &Args) -> Result<(), Failure> {
         files.push((inside, bytes));
     }
     std::fs::write(path, sim_fmi::zip(&files)).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))
+}
+
+/// `report <machine> --out FILE`: the sizing report a customer signs (`sim_components::report`): the machine, plots of
+/// the cycle, every verdict with value, limit and margin, where each input comes from, and a sign-off block. PDF for a
+/// file ending in .pdf, HTML otherwise; `--bands` adds the error bands. The result goes to the error stream.
+fn report(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
+    let ((entry, named), (_, cfg)) = (named_config(args)?, machine_and_config(args)?);
+    let (text, source) = match args.option("--config") {
+        Some(file) => (read(file)?, file.to_string()),
+        None => (entry.default_config.to_string(), tr.tr("report-default-config").to_string()),
+    };
+    let report = sim_components::report::make(entry, &text, &source, &named, &cfg, args.flag("--bands"), tr)?;
+    let bytes = if path.to_lowercase().ends_with(".pdf") { report.pdf() } else { report.html(args.option("--lang").unwrap_or("en")).into_bytes() };
+    std::fs::write(path, bytes).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
+    eprintln!("{}", tr.tr_arg(if report.passed { "cli-report-pass" } else { "cli-report-fail" }, path));
+    Ok(())
 }
 
 /// `compare <machine> --effect NAME`: the cycle run with `effects.NAME` on and with it off (`compare_effect`). Writes

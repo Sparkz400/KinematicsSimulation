@@ -1,0 +1,113 @@
+# Sim sizing: tag parts with a role and material, export masses and inertias to a machine config, run
+# `sim-cli verdicts` on it and show the result. The logic is in simsizing.py next to this file.
+
+import os
+import sys
+
+import FreeCAD as App
+
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    HERE = App.getUserMacroDir(True)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import cadmass  # noqa: E402
+import simsizing  # noqa: E402
+from PySide import QtCore, QtGui  # noqa: E402
+
+COLUMNS = ("check", "motor", "value", "limit", "margin", "result")
+
+
+class Dialog(QtGui.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sim sizing")
+        s = simsizing.settings()
+        form = QtGui.QFormLayout()
+
+        self.role = QtGui.QComboBox()
+        self.role.addItems(["carriage", "arm", "payload", "(untag)"])
+        self.material = QtGui.QComboBox()
+        self.material.addItems(list(cadmass.MATERIALS))
+        self.density = QtGui.QDoubleSpinBox()
+        self.density.setRange(0, 30000)
+        self.density.setSuffix(" kg/m3 (0: from material)")
+        tag = QtGui.QPushButton("Tag selected objects")
+        tag.clicked.connect(self.tag)
+        form.addRow("Role", self.role)
+        form.addRow("Material", self.material)
+        form.addRow("Density", self.density)
+        form.addRow(tag)
+
+        self.machine = QtGui.QComboBox()
+        self.machine.addItems(sorted(cadmass.ROLE_KEYS))
+        self.machine.setCurrentText(s["machine"])
+        self.sim_cli = QtGui.QLineEdit(s["sim_cli"])
+        self.sim_cli.setPlaceholderText(cadmass.find_sim_cli() or "path to sim-cli")
+        self.base = QtGui.QLineEdit(s["base_config"])
+        self.base.setPlaceholderText("the machine's default.toml")
+        self.out = QtGui.QLineEdit(s["out_file"])
+        self.out.setPlaceholderText("<document folder>/<document>-<machine>.toml")
+        run = QtGui.QPushButton("Export and check")
+        run.clicked.connect(self.run)
+        form.addRow("Machine", self.machine)
+        form.addRow("sim-cli", self.sim_cli)
+        form.addRow("Base config", self.base)
+        form.addRow("Output config", self.out)
+        form.addRow(run)
+
+        self.status = QtGui.QLabel()
+        self.table = QtGui.QTableWidget(0, len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
+        layout = QtGui.QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.status)
+        layout.addWidget(self.table)
+        self.resize(640, 640)
+
+    def tag(self):
+        import FreeCADGui
+
+        objs = FreeCADGui.Selection.getSelection()
+        role = self.role.currentText()
+        simsizing.tag(objs, "" if role == "(untag)" else role, self.material.currentText(), self.density.value())
+        self.status.setText(f"{len(objs)} object(s) tagged {role}")
+
+    def settings(self):
+        return {"machine": self.machine.currentText(), "sim_cli": self.sim_cli.text().strip(),
+                "base_config": self.base.text().strip(), "out_file": self.out.text().strip()}
+
+    def run(self):
+        s = self.settings()
+        simsizing.save_settings(s)
+        try:
+            roles, out, rows = simsizing.export(App.ActiveDocument, s)
+        except Exception as e:  # shown to the user rather than lost in a traceback
+            self.status.setText(f"Error: {e}")
+            App.Console.PrintError(f"SimSizing: {e}\n")
+            return
+        lines = simsizing.report_lines(s["machine"], roles, out, rows)
+        App.Console.PrintMessage("\n".join(lines) + "\n")
+        self.status.setText(lines[-1].strip() + f" -> {out}")
+        self.show_rows(rows)
+
+    def show_rows(self, rows):
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            margin = "" if r["margin"] is None else f"{100 * r['margin']:+.1f} %"
+            cells = (r["check"], r["motor"], f"{r['value']:.4g}", f"{r['limit']:.4g}", margin, r["result"])
+            for j, text in enumerate(cells):
+                item = QtGui.QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+                self.table.setItem(i, j, item)
+            self.table.item(i, 5).setBackground(QtGui.QColor("#b8e0b8" if r["ok"] else "#f0a0a0"))
+        self.table.resizeColumnsToContents()
+
+
+# Loaded by the test with another __name__, so that it gets the class without opening the dialog.
+if __name__ == "__main__":
+    import FreeCADGui
+
+    Dialog(FreeCADGui.getMainWindow()).show()

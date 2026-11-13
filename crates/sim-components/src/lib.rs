@@ -22,6 +22,7 @@ pub mod motor_fit;
 pub mod path;
 pub mod profile;
 pub mod rigid;
+pub mod report;
 pub mod sim;
 pub mod trace;
 pub mod transmission;

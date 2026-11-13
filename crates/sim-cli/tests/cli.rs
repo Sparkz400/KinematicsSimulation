@@ -885,3 +885,39 @@ fn a_machine_file_is_run_judged_and_checked() {
     assert_eq!(cli(&["fmu", "--machine-file", file, "--out", dir.join("x.fmu").to_str().unwrap()]).status.code(), Some(2));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// `report` writes the sizing report as HTML or PDF: the verdicts are those `verdicts` prints, and each input says where
+/// it comes from.
+#[test]
+fn report_lists_every_verdict_and_the_source_of_each_input() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    for entry in MACHINES {
+        let html = dir.join(format!("{}-report.html", entry.id));
+        let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let html = std::fs::read_to_string(html).unwrap();
+        let verdicts = cli(&["verdicts", entry.id]);
+        let rows: Vec<Vec<String>> = text(&verdicts.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
+        assert!(!rows.is_empty());
+        for row in &rows {
+            // Value, limit and result as `verdicts` has them, in that order, in the row of the report.
+            let cells = format!("<td>{}</td><td>{}</td><td>", row[2], row[3]);
+            assert!(html.contains(&cells), "{}: {cells} missing", entry.id);
+        }
+        let failed = rows.iter().filter(|r| r[4] == "FAIL").count();
+        assert_eq!(html.matches("<tr class=\"fail\">").count(), failed, "{}", entry.id);
+        assert_eq!(html.matches("<svg").count(), 3);
+        assert!(!html.contains("<td>check-"), "{}: a check without its label", entry.id);
+    }
+    // A PDF, in German, with a value set on top.
+    let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
+    let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let pdf = std::fs::read(pdf).unwrap();
+    assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
+    assert!(pdf.windows(b"(Freigabe)".len()).any(|w| w == b"(Freigabe)"), "German headings in the PDF");
+    assert!(pdf.windows(b"(set for this run)".len()).all(|w| w != b"(set for this run)"));
+    let unknown = cli(&["report", id]);
+    assert!(!unknown.status.success(), "a report needs --out");
+}
+

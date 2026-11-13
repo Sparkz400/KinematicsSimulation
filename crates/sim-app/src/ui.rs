@@ -234,6 +234,8 @@ pub enum Action {
     Export,
     /// The overlay of the replayed trace goes to a CSV file.
     ExportOverlay,
+    /// The sizing report goes to a file the system's dialog asks for.
+    ExportReport,
     TuningAxis(usize),
     RunTuning,
     CloseTuning,
@@ -1219,6 +1221,10 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
             if ui.button(tr(key)).clicked() {
                 actions.push(action);
             }
+        }
+        let report = ui.add_enabled(!model.report_running(), egui::Button::new(tr("ui-report-export"))).on_hover_text(tr("ui-report-export-hint"));
+        if report.clicked() {
+            actions.push(Action::ExportReport);
         }
     });
     ui.horizontal_wrapped(|ui| {

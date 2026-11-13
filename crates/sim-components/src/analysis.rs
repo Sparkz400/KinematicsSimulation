@@ -2131,7 +2131,7 @@ impl Comparison {
 
 /// Runs the configured cycle and keeps every signal once per millisecond over its second pass, as `analyse_cycle`
 /// measures it, with the time counted from the start of that pass.
-fn record_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Vec<f64>>, ConfigError> {
+pub(crate) fn record_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Vec<f64>>, ConfigError> {
     let mut sim = Sim::new(entry, cfg)?;
     let refused = |e: CommandError| ConfigError::Invalid(e.key.into());
     sim.command(Command::StartCycle).map_err(refused)?;
