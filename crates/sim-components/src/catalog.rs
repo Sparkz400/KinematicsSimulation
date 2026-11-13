@@ -322,8 +322,8 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// `motor_modules_s120.csv`, by article number. It sets the drive's rated and maximum output current as
 /// `ratings.drive_rated_current_a` and `drive_max_current_a`, where the config has them; `verdicts` judges the
 /// cycle's RMS and peak motor current against them (checks `drive-current`, `drive-peak-current`). The currents of
-/// a Double Motor Module are per axis. The drive's own current limit is not simulated: the motor's maximum current
-/// stays the torque limit, and a cycle that asks more of the drive fails the check.
+/// a Double Motor Module are per axis. With effects.drive_current_limit the maximum current also limits the simulated
+/// current (`DriveParams::torque_range`): a cycle that asks more of the drive lags behind and fails the check.
 ///
 /// The DC link, where the config has these ratings. An S210 converter (`braking_s210.csv`, from its operating
 /// instructions) sets `dc_link_overvoltage_v` to its trip level (410 V on 1 AC, 820 V on 3 AC) and the powers of its

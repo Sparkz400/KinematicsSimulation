@@ -9,6 +9,15 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Thermal warm start (`effects.thermal_warm_start`, on in the shipped configs): the cycle analysis measures its pass
+  with the windings and, with `effects.thermal_feedback`, the gearboxes and guides at the rises they settle at,
+  iterated from cold to within 0.1 K (secant step, at most 4 warm passes); verdict row `thermal-warm-start`, and
+  `analyze`/`verdicts` say on the error stream which start was used. Shipped verdicts move in the fourth digit (windings
+  at 1 to 7 K); with the feedback on, the EXCT-30's X guide settles at 15.9 K instead of 23.7 K.
+- The drive's current limit simulated (`effects.drive_current_limit`, on in the shipped configs): the torque setpoint is
+  held to the torque of `ratings.drive_max_current_a` where that is below the motor's limit, with anti-windup; a cycle
+  that asks more lags behind, and `drive-peak-current` judges the current asked for. Nothing changes on the shipped
+  configs, whose drives give more than their motors take.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

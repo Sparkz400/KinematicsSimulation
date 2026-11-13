@@ -1171,3 +1171,34 @@ Left open:
   stopped, but one stopped in a corner of two motions loses both. Drives that push on an obstacle trip once the part
   has gone `CREEP` (1 um) further in, not on their torque or following error.
 - The PLC test's crash and reset run against the wall clock like the other PLC tests.
+
+## Thermal warm start and the drive's current limit (13 November)
+
+Two items that make the sizing verdicts honest (goal 2). Not run here: the test suites (the coordinating session runs
+them); `cargo check --tests` of sim-components, sim-machines, machine-single-axis, sim-cli and sim-app is clean.
+
+| Item | What was built | Tests (hand-calculated numbers) |
+| --- | --- | --- |
+| Thermal warm start | `effects.thermal_warm_start` (read with a default of off, so a config of before stays cold), on in every shipped config (T-gantry default and EXCT-30, single axis, delta D3, the joint machines' `common.toml`, `machines/*.toml`). An `effects.` key, not an analysis key: every switch of a run is there, the app lists it with the others, and the configs have no analysis table. `analyse_cycle_with`: where windings (`winding_heating`) or parts (`thermal_feedback`) act back with their warmth, each measured pass is finished, its settled rises (`MotorLoad::winding_rise`, `CycleLoad::part_rises`) compared with those it started at, and the next pass started at a secant step per rise (plain substitution on the first warm pass); stop within `WARM_START_TOLERANCE_K` = 0.1 K or after `WARM_START_PASSES` = 4. `analyse_trajectory_with`: the same, with the machine sent back to the path's start and rested 0.3 s between passes. `CycleLoad::warm_start` (passes, last change); verdict row `thermal-warm-start` (change against 0.1 K; no row: cold); `sim-cli analyze` and `verdicts` print "Thermal start: cold / warm / NOT converged" on the error stream (EN, DE); labels EN, DE | `a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_rise` (single axis, rated 0.5 A: q = 100/1.39 (0.4463/0.5)² = 57.32 K, settled 73.82 K, copper 4 (1 + 0.0039 · 73.82) 0.4463² = 1.0261 W, cold 0.7967 W); `a_guide_started_warm_has_the_hand_calculated_friction_at_its_settled_rise` (single axis with the feedback: guide at 10.03 K, not 12.51; viscous at 0.5 m/s 10 N · ν(10.03)/ν_ref = 6.3673 N); `the_warm_start_converges_on_the_default_t_gantry_within_its_pass_limit` (windings alone: 1 pass; with the feedback: 2) |
+| Drive current limit | `effects.drive_current_limit` (same default rule), on in the shipped configs. `DriveParams::drive_max_current` = `ratings.drive_max_current_a` (infinite without the rating or the effect); `torque_range` narrows the velocity loop's clamp to ±τ(I_drive) (the saturation curve), so the current setpoint stays within min(motor, drive) and the integrator's anti-windup acts as at the motor's limit, also with `torque_limit` off. `torque_curve` (what `motor-peak` judges) stays the motor's. `MotorLoad::peak_current` takes, with the limit simulated, the current of `torque_demand` where higher, so `drive-peak-current` still fails a cycle held at the limit. The search is unchanged: a candidate with its paired drive is limited by that drive; `--motor` without `--drive` keeps the config's drive ratings as before, and is now also limited by them | `the_drive_current_limit_holds_the_torque_to_the_lower_of_motor_and_drive` (drive.rs: 5 A · 0.45 = 2.25 N m below 3.8; 10.9 A leaves 3.8); `a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rate` (single axis rigid, 0.5 A, 15 N friction: a = (56.25 − 15) / 6.125 = 6.7347 m/s², 6.733 by sim-cli; motor at 0.18 N m: 4.8980, 4.894; shipped cycle at 70 % of its peak current fails `drive-peak-current`, tracking error 0.2 → 12.7 mm at 0.78 A) |
+
+What moved in the shipped outputs (`sim-cli verdicts`, warm start on, as shipped): the windings settle at 1 to 2 K
+(T, S) and 6 to 7 K (E), so verdicts move in the fourth digit (default T-gantry `drive-peak-current` a 1.246 → 1.248:
+the current asked for counts now). Every verdict table has one more row, `thermal-warm-start`; golden snapshots and the
+docs' example outputs need regenerating. With part heating and the feedback on: single axis guide 12.51 → 10.03 K,
+`gearbox-continuous` 0.806 → 0.695 N m; T-gantry guide 4.19 → 3.86 K; EXCT-30 X guide 23.68 → 15.90 K (3 warm passes,
+0.045 K). Cost: one more cycle per analysis on the shipped configs, two or three with the feedback (`verdicts` T-gantry
+with feedback 2.9 → 3.8 s), so searches, bands and the optimiser take up to twice as long.
+
+Found on the way: plain substitution converged too slowly where the warmth thins a lubricant (EXCT-30's guide, slope
+about −0.4: 0.30 K off after the 4 passes); the secant step brings every config within 0.1 K in at most 3.
+
+Left open:
+
+- The trajectory's warm passes start after a way back and 0.3 s of rest, not from the machine's start state (`Sim`
+  cannot be copied): what still rings in a lightly damped machine is in the next pass.
+- `check_limits` (the warning that the axis limits ask more of a motor than it has) knows only the motor's peak torque,
+  not the drive's current; the time-optimal planner plans with the motor's torque too.
+- A cycle held at the drive's limit builds a following error whose demand can fail `motor-peak` as well.
+- No ramp or i²t of the drive's current (its overload capacity over time): one maximum current.
+- Not in the app beyond what is generic (the two switches, the verdict row and its label come through the lists).

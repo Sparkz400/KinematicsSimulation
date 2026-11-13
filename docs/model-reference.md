@@ -297,6 +297,18 @@ e_ω      = ω_cmd − ω_f
 I_ω     += (K_p / T_n) · e_ω · T_v                 unless that pushes further into the limit (anti-windup)
 ```
 
+### Drive current limit
+
+`effects.drive_current_limit` (on in the shipped configs): the drive gives no more than its maximum output current `ratings.drive_max_current_a` (a drive by name sets it). The velocity loop's torque range above is narrowed to the torque of that current, where that is below the motor's:
+
+```text
+torque range = [low, high] ∩ [−τ(I_drive), +τ(I_drive)]      τ(i) = k_t · i · (1 − s · min(1, (i / i_max)²)), the saturation curve
+```
+
+So the current setpoint i(τ_cmd) stays within min(motor, drive maximum current), and the velocity integrator stops while the setpoint sits on the limit, the same anti-windup as at the motor's limit; the same with `effects.torque_limit` off. A cycle that asks more than the drive gives then shows it: the axis accelerates at what the drive's current gives, a = (k_t · I_drive · i / r − F_friction) / m_total, falls behind its plan and catches up later. `drive-peak-current` judges the current the velocity loop asks for (i(τ_demand), at most the motor's maximum current under saturation), so a cycle held at the drive's limit fails it, as one held at the motor's limit fails `motor-peak`. The demand that a following error built up may then fail `motor-peak` too. Without the rating, or with the effect off, nothing is held and the drive's maximum current is only judged. `check_limits` (the warning that the axis limits ask more of a motor than it has) still knows only the motor's peak torque.
+
+Tests: `the_drive_current_limit_holds_the_torque_to_the_lower_of_motor_and_drive` (drive.rs: 5 A at 0.45 N m/A holds 3.8 N m to 2.25 N m; 10.9 A leaves the motor's 3.8), `a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rate` (single axis, 0.5 A: a = (0.225 · 250 − 15) / 6.125 = 6.735 m/s²; with the motor at 0.18 N m, below the drive, 4.898 m/s²; the shipped cycle at 70 % of its peak current fails `drive-peak-current` and lags further).
+
 w_v and w_τ are the feedforward factors (0 with the switch off). The notch is a biquad with centre `notch_frequency_hz` and Q = frequency / bandwidth.
 
 **Margins.** `Drive::torque_injection` is a test torque d added to τ_notch before the limit; a drive's own measurement function works the same way. With the machine holding its start pose, a sine d on one motor gives the loop's answer u = τ_notch and the torque that acts e = u + d, both correlated with sine and cosine at the velocity cycle over whole periods (at least 0.1 s to settle, 0.1 s to measure). Then L = −U / E is the open-loop response at that motor, with everything in it: velocity filter, PI, torque filter, delays, current loop, the elastic mechanics (the other motors' loops closed) and the position loop around it; and |S| = |E| / |D| = 1 / |1 + L|. `analysis::loop_margins` follows the phase of L along the frequency axis without jumps and shifts it by whole turns so that it lies between −360° and 0° at the first gain crossover (without a crossover: between −270° and 90° at the lowest point). It reads off, interpolated in log |L| and phase between points, the phase margin 180° + ∠L at each gain crossover (the smallest counts; negative: unstable) and the peak of |S|. Stability is a Nyquist count of the crossings of the negative real axis (the phase through −180° or an odd multiple) beyond −1, |L| > 1: a falling one is an encirclement of −1, a later rising one undoes the last falling one not yet undone. The count starts at a phase of 0 at the gain of the lowest point, as the small circle of the Nyquist contour around s = 0 turns the phase by −90° per integrator, so a loop whose integrators lag past −180° below the measured range counts that crossing too. The loop is stable when no falling crossing is left. The gain margin is −20 log |L| at the worst falling crossing not undone: those with |L| < 1 (in practice above the crossover) give a positive margin, one left with |L| > 1 a negative one (L encircles −1, unstable). A falling crossing beyond −1 that a rising one undoes (the phase turned past −180° and back below the crossover) is the conditionally stable kind: a gain that falls would be the danger there, and the margin for that is not given. A point at which the torque limit was hit, or at which the loop moved on its own (what of e is neither the injected sine nor a constant is larger in RMS than the injection), is no measurement of L: it is NaN, the margins are not valid and NaN (`LoopMargins::valid`, `stable`); `sim-cli margins` says `FAIL` for an invalid or unstable loop. Tests: `margins_are_signed_and_say_an_unstable_loop_is_unstable` (L = ωc e^(−jωτ) / (jω): 100 Hz, 0.5 ms: 72°, 13.979 dB; 200 Hz, 0.5 ms: 54°, 7.959 dB; 300 Hz, 1 ms: −18°, −1.584 dB; 400 Hz, 1 ms: −54°, −4.082 dB), `a_conditionally_stable_loop_is_stable` (L = K (1 + s/a)² / (s (1 + s/b)² (1 + s/c)), a, b, c = 2π · 300, 30, 3000 Hz: stable at K = 3e5, 6.1e5, 1.2e6 with 30.7°, 41.6°, 42.4°), `a_lead_with_positive_phase_at_the_first_point_keeps_its_phase_margin` (a type-0 lead loop: 24.0° at 1516 Hz, not −336°), analysis; `an_unstable_velocity_loop_is_reported_unstable` (single axis at 0.3 N m s/rad), axis. `velocity_loop_margins` does this for every motor at 60 points from 10 Hz to a quarter of the velocity loop's rate (2 kHz), with a tenth of the rated torque, for the config and for each value of `[bounds]` at its low and at its high bound (`sim-cli margins MACHINE [--bands]`). The velocity gains of all three configs were chosen with it (see the [user guide](user-guide.md#tune-gains-and-use-input-shaping)). Friction near standstill damps the loop at this amplitude (the motor's Coulomb friction is smoothed over 0.5 rad/s), so the margins are lower with friction off, as in a cruise.
@@ -892,7 +904,7 @@ Per motor:
 | `motor-peak` | Utilisation | 1 |
 | `motor-thermal` | Settled winding rise | `motor.rated_temperature_rise_k` |
 | `drive-current` | RMS current | `ratings.drive_rated_current_a`: the drive's rated output current (a drive by name sets it). The cycle's RMS against the rated current: the power unit warms in seconds to minutes, about as long as a cycle |
-| `drive-peak-current` | Peak current | `ratings.drive_max_current_a`: the drive's maximum output current. The drive's current limit itself is not simulated: the motor's maximum current stays the limit, and a cycle that needs more than the drive gives fails here |
+| `drive-peak-current` | Peak current; with `effects.drive_current_limit` the current the velocity loop asks for where that is higher (see [drive current limit](#drive-current-limit)) | `ratings.drive_max_current_a`: the drive's maximum output current. With the effect the simulated current stays within it, and a cycle that needs more lags and fails here; without, the motor's maximum current stays the limit of the run |
 | `pulley-torque` | Peak torque at the gearbox output | `ratings.pulley_max_torque_nm` |
 | `gearbox-continuous` | Cubic mean of the torque at the gearbox output, weighted with the speed | `ratings.gearbox_rated_torque_nm` |
 | `gearbox-input-speed` | Peak speed in r/min | `ratings.gearbox_max_input_speed_rpm` |
@@ -932,6 +944,7 @@ For the machine:
 | `belt-span-resonance` | With `effects.belt_span_vibration`: the lowest distance of a span's first sideways mode from an excitation at steady speed, as a share of the mode (see [belt spans](#sideways-vibration-of-the-belt-spans)). Passes at or **above** the limit | `ratings.belt_span_resonance_band` |
 | `gearbox-thermal` | With `effects.part_heating`: where the hottest gearbox settles on the cycle, R_th × its mean loss (`CycleLoad::part_rises`, see [thermal model](#thermal-model-and-view)); not judged on a direct drive, which has no gearbox | `thermal.gearbox_max_rise_k` |
 | `guide-thermal` | With `effects.part_heating`: where the hottest guide settles on the cycle | `thermal.guide_max_rise_k` |
+| `thermal-warm-start` | With `effects.thermal_warm_start`, where something that warms acts back on the run: the most a rise the measured pass started at lies from the one it settles at, K (see [thermal warm start](#thermal-warm-start)). No row: the pass started cold | 0.1 K (`WARM_START_TOLERANCE_K`) |
 | `collision` | Where the config has obstacles: the least clearance to them over the run, m (see [obstacles and crash](#obstacles-and-crash)). Passes at or **above** the limit, never at a contact (clearance 0 or less). Without obstacles it is not judged, so it cannot fail | `profile.min_clearance_m` |
 
 Without `effects.part_heating` (or `effects.thermal_feedback`, which warms the parts too) the two thermal checks are not judged, as a rating left out is not.
@@ -1099,6 +1112,30 @@ belt:    EA = EA_config · (1 − alpha · (T_ambient − T_ref))               
 - Without part heating's losses the parts stay at ambient; the windings are not part of this (their resistance already follows their temperature, `effects.winding_heating`).
 
 Tests: `the_temperature_laws_follow_their_formulas` (the factors at fixed temperatures), `with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature` (the machines at 30 K), `a_guide_settles_where_its_loss_and_heat_flow_balance` (single axis, R 2 K/W at 1 m/s: rise = 2 (λ F_c + b ν/ν_ref v) v settles at 40.2 K instead of 72.5 K).
+
+### Thermal warm start
+
+Source: `analyse_cycle_with` and `analyse_trajectory_with` in [`analysis.rs`](../crates/sim-components/src/analysis.rs); `effects.thermal_warm_start`, on in the shipped configs. It is not a physical effect but how the analysis starts; it sits among the effects because every switch of a run does, the app shows it there, and a config without it keeps starting cold. With thermal time constants of 20 minutes to an hour, a cycle of seconds analysed from cold sees every part at the temperature it started with: the winding's resistance at ambient, and with `effects.thermal_feedback` the guides' friction and the gearboxes' losses cold. A machine that sizing judges has run for a while.
+
+The rises that act back on the run are the windings' (with `effects.winding_heating`: their resistance) and the gearboxes' and guides' (with `effects.thermal_feedback`). Where there are such rises, the cycle repeats:
+
+```text
+pass 1                 from cold, not measured (as before)
+pass 2                 measured from where pass 1 left the rises r_2: settles them at s_2
+                       (winding: settled_rise(I_rms); part: R_th × its mean loss, as the thermal checks judge)
+pass 3                 measured with every rise put at s_2 at its start: r_3 = s_2
+pass k + 1             a secant step per rise: r_(k+1) = r_k + (s_k − r_k) / (1 − m),  m = (s_k − s_(k−1)) / (r_k − r_(k−1))
+                       clamped to [−20, 0.5]
+stop                   when max |s_k − r_k| ≤ 0.1 K (WARM_START_TOLERANCE_K), or after 4 warm passes (WARM_START_PASSES)
+```
+
+The secant step: a warmer guide or gearbox loses less (its lubricant thins), so the rise a pass settles at falls with the rise it starts at, and plain substitution r = s oscillates towards the fixed point; on the EXCT-30's guide (slope about −0.4) it was still 0.3 K off after four passes. A winding's settled rise depends on its current alone (m = 0).
+
+The last measured pass is the result; `CycleLoad::warm_start` has the warm passes and the last change, and the verdicts a row `thermal-warm-start` (that change against 0.1 K). A rise that does not settle (a winding loaded beyond what its copper can shed) ends the iteration at once, not converged. Over a measured pass the rises drift with their time constants, by a hundredth of a kelvin in a cycle of seconds. A trajectory or path (`analyze --path`) counts as a cycle that repeats: between passes the machine goes back to its start (`Command::MoveTo`) and rests 0.3 s; the rises are set after that, and what the way back left ringing in a lightly damped machine is in the next pass. Each warm pass costs one more cycle. On the shipped configs one (the windings alone converge in one: their settled rise depends only on the current); with part heating and the feedback on, two (T-gantry, delta picker) or three (single axis, EXCT-30, which ends 0.045 K off). `verdicts` on the default T-gantry with the feedback on took 3.8 s against 2.9 s from cold.
+
+What it moves: the windings settle at 1 to 2 K on the shipped cycles, so the shipped verdicts move in the fourth digit. With part heating and the feedback on, the single axis's guide settles at 10.03 K instead of 12.51 K (its viscous friction is 0.637 of the cold one there, not 1) and its `gearbox-continuous` falls from 0.806 to 0.695 N m; the T-gantry's guide at 3.86 K instead of 4.19 K; the EXCT-30's X guide at 15.90 K instead of 23.68 K, its windings at 6.62 and 6.08 K instead of 6.88 and 6.24 K. A 0.5 A-rated winding (single axis) settles at 73.8 K, and the measured pass's copper loss is R (1 + 0.0039 · 73.8) I² = 1.026 W instead of the cold 0.797 W.
+
+Tests: `a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_rise`, `a_guide_started_warm_has_the_hand_calculated_friction_at_its_settled_rise`, `the_warm_start_converges_on_the_default_t_gantry_within_its_pass_limit` (belt_and_heat).
 
 ### Belt view
 

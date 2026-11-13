@@ -20,7 +20,10 @@ pub struct MotorLoad {
     /// RMS torque over the torque the motor can give continuously. Above 1 the motor overheats on this cycle.
     pub thermal_utilisation: f64,
     pub rms_current: f64,
-    /// Highest |current| over the pass, A: against the drive's maximum output current.
+    /// Highest |current| over the pass, A: against the drive's maximum output current. With the drive's limit
+    /// simulated (effects.drive_current_limit) the current the velocity loop's torque asks for (`Drive::torque_demand`)
+    /// where that is higher: a drive held at its limit delivers no more, and the check would never see the cycle beyond
+    /// it ("motor-peak" judges the demand for the same reason).
     pub peak_current: f64,
     /// Temperature rise the winding settles at when the cycle repeats for long.
     pub winding_rise: f64,
@@ -170,6 +173,92 @@ pub struct CycleLoad {
     /// took (a shared one counted once); without, the power the drives fed back. For an S120 line-up, which brakes
     /// through one Braking Module (`verdicts`).
     pub braking_power_peak: f64,
+    /// With effects.thermal_warm_start, and windings or parts whose warmth acts back on the run: how the measured pass
+    /// was started warm. `None`: from cold.
+    pub warm_start: Option<WarmStart>,
+}
+
+/// How far the rises a warm pass starts at may lie from those it settles at for the warm start to count as converged,
+/// K: a tenth of a kelvin moves a winding's resistance by 0.04 % and a guide's viscosity by 0.5 %.
+pub const WARM_START_TOLERANCE_K: f64 = 0.1;
+
+/// The most warm passes of a warm start (`analyse_cycle_with`) before the last is measured, converged or not.
+pub const WARM_START_PASSES: usize = 4;
+
+/// A cycle analysis started warm (effects.thermal_warm_start): the measured pass ran with the windings (with
+/// effects.winding_heating) and the heated parts (with effects.thermal_feedback) at the rises the pass before settled
+/// at, by `passes` passes of cold → settled → warm → settled; `change` is the most a rise the measured pass started at
+/// lies from the one it settles at, K (infinite where a rise does not settle, or the run stopped).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WarmStart {
+    pub passes: usize,
+    pub change: f64,
+}
+
+impl WarmStart {
+    pub fn converged(&self) -> bool {
+        self.change <= WARM_START_TOLERANCE_K
+    }
+}
+
+/// The rises that act back on the run: per winding with effects.winding_heating (its resistance), per heated part
+/// with effects.thermal_feedback (friction and losses).
+fn fed_back_rises(sim: &Sim) -> Vec<f64> {
+    let windings = if sim.control.drive_params().heating { &sim.control.drives[..] } else { &[] };
+    let parts = if sim.thermal_feedback { &sim.heated[..] } else { &[] };
+    windings.iter().map(|d| d.temperature_rise).chain(parts.iter().map(|h| h.rise)).collect()
+}
+
+/// The same rises where the cycle of `load` settles them (`MotorLoad::winding_rise`, `CycleLoad::part_rises`).
+fn settled_rises(sim: &Sim, load: &CycleLoad) -> Vec<f64> {
+    let windings = if sim.control.drive_params().heating { &load.motors[..] } else { &[] };
+    let parts = if sim.thermal_feedback { &load.part_rises[..] } else { &[] };
+    windings.iter().map(|m| m.winding_rise).chain(parts.iter().map(|(_, rise)| *rise)).collect()
+}
+
+/// Puts the windings and parts at `rises` (in the order of `fed_back_rises`).
+fn set_rises(sim: &mut Sim, rises: &[f64]) {
+    let mut rises = rises.iter();
+    if sim.control.drive_params().heating {
+        for (drive, rise) in sim.control.drives.iter_mut().zip(&mut rises) {
+            drive.temperature_rise = *rise;
+        }
+    }
+    if sim.thermal_feedback {
+        for (part, rise) in sim.heated.iter_mut().zip(rises) {
+            part.rise = *rise;
+        }
+    }
+    sim.feed_temperatures_back();
+}
+
+/// The warm start's next move after a measured pass that began at `started_at` and settles where `load` says: `None`
+/// to measure another pass from the next rises (already set), or the result. `before` is the pass before's start and
+/// settled rises, which this one replaces.
+///
+/// The next start is a secant step per rise: s(r), the rise a pass settles at for the rise it starts at, falls with r
+/// where the warmth thins a lubricant (a warmer guide loses less), so plain substitution r = s oscillates and converges
+/// slowly (about -0.4 on the EXCT-30's guide: still 0.3 K off after four passes). With the slope m of the last two passes the
+/// fixed point lies at r + (s - r) / (1 - m); m is clamped to [-20, 0.5], and taken as 0 (substitution) on the first
+/// warm pass and where the start did not move. A winding's settled rise depends on its current alone: m = 0.
+fn warm_pass(sim: &mut Sim, started_at: &[f64], load: &CycleLoad, passes: usize, before: &mut Option<(Vec<f64>, Vec<f64>)>) -> Option<WarmStart> {
+    let settled = settled_rises(sim, load);
+    let change = settled.iter().zip(started_at).map(|(s, r)| if s.is_finite() { (s - r).abs() } else { f64::INFINITY }).fold(0.0, f64::max);
+    let done = WarmStart { passes, change };
+    // A rise that does not settle (a winding loaded beyond what its copper can shed) cannot be started at.
+    if done.converged() || passes == WARM_START_PASSES || change.is_infinite() {
+        return Some(done);
+    }
+    let next: Vec<f64> = (0..settled.len())
+        .map(|i| {
+            let (r, s) = (started_at[i], settled[i]);
+            let slope = before.as_ref().filter(|(r0, _)| (r - r0[i]).abs() > 1e-9).map_or(0.0, |(r0, s0)| ((s - s0[i]) / (r - r0[i])).clamp(-20.0, 0.5));
+            (r + (s - r) / (1.0 - slope)).max(0.0)
+        })
+        .collect();
+    *before = Some((started_at.to_vec(), settled));
+    set_rises(sim, &next);
+    None
 }
 
 /// What a run adds up step by step, for a cycle or a trajectory.
@@ -500,6 +589,9 @@ impl Tally {
             let (current, power) = (sim.control.drives[k].current, sim.control.drives[k].power);
             load.rms_current += current * current;
             load.peak_current = load.peak_current.max(current.abs());
+            if sim.control.drive_params().drive_max_current.is_finite() {
+                load.peak_current = load.peak_current.max(sim.control.drive_params().current_for(sim.control.drives[k].torque_demand).abs());
+            }
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
                 self.braking[k] = 0.0;
@@ -589,7 +681,9 @@ impl Tally {
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
             contact: sim.contact.clone(),
             braking_power_peak: self.braking_peak,
+            warm_start: None,
         }
+
     }
 
     /// The energy budget of the steps counted, where the machine reports its losses.
@@ -641,6 +735,13 @@ fn stored_electrically(sim: &Sim) -> (f64, f64) {
 
 /// Runs the configured cycle and measures its second pass, when the machine has settled into it. If a
 /// drive trips before, the cycle never gets there: what is measured then is the run up to the trip.
+///
+/// With effects.thermal_warm_start, where windings (effects.winding_heating) or parts (effects.thermal_feedback) act
+/// back on the run with their warmth: the cycle repeats from cold until a pass that starts with them at the rises it
+/// settles at, within `WARM_START_TOLERANCE_K`; each pass ends with them put at the rises it settles at, and the pass
+/// after it is measured. At most `WARM_START_PASSES` warm passes; the last is the measured one, converged or not
+/// (`CycleLoad::warm_start`). With thermal time constants of minutes to an hour, a cycle of seconds would otherwise
+/// see every part at the temperature it started with.
 pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
     analyse_cycle_with(sim, true)
 }
@@ -649,15 +750,26 @@ pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
 /// for them: they cost one more evaluation of the machine per step, and no verdict needs them.
 pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, CommandError> {
     sim.command(Command::StartCycle)?;
+    let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
     let mut tally = Tally::new(sim, views);
-    let (mut passes, mut last, mut start) = (0, sim.control.cycle_passes(), 0.0);
+    let (mut passes, mut last, mut start) = (0usize, sim.control.cycle_passes(), 0.0);
+    let (mut started_at, mut before) = (Vec::new(), None);
     loop {
         sim.step();
         // The controller counts the passes: a cycle of one segment never changes its segment index.
         let now = sim.control.cycle_passes();
         if now != last {
             passes += 1;
-            if passes == 2 {
+            if warm && passes >= 3 {
+                // A measured pass ended: it is the result, or the next starts at the rises it settles at.
+                let load = std::mem::replace(&mut tally, Tally::new(sim, views)).finish(sim, sim.time() - start);
+                if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes - 3, &mut before) {
+                    let _ = sim.command(Command::Stop);
+                    return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
+                }
+            }
+            if passes == 2 || warm && passes > 2 {
+                started_at = fed_back_rises(sim);
                 // The measured pass begins: what was added up on the way here goes. The energy budget starts from
                 // the state after this step, so it leaves the step out.
                 (start, tally) = (sim.time(), Tally::new(sim, views));
@@ -678,11 +790,15 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     }
     let _ = sim.command(Command::Stop);
     let duration = sim.time() - start;
-    Ok(tally.finish(sim, duration))
+    // Stopped before a measured pass ended (a trip, or a crash): not converged.
+    let warm_start = warm.then(|| WarmStart { passes: passes.saturating_sub(2), change: f64::INFINITY });
+    Ok(CycleLoad { warm_start, ..tally.finish(sim, duration) })
 }
 
 /// Runs a path given as poses at times (see `Command::Trajectory`) and measures it, with 0.3 s of rest
-/// after its end so that the settling of the tool counts.
+/// after its end so that the settling of the tool counts. With effects.thermal_warm_start as `analyse_cycle`: the
+/// path counts as a cycle that repeats, and between passes the machine goes back to the path's start
+/// (`Command::MoveTo`) and rests there, which the rises are then set over.
 pub fn analyse_trajectory(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<CycleLoad, CommandError> {
     analyse_trajectory_with(sim, points, true)
 }
@@ -690,13 +806,39 @@ pub fn analyse_trajectory(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result
 /// `analyse_trajectory`, with the effect views only where `views` asks for them (see `analyse_cycle_with`).
 pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, views: bool) -> Result<CycleLoad, CommandError> {
     let end = points.last().map_or(0.0, |p| p.0) + 0.3;
-    sim.command(Command::Trajectory(points))?;
-    let (mut tally, start) = (Tally::new(sim, views), sim.time());
-    while sim.time() - start < end {
-        sim.step();
-        tally.step(sim);
+    let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
+    let first = points.first().map(|p| p.1.clone());
+    let mut before = None;
+    for passes in 0.. {
+        let started_at = fed_back_rises(sim);
+        sim.command(Command::Trajectory(points.clone()))?;
+        let (mut tally, start) = (Tally::new(sim, views), sim.time());
+        while sim.time() - start < end {
+            sim.step();
+            tally.step(sim);
+        }
+        let load = tally.finish(sim, end);
+        if !warm {
+            return Ok(load);
+        }
+        if !sim.control.enabled() {
+            return Ok(CycleLoad { warm_start: Some(WarmStart { passes, change: f64::INFINITY }), ..load });
+        }
+        if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
+            return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
+        }
+        // shortcut: the way back and the rest are left to the controller and the machine's damping, so a lightly damped
+        // machine starts the next pass with what still rings; a pass from the machine's start state would need a Sim
+        // that can be copied.
+        let rises = fed_back_rises(sim);
+        sim.command(Command::MoveTo(first.clone().unwrap_or_default()))?;
+        while sim.control.busy() && sim.time() < 600.0 {
+            sim.step();
+        }
+        sim.run(0.3, |_| {});
+        set_rises(sim, &rises);
     }
-    Ok(tally.finish(sim, end))
+    unreachable!()
 }
 
 /// One judgement of a cycle: a value the cycle reached against what a part allows.
@@ -941,6 +1083,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 out.push(at_most(check, None, rise, cfg.positive(&format!("thermal.{kind}_max_rise_k"))?));
             }
         }
+    }
+    // How the measured pass was started (effects.thermal_warm_start): the most a rise it started at lies from the one it
+    // settles at, against the warm start's tolerance. No row: from cold.
+    if let Some(warm) = load.warm_start {
+        out.push(at_most("thermal-warm-start", None, warm.change, WARM_START_TOLERANCE_K));
     }
     Ok(out)
 }
@@ -2318,6 +2465,7 @@ mod tests {
             clearance: None,
             contact: None,
             braking_power_peak: 0.0,
+            warm_start: None,
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

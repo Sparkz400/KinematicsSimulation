@@ -68,6 +68,10 @@ pub struct DriveParams {
     /// Saturation: the share of the torque constant lost at the maximum current; 0 when switched off.
     pub saturation: f64,
     pub max_current: f64,
+    /// effects.drive_current_limit: the drive's maximum output current, `ratings.drive_max_current_a`, A. The torque
+    /// setpoint is held to the torque of this current (`torque_range`), as the drive holds its current setpoint.
+    /// Infinite with the effect off or without the rating.
+    pub drive_max_current: f64,
     /// DC link with a braking chopper: whether it is simulated, the voltage the rectifier holds, the
     /// capacitance, the voltage at which the chopper switches the braking resistor in, the most the
     /// resistor takes, and the voltage at which the drive trips.
@@ -159,6 +163,8 @@ impl DriveParams {
         let regenerative = dc_link && on("regenerative_supply")?;
         let line = |leaf: &str| if regenerative { cfg.positive(&format!("ratings.{leaf}")) } else { Ok(1.0) };
         let line_efficiency = line("line_module_efficiency")?;
+        // A config written before 13 November 2026 has no switch: the drive's limit is judged, not simulated.
+        let drive_limit = cfg.get("effects.drive_current_limit").is_ok() && on("drive_current_limit")?;
         if line_efficiency > 1.0 {
             return Err(ConfigError::Invalid("ratings.line_module_efficiency".into()));
         }
@@ -209,13 +215,22 @@ impl DriveParams {
             start_rise: cfg.non_negative("motor.start_temperature_rise_k")?,
             saturation: if on("torque_saturation")? { 1.0 - kt_at_max / kt } else { 0.0 },
             max_current: cfg.positive("motor.max_current_a")?,
+            drive_max_current: if drive_limit && cfg.get("ratings.drive_max_current_a").is_ok() { cfg.positive("ratings.drive_max_current_a")? } else { f64::INFINITY },
         })
     }
 
     /// Torque limits (lowest, highest) at a speed: the current limit everywhere, and in the
-    /// direction of rotation the torque-speed curve that the voltage limit leaves.
+    /// direction of rotation the torque-speed curve that the voltage limit leaves. With the drive's current limit
+    /// (effects.drive_current_limit) also the torque of the drive's maximum current, where that is the lower: the
+    /// current setpoint, the torque's, then stays within min(motor, drive maximum current).
     pub fn torque_range(&self, speed: f64) -> (f64, f64) {
-        if self.limit { self.torque_curve(speed) } else { (f64::NEG_INFINITY, f64::INFINITY) }
+        let (low, high) = if self.limit { self.torque_curve(speed) } else { (f64::NEG_INFINITY, f64::INFINITY) };
+        if self.drive_max_current.is_finite() {
+            let most = self.torque_of(self.drive_max_current);
+            (low.max(-most), high.min(most))
+        } else {
+            (low, high)
+        }
     }
 
     /// Winding resistance at a temperature rise.
@@ -609,6 +624,7 @@ mod tests {
             start_rise: 0.0,
             saturation: 0.0,
             max_current: 9.5,
+            drive_max_current: f64::INFINITY,
             dc_link: false,
             shared_dc_link: false,
             bus_voltage: 190.0,
@@ -840,6 +856,26 @@ mod tests {
         d.velocity_loop(&unlimited, 0.0, 0.0);
         assert!(d.torque_command > 3.8);
         assert_eq!(unlimited.torque_curve(100.0), (-3.8, 3.8));
+    }
+
+    /// effects.drive_current_limit: a drive of 5 A holds the 0.45 N m/A motor to 0.45 * 5 = 2.25 N m, below the
+    /// motor's 3.8 N m, and its velocity loop stops integrating there; the current setpoint is then 2.25 / 0.45 = 5 A.
+    /// A drive of 10.9 A would allow 4.905 N m: the motor's 3.8 N m stays the limit. With the motor's limit off the
+    /// drive's still holds.
+    #[test]
+    fn the_drive_current_limit_holds_the_torque_to_the_lower_of_motor_and_drive() {
+        let small = DriveParams { drive_max_current: 5.0, ..params() };
+        assert_eq!(small.torque_range(100.0), (-2.25, 2.25));
+        assert_eq!(small.torque_range(367.0), (-2.25, 1.9), "the torque-speed curve below the drive's limit");
+        let mut d = Drive { position_part: 1000.0, ..Drive::default() };
+        d.velocity_loop(&small, 0.0, 0.0);
+        let before = d.integral;
+        d.velocity_loop(&small, 0.0, 0.0);
+        assert!(d.torque_command == 2.25 && d.integral == before && (small.current_for(d.torque_command) - 5.0).abs() < 1e-12);
+        assert_eq!(DriveParams { drive_max_current: 10.9, ..params() }.torque_range(100.0), (-3.8, 3.8));
+        assert_eq!(DriveParams { limit: false, ..small.clone() }.torque_range(100.0), (-2.25, 2.25));
+        // What the motor and drive can give, which "motor-peak" judges against, is the motor's.
+        assert_eq!(small.torque_curve(100.0), (-3.8, 3.8));
     }
 
     #[test]

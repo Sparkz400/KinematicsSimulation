@@ -74,6 +74,9 @@ pub struct Sim {
     pub part_heating: bool,
     /// Whether the machine's friction and losses follow the parts' rises (effects.thermal_feedback).
     pub thermal_feedback: bool,
+    /// effects.thermal_warm_start: the cycle analysis measures its pass with the windings and parts at the rises they
+    /// settle at (`analysis::analyse_cycle_with`), not from cold.
+    pub warm_start: bool,
     /// The machine's loss powers, for the heated parts.
     losses: Vec<f64>,
     /// The obstacles of the config (`collision::obstacles`), each marked while a part of the machine touches it.
@@ -111,6 +114,11 @@ pub struct Contact {
 /// temperatures.
 pub fn heats(cfg: &Config) -> Result<bool, ConfigError> {
     Ok(cfg.bool("effects.part_heating")? || cfg.bool("effects.thermal_feedback")?)
+}
+
+/// effects.thermal_warm_start; a config without the key (one written before 13 November 2026) starts cold.
+fn warm_start(cfg: &Config) -> Result<bool, ConfigError> {
+    Ok(cfg.get("effects.thermal_warm_start").is_ok() && cfg.bool("effects.thermal_warm_start")?)
 }
 
 fn timing(cfg: &Config) -> Result<(f64, u32), ConfigError> {
@@ -171,6 +179,7 @@ impl Sim {
             heated,
             part_heating,
             thermal_feedback: cfg.bool("effects.thermal_feedback")?,
+            warm_start: warm_start(cfg)?,
             losses: Vec::new(),
             obstacles: crate::collision::obstacles(cfg)?,
             crash: cfg.bool("effects.crash")?,
@@ -218,6 +227,7 @@ impl Sim {
         }
         (self.heated, self.part_heating) = (heated, heats(cfg)?);
         self.thermal_feedback = cfg.bool("effects.thermal_feedback")?;
+        self.warm_start = warm_start(cfg)?;
         (self.obstacles, self.crash, self.min_clearance) = (crate::collision::obstacles(cfg)?, cfg.bool("effects.crash")?, cfg.non_negative("profile.min_clearance_m")?);
         self.machine = machine;
         self.feed_temperatures_back();

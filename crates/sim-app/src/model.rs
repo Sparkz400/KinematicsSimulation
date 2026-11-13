@@ -266,7 +266,7 @@ const SENSITIVITY_KEYS: [&str; 6] =
     ["ui-analysis-parameter", "ui-analysis-low", "ui-analysis-high", "ui-analysis-peak-change", "ui-analysis-rms-change", "ui-analysis-time-change"];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 36] = [
+const CHECKS: [&str; 37] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -303,6 +303,7 @@ const CHECKS: [&str; 36] = [
     "rack-feed-force",
     "strain-wave-life",
     "collision",
+    "thermal-warm-start",
 ];
 /// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
 const BREAKDOWN_KEYS: [&str; 5] = ["quantity-torque-inertia", "quantity-torque-gravity", "quantity-torque-friction", "quantity-torque-rest", "quantity-torque"];
