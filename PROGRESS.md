@@ -1402,3 +1402,47 @@ Left open:
   screenshot and its caption show it as it is.
 - The Pages workflow has not run: Pages must be switched on in the repository settings (source: GitHub Actions).
 - The advisory ignores in deny.toml go once async-opcua and Bevy are updated past them.
+
+## Time-optimal plan point by point (13 November)
+
+Not run by this session: the test suites (the coordinating session runs them). Run here, release, filtered to the tests
+this work touches: `machine-t-gantry` `time_optimal` (6 tests, among them the 200 random paths), all 15 of
+`machine-delta-d3`, `a_time_optimal_line_takes_the_hand_calculated_time`, `sim-machines` `time_optimal` (collision,
+control) and `sim-cli` `a_path_file_is_planned_run_and_analysed_for_every_machine`: all pass.
+
+| Item | What was built | Tests (hand-calculated numbers) |
+| --- | --- | --- |
+| Limits point by point (C3) | `path::plan_time_optimal` keeps the path, the look-ahead, the junction speeds and the stops of the plan per piece, and times each piece under limits read at places 2 mm apart (0.02 rad on a curve; 32 to 1000 per piece, `piece_limits`): per motor its torque c a + d v^2 + e from `feedforward_torque_moving` (so centripetal and Coriolis torque count, and gravity each way as it pushes) within `profile.torque_reserve` of the peak, its speed within the rated speed, per belt section its rigid change of tension within the room both ways, per axis its jerk (ramps get all of it on a line, 0.4 on a curve, the rest bounds 3 p'' v a + p''' v^3). A ramp (`climb`) is integrated in quarter cycles at constant jerk: up at the jerk limit, along the most acceleration its places allow (each bound at its worst speed of the ramp, lowered ahead of where it falls so the jerk can follow), down so that it reaches zero as the speed reaches the top; the ramp down is the same from the end backwards. The top speed is searched up to the fastest place's: a piece may cruise faster than its slowest place where the ramps pass that place (at most 0.9 of its speed there, so its torque keeps room). 0.02 % of torque and tension kept back. The per-piece timing (`timed`) stays for the plan within the axis limits and for the transition-curve lengths | `the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line` (T-gantry, x 0.1 -> 0.9, 300 m/s^3, 400 N: bound 16.137 / max(2.6 - x, 1.6 + x) m/s^2 by hand; per piece 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s, now 0.8517 s; 6.455 -> 6.73 m/s^2 along the ramp, no pose above its bound, the rigid change of tension within 1 % of 42.26 N); `the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line` (delta, (0.5, 0, -0.85) -> (-0.5, 0, -0.85): rated speed allows 7.270 to 13.31 m/s along it by the inverse kinematics; 8.1 m/s planned, 0.411 s against 0.4290 s, torque with Coriolis, speed and jerk within 0.1 %); `the_time_optimal_plan_keeps_the_belt_within_its_tension_limit` changed (7.02 m/s^2 at x = 0.7 where it accelerates instead of the far end's 6.328 everywhere); the hand-calculated single-axis times hold unchanged |
+
+Planned durations, old (one limit per piece) and new, from `sim-cli run --path ... --time-optimal` (exact, before
+rounding up to the profile cycle), and the planning time (release, one run of the plan):
+
+| Path | Old | New | Planning old / new |
+| --- | --- | --- | --- |
+| T-gantry default cycle as lines | 3.574198 s | 3.574199 s | 0.9 / 3-6 ms |
+| Delta default cycle (Adept, lines) | 0.589106 s | 0.589066 s | 0.4 / 7-12 ms |
+| SCARA default cycle (joint space) | 1.173275 s | 1.173275 s | 0.5 / 8-13 ms |
+| URDF arm default cycle (joint space) | 1.657660 s | 1.657660 s | 0.9 / 19 ms |
+| T-gantry line x 0.1 -> 0.9, 300 m/s^3, belt 400 N | 0.853080 s | 0.851693 s | 0.2 / 1 ms |
+| Delta, line to (0.5, 0, -0.85), across to (-0.5, 0, -0.85) | 0.429020 s | 0.411345 s | 0.2 / 7 ms |
+| Delta, lines to (0, -0.4, -0.9) and (0.4, 0.3, -0.8) | 0.405526 s | 0.392167 s | 0.2 / 16 ms |
+| User guide line, arc, line | 1.428429 s | 1.394717 s | - / 17 ms |
+| User guide spline example | 1.673957 s | 1.379974 s | - / 21 ms |
+
+The default cycles are limited by jerk and rated speed (the delta's 305 mm traverse is a pure jerk ramp, 4 (d / 2 j)^(1/3)
+= 0.1575 s; the arms are in joint space, where the speed limit does not change along a line), so point by point gives
+them nothing; the T-gantry's is 1 us longer (the ramps' quarter-cycle steps).
+
+Left open:
+
+- One cruise speed per piece: where a piece's speed limit rises and falls between its ramps, it cruises at the lowest
+  of it there. A cruise that follows the limit needs ramps with acceleration across places (tried as sixteen
+  sub-stretches with a stop of the acceleration at each: gained 0.009 m/s on the delta line, dropped).
+- The top speed above the slowest place's is searched by trying 16 + 16 speeds (which top speeds fit is not one range),
+  not proven best; a junction is passed no faster than the slowest place of either piece.
+- A ramp's acceleration bound is taken at the worst speed of the ramp (on a curve at low speed some torque is left);
+  on a curve the jerk is shared 0.4 for the ramps, and the jerk's terms are bounded each by its size.
+- Planning is 5 to 40 times slower than per piece (1 to 21 ms); `sim-opcua` plans inside its 10 ms tick (documented).
+- The per-piece limits still size the transition curves and decide the refusals before the places are read.
+- Motor speed by differences reaches 1 + 3e-5 of the rated speed on the random paths (1 + 2e-13 before), within the
+  tests' 0.1 %; the speed bound has no part kept back, so that a speed-limited line stays as fast as before.
