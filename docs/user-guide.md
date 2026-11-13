@@ -9,6 +9,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Find the lightest motor](#find-the-lightest-motor)
 - [See which unknown parameters matter, and judge with error bands](#see-which-unknown-parameters-matter-and-judge-with-error-bands)
 - [Shorten a cycle](#shorten-a-cycle)
+- [Size a delta picker](#size-a-delta-picker)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)
 - [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)
@@ -218,7 +219,7 @@ dc-link-overvoltage,a,770.0,820.0,ok
 | Motor | `motor.rotor_inertia_kgm2`, `motor.torque_constant_nm_a` (static torque over stall current), `motor.max_current_a`, `motor.torque_constant_at_max_current_nm_a`, `motor.rated_current_a` (the catalogue's own, at most 1.05 times the stall current), `motor.thermal_time_constant_s` (where the configuration manual has it), `drive.peak_torque_nm` (capped by `ratings.pulley_max_torque_nm` over the gear ratio), `drive.rated_torque_nm`, `drive.rated_speed_rad_s`, `drive.bus_voltage_v` (the DC link voltage: 540 V for `400v`, 325 V for `230v`), `drive.no_load_speed_rad_s` (sqrt(3/2) × DC link voltage over the torque constant), and `ratings.braking_threshold_v` and `ratings.dc_link_overvoltage_v` scaled with the DC link voltage |
 | Motor on S120 (`--supply s120`) | The same keys from the S120 data: for a 1FK7 or 1FT7 [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) and its data sheet (maximum torque and current, thermal time constant), for a 1FK2 or 1FT2 its S120 configuration manual. A 1FK7 or 1FT7 also brings its winding: `motor.resistance_ohm` and `motor.inductance_h` are three times the data sheet's phase values (the model's one winding carries the phase current at three times the phase voltage), and the current controller is retuned with them, `drive.current_kp_v_a` = L / T for the config's own current loop time constant T (its inductance over its gain) and `drive.current_tn_s` = L / R. The DC link is 540 V |
 | Gearbox | `gearbox.ratio`, `gearbox.efficiency`, `gearbox.stiffness_nm_rad`, `gearbox.backlash_rad` and `gearbox.inertia_at_input_kgm2` (both where the manual gives them), `ratings.gearbox_rated_torque_nm` and `ratings.gearbox_max_torque_nm` (where the config has them) |
-| Drive | An S210 converter ([`converters_s210.csv`](../catalog/siemens/converters_s210.csv)) or an S120 Motor Module ([`motor_modules_s120.csv`](../catalog/siemens/motor_modules_s120.csv)) by article number: `ratings.drive_rated_current_a` and `ratings.drive_max_current_a`, its rated and maximum output current (per axis for a Double Motor Module). `verdicts` judges the cycle's RMS motor current against the first (`drive-current`) and its peak against the second (`drive-peak-current`). The drive's own current limit is not simulated |
+| Drive | An S210 converter ([`converters_s210.csv`](../catalog/siemens/converters_s210.csv)) or an S120 Motor Module ([`motor_modules_s120.csv`](../catalog/siemens/motor_modules_s120.csv)) by article number: `ratings.drive_rated_current_a` and `ratings.drive_max_current_a`, its rated and maximum output current (per axis for a Double Motor Module). `verdicts` judges the cycle's RMS motor current against the first (`drive-current`) and its peak against the second (`drive-peak-current`). The drive's own current limit is not simulated. The DC link: an S210 converter brings its internal braking resistor and trip level ([`braking_s210.csv`](../catalog/siemens/braking_s210.csv)); an S120 Motor Module its DC link capacitance (half per axis for a Double) and, as it has no resistor of its own, the Braking Module's of [`braking_s120.csv`](../catalog/siemens/braking_s120.csv): `braking_resistor_continuous_w` 1.5 kW, `_peak_w` 100 kW, `braking_threshold_v` 770 V, and `dc_link_overvoltage_v` 820 V, the booksize units' trip |
 | Belt | As profile-width, e.g. `AT5-25`: a Megadyne MEGALINEAR belt with standard steel cords ([`megadyne/belts.csv`](../catalog/megadyne/belts.csv); T5, AT3, AT5, AT10 and the HTD-compatible MTD3, MTD5, MTD8). `belt.stiffness_ea_n` (the allowable pull over the stretch at it, 4 mm/m), `belt.mass_kg_m`, `belt.tooth_pitch_m`, and where the config has them `ratings.belt_max_tension_n` (the allowable pull, a quarter of the breaking strength), `ratings.belt_width_mm` and the tooth load table `ratings.belt_tooth_load_rpm` and `_n_cm`. A width between two standard widths is interpolated, one outside them taken in proportion to the nearest |
 | Axis | By name: `EXCT-15`, `EXCT-30`, `EXCT-100` (Festo, [`festo/exct.toml`](../catalog/festo/exct.toml)) and Bahr's axes and X/Z gantries as series-size, e.g. `ELZI-40` or `ELZ-60S` ([`bahr/belt_axes.csv`](../catalog/bahr/belt_axes.csv)). An X/Z gantry goes on a config with a Z stroke, a single axis on one with one stroke; the other way round, and a stroke the axis does not have, is refused. Sets `geometry.pulley_radius_m`, the belt (as above, for the axis's profile and width: Festo's EXCT as AT, Bahr's HTD as MTD; Festo's EA from its stated stretch), `ratings.belt_teeth_in_mesh` (half the pulley's teeth), `ratings.pulley_max_torque_nm` where the config has it (Festo's maximum torque; Bahr's peak feed force times the radius), and the moved masses: Bahr's gantry sheets give them per axis (Z axis, and the carriage as X less Z); Festo gives the Z mass of its torque formula, and the carriage is fitted so that the machine needs Festo's torque at 45 degrees, as `exct-30.toml` was written. The strokes stay; an EXCT gets the shortest Z stroke Festo offers that holds the config's. Bahr's single axes state no moved mass, so the config's carriage stays |
 | Any but the drive | `drive.velocity_kp_nm_s_rad`, retuned for the part (see below) |
@@ -366,7 +367,7 @@ belt.pretension_n = [350.0, 550.0]
 friction_x.coulomb_n = [12.0, 26.0]
 ```
 
-**Sensitivity.** The cycle is run with each parameter at its low and at its high value, one at a time, and the rows are sorted by how much the results change:
+**Sensitivity.** The cycle is run with each parameter at its low and at its high value, one at a time, and the rows are sorted by how much the results change. `ratings.bearing_reliability_percent` is left out: it is a choice of how to judge, and 20 % either way leaves its range of 90 to 99.95 %:
 
 ```text
 $ sim-cli sensitivity t-gantry --config crates/machine-t-gantry/exct-30.toml --group mass --group friction_x --group belt
@@ -535,6 +536,46 @@ Limits for this task:
 
 **Corner blending by hand:** `--set effects.corner_blending=true`, with `profile.blend_time_s` as the longest lead. The next segment starts while the current one is still braking. It applies only where the machine need not stop: no dwell, no gripper action, no axis reversing, and only on the ramps. On lift-traverse-lower cycles every axis stays within its limits; for other shapes of cycle the sum of two segments on one axis is not checked against the limits.
 
+## Size a delta picker
+
+`delta-d3` is a three-arm rotary delta (Clavel), sized like the Autonox DELTA RL3-1200-3kg: working range 1200 mm across, 200 mm high at the edge and 386 mm at the centre, 3 kg payload, three Siemens 1FK2105-4AF motors on S210 converters behind planetary gearboxes of ratio 20. Autonox does not publish its arm lengths and masses; [the config](../crates/machine-delta-d3/default.toml) marks every value `[catalogue]` or `[estimate]` and bounds the estimates. Its cycle is the Adept cycle 25/305/25 mm (up 25 mm, across 305 mm, down 25 mm and back), each leg a move of its own with a stop, and 35 ms at pick and place for the gripper.
+
+The tool is the platform's centre, x, y and z in metres, z up from the plane of the arms' shoulder axes (so the platform works at about −0.7 to −1.1 m). A target outside the working range is refused with its reason: outside the cylinder or below its spherical bottom, out of the arms' reach, beyond an arm's stop, or too near a singularity.
+
+```text
+$ sim-cli analyze delta-d3
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
+1,0.720000,7.786455,2.644848,120.1085,0.5195,0.5750,,,2.5071,26.35,...
+2,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
+3,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
+```
+
+The cycle lies along x, so arm 1 (pointing along +x) works hardest, and arms 2 and 3 alike. Its 0.720 s are the S-curves by hand (traverse d/v + v/a + a/j = 0.1817 s, a 25 mm lift 4 (d / 2j)^(1/3) = 0.0684 s, 0.7069 s with the dwells) on the controller's 1 ms profile cycle (`the_adept_cycle_takes_the_hand_calculated_time`). The makers' figures for the same cycle are shorter (ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg): they round the corners instead of stopping, and run faster than the 3 m/s and 50 m/s² this config allows each axis. `sim-cli optimise delta-d3` rounds the corners through via points (splines on three axes) and raises the limits as far as every check allows.
+
+```text
+$ sim-cli verdicts delta-d3
+motor-peak,1,0.5195,1.000,ok
+motor-thermal,1,26.35,100.0,ok
+drive-current,1,2.507,5.000,ok
+gearbox-continuous,1,68.68,120.0,ok
+gearbox-peak,1,136.6,192.0,ok
+gearbox-life,1,613609,20000,ok
+...
+settling,,0.0006767,0.0005000,FAIL
+singularity,,2.072,5.000,ok
+```
+
+With `--bands` every check but `settling` passes at both bounds of every estimate (peak gearbox torque 127 to 146 N m); `settling` fails at all of them (0.624 to 0.736 mm). What to read from them:
+
+- **Gearbox.** The arm's gearbox carries up to 137 N m of its 192 N m; the cubic mean, 69 N m, is what its 120 N m rating is for.
+- **Settling fails: a sizing finding.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it: 0.64 mm at pick and place at rest with the NRB080's catalogue backlash of 9 arcmin, 0.68 mm in the dwell (with the motion before it); up to 2.09 mm at the rim's lower edge. That offset is the same every pass, which repeatability does not see, but it is beyond the class's accuracy: this delta needs a gearbox with less backlash. With 3 arcmin (`--set gearbox.backlash_rad=8.727e-4`, a robot-grade gearbox, not in the catalogue) it passes: 0.29 mm at rest at pick and place, 0.33 mm in the dwell, 0.30 to 0.38 mm over the bounds. The backlash does not make the loops ring: at rest the tool stands still to 2e-8 m with either.
+- **Singularity**: the highest condition number of the Jacobian in the cycle, against `ratings.max_condition_number` (5). Near a singularity a little motor angle moves the platform a lot and the motor torques for a force grow without bound; the working range has up to 3.6, the cycle 2.07.
+- **No belt, pulley or guide checks**: the delta has none.
+
+To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
+
+What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).
@@ -551,13 +592,14 @@ line,0.6,0.05
 | `line,a,b` | Straight to this point: one position per axis, in metres |
 | `arc,a,b,ca,cb,cw` or `ccw` | On a circle around the centre (ca, cb) to the point (a, b). `cw` and `ccw` are seen with the first axis to the right and the second upwards |
 | `spline,a,b` | On a smooth curve through this point. Lines of `spline` that follow one another form one curve, one via point per line |
+| `line,x,y,z`, `spline,x,y,z`, `arc,x,y,z,cx,cy,cz,cw` or `ccw` | The same on a machine with three axes (the delta). An arc lies in the plane of its start, its end and its centre, and `cw`/`ccw` is seen from the side of that plane its normal points to, taken upwards (+z), for a vertical plane towards the viewer (−y), for the y-z plane from +x. A half or full turn leaves the plane open and is refused; transition curves (`profile.path_tolerance_m`) are not made on three axes |
 | empty, or starting with `#` | Skipped |
 
 An arc whose end is the end point of the piece before it (the same numbers, to a nanometre) is a full turn. Any other arc turns from that point to its own end, however short: an arc of 80 µm is an arc of 80 µm. The stated end has to lie on the circle around the centre through the end point of the piece before, within 10 µm. The arc is laid from where the path really stands and keeps the radius it has there, so it ends beside its stated end by what the two radii differ. Over arcs that follow one another around one centre these offsets add up if every stated end lies further out than the one before: four arcs, each 9 µm further out, end 36 µm beside the last stated end. Where the path ends beside a stated end, the largest such distance is part of the deviation the planner reports (`The planned path is off ...`, below, and "Planned path off the given one" in the app). The command line says it from 0.05 µm, the smallest it can show.
 
-The first piece has no point before it. A path starts at the setpoint of the machine at rest, which belt stretch and gear twist put up to 0.1 mm from the start pose (some hundredths of a millimetre on the default gantry). So an arc as the first piece is judged against where the machine stands: its end may be 0.1 mm off the circle through that place, and it has to end at least 1 mm from that place. Nearer, a full turn cannot be told from a short arc, so neither is guessed and the path is refused (`The path starts with an arc that ends less than 1 mm from where the machine stands. ...`). To start a path with a full turn or with an arc shorter than that, state its start first with a `line` to the start pose; the arc is then judged against that point. Arcs need a machine with two axes.
+The first piece has no point before it. A path starts at the setpoint of the machine at rest, which belt stretch and gear twist put up to 0.1 mm from the start pose (some hundredths of a millimetre on the default gantry). So an arc as the first piece is judged against where the machine stands: its end may be 0.1 mm off the circle through that place, and it has to end at least 1 mm from that place. Nearer, a full turn cannot be told from a short arc, so neither is guessed and the path is refused (`The path starts with an arc that ends less than 1 mm from where the machine stands. ...`). To start a path with a full turn or with an arc shorter than that, state its start first with a `line` to the start pose; the arc is then judged against that point. Arcs need a machine with two axes, or three (in a plane, see the table). On the delta the setpoint at rest can be up to 2.3 mm from the start pose (`Machine::setpoint_slack`: what its gearboxes' twist and backlash can sag under the platform's weight anywhere in the range, worked out from stiffness, backlash and masses; 0.6 mm at the default start pose), and a first arc's end may be that far off the circle. That slack is for where a path starts only: a pose further from the start than the slack has to lie within the range (on an axis whose start lies beyond an end, no further beyond than the start), so a path cannot run past the range where a move there is refused.
 
-A spline runs through all its via points with no step in position, direction or curvature at a via point (a cubic spline over the straight distance between the points). It leaves the line or arc before it in that piece's direction and ends in the direction the line or arc after it starts with. At an end of the path, or where there is no line or arc, it ends without curvature. Splines need a machine with two axes, like arcs. Via points and directions that would make the curve turn back on the spot are refused (`The path cannot be laid out: ...`).
+A spline runs through all its via points with no step in position, direction or curvature at a via point (a cubic spline over the straight distance between the points). It leaves the line or arc before it in that piece's direction and ends in the direction the line or arc after it starts with. At an end of the path, or where there is no line or arc, it ends without curvature. Splines need a machine with two or three axes, like arcs. Via points and directions that would make the curve turn back on the spot are refused (`The path cannot be laid out: ...`).
 
 A spline can swing past its via points: between them the curve bulges outwards, the more the sharper it has to turn. A curve that leaves the travel range although every via point is inside is refused (`The path leaves the travel range. ...`). Move the via points inwards or add one where it bulges.
 
@@ -584,7 +626,7 @@ Two planners time the path:
 | Where a spline meets a line or an arc | The curvature steps, so it slows down as from a line into an arc; with `profile.path_tolerance_m` the spline's end is eased to the curvature of its neighbour, and the junction is passed at speed (below) | The same |
 | Model used to plan | None, only the axis limits | The rigid model: no friction, no belt stretch |
 
-The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.78 s plus rest at 2000 m/s³).
+The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.80 s plus rest at 2000 m/s³, where the belt's tension limits it).
 
 Reading the result:
 
@@ -643,7 +685,7 @@ Limits for this task:
 - Without a path tolerance a rounded corner is slow with the default planner: 0.07 m/s into an arc of 0.1 m radius at 100 m/s³.
 - Splines: without a path tolerance, where one joins a line or an arc the curvature steps, so the path passes that junction slowly, like a line into an arc. With one, the eased junction is passed at speed, but more slowly than a clothoid would allow for the same deviation. A span has one limit, from its tightest place, so a span with one tight bend is slow along its whole length.
 - Transition curves between lines and arcs: one length for the whole path, so an arc whose junctions need less still moves in by what that length asks. None at an arc fixed at both ends (between two corners, or a corner and a spline), or at an arc fixed at one end with an arc at the other, or that turns more than half a circle. Their length follows the speeds the plan allows: the axis limits, or for `--time-optimal` the motors (the example takes 1.499 s with a tolerance of 0.1 mm, 1.729 s without).
-- The time-optimal plan knows the belt's tension ratings (`ratings.belt_max_tension_n`, `belt_min_tension_n`): it keeps every section's tension in the rigid model within `profile.tension_reserve` (0.8) of the room to them, which leaves the rest for friction and belt vibration (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). It does not know the gearbox and pulley torque ratings, the guides or the DC link. Run `analyze` or `verdicts` on it.
+- The time-optimal plan knows the belt's tension ratings (`ratings.belt_max_tension_n`, `belt_min_tension_n`): it takes `profile.tension_margin_n` (31 N on the default T-gantry, the guide friction the belt pulls) off both and keeps every section's tension in the rigid model within `profile.tension_reserve` (0.5) of the room to what is left, because the belt's vibration can add as much again as the rigid model's change of tension (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). It does not know the gearbox and pulley torque ratings, the guides or the DC link. Run `analyze` or `verdicts` on it.
 - The time-optimal plan is not the fastest one possible. It has one speed and one acceleration limit per piece, and on an arc it shares the motors' limits out between the directions along the path and towards the centre, which leaves a part unused. On the full model the motors pass the rated speed by what the control loops add (0.1 % in the example).
 - A machine that stands on an end of a stroke has its setpoint some hundredths of a millimetre beyond it: the setpoint is where the motors stand, under belt stretch and gear twist. A path from there starts that far outside the travel range and is run. Poses more than 0.1 mm outside the range are refused (`The path leaves the travel range. ...` for a path of pieces, `The trajectory needs at least two points inside the travel range, at rising times from 0.` for poses at times).
 - The payload is as the machine has it when planning (attached, at the start).
@@ -708,7 +750,7 @@ The default configs' velocity gains were chosen with it: at least 35° of phase 
 **The step response as a trace:**
 
 ```text
-$ sim-cli step t-gantry --axis 0
+$ sim-cli step t-gantry --axis-index 0
 time_s,setpoint,response
 0.000000,1.000000000e-3,0.000000000e0
 0.000250,1.000000000e-3,-3.611875521e-10
@@ -716,12 +758,12 @@ time_s,setpoint,response
 ...
 ```
 
-`--axis N` (0 is the first axis), `--size M` (default 0.001 m), `--time SECONDS` (default 0.5). `response` is the tool position relative to where it stood, four samples per millisecond.
+`--axis-index N` (0 is the first axis; `--axis` names a catalogue axis, as for every command), `--size M` (default 0.001 m), `--time SECONDS` (default 0.5). `response` is the tool position relative to where it stood, four samples per millisecond.
 
 **The closed-loop frequency response:**
 
 ```text
-$ sim-cli bode t-gantry --axis 0 --count 8
+$ sim-cli bode t-gantry --axis-index 0 --count 8
 frequency_hz,gain,gain_db,phase_deg
 1.0000,9.820613e-1,-0.157,-10.626
 2.1317,9.730009e-1,-0.238,-19.226
@@ -1015,7 +1057,7 @@ In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m 
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang en
 ```
 
-This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840) and `--lang` are the only arguments. A machine the simulator does not have, a port or language it cannot read and any other word are refused with a message and exit code 2.
+This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1) and `--cycle-ms` (default 10) are the only arguments. A machine the simulator does not have, a port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
 
 | Property | Value |
 | --- | --- |
@@ -1055,7 +1097,7 @@ How commands behave:
 Limits for this task:
 
 - **Not tested against a real PLC.** The client in the tests is written with the same library as the server. Interoperability with Siemens, Beckhoff or CODESYS clients, their data types, security settings and cycle jitter are untested.
-- The server binds to 127.0.0.1 only and serves the machine's default config only. There is no `--config` and no `--set`.
+- The server binds to one address (127.0.0.1 unless `--host` names another) and serves the machine's default config only. There is no `--config` and no `--set`.
 - No security profiles, no user accounts, no methods, no config changes.
 - Paths: `status.refused` names the key, not the line that could not be read, and there is no `--trajectory` (poses at times) over OPC UA. A path is planned inside the simulation's 10 ms tick: a long time-optimal path that takes longer to plan makes the simulation fall behind real time for that moment.
 - The server writes its keys into a folder `pki` in the working directory.
@@ -1067,7 +1109,7 @@ cargo build --release -p sim-fmi                                   # the FMU's b
 sim-cli fmu t-gantry --config crates/machine-t-gantry/exct-30.toml --out exct30.fmu
 ```
 
-`fmu` writes the machine with its config (the default, or `--config`, `--motor`, `--supply`, `--gearbox` and `--set` as for every command) as an FMI 2.0 Co-Simulation FMU. The FMU runs the same simulation as `sim-cli run`: drives, controller, every switched-on effect. Import it in Simulink (FMU block), OpenModelica (`File > Import > FMU`, or `importFMU`), Dymola (`File > Import > FMU`) or any other FMI 2.0 tool; a controller or PLC model there sends the position setpoints and reads back the signals. FMI 2.0 and not 3.0, because every one of those tools imports 2.0 Co-Simulation and the simulator needs nothing that only 3.0 has.
+`fmu` writes the machine with its config (the default, or `--config`, `--motor`, `--supply`, `--gearbox` and `--set` as for every command) as an FMI 2.0 Co-Simulation FMU. The FMU runs the same simulation as `sim-cli run`: drives, controller, every switched-on effect. Import it in Simulink (FMU block), OpenModelica (`File > Import > FMU`, or `importFMU`), Dymola (`File > Import > FMU`) or any other FMI 2.0 tool; a controller or PLC model there sends the position setpoints and reads back the signals. FMI 2.0 is the default because every one of those tools imports 2.0 Co-Simulation; `--fmi 3` writes an FMI 3.0 Co-Simulation FMU instead, with the same variables and the binaries under `binaries/<architecture>-<system>` (for example `binaries/x86_64-windows`). [FMI export](fmi.md) describes both versions, the FMU state, the derivatives, why there is no Model Exchange, how the FMUs were validated and how to import them.
 
 What is in the FMU:
 
@@ -1103,8 +1145,8 @@ How a step works:
 
 Limits for this task:
 
-- **Not checked with an independent FMI tool.** No FMI tool was available here (`fmpy` is not installed in the project). The tests call the FMU's functions from Rust and compare with the simulator; the archive and model description were also read with Python's `zipfile` and XML parser and the binary driven through `ctypes`. Import into Simulink, OpenModelica or Dymola is untested.
-- Co-Simulation only, no Model Exchange. No FMU state (`fmi2GetFMUstate` and its kind return `fmi2Error`), so tools that roll back a step cannot use it; no directional derivatives, no asynchronous steps.
+- Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Import into Simulink, OpenModelica or Dymola is untested.
+- Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). The FMU state works by replaying every step since initialisation, so restoring a state takes as long as simulating up to it. The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
 - Inputs are position setpoints only: no move targets, cycle or path commands, and no torque input. The servo loops stay inside the FMU.
 - Messages and descriptions in one language, the one of `--lang` when the FMU was written.
 - A 64-bit Windows binary unless a Linux one is added as above; no 32-bit binaries.
@@ -1145,7 +1187,7 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Freeze | Keeps the traces as they are; the simulation runs on |
 | Export CSV | Writes every signal over the visible window to `traces-<time>.csv` in the working directory |
 | Scopes (heading) | Which quantities are plotted |
-| Config file: File, Open, Save | A file name, typed in. "Open" loads it as a config of the machine shown, as `--config FILE` does: it replaces the running config and restarts the simulation, as switching machine does. A file that cannot be read or that the machine refuses (a misspelt key, a value out of range) is answered under Messages, and the running config stays. "Save" writes the config as it is now, every change of the Effects and Parameters panels and of the part names included. Where only values were changed, the file keeps the comments and the layout of the file the config was read from (the opened file, or the machine's default config); where an array was changed it is written plainly, without comments. Switching machine empties the file field, and "Save" does not write over a file that holds another machine's config: it says so under Messages and leaves the file as it is |
+| Config file: File, Open, Save | A file name, typed in. "Open" loads it as a config of the machine shown, as `--config FILE` does: it replaces the running config and restarts the simulation, as switching machine does. A config of another machine (one the machine shown refuses and another reads) switches to that machine and opens it there. A file that cannot be read or that no machine takes (a misspelt key, a value out of range) is answered under Messages, and the running config stays. "Save" writes the config as it is now, every change of the Effects and Parameters panels and of the part names included. Where only values were changed, the file keeps the comments and the layout of the file the config was read from (the opened file, or the machine's default config); where an array was changed it is written plainly, without comments. Switching machine empties the file field, and "Save" does not write over a file that holds another machine's config: it says so under Messages and leaves the file as it is |
 | Config file: Open…, Save as… | The same with the system's file dialog, which starts where the field points. The window waits while the dialog is open |
 | Config file: Motor article, Supply, Gearbox, Drive article, Belt, Axis, Use parts | The parts `[parts]` of the config names, shown as the config has them. "Use parts" names what is typed there in the running config, as `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` do and as "Use" of the motor search does: a motor by its article number (`1FK2104-5AK`), the supply `230v`, `400v` or `s120`, a gearbox as size-frame-ratio (`NRK070-04-5`), a drive by its article number (`6SL3210-5HE11-5UF0`), a belt as profile-width (`AT5-25`), an axis by name (`EXCT-30`, `ELZI-40`); an empty field names none. A name the catalogue does not have is refused under Messages, and so is any name in a config without `[parts]` |
 | Analysis: Analyse and judge the cycle | The cycle analysis and the verdicts, as three tables: the figures of the machine (cycle time, path error, off target while dwelling, lowest belt tension, slack time, radial load, guide load, guide life), the load on each motor (peak, RMS and cubic-mean torque, winding rise, energy drawn and fed back, the braking resistor's energy and mean power, highest DC link voltage) and one row per check |

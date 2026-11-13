@@ -301,8 +301,8 @@ fn distance(a: &[f64], b: &[f64]) -> f64 {
 /// tolerance allows them (`blend` between lines and arcs, `ease` where a spline meets a line or an arc), and how
 /// far that path is from the given one at most. `speed` is the highest speed along a piece that the planner will
 /// allow, which sets how long a transition has to be.
-fn geometry(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, speed: &dyn Fn(&Geo) -> f64) -> Result<(Vec<Geo>, f64), CommandError> {
-    let (geo, off) = given(start, pieces)?;
+fn geometry(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, speed: &dyn Fn(&Geo) -> f64, slack: f64) -> Result<(Vec<Geo>, f64), CommandError> {
+    let (geo, off) = given(start, pieces, slack)?;
     // shortcut: transition curves are worked out in the plane, so a path on three axes runs as given; lift them into
     // space (along the osculating plane) if a three-axis machine has to pass junctions at speed.
     if tolerance <= 0.0 || start.len() != 2 {
@@ -323,20 +323,21 @@ fn axis_speed(axes: &[AxisInfo]) -> impl Fn(&Geo) -> f64 {
 /// How far the path that is planned for these pieces is from the pieces as given, at most: the deviation
 /// the transition curves make, plus how far an arc ends off its stated end (`given`). Zero with a tolerance of
 /// zero and arcs that end on their circles. For the plan within the axis limits.
-pub fn deviation(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<f64, CommandError> {
-    Ok(geometry(axes, start, pieces, tolerance, &axis_speed(axes))?.1)
+pub fn deviation(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<f64, CommandError> {
+    Ok(geometry(axes, start, pieces, tolerance, &axis_speed(axes), slack)?.1)
 }
 
-/// For an arc that is the first piece: how far its end may be off the circle through its start. A path starts
-/// at the setpoint of the machine at rest, which is where the motors stand: under belt stretch and gear twist up
-/// to 0.1 mm from the pose the file was written for (the controller's `SETPOINT_SLACK`; 12 and 46 um on a gantry
-/// holding its Z axis against gravity).
-const ARC_SLACK: f64 = 1e-4;
-/// A first arc has to end at least this far from where the machine stands. Nearer, a full turn (whose end is
-/// up to `ARC_SLACK` from there) cannot be told from a short arc (a 130 um arc ran as a full turn), so neither
-/// is guessed: the path is refused, and the file states the start with a `line` to it first, after which the
-/// arc is no longer the first piece. With a margin over `ARC_SLACK`, so that a first arc that is run is at
-/// most a tenth longer or shorter than the one the file means.
+/// For an arc that is the first piece: how far its end may be off the circle through its start (the planners'
+/// `slack`). A path starts at the setpoint of the machine at rest, which is where the motors stand: under belt
+/// stretch and gear twist that far from the pose the file was written for. The controller passes
+/// `Machine::setpoint_slack` (12 and 46 um on a gantry holding its Z axis against gravity, within this default of
+/// 0.1 mm; more on the delta, whose gearboxes sag under the platform); this is for a path from a stated point.
+pub const ARC_SLACK: f64 = 1e-4;
+/// A first arc has to end at least this far from where the machine stands, and at least ten times the slack.
+/// Nearer, a full turn (whose end is up to the slack from there) cannot be told from a short arc (a 130 um arc ran
+/// as a full turn), so neither is guessed: the path is refused, and the file states the start with a `line` to it
+/// first, after which the arc is no longer the first piece. The margin of ten over the slack keeps a first arc that
+/// is run at most a tenth longer or shorter than the one the file means.
 const FIRST_ARC: f64 = 1e-3;
 /// For every later arc: how far the stated end may be off the circle through the stated end before it.
 const ARC_TOLERANCE: f64 = 1e-5;
@@ -349,7 +350,7 @@ fn piece_end(piece: &Piece) -> &Vec<f64> {
 /// The pieces laid end to end from `start`, and how far a piece ends off its stated end at most: an arc is
 /// laid on the circle through where the path stands, which its stated end may miss by the tolerances above.
 /// Pieces without length are left out.
-fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), CommandError> {
+fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>, f64), CommandError> {
     let bad = Err(CommandError { key: "error-path" });
     let (mut here, mut out): (Vec<f64>, Vec<Geo>) = (start.to_vec(), Vec::new());
     // The end the file stated last; none before the first piece, where the path stands on the machine's setpoint.
@@ -403,11 +404,11 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
                 // or by which angle it turns, is told from the points the file states: the end stated before
                 // it and its own. Only a first piece has none before it and is told from where the machine
                 // stands, with the slack that needs; too near to there it is not told at all (`FIRST_ARC`).
-                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], ARC_SLACK) };
+                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], slack) };
                 if !(radius > 1e-6 && (distance(to, centre) - distance(from, centre)).abs() < slack) {
                     return bad;
                 }
-                if stated.is_none() && distance(to, from) < FIRST_ARC {
+                if stated.is_none() && distance(to, from) < FIRST_ARC.max(10.0 * slack) {
                     return Err(CommandError { key: "error-path-first-arc" });
                 }
                 let angle = |p: &[f64]| (p[1] - centre[1]).atan2(p[0] - centre[0]);
@@ -419,7 +420,7 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece]) -> Result<(Vec<Geo>, f64), Comm
             Piece::Arc { to, centre, clockwise } if here.len() == 3 && to.len() == 3 && centre.len() == 3 => {
                 // Its end is told from the end stated before it, as on two axes. An arc in space is never a full turn,
                 // so a first arc needs no distance from where the machine stands.
-                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], ARC_SLACK) };
+                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], slack) };
                 if (distance(to, centre) - distance(from, centre)).abs() >= slack {
                     return bad;
                 }
@@ -903,8 +904,8 @@ fn junction_speed(a: &Geo, b: &Geo, axes: &[AxisInfo], cycle: f64) -> f64 {
 ///
 /// With a `tolerance` above zero the path gets transition curves first (`blend`), which let it pass from a
 /// line into an arc at speed, and is off the given pieces by up to the tolerance (`deviation` says by how much).
-pub fn plan(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let (geo, bounds) = (geometry(axes, start, pieces, tolerance, &axis_speed(axes))?.0, axis_bounds(axes));
+pub fn plan(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64, slack: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    let (geo, bounds) = (geometry(axes, start, pieces, tolerance, &axis_speed(axes), slack)?.0, axis_bounds(axes));
     let limits: Vec<[f64; 3]> = geo.iter().map(|g| limits(g, &bounds)).collect();
     Ok(timed(axes, &geo, &limits, cycle))
 }
@@ -987,23 +988,24 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 /// unused. The velocity and acceleration limits of the axes play no part.
 ///
 /// The belt is a limit of the plan too: `tension` is the lowest and the highest tension a belt section may have
-/// (`ratings.belt_min_tension_n` and `belt_max_tension_n`; -inf and inf where the config has none) and the share of the
-/// room to them the plan may use (`profile.tension_reserve`). The rigid model gives each section's tension at the nine
+/// (`ratings.belt_min_tension_n` and `belt_max_tension_n`, each less `profile.tension_margin_n`; -inf and inf where the
+/// config has none) and the share of the room to them the plan may use (`profile.tension_reserve`). The rigid model gives each section's tension at the nine
 /// poses as c + g . acceleration (`Machine::rigid_tensions`), linear in the acceleration, so each section and pose is
 /// one more row of the acceleration bounds: |g . acceleration| <= share * min(highest - c, c - lowest), for either
-/// direction, as the torque is. The rest of the room is for what the rigid model leaves out: the belt's vibration
-/// and damping (on one shipped gantry 15 to 70 N above the rigid tension at jerks of 300 to 2000 m/s^3).
-pub fn plan_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let ((geo, _), limited) = time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance)?;
+/// direction, as the torque is. The rest of the room is for what the rigid model leaves out: the margin for the guide
+/// friction the belt pulls, the share (0.5 in the shipped configs) for the belt's vibration, which after a quick ramp of
+/// acceleration overshoots by up to the rigid model's change of tension.
+pub fn plan_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64, slack: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    let ((geo, _), limited) = time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?;
     Ok(timed(machine.axes(), &geo, &limited, cycle))
 }
 
 /// The same path as `plan` times, transition curves included, their lengths for the speeds the motors allow, with
 /// the deviation and the motors' limits per piece; refused where a piece has no torque left beyond holding the tool
 /// or turns no motor, or where the belt holding the tool there is already beyond its tension limits.
-fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
+fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
     let piece_limits = motor_limits(machine, drive, reserve, tension);
-    let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0])?;
+    let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0], slack)?;
     let mut limited = Vec::new();
     let usable = |limits: &[f64; 3]| limits.iter().all(|l| l.is_finite() && *l > 0.0);
     for piece in &path.0 {
@@ -1020,8 +1022,8 @@ fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f6
 
 /// `deviation` for the path `plan_time_optimal` plans: its transition curves are as long as the speeds the
 /// motors allow need them to be, not the speeds of the axis limits. Refused as that plan is.
-pub fn deviation_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64) -> Result<f64, CommandError> {
-    Ok(time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance)?.0.1)
+pub fn deviation_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<f64, CommandError> {
+    Ok(time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
@@ -1092,7 +1094,7 @@ mod tests {
 arc,0.0,0.0,-0.7,0.0,0.0,-0.8,ccw
 arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
         assert_eq!(pieces[1], Piece::Arc { to: vec![0.0, 0.0, -0.7], centre: vec![0.0, 0.0, -0.8], clockwise: false });
-        let geo = given(&[0.1, 0.0, -0.9], &pieces).unwrap().0;
+        let geo = given(&[0.1, 0.0, -0.9], &pieces, ARC_SLACK).unwrap().0;
         assert_eq!(geo.len(), 3);
         let quarter = std::f64::consts::FRAC_PI_2 * 0.1;
         assert!((geo[1].length() - quarter).abs() < 1e-12 && (geo[2].length() - quarter).abs() < 1e-12);
@@ -1101,13 +1103,13 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
         assert!(distance(&mid, &[half, 0.0, -0.8 + half]) < 1e-12 && distance(&dir, &[-std::f64::consts::FRAC_1_SQRT_2, 0.0, std::f64::consts::FRAC_1_SQRT_2]) < 1e-12);
         // Its curvature points at the centre, 1 / r long.
         assert!(distance(&curve, &[-10.0 * std::f64::consts::FRAC_1_SQRT_2, 0.0, -10.0 * std::f64::consts::FRAC_1_SQRT_2]) < 1e-9);
-        let cw = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.0,-0.7,0.0,0.0,-0.8,cw").unwrap()).unwrap().0;
+        let cw = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.0,-0.7,0.0,0.0,-0.8,cw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((cw[0].length() - 3.0 * quarter).abs() < 1e-12 && cw[0].at(cw[0].length() / 3.0)[0][2] < -0.8);
-        let flat = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.1,-0.8,0.0,0.0,-0.8,ccw").unwrap()).unwrap().0;
+        let flat = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.1,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((flat[0].length() - quarter).abs() < 1e-12 && flat[0].at(0.5 * quarter)[0][1] > 0.0);
-        assert_eq!(given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap()).err().unwrap().key, "error-path");
+        assert_eq!(given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).err().unwrap().key, "error-path");
         // Planned within the axis limits, the path ends where it was told.
-        let points = plan(&axes3(), &[0.1, 0.0, -0.9], &pieces, 1e-3, 0.0).unwrap();
+        let points = plan(&axes3(), &[0.1, 0.0, -0.9], &pieces, 1e-3, 0.0, ARC_SLACK).unwrap();
         assert!(distance(&points[points.len() - 1].1, &[-0.1, 0.0, -0.8]) < 1e-9);
     }
 
@@ -1119,13 +1121,13 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
 spline,0.1,0.1,-0.75
 spline,0.2,0.0,-0.8
 line,0.2,0.0,-0.9").unwrap();
-        let geo = given(&[0.0, 0.0, -0.9], &pieces).unwrap().0;
+        let geo = given(&[0.0, 0.0, -0.9], &pieces, ARC_SLACK).unwrap().0;
         let ends: Vec<Vec<f64>> = geo.iter().map(|g| g.at(g.length())[0].clone()).collect();
         assert!(distance(&ends[1], &[0.1, 0.1, -0.75]) < 1e-9 && distance(&ends[2], &[0.2, 0.0, -0.8]) < 1e-9);
         // Out of the vertical line upwards, into the last line downwards: no corner at either junction.
         assert!(distance(&geo[1].at(0.0)[1], &[0.0, 0.0, 1.0]) < 1e-9 && distance(&geo[2].at(geo[2].length())[1], &[0.0, 0.0, -1.0]) < 1e-9);
         let (axes, cycle) = (axes3(), 1e-3);
-        let points = plan(&axes, &[0.0, 0.0, -0.9], &pieces, cycle, 0.0).unwrap();
+        let points = plan(&axes, &[0.0, 0.0, -0.9], &pieces, cycle, 0.0, ARC_SLACK).unwrap();
         for w in points.windows(4) {
             for (i, axis) in axes.iter().enumerate() {
                 let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
@@ -1135,7 +1137,7 @@ line,0.2,0.0,-0.9").unwrap();
         }
         assert!(distance(&points[points.len() - 1].1, &[0.2, 0.0, -0.9]) < 1e-9);
         // A tolerance changes nothing on three axes: no transition curves there.
-        assert_eq!(deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3).unwrap(), 0.0);
+        assert_eq!(deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3, ARC_SLACK).unwrap(), 0.0);
     }
 
     #[test]
@@ -1150,11 +1152,11 @@ line,0.2,0.0,-0.9").unwrap();
         }
         // An arc whose end is not on the circle through the start, an arc on one axis and a point with the
         // wrong number of positions cannot be laid out.
-        let refused = |start: &[f64], text: &str| plan(&axes()[..start.len()], start, &parse(text).unwrap(), 1e-3, 0.0).unwrap_err().key;
+        let refused = |start: &[f64], text: &str| plan(&axes()[..start.len()], start, &parse(text).unwrap(), 1e-3, 0.0, ARC_SLACK).unwrap_err().key;
         assert_eq!(refused(&[0.5, 0.35], "arc,0.6,0.26,0.5,0.25,cw"), "error-path");
         // A start up to 0.1 mm off the circle (the setpoint of a machine at rest) is run; one a millimetre off
         // is not.
-        let geo = given(&[0.0999876, 0.3500458], &parse("arc,0.3,0.35,0.2,0.35,cw").unwrap()).unwrap().0;
+        let geo = given(&[0.0999876, 0.3500458], &parse("arc,0.3,0.35,0.2,0.35,cw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((geo[0].length() - std::f64::consts::PI * 0.1).abs() < 1e-4, "{} m", geo[0].length());
         assert_eq!(refused(&[0.101, 0.35], "arc,0.3,0.35,0.2,0.35,cw"), "error-path");
         assert_eq!(refused(&[0.5], "arc,0.6,0.25,0.5,0.25,cw"), "error-path");
@@ -1182,18 +1184,18 @@ line,0.2,0.0,-0.9").unwrap();
     fn a_short_arc_is_not_a_full_turn_and_an_arc_off_its_end_is_reported() {
         let (axes, top) = (axes(), vec![0.3, 0.35]);
         let arc = |by: f64, r: f64| Piece::Arc { to: vec![0.3 + r * by.sin(), 0.25 + r * by.cos()], centre: vec![0.3, 0.25], clockwise: true };
-        let lengths = |start: &[f64], pieces: &[Piece]| given(start, pieces).unwrap().0.iter().map(Geo::length).collect::<Vec<f64>>();
+        let lengths = |start: &[f64], pieces: &[Piece]| given(start, pieces, ARC_SLACK).unwrap().0.iter().map(Geo::length).collect::<Vec<f64>>();
         let short = [Piece::Line(top.clone()), arc(8e-4, 0.1), Piece::Line(vec![0.5, 0.35])];
         assert!((lengths(&[0.1, 0.35], &short)[1] - 8e-5).abs() < 1e-12, "{:?}", lengths(&[0.1, 0.35], &short));
-        let lowest = plan(&axes, &[0.1, 0.35], &short, 1e-3, 0.0).unwrap().iter().map(|p| p.1[1]).fold(f64::INFINITY, f64::min);
+        let lowest = plan(&axes, &[0.1, 0.35], &short, 1e-3, 0.0, ARC_SLACK).unwrap().iter().map(|p| p.1[1]).fold(f64::INFINITY, f64::min);
         assert!(lowest > 0.3499, "the path goes down to z = {lowest}");
-        assert_eq!(deviation(&axes, &[0.1, 0.35], &short, 0.0).unwrap(), 0.0);
+        assert_eq!(deviation(&axes, &[0.1, 0.35], &short, 0.0, ARC_SLACK).unwrap(), 0.0);
         assert!((lengths(&[0.1, 0.35], &[Piece::Line(top.clone()), arc(0.0, 0.1)])[1] - std::f64::consts::TAU * 0.1).abs() < 1e-12);
 
         let (pose, rest) = (vec![0.1, 0.35], [0.0999876, 0.3500458]);
         let up = |by: f64| Piece::Arc { to: vec![0.2 - 0.1 * by.cos(), 0.35 + 0.1 * by.sin()], centre: vec![0.2, 0.35], clockwise: true };
         for (start, first) in [(&rest[..], up(1.3e-3)), (&rest[..], up(0.0)), (&pose[..], up(0.0)), (&top[..], arc(5e-4, 0.1)), (&top[..], arc(9.9e-3, 0.1))] {
-            assert_eq!(deviation(&axes, start, &[first.clone()], 0.0).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
+            assert_eq!(deviation(&axes, start, &[first.clone()], 0.0, ARC_SLACK).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
         }
         assert!((lengths(&rest, &[up(0.02)])[0] - 2e-3).abs() < 1e-4);
         for (by, length) in [(1.3e-3, 1.3e-4), (0.0, std::f64::consts::TAU * 0.1)] {
@@ -1205,13 +1207,13 @@ line,0.2,0.0,-0.9").unwrap();
         assert!(sagged.len() == 2 && (sagged[1] - 5e-5).abs() < 1e-12, "{sagged:?}");
 
         let off_by = |by: f64| [Piece::Line(top.clone()), arc(std::f64::consts::FRAC_PI_2, 0.1 + by), Piece::Line(vec![0.4, 0.05])];
-        assert_eq!(deviation(&axes, &[0.1, 0.35], &off_by(-9e-5), 0.0).unwrap_err().key, "error-path");
-        let reported = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 0.0).unwrap();
+        assert_eq!(deviation(&axes, &[0.1, 0.35], &off_by(-9e-5), 0.0, ARC_SLACK).unwrap_err().key, "error-path");
+        let reported = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 0.0, ARC_SLACK).unwrap();
         assert!((reported - 8e-6).abs() < 1e-12, "{reported} m reported");
         let spiral: Vec<Piece> = std::iter::once(Piece::Line(top.clone())).chain((1..=4).map(|k| arc(k as f64 * std::f64::consts::FRAC_PI_2, 0.1 + 9e-6 * k as f64))).collect();
-        let added = deviation(&axes, &[0.1, 0.35], &spiral, 0.0).unwrap();
+        let added = deviation(&axes, &[0.1, 0.35], &spiral, 0.0, ARC_SLACK).unwrap();
         assert!((added - 3.6e-5).abs() < 1e-12, "{added} m reported");
-        let blended = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 1e-4).unwrap();
+        let blended = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 1e-4, ARC_SLACK).unwrap();
         assert!((blended - 1.08e-4).abs() < 1e-6,"{blended} m reported with transition curves");
     }
 
@@ -1228,10 +1230,10 @@ line,0.2,0.0,-0.9").unwrap();
     #[test]
     fn a_spline_passes_through_its_via_points_within_the_axis_limits() {
         let (axes, cycle) = (axes(), 1e-3);
-        let straight = plan(&axes, &[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), cycle, 0.0).unwrap();
+        let straight = plan(&axes, &[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), cycle, 0.0, ARC_SLACK).unwrap();
         // On the line through (0.1, 0.1) and (0.5, 0.4): 3 (x - 0.1) = 4 (z - 0.1).
         assert!(straight.iter().all(|(_, p)| (3.0 * (p[0] - 0.1) - 4.0 * (p[1] - 0.1)).abs() < 1e-12) && distance(&straight[straight.len() - 1].1, &[0.5, 0.4]) < 1e-12);
-        let [Geo::Spline { travelled, .. }] = &given(&[0.1, 0.1], &parse("spline,0.5,0.4").unwrap()).unwrap().0[..] else { panic!("one span") };
+        let [Geo::Spline { travelled, .. }] = &given(&[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), ARC_SLACK).unwrap().0[..] else { panic!("one span") };
         assert!((travelled[SPLINE_PARTS] - 0.5).abs() < 1e-14 && (travelled[16] - 0.125).abs() < 1e-14);
 
         let paths = [
@@ -1242,7 +1244,7 @@ line,0.2,0.0,-0.9").unwrap();
         ];
         for (start, text) in paths {
             let pieces = parse(text).unwrap();
-            let geo = given(&start, &pieces).unwrap().0;
+            let geo = given(&start, &pieces, ARC_SLACK).unwrap().0;
             let via: Vec<&Vec<f64>> = pieces.iter().filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None }).collect();
             let ends: Vec<Vec<f64>> = geo.iter().filter(|g| matches!(g, Geo::Spline { .. })).map(|g| g.at(g.length())[0].clone()).collect();
             assert_eq!(ends.len(), via.len(), "{text}");
@@ -1259,14 +1261,14 @@ line,0.2,0.0,-0.9").unwrap();
             // it gets its transition curve towards the line at its other end (`blend`): no step in position, direction
             // or curvature at any junction, every planned pose within the reported deviation of the path as given, the
             // reported deviation within the tolerance, the axis limits kept, the via points still passed, and faster.
-            let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes)).unwrap();
+            let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes), ARC_SLACK).unwrap();
             assert!(reported <= 1e-4 + 1e-12 && (reported > 0.0) == (eased.len() > geo.len()), "{text}: {reported} m reported, {} pieces from {}", eased.len(), geo.len());
             for pair in eased.windows(2) {
                 let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
                 let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-6, "{text}, eased: steps {steps:?}");
             }
-            let (smooth, given_plan) = (plan(&axes, &start, &pieces, cycle, 1e-4).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0).unwrap());
+            let (smooth, given_plan) = (plan(&axes, &start, &pieces, cycle, 1e-4, ARC_SLACK).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap());
             let peak = peak_rates(&smooth, cycle);
             for (i, axis) in axes.iter().enumerate() {
                 assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, eased, axis {i}: {peak:?}");
@@ -1282,7 +1284,7 @@ line,0.2,0.0,-0.9").unwrap();
             assert!(reported == 0.0 || eased_time < given_time, "{text}: {eased_time} s eased against {given_time} s");
             println!("eased: {eased_time} s against {given_time} s, off by {furthest} m of {reported} m reported");
 
-            let points = plan(&axes, &start, &pieces, cycle, 0.0).unwrap();
+            let points = plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
                 assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
@@ -1298,11 +1300,11 @@ line,0.2,0.0,-0.9").unwrap();
         }
 
         // A via point straight back along the line before it: the curve would have to turn on the spot.
-        assert_eq!(plan(&axes, &[0.1, 0.35], &parse("line,0.5,0.35\nspline,0.3,0.35").unwrap(), cycle, 0.0).unwrap_err().key, "error-path");
+        assert_eq!(plan(&axes, &[0.1, 0.35], &parse("line,0.5,0.35\nspline,0.3,0.35").unwrap(), cycle, 0.0, ARC_SLACK).unwrap_err().key, "error-path");
         // A via point given twice counts once, and a spline of nothing but where the path stands is no piece.
-        let twice = given(&[0.2, 0.1], &parse("spline,0.3,0.2\nspline,0.3,0.2\nspline,0.5,0.25").unwrap()).unwrap().0;
+        let twice = given(&[0.2, 0.1], &parse("spline,0.3,0.2\nspline,0.3,0.2\nspline,0.5,0.25").unwrap(), ARC_SLACK).unwrap().0;
         assert_eq!(twice.len(), 2);
-        assert_eq!(plan(&axes, &[0.2, 0.1], &parse("spline,0.2,0.1").unwrap(), cycle, 0.0).unwrap_err().key, "error-path");
+        assert_eq!(plan(&axes, &[0.2, 0.1], &parse("spline,0.2,0.1").unwrap(), cycle, 0.0, ARC_SLACK).unwrap_err().key, "error-path");
     }
 
     /// Rates of the planned poses by differences over one cycle: the largest speed, acceleration and jerk
@@ -1354,7 +1356,7 @@ line,0.2,0.0,-0.9").unwrap();
     fn a_planned_path_stays_within_the_axis_limits_and_on_its_pieces() {
         let (axes, cycle) = (axes(), 1e-3);
         let pieces = parse("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw\nline,0.6,0.05").unwrap();
-        let points = plan(&axes, &[0.1, 0.35], &pieces, cycle, 0.0).unwrap();
+        let points = plan(&axes, &[0.1, 0.35], &pieces, cycle, 0.0, ARC_SLACK).unwrap();
         let peak = peak_rates(&points, cycle);
         for (i, axis) in axes.iter().enumerate() {
             assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "axis {i}: {peak:?}");
@@ -1402,21 +1404,21 @@ line,0.2,0.0,-0.9").unwrap();
         let pieces = parse("line,0.5,0.35
 arc,0.6,0.25,0.5,0.25,cw
 line,0.6,0.05").unwrap();
-        let given = plan(&axes, &start, &pieces, cycle, 0.0).unwrap();
-        assert_eq!(deviation(&axes, &start, &pieces, 0.0).unwrap(), 0.0);
+        let given = plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap();
+        assert_eq!(deviation(&axes, &start, &pieces, 0.0, ARC_SLACK).unwrap(), 0.0);
         // How far a pose is from the given path: from the first line, the arc or the second line.
         let off = |p: &[f64]| if p[0] <= 0.5 { (p[1] - 0.35).abs() } else if p[1] <= 0.25 { (p[0] - 0.6).abs() } else { (distance(p, &[0.5, 0.25]) - 0.1).abs() };
         let curves = |tolerance: f64| -> Vec<f64> {
-            let geo = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes)).unwrap().0;
+            let geo = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap().0;
             geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect()
         };
         for (tolerance, by_hand, length, speed) in [(1e-4, 1e-4, 0.01549, 0.3957), (1e-3, 0.1067e-3, 0.016, 0.4)] {
-            let reported = deviation(&axes, &start, &pieces, tolerance).unwrap();
+            let reported = deviation(&axes, &start, &pieces, tolerance, ARC_SLACK).unwrap();
             assert!((reported / by_hand - 1.0).abs() < 2e-3 && reported <= tolerance, "{reported} m reported, {by_hand} m by hand");
             let lengths = curves(tolerance);
             assert!(lengths.len() == 2 && lengths.iter().all(|l| (l / length - 1.0).abs() < 5e-3), "{lengths:?} against {length}");
 
-            let points = plan(&axes, &start, &pieces, cycle, tolerance).unwrap();
+            let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
                 assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "axis {i}: {peak:?}");
@@ -1451,7 +1453,7 @@ arc,0.35,0.35,0.35,0.4,cw
 line,0.1,0.35";
         for (text, end) in [(s_curve, [0.7, 0.35]), (same_way, [0.1, 0.35])] {
             let pieces = parse(text).unwrap();
-            let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes)).unwrap();
+            let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
             assert_eq!(geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).count(), 3, "{text}");
             // The tighter arc is the one that moves in by the whole tolerance.
             assert!((reported - tolerance).abs() < 1e-12, "{reported}");
@@ -1460,7 +1462,7 @@ line,0.1,0.35";
                 let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{text}: steps {steps:?}");
             }
-            let (points, given) = (plan(&axes, &start, &pieces, cycle, tolerance).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0).unwrap());
+            let (points, given) = (plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap());
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
                 assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
@@ -1490,7 +1492,7 @@ line,0.1,0.35";
         let end = [p2[0] + 0.02 * (a + b).sin(), p2[1] + 0.02 * (a + b).cos()];
         let arc = |to: [f64; 2], centre: [f64; 2]| Piece::Arc { to: to.to_vec(), centre: centre.to_vec(), clockwise: true };
         let pieces = [Piece::Line(vec![0.2, 0.2]), arc(p1, c1), arc(p2, c2), Piece::Line(end.to_vec())];
-        let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes)).unwrap();
+        let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         let turned: f64 = geo
             .iter()
             .map(|g| match g {
@@ -1502,7 +1504,7 @@ line,0.1,0.35";
         assert!((turned + a + b).abs() < 1e-9, "the planned path turns by {turned} rad, the given one by {}", -a - b);
         // It is blended all the same, with shorter curves, and the tight arc moves in by less than its radius.
         assert!(geo.iter().any(|g| matches!(g, Geo::Clothoid { .. })) && reported > 0.0 && reported < tight, "{reported} m reported");
-        let points = plan(&axes, &start, &pieces, 1e-3, tolerance).unwrap();
+        let points = plan(&axes, &start, &pieces, 1e-3, tolerance, ARC_SLACK).unwrap();
         assert!(distance(&points[points.len() - 1].1, &end) < 1e-9);
         println!("turned {turned} rad, off by {reported} m, {} pieces", geo.len());
     }
@@ -1512,11 +1514,11 @@ line,0.1,0.35";
     #[test]
     fn a_path_onto_the_end_of_a_stroke_stays_within_the_range() {
         let axes = axes();
-        let points = plan(&axes, &[0.278, 0.231], &[Piece::Line(vec![0.525, 0.0])], 1e-3, 0.0).unwrap();
+        let points = plan(&axes, &[0.278, 0.231], &[Piece::Line(vec![0.525, 0.0])], 1e-3, 0.0, ARC_SLACK).unwrap();
         assert!(points.iter().all(|p| p.1[1] >= 0.0), "ends at z = {:e}", points[points.len() - 1].1[1]);
         assert_eq!(points[points.len() - 1].1, [0.525, 0.0]);
         // A path that leaves the range for good is left as it is, for the controller to refuse.
-        let beyond = plan(&axes, &[0.278, 0.231], &[Piece::Line(vec![0.525, -0.001])], 1e-3, 0.0).unwrap();
+        let beyond = plan(&axes, &[0.278, 0.231], &[Piece::Line(vec![0.525, -0.001])], 1e-3, 0.0, ARC_SLACK).unwrap();
         assert!(beyond[beyond.len() - 1].1[1] < -0.000_999);
     }
 
@@ -1525,7 +1527,7 @@ line,0.1,0.35";
     #[test]
     fn a_corner_is_stopped_at() {
         let (axes, cycle) = (axes(), 1e-3);
-        let points = plan(&axes, &[0.1, 0.1], &[Piece::Line(vec![0.5, 0.1]), Piece::Line(vec![0.5, 0.3])], cycle, 0.0).unwrap();
+        let points = plan(&axes, &[0.1, 0.1], &[Piece::Line(vec![0.5, 0.1]), Piece::Line(vec![0.5, 0.3])], cycle, 0.0, ARC_SLACK).unwrap();
         let moves = [crate::profile::Move::new(&[0.1, 0.1], &[0.5, 0.1], &axes), crate::profile::Move::new(&[0.5, 0.1], &[0.5, 0.3], &axes)];
         let duration = points[points.len() - 1].0;
         assert!((duration - moves[0].duration() - moves[1].duration()).abs() <= cycle, "{duration} s");
@@ -1550,7 +1552,7 @@ line,0.1,0.35";
         let off = |p: &[f64]| if p[0] <= 0.5 { (p[1] - 0.35).abs() } else if p[0] <= 0.6 { (distance(p, &[0.5, 0.25]) - 0.1).abs() } else { (p[1] - 0.25).abs() };
         for (text, end) in [("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw", [0.6, 0.25]), ("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw\nline,0.7,0.25", [0.7, 0.25])] {
             let pieces = parse(text).unwrap();
-            let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes)).unwrap();
+            let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
             let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
             assert!(curves.len() == 1 && (curves[0] / 0.01549 - 1.0).abs() < 5e-3, "{text}: curves {curves:?}");
             assert!((reported / tolerance - 1.0).abs() < 2e-3 && reported <= tolerance, "{text}: {reported} m reported");
@@ -1562,7 +1564,7 @@ line,0.1,0.35";
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{text}: steps {steps:?}");
             }
             for tolerance in [0.0, tolerance] {
-                let points = plan(&axes, &start, &pieces, cycle, tolerance).unwrap();
+                let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
                 let peak = peak_rates(&points, cycle);
                 for (i, axis) in axes.iter().enumerate() {
                     assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
@@ -1599,15 +1601,15 @@ line,0.1,0.35";
     fn a_spline_eased_into_a_line_is_entered_at_the_hand_calculated_speed() {
         let (axes, cycle, start) = (axes(), 1e-3, [0.1, 0.2]);
         let pieces = parse("line,0.3,0.2\nspline,0.39,0.23").unwrap();
-        let geo = given(&start, &pieces).unwrap().0;
+        let geo = given(&start, &pieces, ARC_SLACK).unwrap().0;
         let Geo::Spline { c, .. } = &geo[1] else { panic!("a spline span") };
         let [d, d2, _] = poly_rates(c, 0.0);
         assert!((d[0] - 1.0).abs() < 1e-12 && d[1].abs() < 1e-12 && (d2[1] - 10.0).abs() < 1e-9, "{d:?} {d2:?}");
-        let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes)).unwrap();
+        let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes), ARC_SLACK).unwrap();
         let Geo::Spline { h: l, .. } = &eased[1] else { panic!("the eased part") };
         assert!(eased.len() == 3 && (l - 0.024056).abs() < 1e-5 && (reported - 1e-4).abs() < 1e-12, "{l} m eased, {reported} m reported");
         for (tolerance, by_hand) in [(0.0, 0.0707), (1e-4, 0.2189)] {
-            let points = plan(&axes, &start, &pieces, cycle, tolerance).unwrap();
+            let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
                 assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "tolerance {tolerance}, axis {i}: {peak:?}");
@@ -1638,8 +1640,8 @@ line,0.1,0.35";
     /// at most that times the angle it turns. And it turns by as much (a lost or added turn shows here).
     fn assert_blend_keeps_the_path(start: &[f64], pieces: &[Piece], tolerance: f64, what: &str) {
         let axes = axes();
-        let (given, _) = geometry(&axes, start, pieces, 0.0, &axis_speed(&axes)).unwrap();
-        let (planned, reported) = geometry(&axes, start, pieces, tolerance, &axis_speed(&axes)).unwrap();
+        let (given, _) = geometry(&axes, start, pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap();
+        let (planned, reported) = geometry(&axes, start, pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         let ((given_length, given_turn), (planned_length, planned_turn)) = (length_and_turning(&given), length_and_turning(&planned));
         let curves: f64 = planned.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).sum();
         let allowance = curves + reported * given_turn.abs().max(planned_turn.abs()) + 1e-12;
@@ -1660,7 +1662,7 @@ line,0.1,0.35";
         let arc = |to: Vec<f64>| Piece::Arc { to, centre: centre.to_vec(), clockwise: true };
         let pieces = [Piece::Line(vec![0.5, 0.55]), arc(at(a1)), arc(end.clone()), Piece::Line(vec![end[0] + 0.1 * a2.sin(), end[1] - 0.1 * a2.cos()])];
         let axes = axes();
-        let given = length_and_turning(&geometry(&axes, &[0.45, 0.55], &pieces, 0.0, &axis_speed(&axes)).unwrap().0).0;
+        let given = length_and_turning(&geometry(&axes, &[0.45, 0.55], &pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap().0).0;
         assert!((given - (0.05 + 0.05 * (4.0 + std::f64::consts::PI + 0.05) + 0.1)).abs() < 1e-9, "{given} m");
         assert_blend_keeps_the_path(&[0.45, 0.55], &pieces, 1e-4, "two arcs on one circle");
     }

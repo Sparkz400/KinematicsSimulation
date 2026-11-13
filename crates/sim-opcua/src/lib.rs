@@ -30,6 +30,41 @@
 //!
 //! `status.refused` keeps a refusal until a command of the same kind (move, setpoint, cycle start, ...) is
 //! accepted. Accepted commands of another kind, such as a stream of setpoints, do not wipe it.
+//!
+//! Next to these, every axis has PLCopen motion function blocks as handshake variables (see `plcopen` and
+//! docs/plc.md), in the folder `axis.<axis id>`:
+//!
+//! | node                                     | type    | access | meaning                                           |
+//! | ---------------------------------------- | ------- | ------ | ------------------------------------------------- |
+//! | `axis.<id>.Power.Enable`                 | Boolean | write  | MC_Power: true powers the axis                    |
+//! | `axis.<id>.Power.Status`, `.Valid`       | Boolean | read   | drives on; on and without error                   |
+//! | `axis.<id>.Power.Error`, `.ErrorID`      | Boolean, UInt16 | read | the axis error while powered               |
+//! | `axis.<id>.<FB>.Execute`                 | Boolean | write  | rising edge starts FB = Home, MoveAbsolute, MoveRelative, Stop, Reset |
+//! | `axis.<id>.MoveAbsolute.Position`, `.Velocity`, `.Acceleration`, `.Deceleration`, `.Jerk` | Double | write | inputs, taken on the rising edge |
+//! | `axis.<id>.MoveRelative.Distance`, ...   | Double  | write  | as for MoveAbsolute                               |
+//! | `axis.<id>.Stop.Deceleration`            | Double  | write  | braking deceleration of MC_Stop                   |
+//! | `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | read | outputs     |
+//! | `axis.<id>.<FB>.ErrorID`                 | UInt16  | read   | why the block failed, 0 without error             |
+//! | `axis.<id>.State`, `.StateID`            | String, Int32 | read | PLCopen state (Disabled 1, Standstill 2, ErrorStop 3, Stopping 4, Homing 5, DiscreteMotion 6) |
+//! | `axis.<id>.ActualPosition`, `.ActualVelocity` | Double | read | from the simulated axis                      |
+//! | `axis.<id>.IsHomed`, `.Error`, `.ErrorID` | Boolean, Boolean, UInt16 | read | homed; the axis error (ErrorStop) |
+//!
+//! The loop's real-time pacing is measured from the wall-clock times of its ticks, since the start or the last
+//! `command.reset_pacing`:
+//!
+//! | node                         | type    | access | meaning                                                   |
+//! | ---------------------------- | ------- | ------ | --------------------------------------------------------- |
+//! | `status.cycle_s`             | Double  | read   | the loop's nominal cycle                                  |
+//! | `status.cycle_period_s`      | Double  | read   | mean measured time between ticks                          |
+//! | `status.jitter_max_s`        | Double  | read   | largest deviation of a tick period from the cycle         |
+//! | `status.jitter_rms_s`        | Double  | read   | root mean square of that deviation                        |
+//! | `status.overruns`            | UInt64  | read   | ticks that came more than a whole cycle late              |
+//! | `status.cycles`              | UInt64  | read   | ticks measured                                            |
+//! | `status.realtime_factor`     | Double  | read   | simulated time over wall-clock time                       |
+//! | `status.steps`               | UInt64  | read   | simulation steps since the start                          |
+//! | `command.reset_pacing`       | Boolean | write  | true starts the measurement anew                          |
+
+pub mod plcopen;
 
 use opcua::crypto::SecurityPolicy;
 use opcua::server::address_space::{AccessLevel, VariableBuilder};
@@ -39,8 +74,10 @@ use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerHandle};
 use opcua::types::{DataTypeId, DataValue, MessageSecurityMode, NodeId, ObjectId, StatusCode, Variant};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
+use plcopen::{Axis, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 
@@ -64,12 +101,55 @@ enum Input {
     Path(String),
     PathTimeOptimal(bool),
     RunPath,
+    /// A PLCopen input of an axis: `Power.Enable`, `<FB>.Execute`, or a number such as `MoveAbsolute.Position`.
+    AxisFlag(usize, String, bool),
+    AxisNumber(usize, String, f64),
+    ResetPacing,
+}
+
+/// The loop's real-time pacing, measured from the wall-clock times of its ticks since the last reset.
+#[derive(Debug, Clone, Default)]
+pub struct Pacing {
+    /// The nominal cycle.
+    pub cycle_s: f64,
+    pub cycles: u64,
+    pub wall_s: f64,
+    pub sim_s: f64,
+    jitter_square_sum: f64,
+    pub jitter_max_s: f64,
+    /// Ticks that came more than a whole cycle late.
+    pub overruns: u64,
+}
+
+impl Pacing {
+    fn record(&mut self, period: f64, simulated: f64) {
+        let jitter = period - self.cycle_s;
+        self.cycles += 1;
+        self.wall_s += period;
+        self.sim_s += simulated;
+        self.jitter_square_sum += jitter * jitter;
+        self.jitter_max_s = self.jitter_max_s.max(jitter.abs());
+        self.overruns += u64::from(period > 2.0 * self.cycle_s);
+    }
+
+    pub fn period_s(&self) -> f64 {
+        self.wall_s / self.cycles.max(1) as f64
+    }
+
+    pub fn jitter_rms_s(&self) -> f64 {
+        (self.jitter_square_sum / self.cycles.max(1) as f64).sqrt()
+    }
+
+    pub fn realtime_factor(&self) -> f64 {
+        if self.wall_s > 0.0 { self.sim_s / self.wall_s } else { 0.0 }
+    }
 }
 
 pub struct Link {
     pub handle: ServerHandle,
     /// Index of the simulator's namespace on this server.
     pub namespace: u16,
+    pub pacing: Arc<Mutex<Pacing>>,
 }
 
 impl Drop for Link {
@@ -97,10 +177,14 @@ fn flag(value: &DataValue) -> Option<bool> {
     if let Some(Variant::Boolean(on)) = value.value { Some(on) } else { None }
 }
 
-/// Starts the server on `listener` and the simulation behind it, in real time.
+/// Starts the server on `listener` and the simulation behind it, in real time, in ticks of `cycle`.
 /// `labels` names the variables for people browsing the server; `pki_dir` holds the server's keys.
-pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translations, listener: TcpListener, pki_dir: &Path) -> Result<Link, LinkError> {
+pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translations, listener: TcpListener, pki_dir: &Path, cycle: Duration) -> Result<Link, LinkError> {
     let sim = Sim::new(entry, cfg).map_err(|e| LinkError(e.key(), e.detail().into()))?;
+    // The PLCopen axes stream one setpoint per setpoint interval, counted in simulation steps.
+    let interval = cfg.f64("profile.setpoint_interval_s").map_err(|e| LinkError(e.key(), e.detail().into()))?;
+    let stream_steps = ((interval / sim.dt).round() as u64).max(1);
+    let plc: Vec<Axis> = sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(info, home)| Axis::new(info, *home)).collect();
     let address = listener.local_addr().map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
     let (server, handle) = ServerBuilder::new()
         .application_name("sim-opcua")
@@ -130,11 +214,27 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
         let mut space = manager.address_space().write();
         let folder = node("simulator".into());
         space.add_folder(&folder, "simulator", labels.tr(entry.key), &NodeId::from(ObjectId::ObjectsFolder));
-        let mut add = |id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| {
-            let variable = VariableBuilder::new(id, name, label).data_type(kind).value(start).organized_by(&folder);
+        let add_to = |space: &mut opcua::server::address_space::AddressSpace, parent: &NodeId, id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| {
+            let variable = VariableBuilder::new(id, name, label).data_type(kind).value(start).organized_by(parent);
             let access = if writable { AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE } else { AccessLevel::CURRENT_READ };
-            variable.access_level(access).user_access_level(access).insert(&mut *space);
+            variable.access_level(access).user_access_level(access).insert(space);
         };
+        for (i, axis) in plc.iter().enumerate() {
+            let parent = node(format!("axis.{}", axes[i]));
+            space.add_folder(&parent, format!("axis.{}", axes[i]).as_str(), format!("{} · {}", labels.tr(axis_keys[i]), labels.tr("opcua-plcopen-axis")), &folder);
+            for (name, start, writable) in axis.variables(true, (0.0, 0.0)) {
+                let kind = match start {
+                    Variant::Boolean(_) => DataTypeId::Boolean,
+                    Variant::UInt16(_) => DataTypeId::UInt16,
+                    Variant::Int32(_) => DataTypeId::Int32,
+                    Variant::String(_) => DataTypeId::String,
+                    _ => DataTypeId::Double,
+                };
+                let label = format!("{} · {name}", labels.tr(axis_keys[i]));
+                add_to(&mut space, &parent, &node(format!("axis.{}.{name}", axes[i])), &name, label, kind, start, writable);
+            }
+        }
+        let mut add = |id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| add_to(&mut space, &folder, id, name, label, kind, start, writable);
         for signal in &signals {
             let label = format!("{} · {} [{}]", labels.tr(&signal.owner_key), labels.tr(&signal.quantity_key), signal.unit);
             add(&node(format!("signal.{}", signal.id)), &signal.id, label, DataTypeId::Double, 0.0.into(), false);
@@ -156,6 +256,15 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
             ("command.run_path", "opcua-run-path", DataTypeId::Boolean, Variant::from(false), true),
             ("status.busy", "opcua-busy", DataTypeId::Boolean, Variant::from(false), false),
             ("status.refused", "opcua-refused", DataTypeId::String, Variant::from(""), false),
+            ("status.cycle_s", "opcua-cycle-s", DataTypeId::Double, Variant::from(cycle.as_secs_f64()), false),
+            ("status.cycle_period_s", "opcua-cycle-period", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.jitter_max_s", "opcua-jitter-max", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.jitter_rms_s", "opcua-jitter-rms", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.overruns", "opcua-overruns", DataTypeId::UInt64, Variant::from(0u64), false),
+            ("status.cycles", "opcua-cycles", DataTypeId::UInt64, Variant::from(0u64), false),
+            ("status.realtime_factor", "opcua-realtime-factor", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.steps", "opcua-steps", DataTypeId::UInt64, Variant::from(0u64), false),
+            ("command.reset_pacing", "opcua-reset-pacing", DataTypeId::Boolean, Variant::from(false), true),
         ] {
             add(&node(name.into()), name, labels.tr(key).into(), kind, start, writable);
         }
@@ -178,10 +287,28 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
     on_write("command.path".into(), |v, _| Some(Input::Path(text(v)?)), 0, inputs.clone());
     on_write("command.path_time_optimal".into(), |v, _| Some(Input::PathTimeOptimal(flag(v)?)), 0, inputs.clone());
     on_write("command.run_path".into(), |v, _| flag(v)?.then_some(Input::RunPath), 0, inputs.clone());
+    on_write("command.reset_pacing".into(), |v, _| flag(v)?.then_some(Input::ResetPacing), 0, inputs.clone());
+    for (i, axis) in plc.iter().enumerate() {
+        for (name, start, writable) in axis.variables(true, (0.0, 0.0)) {
+            if !writable {
+                continue;
+            }
+            let inputs = inputs.clone();
+            let is_flag = matches!(start, Variant::Boolean(_));
+            manager.inner().add_write_callback(node(format!("axis.{}.{name}", axes[i])), move |value, _| {
+                let input = if is_flag { flag(&value).map(|on| Input::AxisFlag(i, name.clone(), on)) } else { number(&value).map(|v| Input::AxisNumber(i, name.clone(), v)) };
+                match input {
+                    Some(input) => inputs.send(input).map_or(StatusCode::BadShutdown, |_| StatusCode::Good),
+                    None => StatusCode::BadTypeMismatch,
+                }
+            });
+        }
+    }
 
+    let pacing = Arc::new(Mutex::new(Pacing { cycle_s: cycle.as_secs_f64(), ..Default::default() }));
     tokio::spawn(server.run_with(listener));
-    tokio::spawn(simulate(SimLoop { sim, inbox, handle: handle.clone(), namespace, axes }));
-    Ok(Link { handle, namespace })
+    tokio::spawn(simulate(SimLoop { sim, inbox, handle: handle.clone(), namespace, axes, plc, stream_steps, interval, cycle, pacing: pacing.clone() }));
+    Ok(Link { handle, namespace, pacing })
 }
 
 struct SimLoop {
@@ -190,12 +317,39 @@ struct SimLoop {
     handle: ServerHandle,
     namespace: u16,
     axes: Vec<&'static str>,
+    plc: Vec<Axis>,
+    /// Simulation steps per setpoint interval, and the interval in seconds.
+    stream_steps: u64,
+    interval: f64,
+    cycle: Duration,
+    pacing: Arc<Mutex<Pacing>>,
 }
 
-/// Steps the simulation in real time and publishes every signal a hundred times a second.
+impl SimLoop {
+    /// One setpoint interval of the PLCopen axes: each runs its profile, and the positions of those that moved go to
+    /// the controller as one setpoint. A setpoint the controller refuses is an axis error for each of them.
+    fn stream(&mut self) -> Option<&'static str> {
+        let setpoint = self.sim.control.external_setpoint().to_vec();
+        let moving: Vec<bool> = self.plc.iter().map(Axis::moving).collect();
+        for (axis, at) in self.plc.iter_mut().zip(&setpoint) {
+            axis.advance(self.interval, *at);
+        }
+        if !moving.contains(&true) {
+            return None;
+        }
+        let err = self.sim.command(Command::Setpoint(self.plc.iter().map(|a| a.pos).collect())).err()?;
+        for (axis, _) in self.plc.iter_mut().zip(&moving).filter(|(_, m)| **m) {
+            axis.fault(ERR_REFUSED);
+        }
+        Some(err.key)
+    }
+}
+
+/// Steps the simulation in real time and publishes every signal once a cycle (a hundred times a second by default).
 async fn simulate(mut s: SimLoop) {
     let Some(manager) = s.handle.node_managers().get_of_type::<SimpleNodeManager>() else { return };
-    let node = |name: String| NodeId::new(s.namespace, name);
+    let namespace = s.namespace;
+    let node = |name: String| NodeId::new(namespace, name);
     let signal_nodes: Vec<NodeId> = s.sim.signal_infos().iter().map(|i| node(format!("signal.{}", i.id))).collect();
     let (mut target, mut setpoint) = (s.sim.control.set_pos.clone(), s.sim.control.set_pos.clone());
     // Targets the PLC has written for the move to come.
@@ -205,11 +359,26 @@ async fn simulate(mut s: SimLoop) {
     // The path the PLC has written, and whether to plan it as fast as the motors allow.
     let (mut path, mut time_optimal) = (String::new(), false);
     let mut sample = Vec::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(10));
+    let actual: Vec<(Option<usize>, Option<usize>)> =
+        s.axes.iter().map(|id| (s.sim.signal_index(&format!("axis.{id}.position")), s.sim.signal_index(&format!("axis.{id}.velocity")))).collect();
+    let axis_nodes: Vec<Vec<NodeId>> =
+        s.plc.iter().zip(&s.axes).map(|(axis, id)| axis.variables(true, (0.0, 0.0)).into_iter().map(|(name, _, _)| node(format!("axis.{id}.{name}"))).collect()).collect();
+    // Whether a PLCopen axis was powered at the last tick: switched off all together, the drives go off.
+    let mut was_powered = false;
     let mut last = Instant::now();
+    let mut next = last;
     let mut owed = 0.0;
     while !s.handle.token().is_cancelled() {
-        tick.tick().await;
+        // Ticks on a fixed grid of deadlines, so that the mean period is the cycle. A tick more than a cycle late is not
+        // made up for with a burst of ticks: the steps owed are counted from the wall clock anyway. (A dedicated thread
+        // with `std::thread::sleep` was tried: on a loaded Windows host it came late more often than the runtime's timer.)
+        next += s.cycle;
+        let now = Instant::now();
+        if next > now {
+            tokio::time::sleep(next - now).await;
+        } else if now - next > s.cycle {
+            next = now;
+        }
         // In the order they arrived; `None` is a path to run, planned when its turn comes.
         let mut commands = Vec::new();
         let mut new_setpoint = false;
@@ -230,8 +399,28 @@ async fn simulate(mut s: SimLoop) {
                 Input::Path(text) => path = text,
                 Input::PathTimeOptimal(on) => time_optimal = on,
                 Input::RunPath => commands.push(None),
+                Input::AxisFlag(i, name, on) if name == "Power.Enable" => s.plc[i].power(on),
+                Input::AxisFlag(i, name, on) => {
+                    if let Some(k) = FBS.iter().position(|fb| name.strip_suffix(".Execute") == Some(*fb)) {
+                        s.plc[i].execute(k, on, s.sim.control.external_setpoint()[i], s.sim.control.busy());
+                    }
+                }
+                Input::AxisNumber(i, name, v) => _ = s.plc[i].set_param(&name, v),
+                Input::ResetPacing => {
+                    let mut pacing = s.pacing.lock().unwrap();
+                    *pacing = Pacing { cycle_s: pacing.cycle_s, ..Default::default() };
+                }
             }
         }
+        // The controller's drives are on while a PLCopen axis is powered and not in ErrorStop (also after MC_Reset),
+        // and go off when the last axis is switched off. Without PLCopen axes they are left to the commands above.
+        let powered = s.plc.iter().any(|a| a.enable);
+        if s.plc.iter().any(|a| a.enable && a.error_id == 0) && !s.sim.control.enabled() {
+            commands.push(Some(Command::Enable));
+        } else if was_powered && !powered {
+            commands.push(Some(Command::Disable));
+        }
+        was_powered = powered;
         // Axes written together arrive together: one setpoint command per tick.
         if new_setpoint {
             commands.push(Some(Command::Setpoint(setpoint.clone())));
@@ -266,13 +455,27 @@ async fn simulate(mut s: SimLoop) {
             }
         }
         // The wall clock only decides how many steps are due. A slow host falls behind instead of
-        // piling up work.
+        // piling up work; only lag beyond two cycles counts as falling behind, so that long cycles keep real time.
         let now = Instant::now();
-        owed = f64::min(owed + (now - last).as_secs_f64(), 0.1);
+        let period = (now - last).as_secs_f64();
+        owed = f64::min(owed + period, f64::max(0.1, 2.0 * s.cycle.as_secs_f64()));
         last = now;
+        let steps_before = s.sim.step;
         while owed >= s.sim.dt {
+            if s.sim.step.is_multiple_of(s.stream_steps)
+                && let Some(key) = s.stream()
+            {
+                refused = Some((std::mem::discriminant(&Command::Setpoint(Vec::new())), key));
+            }
             s.sim.step();
             owed -= s.sim.dt;
+        }
+        s.pacing.lock().unwrap().record(period, (s.sim.step - steps_before) as f64 * s.sim.dt);
+        // Drives switched off by `command.disable` or a trip: an error for every powered axis.
+        if !s.sim.control.enabled() {
+            for axis in s.plc.iter_mut().filter(|a| a.enable && a.error_id == 0) {
+                axis.fault(ERR_DRIVES_OFF);
+            }
         }
 
         // The mirrors follow the controller where the PLC has not written: after a move the axes stand
@@ -294,6 +497,25 @@ async fn simulate(mut s: SimLoop) {
         values.push((node("command.path_time_optimal".into()), DataValue::new_now(time_optimal)));
         values.push((node("status.busy".into()), DataValue::new_now(s.sim.control.busy())));
         values.push((node("status.refused".into()), DataValue::new_now(refused.map_or("", |(_, key)| key))));
+        let pacing = s.pacing.lock().unwrap().clone();
+        for (name, value) in [
+            ("status.cycle_period_s", Variant::from(pacing.period_s())),
+            ("status.jitter_max_s", pacing.jitter_max_s.into()),
+            ("status.jitter_rms_s", pacing.jitter_rms_s().into()),
+            ("status.overruns", pacing.overruns.into()),
+            ("status.cycles", pacing.cycles.into()),
+            ("status.realtime_factor", pacing.realtime_factor().into()),
+            ("status.steps", s.sim.step.into()),
+        ] {
+            values.push((node(name.into()), DataValue::new_now(value)));
+        }
+        let drives_on = s.sim.control.enabled();
+        for ((axis, nodes), (position, velocity)) in s.plc.iter().zip(&axis_nodes).zip(&actual) {
+            let at = |index: &Option<usize>| index.map_or(f64::NAN, |k| sample[k]);
+            for (id, (_, value, _)) in nodes.iter().zip(axis.variables(drives_on, (at(position), at(velocity)))) {
+                values.push((id.clone(), DataValue::new_now(value)));
+            }
+        }
         let _ = manager.set_values(s.handle.subscriptions(), values.iter().map(|(id, value)| (id, None, value.clone())));
     }
 }

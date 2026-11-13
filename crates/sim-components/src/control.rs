@@ -83,8 +83,8 @@ pub struct Controller {
     /// How far a planned path may leave its lines and arcs for transition curves.
     path_tolerance: f64,
     /// For a path timed as fast as the motors allow: the lowest and highest belt tension it may need
-    /// (`ratings.belt_min_tension_n`, `belt_max_tension_n`; unbounded where the config has none), and the share of the
-    /// room to them it may use (`profile.tension_reserve`).
+    /// (`ratings.belt_min_tension_n`, `belt_max_tension_n` less `profile.tension_margin_n` on both; unbounded where the
+    /// config has none), and the share of the room to them it may use (`profile.tension_reserve`).
     belt_tension: [f64; 3],
     segments: Vec<Segment>,
     motion: Motion,
@@ -287,6 +287,7 @@ impl Controller {
         if tension_reserve > 1.0 {
             return Err(ConfigError::Invalid("profile.tension_reserve".into()));
         }
+        let tension_margin = cfg.non_negative("profile.tension_margin_n")?;
         let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
@@ -317,7 +318,7 @@ impl Controller {
         for (i, segment) in segments.iter().enumerate() {
             let from = &segments[(i + segments.len() - 1) % segments.len()].target;
             if let Some(pieces) = &segment.path
-                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance).map_or(true, |points| !points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)))
+                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK).map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose)))
             {
                 return Err(ConfigError::Invalid(format!("cycle.segment[{i}].via")));
             }
@@ -332,7 +333,9 @@ impl Controller {
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
         self.blend_time = blend_time;
         (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
-        self.belt_tension = [cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY), cfg.f64("ratings.belt_max_tension_n").unwrap_or(f64::INFINITY), tension_reserve];
+        // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
+        // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
+        self.belt_tension = [cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin), cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin), tension_reserve];
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) = (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
         Ok(())
     }
@@ -431,12 +434,12 @@ impl Controller {
                 let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
                 // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
                 // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
-                // path from there starts that far outside the range.
-                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_range(machine, pose, SETPOINT_SLACK)) {
+                // path from there starts that far outside the range (`near_start`).
+                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &self.raw_pos, pose)) {
                     return Err(CommandError { key: "error-trajectory" });
                 }
                 // A path that starts elsewhere would make the setpoint jump.
-                if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > SETPOINT_SLACK) {
+                if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
                     return Err(CommandError { key: "error-trajectory-start" });
                 }
                 self.motion = trajectory(points);
@@ -454,13 +457,13 @@ impl Controller {
     /// `Command::Trajectory` runs: within the axis limits, or as fast as the motors allow (see `path`).
     pub fn plan_path(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = if time_optimal {
-            path::plan_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance)
+            path::plan_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack())
         } else {
-            path::plan(machine.axes(), &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance)
+            path::plan(machine.axes(), &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack())
         }?;
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
-        if !points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)) {
+        if !points.iter().all(|(_, pose)| near_start(machine, &self.raw_pos, pose)) {
             return Err(CommandError { key: "error-path-range" });
         }
         Ok(points)
@@ -473,9 +476,9 @@ impl Controller {
     pub fn path_deviation(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<f64, CommandError> {
         self.plan_path(machine, pieces, time_optimal)?;
         if time_optimal {
-            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.path_tolerance)
+            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.path_tolerance, machine.setpoint_slack())
         } else {
-            path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance)
+            path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance, machine.setpoint_slack())
         }
     }
 
@@ -754,7 +757,7 @@ impl Controller {
         let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_vel).map(|(p, v)| p + sign * h * v).collect() };
         machine.inverse(&shifted(1.0), &mut ahead);
         machine.inverse(&shifted(-1.0), &mut behind);
-        machine.feedforward_torque(&self.set_pos, &self.set_acc, &mut ff);
+        machine.feedforward_torque_moving(&self.set_pos, &self.set_vel, &self.set_acc, &mut ff);
         // Motor acceleration setpoints the same way, for the drives' fine interpolation.
         let (mut acc_ahead, mut acc_behind) = (vec![0.0; motors], vec![0.0; motors]);
         let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_acc).map(|(p, a)| p + sign * h * a).collect() };
@@ -873,9 +876,9 @@ impl Controller {
         self.passes += (next == 0) as u64;
         // A path through via points, planned from where the plan stands; were it refused from there (the first segment,
         // from the start pose), the straight move.
-        let planned = self.segments[next].path.as_ref().and_then(|pieces| path::plan(machine.axes(), &self.set_pos, pieces, self.profile_cycle, self.path_tolerance).ok());
+        let planned = self.segments[next].path.as_ref().and_then(|pieces| path::plan(machine.axes(), &self.set_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack()).ok());
         self.motion = match planned {
-            Some(points) if points.iter().all(|(_, pose)| near_range(machine, pose, SETPOINT_SLACK)) => trajectory(points),
+            Some(points) if points.iter().all(|(_, pose)| near_start(machine, &self.set_pos, pose)) => trajectory(points),
             _ => Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX, tail: None },
         };
     }
@@ -898,8 +901,24 @@ pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
     near_range(machine, target, 0.0)
 }
 
-/// How far the setpoint of a machine at rest may be from the pose of its tool (see `Controller::hold_here`).
-const SETPOINT_SLACK: f64 = 1e-4;
+/// A pose a path from `start` may go to. The setpoint at rest is where the motors stand, up to
+/// `Machine::setpoint_slack` from the tool (at an end of a stroke, beyond it), so a path may start that far outside
+/// the range or the envelope, and no further: a pose within the slack of the start is judged with the slack; any other
+/// within the range, except that on an axis whose start lies beyond an end it may stay as far beyond as the start is
+/// (a path along that end), and within the envelope, with the slack only if the start is outside it. Until 13 November 2026 every pose had the slack,
+/// which let a delta's path run 1.4 mm beyond its 0.6 m range where a move there was refused.
+fn near_start(machine: &dyn Machine, start: &[f64], pose: &[f64]) -> bool {
+    let slack = machine.setpoint_slack();
+    if pose.len() == start.len() && pose.iter().zip(start).map(|(p, s)| (p - s) * (p - s)).sum::<f64>().sqrt() <= slack {
+        return near_range(machine, pose, slack);
+    }
+    let axes = machine.axes();
+    let beyond = |s: f64, a: &sim_core::AxisInfo| ((a.min - s).clamp(0.0, slack), (s - a.max).clamp(0.0, slack));
+    pose.len() == axes.len()
+        && start.len() == axes.len()
+        && pose.iter().zip(start).zip(axes).all(|((t, s), a)| t.is_finite() && *t >= a.min - beyond(*s, a).0 && *t <= a.max + beyond(*s, a).1)
+        && machine.unreachable(pose, if machine.unreachable(start, 0.0).is_some() { slack } else { 0.0 }).is_none()
+}
 
 /// `in_range`, with every axis range wider by `slack` at both ends, and the machine's own envelope too
 /// (`Machine::unreachable`).

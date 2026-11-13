@@ -14,3 +14,6 @@ fmi-error-step = The communication step is not a whole multiple of the simulator
 fmi-error-experiment = Start time, stop time and tolerance must be finite numbers: { $arg }
 fmi-error-time = The communication point is not where the simulation stands: { $arg }
 fmi-refused = Command refused: { $arg }
+fmi-error-fmu-state = This FMU state does not belong to this FMU, or it is damaged: { $arg }
+fmi-error-count = The number of values is not the number of value references: { $arg }
+fmi-error-null = A pointer to values is null, for this number of values: { $arg }

@@ -172,7 +172,7 @@ gearbox-continuous,a,0.3766,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
 gearbox-peak,a,1.326,64.00,ok
 pulley-bearing-life,a,213589,20000,ok
-gearbox-life,a,74414613459,20000,ok
+gearbox-life,a,74415368568,20000,ok
 belt-tooth-load,a,0.1164,1.000,ok
 dc-link-energy,a,1.106,6.205,ok
 dc-link-overvoltage,a,169.6,257.6,ok
@@ -184,7 +184,7 @@ gearbox-continuous,b,0.3850,40.00,ok
 gearbox-input-speed,b,1914,13000,ok
 gearbox-peak,b,1.182,64.00,ok
 pulley-bearing-life,b,213351,20000,ok
-gearbox-life,b,70669834052,20000,ok
+gearbox-life,b,70668656880,20000,ok
 belt-tooth-load,b,0.1038,1.000,ok
 dc-link-energy,b,1.128,6.205,ok
 dc-link-overvoltage,b,169.9,257.6,ok

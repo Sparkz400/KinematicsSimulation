@@ -140,10 +140,12 @@ fn what_the_standard_forbids_is_refused() {
         let mut integer = 0;
         assert_eq!(fmi2GetInteger(c, &0, 1, &mut integer), fmi2Error);
         assert_eq!(fmi2GetInteger(c, null(), 0, &mut integer), fmi2OK);
-        // What this FMU does not support.
-        let mut state = std::ptr::null_mut();
-        assert_eq!(fmi2GetFMUstate(c, &mut state), fmi2Error);
+        // What this FMU does not support; a state that is not one.
         assert_eq!(fmi2CancelStep(c), fmi2Error);
+        assert_eq!(fmi2SetFMUstate(c, std::ptr::null_mut()), fmi2Error);
+        let mut state = std::ptr::null_mut();
+        assert_eq!(fmi2DeSerializeFMUstate(c, c"sim-fmi state 1".as_ptr(), 16, &mut state), fmi2Error);
+        assert!(state.is_null());
         // The parameters read back; the machine is the one of the FMU.
         let machine = vr(&model, &Kind::Machine);
         let mut text: *const c_char = null();
@@ -269,6 +271,103 @@ fn effect_switches_and_the_drive_enable_act_on_the_simulation() {
         assert_eq!(read != 0, !on);
         fmi2FreeInstance(c);
     }
+}
+
+/// Saved after a few steps, the state brings the simulation back bit for bit: set on the same instance after it ran
+/// on, and serialized and set on a second instance, the steps after it give the same signals as the first time.
+#[test]
+fn a_saved_fmu_state_restores_the_simulation_bit_for_bit() {
+    let entry = MACHINES[0];
+    let (model, resources) = unpack(entry, "state");
+    let signals: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect();
+    let (setpoint, enable) = (vr(&model, &Kind::Setpoint(0)), vr(&model, &Kind::Enable));
+    let interval: f64 = model.config_text.lines().find_map(|l| l.trim().strip_prefix("setpoint_interval_s = ")).unwrap().parse().unwrap();
+    let first: f64 = model.variables[setpoint as usize].start.as_ref().unwrap().parse().unwrap();
+    // One communication step: a setpoint 1 mm on, the drives off at step 6.
+    let step = |c: fmi2Component, k: usize| {
+        let target = first + 0.001 * k.min(8) as f64;
+        unsafe {
+            assert_eq!(fmi2SetReal(c, &setpoint, 1, &target), fmi2OK);
+            assert_eq!(fmi2SetBoolean(c, &enable, 1, &((k != 6) as i32)), fmi2OK);
+            assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "step {k}");
+        }
+        get_reals(c, &signals)
+    };
+    let c = instantiate_started(&model, &resources);
+    for k in 0..4 {
+        step(c, k);
+    }
+    let mut state = std::ptr::null_mut();
+    unsafe { assert_eq!(fmi2GetFMUstate(c, &mut state), fmi2OK) };
+    let after: Vec<Vec<f64>> = (4..10).map(|k| step(c, k)).collect();
+    // Back on the same instance; the state may be taken again into the same handle.
+    unsafe {
+        assert_eq!(fmi2SetFMUstate(c, state), fmi2OK);
+        assert_eq!(fmi2GetFMUstate(c, &mut state), fmi2OK);
+    }
+    let again: Vec<Vec<f64>> = (4..10).map(|k| step(c, k)).collect();
+    assert_eq!(again, after);
+    // Serialized, and set on another instance of the FMU.
+    let mut size = 0;
+    let mut bytes = Vec::new();
+    unsafe {
+        assert_eq!(fmi2SerializedFMUstateSize(c, state, &mut size), fmi2OK);
+        bytes.resize(size, 0);
+        assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size), fmi2OK);
+        assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size - 1), fmi2Error);
+        assert!(bytes.starts_with(b"sim-fmi state 1\0"));
+        assert_eq!(fmi2FreeFMUstate(c, &mut state), fmi2OK);
+        assert!(state.is_null());
+        fmi2FreeInstance(c);
+    }
+    let other = instantiate(&model.guid, &resources, fmi2CoSimulation);
+    let mut restored = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(fmi2DeSerializeFMUstate(other, bytes.as_ptr() as *const c_char, size, &mut restored), fmi2OK);
+        assert_eq!(fmi2SetFMUstate(other, restored), fmi2OK);
+        assert_eq!(fmi2FreeFMUstate(other, &mut restored), fmi2OK);
+    }
+    let elsewhere: Vec<Vec<f64>> = (4..10).map(|k| step(other, k)).collect();
+    assert_eq!(elsewhere, after);
+    // A cut-off state is refused.
+    unsafe {
+        assert_eq!(fmi2DeSerializeFMUstate(other, bytes.as_ptr() as *const c_char, size - 1, &mut restored), fmi2Error);
+        fmi2FreeInstance(other);
+    }
+}
+
+/// The outputs depend on no input directly: a setpoint changed at a communication point changes no output there (the
+/// finite difference by hand is zero), and the directional derivative is zero. Only outputs by inputs are accepted.
+#[test]
+fn the_directional_derivative_is_the_finite_difference_zero() {
+    let entry = MACHINES[0];
+    let (model, resources) = unpack(entry, "derivative");
+    let c = instantiate_started(&model, &resources);
+    let outputs: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i as u32).collect();
+    let setpoint = vr(&model, &Kind::Setpoint(0));
+    let interval: f64 = model.config_text.lines().find_map(|l| l.trim().strip_prefix("setpoint_interval_s = ")).unwrap().parse().unwrap();
+    unsafe { assert_eq!(fmi2DoStep(c, 0.0, interval, 1), fmi2OK) };
+    let base = get_reals(c, &outputs);
+    let u = get_reals(c, &[setpoint])[0];
+    let h = 1e-4;
+    unsafe { assert_eq!(fmi2SetReal(c, &setpoint, 1, &(u + h)), fmi2OK) };
+    let by_hand: Vec<f64> = get_reals(c, &outputs).iter().zip(&base).map(|(a, b)| (a - b) / h).collect();
+    let mut derivative = vec![f64::NAN; outputs.len()];
+    unsafe {
+        assert_eq!(fmi2GetDirectionalDerivative(c, outputs.as_ptr(), outputs.len(), &setpoint, 1, &1.0, derivative.as_mut_ptr()), fmi2OK);
+        assert_eq!(derivative, by_hand);
+        assert!(derivative.iter().all(|d| *d == 0.0));
+        // An input as unknown, an output as known.
+        assert_eq!(fmi2GetDirectionalDerivative(c, &setpoint, 1, &setpoint, 1, &1.0, derivative.as_mut_ptr()), fmi2Error);
+        assert_eq!(fmi2GetDirectionalDerivative(c, &outputs[0], 1, &outputs[1], 1, &1.0, derivative.as_mut_ptr()), fmi2Error);
+        fmi2FreeInstance(c);
+    }
+}
+
+fn instantiate_started(model: &Model, resources: &CString) -> fmi2Component {
+    let c = instantiate(&model.guid, resources, fmi2CoSimulation);
+    start(c);
+    c
 }
 
 #[test]

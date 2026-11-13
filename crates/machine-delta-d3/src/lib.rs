@@ -32,7 +32,7 @@
 
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
-use sim_core::{AxisInfo, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_core::{AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d3",
@@ -53,6 +53,22 @@ fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta::new(cfg)?))
 }
 
+/// The start pose and the cycle's targets moved by `dz` in z, with the working range (see `suite_configs`).
+fn lowered(cfg: &mut Config, dz: f64) {
+    let start = cfg.f64s("start.pose").unwrap();
+    cfg.set_text(&format!("start.pose = [{:?}, {:?}, {:?}]", start[0], start[1], start[2] + dz)).unwrap();
+    let segments: Vec<String> = cfg
+        .array("cycle.segment")
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let t: Vec<f64> = s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect();
+            format!("{{ target = [{:?}, {:?}, {:?}], dwell_s = {:?}, payload = {} }}", t[0], t[1], t[2] + dz, s["dwell_s"].as_float().unwrap(), s["payload"].as_bool().unwrap())
+        })
+        .collect();
+    cfg.set_text(&format!("cycle.segment = [{}]", segments.join(", "))).unwrap();
+}
+
 /// The default config with every loss switched off.
 pub fn lossless_config() -> Config {
     let mut cfg = ENTRY.config();
@@ -67,8 +83,8 @@ pub fn lossless_config() -> Config {
 /// Loss-free rigid and elastic models, with and without the payload, and the elastic one with part heating and the
 /// temperature feedback (no loss, so the gearboxes stay at ambient).
 ///
-/// Their working range lies 175 mm lower than the default's (top 850 mm below the shoulders), so that the suite's
-/// middle pose is 1043 mm down: held by constant motor torques, as the suite holds it for 10 s after a pulse, the delta
+/// Their working range, start pose and cycle lie 175 mm lower than the default's (top 850 mm below the shoulders), so
+/// that the suite's middle pose is 1043 mm down: held by constant motor torques, as the suite holds it for 10 s after a pulse, the delta
 /// is unstable in its vertical mode in the upper part of its range, where the platform's weight pulls harder through
 /// the Jacobian the further it sinks (negative stiffness; `the_vertical_mode_under_constant_torques_is_unstable_high_up`),
 /// and stable below about 950 mm. A real property, not a numerical one: the drives' position loops hold it.
@@ -77,6 +93,7 @@ fn suite_configs() -> Vec<Config> {
     for (elastic, payload) in [(false, true), (false, false), (true, true), (true, false)] {
         let mut cfg = lossless_config();
         cfg.set_text("workspace.top_z_m = -0.85").unwrap();
+        lowered(&mut cfg, -0.175);
         cfg.set_text(&format!("effects.joint_elasticity = {elastic}")).unwrap();
         cfg.set_text(&format!("effects.payload = {payload}")).unwrap();
         cfg.set_text(&format!("effects.part_heating = {}", elastic && payload)).unwrap();
@@ -271,6 +288,8 @@ pub struct Delta {
     max_condition: f64,
     axes: [AxisInfo; 3],
     motors: [MotorInfo; 3],
+    /// `Machine::setpoint_slack`, worked out once (`rest_sag`).
+    rest_slack: f64,
 }
 
 // Elastic state: [theta 1..3, omega 1..3, rotor angle 1..3, rotor speed 1..3, brake 1..3].
@@ -326,7 +345,7 @@ impl Delta {
                 max_jerk: cfg.positive(&format!("axis.{id}.max_jerk_m_s3"))?,
             })
         };
-        Ok(Self {
+        let mut delta = Self {
             legs: Legs::new(base_radius - platform_radius, la, lb),
             base_radius,
             platform_radius,
@@ -347,7 +366,51 @@ impl Delta {
             max_condition: cfg.positive("workspace.max_condition_number")?,
             axes: [axis("x", "axis-x", -radius, radius)?, axis("y", "axis-y", -radius, radius)?, axis("z", "axis-z", top - centre, top)?],
             motors: [MotorInfo { id: "1", key: "motor-arm-1" }, MotorInfo { id: "2", key: "motor-arm-2" }, MotorInfo { id: "3", key: "motor-arm-3" }],
-        })
+            rest_slack: 0.0,
+        };
+        delta.rest_slack = delta.rest_sag();
+        Ok(delta)
+    }
+
+    /// How far the motors' pose can be from the tool's at rest anywhere in the working range, payload on or off: each
+    /// gearbox twisted by the torque it holds against gravity over its stiffness, plus half its backlash either way (an
+    /// arm that holds little can rest anywhere in it, so all eight combinations are tried), through the forward
+    /// kinematics. Over a grid of the range: 5 radii, 24 directions, 9 heights and the bottom; plus a tenth for what the
+    /// grid steps over and the joints' friction. At least the default 0.1 mm; that alone in the rigid model, whose
+    /// gearboxes do not twist.
+    fn rest_sag(&self) -> f64 {
+        let mut most = 0f64;
+        if !self.elastic {
+            return 1e-4;
+        }
+        let (bottom, top) = (self.axes[2].min, self.top);
+        for ring in 0..=4 {
+            let rho = self.radius * ring as f64 / 4.0;
+            for turn in 0..24 {
+                let (sin, cos) = (turn as f64 * std::f64::consts::TAU / 24.0).sin_cos();
+                let (x, y) = (rho * cos, rho * sin);
+                let (centre, r) = self.sphere;
+                let lowest = if centre.is_finite() { centre - (r * r - rho * rho).max(0.0).sqrt() } else { bottom };
+                let heights = (0..=8).map(|k| lowest + (top - lowest) * k as f64 / 8.0);
+                for p in heights.map(|z| [x, y, z]).filter(|p| self.in_envelope(p, 1e-9)) {
+                    let Some(t) = self.legs.inverse(p) else { continue };
+                    let Some(j) = self.legs.jacobian(t, p) else { continue };
+                    for m in [self.m_platform, self.m_platform + self.m_payload] {
+                        let twist: V3 = std::array::from_fn(|k| {
+                            let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[2][k]) - self.joints[k].output_torque(t[k], 0.0);
+                            held / self.joints[k].gearbox.stiffness
+                        });
+                        for signs in 0..8 {
+                            let half = |k: usize| if signs >> k & 1 == 1 { 1.0 } else { -1.0 } * self.joints[k].gearbox.half_backlash;
+                            if let Some(q) = self.legs.forward(std::array::from_fn(|k| t[k] + twist[k] + half(k))) {
+                                most = most.max(norm(sub(q, p)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (1.1 * most).max(1e-4)
     }
 
     pub fn legs(&self) -> &Legs {
@@ -535,10 +598,6 @@ impl Delta {
         }
         out.extend(losses.powers);
         out.extend(self.energy_parts(s));
-        for k in 0..3 {
-            let f = &self.joints[k].friction;
-            out.extend([w[k], f.coulomb * (w[k] / f.smoothing).tanh(), f.viscous * w[k], 0.0, 1.0]);
-        }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
@@ -555,16 +614,6 @@ impl Delta {
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
         out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
-        for contact in self.friction_contacts() {
-            for part in FRICTION_SIGNALS {
-                let unit = match part {
-                    "speed" => "rad/s",
-                    "load_scale" => "",
-                    _ => "N m",
-                };
-                out.push(SignalInfo::new(format!("{}.friction_{part}", contact.id), contact.owner_key, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
-            }
-        }
     }
 }
 
@@ -677,6 +726,25 @@ impl Machine for Delta {
         }
     }
 
+    /// With the speed: θ̇ = J⁻¹ ṗ, θ̈ = J⁻¹ (p̈ − J_x⁻¹ w), and at the arm I_b θ̈ + m_nt Jᵀ p̈ − Q_g (which is
+    /// M θ̈ + m_nt Jᵀ J_x⁻¹ w − Q_g), over the ratio, plus the rotor's own J_rotor i θ̈.
+    fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
+        let p = [pos[0], pos[1], pos[2]];
+        let t = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
+        let (_, _, gravity) = self.load(t, [0.0; 3]);
+        let (_, j) = self.pose(t);
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 3]; 3]);
+        let (pv, pa) = ([vel[0], vel[1], vel[2]], [acc[0], acc[1], acc[2]]);
+        let w = mul(&inv, pv);
+        let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 3]);
+        let arm_acc = mul(&inv, std::array::from_fn(|i| pa[i] - bend[i]));
+        let force = transpose(&j).map(|column| self.m_nt() * dot(column, pa));
+        for k in 0..3 {
+            let joint = &self.joints[k];
+            out[k] = (self.arm_inertia * arm_acc[k] + force[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
@@ -697,6 +765,14 @@ impl Machine for Delta {
         for (joint, rise) in self.joints.iter_mut().zip(rises) {
             joint.gearbox.efficiency = law.gearbox_efficiency(*rise);
         }
+    }
+
+    /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`): 2.30 mm with the catalogue's 9
+    /// arcmin backlash (the simulation at rest puts the motors' pose up to 2.09 mm off the tool's at the rim's lower edge,
+    /// between two arms, 0.75 mm at the centre, 0.64 mm at pick and place; its arms rest at one side of their backlash,
+    /// the bound takes either). Until 13 November 2026 a fixed 1.5 mm, which 9 arcmin outgrew.
+    fn setpoint_slack(&self) -> f64 {
+        self.rest_slack
     }
 
     fn unreachable(&self, tool: &[f64], slack: f64) -> Option<&'static str> {
@@ -746,15 +822,9 @@ impl Machine for Delta {
         out.extend(self.losses(s, torque).powers);
     }
 
-    /// The arms' joint friction, as friction contacts of the friction view (Coulomb and viscous, no stiction).
-    fn friction_contacts(&self) -> Vec<FrictionContact> {
-        vec![FrictionContact { id: "joint.1", owner_key: "arm-1" }, FrictionContact { id: "joint.2", owner_key: "arm-2" }, FrictionContact { id: "joint.3", owner_key: "arm-3" }]
-    }
-    fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
-        let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
-        let f = &joint.friction;
-        [f.coulomb * (speed / f.smoothing).tanh(), f.viscous * speed, 0.0]
-    }
+    // shortcut: the joints' friction is not offered to the friction view, which draws a guide's force over its speed
+    // along an axis (N over m/s); the joints' losses are in the energy budget and the torque breakdown. Offer them as
+    // contacts once the view can draw a torque over an angular speed.
 
     /// The three gearboxes, where there are gearboxes (not on a direct drive).
     fn thermal_parts(&self) -> Vec<ThermalPart> {

@@ -377,8 +377,8 @@ Belt-driven machines reuse the existing components. Machines with arms need one 
 - [ ] Line gantry: X and Z with one motor per axis
 - [ ] Area gantry: X, Y and Z
 - [ ] CoreXY
-- [ ] Rotary link and joint component
-- [ ] Delta robot
+- [x] Rotary link and joint component (`sim-components/src/joint.rs`, 13 November 2026: gearbox with stiffness, backlash and efficiency, motor friction, ripple, brake, joint friction, angle stops)
+- [x] Delta robot, D3 (three rotary arms, Clavel): `machine-delta-d3`, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF, 13 November 2026. Still to come: D2 (planar, two arms), D4 (D3 with a fourth axis through a telescopic shaft), the linear delta (three belt axes, Festo EXPT type); see the research note's parameter sets
 - [ ] SCARA
 
 **To do: a separate view per effect**

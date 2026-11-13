@@ -673,6 +673,7 @@ impl Model {
 
     /// Opens a config file for the machine shown: it replaces the running config, as switching machine does.
     /// A file that cannot be read, or that the machine refuses, is reported and the running config stays.
+    /// A config of another machine (one this machine refuses and that one reads) switches to that machine.
     /// A machine file (one with a `[machine]` table, or any `.json`; see docs/machine-files.md) brings its own
     /// machine and replaces the machine shown too.
     pub fn open_config(&mut self, path: &str) {
@@ -693,8 +694,12 @@ impl Model {
             };
         }
         let opened = std::fs::read_to_string(path).map_err(|e| ("ui-file-unreadable", format!("{path}: {e}"))).and_then(|text| {
-            let config = sim_components::load_config(self.entry, &text).map_err(|e| (e.key(), e.detail().to_string()))?;
-            Self::with_config(self.entry, self.lang, config, text).map_err(|e| (e.key(), e.detail().to_string()))
+            let entry = match sim_components::load_config(self.entry, &text) {
+                Ok(_) => self.entry,
+                Err(e) => *MACHINES.iter().find(|m| sim_components::load_config(m, &text).is_ok()).ok_or_else(|| (e.key(), e.detail().to_string()))?,
+            };
+            let config = sim_components::load_config(entry, &text).map_err(|e| (e.key(), e.detail().to_string()))?;
+            Self::with_config(entry, self.lang, config, text).map_err(|e| (e.key(), e.detail().to_string()))
         });
         match opened {
             Ok(fresh) => {

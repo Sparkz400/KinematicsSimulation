@@ -104,8 +104,9 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let cfg = entry.config();
         for (row, m) in rows.iter().zip(&load.motors) {
             let lives = [sim_components::analysis::guide_life_h(&cfg, &load), sim_components::analysis::pulley_bearing_life_h(&cfg, m), sim_components::analysis::gearbox_life_h(&cfg, m), sim_components::analysis::belt_tooth_utilisation(&cfg, m).unwrap()];
+            // Empty where the machine has no such part (the delta: no guide, pulley or belt).
             for (cell, life) in row[28..].iter().zip(lives) {
-                assert_eq!(*cell, format!("{:.4e}", life.unwrap()), "{}: {row:?}", entry.id);
+                assert_eq!(*cell, life.map_or(String::new(), |l| format!("{l:.4e}")), "{}: {row:?}", entry.id);
             }
         }
 
@@ -136,6 +137,13 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
         let bode = table(&["bode", entry.id, "--from", "2", "--to", "50", "--count", "4"]);
         assert_eq!(bode.lines().next().unwrap(), "frequency_hz,gain,gain_db,phase_deg");
         assert_eq!(bode.lines().count(), 5);
+        // The last axis by `--axis-index`; `--axis` names a catalogue axis on every command (it was taken for both,
+        // so `step --axis 1` was refused as "The catalogue has no such part: axis 1").
+        let last = (axes - 1).to_string();
+        let other = table(&["step", entry.id, "--axis-index", &last, "--time", "0.2"]);
+        assert_eq!(other.lines().count(), 2 + 800);
+        assert!(axes == 1 || other != step, "{}: the last axis steps as the first", entry.id);
+        assert_eq!(table(&["bode", entry.id, "--axis-index", &last, "--from", "2", "--to", "50", "--count", "4"]).lines().count(), 5);
         let tuning = table(&["tuning", entry.id]);
         assert_eq!(tuning.lines().count(), 1 + axes);
         for row in tuning.lines().skip(1) {
@@ -248,11 +256,17 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         for check in ["motor-peak", "motor-thermal", "gearbox-peak", "dc-link-energy", "belt-tension"].into_iter().filter(|c| belted || *c != "belt-tension") {
             assert!(rows.iter().any(|r| r[0] == check), "{}: no {check} in {out}", entry.id);
         }
-        assert!(rows.iter().all(|r| r.len() == 5 && r[4] == "ok"), "{}: {out}", entry.id);
+        // As the library judges the cycle: the belt machines pass every check, the delta's catalogue gearboxes fail
+        // `settling` (a sizing finding).
+        let cfg = entry.config();
+        let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
+        let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
+        assert_eq!(rows.len(), judged.len(), "{}: {out}", entry.id);
+        assert!(rows.iter().zip(&judged).all(|(r, v)| r.len() == 5 && r[0] == v.check && r[4] == if v.ok { "ok" } else { "FAIL" }), "{}: {out}", entry.id);
         // Four significant digits for every value: some tens of micrometres off the target do not print as 0.0000.
         let settling = rows.iter().find(|r| r[0] == "settling").unwrap();
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
-        assert!(value > 1e-6 && value < limit && limit == entry.config().f64("ratings.settling_tolerance_m").unwrap() && settling[2].trim_start_matches("0.0").len() >= 4, "{}: {settling:?}", entry.id);
+        assert!(value > 1e-6 && (value < limit) == (settling[4] == "ok") && limit == entry.config().f64("ratings.settling_tolerance_m").unwrap() && settling[2].trim_start_matches("0.0").len() >= 4, "{}: {settling:?}", entry.id);
 
         // With bands: the same checks and values, each with the lowest and highest value over the config's
         // bounds around it. More friction needs more torque, so the bands have a width.
@@ -331,17 +345,14 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
     for entry in MACHINES {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         // Replay and fit take a motor angle per axis travel that is the same everywhere (`identify`): a machine whose
-        // transformation is not linear (the delta) is not what they are for.
-        let (axes, motors) = (sim.machine.axes(), sim.machine.motors().len());
-        let turned = |pose: Vec<f64>| {
-            let (mut a, mut b) = (vec![0.0; motors], vec![0.0; motors]);
-            let ahead: Vec<f64> = pose.iter().enumerate().map(|(i, p)| if i == 0 { p + 1e-3 } else { *p }).collect();
-            sim.machine.inverse(&pose, &mut a);
-            sim.machine.inverse(&ahead, &mut b);
-            b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
-        };
-        let (low, high) = (axes.iter().map(|a| a.min + 0.4 * (a.max - a.min)).collect(), axes.iter().map(|a| a.min + 0.6 * (a.max - a.min)).collect());
-        if turned(low).iter().zip(turned(high)).any(|(a, b)| (a - b).abs() > 1e-9 * a.abs().max(1e-6)) {
+        // transformation is not linear (the delta) is refused, in the chosen language, whatever the trace.
+        if !sim_components::trace::linear_transformation(sim.machine.as_ref()) {
+            for command in [&["replay", entry.id, "--trace", "any.csv"][..], &["fit", entry.id, "--trace", "any.csv"], &["fit", entry.id, "--sweep", "any.csv"]] {
+                for (lang, start) in [("en", "Trace replay and fit need"), ("de", "Nachfahren und Anpassen einer Aufzeichnung brauchen")] {
+                    let out = cli(&[command, &["--lang", lang][..]].concat());
+                    assert!(!out.status.success() && out.stdout.is_empty() && text(&out.stderr).starts_with(start), "{}: {command:?} {lang}: {}", entry.id, text(&out.stderr));
+                }
+            }
             continue;
         }
         let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}.csv", entry.id)).to_str().unwrap().to_string();
@@ -806,6 +817,46 @@ fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
     let _ = std::fs::remove_file(&twice);
     refused(&["fmu", MACHINES[0].id, "--binary", dll.to_str().unwrap(), "--binary", other.to_str().unwrap(), "--out", twice.to_str().unwrap()], "--binary");
     assert!(!twice.exists());
+}
+
+/// `fmu --fmi 3` writes an FMI 3.0 FMU: its model description with the instantiation token, and each binary in the
+/// folder of its architecture, read from its header; a binary without a known header and another version are refused.
+#[test]
+fn fmu_writes_an_fmi3_archive_with_a_folder_per_architecture() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("fmi3");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut pe = vec![0u8; 0x48];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3c] = 0x40;
+    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
+    pe[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
+    let mut elf = b"\x7fELF".to_vec();
+    elf.resize(20, 0);
+    elf[18] = 62;
+    let macho = [[0xcf, 0xfa, 0xed, 0xfe], 0x0100_000cu32.to_le_bytes()].concat();
+    let (dll, so, dylib) = (dir.join("sim_fmi.dll"), dir.join("libsim_fmi.so"), dir.join("libsim_fmi.dylib"));
+    std::fs::write(&dll, &pe).unwrap();
+    std::fs::write(&so, &elf).unwrap();
+    std::fs::write(&dylib, &macho).unwrap();
+    let path = dir.join("fmi3.fmu");
+    let binaries = ["--binary", dll.to_str().unwrap(), "--binary", so.to_str().unwrap(), "--binary", dylib.to_str().unwrap()];
+    let out = cli(&[&["fmu", MACHINES[0].id, "--fmi", "3", "--out", path.to_str().unwrap()][..], &binaries].concat());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let files = unzip(&std::fs::read(&path).unwrap());
+    let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names[3..], ["binaries/x86_64-windows/sim_fmi.dll", "binaries/x86_64-linux/sim_fmi.so", "binaries/aarch64-darwin/sim_fmi.dylib"]);
+    let xml = text(&files[0].1);
+    let root = &xml_elements(&xml)[0];
+    assert_eq!(attribute(&root.1, "fmiVersion"), Some("3.0"));
+    let model = sim_fmi::Model::with_fmi(MACHINES[0], &text(&files[2].1), "en", 3).unwrap();
+    assert_eq!(attribute(&root.1, "instantiationToken"), Some(model.guid.as_str()));
+    assert_eq!(xml, model.xml);
+    // A file that is no binary of a known architecture; a version that does not exist.
+    let fake = dir.join("fake").join("sim_fmi.dll");
+    std::fs::create_dir_all(fake.parent().unwrap()).unwrap();
+    std::fs::write(&fake, b"windows binary").unwrap();
+    refused(&["fmu", MACHINES[0].id, "--fmi", "3", "--binary", fake.to_str().unwrap(), "--out", path.to_str().unwrap()], "sim_fmi.dll");
+    refused(&["fmu", MACHINES[0].id, "--fmi", "4", "--binary", dll.to_str().unwrap(), "--out", path.to_str().unwrap()], "--fmi 4");
 }
 
 /// `--machine-file` takes the place of the machine's id: the H-bot of docs/machine-files.md is run and judged, and a

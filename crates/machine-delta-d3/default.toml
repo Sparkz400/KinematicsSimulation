@@ -155,16 +155,18 @@ brake_torque_nm = 8.0
 
 # The gearbox of each arm. Autonox fits its own "Getriebe Typ 3", whose ratio is behind the registration.
 # [catalogue] Siemens NRB080-05-20 (catalog/siemens/gearbox_nrb.csv): ratio 20, 96 % at full load, 10.4 N m/arcmin,
-# 0.406 kg cm2 at the input. Its backlash of 9 arcmin is not taken: with it the arm the platform's weight hardly loads
-# floats in the backlash, and the loops ring through it in a limit cycle of +-4 mm at the tool (found with
-# `sim-cli run`); a delta's gearbox is a low-backlash one. [estimate] 3 arcmin.
+# 9 arcmin backlash, 0.406 kg cm2 at the input. Twist and backlash put the tool off the motors' pose at rest by 0.64 mm
+# at pick and place and up to 2.09 mm at the rim's lower edge, and the cycle fails settling against 0.5 mm with it
+# (0.68 mm in the dwell): a sizing finding, the NRB080 is too loose for this class of delta (3 arcmin passes with
+# 0.33 mm). No limit cycle at rest: peak-to-peak below 2e-8 m at five poses (a limit cycle of +-4 mm reported before
+# 13 November 2026 was not found again).
 # The ratio is chosen: with all three axes at their 3 m/s at once at the middle of the range the motors turn at
 # 259 rad/s, 82 % of the rated 314 rad/s (16 gives 207, 25 gives 324); and 50 m/s2 along all three at once needs at
 # most 12.1 N m of the 15 N m (16: 14.7 N m). 20 is the highest catalogue ratio below the rated speed.
 [gearbox]
 ratio = 20.0
 efficiency = 0.96
-backlash_rad = 8.727e-4
+backlash_rad = 2.618e-3
 stiffness_nm_rad = 35752.6
 # [estimate]
 damping_nm_s_rad = 5.0
@@ -215,7 +217,8 @@ kv_1_s = 50.0
 # Velocity loop gain, tuned with `sim-cli margins delta --bands` for a phase margin of at least 35 degrees and a gain
 # margin of at least 6 dB in every run, also with motor and joint friction off. The loop crosses over near 230 Hz, where
 # the rotor alone is left (above the gearboxes' resonance), so the filters below are 0.1 ms (0.2 ms on the belt
-# machines). Found: at least 39.6 degrees and 8.2 dB (friction off), 46.5 degrees and 8.6 dB (on). 0.2 left 30.9 degrees.
+# machines). Found: at least 41.7 degrees and 8.1 dB (friction off), 47.0 degrees and 8.6 dB (on), with the catalogue's
+# 9 arcmin backlash. 0.2 left 30.9 degrees.
 velocity_kp_nm_s_rad = 0.25
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
@@ -243,8 +246,8 @@ noise_seed = 1
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
 # How far the tool may be from its target in the second half of a dwell, when the gripper acts. It counts the
-# gearboxes' twist and backlash under the platform's weight, which the motors' encoders do not see: 0.33 mm at the
-# pick. [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue 2024/12); the
+# gearboxes' twist and backlash under the platform's weight, which the motors' encoders do not see: 0.68 mm in the
+# dwell (0.64 mm of it static), so the cycle fails it with the catalogue gearbox (see [gearbox]). [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue 2024/12); the
 # 0.1 mm the makers state is the repeatability, which a constant sag does not spoil.
 settling_tolerance_m = 0.0005
 # [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
@@ -292,9 +295,11 @@ shaper2_damping = 0.03
 torque_reserve = 0.8
 # Read but not used: the delta has no belt.
 tension_reserve = 0.8
+tension_margin_n = 0.0
 # Not used on three axes (see docs/user-guide.md): paths run as given.
 path_tolerance_m = 0.0
-min_clearance_m = 0.0
+# For `sim-cli optimise`: the cycle's own 25 mm lift, as if something that high stood between pick and place.
+min_clearance_m = 0.025
 
 # Low and high bound of the values that are estimates (see the other machines' configs).
 [bounds]
@@ -306,7 +311,7 @@ mass.upper_arm_kg = [0.6, 1.2]
 mass.upper_arm_inertia_kgm2 = [0.032, 0.064]
 mass.elbow_kg = [0.2, 0.45]
 mass.forearm_pair_kg = [0.35, 0.7]
-mass.forearm_elbow_share = [0.5, 0.6667]
+mass.forearm_elbow_share = [0.5, 0.667]
 mass.platform_kg = [0.8, 1.6]
 joint.friction_coulomb_nm = [0.1, 0.6]
 joint.friction_viscous_nm_s_rad = [0.02, 0.1]

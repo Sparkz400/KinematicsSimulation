@@ -119,14 +119,14 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("search") => &["--series", "--gearboxes", "--axes"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
-        Some("step") => &["--axis", "--size", "--time"],
-        Some("bode") => &["--axis", "--from", "--to", "--count", "--amplitude"],
+        Some("step") => &["--axis-index", "--size", "--time"],
+        Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
         Some("replay") => &["--trace"],
         Some("fit") => &["--trace", "--sweep", "--sweep-motor", "--amplitude"],
         Some("compare") => &["--effect", "--signal", "--differences"],
-        Some("fmu") => &["--binary"],
+        Some("fmu") => &["--binary", "--fmi"],
         _ => &[],
     };
     args.check(known)?;
@@ -247,7 +247,11 @@ fn read(path: &str) -> Result<String, Failure> {
 /// of the trace.
 fn replay(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let motors = (entry.build)(&cfg)?.motors().to_vec();
+    let machine = (entry.build)(&cfg)?;
+    if !sim_components::trace::linear_transformation(machine.as_ref()) {
+        return Err(Failure("error-trace-not-linear", String::new()));
+    }
+    let motors = machine.motors().to_vec();
     let measured = Trace::parse(&read(args.option("--trace").ok_or(Failure("cli-usage", String::new()))?)?, &motors)?;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
     println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
@@ -272,6 +276,9 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
+    }
+    if !sim_components::trace::linear_transformation(machine.as_ref()) {
+        return Err(Failure("error-trace-not-linear", String::new()));
     }
     let mut out = output(args, "--out")?;
     let (mut advice, mut result) = (Vec::new(), Ok(()));
@@ -567,7 +574,7 @@ fn number(args: &Args, name: &str, default: f64) -> Result<f64, Failure> {
 /// `step <machine>`: the answer of one axis to a small step of its position setpoint.
 fn step(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let response = step_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
+    let response = step_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, number(args, "--size", 0.001)?, number(args, "--time", 0.5)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "time_s,setpoint,response").map_err(io)?;
     for (t, y) in &response.trace {
@@ -580,7 +587,7 @@ fn step(args: &Args) -> Result<(), Failure> {
 fn bode(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let frequencies = log_spaced(number(args, "--from", 1.0)?, number(args, "--to", 200.0)?, number(args, "--count", 40.0)? as usize);
-    let points = closed_loop_response(entry, &cfg, number(args, "--axis", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
+    let points = closed_loop_response(entry, &cfg, number(args, "--axis-index", 0.0)? as usize, &frequencies, number(args, "--amplitude", 0.0005)?)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "frequency_hz,gain,gain_db,phase_deg").map_err(io)?;
     for p in points {
@@ -650,9 +657,11 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     out.flush().map_err(io)
 }
 
-/// `fmu <machine> --out FILE.fmu`: the machine with its config as an FMI 2.0 Co-Simulation FMU (see `sim_fmi`), with
-/// the descriptions in the language of `--lang`. Its binaries are the files `--binary` names (it may repeat: a .dll goes
-/// to win64, a .so to linux64, a .dylib to darwin64), or else the sim-fmi library built next to this program.
+/// `fmu <machine> --out FILE.fmu [--fmi 2|3]`: the machine with its config as an FMI 2.0 (the default) or 3.0
+/// Co-Simulation FMU (see `sim_fmi`), with the descriptions in the language of `--lang`. Its binaries are the files
+/// `--binary` names (it may repeat: for FMI 2.0 a .dll goes to win64, a .so to linux64, a .dylib to darwin64; for
+/// FMI 3.0 to `<architecture>-<system>`, the architecture read from the binary), or else the sim-fmi library built
+/// next to this program.
 fn fmu(args: &Args) -> Result<(), Failure> {
     // shortcut: the FMU finds its machine by id among the registered ones, so a machine file cannot go into one yet.
     if args.option("--machine-file").is_some() {
@@ -660,7 +669,12 @@ fn fmu(args: &Args) -> Result<(), Failure> {
     }
     let (entry, cfg) = machine_and_config(args)?;
     let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
-    let model = sim_fmi::Model::new(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"))?;
+    let fmi = match args.option("--fmi") {
+        None | Some("2") => 2,
+        Some("3") => 3,
+        Some(other) => return Err(Failure("cli-error-bad-argument", format!("--fmi {other}"))),
+    };
+    let model = sim_fmi::Model::with_fmi(entry, &cfg.to_text()?, args.option("--lang").unwrap_or("en"), fmi)?;
     let mut binaries: Vec<std::path::PathBuf> = args.options("--binary").into_iter().map(Into::into).collect();
     if binaries.is_empty() {
         let name = format!("{}{}{}", std::env::consts::DLL_PREFIX, sim_fmi::MODEL_IDENTIFIER, std::env::consts::DLL_SUFFIX);
@@ -671,12 +685,14 @@ fn fmu(args: &Args) -> Result<(), Failure> {
     let mut platforms: Vec<(String, &std::path::PathBuf)> = Vec::new();
     for binary in &binaries {
         let file_name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let inside = sim_fmi::binary_path(file_name).ok_or_else(|| Failure("cli-error-bad-argument", format!("--binary {}", binary.display())))?;
+        let bad = || Failure("cli-error-bad-argument", format!("--binary {}", binary.display()));
+        let inside = sim_fmi::binary_path(file_name).ok_or_else(bad)?;
+        let bytes = std::fs::read(binary).map_err(|e| Failure("cli-error-fmu-binary", format!("{}: {e}", binary.display())))?;
+        let inside = if fmi == 3 { sim_fmi::binary_path3(file_name, &bytes).ok_or_else(bad)? } else { inside };
         // Two binaries for one platform would be two entries of one name in the archive.
         if let Some((_, other)) = platforms.iter().find(|(path, _)| *path == inside) {
             return Err(Failure("cli-error-conflict", format!("--binary {} --binary {}", other.display(), binary.display())));
         }
-        let bytes = std::fs::read(binary).map_err(|e| Failure("cli-error-fmu-binary", format!("{}: {e}", binary.display())))?;
         platforms.push((inside.clone(), binary));
         files.push((inside, bytes));
     }

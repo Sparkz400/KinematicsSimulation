@@ -1,0 +1,3 @@
+# Tests search the config files for text such as "\n[bounds]": keep them with LF on every checkout, also where
+# core.autocrlf is true (Windows, and the Windows runners of GitHub Actions).
+*.toml text eol=lf

@@ -2,7 +2,7 @@
 //! review found it with: routings the two shipped netlists of crates cannot show (two and three belt loops, a pulley
 //! of another radius), files that loaded where they had to be refused, and error lines that pointed elsewhere.
 
-use sim_core::{Config, Machine, MachineEntry};
+use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 use std::path::Path;
 

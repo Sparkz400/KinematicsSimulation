@@ -19,6 +19,10 @@ const MOTORS_S120_ELECTRICAL: &str = include_str!("../../../catalog/siemens/moto
 const CONVERTERS_S210: &str = include_str!("../../../catalog/siemens/converters_s210.csv");
 const MOTOR_MODULES_S120: &str = include_str!("../../../catalog/siemens/motor_modules_s120.csv");
 const BRAKING_S210: &str = include_str!("../../../catalog/siemens/braking_s210.csv");
+const BRAKING_S120: &str = include_str!("../../../catalog/siemens/braking_s120.csv");
+/// The DC link overvoltage trip of the SINAMICS S120 booksize power units on a 400 V line (S120 Manual for booksize
+/// power units, technical data: 820 V DC); not in the extracted catalogue tables.
+const S120_DC_LINK_TRIP_V: f64 = 820.0;
 const DC_LINK_MEASURED: &str = include_str!("../../../catalog/siemens/dc_link_measured.csv");
 const GEARBOXES: [&str; 3] = [
     include_str!("../../../catalog/siemens/gearbox_nrb.csv"),
@@ -275,7 +279,12 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// between the highest line peak the converter is rated for (240 or 480 V + 10 %, times the square root of 2) and the
 /// trip level. Nor does Siemens publish the S210's DC link capacitance, which stays as the config has it unless
 /// `dc_link_measured.csv` has one measured on a real drive of that article. An S120 Motor Module sets
-/// `dc_link_capacitance_uf` from `motor_modules_s120.csv`, half of it per axis for a Double Motor Module.
+/// `dc_link_capacitance_uf` from `motor_modules_s120.csv`, half of it per axis for a Double Motor Module. A Motor
+/// Module has no braking resistor of its own: on the S120 the line-up brakes through a Braking Module, so it sets the
+/// braking from the Braking Module row of `braking_s120.csv` (6SL3100-1AE31-0AB1 with its 6SL3100-1BE31-0AA0 resistor:
+/// 1.5 kW continuous, 100 kW peak, switching on at 770 V as `braking_threshold_v`) and `dc_link_overvoltage_v` to the
+/// booksize units' trip at 820 V (S120 manual, not in the catalogue tables). Before 13 November 2026 an S120 drive was
+/// judged against the S210 converter's internal resistor the config had (100 W, 5.7 kW on the EXCT-30).
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     let (rated, max) = if let Some(c) = rows(CONVERTERS_S210).into_iter().find(|r| r["article"] == article) {
         if let Some(b) = rows(BRAKING_S210).into_iter().find(|r| r["article"] == article) {
@@ -297,6 +306,13 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         if let Some(capacitance) = number(&m, "dc_link_capacitance_uf") {
             set_if_present(cfg, "ratings.dc_link_capacitance_uf", if m["axes"] == "2" { capacitance / 2.0 } else { capacitance })?;
         }
+        let module = rows(BRAKING_S120).into_iter().find(|r| r["kind"] == "braking_module").ok_or_else(|| unknown("drive", article))?;
+        let (continuous, peak, threshold) = (number(&module, "rated_power_kw"), number(&module, "peak_power_kw"), number(&module, "activation_threshold_v"));
+        let ((continuous, peak), threshold) = continuous.zip(peak).zip(threshold).ok_or_else(|| unknown("drive", article))?;
+        set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous * 1e3)?;
+        set_if_present(cfg, "ratings.braking_resistor_peak_w", peak * 1e3)?;
+        set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
+        set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
         (number(&m, "rated_current_a"), number(&m, "max_current_a"))
     };
     if let Some(capacitance) = rows(DC_LINK_MEASURED).into_iter().find(|r| r["article"] == article).and_then(|r| number(&r, "capacitance_uf")) {
@@ -885,10 +901,15 @@ fn run_jobs(entry: &MachineEntry, supply: &str, jobs: Vec<Job>, mut out: Vec<Can
         done
     };
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len().max(1));
-    let found: Vec<Candidate> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-        workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
-    });
+    // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
+    let found: Vec<Candidate> = if threads <= 1 {
+        work().into_iter().flatten().collect()
+    } else {
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+            workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
+        })
+    };
     out.extend(found);
     rank(&mut out);
     out

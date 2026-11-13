@@ -4,7 +4,7 @@ What the simulator has been compared with, and what it has not.
 
 **The short version.** Every check below proves one of two things: that the equations are solved correctly, or that the catalogue data was read correctly. None proves that the parameters describe a real machine. No real machine has been measured.
 
-All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 345 tests. All of them passed on 13 November 2026 (`cargo test --workspace --release`): 292 in the seven crates without the app and the OPC UA link, 53 in `sim-app` (40) and `sim-opcua` (13).
+All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 374 tests. All of them passed on 13 November 2026 (`cargo test --workspace --release`, with the delta picker registered).
 
 Test files, abbreviated in the tables:
 
@@ -14,6 +14,8 @@ Test files, abbreviated in the tables:
 | mech, drive, profile, path, identify, analysis | [`crates/sim-components/src/`](../crates/sim-components/src) `mech.rs`, `drive.rs`, `profile.rs`, `path.rs`, `identify.rs`, `analysis.rs` |
 | axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
+| delta | [`crates/machine-delta-d3/src/tests.rs`](../crates/machine-delta-d3/src/tests.rs) |
+| joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
 | suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
 | plc | [`crates/sim-opcua/tests/plc.rs`](../crates/sim-opcua/tests/plc.rs) |
@@ -25,6 +27,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: drive](#hand-calculations-drive)
 - [Hand calculations: control, profiles and paths](#hand-calculations-control-profiles-and-paths)
 - [Hand calculations: analysis and verdicts](#hand-calculations-analysis-and-verdicts)
+- [Hand calculations: delta picker D3](#hand-calculations-delta-picker-d3)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -35,7 +38,7 @@ Test files, abbreviated in the tables:
 
 | What is compared | Against | Tolerance | Check in `testkit.rs` |
 | --- | --- | --- | --- |
-| Forward of inverse transformation, on a grid over the workspace | The starting pose | 1e-9 m | `round_trip` |
+| Forward of inverse transformation, on a grid over the workspace (the poses of the axes' box the machine can go to: on the delta its cylinder with the spherical bottom) | The starting pose | 1e-9 m | `round_trip` |
 | The machine at its equilibrium state under the holding torques, for 1 s | It does not move | 1e-7 m, 1e-6 m/s | `static_hold` |
 | Total energy minus the work of the holding torques, for 10 s after a torque pulse, losses off | Constant | 0.1 % of the energy the pulse put in | `energy_conservation` |
 | Travel after 1 s with the time step halved | Travel with the full step | 1 % | `step_convergence` |
@@ -187,7 +190,8 @@ The winding's own model (settles at the rated rise at the rated current, 51.3 K 
 | Both planners on the path with transition curves | Every pose within the reported 0.1 mm of the given path, and reaching it | 10 µm (the start pose) | `both_planners_time_the_path_with_its_transition_curves`, gantry |
 | Path error and distance behind the setpoint on a circle at constant speed, no feedforward | R (1 − gain) and R (ω / Kv) gain, with gain = 1 / sqrt(1 + (ω / Kv)²) | 10 % | `path_error_on_a_circle_matches_the_hand_calculation`, `a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error`, gantry |
 | Time-optimal line, jerk limit 1e5 m/s³ and 100 m/s³ | Distance / v + v / a + a / j = 0.714 s; distance / v + 2 sqrt(v / j) = 0.861 s, with the acceleration peaking at sqrt(v j) = 11.2 m/s² | 1.5 ms; 0.5 % | `a_time_optimal_line_takes_the_hand_calculated_time`, axis |
-| Belt tension as a limit of the time-optimal plan: default T-gantry, line along X from x = 0.7 to 0.95 at 300 m/s³, 400 N allowed | Rigid tensions T = P + d_i with Σ (T_i − P) L_i = 0 (by hand at x = 0.9, 10 m/s²); acceleration 0.8 · (400 − 284.47) / 6.681 = 13.84 m/s²; rigid tension within 3 % of the 376.9 N the plan allows; the full model passes `belt-tension` within 3 % of 400 N; without the limit 19.3 m/s² fails it | 1e-9 N; 0.5 %; 3 %; 3 % | `the_time_optimal_plan_keeps_the_belt_within_its_tension_limit`, gantry |
+| Belt tension as a limit of the time-optimal plan: default T-gantry, line along X from x = 0.7 to 0.95 at 300 m/s³, 400 N allowed | Rigid tensions T = P + d_i with Σ (T_i − P) L_i = 0 (by hand at x = 0.9, 10 m/s²); acceleration 0.5 · (400 − 31 − 284.47) / 6.679 = 6.328 m/s² (share 0.5, margin 31 N); rigid tension within 3 % of the 326.7 N the plan allows; the full model passes `belt-tension`; without the limit 19.3 m/s² fails it | 1e-9 N; 0.5 %; 3 % | `the_time_optimal_plan_keeps_the_belt_within_its_tension_limit`, gantry |
+| The belt's ratings on the full model, time-optimal at 40 m/s², 2000 m/s³, 2 m/s: three lines, rated 340 to 1500 N, and a five-line path at 400 N; 330 N at the default limits | Both ratings kept (highest ≤ rating, slackest > 0 N), or refused (`error-path-tension`) where the holding tension leaves no room (330 and 340 N); with share 0.8 and no margin 331.4 N on 330 N | exact | `the_full_model_keeps_the_belt_ratings_on_a_time_optimal_plan_at_high_jerk`, gantry |
 | A cycle segment with via points | Runs up, through the via point and down without a stop, arrives on its target before the dwell; a via point outside the stroke is refused by name | 1e-9 m | `a_cycle_segment_runs_its_path_through_via_points`, gantry |
 | Time-optimal line-arc-line: torque of the rigid model, motor speed and axis jerk at every planned pose, by differences | Within the torque reserve, the rated speed and the jerk limits; one of them used to 97 % or more at over 60 % of the poses (64 %: jerk 57 %, speed 10 %; with a 0.6 N m motor and 2000 m/s³: torque 30 %, speed 32 %, jerk 4 %); 1.429 s against 1.828 s within the axis limits | 0.1 %; below 0.8 | `the_time_optimal_plan_is_shorter_keeps_a_limit_active_and_stays_on_the_torque_speed_curve`, gantry |
 | The same plan on the full model | Utilisation below 0.6 (0.18); speed below 1.03 × rated; path error below 1 mm | As stated | the same test |
@@ -234,6 +238,28 @@ The winding's own model (settles at the rated rise at the rated current, 51.3 K 
 
 The guide life row checks that the code computes the catalogue formula. It does not check the formula against a guide. The same holds for the life rows: they check that the code computes ISO 281, Siemens' gearbox formula and Megadyne's tooth load method; no bearing, gearbox or belt was run to failure, and the load ratings of the EXCT-30's pulley shafts are estimates.
 
+## Hand calculations: delta picker D3
+
+The delta's geometry and masses are estimates (see [its config](../crates/machine-delta-d3/default.toml)), so these check the equations, not the machine.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Inverse and forward kinematics over a 13 × 13 × 9 grid of the working range (500 and more poses) | Each other | 1e-12 m | `the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_kinematics`, delta |
+| The Jacobian J = J_x⁻¹ J_q | Central differences of the forward kinematics, 1e-6 rad | 1e-7 m/rad | same |
+| Holding torque at the centre, 100 mm below the top | The leg equation solved by halving, dz/dθ = −L_a cos θ + (e + L_a cos θ) L_a sin θ / (z + L_a sin θ) over 3 per arm: −g m_LG cos θ + m_nt g dz/dθ = −4.25 − 6.15 = −10.40 N m per gearbox, −0.520 N m per motor | 1e-4 | `the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_arms_own`, delta |
+| Holding torque at the edge, x = 0.6 m | The weight through the transpose of a Jacobian from finite differences: −22.2 N m on the arm pointing there, −1.35 N m on the others; rigid and elastic models stay put there | 1e-6; 1e-6 rad/s² | `the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose`, delta |
+| A vertical acceleration of 10 m/s² at the centre | θ̈ = a / (3 dz/dθ) = −24.98 rad/s², I_b θ̈ + m_nt a dz/dθ = −10.00 N m at the arm, −0.6053 N m at the motor; the rigid model given that torque accelerates the platform at 10 m/s² straight down | 1e-6; 1e-9 m/s² | `a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque`, delta |
+| The feedforward with the speed | The rigid loss-free model at (2, −1, 0.5) m/s accelerates the platform at the asked (10, 5, −20) m/s²; without the speed it misses by more than 1 m/s² | 1e-9 m/s² | `the_feedforward_with_the_speed_gives_the_asked_acceleration`, delta |
+| The Adept cycle 25/305/25 mm with stops and 35 ms dwells | S-curve by hand: traverse d/v + v/a + a/j = 0.18167 s, 25 mm lift 4 (d / 2j)^(1/3) = 0.06840 s, pass 0.70693 s; on the 1 ms profile cycle 720 cycles. The vendors' 0.35 to 0.52 s (ABB IRB 360, rounded paths) is printed, not asserted | exact (1e-9 s) | `the_adept_cycle_takes_the_hand_calculated_time`, delta |
+| Stability under constant torques | Second differences of gravity less torque times angle: −1.68 N m/rad in the vertical mode at 868 mm, +2.64 at 1000 mm | signs | `the_vertical_mode_under_constant_torques_is_unstable_high_up`, delta |
+| Targets outside the working range, out of reach, beyond a stop, near a singularity | Refused with their reason | exact | `targets_outside_the_working_range_are_refused_with_their_reason`, delta |
+| Condition number | 4 for a turned diag(1, 2, 4), 1 for 2 · 1; the cycle's peak judged against `ratings.max_condition_number` | 1e-12 | `the_condition_number_is_the_ratio_of_the_singular_values`, `the_cycle_is_judged_against_the_condition_number_limit`, delta |
+| The setpoint slack at rest (`rest_sag`) | The simulation's setpoint-to-tool offset after 0.5 s at rest at five poses (0.75 to 2.09 mm with 9 arcmin): covered, and the slack (2.30 mm) at most 1.4 times the largest; 0.1 mm without backlash and with stiff gearboxes | exact | `the_setpoint_slack_covers_the_sag_at_rest`, delta |
+| A first arc from rest; a path beyond the range | `arc,0.2525,0.0,-0.85,0.1525,0.0,-0.85,cw` from rest is laid out (refused before), an end 2 slacks off its circle is not; a line to x = 0.6014 is refused as the move there (both planners), one to 0.6 runs; a trajectory to 0.6014 is refused | exact | `a_first_arc_from_rest_is_laid_out_with_the_machines_slack`, `a_path_may_not_use_the_setpoint_slack_away_from_its_start`, delta |
+| Rotary joint | Joint friction 2 + 0.5 · 4 = 4 N m, stop 1e5 · 0.01 = 1000 N m, rotor 2e-4 · 20² = 0.08 kg m², 1 N m less 0.1 N m friction through ratio 20 = 18 N m, losses 16 W and 8 W | 1e-9 | `a_joint_adds_friction_stops_and_the_rotor_as_calculated`, joint |
+| Arcs on three axes | A quarter circle of 0.1 m in the x-z plane is π/20 m long, passes (0.0707, 0, 0.0707) about its centre halfway with its curvature 1/r towards the centre; clockwise the other way round; in the x-y plane seen from +z; a half turn refused | 1e-12 | `arcs_on_three_axes_lie_in_the_plane_of_their_points`, path |
+| Splines on three axes | Through their via points, out of and into the lines beside them in their directions, the plan within every axis's speed, acceleration and jerk | 1e-9; 0.1 % | `a_spline_on_three_axes_passes_through_its_points_within_the_limits`, path |
+
 ## Vendor formulas and vendor documents
 
 | What is compared | Against | Tolerance | Test |
@@ -269,6 +295,9 @@ These compare the simulator with itself. They prove repeatability and plumbing, 
 | Halving the integration step changes a controlled move with all effects on by less than 1 % | `halving_the_integration_step_changes_a_controlled_move_by_less_than_one_percent`, control |
 | Every effect switch changes the traces | `every_effect_switch_changes_the_traces`, control |
 | A trace written by `run` replays onto itself: torque and following error within 0.5 % (RMS) and 5 % (peak) of their largest value; the fit finds the config's own masses and friction within 2 % | `a_trace_from_run_replays_onto_itself_and_fits_its_own_config`, cli |
+| `sensitivity` leaves `ratings.bearing_reliability_percent` out (it varied it to 72 % and 108 %, which `verdicts` refuses) | `sensitivity_leaves_the_bearing_reliability_alone`, life |
+| `replay` and `fit` refuse a machine whose transformation is not linear (they printed numbers without meaning on the delta), with a message in both languages; `step` and `bode` take the axis as `--axis-index`, `--axis` names a catalogue axis | `a_trace_from_run_replays_onto_itself_and_fits_its_own_config`, `step_bode_and_tuning_write_csv_for_every_machine`, cli |
+| A config file of another machine opens that machine in the app; one no machine takes leaves the model as it was | `a_config_of_another_machine_opens_that_machine`, app |
 | The EXCT-30 cycle stays below 0.8 of the torque-speed curve and of the rated torque, and the belt does not go slack | `exct_30_cycle_stays_within_motor_and_belt_limits`, catalog |
 | The optimiser's result is shorter by at least 5 % and passes every verdict when run again | `the_optimiser_shortens_the_cycle_within_the_verdicts`, axis |
 | A PLC-commanded move runs and reports position and following error, for every machine | `a_plc_commanded_move_runs_and_reports_position_and_following_error`, plc |
@@ -296,6 +325,8 @@ These compare the simulator with itself. They prove repeatability and plumbing, 
 | Every label exists in German and English | [`i18n.rs`](../crates/sim-machines/tests/i18n.rs), and in the app's and the link's tests |
 
 ## What is not validated
+
+- **The delta picker D3's geometry, masses and stiffnesses.** Autonox keeps them behind a registration; the arm lengths are scaled from Williams' estimate of an ABB IRB 360, the masses estimated. Its cycle time is compared with ABB's and Omron's printed figures, not asserted (they round the corners and run faster). Its dynamics are the lumped model of Codourey and Olsson; the full model (forearm inertia, Brinker et al.) was not compared.
 
 **Against a real machine: nothing.**
 

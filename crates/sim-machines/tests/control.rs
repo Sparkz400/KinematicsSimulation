@@ -38,6 +38,19 @@ fn long_move(sim: &Sim) -> Vec<f64> {
     target
 }
 
+/// Moves the first axis to near the low end of its range (5 % of it in), the others staying, and waits there: so that
+/// the long move that follows has a long cruise also where the start pose is in the middle of the range (the delta's).
+/// The gantries start near that end already: they move 50 mm, from 0.1 m to 0.05 m.
+fn to_low_end(sim: &mut Sim) {
+    let axis = sim.machine.axes()[0].clone();
+    let mut low = sim.control.set_pos.clone();
+    low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+    sim.command(Command::MoveTo(low)).unwrap();
+    while sim.control.busy() {
+        sim.step();
+    }
+}
+
 /// Mean following error of the first axis while it cruises at its speed limit, and what each motor's lag of its speed
 /// over Kv makes of it at the tool: forward(motor setpoints) - forward(motor setpoints - motor speeds / Kv), which is
 /// v / Kv where the kinematics are linear (the gantries) and a little more or less where they are not (the delta, whose
@@ -47,15 +60,7 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let v_max = sim.machine.axes()[0].max_vel;
     let kv = cfg.f64("drive.kv_1_s").unwrap();
-    // From near the low end of the first axis, so that the long move has a long cruise also where the start pose is
-    // in the middle of the range (the delta's).
-    let axis = &sim.machine.axes()[0];
-    let mut low = sim.control.set_pos.clone();
-    low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
-    sim.command(Command::MoveTo(low)).unwrap();
-    while sim.control.busy() {
-        sim.step();
-    }
+    to_low_end(&mut sim);
     sim.command(Command::MoveTo(long_move(&sim))).unwrap();
     let (mut sum, mut n, mut cruise_since, mut lag) = (0.0, 0u32, None, 0.0);
     let (mut set, mut behind) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
@@ -87,11 +92,14 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
 fn following_error_at_constant_speed_is_v_over_kv() {
     for entry in MACHINES {
         let off = ["effects.velocity_feedforward = false", "effects.torque_feedforward = false"];
+        // Within 1 %, and what the gears sag beyond the default slack of 0.1 mm (the delta's with 9 arcmin backlash: up
+        // to 2.2 mm more; 0.43 mm seen at Kv = 100), which the tool's error carries along.
+        let sag = ((entry.build)(&entry.config()).unwrap().setpoint_slack() - 1e-4).max(0.0);
         let (measured, expected) = cruise_following_error(entry, &off);
-        assert!((measured - expected).abs() < 0.01 * expected, "{}: {measured} m, v/Kv = {expected} m", entry.id);
+        assert!((measured - expected).abs() < 0.01 * expected + sag, "{}: {measured} m, v/Kv = {expected} m", entry.id);
         // It scales with 1 / Kv.
         let (doubled, expected) = cruise_following_error(entry, &[off[0], off[1], "drive.kv_1_s = 100.0"]);
-        assert!((doubled - expected).abs() < 0.01 * expected, "{}: {doubled} m, v/Kv = {expected} m", entry.id);
+        assert!((doubled - expected).abs() < 0.01 * expected + sag, "{}: {doubled} m, v/Kv = {expected} m", entry.id);
     }
 }
 
@@ -139,8 +147,9 @@ fn a_move_arrives_and_comes_to_rest() {
             low = low.min(sample[position]);
             high = high.max(sample[position]);
         });
-        // The drive controls the motor; belt stretch and friction leave a small standstill error.
-        assert!((0.5 * (low + high) - target[0]).abs() < 1e-4, "{}: rests at {low}..{high}, target {}", entry.id, target[0]);
+        // The drive controls the motor; belt stretch, gear twist, backlash and friction leave a standstill error, up to
+        // the machine's setpoint slack (the delta's 9 arcmin: 0.21 mm here).
+        assert!((0.5 * (low + high) - target[0]).abs() < sim.machine.setpoint_slack().max(1e-4), "{}: rests at {low}..{high}, target {}", entry.id, target[0]);
         assert!(high - low < 2e-5, "{}: still moving by {} m at rest", entry.id, high - low);
     }
 }
@@ -170,10 +179,10 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         // Every segment ran, and the cycle started over.
         assert!(visited.iter().all(|n| *n >= 1) && visited[0] >= 2, "{}: segments run {visited:?} times in 8 s", entry.id);
         assert!(payload_seen == [true, true], "{}: the payload never switched", entry.id);
-        // 0.5 mm, and on a fast machine 0.08 mm per m/s2 of its fastest axis less 0.3 mm: the delta (50 m/s2, 3.7 mm) has
-        // up to 2.9 mm at the motors, from its gearboxes' twist and the velocity term its rigid feedforward leaves out.
+        // 0.5 mm, and on a fast machine 0.03 mm per m/s2 of its fastest axis: the delta (50 m/s2, 1.5 mm) has up to
+        // 1.23 mm at the motors in its Adept cycle, from the gearboxes' springs that the rigid feedforward leaves out.
         let fastest = sim.machine.axes().iter().map(|a| a.max_acc).fold(0.0, f64::max);
-        let limit = f64::max(5e-4, 8e-5 * fastest - 3e-4);
+        let limit = f64::max(5e-4, 3e-5 * fastest);
         assert!(worst_error < limit, "{}: following error up to {worst_error} m in the cycle, limit {limit} m", entry.id);
         // Stop ends the cycle after the segment under way.
         sim.command(Command::Stop).unwrap();
@@ -305,8 +314,17 @@ fn every_effect_switch_changes_the_traces() {
         // switch matters; a weak drive and a low bus voltage (100 V at the winding), so that the torque and
         // voltage limits matter; a via point, so that corner blending matters.
         let mut base = with_via_point(entry);
-        // The pretension where there is a belt.
-        for e in ["belt.pretension_n = 20.0", "drive.peak_torque_nm = 0.3", "drive.bus_voltage_v = 81.65"] {
+        // The pretension where there is a belt. The weak drive keeps half as much again as holding the start pose takes
+        // (0.3 N m on the gantries; the delta's arms need 0.52 N m held up, and with less they lie on their stops, where
+        // no motor turns fast enough to meet the voltage limit).
+        let hold = {
+            let machine = (entry.build)(&base).unwrap();
+            let mut torque = vec![0.0; machine.motors().len()];
+            machine.equilibrium(&base.f64s("start.pose").unwrap(), &mut Vec::new(), &mut torque);
+            torque.iter().fold(0.0f64, |m, t| m.max(t.abs()))
+        };
+        let peak = format!("drive.peak_torque_nm = {:?}", f64::max(0.3, 1.5 * hold));
+        for e in ["belt.pretension_n = 20.0", &peak, "drive.bus_voltage_v = 81.65"] {
             if base.get(e.split(' ').next().unwrap()).is_ok() {
                 base.set_text(e).unwrap();
             }
@@ -534,6 +552,7 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             let switch = model_switch(&entry.config());
             let cfg = config(entry, &[&format!("{switch} = {elastic}")]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
+            to_low_end(&mut sim);
             sim.command(Command::MoveTo(long_move(&sim))).unwrap();
             let axes = sim.machine.axes().to_vec();
             while sim.control.set_vel[0] < axes[0].max_vel - 1e-9 {
