@@ -198,6 +198,14 @@ pub trait Machine: Send {
         None
     }
 
+    /// The 2-norm condition number of the kinematics' Jacobian at a tool pose, for the workspace map: 1 where the
+    /// motors move the tool equally well in every direction, larger towards a singularity, `f64::INFINITY` out of reach
+    /// of the kinematics (whatever the envelope and the joints' stops say, which `unreachable` tells). `None` for a
+    /// machine that has no map to show: one whose motor angles are a linear function of the tool pose.
+    fn condition(&self, _tool_pose: &[f64]) -> Option<f64> {
+        None
+    }
+
     /// How far the setpoint of the machine at rest may be from the pose of its tool, m: the setpoint is where the
     /// motors stand, and what belts and gears give way under the load they hold puts the tool off it. The controller
     /// takes paths and trajectories that start or run this far beyond the travel range or the envelope. 0.1 mm by

@@ -9,7 +9,7 @@ use bevy_egui::egui::{
     ScrollArea, Sense, Slider, Stroke, TextEdit, TextStyle, TextWrapMode, Ui, vec2,
 };
 use egui_plot::{GridMark, HLine, Legend, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
-use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color};
+use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color, short};
 use sim_components::Command;
 use sim_components::analysis::{AT_LEAST, Verdict, utilisation};
 use sim_core::scene::MOTOR_PART;
@@ -1082,6 +1082,7 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
             table(ui, key, &rows, None);
         }
     }
+    sankey(ui, model);
     let views = model.friction_views();
     if !views.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -1110,6 +1111,97 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
     thermal(ui, model);
     belt(ui, model);
     compare(ui, model, inputs, actions);
+}
+
+/// The energy budget as a flow diagram (`Model::budget_flows`), drawn with the painter: from the supply (and the stores
+/// that gave energy back) on the left to what the electrical side lost and the shaft work in the middle, and from the
+/// shaft work on to what the machine lost or stored on the right; each band as wide as its energy. A bar too thin for
+/// its name has it in the tooltip, and in the table above.
+fn sankey(ui: &mut Ui, model: &Model) {
+    let Some(columns) = model.budget_flows() else { return };
+    let total: f64 = columns[0].iter().map(|(_, e)| e).sum();
+    if !(total > 0.0) {
+        return;
+    }
+    heading(ui, model, "ui-effects-flow", Analysis::Cycle);
+    let (width, height) = (ui.available_width().min(560.0), 260.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let painter = ui.painter_at(rect);
+    // Three columns of bars with a gap between bars, scaled so that the column with the most bars fills the height.
+    let (bar, gap) = (10.0, 4.0);
+    let most = columns.iter().map(|c| c.len()).max().unwrap_or(1);
+    let scale = (height - gap * (most as f32 - 1.0)) / total as f32;
+    let xs = [rect.left(), rect.left() + (width - bar) / 2.0, rect.right() - bar];
+    // Each bar's top and bottom, stacked from the top.
+    let stacks: Vec<Vec<(f32, f32)>> = columns
+        .iter()
+        .map(|column| {
+            let mut top = rect.top();
+            column
+                .iter()
+                .map(|(_, e)| {
+                    let span = (top, top + *e as f32 * scale);
+                    top = span.1 + gap;
+                    span
+                })
+                .collect()
+        })
+        .collect();
+    let colors = [PALETTE[0], PALETTE[2], PALETTE[3]];
+    // The bands from the bars of column `from` to those of column `from + 1`: the energy taken in their order, a band
+    // per pair of bars it joins.
+    let bands = |from: usize, sources: &[(f32, f32)], targets: &[(f32, f32)]| {
+        let (x0, x1) = (xs[from] + bar, xs[from + 1]);
+        let (mut s, mut s_used) = (0, 0.0f32);
+        for &(top, bottom) in targets {
+            let (mut need, mut t) = (bottom - top, top);
+            while need > 1e-3 && s < sources.len() {
+                let (s_top, s_bottom) = sources[s];
+                let take = need.min(s_bottom - s_top - s_used);
+                let (a, b) = (s_top + s_used, t);
+                // An S between the two ends; strips across it, since a band that bends is not convex.
+                let edge = |f: f32, y0: f32, y1: f32| egui::pos2(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f * f * (3.0 - 2.0 * f));
+                const STEPS: usize = 24;
+                for k in 0..STEPS {
+                    let (f, g) = (k as f32 / STEPS as f32, (k + 1) as f32 / STEPS as f32);
+                    let quad = vec![edge(f, a, b), edge(g, a, b), edge(g, a + take, b + take), edge(f, a + take, b + take)];
+                    painter.add(egui::Shape::convex_polygon(quad, colors[from].gamma_multiply(0.45), Stroke::NONE));
+                }
+                (need, t, s_used) = (need - take, t + take, s_used + take);
+                if s_bottom - s_top - s_used <= 1e-3 {
+                    (s, s_used) = (s + 1, 0.0);
+                }
+            }
+        }
+    };
+    bands(0, &stacks[0], &stacks[1]);
+    if let Some(&shaft) = stacks[1].last() {
+        bands(1, &[shaft], &stacks[2]);
+    }
+    let supply = columns[0][0].1;
+    for (c, (column, stack)) in columns.iter().zip(&stacks).enumerate() {
+        for ((label, energy), &(top, bottom)) in column.iter().zip(stack) {
+            painter.rect_filled(Rect::from_min_max(egui::pos2(xs[c], top), egui::pos2(xs[c] + bar, bottom.max(top + 1.0))), 0.0, colors[c]);
+            let text = format!("{label}: {} J, {} %", short(*energy), short(100.0 * energy / supply));
+            if response.hover_pos().is_some_and(|p| (top - 2.0..=bottom + 2.0).contains(&p.y) && (xs[c] - 4.0..=xs[c] + bar + 4.0).contains(&p.x)) {
+                response.clone().on_hover_text(text.clone());
+            }
+            // The name over the bands where the bar is tall enough for a line, cut to the room between two columns:
+            // left of the middle and right bars, at their middle, and right of the left ones at their foot, below the
+            // middle column's names.
+            if bottom - top >= 11.0 {
+                let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(11.0), CHALK);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(xs[1] - xs[0] - bar - 6.0);
+                let galley = painter.layout_job(job);
+                let size = galley.size();
+                let at = match c {
+                    0 => egui::pos2(xs[c] + bar + 3.0, bottom - 8.0 - size.y / 2.0),
+                    _ => egui::pos2(xs[c] - 3.0 - size.x, (top + bottom - size.y) / 2.0),
+                };
+                painter.galley(at, galley, CHALK);
+            }
+        }
+    }
 }
 
 /// The temperatures of windings, gearboxes and guides over the scopes' window, the table of where they are and settle,
@@ -1310,6 +1402,71 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
         heading(ui, model, key, Analysis::Path);
         table(ui, &format!("path-{key}"), rows, None);
     }
+    torque_speed(ui, model, Analysis::Path);
+    workspace(ui, model, inputs);
+}
+
+/// The workspace map: a horizontal slice through what the machine reaches, at a height the slider chooses, each node
+/// coloured by the condition number of the kinematics there (dark where the motors move the tool equally well every
+/// way, light towards a singularity, red beyond the rated limit), faint where the machine does not go (outside its
+/// working envelope or beyond a joint's stop) and empty out of reach. The travel range is outlined. Only for a machine
+/// that tells its condition (`Machine::condition`).
+fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let Some(slice) = model.workspace_slice(61) else { return };
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-workspace"));
+        ui.weak(tr("ui-workspace-hint"));
+    });
+    let axes = &model.session.axes;
+    let mut z = slice.z;
+    if ui.add(Slider::new(&mut z, slice.heights.0..=slice.heights.1).text(format!("{} [{}]", tr(axes[2].key), axes[2].unit))).changed() {
+        inputs.workspace_z = Some(z);
+    }
+    let side = ui.available_width().min(360.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, INSET);
+    let n = slice.n;
+    // Node (i, j) at the middle of its cell; y upwards, as in the plots.
+    let cell = side / n as f32;
+    let place = |x: f64, y: f64| {
+        let (fx, fy) = ((x - slice.x.0) / (slice.x.1 - slice.x.0), (y - slice.y.0) / (slice.y.1 - slice.y.0));
+        egui::pos2(rect.left() + cell / 2.0 + (side - cell) * fx as f32, rect.bottom() - cell / 2.0 - (side - cell) * fy as f32)
+    };
+    let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (n - 1) as f64;
+    for (k, &(condition, goes)) in slice.nodes.iter().enumerate() {
+        if !condition.is_finite() {
+            continue;
+        }
+        let color = if condition > slice.limit {
+            LIMIT
+        } else {
+            let [r, g, b] = trail_color((condition.ln() / slice.limit.ln()) as f32).map(|c| (c * 255.0) as u8);
+            Color32::from_rgb(r, g, b)
+        };
+        let centre = place(at(slice.x, k % n), at(slice.y, k / n));
+        painter.rect_filled(Rect::from_center_size(centre, vec2(cell + 0.5, cell + 0.5)), 0.0, if goes { color } else { color.gamma_multiply(0.3) });
+    }
+    let travel = Rect::from_two_pos(place(axes[0].min, axes[1].min), place(axes[0].max, axes[1].max));
+    painter.rect_stroke(travel, 0.0, Stroke::new(1.0, CHALK), egui::StrokeKind::Middle);
+    let label = |pos: egui::Pos2, align: egui::Align2, text: String| painter.text(pos, align, text, FontId::proportional(11.0), DIM);
+    let unit = |i: usize| format!("{} [{}]", tr(axes[i].key), axes[i].unit);
+    label(rect.left_bottom() + vec2(2.0, -2.0), egui::Align2::LEFT_BOTTOM, format!("{} {} … {}", unit(0), short(slice.x.0), short(slice.x.1)));
+    label(rect.left_top() + vec2(2.0, 2.0), egui::Align2::LEFT_TOP, format!("{} {} … {}", unit(1), short(slice.y.0), short(slice.y.1)));
+    if let Some(pointer) = response.hover_pos() {
+        let (fx, fy) = (((pointer.x - rect.left()) / side) as f64, ((rect.bottom() - pointer.y) / side) as f64);
+        let (i, j) = (((fx * n as f64) as usize).min(n - 1), ((fy * n as f64) as usize).min(n - 1));
+        let condition = slice.nodes[j * n + i].0;
+        let shown = if condition.is_finite() { short(condition) } else { tr("ui-workspace-out-of-reach") };
+        response.on_hover_text(format!("{} {}, {} {}: {} {shown}", tr(axes[0].key), short(at(slice.x, i)), tr(axes[1].key), short(at(slice.y, j)), tr("quantity-condition-number")));
+    }
+    ui.horizontal(|ui| {
+        scale_bar(ui, "1", &short(slice.limit), trail_color);
+        ui.colored_label(LIMIT, format!("■ {}", tr("ui-workspace-above")));
+    });
+    ui.weak(tr("ui-workspace-faint"));
 }
 
 /// A drive trace from a file, replayed through the simulator, and what it says the config should be.
@@ -1356,19 +1513,29 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
     }
 }
 
-/// The operating points of the analysed cycle over the motors' torque-speed curve, and as a table.
-fn points(ui: &mut Ui, model: &Model) {
+/// The operating points of the analysed cycle (`Analysis::Cycle`) or of the path that was run (`Analysis::Path`)
+/// over the motors' torque-speed curves, peak dashed and S1 dotted; each motor's points in its colour, hidden by a
+/// click on its name in the legend.
+fn torque_speed(ui: &mut Ui, model: &Model, kind: Analysis) {
     let tr = |key: &str| model.tr.tr(key).to_string();
-    let Some((points, [high, low])) = model.points_plot() else { return };
-    heading(ui, model, "ui-points", Analysis::Cycle);
-    Plot::new("ui-points").height(220.0).legend(Legend::default()).x_axis_label(tr("ui-points-speed")).y_axis_label(tr("ui-points-torque")).show(ui, |plot| {
+    let Some((points, [high, low, s1_high, s1_low])) = model.points_plot(kind) else { return };
+    heading(ui, model, "ui-points", kind);
+    Plot::new(("ui-points", kind as u8)).height(220.0).legend(Legend::default()).x_axis_label(tr("ui-points-speed")).y_axis_label(tr("ui-points-torque")).show(ui, |plot| {
         for ((motor, points), color) in model.session.motors.iter().zip(points).zip(PALETTE.iter().cycle()) {
             plot.points(Points::new(tr(motor.key), points).color(*color).radius(1.0));
         }
         for line in [high, low] {
             plot.line(Line::new(tr("ui-points-curve"), line).color(Color32::GRAY).style(LineStyle::dashed_dense()).width(1.5));
         }
+        for line in [s1_high, s1_low] {
+            plot.line(Line::new(tr("ui-points-s1"), line).color(CHALK).style(LineStyle::dotted_dense()).width(1.5));
+        }
     });
+}
+
+/// The operating points of the analysed cycle over the motors' torque-speed curves, and as a table.
+fn points(ui: &mut Ui, model: &Model) {
+    torque_speed(ui, model, Analysis::Cycle);
     // Thousands of rows: only those in sight are made. Row 0 is the header.
     let Some((count, _)) = model.points_table(0..0) else { return };
     let height = ui.text_style_height(&bevy_egui::egui::TextStyle::Body) + ui.spacing().item_spacing.y;

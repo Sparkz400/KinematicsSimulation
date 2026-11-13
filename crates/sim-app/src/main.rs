@@ -184,7 +184,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (sync_scene, sync_ghost, paint_cad_parts, draw_paths, orbit_camera, follow_tool, developer_hooks, record).chain())
+        .add_systems(Update, (sync_scene, fill_obstacles, sync_ghost, paint_cad_parts, draw_paths, orbit_camera, follow_tool, developer_hooks, record).chain())
         // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
         .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
         .add_systems(EguiPrimaryContextPass, panels)
@@ -470,8 +470,8 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
         gizmos.line(tool, ghost, GAP);
         gizmos.sphere(Isometry3d::from_translation(ghost), 0.012, GAP);
     }
-    // The obstacles as see-through boxes, red while a part touches one, and the clearance to the nearest as a line (its
-    // value is a label, `panels`).
+    // The obstacles' edges, over their translucent faces (`fill_obstacles`), red while a part touches one, and the
+    // clearance to the nearest as a line (its value is a label, `panels`).
     for obstacle in &scene.obstacles {
         let (centre, size) = (to_bevy(obstacle.aabb.centre), to_bevy(obstacle.aabb.size).abs());
         let colour = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM });
@@ -778,6 +778,47 @@ fn sync_scene(
     }
 }
 
+/// The faces of an obstacle of the config, as `fill_obstacles` draws them.
+#[derive(Component)]
+struct ObstacleFace;
+
+/// The obstacles of the config as translucent boxes, the colour of their edges (`draw_paths`): grey, red while a part
+/// touches one. Solid enough to see where they stand, thin enough to see the machine behind them. One box per obstacle
+/// of the scene shown, made anew when their number changes, moved and coloured every frame.
+fn fill_obstacles(
+    state: Res<State>,
+    mut commands: Commands,
+    shapes: Res<Shapes>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut faces: Local<Vec<(Entity, Handle<StandardMaterial>)>>,
+    mut transforms: Query<&mut Transform, With<ObstacleFace>>,
+) {
+    let scene = shown(&state.model, &state.recorded, state.timeline);
+    if faces.len() != scene.obstacles.len() {
+        for (entity, _) in faces.drain(..) {
+            commands.entity(entity).despawn();
+        }
+        for obstacle in &scene.obstacles {
+            // Rough and unlit by reflections, so that the faces read as a tint and not as glass.
+            let material = materials.add(StandardMaterial { alpha_mode: AlphaMode::Blend, perceptual_roughness: 1.0, reflectance: 0.0, ..default() });
+            let place = Transform::from_translation(to_bevy(obstacle.aabb.centre)).with_scale(to_bevy(obstacle.aabb.size).abs());
+            let entity = commands.spawn((Mesh3d(shapes.cube.clone()), MeshMaterial3d(material.clone()), place, ObstacleFace, NotShadowCaster)).id();
+            faces.push((entity, material));
+        }
+    }
+    for (obstacle, (entity, material)) in scene.obstacles.iter().zip(faces.iter()) {
+        if let Ok(mut transform) = transforms.get_mut(*entity) {
+            *transform = Transform::from_translation(to_bevy(obstacle.aabb.centre)).with_scale(to_bevy(obstacle.aabb.size).abs());
+        }
+        let color = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM }).with_alpha(0.22);
+        if materials.get(material).is_some_and(|m| m.base_color != color)
+            && let Some(mut m) = materials.get_mut(material)
+        {
+            m.base_color = color;
+        }
+    }
+}
+
 /// How far back the camera must stand, looking along `rotation` at `target`, for the box from `low` to `high`
 /// to fill the view with a little room: each corner within the vertical field of view of 45 degrees and the
 /// horizontal one the view's `aspect` gives.
@@ -812,7 +853,7 @@ fn orbit_camera(
     mut ray_cast: MeshRayCast,
     parents: Query<&ChildOf>,
     cad: Query<(), With<CadPart>>,
-    ghosts: Query<(), With<GhostPart>>,
+    ghosts: Query<(), Or<(With<GhostPart>, With<ObstacleFace>)>>,
     mut pressed_at: Local<Option<Vec2>>,
 ) {
     let (mut camera, lens, seen_from) = camera.into_inner();
@@ -835,7 +876,7 @@ fn orbit_camera(
     {
         // In x-ray the CAD parts are see-through: a click goes through them to the belt and pulleys they hide.
         let xray = state.overlays.xray;
-        // The compared run's ghost is never picked: it is not one of the machine's parts.
+        // The compared run's ghost is never picked, nor an obstacle's faces: they are not the machine's parts.
         let through = |e: Entity| !ghosts.contains(e) && !(xray && std::iter::once(e).chain(parents.iter_ancestors(e)).any(|a| cad.contains(a)));
         let settings = MeshRayCastSettings::default().with_filter(&through);
         let hit = lens.viewport_to_world(seen_from, at).ok().and_then(|ray| ray_cast.cast_ray(ray, &settings).first().map(|(entity, _)| *entity));
@@ -1221,7 +1262,9 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// `[effects]`) for the run with that effect switched, "trail-speed" or "trail-error" for the travelled path's colour
 /// and "tube" for the deviation tube) switches on what the 3D view draws besides the parts, SIM_APP_EXAGGERATION (a factor) draws
 /// the deflections larger, and SIM_APP_VIEW ("yaw,pitch" in degrees) turns the camera and frames the machine.
-/// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel. SIM_APP_PART (a part's id,
+/// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel; SIM_APP_TAB (cycle, effects,
+/// search, path, trace, sweep or tuning) opens that tab of it, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
+/// the height of the workspace map in the path tab. SIM_APP_PART (a part's id,
 /// e.g. "motor", or "motor,1" for the second of them) picks that part as a click would. SIM_APP_SCRUB (seconds)
 /// scrubs the timeline that far back from the newest scene, just before the screenshot. SIM_APP_RECORD (seconds)
 /// records the view for that long from the start, as the Record button does, and the app exits only once its video
@@ -1265,6 +1308,13 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
             // A check to open in the tools panel, as the top bar's gauge would (its name, e.g. "motor-peak").
             if let Some(check) = asked("SIM_APP_CHECK") {
                 state.panels = ui::PanelState { tools: ui::ToolTab::Cycle, check: Some(check.leak()), ..state.panels };
+            }
+            let tabs = [("cycle", ui::ToolTab::Cycle), ("effects", ui::ToolTab::EffectViews), ("search", ui::ToolTab::Search), ("path", ui::ToolTab::Path), ("trace", ui::ToolTab::Trace), ("sweep", ui::ToolTab::Sweep), ("tuning", ui::ToolTab::Tuning)];
+            if let Some((_, tab)) = asked("SIM_APP_TAB").and_then(|name| tabs.into_iter().find(|(word, _)| *word == name)) {
+                state.panels.tools = tab;
+            }
+            if let Some(height) = asked("SIM_APP_WORKSPACE_Z").and_then(|z| z.parse().ok()) {
+                state.model.inputs.workspace_z = Some(height);
             }
             if let Some(part) = asked("SIM_APP_PART") {
                 let (id, nth) = part.split_once(',').map_or((part.as_str(), 0), |(id, nth)| (id, nth.parse().unwrap_or(0)));

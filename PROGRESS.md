@@ -1059,7 +1059,7 @@ Left open:
 
 Left open:
 
-- The app draws the obstacles as see-through wireframe boxes (gizmos), not filled translucent meshes.
+- ~~The app draws the obstacles as see-through wireframe boxes (gizmos), not filled translucent meshes.~~ Filled (app views, 13 November).
 - ~~The crash's kinetic energy is not booked as a loss; the energy budget of a run with a crash does not close.~~ Booked (eleventh review fixes), with the bleeder loss of the drives switched off.
 - ~~The live check builds the machine's scene every base step while obstacles exist: 4 s of the T-gantry's cycle take 0.61 s instead of 0.23 s on the CLI (the planned check included). Without obstacles nothing changes. Worth a cheaper body list per machine if obstacles are used in searches.~~ The machines build only their collision boxes now (eleventh review fixes).
 - The delta's forearms are not collision bodies; turned parts count as their unturned boxes.
@@ -1304,3 +1304,25 @@ Left open:
 - A piece too short for its curves halves every length of the path, not only the curves at that piece.
 - Next to an arc, a fixed arc's gap is taken as its e; the exact gap between the moved circles differs slightly, and
   a curve that would then take too much of an arc is refused (shorter curves, then the path as given).
+
+## App views: workspace map, torque-speed curves, energy flow, filled obstacles (13 November)
+
+| Item | What was built | Test |
+| --- | --- | --- |
+| Workspace map | `Machine::condition(tool_pose)`: the 2-norm condition number of the kinematics' Jacobian, `INFINITY` out of reach, `None` by default (no map). The delta gives that of `condition_number` (the signal `kinematics.condition`). `Model::workspace_slice(n)`: an n x n grid at the height `inputs.workspace_z` (the middle of the z range by default, clamped to it), over the x and y ranges and half their width beyond each end, per node the condition and whether `unreachable` (no slack) lets the machine go there; the colour scale ends at `ratings.max_condition_number`. App, Path tab: a height slider, the slice drawn with the painter (dark at 1, light at the limit, red beyond, faint where reached but not gone to, empty out of reach), the travel range framed, the condition under the pointer | `the_workspace_map_ends_at_the_hand_calculated_reach_of_the_delta`: at z = -1.0 m the middle row ends towards -x at 0.15 - sqrt(1.35^2 - 1) = -0.7569 m (arm 1 stretched; arm 2 still reaches, 0.906 m of its 0.95 m forearm), the first node of the 0.01 m grid at -0.75 m; the envelope's bottom sphere (R 1.0607 m) is 0.3545 m wide there: x = 0.3 gone to, 0.5 reached but not; no map on the other machines |
+| Torque-speed curves | `model::torque_speed_curves(drive)`: the peak curve (as before) and the S1 line, the rated torque both ways up to the rated speed, for the cycle and now for a path (`PathRun::curves`). `points_plot(kind)` takes `Analysis::Cycle` or `Analysis::Path`; the Path tab draws the path's operating points over both curves (PROGRESS "the operating points of a path are not shown") | `the_operating_points_are_shown_over_the_torque_speed_curve` (S1 corners [-rated speed, rated torque], [rated speed, rated torque] from the config; none for a path before one ran), and in `a_path_is_planned_run_and_analysed_in_the_app` the path's points equal its `CycleLoad`'s, its curves `torque_speed_curves` of its drive |
+| Energy flow | `Model::budget_flows()`: three columns of positive energies: supply plus what stores gave back; the electrical rows (copper, resistor, discharge, mains, line module, windings, capacitors) with what `electrical_unaccounted` leaves, and the shaft work plus what the machine's stores gave back; the machine's rows with the rest of `unaccounted`. Drawn under the budget table (which stays) with the painter as a Sankey: bars per column, bands from slices of one column to the next in order, as wide as the energy; names beside bars taller than a line, all in the tooltip | in `the_effect_views_show_torque_parts_energy_budget_and_friction`: first column = second, the shaft work = third, second + third - (first - supply) = supply to 1e-9 of the supply, one bar per non-zero row and per non-zero side rest, every bar positive; "Wellenarbeit" in German |
+| Filled obstacles | `fill_obstacles`: a translucent box (alpha 0.22, rough, casts no shadow) per obstacle of the scene shown, in the colour of its edges (grey, red in contact); the gizmo edges stay. A click goes through them to the parts | screenshot |
+| Screenshot hook | `SIM_APP_TAB` (cycle, effects, search, path, trace, sweep, tuning) opens a tab of the tools panel; `SIM_APP_WORKSPACE_Z` sets the map's height | the screenshots |
+
+Left open:
+
+- The map is a slice and not a volume in the 3D view; the joint-kit machines have no `condition` (the arms' tool pose is
+  their joints, where the Jacobian is the unit matrix, and a condition over metres and radians says little; the SCARA
+  could have one).
+- The S1 line ends at the rated speed: the motor data has no S1 curve above it. One plot for all motors (they share the
+  drive data), each motor's points hidden by its legend entry, not one plot per motor.
+- The map builds the machine every frame the Path tab is open (as the friction view does): 61 x 61 nodes, cheap on
+  the delta.
+- A store that gave energy back is drawn as a source of the first column whichever side it is on; its band goes to the
+  next bars in order, not to its own side's.
