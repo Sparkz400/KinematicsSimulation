@@ -129,9 +129,14 @@ fn rigid_values(time: &[f64], force: &[f64], speed: &[f64]) -> Option<([f64; 4],
 
 /// Stage 1: the rigid values of every axis from a trace, next to the config's. `None` for an axis the
 /// trace does not move in both directions.
+/// The machine has to pass `trace::per_axis_fit` (a linear transformation and an inertia that does not change with the
+/// pose); others are refused with `error-trace-not-linear` and go to `fit_joints`.
 pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Vec<Option<AxisFit>>, TraceError> {
-    let simulated = replay(entry, cfg, trace)?;
     let machine = (entry.build)(&crate::catalog::resolve(entry, cfg)?)?;
+    if !crate::trace::per_axis_fit(machine.as_ref()) {
+        return Err(TraceError { key: "error-trace-not-linear", detail: String::new() });
+    }
+    let simulated = replay(entry, cfg, trace)?;
     let views = axis_view(machine.as_ref(), trace).into_iter().zip(axis_view(machine.as_ref(), &simulated));
     Ok(views
         .map(|(measured, config)| {
@@ -141,7 +146,173 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
         .collect())
 }
 
-/// The load swinging on the belt against the motor, read from a frequency sweep.
+/// One value of the fit in the motors' coordinates (`fit_joints`): its name as the CLI writes it, of what (a motor's
+/// id, or `payload`), and as in `AxisFit` the config's estimate, the measured one and its standard error. Per motor in
+/// N m, kg m², s and rad at the motor shaft.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JointValue {
+    pub quantity: &'static str,
+    pub of: String,
+    pub config: f64,
+    pub fitted: f64,
+    pub error: f64,
+}
+
+/// Stage 1 in the motors' coordinates (`fit_joints`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct JointFit {
+    pub values: Vec<JointValue>,
+    /// Pairs of `values` (their indices) whose measured estimates correlate by more than `ALIKE`: the trace cannot
+    /// tell them apart, only a sum (or difference) of them is known, and each one's error band is wide for that.
+    pub alike: Vec<(usize, usize)>,
+}
+
+/// Above this correlation of two estimates the trace does not tell them apart.
+pub const ALIKE: f64 = 0.95;
+
+/// The quantities of `fit_joints` per motor, after the factor on the payload (`payload_factor`).
+pub const JOINT_QUANTITIES: [&str; 4] = ["added_inertia_kg_m2", "viscous_friction_nm_s_rad", "coulomb_friction_nm", "constant_torque_nm"];
+
+impl JointFit {
+    /// What the fit says to change in the config, as translation keys with their argument: the factor on the payload,
+    /// per motor the changes of inertia, friction and constant torque at its shaft, and the pairs that cannot be told
+    /// apart.
+    pub fn advice(&self) -> Vec<(&'static str, String)> {
+        let mut out: Vec<(&'static str, String)> = self
+            .values
+            .iter()
+            .map(|v| {
+                let change = |unit: &str| format!("{}: {:+.4} {unit} ± {:.4}", v.of, v.fitted - v.config, v.error);
+                match v.quantity {
+                    "payload_factor" => ("fit-payload", format!("× {:.3} ± {:.3}", v.fitted / v.config, v.error / v.config)),
+                    "added_inertia_kg_m2" => ("fit-joint-inertia", format!("{}: {:+.3e} kg m² ± {:.1e}", v.of, v.fitted - v.config, v.error)),
+                    "viscous_friction_nm_s_rad" => ("fit-joint-viscous", change("N m s/rad")),
+                    "coulomb_friction_nm" => ("fit-joint-coulomb", change("N m")),
+                    _ => ("fit-joint-constant", change("N m")),
+                }
+            })
+            .collect();
+        let name = |i: usize| format!("{} {}", self.values[i].quantity, self.values[i].of);
+        out.extend(self.alike.iter().map(|&(a, b)| ("fit-alike", format!("{} / {}", name(a), name(b)))));
+        out
+    }
+}
+
+/// Least squares of the motor torques on the machine's rigid model in regressor form, τ = Y(q, q̇, q̈) θ, in the motors'
+/// own coordinates: per motor k
+///
+/// τ_k − τ_k,rigid = (θ_p − 1) (τ_k,rigid − τ_k,rigid without payload) + ΔJ_k q̈_k + b_k q̇_k + c_k sign q̇_k + τ0_k,
+///
+/// the rigid torques from `Machine::rigid_motor_torque` at the row's angles, speeds and accelerations. Torque and speed
+/// averaged over the window as `rigid_values` does; the acceleration from the angle, (q[i+w] − 2 q[i] + q[i−w]) / (w dt)²,
+/// since an encoder's angle is far less noisy than the speed differentiated, and noise on a regressor biases its
+/// value towards zero (the speed's slope gave 14 % too little payload on the delta). A motor's row only where it turns
+/// faster than 5 % of its top speed. Values, standard errors and the covariance, in the order [θ_p, then per motor
+/// ΔJ, b, c, τ0]; θ_p is NaN, and left out, where the payload adds nothing (none in the config). `None` where a motor
+/// does not turn both ways or the values cannot be solved for.
+///
+/// A factor on the rest of the rigid model (arms, platform, rotors) is not fitted: on the delta it correlated by more
+/// than 0.95 with the motors' added inertias and constant torques together (gravity is nearly constant over a trace,
+/// and each arm's inertia sits on its own motor), so it made all of them unknown.
+fn joint_values(machine: &mut dyn sim_core::Machine, trace: &Trace) -> Option<(Vec<f64>, Vec<f64>, Vec<Vec<f64>>)> {
+    let (w, rows, n) = (WINDOW, trace.time.len(), trace.motors.len());
+    let p = 1 + 4 * n;
+    let mean = |x: &[f64], i: usize| x[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64;
+    let top: Vec<f64> = trace.motors.iter().map(|m| m.speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()))).collect();
+    let mut samples: Vec<(Vec<f64>, f64)> = Vec::new();
+    let mut ways = vec![[0usize; 2]; n];
+    let (mut with, mut without) = (vec![0.0; n], vec![0.0; n]);
+    for i in w..rows.saturating_sub(w) {
+        let angle: Vec<f64> = trace.motors.iter().map(|m| m.angle[i]).collect();
+        let speed: Vec<f64> = trace.motors.iter().map(|m| mean(&m.speed, i)).collect();
+        let half = 0.5 * (trace.time[i + w] - trace.time[i - w]);
+        let acc: Vec<f64> = trace.motors.iter().map(|m| (m.angle[i + w] - 2.0 * m.angle[i] + m.angle[i - w]) / (half * half)).collect();
+        machine.set_payload_attached(false);
+        machine.rigid_motor_torque(&angle, &speed, &acc, &mut without);
+        machine.set_payload_attached(true);
+        machine.rigid_motor_torque(&angle, &speed, &acc, &mut with);
+        for k in (0..n).filter(|&k| speed[k].abs() > 0.05 * top[k]) {
+            let mut x = vec![0.0; p];
+            x[0] = with[k] - without[k];
+            x[1 + 4 * k..5 + 4 * k].copy_from_slice(&[acc[k], speed[k], speed[k].signum(), 1.0]);
+            ways[k][usize::from(speed[k] > 0.0)] += 1;
+            samples.push((x, mean(&trace.motors[k].torque, i) - with[k]));
+        }
+    }
+    if ways.iter().any(|both| both[0].min(both[1]) < 10 * (2 * w + 1)) {
+        return None;
+    }
+    // Columns scaled to unit length, as their sizes span decades; a payload column of zeros is left out.
+    let norm: Vec<f64> = (0..p).map(|j| samples.iter().map(|(x, _)| x[j] * x[j]).sum::<f64>().sqrt()).collect();
+    let used: Vec<usize> = (0..p).filter(|&j| j > 0 || norm[0] > 1e-12).collect();
+    let m = used.len();
+    let (mut normal, mut right) = (vec![0.0; m * m], vec![0.0; m]);
+    for (x, y) in &samples {
+        let z: Vec<f64> = used.iter().map(|&j| x[j] / norm[j]).collect();
+        for a in 0..m {
+            right[a] += z[a] * y;
+            for b in 0..m {
+                normal[a * m + b] += z[a] * z[b];
+            }
+        }
+    }
+    let unit = |a: usize| (0..m).map(|b| if a == b { 1.0 } else { 0.0 }).collect::<Vec<f64>>();
+    let inverse: Vec<Vec<f64>> = (0..m).map(|a| crate::chain::solve(&normal, &unit(a))).collect::<Option<_>>()?;
+    let mut values = vec![f64::NAN; p];
+    for (a, &j) in used.iter().enumerate() {
+        values[j] = (0..m).map(|b| inverse[a][b] * right[b]).sum::<f64>() / norm[j];
+    }
+    let residual: f64 = samples.iter().map(|(x, y)| (y - used.iter().map(|&j| values[j] * x[j]).sum::<f64>()).powi(2)).sum();
+    // Neighbouring rows share most of their window, so only every (2w + 1)th row counts as a measurement.
+    let variance = residual / (samples.len() - m) as f64 * (2 * w + 1) as f64;
+    let mut covariance = vec![vec![f64::NAN; p]; p];
+    for (a, &i) in used.iter().enumerate() {
+        for (b, &j) in used.iter().enumerate() {
+            covariance[i][j] = variance * inverse[a][b] / (norm[i] * norm[j]);
+        }
+    }
+    // Fitted as a change, as the rest; the config's own payload counts 1.
+    values[0] += 1.0;
+    let errors = (0..p).map(|j| covariance[j][j].sqrt()).collect();
+    Some((values, errors, covariance))
+}
+
+/// Stage 1 in the motors' own coordinates, for every machine, and the only one for a machine whose motors do not turn
+/// in proportion to its axes (the delta's arms, a SCARA, an arm): the motor torques regressed on the machine's own
+/// rigid model (`joint_values`), on the trace and on the config's replay of it. For the config the payload's factor
+/// comes out near 1 and the added inertias near 0, friction and constant torque as the config has them at the motor
+/// shaft, gearbox losses and all, so that the difference is what the config is off by. `None` where a motor does not
+/// turn both ways in the trace.
+///
+/// Each motor's added inertia stands for its arm or link's own inertia about the joint as well as its rotor's: the
+/// trace cannot tell those apart. What else it cannot tell apart depends on the moves and is listed in `alike`; a trace
+/// that swings every axis over much of its range at several frequencies (docs/measurement-procedure.md) leaves none.
+pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Option<JointFit>, TraceError> {
+    let simulated = replay(entry, cfg, trace)?;
+    let mut machine = (entry.build)(&crate::catalog::resolve(entry, cfg)?)?;
+    let ids: Vec<&str> = machine.motors().iter().map(|m| m.id).collect();
+    let (Some((fitted, error, covariance)), Some((config, ..))) = (joint_values(machine.as_mut(), trace), joint_values(machine.as_mut(), &simulated)) else {
+        return Ok(None);
+    };
+    let names = std::iter::once(("payload_factor", "payload".to_string())).chain(ids.iter().flat_map(|id| JOINT_QUANTITIES.map(|q| (q, id.to_string()))));
+    let kept: Vec<usize> = (0..fitted.len()).filter(|&j| fitted[j].is_finite()).collect();
+    let values: Vec<JointValue> = names
+        .enumerate()
+        .filter(|(j, _)| fitted[*j].is_finite())
+        .map(|(j, (quantity, of))| JointValue { quantity, of, config: config[j], fitted: fitted[j], error: error[j] })
+        .collect();
+    let mut alike = Vec::new();
+    for (a, &i) in kept.iter().enumerate() {
+        for (b, &j) in kept.iter().enumerate().skip(a + 1) {
+            if (covariance[i][j] / (covariance[i][i] * covariance[j][j]).sqrt()).abs() > ALIKE {
+                alike.push((a, b));
+            }
+        }
+    }
+    Ok(Some(JointFit { values, alike }))
+}
+
+// The load swinging on the belt against the motor, read from a frequency sweep.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Resonance {
     pub frequency: f64,
@@ -222,6 +393,105 @@ pub fn fit_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, measured: &[S
     let frequencies: Vec<f64> = measured.iter().map(|p| p.frequency).collect();
     let config = crate::analysis::frequency_sweep(entry, cfg, motor, &frequencies, amplitude)?;
     Ok(resonance(&config).zip(resonance(measured)).map(|(config, fitted)| SweepFit { config, fitted }))
+}
+
+/// Above this standard error, over the factor, a trace is taken not to excite the mode enough (`fit_move_stiffness`).
+pub const MOVE_STIFFNESS_LIMIT: f64 = 0.1;
+
+/// The config key `fit_move_stiffness` scales unless told another: the belts' stiffness, of every belt machine.
+pub const BELT_STIFFNESS_KEY: &str = "belt.stiffness_ea_n";
+
+/// Stage 2 from an ordinary move's trace (`fit_move_stiffness`): the factor on the stiffness and its standard error,
+/// and the ringing the fit compares, RMS over the motors in N m: in the trace, and what the config's replay with the
+/// factor leaves of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoveStiffness {
+    pub factor: f64,
+    pub error: f64,
+    pub ringing: f64,
+    pub residual: f64,
+}
+
+impl MoveStiffness {
+    /// What to change in the config, as a translation key with its argument: the same advice as from a sweep.
+    pub fn advice(&self) -> (&'static str, String) {
+        ("fit-stiffness", format!("× {:.3} ± {:.3}", self.factor, self.error))
+    }
+}
+
+/// What is left of each motor torque after its mean over 10 ms on either side is taken off: the ringing of the load on
+/// its springs (12 ms a period at 84 Hz), without the rigid motion (ramps of tens of ms and more), which a wrong mass or
+/// friction would put in. Rows within the window of either end are left out.
+fn ringing(trace: &Trace) -> Vec<f64> {
+    let rows = trace.time.len();
+    let step = (trace.time[rows - 1] - trace.time[0]) / (rows - 1) as f64;
+    let w = ((0.01 / step).round() as usize).max(1);
+    let mut out = Vec::new();
+    for m in &trace.motors {
+        out.extend((w..rows.saturating_sub(w)).map(|i| m.torque[i] - m.torque[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64));
+    }
+    out
+}
+
+/// Stage 2 from an ordinary move's trace, no sweep: an output-error fit of the stiffness. The config is replayed with
+/// the value at `key` (the belts' stiffness, `BELT_STIFFNESS_KEY`, or another spring between motor and load) times a
+/// factor, and the factor is the one whose replay's motor torques ring as the trace's do (`ringing`: least squares over
+/// every motor and row). The replay has the config's loops, filters, delays and friction, which damp the ringing of a
+/// move in the trace as they do in the machine, so that they need not be fitted as well; a free two-mass fit of the
+/// torque took the drive's own lag, at 51 Hz on the single axis, for the belt. The masses have to be right first (stage
+/// 1), as for a sweep.
+///
+/// The factor is searched from 1/4 to 4 (nine replays a factor of 1.41 apart, then golden sections to 0.2 %); its
+/// standard error from the curvature of the sum of squares there, σ² = S / (N − 1) widened by (1 + ρ) / (1 − ρ) for
+/// the lag-one correlation ρ of the residuals (the ringing of neighbouring rows is not independent).
+///
+/// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor or the best
+/// factor lies at an end of the range: the trace's moves did not ring the load enough against its noise (a gentle
+/// move, a low jerk, a heavily damped mode). With `fit-move-no-key` where the config has no number at `key`.
+pub fn fit_move_stiffness(entry: &MachineEntry, cfg: &Config, trace: &Trace, key: &str) -> Result<MoveStiffness, TraceError> {
+    let base = cfg.f64(key).map_err(|_| TraceError { key: "fit-move-no-key", detail: key.to_string() })?;
+    let measured = ringing(trace);
+    let cost = |u: f64| -> Result<(f64, Vec<f64>), TraceError> {
+        let mut scaled = cfg.clone();
+        scaled.set_text(&format!("{key} = {:?}", base * u.exp()))?;
+        let residuals: Vec<f64> = ringing(&replay(entry, &scaled, trace)?).iter().zip(&measured).map(|(s, m)| m - s).collect();
+        Ok((residuals.iter().map(|r| r * r).sum(), residuals))
+    };
+    let not_excited = |detail: String| TraceError { key: "fit-move-not-excited", detail };
+    let grid: Vec<f64> = (0..9).map(|i| (i as f64 - 4.0) * 0.5 * std::f64::consts::LN_2).collect();
+    let costs = grid.iter().map(|&u| cost(u).map(|c| c.0)).collect::<Result<Vec<f64>, _>>()?;
+    let best = (0..grid.len()).min_by(|&a, &b| costs[a].total_cmp(&costs[b])).unwrap_or(0);
+    if best == 0 || best + 1 == grid.len() {
+        return Err(not_excited(format!("× {:.2}", grid[best].exp())));
+    }
+    // Golden sections between the neighbours of the best point of the grid.
+    let golden = 0.5 * (5f64.sqrt() - 1.0);
+    let (mut low, mut high) = (grid[best - 1], grid[best + 1]);
+    let (mut a, mut b) = (high - golden * (high - low), low + golden * (high - low));
+    let (mut ca, mut cb) = (cost(a)?.0, cost(b)?.0);
+    while high - low > 0.002 {
+        if ca < cb {
+            (high, b, cb) = (b, a, ca);
+            a = high - golden * (high - low);
+            ca = cost(a)?.0;
+        } else {
+            (low, a, ca) = (a, b, cb);
+            b = low + golden * (high - low);
+            cb = cost(b)?.0;
+        }
+    }
+    let u = 0.5 * (low + high);
+    let ((s, residuals), h) = (cost(u)?, 0.05);
+    let curvature = (cost(u + h)?.0 - 2.0 * s + cost(u - h)?.0) / (h * h);
+    let rho = (residuals.windows(2).map(|w| w[0] * w[1]).sum::<f64>() / s.max(f64::MIN_POSITIVE)).clamp(0.0, 0.98);
+    let variance = s / (residuals.len() - 1) as f64 * (1.0 + rho) / (1.0 - rho);
+    let factor = u.exp();
+    let error = factor * (2.0 * variance / curvature).sqrt();
+    let rms = |x: &[f64]| (x.iter().map(|v| v * v).sum::<f64>() / x.len().max(1) as f64).sqrt();
+    if !(curvature > 0.0 && error <= MOVE_STIFFNESS_LIMIT * factor) {
+        return Err(not_excited(format!("× {factor:.2} ± {:.2}", if curvature > 0.0 { error } else { f64::INFINITY })));
+    }
+    Ok(MoveStiffness { factor, error, ringing: rms(&measured), residual: rms(&residuals) })
 }
 
 #[cfg(test)]

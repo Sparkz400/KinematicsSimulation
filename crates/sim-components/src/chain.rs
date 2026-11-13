@@ -474,6 +474,20 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
     }
 
+    /// Exact in joint coordinates, velocity terms included (`feedforward_torque` leaves them out): M q'' + h at the
+    /// joint over the ratio, plus the rotor's own J_rotor i q''.
+    fn rigid_motor_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], out: &mut [f64]) {
+        let n = self.n();
+        let joint = |x: &[f64]| -> Vec<f64> { (0..n).map(|k| x[k] / self.joints[k].drive.ratio()).collect() };
+        let (q, qd, qdd) = (joint(angle), joint(speed), joint(acc));
+        let (mass, bias) = self.load(&q, &qd);
+        for k in 0..n {
+            let j = &self.joints[k].drive;
+            let at_joint: f64 = (0..n).map(|c| mass[k * n + c] * qdd[c]).sum::<f64>() + bias[k];
+            out[k] = at_joint / j.ratio() + j.rotor_inertia * j.ratio() * qdd[k];
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
