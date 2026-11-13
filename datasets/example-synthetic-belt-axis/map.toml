@@ -1,0 +1,11 @@
+# Signals of trace.csv at the motor shaft. See datasets/README.md.
+format = "csv"
+time = "time"
+
+[[motor]]
+id = "m"
+setpoint = { signal = "position setpoint", per_rev = 1048576 }
+angle = { signal = "position actual", per_rev = 1048576 }
+speed = "speed actual"
+torque = "torque actual"
+torque_setpoint = "torque setpoint"

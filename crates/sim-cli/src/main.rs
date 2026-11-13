@@ -3,6 +3,8 @@
 
 use sim_components::analysis::{SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep, log_spaced, step_response};
 use sim_components::identify::{fit_rigid, fit_sweep, parse_sweep};
+use sim_components::import::{Imported, Mapping, decode, import};
+use sim_components::motor_fit::{Estimate, TwoMass, frequency_response, friction, lag, ringing, two_mass, two_mass_from_ringing};
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
@@ -123,8 +125,9 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => &["--axis", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
-        Some("replay") => &["--trace"],
-        Some("fit") => &["--trace", "--sweep", "--sweep-motor", "--amplitude"],
+        Some("replay") => &["--trace", "--map"],
+        Some("fit") => &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude"],
+        Some("identify") => &["--trace", "--map", "--from", "--to", "--sweep", "--step-from", "--step-to", "--motor-inertia", "--overlay"],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary"],
         _ => &[],
@@ -151,6 +154,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("margins") => margins(args),
         Some("replay") => replay(args),
         Some("fit") => fit(args, tr),
+        Some("identify") => identify(args, tr),
+        Some("check-dataset") => check_dataset(args, tr),
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
         _ => Err(Failure("cli-usage", String::new())),
@@ -236,7 +241,7 @@ fn read(path: &str) -> Result<String, Failure> {
 fn replay(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
-    let measured = Trace::parse(&read(args.option("--trace").ok_or(Failure("cli-usage", String::new()))?)?, &motors)?;
+    let measured = load_trace(args, &motors)?.trace;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
     println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
     for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
@@ -264,8 +269,8 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut out = output(args, "--out")?;
     let (mut advice, mut result) = (Vec::new(), Ok(()));
     writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
-    if let Some(path) = args.option("--trace") {
-        let measured = Trace::parse(&read(path)?, machine.motors())?;
+    if args.option("--trace").is_some() {
+        let measured = load_trace(args, machine.motors())?.trace;
         for (axis, fit) in machine.axes().iter().zip(fit_rigid(entry, &cfg, &measured)?) {
             let Some(fit) = fit else {
                 advice.push(tr.tr_arg("fit-axis-skipped", axis.id));
@@ -295,6 +300,182 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     out.flush().map_err(io)?;
     advice.iter().for_each(|line| eprintln!("{line}"));
     result
+}
+
+/// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see
+/// docs/measurement-procedure.md), or without one in the simulator's own columns for `motors`. Where a
+/// machine is replayed or fitted, the mapping's motors have to be the machine's, in its order.
+fn load_trace(args: &Args, motors: &[sim_core::MotorInfo]) -> Result<Imported, Failure> {
+    let path = args.option("--trace").ok_or(Failure("cli-usage", String::new()))?;
+    let text = decode(&std::fs::read(path).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?);
+    Ok(match args.option("--map") {
+        Some(map) => {
+            let imported = import(&text, &Mapping::parse(&read(map)?)?)?;
+            if !motors.is_empty() && imported.trace.motors.len() != motors.len() {
+                return Err(Failure("error-import-map", format!("{} [[motor]] for {} motors", imported.trace.motors.len(), motors.len())));
+            }
+            imported
+        }
+        None => {
+            let trace = Trace::parse(&text, motors)?;
+            Imported { ids: motors.iter().map(|m| m.id.to_string()).collect(), torque_setpoints: vec![None; trace.motors.len()], trace }
+        }
+    })
+}
+
+/// One line of the `identify` table: quantity, motor, value, standard error and the 95 % interval.
+fn estimate_row(out: &mut dyn Write, name: &str, of: &str, e: Estimate) -> Result<(), Failure> {
+    let (low, high) = e.interval();
+    writeln!(out, "{name},{of},{:.6e},{:.3e},{low:.6e},{high:.6e}", e.value, e.error).map_err(io)
+}
+
+/// A value without an error (a fit quality), in the same table.
+fn value_row(out: &mut dyn Write, name: &str, of: &str, value: f64) -> Result<(), Failure> {
+    writeln!(out, "{name},{of},{value:.6e},,,").map_err(io)
+}
+
+fn two_mass_rows(out: &mut dyn Write, of: &str, m: &TwoMass) -> Result<(), Failure> {
+    let rows = [
+        ("total_inertia_kg_m2", m.total_inertia),
+        ("motor_side_inertia_kg_m2", m.motor_inertia),
+        ("load_side_inertia_kg_m2", m.load_inertia),
+        ("stiffness_nm_rad", m.stiffness),
+        ("damping_nm_s_rad", m.damping),
+        ("resonance_hz", m.resonance),
+        ("anti_resonance_hz", m.anti_resonance),
+    ];
+    rows.into_iter().try_for_each(|(name, e)| estimate_row(out, name, of, e))
+}
+
+/// `identify [MACHINE] --trace FILE [--map FILE]`: one motor's drive train from its own trace, with no
+/// machine config: inertia, friction (Coulomb, viscous, Stribeck, LuGre presliding stiffness), constant
+/// torque, and the lag and dead time from torque setpoint to torque (where mapped) and from position
+/// setpoint to position. `--motor N` picks the motor (default 0). `--from HZ --to HZ` also computes the
+/// frequency response torque to speed from the trace (which needs an excitation in it) and fits the
+/// two-mass model to it; `--sweep FILE` fits it to a measured response instead. `--step-from S [--step-to S]`
+/// fits the ringing of the speed after a torque step, and with `--motor-inertia KGM2` (rotor and what sits on
+/// it) and the fitted total inertia the two-mass model. Every value with its standard error and 95 %
+/// interval, and how well each model reproduces the trace; `--overlay FILE` writes measured and modelled
+/// signals side by side. Without `--map` the trace is in the simulator's columns of MACHINE.
+fn identify(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    if args.option("--trace").is_none() && args.option("--sweep").is_none() {
+        return Err(Failure("cli-usage", String::new()));
+    }
+    let mut out = output(args, "--out")?;
+    writeln!(out, "quantity,of,value,standard_error,ci95_low,ci95_high").map_err(io)?;
+    let mut result = Ok(());
+    let mut overlay: Vec<(String, Vec<f64>)> = Vec::new();
+    let mut time = Vec::new();
+    if args.option("--trace").is_some() {
+        let motors = match args.option("--map") {
+            Some(_) => Vec::new(),
+            None => {
+                let (entry, cfg) = machine_and_config(args)?;
+                (entry.build)(&cfg)?.motors().to_vec()
+            }
+        };
+        let imported = load_trace(args, &motors)?;
+        let k = number(args, "--motor", 0.0)? as usize;
+        let (Some(m), Some(id)) = (imported.trace.motors.get(k), imported.ids.get(k)) else {
+            return Err(Failure("cli-error-bad-argument", format!("--motor {k}")));
+        };
+        let t = &imported.trace.time;
+        time.clone_from(t);
+        let mut total_inertia = None;
+        match friction(t, &m.angle, &m.speed, &m.torque) {
+            Some(f) => {
+                for (name, e) in [("inertia_kg_m2", f.inertia), ("viscous_nm_s_rad", f.viscous), ("coulomb_nm", f.coulomb), ("constant_torque_nm", f.constant)] {
+                    estimate_row(&mut *out, name, id, e)?;
+                }
+                for (name, e) in [("stiction_nm", f.stiction), ("stribeck_speed_rad_s", f.stribeck_speed), ("presliding_stiffness_nm_rad", f.presliding_stiffness)] {
+                    if let Some(e) = e {
+                        estimate_row(&mut *out, name, id, e)?;
+                    }
+                }
+                value_row(&mut *out, "friction_model_fit_percent", id, f.quality.fit_percent)?;
+                value_row(&mut *out, "friction_model_rms_nm", id, f.quality.rms)?;
+                total_inertia = Some(f.inertia);
+                overlay.push(("torque_measured".into(), m.torque.clone()));
+                overlay.push(("torque_model".into(), f.model));
+            }
+            None => eprintln!("{}", tr.tr_arg("error-identify-friction", id)),
+        }
+        let lags = [("current_loop", imported.torque_setpoints[k].as_deref(), &m.torque), ("position_loop", Some(m.setpoint.as_slice()), &m.angle)];
+        for (name, input, output) in lags {
+            let Some(input) = input else { continue };
+            match lag(t, input, output) {
+                Some(l) => {
+                    estimate_row(&mut *out, &format!("{name}_gain"), id, l.gain)?;
+                    estimate_row(&mut *out, &format!("{name}_time_constant_s"), id, l.time_constant)?;
+                    estimate_row(&mut *out, &format!("{name}_dead_time_s"), id, l.dead_time)?;
+                    value_row(&mut *out, &format!("{name}_fit_percent"), id, l.quality.fit_percent)?;
+                    value_row(&mut *out, &format!("{name}_following_error_fit_percent"), id, l.error_quality.fit_percent)?;
+                    overlay.push((format!("{name}_measured"), output.clone()));
+                    overlay.push((format!("{name}_model"), l.model));
+                }
+                None => eprintln!("{}", tr.tr_arg("error-identify-lag", id)),
+            }
+        }
+        if let (Some(from), Some(to)) = (args.number("--from")?, args.number("--to")?) {
+            if !(from > 0.0 && to > from) {
+                return Err(Failure("cli-error-bad-argument", format!("--from {from} --to {to}")));
+            }
+            match frequency_response(t, &m.torque, &m.speed, &log_spaced(from, to, SWEEP_POINTS)) {
+                Some(response) => {
+                    value_row(&mut *out, "response_lowest_coherence", id, response.iter().map(|(_, c)| *c).fold(1.0, f64::min))?;
+                    let points: Vec<_> = response.into_iter().map(|(p, _)| p).collect();
+                    match two_mass(&points) {
+                        Some(model) => two_mass_rows(&mut *out, id, &model)?,
+                        None => result = Err(Failure("error-identify-two-mass", String::new())),
+                    }
+                }
+                None => result = Err(Failure("error-identify-response", String::new())),
+            }
+        }
+        if let Some(from) = args.number("--step-from")? {
+            match ringing(t, &m.speed, from, number(args, "--step-to", t[t.len() - 1])?) {
+                Some(r) => {
+                    estimate_row(&mut *out, "ringing_frequency_hz", id, r.frequency)?;
+                    estimate_row(&mut *out, "ringing_damping_ratio", id, r.damping_ratio)?;
+                    value_row(&mut *out, "ringing_fit_percent", id, r.quality.fit_percent)?;
+                    if let (Some(motor), Some(total)) = (args.number("--motor-inertia")?, total_inertia) {
+                        two_mass_rows(&mut *out, id, &two_mass_from_ringing(&r, total, Estimate { value: motor, error: 0.0 }))?;
+                    }
+                }
+                None => result = Err(Failure("error-identify-ringing", String::new())),
+            }
+        }
+    }
+    if let Some(path) = args.option("--sweep") {
+        match two_mass(&parse_sweep(&read(path)?)?) {
+            Some(model) => two_mass_rows(&mut *out, "sweep", &model)?,
+            None => result = Err(Failure("error-identify-two-mass", String::new())),
+        }
+    }
+    out.flush().map_err(io)?;
+    if let Some(path) = args.option("--overlay") {
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path).map_err(io)?);
+        let names: Vec<&str> = overlay.iter().map(|(n, _)| n.as_str()).collect();
+        writeln!(file, "time,{}", names.join(",")).map_err(io)?;
+        for (row, t) in time.iter().enumerate() {
+            let values: Vec<String> = overlay.iter().map(|(_, v)| format!("{:.9e}", v[row])).collect();
+            writeln!(file, "{t:.9e},{}", values.join(",")).map_err(io)?;
+        }
+        file.flush().map_err(io)?;
+    }
+    result
+}
+
+/// `check-dataset DIR`: what keeps a dataset folder from being published (datasets/README.md).
+fn check_dataset(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let dir = args.positional(1).ok_or(Failure("cli-usage", String::new()))?;
+    let problems = sim_components::dataset::check(std::path::Path::new(dir));
+    if problems.is_empty() {
+        println!("{}", tr.tr_arg("dataset-ok", dir));
+        return Ok(());
+    }
+    problems.iter().for_each(|p| println!("{}", tr.tr_arg("dataset-problem", p)));
+    Err(Failure("dataset-problem", format!("{} problems in {dir}", problems.len())))
 }
 
 fn io(e: std::io::Error) -> Failure {

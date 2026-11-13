@@ -1,0 +1,11 @@
+Trace;Drive_1 Trace 1
+Recording;2026-11-13 10:00:00
+Sampling time;1 ms
+
+Time [ms];r2665 Position setpoint [LU];r2521[0] Position actual value [LU];r61[0] Speed actual value unsmoothed [1/min];r80[0] Torque actual value [Nm];r79[0] Torque setpoint total [Nm]
+0;0;-100;600;1,25;1,3
+1;1000;900;600;1,26;1,3
+2;2000;1900;600;1,27;1,3
+3;3000;2900;600;1,28;1,3
+4;4000;3900;600;1,29;1,3
+5;5000;4900;600;1,3;1,3

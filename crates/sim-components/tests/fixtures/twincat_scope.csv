@@ -1,0 +1,37 @@
+Name	trace_axis1
+File	C:\TwinCAT\Scope	race_axis1.csv
+Starttime of export	132959733843760000	Montag, 2. Mai 2022	15:56:24.376
+Endtime of export	132959733853750000	Montag, 2. Mai 2022	15:56:25.375
+
+
+Name	SetPos	Name	ActPos	Name	ActVelo	Name	Torque
+SymbolComment		SymbolComment		SymbolComment		SymbolComment	
+Data-Type	REAL64	Data-Type	REAL64	Data-Type	REAL64	Data-Type	INT16
+SampleTime[ms]	1	SampleTime[ms]	1	SampleTime[ms]	1	SampleTime[ms]	0,5
+VariableSize	8	VariableSize	8	VariableSize	8	VariableSize	2
+SymbolBased	True	SymbolBased	True	SymbolBased	True	SymbolBased	True
+IndexGroup	16448	IndexGroup	16448	IndexGroup	16448	IndexGroup	16448
+IndexOffset	385000	IndexOffset	385000	IndexOffset	385000	IndexOffset	385000
+SymbolName	MAIN.Axis.NcToPlc.SetPos	SymbolName	MAIN.Axis.NcToPlc.ActPos	SymbolName	MAIN.Axis.NcToPlc.ActVelo	SymbolName	MAIN.Drive.TorqueActual
+NetID	192.168.0.1.1.1	NetID	192.168.0.1.1.1	NetID	192.168.0.1.1.1	NetID	192.168.0.1.1.1
+Port	851	Port	851	Port	851	Port	851
+Offset	0	Offset	0	Offset	0	Offset	0
+ScaleFactor	1	ScaleFactor	1	ScaleFactor	1	ScaleFactor	1
+BitMask	0xffffffffffffffff	BitMask	0xffffffffffffffff	BitMask	0xffffffffffffffff	BitMask	0xffffffffffffffff
+Unit	mm (Length)	Unit	mm (Length)	Unit	mm/s (Velocity)	Unit	‰ (None)
+Unit ScaleFactor	1	Unit ScaleFactor	1	Unit ScaleFactor	1	Unit ScaleFactor	1
+Unit Offset	0	Unit Offset	0	Unit Offset	0	Unit Offset	0
+
+0	0,0	0	-0,25	0	500	0,0	100
+1	0,5	1	0,25	1	500	0,5	110
+2	1,0	2	0,75	2	500	1,0	120
+3	1,5	3	1,25	3	500	1,5	130
+4	2,0	4	1,75	4	500	2,0	140
+5	2,5	5	2,25	5	500	2,5	150
+ 	 	 	 	 	 	3,0	160
+ 	 	 	 	 	 	3,5	170
+ 	 	 	 	 	 	4,0	180
+ 	 	 	 	 	 	4,5	190
+ 	 	 	 	 	 	5,0	200
+ 	 	 	 	 	 	5,5	210
+EOF

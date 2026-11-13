@@ -1,0 +1,40 @@
+# Copy this folder to datasets/<id>/, fill in every field, and run `sim-cli check-dataset datasets/<id>`.
+# Required unless marked optional. Numbers in SI units. See datasets/README.md.
+
+[dataset]
+id = "template"                      # the folder's name: lower case, digits and dashes
+title = "Belt axis, friction map and step"
+description = "What was measured, on what, and anything a reader needs to know (a worn belt, a cold machine)."
+license = "CC-BY-4.0"                # CC0-1.0, CC-BY-4.0, CC-BY-SA-4.0, ODbL-1.0 or PDDL-1.0
+contributor = "anonymous"            # an organisation, or "anonymous"; no person's name, no e-mail
+recorded = "2026-11"                 # year and month only
+synthetic = false                    # true only for data a simulator made
+
+[machine]
+kind = "single belt axis"            # what the motor drives
+transmission = "toothed belt AT5, 25 mm, pulley 22 teeth, no gearbox"
+mounting = "horizontal"              # horizontal, vertical, inclined 30 deg, ...
+travel_per_motor_rev_m = 0.110       # optional: for a linear axis
+payload_kg = 0.0                     # optional
+
+[drive]
+vendor = "Siemens"                   # Siemens, Beckhoff, CODESYS-based (name the drive), ...
+family = "SINAMICS S210"
+current_cycle_s = 62.5e-6            # optional, the three cycles of the drive's loops
+speed_cycle_s = 125e-6               # optional
+position_cycle_s = 1e-3              # optional
+
+[motor]
+family = "1FK2"                      # the series, nothing that names one motor
+rated_torque_nm = 1.27
+rotor_inertia_kg_m2 = 0.358e-4       # optional, from the data sheet
+encoder_counts_per_rev = 1048576     # optional
+
+# One per file. test: inertia-sines, friction-map, slow-reversal, torque-step, noise-excitation,
+# frequency-response (a file with frequency_hz and gain_rad_s_per_nm, no map) or cycle.
+[[recording]]
+file = "friction-map.csv"
+map = "map.toml"
+test = "friction-map"
+sample_time_s = 1e-3
+notes = "optional: speeds, loop settings, temperature"

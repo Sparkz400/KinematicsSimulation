@@ -851,7 +851,7 @@ What the fit can and cannot recover:
 | Coulomb friction per axis | The belt's damping from friction (the damping of the dip includes friction and the gearbox) |
 | Constant force per axis (weight, incline, cable pull) | Stiffness from a move's trace: the loops and friction damp the ringing, a sweep is required |
 | One factor on the stiffness between motor and load, from a sweep | Which spring between motor and load is off: the factor counts all of them |
-| | Drive delays and filters (stage 3 is not built) |
+| | Drive delays and filters: per motor with `sim-cli identify` (below), not per axis |
 | | Backlash, tooth stiffness, frame and Z-axis stiffness |
 
 Limits for this task:
@@ -862,7 +862,11 @@ Limits for this task:
 - A wrong friction shows as a few percent of wrong mass and the other way round, because of gearbox losses. Change the config and fit again.
 - The stiffness factor holds only once the masses are right.
 - A sweep with a small amplitude finds no dip when friction is on. A sweep at 0.05 N m gives `No stiffness fitted: the measured sweep or the config's own shows no dip with both flanks inside the swept range.` That is a failure like any other: `fit` ends with exit code 2, after writing what a trace gave. The sweep also has to contain the dip and both its flanks. Its frequencies have to be above zero.
-- All of this was tested on traces the simulator made, with added noise. No trace of a real drive has been read. Real exports will need their columns renamed and their units converted to rad, rad/s and N m at the motor shaft.
+- All of this was tested on traces the simulator made, with added noise. No trace of a real drive has been read.
+
+**Vendor traces.** `replay`, `fit` and `identify` take `--map FILE` beside `--trace FILE`: a mapping that says which signals of an export of a SINAMICS (Startdrive), TwinCAT Scope or CODESYS trace, or of any CSV, are the position setpoint, position, speed, torque and torque setpoint, and how to convert their units (LU, increments, mm, 1/min, %, ‰) to rad, rad/s and N m at the motor shaft. A template is in [datasets/template/map.toml](../datasets/template/map.toml).
+
+**Identification without a config.** `sim-cli identify --trace FILE --map FILE` fits one motor's drive train from its own trace: total inertia, viscous, Coulomb and (where the trace shows it) Stribeck friction, the LuGre presliding stiffness, a constant torque, and the lag and dead time from torque setpoint to torque and from position setpoint to position. With `--from HZ --to HZ` (a trace with a noise excitation), `--sweep FILE` or `--step-from S` (a torque step) also stiffness and damping between motor and load as a two-mass model. Every value with its standard error and 95 % interval, and how well each model reproduces the trace. Which test moves to record, at which sample rate, and how to read the result: [Measuring a drive train](measurement-procedure.md). Measured datasets are published in [datasets/](../datasets/README.md) and checked with `sim-cli check-dataset DIR`.
 
 ## See where torque and energy go
 

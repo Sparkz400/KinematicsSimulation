@@ -1,15 +1,23 @@
 //! Components: belt span, friction contact, gearbox, rotary joint, motor, drive, profile generator, encoder. Know no machine.
 
 /// (language code, translation file contents) for everything the components name.
-pub static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
+pub static I18N: &[(&str, &str)] = &[
+    ("en", include_str!("../i18n/en.ftl")),
+    ("de", include_str!("../i18n/de.ftl")),
+    ("en", include_str!("../i18n/import.en.ftl")),
+    ("de", include_str!("../i18n/import.de.ftl")),
+];
 
 pub mod analysis;
 pub mod catalog;
 pub mod control;
+pub mod dataset;
 pub mod drive;
 pub mod identify;
+pub mod import;
 pub mod joint;
 pub mod mech;
+pub mod motor_fit;
 pub mod path;
 pub mod profile;
 pub mod sim;
