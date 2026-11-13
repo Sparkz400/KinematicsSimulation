@@ -125,6 +125,14 @@ gearbox_rated_torque_nm = 120.0
 gearbox_max_torque_nm = 192.0
 gearbox_max_input_speed_rpm = 6000.0
 gearbox_reference_speed_rpm = 400.0
+# The fatigue of the gearbox's gearing above its rated torque, by Palmgren and Miner's damage sum over the cycle's
+# output torque (Siemens' own method is in its gearbox manual, which is not in this repository), on a Woehler line
+# through Siemens' two figures: gearbox_max_torque_nm (M2max) for at most 30000 output revolutions (equipment manual
+# 04/2025, chapter 6), and no damage at or below gearbox_rated_torque_nm (M2N). A torque M between allows
+# 30000 * (M2max / M)^k output revolutions.
+# [estimate] k = 8.7, the slope of the tooth root's S-N line of case-hardened gears in ISO 6336-3 (life factor 2.5 at
+# 10^3 load cycles, 1 from 3 * 10^6: ln(3000) / ln(2.5)), the root stress in proportion to the torque.
+gearbox_gearing_wohler_exponent = 8.7
 # The DC link of the S210 converter. [estimate] as for the delta picker.
 dc_link_capacitance_uf = 66.0
 braking_threshold_v = 770.0
@@ -180,3 +188,4 @@ ratings.line_module_efficiency = [0.95, 0.99]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]

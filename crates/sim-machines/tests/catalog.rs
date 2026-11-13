@@ -403,16 +403,17 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
 }
 
 /// The EXCT-30 config passes every check with margin: in the worst case of both band modes. One at a time,
-/// each of its 61 bounded values at its low and at its high bound (123 cycles); and all of them between their
+/// each of its 67 bounded values at its low and at its high bound (135 cycles); and all of them between their
 /// bounds at once, 60 times. Its belt pretension, X jerk limit, input shaper and corner blending were chosen for
 /// this (see the comments in the file): the slackest belt section keeps more than 100 N, the pulley shafts
 /// carry less than the 1500 N of the lowest shaft rating the file allows for, and the tool is within 0.07 mm
 /// in the second half of every dwell, against a tolerance of 0.1 mm.
 ///
-/// All but one: the rating life of the pulley shaft bearings ("pulley-bearing-life", added with the life estimates)
-/// is 31800 h as written, but below the required 20000 h with the belt pretension at its high bound (550 N) or the
-/// bearings' load rating, which Festo does not publish, at its low bound. That is a finding about the estimate, held
-/// here so that it shows when either changes.
+/// The pulley shaft bearings ("pulley-bearing-life") pass too since the life modification factor a_ISO of ISO 281 is in
+/// their life: 325800 h as written (31800 h without it), above 73000 h with each value at a bound alone and above
+/// 51000 h in the 60 samples. At the worst corner of the bounds they do not (see the test below): that is a finding
+/// about the estimates (Festo publishes neither the bearings nor their lubrication), held here so that it shows when
+/// they change.
 #[test]
 fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() {
     use sim_components::analysis::{Band, analyse_cycle, bounds, verdict_bands, verdict_bands_sampled};
@@ -421,10 +422,10 @@ fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() 
     assert!(bounded.len() >= 60 && bounded.contains(&("belt.pretension_n".to_string(), 350.0, 550.0)));
     let band = |bands: &[Band], check: &str| bands.iter().find(|b| b.verdict.check == check).unwrap().clone();
     for (mode, bands) in [("one at a time", verdict_bands(&machine_t_gantry::ENTRY, &cfg, &bounded).unwrap()), ("sampled", verdict_bands_sampled(&machine_t_gantry::ENTRY, &cfg, &bounded, 60, 1).unwrap())] {
-        let failed: Vec<&Band> = bands.iter().filter(|b| (!b.ok || b.share < 1.0) && b.verdict.check != "pulley-bearing-life").collect();
+        let failed: Vec<&Band> = bands.iter().filter(|b| !b.ok || b.share < 1.0).collect();
         assert!(failed.is_empty(), "{mode}: {failed:?}");
         let bearing = band(&bands, "pulley-bearing-life");
-        assert!(bearing.verdict.ok && !bearing.ok && bearing.low < 20000.0, "{mode}: {bearing:?}");
+        assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
         let (slack, settling, radial) = (band(&bands, "belt-slack"), band(&bands, "settling"), band(&bands, "gearbox-radial-load"));
         assert!(slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0, "{mode}: slackest {} N, settling {} m, radial {} N", slack.low, settling.high, radial.high);
         // The highest belt tension is judged too, against the estimate of 2140 N (a 5 mm pitch belt as stiff as Festo's), and passes in the worst case.
@@ -438,7 +439,9 @@ fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() 
 
 /// The EXCT-30 passes `settling` at the worst corner of its bounds that `verdict_worst` finds, with the second input
 /// shaper at 17.5 Hz (with the 25 Hz shaper alone it was 0.115 mm against 0.1 mm), and so does every other check but
-/// the pulley shaft bearings' life (see the test above). About 2400 cycles, 50 s on all cores of this machine.
+/// the pulley shaft bearings' life: about 10000 h there, with the pretension, the bearings' load rating and fatigue load
+/// limit, the lubricant's viscosity and the cleanliness at their bad bounds (see the test above). About 2400 cycles,
+/// 50 s on all cores of this machine.
 #[test]
 fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
     use sim_components::analysis::{bounds, verdict_bands, verdict_worst};

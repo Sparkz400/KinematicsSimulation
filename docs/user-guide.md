@@ -66,9 +66,9 @@ The cycle is the list of `[[cycle.segment]]` in the config: target pose, dwell t
 
 ```text
 $ sim-cli analyze t-gantry
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation
-a,6.080000,0.559623,0.165360,200.4514,0.1476,0.1302,204.64,334.35,0.3676,1.23,85.026,10.095,28.21,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1252e5,6.7359e9,1.9095e-1
-b,6.080000,0.460106,0.153385,200.4378,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.03,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175176,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9950e6,2.1222e5,1.0201e10,1.5154e-1
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h
+a,6.080000,0.559459,0.165360,200.4513,0.1475,0.1302,204.64,334.35,0.3676,1.23,85.025,10.095,28.22,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7222e5,6.7359e9,1.9095e-1,,
+b,6.080000,0.460121,0.153385,200.4381,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.02,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175177,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7127e5,1.0200e10,1.5155e-1,,
 ```
 
 The simulator starts the cycle, lets the first pass go by, and measures the second. One row per motor. Columns that describe the machine, not one motor, repeat in every row.
@@ -101,9 +101,11 @@ The simulator starts the cycle, lets the first pass go by, and measures the seco
 | `guide_life_km` | km | L10 = (C / P)³ · 50 km for that guide. Empty without `ratings.guide_dynamic_load_rating_n` |
 | `mains_energy_j` | J | With `effects.regenerative_supply`: energy the line module fed back into the mains over the pass (after its efficiency). 0 without |
 | `guide_life_h` | h | `guide_life_km` over the mean speed of that guide's axis. Machine-wide |
-| `pulley_bearing_life_h` | h | Rating life of the bearing that takes the belt's pull on this motor's pulley shaft: (C / P)³ · 10⁶ / (60 n), C = `ratings.pulley_bearing_load_rating_n`, P the cubic mean of the radial load weighted with the speed, n the pulley's mean speed in r/min |
+| `pulley_bearing_life_h` | h | Rating life of the bearing that takes the belt's pull on this motor's pulley shaft: (C / P)³ · 10⁶ / (60 n), C = `ratings.pulley_bearing_load_rating_n`, P the cubic mean of the radial load weighted with the speed, n the pulley's mean speed in r/min; times ISO 281's a_ISO for lubrication and contamination where the config has the four values it needs |
 | `gearbox_life_h` | h | Life of the gearbox's planet bearings by Siemens' formula, 20000 h · (n2B / n2) · (M2N / M2eq)^(10/3). Empty without `ratings.gearbox_rated_torque_nm` and `gearbox_reference_speed_rpm` (the EXCT-30 has no gearbox) |
 | `belt_tooth_utilisation` | fraction | The belt's tooth load on this motor's pulley over what its teeth allow at the pulley's speed (Megadyne's method, with `ratings.belt_service_factor`), the highest over the cycle. Not a life: no belt maker publishes one |
+| `gearbox_gearing_life_h` | h | Life of the gearbox's gearing from the torque above its rated torque (Palmgren–Miner on Siemens' two torque figures). Empty where the cycle never takes the gearbox above `ratings.gearbox_rated_torque_nm` |
+| `motor_bearing_life_h` | h | Life of the motor's bearings under the belt's pull. Only where the pulley sits on the motor shaft (`ratings.motor_bearing_load_rating_n` set, no gearbox); empty in every shipped config |
 
 The exact definitions are in the [model reference](model-reference.md#analysis-quantities).
 
@@ -114,15 +116,15 @@ Then judge the cycle:
 ```text
 $ sim-cli verdicts t-gantry
 check,motor,value,limit,result
-motor-peak,a,0.1476,1.000,ok
+motor-peak,a,0.1475,1.000,ok
 motor-thermal,a,1.227,100.0,ok
 drive-current,a,0.3676,3.000,ok
 drive-peak-current,a,1.246,10.90,ok
 gearbox-continuous,a,0.7955,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
 gearbox-peak,a,2.175,64.00,ok
-pulley-bearing-life,a,212521,20000,ok
-gearbox-life,a,6735878139,20000,ok
+pulley-bearing-life,a,472218,20000,ok
+gearbox-life,a,6735891797,20000,ok
 belt-tooth-load,a,0.1910,1.000,ok
 dc-link-energy,a,5.865,6.205,ok
 dc-link-overvoltage,a,221.4,257.6,ok
@@ -132,7 +134,7 @@ belt-tension,,334.4,1500,ok
 belt-slack,,204.6,0,ok
 gearbox-radial-load,,644.8,1500,ok
 guide-load,,177.8,2000,ok
-guide-life,,4994954,20000,ok
+guide-life,,4994946,20000,ok
 ```
 
 | Check | Value | Limit | Unit |
@@ -154,6 +156,8 @@ guide-life,,4994954,20000,ok
 | `guide-load` | `guide_load_peak_n` | `ratings.guide_max_load_n` | N |
 | `pulley-bearing-life` | `pulley_bearing_life_h` | `ratings.required_life_h` | h |
 | `gearbox-life` | `gearbox_life_h` | `ratings.required_life_h` | h |
+| `gearbox-gearing-life` | `gearbox_gearing_life_h` (only where the cycle exceeds the rated torque) | `ratings.required_life_h` | h |
+| `motor-bearing-life` | `motor_bearing_life_h` | `ratings.required_life_h` | h |
 | `guide-life` | `guide_life_h` | `ratings.required_life_h` | h |
 | `belt-tooth-load` | `belt_tooth_utilisation` | 1 | fraction |
 | `gearbox-thermal` | where the hottest gearbox settles on the cycle (only with `effects.part_heating`; none on a direct drive) | `thermal.gearbox_max_rise_k` | K |
@@ -164,8 +168,8 @@ guide-life,,4994954,20000,ok
 Limits for this task:
 
 - A rating that the config leaves out is not judged. No row is not a pass. The same holds for `gearbox-thermal` and `guide-thermal` with `effects.part_heating` and `effects.thermal_feedback` off, for `belt-tooth-jump` without `effects.belt_tooth_jump` and for `belt-span-resonance` without `effects.belt_span_vibration`. With it on, the EXCT-30's X guide settles at 25 K of 40 K and fails the worst case of `--bands` (51 K at the high bound of its thermal resistance); the thermal resistances are estimates (see the config reference).
-- `belt-slack` and the three lives are the checks where the value has to stay above the limit. `belt-slack` also fails if any section spent any time without tension.
-- The lives are the makers' formulas with ratings that are partly estimates; see the [model reference](model-reference.md#analysis-quantities) for what they leave out. The motors' own bearings are not estimated: in these configs the belt does not pull on a motor shaft.
+- `belt-slack` and the lives are the checks where the value has to stay above the limit. `belt-slack` also fails if any section spent any time without tension.
+- The lives are the makers' formulas with ratings that are partly estimates; see the [model reference](model-reference.md#analysis-quantities) for what they leave out. The motors' own bearings have no figure in these configs: the belt does not pull on a motor shaft.
 - `dc-link-energy` is `ok` whenever the config has a braking resistor to fall back on, even when the value is at or above the limit. The two resistor rows appear only when the resistor is needed. All three default configs simulate the DC link (`effects.dc_link = true`); with it off the braking rows are estimates from what the motor feeds back.
 - A braking threshold at or below `drive.bus_voltage_v` is refused (`Configuration value is out of range: ratings.braking_threshold_v`), simulated or not: it is a rating for another DC link voltage.
 - Values are printed with four significant digits and no exponent, so `settling` shows as `0.00004588`.
@@ -198,8 +202,8 @@ A config can describe a real machine with its values taken from the catalogue. [
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-a,2.048000,3.659797,1.459734,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
-b,2.048000,3.036510,1.391431,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
+a,2.048000,3.659797,1.459735,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
+b,2.048000,3.036505,1.391430,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
 ```
 
 Five values in this config are choices of the designer, made so that the checks pass in the worst case of the error bands ([below](#see-which-unknown-parameters-matter-and-judge-with-error-bands)): a belt pretension of 450 N, an X jerk limit of 150 m/s³, input shaping at a fixed 25 Hz with a second shaper at 17.5 Hz, and corner blending. The comments in the file give the reasons.
@@ -209,7 +213,7 @@ Like the default configs, this one has `effects.dc_link = true`, so the braking 
 ```text
 dc-link-energy,a,9.943,9.943,ok
 braking-resistor-continuous,a,8.303,100.0,ok
-braking-resistor-peak,a,200.5,3000,ok
+braking-resistor-peak,a,200.5,5700,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ```
 
@@ -256,13 +260,13 @@ $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
 Search time on 16: 0.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2886,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,pulley-bearing-life,0.6309,3.2977,41.56
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,pulley-bearing-life,0.6310,3.4296,21.55
-,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,pulley-bearing-life,0.6311,3.3446,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,pulley-bearing-life,0.6311,3.4468,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,pulley-bearing-life,0.6311,3.5158,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,pulley-bearing-life,0.6310,3.6598,6.88
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5297,3.2886,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5294,3.2977,41.56
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4296,21.55
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3446,11.27
+,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4468,12.07
+,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5158,14.67
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6598,6.88
 ...
 ,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6796,3.4378,167.96
 ,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
@@ -270,7 +274,7 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 ,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
 
-On the EXCT-30 every passing motor has the same tightest check, the life of the pulley shaft bearings (20000 h required of about 31700 h), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`.
+On the EXCT-30 no passing motor comes near a limit. The tightest check is the dwell for the lightest motors (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required.
 
 The search runs every motor of the catalogue that is offered at the supply on the config's cycle, each with the drive the catalogue pairs with it, on all processor cores. Passing motors come first, cheapest first. Failing ones follow, nearest to passing first. A candidate whose drives trip on DC link overvoltage comes after all of these, with `inf` as its `tightest_utilisation`: its figures end at the trip.
 
@@ -320,8 +324,8 @@ $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
 Search time on 16: 0.7 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,18.72
-,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,pulley-bearing-life,0.6311,3.5060,54.09
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5060,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5060,54.09
 ...
 ```
 
@@ -336,7 +340,7 @@ ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9078,3.9932,25.
 ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9087,3.9946,51.85
 ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,dc-link-energy,0.6367,3.8864,26.96
 ...
-EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,pulley-bearing-life,0.6310,3.2869,20.39
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5299,3.2869,20.39
 ...
 EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7292,5.0201,52.65
 ...
@@ -410,11 +414,11 @@ motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
 drive-current,a,1.145,5.000,ok,1.125,1.198,ok
 drive-peak-current,a,2.874,19.00,ok,2.770,3.091,ok
 pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
-pulley-bearing-life,a,31788,20000,ok,17349,67792,FAIL
+pulley-bearing-life,a,325761,20000,ok,73164,1194834,ok
 belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
 dc-link-energy,a,9.943,9.943,ok,4.971,23.24,ok
 braking-resistor-continuous,a,8.303,100.0,ok,4.537,13.16,ok
-braking-resistor-peak,a,200.5,3000,ok,138.7,218.2,ok
+braking-resistor-peak,a,200.5,5700,ok,138.7,218.2,ok
 dc-link-overvoltage,a,770.0,820.0,ok,709.1,790.0,ok
 ...
 settling,,0.00003947,0.0001000,ok,0.00003446,0.00004434,ok
@@ -422,10 +426,10 @@ belt-tension,,555.0,2140,ok,455.0,655.0,ok
 belt-slack,,257.8,0,ok,157.8,357.8,ok
 gearbox-radial-load,,1000,2000,ok,800.4,1200,ok
 guide-load,,185.0,2000,ok,177.0,276.7,ok
-guide-life,,3024172,20000,ok,378021,24193374,ok
+guide-life,,3024169,20000,ok,378021,24193350,ok
 ```
 
-`low` and `high` are the lowest and highest value the check took over all runs: the config as it is, and each bounded parameter at its low and at its high bound. `worst_case` is `ok` only if the check passed in every run. Here every check passes in every run but one: with the belt set to its low bound of 350 N the slackest section keeps 158 N, the tool is at most 0.044 mm off its target in the dwell, and the belt pulls a pulley shaft with at most 1200 N. The pulley shaft bearings fail: 31800 h as written, 17300 h with the belt set 100 N high, against 20000 h required. Their load rating is an estimate (Festo publishes none; see the config's comment), so this says that the bearings are the part to ask Festo about, not that the axis wears out. This run simulated 127 cycles (63 bounded values) on all processor cores and took about 2.6 s on the machine this guide was written on.
+`low` and `high` are the lowest and highest value the check took over all runs: the config as it is, and each bounded parameter at its low and at its high bound. `worst_case` is `ok` only if the check passed in every run. Here every check passes in every run: with the belt set to its low bound of 350 N the slackest section keeps 158 N, the tool is at most 0.044 mm off its target in the dwell, and the belt pulls a pulley shaft with at most 1200 N. The pulley shaft bearings last 325800 h as written and at least 73200 h, against 20000 h required. Their load rating and the lubrication values behind a_ISO are estimates (Festo publishes none; see the config's comments). This run simulated 135 cycles (67 bounded values) on all processor cores and took about 2.6 s on the machine this guide was written on.
 
 An earlier state of this config failed here: with 300 N of pretension a belt set to 200 N went slack, and with the frame at the soft end of its bounds the tool was 0.16 mm off in the dwell, against a tolerance of 0.1 mm (the tool position counts the frame's sway). The pretension was raised to 450 N, the X jerk limit lowered from 500 to 150 m/s³, and input shaping and corner blending were switched on; later a second shaper at 17.5 Hz was added for the worst corner (below). The cycle takes 2.048 s now, against 2.136 s before.
 
@@ -434,27 +438,27 @@ An earlier state of this config failed here: with 300 N of pretension a belt set
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 check,motor,value,limit,result,low,high,worst_case,pass_share
-motor-peak,a,0.2930,1.000,ok,0.2799,0.3435,ok,1.000
-motor-thermal,a,6.882,100.0,ok,6.421,8.347,ok,1.000
+motor-peak,a,0.2930,1.000,ok,0.2799,0.3440,ok,1.000
+motor-thermal,a,6.882,100.0,ok,6.423,8.347,ok,1.000
 drive-current,a,1.145,5.000,ok,1.107,1.257,ok,1.000
-drive-peak-current,a,2.874,19.00,ok,2.743,3.371,ok,1.000
-pulley-torque,a,3.126,12.50,ok,2.959,3.719,ok,1.000
-pulley-bearing-life,a,31788,20000,ok,11887,126380,FAIL,0.860
-belt-tooth-load,a,0.3529,1.000,ok,0.2876,0.5665,ok,1.000
+drive-peak-current,a,2.874,19.00,ok,2.745,3.373,ok,1.000
+pulley-torque,a,3.126,12.50,ok,2.953,3.717,ok,1.000
+pulley-bearing-life,a,325761,20000,ok,33442,4107765,ok,1.000
+belt-tooth-load,a,0.3529,1.000,ok,0.2875,0.5661,ok,1.000
 dc-link-energy,a,9.943,9.943,ok,4.781,28.61,ok,1.000
-braking-resistor-continuous,a,8.303,100.0,ok,0.03481,13.44,ok,1.000
-braking-resistor-peak,a,200.5,3000,ok,6.788,231.5,ok,1.000
+braking-resistor-continuous,a,8.303,100.0,ok,0.03500,13.45,ok,1.000
+braking-resistor-peak,a,200.5,5700,ok,6.773,231.6,ok,1.000
 dc-link-overvoltage,a,770.0,820.0,ok,675.3,789.5,ok,1.000
 ...
-settling,,0.00003947,0.0001000,ok,0.00002569,0.00005131,ok,1.000
-belt-tension,,555.0,2140,ok,445.9,665.0,ok,1.000
-belt-slack,,257.8,0,ok,139.6,357.9,ok,1.000
+settling,,0.00003947,0.0001000,ok,0.00002565,0.00004994,ok,1.000
+belt-tension,,555.0,2140,ok,446.3,665.0,ok,1.000
+belt-slack,,257.8,0,ok,139.6,358.1,ok,1.000
 gearbox-radial-load,,1000,2000,ok,797.3,1209,ok,1.000
-guide-load,,185.0,2000,ok,173.1,308.7,ok,1.000
-guide-life,,3024172,20000,ok,291334,22756879,ok,1.000
+guide-load,,185.0,2000,ok,173.0,308.2,ok,1.000
+guide-life,,3024169,20000,ok,187894,23943944,ok,1.000
 ```
 
-The values are drawn as a Latin hypercube: each value's range is cut into N equal parts, each part is used in exactly one run, and the order of the parts is random per value. The random numbers come from `--seed S` (default 1), so the same call gives the same table. `low`, `high` and `worst_case` are the envelope of these runs and the config as it is. `pass_share` is the share of the runs, the config as it is included, in which the check passed. Here the bands are wider than one at a time (140 N instead of 158 N in the slackest section, 0.051 mm instead of 0.044 mm off in the dwell, 1209 N on a pulley shaft), and every check passes in all 201 runs but the pulley shaft bearings, which last less than 20000 h in 14 % of them (11900 h at least). That took about 4 s.
+The values are drawn as a Latin hypercube: each value's range is cut into N equal parts, each part is used in exactly one run, and the order of the parts is random per value. The random numbers come from `--seed S` (default 1), so the same call gives the same table. `low`, `high` and `worst_case` are the envelope of these runs and the config as it is. `pass_share` is the share of the runs, the config as it is included, in which the check passed. Here the bands are wider than one at a time (140 N instead of 158 N in the slackest section, 0.050 mm instead of 0.044 mm off in the dwell, 1209 N on a pulley shaft), and every check passes in all 201 runs. The pulley shaft bearings last 33400 h at least. That took about 4 s.
 
 `--samples` without `--bands`, 0 samples, a fraction, and `--seed` without `--samples` are refused (exit code 2). The runs of both kinds use all processor cores.
 
@@ -462,11 +466,11 @@ The values are drawn as a Latin hypercube: each value's range is cut into N equa
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --worst
-Cycles simulated in the search for the worst corners: 2428
+Cycles simulated in the search for the worst corners: 2656
 check,motor,worst,limit,worst_case,at_high_bound,at_low_bound
 motor-peak,a,0.4109,1.000,ok,...
 ...
-pulley-bearing-life,a,10258,20000,FAIL,...
+pulley-bearing-life,a,10042,20000,FAIL,...
 ...
 dc-link-energy,a,35.66,36.57,ok,...
 ...
@@ -478,9 +482,9 @@ guide-load,,354.9,1000,ok,...
 guide-life,,115600,20000,ok,...
 ```
 
-It starts from the one-at-a-time runs: each check gets the corner where every bounded value is at the bound that made that check worse alone. Then, up to three times, each value that moved the check is flipped to its other bound, one at a time, and what made it worse is kept (all such flips together, or the best one alone, whichever is worse). The last two columns name the values at their high and at their low bound, separated by `;`. "Worse" is judged by the margin to the limit, because some limits are bounded themselves: in this config the DC link's capacitance and threshold, so the `limit` column shows the limit at that corner. `dc-link-energy` is judged by the energy instead: it fails only where the braking resistor is needed and has no rating, and with a resistor the link fills up to its room at every corner that brakes hard, so its margin says nothing (here 35.66 J of 36.57 J of room, with the capacitance at its high bound; 9.94 J as configured). The one-at-a-time runs and the config as it is count as candidates too, so the worst is never better than the bands; where one of them is the worst, the values it leaves as configured are named in neither column. The search took 2428 cycles and 50 s here.
+It starts from the one-at-a-time runs: each check gets the corner where every bounded value is at the bound that made that check worse alone. Then, up to three times, each value that moved the check is flipped to its other bound, one at a time, and what made it worse is kept (all such flips together, or the best one alone, whichever is worse). The last two columns name the values at their high and at their low bound, separated by `;`. "Worse" is judged by the margin to the limit, because some limits are bounded themselves: in this config the DC link's capacitance and threshold, so the `limit` column shows the limit at that corner. `dc-link-energy` is judged by the energy instead: it fails only where the braking resistor is needed and has no rating, and with a resistor the link fills up to its room at every corner that brakes hard, so its margin says nothing (here 35.66 J of 36.57 J of room, with the capacitance at its high bound; 9.94 J as configured). The one-at-a-time runs and the config as it is count as candidates too, so the worst is never better than the bands; where one of them is the worst, the values it leaves as configured are named in neither column. The search took 2656 cycles here.
 
-On the EXCT-30 it found what neither band mode found: with the 25 Hz shaper alone and all values at their worst at once the tool was 0.115 mm off its target in the dwell, against 0.1 mm allowed (0.043 mm one at a time, 0.053 mm in 200 samples). A second shaper at 17.5 Hz, the peak of the tool's response, brings it to 0.095 mm (the comment of `profile.shaper2_frequency_hz` in the file lists what else was tried). The belt keeps 87 N in its slackest section and the shafts carry 1231 N of their 1500 N at the lowest rating bound. The pulley shaft bearings last 10300 h at their worst corner.
+On the EXCT-30 it found what neither band mode found: with the 25 Hz shaper alone and all values at their worst at once the tool was 0.115 mm off its target in the dwell, against 0.1 mm allowed (0.043 mm one at a time, 0.053 mm in 200 samples). A second shaper at 17.5 Hz, the peak of the tool's response, brings it to 0.095 mm (the comment of `profile.shaper2_frequency_hz` in the file lists what else was tried). The belt keeps 87 N in its slackest section and the shafts carry 1231 N of their 1500 N at the lowest rating bound. The pulley shaft bearings fail at their worst corner, every bounded value against them at once: 10000 h of 20000 h. Their rating and lubrication values are estimates, so this is the part to ask Festo about, not proof that the axis wears out.
 
 `--worst` without `--bands`, or with `--samples` or `--seed`, is refused (exit code 2). The app has it as "worst corner" beside the error bands.
 
@@ -561,14 +565,15 @@ drive-current,1,2.507,5.000,ok
 gearbox-continuous,1,68.68,120.0,ok
 gearbox-peak,1,136.6,192.0,ok
 gearbox-life,1,613609,20000,ok
+gearbox-gearing-life,1,8981,20000,FAIL
 ...
 settling,,0.0006767,0.0005000,FAIL
 singularity,,2.072,5.000,ok
 ```
 
-With `--bands` every check but `settling` passes at both bounds of every estimate (peak gearbox torque 127 to 146 N m); `settling` fails at all of them (0.624 to 0.736 mm). What to read from them:
+With `--bands` every check but `settling` and `gearbox-gearing-life` passes at both bounds of every estimate (peak gearbox torque 127 to 146 N m); `settling` fails at all of them (0.624 to 0.736 mm), the gearing's life lies between 4100 and 24100 h. What to read from them:
 
-- **Gearbox.** The arm's gearbox carries up to 137 N m of its 192 N m; the cubic mean, 69 N m, is what its 120 N m rating is for.
+- **Gearbox.** The arm's gearbox carries up to 137 N m of its 192 N m; the cubic mean, 69 N m, is what its 120 N m rating is for. Its planet bearings last 614000 h. The peaks above 120 N m wear the gearing: by Miner's sum on Siemens' two torque figures it lasts about 9000 h of the 20000 h required on arm 1 (arms 2 and 3 stay below 120 N m). That figure is an estimate (see the [model reference](model-reference.md#analysis-quantities)); check the gearbox size with Siemens.
 - **Settling fails: a sizing finding.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it: 0.64 mm at pick and place at rest with the NRB080's catalogue backlash of 9 arcmin, 0.68 mm in the dwell (with the motion before it); up to 2.09 mm at the rim's lower edge. That offset is the same every pass, which repeatability does not see, but it is beyond the class's accuracy: this delta needs a gearbox with less backlash. With 3 arcmin (`--set gearbox.backlash_rad=8.727e-4`, a robot-grade gearbox, not in the catalogue) it passes: 0.29 mm at rest at pick and place, 0.33 mm in the dwell, 0.30 to 0.38 mm over the bounds. The backlash does not make the loops ring: at rest the tool stands still to 2e-8 m with either.
 - **Singularity**: the highest condition number of the Jacobian in the cycle, against `ratings.max_condition_number` (5). Near a singularity a little motor angle moves the platform a lot and the motor torques for a force grow without bound; the working range has up to 3.6, the cycle 2.07.
 - **No belt, pulley or guide checks**: the delta has none.
