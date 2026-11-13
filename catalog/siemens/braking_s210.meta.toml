@@ -1,0 +1,37 @@
+schema_version = 1
+class = "drive"
+table = "braking"
+key = ["part_number"]
+default_source = "s210-oi"
+notes = '''
+Source: Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, 09/2022 (A5E41702836B AL):
+  Table 4-4 "Braking power and braking energy with the internal braking resistor" (the same values as Table 3-2 of the
+  06/2020 edition, A5E41702836B AE, whose rendered page was checked against the text), and the fault F07432 text for the
+  DC link overvoltage threshold: 410 V with a 1 AC line connection, 820 V with a 3 AC one.
+Typed in from the manual; the numbers are the manual's, the layout is ours.
+One row per SINAMICS S210 (6SL3210) converter. line: 1ac (200 ... 240 V 1 AC) or 3ac (380 ... 480 V 3 AC).
+continuous_braking_power_w, peak_braking_power_kw, braking_energy_kj: the internal braking resistor's, as the table gives them.
+  The 6SL3210-5HB10-1UF0 (100 W) has no internal braking resistor (the table's footnote): its DC link takes its braking.
+  On 200 ... 240 V 3 AC the internal resistor of a 3 AC converter must not be used; an external one is required.
+Not in any Siemens document found (catalogue D 32 07/2021 and 02/2026, these operating instructions 06/2020 and 09/2022,
+the product data sheets, SiePortal): the DC link capacitance and the braking chopper's switch-on threshold.
+'''
+
+[[sources]]
+id = "s210-oi"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "Table 4-4 \"Braking power and braking energy with the internal braking resistor\""
+method = "manual: typed in from the manual; the table checked against the rendered page of the 06/2020 edition (Table 3-2), which has the same values"
+
+[[sources]]
+id = "s210-oi-f07432"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "the text of fault F07432 (DC link overvoltage: 410 V with a 1 AC line, 820 V with a 3 AC line)"
+method = "manual: typed in from the manual; the table checked against the rendered page of the 06/2020 edition (Table 3-2), which has the same values"
+
+[[provenance]]
+rows = ["*"]
+fields = ["dc_link_overvoltage_v"]
+source = "s210-oi-f07432"

@@ -181,41 +181,42 @@ fn reference_move_matches_scipy() {
 #[test]
 fn exct_30_config_agrees_with_the_catalogue() {
     let cfg = Config::parse(EXCT_30_CONFIG).unwrap();
-    let festo = Config::parse(include_str!("../../../catalog/festo/exct.toml")).unwrap();
     let close = |a: f64, b: f64, tolerance: f64| (a - b).abs() <= tolerance * b.abs();
-    let f = |leaf: &str| festo.f64(&format!("EXCT-30.{leaf}")).unwrap();
-    assert!(close(cfg.f64("geometry.pulley_radius_m").unwrap(), f("belt.effective_diameter_mm") / 2000.0, 1e-3));
-    let ea = f("belt.elongation_reference_force_n") / (f("belt.elongation_percent") / 100.0);
+    // A row of a catalogue table (schema 1, SI units) by its first columns, as a lookup of its numbers.
+    let row = |text: &'static str, starts: &str| -> Box<dyn Fn(&str) -> f64> {
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let row: Vec<&str> = lines.find(|l| l.starts_with(starts)).unwrap().split(',').collect();
+        Box::new(move |column| row[header.iter().position(|h| *h == column).unwrap()].parse().unwrap())
+    };
+    let f = row(include_str!("../../../catalog/festo/belt_axes.csv"), "EXCT,30,");
+    assert!(close(cfg.f64("geometry.pulley_radius_m").unwrap(), f("pulley_effective_diameter_m") / 2.0, 1e-3));
+    let ea = f("belt_elongation_force_n") / f("belt_elongation");
     assert!(close(cfg.f64("belt.stiffness_ea_n").unwrap(), ea, 1e-3), "belt stiffness {ea}");
-    assert!(close(cfg.f64("belt.tooth_pitch_m").unwrap(), f("belt.pitch_mm") / 1000.0, 1e-9));
-    assert_eq!(cfg.f64("drive.peak_torque_nm").unwrap(), f("max_torque_nm"));
-    assert_eq!(cfg.f64("mass.payload_kg").unwrap(), f("rated_load_kg"));
+    assert!(close(cfg.f64("belt.tooth_pitch_m").unwrap(), f("belt_pitch_m"), 1e-9));
+    assert_eq!(cfg.f64("drive.peak_torque_nm").unwrap(), f("max_pulley_torque_nm"));
+    assert_eq!(cfg.f64("mass.payload_kg").unwrap(), f("rated_payload_kg"));
     assert!(cfg.f64("axis.x.max_velocity_m_s").unwrap() <= f("max_speed_m_s"));
     assert!(cfg.f64("axis.x.max_acceleration_m_s2").unwrap() <= f("max_acceleration_m_s2"));
     assert_eq!(cfg.f64("gearbox.ratio").unwrap(), 1.0);
 
     // The motor, from the row of the 1FK2205-4AF in the Siemens file.
-    let motors = include_str!("../../../catalog/siemens/motors_s210.csv");
-    let mut lines = motors.lines().filter(|l| !l.starts_with('#'));
-    let header: Vec<&str> = lines.next().unwrap().split(',').collect();
-    let row: Vec<&str> = lines.find(|l| l.starts_with("1FK2205-4AF,")).unwrap().split(',').collect();
-    let motor = |column: &str| -> f64 { row[header.iter().position(|h| *h == column).unwrap()].parse().unwrap() };
-    assert!(close(cfg.f64("motor.rotor_inertia_kgm2").unwrap(), motor("rotor_inertia_kgcm2") * 1e-4, 1e-9));
+    let motor = row(include_str!("../../../catalog/siemens/motors_s210.csv"), "1FK2205-4AF,");
+    assert!(close(cfg.f64("motor.rotor_inertia_kgm2").unwrap(), motor("rotor_inertia_kgm2"), 1e-9));
     assert!(close(cfg.f64("motor.torque_constant_nm_a").unwrap(), motor("static_torque_nm") / motor("stall_current_a"), 1e-3));
     assert!(cfg.f64("drive.peak_torque_nm").unwrap() <= motor("max_torque_nm"));
-    assert!(close(cfg.f64("drive.rated_speed_rad_s").unwrap(), motor("rated_speed_400v_rpm") * std::f64::consts::PI / 30.0, 1e-3));
+    assert!(close(cfg.f64("drive.rated_speed_rad_s").unwrap(), motor("rated_speed_400v_rad_s"), 1e-3));
 
-    // Festo: M = a (c_load m_L + c_motor J_m + c) 1e-3 + c_g (m_g + m_L), for the Z stroke of the config.
-    let stroke = cfg.f64("geometry.stroke_z_m").unwrap() * 1000.0;
-    let formula = festo.array("EXCT-30.torque_formula").unwrap().iter().find(|t| t["stroke_z_mm"].as_integer() == Some(stroke as i64)).unwrap();
-    let c = |key: &str| formula[key].as_float().or_else(|| formula[key].as_integer().map(|i| i as f64)).unwrap();
+    // Festo: M = a (c_load m_L + c_motor J_m + c) + c_g (m_g + m_L), for the Z stroke of the config (SI: J_m in kg m2).
+    let stroke = cfg.f64("geometry.stroke_z_m").unwrap();
+    let c = row(include_str!("../../../catalog/festo/belt_axis_torque_formula.csv"), &format!("EXCT,30,{stroke:?},"));
     assert_eq!(cfg.f64("mass.z_axis_kg").unwrap(), c("gravity_mass_kg"));
     for (a, load) in [(5.0, 0.0), (25.0, 0.0), (5.0, 3.0), (25.0, 3.0), (40.0, 6.0)] {
         let gantry = machine(cfg.clone(), &[&format!("mass.payload_kg = {load:?}")]);
         let mut torque = [0.0; 2];
         gantry.feedforward_torque(&[0.5, 0.1], &[a / 2f64.sqrt(), a / 2f64.sqrt()], &mut torque);
-        let festo_torque = a * (c("load_factor") * load + c("motor_inertia_factor") * motor("rotor_inertia_kgcm2") + c("constant")) * 1e-3
-            + c("gravity_factor") * (c("gravity_mass_kg") + load);
+        let festo_torque = a * (c("load_factor_m") * load + c("motor_inertia_factor_1_m") * motor("rotor_inertia_kgm2") + c("constant_kg_m"))
+            + c("gravity_factor_nm_kg") * (c("gravity_mass_kg") + load);
         assert!(close(torque[0], festo_torque, 0.02), "a = {a}, load = {load}: {} against Festo's {festo_torque}", torque[0]);
     }
 }

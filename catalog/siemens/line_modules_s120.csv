@@ -1,34 +1,14 @@
-# Source: Siemens, Catalog NC 82, SINUMERIK MC, SINAMICS S120 and SIMOTICS, February 2020, chapter 4, Line Modules, "Technical specifications".
-# Extracted by catalog/tools/extract_siemens_nc82.py; the numbers are the catalogue's, the layout is ours.
-# One row per SINAMICS S120 Line Module in booksize format with internal air cooling, for a line voltage of 380 ... 480 V 3 AC.
-# type: smart (unregulated infeed with regenerative feedback), active (regulated DC link, regenerative feedback) or
-#   basic (diode infeed without feedback, which needs a braking resistor to brake).
-# rated_power: at 380 V 3 AC. s6_power: for S6 duty with 40 % on-time. max_power: the catalogue's Pmax.
-# dc_link_current_540v/_600v: the rated DC link current at a DC link voltage of 540 V and of 600 V; the catalogue
-#   gives the value at 540 V for the Smart Line Modules only. s6_ and max_dc_link_current: as printed, without a voltage.
-# dc_link_capacitance: of the module itself. power_loss: at rated power, with the losses of the 24 V electronics supply.
-# braking_*: the braking chopper inside the 20 kW and 40 kW Basic Line Modules for an external resistor: peak and
-#   continuous braking power, the DC link voltage at which it switches on, the smallest resistance allowed.
-#   Empty for all other modules, which have none.
-# An empty field means the catalogue does not state the value.
-# max_power of the 6SL3130-7TE25-5AA3 is 91 kW (152 A); the catalogue adds 110 kW (176 A) in brackets for use with the
-#   Active Interface Module 6SL3100-0BE25-5AB0, which is not in this file.
-# Inconsistent in the catalogue and kept as printed: the 6SL3130-6TE25-5AA3 has 138 A for S6 duty and 178 A maximum
-#   at 71 kW and 91 kW, which would be a DC link of about 510 V; every other module, the Active Line Module of the same
-#   power included (121 A, 152 A), has power / 600 V in these two rows.
-# Not extracted: input currents, 24 V current, busbar ratings, the largest capacitance of a drive line-up, cooling air,
-#   connections, cable lengths, dimensions, derating, and the line-side components (reactors, filters, Active Interface Modules).
-article,type,rated_power_kw,s6_power_kw,max_power_kw,dc_link_current_540v_a,dc_link_current_600v_a,s6_dc_link_current_a,max_dc_link_current_a,dc_link_capacitance_uf,power_loss_kw,braking_power_max_kw,braking_power_continuous_kw,braking_threshold_v,min_braking_resistance_ohm
-6SL3130-6AE15-0AB1,smart,5,6.5,10,9.3,8.3,11,16.6,220,0.08,,,,
-6SL3130-6AE21-0AB1,smart,10,13,20,18.5,16.6,22,33.2,330,0.14,,,,
-6SL3130-6TE21-6AA4,smart,16,21,35,30,27,35,59,710,0.19,,,,
-6SL3130-6TE23-6AA3,smart,36,47,70,67,60,79,117,1410,0.406,,,,
-6SL3130-6TE25-5AA3,smart,55,71,91,105,92,138,178,1880,0.666,,,,
-6SL3130-7TE21-6AA4,active,16,21,35,,27,35,59,710,0.28,,,,
-6SL3130-7TE23-6AA3,active,36,47,70,,60,79,117,1410,0.67,,,,
-6SL3130-7TE25-5AA3,active,55,71,91,,92,121,152,1880,0.95,,,,
-6SL3130-7TE28-0AA3,active,80,106,131,,134,176,218,2820,1.38,,,,
-6SL3130-7TE31-2AA3,active,120,145,175,,200,244,292,3995,2.24,,,,
-6SL3130-1TE22-0AA0,basic,20,26,60,,34,43,100,940,0.144,40,5,774,14.8
-6SL3130-1TE24-0AA0,basic,40,52,120,,67,87,200,1880,0.284,80,10,774,7.4
-6SL3130-1TE31-0AA0,basic,100,130,175,,167,217,292,4100,0.628,,,,
+part_number,infeed_type,rated_power_w,s6_power_w,max_power_w,dc_link_current_540v_a,dc_link_current_600v_a,s6_dc_link_current_a,max_dc_link_current_a,dc_link_capacitance_f,power_loss_w,max_braking_power_w,continuous_braking_power_w,braking_threshold_v,min_braking_resistance_ohm
+6SL3130-6AE15-0AB1,smart,5000,6500,10000,9.3,8.3,11,16.6,0.00022,80,,,,
+6SL3130-6AE21-0AB1,smart,10000,13000,20000,18.5,16.6,22,33.2,0.00033,140,,,,
+6SL3130-6TE21-6AA4,smart,16000,21000,35000,30,27,35,59,0.00071,190,,,,
+6SL3130-6TE23-6AA3,smart,36000,47000,70000,67,60,79,117,0.00141,406,,,,
+6SL3130-6TE25-5AA3,smart,55000,71000,91000,105,92,138,178,0.00188,666,,,,
+6SL3130-7TE21-6AA4,active,16000,21000,35000,,27,35,59,0.00071,280,,,,
+6SL3130-7TE23-6AA3,active,36000,47000,70000,,60,79,117,0.00141,670,,,,
+6SL3130-7TE25-5AA3,active,55000,71000,91000,,92,121,152,0.00188,950,,,,
+6SL3130-7TE28-0AA3,active,80000,106000,131000,,134,176,218,0.00282,1380,,,,
+6SL3130-7TE31-2AA3,active,120000,145000,175000,,200,244,292,0.003995,2240,,,,
+6SL3130-1TE22-0AA0,basic,20000,26000,60000,,34,43,100,0.00094,144,40000,5000,774,14.8
+6SL3130-1TE24-0AA0,basic,40000,52000,120000,,67,87,200,0.00188,284,80000,10000,774,7.4
+6SL3130-1TE31-0AA0,basic,100000,130000,175000,,167,217,292,0.0041,628,,,,

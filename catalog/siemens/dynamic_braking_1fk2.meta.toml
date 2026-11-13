@@ -1,0 +1,27 @@
+schema_version = 1
+class = "servo_motor"
+table = "dynamic_braking"
+key = ["part_number"]
+default_source = "1fk2-s120"
+notes = '''
+Source: Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, 02/2022, A5E46927724B AD, section 5.4.3, Table 5-2 "Dynamic braking for 1FK2".
+Extracted by catalog/tools/extract_siemens_1fk2_s120.py; the numbers are the manual's, the layout is ours.
+Armature short-circuit braking: the windings are shorted directly or through external resistors.
+optimum_resistance: the external resistor the manual dimensions for an optimum braking time. *_with_resistor: with it.
+braking_torque_rms: the manual's "average braking torque". Currents are RMS.
+The manual's conditions: braking from the rated speed with an external moment of inertia equal to the
+  motor's own; calculated from the rated values of the data sheet, without the variance of production and
+  without iron saturation, which can give higher currents and torques. From a lower speed the braking time
+  is shorter or the same, but not in proportion. The resistor must be intrinsically safe and temperature-monitored,
+  and braking from the rated speed is permitted at most every 2 minutes.
+Kept as printed although it looks like a misprint: braking_current_rms_with_resistor_a of the 1FK2306-2AC (6.5)
+  is above the current without the resistor (6.1); for every other motor it is about 10 % below.
+'''
+
+[[sources]]
+id = "1fk2-s120"
+document = "Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, A5E46927724B AD"
+date = "2022-02"
+locator = "section 5.4.3, Table 5-2 \"Dynamic braking for 1FK2\""
+method = "script:tools/extract_siemens_1fk2_s120.py"
+url = "https://cache.industry.siemens.com/dl/files/757/109769757/att_1102511/v1/1FK2_S120_config_man_0222_en-US.pdf"

@@ -1,0 +1,21 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number"]
+default_source = "1fk2-s120"
+notes = '''
+Source: Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, 02/2022, A5E46927724B AD, chapter "Data sheets and characteristics".
+Extracted by catalog/tools/extract_siemens_1fk2_s120.py; the numbers are the manual's, the layout is ours.
+One row per 1FK2 motor winding as operated on SINAMICS S120 at a line voltage of 380 ... 480 V 3 AC.
+Most of these motors are also in motors_s210.csv, there as operated on SINAMICS S210.
+Currents are RMS. max_speed_inverter: what the converter allows. thermal_time_constant: of the winding.
+The data sheets of the 1FK2306-4AC, 1FK2308-3AB and 1FK2308-4AB head their rated data "3AC 400 ... 480 V".
+An empty field: rotor_inertia_kgcm2 of the 1FK2308-3AB, which the manual prints as "1,60,1".
+'''
+
+[[sources]]
+id = "1fk2-s120"
+document = "Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, A5E46927724B AD"
+date = "2022-02"
+locator = "chapter \"Data sheets and characteristics\""
+method = "script:tools/extract_siemens_1fk2_s120.py"
+url = "https://cache.industry.siemens.com/dl/files/757/109769757/att_1102511/v1/1FK2_S120_config_man_0222_en-US.pdf"

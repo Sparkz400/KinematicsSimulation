@@ -1,0 +1,29 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number"]
+default_source = "d32"
+notes = '''
+Source: Siemens, catalogue D 32, SINAMICS S210 servo drive system, January 2024, "Specific technical specifications" of each shaft height.
+Extracted by catalog/tools/extract_siemens_d32.py; the numbers are the catalogue's, the layout is ours.
+One row per motor winding: the article number up to the speed letter, e.g. 1FK2104-5AK.
+Currents are RMS. static: at standstill; max_speed: mechanical limit. Inertias are the rotor's.
+The rated values depend on the supply: 230v is 200 ... 240 V (1 AC or 3 AC), 400v is 380 ... 480 V 3 AC.
+converter_*: the SINAMICS S210 converter the catalogue pairs with the motor at that supply;
+  converter_new_*: the same for the "SINAMICS S210 (New)" converters (6SL5310).
+An empty field: the catalogue lists no value, mostly because the motor is not offered at that supply.
+  The 230 V rated power of the 1FT2 shaft height 100 motors is empty because the catalogue's row is one value short.
+Kept as printed although it looks like a misprint: rated_current_230v_a of the 1FT2206-2AC is 3.75 A, above
+  its stall current of 2.8 A and above its converter's 3 A.
+Not in this catalogue, and so not here: torque and voltage constant, winding resistance and
+  inductance, pole pairs, thermal time constant. The configuration manuals have the thermal time constant
+  of most of these motors (motors_1fk2_s120.csv, motors_1ft2_s120.csv). Winding resistance and inductance
+  are published nowhere for these motors.
+'''
+
+[[sources]]
+id = "d32"
+document = "Siemens, catalogue D 32, SINAMICS S210 servo drive system"
+date = "2024-01"
+locator = "\"Specific technical specifications\" of each shaft height"
+method = "script:tools/extract_siemens_d32.py"
+url = "https://cache.industry.siemens.com/dl/files/381/109754381/att_1261452/v1/motion-control-drives-D32-complete-English-2024-01.pdf"

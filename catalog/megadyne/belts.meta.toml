@@ -1,0 +1,23 @@
+schema_version = 1
+class = "belt"
+key = ["profile", "width_m"]
+default_source = "megalinear"
+notes = '''
+Source: Megadyne (Ammega), MEGALINEAR technical handbook, 02.2026 (megadynegroup.com, md_manu_en_megalinear_web.pdf), the page of each profile.
+Extracted by catalog/tools/extract_megadyne.py; the numbers are the handbook's, the layout is ours.
+Open-ended polyurethane belts with standard steel cords (S and Z torsion zinked steel). MTD is Megadyne's
+HTD-compatible profile: MTD3, MTD5, MTD8 fit Bahr's 3M, 5M, 8M belts.
+One row per profile and standard width. Average values, as the handbook says.
+mass: "Weight (gr/m)". max_traction_load: the allowable pull of the cords, a quarter of the breaking strength
+  (the handbook's figures); elongation_at_mtl: the stretch at that pull, so EA = max_traction_load / (elongation / 1000).
+Not extracted: the other cord materials (Kevlar, HP, HF, HPF, stainless), the flexion table (minimum pulley teeth),
+  pulley diameters, thickness and tolerances.
+'''
+
+[[sources]]
+id = "megalinear"
+document = "Megadyne (Ammega), MEGALINEAR technical handbook"
+date = "2026-02"
+locator = "the page of each profile"
+method = "script:tools/extract_megadyne.py"
+url = "https://megadynegroup.com/files/resources/attachments/md_manu_en_megalinear_web.pdf"

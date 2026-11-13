@@ -1,15 +1,2 @@
-# DC link data measured on real drives, for what Siemens does not publish (see braking_s210.csv). Not catalogue data:
-# one unit each, on one day, by the method below.
-#
-# 6SL5310-1BE10-8DF0 (SINAMICS S210, new generation, firmware 6.4) with a 1FK2204-5AF on a belt conveyor, 3 AC 400 V line,
-# 13 November 2026. Startdrive trace of r0070 (DC link voltage), r0063 (speed, smoothed), r0080 (torque), r0068 (current)
-# at 1 ms. Quick stop (OFF3, 0 s ramp) from 3000 rpm: the motor brakes at its 2.38 N m limit for 22 ms, 2.28 A, and the
-# DC link rises from 551.1 V (548.4 V on average over the 90 ms before; the line ripple is +-3 V) to 631.7 V.
-# Energy into the DC link: braking torque times the angle turned, 7.4 to 9.1 J (the integral of torque times the smoothed
-# speed, and torque times omega0^2 / (2 alpha) with the deceleration from a line fit), less the winding's copper loss
-# 3 I^2 R t, 0.34 J per ohm of phase resistance (p0350 is not shown on the S210; 3 to 6 ohm taken for this motor size).
-# C = 2 E / (V2^2 - V1^2): 139 uF, between 113 and 164 uF (inverter losses, not subtracted, make it a little high).
-# The voltage peaked at 631.7 V and did not level off, so the braking chopper switches on above that (chopper_above_v).
-# idle_dc_link_v: the DC link with the drive enabled at standstill, from the parameter export (r0070).
-article,date,firmware,capacitance_uf,capacitance_low_uf,capacitance_high_uf,chopper_above_v,idle_dc_link_v
-6SL5310-1BE10-8DF0,2026-11-13,6.4,139,113,164,632,547
+part_number,date,firmware,dc_link_capacitance_f,dc_link_capacitance_low_f,dc_link_capacitance_high_f,braking_threshold_above_v,idle_dc_link_v
+6SL5310-1BE10-8DF0,2026-11-13,6.4,0.000139,0.000113,0.000164,632,547

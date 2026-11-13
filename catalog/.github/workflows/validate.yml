@@ -1,0 +1,19 @@
+name: Validate
+
+# This file only runs once catalog/ is a repository of its own (see README.md, "Its own repository"). In the
+# simulator's repository the same job is .github/workflows/catalogue.yml.
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema==4.26.0
+      - name: Validate
+        run: python tools/catalog.py validate
+      - name: Tool tests
+        run: python -m unittest discover -s tools/tests -v

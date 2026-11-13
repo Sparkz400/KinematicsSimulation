@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:braking_resistor",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "braking_resistor",
+  "description": "A braking module (chopper) or braking resistor of a DC link.",
+  "type": "object",
+  "required": [
+    "part_number"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "activation_threshold_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V"
+    },
+    "continuous_power_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "cycle_duration_2_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "cycle_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "dc_link_capacitance_f": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "F"
+    },
+    "for_part_number": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "description": "axis, xy_gantry or xz_gantry for a belt axis; braking_module or braking_resistor for a braking resistor."
+    },
+    "load_duration_2_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "load_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s"
+    },
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number (order number), as printed."
+    },
+    "peak_power_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W"
+    },
+    "resistance_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm"
+    }
+  }
+}

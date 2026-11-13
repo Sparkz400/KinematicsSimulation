@@ -1,0 +1,26 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number"]
+default_source = "d21-4"
+notes = '''
+Source: Siemens, catalogue D 21.4, SINAMICS S120 and SIMOTICS, 2017, selection and ordering data of the SIMOTICS S synchronous motors.
+Extracted by catalog/tools/extract_siemens_d21_4.py; the numbers are the catalogue's, the layout is ours.
+One row per motor winding: the article number up to the DC link code, e.g. 1FK7042-2AF7. All for a
+DC link of 510 ... 720 V (line 380 ... 480 V 3 AC).
+Ratings are for a winding temperature rise of 100 K. Currents are RMS. static and stall: at standstill.
+rated_values_at_rpm: where the catalogue marks rated power, torque and current with a footnote
+  "These values refer to n = ... rpm", that speed; empty where they hold at the rated speed.
+calculated_power: static torque times rated speed, the catalogue's figure for choosing the Motor Module.
+motor_module: the booksize Motor Module the catalogue pairs with the motor; the "7" and the "." in its
+  article number are placeholders (7: 1 for a Single, 2 for a Double Motor Module).
+Not in these tables, and so not here: maximum torque, current and speed (given as characteristic curves),
+  torque and voltage constant, winding resistance and inductance, thermal time constant.
+'''
+
+[[sources]]
+id = "d21-4"
+document = "Siemens, catalogue D 21.4, SINAMICS S120 and SIMOTICS"
+date = "2017"
+locator = "selection and ordering data of the SIMOTICS S synchronous motors"
+method = "script:tools/extract_siemens_d21_4.py"
+url = "https://assets.new.siemens.com/siemens/assets/api/uuid:ef8b99bf-acb1-4efd-bada-76f046c0ccc3/catalogo-simotics-1fk7-1ft7-1ph8-1pn-1fw.pdf"

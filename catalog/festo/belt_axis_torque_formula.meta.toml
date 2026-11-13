@@ -1,0 +1,47 @@
+schema_version = 1
+class = "belt_axis"
+table = "torque_formula"
+key = ["series", "size", "stroke_z_m"]
+default_source = "exct"
+notes = '''
+Festo linear gantry EXCT: a T-gantry. Two fixed servo motors drive one toothed belt arranged in
+a T; the belt moves the slide of the Y axis (horizontal) and the Z axis (vertical).
+
+Source: Festo catalogue "Linear gantries EXCT", 2023/01.
+The numbers are the catalogue's; the layout and the field names are ours. Units are in the names.
+
+The motors couple directly onto the belt pulleys through an axial kit; the catalogue lists no
+gear unit. Motors are not part of the gantry. "max_torque_nm" and "max_no_load_torque_nm" are
+at the pulley and also apply to third-party motors.
+
+Required motor torque and speed for travel at 45 degrees, the heaviest case (one motor does
+all the work), from the catalogue's "Load values":
+
+  M = a (load_factor m_L + motor_inertia_factor J_m + constant) 1e-3
+      + gravity_factor (gravity_mass_kg + m_L) + M_R                         [N m]
+  n = v 60000 / feed_constant_mm_rev sqrt(2)                                [1/min]
+
+  a: acceleration along the path [m/s2], v: speed along the path [m/s],
+  m_L: attachment on the Z axis with payload [kg], J_m: motor inertia [kg cm2],
+  M_R: friction torque [N m], which the catalogue gives only as a graph over speed.
+
+Not extracted, because the catalogue gives them only as graphs or drawings: maximum
+acceleration over rated load and Z position, friction torque over speed, permissible support
+span, dimensions. The catalogue's sample calculation uses a constant of 39.2 and a gravity mass
+of 2.14 kg for the EXCT-15 with 200 mm Z stroke, which differs from its own formula table
+(47.5 and 2.6); the values below are the formula table's.
+Tool load plus payload, at maximum dynamic response.
+At 0.2 m/s and travel at 45 degrees.
+"Under ideal conditions."
+Without rated load, motors, axial kits and mounting kits.
+The belt stretches by this much at the reference force.
+"At 45 degrees travel."
+'''
+
+[[sources]]
+id = "exct"
+document = "Festo, catalogue \"Linear gantries EXCT\""
+date = "2023-01"
+locator = "\"Load values\": the required motor torque at 45 degrees travel"
+method = "manual: written from the catalogue's tables; there are three sizes"
+url = "https://ftp.festo.com/Public/PNEUMATIC/SOFTWARE_SERVICE/Documentation/2023/EN/EXCT_EN.PDF"

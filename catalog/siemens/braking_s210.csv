@@ -1,24 +1,13 @@
-# Source: Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, 09/2022 (A5E41702836B AL):
-#   Table 4-4 "Braking power and braking energy with the internal braking resistor" (the same values as Table 3-2 of the
-#   06/2020 edition, A5E41702836B AE, whose rendered page was checked against the text), and the fault F07432 text for the
-#   DC link overvoltage threshold: 410 V with a 1 AC line connection, 820 V with a 3 AC one.
-# Typed in from the manual; the numbers are the manual's, the layout is ours.
-# One row per SINAMICS S210 (6SL3210) converter. line: 1ac (200 ... 240 V 1 AC) or 3ac (380 ... 480 V 3 AC).
-# continuous_braking_power_w, peak_braking_power_kw, braking_energy_kj: the internal braking resistor's, as the table gives them.
-#   The 6SL3210-5HB10-1UF0 (100 W) has no internal braking resistor (the table's footnote): its DC link takes its braking.
-#   On 200 ... 240 V 3 AC the internal resistor of a 3 AC converter must not be used; an external one is required.
-# Not in any Siemens document found (catalogue D 32 07/2021 and 02/2026, these operating instructions 06/2020 and 09/2022,
-# the product data sheets, SiePortal): the DC link capacitance and the braking chopper's switch-on threshold.
-article,line,rated_power_kw,continuous_braking_power_w,peak_braking_power_kw,braking_energy_kj,dc_link_overvoltage_v
-6SL3210-5HB10-1UF0,1ac,0.1,5,0.35,0.01,410
-6SL3210-5HB10-2UF0,1ac,0.2,10,0.6,0.15,410
-6SL3210-5HB10-4UF0,1ac,0.4,20,1.3,0.325,410
-6SL3210-5HB10-8UF0,1ac,0.75,40,2.4,0.60,410
-6SL3210-5HE10-4UF0,3ac,0.4,50,1.2,0.30,820
-6SL3210-5HE10-8UF0,3ac,0.75,50,2.4,0.30,820
-6SL3210-5HE11-0UF0,3ac,1.0,50,3.0,0.30,820
-6SL3210-5HE11-5UF0,3ac,1.5,100,5.7,0.60,820
-6SL3210-5HE12-0UF0,3ac,2.0,100,6.0,0.60,820
-6SL3210-5HE13-5UF0,3ac,3.5,325,15.0,1.95,820
-6SL3210-5HE15-0UF0,3ac,5.0,325,19.0,1.95,820
-6SL3210-5HE17-0UF0,3ac,7.0,325,19.5,1.95,820
+part_number,line,rated_power_w,continuous_braking_power_w,peak_braking_power_w,braking_energy_j,dc_link_overvoltage_v
+6SL3210-5HB10-1UF0,1ac,100,5,350,10,410
+6SL3210-5HB10-2UF0,1ac,200,10,600,150,410
+6SL3210-5HB10-4UF0,1ac,400,20,1300,325,410
+6SL3210-5HB10-8UF0,1ac,750,40,2400,600,410
+6SL3210-5HE10-4UF0,3ac,400,50,1200,300,820
+6SL3210-5HE10-8UF0,3ac,750,50,2400,300,820
+6SL3210-5HE11-0UF0,3ac,1000,50,3000,300,820
+6SL3210-5HE11-5UF0,3ac,1500,100,5700,600,820
+6SL3210-5HE12-0UF0,3ac,2000,100,6000,600,820
+6SL3210-5HE13-5UF0,3ac,3500,325,15000,1950,820
+6SL3210-5HE15-0UF0,3ac,5000,325,19000,1950,820
+6SL3210-5HE17-0UF0,3ac,7000,325,19500,1950,820

@@ -1,0 +1,26 @@
+# Open drive-train component catalogue. schema_version: the major version of schema/v<n>/ every table keeps;
+# tables: every table, a <path>.csv with its <path>.meta.toml. See README.md.
+schema_version = 1
+tables = [
+    "bahr/belt_axes.csv",
+    "festo/belt_axes.csv",
+    "festo/belt_axis_torque_formula.csv",
+    "megadyne/belt_tooth_load.csv",
+    "megadyne/belts.csv",
+    "siemens/braking_s120.csv",
+    "siemens/braking_s210.csv",
+    "siemens/converters_s210.csv",
+    "siemens/dc_link_measured.csv",
+    "siemens/dynamic_braking_1fk2.csv",
+    "siemens/gearbox_mass.csv",
+    "siemens/gearbox_nlc.csv",
+    "siemens/gearbox_nrb.csv",
+    "siemens/gearbox_nrk.csv",
+    "siemens/line_modules_s120.csv",
+    "siemens/motor_modules_s120.csv",
+    "siemens/motors_1fk2_s120.csv",
+    "siemens/motors_1ft2_s120.csv",
+    "siemens/motors_s120.csv",
+    "siemens/motors_s120_electrical.csv",
+    "siemens/motors_s210.csv",
+]

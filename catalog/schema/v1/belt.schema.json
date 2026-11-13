@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:belt",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "belt",
+  "description": "A toothed belt: one profile and width. Table tooth_load: the specific tooth load of a profile over speed.",
+  "type": "object",
+  "required": [
+    "profile",
+    "width_m"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "breaking_strength_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "elongation_at_max_pull": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1",
+      "description": "The belt's strain at max_pull_n."
+    },
+    "mass_kg_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg/m"
+    },
+    "max_pull_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "pitch_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "width_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    }
+  },
+  "$defs": {
+    "tooth_load": {
+      "type": "object",
+      "required": [
+        "profile",
+        "speed_rad_s"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "specific_tooth_load_n_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "N/m"
+        },
+        "speed_rad_s": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "rad/s"
+        }
+      },
+      "description": "The specific tooth load: allowable force per metre of belt width and per tooth in mesh, over the pulley speed."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+schema_version = 1
+class = "belt"
+table = "tooth_load"
+key = ["profile", "speed_rad_s"]
+default_source = "megalinear"
+notes = '''
+Source: Megadyne (Ammega), MEGALINEAR technical handbook, 02.2026 (megadynegroup.com, md_manu_en_megalinear_web.pdf), the page of each profile.
+Extracted by catalog/tools/extract_megadyne.py; the numbers are the handbook's, the layout is ours.
+Open-ended polyurethane belts with standard steel cords (S and Z torsion zinked steel). MTD is Megadyne's
+HTD-compatible profile: MTD3, MTD5, MTD8 fit Bahr's 3M, 5M, 8M belts.
+The "tooth resistance" table: specific tooth load Fp spec in N per cm of width and per tooth in mesh, over the
+  pulley's r/min. The handbook sizes by effective pull * service factor <= Fp spec * width in cm * teeth in mesh
+  (at most 12 for open-ended belts), page 9.
+'''
+
+[[sources]]
+id = "megalinear"
+document = "Megadyne (Ammega), MEGALINEAR technical handbook"
+date = "2026-02"
+locator = "the page of each profile"
+method = "script:tools/extract_megadyne.py"
+url = "https://megadynegroup.com/files/resources/attachments/md_manu_en_megalinear_web.pdf"

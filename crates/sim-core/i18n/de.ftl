@@ -9,4 +9,6 @@ error-config-part-gearbox = Der Katalog kennt dieses Bauteil nicht: Getriebe { $
 error-config-part-drive = Der Katalog kennt dieses Bauteil nicht: Antrieb { $arg }
 error-config-part-belt = Der Katalog kennt dieses Bauteil nicht: Riemen { $arg }
 error-config-part-axis = Der Katalog kennt dieses Bauteil nicht: Achse { $arg }
+error-catalog-read = Der Katalog konnte nicht gelesen werden: { $arg }
+error-catalog-version = Nicht unterstützte Schemaversion des Katalogs: { $arg }
 param-format_version = Formatversion

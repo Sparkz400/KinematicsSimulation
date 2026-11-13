@@ -1,16 +1,4 @@
-# Source: Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, 02/2022, A5E46927724B AD, section 5.4.3, Table 5-2 "Dynamic braking for 1FK2".
-# Extracted by catalog/tools/extract_siemens_1fk2_s120.py; the numbers are the manual's, the layout is ours.
-# Armature short-circuit braking: the windings are shorted directly or through external resistors.
-# optimum_resistance: the external resistor the manual dimensions for an optimum braking time. *_with_resistor: with it.
-# braking_torque_rms: the manual's "average braking torque". Currents are RMS.
-# The manual's conditions: braking from the rated speed with an external moment of inertia equal to the
-#   motor's own; calculated from the rated values of the data sheet, without the variance of production and
-#   without iron saturation, which can give higher currents and torques. From a lower speed the braking time
-#   is shorter or the same, but not in proportion. The resistor must be intrinsically safe and temperature-monitored,
-#   and braking from the rated speed is permitted at most every 2 minutes.
-# Kept as printed although it looks like a misprint: braking_current_rms_with_resistor_a of the 1FK2306-2AC (6.5)
-#   is above the current without the resistor (6.1); for every other motor it is about 10 % below.
-article,optimum_resistance_ohm,braking_torque_rms_nm,braking_torque_rms_with_resistor_nm,max_braking_torque_nm,braking_current_rms_a,braking_current_rms_with_resistor_a
+part_number,optimum_resistance_ohm,braking_torque_rms_nm,braking_torque_rms_with_resistor_nm,max_braking_torque_nm,braking_current_rms_a,braking_current_rms_with_resistor_a
 1FK2103-2AH,15,0.47,0.6,0.75,2.1,1.9
 1FK2103-4AH,10,0.9,1.2,1.5,3.9,3.5
 1FK2104-4AF,21,0.75,1.1,1.35,2.2,2

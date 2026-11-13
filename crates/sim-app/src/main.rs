@@ -138,8 +138,16 @@ struct WorldCamera;
 fn main() {
     let lang = std::env::var("SIM_APP_LANG").ok().and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l)).unwrap_or(LANGUAGES[0]);
     let mut model = Model::new(MACHINES[0], lang);
-    // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md).
     let args: Vec<String> = std::env::args().collect();
+    // `sim-app --catalog DIR`: the catalogue from a directory instead of the compiled-in one. Before a machine file is
+    // opened, which may name parts.
+    if let Some(dir) = args.windows(2).find(|w| w[0] == "--catalog").map(|w| &w[1]) {
+        if let Err(e) = sim_components::catalog::use_directory(std::path::Path::new(dir)) {
+            eprintln!("{}", model.tr.tr_arg(e.key(), e.detail()));
+            std::process::exit(2);
+        }
+    }
+    // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md).
     if let Some(file) = args.windows(2).find(|w| w[0] == "--machine-file").map(|w| w[1].clone()) {
         model.open_config(&file);
     }

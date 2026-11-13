@@ -40,7 +40,7 @@ Catalogue data in `catalog/`, each file with the script in `catalog/tools/` that
 
 | File | Content | Source |
 | --- | --- | --- |
-| `festo/exct.toml` | EXCT-15, -30, -100 T-gantries | Festo catalogue 2023/01 |
+| `festo/belt_axes.csv`, `festo/belt_axis_torque_formula.csv` | EXCT-15, -30, -100 T-gantries | Festo catalogue 2023/01 |
 | `siemens/gearbox_nrb.csv`, `_nrk`, `_nlc` | 774 planetary gearbox variants for 1FK2 and 1FT2 | Siemens equipment manual 04/2025 |
 | `siemens/motors_s210.csv`, `converters_s210.csv` | 96 1FK2 and 1FT2 motors, 24 S210 converters, pairings | Siemens catalogue D 32, 01/2024 |
 | `siemens/motors_1ft2_s120.csv` | 37 1FT2 motors on S120, with thermal time constant | Siemens configuration manual 02/2022 |
