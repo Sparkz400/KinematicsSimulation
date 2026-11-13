@@ -318,6 +318,7 @@ ui-effects-item = Where it went
 ui-effects-energy = Energy [J]
 ui-effects-share = Share of the supply [%]
 ui-effects-flow = Where the supplied energy went: bands as wide as the energy
+ui-effects-flow-energy = { $arg } J
 ui-effects-shaft-work = Shaft work
 ui-effects-friction = Friction per guide
 ui-effects-friction-hint = lines: steady sliding at the present guide load; dot: now

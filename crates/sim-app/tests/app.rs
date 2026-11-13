@@ -907,7 +907,8 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
     let tables = model.cycle_tables();
     assert_eq!(tables[3].len(), 1 + bands.len());
     for (row, band) in tables[3][1..].iter().zip(&bands) {
-        assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share), "{row:?} against {band:?}");
+        // The share as the app shows it, cut at four decimals (`Band::share_shown`): 1 of 45 is 2.22 %.
+        assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
     }
     model.set_language("de");
     assert_eq!(model.worst_table().unwrap()[0][2..], ["Ungünstigster Wert", "Grenze", "Ergebnis", "An der oberen Grenze", "An der unteren Grenze"]);
@@ -941,7 +942,8 @@ fn the_checks_get_error_bands_in_the_app() {
         for (row, band) in banded[1..].iter().zip(&bands) {
             assert_eq!(row[0], model.tr.tr(&format!("check-{}", band.verdict.check)));
             assert_eq!((row[1].is_empty(), row[4].as_str()), (band.verdict.motor.is_none(), if band.ok { "ok" } else { "FAIL" }));
-            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share), "{row:?} against {band:?}");
+            // The share as the app shows it, cut at four decimals (`Band::share_shown`): 1 of 45 is 2.22 %.
+            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
             assert!(band.low <= band.verdict.value && band.verdict.value <= band.high);
         }
         // The bounds move the checks: a band is not a line.
@@ -967,7 +969,7 @@ fn the_checks_get_error_bands_in_the_app() {
         let tables = model.cycle_tables();
         assert_eq!((model.band_samples, tables[3].len()), (6, 1 + sampled.len()), "{}", entry.id);
         for (row, band) in tables[3][1..].iter().zip(&sampled) {
-            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share), "{row:?} against {band:?}");
+            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
         }
         assert!(sampled.iter().zip(&bands).any(|(sampled, alone)| sampled.high != alone.high), "{}", entry.id);
         // Without the option there are the three tables again.
@@ -1165,7 +1167,10 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         if let Some(end) = sim.machine.scene_point(&point(0.75)) {
             assert_eq!(run.scene_line.len(), run.points.len(), "{}", entry.id);
             let (planned_start, planned_end) = (run.scene_line[0], run.scene_line[run.scene_line.len() - 1]);
-            assert!(apart(planned_end, end) < 1e-9 && apart(planned_start, planned_end) > 0.1, "{}", entry.id);
+            // The line spans the way from the start pose to the end, not a point: half of it at least, not 0.1 m, which the
+            // planar delta's 51 mm from its start to 3/4 of its strokes are not.
+            let way = apart(sim.machine.scene_point(&home).unwrap(), end);
+            assert!(apart(planned_end, end) < 1e-9 && apart(planned_start, planned_end) > 0.5 * way, "{}", entry.id);
             let twist = twist_in_scene(sim.machine.as_ref(), &home);
             // The trail starts once the machine has taken the path, not when it is sent.
             let sent = Instant::now();
@@ -1600,7 +1605,10 @@ fn a_config_file_is_opened_changed_saved_and_opened_again() {
 
         // A changed array is not written over the old text: the file is written plainly and still reads back.
         let mut moved = model.config.clone();
-        let pose: Vec<f64> = moved.f64s("start.pose").unwrap().iter().map(|p| p + 0.01).collect();
+        // 10 mm towards the middle of each axis: a start pose may be 10 mm from an end (the linear delta's at its top),
+        // where -1.13 + 0.01 lies a rounding beyond -1.12.
+        let middle = |a: &sim_core::AxisInfo| 0.5 * (a.min + a.max);
+        let pose: Vec<f64> = moved.f64s("start.pose").unwrap().iter().zip(&model.session.axes).map(|(p, a)| p + 0.01 * (middle(a) - p).signum()).collect();
         moved.set_text(&format!("start.pose = {pose:?}")).unwrap();
         std::fs::write(&original, moved.to_text().unwrap()).unwrap();
         model.open_config(&original);
@@ -2028,7 +2036,9 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
         for (i, (view, contact)) in views.iter().zip(machine.friction_contacts()).enumerate() {
             let get = |part: &str| latest(&model, &format!("{}.friction_{part}", contact.id));
             let scale = get("load_scale");
-            let top = model.session.axes.iter().find(|a| a.key == contact.owner_key).unwrap().max_vel;
+            // A guide on no axis of its own (a delta's carriage) spans the fastest axis's limit.
+            let fastest = model.session.axes.iter().map(|a| a.max_vel).fold(0.0, f64::max);
+            let top = model.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel);
             assert_eq!(view.title, model.tr.tr(contact.owner_key));
             let curve = &view.curves[0].1;
             assert!(curve.len() == 200 && curve[0][0] == -top && curve[199][0] == top && curve.windows(2).all(|w| w[0][0] < w[1][0] && w[0][0] * w[1][0] > 0.0 || w[0][0] < 0.0 && w[1][0] > 0.0));
@@ -2109,36 +2119,32 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
 /// of 2.4 / 240 = 0.01 m: the first node reached is x = -0.75 m, the 45th. The working envelope's bottom sphere (radius
 /// (0.6^2 + 0.186^2) / (2 * 0.186) = 1.0607 m about z = -0.675 - 0.386 + 1.0607 = -0.0003 m) is 0.3545 m wide at
 /// z = -1.0: the machine goes to x = 0.3 m but not to x = 0.5 m, which its arms reach (at 7.3 and 66.4 degrees). The
-/// other machines move their tool as their axes and have no map.
+/// delta picker is the first machine registered with a map; machines that move their tool as their axes have none.
 #[test]
 fn the_workspace_map_ends_at_the_hand_calculated_reach_of_the_delta() {
-    for entry in MACHINES.iter().copied() {
-        let mut model = Model::new(entry, "en");
-        if entry.id != "delta-d3" {
-            assert!(model.workspace_slice(5).is_none(), "{}", entry.id);
-            continue;
-        }
-        // The middle of the z range by default: -0.675 - 0.386 / 2.
-        assert!((model.workspace_slice(5).unwrap().z + 0.868).abs() < 1e-12);
-        model.inputs.workspace_z = Some(-1.0);
-        let slice = model.workspace_slice(241).unwrap();
-        assert_eq!((slice.x, slice.y, slice.z, slice.limit), ((-1.2, 1.2), (-1.2, 1.2), -1.0, 5.0));
-        assert!((slice.heights.0 + 1.061).abs() < 1e-12 && slice.heights.1 == -0.675, "{:?}", slice.heights);
-        let middle = &slice.nodes[120 * 241..121 * 241];
-        let first = middle.iter().position(|(condition, _)| condition.is_finite()).unwrap();
-        let reach = 0.15 - (1.35f64.powi(2) - 1.0).sqrt();
-        let x = |i: usize| -1.2 + 0.01 * i as f64;
-        assert!(first == 45 && x(first) >= reach && x(first - 1) < reach, "{first}");
-        // Beyond arm 1's stop at 95 degrees there (124.7), so reached but not gone to.
-        assert!(!middle[first].1);
-        // The centre: gone to, the condition the signal kinematics.condition has there.
-        let machine = (entry.build)(&entry.config()).unwrap();
-        assert!(middle[120].1 && middle[120].0 == machine.condition(&[0.0, 0.0, -1.0]).unwrap() && middle[120].0 >= 1.0 && middle[120].0 < 3.6, "{:?}", middle[120]);
-        assert!(middle[150].1 && middle[170].0.is_finite() && !middle[170].1, "{:?} {:?}", middle[150], middle[170]);
-        // A height beyond the z range is taken at its end.
-        model.inputs.workspace_z = Some(0.0);
-        assert_eq!(model.workspace_slice(5).unwrap().z, -0.675);
-    }
+    assert!(MACHINES.iter().any(|e| Model::new(e, "en").workspace_slice(5).is_none()));
+    let entry = MACHINES.iter().copied().find(|e| Model::new(e, "en").workspace_slice(5).is_some()).unwrap();
+    let mut model = Model::new(entry, "en");
+    // The middle of the z range by default: -0.675 - 0.386 / 2.
+    assert!((model.workspace_slice(5).unwrap().z + 0.868).abs() < 1e-12);
+    model.inputs.workspace_z = Some(-1.0);
+    let slice = model.workspace_slice(241).unwrap();
+    assert_eq!((slice.x, slice.y, slice.z, slice.limit), ((-1.2, 1.2), (-1.2, 1.2), -1.0, 5.0));
+    assert!((slice.heights.0 + 1.061).abs() < 1e-12 && slice.heights.1 == -0.675, "{:?}", slice.heights);
+    let middle = &slice.nodes[120 * 241..121 * 241];
+    let first = middle.iter().position(|(condition, _)| condition.is_finite()).unwrap();
+    let reach = 0.15 - (1.35f64.powi(2) - 1.0).sqrt();
+    let x = |i: usize| -1.2 + 0.01 * i as f64;
+    assert!(first == 45 && x(first) >= reach && x(first - 1) < reach, "{first}");
+    // Beyond arm 1's stop at 95 degrees there (124.7), so reached but not gone to.
+    assert!(!middle[first].1);
+    // The centre: gone to, the condition the signal kinematics.condition has there.
+    let machine = (entry.build)(&entry.config()).unwrap();
+    assert!(middle[120].1 && middle[120].0 == machine.condition(&[0.0, 0.0, -1.0]).unwrap() && middle[120].0 >= 1.0 && middle[120].0 < 3.6, "{:?}", middle[120]);
+    assert!(middle[150].1 && middle[170].0.is_finite() && !middle[170].1, "{:?} {:?}", middle[150], middle[170]);
+    // A height beyond the z range is taken at its end.
+    model.inputs.workspace_z = Some(0.0);
+    assert_eq!(model.workspace_slice(5).unwrap().z, -0.675);
 }
 
 /// How many rows of a table have a label that ends with `quantity`.
@@ -2204,13 +2210,15 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation() {
         let belted = !sections.is_empty();
         if belted {
             let belt = model.belt_view().unwrap();
-            assert!(belt.tension.len() == sections.len() && belt.stretch.len() == sections.len() && belt.pretension == 300.0 && belt.rating == Some(1500.0));
-            assert_eq!((belt.titles.clone(), belt.scale.clone()), (["Tension [N]".to_string(), "Stretch [mm]".into()], ["slack 0 N".to_string(), "twice the pretension 600 N".into()]));
+            // The config's own pretension and rating: the belt machines differ in the rating (1500 N, 1000 N).
+            let (pretension, rating) = (model.config.f64("belt.pretension_n").unwrap(), model.config.f64("ratings.belt_max_tension_n").unwrap());
+            assert!(belt.tension.len() == sections.len() && belt.stretch.len() == sections.len() && belt.pretension == pretension && belt.rating == Some(rating), "{}", entry.id);
+            assert_eq!((belt.titles.clone(), belt.scale.clone()), (["Tension [N]".to_string(), "Stretch [mm]".into()], ["slack 0 N".to_string(), format!("twice the pretension {:.0} N", 2.0 * pretension)]));
             assert_eq!(belt.table[0], ["Section", "Tension [N]", "Pretension [N]", "Allowed [N]", "Of the rating [%]", "Stretch [mm]"]);
             for (i, section) in sections.iter().enumerate() {
                 let (tension, stretch) = (latest(&model, &format!("{}.tension", section.id)), latest(&model, &format!("{}.stretch", section.id)));
                 let cells = row(&belt.table, model.tr.tr(section.owner_key));
-                assert!(shows(&cells[0], tension) && cells[1] == "300.0" && shows(&cells[3], 100.0 * tension / 1500.0) && shows(&cells[4], stretch * 1e3), "{cells:?}");
+                assert!(shows(&cells[0], tension) && shows(&cells[1], pretension) && shows(&cells[3], 100.0 * tension / rating) && shows(&cells[4], stretch * 1e3), "{cells:?}");
                 assert!(belt.tension[i].1.last().unwrap()[1] == tension && belt.stretch[i].1.last().unwrap()[1] == stretch * 1e3);
             }
         }

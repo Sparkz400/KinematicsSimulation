@@ -16,7 +16,7 @@
 //! * idlers (`machine.idler`): idler d passes belt at the speed s_d . v (s_d its `speed` per axis), so its inertia
 //!   J_d / r_d^2 adds m_d s_d s_d^T to the axes' mass matrix (which is then no longer diagonal), and its bearing
 //!   friction torque F_d r_d pulls the axes back with F_d tanh(s_d . v / (w_s r_d)) s_d (w_s the motors' friction
-//!   smoothing speed, as for the T-gantry's idlers). They carry no weight.
+//!   smoothing speed, as for the gantry's idlers). They carry no weight.
 //! * a cable chain on an axis (`cable_chain = true`): mass m(q) = mu (L0 + q / 2) that moves with the axis, which
 //!   takes m dv/dt + m' v^2 / 2, and a drag that fades out below the axis guide's Stribeck speed (`mech::CableChain`).
 //! * a process force per axis, `process.force_<axis>_n`, on the tool while the cycle dwells.
@@ -49,7 +49,7 @@ use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTIO
 const G: f64 = 9.80665;
 
 /// Effects the shipped machine crates have and machine files do not: switched on, a machine file is refused.
-/// tool_flex is the T-gantry's Z axis leaning on its carriage: it needs where that axis's centre of mass and tool tip
+/// tool_flex is the gantry's Z axis leaning on its carriage: it needs where that axis's centre of mass and tool tip
 /// sit below the guide and how that changes with its travel, geometry a netlist of belts and bodies does not have.
 pub const UNSUPPORTED_EFFECTS: [&str; 1] = ["tool_flex"];
 
@@ -1491,7 +1491,7 @@ impl Machine for ConfigMachine {
             let at = self.idler_scene_at(d, q);
             idler(&mut out.parts, [at[0], at[2]], at[1], d.radius, -dot(&d.speed, q) / d.radius);
         }
-        // A machine without idler nodes and one motor gets the idler at the far end the single axis has.
+        // A machine without idler nodes and one motor gets the idler at the far end the one-axis machine has.
         if m == 1 && self.idlers.is_empty() {
             idler(&mut out.parts, [end + 0.1, 0.0], -0.05, self.r[0], 0.0);
         }

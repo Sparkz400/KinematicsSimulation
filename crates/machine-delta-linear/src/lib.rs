@@ -23,8 +23,8 @@
 //! m_c = carriage + r m_rod
 //! ```
 //!
-//! Each column is a belt axis as on the single axis, turned upright with its motor at the top: the motor pulley at the
-//! top and an idler at the bottom cut the belt into section 1, from the motor pulley straight down to the carriage
+//! Each column is a belt axis as on the one-axis machine, turned upright with its motor at the top: the motor pulley
+//! at the top and an idler at the bottom cut the belt into section 1, from the motor pulley straight down to the carriage
 //! (length span + stroke - x), and section 2, from the motor pulley down round the idler and up to the carriage
 //! (3 span + stroke + x), x = h - h_min the carriage's place in its stroke. The belt pulls the carriage up with T1 - T2
 //! and the pulley with r (T2 - T1). Elastic (effects.belt_stretch) the sections are springs and pulley and rotor states of
@@ -114,7 +114,7 @@ fn inverse(m: &M3) -> Option<M3> {
     Some(std::array::from_fn(|i| [c0[i] / det, c1[i] / det, c2[i] / det]))
 }
 
-/// The 2-norm condition number of a 3 x 3 matrix, as the D3's (`machine_delta_d3::condition_number`, copied so that
+/// The 2-norm condition number of a 3 x 3 matrix, as the spatial delta picker's (copied so that
 /// the machine crates stay apart): the square root of the largest over the smallest eigenvalue of J^T J.
 pub fn condition_number(j: &M3) -> f64 {
     let jt = transpose(j);
@@ -258,7 +258,7 @@ pub struct LinearDelta {
     brake_engaged: bool,
     /// The belt axis on each column, all alike.
     r: f64,
-    /// Unstretched belt fed per radian of pulley (the radius holds at pretension, as on the single axis).
+    /// Unstretched belt fed per radian of pulley (the radius holds at pretension, as on the one-axis machine).
     r_mat: f64,
     span_min: f64,
     belt: Belt,
@@ -513,7 +513,7 @@ impl LinearDelta {
     }
 
     /// The rigid model's moment. The gearbox loses torque only on what it transmits (the motor's less what accelerates
-    /// the rotor itself); the second pass takes the acceleration of the first for that, as on the single axis.
+    /// the rotor itself); the second pass takes the acceleration of the first for that, as on the one-axis machine.
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> Rigid {
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (h, v) = self.heights(s);
@@ -718,7 +718,7 @@ impl Machine for LinearDelta {
     }
 
     /// Each carriage held by its belt against its weight and the rods' share of the plate's, Q_g; elastic, each column's
-    /// sections share their belt so that T1 - T2 is that force, as on the single axis.
+    /// sections share their belt so that T1 - T2 is that force, as on the one-axis machine.
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
         let h = self.legs.inverse([tool[0], tool[1], tool[2]]).unwrap_or([f64::NAN; 3]);
         let (_, _, gravity) = self.load(h, [0.0; 3]);
@@ -935,7 +935,7 @@ impl Machine for LinearDelta {
     }
 
     // shortcut: no part warms with its loss (`thermal_parts` empty): the couplings of the shipped direct drives lose
-    // nothing, and the guides' heat is not modelled; add the guides as parts like the single axis's once a guide's
+    // nothing, and the guides' heat is not modelled; add the guides as parts like the one-axis machine's once a guide's
     // temperature matters here.
 
     /// Each column's belt loop in the vertical plane through the column, seen from outside: the motor at the top, an
