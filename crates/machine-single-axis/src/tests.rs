@@ -799,6 +799,88 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
     assert!(optimise_cycle(&ENTRY, &strict, 14).is_err());
 }
 
+/// The robust optimiser steps back to the fastest setting that passes in the error bands. With one bound, the payload
+/// between 2 and 20 kg, each setting judged in the bands costs 2 * 1 + 1 = 3 cycles. The fastest setting of the 14
+/// cycles of search on the config as written leaves the belt slack with 20 kg on, the cycle as configured does not (so
+/// nothing is excused), and the step before the last passes: three settings judged, 9 cycles. The nominal search has no
+/// robust part, and its result fails in the bands where the robust one passes.
+#[test]
+fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_bands() {
+    use sim_components::analysis::{Optimised, OptimiseOptions, bounds, optimise_cycle, optimise_cycle_with, verdict_bands};
+    let mut cfg = ENTRY.config();
+    cfg.set_text("bounds = { mass = { payload_kg = [2.0, 20.0] } }").unwrap();
+    let nominal = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
+    let found = optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { max_runs: 14, robust: true, pareto: false }).unwrap();
+    let robust = found.robust.clone().unwrap();
+    assert_eq!((robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs), (["belt-slack"].as_slice(), 0, 1, 9), "{robust:?}");
+    assert!(nominal.robust.is_none() && robust.nominal_duration == nominal.after.duration, "{} s", robust.nominal_duration);
+    assert!(found.after.duration > nominal.after.duration && found.after.duration < found.before.duration, "{} s to {} s", found.before.duration, found.after.duration);
+    let applied = |found: &Optimised| {
+        let mut out = cfg.clone();
+        for (path, _, after) in &found.changes {
+            out.set_text(&format!("{path} = {after}")).unwrap();
+        }
+        out
+    };
+    let passes = |cfg: &Config| verdict_bands(&ENTRY, cfg, &bounds(cfg).unwrap()).unwrap().iter().all(|b| b.ok);
+    assert!(passes(&applied(&found)) && !passes(&applied(&nominal)));
+}
+
+/// Energy against cycle time (`sim-cli optimise --pareto`). The 0.8 m moves cannot reach 1 m/s at these accelerations:
+/// each is a jerk-limited triangle that peaks where v^2/a + v a/j = d, at 0.88944 m/s with a = 1 m/s^2 and 0.63121 m/s
+/// with 0.5 m/s^2 (j = 100 m/s^3; v above a^2/j, so a is reached). Each of the cycle's two stops gives back 1/2 m v^2,
+/// m = 6.125 kg (carriage, pulley and rotor through radius and ratio, as above): 2.4228 J and 1.2202 J, less the copper
+/// loss on the way (4 Ohm * (0.0245 N m s^2/m * 1 m/s^2 / 0.45 N m/A)^2 = 0.012 W over the 0.9 s of a stop: 0.01 J). So
+/// the lower acceleration gives back 2 * 1.2026 = 2.405 J less per cycle, within 2 %. With the DC link at 4.7 uF the
+/// braking resistor burns all but 0.062 J of each stop, which the supply gives again at the next start: the energy from
+/// the supply falls by as much, within 3 % (the copper loss of the starts falls too, some 0.03 J).
+#[test]
+fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply() {
+    use sim_components::analysis::supply_energy;
+    let run = |a: f64| {
+        let mut cfg = ideal_rigid();
+        for e in ["effects.dc_link = true".to_string(), "ratings.dc_link_capacitance_uf = 4.7".into(), format!("axis.x.max_acceleration_m_s2 = {a:?}")] {
+            cfg.set_text(&e).unwrap();
+        }
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        (load.motors[0].energy_regenerated, supply_energy(&cfg, &load))
+    };
+    // The peak speed of the triangle: v^2 + (a^2/j) v - a d = 0.
+    let kinetic = |a: f64| {
+        let (j, d) = (100.0, 0.8);
+        let v: f64 = (-a * a / j + (a.powi(4) / (j * j) + 4.0 * a * d).sqrt()) / 2.0;
+        0.5 * 6.125 * v * v
+    };
+    assert!((kinetic(1.0) - 2.4228).abs() < 1e-4 && (kinetic(0.5) - 1.2202).abs() < 1e-4);
+    let ((back_fast, supply_fast), (back_slow, supply_slow)) = (run(1.0), run(0.5));
+    for (back, a) in [(back_fast, 1.0), (back_slow, 0.5)] {
+        assert!(back < 2.0 * kinetic(a) && back > 0.98 * 2.0 * kinetic(a), "{back} J fed back at {a} m/s^2, by hand {} J", 2.0 * kinetic(a));
+    }
+    let less = 2.0 * (kinetic(1.0) - kinetic(0.5));
+    assert!(((back_fast - back_slow) / less - 1.0).abs() < 0.02, "{} J less fed back, by hand {less} J", back_fast - back_slow);
+    assert!(((supply_fast - supply_slow) / less - 1.0).abs() < 0.03, "{supply_fast} J and {supply_slow} J from the supply, by hand {less} J less");
+}
+
+/// The front of `sim-cli optimise --pareto` on the default config: the settings of the search that pass, and the
+/// slower ones of the sweep (the six of them come on top of the 14 cycles of search). No row is beaten by another in
+/// cycle time, energy and peak utilisation at once, fastest first; it reaches below the cycle as configured (the
+/// sweep) and up to the result.
+#[test]
+fn every_row_of_the_energy_front_is_beaten_by_no_other() {
+    use sim_components::analysis::{OptimiseOptions, optimise_cycle_with};
+    let found = optimise_cycle_with(&ENTRY, &ENTRY.config(), &OptimiseOptions { max_runs: 14, robust: false, pareto: true }).unwrap();
+    assert!(found.runs <= 14 + 6 && found.front.len() >= 3, "{} runs, {:?}", found.runs, found.front);
+    let figures = |p: &sim_components::analysis::FrontPoint| [p.duration, p.energy, p.utilisation];
+    for p in &found.front {
+        for q in &found.front {
+            let beats = figures(q).iter().zip(figures(p)).all(|(x, y)| *x <= y) && figures(q) != figures(p);
+            assert!(!beats, "{q:?} beats {p:?}");
+        }
+    }
+    assert!(found.front.windows(2).all(|w| w[0].duration <= w[1].duration));
+    assert!(found.front[0].duration == found.after.duration && found.front.last().unwrap().duration > found.before.duration, "{:?}", found.front);
+}
+
 /// A drive trace of the axis going to the far end and back, one row per millisecond as a run writes it,
 /// with measurement noise on torque (0.005 N m, about 1 % of the peak), speed (0.1 rad/s) and angle.
 fn noisy_trace(cfg: &Config, noise: &mut Noise) -> Trace {

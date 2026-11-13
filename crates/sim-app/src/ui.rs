@@ -1018,10 +1018,23 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
     if let Some(rows) = &optimised {
         heading(ui, model, "ui-analysis-optimised", Analysis::Optimise);
         table(ui, "ui-analysis-optimised", rows, None);
+        optimised_front(ui, model);
         if ui.button(tr("ui-analysis-apply")).clicked() {
             actions.push(Action::ApplyOptimised);
         }
     }
+}
+
+/// The optimiser's front: energy per cycle against cycle time of the settings no other one beats (in cycle time, energy
+/// and peak utilisation at once), the result marked by a vertical line.
+fn optimised_front(ui: &mut Ui, model: &Model) {
+    let Some((points, result)) = model.optimised_front() else { return };
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.label(tr("ui-optimised-front"));
+    Plot::new("optimised-front").height(160.0).x_axis_label(tr("ui-analysis-cycle-time")).y_axis_label(tr("ui-optimised-energy")).show(ui, |plot| {
+        plot.points(Points::new(tr("ui-optimised-front"), points).color(PALETTE[0]).radius(3.0));
+        plot.vline(VLine::new(tr("ui-optimised-result"), result).color(PALETTE[1]));
+    });
 }
 
 /// What the lines of the plot below are, each in its colour, dashed ones marked so: in place of a legend in the plot,

@@ -40,7 +40,7 @@ struct Args(Vec<String>);
 /// Options every command takes, each with a value.
 const COMMON: [&str; 12] = ["--machine-file", "--config", "--catalog", "--motor", "--supply", "--gearbox", "--drive", "--belt", "--axis", "--set", "--out", "--lang"];
 /// Options without a value.
-const FLAGS: [&str; 5] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes"];
+const FLAGS: [&str; 6] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -117,7 +117,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("run") => &["--move", "--cycle", "--trajectory", "--path", "--time-optimal", "--time", "--disable-at", "--every"],
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
-        Some("optimise") => &["--runs"],
+        Some("optimise") => &["--runs", "--nominal", "--pareto"],
         Some("search") => &["--series", "--gearboxes", "--axes"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
@@ -152,7 +152,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("sensitivity") => sensitivity(args),
         Some("verdicts") => verdicts(args, tr),
         Some("search") => search(args, tr),
-        Some("optimise") => optimise(args),
+        Some("optimise") => optimise(args, tr),
         Some("step") => step(args),
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
@@ -562,14 +562,37 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 /// and higher axis limits, with input shaping where a faster setting fails on settling alone, lower lifts down to
 /// `profile.min_clearance_m` and lifts rounded through a via point (`--runs N` cycles at most, 40 by default). Prints
 /// the cycle time and what to change in the config; per changed lift its segments, height before and after, and via point.
-fn optimise(args: &Args) -> Result<(), Failure> {
+/// The result passes every verdict in the error bands of the config's `[bounds]` too: where the fastest setting found
+/// fails there, the search's steps are gone back to the fastest that passes (rows `bands_*`, and on the error stream
+/// what the bands cost). `--nominal` judges the config as written alone. `--pareto FILE` writes the settings that no
+/// other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
+fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let runs = args.number("--runs")?.unwrap_or(40.0) as usize;
-    let found = sim_components::analysis::optimise_cycle(entry, &cfg, runs)?;
+    let options = sim_components::analysis::OptimiseOptions { max_runs: runs, robust: !args.flag("--nominal"), pareto: args.option("--pareto").is_some() };
+    let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options)?;
     let mut out = output(args, "--out")?;
     writeln!(out, "setting,before,after").map_err(io)?;
     writeln!(out, "cycle_s,{:.4},{:.4}", found.before.duration, found.after.duration).map_err(io)?;
     writeln!(out, "dwell_error_peak_m,{:.3e},{:.3e}", found.before.dwell_error_peak, found.after.dwell_error_peak).map_err(io)?;
+    if let Some(robust) = &found.robust {
+        // The fastest setting on the verdicts as written, what it fails in the bands, and how far the result went back.
+        writeln!(out, "bands_fastest_cycle_s,,{:.4}", robust.nominal_duration).map_err(io)?;
+        writeln!(out, "bands_fastest_fails,,{}", robust.nominal_fails.join(" ")).map_err(io)?;
+        writeln!(out, "bands_steps_back,,{}", robust.steps_back).map_err(io)?;
+        // Failed in the bands by the cycle as configured already: the result is not judged on them.
+        writeln!(out, "bands_excused,,{}", robust.excused.join(" ")).map_err(io)?;
+        eprintln!("{}", tr.tr_arg("cli-optimise-runs", &format!("{} + {}", found.runs, robust.runs)));
+    }
+    if let Some(path) = args.option("--pareto") {
+        let mut front = std::io::BufWriter::new(std::fs::File::create(path).map_err(io)?);
+        writeln!(front, "cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping").map_err(io)?;
+        for p in &found.front {
+            let [v, a, j] = p.factors;
+            writeln!(front, "{:.4},{:.3},{:.4},{v:.4},{a:.4},{j:.4},{},{}", p.duration, p.energy, p.utilisation, p.blending, p.shaping).map_err(io)?;
+        }
+        front.flush().map_err(io)?;
+    }
     // The new cycle itself is TOML with commas; its lifts say what changed in it.
     for (path, before, after) in found.changes.iter().filter(|c| c.0 != "cycle.segment") {
         writeln!(out, "{path},{before},{after}").map_err(io)?;
