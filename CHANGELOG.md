@@ -27,6 +27,17 @@ item are in [PROGRESS.md](PROGRESS.md).
   their own rating checks (`screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life`,
   `rack-feed-force`, `strain-wave-life`).
 
+### Changed
+
+- The time-optimal plan (`--time-optimal`) reads the motors' limits point by point, every 2 mm along a piece (and
+  every 0.02 rad on a curve), instead of one speed and one acceleration limit per piece from nine poses: each ramp
+  accelerates by what the torque, the belt's tension and the axes' jerk allow where it is, gravity counts each way
+  as it pushes, the centripetal and Coriolis torque of the speed counts, and a piece may cruise faster than its
+  slowest place where its ramps pass that place more slowly. Arcs no longer share the limits 3 : 4 : 5. The user
+  guide's line, arc, line takes 1.395 s instead of 1.429 s, its spline example 1.380 s instead of 1.674 s, a line
+  across the delta's range 0.411 s instead of 0.429 s; the default cycles of the T-gantry, the delta and the arms
+  are limited by jerk and speed and plan as before. Planning takes 1 to 21 ms instead of 0.2 to 1 ms.
+
 ## [1.0.0-rc.1] - 2026-11-13
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

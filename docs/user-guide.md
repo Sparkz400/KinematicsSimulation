@@ -610,7 +610,7 @@ motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_err
 a,2.128000,0.547780,...,1.579e-4,5.575e-5,1.679e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path corner.path --time-optimal
-a,1.729000,0.639460,...,1.915e-4,6.738e-5,1.915e-4,0.000e0,...
+a,1.695000,0.636875,...,1.908e-4,6.864e-5,1.908e-4,0.000e0,...
 ```
 
 For a path, `cycle_s` is the planned duration plus 0.3 s of rest at the end, so that the settling of the tool counts.
@@ -627,7 +627,7 @@ Two planners time the path:
 | Where a spline meets a line or an arc | The curvature steps, so it slows down as from a line into an arc; with `profile.path_tolerance_m` the spline's end is eased to the curvature of its neighbour, and the junction is passed at speed (below) | The same |
 | Model used to plan | None, only the axis limits | The rigid model: no friction, no belt stretch |
 
-The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.80 s plus rest at 2000 m/s³, where the belt's tension limits it).
+The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.79 s plus rest at 2000 m/s³, where the belt's tension limits it).
 
 Reading the result:
 
@@ -671,10 +671,10 @@ motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_err
 a,2.101000,0.547145,...,1.646e-4,5.616e-5,1.679e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path curve.path --time-optimal
-a,1.974000,0.586259,...,1.722e-4,6.077e-5,1.722e-4,0.000e0,...
+a,1.681000,0.585290,...,2.008e-4,7.640e-5,2.008e-4,0.000e0,...
 ```
 
-2.101 s within the axis limits and 1.974 s as fast as the motors allow, both with 0.3 s of rest. The curve leaves the first line horizontally and arrives on the last one going straight down, but with the curvature its via points ask for, so the path slows down at both junctions as into an arc. With `--set profile.path_tolerance_m=0.0001` the spline's ends are eased: near each junction the spline is bent so that its curvature there is that of the line (0), over a length l = sqrt(tolerance / (0.01728 dk)) for a step dk of the curvature, at most half the span, and only as long as the speed needs. The via points stay where they are; the spline moves by at most the tolerance. Here: 1.985 s within the axis limits and 1.809 s as fast as the motors allow. The eased part changes its curvature about nine times as fast as a clothoid of the same length would, so it is passed more slowly than a transition curve between a line and an arc (see the [model reference](model-reference.md#transition-curves-profilepath_tolerance_m)).
+2.101 s within the axis limits and 1.681 s as fast as the motors allow, both with 0.3 s of rest. The curve leaves the first line horizontally and arrives on the last one going straight down, but with the curvature its via points ask for, so the path slows down at both junctions as into an arc. With `--set profile.path_tolerance_m=0.0001` the spline's ends are eased: near each junction the spline is bent so that its curvature there is that of the line (0), over a length l = sqrt(tolerance / (0.01728 dk)) for a step dk of the curvature, at most half the span, and only as long as the speed needs. The via points stay where they are; the spline moves by at most the tolerance. Here: 1.985 s within the axis limits and 1.528 s as fast as the motors allow. The eased part changes its curvature about nine times as fast as a clothoid of the same length would, so it is passed more slowly than a transition curve between a line and an arc (see the [model reference](model-reference.md#transition-curves-profilepath_tolerance_m)).
 
 Other ways to give a path:
 
@@ -685,9 +685,9 @@ Limits for this task:
 
 - Without a path tolerance a rounded corner is slow with the default planner: 0.07 m/s into an arc of 0.1 m radius at 100 m/s³.
 - Splines: without a path tolerance, where one joins a line or an arc the curvature steps, so the path passes that junction slowly, like a line into an arc. With one, the eased junction is passed at speed, but more slowly than a clothoid would allow for the same deviation. A span has one limit, from its tightest place, so a span with one tight bend is slow along its whole length.
-- Transition curves between lines and arcs: one length for the whole path, so an arc whose junctions need less still moves in by what that length asks. None at an arc fixed at both ends (between two corners, or a corner and a spline), or at an arc fixed at one end with an arc at the other, or that turns more than half a circle. Their length follows the speeds the plan allows: the axis limits, or for `--time-optimal` the motors (the example takes 1.499 s with a tolerance of 0.1 mm, 1.729 s without).
+- Transition curves between lines and arcs: one length for the whole path, so an arc whose junctions need less still moves in by what that length asks. None at an arc fixed at both ends (between two corners, or a corner and a spline), or at an arc fixed at one end with an arc at the other, or that turns more than half a circle. Their length follows the speeds the plan allows: the axis limits, or for `--time-optimal` the motors (the example takes 1.397 s with a tolerance of 0.1 mm, 1.695 s without).
 - The time-optimal plan knows the belt's tension ratings (`ratings.belt_max_tension_n`, `belt_min_tension_n`): it takes `profile.tension_margin_n` (31 N on the default T-gantry, the guide friction the belt pulls) off both and keeps every section's tension in the rigid model within `profile.tension_reserve` (0.5) of the room to what is left, because the belt's vibration can add as much again as the rigid model's change of tension (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). It does not know the gearbox and pulley torque ratings, the guides or the DC link. Run `analyze` or `verdicts` on it.
-- The time-optimal plan is not the fastest one possible. It has one speed and one acceleration limit per piece, and on an arc it shares the motors' limits out between the directions along the path and towards the centre, which leaves a part unused. On the full model the motors pass the rated speed by what the control loops add (0.1 % in the example).
+- The time-optimal plan reads the motors' limits point by point (every 2 mm) and takes each where it is, but it is not the fastest one possible: a piece cruises at one speed, and on a curve the ramps get 0.4 of the jerk limit (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Planning takes some milliseconds (1 to 21 ms on the shipped machines). On the full model the motors pass the rated speed by what the control loops add (0.1 % in the example).
 - A machine that stands on an end of a stroke has its setpoint some hundredths of a millimetre beyond it: the setpoint is where the motors stand, under belt stretch and gear twist. A path from there starts that far outside the travel range and is run. Only near its start may a path leave the range: a pose within the machine's setpoint slack of the start (0.1 mm on the gantries, 2.3 mm on the delta) may lie that far outside it; any other pose has to lie within the range (on an axis whose start lies beyond an end, no further beyond than the start; rounding of 1e-9 m aside). Other poses are refused (`The path leaves the travel range. ...` for a path of pieces, `The trajectory needs at least two points inside the travel range, at rising times from 0.` for poses at times).
 - The payload is as the machine has it when planning (attached, at the start).
 - `verdicts`, `optimise`, `search` and `sensitivity` work on the cycle only, not on a path.

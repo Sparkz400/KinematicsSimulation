@@ -702,16 +702,16 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
 }
 
 /// Time-optimal timing of a path: a line, an arc of radius 0.1 m and a line, tangent to each other.
-/// (a) It is shorter than the plan within the axis limits: 1.43 s against 1.83 s. (The plan without a jerk
-/// limit took 0.69 s and asked the motors for more than they have on a tight arc.) (b) No pose uses more
-/// than the plan promises, by differences (`plan_use`, margin 0.1 %): the motors' share of the torque-speed
-/// curve (`profile.torque_reserve`, 0.8), their rated speed and the jerk limits of the axes. (c) A limit is
-/// active, used to 97 % or more, at over 60 % of the poses. With the config's motor that is the jerk at 57 %
-/// and the rated speed at 10 %; the torque stays at 0.16 of its share, because at 100 m/s^3 the lines are
-/// too short to reach it. With a motor of 0.6 N m and a jerk limit of 2000 m/s^3 it is the torque at 30 %
-/// of the poses, the speed at 32 % and the jerk at 4 %. The other poses are on the arc, where the planner
-/// shares speed, acceleration and jerk out between the directions along the path and towards the centre and
-/// so uses none in full, and the steady cycles on either side of a junction. (d) Run on the full model with
+/// (a) It is shorter than the plan within the axis limits: 1.395 s against 1.83 s (1.429 s with one limit per
+/// piece). (The plan without a jerk limit took 0.69 s and asked the motors for more than they have on a tight
+/// arc.) (b) No pose uses more than the plan promises, by differences (`plan_use`, margin 0.1 %): the motors'
+/// share of the torque-speed curve (`profile.torque_reserve`, 0.8), their rated speed and the jerk limits of the
+/// axes. (c) A limit is active, used to 97 % or more, at over 60 % of the poses. With the config's motor that is
+/// the jerk at 59 % and the rated speed at 10 %; the torque stays at 0.16 of its share, because at 100 m/s^3 the
+/// lines are too short to reach it. With a motor of 0.6 N m and a jerk limit of 2000 m/s^3 it is the torque at
+/// 33 % of the poses, the speed at 38 % and the jerk at 5 %. The other poses are on the arc, where the ramps get
+/// 0.4 of the jerk and the jerk the curve takes holds the speed below what the motors allow, and the steady
+/// cycles on either side of a junction. (d) Run on the full model with
 /// all default effects, the plan stays on the torque-speed curve.
 #[test]
 fn the_time_optimal_plan_is_shorter_keeps_a_limit_active_and_stays_on_the_torque_speed_curve() {
@@ -752,7 +752,8 @@ line,0.6,0.05").unwrap();
 /// With `profile.path_tolerance_m` both planners time the same path: the one with transition curves, whose arc
 /// has moved in by the tolerance. Each plan's poses are nowhere further from the given line, arc and line
 /// than the 0.1 mm the simulator reports, reach that on the arc, and end on the target; within the axis
-/// limits the path takes 1.59 s where it took 1.83 s, and as fast as the motors allow 1.20 s.
+/// limits the path takes 1.59 s where it took 1.83 s, and as fast as the motors allow 1.10 s (1.20 s with one limit
+/// per piece).
 #[test]
 fn both_planners_time_the_path_with_its_transition_curves() {
     let pieces = sim_components::path::parse("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw\nline,0.6,0.05").unwrap();
@@ -814,9 +815,11 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
 /// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N per m/s^2, and with
 /// `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 * (400 - 31 - 284.47)
 /// = 42.26 N of it: a = 6.328 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension`
-/// on the full model (425 N); the plan with it accelerates at 6.328 m/s^2 within 0.5 %, its rigid tension reaches the
-/// 326.7 N the plan allows within 3 % (where it accelerates, x = 0.7 to 0.8, the rise per m/s^2 is a little less), and
-/// the full model, friction and belt vibration on top, passes `belt-tension`.
+/// on the full model (425 N). The plan with it takes the limit at each pose (`belt_bound`): where it accelerates,
+/// x = 0.7 to 0.8, 42.26 N / (11 kg * 2.3 / 4.2) = 7.02 m/s^2 at x = 0.7, more than the 6.328 m/s^2 of the far end
+/// (the plan with one limit per piece took that all along); no pose accelerates harder than its bound by 0.2 % and
+/// one reaches it within 0.5 %; its rigid tension reaches the 326.7 N the plan allows within 1 %, and the full model,
+/// friction and belt vibration on top, passes `belt-tension`.
 #[test]
 fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let pieces = sim_components::path::parse("line,0.95,0.35").unwrap();
@@ -828,21 +831,23 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
         cfg.set_text(&format!("ratings.belt_max_tension_n = {rated:?}")).unwrap();
         let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
         let points = sim.plan_path(&pieces, true).unwrap();
-        // The most acceleration along X and the most tension of the rigid model, by differences over the planned poses.
-        let (c, mut most_acc, mut most_tension) = (1e-3, 0f64, 0f64);
+        // The most acceleration along X, the most of it against the bound at its pose and the most tension of the rigid
+        // model, by differences over the planned poses.
+        let (c, mut most_acc, mut most_used, mut most_tension) = (1e-3, 0f64, 0f64, 0f64);
         for w in points.windows(3) {
             let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
             let mut tensions = Vec::new();
             sim.machine.rigid_tensions(&w[1].1, &acc, &mut tensions);
             most_acc = most_acc.max(acc[0].abs());
+            most_used = most_used.max(acc[0].abs() / belt_bound(w[1].1[0]));
             most_tension = tensions.iter().fold(most_tension, |m, t| m.max(*t));
         }
         let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
         let mut judged = cfg.clone();
         judged.set_text("ratings.belt_max_tension_n = 400.0").unwrap();
         let verdict = sim_components::analysis::verdicts(&judged, &load).unwrap().into_iter().find(|v| v.check == "belt-tension").unwrap();
-        println!("limit {rated} N: {most_acc} m/s^2, rigid {most_tension} N, simulated {} N", verdict.value);
-        (most_acc, most_tension, verdict)
+        println!("limit {rated} N: {most_acc} m/s^2, {most_used} of the bound, rigid {most_tension} N, simulated {} N", verdict.value);
+        (most_acc, most_used, most_tension, verdict)
     };
     // The tension law of the rigid model, by hand, at rest and accelerating at x = 0.9.
     let machine = (ENTRY.build)(&ENTRY.config()).unwrap();
@@ -855,12 +860,61 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.5 * (400.0 - 31.0 - (300.0 - weight * 0.95 / 4.2)));
     let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
     assert!((allowed - 6.328).abs() < 5e-3 && (still + room - 326.74).abs() < 0.01, "{allowed}");
-    let (old_acc, _, old) = run(1e12);
-    assert!(old_acc > 1.3 * allowed && !old.ok, "{old_acc} m/s^2, {old:?}");
-    let (acc, tension, new) = run(400.0);
-    assert!((acc / allowed - 1.0).abs() < 0.005, "{acc} m/s^2 against {allowed}");
-    assert!(tension <= (still + room) * 1.001 && tension >= 0.97 * (still + room), "{tension} N");
+    assert!((belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.016).abs() < 5e-3, "{} {}", belt_bound(0.95), belt_bound(0.7));
+    let (old_acc, ..) = run(1e12);
+    assert!(old_acc > 1.3 * allowed && !run(1e12).3.ok, "{old_acc} m/s^2");
+    let (acc, used, tension, new) = run(400.0);
+    assert!(used <= 1.002 && used > 0.995 && acc > 1.05 * allowed, "{acc} m/s^2, {used} of the bound at its pose, the far end allows {allowed}");
+    assert!(tension <= (still + room) * 1.001 && tension >= 0.99 * (still + room), "{tension} N");
     assert!(new.ok, "{new:?}");
+}
+
+/// The most acceleration along X that the belt allows the time-optimal plan at x on the default T-gantry (z = 0.35) rated
+/// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.47) = 42.26 N either way (see the test above), and
+/// accelerating 11 kg along X changes section 3 by 11 (L1 + 0.95) / 4.2 = 11 (1.6 + x) / 4.2 and section 1 by
+/// 11 (L3 + 0.95) / 4.2 = 11 (2.6 - x) / 4.2 per m/s^2.
+fn belt_bound(x: f64) -> f64 {
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    room / (11.0 * (1.6 + x).max(2.6 - x) / 4.2)
+}
+
+/// Limits that change within a piece: a line along X from (0.1, 0.35) to (0.9, 0.35) at 300 m/s^3, the belt rated
+/// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
+/// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
+/// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that). The plan point by
+/// point accelerates as the bound rises along its ramp, 6.455 m/s^2 at x = 0.1 to 6.73 m/s^2 at x = 0.23 where the ramp
+/// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
+/// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
+/// 1.4 ms less (0.8517 s). Every planned pose keeps the acceleration within its bound (0.2 %), the rigid tensions within 42.26 N
+/// of holding, the motors within torque and speed and the axes within their jerk limit (`plan_use`).
+#[test]
+fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
+    let mut cfg = ENTRY.config();
+    for e in ["axis.x.max_jerk_m_s3 = 300.0", "axis.z.max_jerk_m_s3 = 300.0", "ratings.belt_max_tension_n = 400.0"] {
+        cfg.set_text(e).unwrap();
+    }
+    let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+    let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
+    let duration = points[points.len() - 1].0;
+    let by_hand = 0.8 / 1.2559 + 1.2559 / belt_bound(0.9) + belt_bound(0.9) / 300.0;
+    assert!((belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8531).abs() < 1e-4, "{} m/s^2, {by_hand} s", belt_bound(0.9));
+    assert!(duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3, "{duration} s, with one limit per piece {by_hand} s");
+    let (c, mut of_bound, mut hardest, mut most_change) = (1e-3, 0f64, 0f64, 0f64);
+    for w in points.windows(3) {
+        let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
+        let (mut moving, mut still) = (Vec::new(), Vec::new());
+        sim.machine.rigid_tensions(&w[1].1, &acc, &mut moving);
+        sim.machine.rigid_tensions(&w[1].1, &[0.0, 0.0], &mut still);
+        most_change = moving.iter().zip(&still).fold(most_change, |m, (a, b)| m.max((a - b).abs()));
+        of_bound = of_bound.max(acc[0].abs() / belt_bound(w[1].1[0]));
+        hardest = hardest.max(acc[0].abs());
+    }
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    assert!(of_bound <= 1.002 && of_bound > 0.995 && hardest > 1.03 * belt_bound(0.9), "{of_bound} of the bound, {hardest} m/s^2");
+    assert!(most_change <= 1.001 * room && most_change > 0.99 * room, "{most_change} N of {room} N");
+    let used = most_used(&plan_use(&sim, &cfg, &points));
+    assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
+    println!("{duration} s (one limit per piece {by_hand} s), {of_bound} of the bound, hardest {hardest} m/s^2, {most_change} N");
 }
 
 /// The tenth review's paths, as fast as the motors and a belt rated 330 to 1500 N allow (330 N with the default axis
@@ -1398,3 +1452,4 @@ fn the_report_names_the_source_of_each_exct_30_value() {
     assert_eq!(source(ENTRY.default_config, &named, &cfg, "motor.rotor_inertia_kgm2"), "[catalogue] part in [parts]");
     assert_eq!(source(ENTRY.default_config, &named, &cfg, "parts.motor"), "set for this run");
 }
+

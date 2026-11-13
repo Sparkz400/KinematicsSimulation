@@ -361,3 +361,64 @@ fn an_arc_along_the_rim_of_the_range_is_planned() {
         assert!(sim.plan_path(&rim, time_optimal).is_ok(), "{time_optimal}: {:?}", sim.plan_path(&rim, time_optimal).err());
     }
 }
+
+/// Limits that change within a piece: on the delta the motors turn faster per tool speed in one place than in another.
+/// From the start pose a line to (0.5, 0, -0.85) and across the range to (-0.5, 0, -0.85), as fast as the motors allow.
+/// Along the second line, by the inverse kinematics at 801 places (central differences of 1 µm), the rated speed lets
+/// the tool go 7.270 m/s where the motors turn fastest per tool speed (at its end, x = -0.5) and 13.31 m/s where they
+/// turn slowest. The plan with one limit per piece kept the whole line below the slowest place's speed and its
+/// acceleration below the line's weakest pose, and took 0.4290 s (13 November, before it was replaced). Point by point
+/// the plan reaches 8.12 m/s on the second line, more than 1.1 times the slowest place's speed (it passes that place
+/// braking, slower), uses the motors' torque up to the reserve, and takes 0.412 s. Every planned pose
+/// keeps each motor within `profile.torque_reserve` of its torque-speed curve (rigid model, with the centripetal and
+/// Coriolis torque of the speed), within its rated speed, and each axis within its jerk limit, by differences over
+/// one cycle (0.1 %), and the path ends on its end point.
+#[test]
+fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
+    let cfg = ENTRY.config();
+    let sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let (from, to) = ([0.5, 0.0, -0.85], [-0.5, 0.0, -0.85]);
+    let points = sim.plan_path(&sim_components::path::parse("line,0.5,0.0,-0.85\nline,-0.5,0.0,-0.85").unwrap(), true).unwrap();
+    let (reserve, rated, c) = (cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap(), 1e-3);
+    // The tool speed along the second line at which the fastest motor turns at its rated speed, at its places.
+    let length = (0..3).map(|i| (to[i] - from[i]) * (to[i] - from[i])).sum::<f64>().sqrt();
+    let speed_at = |k: usize| {
+        let at = |s: f64| (0..3).map(|i| from[i] + (to[i] - from[i]) * s / length).collect::<Vec<_>>();
+        let (mut ahead, mut behind) = ([0.0; 3], [0.0; 3]);
+        let s = length * k as f64 / 800.0;
+        sim.machine.inverse(&at(s + 1e-6), &mut ahead);
+        sim.machine.inverse(&at(s - 1e-6), &mut behind);
+        rated / (0..3).map(|m| (ahead[m] - behind[m]).abs() / 2e-6).fold(0.0, f64::max)
+    };
+    let (slowest, fastest) = (0..=800).map(speed_at).fold((f64::INFINITY, 0f64), |(l, h), v| (l.min(v), h.max(v)));
+    assert!((slowest - 7.270).abs() < 1e-3 && (fastest - 13.31).abs() < 0.01, "{slowest} to {fastest} m/s");
+    // Speed, motor torque and speed, axis jerk by differences over the planned poses, at rest before and after.
+    let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
+    let off = |p: &[f64]| (0..3).map(|k| (p[k] - from[k]) * (p[k] - from[k])).sum::<f64>();
+    let junction = (0..points.len()).min_by(|i, j| off(&points[*i].1).total_cmp(&off(&points[*j].1))).unwrap() as isize;
+    let (mut quickest, mut used) = (0f64, [0f64; 3]);
+    for i in 0..points.len() as isize {
+        let (a, p, b, b2) = (pose(i - 1), pose(i), pose(i + 1), pose(i + 2));
+        let vel: Vec<f64> = (0..3).map(|k| (b[k] - a[k]) / (2.0 * c)).collect();
+        let acc: Vec<f64> = (0..3).map(|k| (b[k] - 2.0 * p[k] + a[k]) / (c * c)).collect();
+        let (mut torque, mut ahead, mut here) = ([0.0; 3], [0.0; 3], [0.0; 3]);
+        sim.machine.feedforward_torque_moving(p, &vel, &acc, &mut torque);
+        sim.machine.inverse(b, &mut ahead);
+        sim.machine.inverse(p, &mut here);
+        if i > junction {
+            quickest = quickest.max(vel.iter().map(|v| v * v).sum::<f64>().sqrt());
+        }
+        for k in 0..3 {
+            let speed = (ahead[k] - here[k]) / c;
+            let (low, high) = sim.control.torque_curve(speed);
+            let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
+            used = [used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })), used[1].max(speed.abs() / rated), used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk)];
+        }
+    }
+    let (duration, last) = (points[points.len() - 1].0, &points[points.len() - 1].1);
+    println!("{duration} s, {quickest} m/s on the second line (its slowest place allows {slowest} m/s), used {used:?}");
+    assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
+    assert!(quickest > 1.1 * slowest, "{quickest} m/s, the slowest place of the line allows {slowest} m/s");
+    assert!(duration < 0.4290 - 0.01, "{duration} s, with one limit per piece 0.4290 s");
+    assert!((0..3).all(|k| (last[k] - to[k]).abs() < 1e-9), "ends at {last:?}");
+}
