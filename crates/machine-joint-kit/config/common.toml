@@ -36,6 +36,9 @@ velocity_filter = true
 torque_filter = true
 notch_filter = false
 torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
 corner_blending = false
 input_shaping = false
 back_emf = true
@@ -43,6 +46,10 @@ voltage_limit = true
 winding_heating = true
 part_heating = false
 thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
 torque_saturation = true
 drive_delay = true
 dc_link = true

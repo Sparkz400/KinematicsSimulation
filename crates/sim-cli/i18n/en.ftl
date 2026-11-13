@@ -18,3 +18,6 @@ cli-planned-clearance = Planned path: least clearance to the obstacles { $arg } 
 cli-planned-contact = Planned path: first contact with an obstacle at the pose { $arg }
 cli-run-clearance = Run: least clearance to the obstacles { $arg } mm
 cli-run-contact = Run: first contact with an obstacle (name: time, speed of the tool, pose) { $arg }
+cli-thermal-start-cold = Thermal start: cold (the parts and windings at the temperatures the run began with)
+cli-thermal-start-warm = Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass { $arg } K
+cli-thermal-start-unsettled = Thermal start: warm, but NOT converged within the warm passes; largest change of a rise over the measured pass { $arg } K

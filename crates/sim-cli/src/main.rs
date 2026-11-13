@@ -267,6 +267,17 @@ fn pose_text(pose: &[f64]) -> String {
     pose.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(" ")
 }
 
+/// On the error stream: how the cycle's measured pass was started (effects.thermal_warm_start), by the largest change of
+/// a rise over it (`analysis::WarmStart::change`); `None`: from cold.
+fn tell_start(tr: &Translations, change: Option<f64>) {
+    let (key, arg) = match change {
+        None => ("cli-thermal-start-cold", String::new()),
+        Some(c) if c <= sim_components::analysis::WARM_START_TOLERANCE_K => ("cli-thermal-start-warm", format!("{c:.3}")),
+        Some(c) => ("cli-thermal-start-unsettled", format!("{c:.3}")),
+    };
+    eprintln!("{}", tr.tr_arg(key, &arg));
+}
+
 /// On the error stream: the least clearance of a planned path to the obstacles, in mm, and its first pose in contact.
 /// Nothing without obstacles.
 fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>) {
@@ -661,6 +672,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some(samples) => verdict_bands_sampled(entry, &cfg, &bounds(&cfg)?, samples as usize, seed.unwrap_or(1.0) as u64)?,
         None => verdict_bands(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?,
     };
+    tell_start(tr, bands.iter().find(|b| b.verdict.check == "thermal-warm-start").map(|b| b.verdict.value));
     let result = |ok: bool| if ok { "ok" } else { "FAIL" };
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
@@ -722,6 +734,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         None => analyse_cycle_with(&mut sim, views),
     }
     .map_err(|e| Failure(e.key, String::new()))?;
+    tell_start(tr, load.warm_start.map(|w| w.change));
     let mut out = output(args, "--out")?;
     writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation").map_err(io)?;
     // Empty where the machine does not report the signal or the config has no load rating for the guide.

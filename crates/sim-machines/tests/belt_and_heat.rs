@@ -1,6 +1,6 @@
 //! Temperature feedback, belt tooth jump and the sideways vibration of the belt spans, against hand calculations.
 
-use sim_components::analysis::{BUDGET_TOLERANCE, analyse_cycle, verdicts};
+use sim_components::analysis::{BUDGET_TOLERANCE, WARM_START_PASSES, analyse_cycle, verdicts};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
@@ -111,6 +111,72 @@ fn a_guide_settles_where_its_loss_and_heat_flow_balance() {
     let rise = sim.heated[part].rise;
     assert!((rise - low).abs() < 0.01 * low, "{rise} K against {low} K");
     assert!((low - 40.18).abs() < 0.5, "the balance at the run's speed {v} m/s and scale {scale}: {low} K");
+}
+
+/// effects.thermal_warm_start with a winding whose resistance rises with its temperature (effects.winding_heating,
+/// copper 0.39 %/K). Single axis, its shipped cycle, the motor's rated current set to 0.5 A so that the winding warms
+/// well: the cycle's RMS current 0.4463 A settles it at q / (1 - 0.0039 q), q = 100 K / (1 + 0.0039 * 100) *
+/// (0.4463 / 0.5)^2 = 57.32 K: at 73.82 K. Started warm, the measured pass's copper loss is R (1 + 0.0039 * 73.82) I^2 =
+/// 4 ohm * 1.28790 * 0.4463^2 A^2 = 1.0261 W; from cold 4 * 0.4463^2 = 0.7967 W, as if the winding stayed at ambient.
+#[test]
+fn a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_rise() {
+    let entry = &machine_single_axis::ENTRY;
+    let run = |warm: bool| {
+        let cfg = edited(entry, &["motor.rated_current_a = 0.5", &format!("effects.thermal_warm_start = {warm}")]);
+        let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+        let copper = load.budget.as_ref().unwrap().rows.iter().find(|r| r.id == "copper.m").unwrap().energy / load.duration;
+        (load, copper)
+    };
+    let by_hand = |rms: f64, rise: f64| 4.0 * (1.0 + 0.0039 * rise) * rms * rms;
+    let ((cold, cold_loss), (warm, warm_loss)) = (run(false), run(true));
+    let (c, w) = (&cold.motors[0], &warm.motors[0]);
+    assert!(cold.warm_start.is_none() && warm.warm_start.is_some_and(|s| s.converged()), "{:?}", warm.warm_start);
+    assert!((w.rms_current - 0.4463).abs() < 5e-4 && (w.winding_rise - 73.82).abs() < 0.1, "{} A, {} K", w.rms_current, w.winding_rise);
+    assert!((warm_loss - by_hand(w.rms_current, w.winding_rise)).abs() < 2e-3 * warm_loss, "{warm_loss} W, by hand {} W", by_hand(w.rms_current, w.winding_rise));
+    assert!((warm_loss - 1.0261).abs() < 5e-3 * 1.0261, "{warm_loss} W");
+    // From cold the winding warms by a fifth of a kelvin over the two passes (time constant 30 min).
+    assert!((cold_loss - by_hand(c.rms_current, 0.0)).abs() < 2e-3 * cold_loss, "{cold_loss} W, by hand {} W", by_hand(c.rms_current, 0.0));
+}
+
+/// A guide with effects.thermal_feedback, started warm: the single axis's shipped cycle with the parts warming
+/// (part_heating) settles its guide where loss and heat flow balance, now at 10.03 K (12.51 K judged from cold: its
+/// viscous friction falls as it warms). The measured pass ran with the guide there, so its viscous friction at 0.5 m/s
+/// is 0.5 m/s * 20 N s/m * nu(10.03 K) / nu_ref = 10 N * exp(4000 K (1/303.18 K - 1/293.15 K)) = 10 N * 0.63673 =
+/// 6.3673 N, where the cold start had 10 N at the start and 5.721 N only at the rise it would have settled at.
+#[test]
+fn a_guide_started_warm_has_the_hand_calculated_friction_at_its_settled_rise() {
+    let entry = &machine_single_axis::ENTRY;
+    let cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = true"]);
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+    let start = load.warm_start.unwrap();
+    assert!(start.converged() && start.passes >= 1 && start.passes <= WARM_START_PASSES, "{start:?}");
+    let settled = load.part_rises.iter().find(|(p, _)| p.id == "guide_x").unwrap().1;
+    assert!((settled - 10.03).abs() < 0.05, "{settled} K");
+    // The guide ran the pass at that rise, within the tolerance and what it drifted over 2.2 s of a 40 min time constant.
+    let now = sim.heated.iter().find(|h| h.part.id == "guide_x").unwrap().rise;
+    assert!((now - settled).abs() < 0.15, "{now} K against {settled} K");
+    let guide = sim.machine.friction_contacts().iter().position(|c| c.id == "axis.x").unwrap();
+    let viscous = sim.machine.friction_curve(guide, 0.5, 1.0)[1];
+    assert!((viscous - 10.0 * viscosity(settled)).abs() < 2e-3 * viscous && (viscous - 6.3673).abs() < 0.01 * 6.3673, "{viscous} N, by hand {} N", 10.0 * viscosity(settled));
+    let cold = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = false"]);
+    let cold = analyse_cycle(&mut Sim::new(entry, &cold).unwrap()).unwrap();
+    assert!(cold.warm_start.is_none() && (cold.part_rises.iter().find(|(p, _)| p.id == "guide_x").unwrap().1 - 12.51).abs() < 0.05);
+}
+
+/// The warm start converges on the default T-gantry within its pass limit, its windings alone (the shipped switches)
+/// and with the parts warming and acting back (part_heating, thermal_feedback), and says so in its verdict row.
+#[test]
+fn the_warm_start_converges_on_the_default_t_gantry_within_its_pass_limit() {
+    let entry = &machine_t_gantry::ENTRY;
+    for edits in [&[][..], &["effects.part_heating = true", "effects.thermal_feedback = true"][..]] {
+        let cfg = edited(entry, edits);
+        let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+        let start = load.warm_start.unwrap();
+        assert!(start.converged() && start.passes >= 1 && start.passes <= WARM_START_PASSES, "{edits:?}: {start:?}");
+        let row = verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "thermal-warm-start").unwrap();
+        assert!(row.ok && row.value == start.change, "{row:?}");
+    }
 }
 
 /// Single axis standing upright (incline 90 degrees) and holding at x = 0.1 m: the carriage hangs on section 2,

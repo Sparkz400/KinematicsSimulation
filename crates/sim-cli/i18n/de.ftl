@@ -18,3 +18,6 @@ cli-planned-clearance = Geplante Bahn: kleinster Abstand zu den Hindernissen { $
 cli-planned-contact = Geplante Bahn: erste Berührung eines Hindernisses in der Lage { $arg }
 cli-run-clearance = Lauf: kleinster Abstand zu den Hindernissen { $arg } mm
 cli-run-contact = Lauf: erste Berührung eines Hindernisses (Name: Zeit, Geschwindigkeit des Werkzeugs, Lage) { $arg }
+cli-thermal-start-cold = Thermischer Start: kalt (Teile und Wicklungen bei den Temperaturen, mit denen der Lauf begann)
+cli-thermal-start-warm = Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K
+cli-thermal-start-unsettled = Thermischer Start: warm, aber in den Warmdurchläufen NICHT konvergiert; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K

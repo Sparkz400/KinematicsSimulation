@@ -225,7 +225,7 @@ fn a_drive_by_name_brings_its_published_dc_link_data() {
 fn an_s120_line_up_is_judged_against_its_one_braking_module() {
     use sim_components::analysis::{CycleLoad, MotorLoad, verdicts};
     let axis = MotorLoad { energy_regenerated: 900.0, peak_regenerated_power: 60e3, largest_regeneration: 900.0, ..Default::default() };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: vec![axis.clone(), axis], budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 120e3 };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: vec![axis.clone(), axis], budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 120e3, warm_start: None };
     let braking = |cfg: &Config| -> Vec<(&'static str, Option<usize>, f64, f64, bool)> {
         verdicts(cfg, &load).unwrap().into_iter().filter(|v| v.check.starts_with("braking-resistor")).map(|v| (v.check, v.motor, v.value, v.limit, v.ok)).collect()
     };

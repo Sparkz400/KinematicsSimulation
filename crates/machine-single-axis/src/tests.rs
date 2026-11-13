@@ -956,6 +956,50 @@ fn a_cycle_on_the_torque_limit_fails_the_peak_verdict() {
     assert!((m.utilisation - m.peak_torque / 3.8).abs() < 0.05 * m.utilisation, "utilisation {}, peak {} N m", m.utilisation, m.peak_torque);
 }
 
+/// effects.drive_current_limit: a move that asks more than a 0.5 A drive gives. Rigid model, payload off, the guide's
+/// 15 N Coulomb friction the only loss (its viscous part set to 0, its stiction gone above the 0.01 m/s Stribeck speed).
+/// Held at the drive's current, the motor gives 0.45 N m/A * 0.5 A = 0.225 N m, through the gearbox (5) and the pulley
+/// (0.02 m) 56.25 N, of which friction takes 15 N, on the carriage and the rotor and pulley seen at the belt,
+/// 4 + (1e-4 + 25 * 0.3e-4) / 0.02^2 = 6.125 kg: a = (k_t I_max i / r - F_friction) / m_total = 41.25 / 6.125 =
+/// 6.7347 m/s^2, where the plan asks for 10. With the motor's peak torque at 0.18 N m, below the drive's 0.225 N m, the
+/// motor's limit holds: a = (0.18 * 250 - 15) / 6.125 = 4.8980 m/s^2. Measured over 50 ms in the middle of the
+/// acceleration, while the delivered torque sits on the limit. On the shipped cycle a drive of 70 % of the current the
+/// cycle needs leaves the carriage further behind and fails "drive-peak-current" with the current asked for.
+#[test]
+fn a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rate() {
+    let limited = |edits: &[&str]| {
+        let mut cfg = ideal_rigid();
+        let base = ["effects.drive_current_limit = true", "ratings.drive_max_current_a = 0.5", "effects.guide_friction = true", "friction_x.viscous_n_s_m = 0.0", "effects.torque_saturation = false"];
+        for e in base.iter().chain(edits) {
+            cfg.set_text(e).unwrap();
+        }
+        cfg
+    };
+    for (edits, torque, by_hand) in [(&[][..], 0.225, 41.25 / 6.125), (&["drive.peak_torque_nm = 0.18"][..], 0.18, 30.0 / 6.125)] {
+        let mut sim = Sim::new(&ENTRY, &limited(edits)).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+        let speed = |sim: &Sim| {
+            let (mut pos, mut vel) = ([0.0], [0.0]);
+            sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+            vel[0]
+        };
+        sim.run(0.12, |_| {});
+        let before = speed(&sim);
+        sim.run(0.05, |sim| assert!((sim.control.drives[0].torque - torque).abs() < 5e-3 * torque, "{} N m, not on the limit", sim.control.drives[0].torque));
+        let a = (speed(&sim) - before) / 0.05;
+        assert!((a - by_hand).abs() < 0.01 * by_hand, "{a} m/s^2, by hand {by_hand} m/s^2");
+    }
+    // The shipped cycle against a drive of 70 % of its peak current: the check fails with what the loop asks for, and
+    // the carriage falls further behind.
+    let free = analyse_cycle(&mut Sim::new(&ENTRY, &ENTRY.config()).unwrap()).unwrap();
+    let mut cfg = ENTRY.config();
+    cfg.set_text(&format!("ratings.drive_max_current_a = {}", 0.7 * free.motors[0].peak_current)).unwrap();
+    let held = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+    let check = sim_components::analysis::verdicts(&cfg, &held).unwrap().into_iter().find(|v| v.check == "drive-peak-current").unwrap();
+    assert!(!check.ok && check.value > 0.95 * free.motors[0].peak_current, "{} A against {} A", check.value, check.limit);
+    assert!(held.tracking_error_peak > 1.2 * free.tracking_error_peak, "{} m behind, {} m without the limit", held.tracking_error_peak, free.tracking_error_peak);
+}
+
 /// The gearbox verdicts judge the torque at the gearbox output, not the motor torque times the ratio. On a
 /// vertical axis with a gearbox of 0.9 efficiency the two differ both ways.
 /// (a) Rigid model, 4 kg at a steady 0.5 m/s. The output holds the weight whichever way it moves:

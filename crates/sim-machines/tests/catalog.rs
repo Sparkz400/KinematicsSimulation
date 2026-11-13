@@ -381,7 +381,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     use sim_components::analysis::{CycleLoad, Verdict};
     use sim_components::catalog::Candidate;
     let verdict = |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 0.0 };
+    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 0.0, warm_start: None };
     let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
     let with_resistor = candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), verdict("braking-resistor-continuous", 6.0, 20.0, true), verdict("dc-link-overvoltage", 770.0, 820.0, true)]);
