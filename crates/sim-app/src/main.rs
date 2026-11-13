@@ -392,9 +392,10 @@ const PAINTED: [f32; 3] = [0.3, 0.45, 0.5];
 
 /// A part's finish in its own colour (as `PAINTED`). Turned steel for round parts, matt rubber for the belt; by
 /// colour and size for the rest, so that no machine needs naming: long grey parts are aluminium profiles, small dark
-/// ones anodised, the others painted. Aluminium is not brushed (anisotropic): Bevy draws anisotropy only with its
-/// pbr_anisotropy_texture feature, which the workspace does not switch on; a fairly smooth, mostly metallic finish
-/// stands in.
+/// ones anodised, the others painted. Aluminium is not brushed (anisotropic): tried on 2026-11-13 with Bevy 0.20's
+/// pbr_anisotropy_texture feature and tangents on the box mesh, any strength from 0.25 up drew the long, thin boxes
+/// (a beam stretched 1.4 m by 0.09 m) burnt-out white with black faces, while 0 drew them as here. Brushing would
+/// need a mesh per part at its true size, or a fixed Bevy; a fairly smooth, mostly metallic finish stands in.
 fn finish(part: &Part) -> [f32; 3] {
     let [r, g, b] = part.color;
     let grey = r.max(g).max(b) - r.min(g).min(b) < 0.1;
