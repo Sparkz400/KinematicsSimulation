@@ -14,6 +14,16 @@ item are in [PROGRESS.md](PROGRESS.md).
   tool pose (x, y, z, c); switches `effects.shaft_mass`, `shaft_torsion`, `telescope_friction` (on); the check
   `tool-gearbox-peak`; its default cycle (the Adept cycle with a 90 degree turn) passes every verdict. The D3 gained
   `PlatformDrag` (`Delta::set_platform_drag`), a force on its platform along a line, for the telescope's friction.
+
+- Machine files: ball screws, racks, linear motors and rotary tables beside belts (nodes `screw`, `rack`,
+  `linear_motor`, `rotary`; value tables laid out as the joint kit's `[screw]`, `[rack]`, `[linear_motor]`,
+  `[strain_wave]`; a rotary axis in rad with `stroke_rad`), built with the joint kit's `RotaryJoint` and
+  `transmission::Converter`, with the kit's signals and checks (`screw-speed`, `screw-dn`, `screw-buckling`,
+  `screw-static`, `screw-life`, `rack-feed-force`, `strain-wave-life`). New files `machines/screw-portal.toml` (Z on a
+  ball screw with a brake) and `machines/rack-gantry.toml` (3 m X on rack and pinion, Y on a belt). The JSON schema no
+  longer requires `pulley`, `section`, `body` and `gearbox`. Verdicts no longer judge belt-tooth load for a motor that
+  turns no pulley (it reports neither a pulley radial load nor a belt wrap).
+
 - Delta picker D3: forearms as rigid rods with their inertia (`effects.forearm_inertia`, on; off is the lumped model),
   bending upper arms (`effects.link_elasticity`, `[upper_arm]`, off), the lowest mode with the motors held through
   `resonance_hz` and `mode_shape` (so `shaper_follows_pose` follows it), and the forearm rods as collision bodies.

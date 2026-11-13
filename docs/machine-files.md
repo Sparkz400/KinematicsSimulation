@@ -1,7 +1,8 @@
 # Machine files
 
 A machine file defines a machine without Rust code and without a rebuild: the components of `sim-components` wired
-together like a netlist (motor, gearbox, pulley, belt sections, carriages, guides), with the axes, ratings, bounds,
+together like a netlist (motor, gearbox, pulley, belt sections, carriages, guides, and ball screws, racks, linear motors
+and rotary tables beside the belts), with the axes, ratings, bounds,
 control loops and cycle of a machine config. CLI, app and PLC link load it from a path at run time.
 Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 
@@ -10,6 +11,7 @@ Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 - [Worked example: an H-bot](#worked-example-an-h-bot)
 - [The nodes](#the-nodes)
 - [Motors that differ](#motors-that-differ)
+- [Screws, racks, linear motors and rotary tables](#screws-racks-linear-motors-and-rotary-tables)
 - [The other examples: a CoreXY and an XYZ portal](#the-other-examples-a-corexy-and-an-xyz-portal)
 - [What is checked, and how errors read](#what-is-checked-and-how-errors-read)
 - [The model behind it](#the-model-behind-it)
@@ -218,12 +220,13 @@ the file. The order of the motors in the file is the order of the motor signals 
 | ---- | ----- | - | ------- |
 | `axis` | `id` | required | the axis; signals `axis.<id>.*`, its limits in `[axis.<id>]` |
 | | `key` | | translation key of its name; default `axis-<id>` |
-| | `stroke_m` | required | stroke, m; the axis runs from 0 to it |
+| | `stroke_m` | required | stroke, m; the axis runs from 0 to it (a rotary axis has `stroke_rad` instead) |
+| | `stroke_rad` | | a rotary axis's range from 0, rad, in place of `stroke_m` |
 | | `incline_deg` | | angle above the horizontal, deg, 90 vertical and rising towards +; default 0 |
 | `motor` | `id` | required | a servo motor with its drive; signals `motor.<id>.*` |
 | | `key` | | translation key of its name; default `motor-<id>` |
-| `gearbox` | `motor` | required | the motor that drives it; one gearbox per motor; ratio 1 is a coupling |
-| `pulley` | `gearbox` | required | the gearbox whose output turns it; one pulley per gearbox |
+| `gearbox` | `motor` | required | the motor that drives it; one gearbox per motor (none for a linear motor); ratio 1 is a coupling |
+| `pulley` | `gearbox` | required | the gearbox whose output turns it; one pulley, screw, rack or rotary per gearbox |
 | | `radius_m` | required | pitch radius, m |
 | | `inertia_kgm2` | required | inertia without the belt, kg m² |
 | `section` | `length_m` | required | geometric length with every axis at 0, m |
@@ -251,8 +254,19 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `span` | `section` | required | a free belt span of that section, for its sideways mode (`effects.belt_span_vibration`) |
 | | `length_m` | required | its length with every axis at 0, m |
 | | `axes` | | how much longer it gets per metre of each axis |
+| `screw` | `gearbox`, `axis` | required | a ball screw on that gearbox's output, its nut driving that axis ([below](#screws-racks-linear-motors-and-rotary-tables)) |
+| | `values` | required | the table of its values, laid out as `[screw]` of the joint kit's screw axis |
+| `rack` | `gearbox`, `axis` | required | a pinion on that gearbox's output, driving that axis along a rack |
+| | `values` | required | the table of its values, laid out as `[rack]` of the joint kit's rack axis |
+| `linear_motor` | `motor`, `axis` | required | that motor is a linear motor driving that axis; it has no gearbox node |
+| | `values` | required | the table of its values, laid out as `[linear_motor]` of the joint kit's linear motor axis |
+| `rotary` | `gearbox`, `axis` | required | a rotary table on that gearbox's output: the axis turns, in rad |
+| | `inertia_kgm2` | required | the inertia it turns, kg m² |
+| | `payload_inertia_kgm2` | | its payload's while `effects.payload` is on and the gripper holds it, kg m² |
+| | `strain_wave` | | the table of its strain wave gear's life values, laid out as `[strain_wave]` |
 
-There are as many motors as axes. A file names each list it uses; `guide`, `idler`, `frame` and `span` may be left out.
+There are as many motors as axes. A file names each list it uses; `axis` and `motor` are always there, `gearbox`,
+`pulley` and `section` where belts are driven, `body` where an axis moves one, and the others may be left out.
 An effect that needs nodes the file has not (`frame_compliance` without a `frame`, `belt_span_vibration` without a
 `span`) refuses the file with `machine.<list>`.
 
@@ -290,6 +304,55 @@ refused there. What stays shared: the drives' cycle times, the noise seed, a sha
 `sim-cli catalog` searches the shared motor; a motor with its own `[parts.<id>]` keeps its part through the search.
 The time-optimal path planner takes the shared `[drive]`'s torque curve for every motor.
 
+## Screws, racks, linear motors and rotary tables
+
+A motor may drive an axis without a belt: through a `screw`, `rack` or `rotary` node on its gearbox's output (a gearbox
+of ratio 1 is the coupling), or as a `linear_motor`, which is the motor itself and has no gearbox node. Each drives one
+axis, an axis has at most one, and belts and these mix in one file:
+
+```toml
+[[machine.screw]]          # machines/screw-portal.toml: X and Y on belts, Z on a ball screw 16 x 10
+id = "screw_z"
+gearbox = "gearbox_z"      # the coupling: [gearbox.mz] has ratio = 1
+axis = "z"
+values = "screw_z"         # the table [screw_z], laid out as [screw] of the joint kit's screw axis
+```
+
+The values are the joint kit's ([mechanisms](mechanisms.md)), in a table the node names, so that two screws have two
+tables: `[screw]`'s layout for a screw (lead, nominal and root diameter, length between the bearings, mounting,
+efficiency, nut and bearing stiffness, preload, load ratings and factors, `max_dn`), `[rack]`'s for a rack (module,
+teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force, service factor),
+`[linear_motor]`'s for a linear motor (attraction force, pole pitch, guide friction coefficient), `[strain_wave]`'s for
+a rotary's strain wave gear (rated torque, input speed and life). The drive train is built as the joint kit builds it
+(`transmission::Converter` behind the gearbox): the screw's lead / 2 pi or the pinion's radius as a lever, its stiffness
+in series with the gearbox's, its efficiency on the gearbox's, the screw shaft's or pinion's inertia on the rotor. So a
+screw axis's motor needs T = J a / lever + F lever / eta to lift a load F at an acceleration a (J the rotor, coupling
+and shaft), and a rack's motor turns i x / r.
+
+- With `effects.guide_friction` the nut's preload drags at the motor, and a linear motor's attraction adds its guide
+  friction coefficient times itself; the attraction and the forcer's weight also press on the axis's guide
+  (`axis.<id>.guide_load`, judged by the guide checks).
+- A linear motor's `[motor.<id>]` and `[drive.<id>]` read in N for N m and m for rad (force constant in N/A, the
+  forcer's mass as `rotor_inertia_kgm2`); its `[gearbox.<id>]` has ratio 1 and is the forcer's mounting.
+- A rotary turns its axis in rad: the axis has `stroke_rad` for `stroke_m`, its limits are `[axis.<id>]`'s
+  `max_velocity_rad_s`, `max_acceleration_rad_s2` and `max_jerk_rad_s3`, and what it moves is the rotary's
+  `inertia_kgm2` (and `payload_inertia_kgm2`). No body moves with it; it has no guide, no incline and no cable chain.
+- Signals and checks are named by the motor, as the joint kit's are by its joint: `joint.<motor>.force` (what the
+  screw, rack, linear motor or rotary passes to its axis), `screw.<motor>.speed`, `.dn` and `.damage_rate`,
+  `rack.<motor>.feed_force`, `strain_wave.<motor>.damage_rate`; `gearbox.<motor>.output_torque` is the torque ahead of
+  the screw or rack. The checks are the kit's: `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`,
+  `screw-life`, `rack-feed-force`, `strain-wave-life` (the lives where `ratings.required_life_h` is set). A motor that
+  turns no pulley reports no `pulley.<motor>.radial_load`, so the belt-tooth and pulley-bearing checks pass it over.
+- `effects.belt_stretch` switches the elastic model of the whole machine: with it the screws', racks' and rotaries'
+  gearboxes twist too (the converter's stiffness in series), and the belt's mode at a pose includes them, with the
+  rotors held.
+
+`machines/screw-portal.toml` is the XYZ portal with its Z belt replaced by a ball screw 16 x 10 behind a bellows coupling,
+the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gantry.toml` is a two-axis gantry with a
+3 m X on a rack and pinion (module 2, 200 mm per turn) behind a gearbox of ratio 10 and Y on a belt. Both pass every
+verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 422 of 2400 N). The joint kit's
+screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
+
 ## The other examples: a CoreXY and an XYZ portal
 
 `machines/corexy.toml` is a CoreXY table. Its two motors stand at the front corners; each drives a belt clamped to the
@@ -313,10 +376,12 @@ A machine file is checked in full when it is loaded, before anything runs:
 - the TOML or JSON itself, `format_version` and `machine.version`;
 - every node: no field its kind does not have, every required field there, each value of the right type, ids valid
   and unique, every reference to a node that exists, every path to a number that exists;
-- the machine: masses, radii and lengths positive, one gearbox per motor and one pulley per gearbox, as many motors as
-  axes, a routing that keeps the belt's length and sets every axis;
+- the machine: masses, radii and lengths positive, one gearbox per motor (none for a linear motor) and one pulley,
+  screw, rack or rotary per gearbox, at most one of these per axis, a screw at least as long as its stroke, as many
+  motors as axes, a routing that keeps the belt's length and sets every axis;
 - every other key against the keys the registered machines' configs have (so `pretensoin_n` is refused by name), plus
-  `[axis.<id>]` for each axis, a friction table for each guide, and every key the netlist names by path;
+  `[axis.<id>]` for each axis, a friction table for each guide, the value tables of screws, racks, linear motors and
+  strain wave gears laid out as the joint kit's, and every key the netlist names by path;
 - then everything the simulation reads at its start, as for a config: the drive, the cycle, the start pose, the
   catalogue parts the file names.
 
@@ -369,6 +434,11 @@ derivations):
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
   held, K = Σ_s EA / L_s c_s c_s^T, against their mass matrix; the lowest is `resonance_hz` at a pose, so
   `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).
+- A screw, rack, linear motor or rotary (`machine.screw`, ...): its motor's gearbox becomes one in the axis's unit, of
+  ratio i / lever (the joint kit's `RotaryJoint` with the `transmission::Converter` behind it), and its "pulley" is the
+  axis itself: K has the row e_i for it, the axis takes the gearbox's output as its force, the belt's equations leave
+  the axis to it (at rest and in the rigid tensions), and in the elastic model the pulley's states follow the axis. A
+  rotary axis's mass is its rotary's inertia, with no gravity along it.
 
 The controller, drives, DC link, winding heat, analyses, verdicts, sensitivity and error bands are those of every
 machine; nothing about them is particular to machine files.
@@ -379,7 +449,13 @@ machine; nothing about them is particular to machine files.
   sit below its guide and how that changes with its travel, geometry a netlist of belts and bodies does not have; a node
   for it would be the T-gantry's special case. A file that switches it on is refused (`effects.tool_flex (not in machine
   files yet)`), so a result never leaves out an effect that was asked for.
-- Mechanisms other than belts: screws, racks, linkages, rotary joints. The node kinds are the ones above.
+- Linkages (a five-bar, a scissor lift) and worm gears: the mechanisms beside belts are screws, racks, linear motors
+  and rotary tables, each driving one axis straight. A body cannot ride on a rotary axis (it would move on a circle,
+  not along square axes), and a rotary axis has no bearing friction of its own (only its motor's and gearbox's).
+- `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
+  a motor without a pulley has none; the file is refused.
+- A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's
+  drag sits at the motor with a smoothing in rad/s.
 - Modes other than the belt's: the frame enters the belt's mode where it sways, but the guides' and the motors' own
   stiffness do not, and a body's bending is not modelled.
 - Section and span lengths are numbers (or paths), not formulas: one whose length depends on a stroke does not follow a
@@ -418,6 +494,13 @@ backlash for the same reason. Its suite run has the gearbox backlash off: nothin
 gears to one flank, and the suite's small pulse knocking them across the backlash drifts the energy by 0.17 %, over
 the 0.1 % allowed. That is the gearbox contact at the suite's step size, not the netlist: the T-gantry crate with
 gravity off drifts by 0.19 % the same way.
+
+`crates/sim-machines/tests/machine_file_mechanisms.rs` holds the screws, racks, linear motors and rotary tables: the
+joint kit's screw axis written as a file is its crate to 1e-9 (elastic and rigid, payload held, set down and braked:
+kinematics, rest state, derivatives, energy, feedforward, the screw's signals and torque breakdown, its checks); by
+hand, the screw portal's Z motor torque for a load and acceleration and its screw's critical speed, the rack gantry's
+motor angle x i / r and feed force, a linear motor's current for a force and its guide load, a rotary table's torque in
+rad; both new files pass the standard suite; and a broken screw is refused by key and line.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was
 fixed: a machine with two or three separate belt loops (its rest state was wrong where an axis is vertical), a

@@ -293,6 +293,18 @@ unit and mark there. `[parts.<id>]` takes `motor`, `motor_supply`, `gearbox` and
 are the machine's). See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
 has them for its Z motor; no other config has any.
 
+## A machine file's screws, racks, linear motors and strain wave gears
+
+In a machine file, each `screw`, `rack`, `linear_motor` node and each `rotary` node's `strain_wave` names a table of
+its values by its path (any name: `[screw_z]` in `machines/screw-portal.toml`, `[rack_x]` in
+`machines/rack-gantry.toml`). That table is laid out as the joint kit's `[screw]`, `[rack]`, `[linear_motor]` or
+`[strain_wave]` (keys, units and meanings in [mechanisms](mechanisms.md); every key is required there as in the kit),
+and is checked against that layout key by key. A screw's and a rack's dimensions and ratings are what its maker's
+catalogue lists for the article ([catalogue] where one is named, placeholders in the shipped files); efficiency,
+stiffness, preload and the load ratings of an unnamed size are [estimate] and have `[bounds]` entries, as
+`screw_z.efficiency = [0.85, 0.95]` and `rack_x.stiffness_n_m = [6.0e7, 1.5e8]`. A rotary node's axis takes its limits
+in rad (`[axis.<id>]` below).
+
 ## `[hard_stop]`
 
 With `effects.hard_stops`: a spring and a damper at both ends of each stroke that act only beyond it.
@@ -347,6 +359,7 @@ Limits of the motion planner per tool axis. `[axis.z]` exists on the T-gantry on
 | `max_velocity_m_s` | T E S | m/s | Highest planned speed | choice, within the datasheet |
 | `max_acceleration_m_s2` | T E S | m/s² | Highest planned acceleration | choice, within the datasheet |
 | `max_jerk_m_s3` | T E S | m/s³ | Highest planned jerk | choice |
+| `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | machine files | rad/s, rad/s², rad/s³ | The same for a rotary axis of a machine file (one a `rotary` node turns), in place of the m keys | choice, within the datasheet |
 
 E stays below Festo's limits of 5 m/s and 50 m/s², which hold "under ideal conditions".
 

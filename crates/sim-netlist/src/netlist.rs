@@ -59,7 +59,8 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("key", Kind::Key, false, "Translation key of its name; default axis-<id>."),
-            field("stroke_m", Kind::Number, true, "Stroke, m."),
+            field("stroke_m", Kind::Number, false, "Stroke, m; every axis but a rotary one has it."),
+            field("stroke_rad", Kind::Number, false, "Range of a rotary axis (one a rotary node turns), from 0, rad; in place of stroke_m."),
             field("incline_deg", Kind::Number, false, "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0."),
             field("cable_chain", Kind::Bool, false, "The axis drags a cable chain fixed at its 0 end (effects.cable_chain, values in [cable_chain]). Default false."),
             POS,
@@ -165,6 +166,52 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "screw",
+        "A ball screw on a gearbox's output (a gearbox of ratio 1 is the coupling) that drives an axis through its nut (transmission::BallScrew; checks screw-speed, screw-dn, screw-buckling, screw-static, screw-life). Its signals and checks are named by its motor: screw.<motor>.speed, joint.<motor>.force.",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
+            field("axis", Kind::Ref("axis"), true, "The axis its nut drives; one screw, rack, linear motor or rotary per axis."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [screw] of the joint kit's screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings)."),
+            POS,
+        ],
+    ),
+    (
+        "rack",
+        "A pinion on a gearbox's output that drives an axis along a rack (transmission::RackPinion; check rack-feed-force on rack.<motor>.feed_force).",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns the pinion."),
+            field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [rack] of the joint kit's rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force)."),
+            POS,
+        ],
+    ),
+    (
+        "linear_motor",
+        "An ironcore linear motor that drives an axis with no transmission (transmission::LinearMotor). Its motor's values read in N for N m and m for rad ([motor.<id>]: force constant in N/A, the forcer's mass as rotor_inertia_kgm2); its gearbox values ([gearbox.<id>], ratio 1) are the forcer's mounting.",
+        &[
+            ID,
+            field("motor", Kind::Ref("motor"), true, "The motor it is; that motor has no gearbox node."),
+            field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [linear_motor] of the joint kit's linear motor axis (attraction force, pole pitch, guide friction coefficient)."),
+            POS,
+        ],
+    ),
+    (
+        "rotary",
+        "A rotary table or joint on a gearbox's output: its axis turns, in rad. With strain_wave the gearbox is a strain wave gear (check strain-wave-life on strain_wave.<motor>.damage_rate).",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
+            field("axis", Kind::Ref("axis"), true, "The axis it turns, which has stroke_rad; no body moves with it."),
+            field("inertia_kgm2", Kind::Number, true, "Inertia it turns, kg m^2."),
+            field("payload_inertia_kgm2", Kind::Number, false, "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2."),
+            field("strain_wave", Kind::Table, false, "The table of the strain wave gear's life values, laid out as [strain_wave] of the joint kit's rotary table."),
+            POS,
+        ],
+    ),
 ];
 
 pub struct AxisNode {
@@ -173,16 +220,31 @@ pub struct AxisNode {
     pub stroke: f64,
     pub incline_deg: f64,
     pub cable_chain: bool,
+    /// A rotary node turns it: its unit is rad.
+    pub rotary: bool,
+}
+
+/// What a motor drives: a belt pulley, or an axis through a screw, rack, linear motor or rotary (each with the dotted
+/// path of its values' table).
+pub enum Transmission {
+    Belt,
+    Screw { values: String },
+    Rack { values: String },
+    LinearMotor { values: String },
+    Rotary { inertia: f64, payload: f64, strain_wave: Option<String> },
 }
 
 pub struct MotorNode {
     pub id: String,
     pub key: String,
-    /// The pulley it turns, through its gearbox: radius and inertia.
+    /// The pulley it turns, through its gearbox: radius and inertia (1 and 0 where it turns none).
     pub radius: f64,
     pub inertia: f64,
     pub pulley: String,
     pub at: Option<[f64; 3]>,
+    pub transmission: Transmission,
+    /// The axis its screw, rack, linear motor or rotary drives; `None` for a belt.
+    pub axis: Option<usize>,
 }
 
 pub struct SectionNode {
@@ -265,6 +327,9 @@ pub struct Netlist {
     pub spans: Vec<SpanNode>,
     /// Every dotted path a number field named: these keys of the file are in use.
     pub refs: Vec<String>,
+    /// The value tables of screws, racks, linear motors and strain wave gears: the joint kit's table each is laid out
+    /// as ("screw", ...), and its path in the file.
+    pub values: Vec<(&'static str, String)>,
 }
 
 /// One node of a list, with the path its errors name: `machine.<list>[<id>]`, or `machine.<list>[#<n>]` (from 1)
@@ -382,8 +447,10 @@ impl Netlist {
             }
             lists.push(nodes);
         }
-        let [axes, motors, gearboxes, pulleys, sections, bodies, guides, idlers, frames, spans] = <[Vec<Node>; 10]>::try_from(lists).ok().expect("one list per entry of NODES");
-        for (list, nodes) in [("axis", &axes), ("motor", &motors), ("pulley", &pulleys), ("section", &sections), ("body", &bodies)] {
+        let [axes, motors, gearboxes, pulleys, sections, bodies, guides, idlers, frames, spans, screws, racks, linears, rotaries] =
+            <[Vec<Node>; 14]>::try_from(lists).ok().expect("one list per entry of NODES");
+        // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
+        for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
                 return Err(ConfigError::Missing(format!("machine.{list}")));
             }
@@ -395,40 +462,105 @@ impl Netlist {
         };
         let mut refs = Vec::new();
 
+        // The axes a rotary node turns are in rad.
+        let turned: Vec<&str> = rotaries.iter().filter_map(|r| r.table.get("axis").and_then(Value::as_str)).collect();
         let mut axis_nodes = Vec::new();
         for node in &axes {
             let id = id_of(node);
+            let rotary = turned.contains(&id.as_str());
             let incline = node.get("incline_deg").map(|v| number(cfg, v, &node.at("incline_deg"), &mut refs)).transpose()?.unwrap_or(0.0);
-            let stroke = number(cfg, node.required("stroke_m")?, &node.at("stroke_m"), &mut refs)?;
+            let (stroke_field, other) = if rotary { ("stroke_rad", "stroke_m") } else { ("stroke_m", "stroke_rad") };
+            if node.get(other).is_some() {
+                return Err(ConfigError::Invalid(format!("{} (a rotary axis has stroke_rad, any other stroke_m)", node.at(other))));
+            }
+            let stroke = number(cfg, node.required(stroke_field)?, &node.at(stroke_field), &mut refs)?;
             if stroke <= 0.0 {
-                return Err(ConfigError::Invalid(node.at("stroke_m")));
+                return Err(ConfigError::Invalid(node.at(stroke_field)));
+            }
+            // A table turns about a vertical axis and drags no chain.
+            if rotary && incline != 0.0 {
+                return Err(ConfigError::Invalid(format!("{} (a rotary axis turns about a vertical axis)", node.at("incline_deg"))));
+            }
+            if rotary && node.bool("cable_chain")? {
+                return Err(ConfigError::Invalid(format!("{} (not on a rotary axis)", node.at("cable_chain"))));
             }
             let key = node.text("key")?.map_or_else(|| format!("axis-{id}"), str::to_string);
-            axis_nodes.push(AxisNode { id, key, stroke, incline_deg: incline, cable_chain: node.bool("cable_chain")? });
+            axis_nodes.push(AxisNode { id, key, stroke, incline_deg: incline, cable_chain: node.bool("cable_chain")?, rotary });
         }
 
-        // Each motor turns one gearbox, and each gearbox one pulley: the drive trains, in the order of the motors.
+        // Each motor turns one gearbox, and each gearbox one pulley, screw, rack or rotary; or the motor is a linear
+        // motor, with no gearbox node. The drive trains, in the order of the motors.
+        let refers = |nodes: &[Node], field: &str, to: &str| -> Vec<usize> { (0..nodes.len()).filter(|&i| nodes[i].table.get(field).and_then(Value::as_str) == Some(to)).collect() };
+        // A node's field that names a table of the file.
+        let table_path = |node: &Node, name: &str| -> Result<String> {
+            let path = node.required(name)?.as_str().ok_or_else(|| ConfigError::Type(node.at(name)))?;
+            if !cfg.get(path).is_ok_and(Value::is_table) {
+                return Err(ConfigError::Missing(format!("{} = \"{path}\"", node.at(name))));
+            }
+            Ok(path.to_string())
+        };
         let mut motor_nodes = Vec::new();
+        let mut values = Vec::new();
+        // Per axis, the screw, rack, linear motor or rotary that drives it.
+        let mut driven: Vec<Option<String>> = vec![None; axis_nodes.len()];
         for motor in &motors {
             let id = id_of(motor);
-            let geared: Vec<&Node> = gearboxes.iter().filter(|g| g.table["motor"].as_str() == Some(&id)).collect();
-            let [gearbox] = geared[..] else { return Err(ConfigError::Invalid(format!("{} (one gearbox per motor)", motor.path))) };
-            let gearbox_id = id_of(gearbox);
-            let turned: Vec<&Node> = pulleys.iter().filter(|p| p.table["gearbox"].as_str() == Some(&gearbox_id)).collect();
-            let [pulley] = turned[..] else { return Err(ConfigError::Invalid(format!("{} (one pulley per gearbox)", gearbox.path))) };
-            let radius = number(cfg, pulley.required("radius_m")?, &pulley.at("radius_m"), &mut refs)?;
-            let inertia = number(cfg, pulley.required("inertia_kgm2")?, &pulley.at("inertia_kgm2"), &mut refs)?;
-            if radius <= 0.0 || inertia <= 0.0 {
-                return Err(ConfigError::Invalid(pulley.at(if radius <= 0.0 { "radius_m" } else { "inertia_kgm2" })));
-            }
             let key = motor.text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
-            motor_nodes.push(MotorNode { id, key, radius, inertia, pulley: id_of(pulley), at: pulley.point("at_m")? });
+            let (node, transmission) = match (&refers(&gearboxes, "motor", &id)[..], &refers(&linears, "motor", &id)[..]) {
+                ([], [l]) => (&linears[*l], Transmission::LinearMotor { values: table_path(&linears[*l], "values")? }),
+                ([g], []) => {
+                    let gearbox = &gearboxes[*g];
+                    let gearbox_id = id_of(gearbox);
+                    let outputs: Vec<(usize, usize)> = [&pulleys, &screws, &racks, &rotaries].into_iter().enumerate().flat_map(|(list, nodes)| refers(nodes, "gearbox", &gearbox_id).into_iter().map(move |i| (list, i))).collect();
+                    let [(list, i)] = outputs[..] else { return Err(ConfigError::Invalid(format!("{} (one pulley, screw, rack or rotary per gearbox)", gearbox.path))) };
+                    match list {
+                        0 => {
+                            let pulley = &pulleys[i];
+                            let radius = number(cfg, pulley.required("radius_m")?, &pulley.at("radius_m"), &mut refs)?;
+                            let inertia = number(cfg, pulley.required("inertia_kgm2")?, &pulley.at("inertia_kgm2"), &mut refs)?;
+                            if radius <= 0.0 || inertia <= 0.0 {
+                                return Err(ConfigError::Invalid(pulley.at(if radius <= 0.0 { "radius_m" } else { "inertia_kgm2" })));
+                            }
+                            motor_nodes.push(MotorNode { id, key, radius, inertia, pulley: id_of(pulley), at: pulley.point("at_m")?, transmission: Transmission::Belt, axis: None });
+                            continue;
+                        }
+                        1 => (&screws[i], Transmission::Screw { values: table_path(&screws[i], "values")? }),
+                        2 => (&racks[i], Transmission::Rack { values: table_path(&racks[i], "values")? }),
+                        _ => {
+                            let node = &rotaries[i];
+                            let inertia = number(cfg, node.required("inertia_kgm2")?, &node.at("inertia_kgm2"), &mut refs)?;
+                            let payload = node.get("payload_inertia_kgm2").map(|v| number(cfg, v, &node.at("payload_inertia_kgm2"), &mut refs)).transpose()?.unwrap_or(0.0);
+                            if inertia <= 0.0 || payload < 0.0 {
+                                return Err(ConfigError::Invalid(node.at(if inertia <= 0.0 { "inertia_kgm2" } else { "payload_inertia_kgm2" })));
+                            }
+                            let strain_wave = node.get("strain_wave").map(|_| table_path(node, "strain_wave")).transpose()?;
+                            (node, Transmission::Rotary { inertia, payload, strain_wave })
+                        }
+                    }
+                }
+                _ => return Err(ConfigError::Invalid(format!("{} (one gearbox per motor, or one linear motor)", motor.path))),
+            };
+            let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
+            if let Some(other) = &driven[axis] {
+                return Err(ConfigError::Invalid(format!("{} (one screw, rack, linear motor or rotary per axis; {other} drives it too)", node.at("axis"))));
+            }
+            driven[axis] = Some(id_of(node));
+            match &transmission {
+                Transmission::Screw { values: v } => values.push(("screw", v.clone())),
+                Transmission::Rack { values: v } => values.push(("rack", v.clone())),
+                Transmission::LinearMotor { values: v } => values.push(("linear_motor", v.clone())),
+                Transmission::Rotary { strain_wave: Some(v), .. } => values.push(("strain_wave", v.clone())),
+                _ => {}
+            }
+            motor_nodes.push(MotorNode { id, key, radius: 1.0, inertia: 0.0, pulley: String::new(), at: None, transmission, axis: Some(axis) });
         }
         for gearbox in &gearboxes {
             find(&motors, gearbox, "motor", gearbox.text("motor")?.unwrap_or_default())?;
         }
-        for pulley in &pulleys {
-            find(&gearboxes, pulley, "gearbox", pulley.text("gearbox")?.unwrap_or_default())?;
+        for (nodes, field, targets) in [(&pulleys, "gearbox", &gearboxes), (&screws, "gearbox", &gearboxes), (&racks, "gearbox", &gearboxes), (&rotaries, "gearbox", &gearboxes), (&linears, "motor", &motors)] {
+            for node in nodes {
+                find(targets, node, field, node.text(field)?.unwrap_or_default())?;
+            }
         }
 
         let mut section_nodes = Vec::new();
@@ -488,7 +620,12 @@ impl Netlist {
             }
             let mut moves = vec![false; axis_nodes.len()];
             for id in node.id_list("axes")? {
-                moves[find(&axes, node, "axes", id)?] = true;
+                let i = find(&axes, node, "axes", id)?;
+                // A rotary axis turns its rotary's inertia; a body on it would move on a circle, not along the axes.
+                if axis_nodes[i].rotary {
+                    return Err(ConfigError::Invalid(format!("{} (no body moves with the rotary axis {id})", node.at("axes"))));
+                }
+                moves[i] = true;
             }
             if !moves.contains(&true) {
                 return Err(ConfigError::Missing(node.at("axes")));
@@ -501,6 +638,11 @@ impl Netlist {
             let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
             if guide_nodes.iter().any(|g| g.axis == axis) {
                 return Err(ConfigError::Invalid(node.at("axis")));
+            }
+            // shortcut: a rotary axis has no bearing friction of its own (only its motor's and gearbox's); give the
+            // rotary node a friction table if a table's bearing drag matters.
+            if axis_nodes[axis].rotary {
+                return Err(ConfigError::Invalid(format!("{} (a rotary axis has no guide)", node.at("axis"))));
             }
             let friction = node.text("friction")?.unwrap_or_default().to_string();
             if !cfg.get(&friction).is_ok_and(Value::is_table) {
@@ -552,7 +694,7 @@ impl Netlist {
             [node] => {
                 let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
                 // A frame swaying along a sloped axis would move the bodies' weight with it.
-                if axis_nodes[axis].incline_deg != 0.0 {
+                if axis_nodes[axis].incline_deg != 0.0 || axis_nodes[axis].rotary {
                     return Err(ConfigError::Invalid(format!("{} (the frame sways along a horizontal axis)", node.at("axis"))));
                 }
                 let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
@@ -575,7 +717,7 @@ impl Netlist {
             span_nodes.push(SpanNode { id: id_of(node), section, length, axes: coefficients(node, "axes", &mut refs)? });
         }
         // Checked here: a field of the schema with the wrong type that the reading above passed over.
-        for node in [&axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans].into_iter().flatten() {
+        for node in [&axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries].into_iter().flatten() {
             for f in node.fields {
                 let Some(value) = node.get(f.name) else { continue };
                 let ok = match f.kind {
@@ -589,7 +731,7 @@ impl Netlist {
                 }
             }
         }
-        if let Some(i) = (0..axis_nodes.len()).find(|&i| !body_nodes.iter().any(|b| b.axes[i])) {
+        if let Some(i) = (0..axis_nodes.len()).find(|&i| !axis_nodes[i].rotary && !body_nodes.iter().any(|b| b.axes[i])) {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
         for (key, check) in [("id", true), ("name", false)] {
@@ -603,7 +745,7 @@ impl Netlist {
         if motor_nodes.len() != axis_nodes.len() {
             return Err(ConfigError::Invalid("machine.motor (as many motors as axes)".into()));
         }
-        Ok(Self { axes: axis_nodes, motors: motor_nodes, sections: section_nodes, bodies: body_nodes, guides: guide_nodes, idlers: idler_nodes, frame, spans: span_nodes, refs })
+        Ok(Self { axes: axis_nodes, motors: motor_nodes, sections: section_nodes, bodies: body_nodes, guides: guide_nodes, idlers: idler_nodes, frame, spans: span_nodes, refs, values })
     }
 }
 
@@ -644,7 +786,7 @@ pub fn json_schema() -> Value {
     lists.insert("version".into(), obj([("const", Value::Integer(VERSION)), ("description", text("Version of the [machine] part."))]));
     lists.insert("id".into(), obj([("type", text("string")), ("pattern", text("^[A-Za-z0-9_-]+$")), ("description", text("Id of the machine, as the front ends list it; default the file name without its extension."))]));
     lists.insert("name".into(), obj([("type", text("string")), ("description", text("Translation key or plain text of the machine's name; default its id."))]));
-    let required = ["version", "axis", "motor", "gearbox", "pulley", "section", "body"].map(text).to_vec();
+    let required = ["version", "axis", "motor"].map(text).to_vec();
     obj([
         ("$schema", text("https://json-schema.org/draft/2020-12/schema")),
         ("$id", text("https://github.com/kinematics-simulation/machine-file.schema.json")),
