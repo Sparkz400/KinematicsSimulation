@@ -979,12 +979,8 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// Co-Simulation FMU (see `sim_fmi`), with the descriptions in the language of `--lang`. Its binaries are the files
 /// `--binary` names (it may repeat: for FMI 2.0 a .dll goes to win64, a .so to linux64, a .dylib to darwin64; for
 /// FMI 3.0 to `<architecture>-<system>`, the architecture read from the binary), or else the sim-fmi library built
-/// next to this program.
+/// next to this program. A machine file (`--machine-file`) goes into the FMU's resources, which builds its machine from it.
 fn fmu(args: &Args) -> Result<(), Failure> {
-    // shortcut: the FMU finds its machine by id among the registered ones, so a machine file cannot go into one yet.
-    if args.option("--machine-file").is_some() {
-        return Err(Failure("cli-error-machine-file-fmu", String::new()));
-    }
     let (entry, cfg) = machine_and_config(args)?;
     let path = args.option("--out").ok_or(Failure("cli-error-missing-value", "--out".into()))?;
     let fmi = match args.option("--fmi") {

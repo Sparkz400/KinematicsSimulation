@@ -20,6 +20,10 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "cable_chain": {
+                "description": "The axis drags a cable chain fixed at its 0 end (effects.cable_chain, values in [cable_chain]). Default false.",
+                "type": "boolean"
+              },
               "id": {
                 "description": "Stable id of the node; signals and other nodes refer to it.",
                 "pattern": "^[A-Za-z0-9_-]+$",
@@ -130,6 +134,80 @@
               "id",
               "mass_kg",
               "axes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "frame": {
+          "description": "The machine frame swaying along a horizontal axis on its own spring (effects.frame_compliance, elastic model only). At most one.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The axis the frame sways along; it has to be horizontal. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "damping_n_s_m": {
+                "description": "Its damping, N s/m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "mass_kg": {
+                "description": "The frame's mass in its sway, kg; bodies that do not move along the axis ride on it too.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "stiffness_n_m": {
+                "description": "Its stiffness, N/m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "axis",
+              "mass_kg",
+              "stiffness_n_m",
+              "damping_n_s_m"
             ],
             "type": "object"
           },
@@ -258,8 +336,107 @@
           "pattern": "^[A-Za-z0-9_-]+$",
           "type": "string"
         },
+        "idler": {
+          "description": "A free pulley the belt runs over (effects.idlers): its inertia and bearing friction, at the belt speed past it.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "at_m": {
+                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one).",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "body": {
+                "description": "A body it rides on, for the 3D view: at_m is then from that body. Id of a machine.body node.",
+                "type": "string"
+              },
+              "friction_nm": {
+                "description": "Bearing friction torque, N m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "inertia_kgm2": {
+                "description": "Inertia, kg m^2.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "radius_m": {
+                "description": "Radius, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "speed": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Belt speed past it per speed of each axis (m/s per m/s). Keys: ids of machine.axis nodes.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "speed",
+              "radius_m",
+              "inertia_kgm2",
+              "friction_nm"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "motor": {
-          "description": "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors.",
+          "description": "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors; [motor.<id>], [drive.<id>], [gearbox.<id>], [ratings.<id>] and [parts.<id>] give one motor its own.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -298,6 +475,15 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "at_m": {
+                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
               "gearbox": {
                 "description": "The gearbox that turns it. Id of a machine.gearbox node.",
                 "type": "string"
@@ -420,6 +606,13 @@
                 },
                 "description": "+1 for a pulley whose forward turn feeds belt into the section, -1 for one that takes belt out of it. Keys: ids of machine.pulley nodes.",
                 "type": "object"
+              },
+              "route": {
+                "description": "The pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to. Ids of machine.pulley, machine.idler, machine.body nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -427,6 +620,68 @@
               "length_m",
               "axes",
               "pulleys"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "span": {
+          "description": "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration).",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axes": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "How much longer it gets per metre of each axis. Keys: ids of machine.axis nodes.",
+                "type": "object"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "length_m": {
+                "description": "Length with every axis at 0, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "section": {
+                "description": "The section it is part of: its tension. Id of a machine.section node.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "section",
+              "length_m"
             ],
             "type": "object"
           },

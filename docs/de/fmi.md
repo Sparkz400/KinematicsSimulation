@@ -31,6 +31,8 @@ Die Variablen sind in beiden Versionen dieselben; nur die Typnamen unterscheiden
 | `command.setpoint.<Achs-ID>` | Real | Float64 | input | continuous |
 | `command.enable` | Boolean | Boolean | input | discrete |
 | `machine`, `config_file` | String | String | parameter | fixed |
+
+Eine FMU einer Maschinendatei (`sim-cli fmu --machine-file DATEI`) trägt die Datei als `resources/machine.toml` mit und baut ihre Maschine beim Instanziieren daraus, in beiden Versionen; ihr Parameter `machine` ist die Maschinen-id der Datei.
 | `effects.<Name>` | Boolean | Boolean | parameter | fixed |
 
 In FMI 3.0 steht der Startwert eines Strings in einem Element `<Start value="..."/>`, wie das Schema von FMI 3.0 es verlangt. Die Modellstruktur führt jeden Ausgang als Ausgang und als Anfangsunbekannte. Die Ausgänge tragen `dependencies=""`: Kein Ausgang hängt direkt von einem Eingang ab, weil ein Sollwert die Ausgänge erst über den nächsten Kommunikationsschritt erreicht. Die Anfangsunbekannten tragen keine Abhängigkeitsliste; sie dürfen also von jedem Parameter abhängen.

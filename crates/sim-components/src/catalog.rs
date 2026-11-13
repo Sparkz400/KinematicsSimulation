@@ -805,6 +805,39 @@ pub(crate) fn parts_applied(cfg: &Config) -> Result<Config, ConfigError> {
     Ok(out)
 }
 
+/// The tables a config may give one motor its own values in, as `[<table>.<motor id>]` (a machine file's motors
+/// that differ: a smaller Z motor, another gearbox). See `motor_config`.
+pub const PER_MOTOR_TABLES: [&str; 5] = ["parts", "motor", "gearbox", "drive", "ratings"];
+
+/// The config one motor sees: each table of `PER_MOTOR_TABLES` with that motor's `[<table>.<id>]` over it, and the
+/// motor, gearbox and drive its `[parts.<id>]` names applied from the catalogue over that. A key there has to be one
+/// the shared table has (`motor.<id>.rotor_inertia_kgm2` overrides `motor.rotor_inertia_kgm2`). Without such tables
+/// the config as it is. The drives, the machine files' drive trains and the per-motor verdicts read their motor's.
+/// shortcut: the drives' cycle times, the noise seed and a shared DC link stay those of the shared `[drive]`; the
+/// velocity gain is not retuned for a part named per motor (set `drive.<id>.velocity_kp_nm_s_rad` with it).
+pub fn motor_config(cfg: &Config, id: &str) -> Result<Config, ConfigError> {
+    let mut out = cfg.clone();
+    let mut named = false;
+    for table in PER_MOTOR_TABLES {
+        let Some(own) = cfg.get(&format!("{table}.{id}")).ok().filter(|_| !id.is_empty()).and_then(|v| v.as_table()) else { continue };
+        named |= table == "parts";
+        for (key, value) in own {
+            out.set(&format!("{table}.{key}"), value.clone()).map_err(|_| ConfigError::Invalid(format!("{table}.{id}.{key}")))?;
+        }
+    }
+    if named {
+        let parts = Parts::of(&out)?;
+        if !parts.belt.is_empty() || !parts.axis.is_empty() {
+            return Err(ConfigError::Invalid(format!("parts.{id} (belt and axis are the machine's, not a motor's)")));
+        }
+        let own = Parts { motor: parts.motor, supply: parts.supply, gearbox: parts.gearbox, drive: parts.drive, belt: "", axis: "" };
+        let mut applied = out.clone();
+        apply_parts(&mut applied, &own, None)?;
+        out = applied;
+    }
+    Ok(out)
+}
+
 /// The config with the catalogue values of the parts it names: `[parts]` with `motor = "<article>"`,
 /// `motor_supply` (`SUPPLIES`), `gearbox = "<size-frame-ratio>"`, `drive = "<article>"`, `belt = "<profile-width>"`
 /// and `axis = "<name>"`, "" for none. A named part overwrites the numbers the config has for it, and the velocity

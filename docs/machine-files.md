@@ -9,6 +9,8 @@ Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 - [Use one](#use-one)
 - [Worked example: an H-bot](#worked-example-an-h-bot)
 - [The nodes](#the-nodes)
+- [Motors that differ](#motors-that-differ)
+- [The other examples: a CoreXY and an XYZ portal](#the-other-examples-a-corexy-and-an-xyz-portal)
 - [What is checked, and how errors read](#what-is-checked-and-how-errors-read)
 - [The model behind it](#the-model-behind-it)
 - [What machine files cannot do yet](#what-machine-files-cannot-do-yet)
@@ -44,25 +46,31 @@ error bands of `[bounds]`, the sensitivity analysis, saving the config. A number
 by its path (`radius_m = "geometry.pulley_radius_m"`); then changing the value changes the machine. A plain number is
 fixed.
 
-Three files ship in `machines/`:
+Five files ship in `machines/`:
 
 | file | what it is |
 | ---- | ---------- |
 | `machines/single-axis.toml` | the single axis of `crates/machine-single-axis`, rewired as a netlist |
-| `machines/t-gantry.toml` | the T-gantry of `crates/machine-t-gantry`, rewired as a netlist (frame compliance and tool flex off, see [below](#what-machine-files-cannot-do-yet)) |
+| `machines/t-gantry.toml` | the T-gantry of `crates/machine-t-gantry`, rewired as a netlist, with its idlers, frame, cable chain and belt spans (tool flex is not in machine files, see [below](#what-machine-files-cannot-do-yet)) |
 | `machines/h-bot.toml` | the worked example below: an X-Y table, not a real machine |
+| `machines/corexy.toml` | a CoreXY X-Y table: two fixed motors, two crossed belts ([below](#the-other-examples-a-corexy-and-an-xyz-portal)) |
+| `machines/xyz-portal.toml` | a three-axis cartesian portal, X, Y and Z each on its own belt, with a smaller Z motor of its own |
 
 The easiest way to a new machine is to copy the one nearest to it and change `[machine]`.
 
 ## Use one
 
-Command line: `--machine-file FILE` takes the place of the machine's id, for every command but `fmu`.
+Command line: `--machine-file FILE` takes the place of the machine's id, for every command.
 
 ```
 sim-cli verdicts --machine-file machines/h-bot.toml
 sim-cli run --machine-file machines/t-gantry.toml --cycle --time 2 --out run.csv
 sim-cli verdicts --machine-file machines/t-gantry.toml --bands --set belt.pretension_n=350
+sim-cli fmu --machine-file machines/h-bot.toml --fmi 3 --out h-bot.fmu
 ```
+
+An FMU of a machine file carries the file among its resources (`resources/machine.toml`) and builds the machine from it
+when it is instantiated, for FMI 2.0 and 3.0 alike; the tool that imports it needs nothing else.
 
 App: **Open** in the config file row (or **Open…** for the file dialog) opens a machine file like a config, and the machine changes with it.
 **Save** writes the edited values back over the file, keeping its comments; a JSON file is not written over. The app
@@ -232,8 +240,71 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `overhang_axis`, `lever_m`, `spacing_m` | with `overhang` | the axis, the lever of the overhang's centre of mass and the spacing of the guide's two carriages, m; the tilt puts 2 m a lever / spacing on them |
 | | `lever_axis` | | an axis whose travel shortens the lever |
 | | `side_load` | | the guide also carries the overhang's inertia force m a; default false |
+| `axis` | `cable_chain` | | the axis drags a cable chain fixed at its 0 end (`effects.cable_chain`, values in `[cable_chain]`); default false |
+| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis |
+| `section` | `route` | | the pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to |
+| `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`) |
+| | `radius_m`, `inertia_kgm2`, `friction_nm` | required | its radius, inertia and bearing friction torque |
+| | `body`, `at_m` | | a body it rides on and where the 3D view draws it (from that body) |
+| `frame` | `axis` | required | the horizontal axis the frame sways along (`effects.frame_compliance`, elastic model); at most one |
+| | `mass_kg`, `stiffness_n_m`, `damping_n_s_m` | required | the frame's mass, stiffness and damping in its sway |
+| `span` | `section` | required | a free belt span of that section, for its sideways mode (`effects.belt_span_vibration`) |
+| | `length_m` | required | its length with every axis at 0, m |
+| | `axes` | | how much longer it gets per metre of each axis |
 
-There are as many motors as axes. A file names each list it uses; `guide` may be left out (no guide friction).
+There are as many motors as axes. A file names each list it uses; `guide`, `idler`, `frame` and `span` may be left out.
+An effect that needs nodes the file has not (`frame_compliance` without a `frame`, `belt_span_vibration` without a
+`span`) refuses the file with `machine.<list>`.
+
+## Motors that differ
+
+`[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and `[parts]` hold for every motor. A table `[<table>.<motor id>]` gives
+one motor its own values over them, key by key; it may only hold keys the shared table has:
+
+```toml
+[gearbox.mz]          # the Z motor of machines/xyz-portal.toml has its own gearbox ratio
+ratio = 10.0
+
+[motor.mz]            # and a smaller motor
+rotor_inertia_kgm2 = 0.15e-4
+rated_current_a = 1.411
+
+[drive.mz]            # its drive retuned for it
+peak_torque_nm = 1.9
+rated_torque_nm = 0.635
+velocity_kp_nm_s_rad = 0.01
+
+[ratings.mz]          # and what its smaller gearbox and drive allow
+gearbox_rated_torque_nm = 18.0
+drive_rated_current_a = 1.5
+
+[parts.mz]            # or a motor, gearbox and drive from the catalogue, for this motor alone
+motor = "1FK2203-2AG"
+```
+
+That motor's drive train in the machine (rotor, gearbox, motor friction, ripple, brake), its drive in the controller
+(current and velocity loops, torque-speed curve, winding, DC link) and its verdicts (motor, drive current, gearbox,
+bearing, belt teeth, braking) take its own values; the machine-wide checks keep the shared ones. A part named in
+`[parts.<id>]` sets that motor's values over the numbers, as `[parts]` does; `belt` and `axis` are the machine's and are
+refused there. What stays shared: the drives' cycle times, the noise seed, a shared DC link and the braking module.
+`sim-cli catalog` searches the shared motor; a motor with its own `[parts.<id>]` keeps its part through the search.
+The time-optimal path planner takes the shared `[drive]`'s torque curve for every motor.
+
+## The other examples: a CoreXY and an XYZ portal
+
+`machines/corexy.toml` is a CoreXY table. Its two motors stand at the front corners; each drives a belt clamped to the
+head at both ends, so each motor's pulley cuts its belt into two sections. Belt A gets longer by x + y on one side of
+its pulley, belt B by x - y, so the pulley angles are a = (x + y) / r and b = (x - y) / r: the loader finds that from
+the sections alone, and one motor turning alone moves the head along a diagonal. The gantry moves in Y, the head on it
+in X. Its idler nodes (four, off by default) and the `route` of each section are what the 3D view draws.
+
+`machines/xyz-portal.toml` is a three-axis portal: X, Y and Z each on a belt loop of its own, round its motor's pulley
+and an idler at the far end, clamped to its carriage, Z vertical. Its Z motor is smaller, with a gearbox of ratio 10,
+its drive tuned for it and its own ratings ([above](#motors-that-differ)); it holds the slide and payload,
+m g r / i = 3.5 kg * 9.81 m/s² * 0.02 m / 10 = 0.0686 N m.
+
+Both pass every verdict on their cycles with the T-gantry's placeholder values (`sim-cli verdicts --machine-file ...`);
+neither is a real machine.
 
 ## What is checked, and how errors read
 
@@ -280,24 +351,40 @@ derivations):
   the pulleys equally) add K^T J K. Gravity pulls axis i with m_i g sin(incline_i).
 - Gearbox (backlash, stiffness, efficiency), motor friction, torque ripple and cogging, tooth meshing, holding brake,
   hard stops at both ends of every stroke, LuGre guide friction with its load scaling: the components of
-  `sim-components::mech`, as the crates use them.
+  `sim-components::mech`, as the crates use them. Each motor's from its own config ([above](#motors-that-differ)).
+- Idlers (`machine.idler`, `effects.idlers`): idler d passes belt at s_d . v (its `speed`), so its inertia J / r² adds
+  m_d s_d s_d^T to the axes' mass matrix (which is then full), and its bearing pulls the axes back with
+  F_d tanh(s_d . v / (w r)) s_d, F_d its friction torque over its radius. They carry no weight.
+- A cable chain on an axis: its moving mass m(q) = mu (L0 + q / 2) takes m dv/dt + m' v² / 2, and it drags.
+- A process force per axis, `process.force_<axis>_n`, on the tool while the cycle dwells.
+- The frame (`machine.frame`, elastic model): it sways by u along a horizontal axis f; the bodies move at v + e_f du/dt
+  over ground, and the frame takes back the forces its belt, guides, idlers, chain and stops put on them, but not the
+  process force, which the workpiece on the floor takes. The tool moves with the frame.
+- Thermal feedback: each gearbox's efficiency and each guide's viscous friction follow their temperature, the belt's
+  stiffness the ambient one (`mech::ThermalFeedback`).
+- Belt tooth jump (elastic model): at each motor pulley between the section it feeds and the one it takes from
+  (`mech::ToothJump`); a pulley with a section on one side only (a drum) refuses the effect.
+- Span vibration (`machine.span`): each span's first sideways mode at its section's tension, against what the drives
+  excite (`mech::span_frequency`).
+- The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
+  held, K = Σ_s EA / L_s c_s c_s^T, against their mass matrix; the lowest is `resonance_hz` at a pose, so
+  `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).
 
 The controller, drives, DC link, winding heat, analyses, verdicts, sensitivity and error bands are those of every
 machine; nothing about them is particular to machine files.
 
 ## What machine files cannot do yet
 
-- These effects: `frame_compliance`, `tool_flex`, `idlers`, `cable_chain`, `process_force`, `thermal_feedback`,
-  `belt_tooth_jump`, `belt_span_vibration`. A file that switches one on is refused (`effects.<name> (not in machine files
-  yet)`), so a result never leaves out an effect that was asked for. `part_heating` works (it only shows).
+- `tool_flex`: the T-gantry's Z axis leaning on its carriage. It needs where that axis's centre of mass and tool tip
+  sit below its guide and how that changes with its travel, geometry a netlist of belts and bodies does not have; a node
+  for it would be the T-gantry's special case. A file that switches it on is refused (`effects.tool_flex (not in machine
+  files yet)`), so a result never leaves out an effect that was asked for.
 - Mechanisms other than belts: screws, racks, linkages, rotary joints. The node kinds are the ones above.
-- Different motors, gearboxes or drives per axis: `[motor]`, `[gearbox]` and `[drive]` hold for all.
-- A structural resonance: the machine reports none, so `effects.shaper_follows_pose` keeps the fixed shaper frequency
-  and the app has no mode shape to show.
-- Section lengths are numbers (or paths), not formulas: a section whose length depends on a stroke does not follow a
+- Modes other than the belt's: the frame enters the belt's mode where it sways, but the guides' and the motors' own
+  stiffness do not, and a body's bending is not modelled.
+- Section and span lengths are numbers (or paths), not formulas: one whose length depends on a stroke does not follow a
   change of that stroke by itself.
-- The 3D view draws a plain machine (a beam, a box per body, a drive unit per motor), not the belt.
-- `sim-cli fmu` refuses a machine file: the FMU finds its machine among the registered ones.
+- The 3D view draws the belt as straight strips from point to point of each section's route, not round its pulleys.
 - `sim-cli list` and the app's machine list show the registered machines only; a file is opened, not listed.
 
 ## How it is validated
@@ -317,9 +404,17 @@ them against their crates:
   with its carriage 1e-9 heavier spreads its peak braking power by 0.5 %, and the file is held to three times the
   crate's own spread, or 1e-4.
 
-The H-bot has no crate to be held against. All three files pass the standard suite every machine passes (round trip,
-static hold, determinism, energy conservation without losses, the loss budget with them), and the H-bot's motor angles
-and torques are checked against a hand calculation. Its suite run has the gearbox backlash off: nothing pulls its
+The same comparison runs with each effect machine files have had since 13 November switched on (frame, idlers, cable
+chain, process force, thermal feedback with warm parts, belt tooth jump, span vibration), elastic and rigid, and with
+all of them at once: the T-gantry's file names its five idlers, frame and eight spans, and gives the crate's numbers to
+1e-9 (`the_effects_of_a_machine_file_are_its_crates`). The effects' own hand checks are the crate's.
+
+The H-bot, the CoreXY and the portal have no crate to be held against. All five files pass the standard suite every machine passes (round trip,
+static hold, determinism, energy conservation without losses, the loss budget with them), and hand calculations check the H-bot's and
+the CoreXY's motor angles and torques, the portal's per-motor gearbox ratio (in its Z motor's angle and speed), the
+torque its Z motor holds the slide with, its Z motor's own drive and ratings, the single axis's belt mode, and the belt
+strips the 3D view draws. The CoreXY and the portal lie flat (in X and Y) as the H-bot does and run the suite without
+backlash for the same reason. Its suite run has the gearbox backlash off: nothing pulls its
 gears to one flank, and the suite's small pulse knocking them across the backlash drifts the energy by 0.17 %, over
 the 0.1 % allowed. That is the gearbox contact at the suite's step size, not the netlist: the T-gantry crate with
 gravity off drifts by 0.19 % the same way.
@@ -364,3 +459,7 @@ motors and axes.
 - `sim_netlist::build(&Config)`: the `MachineEntry::build` of every machine file; the netlist is in the config.
 - `sim_netlist::Netlist::parse(&Config)`, `ConfigMachine::new(&Config, &Netlist)`, `json_schema()` (as a value; `sim_machines::json_schema()` writes it),
   `line_of(text, path)`.
+- `sim_components::catalog::motor_config(&Config, motor_id)`: the config one motor sees ([motors that
+  differ](#motors-that-differ)); `Controller::drive_params_of(k)` is its drive.
+- `sim_machines::load_text(toml_text, id)`: a machine file's text as `load_file` reads it (what an FMU does with its
+  `resources/machine.toml`).

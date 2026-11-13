@@ -1,6 +1,6 @@
-//! The FMU's C functions, called as an importing tool calls them, on every registered machine: a move commanded
-//! through the setpoint inputs gives bit for bit the signals of a plain `Sim` given the same setpoints, and what the
-//! standard forbids is refused.
+//! The FMU's C functions, called as an importing tool calls them, on every registered machine and the machine files
+//! of machines/: a move commanded through the setpoint inputs gives bit for bit the signals of a plain `Sim` given the
+//! same setpoints, and what the standard forbids is refused.
 
 use sim_components::{Command, Sim, load_config};
 use sim_core::MachineEntry;
@@ -24,6 +24,14 @@ fn unpack(entry: &'static MachineEntry, name: &str) -> (Model, CString) {
     // A space in the folder name would come percent-encoded; the URI keeps it plain where it can.
     let uri = format!("file:///{}", dir.join("resources").display().to_string().replace('\\', "/").trim_start_matches('/'));
     (model, CString::new(uri).unwrap())
+}
+
+/// The machine files of machines/ that the FMU builds from its resources (`resources/machine.toml`).
+fn machine_files() -> Vec<&'static MachineEntry> {
+    ["h-bot.toml", "corexy.toml", "xyz-portal.toml"]
+        .iter()
+        .map(|name| sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name)).unwrap_or_else(|e| panic!("{e}")))
+        .collect()
 }
 
 fn instantiate(guid: &str, resources: &CString, kind: i32) -> fmi2Component {
@@ -51,8 +59,10 @@ fn start(c: fmi2Component) {
 
 #[test]
 fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
-    for entry in MACHINES {
+    for entry in MACHINES.iter().copied().chain(machine_files()) {
         let (model, resources) = unpack(entry, "move");
+        // A machine file goes along with the FMU, a registered machine is found by its id.
+        assert_eq!(model.files().iter().any(|(path, _)| path == "resources/machine.toml"), !sim_fmi::is_registered(entry), "{}", entry.id);
         let cfg = load_config(entry, &model.config_text).unwrap();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let signals: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect();

@@ -217,7 +217,7 @@ drag_n = 3.0
 # With effects.process_force: a force on the tool while the cycle dwells, e.g. the reaction to pressing a part in.
 [process]
 force_x_n = 0.0
-force_z_n = 20.0
+force_y_n = 20.0
 
 # With effects.hard_stops: a spring and damper at both ends of each stroke that act only beyond it.
 [hard_stop]

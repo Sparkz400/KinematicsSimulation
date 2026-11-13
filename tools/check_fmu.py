@@ -3,6 +3,8 @@ Windows and Linux).
 
 usage: python tools/check_fmu.py SIM_CLI FMU MACHINE [--config TOML] [--stop S]
 
+MACHINE is a registered machine's id, or a machine file (.toml or .json) that `sim-cli run --machine-file` reads.
+
 1. fmpy's validator (the XSD of the FMU's FMI version, names, model structure, start values, causality, units) finds
    no problem.
 2. fmpy runs the FMU as co-simulation at its default step with no input; every output must equal
@@ -44,9 +46,10 @@ for m in logs:
 
 with tempfile.TemporaryDirectory() as d:
     out = os.path.join(d, "cli.csv")
-    cmd = [os.path.abspath(a.cli), "run", a.machine, "--time", str(a.stop), "--every", "1", "--out", out]
+    machine = ["--machine-file", a.machine] if a.machine.endswith((".toml", ".json")) else [a.machine]
+    cmd = [os.path.abspath(a.cli), "run", *machine, "--time", str(a.stop), "--every", "1", "--out", out]
     if a.config:
-        cmd[3:3] = ["--config", a.config]
+        cmd[2 + len(machine):2 + len(machine)] = ["--config", a.config]
     subprocess.run(cmd, check=True)
     cli = np.genfromtxt(out, delimiter=",", names=True, deletechars="")
 cols = {n.split("[")[0]: n for n in cli.dtype.names}

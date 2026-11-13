@@ -24,6 +24,14 @@ fn unpack(entry: &'static MachineEntry, name: &str) -> (Model, CString) {
     (model, CString::new(resources).unwrap())
 }
 
+/// The machine files of machines/, which the FMU builds from its resources (`resources/machine.toml`).
+fn machine_files() -> Vec<&'static MachineEntry> {
+    ["h-bot.toml", "corexy.toml", "xyz-portal.toml"]
+        .iter()
+        .map(|name| sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name)).unwrap_or_else(|e| panic!("{e}")))
+        .collect()
+}
+
 fn instantiate(token: &str, resources: &CString) -> fmi3Instance {
     let (name, token) = (CString::new("test").unwrap(), CString::new(token).unwrap());
     unsafe { fmi3InstantiateCoSimulation(name.as_ptr(), token.as_ptr(), resources.as_ptr(), false, false, false, false, null(), 0, null_mut(), None, None) }
@@ -69,7 +77,7 @@ fn interval(model: &Model) -> f64 {
 
 #[test]
 fn a_move_through_the_fmi3_functions_matches_a_plain_simulation_bit_for_bit() {
-    for entry in MACHINES {
+    for entry in MACHINES.iter().copied().chain(machine_files()) {
         let (model, resources) = unpack(entry, "move");
         assert!(model.xml.contains(r#"fmiVersion="3.0""#) && model.xml.contains(&format!(r#"instantiationToken="{}""#, model.guid)));
         let cfg = load_config(entry, &model.config_text).unwrap();
