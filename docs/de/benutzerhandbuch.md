@@ -11,6 +11,7 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einfluss unsicherer Parameter erkennen und mit Fehlerbändern beurteilen](#einfluss-unsicherer-parameter-erkennen-und-mit-fehlerbändern-beurteilen)
 - [Einen Zyklus verkürzen](#einen-zyklus-verkürzen)
 - [Einen Delta-Picker auslegen](#einen-delta-picker-auslegen)
+- [Einen Linear-Delta auslegen](#einen-linear-delta-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
 - [Regler einstellen und Input Shaping nutzen](#regler-einstellen-und-input-shaping-nutzen)
 - [Eine Antriebsaufzeichnung nachfahren und Parameter anpassen](#eine-antriebsaufzeichnung-nachfahren-und-parameter-anpassen)
@@ -579,6 +580,45 @@ Mit `--bands` besteht jede Prüfung außer `settling` an beiden Grenzen jedes Sc
 Für eine andere Nutzlast `mass.payload_kg` ändern (und `ratings`, wo sich Teile ändern); einen anderen Motor oder ein anderes Getriebe benennt man wie bei den anderen Maschinen (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Bahnen auf drei Achsen schreibt man `line,x,y,z`, `spline,x,y,z` und `arc,x,y,z,cx,cy,cz,cw`.
 
 Was der Delta nicht hat: die Drehträgheit der Unterarme, elastische Arme und Stäbe, die Kegelgrenzen der Kugelgelenke (Anschläge und Arbeitsraum stehen dafür), eine vierte Achse, Übergangsbögen auf drei Achsen, eine Reibungsansicht für seine Gelenke (ihre Verluste stehen in der Energiebilanz) sowie Nachfahren und Anpassen einer Aufzeichnung, die eine lineare Transformation voraussetzen (`replay` und `fit` lehnen den Delta ab: `Nachfahren und Anpassen einer Aufzeichnung brauchen eine Maschine, deren Motorwinkel ihren Achsen linear folgen ...`). Von festen Motormomenten gehalten ist er im oberen Teil seines Arbeitsraums in der senkrechten Bewegung instabil; die Lageregler der Antriebe halten ihn (siehe die Modellreferenz).
+
+## Einen Linear-Delta auslegen
+
+`delta-linear` ist ein Linear-Delta: drei senkrechte Zahnriemenachsen an den Säulen eines Gestells, jeder Schlitten mit einem Stabpaar hinunter zu einer Platte, die waagerecht bleibt. Ausgelegt ist er wie der Festo-Tripod EXPT-95: Arbeitsraum 950 mm Durchmesser und 100 mm hoch, Zahnriemenachsen EGC-80 ohne Getriebe angetrieben, 1 kg Nennlast bei höchster Dynamik, hier mit drei Siemens 1FK2205-2AF an S210-Umrichtern. Festo veröffentlicht weder Stablänge noch Säulenanordnung noch bewegte Massen; [die Konfiguration](../../crates/machine-delta-linear/default.toml) kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` und gibt den Schätzungen Grenzen. Ihr Zyklus ist der Adept-Zyklus 25/305/25 mm des D3, oben im Arbeitsraum.
+
+Das Werkzeug ist die Mitte der Platte, x, y und z in Metern, z nach oben ab dem oberen Anschlag der Schlitten (die Platte arbeitet bei −1,12 bis −1,22 m). Ein Ziel wird mit seinem Grund abgelehnt, wenn es außerhalb des Zylinders liegt, außer Reichweite der Stäbe, wo ein Stab steiler als 60° zur Senkrechten stünde, wo ein Schlitten seinen Hub verlassen müsste oder zu nahe an einer Singularität.
+
+```text
+$ sim-cli analyze delta-linear
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
+1,0.720000,4.749490,2.025259,106.0492,0.4401,0.6751,141.10,529.06,1.6426,35.34,...
+2,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+3,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+```
+
+Der Zyklus liegt entlang x, auf Säule 1 zu und von ihr weg, also arbeitet Säule 1 am meisten. Seine 0,720 s sind die des D3: derselbe Zyklus, dieselben Achsgrenzen. Festo gibt für den EXPT-95 bis zu 150 solcher Zyklen je Minute bei leichter Last an (je 0,4 s), mit verrundeten Ecken und bis zu 7 m/s und 110 m/s²; `sim-cli optimise delta-linear` verrundet die Ecken und hebt die Grenzen, so weit alle Prüfungen es zulassen.
+
+```text
+$ sim-cli verdicts delta-linear
+motor-peak,1,0.4401,1.000,ok
+motor-thermal,1,35.34,100.0,ok
+drive-current,1,1.643,3.000,ok
+pulley-torque,1,3.991,10.00,ok
+...
+settling,,0.00006175,0.0005000,ok
+belt-tension,,529.1,1000,ok
+belt-slack,,141.1,0,ok
+singularity,,3.278,5.000,ok
+gearbox-radial-load,,785.7,1500,ok
+```
+
+Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Was man daraus liest:
+
+- **Motor.** Ein Compact-Motor, wegen seines Läufers: der High-Dynamic-Motor 1FK2104-5AF hätte das Moment (7,5 N m gegen 4,7 N m Bedarf), aber 0,65 kg cm² Läufer gegen etwa 6 kg cm² aus Schlitten, Platte und Riemenscheibe an seiner Welle: sein Drehzahlregler schwang oberhalb 0,1 N m s/rad bei etwa 450 Hz, und der Zyklus kam nur auf 2,5 mm statt 0,5 mm zur Ruhe. Die 4,0 kg cm² des 1FK2205-2AF vertragen eine Verstärkung von 0,25 mit mindestens 41° Phasenreserve über die Grenzen.
+- **Riemen.** Der Riemen jeder Säule trägt das Gewicht des Schlittens und seinen Anteil an dem der Platte (22 N in der Mitte) und was ihr Beschleunigen braucht: 141 bis 529 N in seinen beiden Abschnitten, bei 300 N Vorspannung.
+- **Singularität.** Die Konditionszahl ist schon in der Mitte 3,15: ein Meter Schlittenweg bewegt die Platte seitlich weiter als nach oben. Der Arbeitsraum hat bis zu 3,98, am unteren Rand gegenüber einer Säule.
+- **Keine Prüfungen für Getriebe, Riemenscheibenlager, Führungen oder Zahnbelastung**: die Achsen haben kein Getriebe, und für Lager, Führungen und Riemenzähne stehen keine Kennwerte in der Konfiguration (die der EGC-80 sind nicht im Katalog).
+
+Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse, die Erwärmung der Führungen, Trace-Wiedergabe und Fit (eine nichtlineare Transformation, wie beim D3). Siehe die [Modellreferenz](../model-reference.md#linear-delta).
 
 ## Eine Bahn fahren und den Bahnfehler ablesen
 

@@ -15,6 +15,7 @@ Test files, abbreviated in the tables:
 | axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
 | delta | [`crates/machine-delta-d3/src/tests.rs`](../crates/machine-delta-d3/src/tests.rs) |
+| linear delta | [`crates/machine-delta-linear/src/tests.rs`](../crates/machine-delta-linear/src/tests.rs) |
 | joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
 | suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
@@ -28,6 +29,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: control, profiles and paths](#hand-calculations-control-profiles-and-paths)
 - [Hand calculations: analysis and verdicts](#hand-calculations-analysis-and-verdicts)
 - [Hand calculations: delta picker D3](#hand-calculations-delta-picker-d3)
+- [Hand calculations: linear delta](#hand-calculations-linear-delta)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -259,6 +261,20 @@ The delta's geometry and masses are estimates (see [its config](../crates/machin
 | Rotary joint | Joint friction 2 + 0.5 · 4 = 4 N m, stop 1e5 · 0.01 = 1000 N m, rotor 2e-4 · 20² = 0.08 kg m², 1 N m less 0.1 N m friction through ratio 20 = 18 N m, losses 16 W and 8 W | 1e-9 | `a_joint_adds_friction_stops_and_the_rotor_as_calculated`, joint |
 | Arcs on three axes | A quarter circle of 0.1 m in the x-z plane is π/20 m long, passes (0.0707, 0, 0.0707) about its centre halfway with its curvature 1/r towards the centre; clockwise the other way round; in the x-y plane seen from +z; a half turn refused | 1e-12 | `arcs_on_three_axes_lie_in_the_plane_of_their_points`, path |
 | Splines on three axes | Through their via points, out of and into the lines beside them in their directions, the plan within every axis's speed, acceleration and jerk | 1e-9; 0.1 % | `a_spline_on_three_axes_passes_through_its_points_within_the_limits`, path |
+
+## Hand calculations: linear delta
+
+The linear delta's geometry and masses are estimates (see [its config](../crates/machine-delta-linear/default.toml)), so these check the equations, not the machine. It passes the standard suite as every machine does, also from its own tests.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Inverse and forward kinematics over a 20 × 20 × 5 grid of the working range (1000 and more poses) | Each other | 1e-12 m | `the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_kinematics`, linear delta |
+| The Jacobian J = J_x⁻¹ J_q | Central differences of the forward kinematics, 1e-6 m; its z row sums to 1, its x and y rows to 0 | 1e-7; 1e-12 | same |
+| The belts' holding forces | g (m_c + m_nt dz/dh_k), m_c = 1.475 kg, m_nt = 2.325 kg: 22.0650 N per column at the centre (0.31606 N m at the motor), 32.784, 19.257 and 14.154 N at (0.3, 0.1, −1.17) with dz/dh from finite differences, summing to 3 m_c g + m_nt g = 66.1949 N; the rigid model's holding torques and the elastic one's T₁ − T₂; both stay put there | 1e-6; 1e-6 | `the_belts_hold_the_carriages_and_the_plates_weight_through_the_jacobian`, linear delta |
+| The working range's edges at a height | At z = −1.17 a rod reaches 60° at x = e − L sin 60° = −0.502628 m; at z = −1.09 a carriage reaches its upper stop at x = e − sqrt(L² − 1.09²) = 0.302014 m; refused 1e-6 m beyond, not before; outside, out of reach, near a singularity refused with their reasons | 1e-6 m | `the_working_range_ends_where_a_rod_tilts_too_far_or_a_carriage_meets_its_stop`, linear delta |
+| The feedforward | With the speed the rigid loss-free model accelerates the plate at the asked (10, 5, −20) m/s² at (2, −1, 0.5) m/s; at rest 10 m/s² up at the centre takes ((m_c + (J_pulley + belt + J_rotor) / r²) 10 + m_nt 10 / 3) r = 0.63355 N m per motor | 1e-9 m/s²; 1e-9 | `the_feedforward_gives_the_asked_acceleration`, linear delta |
+| The default cycle | Every verdict passes; 720 profile cycles as the D3's Adept cycle by hand; condition number 3.28 | exact | `the_default_cycle_passes_its_verdicts`, linear delta |
+| The setpoint slack at rest | The simulation's setpoint-to-tool offset after 0.5 s at rest at four poses (0.010 to 0.016 mm) within the slack (0.1 mm) | exact | `the_setpoint_slack_covers_the_sag_at_rest`, linear delta |
 
 ## Vendor formulas and vendor documents
 

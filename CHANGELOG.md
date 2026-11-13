@@ -9,6 +9,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Linear delta (`delta-linear`, crate `machine-delta-linear`): three vertical toothed-belt axes with parallelogram rods
+  to a level plate, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF motors on S210 converters. Inverse, forward
+  kinematics, Jacobian, working range with the rods' tilt and the carriages' stroke, condition number; elastic belt
+  axes (sections as springs, couplings, LuGre guides loaded by the rods' pull, stops, brakes) and a rigid model; its
+  default Adept cycle passes every verdict, also over the estimates' bounds.
 - Machine files: a machine defined in a TOML or JSON file as a netlist of components (motor, gearbox, pulley,
   belt sections, bodies, guides) with the tables of a machine config, loaded at run time by `sim-cli --machine-file`,
   the app (Open, or `sim-app --machine-file`) and `sim-opcua --machine-file`; versioned, checked with file, line and

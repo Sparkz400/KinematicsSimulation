@@ -10,6 +10,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [See which unknown parameters matter, and judge with error bands](#see-which-unknown-parameters-matter-and-judge-with-error-bands)
 - [Shorten a cycle](#shorten-a-cycle)
 - [Size a delta picker](#size-a-delta-picker)
+- [Size a linear delta](#size-a-linear-delta)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)
 - [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)
@@ -576,6 +577,45 @@ With `--bands` every check but `settling` passes at both bounds of every estimat
 To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
 
 What the delta does not have: the forearms' own rotational inertia, elastic arms and rods, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, transition curves on three axes, a friction view for its joints (their losses are in the energy budget), and trace replay and fit, which take a linear transformation (`replay` and `fit` refuse the delta: `Trace replay and fit need a machine whose motor angles follow its axes linearly ...`). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
+
+## Size a linear delta
+
+`delta-linear` is a linear delta: three vertical toothed-belt axes on the columns of a frame, each carriage with a pair of rods down to a plate that stays level. It is sized like the Festo EXPT-95 tripod: working range 950 mm across and 100 mm high, EGC-80 belt axes driven without gearbox, 1 kg rated load at its highest dynamics, here with three Siemens 1FK2205-2AF motors on S210 converters. Festo publishes neither rod length nor column layout nor moving masses; [the config](../crates/machine-delta-linear/default.toml) marks every value `[catalogue]` or `[estimate]` and bounds the estimates. Its cycle is the D3's Adept cycle 25/305/25 mm, at the top of the range.
+
+The tool is the plate's centre, x, y and z in metres, z up from the carriages' upper stop (the plate works at −1.12 to −1.22 m). A target is refused with its reason where it lies outside the cylinder, out of the rods' reach, where a rod would stand steeper than 60° from the vertical, where a carriage would leave its stroke, or too near a singularity.
+
+```text
+$ sim-cli analyze delta-linear
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
+1,0.720000,4.749490,2.025259,106.0492,0.4401,0.6751,141.10,529.06,1.6426,35.34,...
+2,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+3,0.720000,3.830428,1.365807,58.7664,0.3549,0.4553,141.10,529.06,1.1035,14.83,...
+```
+
+The cycle lies along x, towards column 1 and away from it, so column 1 works hardest. Its 0.720 s are the D3's: the same cycle and axis limits. Festo times the EXPT-95 at up to 150 of these cycles a minute at light loads (0.4 s each) with rounded corners and up to 7 m/s and 110 m/s²; `sim-cli optimise delta-linear` rounds the corners and raises the limits as far as every check allows.
+
+```text
+$ sim-cli verdicts delta-linear
+motor-peak,1,0.4401,1.000,ok
+motor-thermal,1,35.34,100.0,ok
+drive-current,1,1.643,3.000,ok
+pulley-torque,1,3.991,10.00,ok
+...
+settling,,0.00006175,0.0005000,ok
+belt-tension,,529.1,1000,ok
+belt-slack,,141.1,0,ok
+singularity,,3.278,5.000,ok
+gearbox-radial-load,,785.7,1500,ok
+```
+
+Every check passes, with `--bands` at both bounds of every estimate too. What to read from them:
+
+- **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.7 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 41° of phase margin over the bounds.
+- **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 141 to 529 N in its two sections, against the pretension of 300 N.
+- **Singularity.** The condition number is 3.15 already at the centre: a metre of carriage moves the plate further sideways than up. The range has up to 3.98, at its bottom rim opposite a column.
+- **No gearbox, pulley-bearing, guide or tooth-load checks**: the axes have no gearbox, and their pulley bearings, guides and belt teeth have no ratings in the config (the EGC-80's are not in the catalogue).
+
+What the linear delta does not have: the rods' own rotational inertia, elastic frame, rods and joints, a fourth axis, the guides' heat, trace replay and fit (a nonlinear transformation, as on the D3). See the [model reference](model-reference.md#linear-delta).
 
 ## Run a path and read path error
 

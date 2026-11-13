@@ -111,8 +111,9 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
     for entry in MACHINES.iter().copied() {
         let sim = Sim::new(entry, &edited(entry, &["effects.gravity = false"])).unwrap();
         let sections = sim.machine.belt_sections();
-        // A machine without belts reports no sections.
-        if sections.is_empty() {
+        // A machine without belts reports no sections. The hand calculation below is the single axis's and the
+        // T-gantry's; the linear delta's belts are checked in its own tests.
+        if sections.is_empty() || entry.id == "delta-linear" {
             continue;
         }
         assert!(sections.len() >= 2, "{}", entry.id);
