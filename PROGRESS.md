@@ -2543,3 +2543,37 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## Netlist nodes: linkages, scissor lift, worm lock, rotary friction, pinion load, belts round pulleys (14 November)
+
+| What | How | Test |
+| --- | --- | --- |
+| One linkage implementation | The D3's model moved to `sim-netlist/src/spatial.rs` (`git mv`); `LinkageMachine` and `spatial::Delta` take their numbers from a `Numbers` source (a crate's tables by path, or the file's node by the path's last part) and their drives from `Arms` (one shared joint for a crate, per-motor joints for a file). `machine-delta-d2` and `machine-delta-d3` are thin: ENTRY, suite configs and `Delta2::new` / `Delta::new` reading their tables; both depend on `sim-netlist` (two `BUILT_ON` entries in architecture.rs) | `the_planar_delta_file_is_its_crate_with_every_effect` (as before, now one code path); the crates' own tests unchanged but for accessors |
+| Spatial delta as a file | A linkage node with three arms and three axes; `radius_m`, `forearm_rod_spin_inertia_kgm2` and the bending values for it; `machines/delta-d3.toml` (the crate's default config plus `[machine]`). `sim-cli verdicts` gives the crate's verdicts digit for digit | `the_spatial_delta_file_is_its_crate_with_every_effect` (1e-9, each effect flipped), `the_spatial_delta_file_runs_its_crates_cycle` (signals every 16th step of 0.3 s and the cycle's analysis, 1e-9) |
+| Belt effects in a linkage file | Refused by name (`effects.<belt_*> (a linkage has no belt: switch it off)`); a spatial value on a planar linkage refused | `a_broken_linkage_is_refused_with_its_key_and_line` |
+| Rotary bearing friction | `friction_coulomb_nm`, `friction_viscous_nm_s_rad` on the rotary node, with `effects.guide_friction`, added to the motor's shaft friction as c / i and v / i^2 | `a_rotary_axis_has_the_hand_calculated_bearing_friction`: (2 + 0.5 * 1) / 100 = 0.025 N m at the motor, 0 off |
+| Self-locking worm | Driven back the rotor factor fades to eta_back (below 0: against the motion). Rigid: driven back the drag at the wheel is (1 - rotor factor) times the torque held at rest against the axes' forces (K^T o = -base; a drag in proportion to the dynamic torque has no consistent rigid solution); at rest the output sticks (K acc = 0) while the drag stays within -(1/eta - 1) and (1 - eta_back) of the held torque, beyond it breaks loose at the bound. With thermal feedback 1 - eta becomes (1 - eta)(1 - s + s nu/nu_ref) both ways (`worm::warmed`); a locking worm stays locked | `a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_efficiency`: held at rest (10 N m, no torque), braking at -10 rad/s (2 / 4.996 = 0.400320 rad/s2, 11.801441 N m), a 0.05 N m push holds the lowering speed, 0.1 N m speeds it at -0.400320, from rest stuck at -0.04 and +0.3 N m, loose at -0.06 (-0.080064) and +0.35 (0.300240); `a_worm_passes_its_efficiencies_and_a_locking_one_holds_at_rest` (-0.2 far back, -0.152319 at 0.5 W back); `a_warm_worm_loses_less_and_a_locking_one_stays_locked` (0.9 and 0.75; a locking one stays at 0; cold -1.4) |
+| `belt_wrap` beside a screw | `wrap_neighbours` skips motors with a direct transmission; `belt_wraps` is NaN for them; the analysis skips non-finite wraps (one filter in analysis.rs) | `the_belts_wrap_their_pulleys_beside_a_screw`: screw portal at x = 0.3, pi + 2 asin(0.02 / 0.4) = 3.2416344, pi + 2 asin(0.02 / 0.2) = 3.3419275, Z NaN |
+| Scissor lift | `[[machine.scissor]]` (scissor.rs): n stages, arm L, a screw of lead on the sliding foot; h = n sqrt(L^2 - u^2), u = u0 - c theta; M = J_screw + m h'^2, velocity term m h' h'' w^2, Q_g = -g m_g h'; `RotaryJoint` with the screw's efficiency on the gearbox's; rigid and elastic; signal `scissor.<id>.actuator_force`. `machines/scissor-lift.toml` (2 x 1 m, 0.6 to 1.4 m, 280 kg weight, the planar delta's 1FK2105 and NRB080-05-20): every verdict passes | `the_scissor_force_ratio_is_n_cot_alpha_at_two_heights` (6359.59 N per kN at 0.6 m, 1500 N at 1.6 m, ratio 4.23973, equal to W h' / c), `the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_heights` (1.389627 and 0.445847 N m, 17462.6 and 5602.7 N), `the_scissor_lift_file_passes_the_standard_suite` (without gravity: under a constant torque the lift is unstable at every height, 1.09 per second at mid height) |
+| Pinion radial load | `rack.<motor>.radial_load` = tooth force sqrt(1 + (tan 20 deg / cos beta)^2); a `RatingCheck` `gearbox-radial-load` against the motor's `ratings.shaft_max_radial_load_n`. Rack gantry: 192.9 of 1500 N | `a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force`: 35.0515 * 1.0719789 = 37.5745 N |
+| Belts round pulleys | `geometry::contacts` (tangent points), `geometry::arc`; the scene draws each section from tangent to tangent and round the wheels inside its route, and the motor pulleys' wraps between sections (8 pieces per arc), shaded as the section coming on | `the_belt_meets_its_wheels_at_the_tangents_and_runs_round_them_in_their_sense` (open belt (0, -0.1), (1, -0.1); crossed (0.02, -0.0979796), (0.98, 0.0979796)); `the_3d_view_draws_the_belt_of_a_machine_file` now 12 and 64 strips |
+| Docs | machine-files.md and maschinendateien.md: ten files listed, the T-gantry's lean, `stroke_m` not required, linkages of three arms, the scissor lift, the worm's lock and temperature, rotary friction, pinion load, belts drawn round pulleys; config-reference (guide_friction, thermal_feedback, shaft_max_radial_load_n), model-reference (sources of D2 and D3), validation, README and the German README, ROADMAP | -- |
+
+Outside the area, kept small: `sim-components/src/analysis.rs` (one filter on non-finite wraps), `sim-core/src/machine.rs`
+(the doc of `belt_wraps`), `sim-machines/tests/architecture.rs` (two `BUILT_ON` entries), the D2 and D3 crates (now
+thin) and their tests (accessors in place of private fields; vector helpers made public in sim-netlist),
+`machine_files.rs` (belt strip counts), `machine_file_mechanisms.rs` (the kit comparison leaves out the file's own
+radial check). No test suite was run here; `schema/machine-file.schema.json` was rewritten with its generator
+(`MACHINE_SCHEMA_WRITE=1`, that one test).
+
+Left open:
+
+- The D3's lib.rs moved to sim-netlist as a new file: a concurrent edit of `crates/machine-delta-d3/src/lib.rs` on
+  another branch has to be carried to `crates/sim-netlist/src/spatial.rs` by hand.
+- A self-locking worm sticks from rest in the rigid model only; once moving, and in the elastic model, the lock fades in
+  over 0.5 W, so a torque short of moving it creeps it at about 0.5 W atanh(share) of power.
+- The rotary's bearing friction acts at the rotor (before the gearbox's spring and efficiency); every rack has a 20 deg
+  pressure angle and the pinion's axial force is left out.
+- The scissor lift's mass leaves out the arms' turning and the feet's sideways motion; one screw on the lowest foot; it
+  and a linkage cannot sit beside other mechanisms in one file; the spatial delta's modes take arm 1's gearbox for all.
+- Arms and scissor in the 3D view are drawn plainly (no bearings, no screw thread).

@@ -679,7 +679,7 @@ Not on the single axis: frame mode, leaning tool, idler inertia and friction, a 
 
 ## Delta picker D3
 
-Source: [`machine-delta-d3/src/lib.rs`](../crates/machine-delta-d3/src/lib.rs), with the joint of [`joint.rs`](../crates/sim-components/src/joint.rs). Equations after the research note of 13 November 2026: Williams, "The Delta Parallel Robot: Kinematics Solutions" (Ohio University, 2016), for the kinematics; Codourey (IJRR 17(12), 1998) as used by Olsson ("Modeling and control of a Delta-3 robot", Lund 2009) for the dynamics.
+Source: [`sim-netlist/src/spatial.rs`](../crates/sim-netlist/src/spatial.rs) (the crate reads its tables into it; a machine file's linkage node of three arms builds the same machine), with the joint of [`joint.rs`](../crates/sim-components/src/joint.rs). Equations after the research note of 13 November 2026: Williams, "The Delta Parallel Robot: Kinematics Solutions" (Ohio University, 2016), for the kinematics; Codourey (IJRR 17(12), 1998) as used by Olsson ("Modeling and control of a Delta-3 robot", Lund 2009) for the dynamics.
 
 Three arms at the azimuths φ_i = 0°, 120°, 240° turn about horizontal axes at the base radius R; each carries a parallelogram of two forearms down to a platform of radius r, which stays level. The tool is the platform's centre p = (x, y, z), in a frame with its origin at the centre of the shoulder plane and z up (the platform works below 0). θ_i is the arm angle, 0 horizontal and positive downwards. Because the platform never turns, its offset folds into the base: e = R − r.
 
@@ -770,7 +770,7 @@ Not modelled: the tube's own share of the bending modes (it stays with the root 
 
 ## Delta picker D2
 
-Source: [`machine-delta-d2/src/lib.rs`](../crates/machine-delta-d2/src/lib.rs). The planar delta: two arms in the vertical x-z plane, their shoulder axes along y at x = ±R, each with a pair of forearms down to a plate that keeps its orientation (a five-bar whose lower links are parallelograms, as in Codian's D2 or ABB's two-axis FlexPicker). The tool is the plate's centre p = (x, z), z up from the shoulder axes. The equations are the [D3's](#delta-picker-d3) with two legs at φ = 0° and 180° and y = 0; leg i points along s_i x (s_1 = +1, s_2 = −1):
+Source: [`sim-netlist/src/linkage.rs`](../crates/sim-netlist/src/linkage.rs) (the crate reads its tables into it; a machine file's linkage node of two arms builds the same machine). The planar delta: two arms in the vertical x-z plane, their shoulder axes along y at x = ±R, each with a pair of forearms down to a plate that keeps its orientation (a five-bar whose lower links are parallelograms, as in Codian's D2 or ABB's two-axis FlexPicker). The tool is the plate's centre p = (x, z), z up from the shoulder axes. The equations are the [D3's](#delta-picker-d3) with two legs at φ = 0° and 180° and y = 0; leg i points along s_i x (s_1 = +1, s_2 = −1):
 
 ```text
 elbow       c_i(θ) = (s_i (e + L_a cos θ), −L_a sin θ)

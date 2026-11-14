@@ -7,6 +7,29 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Machine files: a linkage node of three arms is the spatial delta (`machines/delta-d3.toml`, the D3 crate's machine);
+  a `scissor` node and `machines/scissor-lift.toml`, a two-stage scissor lift table on a ball screw; a rotary node's
+  bearing friction (`friction_coulomb_nm`, `friction_viscous_nm_s_rad`, with `effects.guide_friction`); a rack
+  pinion's radial load on the gearbox shaft (`rack.<motor>.radial_load`, checked as `gearbox-radial-load`);
+  `effects.belt_wrap` beside a screw, rack, linear motor or rotary (`belt_wraps` gives NaN for a motor without a
+  belt); a worm's efficiencies follow its temperature with `effects.thermal_feedback`.
+
+### Changed
+
+- The D2 and D3 crates are the linkage machines of `sim-netlist` read from their tables: one implementation for crate
+  and file (the D3's model moved to `sim-netlist/src/spatial.rs`). A linkage's gearbox warmth is named after its
+  loss, `gearbox_<motor>`.
+- The 3D view draws a machine file's belts round their pulleys and idlers, from tangent to tangent.
+
+### Fixed
+
+- A self-locking worm in a machine file holds its load: driven back the motor has to push to lower it, a lowering load
+  with no torque brakes to a stop, and in the rigid model its output sticks at rest within what the worm can take
+  (before, it lowered the load with no torque and crept).
+- A belt effect switched on in a linkage file was silently ignored; it is refused.
+
 ### Fixed
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it

@@ -2,7 +2,8 @@
 
 A machine file defines a machine without Rust code and without a rebuild: the components of `sim-components` wired
 together like a netlist (motor, gearbox, pulley, belt sections, carriages, guides, and ball screws, racks, linear motors,
-rotary tables and worm gears beside the belts, or a planar parallel linkage), with the axes, ratings, bounds,
+rotary tables and worm gears beside the belts, or a parallel linkage of two or three arms, or a scissor lift), with the
+axes, ratings, bounds,
 control loops and cycle of a machine config. CLI, app and PLC link load it from a path at run time.
 Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 
@@ -12,7 +13,8 @@ Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 - [The nodes](#the-nodes)
 - [Motors that differ](#motors-that-differ)
 - [Screws, racks, linear motors and rotary tables](#screws-racks-linear-motors-and-rotary-tables)
-- [A linkage: the planar delta](#a-linkage-the-planar-delta)
+- [Linkages: the planar and the spatial delta](#linkages-the-planar-and-the-spatial-delta)
+- [A scissor lift](#a-scissor-lift)
 - [Worm gears](#worm-gears)
 - [The belt's wrap and a leaning axis](#the-belts-wrap-and-a-leaning-axis)
 - [The other examples: a CoreXY and an XYZ portal](#the-other-examples-a-corexy-and-an-xyz-portal)
@@ -51,15 +53,20 @@ error bands of `[bounds]`, the sensitivity analysis, saving the config. A number
 by its path (`radius_m = "geometry.pulley_radius_m"`); then changing the value changes the machine. A plain number is
 fixed.
 
-Five files ship in `machines/`:
+Ten files ship in `machines/`:
 
 | file | what it is |
 | ---- | ---------- |
 | `machines/single-axis.toml` | the single axis of `crates/machine-single-axis`, rewired as a netlist |
-| `machines/t-gantry.toml` | the T-gantry of `crates/machine-t-gantry`, rewired as a netlist, with its idlers, frame, cable chain and belt spans (tool flex is not in machine files, see [below](#what-machine-files-cannot-do-yet)) |
+| `machines/t-gantry.toml` | the T-gantry of `crates/machine-t-gantry`, rewired as a netlist, with its idlers, frame, cable chain, belt spans and its leaning Z axis (a `lean` node and `[tool_flex]`, off as shipped; [below](#the-belts-wrap-and-a-leaning-axis)) |
 | `machines/h-bot.toml` | the worked example below: an X-Y table, not a real machine |
 | `machines/corexy.toml` | a CoreXY X-Y table: two fixed motors, two crossed belts ([below](#the-other-examples-a-corexy-and-an-xyz-portal)) |
 | `machines/xyz-portal.toml` | a three-axis cartesian portal, X, Y and Z each on its own belt, with a smaller Z motor of its own |
+| `machines/screw-portal.toml` | the XYZ portal with its Z on a ball screw ([below](#screws-racks-linear-motors-and-rotary-tables)) |
+| `machines/rack-gantry.toml` | a two-axis gantry, X on a rack and pinion, Y on a belt |
+| `machines/planar-delta.toml` | the planar delta of `crates/machine-delta-d2` as a linkage of two arms ([below](#linkages-the-planar-and-the-spatial-delta)) |
+| `machines/delta-d3.toml` | the spatial delta of `crates/machine-delta-d3` as a linkage of three arms |
+| `machines/scissor-lift.toml` | a two-stage scissor lift table on a ball screw ([below](#a-scissor-lift)) |
 
 The easiest way to a new machine is to copy the one nearest to it and change `[machine]`.
 
@@ -223,7 +230,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | ---- | ----- | - | ------- |
 | `axis` | `id` | required | the axis; signals `axis.<id>.*`, its limits in `[axis.<id>]` |
 | | `key` | | translation key of its name; default `axis-<id>` |
-| | `stroke_m` | required | stroke, m; the axis runs from 0 to it (a rotary axis has `stroke_rad` instead) |
+| | `stroke_m` | | stroke, m; the axis runs from 0 to it. Every axis has it but a rotary one (which has `stroke_rad`) and a linkage's or scissor lift's (whose range the node sets) |
 | | `stroke_rad` | | a rotary axis's range from 0, rad, in place of `stroke_m` |
 | | `incline_deg` | | angle above the horizontal, deg, 90 vertical and rising towards +; default 0 |
 | `motor` | `id` | required | a servo motor with its drive; signals `motor.<id>.*` |
@@ -267,6 +274,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `rotary` | `gearbox`, `axis` | required | a rotary table on that gearbox's output: the axis turns, in rad |
 | | `inertia_kgm2` | required | the inertia it turns, kg m² |
 | | `payload_inertia_kgm2` | | its payload's while `effects.payload` is on and the gripper holds it, kg m² |
+| | `friction_coulomb_nm`, `friction_viscous_nm_s_rad` | | its bearing's Coulomb and viscous friction at the axis, with `effects.guide_friction`; default 0 |
 | | `strain_wave` | | the table of its strain wave gear's life values, laid out as `[strain_wave]` |
 | `worm` | `gearbox` | required | that gearbox is a worm stage ([below](#worm-gears)); one worm per gearbox |
 | | `ratio` | required | its ratio, in place of the gearbox's |
@@ -354,12 +362,20 @@ and shaft), and a rack's motor turns i x / r.
 - A rotary turns its axis in rad: the axis has `stroke_rad` for `stroke_m`, its limits are `[axis.<id>]`'s
   `max_velocity_rad_s`, `max_acceleration_rad_s2` and `max_jerk_rad_s3`, and what it moves is the rotary's
   `inertia_kgm2` (and `payload_inertia_kgm2`). No body moves with it; it has no guide, no incline and no cable chain.
+  Its bearing drags with the rotary's `friction_coulomb_nm` + `friction_viscous_nm_s_rad` w at the axis while
+  `effects.guide_friction` is on, taken at the rotor as c / i + v w_rotor / i² (in the motor's shaft friction and its
+  loss); no shipped file sets it.
 - Signals and checks are named by the motor, as the joint kit's are by its joint: `joint.<motor>.force` (what the
   screw, rack, linear motor or rotary passes to its axis), `screw.<motor>.speed`, `.dn` and `.damage_rate`,
   `rack.<motor>.feed_force`, `strain_wave.<motor>.damage_rate`; `gearbox.<motor>.output_torque` is the torque ahead of
   the screw or rack. The checks are the kit's: `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`,
   `screw-life`, `rack-feed-force`, `strain-wave-life` (the lives where `ratings.required_life_h` is set). A motor that
   turns no pulley reports no `pulley.<motor>.radial_load`, so the belt-tooth and pulley-bearing checks pass it over.
+- A rack's pinion loads the gearbox's output shaft sideways: the tooth force F, tangential, and the force that pushes
+  pinion and rack apart, F tan(alpha_n) / cos(beta) (alpha_n = 20 degrees, beta the helix angle), at right angles to it,
+  |F| sqrt(1 + (tan(alpha_n) / cos(beta))²) together: `rack.<motor>.radial_load`, judged as `gearbox-radial-load`
+  against the motor's `ratings.shaft_max_radial_load_n` where that is set. The helical pinion's axial force and the
+  tilt it puts on the shaft are left out. The rack gantry's X: 192.9 N of 1500.
 - `effects.belt_stretch` switches the elastic model of the whole machine: with it the screws', racks' and rotaries'
   gearboxes twist too (the converter's stiffness in series), and the belt's mode at a pose includes them, with the
   rotors held.
@@ -370,9 +386,10 @@ the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gan
 verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 180 of 2400 N). The joint kit's
 screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
 
-## A linkage: the planar delta
+## Linkages: the planar and the spatial delta
 
-A `linkage` node is a planar parallel linkage: two arms in the vertical x-z plane, one at each side of the base, each
+A `linkage` node is a parallel linkage. With two arms it is planar: two arms in the vertical x-z plane, one at each
+side of the base, each
 turned by a motor through its gearbox and carrying a pair of forearms down to a plate that keeps its orientation (a
 five-bar whose lower links are parallelograms). The tool is the plate's centre, x across and z up from the shoulders'
 axis. `machines/planar-delta.toml` is the registered planar delta (`delta-d2`) written so, its values unchanged:
@@ -419,12 +436,76 @@ train from its motor's own config ([above](#motors-that-differ)), its bearing fr
 target outside the working range, out of reach, beyond a joint's stop or above the condition number is refused with
 the crate's reasons, and the `singularity` verdict judges the cycle against `ratings.max_condition_number`. The signals
 are the crate's: `arm.<motor>.angle`, `gearbox.<motor>.output_torque`, `kinematics.condition`, the torque breakdown, loss
-powers and energies; the gearboxes warm under the gearbox nodes' ids.
+powers and energies; the gearboxes warm as `gearbox_<motor>`, the name of their loss.
 
-A file with a linkage has two axes (with a `key` at most: no stroke, incline or cable chain), two motors, a gearbox on
-each and the linkage; a pulley, section, body, guide, idler, frame, span, screw, rack, linear motor, rotary, worm or
-lean beside it is refused, as is a second linkage. The effects are the crate's (`[effects]` as in its config); the
-belt's are not read.
+**Three arms** make the spatial delta (Clavel's): the arms at 0, 120 and 240 degrees round the base, each with a
+parallelogram of two forearms down to a platform that stays level; the tool is x, y and z, so the node names three
+axes (x, y, then up) and three gearboxes. Its fields are the planar one's with the working range a cylinder about z
+(`radius_m` in place of `half_width_m`, the bottom a sphere's cap through the edge and the centre), and three more:
+`forearm_rod_spin_inertia_kgm2` (each rod's inertia about its own axis, with `effects.forearm_inertia`), and the upper
+arms' bending with `effects.link_elasticity`, `bending_stiffness_nm_rad` and `lateral_stiffness_n_m` (required) with
+`bending_damping_nm_s_rad` and `lateral_damping_n_s_m`. A planar linkage refuses the spatial values and the spatial one
+`half_width_m`. `machines/delta-d3.toml` is the registered spatial delta (`delta-d3`) written so, its values
+unchanged, naming the crate's `[geometry]`, `[mass]`, `[upper_arm]` and `[workspace]`.
+
+One implementation: the delta crates are these linkages read from their own tables (`sim_netlist::linkage` and
+`sim_netlist::spatial`; `crates/machine-delta-d2` and `crates/machine-delta-d3` are built on `sim-netlist`), so a fix
+to the arms reaches the crates and the files at once, and each file gives its crate's numbers to the bit.
+
+A file with a linkage has as many axes as arms (with a `key` at most: no stroke, incline or cable chain), one motor
+per arm, a gearbox on each and the linkage; a pulley, section, body, guide, idler, frame, span, screw, rack, linear
+motor, rotary, worm, lean or scissor beside it is refused, as is a second linkage. The effects are the crate's
+(`[effects]` as in its config); a belt effect switched on (`belt_wrap`, `belt_stretch`, ...) is refused, as the
+linkage has no belt to apply it to.
+
+## A scissor lift
+
+A `scissor` node is a scissor lift table: `stages` stages of crossed arm pairs, each arm `arm_m` from pin to pin,
+stand on the base; a screw of lead `lead_m`, turned by the motor through its gearbox, pulls the sliding foot of the
+lowest stage towards the fixed one and so raises the platform. The tool is the platform's height z, from
+`min_height_m` to `max_height_m`.
+
+```toml
+[[machine.axis]]           # no stroke: min_height_m and max_height_m set the range
+id = "z"
+
+[[machine.motor]]
+id = "lift"
+
+[[machine.gearbox]]
+id = "gearbox"
+motor = "lift"
+
+[[machine.scissor]]        # machines/scissor-lift.toml
+id = "scissor"
+gearbox = "gearbox"
+axis = "z"
+stages = 2.0
+arm_m = 1.0
+lead_m = 0.01
+min_height_m = 0.6
+max_height_m = 1.4
+arms_kg = 40.0
+platform_kg = 60.0
+payload_kg = 200.0
+screw_efficiency = 0.9     # with effects.gearbox_efficiency; default 1
+screw_inertia_kgm2 = 6.47e-4
+```
+
+With u the span between the feet a stage stands s = sqrt(L² - u²) high and the platform h = n s; the screw turned by
+theta moves the foot by c theta, c = lead / 2 pi. By virtual work the screw pulls the foot with
+F = W dh/du = W n u / s = W n cot(alpha) for a weight W on the platform, alpha the arms' angle to the base: the lift
+needs three times the force at 0.6 m that it needs at 1.4 m. The dynamics are in theta as the linkage's:
+M(theta) theta'' + m h' h'' theta'² = tau_gear + Q_g, M = J_screw + m h'², Q_g = -g m_g h', m the platform, the
+payload and the arms' vertical motion ((4 n² - 1) / (12 n²) of them), m_g the platform, the payload and half the
+arms. The joint is a `RotaryJoint` on the motor's config, elastic or rigid (`effects.joint_elasticity`), the screw's
+efficiency on the gearbox's. Signals: `gearbox.<motor>.output_torque`, `scissor.<id>.actuator_force` (the force on the
+foot), the torque breakdown, loss powers and energies. A file with a scissor lift has one axis, one motor, its gearbox
+and the scissor; anything else beside it is refused, as is a belt effect switched on.
+
+Held by a constant torque the lift is unstable at every height: it needs less torque the higher it stands (gravity's
+stiffness -g m_g h'' is negative), so a little too much torque lifts it ever faster; the drive's position loop holds
+it. Its standard suite runs without gravity for that reason.
 
 ## Worm gears
 
@@ -442,11 +523,15 @@ back_efficiency = 0.5      # driven back by the wheel: tan(gamma - rho') / tan(g
 
 While the motor drives it passes its spring's torque t on as t eta to the output and t / i to the rotor, as a gearbox
 does (`mech::Gearbox`, the efficiency fading in over 0.5 W). Driven back by the load it passes t / eta_back: a back
-efficiency of 0.5 has the rotor take half the load's power. A back efficiency of 0 or less locks it: driven back, it
-passes t to the output and nothing to the rotor, so the output stands where the rotor holds it and the load's power
-goes into the worm's friction; at rest it holds any load with no motor torque (its holding torque is 0). With the same
-efficiency both ways it is the joint kit's rotary table with `table.gear = "worm"`. Its efficiencies do not follow its
-temperature, and below 0 they count as 0 (see [what files cannot do yet](#what-machine-files-cannot-do-yet)).
+efficiency of 0.5 has the rotor take half the load's power. A back efficiency of 0 or less locks it: the load cannot
+turn the worm. Driven back it passes t to the output and eta_back t / i to the rotor, against the motion, so the motor
+has to push to lower a load, by -eta_back of the load's torque over i, and the load's and the motor's power both go
+into the worm's friction; with no motor torque a lowering load brakes to a stop. At rest it holds any load with no
+motor torque (its holding torque is 0). In the rigid model its output sticks at rest while the worm can take what the
+motor and the load ask of it: from -(1 / eta - 1) of the held torque (lifting) to (1 - eta_back) of it (lowering);
+beyond, it breaks loose. With the same efficiency both ways it is the joint kit's rotary table with
+`table.gear = "worm"`. With `effects.thermal_feedback` its efficiencies follow its temperature as a gearbox's does:
+1 - eta becomes (1 - eta) (1 - s + s nu / nu_ref) both ways, a self-locking worm staying locked.
 
 ## The belt's wrap and a leaning axis
 
@@ -458,8 +543,14 @@ and the second of the route of the section that starts there (an idler with its 
 one; a body, a clamp on it, where the 3D view draws it; another pulley). Each wheel's `clockwise` says which way the
 belt runs round it, followed along the routes; the belt's straight runs are the tangents that fit, and the wrap is how
 far the belt turns round the pulley between them. For the shipped crates' layouts that is `mech::wrap_angle`, half a
-turn less the lean of both runs. A file is refused where a motor drives no pulley, a pulley does not end one route and
-start another, or it or a wheel next to it has no `at_m`.
+turn less the lean of both runs. A motor with a screw, rack, linear motor or rotary has no wrap (NaN in
+`Machine::belt_wraps`; the tooth load passes it over). A file is refused where a belt pulley does not end one route
+and start another, or it or a wheel next to it has no `at_m`. The screw portal with the wrap on: X's belt runs from the
+bridge's clamp round its pulley and back to the same clamp, pi + 2 asin(r / D) round it.
+
+The 3D view draws each belt section round its wheels, as the wrap sees them: from tangent to tangent between the wheels
+of its route and round each wheel inside the route in the wheel's sense, and round each motor pulley between the
+section that ends there and the one that starts there (`geometry::contacts`, `geometry::arc`).
 
 **A leaning axis** (`effects.tool_flex`, elastic model): a `lean` node is a body that leans on its carriage along a
 horizontal axis, as the T-gantry's Z axis does on its X carriage. Its centre of mass moves sideways by w against the
@@ -574,31 +665,36 @@ derivations):
   the axis to it (at rest and in the rigid tensions), and in the elastic model the pulley's states follow the axis. A
   rotary axis's mass is its rotary's inertia, with no gravity along it.
 - A worm stage (`machine.worm`): its gearbox's output gets t eta^x and its rotor t / i, x = tanh(t w / 0.5 W), with the
-  back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and nothing
-  driven back. In the rigid model, with a self-locking worm, the gearboxes' outputs are solved for beside the
-  accelerations, so that a rotor that takes nothing stays solvable (`ConfigMachine::rigid_locking`).
+  back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and
+  -x eta_back t / i driven back, against the motion. In the rigid model, with a self-locking worm, the gearboxes'
+  outputs are solved for beside the accelerations; driven back its drag at the wheel is (1 - rotor factor) times the
+  torque the output holds at rest against the axes' forces (a drag in proportion to the dynamic torque has no
+  consistent rigid solution there), and at rest the output sticks within the worm's bounds
+  (`ConfigMachine::rigid_locking`).
 - A leaning body (`machine.lean`, elastic model): one more coordinate w beside the axes, the body's mass coupling it to
   its axis, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k and tip from `geometry::flex_at`.
 - The belt's wrap (`effects.belt_wrap`): `geometry::wrap` at each pulley from its neighbours' tangents, at the pose.
+- A linkage of two or three arms builds a `LinkageMachine` or a `spatial::Delta`, a scissor a `ScissorMachine`, not a
+  `ConfigMachine`: their models are above.
 
 The controller, drives, DC link, winding heat, analyses, verdicts, sensitivity and error bands are those of every
 machine; nothing about them is particular to machine files.
 
 ## What machine files cannot do yet
 
-- `belt_wrap` beside a screw, rack, linear motor or rotary: the wraps are reported per motor, and such a motor turns no
-  pulley; the file is refused. A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are
-  the 3D view's: the section lengths are not checked against them.
+- A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are the 3D view's: the section
+  lengths are not checked against them.
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
-- A self-locking worm (back efficiency 0 or less) driven back passes nothing to its rotor, so the motor lowers a load
-  through it with no torque where one with a back efficiency below 0 would have to push; and its lock fades in over the
-  gearbox's 0.5 W instead of sticking, so a motor torque short of lifting the load creeps it forward slowly. A worm's
-  efficiencies do not follow its temperature.
-- A scissor lift: the mechanisms beside belts are screws, racks, linear motors and rotary tables, each driving one axis
-  straight, and the one linkage is the planar delta's, which does not mix with them. A scissor lift is not a case of it:
-  one motor drives one vertical axis through a screw or a cylinder on the scissor's foot, z = n L sin phi, which needs a
-  screw that drives a linkage instead of an axis. A body cannot ride on a rotary axis (it would move on a circle, not
-  along square axes), and a rotary axis has no bearing friction of its own (only its motor's and gearbox's).
+- A self-locking worm's lock fades in over the gearbox's 0.5 W once it moves: from rest it sticks (rigid model), but a
+  motor torque short of lifting the load, or a push short of lowering it, creeps it at the speed whose power is about
+  0.5 W atanh(the share of the torque it would take). In the elastic model the stick is the fade alone.
+- A rotary's bearing friction acts at the rotor, before the gearbox's spring and efficiency, as a screw's preload does.
+- A rack's pressure angle is 20 degrees for every rack, and its pinion's axial force is left out of the shaft's load.
+- The scissor lift's arms count with their vertical motion only (their turning and the feet's sideways motion are left
+  out of its mass), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
+  belts, screws or bodies. A linkage's or scissor lift's file cannot carry other mechanisms beside it. The spatial
+  delta's modes take its first arm's gearbox for all three.
+- A body cannot ride on a rotary axis (it would move on a circle, not along square axes).
 - `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
   a motor without a pulley has none; the file is refused.
 - A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's
@@ -607,7 +703,7 @@ machine; nothing about them is particular to machine files.
   stiffness do not, and a body's bending is not modelled.
 - Section and span lengths are numbers (or paths), not formulas: one whose length depends on a stroke does not follow a
   change of that stroke by itself.
-- The 3D view draws the belt as straight strips from point to point of each section's route, not round its pulleys.
+
 - `sim-cli list` and the app's machine list show the registered machines only; a file is opened, not listed.
 
 ## How it is validated
@@ -649,7 +745,9 @@ joint kit's screw axis written as a file is its crate to 1e-9 (elastic and rigid
 kinematics, rest state, derivatives, energy, feedforward, the screw's signals and torque breakdown, its checks); by
 hand, the screw portal's Z motor torque for a load and acceleration and its screw's critical speed, the rack gantry's
 motor angle x i / r and feed force, a linear motor's current for a force and its guide load, a rotary table's torque in
-rad; both new files pass the standard suite; and a broken screw is refused by key and line.
+rad, a rotary's bearing friction at the motor ((2 + 0.5) / 100 = 0.025 N m), the rack pinion's radial load on the
+gearbox shaft (37.5745 N for 35.05 N on the teeth); both new files pass the standard suite; and a broken screw is
+refused by key and line.
 
 `crates/sim-machines/tests/machine_file_linkage.rs` holds the linkage: `machines/planar-delta.toml` is the planar delta's
 crate to 1e-9 in its default config and with each of its 36 effects switched from its default, one at a time (axes and
@@ -659,12 +757,18 @@ every effect that is off by default switched on, gives the crate's signals at ev
 and the crate's motor loads and verdicts, to 1e-9 (the two sum in the same order, so they agree to the bit, encoder
 counts and all); the file passes the standard suite with the crate's loss-free configs; by hand, the arm angles at
 (0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.358 N m at
-each gearbox); and a broken linkage is refused by key and line.
+each gearbox); and a broken linkage is refused by key and line (a belt effect switched on and a spatial value on the
+planar linkage among them). `machines/delta-d3.toml` is the spatial delta's crate the same way, with each of its
+effects switched from its default, and its cycle gives the crate's signals and verdicts to 1e-9. The scissor lift's
+holding torque and the force on its foot at 0.6 and 1.4 m are the hand's (W n cot(alpha): 17462.6 and 5602.7 N), as
+its force ratio n cot(alpha) at two heights is (`scissor.rs`), and its file passes the standard suite without gravity.
 
 `crates/sim-machines/tests/machine_file_geometry.rs` holds the belt's wrap from the places of a pulley's neighbours by
 hand at two poses (an offset idler and a clamp that is not level), the worm gear against the joint kit's table with its
 worm (rigid and elastic, driving and driven back), a self-locking worm's hold and a turning worm's back-driven
-acceleration by hand, and the catalogue search for the XYZ portal's Z motor alone.
+acceleration by hand, the self-locking worm braking a lowering load with no torque, needing 0.05 N m of push to lower it
+and sticking from rest short of what moves it, the belts' wraps of the screw portal beside its Z screw, and the
+catalogue search for the XYZ portal's Z motor alone.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was
 fixed: a machine with two or three separate belt loops (its rest state was wrong where an axis is vertical), a
