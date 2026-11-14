@@ -241,6 +241,11 @@ crank_bearing_max_load_n = 20000.0
 
 # The electronic cam (sim_components::cam). run: the controller runs it as the cycle instead of [[cycle.segment]]; the
 # master comes up to speed in ramp_s. table_file: a CSV of master, slave (and slopes) instead of the segments; "" none.
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 [cam]
 run = false
 ramp_s = 0.5

@@ -438,6 +438,11 @@ drive_max_current_a = 19.0
 drive_base_load_current_a = 4.25
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 
 [start]
 pose = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0]
