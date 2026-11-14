@@ -138,3 +138,42 @@ fn the_optimiser_shortens_a_paths_time() {
     assert!(found.after.duration < found.before.duration - 1e-3, "{} {}", found.after.duration, found.before.duration);
     assert!(found.changes.iter().any(|(path, ..)| path.starts_with("axis.")) && found.lifts.is_empty());
 }
+
+/// On the hexapod and the spatial cable robot (x, y, z, rx, ry, rz: a line is a slerp), a line from the start to the
+/// middle of the travel and one to three quarters of it rise to one top speed each and fall from it as fast as the
+/// motors allow, and the two lines one after the other are planned too. Before 14 November the slerp's derivatives by
+/// differences gave the hexapod's line to the middle bends of rounding noise that its jerk left no room for: its
+/// places' top speeds alternated between 0, 0.0016 and 0.99 m/s, and every line was refused (`error-path-torque`).
+#[test]
+fn lines_on_six_axes_are_planned_time_optimal() {
+    for entry in [&machine_hexapod::ENTRY, &machine_cable_robot::SPATIAL] {
+        let sim = Sim::new(entry, &entry.config()).unwrap();
+        let point =
+            |share: f64| -> Vec<f64> { sim.machine.axes().iter().map(|a| a.min + share * (a.max - a.min)).collect() };
+        let line = |p: Vec<f64>| format!("line,{}\n", p.iter().map(f64::to_string).collect::<Vec<_>>().join(","));
+        let plan = |text: &str| {
+            let points = sim.plan_path(&sim_components::path::parse(text).unwrap(), true);
+            points.unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key))
+        };
+        // The cable robot starts in the middle: its line there is a few micrometres, and only the hexapod's is timed.
+        for share in [0.5, 0.75] {
+            let points = plan(&line(point(share)));
+            let apart = |b: &[f64], a: &[f64]| b.iter().zip(a).map(|(b, a)| (b - a).powi(2)).sum::<f64>().sqrt();
+            if apart(&points[points.len() - 1].1, &points[0].1) < 0.01 {
+                continue;
+            }
+            let speeds: Vec<f64> = points.windows(2).map(|w| apart(&w[1].1, &w[0].1) / (w[1].0 - w[0].0)).collect();
+            let top = speeds.iter().fold(0.0, |a: f64, b| a.max(*b));
+            let peak = speeds.iter().position(|v| *v == top).unwrap();
+            assert!(
+                top > 0.05
+                    && speeds[..=peak].windows(2).all(|w| w[1] >= w[0] - 1e-3 * top)
+                    && speeds[peak..].windows(2).all(|w| w[1] <= w[0] + 1e-3 * top),
+                "{} to {share}: {speeds:?}",
+                entry.id
+            );
+        }
+        let end = plan(&(line(point(0.5)) + &line(point(0.75)))).pop().unwrap().1;
+        assert!(end.iter().zip(point(0.75)).all(|(a, b)| (a - b).abs() < 1e-9), "{}: {end:?}", entry.id);
+    }
+}
