@@ -913,7 +913,7 @@ fn a_refused_config_value_is_rolled_back_and_reported_once() {
 /// and which bounded values are at their high and which at their low bound; in both languages. Without the option,
 /// or without the bands, there is no such table. On the machine with the fewest bounded values (some 300 cycles).
 /// The bands beside it come from the search's first runs (`verdict_worst_and_bands`, whose bands are those of
-/// `verdict_bands`: `the_worst_corner_search_finds_the_hand_calculated_corner` of the single axis).
+/// `verdict_bands`: `the_worst_corner_search_finds_the_hand_calculated_corner` checks that).
 #[test]
 fn the_app_searches_the_worst_corner_of_the_bounds() {
     use sim_components::analysis::{bounds, verdict_worst_and_bands};
