@@ -68,6 +68,25 @@ fn the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_k
 /// with dz/dh from central differences of the forward kinematics (not the machine's Jacobian): 0.80346, 0.21018,
 /// -0.01364, so 32.784, 19.257 and 14.154 N; they add up to 3 m_c g + m_nt g = 66.1949 N. The rigid model's holding
 /// torques and the elastic one's belt sections (T1 - T2) say so.
+/// The guides' loads the time-optimal plan reads (`Machine::rigid_guide_loads`): at rest those of `guide_loads`, the
+/// rods' pull holding the plate times the reach; accelerating the plate straight up at a takes m (g + a) through the same
+/// rods, so each guide's moving part is its load at rest times a / g (2 / 9.80665 = 0.20394 for 2 m/s^2), with the sign
+/// of its pull.
+#[test]
+fn the_guide_loads_of_the_plan_grow_with_the_plates_upward_acceleration_by_hand() {
+    let m = delta(&["effects.belt_stretch = false"]);
+    let pose = [0.1, 0.05, -1.13];
+    let h = m.legs.inverse(pose).unwrap();
+    let (rest, mut loads) = (m.guide_loads(h), Vec::new());
+    m.rigid_guide_loads(&pose, &[0.0, 0.0, 2.0], &mut loads);
+    let pull = m.legs.rod_pull(h, pose, m.m_nt(), G).unwrap();
+    for k in 0..3 {
+        close(loads[k][0], rest[k], 1e-9 * rest[k], "load at rest");
+        close(loads[k][1], pull[k] * m.legs.reach(k, pose) * 2.0 / G, 1e-9 * rest[k], "moving part");
+        close(loads[k][1].abs(), rest[k] * 0.20394, 1e-4 * rest[k], "a / g of the load at rest");
+    }
+}
+
 #[test]
 fn the_belts_hold_the_carriages_and_the_plates_weight_through_the_jacobian() {
     let rigid = delta(&["effects.torque_ripple = false", "effects.belt_stretch = false"]);

@@ -96,6 +96,8 @@ pub trait Mechanism: Send {
     fn rating_checks(&self) -> Vec<RatingCheck> {
         Vec::new()
     }
+    /// As `Machine::rigid_guide_loads`: the loads of the guides among `signals`, at a tool pose and acceleration.
+    fn rigid_guide_loads(&self, _tool: &[f64], _acc: &[f64], _out: &mut Vec<[f64; 2]>) {}
 
     /// The ids of the boxes `scene` draws that move with the load and can hit an obstacle (`Machine::collision_bodies`).
     fn collision_parts(&self) -> &'static [&'static str] {
@@ -547,6 +549,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             let at_joint: f64 = (0..n).map(|c| mass[k * n + c] * qdd[c]).sum::<f64>() + gravity[k];
             out[k] = at_joint / j.ratio() + j.rotor_inertia * j.ratio() * qdd[k];
         }
+    }
+
+    fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.mechanism.rigid_guide_loads(pos, acc, out);
     }
 
     /// Where the tool is not the joints: the joint speeds J^-1 v and accelerations J^-1 (a - J' q') with J' q' the

@@ -303,6 +303,12 @@ fn commanded_acc_vs_true_acc() {
     // The tilt from the X acceleration a rigid machine gets: it was 17 % high where the drive mass matrix is not
     // diagonal (a pulley of another radius).
     assert!((v[gl] - expected).abs() < 1e-6 * expected, "guide load {} vs {expected}", v[gl]);
+    // The time-optimal plan reads the same load (`Machine::rigid_guide_loads`): nothing at rest without gravity, and
+    // 2 m a lever / spacing linear in the X acceleration.
+    let mut loads = Vec::new();
+    m.rigid_guide_loads(&[0.5, 0.25], &[acc_x, 0.0], &mut loads);
+    let x = infos.iter().filter(|i| i.id.ends_with(".guide_load")).position(|i| i.id == "axis.x.guide_load").unwrap();
+    assert!(loads[x][0].abs() < 1e-12 && (loads[x][1].abs() - expected).abs() < 1e-6 * expected, "{loads:?}");
 }
 
 #[test]

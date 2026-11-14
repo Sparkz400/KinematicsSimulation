@@ -144,6 +144,43 @@ fn the_linear_motor_loads_its_guides_with_its_attraction() {
     assert!(inertial > 260.0 && inertial < 300.0, "{inertial} N for 13 kg at 20 m/s^2");
 }
 
+/// The time-optimal plan reads the same guide load (`Machine::rigid_guide_loads`): 2627.49 N at rest, and nothing more
+/// from accelerating along the rail, which the motor takes.
+#[test]
+fn the_linear_motor_tells_the_time_optimal_plan_its_guide_load() {
+    let m = (LINEAR_MOTOR.build)(&rigid(&LINEAR_MOTOR)).unwrap();
+    let mut loads = Vec::new();
+    m.rigid_guide_loads(&[0.2], &[15.0], &mut loads);
+    assert_eq!(loads.len(), 1);
+    near(loads[0][0], 2500.0 + 13.0 * 9.80665, 1e-12, "guide load at rest");
+    assert_eq!(loads[0][1], 0.0);
+}
+
+/// A path whose motors may hardly turn crawls as near a singularity: the SCARA's motors at 1e-4 rad/s turn some rad per
+/// metre of the tool, so 0.1 m along x would take some 1000 s and more, a pose per millisecond. The time-optimal plan
+/// refuses a plan longer than 1000 s instead of handing on that many poses.
+#[test]
+fn the_time_optimal_plan_refuses_a_crawl_that_would_take_unbounded_poses() {
+    let mut cfg = SCARA.config();
+    cfg.set_text("drive.rated_speed_rad_s = 1.0e-4").unwrap();
+    let sim = Sim::new(&SCARA, &cfg).unwrap();
+    let start = sim.control.planned_pos().to_vec();
+    let mut far = start.clone();
+    far[0] -= 0.1;
+    let limits = sim_components::path::PlanLimits::new(0.8, [f64::NEG_INFINITY, f64::INFINITY, 1.0]);
+    let planned = sim_components::path::plan_time_optimal(
+        sim.machine.as_ref(),
+        sim.control.drive_params(),
+        &limits,
+        &start,
+        &[sim_components::path::Piece::Line(far)],
+        1e-3,
+        0.0,
+        1e-4,
+    );
+    assert_eq!(planned.err().map(|e| e.key), Some("error-path-singular"));
+}
+
 /// By hand: the table and fixture (3 kg m^2) and the work (1.5) take J alpha at the gear's output.
 #[test]
 fn the_rotary_table_takes_the_hand_calculated_torque() {

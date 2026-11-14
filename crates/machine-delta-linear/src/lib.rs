@@ -249,8 +249,14 @@ impl Legs {
     /// The pull of each rod pair on its carriage that holds a plate of `m` kg at rest against gravity `g`, as the
     /// multiplier lambda_i of the rod vector u_i (force on carriage i: lambda_i u_i): J_x^T lambda = -m g e_z.
     pub fn rod_pull(&self, h: V3, p: V3, m: f64, g: f64) -> Option<V3> {
+        self.rod_force(h, p, [0.0, 0.0, -m * g])
+    }
+
+    /// The rods' pull that takes the force `force` on the plate: `rod_pull` for any force, such as the plate's weight
+    /// and what accelerating it takes, m (g - a).
+    pub fn rod_force(&self, h: V3, p: V3, force: V3) -> Option<V3> {
         let (jx, _) = self.constraint(h, p);
-        Some(mul(&transpose(&inverse(&jx)?), [0.0, 0.0, -m * g]))
+        Some(mul(&transpose(&inverse(&jx)?), force))
     }
 }
 
@@ -960,6 +966,24 @@ impl Machine for LinearDelta {
             let f = self.m_c * carriage_acc[k] + force[k] - gravity[k];
             let [l1, l2] = self.geo(h[k] - self.h_min());
             out.extend([pre + f * l2 / (l1 + l2), pre - f * l1 / (l1 + l2)]);
+        }
+    }
+
+    /// Each carriage guide's load across its rail (`guide_loads`) at a tool pose and acceleration: the rods' pull times
+    /// the reach, at rest under the plate's weight and moving with what accelerating the plate (and payload) takes on
+    /// top, m a, through the same rods; the size of the sum is at most the rest's plus the moving part's.
+    fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        let p = [pos[0], pos[1], pos[2]];
+        let h = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
+        let m = self.m_nt();
+        let pull = |a: V3| {
+            let force = [-m * a[0], -m * a[1], -m * (self.g + a[2])];
+            self.legs.rod_force(h, p, force).unwrap_or([f64::NAN; 3])
+        };
+        let (rest, moving) = (pull([0.0; 3]), pull([acc[0], acc[1], acc[2]]));
+        for k in 0..3 {
+            let reach = self.legs.reach(k, p);
+            out.push([(rest[k] * reach).abs(), (moving[k] - rest[k]) * reach]);
         }
     }
 

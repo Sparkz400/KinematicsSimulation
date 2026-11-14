@@ -1112,16 +1112,17 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
 /// The guides' load rating limits the time-optimal plan (`Machine::rigid_guide_loads`): along X at z = 0.35 m the Z axis
 /// and its payload (7 kg) tilt on the X carriage, 2 * 7 kg * a * (0.3 - 0.35) / 0.12 m, so the X guide carries the weight
 /// of all it moves (11 kg * 9.80665 = 107.87 N) and 5.833 kg times the X acceleration; the Z guide 7 kg * a * (1 +
-/// 0.8333) = 12.833 kg times it. Rated 150 N, the X guide binds: a = (150 - 107.87) / 5.833 = 7.222 m/s^2 (the motors
-/// allow 11.2, the Z guide 11.69). The line 0.1 -> 0.9 m at the rated speed 1.2559 m/s and 100 m/s^3 then takes
-/// 0.8 / 1.2559 + 1.2559 / 7.222 + 7.222 / 100 = 0.8831 s.
+/// 0.8333) = 12.833 kg times it. Rated 150 N, of which the plan keeps `profile.torque_reserve` (0.8, as of the motors'
+/// torques: 120 N), the X guide binds: a = (120 - 107.87) / 5.833 = 2.0789 m/s^2 (the motors allow 11.2, the Z guide
+/// 120 / 12.833 = 9.35). The line 0.1 -> 0.9 m at the rated speed 1.2559 m/s and 100 m/s^3 then takes
+/// 0.8 / 1.2559 + 1.2559 / 2.0789 + 2.0789 / 100 = 1.2619 s. (Before 14 November the guides kept no reserve: 7.222 m/s^2.)
 #[test]
 fn the_guide_load_rating_limits_the_time_optimal_acceleration() {
     let mut cfg = ENTRY.config();
     cfg.set_text("ratings.guide_max_load_n = 150.0").unwrap();
-    let a: f64 = (150.0 - 11.0 * 9.80665) / (7.0 * 2.0 * 0.05 / 0.12);
+    let a: f64 = (0.8 * 150.0 - 11.0 * 9.80665) / (7.0 * 2.0 * 0.05 / 0.12);
     let by_hand: f64 = 0.8 / 1.2559 + 1.2559 / a + a / 100.0;
-    assert!((a - 7.222).abs() < 1e-3 && (by_hand - 0.8831).abs() < 1e-4, "{a} m/s^2, {by_hand} s");
+    assert!((a - 2.0789).abs() < 1e-4 && (by_hand - 1.2619).abs() < 1e-4, "{a} m/s^2, {by_hand} s");
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let (c, mut hardest, mut heaviest) = (1e-3, 0f64, 0f64);
@@ -1133,8 +1134,9 @@ fn the_guide_load_rating_limits_the_time_optimal_acceleration() {
         heaviest = loads.iter().fold(heaviest, |m, [rest, moving]| m.max(rest + moving.abs()));
     }
     let duration = points[points.len() - 1].0;
-    assert!((hardest - a).abs() < 2e-3 * a && heaviest <= 150.0 * 1.0005, "{hardest} m/s^2, {heaviest} N");
-    assert!((duration - by_hand).abs() < 1.5e-3, "{duration} s, by hand {by_hand} s");
+    assert!((hardest - a).abs() < 2e-3 * a && heaviest <= 120.0 * 1.0005, "{hardest} m/s^2, {heaviest} N");
+    // The acceleration to 2e-3 of the hand value is v / a to 2e-3 too: 1.2 ms of the 0.6 s at it.
+    assert!((duration - by_hand).abs() < 2.5e-3, "{duration} s, by hand {by_hand} s");
     let used = most_used(&plan_use(&sim, &cfg, &points));
     assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
     // The loads as `guide_loads` gives them to the signals.

@@ -7,7 +7,31 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- `profile.cycle_timing = "time_optimal"`: every cycle segment timed rest to rest as fast as the motors, the gearbox,
+  pulley, belt and guide ratings and the jerk limits allow (`path::plan_time_optimal`), so `analyze`, `verdicts`,
+  `search` and `optimise` judge a cycle at the motors' limits. `"axis_limits"` (as before) in every shipped file.
+- `profile.corner_tolerance_m`: a corner between two lines is rounded by a G2 curve within the tolerance (as a CNC's
+  G642 or a robot's zone) instead of stopped at. 0 (stop) in every shipped file.
+- Arcs on more than three axes (the other axes carried evenly with the distance) and splines on up to six: curves for
+  the SCARA, the D4 and the arm in tool space.
+- `Machine::rigid_guide_loads` for the linear delta, the linear motor axis and machine files: their guides' ratings
+  limit the time-optimal plan.
+
+### Changed
+
+- The time-optimal plan passes a junction as fast as the junction and the speed curves beside it allow, no longer no
+  faster than the slowest place of either piece, and joins the runs of a piece on the speed curve where that is
+  quicker than on a cruise.
+- The time-optimal plan keeps `profile.torque_reserve` of the guides' load rating, and its motors give a lossy
+  gearbox's loss on top (`gearbox.efficiency` with `effects.gearbox_efficiency`).
+
 ### Fixed
+
+- The time-optimal plan refuses a path through a singularity or one that would crawl longer than 1000 s
+  (`error-path-singular`) instead of timing it on rows that are not numbers or handing on a pose per cycle without
+  bound.
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
