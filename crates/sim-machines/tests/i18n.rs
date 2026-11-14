@@ -43,6 +43,7 @@ fn every_key_has_an_entry_in_every_language() {
                 "error-path-first-arc",
                 "error-path-range",
                 "error-path-torque",
+                "error-path-guide",
                 "limit-motor-speed",
                 "limit-motor-torque",
             ]

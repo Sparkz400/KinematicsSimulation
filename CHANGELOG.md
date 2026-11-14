@@ -7,6 +7,21 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The time-optimal plan follows the highest speed a piece allows within it, up and down (a smoothed speed curve per
+  piece, runs from both ends that rise along the acceleration ceilings at the speed they reach and follow the curve),
+  instead of one cruise speed per piece and 16 + 16 trial top speeds; the user guide's spline example 1.380 -> 1.349 s.
+- The time-optimal plan keeps the drive's maximum current (`effects.drive_current_limit`), `profile.torque_reserve` of
+  the gearbox's and the pulley's torque rating at the output, and the guides' load rating (T-gantry, single axis) at
+  every planned pose. The delta's and the arm's plans are slower where their gearboxes' M2max binds (a line across the
+  delta's range 0.411 -> 0.434 s). `path::plan_time_optimal` and `deviation_time_optimal` take a `path::PlanLimits`.
+
+### Added
+
+- `Machine::rigid_guide_loads`, and the refusal `error-path-guide` (EN/DE) for a path whose guide load at rest is
+  beyond its rating.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

@@ -98,14 +98,13 @@ pub struct Controller {
     setpoint_ticks: u64,
     /// How long before the end of a segment the next one may start; 0 with blending off.
     blend_time: f64,
-    /// For a path timed as fast as the motors allow: the share of the torque-speed curve it may use.
-    torque_reserve: f64,
+    /// For a path timed as fast as the motors allow: the share of the torque limits it may use
+    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n` less
+    /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
+    /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
+    plan_limits: path::PlanLimits,
     /// How far a planned path may leave its lines and arcs for transition curves.
     path_tolerance: f64,
-    /// For a path timed as fast as the motors allow: the lowest and highest belt tension it may need
-    /// (`ratings.belt_min_tension_n`, `belt_max_tension_n` less `profile.tension_margin_n` on both; unbounded where the
-    /// config has none), and the share of the room to them it may use (`profile.tension_reserve`).
-    belt_tension: [f64; 3],
     segments: Vec<Segment>,
     motion: Motion,
     /// Index of the cycle segment under way, while the cycle runs.
@@ -183,9 +182,8 @@ impl Controller {
             profile_cycle: 1.0,
             setpoint_ticks: 1,
             blend_time: 0.0,
-            torque_reserve: 1.0,
+            plan_limits: path::PlanLimits::new(1.0, [f64::NEG_INFINITY, f64::INFINITY, 1.0]),
             path_tolerance: 0.0,
-            belt_tension: [f64::NEG_INFINITY, f64::INFINITY, 1.0],
             segments: Vec::new(),
             motion: Motion::Idle,
             cycle: None,
@@ -329,6 +327,29 @@ impl Controller {
             return Err(ConfigError::Invalid("profile.tension_reserve".into()));
         }
         let tension_margin = cfg.non_negative("profile.tension_margin_n")?;
+        // The ratings the time-optimal plan keeps beside the motors': each gearbox's output torque where the machine
+        // reports it, and the guides' load where it reports theirs (the verdicts judge the same signals).
+        let reported = machine.signal_infos();
+        let reports = |id: &str| reported.iter().any(|s| s.id == id);
+        let gearbox = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<Option<[f64; 3]>> {
+                if !reports(&format!("gearbox.{}.output_torque", m.id)) {
+                    return Ok(None);
+                }
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                let rated = ["gearbox_max_torque_nm", "pulley_max_torque_nm"]
+                    .iter()
+                    .filter_map(|key| own.f64(&format!("ratings.{key}")).ok())
+                    .fold(f64::INFINITY, f64::min);
+                let inertia = own.f64("motor.rotor_inertia_kgm2").unwrap_or(0.0)
+                    + own.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
+                Ok(rated.is_finite().then_some([own.f64("gearbox.ratio").unwrap_or(1.0), inertia, rated]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let guides = reported.iter().any(|s| s.id.starts_with("axis.") && s.id.ends_with(".guide_load"));
+        let guide = if guides { cfg.f64("ratings.guide_max_load_n").unwrap_or(f64::INFINITY) } else { f64::INFINITY };
         let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
@@ -389,14 +410,15 @@ impl Controller {
             (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
         self.blend_time = blend_time;
-        (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
+        self.path_tolerance = path_tolerance;
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
-        self.belt_tension = [
+        let tension = [
             cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
             cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
             tension_reserve,
         ];
+        self.plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide };
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
             (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
         Ok(())
@@ -546,8 +568,7 @@ impl Controller {
             path::plan_time_optimal(
                 machine,
                 &self.params,
-                self.torque_reserve,
-                self.belt_tension,
+                &self.plan_limits,
                 &self.raw_pos,
                 pieces,
                 self.profile_cycle,
@@ -587,8 +608,7 @@ impl Controller {
             path::deviation_time_optimal(
                 machine,
                 &self.params,
-                self.torque_reserve,
-                self.belt_tension,
+                &self.plan_limits,
                 &self.raw_pos,
                 pieces,
                 self.path_tolerance,

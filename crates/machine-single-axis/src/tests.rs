@@ -1259,6 +1259,98 @@ fn a_time_optimal_line_takes_the_hand_calculated_time() {
     assert_eq!(sim.plan_path(&arc, false).unwrap_err().key, "error-path");
 }
 
+/// The rigid single axis at 1e5 m/s^3 with the belt's ratings out of the way (at a hundred m/s^2 the carriage's pull
+/// would take the slack side's room).
+fn ideal_rigid_quick() -> Config {
+    let mut cfg = ideal_rigid();
+    for e in
+        ["axis.x.max_jerk_m_s3 = 1.0e5", "ratings.belt_min_tension_n = -1.0e6", "ratings.belt_max_tension_n = 1.0e6"]
+    {
+        cfg.set_text(e).unwrap();
+    }
+    cfg
+}
+
+/// The time-optimal line 0.1 -> 0.9 m on the rigid single axis: the planned duration, the top speed and the
+/// acceleration up and down (the hardest of each, by differences over the 1 ms poses).
+fn time_optimal_line(cfg: &Config) -> (f64, f64, f64, f64) {
+    let points =
+        Sim::new(&ENTRY, cfg).unwrap().plan_path(&sim_components::path::parse("line,0.9").unwrap(), true).unwrap();
+    assert!((points[points.len() - 1].1[0] - 0.9).abs() < 1e-15, "ends at {:?}", points[points.len() - 1].1);
+    let speed = points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]) / 1e-3).fold(0.0, f64::max);
+    let acc: Vec<f64> = points.windows(3).map(|w| (w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / 1e-6).collect();
+    (points[points.len() - 1].0, speed, acc.iter().fold(0.0, |m, a| m.max(*a)), acc.iter().fold(0.0, |m, a| m.max(-a)))
+}
+
+/// With effects.drive_current_limit the drive's maximum current limits the time-optimal plan where its torque is below
+/// the motor's: 2 A through k_t 0.45 N m/A (no saturation) is 0.9 N m against the motor's 3.8 N m. Up a 30 degree
+/// incline the carriage's weight along the axis, F = 4 kg * 9.80665 * 0.5 = 19.613 N, takes from the torque on the way
+/// up and gives on the way down: a = (0.8 * 0.9 N m * 5 / 0.02 m -+ F) / 6.125 kg = (180 -+ 19.613) / 6.125 = 26.186 and
+/// 32.590 m/s^2 (6.125 kg: the carriage, the pulley and the rotor through radius and ratio). The duration is the cruise
+/// at the rated speed 1.256 m/s plus half of each ramp: 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) / 2 =
+/// 0.68049 s. Without the effect the motor's torque limits it again.
+#[test]
+fn the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated_one() {
+    let mut cfg = ideal_rigid_quick();
+    for e in ["effects.torque_saturation = false", "geometry.incline_deg = 30.0", "ratings.drive_max_current_a = 2.0"] {
+        cfg.set_text(e).unwrap();
+    }
+    let (m_total, v, j, weight) =
+        (4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02), 314.0 * 0.02 / 5.0, 1e5, 4.0 * G * 0.5);
+    let (up, down) =
+        ((0.8 * 0.45 * 2.0 * 5.0 / 0.02 - weight) / m_total, (0.8 * 0.45 * 2.0 * 5.0 / 0.02 + weight) / m_total);
+    let by_hand = 0.8 / v + 0.5 * (v / up + up / j) + 0.5 * (v / down + down / j);
+    assert!((up - 26.186).abs() < 1e-3 && (down - 32.590).abs() < 1e-3 && (by_hand - 0.68049).abs() < 1e-5);
+    let (time, top, rising, falling) = time_optimal_line(&cfg);
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    assert!(
+        (top - v).abs() < 1e-3 * v && (rising - up).abs() < 1e-3 * up && (falling - down).abs() < 1e-3 * down,
+        "{top} m/s, {rising} and {falling} m/s^2, by hand {v} m/s, {up} and {down} m/s^2"
+    );
+    // The motor's own 0.8 * 3.8 N m gives far more without the drive's limit.
+    cfg.set_text("effects.drive_current_limit = false").unwrap();
+    let (_, _, rising, _) = time_optimal_line(&cfg);
+    let motor = (0.8 * 3.8 * 5.0 / 0.02 - weight) / m_total;
+    assert!((rising - motor).abs() < 1e-3 * motor, "{rising} m/s^2, by hand {motor} m/s^2");
+}
+
+/// The gearbox's peak output torque rating (M2max) and the pulley's torque rating limit the time-optimal plan through
+/// the transmission: the output drives the carriage and the pulley, 4 kg * 0.02 m + 1e-4 kg m^2 / 0.02 m = 0.085 N m
+/// per m/s^2 (the motor's 0.0245 N m per m/s^2 less the rotor's 0.3e-4 kg m^2 * 250 rad/m, times the ratio 5). With
+/// M2max 10 N m: a = 0.8 * 10 / 0.085 = 94.118 m/s^2 (the motor alone allows 0.8 * 3.8 / 0.0245 = 124.1 m/s^2); with the
+/// pulley rated 8 N m below it, a = 0.8 * 8 / 0.085 = 75.294 m/s^2. Durations 0.8 / v + v / a + a / j.
+#[test]
+fn a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration() {
+    let mut cfg = ideal_rigid_quick();
+    let (v, j) = (314.0 * 0.02 / 5.0, 1e5);
+    let per_acc: f64 = 5.0 * (6.125 * 0.02 / 5.0 - 0.3e-4 * 5.0 / 0.02);
+    assert!((per_acc - 0.085).abs() < 1e-12);
+    for (rating, rated) in [("gearbox_max_torque_nm", 10.0), ("pulley_max_torque_nm", 8.0)] {
+        // The single axis's config has no pulley rating of its own (a catalogue axis brings one): added to its text.
+        if cfg.set_text(&format!("ratings.{rating} = {rated:.1}")).is_err() {
+            let text = cfg.to_text().unwrap().replace(
+                "[ratings]
+",
+                &format!(
+                    "[ratings]
+{rating} = {rated:.1}
+"
+                ),
+            );
+            cfg = Config::parse(&text).unwrap();
+        }
+        let a = 0.8 * rated / per_acc;
+        let by_hand = 0.8 / v + v / a + a / j;
+        let (time, _, rising, falling) = time_optimal_line(&cfg);
+        assert!((time - by_hand).abs() < 1.5e-3, "{rating}: {time} s, by hand {by_hand} s");
+        assert!(
+            (rising - a).abs() < 1e-3 * a && (falling - a).abs() < 1e-3 * a,
+            "{rating}: {rising} and {falling} m/s^2, by hand {a} m/s^2"
+        );
+    }
+    assert!((0.8 * 10.0 / per_acc - 94.118).abs() < 1e-3 && (0.8 * 8.0 / per_acc - 75.294).abs() < 1e-3);
+}
+
 /// A drive on its torque limit fails "motor-peak". With 120 kg of payload, accelerating at 10 m/s^2 takes
 /// (124 kg + 2.125 kg of pulley and rotor) * 10 m/s^2 * 0.02 m / 5 = 5.05 N m, which the 3.8 N m motor does
 /// not have: the drive sits on its limit and the carriage falls behind. The delivered torque never exceeds

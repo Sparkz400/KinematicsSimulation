@@ -1898,3 +1898,62 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## Time-optimal plan that follows the limit, with the drive's, gearbox's and guides' ratings in it (14 November)
+
+Not run by this session: the test suites (the coordinating session runs them). Run here, release, filtered to the tests
+this work touches: `sim-components` `path::` (all), `machine-single-axis` `time_optimal`, `drive_current`,
+`gearbox_or_pulley`, `machine-t-gantry` `time_optimal` and `guide_load` (among them the 200 random paths),
+`machine-delta-d3` `time_optimal`, `motor_limits`, `transition`, `tilted`, `rim`, `sim-machines` `control` and
+`collision` `time_optimal`, `i18n`: all pass.
+
+| Item | What was built | Tests (hand-calculated numbers) |
+| --- | --- | --- |
+| A plan that follows the limit inside a piece (goal 3, a) | `path::plan_time_optimal` keeps the places, the look-ahead, the junction speeds and the stops. Per piece a speed curve (`smoothed`): the places' tops, only lowered, in sweeps, until its acceleration is within 0.9 of the places' ceilings at its speed and its jerk (v d(x'/2)/ds) within half the ramps' jerk (peaks lowered onto the bound, the sides of a dip lowered); never below the slowest top. Each piece runs from its start and from its end (`follow`, quarter cycles at constant jerk): the acceleration rises at the jerk limit as far as the ceiling ahead (now at 32 speed levels, the level of v + a^2 / 2j, instead of the whole ramp's worst speed), braking for the top speed, and landing on the speed curve with the jerk left beside the curve's own allow; the landing is skipped while falling to zero at once keeps the speed below the curve all the way (a range-minimum table, `lowest_ahead`). So a run rises, meets the curve, follows it up and down, and goes on to the top speed. The runs join on a cruise at the top speed, the highest that fits up to the curve's highest, found by halving to 1e-9: a higher top that fits is the quicker, since the runs are the same until they brake for it. Replaces the one cruise speed per piece, the 0.9 passing of slower places, the 16 + 16 trial tops and the lowest-of-three-places ceilings (the ceilings are taken as straight between places, within `KEPT_BACK`) | `the_speed_curve_comes_down_to_a_slow_place_within_its_acceleration_and_jerk` (places at 1 m/s, one at 0.5 m/s, 10 m/s^2, 10 mm: x rises 0.25, 0.43, 0.61, 0.79, 0.97, 1 by 2 * 0.01 * 0.9 * 10 = 0.18 per place; at 50 m/s^3 also x'' within 2 * 0.5 * 50 * 1e-4 / v); `the_lowest_over_a_range_is_the_lowest_of_its_values`; `the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line` extended: 0.851565 s against 0.851693 s of 13 November, on a 125 us profile cycle it ends before 0.851693 s, every pose within its belt bound (0.2 %) and the rigid tension within 42.26 N; the hand-calculated single-axis times (`a_time_optimal_line_takes_the_hand_calculated_time`) and every other time-optimal test hold unchanged |
+| The drive's current as a limit of the plan (b) | With `effects.drive_current_limit` the torque T of each motor row is `profile.torque_reserve` times the lower of the torque-speed curve and the torque of `ratings.drive_max_current_a` (`DriveParams::torque_of`, saturation where it is on), here and in the per-piece limits (`motor_torque`) | `the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated_one`: single axis, 30 degree incline, 2 A on 0.45 N m/A: a = (0.8 * 0.9 * 5 / 0.02 -+ 19.613) / 6.125 = 26.186 up, 32.590 m/s^2 down, 0.68049 s (1.5 ms; 0.1 %); without the effect the motor's (0.8 * 3.8 * 250 - 19.613) / 6.125 |
+| Gearbox and pulley torque as limits of the plan (b) | `path::PlanLimits` (reserve, belt, per motor [ratio, inertia at the input, rating], guide rating) replaces the reserve and tension arguments of `plan_time_optimal` and `deviation_time_optimal`. The controller fills it per motor where the machine reports `gearbox.<id>.output_torque`: the lower of `ratings.gearbox_max_torque_nm` and `pulley_max_torque_nm` of the motor's config, `gearbox.ratio`, `motor.rotor_inertia_kgm2` + `gearbox.inertia_at_input_kgm2`. Row: i ((c - J_in w) a + (d - J_in w') v^2 + e) within reserve * rating, w' by second differences of the inverse along the path (`BEND_STEP` 0.1 mm); a holding output torque beyond it is refused (`error-path-torque`, its message now says "or their gearboxes", EN/DE) | `a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration`: 0.085 N m per m/s^2 at the output (0.0245 less the rotor's 0.0075, times 5): 94.118 m/s^2 at M2max 10 N m, 75.294 m/s^2 with the pulley at 8 N m, both ways, 0.8 / v + v / a + a / j (1.5 ms; 0.1 %); `the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line` (delta): M2max lifted for the motor check (8.13 m/s, 0.412 s); with the shipped 192 N m each output torque by differences up to and within 0.8 * 192 N m (0.1 %), 0.434 s |
+| Guide load as a limit of the plan (b) | `Machine::rigid_guide_loads` (new, default none; sim-core): per guide [load at rest, part linear in the tool's acceleration] for rest + abs(moving). T-gantry: `guide_loads` at the tool's X acceleration; single axis: the weight. Row: abs(g . (a p' + v^2 p'')) <= rating - rest, no reserve; a load at rest beyond the rating is refused (`error-path-guide`, new, EN/DE). Only where the machine reports `axis.*.guide_load` and the config has `ratings.guide_max_load_n` | `the_guide_load_rating_limits_the_time_optimal_acceleration`: T-gantry X line at z = 0.35, 150 N: X guide 107.87 N + 5.833 kg a, Z guide 12.833 kg a, a = 7.222 m/s^2, 0.8831 s (1.5 ms; 0.2 %), no pose's load above 150 N (0.05 %), and the loads of `rigid_guide_loads` against the hand values at 2 m/s^2 |
+
+Planned durations, old (13 November) and new, from `sim-cli run --path ... --time-optimal` (exact, before rounding up
+to the profile cycle), and the planning time (release, one plan, the range of three runs):
+
+| Path | Old | New | Planning old / new |
+| --- | --- | --- | --- |
+| T-gantry default cycle as lines | 3.574199 s | 3.574199 s | 3-4 / 8 ms |
+| Delta default cycle as lines | 0.589065 s | 0.595831 s (M2max binds; 0.589065 s lifted) | 8 / 7 ms |
+| SCARA default cycle (joint space) | 1.173275 s | 1.173275 s | 7-8 / 13 ms |
+| URDF arm default cycle (joint space) | 1.657660 s | 1.665462 s (M2max binds; 1.657660 s lifted) | 10-12 / 18 ms |
+| T-gantry line x 0.1 -> 0.9, 300 m/s^3, belt 400 N | 0.851693 s | 0.851565 s | 1 / 2 ms |
+| Delta, line to (0.5, 0, -0.85), across to (-0.5, 0, -0.85) | 0.411220 s | 0.433528 s (M2max binds; 0.411148 s lifted) | 5-6 / 16-20 ms |
+| Delta, lines to (0, -0.4, -0.9) and (0.4, 0.3, -0.8) | 0.391798 s | 0.419082 s (M2max binds; 0.391729 s lifted) | 7-9 / 18-21 ms |
+| User guide line, arc, line | 1.394717 s | 1.394717 s | 12-14 / 11-15 ms |
+| The same, path tolerance 0.1 mm | 1.096349 s | 1.096352 s | 8 / 8 ms |
+| The same at 2000 m/s^3 | 0.792757 s | 0.792727 s | 1 / 4 ms |
+| User guide spline example | 1.379974 s | 1.349068 s | 16-21 / 17-18 ms |
+| The same, path tolerance 0.1 mm | 1.229552 s | 1.227411 s | 17-19 / 19-22 ms |
+
+Where nothing new binds, following the limit gains little on the shipped paths: their pieces are limited by the jerk,
+the rated speed (flat along a line in joint space or on the gantry) or an acceleration that peaks below the speed limit
+(the delta's lines), which the 13 November ramps already took point by point. It gains where the speed curve bends
+within a piece (the spline, 2.2 %). The delta and the arm are slower where their gearboxes' M2max (with the reserve)
+binds: the plan of 13 November asked more of them than rated. One run is 3 us slower (the line, arc, line with a tolerance; quarter-cycle steps).
+The user guide's spline examples now take 1.650 s and 1.528 s with rest (`analyze`, docs updated).
+
+Left open:
+
+- The runs of a piece join on a cruise at no acceleration; where they meet while the speed curve still rises or falls,
+  the top is a little below where they would meet (`shortcut:` on `piece_timing`). Not proven time-optimal.
+- The speed curve's sweeps stop at a change of 1e-7 or after 300 sweeps (a sharp dip converges by about 1 % a sweep,
+  `shortcut:` on `smoothed`); it keeps 0.1 of the acceleration and half of the jerk for catching up with it.
+- The top speed is the highest that fits, found by halving: it assumes that a top fits up to some speed and not above;
+  where a piece's speed curve has two humps with a dip between them, a top between the dip and the lower hump does not
+  fit and the halving may settle below the dip.
+- Planning is up to 2 to 4 times slower on the shortest paths (1 -> 2, 1 -> 4 ms), and up to 3 times on the delta's lines
+  (5 -> 16 ms); the 32 speed levels of ceilings (1 to 2 ms per piece) and the halving of the top (about 30 tries) cost
+  most. `sim-opcua` plans inside its 10 ms tick.
+- Gearbox losses are not in the output torque (the rigid model is lossless); the reserve covers them with friction. The
+  guide rows have no reserve: what friction adds to the acceleration the motors command (`commanded_ax`) is not in them.
+  Only the T-gantry and the single axis give their guides' loads; the delta-linear, the joint-kit's linear motor and the machine files (`sim-netlist`)
+  report guide loads but have no `rigid_guide_loads` (no limit of the plan there).
+- One rating set and one `DriveParams` for all motors of a machine in the plan (the controller's shared `params`), as
+  before; the gearbox entries are per motor (`motor_config`).

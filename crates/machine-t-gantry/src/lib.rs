@@ -1033,6 +1033,13 @@ impl Machine for TGantry {
         out.extend([p + d1, p + d1 + (fx + fz) / 2.0, p + d1 + fx]);
     }
 
+    /// `guide_loads` at the X acceleration of the tool: the X guide m_x g + |tilt|, the Z guide |side| + |tilt|, with
+    /// side = m_z a_x and tilt = side 2 (z_com_drop - z) / guide_spacing.
+    fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        let (side, arm) = (self.m_z() * acc[X], 2.0 * (self.z_com_drop - pos[Z]) / self.guide_spacing);
+        out.extend([[self.m_x() * self.g, side * arm], [0.0, side * (1.0 + arm.abs())]]);
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
