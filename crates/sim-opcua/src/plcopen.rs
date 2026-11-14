@@ -30,6 +30,8 @@ const HOME: usize = 0;
 const MOVE_ABSOLUTE: usize = 1;
 const STOP: usize = 3;
 const RESET: usize = 4;
+/// The block of a motion no block reports on any more: the braking left by a refused re-trigger.
+const UNOWNED: usize = usize::MAX;
 const PARAMS: [&[&str]; 5] = [
     &[],
     &["Position", "Velocity", "Acceleration", "Deceleration", "Jerk"],
@@ -123,9 +125,10 @@ impl Axis {
             _ if self.error_id != 0 => State::ErrorStop,
             _ if !self.enable => State::Disabled,
             Some(m) if m.fb == HOME => State::Homing,
-            Some(m) if m.fb != STOP => State::DiscreteMotion,
+            // MC_Stop's own braking, or MC_Stop done with its Execute held; never with another block's motion.
             _ if self.stopping => State::Stopping,
-            _ => State::Standstill,
+            Some(_) => State::DiscreteMotion,
+            None => State::Standstill,
         }
     }
 
@@ -137,7 +140,8 @@ impl Axis {
     /// controller's drives are on, `actual` is the simulated axis's position and velocity.
     pub fn variables(&self, drives_on: bool, actual: (f64, f64)) -> Vec<(String, Variant, bool)> {
         let status = self.enable && drives_on;
-        let error = self.enable && self.error_id != 0;
+        // Also with Enable off: the axis stays in ErrorStop until MC_Reset (PLCopen state diagram), and MC_Power says so.
+        let error = self.error_id != 0;
         let mut out: Vec<(String, Variant, bool)> = vec![
             ("Power.Enable".into(), self.enable.into(), true),
             ("Power.Status".into(), status.into(), false),
@@ -176,8 +180,9 @@ impl Axis {
 
     /// Ends the motion under way: its function block reports `CommandAborted`, or `Error` with `error`.
     fn end_motion(&mut self, error: u16) {
-        if let Some(m) = self.motion.take() {
-            let fb = &mut self.fbs[m.fb];
+        if let Some(m) = self.motion.take()
+            && let Some(fb) = self.fbs.get_mut(m.fb)
+        {
             (fb.busy, fb.aborted, fb.error, fb.error_id) = (false, error == 0, error != 0, error);
         }
         self.vel = 0.0;
@@ -269,8 +274,16 @@ impl Axis {
             _ => 0,
         };
         if refuse != 0 {
+            // Re-triggered while busy: the block gives up its motion, so that it reports Error alone (Done, Busy, Error
+            // and CommandAborted are exclusive), and the axis brakes to a stop with the motion's deceleration, a motion
+            // no block reports on, which a new move may take over (PLCopen Part 1 leaves this case open).
+            if self.fbs[k].busy
+                && let Some(m) = &mut self.motion
+            {
+                (m.fb, m.target) = (UNOWNED, None);
+            }
             let fb = &mut self.fbs[k];
-            (fb.error, fb.error_id) = (true, refuse);
+            (fb.busy, fb.error, fb.error_id) = (false, true, refuse);
             return;
         }
         // A new motion takes over the one under way at its position and speed.
@@ -313,7 +326,9 @@ impl Axis {
         if self.vel == 0.0 && m.target.is_none_or(|target| self.pos == target) {
             let k = m.fb;
             self.motion = None;
-            (self.fbs[k].busy, self.fbs[k].done) = (false, true);
+            if let Some(fb) = self.fbs.get_mut(k) {
+                (fb.busy, fb.done) = (false, true);
+            }
             self.homed |= k == HOME;
             self.stopping = k == STOP && self.fbs[k].execute;
         }

@@ -38,7 +38,7 @@
 //! | ---------------------------------------- | ------- | ------ | ------------------------------------------------- |
 //! | `axis.<id>.Power.Enable`                 | Boolean | write  | MC_Power: true powers the axis                    |
 //! | `axis.<id>.Power.Status`, `.Valid`       | Boolean | read   | drives on; on and without error                   |
-//! | `axis.<id>.Power.Error`, `.ErrorID`      | Boolean, UInt16 | read | the axis error while powered               |
+//! | `axis.<id>.Power.Error`, `.ErrorID`      | Boolean, UInt16 | read | the axis error (ErrorStop), also unpowered |
 //! | `axis.<id>.<FB>.Execute`                 | Boolean | write  | rising edge starts FB = Home, MoveAbsolute, MoveRelative, Stop, Reset |
 //! | `axis.<id>.MoveAbsolute.Position`, `.Velocity`, `.Acceleration`, `.Deceleration`, `.Jerk` | Double | write | inputs, taken on the rising edge |
 //! | `axis.<id>.MoveRelative.Distance`, ...   | Double  | write  | as for MoveAbsolute                               |
@@ -96,7 +96,7 @@ use opcua::types::{
 use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -126,6 +126,8 @@ enum Input {
     AxisFlag(usize, String, bool),
     AxisNumber(usize, String, f64),
     ResetPacing,
+    /// `Link::run_trajectory`.
+    Trajectory(Vec<(f64, Vec<f64>)>),
 }
 
 /// The loop's real-time pacing, measured from the wall-clock times of its ticks since the last reset.
@@ -276,17 +278,94 @@ impl InMemoryNodeManagerImpl for Timed {
     }
 }
 
-/// How the server lets clients in. It always offers three endpoints at the same URL: security policy `None`, and
-/// `Basic256Sha256` with `Sign` and with `SignAndEncrypt`. Its application instance certificate (self-signed, valid for
-/// a year) is created in the pki folder on the first start: `own/cert.der` and `private/private.pem`.
+/// The secured endpoints, each offered with `Sign` and with `SignAndEncrypt`: every policy async-opcua has that OPC UA
+/// does not deprecate (Basic128Rsa15 and Basic256 are, and are left out).
+pub const POLICIES: [(&str, SecurityPolicy); 3] = [
+    ("basic256sha256", SecurityPolicy::Basic256Sha256),
+    ("aes128_sha256_rsaoaep", SecurityPolicy::Aes128Sha256RsaOaep),
+    ("aes256_sha256_rsapss", SecurityPolicy::Aes256Sha256RsaPss),
+];
+
+/// How the server lets clients in. It offers at the same URL the security policy `None` and every policy of `POLICIES`
+/// with `Sign` and with `SignAndEncrypt`. Its application instance certificate (self-signed, valid for 365 days) is
+/// created in the pki folder on the first start: `own/cert.der` and `private/private.pem` (`certificate_days_left`,
+/// `renew_certificate`).
 #[derive(Debug, Clone, Default)]
 pub struct Security {
     /// Accept every client certificate and store it in `<pki>/trusted` (for commissioning). Off, a client certificate
     /// that is not in `<pki>/trusted` is refused and stored in `<pki>/rejected`, to be moved to `trusted` by hand.
     pub trust_all: bool,
-    /// The user name and password a client must give; `None` lets clients in anonymously. With a user the endpoint
-    /// without security is not offered, so that the password never travels in clear.
+    /// The user name and password a client may log in with.
     pub user: Option<(String, String)>,
+    /// User certificates (X.509 user tokens, `.der` or `.pem`): a client that signs with the private key of one of them
+    /// logs in as that user, named after the file.
+    pub user_certs: Vec<PathBuf>,
+}
+
+impl Security {
+    /// Whether a client must log in. Then no client gets in anonymously and the endpoint without security is not
+    /// offered, so that a password never travels in clear.
+    pub fn logins(&self) -> bool {
+        self.user.is_some() || !self.user_certs.is_empty()
+    }
+}
+
+/// The server's application instance certificate in `pki_dir`, where async-opcua stores it.
+fn own_certificate(pki_dir: &Path) -> PathBuf {
+    pki_dir.join("own").join("cert.der")
+}
+
+/// Days until the server's certificate in `pki_dir` expires (negative once it has); `None` without one (the next start
+/// creates it).
+pub fn certificate_days_left(pki_dir: &Path) -> Option<f64> {
+    let cert = opcua::crypto::CertificateStore::read_cert(&own_certificate(pki_dir)).ok()?;
+    let end = cert.not_after().ok()?.timestamp() as f64;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64();
+    Some((end - now) / 86_400.0)
+}
+
+/// Sets the server's certificate and private key in `pki_dir` aside (`.old` beside them, replacing an older one), so
+/// that the next start creates new ones, valid for 365 days. Clients that trusted the old certificate must trust the
+/// new one. Nothing to do without one.
+pub fn renew_certificate(pki_dir: &Path) -> std::io::Result<()> {
+    for file in [own_certificate(pki_dir), pki_dir.join("private").join("private.pem")] {
+        if file.exists() {
+            let mut old = file.clone().into_os_string();
+            old.push(".old");
+            std::fs::rename(&file, old)?;
+        }
+    }
+    Ok(())
+}
+
+/// The config of `--config FILE` (or else the machine's default) with every `--set path=value` on top, read as sim-cli
+/// reads them; and the trajectory of `--trajectory FILE` (`sim_components::path::parse_trajectory`), to run at the start
+/// (`Link::run_trajectory`).
+pub fn configured(
+    entry: &MachineEntry,
+    config: Option<&Path>,
+    sets: &[String],
+    trajectory: Option<&Path>,
+) -> Result<(Config, Option<Vec<(f64, Vec<f64>)>>), LinkError> {
+    let read = |path: &Path| {
+        std::fs::read_to_string(path).map_err(|e| LinkError("opcua-error-file", format!("{}: {e}", path.display())))
+    };
+    let config_error = |e: sim_core::ConfigError| LinkError(e.key(), e.detail().into());
+    let mut cfg = match config {
+        Some(path) => sim_components::load_config(entry, &read(path)?).map_err(config_error)?,
+        None => entry.config(),
+    };
+    for assignment in sets {
+        cfg.set_text(assignment).map_err(config_error)?;
+    }
+    let points = match trajectory {
+        Some(path) => Some(
+            sim_components::path::parse_trajectory(&read(path)?)
+                .map_err(|line| LinkError("opcua-error-file", format!("{}: {line}", path.display())))?,
+        ),
+        None => None,
+    };
+    Ok((cfg, points))
 }
 
 pub struct Link {
@@ -295,6 +374,14 @@ pub struct Link {
     pub namespace: u16,
     pub pacing: Arc<Mutex<Pacing>>,
     pub clients: Arc<Mutex<ClientTiming>>,
+    inputs: Sender<Input>,
+}
+
+impl Link {
+    /// Runs the poses at times `points` (`Command::Trajectory`) at the next tick; a refusal shows in `status.refused`.
+    pub fn run_trajectory(&self, points: Vec<(f64, Vec<f64>)>) {
+        let _ = self.inputs.send(Input::Trajectory(points));
+    }
 }
 
 impl Drop for Link {
@@ -303,13 +390,22 @@ impl Drop for Link {
     }
 }
 
-fn number(value: &DataValue) -> Option<f64> {
+/// A number a client wrote, of any IEC 61131-3 numeric type: LREAL, REAL, SINT, INT, DINT, LINT, USINT, UINT, UDINT,
+/// ULINT. A 64-bit integer beyond 2^53 is refused: a double would not hold it exactly.
+pub fn number(value: &DataValue) -> Option<f64> {
+    // Compared as integers: 2^53 + 1 as a double is already 2^53.
+    const EXACT: u64 = 1 << 53;
     match value.value.as_ref()? {
         Variant::Double(v) => Some(*v),
         Variant::Float(v) => Some(*v as f64),
+        Variant::SByte(v) => Some(*v as f64),
+        Variant::Byte(v) => Some(*v as f64),
         Variant::Int16(v) => Some(*v as f64),
+        Variant::UInt16(v) => Some(*v as f64),
         Variant::Int32(v) => Some(*v as f64),
-        Variant::Int64(v) => Some(*v as f64),
+        Variant::UInt32(v) => Some(*v as f64),
+        Variant::Int64(v) => (v.unsigned_abs() <= EXACT).then_some(*v as f64),
+        Variant::UInt64(v) => (*v <= EXACT).then_some(*v as f64),
         _ => None,
     }
 }
@@ -365,22 +461,37 @@ pub async fn serve_secured(
             clients,
         }
     };
-    let user_tokens: &[&str] = if security.user.is_some() { &["user"] } else { &[ANONYMOUS_USER_TOKEN_ID] };
     let mut builder = ServerBuilder::new();
-    for (id, policy, mode) in [
-        ("none", SecurityPolicy::None, MessageSecurityMode::None),
-        ("basic256sha256_sign", SecurityPolicy::Basic256Sha256, MessageSecurityMode::Sign),
-        ("basic256sha256_sign_encrypt", SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt),
-    ] {
-        // With a password, no endpoint without security: async-opcua takes a password sent in clear (an empty
-        // encryption algorithm) even where the policy asks for it encrypted.
-        if security.user.is_some() && policy == SecurityPolicy::None {
-            continue;
-        }
-        builder = builder.add_endpoint(id, ("/", policy, mode, user_tokens));
-    }
+    let mut user_tokens: Vec<String> = Vec::new();
     if let Some((user, password)) = &security.user {
         builder = builder.add_user_token("user", ServerUserToken::user_pass(user.as_str(), password.as_str()));
+        user_tokens.push("user".into());
+    }
+    for (i, path) in security.user_certs.iter().enumerate() {
+        // Read here: async-opcua passes over a certificate it cannot read without a word, and nobody could log in.
+        opcua::crypto::CertificateStore::read_cert(path)
+            .map_err(|_| LinkError("opcua-error-user-cert", path.display().to_string()))?;
+        let user = path.file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+        let id = format!("x509-{i}");
+        builder = builder.add_user_token(id.clone(), ServerUserToken::x509(user, path));
+        user_tokens.push(id);
+    }
+    if user_tokens.is_empty() {
+        user_tokens.push(ANONYMOUS_USER_TOKEN_ID.into());
+    }
+    let user_tokens: Vec<&str> = user_tokens.iter().map(String::as_str).collect();
+    // With a login, no endpoint without security: async-opcua takes a password sent in clear (an empty encryption
+    // algorithm) even where the policy asks for it encrypted.
+    if !security.logins() {
+        builder =
+            builder.add_endpoint("none", ("/", SecurityPolicy::None, MessageSecurityMode::None, &user_tokens[..]));
+    }
+    for (name, policy) in POLICIES {
+        for (suffix, mode) in
+            [("sign", MessageSecurityMode::Sign), ("sign_encrypt", MessageSecurityMode::SignAndEncrypt)]
+        {
+            builder = builder.add_endpoint(format!("{name}_{suffix}"), ("/", policy, mode, &user_tokens[..]));
+        }
     }
     let (server, handle) = builder
         .application_name("sim-opcua")
@@ -394,7 +505,7 @@ pub async fn serve_secured(
         .host(address.ip().to_string())
         .port(address.port())
         .discovery_urls(vec![format!("opc.tcp://{address}/")])
-        .default_endpoint(if security.user.is_some() { "basic256sha256_sign_encrypt" } else { "none" })
+        .default_endpoint(if security.logins() { "basic256sha256_sign_encrypt" } else { "none" })
         .with_node_manager(InMemoryNodeManagerBuilder::new(timed))
         .build()
         .map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
@@ -574,7 +685,7 @@ pub async fn serve_secured(
         pacing: pacing.clone(),
         clients: clients.clone(),
     }));
-    Ok(Link { handle, namespace, pacing, clients })
+    Ok(Link { handle, namespace, pacing, clients, inputs })
 }
 
 struct SimLoop {
@@ -690,6 +801,7 @@ async fn simulate(mut s: SimLoop) {
                     let mut pacing = s.pacing.lock().unwrap();
                     *pacing = Pacing { cycle_s: pacing.cycle_s, ..Default::default() };
                 }
+                Input::Trajectory(points) => commands.push(Some(Command::Trajectory(points))),
             }
         }
         // The controller's drives are on while a PLCopen axis is powered and not in ErrorStop (also after MC_Reset),

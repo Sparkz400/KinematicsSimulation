@@ -92,7 +92,60 @@ fn certificates(dir: PathBuf) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|d| d.filter_map(|e| Some(e.ok()?.path())).collect()).unwrap_or_default()
 }
 
-/// The server offers None, and Basic256Sha256 with Sign and with SignAndEncrypt. A client whose certificate the
+/// The endpoints a server lists, as (security policy URI, mode), sorted.
+fn offered(endpoints: &[opcua::types::EndpointDescription]) -> Vec<(String, MessageSecurityMode)> {
+    let mut offered: Vec<(String, MessageSecurityMode)> =
+        endpoints.iter().map(|e| (e.security_policy_uri.to_string(), e.security_mode)).collect();
+    offered.sort_by_key(|(uri, mode)| (uri.clone(), *mode as i32));
+    offered
+}
+
+/// What the server must list: Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss each with Sign and with
+/// SignAndEncrypt, and None where no login is required. Written out here, not taken from `sim_opcua::POLICIES`.
+fn listing(with_none: bool) -> Vec<(String, MessageSecurityMode)> {
+    let mut listing = Vec::new();
+    for policy in
+        [SecurityPolicy::Basic256Sha256, SecurityPolicy::Aes128Sha256RsaOaep, SecurityPolicy::Aes256Sha256RsaPss]
+    {
+        for mode in [MessageSecurityMode::Sign, MessageSecurityMode::SignAndEncrypt] {
+            listing.push((policy.to_uri().to_string(), mode));
+        }
+    }
+    if with_none {
+        listing.push((SecurityPolicy::None.to_uri().to_string(), MessageSecurityMode::None));
+    }
+    listing.sort_by_key(|(uri, mode)| (uri.clone(), *mode as i32));
+    listing
+}
+
+/// A client that knows the server's endpoints, for listing them.
+async fn endpoints(url: &str, name: &str) -> Vec<opcua::types::EndpointDescription> {
+    let client = ClientBuilder::new().application_name("probe").application_uri("urn:probe").pki_dir(scratch(name));
+    client.client().unwrap().get_server_endpoints_from_url(url).await.unwrap()
+}
+
+/// The server lists Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss beside Basic256Sha256, each with Sign and with
+/// SignAndEncrypt, and a trusted client reads over each of the new ones. With a login required, None is not listed.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_aes_policies_are_listed_and_carry_a_session() {
+    let (server_pki, client_pki) = (scratch("aes-server"), scratch("aes-client"));
+    let (link, url) = start(&server_pki, Security { trust_all: true, ..Default::default() }).await;
+    assert_eq!(offered(&endpoints(&url, "aes-probe").await), listing(true));
+    for policy in [SecurityPolicy::Aes128Sha256RsaOaep, SecurityPolicy::Aes256Sha256RsaPss] {
+        for mode in [MessageSecurityMode::Sign, MessageSecurityMode::SignAndEncrypt] {
+            let session = connect(&url, &client_pki, policy, mode, IdentityToken::Anonymous)
+                .await
+                .unwrap_or_else(|| panic!("{policy:?} {mode:?} refused"));
+            assert!(matches!(read(&session, link.namespace, "status.busy").await, Variant::Boolean(false)));
+        }
+    }
+    drop(link);
+    let user = Security { user: Some(("plc".into(), "secret".into())), ..Default::default() };
+    let (_link, url) = start(&scratch("aes-user-server"), user).await;
+    assert_eq!(offered(&endpoints(&url, "aes-user-probe").await), listing(false));
+}
+
+/// The server offers None, and every secured policy with Sign and with SignAndEncrypt. A client whose certificate the
 /// server does not know is refused on the secured endpoints, and its certificate lands in `pki/rejected`; moved to
 /// `pki/trusted`, as the commissioning engineer does, the same client connects with SignAndEncrypt, reads and writes.
 #[tokio::test(flavor = "multi_thread")]
@@ -110,18 +163,7 @@ async fn a_trusted_client_reads_and_writes_with_basic256sha256_sign_and_encrypt(
         .get_server_endpoints_from_url(url.as_str())
         .await
         .unwrap();
-    let mut offered: Vec<(String, MessageSecurityMode)> =
-        endpoints.iter().map(|e| (e.security_policy_uri.to_string(), e.security_mode)).collect();
-    offered.sort_by_key(|(uri, mode)| (uri.clone(), *mode as i32));
-    let basic = SecurityPolicy::Basic256Sha256.to_uri().to_string();
-    assert_eq!(
-        offered,
-        [
-            (basic.clone(), MessageSecurityMode::Sign),
-            (basic, MessageSecurityMode::SignAndEncrypt),
-            (SecurityPolicy::None.to_uri().to_string(), MessageSecurityMode::None),
-        ]
-    );
+    assert_eq!(offered(&endpoints), listing(true));
 
     let secured = (SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt);
     assert!(connect(&url, &client_pki, secured.0, secured.1, IdentityToken::Anonymous).await.is_none());
@@ -146,7 +188,7 @@ async fn a_trusted_client_reads_and_writes_with_basic256sha256_sign_and_encrypt(
 #[tokio::test(flavor = "multi_thread")]
 async fn trust_all_lets_an_unknown_client_in() {
     let (server_pki, client_pki) = (scratch("trust-all-server"), scratch("trust-all-client"));
-    let (link, url) = start(&server_pki, Security { trust_all: true, user: None }).await;
+    let (link, url) = start(&server_pki, Security { trust_all: true, ..Default::default() }).await;
     let session = connect(
         &url,
         &client_pki,
@@ -166,7 +208,7 @@ async fn trust_all_lets_an_unknown_client_in() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_user_name_and_password_keep_others_out() {
     let (server_pki, client_pki) = (scratch("user-server"), scratch("user-client"));
-    let security = Security { trust_all: true, user: Some(("plc".into(), "secret".into())) };
+    let security = Security { trust_all: true, user: Some(("plc".into(), "secret".into())), ..Default::default() };
     let (link, url) = start(&server_pki, security).await;
     let encrypted = (SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt);
     let user = |password: &str| IdentityToken::new_user_name("plc", password);
@@ -432,4 +474,142 @@ async fn the_server_measures_the_cycle_of_a_client_writing_every_10_ms() {
     // The figures the log prints at shutdown are the same.
     let reads = link.clients.lock().unwrap().reads.clone();
     assert_eq!(reads.count, 31, "the pattern's 30 and the read of the results");
+}
+
+/// `start_machine` with the config `cfg`.
+async fn start_config(cfg: &sim_core::Config, pki: &Path) -> (Link, String) {
+    let entry = MACHINES[0];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("opc.tcp://{}/", listener.local_addr().unwrap());
+    let labels = translations("en", entry);
+    let security = Security::default();
+    let link = serve_secured(entry, cfg, &labels, listener, pki, Duration::from_millis(10), &security).await.unwrap();
+    (link, url)
+}
+
+/// An anonymous client on the endpoint without security.
+async fn plain(url: &str, name: &str) -> Arc<Session> {
+    let none = (SecurityPolicy::None, MessageSecurityMode::None);
+    connect(url, &scratch(name), none.0, none.1, IdentityToken::Anonymous).await.unwrap()
+}
+
+/// A PLC writing IEC USINT, SINT, UINT, UDINT, ULINT or LINT to a numeric input used to get BadTypeMismatch. Each is
+/// taken now, as the number it is; a 64-bit integer beyond 2^53 = 9 007 199 254 740 992, which a double cannot hold
+/// exactly, is refused. The write's status comes from the server at once; the value read back from the loop's next tick.
+#[tokio::test(flavor = "multi_thread")]
+async fn unsigned_and_byte_integers_are_taken_as_numbers() {
+    let (link, url) = start(&scratch("unsigned-server"), Security::default()).await;
+    let session = plain(&url, "unsigned-client").await;
+    let axis = sim_components::Sim::new(MACHINES[0], &MACHINES[0].config()).unwrap().machine.axes()[0].id;
+    let name = format!("axis.{axis}.MoveAbsolute.Jerk");
+    let exact = 1i64 << 53;
+    for (value, number) in [
+        (Variant::Byte(200), 200.0),
+        (Variant::SByte(-100), -100.0),
+        (Variant::UInt16(60_000), 60_000.0),
+        (Variant::UInt32(4_000_000_000), 4.0e9),
+        (Variant::UInt64(exact as u64), 9_007_199_254_740_992.0),
+        (Variant::Int64(-exact), -9_007_199_254_740_992.0),
+    ] {
+        assert!(write(&session, link.namespace, &name, value.clone()).await, "{value:?} refused");
+        let mut read_back = Variant::Empty;
+        for _ in 0..200 {
+            read_back = read(&session, link.namespace, &name).await;
+            if read_back == Variant::Double(number) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(read_back, Variant::Double(number), "{value:?}");
+    }
+    for value in [Variant::UInt64(exact as u64 + 1), Variant::Int64(-exact - 1), Variant::from("1")] {
+        assert!(!write(&session, link.namespace, &name, value.clone()).await, "{value:?} taken");
+    }
+}
+
+/// `--config FILE` and `--set` (`sim_opcua::configured`) give the config the server serves: the start pose set on top of
+/// the machine's config file is where the move targets read before any move, [0.2, 0.3] m instead of [0.1, 0.35] m.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_config_file_with_set_on_top_is_served() {
+    let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/default.toml"));
+    let sets = ["start.pose = [0.2, 0.3]".to_string()];
+    let (cfg, trajectory) = sim_opcua::configured(MACHINES[0], Some(file), &sets, None).unwrap();
+    assert!(trajectory.is_none());
+    let (link, url) = start_config(&cfg, &scratch("config-server")).await;
+    let session = plain(&url, "config-client").await;
+    let sim = sim_components::Sim::new(MACHINES[0], &cfg).unwrap();
+    for (axis, at) in sim.machine.axes().iter().zip([0.2, 0.3]) {
+        let target = read(&session, link.namespace, &format!("command.target.{}", axis.id)).await;
+        assert_eq!(target, Variant::Double(at), "{}", axis.id);
+    }
+}
+
+/// The server's certificate is valid for 365 days from its creation; `renew_certificate` sets it and its key aside and
+/// the next start creates a new one, again valid for 365 days. Before the first start there is none.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_certificate_lasts_365_days_and_is_renewed_on_request() {
+    let pki = scratch("renew-server");
+    assert!(sim_opcua::certificate_days_left(&pki).is_none());
+    drop(start(&pki, Security::default()).await);
+    let days = sim_opcua::certificate_days_left(&pki).unwrap();
+    // Created a moment ago: 365 days less the seconds since (0.1 day is 2.4 hours).
+    assert!((364.9..=365.0).contains(&days), "{days} days");
+    let cert = pki.join("own").join("cert.der");
+    let old = std::fs::read(&cert).unwrap();
+    sim_opcua::renew_certificate(&pki).unwrap();
+    assert!(sim_opcua::certificate_days_left(&pki).is_none());
+    assert!(pki.join("own").join("cert.der.old").exists() && pki.join("private").join("private.pem.old").exists());
+    drop(start(&pki, Security::default()).await);
+    assert!(sim_opcua::certificate_days_left(&pki).unwrap() > 364.9);
+    assert_ne!(std::fs::read(&cert).unwrap(), old, "the same certificate");
+}
+
+/// A user certificate (X.509 user token, `--user-cert`) lets in the client that signs with its key, and no one else:
+/// not an anonymous client, not one with another certificate. None is not listed, as with a password.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_certificate_lets_in_its_holder_only() {
+    let users = scratch("x509-users");
+    std::fs::create_dir_all(&users).unwrap();
+    let make = |name: &str| {
+        let description = opcua::types::ApplicationDescription {
+            application_name: name.into(),
+            application_uri: format!("urn:{name}").into(),
+            ..Default::default()
+        };
+        let (cert, key) = (users.join(format!("{name}.der")), users.join(format!("{name}.pem")));
+        opcua::crypto::CertificateStore::create_certificate_and_key(
+            &opcua::crypto::X509Data::from(description),
+            true,
+            &cert,
+            &key,
+        )
+        .unwrap();
+        (cert, key)
+    };
+    let (operator, intruder) = (make("operator"), make("intruder"));
+    let security = Security { trust_all: true, user_certs: vec![operator.0.clone()], ..Default::default() };
+    let (link, url) = start(&scratch("x509-server"), security).await;
+    assert_eq!(offered(&endpoints(&url, "x509-probe").await), listing(false));
+    let client_pki = scratch("x509-client");
+    let encrypted = (SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt);
+    let holder = |(cert, key): &(PathBuf, PathBuf)| IdentityToken::new_x509_path(cert, key).unwrap();
+    assert!(connect(&url, &client_pki, encrypted.0, encrypted.1, IdentityToken::Anonymous).await.is_none());
+    assert!(connect(&url, &client_pki, encrypted.0, encrypted.1, holder(&intruder)).await.is_none());
+    let session = connect(&url, &client_pki, encrypted.0, encrypted.1, holder(&operator)).await.unwrap();
+    assert!(matches!(read(&session, link.namespace, "status.busy").await, Variant::Boolean(false)));
+}
+
+/// A user certificate the server cannot read stops the start with its file named: async-opcua would pass over it
+/// without a word, and nobody could log in.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_user_certificate_stops_the_start() {
+    let entry = MACHINES[0];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let security = Security { user_certs: vec![PathBuf::from("no-such-user.der")], ..Default::default() };
+    let labels = translations("en", entry);
+    let pki = scratch("x509-missing");
+    let started =
+        serve_secured(entry, &entry.config(), &labels, listener, &pki, Duration::from_millis(10), &security).await;
+    let Err(sim_opcua::LinkError(key, detail)) = started else { panic!("started") };
+    assert_eq!((key, detail.as_str()), ("opcua-error-user-cert", "no-such-user.der"));
 }

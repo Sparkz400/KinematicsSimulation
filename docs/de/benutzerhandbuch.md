@@ -1327,12 +1327,12 @@ In diesem Lauf steht die Z-Achse bei 0,498 s auf 0,2276 m und bewegt sich; bei 1
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang de
 ```
 
-Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine, `--port` (Standard 4840), `--lang`, `--host` (Standard 127.0.0.1), `--cycle-ms` (Standard 10) und die Sicherheitsoptionen `--pki`, `--trust-all` und `--user` sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, ein Port, eine Sprache, eine Adresse oder ein Takt, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt. PLCopen-Bausteine je Achse, der Echtzeittakt und seine Messung, Beispiele für TwinCAT und CODESYS und der Dauertest stehen in [SPS-Inbetriebnahme](sps.md).
+Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine (oder `--machine-file`), `--config`, `--set` und `--trajectory`, gelesen wie von `sim-cli`, `--port` (Standard 4840), `--lang`, `--host` (Standard 127.0.0.1), `--cycle-ms` (Standard 10) und die Sicherheitsoptionen `--pki`, `--trust-all`, `--user`, `--user-cert` und `--renew-certificate` sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, eine Konfiguration, ein Port, eine Sprache, eine Adresse oder ein Takt, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt. PLCopen-Bausteine je Achse, der Echtzeittakt und seine Messung, Beispiele für TwinCAT und CODESYS und der Dauertest stehen in [SPS-Inbetriebnahme](sps.md).
 
 | Eigenschaft | Wert |
 | --- | --- |
 | Endpunkt | `opc.tcp://127.0.0.1:PORT/` |
-| Sicherheit | None, und Basic256Sha256 mit Sign und mit SignAndEncrypt; anonym außer mit `--user` (siehe [Sicherheit](sps.md#sicherheit)) |
+| Sicherheit | None, und Basic256Sha256, Aes128_Sha256_RsaOaep und Aes256_Sha256_RsaPss mit Sign und mit SignAndEncrypt; anonym außer mit `--user` oder `--user-cert` (siehe [Sicherheit](sps.md#sicherheit)) |
 | Namensraum | `urn:kinematics-simulation` |
 | Knoten-IDs | Zeichenketten in diesem Namensraum, wie in der Tabelle unten |
 | Aktualisierungsrate | Jedes Signal wird 100-mal je Sekunde veröffentlicht |
@@ -1355,7 +1355,7 @@ Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und läs
 So verhalten sich die Befehle:
 
 - Die Regelkreise der Antriebe bleiben im Simulator. Die SPS sendet Ziele oder Lagesollwerte, kein Drehmoment.
-- Zahlen dürfen als Double, Float, Int16, Int32 oder Int64 geschrieben werden. Alles andere wird mit `BadTypeMismatch` beantwortet.
+- Zahlen dürfen als Double, Float, SByte, Byte, Int16, UInt16, Int32, UInt32, Int64 oder UInt64 geschrieben werden (64-Bit-Ganzzahlen bis 2^53). Alles andere wird mit `BadTypeMismatch` beantwortet.
 - Sollwerte mehrerer Achsen, die innerhalb derselben 10 ms geschrieben werden, gelten zusammen als ein Sollwert.
 - Eine Achse, die nicht geschrieben wird, bleibt, wo sie ist. `command.target.<axis id>` zeigt die geplante Position, bis es geschrieben wird, und wieder, sobald die Fahrt befohlen ist, für die es geschrieben wurde. `command.setpoint.<axis id>` zeigt den Sollwert, dem die Steuerung folgt; das ist die geplante Position, solange kein Sollwert unterwegs ist. Nach einer Fahrt oder einem Zyklus schickt ein Schreiben auf eine Achse die anderen also nicht dorthin zurück, wo sie vorher standen.
 - Eine Bahn wird erst geschrieben und dann gestartet: `command.path` (und `command.path_time_optimal`) zusammen mit `command.run_path` oder davor schreiben. Zusammen geschrieben, gelten `command.path` und `command.path_time_optimal` in beliebiger Reihenfolge im Schreibvorgang: gefahren wird die zuletzt geschriebene Bahn. Die Befehle eines Schreibvorgangs werden in der geschriebenen Reihenfolge ausgeführt, und die Bahn wird ausgelegt, wenn sie an der Reihe ist, von dort aus, wo die Maschine dann steht (etwa nach einem davor geschriebenen `command.enable`), genau wie `sim-cli run --path` sie auslegt, und in Echtzeit gefahren.

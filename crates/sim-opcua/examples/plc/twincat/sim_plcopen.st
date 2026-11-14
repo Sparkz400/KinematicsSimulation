@@ -2,8 +2,9 @@
     PLCopen motion over OPC UA to the KinematicsSimulation link (sim-opcua), for TwinCAT 3.
     Library: Tc3_PLCopen_OpcUa (add it in the PLC project's References).
 
-    NOT COMPILED: this file was written against the Tc3_PLCopen_OpcUa documentation and has not been built in
-    TwinCAT. Check the names marked "CHECK" against the library version you have.
+    NOT COMPILED: TwinCAT needs a Beckhoff account to download, so this file was not built. The names were checked
+    on 14 November 2026 against Beckhoff Infosys (TF6100 TwinCAT 3 OPC UA Client, documentation 1.3.0 of
+    8 April 2026) and Beckhoff's TF6100_Samples on GitHub.
 
     Structure:
       SIM_Access          one OPC UA read or write of one variable (get handle, read/write, release handle)
@@ -42,7 +43,7 @@ VAR
     fbWrite     : UA_Write;
     fbRelease   : UA_NodeReleaseHandle;
     stNodeID    : ST_UANodeID;
-    stInfo      : ST_UANodeAdditionalInfo;   (* CHECK: member name of the attribute id *)
+    stInfo      : ST_UANodeAdditionalInfo;
     hNode       : DWORD;
     nStep       : INT;
     bLast       : BOOL;
@@ -52,8 +53,8 @@ IF bExecute AND NOT bLast THEN
     bDone := FALSE; bError := FALSE; nErrorID := 0; bBusy := TRUE;
     stNodeID.nNamespaceIndex := nNamespace;
     stNodeID.sIdentifier := sNode;
-    stNodeID.eIdentifierType := eUAIdentifierType.String;
-    stInfo.nAttributeID := 13;   (* the Value attribute *)
+    stNodeID.eIdentifierType := eUAIdentifierType_String;
+    stInfo.eAttributeID := eUAAI_Value;   (* the Value attribute, 13 *)
     nStep := 1;
 END_IF
 bLast := bExecute;
@@ -355,10 +356,10 @@ END_VAR
 CASE nStep OF
 0:  (* connect without security; the link offers SecurityPolicy None with anonymous login *)
     stSession.sApplicationName := 'TwinCAT sim client';
-    stSession.eSecurityMode := eUASecurityMsgMode.None;
-    stSession.eSecurityPolicyUri := eUASecurityPolicyUri.None;
-    stSession.eTransportProfileUri := eUATransportProfileUri.UATcp;
-    stSession.nSessionTimeout := T#60S;
+    stSession.eSecurityMode := eUASecurityMsgMode_None;
+    stSession.eSecurityPolicyUri := eUASecurityPolicy_None;
+    stSession.eTransportProfileUri := eUATransportProfileUri_UATcp;
+    stSession.tSessionTimeout := T#60S;
     fbConnect(Execute := TRUE, ServerURL := 'opc.tcp://192.168.0.10:4840', SessionConnectInfo := stSession, Timeout := T#5S);
     IF fbConnect.Done THEN hConnection := fbConnect.ConnectionHdl; fbConnect(Execute := FALSE); nStep := 10;
     ELSIF fbConnect.Error THEN fbConnect(Execute := FALSE); nStep := 900; END_IF

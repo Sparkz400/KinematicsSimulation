@@ -8,9 +8,12 @@ all-features = true
 # Drop an ignore when that dependency is updated.
 [advisories]
 ignore = [
-    # rsa 0.9 (Marvin attack, a timing side channel in RSA decryption), via async-opcua. sim-opcua offers one endpoint,
-    # SecurityPolicy::None with MessageSecurityMode::None (crates/sim-opcua/src/lib.rs), so no RSA decryption runs.
-    { id = "RUSTSEC-2023-0071", reason = "sim-opcua has only a SecurityPolicy::None endpoint; no RSA decryption runs" },
+    # rsa 0.9 (Marvin attack, a timing side channel in RSA decryption), via async-opcua-crypto 0.19.0. It applies:
+    # sim-opcua's secured endpoints (Basic256Sha256, Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss) decrypt the
+    # OpenSecureChannel request with the server's key in Sign and SignAndEncrypt mode, before the client's certificate
+    # is checked. rsa 0.10.0 fixes it, but async-opcua 0.19.0 (the newest, checked 14 November 2026) needs rsa 0.9.
+    # Residual risk and mitigations (loopback by default, firewall, --renew-certificate): docs/plc.md, SECURITY.md.
+    { id = "RUSTSEC-2023-0071", reason = "applies to sim-opcua's secured endpoints; no async-opcua release on rsa 0.10 yet; mitigations in docs/plc.md#security" },
     # Unmaintained, no fix to take: atomic-polyfill (heapless 0.7 via postcard via async-opcua-server).
     { id = "RUSTSEC-2023-0089", reason = "unmaintained, via async-opcua 0.19; no release without it" },
     # Unmaintained, no fix to take: unsafe-libyaml (serde_yaml via async-opcua-core).
