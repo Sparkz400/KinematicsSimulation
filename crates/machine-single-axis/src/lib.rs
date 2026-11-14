@@ -565,7 +565,8 @@ impl Machine for SingleAxis {
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
         let (x, r, ratio) = (tool[0], self.r, self.gearbox.ratio);
-        let weight = (self.m() + self.chain.mass(x).0) * self.g_along;
+        // The weight along the axis less what pushes the carriage at rest (the process force while dwelling).
+        let weight = (self.m() + self.chain.mass(x).0) * self.g_along - self.extra_force(x, 0.0);
         if !self.elastic {
             *state = vec![x, 0.0, 0.0, 0.0];
             let shaft = (weight - self.mesh.force(x)) * r / ratio;
