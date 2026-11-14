@@ -9,7 +9,9 @@ What is not built yet, from the "Left open" lists at the end of each section of 
   motors' coordinates, for the deltas, the SCARA and the arm) and the belt stiffness from a move's trace are built
   and tested on traces the simulator made and on files built after the vendors' layouts; none has read a real
   drive's trace yet. The layout of the Startdrive CSV export is not documented by Siemens and is assumed.
-- A real PLC (Siemens, Beckhoff, CODESYS) against the OPC UA server: data types, security, cycle jitter.
+- A real PLC (Siemens, Beckhoff, CODESYS) against the OPC UA server. The server is prepared (Basic256Sha256
+  endpoints, trusted client certificates, user and password, a checked type table, the clients' cycle jitter, Structured
+  Text programs for TwinCAT and CODESYS, docs/plc.md); no PLC has connected yet and the ST files are not compiled.
 - The S210's DC link capacitance and chopper threshold: Siemens publishes neither. The capacitance is measured for
   one converter (6SL5310-1BE10-8DF0, `dc_link_measured.csv`); for every other converter both stay estimates.
 - The motors' own bearings: Siemens gives their allowable radial forces only as diagrams; one frame size

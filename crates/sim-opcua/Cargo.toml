@@ -9,6 +9,7 @@ sim-core.workspace = true
 sim-components.workspace = true
 sim-machines.workspace = true
 async-opcua = { workspace = true, features = ["server"] }
+async-trait.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]

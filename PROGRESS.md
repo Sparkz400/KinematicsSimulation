@@ -1915,3 +1915,58 @@ Left open:
 
 - OMEdit's graphical SSP editor (File > New SSP Model) was not clicked through; OMSimulator was run from its command line.
 - Simulink and Dymola stay untested.
+
+## The OPC UA server prepared for real PLCs (14 November)
+
+What: `sim-opcua` made ready for a Siemens, Beckhoff or CODESYS OPC UA client, without one here (ROADMAP: "A real PLC
+against the OPC UA server: data types, security, cycle jitter").
+
+- Security: three endpoints at the same URL, None and Basic256Sha256 with Sign and with SignAndEncrypt. The application
+  instance certificate (self-signed, RSA 2048, 365 days, alternative names the application URI, localhost, the host
+  name and its addresses, checked with openssl) is made on the first start in `--pki` (default `pki`). A client
+  certificate not in `pki/trusted` is refused on the secured endpoints and lands in `pki/rejected`, from where moving it
+  trusts it; `--trust-all` (off by default) accepts and stores every one. `--user NAME` asks for that user and the
+  password from `SIM_OPCUA_PASSWORD` (not on the command line); the None endpoint is then not offered, because
+  async-opcua accepts a password sent in clear (empty encryption algorithm) whatever the endpoint's password policy. All of it is async-opcua's own (`ServerEndpoint`, `ServerUserToken`, its certificate
+  store); `sim_opcua::Security` and `serve_secured` carry it, `serve` keeps the old defaults for the other tests.
+- Data types: every variable checked against the IEC 61131-3 type the PLC clients map it to. Nothing a PLC could not
+  read or write was found: all variables are scalars (ValueRank -1) with types the clients know (Double LREAL, Boolean
+  BOOL, UInt16 UINT, Int32 DINT, UInt64 ULINT, String STRING), and the server already lets a scalar of another type
+  through to the write callback, which takes Float and the integers for a number. The node id table, with what S7-1500,
+  TF6100 and CODESYS need (S7 String 254 characters, no ULInt on the S7-1200), is in docs/plc.md; the namespace index
+  is 2 and the string ids are built from names, so stable across restarts.
+- The clients' cycle: async-opcua's simple node manager wrapped in `Timed`, which times each Read and Write request of
+  the simulator's namespace (one request counts once; reads counted after they are answered, so that a read of the
+  figures is not in its own answer). Count, mean, standard deviation and largest interval are `status.client_*` and
+  printed at shutdown; `command.reset_pacing` clears them in the write itself. async-trait (=0.1.92, already in the lock
+  through async-opcua) became a direct dependency for the wrapper's trait impl.
+- Structured Text: `sim_cycle.st` for TwinCAT (TF6100) and CODESYS beside the existing `sim_plcopen.st`: a secured
+  connect with optional user, namespace by URI, MC_Power, MC_MoveAbsolute, a path through `command.path` and
+  `command.run_path`, position and following error read every cycle through handles kept; docs/plc.md (and
+  docs/de/sps.md) step by step for running them against `sim-opcua` on the same PC, and reading the jitter off.
+- CI: the new wall-clock tests run in the serial PLC step (`binary(interop)` in ci.yml and nextest.toml).
+
+Test (`sim-opcua/tests/interop.rs`, async-opcua's client; no independent client was on this machine: no Python
+`asyncua` or `opcua` in the repo's .venv or the system Pythons, no UaExpert, TwinCAT or CODESYS):
+`a_trusted_client_reads_and_writes_with_basic256sha256_sign_and_encrypt` (the three endpoints offered; an unknown client
+refused, its certificate in rejected/; moved to trusted/, it reads and writes with SignAndEncrypt, and connects with
+Sign), `trust_all_lets_an_unknown_client_in`, `a_user_name_and_password_keep_others_out` (anonymous and a wrong
+password refused, the right one in on SignAndEncrypt; None not offered), `the_type_table_matches_every_exposed_variable`
+(every variable of every machine browsed; DataType, ValueRank, AccessLevel and value against the table parsed from
+docs/plc.md; every row met; namespace index 2), `the_server_measures_the_cycle_of_a_client_writing_every_10_ms`
+(intervals of nine times 10 ms and one of 40 ms, three times, by spinning on the wall clock: by hand 30 intervals,
+mean 390/30 = 13 ms, largest 40 ms, standard deviation sqrt(250 - 13^2) = 9 ms; for writes and for reads, within 0.5,
+5 and 2 ms). In the crate: `intervals_give_count_mean_standard_deviation_and_largest` (10, 10, 10, 30 ms: mean 15 ms,
+largest 30 ms, standard deviation sqrt(75) = 8.660 ms) and `security_options_are_read`. `tests/interop.rs` passed here, 5 of 5 in 37 s
+(release, one thread); the crate's unit tests were not run (the coordinating session runs the suites); the server was started with and without `--user` and `--trust-all` and
+made its certificate.
+
+Left open:
+
+- No real PLC has connected, and the ST files are not compiled; names that can differ between library versions are
+  marked `CHECK`, among them the user identity token members of TF6100 and CODESYS.
+- Aes128-Sha256-RsaOaep and Aes256-Sha256-RsaPss endpoints, X.509 user tokens, roles (read only), certificate
+  revocation lists: not served.
+- The client timing counts all clients together and leaves subscriptions out; a PLC that subscribes instead of polling
+  shows nothing there.
+- The certificate does not renew itself after 365 days.

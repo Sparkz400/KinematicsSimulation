@@ -49,6 +49,7 @@ Der Simulator rechnet seine Physik in Schritten von 62,5 µs; das ist schnell ge
 
 - PROFINET RT-Klasse 1 mit 1 bis 4 ms: braucht eine Schleife, die in jedem Buszyklus mit einem Jitter weit unter einem Zyklus aufwacht. Unter Linux mit PREEMPT_RT und einem festgelegten Thread ist das üblich. Unter Windows ist das ohne Echtzeiterweiterung nicht erreichbar.
 - EtherCAT mit DC bei 250 µs bis 1 ms: Der ESC gibt den Takt vor; der Simulator muss die nächste Istposition vor dem nächsten SYNC0 liefern, in jedem Zyklus. Mit einem ESC an SPI (LAN9252) ist das eine harte Echtzeitschleife unter Linux mit 1 kHz oder mehr.
+- Noch vor jedem Bus misst die OPC-UA-Kopplung, wie regelmäßig eine SPS sie erreicht (`status.client_read_*`, `status.client_write_*`, siehe [Der Takt des Clients](sps.md#der-takt-des-clients)): den Jitter der SPS-Task samt dem dieses Rechners, den ein Buszyklus unterbieten müsste.
 - Die Sollwertinterpolation des Simulators (`profile.setpoint_interval_s`) würde zum Buszyklus, und seine Feldbusverzögerung und sein Feldbusjitter (`profile.fieldbus_delay_cycles`, `fieldbus_jitter_cycles`) würden durch den echten Bus ersetzt.
 
 ## Lizenzen

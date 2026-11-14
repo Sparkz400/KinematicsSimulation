@@ -14,6 +14,14 @@ item are in [PROGRESS.md](PROGRESS.md).
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
   the FMI 2.0 FMUs and agrees with `sim-cli run` to 5.0e-10.
 
+- `sim-opcua`: Basic256Sha256 endpoints with Sign and SignAndEncrypt beside None; a self-signed certificate made in
+  `--pki` on the first start; client certificates trusted from `pki/trusted` (refused ones in `pki/rejected`), or all
+  with `--trust-all`; `--user NAME` with the password from `SIM_OPCUA_PASSWORD`.
+- `sim-opcua`: the clients' read and write intervals (count, mean, standard deviation, largest) as `status.client_*`
+  and at shutdown, to read a PLC's cycle jitter off.
+- docs/plc.md: node ids with their OPC UA and IEC 61131-3 types (checked by a test), security, and a step-by-step run of
+  the new `sim_cycle.st` programs for TwinCAT 3 and CODESYS against `sim-opcua` on the same PC.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

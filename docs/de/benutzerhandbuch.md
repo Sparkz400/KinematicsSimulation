@@ -1284,12 +1284,12 @@ In diesem Lauf steht die Z-Achse bei 0,498 s auf 0,2276 m und bewegt sich; bei 1
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang de
 ```
 
-Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine, `--port` (Standard 4840), `--lang`, `--host` (Standard 127.0.0.1) und `--cycle-ms` (Standard 10) sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, ein Port, eine Sprache, eine Adresse oder ein Takt, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt. PLCopen-Bausteine je Achse, der Echtzeittakt und seine Messung, Beispiele für TwinCAT und CODESYS und der Dauertest stehen in [SPS-Inbetriebnahme](sps.md).
+Das gibt `OPC-UA-Server erreichbar unter opc.tcp://127.0.0.1:4840/` aus und lässt die Maschine in Echtzeit laufen, bis der Server beendet wird. Der Name der Maschine, `--port` (Standard 4840), `--lang`, `--host` (Standard 127.0.0.1), `--cycle-ms` (Standard 10) und die Sicherheitsoptionen `--pki`, `--trust-all` und `--user` sind die einzigen Argumente. Eine Maschine, die der Simulator nicht hat, ein Port, eine Sprache, eine Adresse oder ein Takt, die nicht lesbar sind, und jedes andere Wort werden mit einer Meldung und dem Code 2 abgelehnt. PLCopen-Bausteine je Achse, der Echtzeittakt und seine Messung, Beispiele für TwinCAT und CODESYS und der Dauertest stehen in [SPS-Inbetriebnahme](sps.md).
 
 | Eigenschaft | Wert |
 | --- | --- |
 | Endpunkt | `opc.tcp://127.0.0.1:PORT/` |
-| Sicherheit | Keine. Anonymer Zugriff |
+| Sicherheit | None, und Basic256Sha256 mit Sign und mit SignAndEncrypt; anonym außer mit `--user` (siehe [Sicherheit](sps.md#sicherheit)) |
 | Namensraum | `urn:kinematics-simulation` |
 | Knoten-IDs | Zeichenketten in diesem Namensraum, wie in der Tabelle unten |
 | Aktualisierungsrate | Jedes Signal wird 100-mal je Sekunde veröffentlicht |

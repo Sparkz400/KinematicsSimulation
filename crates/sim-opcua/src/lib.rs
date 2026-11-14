@@ -63,15 +63,36 @@
 //! | `status.realtime_factor`     | Double  | read   | simulated time over wall-clock time                       |
 //! | `status.steps`               | UInt64  | read   | simulation steps since the start                          |
 //! | `command.reset_pacing`       | Boolean | write  | true starts the measurement anew                          |
+//!
+//! The clients' cycle, from the arrival times of their Read and Write requests (`ClientTiming`), reset with the pacing:
+//!
+//! | node                                                   | type    | access | meaning                                |
+//! | ------------------------------------------------------ | ------- | ------ | -------------------------------------- |
+//! | `status.client_writes`, `status.client_reads`          | UInt64  | read   | intervals measured                     |
+//! | `status.client_write_mean_s`, `status.client_read_mean_s` | Double | read  | mean interval                          |
+//! | `status.client_write_std_s`, `status.client_read_std_s`   | Double | read  | standard deviation of the intervals    |
+//! | `status.client_write_max_s`, `status.client_read_max_s`   | Double | read  | largest interval                       |
+//!
+//! Endpoints, certificates and users: see `Security`. docs/plc.md has the IEC 61131-3 type of every node.
 
 pub mod plcopen;
 
 use opcua::crypto::SecurityPolicy;
-use opcua::server::address_space::{AccessLevel, VariableBuilder};
+use opcua::server::address_space::{AccessLevel, AddressSpace, VariableBuilder};
 use opcua::server::diagnostics::NamespaceMetadata;
-use opcua::server::node_manager::memory::{SimpleNodeManager, simple_node_manager};
-use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerHandle};
-use opcua::types::{DataTypeId, DataValue, MessageSecurityMode, NodeId, ObjectId, StatusCode, Variant};
+use opcua::server::node_manager::memory::{
+    InMemoryNodeManager, InMemoryNodeManagerBuilder, InMemoryNodeManagerImpl, InMemoryNodeManagerImplBuilder,
+    SimpleNodeManagerBuilder, SimpleNodeManagerImpl,
+};
+use opcua::server::node_manager::{
+    MonitoredItemRef, MonitoredItemUpdateRef, ParsedReadValueId, RequestContext, ServerContext, WriteNode,
+};
+use opcua::server::{ANONYMOUS_USER_TOKEN_ID, CreateMonitoredItem, ServerBuilder, ServerHandle, ServerUserToken};
+use opcua::sync::RwLock;
+use opcua::types::{
+    DataTypeId, DataValue, MessageSecurityMode, MonitoringMode, NodeId, ObjectId, StatusCode, TimestampsToReturn,
+    Variant,
+};
 use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
@@ -145,11 +166,135 @@ impl Pacing {
     }
 }
 
+/// The time between consecutive requests of one kind (Read or Write) from the clients, since the last reset.
+#[derive(Debug, Clone, Default)]
+pub struct Intervals {
+    /// Intervals measured: one fewer than the requests.
+    pub count: u64,
+    sum_s: f64,
+    square_sum_s2: f64,
+    pub max_s: f64,
+    last: Option<Instant>,
+}
+
+impl Intervals {
+    /// A request arrived at `at`.
+    pub fn record(&mut self, at: Instant) {
+        if let Some(last) = self.last.replace(at) {
+            let interval = at.saturating_duration_since(last).as_secs_f64();
+            self.count += 1;
+            self.sum_s += interval;
+            self.square_sum_s2 += interval * interval;
+            self.max_s = self.max_s.max(interval);
+        }
+    }
+
+    pub fn mean_s(&self) -> f64 {
+        self.sum_s / self.count.max(1) as f64
+    }
+
+    /// Standard deviation of the intervals around their mean (of the population: divided by the count).
+    pub fn std_s(&self) -> f64 {
+        (self.square_sum_s2 / self.count.max(1) as f64 - self.mean_s().powi(2)).max(0.0).sqrt()
+    }
+}
+
+/// How regularly the clients read and write the simulator's variables: a PLC that reads and writes once a task cycle
+/// shows its cycle and jitter here. One Read or Write request counts once, however many variables it holds; reads of
+/// other attributes than the value (browsing) and subscriptions do not count.
+#[derive(Debug, Clone, Default)]
+pub struct ClientTiming {
+    pub reads: Intervals,
+    pub writes: Intervals,
+}
+
+/// The simple in-memory node manager, with the arrival of every Read and Write request timed.
+pub struct Timed {
+    simple: SimpleNodeManagerImpl,
+    clients: Arc<Mutex<ClientTiming>>,
+}
+
+#[async_trait::async_trait]
+impl InMemoryNodeManagerImpl for Timed {
+    async fn init(&self, address_space: &mut AddressSpace, context: ServerContext) {
+        self.simple.init(address_space, context).await
+    }
+
+    fn name(&self) -> &str {
+        self.simple.name()
+    }
+
+    fn namespaces(&self) -> Vec<NamespaceMetadata> {
+        self.simple.namespaces()
+    }
+
+    async fn read_values(
+        &self,
+        context: &RequestContext,
+        address_space: &RwLock<AddressSpace>,
+        nodes: &[&ParsedReadValueId],
+        max_age: f64,
+        timestamps_to_return: TimestampsToReturn,
+    ) -> Vec<DataValue> {
+        let arrived = Instant::now();
+        let values = self.simple.read_values(context, address_space, nodes, max_age, timestamps_to_return).await;
+        // Counted once answered: a read of the measurement is not in its own answer.
+        self.clients.lock().unwrap().reads.record(arrived);
+        values
+    }
+
+    async fn write(
+        &self,
+        context: &RequestContext,
+        address_space: &RwLock<AddressSpace>,
+        nodes_to_write: &mut [&mut WriteNode],
+    ) -> Result<(), StatusCode> {
+        // Before the write is carried out: `command.reset_pacing` clears what it is counted in.
+        self.clients.lock().unwrap().writes.record(Instant::now());
+        self.simple.write(context, address_space, nodes_to_write).await
+    }
+
+    async fn create_value_monitored_items(
+        &self,
+        context: &RequestContext,
+        address_space: &RwLock<AddressSpace>,
+        items: &mut [&mut &mut CreateMonitoredItem],
+    ) {
+        self.simple.create_value_monitored_items(context, address_space, items).await
+    }
+
+    async fn set_monitoring_mode(&self, context: &RequestContext, mode: MonitoringMode, items: &[&MonitoredItemRef]) {
+        self.simple.set_monitoring_mode(context, mode, items).await
+    }
+
+    async fn modify_monitored_items(&self, context: &RequestContext, items: &[&MonitoredItemUpdateRef]) {
+        self.simple.modify_monitored_items(context, items).await
+    }
+
+    async fn delete_monitored_items(&self, context: &RequestContext, items: &[&MonitoredItemRef]) {
+        self.simple.delete_monitored_items(context, items).await
+    }
+}
+
+/// How the server lets clients in. It always offers three endpoints at the same URL: security policy `None`, and
+/// `Basic256Sha256` with `Sign` and with `SignAndEncrypt`. Its application instance certificate (self-signed, valid for
+/// a year) is created in the pki folder on the first start: `own/cert.der` and `private/private.pem`.
+#[derive(Debug, Clone, Default)]
+pub struct Security {
+    /// Accept every client certificate and store it in `<pki>/trusted` (for commissioning). Off, a client certificate
+    /// that is not in `<pki>/trusted` is refused and stored in `<pki>/rejected`, to be moved to `trusted` by hand.
+    pub trust_all: bool,
+    /// The user name and password a client must give; `None` lets clients in anonymously. With a user the endpoint
+    /// without security is not offered, so that the password never travels in clear.
+    pub user: Option<(String, String)>,
+}
+
 pub struct Link {
     pub handle: ServerHandle,
     /// Index of the simulator's namespace on this server.
     pub namespace: u16,
     pub pacing: Arc<Mutex<Pacing>>,
+    pub clients: Arc<Mutex<ClientTiming>>,
 }
 
 impl Drop for Link {
@@ -179,6 +324,7 @@ fn flag(value: &DataValue) -> Option<bool> {
 
 /// Starts the server on `listener` and the simulation behind it, in real time, in ticks of `cycle`.
 /// `labels` names the variables for people browsing the server; `pki_dir` holds the server's keys.
+/// Anonymous clients, and only client certificates already trusted: `Security::default()`.
 pub async fn serve(
     entry: &'static MachineEntry,
     cfg: &Config,
@@ -187,6 +333,19 @@ pub async fn serve(
     pki_dir: &Path,
     cycle: Duration,
 ) -> Result<Link, LinkError> {
+    serve_secured(entry, cfg, labels, listener, pki_dir, cycle, &Security::default()).await
+}
+
+/// `serve`, letting clients in as `security` says.
+pub async fn serve_secured(
+    entry: &'static MachineEntry,
+    cfg: &Config,
+    labels: &Translations,
+    listener: TcpListener,
+    pki_dir: &Path,
+    cycle: Duration,
+    security: &Security,
+) -> Result<Link, LinkError> {
     let sim = Sim::new(entry, cfg).map_err(|e| LinkError(e.key(), e.detail().into()))?;
     // The PLCopen axes stream one setpoint per setpoint interval, counted in simulation steps.
     let interval = cfg.f64("profile.setpoint_interval_s").map_err(|e| LinkError(e.key(), e.detail().into()))?;
@@ -194,7 +353,36 @@ pub async fn serve(
     let plc: Vec<Axis> =
         sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(info, home)| Axis::new(info, *home)).collect();
     let address = listener.local_addr().map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
-    let (server, handle) = ServerBuilder::new()
+    let clients = Arc::new(Mutex::new(ClientTiming::default()));
+    let timed = {
+        let clients = clients.clone();
+        move |context: ServerContext, space: &mut AddressSpace| Timed {
+            simple: SimpleNodeManagerBuilder::new(
+                NamespaceMetadata { namespace_uri: NAMESPACE.to_owned(), ..Default::default() },
+                "simulator",
+            )
+            .build(context, space),
+            clients,
+        }
+    };
+    let user_tokens: &[&str] = if security.user.is_some() { &["user"] } else { &[ANONYMOUS_USER_TOKEN_ID] };
+    let mut builder = ServerBuilder::new();
+    for (id, policy, mode) in [
+        ("none", SecurityPolicy::None, MessageSecurityMode::None),
+        ("basic256sha256_sign", SecurityPolicy::Basic256Sha256, MessageSecurityMode::Sign),
+        ("basic256sha256_sign_encrypt", SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt),
+    ] {
+        // With a password, no endpoint without security: async-opcua takes a password sent in clear (an empty
+        // encryption algorithm) even where the policy asks for it encrypted.
+        if security.user.is_some() && policy == SecurityPolicy::None {
+            continue;
+        }
+        builder = builder.add_endpoint(id, ("/", policy, mode, user_tokens));
+    }
+    if let Some((user, password)) = &security.user {
+        builder = builder.add_user_token("user", ServerUserToken::user_pass(user.as_str(), password.as_str()));
+    }
+    let (server, handle) = builder
         .application_name("sim-opcua")
         // Not the namespace URI: the application URI becomes namespace 1, and the same URI twice
         // would make the variables' namespace index ambiguous.
@@ -202,22 +390,17 @@ pub async fn serve(
         .product_uri(format!("{NAMESPACE}:server"))
         .create_sample_keypair(true)
         .pki_dir(pki_dir)
+        .trust_client_certs(security.trust_all)
         .host(address.ip().to_string())
         .port(address.port())
         .discovery_urls(vec![format!("opc.tcp://{address}/")])
-        .add_endpoint(
-            "none",
-            ("/", SecurityPolicy::None, MessageSecurityMode::None, &[ANONYMOUS_USER_TOKEN_ID] as &[&str]),
-        )
-        .with_node_manager(simple_node_manager(
-            NamespaceMetadata { namespace_uri: NAMESPACE.to_owned(), ..Default::default() },
-            "simulator",
-        ))
+        .default_endpoint(if security.user.is_some() { "basic256sha256_sign_encrypt" } else { "none" })
+        .with_node_manager(InMemoryNodeManagerBuilder::new(timed))
         .build()
         .map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
     let manager = handle
         .node_managers()
-        .get_of_type::<SimpleNodeManager>()
+        .get_of_type::<InMemoryNodeManager<Timed>>()
         .ok_or(LinkError("opcua-error-start", String::new()))?;
     let namespace = handle.get_namespace_index(NAMESPACE).ok_or(LinkError("opcua-error-start", String::new()))?;
     let node = |name: String| NodeId::new(namespace, name);
@@ -310,6 +493,14 @@ pub async fn serve(
             ("status.realtime_factor", "opcua-realtime-factor", DataTypeId::Double, Variant::from(0.0), false),
             ("status.steps", "opcua-steps", DataTypeId::UInt64, Variant::from(0u64), false),
             ("command.reset_pacing", "opcua-reset-pacing", DataTypeId::Boolean, Variant::from(false), true),
+            ("status.client_writes", "opcua-client-writes", DataTypeId::UInt64, Variant::from(0u64), false),
+            ("status.client_write_mean_s", "opcua-client-write-mean", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.client_write_std_s", "opcua-client-write-std", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.client_write_max_s", "opcua-client-write-max", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.client_reads", "opcua-client-reads", DataTypeId::UInt64, Variant::from(0u64), false),
+            ("status.client_read_mean_s", "opcua-client-read-mean", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.client_read_std_s", "opcua-client-read-std", DataTypeId::Double, Variant::from(0.0), false),
+            ("status.client_read_max_s", "opcua-client-read-max", DataTypeId::Double, Variant::from(0.0), false),
         ] {
             add(&node(name.into()), name, labels.tr(key).into(), kind, start, writable);
         }
@@ -317,7 +508,7 @@ pub async fn serve(
     // Writes arrive on the server's tasks; they are queued for the simulation loop.
     let on_write =
         |name: String, convert: fn(&DataValue, usize) -> Option<Input>, index: usize, inputs: Sender<Input>| {
-            manager.inner().add_write_callback(node(name), move |value, _| match convert(&value, index) {
+            manager.inner().simple.add_write_callback(node(name), move |value, _| match convert(&value, index) {
                 Some(input) => inputs.send(input).map_or(StatusCode::BadShutdown, |_| StatusCode::Good),
                 None => StatusCode::BadTypeMismatch,
             });
@@ -333,7 +524,20 @@ pub async fn serve(
     on_write("command.path".into(), |v, _| Some(Input::Path(text(v)?)), 0, inputs.clone());
     on_write("command.path_time_optimal".into(), |v, _| Some(Input::PathTimeOptimal(flag(v)?)), 0, inputs.clone());
     on_write("command.run_path".into(), |v, _| flag(v)?.then_some(Input::RunPath), 0, inputs.clone());
-    on_write("command.reset_pacing".into(), |v, _| flag(v)?.then_some(Input::ResetPacing), 0, inputs.clone());
+    // The client timing starts anew at once, in this write: the loop would count the writes that come before its tick.
+    let (reset, timing) = (inputs.clone(), clients.clone());
+    manager.inner().simple.add_write_callback(node("command.reset_pacing".into()), move |value, _| {
+        match flag(&value) {
+            Some(on) => {
+                if on {
+                    *timing.lock().unwrap() = ClientTiming::default();
+                    return reset.send(Input::ResetPacing).map_or(StatusCode::BadShutdown, |_| StatusCode::Good);
+                }
+                StatusCode::Good
+            }
+            None => StatusCode::BadTypeMismatch,
+        }
+    });
     for (i, axis) in plc.iter().enumerate() {
         for (name, start, writable) in axis.variables(true, (0.0, 0.0)) {
             if !writable {
@@ -341,7 +545,7 @@ pub async fn serve(
             }
             let inputs = inputs.clone();
             let is_flag = matches!(start, Variant::Boolean(_));
-            manager.inner().add_write_callback(node(format!("axis.{}.{name}", axes[i])), move |value, _| {
+            manager.inner().simple.add_write_callback(node(format!("axis.{}.{name}", axes[i])), move |value, _| {
                 let input = if is_flag {
                     flag(&value).map(|on| Input::AxisFlag(i, name.clone(), on))
                 } else {
@@ -368,8 +572,9 @@ pub async fn serve(
         interval,
         cycle,
         pacing: pacing.clone(),
+        clients: clients.clone(),
     }));
-    Ok(Link { handle, namespace, pacing })
+    Ok(Link { handle, namespace, pacing, clients })
 }
 
 struct SimLoop {
@@ -384,6 +589,7 @@ struct SimLoop {
     interval: f64,
     cycle: Duration,
     pacing: Arc<Mutex<Pacing>>,
+    clients: Arc<Mutex<ClientTiming>>,
 }
 
 impl SimLoop {
@@ -410,7 +616,7 @@ impl SimLoop {
 
 /// Steps the simulation in real time and publishes every signal once a cycle (a hundred times a second by default).
 async fn simulate(mut s: SimLoop) {
-    let Some(manager) = s.handle.node_managers().get_of_type::<SimpleNodeManager>() else { return };
+    let Some(manager) = s.handle.node_managers().get_of_type::<InMemoryNodeManager<Timed>>() else { return };
     let namespace = s.namespace;
     let node = |name: String| NodeId::new(namespace, name);
     let signal_nodes: Vec<NodeId> = s.sim.signal_infos().iter().map(|i| node(format!("signal.{}", i.id))).collect();
@@ -584,6 +790,19 @@ async fn simulate(mut s: SimLoop) {
         ] {
             values.push((node(name.into()), DataValue::new_now(value)));
         }
+        let clients = s.clients.lock().unwrap().clone();
+        for (name, value) in [
+            ("status.client_writes", Variant::from(clients.writes.count)),
+            ("status.client_write_mean_s", clients.writes.mean_s().into()),
+            ("status.client_write_std_s", clients.writes.std_s().into()),
+            ("status.client_write_max_s", clients.writes.max_s.into()),
+            ("status.client_reads", clients.reads.count.into()),
+            ("status.client_read_mean_s", clients.reads.mean_s().into()),
+            ("status.client_read_std_s", clients.reads.std_s().into()),
+            ("status.client_read_max_s", clients.reads.max_s.into()),
+        ] {
+            values.push((node(name.into()), DataValue::new_now(value)));
+        }
         let drives_on = s.sim.control.enabled();
         for ((axis, nodes), (position, velocity)) in s.plc.iter().zip(&axis_nodes).zip(&actual) {
             let at = |index: &Option<usize>| index.map_or(f64::NAN, |k| sample[k]);
@@ -598,6 +817,28 @@ async fn simulate(mut s: SimLoop) {
 
 #[cfg(test)]
 mod tests {
+    use super::Intervals;
+    use std::time::{Duration, Instant};
+
+    /// Requests at intervals of 10, 10, 10 and 30 ms: four intervals, mean (30 + 30) / 4 = 15 ms, largest 30 ms;
+    /// deviations −5, −5, −5 and +15 ms, so the standard deviation is √((3 · 25 + 225) / 4) = √75 = 8.660 ms. The
+    /// first request starts the series and is no interval itself.
+    #[test]
+    fn intervals_give_count_mean_standard_deviation_and_largest() {
+        let mut intervals = Intervals::default();
+        let mut at = Instant::now();
+        intervals.record(at);
+        assert_eq!((intervals.count, intervals.mean_s(), intervals.std_s()), (0, 0.0, 0.0));
+        for ms in [10, 10, 10, 30] {
+            at += Duration::from_millis(ms);
+            intervals.record(at);
+        }
+        assert_eq!(intervals.count, 4);
+        assert!((intervals.mean_s() - 0.015).abs() < 1e-12, "{}", intervals.mean_s());
+        assert!((intervals.max_s - 0.030).abs() < 1e-12, "{}", intervals.max_s);
+        assert!((intervals.std_s() - 75f64.sqrt() * 1e-3).abs() < 1e-9, "{}", intervals.std_s());
+    }
+
     /// Every key the link shows has a German and an English entry.
     #[test]
     fn every_link_message_exists_in_every_language() {

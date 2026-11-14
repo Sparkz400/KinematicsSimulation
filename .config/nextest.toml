@@ -25,7 +25,7 @@ default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_
 real-time = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = "package(sim-opcua) & (binary(plc) | binary(soak))"
+filter = "package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop))"
 test-group = "real-time"
 
 # Not the app's long analyses: they wait for their jobs as long as these take (`wait_for_jobs`, up to 20 minutes) and

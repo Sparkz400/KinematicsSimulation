@@ -1,14 +1,21 @@
-//! The PLC link as a process: `sim-opcua [MACHINE | --machine-file FILE] [--port N] [--lang en|de] [--cycle-ms N] [--host IP]`.
+//! The PLC link as a process: `sim-opcua [MACHINE | --machine-file FILE] [--port N] [--lang en|de] [--cycle-ms N] [--host IP]
+//! [--pki DIR] [--trust-all] [--user NAME]`.
 //! Serves the machine's default config on opc.tcp://HOST:PORT/ (HOST 127.0.0.1 unless given) until stopped with
-//! Ctrl+C, then prints the measured real-time pacing. `--cycle-ms` sets the simulation loop's tick (default 10 ms).
+//! Ctrl+C, then prints the measured real-time pacing and the clients' read and write intervals. `--cycle-ms` sets the
+//! simulation loop's tick (default 10 ms). Security (docs/plc.md): the server's certificate and the trusted and
+//! rejected client certificates live in `--pki` (default `pki` in the working directory); `--trust-all` accepts every
+//! client certificate; `--user NAME` requires that user name, with the password from the environment variable
+//! `SIM_OPCUA_PASSWORD` (not on the command line, where every process on the computer could read it).
 
 use sim_core::MachineEntry;
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
-/// Machine, language, port, loop cycle in ms, and the address to listen on.
-type Arguments = (&'static MachineEntry, &'static str, u16, u64, IpAddr);
+/// Machine, language, port, loop cycle in ms, the address to listen on, the pki folder, whether to trust every
+/// client certificate, and the user name a client must give.
+type Arguments = (&'static MachineEntry, &'static str, u16, u64, IpAddr, PathBuf, bool, Option<String>);
 
 /// What the command line asks for, or the translation key and the argument of what is wrong with it. Nothing is
 /// passed over: a server for another machine or on another port than the one asked for looks like the right one
@@ -16,6 +23,7 @@ type Arguments = (&'static MachineEntry, &'static str, u16, u64, IpAddr);
 fn arguments(args: &[String]) -> Result<Arguments, (&'static str, String)> {
     let (mut entry, mut lang, mut port, mut cycle_ms, mut host) =
         (MACHINES[0], LANGUAGES[0], 4840, 10, IpAddr::from([127, 0, 0, 1]));
+    let (mut pki, mut trust_all, mut user) = (PathBuf::from("pki"), false, None);
     let mut at = 0;
     while at < args.len() {
         let value = args.get(at + 1).map(String::as_str);
@@ -25,6 +33,14 @@ fn arguments(args: &[String]) -> Result<Arguments, (&'static str, String)> {
             "--lang" => lang = LANGUAGES.iter().copied().find(|known| Some(*known) == value).ok_or_else(unreadable)?,
             "--port" => port = value.and_then(|port| port.parse().ok()).ok_or_else(unreadable)?,
             "--host" => host = value.and_then(|ip| ip.parse().ok()).ok_or_else(unreadable)?,
+            "--pki" => pki = value.filter(|dir| !dir.starts_with("--")).map(PathBuf::from).ok_or_else(unreadable)?,
+            "--user" => user = Some(value.filter(|name| !name.starts_with("--")).ok_or_else(unreadable)?.to_string()),
+            // A switch without a value.
+            "--trust-all" => {
+                trust_all = true;
+                at += 1;
+                continue;
+            }
             "--cycle-ms" => {
                 cycle_ms =
                     value.and_then(|ms| ms.parse().ok()).filter(|ms| (1..=1000).contains(ms)).ok_or_else(unreadable)?
@@ -45,13 +61,13 @@ fn arguments(args: &[String]) -> Result<Arguments, (&'static str, String)> {
         }
         at += 2;
     }
-    Ok((entry, lang, port, cycle_ms, host))
+    Ok((entry, lang, port, cycle_ms, host, pki, trust_all, user))
 }
 
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (entry, lang, port, cycle_ms, host) = arguments(&args).unwrap_or_else(|(key, detail)| {
+    let (entry, lang, port, cycle_ms, host, pki, trust_all, user) = arguments(&args).unwrap_or_else(|(key, detail)| {
         // In the language asked for, if that much of the command line can be read.
         let lang = args
             .windows(2)
@@ -68,15 +84,25 @@ async fn main() {
     let mut tr = translations(lang, entry);
     sim_opcua::I18N.iter().filter(|(l, _)| *l == lang).for_each(|(_, text)| tr.add(text));
 
+    let password = std::env::var("SIM_OPCUA_PASSWORD").ok().filter(|p| !p.is_empty());
+    let security = match (user, password) {
+        (Some(user), Some(password)) => sim_opcua::Security { trust_all, user: Some((user, password)) },
+        (Some(user), None) => {
+            eprintln!("{}", tr.tr_arg("opcua-error-password", &user));
+            std::process::exit(2);
+        }
+        (None, _) => sim_opcua::Security { trust_all, user: None },
+    };
     let started = match tokio::net::TcpListener::bind((host, port)).await {
         Ok(listener) => {
-            sim_opcua::serve(
+            sim_opcua::serve_secured(
                 entry,
                 &entry.config(),
                 &tr,
                 listener,
-                std::path::Path::new("pki"),
+                &pki,
                 Duration::from_millis(cycle_ms),
+                &security,
             )
             .await
         }
@@ -88,6 +114,14 @@ async fn main() {
                 "{}",
                 tr.tr_arg("opcua-listening", &format!("opc.tcp://{}/", std::net::SocketAddr::new(host, port)))
             );
+            let folder = std::path::absolute(&pki).unwrap_or(pki);
+            println!("{}", tr.tr_arg("opcua-pki", &folder.display().to_string()));
+            if security.trust_all {
+                println!("{}", tr.tr("opcua-trust-all"));
+            }
+            if let Some((user, _)) = &security.user {
+                println!("{}", tr.tr_arg("opcua-user", user));
+            }
             tokio::select! {
                 _ = link.handle.token().cancelled() => {}
                 _ = tokio::signal::ctrl_c() => {}
@@ -103,6 +137,12 @@ async fn main() {
                 p.realtime_factor()
             );
             println!("{}", tr.tr_arg("opcua-pacing", &line));
+            let clients = link.clients.lock().unwrap().clone();
+            let intervals = |i: &sim_opcua::Intervals| {
+                format!("{} · {} · {} · {}", i.count, ms(i.mean_s()), ms(i.std_s()), ms(i.max_s))
+            };
+            println!("{}", tr.tr_arg("opcua-client-timing-writes", &intervals(&clients.writes)));
+            println!("{}", tr.tr_arg("opcua-client-timing-reads", &intervals(&clients.reads)));
         }
         Err(sim_opcua::LinkError(key, detail)) => {
             eprintln!("{}", tr.tr_arg(key, &detail));
@@ -117,7 +157,7 @@ mod tests {
 
     fn parsed(args: &[&str]) -> Result<(&'static str, &'static str, u16, u64), (&'static str, String)> {
         arguments(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
-            .map(|(entry, lang, port, cycle, _)| (entry.id, lang, port, cycle))
+            .map(|(entry, lang, port, cycle, ..)| (entry.id, lang, port, cycle))
     }
 
     /// The server listens on 127.0.0.1 unless `--host` names another address of this computer.
@@ -128,6 +168,26 @@ mod tests {
         assert_eq!(host(&[]), Ok("127.0.0.1".into()));
         assert_eq!(host(&["--host", "192.168.0.10"]), Ok("192.168.0.10".into()));
         assert_eq!(host(&["--host", "plc"]), Err(("opcua-error-argument", "--host plc".into())));
+    }
+
+    /// Security: certificates in `pki` unless `--pki` names another folder, client certificates trusted only from that
+    /// folder unless `--trust-all`, anonymous clients unless `--user` names the user a client must give.
+    #[test]
+    fn security_options_are_read() {
+        let security =
+            |args: &[&str]| arguments(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>()).map(|a| (a.5, a.6, a.7));
+        assert_eq!(security(&[]), Ok((PathBuf::from("pki"), false, None)));
+        assert_eq!(
+            security(&["--trust-all", "--pki", "certs", "--user", "plc", "--port", "4841"]),
+            Ok((PathBuf::from("certs"), true, Some("plc".into())))
+        );
+        assert_eq!(
+            security(&[MACHINES[0].id, "--port", "4841", "--trust-all"]),
+            Ok((PathBuf::from("pki"), true, None))
+        );
+        assert_eq!(security(&["--user"]), Err(("opcua-error-argument", "--user".into())));
+        assert_eq!(security(&["--user", "--trust-all"]), Err(("opcua-error-argument", "--user --trust-all".into())));
+        assert_eq!(security(&["--pki"]), Err(("opcua-error-argument", "--pki".into())));
     }
 
     /// What is asked for is taken, in any order of the options, and the defaults fill in the rest.

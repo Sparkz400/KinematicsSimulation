@@ -27,8 +27,10 @@ egui_plot = "=0.37.0"
 rfd = "=0.18.0"
 # Writes a changed config over the file it came from, keeping its comments; already built for Bevy's macros.
 toml_edit = "=0.25.19"
-# Only the PLC link may depend on these two.
+# Only the PLC link may depend on these three. async-trait is async-opcua's own (already in the lock): the link's node
+# manager implements its trait to time the clients' requests.
 async-opcua = "=0.19.0"
+async-trait = "=0.1.92"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 
 # The physics tests integrate millions of steps; unoptimised they take minutes.
