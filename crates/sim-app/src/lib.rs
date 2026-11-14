@@ -3,6 +3,7 @@
 
 pub mod model;
 pub mod runs;
+pub mod search_views;
 pub mod session;
 pub mod video;
 

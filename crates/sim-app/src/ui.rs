@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use toml::Value;
 
+mod search_views;
+
 // The palette. Each colour stands for one thing, the same in the panels as in the 3D view: amber what is planned,
 // cyan what is measured or travelled, red what is over its limit. Green only marks a check that passes. The neutral
 // colours (panels, fields, text) follow the theme the top bar picks, dark or light; the meaning colours stay.
@@ -311,6 +313,8 @@ pub enum Action {
     ApplyOptimised,
     /// A row of the motor search goes into the config.
     UseCandidate(usize),
+    /// One of the search tab's other computations, or the path tab's move maps (`sim_app::search_views`).
+    RunView(sim_app::search_views::ViewJob),
     /// The config file field: open it, or save the config to it; with `true`, a file dialog asks for the file first.
     OpenConfig(bool),
     SaveConfig(bool),
@@ -1051,7 +1055,7 @@ pub fn tools(
                 analysis(ui, model, &mut inputs, actions);
             }
             ToolTab::EffectViews => effects(ui, model, &mut inputs, actions),
-            ToolTab::Search => search(ui, model, &mut inputs, actions),
+            ToolTab::Search => search_views::search(ui, model, &mut inputs, actions),
             ToolTab::Path => path(ui, model, &mut inputs, actions),
             ToolTab::Trace => trace(ui, model, &mut inputs, actions),
             ToolTab::Sweep => sweep(ui, model, &mut inputs, actions),
@@ -1965,38 +1969,6 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
     });
 }
 
-/// The motor search: every catalogue motor the fields ask for on the cycle, and a button per motor that
-/// names it in the running config.
-fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
-    let tr = |key: &str| model.tr.tr(key).to_string();
-    let found = model.search_table();
-    ui.horizontal_wrapped(|ui| {
-        ComboBox::from_label(tr("ui-search-supply")).selected_text(&inputs.supply).width(60.0).show_ui(ui, |ui| {
-            for &supply in SUPPLIES {
-                ui.selectable_value(&mut inputs.supply, supply.to_string(), supply);
-            }
-        });
-        ui.label(tr("ui-search-series"));
-        ui.add(TextEdit::singleline(&mut inputs.series).desired_width(90.0));
-        ui.label(tr("ui-search-gearboxes"));
-        ui.add(TextEdit::singleline(&mut inputs.gearboxes).desired_width(60.0));
-        ui.checkbox(&mut inputs.axes, tr("ui-search-axes"));
-        run_button(ui, model, "ui-search-run", Analysis::Search, actions);
-        if found.is_some() && ui.button(tr("ui-clear")).clicked() {
-            actions.push(Action::Clear(Analysis::Search));
-        }
-    });
-    if let Some(rows) = &found {
-        heading(ui, model, "ui-search-ranked", Analysis::Search);
-        table(
-            ui,
-            "ui-search-ranked",
-            rows,
-            Some((&tr("ui-search-use"), &mut |row| actions.push(Action::UseCandidate(row)))),
-        );
-    }
-}
-
 /// A path from a file: planned, run by the machine and analysed, with the planned path drawn.
 fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
@@ -2029,6 +2001,7 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
     }
     torque_speed(ui, model, Analysis::Path, actions);
     workspace(ui, model, inputs);
+    search_views::move_maps(ui, model, inputs, actions);
 }
 
 /// The workspace map: a horizontal slice through what the machine reaches, at a height the slider chooses, each node
@@ -2057,23 +2030,10 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
         inputs.workspace_z = Some(z);
     }
     let side = ui.available_width().min(360.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, inset());
-    let n = slice.n;
-    // Node (i, j) at the middle of its cell; y upwards, as in the plots.
-    let cell = side / n as f32;
-    let place = |x: f64, y: f64| {
-        let (fx, fy) = ((x - slice.x.0) / (slice.x.1 - slice.x.0), (y - slice.y.0) / (slice.y.1 - slice.y.0));
-        egui::pos2(
-            rect.left() + cell / 2.0 + (side - cell) * fx as f32,
-            rect.bottom() - cell / 2.0 - (side - cell) * fy as f32,
-        )
-    };
-    let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (n - 1) as f64;
-    for (k, &(condition, goes)) in slice.nodes.iter().enumerate() {
+    let map = search_views::GridMap::draw(ui, side, (slice.x, slice.y), slice.n, |k| {
+        let (condition, goes) = slice.nodes[k];
         if !condition.is_finite() {
-            continue;
+            return None;
         }
         let color = if condition > slice.limit {
             LIMIT
@@ -2081,40 +2041,21 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
             let [r, g, b] = trail_color((condition.ln() / slice.limit.ln()) as f32).map(|c| (c * 255.0) as u8);
             Color32::from_rgb(r, g, b)
         };
-        let centre = place(at(slice.x, k % n), at(slice.y, k / n));
-        painter.rect_filled(
-            Rect::from_center_size(centre, vec2(cell + 0.5, cell + 0.5)),
-            0.0,
-            if goes { color } else { color.gamma_multiply(0.3) },
-        );
-    }
-    let travel = Rect::from_two_pos(place(axes[0].min, axes[1].min), place(axes[0].max, axes[1].max));
-    painter.rect_stroke(travel, 0.0, Stroke::new(1.0, chalk()), egui::StrokeKind::Middle);
-    let label = |pos: egui::Pos2, align: egui::Align2, text: String| {
-        painter.text(pos, align, text, FontId::proportional(11.0), dim())
-    };
+        Some(if goes { color } else { color.gamma_multiply(0.3) })
+    });
+    let travel = Rect::from_two_pos(map.place(axes[0].min, axes[1].min), map.place(axes[0].max, axes[1].max));
+    ui.painter_at(map.rect).rect_stroke(travel, 0.0, Stroke::new(1.0, chalk()), egui::StrokeKind::Middle);
     let unit = |i: usize| format!("{} [{}]", tr(axes[i].key), axes[i].unit);
-    label(
-        rect.left_bottom() + vec2(2.0, -2.0),
-        egui::Align2::LEFT_BOTTOM,
-        format!("{} {} … {}", unit(0), short(slice.x.0), short(slice.x.1)),
-    );
-    label(
-        rect.left_top() + vec2(2.0, 2.0),
-        egui::Align2::LEFT_TOP,
-        format!("{} {} … {}", unit(1), short(slice.y.0), short(slice.y.1)),
-    );
-    if let Some(pointer) = response.hover_pos() {
-        let (fx, fy) = (((pointer.x - rect.left()) / side) as f64, ((rect.bottom() - pointer.y) / side) as f64);
-        let (i, j) = (((fx * n as f64) as usize).min(n - 1), ((fy * n as f64) as usize).min(n - 1));
-        let condition = slice.nodes[j * n + i].0;
+    map.label_axes(ui, unit(0), unit(1));
+    if let Some((i, j)) = map.hovered() {
+        let condition = slice.nodes[j * slice.n + i].0;
         let shown = if condition.is_finite() { short(condition) } else { tr("ui-workspace-out-of-reach") };
-        response.on_hover_text(format!(
+        map.response.clone().on_hover_text(format!(
             "{} {}, {} {}: {} {shown}",
             tr(axes[0].key),
-            short(at(slice.x, i)),
+            short(map.at(slice.x, i)),
             tr(axes[1].key),
-            short(at(slice.y, j)),
+            short(map.at(slice.y, j)),
             tr("quantity-condition-number")
         ));
     }
