@@ -37,8 +37,10 @@ What is not built yet, from the "Left open" lists at the end of each section of 
 ## Front ends
 
 - In the app: `--set` (values are changed in the parameter panel).
-- FMI: asynchronous steps, a darwin64 binary; import tested in Simulink, OpenModelica or Dymola (checked with fmpy in
-  CI). Restoring an FMU state replays every step from initialisation, so it costs as long as simulating to that point.
+- FMI: asynchronous steps, a darwin64 binary; import tested in Simulink or Dymola (checked with fmpy in CI, run in
+  OpenModelica 1.27.1 through OMSimulator). A Model Exchange FMU, which Modelica tools import as a block, is not
+  written (docs/fmi.md says why). Restoring an FMU state replays every step from initialisation, so it costs as long
+  as simulating to that point.
 
 ## Release
 

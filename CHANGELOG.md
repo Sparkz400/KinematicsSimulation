@@ -7,6 +7,13 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
+  implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
+  want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
+  the FMI 2.0 FMUs and agrees with `sim-cli run` to 5.0e-10.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

@@ -56,7 +56,7 @@ Other limits that matter:
 - The motor is one equivalent winding (R, L, back-EMF) that carries the RMS phase current and gets at most sqrt(3/2) times the DC link voltage. There is no three-phase model, no PWM, no field weakening.
 - The life figures are the makers' formulas and nothing more: ISO 281's life factor a1 on the bearings and a_ISO on the pulley shaft bearings alone (none on the guides), one bearing per pulley shaft, the gearing's life from a Wöhler exponent and knee that are estimates (Siemens' own damage sum was not read), load ratings and lubrication values that are partly estimates (Festo publishes none for the EXCT). They are not validated.
 - The OPC UA link was tested against a client written with the same library, not against a PLC.
-- The FMU was checked with fmpy's validator and simulator and with OMSimulator (OpenModelica's co-simulation tool), not imported into Simulink or Dymola, and not with the Modelica Association's `fmusim` or the FMU Compliance Checker ([docs/fmi.md](docs/fmi.md#validation)).
+- The FMU was checked with fmpy's validator and simulator and run in OpenModelica 1.27.1 through OMSimulator, its co-simulation tool (OpenModelica's import as a Modelica block takes Model Exchange FMUs only, which this export does not write); not imported into Simulink or Dymola, and not with the Modelica Association's `fmusim` or the FMU Compliance Checker ([docs/fmi.md](docs/fmi.md#validation)).
 - The browser's numbers agree with the command line's to four or five significant digits, not bit for bit ([docs/web.md](docs/web.md)).
 - Mouse handling of the app (orbit camera, panels) was not checked by a person; screenshots were.
 - Import of drive traces and the parameter fit were tested on traces the simulator made itself.

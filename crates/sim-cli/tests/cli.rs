@@ -1467,17 +1467,15 @@ fn fmu_writes_an_archive_with_the_fmi_layout_and_every_signal() {
         refs.dedup();
         assert_eq!(refs.len(), variables.len(), "value references are unique");
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-        for (k, signal) in sim.signal_infos().iter().enumerate() {
+        // The first signal, time, is FMI 2.0's implicit independent variable: declared, it needs no start attribute by
+        // the standard but one by FMIL, OpenModelica's FMI library, which reported it as an error.
+        assert!(variables.iter().all(|v| v.0 != "time" && v.2 != "independent"), "{}: time declared", entry.id);
+        for signal in sim.signal_infos().iter().skip(1) {
             let v = variables
                 .iter()
                 .find(|v| v.0 == signal.id)
                 .unwrap_or_else(|| panic!("{}: no variable {}", entry.id, signal.id));
-            assert_eq!(
-                (v.2.as_str(), v.3.as_str()),
-                (if k == 0 { "independent" } else { "output" }, signal.unit.as_str()),
-                "{}",
-                signal.id
-            );
+            assert_eq!((v.2.as_str(), v.3.as_str()), ("output", signal.unit.as_str()), "{}", signal.id);
         }
         for axis in sim.machine.axes() {
             assert!(variables.iter().any(|v| v.0 == format!("command.setpoint.{}", axis.id) && v.2 == "input"));

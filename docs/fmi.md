@@ -136,7 +136,7 @@ Not run: the Modelica Association's `fmusim` (Reference-FMUs) and the FMU Compli
 
 ## Import into other tools
 
-Import in Simulink, OpenModelica (OMEdit) and Dymola was **not tested** here: none of them was available. The steps below follow the tools' documented menus. In every tool the communication step must be a whole multiple of `sim.dt_s` (62.5 µs in the shipped configs); use the FMU's default step, `profile.setpoint_interval_s` (10 ms), unless you change that interval in the config.
+Import in Simulink and Dymola was **not tested** here: neither was available. OpenModelica 1.27.1 was (see its section). The steps below follow the tools' documented menus. In every tool the communication step must be a whole multiple of `sim.dt_s` (62.5 µs in the shipped configs); use the FMU's default step, `profile.setpoint_interval_s` (10 ms), unless you change that interval in the config.
 
 ### Simulink
 
@@ -151,11 +151,13 @@ Simulink imports FMI 2.0 Co-Simulation FMUs with the FMU block; MathWorks lists 
 
 ### OpenModelica
 
-OpenModelica's model editor OMEdit imports FMI 2.0 FMUs as Modelica blocks; for FMI 3.0 and for running co-simulation directly use OMSimulator, which was tested here from the command line (see above).
+Tested with OpenModelica 1.27.1 (64-bit, Windows), 14 November 2026. OpenModelica runs these FMUs through OMSimulator, its co-simulation tool, not as Modelica blocks:
 
-1. OMEdit: File > Import > FMU..., choose the `.fmu` file and an output directory, and confirm. OMEdit generates a Modelica block with the FMU's inputs and outputs and loads it into the library tree.
-2. Drag the block into a model, connect the setpoint inputs, and set the simulation's interval to the communication step.
-3. OMSimulator: `OMSimulator t-gantry-3.fmu --stopTime 1.0 --resultFile result.csv` runs the FMU on its own; in OMEdit, File > New SSP Model opens an OMSimulator model to which the FMU is added as a component and connected to other FMUs.
+- **OMSimulator 2.1.3, which ships with OpenModelica 1.27.1**, ran the FMI 2.0 FMUs of the T-gantry, the delta D3 and the H-bot machine file for 1 s at the default step of 0.01 s (`OMSimulator t-gantry.fmu --stopTime=1.0 --stepSize=0.01 --resultFile=result.csv`). Every output agrees with `sim-cli run` to within 5.0e-10 of its peak, the rounding of the CLI's 9 digits. That version refuses FMI 3.0 ("unsupported FMI version"); OMSimulator 3.0 (from PyPI, above) runs both.
+- **OMEdit's File > Import > FMU** (the compiler's `importFMU`) turns only FMI 2.0 **Model Exchange** FMUs into Modelica blocks; it refuses these Co-Simulation FMUs ("Only FMI 2.0 ModelExchange is supported"), and this export has no Model Exchange (see [why](#why-there-is-no-model-exchange)).
+- FMIL, the FMI library of OpenModelica and other importers, reported an error on the FMI 2.0 description while it was read: it wants a start value on the independent variable `time`, which the standard forbids there. Since 14 November the FMI 2.0 description leaves `time` out (the standard then has it implicitly; its value reference still answers), and FMIL reads it without a message. The FMI 3.0 description declares it.
+
+In OMEdit, File > New SSP Model opens an OMSimulator model to which the FMU is added as a component and connected to other FMUs.
 
 ### Dymola
 

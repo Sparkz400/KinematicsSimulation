@@ -257,7 +257,13 @@ fn description(
         cfg.positive("profile.setpoint_interval_s")?
     );
     let _ = writeln!(x, "  <ModelVariables>");
-    for (vr, v) in variables.iter().enumerate() {
+    // FMI 2.0 (2.2.7) gives an independent variable no start attribute, and FMIL (the FMI library of OpenModelica and
+    // other importers) reports one without it as an error; where none is declared, `time` is there implicitly. So 2.0
+    // leaves it out of the list (its value reference still answers), and 3.0, whose libraries accept it, declares it.
+    let written: Vec<usize> =
+        (0..variables.len()).filter(|&i| v3 || variables[i].causality() != "independent").collect();
+    for &vr in &written {
+        let v = &variables[vr];
         let variability = match (v.causality(), v.type_name()) {
             ("parameter", _) => "fixed",
             (_, "Real") => "continuous",
@@ -309,7 +315,9 @@ fn description(
         for (list, dependencies) in [("Outputs", r#" dependencies="""#), ("InitialUnknowns", "")] {
             let _ = writeln!(x, "    <{list}>");
             for vr in &outputs {
-                let _ = writeln!(x, r#"      <Unknown index="{}"{dependencies}/>"#, vr + 1);
+                // The index counts the variables as listed (from 1), not their value references.
+                let index = written.iter().position(|w| w == vr).expect("outputs are listed") + 1;
+                let _ = writeln!(x, r#"      <Unknown index="{index}"{dependencies}/>"#);
             }
             let _ = writeln!(x, "    </{list}>");
         }

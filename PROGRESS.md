@@ -1898,3 +1898,20 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## FMUs in OpenModelica (14 November 2026)
+
+OpenModelica 1.27.1 (64-bit, Windows, installed for the user only from build.openmodelica.org, checksum and signature
+checked) against the FMUs of `sim-cli fmu`:
+
+| What | Result | Test |
+| --- | --- | --- |
+| OMSimulator 2.1.3 (ships with OpenModelica 1.27.1), FMI 2.0 Co-Simulation: T-gantry, delta D3, H-bot machine file, 1 s at 0.01 s | Runs; 96, 94 and 90 outputs agree with `sim-cli run` to 5.0e-10, 4.3e-10 and 4.9e-10 of their peaks (the CLI's 9 digits) | by hand, as `tools/check_fmu.py` compares |
+| The same OMSimulator, FMI 3.0 | Refused: "unsupported FMI version" (OMSimulator 3.0 from PyPI runs it, 13 November) | -- |
+| OMEdit's Import FMU (`importFMU` of omc) | Refused: "Only FMI 2.0 ModelExchange is supported"; this export writes Co-Simulation only (docs/fmi.md, why there is no Model Exchange) | -- |
+| FMIL reading the FMI 2.0 description | Reported "Start attribute is required" for the independent variable `time`, which the standard forbids a start; with a start added the error went, confirming the cause. The 2.0 description now leaves `time` out (implicit by the standard), the ModelStructure counts the listed variables; FMIL reads it without a message, fmpy validates it, the FMI 3.0 description keeps `time` | `fmu_writes_an_archive_with_the_fmi_layout_and_every_signal` (no independent variable declared; outputs by their place), `tools/check_fmu.py` on the T-gantry and the H-bot |
+
+Left open:
+
+- OMEdit's graphical SSP editor (File > New SSP Model) was not clicked through; OMSimulator was run from its command line.
+- Simulink and Dymola stay untested.

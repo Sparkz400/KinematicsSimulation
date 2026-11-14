@@ -1372,7 +1372,7 @@ Wie ein Schritt abläuft:
 
 Grenzen bei dieser Aufgabe:
 
-- Geprüft mit fmpy und OMSimulator (Prüfung gegen das FMI-Schema, Simulation verglichen mit `sim-cli run`; die Befehle stehen in [FMI-Export](fmi.md#prüfung)). Der Import in Simulink, OpenModelica oder Dymola ist ungeprüft.
+- Geprüft mit fmpy und OMSimulator (Prüfung gegen das FMI-Schema, Simulation verglichen mit `sim-cli run`; die Befehle stehen in [FMI-Export](fmi.md#prüfung)). In OpenModelica 1.27.1 mit OMSimulator gerechnet (FMI 2.0; sein Modelica-Import nimmt nur Model Exchange); der Import in Simulink oder Dymola ist ungeprüft.
 - Nur Co-Simulation, kein Model Exchange ([warum](fmi.md#warum-es-kein-model-exchange-gibt)). Der FMU-Zustand arbeitet durch Wiederholen jedes Schritts seit der Initialisierung; einen Zustand wiederherzustellen dauert also so lange, wie bis zu ihm zu simulieren. Die Richtungsableitungen sind null, weil kein Ausgang direkt von einem Eingang abhängt. Keine asynchronen Schritte.
 - Eingänge sind nur Lagesollwerte: keine Fahrziele, kein Zyklus- oder Bahnbefehl und kein Momenteingang. Die Regelkreise bleiben in der FMU.
 - Meldungen und Beschreibungen in einer Sprache, der von `--lang` beim Schreiben der FMU.

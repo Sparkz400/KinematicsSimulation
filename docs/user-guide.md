@@ -1344,7 +1344,7 @@ How a step works:
 
 Limits for this task:
 
-- Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Import into Simulink, OpenModelica or Dymola is untested.
+- Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Run in OpenModelica 1.27.1 through OMSimulator (FMI 2.0; its Modelica import takes Model Exchange only); import into Simulink or Dymola is untested.
 - Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). The FMU state works by replaying every step since initialisation, so restoring a state takes as long as simulating up to it. The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
 - Inputs are position setpoints only: no move targets, cycle or path commands, and no torque input. The servo loops stay inside the FMU.
 - Messages and descriptions in one language, the one of `--lang` when the FMU was written.

@@ -136,7 +136,7 @@ Nicht ausgeführt: `fmusim` der Modelica Association (Reference-FMUs) und der FM
 
 ## Import in andere Werkzeuge
 
-Der Import in Simulink, OpenModelica (OMEdit) und Dymola wurde hier **nicht geprüft**: Keines dieser Werkzeuge stand zur Verfügung. Die Schritte folgen den dokumentierten Menüs der Werkzeuge. In jedem Werkzeug muss der Kommunikationsschritt ein ganzzahliges Vielfaches von `sim.dt_s` sein (62,5 µs in den mitgelieferten Konfigurationen); den Standardschritt der FMU nehmen, `profile.setpoint_interval_s` (10 ms), außer dieses Intervall wird in der Konfiguration geändert.
+Der Import in Simulink und Dymola wurde hier **nicht geprüft**: Keines der beiden stand zur Verfügung. OpenModelica 1.27.1 stand zur Verfügung (siehe seinen Abschnitt). Die Schritte folgen den dokumentierten Menüs der Werkzeuge. In jedem Werkzeug muss der Kommunikationsschritt ein ganzzahliges Vielfaches von `sim.dt_s` sein (62,5 µs in den mitgelieferten Konfigurationen); den Standardschritt der FMU nehmen, `profile.setpoint_interval_s` (10 ms), außer dieses Intervall wird in der Konfiguration geändert.
 
 ### Simulink
 
@@ -151,11 +151,13 @@ Simulink importiert FMUs für FMI 2.0 Co-Simulation mit dem FMU-Block; MathWorks
 
 ### OpenModelica
 
-Der Modelleditor OMEdit von OpenModelica importiert FMUs für FMI 2.0 als Modelica-Blöcke; für FMI 3.0 und um Co-Simulation direkt laufen zu lassen, OMSimulator verwenden, das hier von der Kommandozeile aus geprüft wurde (siehe oben).
+Geprüft mit OpenModelica 1.27.1 (64 Bit, Windows) am 14. November 2026. OpenModelica rechnet diese FMUs mit OMSimulator, seinem Co-Simulationswerkzeug, nicht als Modelica-Blöcke:
 
-1. OMEdit: File > Import > FMU..., die `.fmu`-Datei und ein Ausgabeverzeichnis wählen und bestätigen. OMEdit erzeugt einen Modelica-Block mit den Ein- und Ausgängen der FMU und lädt ihn in den Bibliotheksbaum.
-2. Den Block in ein Modell ziehen, die Sollwerteingänge verbinden und das Intervall der Simulation auf den Kommunikationsschritt setzen.
-3. OMSimulator: `OMSimulator t-gantry-3.fmu --stopTime 1.0 --resultFile result.csv` rechnet die FMU allein; in OMEdit öffnet File > New SSP Model ein OMSimulator-Modell, dem die FMU als Komponente hinzugefügt und mit anderen FMUs verbunden wird.
+- **OMSimulator 2.1.3, das mit OpenModelica 1.27.1 kommt**, rechnete die FMUs nach FMI 2.0 des T-Portals, des Delta D3 und der H-Bot-Maschinendatei 1 s lang im Standardschritt von 0,01 s (`OMSimulator t-gantry.fmu --stopTime=1.0 --stepSize=0.01 --resultFile=result.csv`). Jeder Ausgang stimmt mit `sim-cli run` bis auf 5,0e-10 seines Höchstwerts überein, die Rundung der 9 Stellen der Befehlszeile. Diese Version lehnt FMI 3.0 ab („unsupported FMI version“); OMSimulator 3.0 (aus PyPI, oben) rechnet beide.
+- **OMEdits File > Import > FMU** (`importFMU` des Compilers) macht nur aus FMUs für FMI 2.0 **Model Exchange** Modelica-Blöcke; diese Co-Simulation-FMUs lehnt es ab („Only FMI 2.0 ModelExchange is supported“), und dieser Export hat kein Model Exchange (siehe [warum](#warum-es-kein-model-exchange-gibt)).
+- FMIL, die FMI-Bibliothek von OpenModelica und anderen Werkzeugen, meldete beim Lesen der Beschreibung nach FMI 2.0 einen Fehler: Sie verlangt einen Startwert an der unabhängigen Variable `time`, den der Standard dort verbietet. Seit dem 14. November lässt die Beschreibung nach FMI 2.0 `time` weg (der Standard nimmt sie dann stillschweigend an; ihre Wertreferenz antwortet weiter), und FMIL liest sie ohne Meldung. Die Beschreibung nach FMI 3.0 führt sie auf.
+
+In OMEdit öffnet File > New SSP Model ein OMSimulator-Modell, dem die FMU als Komponente hinzugefügt und mit anderen FMUs verbunden wird.
 
 ### Dymola
 
