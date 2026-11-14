@@ -324,7 +324,10 @@ impl Conveyor {
         };
         let above = plus(&self.part_pose(k, t0), &self.lift);
         add(&mut at, &mut t, &zero, &above, &belt, None)?;
-        let part = self.part_pose(k, t0 + t);
+        // Down from where the tool met the part, as at the place: the part's pose to rounding. Its pose computed anew
+        // differs from there by rounding, which a move of no lift made a move of microseconds (the S-curve of a
+        // 1e-16 m step takes (1e-16 / 2 j)^(1/3) * 4 = 2 us), shifting the grip by that.
+        let part = minus(&at, &self.lift);
         add(&mut at, &mut t, &belt, &part, &belt, None)?;
         let grip_start = t;
         add(&mut at, &mut t, &belt, &[], &belt, Some(self.grip))?;
@@ -411,7 +414,8 @@ mod tests {
     /// A belt along the one axis at 0.5 m/s, a part every 2 s, the window from 0.5 to 1.0 m, the place at -0.5 m.
     fn conveyor() -> Conveyor {
         let cfg = Config::parse(
-            "[conveyor]\nenabled = true\ndirection = [1.0]\nspeed_m_s = 0.5\nramp_s = 0.0\norigin = [0.0]\n\
+            "format_version = 1\n[conveyor]\nenabled = true\ndirection = [1.0]\nspeed_m_s = 0.5\nramp_s = 0.0\n\
+             origin = [0.0]\n\
              length_m = 2.0\npitch_s = 2.0\narrivals_s = [0.0]\nwindow_m = [0.5, 1.0]\nlift = [0.0]\ngrip_s = 0.1\n\
              release_s = 0.1\nplace = [-0.5]\nplace_direction = [1.0]\nplace_speed_m_s = 0.0\n\
              tracking_tolerance_m = 0.001\n",
@@ -475,16 +479,20 @@ mod tests {
         assert_eq!((c.picked, c.missed), (1, 0));
     }
 
-    /// A part the tool cannot grip before it leaves the window is missed. Parts pass the origin at 0, 2 and 4 s; at
-    /// 5 s, where the tool starts, they are 2.5, 1.5 and 0.5 m along the belt. The window ends at 1.0 m: parts 0 and 1
-    /// are missed, part 2 is picked inside it.
+    /// A part the tool cannot grip before it leaves the window is missed. Parts pass the origin at 0, 2, 4 and 6 s; at
+    /// 5 s, where the tool starts from -0.5 m, they are 2.5, 1.5, 0.5 and -0.5 m along the belt. The window ends at
+    /// 1.0 m: parts 0 and 1 are missed. Part 2 is met after T = D / v' + v' / a' + a' / j' with D = 1 + 0.25 T,
+    /// v' = 1.5 m/s, a' = 20 - 0.75 / T, j' = 400 - 3 / T^2: T = 0.9518 s, so the grip ends 1.0518 s on, with the part
+    /// at 0.5 + 0.5 * 1.0518 = 1.026 m, beyond the window: missed too (without the jerk limit, T = 0.894 s would grip it
+    /// at 0.997 m). Part 3 is waited for at the window's start and picked inside it.
     #[test]
     fn a_part_beyond_the_window_counts_as_missed() {
         let mut c = conveyor();
         let pass = c.plan(&[axis(2.0, 20.0, 400.0)], 5.0, &[-0.5], &|_| true).unwrap();
-        assert_eq!((pass.part, c.missed, c.picked), (2, 2, 1));
+        assert_eq!((pass.part, c.missed, c.picked), (3, 3, 1));
         let s = c.position(pass.part, pass.start + pass.grip.1);
         assert!((0.5..=1.0).contains(&s), "{s}");
+        assert!((c.position(pass.part, pass.start + pass.grip.0) - 0.5).abs() < 1e-6);
     }
 
     /// A pass whose path leaves what the machine reaches is not run: its part counts as missed too.
