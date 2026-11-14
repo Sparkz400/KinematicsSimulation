@@ -519,6 +519,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         path_angle_error_rms: 0.0,
         tracking_angle_error_peak: 0.0,
         dwell_angle_error_peak: 0.0,
+        path_error_series: Vec::new(),
         tripped: false,
         motors: Vec::new(),
         budget: None,
@@ -636,6 +637,7 @@ fn the_tightest_check_of_a_one_motor_search_is_that_motors() {
         path_angle_error_rms: 0.0,
         tracking_angle_error_peak: 0.0,
         dwell_angle_error_peak: 0.0,
+        path_error_series: Vec::new(),
         tripped: false,
         motors: vec![
             MotorLoad { id: "mx".into(), ..MotorLoad::default() },

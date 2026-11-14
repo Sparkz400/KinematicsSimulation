@@ -176,28 +176,8 @@ pub struct PathRun {
     pub curves: Curves,
 }
 
-/// The motors' torque-speed curves as lines of (speed in rad/s, torque in N m): the highest and the lowest torque the
-/// drives give (peak), and the same of the continuous (S1) rating.
-pub type Curves = [Vec<[f64; 2]>; 4];
-
-/// The torque-speed curves of `Curves` from the drive's data. The peak curve is straight between its corners
-/// (`DriveParams::torque_curve`): the peak torque both ways up to the rated speed, falling to nothing at the no-load
-/// speed in the direction of motion. The S1 curve is the rated torque up to the rated speed both ways.
-// shortcut: the S1 line ends at the rated speed, where the motor data says nothing more; upgrade when the catalogue
-// gives the S1 curve above it.
-pub fn torque_speed_curves(drive: &sim_components::drive::DriveParams) -> Curves {
-    let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
-    let peak = |high: bool| {
-        corners
-            .iter()
-            .map(|&speed| [speed, if high { drive.torque_curve(speed).1 } else { drive.torque_curve(speed).0 }])
-            .collect()
-    };
-    let s1 = |sign: f64| {
-        [-drive.rated_speed, drive.rated_speed].iter().map(|&speed| [speed, sign * drive.rated_torque]).collect()
-    };
-    [peak(true), peak(false), s1(1.0), s1(-1.0)]
-}
+/// Per motor its torque-speed chart (`charts::TorqueSpeed`), from its own drive (`Run::torque_speed`).
+pub type Curves = Vec<sim_components::charts::TorqueSpeed>;
 
 /// A trace replayed and fitted: per motor the RMS and peak difference between the trace and its replay, of
 /// torque and of following error, and per axis the fit (none for an axis the trace does not move both ways), or
@@ -436,13 +416,6 @@ pub struct RunLine {
     pub points: Vec<[f64; 2]>,
 }
 
-/// Per motor of `sim` its drive's rated and peak torque.
-fn ratings_of(sim: &Sim) -> Vec<(f64, f64)> {
-    (0..sim.machine.motors().len())
-        .map(|k| (sim.control.drive_params_of(k).rated_torque, sim.control.drive_params_of(k).peak_torque))
-        .collect()
-}
-
 /// A run of `kind` from the rows `sim` gave, judged by `verdicts`, labelled with the machine, the kind and `label`.
 fn judged_run(
     kind: RunKind,
@@ -456,7 +429,7 @@ fn judged_run(
     let label = format!("{} · {} · {label}", tr.tr(entry.key), tr.tr(kind.key()));
     let run =
         Run::from_rows(label, kind, entry.id, sim.signal_infos(), sim.machine.motors(), rows.iter().map(Vec::as_slice));
-    Run { ratings: ratings_of(sim), verdicts: Some(verdicts.to_vec()), ..run }
+    Run { verdicts: Some(verdicts.to_vec()), ..run.rated(sim) }
 }
 
 /// The configured cycle of `config` as a judged run: its samples as the analysis measures it and its checks, the two
@@ -1489,9 +1462,12 @@ impl Model {
     // ---------------------------------------------------------------------------------------
     // Runs
 
-    /// Per motor of the config's drives the rated and the peak torque, for the utilisation of a run.
-    pub fn ratings(&self) -> Vec<(f64, f64)> {
-        Sim::new(self.entry, &self.config).map(|sim| ratings_of(&sim)).unwrap_or_default()
+    /// `run` with what the config's machine says about its motors and resonances (`Run::rated`).
+    pub fn rated(&self, run: Run) -> Run {
+        match Sim::new(self.entry, &self.config) {
+            Ok(sim) => run.rated(&sim),
+            Err(_) => run,
+        }
     }
 
     /// Keeps what the scopes show (the live or frozen window) as a run.
@@ -1505,7 +1481,7 @@ impl Model {
         );
         let (signals, motors) = (self.session.signals.clone(), &self.session.motors);
         let run = Run::from_rows(label, RunKind::Live, self.entry.id, signals, motors, self.visible_rows());
-        self.runs.add(Run { ratings: self.ratings(), ..run });
+        self.runs.add(self.rated(run));
     }
 
     /// Records the configured cycle of another config as a run, in the background: the config shown, or the config or
@@ -1791,7 +1767,6 @@ impl Model {
                             (analyse_cycle(&mut sim), rows.join().unwrap_or_else(|_| Ok(Vec::new())))
                         });
                         let (load, rows) = (load.map_err(command)?, rows.map_err(refused)?);
-                        let curve = torque_speed_curves(sim.control.drive_params());
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
                         // Two more cycles per bounded value, or one per sample (always with the same seed, so
                         // that asking again gives the same bands).
@@ -1822,7 +1797,8 @@ impl Model {
                             )
                         };
                         let run = judged_run(RunKind::Cycle, &label, &sim, entry, &rows, &verdicts, &tr);
-                        Report::Cycle(load, verdicts, bands, inputs.samples, curve, worst, run)
+                        let run = Run { off_path: load.path_error_series.clone(), ..run };
+                        Report::Cycle(load, verdicts, bands, inputs.samples, run.torque_speed(), worst, run)
                     }
                     Analysis::Sensitivity => {
                         // The values the config calls uncertain: those it gives bounds. Two cycles each.
@@ -1925,15 +1901,9 @@ impl Model {
                         let file = std::path::Path::new(&inputs.path_file).file_name().map(|f| f.to_string_lossy());
                         let label = format!("{} · {label}", file.unwrap_or_default());
                         let recorded = judged_run(RunKind::Path, &label, &again, entry, &rows, &verdicts, &tr);
+                        let recorded = Run { off_path: load.path_error_series.clone(), ..recorded };
                         Report::Path(
-                            PathRun {
-                                points,
-                                scene_line,
-                                load,
-                                verdicts,
-                                deviation,
-                                curves: torque_speed_curves(sim.control.drive_params()),
-                            },
+                            PathRun { points, scene_line, load, verdicts, deviation, curves: recorded.torque_speed() },
                             recorded,
                         )
                     }
@@ -2462,7 +2432,7 @@ impl Model {
             .iter()
             .map(|m| m.points.iter().map(|(speed, torque)| [*speed * rpm, *torque]).collect())
             .collect();
-        let curves = curves.clone().map(|line| line.into_iter().map(|[speed, torque]| [speed * rpm, torque]).collect());
+        let curves = curves.iter().map(|chart| crate::runs::scaled_speeds(chart, rpm)).collect();
         Some((points, curves))
     }
 

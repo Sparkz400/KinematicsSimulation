@@ -2,6 +2,7 @@
 //! It knows no machine; it draws whatever parts the selected machine describes.
 
 mod ui;
+mod views;
 
 use bevy::anti_alias::smaa::Smaa;
 use bevy::asset::RenderAssetUsages;
@@ -553,6 +554,14 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     let Some(trail) = &state.model.trail else { return };
     let (by, tube, all) = (state.overlays.trail, state.overlays.tube, &state.trail_points);
     let points = trail_until(all, state.timeline.time);
+    // Scrubbed: the tool's error at that moment as an arrow from the path to the tool, as many times longer as the
+    // deflections are drawn, so that its direction across or along the path shows.
+    if let (Some(_), Some(p)) = (state.timeline.time, points.last()) {
+        let (from, to) = (to_bevy(p.planned), to_bevy(p.at));
+        if from.distance(to) > 0.0 {
+            gizmos.arrow(from, from + (to - from) * state.model.exaggeration as f32, GAP);
+        }
+    }
     if all.is_empty() || (by == ui::TrailColor::Plain && !tube && state.timeline.time.is_none()) {
         gizmos.linestrip(trail.iter().map(|p| to_bevy(*p)), palette(ui::ACTUAL));
         return;
@@ -1131,7 +1140,16 @@ fn panels(
         .frame(side)
         .show(&mut root, |ui| {
             let ghost = state.ghost.is_some();
-            ui::tools(ui, &state.model, scene, state.panels, &mut actions, state.scroll, ghost)
+            ui::tools(
+                ui,
+                &state.model,
+                scene,
+                state.panels,
+                &mut actions,
+                state.scroll,
+                ghost,
+                state.overlays.tolerance,
+            )
         })
         .response
         .rect;
@@ -1521,8 +1539,8 @@ fn keep_ghost(state: &mut State) {
     let label = format!("{} · {switched}", model.tr.tr(RunKind::Ghost.key()));
     let (signals, motors) = (ghost.session.signals.clone(), &ghost.session.motors);
     let run = Run::from_rows(label, RunKind::Ghost, model.entry.id, signals, motors, rows.iter().skip(from));
-    let ratings = model.ratings();
-    model.runs.add(Run { ratings, ..run });
+    let run = model.rated(run);
+    model.runs.add(run);
 }
 
 /// A file to save to, from the system's dialog, starting with `name`; `None` where it is cancelled. The dialog holds
@@ -1569,7 +1587,7 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// and "tube" for the deviation tube) switches on what the 3D view draws besides the parts, SIM_APP_EXAGGERATION (a factor) draws
 /// the deflections larger, and SIM_APP_VIEW ("yaw,pitch" in degrees) turns the camera and frames the machine.
 /// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel; SIM_APP_TAB (cycle, effects,
-/// search, path, trace, sweep, tuning or runs, the last with the runs in the bottom panel) opens that tab of it,
+/// search, path, trace, sweep, tuning, runs (with the runs in the bottom panel) or views) opens that tab of it,
 /// SIM_APP_THEME=light shows the light theme, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
 /// the height of the workspace map in the path tab. SIM_APP_PART (a part's id,
 /// e.g. "motor", or "motor,1" for the second of them) picks that part as a click would. SIM_APP_SCRUB (seconds)
@@ -1646,6 +1664,7 @@ fn developer_hooks(
                 ("sweep", ui::ToolTab::Sweep),
                 ("tuning", ui::ToolTab::Tuning),
                 ("runs", ui::ToolTab::Runs),
+                ("views", ui::ToolTab::Views),
             ];
             if let Some((_, tab)) =
                 asked("SIM_APP_TAB").and_then(|name| tabs.into_iter().find(|(word, _)| *word == name))
