@@ -69,6 +69,19 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 - `LiftChange::via` is a list of via points (`Option<Vec<Vec<f64>>>`); the CLI's `via_m` row puts `; ` between them.
 
+### Added
+
+- Field weakening (`effects.field_weakening`, off in the shipped configs): a d-q model of the permanent-magnet motor in
+  the drive's current control, with the voltage and current circles and a negative d current above base speed; the
+  torque-speed curve follows from it. New keys `motor.pole_pairs`, `motor.d_inductance_h` (set for a 1FK7 or 1FT7 by name).
+- Drive overload (`effects.drive_overload`, off in the shipped configs): the drive's i²t image lowers its current limit
+  to the base load current; verdict `drive-overload`. New keys `ratings.drive_base_load_current_a` (set by a drive by
+  name), `drive_overload_time_constant_s`, `drive_max_current_time_s`.
+- Three thermal nodes for the motor (`effects.motor_thermal_nodes`, off in the shipped configs): winding, stator and
+  housing, surroundings; the one node stays the fallback. New keys `motor.winding_resistance_share`,
+  `winding_time_constant_s`.
+- `sim-cli analyze`: columns `housing_rise_k` and `drive_overload`; the app's motor table has both.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

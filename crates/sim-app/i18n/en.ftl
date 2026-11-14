@@ -189,6 +189,8 @@ ui-analysis-resistor-energy = Braking resistor, energy [J]
 ui-analysis-resistor-power = Braking resistor, mean power [W]
 ui-analysis-dc-link-peak = Highest DC link voltage [V]
 ui-analysis-mains-energy = Fed back into the mains [J]
+ui-analysis-housing-rise = Stator and housing rise, settled [K]
+ui-analysis-drive-overload = Drive thermal image, peak (1 = rated current held)
 ui-analysis-band-low = Lowest
 ui-analysis-band-high = Highest
 ui-analysis-band-worst = Worst case

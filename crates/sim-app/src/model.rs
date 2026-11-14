@@ -258,7 +258,7 @@ const CYCLE_KEYS: [&str; 12] = [
     "ui-analysis-guide-life-h",
 ];
 /// One row per figure, one column per motor.
-const MOTOR_KEYS: [&str; 10] = [
+const MOTOR_KEYS: [&str; 12] = [
     "ui-analysis-peak-torque",
     "ui-analysis-rms-torque",
     "ui-analysis-cubic-torque",
@@ -269,6 +269,8 @@ const MOTOR_KEYS: [&str; 10] = [
     "ui-analysis-resistor-power",
     "ui-analysis-dc-link-peak",
     "ui-analysis-mains-energy",
+    "ui-analysis-housing-rise",
+    "ui-analysis-drive-overload",
 ];
 /// Rows of the motor table that a machine or a config may lack: the lives in hours and the belt's tooth load.
 const LIFE_KEYS: [&str; 5] = [
@@ -363,7 +365,7 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 39] = [
+const CHECKS: [&str; 40] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -393,6 +395,7 @@ const CHECKS: [&str; 39] = [
     "belt-span-resonance",
     "drive-current",
     "drive-peak-current",
+    "drive-overload",
     "singularity",
     "screw-speed",
     "screw-dn",
@@ -1631,6 +1634,8 @@ impl Model {
                 m.resistor_energy / load.duration,
                 m.peak_dc_link_voltage,
                 m.mains_energy,
+                m.housing_rise,
+                m.drive_overload,
             ]
         };
         let mut motors = vec![self.per_motor()];

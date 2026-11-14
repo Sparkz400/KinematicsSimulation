@@ -281,7 +281,22 @@ dϑ/dt    = ( ϑ_rated · P_cu / P_rated − ϑ ) / τ_th            P_cu = E_cu
 
 At the rated current the winding settles at `rated_temperature_rise_k`. The warmer resistance is used in the winding equation above. A disabled drive has no current, so its winding cools by the same equation with P_cu = 0: ϑ falls by the factor e every τ_th (`a_disabled_winding_cools_by_the_exponential`). Stepped once per base step (explicit Euler; with dt / τ_th of 3.5e-8 its error is far below anything that shows). The thermal time constant is half an hour, so a simulated cycle hardly warms the winding; the analysis therefore reports the rise the winding would *settle* at (see [analysis quantities](#analysis-quantities)).
 
-Assumptions: only copper loss heats; the surroundings are at a fixed temperature; no housing, no second thermal mass; the torque constant does not change with temperature.
+Assumptions: only copper loss heats; the surroundings are at a fixed temperature; no housing, no second thermal mass (but see the three nodes below); the torque constant does not change with temperature.
+
+### Motor thermal nodes
+
+`effects.motor_thermal_nodes` (off in the shipped configs; read as off where a config has no switch): three nodes, the winding ϑ_w, the stator and housing ϑ_h, and the surroundings, as two heat capacities in a chain. The resistances add up to the one-node model's, R = ϑ_rated / P_rated, and the heat capacities too, C = τ_th / R; the winding has the share s = `motor.winding_resistance_share` of the resistance and the time constant τ_w = `motor.winding_time_constant_s` against the housing (both `[estimate]`: Siemens publishes one thermal time constant per motor, the catalogue's τ_th):
+
+```text
+R_w = s · R            C_w = τ_w / R_w
+R_h = (1 − s) · R      C_h = C − C_w = (τ_th − τ_w / s) / R          τ_w < s · τ_th, or the config is refused
+τ_w · dϑ_w/dt               = s · P_cu · R − (ϑ_w − ϑ_h)
+(τ_th − τ_w / s) · dϑ_h/dt  = (ϑ_w − ϑ_h) / s − ϑ_h / (1 − s)
+```
+
+The steady state is ϑ_w = P · (R_w + R_h), the one-node model's, and ϑ_h = P · R_h: the settled rise the analysis reports and `motor-thermal` judges is the winding's and does not change; the analysis reports the housing's settled rise beside it (`MotorLoad::housing_rise`). On the way the winding warms much faster than the one node: with s = 0.25, τ_w = 60 s, τ_th = 1800 s it is at 16.2 K after 60 s (one node: 3.3 K) and 78.3 K after 1800 s (one node: 63.2 K) of a loss that settles at 100 K. A winding started warm (`start_temperature_rise_k`, the warm start) starts with its housing where that rise settles it. The one-node model stays the fallback with the switch off.
+
+Test: `three_thermal_nodes_settle_at_the_sum_of_the_resistances_and_step_as_by_hand` (drive.rs; the step response by its two eigenvalues, −7.36e-4 and −1.935e-2 1/s, at 60 s and 1800 s, and the steady state 100 K / 75 K).
 
 ### Current loop
 
@@ -325,6 +340,22 @@ So the current setpoint i(τ_cmd) stays within min(motor, drive maximum current)
 
 Tests: `the_drive_current_limit_holds_the_torque_to_the_lower_of_motor_and_drive` (drive.rs: 5 A at 0.45 N m/A holds 3.8 N m to 2.25 N m; 10.9 A leaves the motor's 3.8), `a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rate` (single axis, 0.5 A: a = (0.225 · 250 − 15) / 6.125 = 6.735 m/s²; with the motor at 0.18 N m, below the drive, 4.898 m/s²; the shipped cycle at 70 % of its peak current fails `drive-peak-current` and lags further).
 
+### Drive overload
+
+`effects.drive_overload` (off in the shipped configs; read as off where a config has no switch): SINAMICS drives give their maximum current only for a short time and then fall back to their base load current. The drive keeps a thermal image of its power unit (i²t), stepped exactly every base step with the RMS phase current i (with field weakening the hypotenuse of q and d current):
+
+```text
+x' = ((i / I_rated)² − x) / τ_drive            x = 1 at the rated current held
+trip = r² − (r² − 1) · exp(−t_max / τ_drive)   r = I_max / I_rated: the maximum current from the rated load for t_max
+x ≥ trip  → limit = I_base, until x ≤ 1 again
+```
+
+I_rated, I_max and I_base are `ratings.drive_rated_current_a`, `drive_max_current_a` and `drive_base_load_current_a` (a drive by name sets them: an S120 Motor Module's base load current is the catalogue's, about 0.85 of its rated current; Siemens publishes none for the S210, so 0.85 of its rated current is taken, `[estimate]`); τ_drive = `drive_overload_time_constant_s` and t_max = `drive_max_current_time_s` are `[estimate]`s (10 s and 0.25 s in the shipped configs: the Siemens load duty cycles are not in the catalogue files). While tripped, the velocity loop's torque range is narrowed to the torque of I_base, as for the drive current limit above.
+
+`drive-overload` judges the image's peak when the cycle repeats for long against the trip level. The image is linear in its start: one started at x₀ lies (x₀ − x_start) · exp(−t / τ) above the measured pass's at every t, and the start a repeating pass returns to is x₀ = f / (1 − exp(−T / τ)), with f = x_end − x_start · exp(−T / τ) what the pass added (`analysis::repeating_peak`; sampled once per millisecond). Where the image tripped in the pass the drive was not linear any more; the check fails there anyway.
+
+Tests: `a_step_at_twice_the_rated_current_clamps_after_the_hand_calculated_time` (drive.rs: 3 A rated, 2.6 A base load, 9 A for 0.25 s, τ = 10 s: trip 1.19752; 6 A from cold clamps to 2.6 A after −10 s · ln(1 − 1.19752 / 4) = 3.558 s, and the image is back at 1 after another 5.842 s), `the_overload_image_of_a_repeated_cycle_peaks_at_the_hand_calculated_level` (1.5 I_rated held: 2.25; 2 I_rated for 0.5 s of 1 s: 2.04999).
+
 w_v and w_τ are the feedforward factors (0 with the switch off). The notch is a biquad with centre `notch_frequency_hz` and Q = frequency / bandwidth.
 
 **Margins.** `Drive::torque_injection` is a test torque d added to τ_notch before the limit; a drive's own measurement function works the same way. With the machine holding its start pose, a sine d on one motor gives the loop's answer u = τ_notch and the torque that acts e = u + d, both correlated with sine and cosine at the velocity cycle over whole periods (at least 0.1 s to settle, 0.1 s to measure). Then L = −U / E is the open-loop response at that motor, with everything in it: velocity filter, PI, torque filter, delays, current loop, the elastic mechanics (the other motors' loops closed) and the position loop around it; and |S| = |E| / |D| = 1 / |1 + L|. `analysis::loop_margins` follows the phase of L along the frequency axis without jumps and shifts it by whole turns so that it lies between −360° and 0° at the first gain crossover (without a crossover: between −270° and 90° at the lowest point). It reads off, interpolated in log |L| and phase between points, the phase margin 180° + ∠L at each gain crossover (the smallest counts; negative: unstable) and the peak of |S|. Stability is a Nyquist count of the crossings of the negative real axis (the phase through −180° or an odd multiple) beyond −1, |L| > 1: a falling one is an encirclement of −1, a later rising one undoes the last falling one not yet undone. The count starts at a phase of 0 at the gain of the lowest point, as the small circle of the Nyquist contour around s = 0 turns the phase by −90° per integrator, so a loop whose integrators lag past −180° below the measured range counts that crossing too. The loop is stable when no falling crossing is left. The gain margin is −20 log |L| at the worst falling crossing not undone: those with |L| < 1 (in practice above the crossover) give a positive margin, one left with |L| > 1 a negative one (L encircles −1, unstable). A falling crossing beyond −1 that a rising one undoes (the phase turned past −180° and back below the crossover) is the conditionally stable kind: a gain that falls would be the danger there, and the margin for that is not given. A point at which the torque limit was hit, or at which the loop moved on its own (what of e is neither the injected sine nor a constant is larger in RMS than the injection), is no measurement of L: it is NaN, the margins are not valid and NaN (`LoopMargins::valid`, `stable`); `sim-cli margins` says `FAIL` for an invalid or unstable loop. Tests: `margins_are_signed_and_say_an_unstable_loop_is_unstable` (L = ωc e^(−jωτ) / (jω): 100 Hz, 0.5 ms: 72°, 13.979 dB; 200 Hz, 0.5 ms: 54°, 7.959 dB; 300 Hz, 1 ms: −18°, −1.584 dB; 400 Hz, 1 ms: −54°, −4.082 dB), `a_conditionally_stable_loop_is_stable` (L = K (1 + s/a)² / (s (1 + s/b)² (1 + s/c)), a, b, c = 2π · 300, 30, 3000 Hz: stable at K = 3e5, 6.1e5, 1.2e6 with 30.7°, 41.6°, 42.4°), `a_lead_with_positive_phase_at_the_first_point_keeps_its_phase_margin` (a type-0 lead loop: 24.0° at 1516 Hz, not −336°), analysis; `an_unstable_velocity_loop_is_reported_unstable` (single axis at 0.3 N m s/rad), axis. `velocity_loop_margins` does this for every motor at 60 points from 10 Hz to a quarter of the velocity loop's rate (2 kHz), with a tenth of the rated torque, for the config and for each value of `[bounds]` at its low and at its high bound (`sim-cli margins MACHINE [--bands]`). The velocity gains of all three configs were chosen with it (see the [user guide](user-guide.md#tune-gains-and-use-input-shaping)). Friction near standstill damps the loop at this amplitude (the motor's Coulomb friction is smoothed over 0.5 rad/s), so the margins are lower with friction off, as in a cruise.
@@ -346,7 +377,29 @@ motoring : |τ| ≤ peak_torque · fade        in the direction of rotation
 braking  : |τ| ≤ peak_torque
 ```
 
-ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well.
+ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well. With field weakening the curve follows from the d-q model instead (below).
+
+### Field weakening
+
+`effects.field_weakening` (off in the shipped configs; read as off where a config has no switch): the permanent-magnet synchronous motor in d-q axes. The one winding above is the q axis, scaled as it is (current the RMS phase current, voltage three times the RMS phase voltage, so R, L and U_max are the winding's: three times the data sheet's phase values); the d axis is scaled alike. The flux linkage is ψ = k_e / p, from the torque constant; p = `motor.pole_pairs`, L_q = `motor.inductance_h`, L_d = `motor.d_inductance_h`. With the electrical speed ω_e = p · ω:
+
+```text
+u_q = R · i_q + L_q · di_q/dt + k_e · ω + ω_e · L_d · i_d
+u_d = R · i_d − ω_e · L_q · i_q
+u_q² + u_d² ≤ U_max²                    voltage circle (the DC link through the modulation, as above)
+i_q² + i_d² ≤ I_max²                    current circle (the motor's maximum current)
+τ = k_t · i_q + p · (L_d − L_q) · i_d · i_q
+```
+
+Above base speed the drive sets a negative d current: the least that brings the steady voltage within the circle for the q setpoint, from (c₀ + a · i_d)² + (R · i_d − b · i_q)² = U_max² with c₀ = R · i_q + k_e · ω, a = ω_e · L_d, b = ω_e · L_q (`DriveParams::d_current_for`). The q axis's current controller adds ω_e · L_d · i_d to the back-EMF it expects and gets what u_d leaves of the voltage, sqrt(U_max² − u_d²). The d current is held over the base step like the voltage: u_d · i_d joins the electrical power, R · i_d² the copper loss (and so the heating), the reluctance torque the shaft, so u_q · i_q + u_d · i_d = R (i_q² + i_d²) + L_q · i_q · di_q/dt + τ · ω still closes. The drive's thermal image, the RMS current of the analysis and `drive-current` see the phase current sqrt(i_q² + i_d²).
+
+The torque-speed curve is then the most torque within both circles at each speed, over d currents from 0 to −I_max (golden section), up to `drive.peak_torque_nm`, motoring and braking apart; `motor-peak`, the report's curve and the app's plot use it. Towards high speed the best d current tends to the characteristic current −ψ / L_d.
+
+Catalogue: Siemens publishes R, L, k_E and the pole pairs of the 1FK7 and 1FT7 (`motors_s120_electrical.csv`, `motors_s120.csv`); a motor by name sets `pole_pairs` and takes L_d = L_q (surface magnets, `[estimate]`). For the 1FK2 and 1FT2 none of these is published; the config's `[estimate]`s stay.
+
+Tests: `field_weakening_gives_the_hand_calculated_torque_above_the_voltage_limit` (drive.rs: 0.45 N m/A, 190 V, 9.5 A, 4 pole pairs, 10 mH, R → 0, at 500 rad/s: the circles cross at i_d = −5.625 A, i_q = 7.6557 A, 3.4451 N m, where the fading curve has none; the current loop settles there with |u| = 190 V and the power balance closes), `the_d_q_model_holds_the_published_points_of_a_1fk7` (1FK7042-2AF7 at 600 V: the rated 2.6 N m at 2.0 A and 314.16 rad/s within 6 % and inside the curve without d current; torque left at n_max,inv = 670.2 rad/s, where the fading curve ends at 538.9 rad/s; the best d current at 942.5 rad/s within 1 % of −ψ / L_d = −3.247 A). Siemens' torque-speed curves themselves are printed only as graphs and are not in the catalogue files, so the model is not checked against curve points.
+
+Assumptions: the d current follows its setpoint at once (no d-axis winding state); the back-EMF in the d-current choice and the curve is unsaturated; the curve takes the static voltage (the bus voltage), the current loop the DC link's voltage of the moment; no MTPA below base speed for L_d < L_q beyond what the curve's search finds; `check_limits` still limits the axis speed to the rated speed.
 
 ### Measurement effects
 

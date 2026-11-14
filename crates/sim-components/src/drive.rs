@@ -96,6 +96,78 @@ pub struct DriveParams {
     pub encoder_noise: f64,
     pub current_noise: f64,
     pub noise_seed: u64,
+    /// effects.field_weakening: the winding as the q axis of a d-q model, with a d current (`FieldWeakening`).
+    pub field_weakening: Option<FieldWeakening>,
+    /// effects.drive_overload: the drive's thermal image, which lowers its current limit (`Overload`).
+    pub overload: Option<Overload>,
+    /// effects.motor_thermal_nodes: winding and housing as two heat capacities (`ThermalNodes`); without it one.
+    pub thermal_nodes: Option<ThermalNodes>,
+}
+
+/// effects.field_weakening: the permanent-magnet synchronous motor in d-q axes. The one winding is the q axis, scaled as
+/// the module comment says (current the RMS phase current, voltage three times the RMS phase voltage); the d axis is
+/// scaled alike, so that R, L and the voltage limit are the winding's and the flux linkage is ke / pole pairs. With the
+/// electrical speed w = pole pairs * shaft speed:
+///   u_q = R i_q + L_q di_q/dt + ke speed + w L_d i_d,   u_d = R i_d - w L_q i_q,   u_q^2 + u_d^2 <= U^2,
+///   torque = kt i_q + pole pairs (L_d - L_q) i_d i_q.
+/// Above base speed the drive sets a negative d current, the least that brings the voltage within the circle
+/// (`DriveParams::d_current_for`); i_q^2 + i_d^2 is the RMS phase current squared.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FieldWeakening {
+    pub pole_pairs: f64,
+    /// d-axis inductance as the winding has it (three times the phase value); the q axis's is `DriveParams::inductance`.
+    pub d_inductance: f64,
+}
+
+/// effects.drive_overload: the drive's thermal image (i^2 t) of its power unit, x' = ((i / I_rated)^2 - x) / tau, 1 at
+/// the rated current held. At the trip level the drive lowers its current limit to the base load current, and holds it
+/// there until the image is back at 1. The trip level follows from the time the drive gives its maximum current from
+/// the rated load: trip = r^2 - (r^2 - 1) exp(-t_max / tau) for r = I_max / I_rated.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overload {
+    pub rated_current: f64,
+    pub base_current: f64,
+    pub max_current: f64,
+    pub time_constant: f64,
+    pub trip: f64,
+}
+
+impl Overload {
+    /// With effects.drive_overload on (off where the config has no switch), from the `[ratings]`.
+    pub fn from_config(cfg: &Config) -> Result<Option<Self>> {
+        if !(cfg.get("effects.drive_overload").is_ok() && cfg.bool("effects.drive_overload")?) {
+            return Ok(None);
+        }
+        let rating = |leaf: &str| cfg.positive(&format!("ratings.{leaf}"));
+        let (rated_current, base_current) = (rating("drive_rated_current_a")?, rating("drive_base_load_current_a")?);
+        let max_current = rating("drive_max_current_a")?;
+        if base_current >= rated_current {
+            return Err(ConfigError::Invalid("ratings.drive_base_load_current_a".into()));
+        }
+        if max_current <= rated_current {
+            return Err(ConfigError::Invalid("ratings.drive_max_current_a".into()));
+        }
+        let time_constant = rating("drive_overload_time_constant_s")?;
+        let r2 = (max_current / rated_current).powi(2);
+        let trip = r2 - (r2 - 1.0) * (-rating("drive_max_current_time_s")? / time_constant).exp();
+        Ok(Some(Self { rated_current, base_current, max_current, time_constant, trip }))
+    }
+
+    /// The image after `dt` at a constant `current`, exactly.
+    pub fn image_after(&self, image: f64, current: f64, dt: f64) -> f64 {
+        let target = (current / self.rated_current).powi(2);
+        target + (image - target) * (-dt / self.time_constant).exp()
+    }
+}
+
+/// effects.motor_thermal_nodes: three nodes, winding, stator/housing and ambient, as two heat capacities in a chain.
+/// The resistances add up to the one-node model's, rated rise over rated loss, so the settled rises stay; the winding
+/// has the share `winding_share` of it (to the housing) and the time constant `winding_time_constant` against the
+/// housing. The heat capacities add up to the one-node model's too (thermal time constant over the resistance).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThermalNodes {
+    pub winding_share: f64,
+    pub winding_time_constant: f64,
 }
 
 /// Resistance of copper rises by this share per kelvin.
@@ -169,7 +241,36 @@ impl DriveParams {
         if line_efficiency > 1.0 {
             return Err(ConfigError::Invalid("ratings.line_module_efficiency".into()));
         }
+        // The three switches of 14 November 2026 read as off where a config has none; their keys only when on.
+        let switched =
+            |effect: &str| -> Result<bool> { Ok(cfg.get(&format!("effects.{effect}")).is_ok() && on(effect)?) };
+        let field_weakening = if switched("field_weakening")? {
+            Some(FieldWeakening {
+                pole_pairs: cfg.positive("motor.pole_pairs")?,
+                d_inductance: cfg.positive("motor.d_inductance_h")?,
+            })
+        } else {
+            None
+        };
+        let thermal_time_constant = cfg.positive("motor.thermal_time_constant_s")?;
+        let thermal_nodes = if switched("motor_thermal_nodes")? {
+            let share = cfg.positive("motor.winding_resistance_share")?;
+            let winding_time_constant = cfg.positive("motor.winding_time_constant_s")?;
+            if share >= 1.0 {
+                return Err(ConfigError::Invalid("motor.winding_resistance_share".into()));
+            }
+            // The housing's heat capacity, (tau - tau_w / share) / R, has to be left over.
+            if winding_time_constant >= share * thermal_time_constant {
+                return Err(ConfigError::Invalid("motor.winding_time_constant_s".into()));
+            }
+            Some(ThermalNodes { winding_share: share, winding_time_constant })
+        } else {
+            None
+        };
         Ok(Self {
+            field_weakening,
+            overload: Overload::from_config(cfg)?,
+            thermal_nodes,
             dc_link,
             shared_dc_link: dc_link && on("shared_dc_link")?,
             bus_voltage,
@@ -224,7 +325,7 @@ impl DriveParams {
             heating: on("winding_heating")?,
             rated_rise: cfg.positive("motor.rated_temperature_rise_k")?,
             rated_current: cfg.positive("motor.rated_current_a")?,
-            thermal_time_constant: cfg.positive("motor.thermal_time_constant_s")?,
+            thermal_time_constant,
             start_rise: cfg.non_negative("motor.start_temperature_rise_k")?,
             saturation: if on("torque_saturation")? { 1.0 - kt_at_max / kt } else { 0.0 },
             max_current: cfg.positive("motor.max_current_a")?,
@@ -289,9 +390,102 @@ impl DriveParams {
     /// The winding's rates at a moment of a base step, for the integrator (`Sim::step`), with the voltage and the
     /// resistance held over the step: [di/dt, electrical power u i, copper loss R i^2, shaft power torque w]. With
     /// the back-EMF on, u i = R i^2 + L i di/dt + torque w at every moment, so the winding's energy closes.
-    pub fn winding_rates(&self, voltage: f64, resistance: f64, current: f64, speed: f64) -> [f64; 4] {
-        let rate = (voltage - resistance * current - self.back_emf(current, speed)) / self.inductance;
-        [rate, voltage * current, resistance * current * current, self.torque_of(current) * speed]
+    ///
+    /// With field weakening the d current `d_current` is held over the step as the controller set it (`FieldWeakening`):
+    /// it adds w L_d i_d to what the q axis meets, u_d i_d to the electrical power, R i_d^2 to the copper loss and the
+    /// reluctance torque to the shaft. u_q i_q + u_d i_d = R (i_q^2 + i_d^2) + L i_q di_q/dt + torque w still closes.
+    pub fn winding_rates(&self, voltage: f64, resistance: f64, current: f64, speed: f64, d_current: f64) -> [f64; 4] {
+        let (coupling, d_power) = match &self.field_weakening {
+            Some(fw) => {
+                let w = fw.pole_pairs * speed;
+                (w * fw.d_inductance * d_current, (resistance * d_current - w * self.inductance * current) * d_current)
+            }
+            None => (0.0, 0.0),
+        };
+        let rate = (voltage - resistance * current - self.back_emf(current, speed) - coupling) / self.inductance;
+        [
+            rate,
+            voltage * current + d_power,
+            resistance * (current * current + d_current * d_current),
+            self.torque_with(current, d_current) * speed,
+        ]
+    }
+
+    /// Torque of a q current and a d current: `torque_of`, plus the reluctance torque pole pairs (L_d - L_q) i_d i_q
+    /// with field weakening.
+    pub fn torque_with(&self, current: f64, d_current: f64) -> f64 {
+        let reluctance = self
+            .field_weakening
+            .map_or(0.0, |fw| fw.pole_pairs * (fw.d_inductance - self.inductance) * d_current * current);
+        self.torque_of(current) + reluctance
+    }
+
+    /// The d current the drive sets for a q current at a speed with the voltage `max_voltage`: none while
+    /// u_q^2 + u_d^2 (steady, `FieldWeakening`) stays within it, else the least negative one that brings it there, at
+    /// most `limit`. Where none does, the one that needs the least voltage. 0 without field weakening.
+    ///
+    /// shortcut: the d current follows its setpoint at once (no d-axis dynamics) and the back-EMF here is unsaturated;
+    /// give the d axis a winding state of its own if current-loop transients in field weakening are ever studied.
+    pub fn d_current_for(&self, q: f64, speed: f64, max_voltage: f64, limit: f64) -> f64 {
+        let Some(fw) = &self.field_weakening else { return 0.0 };
+        let w = fw.pole_pairs * speed;
+        let (a, b, r) = (w * fw.d_inductance, w * self.inductance, self.resistance);
+        let c0 = r * q + self.ke * speed;
+        // (c0 + a d)^2 + (r d - b q)^2 = U^2 as a d^2 + b d + c = 0.
+        let (qa, qb, qc) =
+            (a * a + r * r, 2.0 * (a * c0 - r * b * q), c0 * c0 + b * b * q * q - max_voltage * max_voltage);
+        if !(qc > 0.0) {
+            return 0.0;
+        }
+        let disc = qb * qb - 4.0 * qa * qc;
+        let d = if disc >= 0.0 { (-qb + disc.sqrt()) / (2.0 * qa) } else { -qb / (2.0 * qa) };
+        d.clamp(-limit, 0.0)
+    }
+
+    /// With field weakening: the most torque, motoring or braking (as a magnitude), at a speed of at least 0 within the
+    /// current circle of the motor's maximum current and the voltage circle of `max_voltage`, over every d current
+    /// from 0 to minus the maximum current (golden section; the torque rises to one top and falls).
+    fn field_weakened_torque(&self, fw: &FieldWeakening, speed: f64, motoring: bool) -> f64 {
+        let (imax, umax, r) = (self.max_current, self.max_voltage, self.resistance);
+        let w = fw.pole_pairs * speed;
+        let (a, b) = (w * fw.d_inductance, w * self.inductance);
+        // The q current the two circles leave at a d current, as a magnitude.
+        let q_at = |d: f64| -> f64 {
+            let by_current = (imax * imax - d * d).max(0.0).sqrt();
+            if !umax.is_finite() {
+                return by_current;
+            }
+            // (r q + c1)^2 + (r d - b q)^2 <= U^2 as qa q^2 + qb q + qc <= 0.
+            let c1 = self.ke * speed + a * d;
+            let (qa, qb, qc) = (r * r + b * b, 2.0 * r * (c1 - b * d), c1 * c1 + r * r * d * d - umax * umax);
+            let disc = qb * qb - 4.0 * qa * qc;
+            if disc < 0.0 {
+                return 0.0;
+            }
+            let q = if motoring { (-qb + disc.sqrt()) / (2.0 * qa) } else { -(-qb - disc.sqrt()) / (2.0 * qa) };
+            q.clamp(0.0, by_current)
+        };
+        let torque = |d: f64| {
+            let q = if motoring { q_at(d) } else { -q_at(d) };
+            let t = self.torque_with(q, d);
+            (if motoring { t } else { -t }).max(0.0)
+        };
+        let (mut lo, mut hi) = (-imax, 0.0);
+        let g = 0.5 * (5f64.sqrt() - 1.0);
+        let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+        let (mut f1, mut f2) = (torque(x1), torque(x2));
+        for _ in 0..40 {
+            if f1 < f2 {
+                (lo, x1, f1) = (x1, x2, f2);
+                x2 = lo + g * (hi - lo);
+                f2 = torque(x2);
+            } else {
+                (hi, x2, f2) = (x2, x1, f1);
+                x1 = hi - g * (hi - lo);
+                f1 = torque(x1);
+            }
+        }
+        f1.max(f2).max(torque(0.0))
     }
 
     /// The temperature rise the winding settles at when a cycle with this RMS current repeats for long:
@@ -302,7 +496,16 @@ impl DriveParams {
     }
 
     /// The same limits, whether or not the limit is switched on: what the motor and drive can give.
+    /// With field weakening the curve is the d-q model's (`FieldWeakening`), up to the peak torque; without it the
+    /// torque fades out linearly between the rated and the no-load speed.
     pub fn torque_curve(&self, speed: f64) -> (f64, f64) {
+        if let Some(fw) = &self.field_weakening {
+            let (motoring, braking) = (
+                self.field_weakened_torque(fw, speed.abs(), true).min(self.peak_torque),
+                self.field_weakened_torque(fw, speed.abs(), false).min(self.peak_torque),
+            );
+            return if speed >= 0.0 { (-braking, motoring) } else { (-motoring, braking) };
+        }
         let fade = ((self.no_load_speed - speed.abs()) / (self.no_load_speed - self.rated_speed)).clamp(0.0, 1.0);
         let (peak, motoring) = (self.peak_torque, self.peak_torque * fade);
         if speed >= 0.0 { (-peak, motoring) } else { (-motoring, peak) }
@@ -346,6 +549,15 @@ pub struct Drive {
     pub shaft_power: f64,
     /// Temperature of the winding above its surroundings.
     pub temperature_rise: f64,
+    /// With effects.motor_thermal_nodes: temperature of the stator and housing above the surroundings; 0 without.
+    pub housing_rise: f64,
+    /// With effects.field_weakening: the d current the drive sets (`DriveParams::d_current_for`), held over the base
+    /// step like the voltage; 0 without. The RMS phase current is the hypotenuse of it and `current` (`phase_current`).
+    pub d_current: f64,
+    /// With effects.drive_overload: the drive's thermal image (`Overload`), and whether it has lowered its current
+    /// limit to the base load current.
+    pub overload_image: f64,
+    pub overloaded: bool,
     /// DC link voltage, the power the braking resistor burns, and whether the drive has tripped on
     /// overvoltage. With the DC link switched off the voltage stays at the bus level.
     pub dc_voltage: f64,
@@ -398,6 +610,11 @@ impl Drive {
             voltage: p.resistance * p.current_for(torque),
             current_integral: p.resistance * p.current_for(torque),
             temperature_rise: if p.heating { p.start_rise } else { 0.0 },
+            // A winding started warm has its housing where that rise settles it.
+            housing_rise: match (p.heating, &p.thermal_nodes) {
+                (true, Some(n)) => p.start_rise * (1.0 - n.winding_share),
+                _ => 0.0,
+            },
             dc_voltage: p.bus_voltage,
             noise: Noise(p.noise_seed),
             integral: torque - p.torque_ff * torque_ff,
@@ -413,6 +630,11 @@ impl Drive {
 
     pub fn encoder(&self) -> f64 {
         self.encoder
+    }
+
+    /// The RMS phase current: of the q current `current` and the d current together.
+    pub fn phase_current(&self) -> f64 {
+        self.current.hypot(self.d_current)
     }
 
     /// Moves the encoder's readings so far by `by`, for a motor that was set elsewhere without turning there.
@@ -457,7 +679,12 @@ impl Drive {
             out = b0 * self.filtered + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
             self.notch = [self.filtered, x1, out, y1];
         }
-        let (low, high) = p.torque_range(self.speed);
+        let (mut low, mut high) = p.torque_range(self.speed);
+        // An overloaded drive gives its base load current at most.
+        if let (true, Some(o)) = (self.overloaded, &p.overload) {
+            let most = p.torque_of(o.base_current);
+            (low, high) = (low.max(-most), high.min(most));
+        }
         self.torque_demand = out;
         self.torque_command =
             delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
@@ -471,15 +698,26 @@ impl Drive {
     /// integrator takes the winding through it (`DriveParams::winding_rates`); then `winding_stepped`.
     pub fn current_control(&mut self, p: &DriveParams, speed: f64) {
         let measured = self.current + if p.current_noise > 0.0 { p.current_noise * self.noise.next() } else { 0.0 };
-        let error = p.current_for(self.torque_command) - measured;
-        // The drive adds the back-EMF it expects at this speed, as real drives do. Without that the
-        // integrator would have to follow every speed change, at the slow pace of L / R.
-        let back_emf = p.back_emf(self.current, speed);
-        let wanted = p.current_kp * error + self.current_integral + back_emf;
+        let setpoint = p.current_for(self.torque_command);
+        let error = setpoint - measured;
         // The voltage limit is what the DC link has at this moment.
         let max_voltage =
             if p.dc_link && p.max_voltage.is_finite() { WINDING_PER_DC_LINK * self.dc_voltage } else { p.max_voltage };
-        let limited = wanted.clamp(-max_voltage, max_voltage);
+        // Field weakening: the d current for this setpoint; the q axis gets what the d axis leaves of the voltage.
+        self.d_current = p.d_current_for(setpoint, speed, max_voltage, p.max_current.min(p.drive_max_current));
+        let (coupling, q_voltage) = match &p.field_weakening {
+            Some(fw) => {
+                let w = fw.pole_pairs * speed;
+                let u_d = p.resistance * self.d_current - w * p.inductance * self.current;
+                (w * fw.d_inductance * self.d_current, (max_voltage * max_voltage - u_d * u_d).max(0.0).sqrt())
+            }
+            None => (0.0, max_voltage),
+        };
+        // The drive adds the back-EMF it expects at this speed, as real drives do. Without that the
+        // integrator would have to follow every speed change, at the slow pace of L / R.
+        let back_emf = p.back_emf(self.current, speed) + coupling;
+        let wanted = p.current_kp * error + self.current_integral + back_emf;
+        let limited = wanted.clamp(-q_voltage, q_voltage);
         self.voltage = delayed(&mut self.voltage_queue, limited, p.current_delay);
         // Anti-windup: the integrator stops while the bus voltage is used up.
         if wanted == limited {
@@ -497,7 +735,7 @@ impl Drive {
     /// DC link of its own and the winding's heating.
     pub fn winding_stepped(&mut self, p: &DriveParams, current: f64, [electrical, copper, work]: [f64; 3]) {
         let dt = p.current_cycle;
-        (self.current, self.torque) = (current, p.torque_of(current));
+        (self.current, self.torque) = (current, p.torque_with(current, self.d_current));
         (self.power, self.copper_loss, self.shaft_power, self.discharge_power) =
             (electrical / dt, copper / dt, work / dt, 0.0);
         // A DC link of its own. A shared one is stepped once all drives have had this step (`shared_dc_link`).
@@ -505,6 +743,20 @@ impl Drive {
             self.own_dc_link(p);
         }
         self.warm(p);
+        self.load_power_unit(p);
+    }
+
+    /// effects.drive_overload: the step's phase current on the drive's thermal image; at the trip level the drive lowers
+    /// its limit to the base load current, back at the level of the rated current it lifts it again.
+    fn load_power_unit(&mut self, p: &DriveParams) {
+        if let Some(o) = &p.overload {
+            self.overload_image = o.image_after(self.overload_image, self.phase_current(), p.current_cycle);
+            if self.overload_image >= o.trip {
+                self.overloaded = true;
+            } else if self.overload_image <= 1.0 {
+                self.overloaded = false;
+            }
+        }
     }
 
     /// A base step with the drive disabled: no current, no torque. The winding cools and the DC link discharges
@@ -516,8 +768,10 @@ impl Drive {
     pub fn disabled_step(&mut self, p: &DriveParams) {
         let freewheeling = 0.5 * p.inductance * self.current * self.current;
         (self.torque, self.torque_command, self.torque_demand, self.current, self.voltage) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        (self.power, self.copper_loss, self.shaft_power) = (-freewheeling / p.current_cycle, 0.0, 0.0);
+        (self.power, self.copper_loss, self.shaft_power, self.d_current) =
+            (-freewheeling / p.current_cycle, 0.0, 0.0, 0.0);
         self.warm(p);
+        self.load_power_unit(p);
         if p.dc_link {
             // C dU/dt = -U / R_b: the voltage falls by exp(-dt / (R_b C)) per step, exactly. The rectifier catches it
             // at the bus level, a regenerative supply takes what is above.
@@ -545,11 +799,23 @@ impl Drive {
 
     /// The copper loss of the step warms the winding; at the rated current it balances at the rated rise. Without
     /// current (a disabled drive) the same model cools it.
+    ///
+    /// With effects.motor_thermal_nodes (`ThermalNodes`), in units of the rise the loss would settle at (P R): the winding
+    /// tau_w dT_w/dt = s P R - (T_w - T_h), the housing (tau - tau_w / s) dT_h/dt = (T_w - T_h) / s - T_h / (1 - s).
     fn warm(&mut self, p: &DriveParams) {
         if p.heating {
             let rated_loss = p.resistance_at(p.rated_rise) * p.rated_current * p.rated_current;
             let heating = p.rated_rise * self.copper_loss / rated_loss;
-            self.temperature_rise += p.current_cycle / p.thermal_time_constant * (heating - self.temperature_rise);
+            let dt = p.current_cycle;
+            match &p.thermal_nodes {
+                None => self.temperature_rise += dt / p.thermal_time_constant * (heating - self.temperature_rise),
+                Some(n) => {
+                    let (s, across) = (n.winding_share, self.temperature_rise - self.housing_rise);
+                    let housing_time = p.thermal_time_constant - n.winding_time_constant / s;
+                    self.temperature_rise += dt / n.winding_time_constant * (s * heating - across);
+                    self.housing_rise += dt / housing_time * (across / s - self.housing_rise / (1.0 - s));
+                }
+            }
         }
     }
 }
@@ -671,6 +937,9 @@ mod tests {
             encoder_noise: 0.0,
             current_noise: 0.0,
             noise_seed: 1,
+            field_weakening: None,
+            overload: None,
+            thermal_nodes: None,
         }
     }
 
@@ -679,12 +948,12 @@ mod tests {
         /// with the mechanics: four RK4 sub-steps of the same rates.
         fn current_loop(&mut self, p: &DriveParams, speed: f64) {
             self.current_control(p, speed);
-            let (voltage, resistance) = (self.voltage, self.winding_resistance(p));
+            let (voltage, resistance, d_current) = (self.voltage, self.winding_resistance(p), self.d_current);
             let mut y = [self.current, 0.0, 0.0, 0.0];
             let mut rk = sim_core::Rk4::new(4);
             for _ in 0..4 {
                 rk.step(
-                    |y, dy| dy.copy_from_slice(&p.winding_rates(voltage, resistance, y[0], speed)),
+                    |y, dy| dy.copy_from_slice(&p.winding_rates(voltage, resistance, y[0], speed, d_current)),
                     &mut y,
                     p.current_cycle / 4.0,
                 );
@@ -1207,5 +1476,219 @@ mod tests {
         d.velocity_loop(&p, 2.0, 0.0);
         d.current_loop(&p, 0.0);
         assert!((d.torque - 0.14).abs() < 1e-12 && (d.torque_command - 0.14).abs() < 1e-12);
+    }
+
+    /// The test motor with field weakening: 4 pole pairs, L_d = L_q = 10 mH, and a winding resistance small enough to
+    /// leave out of the hand calculation.
+    fn weakening() -> DriveParams {
+        DriveParams {
+            resistance: 1e-6,
+            field_weakening: Some(FieldWeakening { pole_pairs: 4.0, d_inductance: 0.010 }),
+            ..params()
+        }
+    }
+
+    /// effects.field_weakening against a hand calculation. At 500 rad/s the back-EMF is 0.45 * 500 = 225 V, above the
+    /// 190 V the winding gets: without field weakening there is no torque (the fade ends at 420 rad/s). With it, w L =
+    /// 4 * 500 * 0.010 = 20 Ohm on both axes, and R = 0, the voltage circle is (225 + 20 i_d)^2 + (20 i_q)^2 <= 190^2,
+    /// the current circle i_q^2 + i_d^2 <= 9.5^2. i_q is largest where they cross: 225^2 + 9000 i_d + 400 * 9.5^2 = 190^2,
+    /// i_d = -50625 / 9000 = -5.625 A, i_q = sqrt(90.25 - 31.640625) = 7.6557 A, 0.45 * 7.6557 = 3.4451 N m. The current
+    /// loop gets there: the drive sets i_d = -5.625 A for that setpoint and the voltage vector sits on the circle.
+    #[test]
+    fn field_weakening_gives_the_hand_calculated_torque_above_the_voltage_limit() {
+        let p = weakening();
+        assert_eq!(DriveParams { field_weakening: None, ..p.clone() }.torque_curve(500.0).1, 0.0);
+        let (low, high) = p.torque_curve(500.0);
+        assert!((high - 3.4451).abs() < 1e-3, "{high} N m motoring at 500 rad/s");
+        // Braking the same: with R = 0 the voltage circle does not depend on the sign of i_q. With R = 4 Ohm the back-EMF
+        // is partly spent in the resistance while braking, and braking has more torque than motoring.
+        let back = p.torque_curve(-500.0);
+        assert!((low + high).abs() < 1e-6 && back == (-high, -low), "{low} N m braking, {back:?} backwards");
+        let resistive = DriveParams { resistance: 4.0, ..p.clone() };
+        let (braking, motoring) = resistive.torque_curve(500.0);
+        assert!(-braking > motoring, "{braking} N m braking, {motoring} N m motoring");
+        // Below base speed field weakening changes nothing.
+        assert_eq!(p.torque_curve(100.0), (-3.8, 3.8));
+        assert!((p.d_current_for(7.6557, 500.0, 190.0, 9.5) + 5.625).abs() < 1e-3);
+        assert_eq!(p.d_current_for(1.0, 100.0, 190.0, 9.5), 0.0, "45 V and 4 V reach");
+
+        let mut d = Drive { torque_command: high, ..Drive::default() };
+        for _ in 0..4000 {
+            d.current_loop(&p, 500.0);
+        }
+        let u_d = -20.0 * d.current;
+        assert!(
+            (d.current - 7.6557).abs() < 1e-3
+                && (d.d_current + 5.625).abs() < 1e-3
+                && (d.voltage.hypot(u_d) - 190.0).abs() < 0.1
+                && (d.torque - high).abs() < 1e-3,
+            "{} A, {} A, {} V, {} V",
+            d.current,
+            d.d_current,
+            d.voltage,
+            u_d
+        );
+        // The RMS phase current is the hypotenuse of both: 9.5 A, the current circle.
+        assert!((d.phase_current() - 9.5).abs() < 1e-3);
+        // The winding's energy closes with the d axis: electrical power = copper loss + shaft power (steady, R = 0).
+        assert!((d.power - d.copper_loss - d.shaft_power).abs() < 1e-3 * d.shaft_power, "{} W", d.power);
+    }
+
+    /// The d-q model on a motor Siemens publishes R, L, ke and the pole pairs of: the 1FK7042-2AF7 on S120
+    /// (catalog/siemens/motors_s120.csv and motors_s120_electrical.csv), at the DC link of 600 V its data sheet holds
+    /// for: kt = 3.0 N m / 2.2 A = 1.364 N m/A, R = 3 * 4.67 Ohm, L = 3 * 35 mH, 4 pole pairs, 7.6 A, 10.5 N m at most.
+    ///
+    /// The S1 and peak torque-speed curves Siemens prints only as graphs (in the data sheets and manuals, not in the
+    /// catalogue files), so the points checked are those the catalogue has. The S1 point, 2.6 N m at the rated 2.0 A
+    /// and 314.16 rad/s: the model gives kt * 2.0 A = 2.73 N m, 5 % above (the tolerance stated: 6 %, about the
+    /// difference between the static and the rated torque constant, 1.364 against 1.3 N m/A), and needs no field weakening
+    /// there: R i + kt w = 456.6 V and w L i = 263.9 V make 527 V of the sqrt(3/2) * 600 = 734.8 V. Without field weakening
+    /// the torque is gone at 734.8 / 1.364 = 538.9 rad/s; Siemens gives the motor up to 670.2 rad/s on S120 (n_max,inv)
+    /// and the model with field weakening still has torque there. Towards high speed the best d current tends to the
+    /// characteristic current -psi / L_d = -kt / (p L_d) = -1.364 / (4 * 0.105) = -3.247 A.
+    /// n_max,inv itself is where the motor's no-load voltage, sqrt(2) * 0.8594 V s/rad * 670.2 rad/s = 814.6 V peak line to
+    /// line, reaches the 820 V at which the S120 trips: the speed above which field weakening must not be lost.
+    #[test]
+    fn the_d_q_model_holds_the_published_points_of_a_1fk7() {
+        let kt = 3.0 / 2.2;
+        let fw = FieldWeakening { pole_pairs: 4.0, d_inductance: 3.0 * 0.035 };
+        let p = DriveParams {
+            kt,
+            ke: kt,
+            resistance: 3.0 * 4.67,
+            inductance: 3.0 * 0.035,
+            max_voltage: WINDING_PER_DC_LINK * 600.0,
+            max_current: 7.6,
+            peak_torque: 10.5,
+            rated_speed: 314.16,
+            no_load_speed: WINDING_PER_DC_LINK * 600.0 / kt,
+            field_weakening: Some(fw),
+            ..params()
+        };
+        let rated = p.torque_of(2.0);
+        assert!((rated / 2.6 - 1.0).abs() < 0.06 && p.torque_curve(314.16).1 >= rated, "{rated} N m");
+        assert_eq!(p.d_current_for(2.0, 314.16, p.max_voltage, 7.6), 0.0);
+        let old = DriveParams { field_weakening: None, ..p.clone() };
+        assert!(old.torque_curve(670.2).1 == 0.0 && p.torque_curve(670.2).1 > rated, "{:?}", p.torque_curve(670.2));
+        // At 942.5 rad/s, the mechanical limit: the largest q current on both circles for each d current, by bisection
+        // on the voltage, and the d current where it is largest, by stepping through them.
+        let w = 4.0 * 942.5;
+        let q_at = |d: f64| {
+            let (mut lo, mut hi) = (0.0, (7.6f64 * 7.6 - d * d).max(0.0).sqrt());
+            for _ in 0..40 {
+                let mid = 0.5 * (lo + hi);
+                let uq = p.resistance * mid + kt * 942.5 + w * fw.d_inductance * d;
+                let ud = p.resistance * d - w * p.inductance * mid;
+                if uq.hypot(ud) <= p.max_voltage { lo = mid } else { hi = mid }
+            }
+            lo
+        };
+        let best = (0..=7600).map(|k| -(k as f64) * 1e-3).max_by(|a, b| q_at(*a).total_cmp(&q_at(*b))).unwrap();
+        assert!((best + 3.247).abs() < 0.01 * 3.247, "{best} A");
+        assert!((p.torque_curve(942.5).1 - kt * q_at(best)).abs() < 1e-3, "{:?}", p.torque_curve(942.5));
+        assert!((2f64.sqrt() * 0.8594 * 670.2 / 820.0 - 1.0).abs() < 0.01);
+    }
+
+    /// effects.drive_overload against a hand calculation, with the 3 A S120 Motor Module: rated 3 A, base load 2.6 A,
+    /// 9 A for 0.25 s from the rated load, and a thermal image of 10 s. The trip level is 9 - 8 exp(-0.025) = 1.19752.
+    /// A cold drive asked for 6 A, twice its rated current, fills its image as 4 (1 - exp(-t / 10 s)): it reaches the
+    /// trip after -10 s ln(1 - 1.19752 / 4) = 3.558 s, and holds 2.6 A from then. The image then falls towards
+    /// (2.6 / 3)^2 = 0.7511 and is back at 1 after -10 s ln((1 - 0.7511) / (1.19752 - 0.7511)) = 5.842 s, when the drive
+    /// gives the 6 A again.
+    #[test]
+    fn a_step_at_twice_the_rated_current_clamps_after_the_hand_calculated_time() {
+        let trip = 9.0 - 8.0 * (-0.025f64).exp();
+        assert!((trip - 1.19752).abs() < 1e-5);
+        let o = Overload { rated_current: 3.0, base_current: 2.6, max_current: 9.0, time_constant: 10.0, trip };
+        let p = DriveParams { overload: Some(o), torque_ff: 1.0, drive_max_current: 9.0, ..params() };
+        let mut d = Drive { torque_ff: 0.45 * 6.0, ..Drive::default() };
+        let (mut clamped, mut released, mut t) = (None, None, 0.0);
+        while t < 10.0 {
+            d.velocity_loop(&p, 0.0, 0.0);
+            for _ in 0..2 {
+                d.current_loop(&p, 0.0);
+                t += p.current_cycle;
+            }
+            if clamped.is_none() && d.torque_command < 0.45 * 6.0 - 1e-9 {
+                clamped = Some(t);
+                assert!((d.torque_command - 0.45 * 2.6).abs() < 1e-12);
+            }
+            if clamped.is_some() && released.is_none() && d.torque_command == 0.45 * 6.0 {
+                released = Some(t);
+            }
+        }
+        let (clamped, released) = (clamped.unwrap(), released.unwrap());
+        assert!((clamped - 3.558).abs() < 2e-3, "clamps after {clamped} s");
+        // The image passes the trip by up to a velocity cycle (125 us at 0.28 /s), worth 22 s per unit on the way down.
+        assert!((released - clamped - 5.842).abs() < 3e-3, "released {} s later", released - clamped);
+        // Off, nothing clamps.
+        let off = DriveParams { overload: None, ..p.clone() };
+        let mut d = Drive { torque_ff: 0.45 * 6.0, ..Drive::default() };
+        for _ in 0..40_000 {
+            d.velocity_loop(&off, 0.0, 0.0);
+            d.current_loop(&off, 0.0);
+        }
+        assert!(d.torque_command == 0.45 * 6.0 && !d.overloaded && d.overload_image == 0.0);
+    }
+
+    /// The image's peak when a cycle repeats (`analysis::repeating_peak`), by hand: 1.5 times the rated current held for
+    /// a 1 s pass from a cold image settles at 2.25. Twice the rated current for 0.5 s and nothing for 0.5 s, tau 10 s:
+    /// the repeating start is x0 = 4 (1 - e) e / (1 - e^2) with e = exp(-0.05), 1.95001, and the peak, at 0.5 s,
+    /// x0 e + 4 (1 - e) = 2.04999, a little above the mean of (i / I)^2, 2.
+    #[test]
+    fn the_overload_image_of_a_repeated_cycle_peaks_at_the_hand_calculated_level() {
+        let o = Overload { rated_current: 1.0, base_current: 0.85, max_current: 3.0, time_constant: 10.0, trip: 1.2 };
+        let pass = |current: &dyn Fn(f64) -> f64| {
+            let (mut x, mut samples) = (0.0, Vec::new());
+            for k in 1..=1000 {
+                x = o.image_after(x, current(k as f64 * 1e-3 - 0.5e-3), 1e-3);
+                samples.push((k as f64 * 1e-3, x));
+            }
+            let end = samples.pop().unwrap();
+            crate::analysis::repeating_peak(&o, 0.0, &samples, end)
+        };
+        assert!((pass(&|_| 1.5) - 2.25).abs() < 1e-9);
+        assert!((pass(&|t| if t < 0.5 { 2.0 } else { 0.0 }) - 2.04999).abs() < 1e-4);
+    }
+
+    /// effects.motor_thermal_nodes against a hand calculation. The winding has a quarter of the resistance (s = 0.25) and
+    /// 60 s against the housing; the motor 1800 s, as the one node. At a loss that the one node settles at 100 K the
+    /// winding settles at P (R_w + R_h) = 100 K too and the housing at P R_h = 75 K. On the way, with
+    /// k = 1800 - 60 / 0.25 = 1560 s, the matrix [[-1/60, 1/60], [1/(0.25 k), -(1/0.25 + 1/0.75)/k]] has the eigenvalues
+    /// -7.36204e-4 and -1.934927e-2 1/s (1358 s and 51.7 s), and from cold the winding is at
+    /// 100 - 81.5696 exp(-t / 1358.3 s) - 18.4304 exp(-t / 51.68 s): 16.18 K after 60 s (the one node: 3.28 K) and
+    /// 78.32 K after 1800 s (the one node: 63.21 K).
+    #[test]
+    fn three_thermal_nodes_settle_at_the_sum_of_the_resistances_and_step_as_by_hand() {
+        let p = DriveParams {
+            heating: true,
+            thermal_time_constant: 1800.0,
+            current_cycle: 1e-3,
+            thermal_nodes: Some(ThermalNodes { winding_share: 0.25, winding_time_constant: 60.0 }),
+            ..params()
+        };
+        let rated_loss = p.resistance_at(p.rated_rise) * p.rated_current * p.rated_current;
+        let mut d = Drive { copper_loss: rated_loss, ..Drive::default() };
+        let by_hand = |t: f64| 100.0 - 81.5696 * (-7.362_044e-4 * t).exp() - 18.4304 * (-1.934_927e-2 * t).exp();
+        // 20 000 s: 81.6 K exp(-20000 / 1358) = 3e-5 K are left of the slow part.
+        for step in 1..=20_000_000 {
+            d.warm(&p);
+            let t = step as f64 * 1e-3;
+            if step == 60_000 || step == 1_800_000 {
+                assert!((d.temperature_rise - by_hand(t)).abs() < 1e-3, "{} K at {t} s", d.temperature_rise);
+            }
+        }
+        assert!((by_hand(60.0) - 16.18).abs() < 0.01 && (by_hand(1800.0) - 78.32).abs() < 0.01);
+        assert!(
+            (d.temperature_rise - 100.0).abs() < 1e-3 && (d.housing_rise - 75.0).abs() < 1e-3,
+            "{} K, {} K",
+            d.temperature_rise,
+            d.housing_rise
+        );
+        // The settled rise the verdicts judge is the winding's, and the same as the one node's.
+        assert!((p.settled_rise(p.rated_current) - 100.0).abs() < 1e-9);
+        // A winding started warm starts with its housing settled for it.
+        let warm = DriveParams { start_rise: 40.0, ..p.clone() };
+        assert_eq!(Drive::at_rest(&warm, 0.0, 0.0, 0.0).housing_rise, 30.0);
     }
 }
