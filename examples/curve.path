@@ -1,0 +1,6 @@
+# A path on the T-gantry's two axes (x, z in m): a line, a smooth curve through two via points (spline), a line,
+# from the start pose (0.1, 0.35). The second path file printed in README.md; see docs/user-guide.md, "Run a path".
+line,0.3,0.35
+spline,0.45,0.3
+spline,0.55,0.15
+line,0.55,0.05
