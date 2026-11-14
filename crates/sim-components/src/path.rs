@@ -316,17 +316,20 @@ impl Geo {
                 [from.iter().zip(dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; dir.len()]]
             }
             Geo::Slerp { from, to, length } => {
+                let dir: Vec<f64> = from.iter().zip(to).map(|(f, t)| (t - f) / length).collect();
                 let pose = |s: f64| -> Vec<f64> {
-                    let share = s / length;
-                    let turned = crate::rigid::slerp([from[3], from[4], from[5]], [to[3], to[4], to[5]], share);
-                    (0..6).map(|i| if i < 3 { from[i] + share * (to[i] - from[i]) } else { turned[i - 3] }).collect()
+                    let turned = crate::rigid::slerp([from[3], from[4], from[5]], [to[3], to[4], to[5]], s / length);
+                    (0..6).map(|i| if i < 3 { from[i] + s * dir[i] } else { turned[i - 3] }).collect()
                 };
                 // The orientation's rates by central differences over 1e-4 of the piece (the slerp goes on smoothly past
-                // its ends): truncation ~1e-8 of them, rounding ~1e-16 / 1e-8 of the rotation vector.
+                // its ends): truncation ~1e-8 of them, rounding ~1e-16 / 1e-8 of the rotation vector. The place's are exact:
+                // by differences they were bends of rounding noise on every axis, which `piece_limits` cannot pass.
                 let h = 1e-4 * length;
                 let (ahead, here, behind) = (pose(s + h), pose(s), pose(s - h));
-                let first = (0..6).map(|i| (ahead[i] - behind[i]) / (2.0 * h)).collect();
-                let second = (0..6).map(|i| (ahead[i] - 2.0 * here[i] + behind[i]) / (h * h)).collect();
+                let first = (0..6).map(|i| if i < 3 { dir[i] } else { (ahead[i] - behind[i]) / (2.0 * h) }).collect();
+                let second = (0..6)
+                    .map(|i| if i < 3 { 0.0 } else { (ahead[i] - 2.0 * here[i] + behind[i]) / (h * h) })
+                    .collect();
                 [here, first, second]
             }
             Geo::Arc { centre, radius, from_angle, turn, .. } => {
@@ -2427,10 +2430,15 @@ fn piece_limits(
         })
         .collect();
     // The ramps' jerk along the path: on a line all of the axes' jerk limits; on a curve 0.4 of it, as `curved` shares
-    // it out, and the bends get the rest.
+    // it out, and the bends get the rest. A turning slerp bends its rotation vector a little (and its differences
+    // add rounding): an axis of it that bends keeps 0.6 of its jerk limit for that, or the bend would stop the piece.
+    let slerp = matches!(geo, Geo::Slerp { .. });
+    let bends = |i: usize| slerp && derivatives.iter().any(|[_, _, d2, _]| d2[i] != 0.0);
     let along = derivatives
         .iter()
-        .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs()))
+        .flat_map(|[_, d1, ..]| {
+            axes.iter().zip(d1).enumerate().map(|(i, (a, d))| if bends(i) { 0.4 } else { 1.0 } * a.max_jerk / d.abs())
+        })
         .fold(f64::INFINITY, f64::min);
     let jerk = if matches!(geo, Geo::Line { .. } | Geo::Slerp { .. }) { 1.0 } else { 0.4 } * along;
     // What each motor gives at a standstill, either way: the bounds of its row, and what holds the tool.
