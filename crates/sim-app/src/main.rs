@@ -1390,6 +1390,7 @@ fn panels(
             Action::RunAnalysis(kind) => model.run_analysis(kind),
             Action::ApplyOptimised => model.apply_optimised(),
             Action::UseCandidate(row) => model.use_candidate(row),
+            Action::RunView(kind) => model.views.start(kind, model.entry, &model.config, &model.inputs),
             Action::OpenConfig(dialog) => {
                 if let Some(path) = config_path(model, dialog, false) {
                     model.open_config(&path);
@@ -1559,7 +1560,8 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// exits a second later. To get another part of the panel into the picture, one of SIM_APP_SEARCH (how the
 /// article numbers start), SIM_APP_PATH and SIM_APP_TRACE (a file each) runs that part in their place, and
 /// SIM_APP_SWEEP (a measured frequency response, or nothing) runs the frequency response from 50 to 130 Hz
-/// with 1.5 N m and, with a file, its fit. SIM_APP_POINTS runs the cycle alone, for its operating points.
+/// with 1.5 N m and, with a file, its fit. SIM_APP_RATIO (anything) runs the search tab's ratio sweep,
+/// SIM_APP_KINEMATICS (a task file) its kinematics comparison, and SIM_APP_MAP (anything) the path tab's move maps. SIM_APP_POINTS runs the cycle alone, for its operating points.
 /// SIM_APP_EFFECTS starts the cycle and analyses it, for the effect views; SIM_APP_COMPARE (an effect's name in
 /// `[effects]`) runs the effect comparison with it as well. SIM_APP_CONFIG (a file) opens that config
 /// file first (a config of another machine switches to it); SIM_APP_MACHINE (a machine's id) switches to that
@@ -1701,6 +1703,22 @@ fn developer_hooks(
             if asked("SIM_APP_POINTS").is_some() {
                 kinds.push(Analysis::Cycle);
             }
+            // The search tab's ratio sweep and kinematics comparison (of a task file), the path tab's move maps.
+            use sim_app::search_views::ViewJob;
+            let mut views = Vec::new();
+            if asked("SIM_APP_RATIO").is_some() {
+                views.push(ViewJob::Sweep);
+            }
+            if let Some(file) = asked("SIM_APP_KINEMATICS") {
+                model.inputs.search.task_file = file;
+                views.push(ViewJob::Kinematics);
+            }
+            if asked("SIM_APP_MAP").is_some() {
+                views.push(ViewJob::Map);
+            }
+            for kind in views.iter().copied() {
+                model.views.start(kind, model.entry, &model.config, &model.inputs);
+            }
             // The effect views: their live parts need the machine moving.
             let mut cycle = false;
             if asked("SIM_APP_EFFECTS").is_some() {
@@ -1712,7 +1730,7 @@ fn developer_hooks(
                 model.inputs.compare_effect = effect;
                 kinds.push(Analysis::Compare);
             }
-            if kinds.is_empty() {
+            if kinds.is_empty() && views.is_empty() {
                 model.command(sim_components::Command::StartCycle);
                 cycle = true;
                 model.run_tuning(0);

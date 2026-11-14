@@ -16,7 +16,7 @@ use sim_components::analysis::{
     guide_life_h, guide_life_km, motor_bearing_life_h, optimise_cycle_with, pulley_bearing_life_h, record_cycle,
     sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts,
 };
-use sim_components::catalog::{Candidate, search_axes, search_motors};
+use sim_components::catalog::Candidate;
 use sim_components::identify::{
     AxisFit, BELT_STIFFNESS_KEY, JointFit, MoveStiffness, SweepFit, fit_joints, fit_move_stiffness, fit_rigid,
     fit_sweep, parse_sweep, resonance,
@@ -123,6 +123,10 @@ pub struct Inputs {
     pub series: String,
     pub gearboxes: String,
     pub axes: bool,
+    /// The search's other options, the ratio sweep and the kinematics comparison (`search_views`).
+    pub search: crate::search_views::SearchInputs,
+    /// The path tab's maps of peak torque and following error (`search_views::move_map`).
+    pub map: crate::search_views::MapInputs,
     /// Path: the file, whether it holds poses at times and not lines and arcs, and whether lines and arcs
     /// are timed as fast as the motors allow and not within the axis limits.
     pub path_file: String,
@@ -225,7 +229,7 @@ enum Report {
     Sensitivity(CycleLoad, Vec<Sensitivity>),
     Optimised(Optimised),
     /// With the supply that was searched.
-    Search(Vec<Candidate>, String),
+    Search(crate::search_views::Found, String),
     /// With the path as a run for the run store.
     Path(PathRun, Run),
     Trace(TraceFit),
@@ -491,7 +495,7 @@ fn record_path(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<Vec<Vec<f6
     Ok(rows)
 }
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
-const NOTES: [&str; 25] = [
+const NOTES: [&str; 31] = [
     "ui-overlay-exported",
     "ui-report-written",
     "ui-report-failed",
@@ -514,6 +518,12 @@ const NOTES: [&str; 25] = [
     "ui-search-axis-stroke",
     "ui-search-axis-payload",
     "ui-search-axis-speed",
+    "ui-search-bad-duty",
+    "ui-search-bad-rank",
+    "ui-search-motor-axes",
+    "ui-search-unknown-machine",
+    "ui-map-move-too-long",
+    "ui-map-bad-plane",
     "ui-file-unreadable",
     "ui-file-line",
     "ui-analysis-figure",
@@ -811,6 +821,8 @@ pub struct Model {
     pub sweep_fit: Option<(usize, SweepFit)>,
     /// The effect comparison, with the effect that was switched.
     pub comparison: Option<(String, Comparison)>,
+    /// The search's views, the ratio sweep, the kinematics comparison and the path tab's move maps (`search_views`).
+    pub views: crate::search_views::Views,
     /// Per kind of analysis (`Analysis as usize`) the config its result was computed for. A result says
     /// nothing about another config: it is marked (`outdated`), and nothing of it is applied to one.
     computed_for: [Option<Config>; 9],
@@ -967,6 +979,8 @@ impl Model {
                 series: String::new(),
                 gearboxes: String::new(),
                 axes: false,
+                search: Default::default(),
+                map: Default::default(),
                 path_file: String::new(),
                 path_timed: false,
                 time_optimal: false,
@@ -1003,6 +1017,7 @@ impl Model {
             comparison: None,
             computed_for: Default::default(),
             analysis_jobs: Vec::new(),
+            views: Default::default(),
         };
         model.target = model.config.f64s("start.pose").unwrap_or_default();
         model.show_parts();
@@ -1303,6 +1318,9 @@ impl Model {
                 Err(message) => self.say(message),
             }
         }
+        for message in self.views.poll() {
+            self.say(message);
+        }
         // A job stays until it has answered.
         let mut reports = Vec::new();
         self.analysis_jobs.retain(|(kind, config, job)| {
@@ -1334,7 +1352,8 @@ impl Model {
                     None
                 }
                 Report::Search(found, supply) => {
-                    self.candidates = Some((found, supply));
+                    self.views.curves = found.curves;
+                    self.candidates = Some((found.candidates, supply));
                     None
                 }
                 Report::Path(run, recorded) => {
@@ -1738,7 +1757,7 @@ impl Model {
     // Analysis
 
     pub fn analysis_running(&self) -> bool {
-        !self.analysis_jobs.is_empty()
+        !self.analysis_jobs.is_empty() || self.views.any_running()
     }
 
     pub fn running(&self, kind: Analysis) -> bool {
@@ -1765,7 +1784,7 @@ impl Model {
     /// where the machine stands, and when its analysis is back the machine runs it too (see `poll`).
     pub fn run_analysis(&mut self, kind: Analysis) {
         let (entry, config, inputs) = (self.entry, self.config.clone(), self.inputs.clone());
-        if kind == Analysis::Search && !SUPPLIES.contains(&inputs.supply.as_str()) {
+        if kind == Analysis::Search && crate::search_views::supplies(&inputs.search.vendor, &inputs.supply).is_empty() {
             return self.say(("ui-search-bad-supply", inputs.supply));
         }
         let (standing, motors, tr) = (self.standing(), self.session.motors.clone(), self.tr.clone());
@@ -1847,25 +1866,7 @@ impl Model {
                         .map_err(refused)?,
                     ),
                     Analysis::Search => {
-                        let (series, gearboxes) =
-                            (inputs.series.trim(), Some(inputs.gearboxes.trim()).filter(|series| !series.is_empty()));
-                        let wanted = |article: &str| article.starts_with(series);
-                        let found = if inputs.axes {
-                            search_axes(entry, &config, &inputs.supply, &wanted, gearboxes)
-                        } else {
-                            search_motors(entry, &config, &inputs.supply, &wanted, gearboxes)
-                        };
-                        if found.iter().all(|c| c.article.is_empty()) {
-                            // Motors there are, so it is the gearbox series that has nothing for them.
-                            let motors = sim_components::catalog::motor_articles_for(&inputs.supply)
-                                .iter()
-                                .any(|article| article.starts_with(series));
-                            return Err(match gearboxes.filter(|_| motors) {
-                                Some(gearboxes) => ("ui-search-no-gearbox", gearboxes.to_string()),
-                                None => ("ui-search-none", series.to_string()),
-                            });
-                        }
-                        Report::Search(found, inputs.supply.clone())
+                        Report::Search(crate::search_views::run_search(entry, &config, &inputs)?, inputs.supply.clone())
                     }
                     Analysis::Path => {
                         let unreadable = |line: String| ("ui-file-line", format!("{}: {line}", inputs.path_file));
@@ -2048,7 +2049,8 @@ impl Model {
         let or_own = |name: &str, key: &str| if name.is_empty() { own(key) } else { name.to_string() };
         let names = [
             candidate.article.to_string(),
-            supply.clone(),
+            // Searched at several supplies (a maker's), each candidate at its own.
+            if candidate.supply.is_empty() { supply.clone() } else { candidate.supply.to_string() },
             or_own(&candidate.gearbox, "gearbox"),
             or_own(candidate.drive, "drive"),
             own("belt"),

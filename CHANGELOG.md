@@ -9,6 +9,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- App search tab: every option of `sim-cli search` (maker, drives, rank by, one motor, duty mix), a candidates x checks
+  heat map of the utilisations, cost against worst margin coloured by energy with the front, the best candidates'
+  operating points on their torque-speed curves, and why each failing one fails; a ratio sweep view (inertia ratio and
+  tightest check over the gear ratio or pulley radius, optimum and catalogue gearboxes marked) and a kinematics
+  comparison of one task file. Path tab: maps of peak torque and following error from a grid of short moves.
 - Drive monitoring and fault reactions (`effects.drive_monitoring`, off by default): each drive trips on its
   following error window (S120 p2546), a standstill window (p2542/p2543), a motor blocked at its torque limit (F07900)
   and optionally a band around the expected torque, and every drive then stops by its own `drive.fault_reaction`

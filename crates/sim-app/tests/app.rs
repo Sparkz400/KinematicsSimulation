@@ -89,7 +89,7 @@ fn string_literals(source: &str) -> Vec<String> {
 }
 
 fn window_sources() -> String {
-    ["src/main.rs", "src/ui.rs"]
+    ["src/main.rs", "src/ui.rs", "src/ui/search_views.rs"]
         .map(|f| std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f)).unwrap())
         .concat()
 }
@@ -3744,4 +3744,140 @@ fn every_motor_has_one_colour_in_every_plot() {
             assert_eq!(owner_slot(axis.key, &signals, &axes, &motors), i, "{}: {}", entry.id, axis.key);
         }
     }
+}
+
+/// The search tab's views of one search (`search_views`): a cell of the candidates × checks heat map is that
+/// candidate's utilisation of that check (`Figures::checks`), which for "motor-peak" is the cycle's peak torque demand
+/// over the motor's peak torque (`MotorLoad::utilisation`, judged against 1; the single axis has one motor); and the
+/// scatter of cost against margin marks as its front exactly the candidates of `search::front`, each at 1 less its
+/// tightest check.
+#[test]
+fn the_search_views_show_each_candidates_checks_and_the_front_of_the_search() {
+    use sim_app::search_views::{heatmap, scatter};
+    let entry = sim_machines::find("single-axis").unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    (model.inputs.series, model.inputs.search.drives) = ("1FK2104".into(), sim_components::catalog::Drives::Neighbours);
+    model.run_analysis(Analysis::Search);
+    wait_for_analysis(&mut model);
+    let (found, _) = model.candidates.as_ref().unwrap();
+    let map = heatmap(found);
+    let peak = map.checks.iter().position(|c| *c == "motor-peak").expect("no motor-peak column");
+    let mut cells = 0;
+    for (row, c) in map.rows.iter().zip(found) {
+        let Some((load, verdicts)) = &c.result else { continue };
+        let demand = load.motors[0].utilisation;
+        assert!((row[peak] - demand).abs() < 1e-12, "{}: {} against {demand}", c.article, row[peak]);
+        for (j, check) in map.checks.iter().enumerate() {
+            let by_hand = verdicts
+                .iter()
+                .filter(|v| v.check == *check)
+                .map(sim_components::analysis::utilisation)
+                .fold(f64::NAN, f64::max);
+            let same = row[j] == by_hand || (row[j].is_nan() && by_hand.is_nan());
+            assert!(same, "{} {check}: {} against {by_hand}", c.article, row[j]);
+            cells += 1;
+        }
+    }
+    assert!(cells > 20, "{cells} cells");
+    let front = sim_components::search::front(found);
+    let points = scatter(found);
+    assert!(points.iter().any(|p| p.front) && points.len() >= 3, "{points:?}");
+    for p in &points {
+        assert_eq!(p.front, front[p.index]);
+        assert_eq!(p.margin, 1.0 - found[p.index].tightest().unwrap().1);
+    }
+    // Every candidate of the front is drawn.
+    assert!((0..found.len()).filter(|&i| front[i]).all(|i| points.iter().any(|p| p.index == i)));
+}
+
+/// The vendor filter searches every supply of that maker, and only those: Yaskawa's are yaskawa-200v and yaskawa-400v,
+/// and every candidate of a search with it is at one of them; "all" is every supply, none the supply chosen alone.
+#[test]
+fn the_vendor_filter_keeps_only_that_makers_supplies() {
+    use sim_app::search_views::supplies;
+    use sim_components::catalog::{SUPPLIES, vendor_of};
+    assert_eq!(supplies("yaskawa", "400v"), ["yaskawa-200v", "yaskawa-400v"]);
+    assert_eq!(supplies("", "400v"), ["400v"]);
+    assert_eq!(supplies("all", "400v"), SUPPLIES);
+    assert!(supplies("nobody", "400v").is_empty());
+    let entry = sim_machines::find("single-axis").unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    (model.inputs.series, model.inputs.search.vendor) = ("SGM7J".into(), "yaskawa".into());
+    model.run_analysis(Analysis::Search);
+    wait_for_analysis(&mut model);
+    let (found, _) = model.candidates.as_ref().unwrap();
+    assert!(found.len() >= 3, "{}", found.len());
+    assert!(found.iter().all(|c| vendor_of(c.supply) == "yaskawa" && c.article.starts_with("SGM7J")));
+    // The button names each candidate at its own supply, not at the one chosen in the field (it named "400v").
+    let at = found.iter().position(|c| c.supply == "yaskawa-200v").unwrap();
+    model.use_candidate(at);
+    let supply = model.config.get("parts.motor_supply").unwrap().as_str().unwrap().to_string();
+    assert_eq!(supply, "yaskawa-200v", "{:?}", model.messages);
+    model.inputs.search.vendor = "nobody".into();
+    model.run_analysis(Analysis::Search);
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-search-bad-supply"));
+}
+
+/// The ratio sweep of the search tab finds the classic optimum of a pure inertia: the single axis without its cable
+/// chain turns J_L = 0.002604 kg m^2 at the pulley (carriage and payload 6 kg and the belt 0.26 kg at r = 20 mm, the
+/// pulley 1e-4) with a rotor of J_m = 0.3e-4 kg m^2, so the torque J_m i a + J_L a / i is least at
+/// i = sqrt(J_L / J_m) = sqrt(86.8) = 9.3167.
+#[test]
+fn the_ratio_sweep_finds_the_root_of_the_inertia_ratio() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_param("effects.cable_chain", toml::Value::Boolean(false));
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    let s = &mut model.inputs.search;
+    (s.sweep_from, s.sweep_to, s.sweep_count) = (2.0, 40.0, 3);
+    model.views.start(sim_app::search_views::ViewJob::Sweep, entry, &model.config, &model.inputs);
+    wait_for_analysis(&mut model);
+    let (_, sweep) = model.views.sweep.as_ref().unwrap();
+    let by_hand = (0.002604f64 / 0.3e-4).sqrt();
+    assert!((by_hand - 9.3167).abs() < 1e-4);
+    assert!((sweep.classic / by_hand - 1.0).abs() < 1e-5, "{} against {by_hand}", sweep.classic);
+    assert_eq!(sweep.rows.len(), 4);
+    // The inertia ratio J_L / (i^2 J_m) falls as the ratio grows.
+    let ratios: Vec<f64> = sweep.rows.iter().map(|r| r.inertia_ratio).collect();
+    assert!(ratios.windows(2).all(|w| w[1] < w[0]), "{ratios:?}");
+}
+
+/// A cell of the path tab's torque map is the peak motor torque of the short move from that node: the T-gantry at the
+/// corner of its travel, moved a tenth of the x travel along x, run here by hand on a simulation of its own.
+#[test]
+fn a_move_map_cell_is_the_peak_torque_of_a_hand_run_short_move() {
+    use sim_components::{Command, Sim};
+    let entry = sim_machines::find("t-gantry").unwrap();
+    let mut model = Model::new(entry, "en");
+    model.inputs.map = sim_app::search_views::MapInputs { plane: [0, 1], axis: 0, distance: 0.0, n: 2 };
+    model.views.start(sim_app::search_views::ViewJob::Map, entry, &model.config, &model.inputs);
+    wait_for_analysis(&mut model);
+    let (_, map) = model.views.map.as_ref().unwrap();
+    let axes = &model.session.axes;
+    let (x, z) = ((axes[0].min, axes[0].max), (axes[1].min, axes[1].max));
+    assert_eq!((map.x, map.y, map.torque.len()), (x, z, 4));
+    let distance = (x.1 - x.0) / 10.0;
+    assert_eq!(map.distance, distance);
+    // Node (0, 0): from the corner (x min, z min) a tenth of the travel to the right.
+    let mut cfg = model.config.clone();
+    cfg.set_text(&format!("start.pose = {:?}", [x.0, z.0])).unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let torques: Vec<usize> =
+        sim.machine.motors().iter().map(|m| sim.signal_index(&format!("motor.{}.torque", m.id)).unwrap()).collect();
+    sim.command(Command::MoveTo(vec![x.0 + distance, z.0])).unwrap();
+    let (mut peak, mut row, mut arrived) = (0.0f64, Vec::new(), None);
+    loop {
+        sim.step();
+        row.clear();
+        sim.sample(&mut row);
+        peak = torques.iter().map(|&i| row[i].abs()).fold(peak, f64::max);
+        let now = sim.time();
+        if !sim.control.busy() && now - *arrived.get_or_insert(now) >= 0.1 {
+            break;
+        }
+    }
+    assert!(peak > 0.1 && (map.torque[0] - peak).abs() <= 1e-12 * peak, "{} against {peak}", map.torque[0]);
+    assert!(map.torque.iter().chain(&map.error).all(|v| v.is_finite() && *v > 0.0), "{map:?}");
 }

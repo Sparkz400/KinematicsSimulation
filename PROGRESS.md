@@ -4110,3 +4110,33 @@ Left open:
   variants) and did worse here; worth a proper layout study.
 - Search: both run in `sim-cli search` as every machine does (motor dimension); no cable or leg catalogue, so the
   search does not pick cables, screws or winches.
+
+## App search views (14 November)
+
+| What | How | Test |
+| --- | --- | --- |
+| Search options | The search tab takes every option of `sim-cli search`: maker (`--vendor`: every supply of that maker, or "all"), drives (`--drives`), rank by (`--rank-by`, `search::rank_by` after the search), one motor (`--motor-id`), a duty mix (config files with weights beside the config shown, its first duty), and how many curves to draw. In `sim_app::search_views` (lib) and `ui/search_views.rs` (window, a child module of `ui`); ui.rs and model.rs only wire them. "Use" names each candidate at its own supply (it named the field's) | `the_vendor_filter_keeps_only_that_makers_supplies`: Yaskawa's are yaskawa-200v and yaskawa-400v, every SGM7J candidate is at one, "Use" names yaskawa-200v |
+| Heat map | Candidates × checks, the utilisation of `Figures::checks` in the order of the ranking, red above 1 | `the_search_views_show_each_candidates_checks_and_the_front_of_the_search`: each cell is `analysis::utilisation` of that check's verdicts (the highest over the motors); the motor-peak cell is `MotorLoad::utilisation` (single axis, 1FK2104, neighbouring drives) |
+| Scatter | Cost (installed mass) against worst margin 1 - tightest, coloured by energy, the front of `search::front` as diamonds joined by a line, failing ones hollow | same test: the front marks are `search::front`'s, margin 1 - tightest |
+| Operating points | The first N candidates that ran, each on its own motor's torque-speed curves (`torque_speed_curves` of the candidate's config, that motor's drive data for one motor's search). A simple version: the views session's chart had not landed on main | screenshot |
+| Why they fail | The first ten failing candidates with their failing checks: value / limit = utilisation | screenshot |
+| Ratio sweep | `search::transmission_sweep` in the background: inertia ratio and tightest check over the value, classic optimum and best for the cycle marked, the catalogue gearboxes of a series as squares | `the_ratio_sweep_finds_the_root_of_the_inertia_ratio`: single axis without cable chain, sqrt(0.002604 / 0.3e-4) = 9.3167 to 1e-5; the inertia ratio falls with the ratio |
+| Kinematics comparison | `search::compare_kinematics` on a task file and machine ids (the machine shown with its config, others with their default), a column per machine | screenshot: `examples/pick-place-task.toml` on the T-gantry, best candidate 2.32 kg installed with drive 6SL3210-5HE10-4UF0, cycle 2.07 s against the 1.5 s target, 84 / 84 passing |
+| Torque and error maps | Path tab: over a plane of two of the first three axes an n x n grid; from each node a point-to-point move (`Command::MoveTo`) along a chosen axis by a distance (a tenth of its travel by default, backwards at the end), on a simulation of its own, watched until 0.1 s after arrival; peak motor torque and peak following error (axes in the moved axis's unit) mapped with the workspace map's painter (`GridMap`, which ui.rs `workspace` now draws with too) | `a_move_map_cell_is_the_peak_torque_of_a_hand_run_short_move`: T-gantry, node (x min, z min), 0.1 m along x, the same peak as a move run by hand in the test |
+
+Screenshots (SIM_APP_RATIO, SIM_APP_KINEMATICS=task file, SIM_APP_MAP are new hooks) of the search tab on the single
+axis (1FK2104) and of the maps on the T-gantry looked right. Outside the area: model.rs (two `Inputs` fields, a `views`
+field, the search job calls `search_views::run_search`, `use_candidate` takes the candidate's supply, `analysis_running`
+counts the views' jobs, six message keys), main.rs (one action, three hooks), tests/app.rs (the label scan reads the new
+window file).
+
+Left open:
+
+- The pre-existing failures seen while checking: `every_label_exists_in_every_language` (no `effect-braking_resistor_heating`
+  label), `the_app_searches_motors_and_names_one_in_the_config` (crank-cam, hexapod and cable configs lack
+  `gearbox.lost_motion_band_rad` / `profile.corner_tolerance_m`; `inf` shares and 1FK2208-3AC now passing on several
+  machines): not from this branch, whose search runs the same `catalog::search` call.
+- The operating-point plot is a simple one; swap in the views session's torque-speed chart once merged.
+- The maps run each move from rest on a fresh simulation (cold, the config's thermal state); n is kept to 15 per side.
+  No map of the cycle's own moves, and the out-of-plane axes stay at `start.pose`.
+- Search table columns unchanged (drive, supply, energy are in the views and hover, not the table: its header is tested).
