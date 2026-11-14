@@ -7,6 +7,8 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-14
+
 ### Added
 
 - `verdicts`, `search` and `optimise --path FILE [--time-optimal]` (and Python's `path=`): the path or program is
@@ -781,4 +783,5 @@ Phases 0 to 6 of the project plan.
 - **Phase 6:** PLC link as an OPC UA server (`sim-opcua`).
 - After phase 6: winding model, corner blending, tuning help, a reworked 3D view and scopes.
 
-<!-- Version links (compare/tag URLs) go here once the repository has a public remote. -->
+[Unreleased]: https://github.com/Sparkz400/KinematicsSimulation/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Sparkz400/KinematicsSimulation/releases/tag/v1.0.0

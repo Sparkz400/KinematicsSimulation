@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "KinematicsSimulation: a physics simulator for belt gantries, delta pickers and joint machines"
-version: 1.0.0-rc.1
+version: 1.0.0
 license: "MIT OR Apache-2.0"
 repository-code: "https://github.com/Sparkz400/KinematicsSimulation"
 type: software
