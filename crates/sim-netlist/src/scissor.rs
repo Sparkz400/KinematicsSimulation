@@ -343,7 +343,7 @@ impl ScissorMachine {
         let (theta, w) = (s[0], s[1]);
         let (rotor, rotor_speed) = self.rotor(s);
         let j = &self.joint;
-        let [_, _, shaft] = j.losses(theta, w, rotor_speed, self.brake(s), self.brake_engaged);
+        let [_, _, shaft, drag] = j.losses(theta, w, rotor_speed, self.brake(s), self.brake_engaged);
         let (gear, at_rotor) = if self.elastic {
             let g = j.gearbox.torque(s[2], s[3], theta, w);
             (j.gearbox.loss_power(s[2], s[3], theta, w), g.rotor - g.output / j.ratio())
@@ -351,7 +351,7 @@ impl ScissorMachine {
             let (_, into, out) = self.rigid_solve(s, torque);
             ((into - out) * w, (into - out) / j.ratio())
         };
-        ([shaft, gear, (torque - j.ripple.apply(torque, rotor)) * rotor_speed], at_rotor)
+        ([shaft, gear + drag, (torque - j.ripple.apply(torque, rotor)) * rotor_speed], at_rotor)
     }
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
@@ -481,6 +481,13 @@ impl Machine for ScissorMachine {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        if self.elastic {
+            self.joint.gearbox.commit(s[2], s[0]);
+        }
+    }
+
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         if let (Some(law), Some(rise), false) = (&self.thermal, rises.first(), self.joint.gearbox.is_coupling()) {
             self.joint.gearbox.efficiency = law.gearbox_efficiency(*rise) * self.screw_efficiency;

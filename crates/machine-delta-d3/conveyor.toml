@@ -305,11 +305,12 @@ no_load_torque_nm = 0.93
 no_load_speed_rpm = 3000.0
 # With effects.gearbox_lost_motion [estimate]: the band beyond the backlash over which the flanks' stiffness rises from
 # 0 to stiffness_nm_rad, half an arcmin (WITTENSTEIN publishes none; it measures the backlash at 2 % of T2B, where the
-# twist is 0.22 arcmin). The hysteresis loop's width at zero torque: 0 here. The model's hysteresis is a friction on
-# the twist's rate (mech::Gearbox), which at the small amplitudes of a frequency response locks the flanks like a
-# damper of hysteresis / 1e-3 rad/s: with half an arcmin the velocity loop's crossover fell from 225 to 19 Hz.
+# twist is 0.22 arcmin). hysteresis_rad [estimate]: the hysteresis loop's width at zero torque, half an arcmin
+# (WITTENSTEIN publishes none for SP+; Harmonic Drive's strain wave gears give 1 arcmin). The flanks' friction is a
+# Dahl state (mech::Gearbox): at the small amplitudes of a frequency response it is a spring beside K1, and the D3's
+# velocity loop keeps its crossover (305 Hz with it, 259 Hz without; it locked at 19 Hz as a friction on the rate).
 lost_motion_band_rad = 1.454e-4
-hysteresis_rad = 0.0
+hysteresis_rad = 1.454e-4
 # With effects.gearbox_stiffness_curve: a planetary gearbox has one stiffness, the knees at T2B and K2 = K3 = K1.
 stiffness_t1_nm = 347.0
 stiffness_t2_nm = 347.0
@@ -609,6 +610,7 @@ motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 gearbox.no_load_torque_nm = [0.7, 1.2]
 gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
+gearbox.hysteresis_rad = [0.0, 2.909e-4]
 thermal_feedback.seal_viscosity_exponent = [0.0, 0.5]
 [start]
 pose = [0.0, -0.3, -0.75]

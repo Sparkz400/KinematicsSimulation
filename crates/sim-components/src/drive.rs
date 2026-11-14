@@ -522,7 +522,13 @@ impl DriveParams {
     /// (effects.drive_current_limit) also the torque of the drive's maximum current, where that is the lower: the
     /// current setpoint, the torque's, then stays within min(motor, drive maximum current).
     pub fn torque_range(&self, speed: f64) -> (f64, f64) {
-        let (low, high) = if self.limit { self.torque_curve(speed) } else { (f64::NEG_INFINITY, f64::INFINITY) };
+        self.torque_range_at(speed, self.max_voltage)
+    }
+
+    /// `torque_range` with the winding getting `max_voltage` at most (the DC link's at the moment, `Drive::max_voltage`).
+    pub fn torque_range_at(&self, speed: f64, max_voltage: f64) -> (f64, f64) {
+        let (low, high) =
+            if self.limit { self.torque_curve_at(speed, max_voltage) } else { (f64::NEG_INFINITY, f64::INFINITY) };
         if self.drive_max_current.is_finite() {
             let most = self.torque_of(self.drive_max_current);
             (low.max(-most), high.min(most))
@@ -648,8 +654,8 @@ impl DriveParams {
     /// With field weakening: the most torque, motoring or braking (as a magnitude), at a speed of at least 0 within the
     /// current circle of the motor's maximum current and the voltage circle of `max_voltage`, over every d current
     /// from 0 to minus the maximum current (golden section; the torque rises to one top and falls).
-    fn field_weakened_torque(&self, fw: &FieldWeakening, speed: f64, motoring: bool) -> f64 {
-        let (imax, umax, r) = (self.max_current, self.max_voltage, self.resistance);
+    fn field_weakened_torque(&self, fw: &FieldWeakening, speed: f64, umax: f64, motoring: bool) -> f64 {
+        let (imax, r) = (self.max_current, self.resistance);
         let w = fw.pole_pairs * speed;
         let (a, b) = (w * fw.d_inductance, w * self.inductance);
         // The q current the two circles leave at a d current, as a magnitude.
@@ -716,14 +722,25 @@ impl DriveParams {
     /// With field weakening the curve is the d-q model's (`FieldWeakening`), up to the peak torque; without it the
     /// torque fades out linearly between the rated and the no-load speed.
     pub fn torque_curve(&self, speed: f64) -> (f64, f64) {
+        self.torque_curve_at(speed, self.max_voltage)
+    }
+
+    /// `torque_curve` with the winding getting `max_voltage` at most. Without field weakening the fade's two speeds
+    /// scale with it against `max_voltage` (the back-EMF the voltage leaves room for).
+    pub fn torque_curve_at(&self, speed: f64, max_voltage: f64) -> (f64, f64) {
         if let Some(fw) = &self.field_weakening {
             let (motoring, braking) = (
-                self.field_weakened_torque(fw, speed.abs(), true).min(self.peak_torque),
-                self.field_weakened_torque(fw, speed.abs(), false).min(self.peak_torque),
+                self.field_weakened_torque(fw, speed.abs(), max_voltage, true).min(self.peak_torque),
+                self.field_weakened_torque(fw, speed.abs(), max_voltage, false).min(self.peak_torque),
             );
             return if speed >= 0.0 { (-braking, motoring) } else { (-motoring, braking) };
         }
-        let fade = ((self.no_load_speed - speed.abs()) / (self.no_load_speed - self.rated_speed)).clamp(0.0, 1.0);
+        // shortcut: the linear fade's rated and no-load speeds scale with the voltage alike; the d-q model (field
+        // weakening on) is the one that follows R, L and kE.
+        let scale =
+            if max_voltage.is_finite() && self.max_voltage.is_finite() { max_voltage / self.max_voltage } else { 1.0 };
+        let (rated_speed, no_load_speed) = (scale * self.rated_speed, scale * self.no_load_speed);
+        let fade = ((no_load_speed - speed.abs()) / (no_load_speed - rated_speed)).clamp(0.0, 1.0);
         let (peak, motoring) = (self.peak_torque, self.peak_torque * fade);
         if speed >= 0.0 { (-peak, motoring) } else { (-motoring, peak) }
     }
@@ -933,6 +950,11 @@ impl Drive {
         self.speed_command = self.position_part + p.velocity_ff * (self.vel_set + self.acc_set * t);
     }
 
+    /// The voltage limit of the winding: what the DC link has at this moment with effects.dc_link, else the nominal one.
+    pub fn max_voltage(&self, p: &DriveParams) -> f64 {
+        if p.dc_link && p.max_voltage.is_finite() { WINDING_PER_DC_LINK * self.dc_voltage } else { p.max_voltage }
+    }
+
     /// Velocity loop: PI on the measured speed (from `read_encoder`), plus torque feedforward, then filters and limits.
     pub fn velocity_loop(&mut self, p: &DriveParams, true_speed: f64) {
         // A real encoder gives positions only; the speed is their difference per cycle.
@@ -957,7 +979,8 @@ impl Drive {
             out = b0 * self.filtered + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
             self.notch = [self.filtered, x1, out, y1];
         }
-        let (mut low, mut high) = p.torque_range(self.speed);
+        // The torque-speed curve at the DC link's voltage of the moment: a sagging DC link limits the torque at speed.
+        let (mut low, mut high) = p.torque_range_at(self.speed, self.max_voltage(p));
         // An overloaded drive gives its base load current at most.
         if let (true, Some(o)) = (self.overloaded, &p.overload) {
             let most = p.torque_of(o.base_current);
@@ -978,9 +1001,7 @@ impl Drive {
         let measured = self.current + if p.current_noise > 0.0 { p.current_noise * self.noise.next() } else { 0.0 };
         let setpoint = p.current_for(self.torque_command);
         let error = setpoint - measured;
-        // The voltage limit is what the DC link has at this moment.
-        let max_voltage =
-            if p.dc_link && p.max_voltage.is_finite() { WINDING_PER_DC_LINK * self.dc_voltage } else { p.max_voltage };
+        let max_voltage = self.max_voltage(p);
         // Field weakening: the d current for this setpoint, with the winding warm as it is; the d axis follows it as the
         // current loop does. The q axis gets what the d axis leaves of the voltage.
         let (resistance, flux) = (self.winding_resistance(p), self.flux(p));
@@ -1848,6 +1869,32 @@ mod tests {
         d.velocity_loop(&p, 0.0);
         d.current_loop(&p, 0.0);
         assert!((d.torque - 0.14).abs() < 1e-12 && (d.torque_command - 0.14).abs() < 1e-12);
+    }
+
+    /// The velocity loop's torque limit follows the DC link's voltage of the moment (the field weakening test's motor, R
+    /// left out, at 500 rad/s). The DC link 10 % low gives the winding 171 V of 190: on the current circle of 9.5 A,
+    /// (225 + 20 i_d)^2 + (20 i_q)^2 = 171^2 is 50625 + 9000 i_d + 400 * 90.25 = 29241, i_d = -57484 / 9000 = -6.38711 A,
+    /// i_q = sqrt(90.25 - 40.79522) = 7.03241 A, 0.45 * 7.03241 = 3.16459 N m (3.4451 N m at the full 190 V). Without
+    /// field weakening the fade's speeds scale by 0.9, to 282.6 and 378 rad/s: at 330 rad/s 3.8 * 48 / 95.4 =
+    /// 1.91195 N m where the full voltage gives 3.8 * 90 / 106 = 3.22642 N m.
+    #[test]
+    fn a_dc_link_ten_percent_low_lowers_the_velocity_loops_torque_limit_at_speed() {
+        let bus = 190.0 / WINDING_PER_DC_LINK;
+        let limit = |p: &DriveParams, dc: f64, speed: f64| {
+            // An integrator far beyond the limit: the loop asks for more than it may give.
+            let mut d = Drive { dc_voltage: dc, integral: 100.0, ..Drive::default() };
+            d.velocity_loop(p, speed);
+            d.torque_command
+        };
+        let p = DriveParams { dc_link: true, bus_voltage: bus, ..weakening() };
+        let (full, low) = (limit(&p, bus, 500.0), limit(&p, 0.9 * bus, 500.0));
+        assert!((full - 3.4451).abs() < 1e-3 && (low - 3.16459).abs() < 1e-3, "{full} N m, {low} N m");
+        let fade = DriveParams { field_weakening: None, ..p.clone() };
+        let (full, low) = (limit(&fade, bus, 330.0), limit(&fade, 0.9 * bus, 330.0));
+        assert!((full - 3.22642).abs() < 1e-4 && (low - 1.91195).abs() < 1e-4, "{full} N m, {low} N m");
+        // Without the DC link simulated the nominal voltage holds, whatever the drive's DC link field says.
+        let nominal = DriveParams { dc_link: false, ..p.clone() };
+        assert!((limit(&nominal, 0.9 * bus, 500.0) - 3.4451).abs() < 1e-3);
     }
 
     /// The test motor with field weakening: 4 pole pairs, L_d = L_q = 10 mH, and a winding resistance small enough to

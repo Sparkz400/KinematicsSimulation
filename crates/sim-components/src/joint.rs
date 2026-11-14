@@ -155,15 +155,17 @@ impl RotaryJoint {
         self.stops.energy(angle - min, max - min)
     }
 
-    /// Powers lost at an angle and speed, rotor speed and brake: in the joint's friction, the stops, and the motor's
-    /// friction with the brake (W).
-    pub fn losses(&self, angle: f64, speed: f64, rotor_speed: f64, brake: f64, engaged: bool) -> [f64; 3] {
+    /// Powers lost at an angle and speed, rotor speed and brake: in the joint's friction, the stops, the motor's
+    /// friction with the brake, and the gearbox's drag (W; the gearbox's loss, though it acts on the rotor).
+    pub fn losses(&self, angle: f64, speed: f64, rotor_speed: f64, brake: f64, engaged: bool) -> [f64; 4] {
         let (min, max) = self.range;
         let held = self.brake.torque(engaged, rotor_speed, brake).0;
+        let drag = self.shaft.drag_power(rotor_speed);
         [
             self.friction.torque(speed) * speed,
             self.stops.loss_power(angle - min, speed, max - min),
-            (self.shaft.torque(rotor_speed) + held) * rotor_speed,
+            (self.shaft.torque(rotor_speed) + held) * rotor_speed - drag,
+            drag,
         ]
     }
 }
@@ -198,7 +200,7 @@ mod tests {
         let (gear, acc, _) = j.rotor(0.0, 20.0 * 1e-3, 0.0, 0.0, 0.0, 0.0, false);
         assert!((gear.output - 10.0).abs() < 1e-9 && (acc + 0.5 / 2e-4).abs() < 1e-6);
         // The losses at 4 rad/s at the arm and 80 rad/s at the rotor: 16 W in the joint, 8 W in the motor bearings.
-        let [joint_loss, stop_loss, motor_loss] = j.losses(0.0, 4.0, 80.0, 0.0, false);
+        let [joint_loss, stop_loss, motor_loss, _] = j.losses(0.0, 4.0, 80.0, 0.0, false);
         assert!((joint_loss - 16.0).abs() < 1e-9 && stop_loss == 0.0 && (motor_loss - 8.0).abs() < 1e-9);
     }
     /// A pinion of 50 mm radius (stiffness 1e7 N/m, backlash 0.1 mm, 95 %, 0.04 kg m^2) behind the gearbox of ratio 20

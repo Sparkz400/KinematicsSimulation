@@ -3494,3 +3494,40 @@ Left open:
 - Runs are aligned from their starts; an offset to line up two runs that start their motion at different times, and
   a contour error of a run (beside the tool's position error) are for the views to come.
 - The light theme was checked in a screenshot only; the 3D view keeps its dark studio.
+
+## Physics leftovers: gearbox hysteresis as a state, the drag's heat, the DC link's torque limit, 1FT2 data (14 November)
+
+What the friction and motor sessions of 14 November left open in `mech.rs`, `drive.rs`, the heated parts and
+`catalog/siemens`.
+
+| Item | What was built | Test |
+| --- | --- | --- |
+| Gearbox hysteresis as a state | `Gearbox` keeps a Dahl friction state on the contact twist x (twist beyond the backlash, signed): dz/dx = sigma (1 - sgn(x') z / T_h), sigma = K1 (`shortcut`), in parallel with the spring. The state is an anchor (x0, z0) where the last base step ended (`Gearbox::commit`, called from `after_step` of every machine with gearboxes: single axis, T-gantry, linear delta (one anchor per axis), D4 (tool and arms), the joint chain, linkage, D3, scissor, machine files); within a step z follows Dahl's law in closed form from it. Energy z^2 / (2 sigma), loss s x' z^2 / T_h, the direction at the anchor itself from the rate. Without play the flanks touch at zero twist, where the state holds | `the_hysteresis_loop_is_as_wide_as_given_and_holds_its_torque_at_rest` (T_h 1.4545 N m, K1 = sigma 1e4: zero torque at +-1.4545e-4 rad, -1.4545 N m held at rest, z = 0.919419 N m at T_h / sigma, 0.290592 W either way; the reverse case failed before the rate tie-break, -0.29 W, which opened the D3's budget by 0.18 J); `a_gear_with_hysteresis_answers_small_signals_as_its_stiffness` (1e-7 rad at 100 Hz: (K1 + sigma) A in phase within 1 %; the rate-switched model gave 45 times the spring in quadrature); `the_lost_motion_band_is_the_calculated_one` (the band's part of the old test) |
+| On in the deltas | `gearbox.hysteresis_rad = 1.454e-4` (half an arcmin, [estimate], bounds 0 to 1 arcmin) in D2's and D3's default and conveyor configs, `machines/delta-d3.toml`, `machines/planar-delta.toml` | `sim-cli margins`: D3 305.2 Hz, 57.7 degrees, 9.40 dB (259 Hz, 52.0, 10.35 without; 19 Hz with the old model); `margins --bands` worst 54.4 degrees, 8.99 dB (D3), 55.5, 9.28 (D2); `verdicts` and `verdicts --bands` pass; settling D3 0.305 mm (0.298 without), D2 0.369 (0.377); budget open 1.998 % / 2.000 %, as without it (the line module's 2 %) |
+| Drag heat in the gearbox | `ShaftFriction::drag_power`; `RotaryJoint::losses` returns the drag as a fourth value; every machine books it in the gearbox's loss row and takes it off the shaft's (the drag still acts on the rotor through `ShaftFriction::torque`) | `the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power` (sim-machines, belt_and_heat): single axis cruising at 1 m/s, 250 rad/s at the motor, drag 0.125 (250 / 314.159)^(2/3) = 0.107342 N m, 26.8355 W, rise 2 K/W * 26.8355 = 53.671 K within 1 % |
+| Torque limit at the DC link's voltage | `Drive::max_voltage` (sqrt(3/2) U_dc with effects.dc_link, else the nominal), `DriveParams::torque_range_at` / `torque_curve_at`; the velocity loop and the loop measurement's limit check use it. Without field weakening the fade's rated and no-load speeds scale with the voltage (`shortcut`) | `a_dc_link_ten_percent_low_lowers_the_velocity_loops_torque_limit_at_speed`: 500 rad/s, 171 V of 190, i_d = -57484 / 9000 = -6.38711 A, i_q = 7.03241 A, 3.16459 N m (3.4451 at 190 V); fade 1.91195 against 3.22642 N m at 330 rad/s; nominal without the DC link |
+| 1FT2 thermal time constants | The S210 operating instructions 09/2022 (A5E41702836B AL) from cache.industry.siemens.com (entry 109801184; the same file a distributor serves). `extract_siemens_s210_oi.py` reads sections 11.1 and 12.1: 74 rows (34 1FK2, 40 1FT2). All 62 motors also in an S120 manual agree, the two 1FK2 the 06/2020 edition printed otherwise included; the check now compares 1FT2 too | `catalog.py validate`; `catalog_golden.txt` and `catalog_snapshot.txt` rewritten with UPDATE_GOLDEN / UPDATE_CATALOG_SNAPSHOT (the 1FT2's `motor.thermal_time_constant_s`; the golden also took lines other merged branches had changed) |
+
+Found on the way: `vendor_drives_are_plausible` in `catalog/tools/cataloglib/checks.py` lost its `return errors`, so
+`catalog.py validate` crashed; fixed. The T-gantry's energy took `self.gearbox` where its torque took `self.gears[k]`;
+it now takes the gears it runs.
+
+Touched outside the area (small, local): `after_step` (new or one block) in machine-single-axis, machine-t-gantry,
+machine-delta-linear, machine-delta-d4, sim-netlist (machine.rs, linkage.rs, spatial.rs, scissor.rs) and chain.rs; their
+loss rows (the drag moved); `analysis.rs` (the loop measurement's limit check, one line); `transmission.rs` (sigma in
+series with the converter like K1); belt_and_heat.rs (new test); the delta configs and machine files; catalog checks.
+
+Left open:
+
+- sigma = K1 is an estimate: no maker publishes a gear's loop shape at a reversal. The gear is K1 + sigma stiff at small
+  amplitudes; a measured loop would set it (a config key then).
+- The state is outside the machine's state vector: a state set from outside (a crash's stop, `adopt_state`) keeps the
+  old anchor, and within a 62.5 us step a reversal follows the step's start curve.
+- 22 1FT2 windings of the S210 catalogue (1FT2108, 1FT2208-.S., some 1FT2206/08/10) are in no S210 edition read and
+  have no thermal time constant; a later edition (FW V6.x) would have them, not found on Siemens' cache.
+- Siemens' torque-speed curve points: printed as graphs only (operating instructions, configuration manuals); the
+  configurator's data sheet per article (1FK2104-6AF11, generated 2023) has neither curve points nor R, L, kE. SIZER
+  may export curves but needs an installation and a login: not done. Per-motor R, kE of 1FK2/1FT2 stay estimates.
+- The planner's and the analysis's torque curves still take the nominal bus.
+- Not run here: the test suites. Run: the six new tests by name, the catalogue golden and snapshot tests (to rewrite
+  them), `cargo check --workspace --tests`, clippy on the touched crates.

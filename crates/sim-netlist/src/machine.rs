@@ -1925,8 +1925,10 @@ impl ConfigMachine {
             }
         }
         let mut powers: Vec<f64> = self.guides.iter().map(|g| friction[g.axis] * vq[g.axis]).collect();
-        powers.extend((0..m).map(|kk| (self.shafts[kk].torque(speed[kk]) + brake[kk]) * speed[kk]));
-        powers.extend(&gear_power);
+        // The gearboxes' drag acts on the rotors but is the gearboxes' loss.
+        let drag: Vec<f64> = (0..m).map(|kk| self.shafts[kk].drag_power(speed[kk])).collect();
+        powers.extend((0..m).map(|kk| (self.shafts[kk].torque(speed[kk]) + brake[kk]) * speed[kk] - drag[kk]));
+        powers.extend((0..m).map(|kk| gear_power[kk] + drag[kk]));
         if !self.idlers.is_empty() {
             powers.push(self.idler_friction(vq).1);
         }
@@ -2739,6 +2741,14 @@ impl Machine for ConfigMachine {
     /// Belt tooth jump at each motor pulley (`ToothJump`): a positive slip feeds the section the pulley feeds.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;
+        // The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+        if self.elastic {
+            let (n, m) = (self.n(), self.m());
+            for kk in 0..m {
+                let (phi, theta) = (s[n + m + kk], self.output(s, kk).0);
+                self.gears[kk].commit(phi, theta);
+            }
+        }
         let v = self.vel() + self.n();
         let wraps = self.wraps_at(&s[..self.n()]);
         for kk in 0..self.jumps.len() {

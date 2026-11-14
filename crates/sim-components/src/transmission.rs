@@ -86,7 +86,8 @@ impl Converter {
         let series = move |k: f64| 1.0 / (l * l / k + 1.0 / converter);
         // The three segments are given in torque, so each is in series with the converter as K1 is; the knees and the
         // hysteresis are torques at the gearbox output, forces over the lever at the joint.
-        [g.stiffness, g.upper[0], g.upper[1]] = [g.stiffness, g.upper[0], g.upper[1]].map(series);
+        [g.stiffness, g.upper[0], g.upper[1], g.dahl_stiffness] =
+            [g.stiffness, g.upper[0], g.upper[1], g.dahl_stiffness].map(series);
         g.knees = g.knees.map(|t| t / l);
         g.hysteresis /= l;
         // shortcut: the lost-motion band is the gearbox's angle times the lever, as the backlash; the converter's

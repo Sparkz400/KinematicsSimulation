@@ -697,7 +697,7 @@ impl TGantry {
         let ([a, b], _) = self.fed_angles(s);
         let (geo, mat) = (self.geo(s[X], s[Z]), self.mat(a, b));
         let belt: f64 = (0..3).map(|i| self.belt.energy(geo[i], mat[i])).sum();
-        let gears: f64 = (0..2).map(|k| self.gearbox.energy(s[PA + k], s[A + k])).sum();
+        let gears: f64 = (0..2).map(|k| self.gears[k].energy(s[PA + k], s[A + k])).sum();
         let slip = self
             .jump
             .as_ref()
@@ -765,7 +765,10 @@ impl TGantry {
             }
             (process_x * vx + process_z * vz, [0.0; 3])
         };
-        let shaft: [f64; 2] = std::array::from_fn(|k| (self.shaft.torque(speed[k]) + brake[k]) * speed[k]);
+        // The gearboxes' drag acts on the rotors but is the gearboxes' loss.
+        let gear_drag: [f64; 2] = std::array::from_fn(|k| self.shaft.drag_power(speed[k]));
+        let shaft: [f64; 2] =
+            std::array::from_fn(|k| (self.shaft.torque(speed[k]) + brake[k]) * speed[k] - gear_drag[k]);
         let ripple: f64 = (0..2).map(|k| (torque[k] - self.ripple.apply(torque[k], angle[k])) * speed[k]).sum();
         let stops = self.stops.loss_power(s[X], vx, self.axes[0].max) + self.stops.loss_power(z, vz, self.axes[1].max);
         let [belt, frame, flex] = damping;
@@ -776,8 +779,8 @@ impl TGantry {
             drag * vx,
             shaft[0],
             shaft[1],
-            gear_power[0],
-            gear_power[1],
+            gear_power[0] + gear_drag[0],
+            gear_power[1] + gear_drag[1],
             belt,
             frame,
             flex,
@@ -1223,6 +1226,12 @@ impl Machine for TGantry {
     /// section 2.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;
+        // The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+        if self.elastic {
+            for k in 0..2 {
+                self.gears[k].commit(s[PA + k], s[A + k]);
+            }
+        }
         let Some(mut jump) = self.jump.clone() else { return };
         let wraps = self.belt_wraps(&[s[X], s[Z]]);
         for k in 0..2 {

@@ -441,7 +441,7 @@ impl Delta4 {
     fn tool_losses(&self, s: &[f64], torque: f64) -> ToolLosses {
         let ((c, w), (rotor, speed)) = (self.turn(s), self.rotor(s));
         let j = &self.tool;
-        let [friction, stop, shaft] = j.losses(c, w, speed, self.brake(s), self.brake_engaged);
+        let [friction, stop, shaft, drag] = j.losses(c, w, speed, self.brake(s), self.brake_engaged);
         let (gear, gear_at_rotor) = if self.elastic {
             let g = j.gearbox.torque(rotor, speed, c, w);
             (j.gearbox.loss_power(rotor, speed, c, w), g.rotor - g.output / j.ratio())
@@ -450,7 +450,7 @@ impl Delta4 {
             ((into - out) * w, (into - out) / j.ratio())
         };
         let other = (torque - j.ripple.apply(torque, rotor)) * speed;
-        ToolLosses { powers: [friction + stop, shaft, gear, self.telescope_power(s), other], gear_at_rotor }
+        ToolLosses { powers: [friction + stop, shaft, gear + drag, self.telescope_power(s), other], gear_at_rotor }
     }
 
     /// The torsional mode of the tool with its motor held: the gearbox's spring (with the shaft's in series,
@@ -603,6 +603,15 @@ impl Machine for Delta4 {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
         self.arms.set_brake_engaged(engaged);
+    }
+
+    /// The arms' gearboxes, then the tool's: their hysteresis states move on to where the step ended.
+    fn after_step(&mut self, s: &mut [f64], dt: f64) {
+        self.arms.after_step(&mut s[..self.n3], dt);
+        if self.elastic {
+            let ((c, _), (rotor, _)) = (self.turn(s), self.rotor(s));
+            self.tool.gearbox.commit(rotor, c);
+        }
     }
 
     /// The arms' three gearboxes, then the tool's.

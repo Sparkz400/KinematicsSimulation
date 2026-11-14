@@ -395,7 +395,7 @@ impl<M: Mechanism> JointMachine<M> {
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque));
         for k in 0..n {
             let j = &self.joints[k].drive;
-            let [friction, stop, shaft] = j.losses(q[k], qd[k], rotor_speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] = j.losses(q[k], qd[k], rotor_speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, into, out)) => {
                     gear_at_rotor[k] = (into[k] - out[k]) / j.ratio();
@@ -407,7 +407,7 @@ impl<M: Mechanism> JointMachine<M> {
                     j.gearbox.loss_power(s[2 * n + k], s[3 * n + k], s[k], s[n + k])
                 }
             };
-            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear]);
+            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
             powers[3 * n] += stop;
             powers[3 * n + 1] += (torque[k] - j.ripple.apply(torque[k], rotor[k])) * rotor_speed[k];
         }
@@ -770,6 +770,16 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     /// The gearboxes, in the order of `thermal_parts`.
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        let n = self.n();
+        if self.elastic {
+            for k in 0..n {
+                self.joints[k].drive.gearbox.commit(s[2 * n + k], s[k]);
+            }
+        }
+    }
+
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };
         let geared = self.joints.iter_mut().filter(|j| !j.drive.coupled);

@@ -293,12 +293,13 @@ inertia_at_input_kgm2 = 7e-05
 # The torque at which `efficiency` holds: [catalogue] WITTENSTEIN alpha SP+ 100 MF, two stages, ratio 20 (the SP100
 # Siemens fits, chapter 6.5 of its manual): "efficiency at full load 94 %" at its nominal torque T2N = 259 N m.
 efficiency_torque_nm = 259.0
-hysteresis_rad = 0.0
+hysteresis_rad = 1.454e-4
 # With effects.gearbox_lost_motion [estimate]: the band beyond the backlash over which the flanks' stiffness rises from
 # 0 to stiffness_nm_rad, half an arcmin (WITTENSTEIN publishes none; it measures the backlash at 2 % of T2B, where the
-# twist is 0.22 arcmin). The hysteresis loop's width at zero torque: 0 here. The model's hysteresis is a friction on
-# the twist's rate (mech::Gearbox), which at the small amplitudes of a frequency response locks the flanks like a
-# damper of hysteresis / 1e-3 rad/s: with half an arcmin the velocity loop's crossover fell from 225 to 19 Hz.
+# twist is 0.22 arcmin). hysteresis_rad [estimate]: the hysteresis loop's width at zero torque, half an arcmin
+# (WITTENSTEIN publishes none for SP+; Harmonic Drive's strain wave gears give 1 arcmin). The flanks' friction is a
+# Dahl state (mech::Gearbox): at the small amplitudes of a frequency response it is a spring beside K1, and the D3's
+# velocity loop keeps its crossover (305 Hz with it, 259 Hz without; it locked at 19 Hz as a friction on the rate).
 lost_motion_band_rad = 1.454e-4
 no_load_speed_rpm = 3000.0
 # With effects.gearbox_drag: [catalogue] the same sheet's mean no-load running torque T012 "at n1 = 3000 rpm and 20 degC
@@ -565,6 +566,7 @@ base.stiffness_y_n_m = [1.08e6, 6.75e6]
 base.stiffness_z_n_m = [7.6e6, 4.75e7]
 gearbox.backlash_rad = [4.363e-4, 8.727e-4]
 gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
+gearbox.hysteresis_rad = [0.0, 2.909e-4]
 gearbox.no_load_torque_nm = [0.7, 1.2]
 mass.elbow_twist_inertia_kgm2 = [1.2e-4, 5.0e-4]
 # Above the place position of the cycle. (Further out, near the edge of the range, one arm carries little of the
