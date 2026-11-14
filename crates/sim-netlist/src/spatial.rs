@@ -1413,6 +1413,12 @@ impl Machine for Delta {
             }
         }
     }
+    fn memory(&self) -> Vec<f64> {
+        sim_components::mech::Gearbox::anchors(self.joints.iter().map(|j| &j.gearbox))
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        sim_components::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.gearbox), memory)
+    }
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };

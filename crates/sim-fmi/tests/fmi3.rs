@@ -498,10 +498,11 @@ fn debug_logging_switches_the_log_categories() {
         let unknown = categories(&[c"logEvents", c"logNoSuchThing"]);
         assert_eq!(fmi3SetDebugLogging(c, false, 2, unknown.as_ptr()), fmi3Error);
         assert_eq!(taken().iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["logStatusError"]);
-        // All off: neither commands nor errors.
+        // All off: neither commands nor warnings nor errors. The cycle stopped a step ago runs on to the end of its
+        // segment (the T-gantry's first, 0.96 s), so starting it again is refused as busy: a warning, not logged either.
         assert_eq!(fmi3SetDebugLogging(c, false, 0, null()), fmi3OK);
         assert_eq!(fmi3SetBoolean(c, &cycle, 1, &true, 1), fmi3OK);
-        assert_eq!(do_step(c, 2.0 * step, step), fmi3OK);
+        assert_eq!(do_step(c, 2.0 * step, step), fmi3Warning);
         assert_eq!(fmi3EnterEventMode(c), fmi3Error);
         assert!(taken().is_empty());
         // logAll: every category again.

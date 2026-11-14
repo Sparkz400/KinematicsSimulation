@@ -180,11 +180,14 @@ pub struct Contact {
 /// What a running simulation has come to apart from its machine (`Sim::snapshot`): the integrated state, the controller
 /// with its drives (loops, filters, windings, thermal and overload images), the parts' warmth and the obstacle record.
 /// `Sim::restore` takes it back into a simulation built from the same machine and config; what the machine itself keeps
-/// between steps (payload, brakes, dwelling, the parts' temperatures) is set again from it.
+/// between steps (payload, brakes, dwelling, the parts' temperatures, its `memory`) is set again from it.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
     control: Controller,
     state: Vec<f64>,
+    /// `Machine::memory`: the gearboxes' hysteresis anchors, a tool-space arm's last inverse solution. Without them a
+    /// restored delta ran on some micrometres off the run it was taken from, the palletiser by rounding.
+    memory: Vec<f64>,
     torque: Vec<f64>,
     step: u64,
     payload_attached: bool,
@@ -426,6 +429,7 @@ impl Sim {
         Snapshot {
             control: self.control.clone(),
             state: self.state.clone(),
+            memory: self.machine.memory(),
             torque: self.torque.clone(),
             step: self.step,
             payload_attached: self.payload_attached,
@@ -450,6 +454,7 @@ impl Sim {
     /// signals at the snapshot are wanted.
     pub fn restore(&mut self, s: &Snapshot) -> Result<(), ConfigError> {
         if s.state.len() != self.state.len()
+            || s.memory.len() != self.machine.memory().len()
             || s.torque.len() != self.torque.len()
             || s.control.drives.len() != self.control.drives.len()
             || s.heated.len() != self.heated.len()
@@ -472,6 +477,7 @@ impl Sim {
         (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
         // What the machine keeps between steps, as `step` sets it.
         self.payload_attached = s.payload_attached;
+        self.machine.set_memory(&s.memory);
         self.machine.set_payload_attached(s.payload_attached);
         self.machine.set_dwelling(self.control.dwell_progress().is_some());
         self.machine.set_brake_engaged(!self.control.enabled());

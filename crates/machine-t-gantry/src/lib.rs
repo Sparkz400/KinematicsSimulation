@@ -1222,6 +1222,13 @@ impl Machine for TGantry {
         self.brake_engaged = engaged;
     }
 
+    fn memory(&self) -> Vec<f64> {
+        Gearbox::anchors(&self.gears)
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        Gearbox::set_anchors(&mut self.gears, memory)
+    }
+
     /// Belt tooth jump at each motor pulley (`ToothJump`): a positive slip of pulley A feeds section 1, of pulley B
     /// section 2.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {

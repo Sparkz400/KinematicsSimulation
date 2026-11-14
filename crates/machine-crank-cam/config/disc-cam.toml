@@ -210,6 +210,8 @@ torque_band = 0.0
 [ratings]
 # [estimate] in rad of the disc: 13 um of lift on the steepest part of the rise (0.027 m/rad). The cycle settles to
 # 0.23 mrad.
+settling_tolerance_rad = 0.0005
+# The axes in m, which this machine has none of (the angle was judged against it until 14 November).
 settling_tolerance_m = 0.0005
 # [estimate] a planetary gearbox as the delta picker's NRB080: its limit for the average torque, its repeated peak torque
 # and its input speed.

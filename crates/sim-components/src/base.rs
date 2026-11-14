@@ -329,6 +329,12 @@ impl Machine for Based {
         let n = self.n();
         self.inner.after_step(&mut state[..n], dt)
     }
+    fn memory(&self) -> Vec<f64> {
+        self.inner.memory()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        self.inner.set_memory(memory)
+    }
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         self.inner.set_part_temperatures(rises)
     }

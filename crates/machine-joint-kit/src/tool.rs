@@ -344,6 +344,20 @@ impl Pose {
         solved
     }
 
+    /// The last solution, one number per joint (NaN before the first), for a snapshot (`Machine::memory`): the next
+    /// walk starts from it, which a restored simulation has to do as the one it was taken from did.
+    pub fn memory(&self) -> Vec<f64> {
+        let last = self.last.lock().ok().and_then(|l| l.clone());
+        last.unwrap_or_else(|| vec![f64::NAN; self.home.len()])
+    }
+
+    /// Sets back what `memory` gave.
+    pub fn set_memory(&self, memory: &[f64]) {
+        if let Ok(mut l) = self.last.lock() {
+            *l = (memory.len() == self.home.len() && memory.iter().all(|q| q.is_finite())).then(|| memory.to_vec());
+        }
+    }
+
     pub fn condition(&self, fk: Forward, q: &[f64]) -> f64 {
         self.condition_of(&self.jacobian(fk, q))
     }

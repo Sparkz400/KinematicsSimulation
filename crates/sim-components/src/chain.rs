@@ -81,6 +81,13 @@ pub trait Mechanism: Send {
         q.copy_from_slice(tool);
         true
     }
+    /// What `inverse` carries from one call to the next (a numerical inverse's last solution, which the next starts
+    /// from), as a fixed count of numbers, for `Machine::memory`. None by default.
+    fn memory(&self) -> Vec<f64> {
+        Vec::new()
+    }
+    /// Sets back what `memory` gave.
+    fn set_memory(&mut self, _memory: &[f64]) {}
     fn unreachable(&self, _tool: &[f64], _slack: f64) -> Option<&'static str> {
         None
     }
@@ -839,6 +846,16 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 self.joints[k].drive.gearbox.commit(s[2 * n + k], s[k]);
             }
         }
+    }
+    /// The mechanism's, then the gearboxes' hysteresis anchors.
+    fn memory(&self) -> Vec<f64> {
+        let gears = crate::mech::Gearbox::anchors(self.joints.iter().map(|j| &j.drive.gearbox));
+        [self.mechanism.memory(), gears].concat()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        let (own, gears) = memory.split_at(self.mechanism.memory().len().min(memory.len()));
+        self.mechanism.set_memory(own);
+        crate::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.drive.gearbox), gears)
     }
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {
