@@ -19,6 +19,9 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_joint_kit::ROTARY_TABLE,
     &machine_joint_kit::URDF_ARM,
     &machine_joint_kit::SCARA,
+    &machine_crank_cam::SLIDER_CRANK,
+    &machine_crank_cam::ROTARY_KNIFE,
+    &machine_crank_cam::FLYING_SAW,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

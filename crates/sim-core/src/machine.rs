@@ -115,6 +115,16 @@ pub struct Mode {
     pub damping: f64,
 }
 
+/// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
+/// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
+/// and back (a sin^2 ramp, `sim_components::cam::master_at`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CamMaster {
+    pub speed: f64,
+    pub period: f64,
+    pub ramp_s: f64,
+}
+
 pub trait Machine: Send {
     /// The ratings of the machine's own parts (ball screw, rack, strain wave gear, ...) that its cycle is judged
     /// against. Empty where it has none beyond the common ones.
@@ -246,6 +256,15 @@ pub trait Machine: Send {
     fn setpoint_slack(&self) -> f64 {
         1e-4
     }
+
+    /// An electronic cam the controller runs as the cycle: the master's motion, `None` for a machine whose cycle is its
+    /// `[[cycle.segment]]`. Each pass is one `period` of the master once it is up to speed; a stop runs it down.
+    fn cam(&self) -> Option<CamMaster> {
+        None
+    }
+    /// With `cam`: each tool axis (the slaves) at the master position `master`, as [s, s', s'', s'''], the rates over
+    /// the master.
+    fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
 
     /// Signals beyond axis and motor positions, speeds and torques, which every machine gets for free: first those
     /// of `base_signals`, then those of `effect_signals`.

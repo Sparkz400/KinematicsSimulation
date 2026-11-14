@@ -696,6 +696,45 @@ and a cycle of straight lines in tool space (and the arm's settling tolerance 5 
 
 These are choices and design rules, not properties of a part, so they have no `[bounds]`.
 
+## Slider-crank, rotary knife, flying saw (`machine-crank-cam`)
+
+What the three machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
+crank and the knife a `[joint]` as the rotary table's, the saw a `[slide]` and `[rack]` as the rack axis's). Formulas in
+[mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). `effects.process_force` switches the press force and the
+cuts (on in all three).
+
+| Key | Unit | Meaning | Mark |
+| --- | --- | --- | --- |
+| `crank.radius_m`, `rod.length_m` | m | Crank radius r and rod length l (l > r) | [estimate] |
+| `crank.inertia_kgm2` | kg m² | The crank disc and shaft about their axis | [estimate], [bounds] |
+| `crank.motion` | – | With `cam.run`: `"constant"` (one turn per stroke at constant speed) or `"cam"` (`[[cam.segment]]` or `cam.table_file`) | choice |
+| `crank.strokes_per_min` | 1/min | The master's speed with `cam.run`: master periods per minute | choice |
+| `rod.mass_kg`, `rod.crank_end_share` | kg, – | The rod's mass and the share of it at the crank pin (0 to 1); the rest moves with the slider | [estimate], [bounds] |
+| `slider.mass_kg` | kg | The slider (ram) | [estimate], [bounds] |
+| `slider.incline_deg` | ° | The guide from the crank towards the slider against the horizontal, −90 to 90 (−90: a ram below the crank) | choice |
+| `mass.payload_kg` | kg | With `effects.payload`: the die on the ram, the knife bars at the knife's radius, the saw on the carriage | [estimate], [bounds] |
+| `process.distance_m`, `process.force_n` | m, N | The press force over the ram's distance from the bottom dead centre, linear between the points, 0 outside them | [estimate] |
+| `process.smoothing_m_s` | m/s | The press force fades in between this ram speed and twice it | choice |
+| `ratings.rod_max_force_n`, `ratings.slider_guide_max_load_n`, `ratings.crank_bearing_max_load_n` | N | The verdicts `rod-force`, `slider-guide-load`, `crank-bearing-load` | [estimate] |
+| `knife.radius_m`, `knife.inertia_kgm2`, `knife.knives` | m, kg m², – | Knife radius (the blade's tip), the roll's inertia, blades on the roll (a whole number) | [estimate], inertia [bounds] |
+| `knife.sync_angle_deg` | ° | The synchronous zone ± about each cut (2 × it below the blade pitch) | choice |
+| `knife.format_length_m` | m | Web per cut (more than the zone, 2 R α) | choice |
+| `knife.transition_law`, `saw.return_law` | – | `"3-4-5"`, `"4-5-6-7"`, `"cycloid"` or `"harmonic"` | choice |
+| `web.speed_m_s`, `material.speed_m_s` | m/s | The master's speed with `cam.run` | choice |
+| `cut.angle_deg`, `cut.force_n` (knife) | °, N | The cut's force at the blade's tip over the angle from the cut | [estimate] |
+| `cut.position_m`, `cut.force_n` (saw) | m, N | The cut's force on the carriage along the material over the way into the window | [estimate] |
+| `saw.home_m` | m | Where the carriage waits; home + stroke within `slide.stroke_m` | choice |
+| `saw.cut_length_m`, `saw.cut_window_m` | m | Material per cut, and the window the carriage runs with it while cutting; L > 2 v² / a + W | choice |
+| `saw.sync_acceleration_m_s2` | m/s² | The mean acceleration to the material's speed (peak 1.5 times it) | choice |
+| `cam.run` | true/false | The controller runs the cam as the cycle instead of `[[cycle.segment]]`. Off in the shipped configs | choice |
+| `cam.ramp_s` | s | The master's sin² ramp from rest to speed and back | choice |
+| `cam.table_file` (crank) | – | A CSV cam table (master, slave[, slope], a header and `#` lines skipped; the last row closes the period); `""`: the segments | choice |
+| `[[cam.segment]]` `master`, `slave`, `law` (crank) | rad | One segment: master span, slave rise, law (`linear`, `dwell`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`) | choice |
+
+All three have `[axis.crank]`, `[axis.knife]` or `[axis.x]` with `max_velocity_*`, `max_acceleration_*` and `max_jerk_*`
+as every machine; with `cam.run` the cam's peaks at the master's speed are checked against them (`limit-cam-speed`,
+`limit-cam-acceleration`, `limit-cam-jerk`).
+
 ## `[[cycle.segment]]`
 
 The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited in the parameter panel; `--set "cycle.segment = [{...}, ...]"` replaces it whole (TOML inline tables), and so does "Apply" of the app's optimiser where it changed the cycle's lifts.

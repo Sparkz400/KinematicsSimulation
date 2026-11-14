@@ -957,6 +957,9 @@ mod across_the_bounds {
         rotary_table: "rotary-table",
         urdf_arm: "urdf-arm",
         scara: "scara",
+        slider_crank: "slider-crank",
+        rotary_knife: "rotary-knife",
+        flying_saw: "flying-saw",
         exct_30: "EXCT-30",
     );
 }

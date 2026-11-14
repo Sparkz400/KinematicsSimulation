@@ -4328,6 +4328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-crank-cam"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "machine-delta-d2"
 version = "1.0.0-rc.1"
 dependencies = [
@@ -6096,6 +6104,7 @@ dependencies = [
 name = "sim-machines"
 version = "1.0.0-rc.1"
 dependencies = [
+ "machine-crank-cam",
  "machine-delta-d2",
  "machine-delta-d3",
  "machine-delta-d4",

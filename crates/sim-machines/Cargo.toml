@@ -14,6 +14,7 @@ machine-delta-d2 = { path = "../machine-delta-d2" }
 machine-delta-linear = { path = "../machine-delta-linear" }
 machine-delta-d4 = { path = "../machine-delta-d4" }
 machine-joint-kit = { path = "../machine-joint-kit" }
+machine-crank-cam = { path = "../machine-crank-cam" }
 sim-netlist = { path = "../sim-netlist" }
 toml.workspace = true
 serde_json.workspace = true

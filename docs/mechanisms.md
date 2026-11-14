@@ -199,6 +199,73 @@ gearbox (`effects.shaft_torsion`), its weight share loads the arms (`effects.sha
 friction pulls on the platform along the shaft (`effects.telescope_friction`). See the
 [model reference](model-reference.md#delta-picker-d4).
 
+## Crank and cam mechanisms (`machine-crank-cam`)
+
+The core cases of a servo sizing tool (Siemens SIZER) that a joint alone does not cover: a crank that turns a rotary motion
+into a stroke, and two axes that work on a moving web or bar through an electronic cam. Each is one motor-driven joint
+(`chain::JointMachine`), so the motor, gearbox, drive loops, heating and every common check are the same as above.
+
+| Id | Mechanism | Transmission | Tool pose | Own checks |
+| --- | --- | --- | --- | --- |
+| `slider-crank` | servo press: crank 50 mm, rod 200 mm, ram 15 kg and die 10 kg below it, press force up to 3 kN | planetary gearbox of ratio 20 | crank angle (rad), 0 at the bottom dead centre | `rod-force`, `slider-guide-load`, `crank-bearing-load` |
+| `rotary-knife` | cross cutter: knife roll of 100 mm radius, one blade, cuts a web at 1 m/s into 0.5 m formats | planetary gearbox of ratio 10 | roll angle (rad), 0 with a blade at the cut | |
+| `flying-saw` | carriage 40 kg with a saw of 25 kg, material at 1 m/s cut into 1.5 m lengths in a window of 0.2 m | helical pinion on a rack behind a planetary gearbox of ratio 5 | x (m) | `rack-feed-force` |
+
+**Slider-crank.** The slider's distance from the crank's centre is x(θ) = r cos θ + √(l² − r² sin² θ), its speed ratio
+x'(θ) = −r sin θ − r² sin θ cos θ / w with w = √(l² − r² sin² θ), and x''(θ) = −r cos θ − r² cos 2θ / w −
+r⁴ sin² θ cos² θ / w³. The rod's mass is split into a share at the crank pin (`rod.crank_end_share`) and the rest at the
+slider. The inertia the crank feels changes with the angle: J(θ) = J_crank + m_pin r² + m_x x'², m_x the slider, the die
+(payload) and the rod's slider end; its speed term is m_x x' x'' θ'² (dJ/dθ θ'² / 2), which the feedforward takes too.
+Gravity along the guide (`slider.incline_deg`, −90 for a ram below the crank) and on the pin. The process force
+(`effects.process_force`) is a table over the ram's distance from the bottom dead centre (`[process]`); it pushes back
+while the ram moves out (forming), not on the way back, and reaches the crank as −F x'(θ): near the dead centre a large
+force costs little torque. Signals: the ram's position, speed and acceleration, the process force, the rod force
+T = (F_along − m_x ẍ) l / w, the guide's load across |m_x g cos β − T r sin θ / l|, the crank bearing's load (the rod's
+pull plus the pin's mass on its circle) and J(θ). Judged against `ratings.rod_max_force_n`,
+`slider_guide_max_load_n` and `crank_bearing_max_load_n`.
+
+**Rotary knife.** The cam's master is the web, in metres. In the synchronous zone ±α about each cut
+(`knife.sync_angle_deg`) the blade's tip runs with the web, slope 1 / R; between cuts a motion law takes the roll the rest
+of a blade pitch, 2π / n − 2α, over the rest of the format, L − 2Rα. A format shorter than the circumference over n speeds
+the roll up between cuts, a longer one slows it: on average (2π / n − 2α) / (L − 2Rα) rad per metre of web, and with
+3-4-5 at mid-span 1 / R + 1.875 × (that − 1 / R). The cut (`effects.process_force`) brakes the roll with a force at the
+tip over the angle from the cut (`[cut]`).
+
+**Flying saw.** The cam's master is the material. Per cut length: the carriage comes up to the material's speed v while
+the material runs v² / a (`saw.sync_acceleration_m_s2` = a, the mean acceleration), its speed blending as 3u² − 2u³ (no
+jump in acceleration, peak 1.5 a), so it covers the synchronisation distance v² / (2a); it runs with the material through
+the cut window W for W / v seconds; it leaves the material over another v² / (2a), and returns over the stroke W + v² / a
+by a motion law in the rest of the cut length, L − 2v² / a − W of material. A cut length that leaves no room is refused
+(`saw.cut_length_m`). The cut pushes on the carriage along the material over the way into the window (`[cut]`).
+
+**Electronic cam.** `sim_components::cam` holds a cam as the slave's position over a master's, periodic, the slave rising
+by its advance per master period (a crank or knife one turn, the saw 0). Segments take the motion laws of VDI 2143:
+`linear` (a synchronous run), `dwell`, `3-4-5` and `4-5-6-7` (the 5th and 7th order polynomials), `cycloid` and
+`harmonic`. Where a law meets a linear segment or a dwell it takes its neighbour's slope and has no acceleration there
+(velocity in velocity); between two laws the slave rests (rest in rest). A cam table (`cam.table_file`, CSV of master,
+slave and an optional slope) runs a cubic through its points: with the slopes given between each two points, without them
+the periodic cubic spline (the slave's acceleration continuous). With `cam.run = true` the controller runs the cam as the
+cycle instead of `[[cycle.segment]]`: the master comes up to speed by a sin² ramp in `cam.ramp_s`, the slave's speed is
+s'(m) m' and its acceleration s''(m) m'² + s'(m) m''; a pass is one master period at speed, so `analyze` and `verdicts`
+measure the steady state; a stop runs the master down over the same ramp. A cam that asks more slave speed, acceleration or
+jerk at the master's speed than the axis limits allow is reported as `limit-cam-speed`, `-acceleration`, `-jerk` (with the
+motor limits). The slider-crank runs either at constant speed (`crank.motion = "constant"`, one turn per stroke, as a
+mechanical press's flywheel) or by the servo-press cam of `[[cam.segment]]` (fast approach, slow through the forming
+zone, fast return) at `crank.strokes_per_min`.
+
+The shipped configs keep `cam.run = false`: the cycle swings the crank from the top dead centre down to the bottom and
+back (a servo press in pendulum mode), indexes the knife by half a turn and back, moves the saw's carriage over its
+stroke. Run the cams with `--set cam.run=true` (app: the cam group's switch):
+
+```text
+sim-cli verdicts slider-crank --set cam.run=true
+sim-cli analyze rotary-knife --set cam.run=true --set knife.format_length_m=0.4
+sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
+```
+
+The torque and following error come out of the drive model as on every machine; the cams' and the mechanisms' formulas are
+checked by hand in `cam.rs` and `machine-crank-cam`'s tests (below).
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -222,6 +289,18 @@ screw's fails `screw-life`. With losses: the rack's gearbox torque and feed forc
 screw's life shrinks by a1 at 99 % reliability, and the temperature feedback keeps the efficiency of screw, rack and
 worm.
 
+Crank and cam tests (`sim-components` cam.rs, `machine-crank-cam`): a 3-4-5 segment of rise 0.1 m over 2 rad at 4 rad/s
+peaks at 1.875 h V / T = 0.375 m/s, 5.7735 h V² / T² = 2.3094 m/s² and a jerk of 60 h V³ / T³ = 48 m/s³; every law rises
+from rest to rest with rates that are its differences; a law between two runs of slope 10 keeps it at its ends and has
+10 + 1.875 (12 − 10) at mid-span; a sine table with slopes, and its periodic spline without, run through the sine; the
+master's sin² ramp covers ramp V / 2. The slider-crank at 60° (r 50 mm, l 200 mm): x = 0.2202562 m, x' = −0.0488454 m/rad,
+x'' = −0.0187556 m/rad²; J = 0.0869757 kg m², and turning back at 2 rad/s, speeding up by 10 rad/s² against 1 kN,
+−47.878563 N m at the crank; at −90° the rod pushes with 1032.796 N, the guide takes 258.199 N. The knife (R 0.1 m, ±10°)
+on a 0.5 m format turns 12.758984 rad/m between cuts on average and 15.173095 at mid-span, 7.756072 on 0.8 m. The saw (1 m/s,
+5 m/s²) synchronises over 0.1 m at 7.5 m/s² peak, runs 0.2 m with the material and returns at 0.8333 m/s. Each machine passes
+the standard suite, its default cycle and its cam pass all verdicts, a cam pass lasts one master period (2, 0.5 and
+1.5 s) and a stop ends it within the ramp; the knife's cam at a 10 rad/s limit is reported at 15.17 rad/s.
+
 ## Limits
 
 - The arms are sized in joint space: no Cartesian paths and no inverse kinematics of the tool.
@@ -230,4 +309,8 @@ worm.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
-- Not built yet: mechanical cams, electronic cams and flying saw profiles.
+- Not built yet: mechanical (disc) cams with a follower and their contact force; a cam's master cannot yet be the
+  conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's speed-and-ramp model); no MC_CamIn over
+  OPC UA; a changed master speed is taken at once, not ramped; the crank's and the knife's joint has no stops while
+  the cam turns it on; the press force acts only on the way out (no springback) and the knife's and saw's cut force
+  only forwards.

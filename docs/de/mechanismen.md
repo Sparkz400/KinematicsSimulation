@@ -211,6 +211,78 @@ Werkzeuggetriebe (`effects.shaft_torsion`), ihr Gewichtsanteil belastet die Arme
 Gleitreibung des Teleskops zieht längs der Welle an der Plattform (`effects.telescope_friction`). Siehe die
 Modellreferenz (docs/model-reference.md, Abschnitt „Delta picker D4“).
 
+## Kurbel- und Kurvenmechanismen (`machine-crank-cam`)
+
+Die Kernfälle eines Servo-Auslegungswerkzeugs (Siemens SIZER), die ein Gelenk allein nicht abdeckt: eine Kurbel, die eine
+Drehung in einen Hub wandelt, und zwei Achsen, die über eine elektronische Kurvenscheibe an einer laufenden Bahn oder Stange
+arbeiten. Jede ist ein motorgetriebenes Gelenk (`chain::JointMachine`); Motor, Getriebe, Regelkreise, Erwärmung und alle
+gemeinsamen Prüfungen sind dieselben wie oben.
+
+| Id | Mechanismus | Übertragung | Werkzeugpose | Eigene Prüfungen |
+| --- | --- | --- | --- | --- |
+| `slider-crank` | Servopresse: Kurbel 50 mm, Pleuel 200 mm, Stößel 15 kg und Werkzeug 10 kg darunter, Presskraft bis 3 kN | Planetengetriebe 20 | Kurbelwinkel (rad), 0 im unteren Totpunkt | `rod-force`, `slider-guide-load`, `crank-bearing-load` |
+| `rotary-knife` | Querschneider: Messerwalze mit 100 mm Radius, ein Messer, schneidet eine Bahn mit 1 m/s in Formate von 0,5 m | Planetengetriebe 10 | Walzenwinkel (rad), 0 mit einem Messer am Schnitt | |
+| `flying-saw` | Wagen 40 kg mit Säge 25 kg, Material mit 1 m/s, in Längen von 1,5 m in einem Fenster von 0,2 m geschnitten | Schrägverzahntes Ritzel auf Zahnstange hinter Planetengetriebe 5 | x (m) | `rack-feed-force` |
+
+**Schubkurbel.** Der Abstand des Schiebers vom Kurbelmittelpunkt ist x(θ) = r cos θ + √(l² − r² sin² θ), seine
+Übersetzung x'(θ) = −r sin θ − r² sin θ cos θ / w mit w = √(l² − r² sin² θ), und x''(θ) = −r cos θ − r² cos 2θ / w −
+r⁴ sin² θ cos² θ / w³. Die Pleuelmasse teilt sich in einen Anteil am Kurbelzapfen (`rod.crank_end_share`) und den Rest am
+Schieber. Die Trägheit an der Kurbel hängt vom Winkel ab: J(θ) = J_Kurbel + m_Zapfen r² + m_x x'², m_x Schieber, Werkzeug
+(Nutzlast) und Pleuelende am Schieber; ihr Geschwindigkeitsterm m_x x' x'' θ'² geht auch in die Vorsteuerung. Schwerkraft
+längs der Führung (`slider.incline_deg`, −90 für einen Stößel unter der Kurbel) und am Zapfen. Die Prozesskraft
+(`effects.process_force`) ist eine Tabelle über dem Abstand des Stößels vom unteren Totpunkt (`[process]`); sie drückt
+zurück, solange der Stößel ausfährt (Umformen), nicht auf dem Rückweg, und wirkt an der Kurbel als −F x'(θ): nahe dem
+Totpunkt kostet eine große Kraft wenig Moment. Signale: Lage, Geschwindigkeit und Beschleunigung des Stößels, Prozesskraft,
+Pleuelkraft T = (F_längs − m_x ẍ) l / w, Querlast der Führung |m_x g cos β − T r sin θ / l|, Last des Kurbellagers (Zug
+des Pleuels und Zapfenmasse auf ihrem Kreis) und J(θ). Geprüft gegen `ratings.rod_max_force_n`,
+`slider_guide_max_load_n` und `crank_bearing_max_load_n`.
+
+**Rotationsmesser.** Leitwert der Kurvenscheibe ist die Bahn in Metern. Im Synchronbereich ±α um jeden Schnitt
+(`knife.sync_angle_deg`) läuft die Messerspitze mit der Bahn, Steigung 1 / R; zwischen den Schnitten führt ein
+Bewegungsgesetz die Walze den Rest einer Messerteilung, 2π / n − 2α, über den Rest des Formats, L − 2Rα. Ein Format
+kürzer als der Umfang durch n beschleunigt die Walze zwischen den Schnitten, ein längeres bremst sie: im Mittel
+(2π / n − 2α) / (L − 2Rα) rad je Meter Bahn, mit 3-4-5 in der Mitte 1 / R + 1,875 × (das − 1 / R). Der Schnitt
+(`effects.process_force`) bremst die Walze mit einer Kraft an der Spitze über dem Winkel vom Schnitt (`[cut]`).
+
+**Fliegende Säge.** Leitwert ist das Material. Je Schnittlänge: Der Wagen kommt auf die Geschwindigkeit v des Materials,
+während das Material v² / a läuft (`saw.sync_acceleration_m_s2` = a, die mittlere Beschleunigung), seine Geschwindigkeit
+geht wie 3u² − 2u³ über (kein Beschleunigungssprung, Spitze 1,5 a); er legt dabei die Synchronisierstrecke v² / (2a)
+zurück, läuft W / v Sekunden mit dem Material durch das Schnittfenster W, löst sich über weitere v² / (2a) und fährt den
+Hub W + v² / a mit einem Bewegungsgesetz im Rest der Schnittlänge zurück, L − 2v² / a − W Material. Eine Schnittlänge
+ohne Platz dafür wird abgewiesen (`saw.cut_length_m`). Der Schnitt drückt längs des Materials über dem Weg ins Fenster
+auf den Wagen (`[cut]`).
+
+**Elektronische Kurvenscheibe.** `sim_components::cam` hält eine Kurvenscheibe als Folgewert über einem Leitwert,
+periodisch, der Folgewert steigt je Leitwertperiode um seinen Vorschub (Kurbel oder Messer eine Umdrehung, die Säge 0).
+Segmente nehmen die Bewegungsgesetze der VDI 2143: `linear` (Synchronlauf), `dwell` (Rast), `3-4-5` und `4-5-6-7` (Polynome
+5. und 7. Ordnung), `cycloid` (geneigte Sinuslinie) und `harmonic` (einfache Sinuslinie). Wo ein Gesetz an ein lineares
+Segment oder eine Rast stößt, übernimmt es dessen Steigung, ohne Beschleunigung dort (Geschwindigkeit in Geschwindigkeit);
+zwischen zwei Gesetzen ruht der Folgewert (Rast in Rast). Eine Kurventabelle (`cam.table_file`, CSV aus Leitwert,
+Folgewert und optional Steigung) legt eine kubische Kurve durch ihre Punkte: mit gegebenen Steigungen je zwei Punkte,
+ohne sie der periodische kubische Spline (stetige Folgebeschleunigung). Mit `cam.run = true` fährt die Steuerung die
+Kurvenscheibe statt `[[cycle.segment]]` als Zyklus: der Leitwert läuft mit einer sin²-Rampe in `cam.ramp_s` hoch, die
+Folgegeschwindigkeit ist s'(m) m', die Beschleunigung s''(m) m'² + s'(m) m''; ein Durchgang ist eine Leitwertperiode bei
+voller Geschwindigkeit, sodass `analyze` und `verdicts` den eingeschwungenen Zustand messen; ein Stopp fährt den Leitwert
+über dieselbe Rampe herunter. Verlangt die Kurvenscheibe bei der Leitgeschwindigkeit mehr Folgegeschwindigkeit,
+-beschleunigung oder -ruck, als die Achsgrenzen erlauben, meldet das Programm `limit-cam-speed`, `-acceleration`,
+`-jerk` (wie die Motorgrenzen). Die Schubkurbel läuft mit konstanter Drehzahl (`crank.motion = "constant"`, eine
+Umdrehung je Hub wie eine mechanische Presse mit Schwungrad) oder mit der Servopressen-Kurve aus `[[cam.segment]]`
+(schnelle Annäherung, langsam durch die Umformzone, schneller Rückhub) bei `crank.strokes_per_min`.
+
+Die mitgelieferten Konfigurationen lassen `cam.run = false`: der Zyklus schwenkt die Kurbel vom oberen Totpunkt in den
+unteren und zurück (Servopresse im Pendelhub), taktet das Messer um eine halbe Umdrehung hin und zurück und fährt den
+Sägewagen über seinen Hub. Die Kurvenscheiben laufen mit `--set cam.run=true` (App: der Schalter der Gruppe
+Elektronische Kurvenscheibe):
+
+```text
+sim-cli verdicts slider-crank --set cam.run=true
+sim-cli analyze rotary-knife --set cam.run=true --set knife.format_length_m=0.4
+sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
+```
+
+Moment und Schleppfehler kommen wie bei jeder Maschine aus dem Antriebsmodell; die Formeln der Kurvenscheiben und
+Mechanismen sind in `cam.rs` und den Tests von `machine-crank-cam` von Hand nachgerechnet (unten).
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -237,6 +309,20 @@ Eine 1,6 m lange Spindel fällt bei `screw-speed` durch, und eine geforderte Leb
 Lebensdauer der Spindel schrumpft bei 99 % Zuverlässigkeit um a1, und die Temperaturrückführung behält den Wirkungsgrad
 von Spindel, Zahnstange und Schnecke.
 
+Tests der Kurbeln und Kurvenscheiben (`sim-components` cam.rs, `machine-crank-cam`): ein 3-4-5-Segment mit 0,1 m Hub über 2 rad
+bei 4 rad/s erreicht 1,875 h V / T = 0,375 m/s, 5,7735 h V² / T² = 2,3094 m/s² und einen Ruck von 60 h V³ / T³ = 48 m/s³;
+jedes Gesetz steigt von Rast zu Rast mit Ableitungen, die seine Differenzen sind; ein Gesetz zwischen zwei Synchronläufen
+der Steigung 10 behält sie an seinen Enden und hat in der Mitte 10 + 1,875 (12 − 10); eine Sinustabelle mit Steigungen
+und ihr periodischer Spline ohne laufen durch den Sinus; die sin²-Rampe des Leitwerts legt Rampe × V / 2 zurück. Die
+Schubkurbel bei 60° (r 50 mm, l 200 mm): x = 0,2202562 m, x' = −0,0488454 m/rad, x'' = −0,0187556 m/rad²; J = 0,0869757 kg m²,
+und rückwärts mit 2 rad/s, um 10 rad/s² schneller, gegen 1 kN −47,878563 N m an der Kurbel; bei −90° drückt das Pleuel
+mit 1032,796 N, die Führung nimmt 258,199 N. Das Messer (R 0,1 m, ±10°) dreht auf einem Format von 0,5 m zwischen den
+Schnitten im Mittel 12,758984 rad/m und in der Mitte 15,173095, auf 0,8 m 7,756072. Die Säge (1 m/s, 5 m/s²) synchronisiert
+über 0,1 m mit 7,5 m/s² Spitze, läuft 0,2 m mit dem Material und fährt mit 0,8333 m/s zurück. Jede Maschine besteht die
+Standardprüfungen, ihr Standardzyklus und ihre Kurvenscheibe bestehen alle Urteile, ein Durchgang der Kurvenscheibe dauert
+eine Leitwertperiode (2, 0,5 und 1,5 s) und ein Stopp endet innerhalb der Rampe; die Kurvenscheibe des Messers bei einer
+Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet.
+
 ## Grenzen
 
 - Die Roboter werden im Gelenkraum ausgelegt: keine kartesischen Bahnen und keine inverse Kinematik des Werkzeugs.
@@ -247,4 +333,8 @@ von Spindel, Zahnstange und Schnecke.
 - Ein vom Abtrieb zurückgetriebenes Schneckengetriebe verliert wie jedes Getriebe (1 / Wirkungsgrad) und hemmt nie selbst.
 - Keine Unwucht am Rundtisch, keine Lebensdauerformel der Zahnstange (keine veröffentlicht), keine Prüfung des
   Kreuzrollenlagers.
-- Noch nicht gebaut: mechanische Kurvenscheiben, elektronische Kurvenscheiben und Profile für die fliegende Säge.
+- Noch nicht gebaut: mechanische Kurvenscheiben mit Abtastrolle und ihre Kontaktkraft; das Förderband aus `[conveyor]`
+  kann noch nicht Leitwert einer Kurvenscheibe sein (der Leitwert ist ein eigener, mit dem Geschwindigkeits- und
+  Rampenmodell des Bands); kein MC_CamIn über OPC UA; eine geänderte Leitgeschwindigkeit gilt sofort, ohne Rampe;
+  das Gelenk von Kurbel und Messer hat keine Anschläge, solange die Kurvenscheibe es weiterdreht; die Presskraft wirkt
+  nur beim Ausfahren (keine Rückfederung), die Schnittkraft von Messer und Säge nur vorwärts.

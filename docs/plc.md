@@ -174,7 +174,7 @@ Limits:
 
 - The streamed profile has a step of 10 ms. Within a step the velocity is constant, so acceleration changes at each step. There is no jerk limitation and no input shaping of the PLCopen moves.
 - A move that aborts a fast move towards a nearer target, or reverses, brakes with `Deceleration` and can overshoot. If the overshoot leaves the axis range, the controller refuses the setpoint and the axis goes to ErrorStop (ErrorID 6).
-- No buffered or blended moves (`BufferMode`), no MC_MoveVelocity, MC_Halt, MC_ReadParameter, gearing or camming.
+- No buffered or blended moves (`BufferMode`), no MC_MoveVelocity, MC_Halt, MC_ReadParameter, gearing or camming blocks (MC_CamIn, MC_GearIn). A machine with an electronic cam (`machine-crank-cam`, `cam.run = true`) runs it as its cycle: `command.cycle` starts it, `command.stop` runs its master down.
 - The link adds the latency of OPC UA: a client sees the effect of a write after one to two loop cycles plus its own polling time.
 
 ## Real-time pacing and jitter

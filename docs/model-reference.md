@@ -397,6 +397,20 @@ The torque feedforward (`effects.torque_feedforward`, weight `drive.torque_feedf
 
 Tests: `fine_interpolation_runs_the_setpoint_on_between_profile_cycles`, `the_friction_feedforward_is_the_characteristic_at_the_speed_setpoint`, `balancing_lags_the_position_setpoint_by_its_time_constant` (drive.rs); `the_constant_inertia_feedforward_is_j_times_the_motor_acceleration`, `a_load_side_encoder_measures_the_following_error_at_the_load`, `both_loops_read_one_encoder_sample_per_step`, `a_long_profile_cycle_with_fine_interpolation_keeps_the_peak_torque` (sim-machines control tests).
 
+### Electronic cam
+
+A machine that has a cam (`Machine::cam`, the crank and cam machines of `machine-crank-cam` with `cam.run = true`) runs it as
+its cycle: the controller moves a master m from rest to its speed V by a sin² ramp of `cam.ramp_s` (m' = V sin²(π t /
+2T), m'' = V π / (2T) sin(π t / T)), steady after, and down by the mirror ramp after a stop. The slave's setpoint is
+s(m) + offset, its speed s'(m) m' and acceleration s''(m) m'² + s'(m) m'' (`cam::slave_motion`), s from
+`sim_components::cam` (VDI 2143 segments or a cubic through a table). The offset keeps the slave where it stands when the
+cam starts; the master keeps its position between runs. These setpoints go through the inverse kinematics, the torque
+feedforward and the drives as every other motion's. One pass of the cycle is one master period once the master is up to
+speed, so the analysis measures the second steady period. The cam's peaks at speed V, |s'| V, |s''| V² and |s'''| V³, are
+checked against the axis limits (`limit-cam-*`). A mechanism's process force (`Mechanism::process_torque`: a press force,
+a cut) is a generalized force at the joint outside the rigid model: in the dynamics, not in the feedforward, among the
+rest in the torque breakdown, and its power given to the process is `power.process`.
+
 ### Torque-speed curve
 
 ```text

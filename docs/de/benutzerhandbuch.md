@@ -721,6 +721,33 @@ sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
 
 Beide bestehen jede Prüfung. Der SCARA greift 100 mm tiefer, trägt das Teil 500 mm quer bei x = 0,4 m und dreht es dabei um 1,5 rad, und zurück: 2,542 s, Motor 1 bei 5 % seiner Spitze und 288 seiner 314 rad/s (der Arm schwenkt am schnellsten, wo die Gerade der Basis am nächsten kommt), Einschwingen 0,04 mm. Der Arm tut dasselbe mit durchweg nach unten zeigendem Flansch (ry = π/2): 3,774 s, Motor 2 bei 23 % seiner Spitze, Einschwingen 4,0 mm der 5, die die Konfiguration erlaubt: Unter den 6 kg Nutzlast verdrehen sich die Getriebe, und der Flansch ruht 4 mm unter der Lage, die die Geber angeben (0,2 mm im starren Modell, `--set effects.joint_elasticity=false`). Eine Bahn im Werkzeugraum schreibt man `line,x,y,z,c` (oder sechs Zahlen beim Arm); `--time-optimal` plant sie so schnell, wie die Motoren es über die Rückwärtskinematik erlauben: Die Gerade des SCARA quer dauert 1,542 s statt 1,750 s, Motor 1 bei 307,5 seiner 314,2 rad/s. Ein Ziel, das der Arm nicht erreicht, wird mit dem Grund abgelehnt (`Der Arm reicht nicht bis zum Ziel.`), ebenso eines zu nahe an einer Singularität (der gestreckte Arm des SCARA: `workspace.max_condition_number`, 25) und eine Bahn hindurch. Den Ellbogen des SCARA wählt `kinematics.elbow` ("right" oder "left"); der Arm hält den Zweig von `kinematics.home_joints` (Schulter, Ellbogen und Handgelenk wie dort).
 
+## Eine Presse, ein Rotationsmesser oder eine fliegende Säge auslegen
+
+`machine-crank-cam` enthält die Kurbel- und Kurvenscheibenfälle eines Servo-Auslegungswerkzeugs
+([Mechanismen](mechanismen.md#kurbel--und-kurvenmechanismen-machine-crank-cam)). Ihre mitgelieferten Zyklen sind gewöhnliche
+Segmente; mit `cam.run = true` fährt jede ihre elektronische Kurvenscheibe, und ein Durchgang ist eine Leitwertperiode bei
+voller Geschwindigkeit:
+
+```text
+$ sim-cli analyze slider-crank --set cam.run=true          # 30 Hübe je Minute
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation
+1,2.000000,1.955907,0.779359,117.4226,0.1305,0.1694
+$ sim-cli analyze rotary-knife --set cam.run=true          # Formate von 0,5 m bei 1 m/s
+1,0.500000,2.896021,0.480603,151.7762,0.1947,0.1045
+$ sim-cli analyze flying-saw --set cam.run=true            # Längen von 1,5 m bei 1 m/s
+1,1.500000,4.331545,1.942329,160.1879,0.2893,0.4222
+```
+
+Alle drei bestehen jedes Urteil. Die höchste Motordrehzahl des Messers ist die der Handrechnung: zwischen den Schnitten
+dreht die Walze auf einem Format von 0,5 m in der Mitte 15,17 rad/s (1 / R + 1,875 × (12,76 − 1 / R)), mal die 10 des
+Getriebes. Die eigenen Prüfungen der Presse sind die Pleuelkraft (2,7 kN gegen 20 kN), die Querlast der Stößelführung und
+die Last des Kurbellagers. Format, Bahngeschwindigkeit oder Hubzahl ändern und neu ansehen: `--set
+knife.format_length_m=0.35` verlangt 26,6 rad/s von der Walze, mehr als ihre Achsgrenze von 20, und `run` und die App
+sagen das (`limit-cam-speed`, mit Beschleunigung und Ruck). Eine eigene Pressenkurve gehört in `[[cam.segment]]` oder als
+CSV aus Leit- und Folgewert (und Steigungen) in `cam.table_file`. In der App zeigt das Oszilloskop Lage und Kraft des
+Stößels, die Pleuelkraft und die Trägheit an der Kurbel über dem Hub; der Schleppfehler ist der des Folgewerts gegen die
+Kurvenscheibe.
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).

@@ -3,7 +3,7 @@
 ![Das T-Portal fährt seinen Pick-and-Place-Zyklus in der App](../images/t-gantry-cycle.gif)
 
 Ein Simulator für Bewegungsmaschinen. Drehmoment, Drehzahl und Schleppfehler ergeben sich aus einem physikalischen Modell: Riementrume als Federn, Führungsreibung nach LuGre, ein Getriebe mit Spiel, eine Motorwicklung und ein Servoantrieb mit Kaskadenregelung.
-Er enthält zwölf Maschinen: ein T-Portal mit zwei Motoren (X und Z an einem Zahnriemen), eine Einzelachse mit Zahnriemen, vier Delta-Picker (den D3 mit drei Armen, ausgelegt wie ein Autonox RL3-1200-3kg, einen D4 mit vierter Achse, die das Werkzeug dreht, einen planaren D2 mit zwei Armen, ausgelegt wie ein Codian D2-800, und einen Linear-Delta auf drei Zahnriemensäulen, ausgelegt wie ein Festo EXPT-95) und, aus einem Baukasten von Gelenken, eine Kugelgewindeachse, eine Zahnstangenachse, eine Linearmotorachse, einen Rundtisch, einen Sechsachsroboter aus einer URDF-Datei und einen SCARA ([Mechanismen](mechanismen.md)). Weitere Maschinen beschreiben [Maschinendateien](maschinendateien.md) ohne Rust-Code: ein H-Portal (H-Bot), einen CoreXY-Tisch, ein XYZ-Portal, ein Portal mit Kugelgewinde-Z und ein Portal mit Zahnstange (`machines/*.toml`).
+Er enthält fünfzehn Maschinen: ein T-Portal mit zwei Motoren (X und Z an einem Zahnriemen), eine Einzelachse mit Zahnriemen, vier Delta-Picker (den D3 mit drei Armen, ausgelegt wie ein Autonox RL3-1200-3kg, einen D4 mit vierter Achse, die das Werkzeug dreht, einen planaren D2 mit zwei Armen, ausgelegt wie ein Codian D2-800, und einen Linear-Delta auf drei Zahnriemensäulen, ausgelegt wie ein Festo EXPT-95) und, aus einem Baukasten von Gelenken, eine Kugelgewindeachse, eine Zahnstangenachse, eine Linearmotorachse, einen Rundtisch, einen Sechsachsroboter aus einer URDF-Datei und einen SCARA, und, mit elektronischer Kurvenscheibe, eine Schubkurbel-Servopresse, ein Rotationsmesser und eine fliegende Säge ([Mechanismen](mechanismen.md)). Weitere Maschinen beschreiben [Maschinendateien](maschinendateien.md) ohne Rust-Code: ein H-Portal (H-Bot), einen CoreXY-Tisch, ein XYZ-Portal, ein Portal mit Kugelgewinde-Z und ein Portal mit Zahnstange (`machines/*.toml`).
 Dazu gibt es sechs Bedienoberflächen: eine Desktop-App mit 3D-Ansicht und Oszilloskopen, ein Befehlszeilenprogramm, das CSV schreibt, einen OPC-UA-Server mit PLCopen-artigen Achsen für eine SPS, einen Export als FMU nach FMI 2.0 und 3.0 (Co-Simulation) für Simulink, OpenModelica, Dymola und andere Werkzeuge, ein Python-Modul und eine Browserseite mit 3D-Ansicht der Maschine und Auslegungsprüfung.
 Das Programm ist in Rust geschrieben. Herstellerdaten zu Motoren, Getrieben, Antrieben und Riemenachsen liegen in [`catalog/`](../../catalog/).
 **Schnellstart:** eine Maschine in 3D laufen sehen und die Auslegungsprüfung im Browser unter **https://sparkz400.github.io/KinematicsSimulation/** ausprobieren (ohne Installation), die Windows- oder Linux-Version unter [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases) herunterladen oder selbst bauen mit `cargo run --release -p sim-app` (siehe [Bauen und starten](#bauen-und-starten)).
@@ -83,6 +83,9 @@ linear-motor-axis	Linearmotorachse
 rotary-table	Rundschalttisch
 urdf-arm	Sechsachsroboter (URDF)
 scara	SCARA-Roboter (URDF)
+slider-crank	Schubkurbel (Servopresse)
+rotary-knife	Rotationsmesser (Querschneider)
+flying-saw	Fliegende Säge
 ```
 
 Alle Befehle schreiben CSV auf die Standardausgabe oder mit `--out FILE` in eine Datei. Meldungen und Fehler gehen auf die Fehlerausgabe. Die Spaltennamen der CSV-Ausgabe sind englische Bezeichner und werden nicht übersetzt.
@@ -105,7 +108,7 @@ Die Referenzdokumente gibt es nur auf Englisch:
 | [Maschinendateien](maschinendateien.md) | Deutsch. Eine Maschine in einer TOML- oder JSON-Datei beschreiben, wie eine Netzliste aus Bauteilen verschaltet, ohne Rust-Code; das Format, seine Prüfungen, ein durchgerechnetes Beispiel |
 | [config-reference.md](../config-reference.md) | Jede Tabelle und jeder Schlüssel der Konfiguration, mit Einheit, Bedeutung, Quelle und dem zugehörigen Effektschalter |
 | [model-reference.md](../model-reference.md) | Die Gleichungen, je Komponente und je Maschine, mit Annahmen und bekannten Vereinfachungen |
-| [mechanismen.md](mechanismen.md) | Kugelgewindetrieb, Zahnstange, Linearmotor, Rundtisch und Roboter aus URDF-Dateien: die Maschinen, ihre Formeln, Prüfungen und Grenzen |
+| [mechanismen.md](mechanismen.md) | Kugelgewindetrieb, Zahnstange, Linearmotor, Rundtisch, Roboter aus URDF-Dateien, Schubkurbel, Rotationsmesser, fliegende Säge und die elektronische Kurvenscheibe: die Maschinen, ihre Formeln, Prüfungen und Grenzen |
 | [catalogue.md](../catalogue.md) | Was in `catalog/` liegt, woher es stammt, gefundene Druckfehler, was fehlt |
 | [validation.md](../validation.md) | Jede Prüfung gegen etwas Unabhängiges, und was nicht validiert ist |
 | [user-guide.md](../user-guide.md) | Die englische Fassung des Benutzerhandbuchs |

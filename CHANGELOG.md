@@ -7,6 +7,14 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Crank and cam mechanisms (`machine-crank-cam`): `slider-crank` (a servo press with J(θ), press force over the stroke, rod,
+  guide and crank bearing loads), `rotary-knife` (cross cutter, synchronous zone and format length) and `flying-saw`
+  (synchronise, cut in a window, return). An electronic cam (`sim_components::cam`: VDI 2143 laws, CSV cam tables, master
+  ramp, slave limits at the master's speed) that the controller runs as the cycle with `cam.run = true`
+  (`Machine::cam`); `limit-cam-speed`, `-acceleration`, `-jerk`; a mechanism's process force (`power.process`).
+
 ### Fixed
 
 - Drive loops: the position setpoint is interpolated between profile cycles (`effects.fine_interpolation`, as a SINAMICS
