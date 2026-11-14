@@ -77,7 +77,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "incline_deg",
                 Kind::Number,
                 false,
-                "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0.",
+                "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0. On a rotary axis the tilt of the axis it turns about, from the vertical (0, a C axis) towards x (90, an A axis).",
             ),
             field(
                 "cable_chain",
@@ -151,7 +151,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 false,
                 "Payload it carries while effects.payload is on and the payload is attached, kg.",
             ),
-            field("axes", Kind::Refs("axis"), true, "The axes it moves along: it moves with each of them."),
+            field(
+                "axes",
+                Kind::Refs("axis"),
+                true,
+                "The axes it moves along: it moves with each of them. Rotary axes among them carry it round, the first outermost.",
+            ),
+            field(
+                "offset_m",
+                Kind::Point,
+                false,
+                "On rotary axes: its centre of mass from the point their axes meet, [x, y, z] at angle 0, m. Default [0, 0, 0].",
+            ),
             POS,
         ],
     ),
@@ -334,7 +345,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
-            field("axis", Kind::Ref("axis"), true, "The axis it turns, which has stroke_rad; no body moves with it."),
+            field(
+                "axis",
+                Kind::Ref("axis"),
+                true,
+                "The axis it turns, which has stroke_rad; bodies that move with it ride round on it (offset_m).",
+            ),
             field("inertia_kgm2", Kind::Number, true, "Inertia it turns, kg m^2."),
             field(
                 "payload_inertia_kgm2",
@@ -452,6 +468,80 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "gantry",
+        "A gantry's bridge that yaws (racks) about a vertical axis while it travels along a horizontal axis (effects.gantry_yaw): its two sides run apart by width times the yaw angle, which its joints and guides hold with a spring. Bodies that move with its axis and along the bridge (across) weigh on the side they are nearer; screws, racks and linear motors at its sides (drives) and belt sections that pull its ends (sections) turn it. Two drives on its axis make a dual-drive gantry, one motor more than axes; each follows the axis's setpoint. Signals gantry.<id>.yaw, .sync_error, .moment; check gantry-sync. At most one.",
+        &[
+            ID,
+            field("axis", Kind::Ref("axis"), true, "The horizontal straight axis the bridge travels along."),
+            field(
+                "across",
+                Kind::Ref("axis"),
+                false,
+                "The straight axis along the bridge, whose bodies' lever about the bridge's centre changes with it.",
+            ),
+            field("width_m", Kind::Number, true, "Distance between the bridge's two sides (its guides), m."),
+            field(
+                "across_start_m",
+                Kind::Number,
+                false,
+                "Where across is at 0, from the bridge's first side, m; default with across's stroke in the middle.",
+            ),
+            field(
+                "inertia_kgm2",
+                Kind::Number,
+                true,
+                "The bridge's own inertia about a vertical axis through its centre, without the bodies that move across, kg m^2.",
+            ),
+            field(
+                "stiffness_nm_rad",
+                Kind::Number,
+                true,
+                "What holds the yaw beside the drives and belts: the joints of the bridge on its carriages and their guides, N m/rad.",
+            ),
+            field("damping_nm_s_rad", Kind::Number, true, "Damping of the yaw, N m s/rad."),
+            field(
+                "drives",
+                Kind::Coefficients("motor"),
+                false,
+                "Per motor whose screw, rack or linear motor drives axis: where it acts across the bridge, from its centre, m (negative towards the first side).",
+            ),
+            field(
+                "sections",
+                Kind::Coefficients("section"),
+                false,
+                "Per belt section that pulls the bridge's ends along axis: how much longer it gets per rad of yaw, m (its pull along axis times the end's place across, from the centre).",
+            ),
+            field(
+                "tolerance_m",
+                Kind::Number,
+                false,
+                "The largest synchronisation error (width times yaw) the check gantry-sync allows, m; no check without it.",
+            ),
+            POS,
+        ],
+    ),
+    (
+        "tcp",
+        "The tool centre point of a tool carried by rotary axes: the tool's coordinates of the three straight axes are where its tip is, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
+        &[
+            ID,
+            field(
+                "axes",
+                Kind::Refs("axis"),
+                true,
+                "The three straight axes along x (the first axis of the file), y (horizontal) and z (vertical), in that order.",
+            ),
+            field("rotaries", Kind::Refs("axis"), true, "The rotary axes that carry the tool, outermost first."),
+            field(
+                "tool_m",
+                Kind::Point,
+                true,
+                "The tool's tip from the point the rotaries' axes meet, [x, y, z] at angle 0, m.",
+            ),
+            POS,
+        ],
+    ),
 ];
 
 pub struct AxisNode {
@@ -562,6 +652,37 @@ pub struct BodyNode {
     pub mass: f64,
     pub payload: f64,
     pub axes: Vec<bool>,
+    /// The rotary axes it rides on, outermost first, and its centre of mass from where their axes meet at angle 0.
+    pub rotaries: Vec<usize>,
+    pub offset: [f64; 3],
+}
+
+/// A gantry's bridge that yaws (`machine.gantry`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GantryNode {
+    pub id: String,
+    pub axis: usize,
+    pub across: Option<usize>,
+    pub width: f64,
+    /// Where `across` is at 0 from the bridge's centre, m (negative towards the first side).
+    pub across_shift: f64,
+    pub inertia: f64,
+    pub stiffness: f64,
+    pub damping: f64,
+    /// Per motor, where its drive acts across the bridge from the centre; `None` for one that does not drive it.
+    pub drives: Vec<Option<f64>>,
+    /// Per section, its length per rad of yaw.
+    pub sections: Vec<f64>,
+    pub tolerance: Option<f64>,
+}
+
+/// The tool centre point (`machine.tcp`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TcpNode {
+    /// The straight axes along x, y and z.
+    pub axes: [usize; 3],
+    pub rotaries: Vec<usize>,
+    pub tool: [f64; 3],
 }
 
 pub struct Overhang {
@@ -592,6 +713,8 @@ pub struct Netlist {
     pub frame: Option<FrameNode>,
     pub spans: Vec<SpanNode>,
     pub lean: Option<LeanNode>,
+    pub gantry: Option<GantryNode>,
+    pub tcp: Option<TcpNode>,
     /// Every dotted path a number field named: these keys of the file are in use.
     pub refs: Vec<String>,
     /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
@@ -751,6 +874,7 @@ impl Netlist {
             (take("body"), take("guide"), take("idler"), take("frame"), take("span"));
         let (screws, racks, linears, rotaries) = (take("screw"), take("rack"), take("linear_motor"), take("rotary"));
         let (leans, worms, linkages) = (take("lean"), take("worm"), take("linkage"));
+        let (gantries, tcps) = (take("gantry"), take("tcp"));
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
@@ -770,7 +894,7 @@ impl Netlist {
         if !linkages.is_empty() {
             let others = [
                 &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries,
-                &leans, &worms,
+                &leans, &worms, &gantries, &tcps,
             ];
             return crate::linkage::read(cfg, &axes, &motors, &gearboxes, &linkages, &others.map(|n| &n[..]));
         }
@@ -806,13 +930,7 @@ impl Netlist {
             if stroke <= 0.0 {
                 return Err(ConfigError::Invalid(node.at(stroke_field)));
             }
-            // A table turns about a vertical axis and drags no chain.
-            if rotary && incline != 0.0 {
-                return Err(ConfigError::Invalid(format!(
-                    "{} (a rotary axis turns about a vertical axis)",
-                    node.at("incline_deg")
-                )));
-            }
+            // A rotary axis drags no chain.
             if rotary && node.bool("cable_chain")? {
                 return Err(ConfigError::Invalid(format!("{} (not on a rotary axis)", node.at("cable_chain"))));
             }
@@ -842,8 +960,14 @@ impl Netlist {
         };
         let mut motor_nodes = Vec::new();
         let mut values = Vec::new();
-        // Per axis, the screw, rack, linear motor or rotary that drives it.
-        let mut driven: Vec<Option<String>> = vec![None; axis_nodes.len()];
+        // Per axis, the screw, rack, linear motor or rotary that drives it, and its motor.
+        let mut driven: Vec<Option<(String, String)>> = vec![None; axis_nodes.len()];
+        // The motors at a gantry's sides, which may drive its axis together.
+        let sides: Vec<String> = gantries
+            .first()
+            .and_then(|g| g.get("drives"))
+            .and_then(Value::as_table)
+            .map_or_else(Vec::new, |t| t.keys().cloned().collect());
         for motor in &motors {
             let id = id_of(motor);
             let key = motor.text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
@@ -934,13 +1058,15 @@ impl Netlist {
                     }
                 };
             let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
-            if let Some(other) = &driven[axis] {
+            if let Some((other, motor)) = &driven[axis]
+                && !(sides.contains(motor) && sides.contains(&id))
+            {
                 return Err(ConfigError::Invalid(format!(
-                    "{} (one screw, rack, linear motor or rotary per axis; {other} drives it too)",
+                    "{} (one screw, rack, linear motor or rotary per axis, but at a gantry's sides; {other} drives it too)",
                     node.at("axis")
                 )));
             }
-            driven[axis] = Some(id_of(node));
+            driven[axis] = Some((id_of(node), id.clone()));
             match &transmission {
                 Transmission::Screw { values: v } => values.push(("screw", v.clone())),
                 Transmission::Rack { values: v } => values.push(("rack", v.clone())),
@@ -1041,21 +1167,23 @@ impl Netlist {
                 return Err(ConfigError::Invalid(node.at(if mass <= 0.0 { "mass_kg" } else { "payload_kg" })));
             }
             let mut moves = vec![false; axis_nodes.len()];
+            let mut rotaries = Vec::new();
             for id in node.id_list("axes")? {
                 let i = find(&axes, node, "axes", id)?;
-                // A rotary axis turns its rotary's inertia; a body on it would move on a circle, not along the axes.
+                // A rotary axis carries the body round on a circle about its axis.
                 if axis_nodes[i].rotary {
-                    return Err(ConfigError::Invalid(format!(
-                        "{} (no body moves with the rotary axis {id})",
-                        node.at("axes")
-                    )));
+                    rotaries.push(i);
                 }
                 moves[i] = true;
             }
             if !moves.contains(&true) {
                 return Err(ConfigError::Missing(node.at("axes")));
             }
-            body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves });
+            let offset = node.point("offset_m")?.unwrap_or_default();
+            if rotaries.is_empty() && node.get("offset_m").is_some() {
+                return Err(ConfigError::Invalid(format!("{} (only on rotary axes)", node.at("offset_m"))));
+            }
+            body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves, rotaries, offset });
         }
 
         let mut guide_nodes: Vec<GuideNode> = Vec::new();
@@ -1192,8 +1320,14 @@ impl Netlist {
         {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
-        if motor_nodes.len() != axis_nodes.len() {
-            return Err(ConfigError::Invalid("machine.motor (as many motors as axes)".into()));
+        let gantry = gantry_node(cfg, &gantries, &axes, &axis_nodes, &motor_nodes, &section_nodes, &mut refs)?;
+        let tcp = tcp_node(&tcps, &axes, &axis_nodes)?;
+        // A gantry's drives beyond the first are motors beyond the axes.
+        let extra = gantry.as_ref().map_or(0, |g| g.drives.iter().flatten().count().saturating_sub(1));
+        if motor_nodes.len() != axis_nodes.len() + extra {
+            return Err(ConfigError::Invalid(
+                "machine.motor (as many motors as axes, and one more per gantry drive beyond the first)".into(),
+            ));
         }
         Ok(Self {
             axes: axis_nodes,
@@ -1205,6 +1339,8 @@ impl Netlist {
             frame,
             spans: span_nodes,
             lean,
+            gantry,
+            tcp,
             refs,
             values,
             linkage: None,
@@ -1295,6 +1431,150 @@ fn lean_node(
         }
     }
     Ok(Some(lean))
+}
+
+/// The gantry (`machine.gantry`), at most one: its bridge travels along a horizontal straight axis, across another straight
+/// one; its drives are motors whose screw, rack or linear motor drives that axis, its sections belt sections.
+#[allow(clippy::too_many_arguments)]
+fn gantry_node(
+    cfg: &Config,
+    gantries: &[Node],
+    axes: &[Node],
+    axis_nodes: &[AxisNode],
+    motors: &[MotorNode],
+    sections: &[SectionNode],
+    refs: &mut Vec<String>,
+) -> Result<Option<GantryNode>> {
+    let node = match gantries {
+        [] => return Ok(None),
+        [node] => node,
+        [_, second, ..] => return Err(ConfigError::Invalid(format!("{} (one gantry at most)", second.path))),
+    };
+    let find = |name: &str, id: &str| {
+        axes.iter()
+            .position(|n| n.table["id"].as_str() == Some(id))
+            .ok_or_else(|| ConfigError::Invalid(format!("{}.{name} = \"{id}\"", node.path)))
+    };
+    let axis = find("axis", node.text("axis")?.unwrap_or_default())?;
+    if axis_nodes[axis].incline_deg != 0.0 || axis_nodes[axis].rotary {
+        return Err(ConfigError::Invalid(format!("{} (a horizontal straight axis)", node.at("axis"))));
+    }
+    let across = node.text("across")?.map(|id| find("across", id)).transpose()?;
+    if across.is_some_and(|a| a == axis || axis_nodes[a].rotary) {
+        return Err(ConfigError::Invalid(format!("{} (a straight axis other than axis)", node.at("across"))));
+    }
+    let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+    let (width, inertia, stiffness, damping) = (
+        value("width_m", refs)?,
+        value("inertia_kgm2", refs)?,
+        value("stiffness_nm_rad", refs)?,
+        value("damping_nm_s_rad", refs)?,
+    );
+    for (name, bad) in [
+        ("width_m", width <= 0.0),
+        ("inertia_kgm2", inertia <= 0.0),
+        ("stiffness_nm_rad", stiffness <= 0.0),
+        ("damping_nm_s_rad", damping < 0.0),
+    ] {
+        if bad {
+            return Err(ConfigError::Invalid(node.at(name)));
+        }
+    }
+    let across_shift = match node.get("across_start_m") {
+        Some(v) => number(cfg, v, &node.at("across_start_m"), refs)? - 0.5 * width,
+        None => -0.5 * across.map_or(0.0, |a| axis_nodes[a].stroke),
+    };
+    // A table of numbers by the ids of a node list.
+    let per = |name: &str, ids: &[&str], refs: &mut Vec<String>| -> Result<Vec<Option<f64>>> {
+        let mut out = vec![None; ids.len()];
+        let Some(table) = node.get(name) else { return Ok(out) };
+        for (id, v) in table.as_table().ok_or_else(|| ConfigError::Type(node.at(name)))? {
+            let at = format!("{}.{id}", node.at(name));
+            let i = ids.iter().position(|known| known == id).ok_or_else(|| ConfigError::Invalid(at.clone()))?;
+            out[i] = Some(number(cfg, v, &at, refs)?);
+        }
+        Ok(out)
+    };
+    let motor_ids: Vec<&str> = motors.iter().map(|m| m.id.as_str()).collect();
+    let drives = per("drives", &motor_ids, refs)?;
+    for (m, _) in motors.iter().zip(&drives).filter(|(_, d)| d.is_some()) {
+        let side = matches!(
+            m.transmission,
+            Transmission::Screw { .. } | Transmission::Rack { .. } | Transmission::LinearMotor { .. }
+        );
+        if !side || m.axis != Some(axis) {
+            return Err(ConfigError::Invalid(format!(
+                "{}.{} (a motor whose screw, rack or linear motor drives the gantry's axis)",
+                node.at("drives"),
+                m.id
+            )));
+        }
+    }
+    let section_ids: Vec<&str> = sections.iter().map(|s| s.id.as_str()).collect();
+    let lengths = per("sections", &section_ids, refs)?.into_iter().map(|l| l.unwrap_or(0.0)).collect();
+    let tolerance = node.get("tolerance_m").map(|v| number(cfg, v, &node.at("tolerance_m"), refs)).transpose()?;
+    if tolerance.is_some_and(|t| t <= 0.0) {
+        return Err(ConfigError::Invalid(node.at("tolerance_m")));
+    }
+    Ok(Some(GantryNode {
+        id: node.table["id"].as_str().unwrap_or_default().to_string(),
+        axis,
+        across,
+        width,
+        across_shift,
+        inertia,
+        stiffness,
+        damping,
+        drives,
+        sections: lengths,
+        tolerance,
+    }))
+}
+
+/// The tool centre point (`machine.tcp`), at most one: three straight axes along x (the file's first), y (horizontal)
+/// and z (vertical), so that they stand square to each other in the 3D view, and the rotary axes that carry the tool.
+fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Option<TcpNode>> {
+    let node = match tcps {
+        [] => return Ok(None),
+        [node] => node,
+        [_, second, ..] => return Err(ConfigError::Invalid(format!("{} (one tcp at most)", second.path))),
+    };
+    let find = |name: &str| -> Result<Vec<usize>> {
+        node.id_list(name)?
+            .into_iter()
+            .map(|id| {
+                axes.iter()
+                    .position(|n| n.table["id"].as_str() == Some(id))
+                    .ok_or_else(|| ConfigError::Invalid(format!("{} = \"{id}\"", node.at(name))))
+            })
+            .collect()
+    };
+    let (straight, rotaries) = (find("axes")?, find("rotaries")?);
+    let incline = |i: usize| (!axis_nodes[i].rotary).then_some(axis_nodes[i].incline_deg);
+    let axes = match straight[..] {
+        [x, y, z]
+            if x == 0
+                && y != 0
+                && z != 0
+                && y != z
+                && incline(x) == Some(0.0)
+                && incline(y) == Some(0.0)
+                && incline(z) == Some(90.0) =>
+        {
+            [x, y, z]
+        }
+        _ => {
+            return Err(ConfigError::Invalid(format!(
+                "{} (three straight axes: the file's first, a horizontal and a vertical one)",
+                node.at("axes")
+            )));
+        }
+    };
+    if rotaries.is_empty() || rotaries.iter().any(|&r| !axis_nodes[r].rotary) {
+        return Err(ConfigError::Invalid(format!("{} (rotary axes)", node.at("rotaries"))));
+    }
+    let tool = node.point("tool_m")?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
+    Ok(Some(TcpNode { axes, rotaries, tool }))
 }
 
 /// The JSON Schema (draft 2020-12) of a machine file, from `NODES`, as a value for a JSON writer (`sim_machines`

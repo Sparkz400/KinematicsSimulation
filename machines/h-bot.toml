@@ -115,6 +115,9 @@ shaper_follows_pose = false
 # Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
 # (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
 crash = false
+# The bridge (the carriage on X) yaws, the H-bot's racking ([machine.gantry], values in [gantry]). Off, so that earlier
+# results stay as they were.
+gantry_yaw = false
 
 [geometry]
 pulley_radius_m = 0.02
@@ -217,6 +220,15 @@ stiffness_nm_rad = 1.0e4
 damping_nm_s_rad = 0.2
 # The gearbox's own inertia at its input, which turns with the rotor. A gearbox named in [parts] brings it.
 inertia_at_input_kgm2 = 0.0
+
+# The bridge's yaw with effects.gantry_yaw [estimate]: the distance between the two X rails, its own inertia about a
+# vertical axis through its centre (4 kg over 0.6 m, m L^2 / 12), the stiffness of its joints on the rails' carriages
+# against yawing, and its damping.
+[gantry]
+width_m = 0.6
+inertia_kgm2 = 0.12
+stiffness_nm_rad = 5000.0
+damping_nm_s_rad = 2.0
 
 [pulley]
 inertia_kgm2 = 1.0e-4
@@ -525,6 +537,9 @@ thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 
+gantry.inertia_kgm2 = [0.08, 0.2]
+gantry.stiffness_nm_rad = [2000.0, 20000.0]
+gantry.damping_nm_s_rad = [0.5, 8.0]
 [start]
 pose = [0.1, 0.35]
 
@@ -657,3 +672,21 @@ axis = "y"
 friction = "friction_z"
 carries = ["head"]
 pos = [900, 300]
+
+# The bridge's racking (effects.gantry_yaw): its ends, 0.3 m either side of its centre, move along x by 0.3 m times the
+# yaw. Section 1 leaves the bridge's first end (y below 0) along x towards motor A, section 3 its other end; section 2
+# leaves the first end towards the front and the other towards the back. So per rad of yaw section 1 gets longer by
+# 1 * -0.3 m, section 2 by -1 * -0.3 + 1 * 0.3 m and section 3 by -1 * 0.3 m: what the pulleys can take up with the
+# head moving along y (A and B turn apart), so a rigid belt does not hold it. The belt's moment on the bridge is
+# -sum(c T) = 0.3 (T1 - 2 T2 + T3) = -0.3 m * (the belt's pull on the head along y): the H-bot racks whenever the head
+# is pushed along the bridge, wherever it is.
+[[machine.gantry]]
+id = "bridge_yaw"
+axis = "x"
+across = "y"
+width_m = "gantry.width_m"
+inertia_kgm2 = "gantry.inertia_kgm2"
+stiffness_nm_rad = "gantry.stiffness_nm_rad"
+damping_nm_s_rad = "gantry.damping_nm_s_rad"
+sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }
+pos = [1050, 150]

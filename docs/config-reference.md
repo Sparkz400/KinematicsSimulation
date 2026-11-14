@@ -97,6 +97,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `frame_compliance` | T E | on | One spring-mass mode of the frame in X |
 | `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
 | `idlers` | T E | off | Inertia and bearing friction of the five idlers |
+| `gantry_yaw` | T E | off | Read by machine files only: the bridge of a `machine.gantry` node yaws, one more coordinate held by its drives, belts and joints' spring (values in `[gantry]`, see [machine files](machine-files.md#a-gantry-that-yaws-and-tools-on-rotary-axes)); signals `gantry.<id>.yaw`, `.sync_error`, `.moment`, check `gantry-sync`. On in `machines/dual-gantry.toml`, off in the H-bot, CoreXY and rack gantry files, so that earlier results stay as they were; the crates have no such bridge |
 | `cable_chain` | T E S | off | A cable chain whose moving mass grows with x, plus drag. On an inclined single axis the moving run is lifted too |
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
@@ -262,6 +263,18 @@ T-gantry, and machine files whose `machine.lean` node names these values (`machi
 | `lateral_stiffness_n_m` | T E | N/m | Sideways stiffness of the Z guide | estimate |
 | `tilt_stiffness_nm_rad` | T E | N m/rad | Tilt stiffness of the Z guide | estimate |
 | `damping_n_s_m` | T E | N s/m | Damping of the leaning motion | estimate |
+
+## `[gantry]`
+
+Machine files whose `machine.gantry` node names these values (`machines/dual-gantry.toml`, and the H-bot, CoreXY and rack gantry files with the effect off). With `effects.gantry_yaw`: the bridge's yaw. The node may name any keys; these are the shipped files'.
+
+| Key | In | Unit | Meaning | Source |
+| --- | --- | --- | --- | --- |
+| `width_m` | files | m | Distance between the bridge's two sides (its guides, where its drives are) | geometry |
+| `inertia_kgm2` | files | kg m² | The bridge's own inertia about a vertical axis through its centre, without the bodies that move across it | estimate, bounds |
+| `stiffness_nm_rad` | files | N m/rad | What holds the yaw beside drives and belts: the bridge's joints on its carriages and their guide blocks | estimate, bounds |
+| `damping_nm_s_rad` | files | N m s/rad | Damping of the yaw | estimate, bounds |
+| `sync_tolerance_m` | dual gantry | m | The synchronisation error (width times yaw) check `gantry-sync` allows; 0.1 mm | choice |
 
 ## `[idler]`
 

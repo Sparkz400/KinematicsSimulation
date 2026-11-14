@@ -231,7 +231,7 @@ Motorsignale und von `--motor N`.
 | | `key` | | Übersetzungsschlüssel ihres Namens; Vorgabe `axis-<id>` |
 | | `stroke_m` | Pflicht | Hub, m; die Achse läuft von 0 bis zu ihm (eine Drehachse hat statt dessen `stroke_rad`) |
 | | `stroke_rad` | | Bereich einer Drehachse ab 0, rad, an Stelle von `stroke_m` |
-| | `incline_deg` | | Winkel über der Waagrechten, Grad, 90 senkrecht und nach + steigend; Vorgabe 0 |
+| | `incline_deg` | | Winkel über der Waagrechten, Grad, 90 senkrecht und nach + steigend; Vorgabe 0; bei einer Drehachse die Neigung der Achse, um die sie dreht, aus der Senkrechten (0, eine C-Achse) nach x (90, eine A-Achse) |
 | `motor` | `id` | Pflicht | ein Servomotor mit seinem Antrieb; Signale `motor.<id>.*` |
 | | `key` | | Übersetzungsschlüssel seines Namens; Vorgabe `motor-<id>` |
 | `gearbox` | `motor` | Pflicht | der Motor, der es antreibt; ein Getriebe je Motor (keins bei einem Linearmotor); Übersetzung 1 ist eine Kupplung |
@@ -244,7 +244,8 @@ Motorsignale und von `--motor N`.
 | | `key` | | Übersetzungsschlüssel seines Namens; Vorgabe `belt-section-<id>`; Signale `belt.<id>.*` |
 | `body` | `mass_kg` | Pflicht | Masse, kg |
 | | `payload_kg` | | Nutzlast, die er trägt, solange `effects.payload` an ist und der Greifer sie hält, kg |
-| | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |
+| | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |; Drehachsen darunter nehmen ihn mit herum, die erste ganz außen
+| | `offset_m` | | auf Drehachsen: sein Schwerpunkt von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
 | `guide` | `axis` | Pflicht | die Achse, die sie führt; höchstens eine Führung je Achse; ihr Verlust ist `power.<id>` |
 | | `friction` | Pflicht | die Tabelle ihrer Reibwerte, aufgebaut wie `[friction_x]` |
 | | `carries` | | Körper, deren Gewicht quer zur Achse sie trägt |
@@ -282,8 +283,19 @@ Motorsignale und von `--motor N`.
 | | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
 | | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | Pflicht | Steifigkeit der Führung seitlich und gegen Kippen, die Dämpfung der Neigung |
+| `gantry` | `axis` | Pflicht | eine Brücke, die entlang dieser waagrechten Linearachse fährt, giert (`effects.gantry_yaw`); höchstens eine ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
+| | `across` | | die Linearachse entlang der Brücke; mit ihr ändert sich der Hebel ihrer Körper um die Mitte der Brücke |
+| | `width_m`, `inertia_kgm2` | Pflicht | Abstand der beiden Seiten der Brücke, m; ihre eigene Trägheit um eine senkrechte Achse durch ihre Mitte, kg m² |
+| | `stiffness_nm_rad`, `damping_nm_s_rad` | Pflicht | was das Gieren neben Antrieben und Riemen hält (ihre Anbindung und Führungen), und seine Dämpfung |
+| | `across_start_m` | | wo `across` auf 0 steht, von der ersten Seite, m; Vorgabe ihr Hub in der Mitte |
+| | `drives` | | je Motor, dessen Spindel, Zahnstange oder Linearmotor `axis` treibt: seine Lage quer über die Brücke von der Mitte, m; zwei ergeben ein Portal mit Doppelantrieb |
+| | `sections` | | je Riemenabschnitt, der an den Enden der Brücke zieht: seine Länge je rad Gieren, m |
+| | `tolerance_m` | | der Gleichlauffehler (Breite mal Gierwinkel), den die Prüfung `gantry-sync` zulässt, m |
+| `tcp` | `axes` | Pflicht | der Werkzeugmittelpunkt: die drei Linearachsen entlang x (die erste der Datei), y (waagrecht) und z (senkrecht); höchstens einer |
+| | `rotaries` | Pflicht | die Drehachsen, die das Werkzeug tragen, die äußerste zuerst |
+| | `tool_m` | Pflicht | die Werkzeugspitze von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m |
 
-Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `axis` und `motor` immer,
+Es gibt so viele Motoren wie Achsen und einen mehr für jeden Antrieb eines Portals über den ersten hinaus. Eine Datei nennt jede Liste, die sie verwendet; `axis` und `motor` immer,
 `gearbox`, `pulley` und `section`, wo Riemen getrieben werden, `body`, wo eine Achse einen bewegt; die anderen dürfen
 fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
 `belt_span_vibration` ohne `span`, `tool_flex` ohne `lean`), lehnt die Datei mit `machine.<Liste>` ab; `belt_wrap` ohne
@@ -366,8 +378,9 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Anbindung des Primärteils.
 - Ein Rundtisch dreht seine Achse in rad: die Achse hat `stroke_rad` statt `stroke_m`, ihre Grenzen sind
   `max_velocity_rad_s`, `max_acceleration_rad_s2` und `max_jerk_rad_s3` in `[axis.<id>]`, und was sie bewegt, ist
-  `inertia_kgm2` (und `payload_inertia_kgm2`) des Rundtischs. Kein Körper bewegt sich mit ihr; sie hat keine Führung,
-  keine Neigung und keine Energiekette.
+  `inertia_kgm2` (und `payload_inertia_kgm2`) des Rundtischs und die Körper, die auf ihr mitfahren
+  ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)). Ihr `incline_deg` neigt die Achse, um die sie dreht;
+  sie hat keine Führung und keine Energiekette.
 - Signale und Prüfungen heißen nach dem Motor, wie die des Gelenkbaukastens nach seinem Gelenk: `joint.<Motor>.force`
   (was Spindel, Zahnstange, Linearmotor oder Rundtisch an die Achse gibt), `screw.<Motor>.speed`, `.dn` und
   `.damage_rate`, `rack.<Motor>.feed_force`, `strain_wave.<Motor>.damage_rate`; `gearbox.<Motor>.output_torque` ist das
@@ -512,6 +525,91 @@ Die Datei des T-Portals hat beides, ausgeliefert aus (das Crate hat seine Neigun
 auf Höhe des Wagens und ihre Wagenrollen r + r_Rolle darüber und darunter, sodass der Riemen beide Scheiben waagrecht
 verlässt, eine halbe Umdrehung in jeder Lage, wie im Crate; mit einem der beiden Effekte an ist sie ihr Crate auf 1e-9.
 
+## Ein Portal, das giert, und Werkzeuge auf Drehachsen
+
+**Eine Brücke, die giert** (`machine.gantry`, `effects.gantry_yaw`). Die Brücke eines Portals fährt entlang einer
+waagrechten Achse und giert dabei ein wenig um die Senkrechte: ihre beiden Seiten, `width_m` voneinander, laufen um die
+Breite mal den Gierwinkel psi auseinander (kleine Winkel). psi ist eine Koordinate mehr neben den Achsen. Was es hält:
+die Anbindung der Brücke an ihre Wagen und deren Führungen, eine Feder `stiffness_nm_rad` mit `damping_nm_s_rad`;
+Spindeln, Zahnstangen oder Linearmotoren an ihren Seiten (`drives`, jede mit ihrer Lage quer über die Brücke von der
+Mitte, so dass ihr Abtrieb x + Seite psi fährt); und Riemenabschnitte, die an ihren Enden ziehen (`sections`, m Länge
+je rad: der Zug des Abschnitts entlang der Achse mal die Lage des Endes quer dazu). Was es dreht: ihre eigene
+`inertia_kgm2` und die Körper, die mit der Achse und entlang der Brücke (`across`) fahren. Ein solcher Körper sitzt
+e = q_across + Versatz von der Mitte und fährt mit dem Gieren um e psi entlang der Achse; seine Masse koppelt also Achse
+und Gieren (m e) und legt m e² auf die Trägheit des Gierens, über die Jacobimatrix seiner Lage (unten); das Werkzeug auf
+ihm fährt mit. Signale `gantry.<id>.yaw` (rad), `.sync_error` (Breite mal Gierwinkel, m: wie weit die Seiten
+auseinander sind) und `.moment` (k psi + c psi', N m, was die Anbindung trägt); Verlust `power.gantry_<id>`; Prüfung
+`gantry-sync`, der größte |Gleichlauffehler| gegen `tolerance_m`. `ConfigMachine::racking_moment` gibt das Giermoment
+bei einer Stellung und Beschleunigung im verlustfreien starren Modell: was Riemen, Antriebe und Schwerkraft auf das
+Gieren legen, über das hinaus, was die Körper bei rechtwinklig gehaltener Brücke dreht. Der Effekt ist in den
+mitgelieferten Dateien von H-Bot, CoreXY und Zahnstangenportal aus, damit ihre Ergebnisse bleiben, und in der des
+Portals mit Doppelantrieb an.
+
+```toml
+[[machine.gantry]]         # machines/dual-gantry.toml
+id = "bridge_yaw"
+axis = "x"
+across = "y"
+width_m = "gantry.width_m"
+inertia_kgm2 = "gantry.inertia_kgm2"
+stiffness_nm_rad = "gantry.stiffness_nm_rad"
+damping_nm_s_rad = "gantry.damping_nm_s_rad"
+drives = { mx1 = -0.6, mx2 = 0.6 }
+tolerance_m = "gantry.sync_tolerance_m"
+```
+
+- **Zwei Antriebe.** Zwei Zahnstangen auf der Achse des Portals, eine an jedem Ende: die Datei hat einen Motor mehr
+  als Achsen, und die beiden legen x und psi zusammen fest. Jeder Antrieb folgt dem Sollwert der Achse an seinem
+  eigenen Geber (Sollwertkopplung), so halten die beiden Lageregler die Brücke rechtwinklig, und ihre Momente teilen die
+  Last nach dem Hebelgesetz: F2 - F1 = 2 m e a / B für einen Wagen m bei e, mit a beschleunigt. Mit dem Effekt aus
+  halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
+  auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
+  von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 16 µm von 100, und das Ende, nahe dem der Wagen
+  anfängt, trägt mehr (`rack-feed-force` 109 gegen 95 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
+  155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
+- **Ein Antrieb.** Die eine Zahnstange des Zahnstangenportals treibt seine Brücke an einem Ende
+  (`drives = { mx = -0.5 }`): das ferne Ende hält nur die Feder der Anbindung, und es bleibt zurück, solange die Brücke
+  beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,20 mm.
+- **H-Bot und CoreXY.** Riemen ziehen an den Enden der Brücke. Beim H-Bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
+  ist das Moment des Riemens auf die Brücke -0,3 m mal sein Zug am Kopf entlang der Brücke: sie giert, sobald der Kopf
+  entlang der Brücke geschoben wird, wo er auch steht (-4,2 N m für den Kopf von 7 kg bei 2 m/s²), und ein Kopf
+  außerhalb der Mitte lässt sie gieren, wenn die Brücke beschleunigt (-m e a). Ein starrer Riemen lässt den H-Bot gieren
+  (der Kopf kann bei festgehaltenen Motoren entlang der Brücke fahren), er giert also in beiden Modellen; mit dem Effekt
+  an wächst der Bahnfehler seines Zyklus von 0,09 auf 0,80 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
+  Moment ist die Summe der Zugkräfte des einen Riemens gegen die des anderen, -0,19 N m für den Zug von 8 N, der einen
+  H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,06 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
+  starres Modell hat keins.
+
+**Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein
+Schwerpunkt von dort, wo sich ihre Achsen bei Winkel 0 treffen, und er fährt auf ihnen herum, die erste in seinen
+`axes` ganz außen. Das `incline_deg` einer Drehachse neigt die Achse, um die sie dreht, aus der Senkrechten (0, eine
+C-Achse) nach x (90, eine A-Achse). Die Lage p(q) eines solchen Körpers ist der Weg der Linearachsen plus sein Versatz,
+von seinen Drehachsen gedreht; sein Teil der Massenmatrix ist m J^T J (J = dp/dq, über zentrale Differenzen), der
+Schwerkraft -m g J_z, und der Kräfte, die seine Geschwindigkeit verlangt, -m J^T (dJ/dt q'), die Zentripetal- und
+Corioliskräfte: die Gleichungen von Lagrange, die Energie bleibt also erhalten. Ein Knoten `tcp` macht die Koordinaten
+des Werkzeugs zu denen der Spitze: drei Linearachsen entlang x (die erste der Datei), y und z, die `rotaries`, die das
+Werkzeug tragen, und `tool_m`, die Spitze von dort, wo sich ihre Achsen treffen. Die Achsen stehen bei der Spitze
+weniger `tool_m`, von den Drehachsen gedreht: eine Bahn führt die Spitze gerade, während die Drehachsen drehen und die
+Linearachsen das ausgleichen, und die Vorsteuerung hat den Anteil der Geschwindigkeit (`feedforward_torque_moving`).
+Die Bereiche des Werkzeugs sind die Hübe, um |`tool_m`| erweitert, und eine Stellung, die die Linearachsen nicht
+erreichen, wird abgelehnt (`error-tcp-joint-range`). Die 3D-Ansicht zeichnet das Werkzeug von den Drehachsen bis zur
+Spitze und die Bahn des Werkzeugs an der Spitze.
+
+```toml
+[[machine.tcp]]            # machines/five-axis.toml
+id = "tool_tip"
+axes = ["x", "y", "z"]
+rotaries = ["c", "a"]      # C um die Senkrechte trägt A um x
+tool_m = [0.0, 0.0, -0.2]
+```
+
+`machines/portal-c.toml` ist das Spindelportal mit einer C-Achse auf seinem Z-Schlitten, die einen Greifer dreht, dessen
+Spitze 0,1 m neben der Achse liegt: sein Zyklus trägt ein Teil, während C es um eine Vierteldrehung dreht, die Spitze
+auf einer Geraden. `machines/five-axis.toml` ist das Spindelportal mit einem Gabelkopf, C um die Senkrechte und darin A
+um x, die Spitze 0,2 m unter ihrem Schnittpunkt: sein Zyklus neigt A und schwenkt C um eine halbe Drehung um die
+stehende Spitze, X und Y fahren dabei einen Kreis, und das Gewicht der Spindel liegt auf A. Beide bestehen jedes Urteil
+ihres Zyklus. Getriebe und Trägheiten ihrer Drehachsen und die Massen der Köpfe sind Schätzwerte.
+
 ## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
 
 `machines/corexy.toml` ist ein CoreXY-Tisch. Seine beiden Motoren stehen an den vorderen Ecken; jeder treibt einen
@@ -538,7 +636,9 @@ Eine Maschinendatei wird beim Laden vollständig geprüft, bevor etwas läuft:
   gültig und eindeutig, jeder Verweis auf einen vorhandenen Knoten, jeder Pfad auf eine vorhandene Zahl;
 - die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor (keins bei einem Linearmotor) und eine
   Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe, höchstens eins davon je Achse, eine Spindel mindestens so
-  lang wie ihr Hub, so viele Motoren wie Achsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
+  lang wie ihr Hub, so viele Motoren wie Achsen und einen mehr je Antrieb eines Portals über den ersten hinaus, die
+  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, das `offset_m`
+  eines Körpers nur auf Drehachsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
 - jeder andere Schlüssel gegen die Schlüssel der Konfigurationen der eingetragenen Maschinen (so wird `pretensoin_n`
   beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung, die Wertetabellen von Spindeln,
   Zahnstangen, Linearmotoren und Wellgetrieben im Aufbau des Gelenkbaukastens und jeder Schlüssel, den die Netzliste
@@ -575,7 +675,9 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   einer Seite einspeist und auf einer anderen herausnimmt. Eine Maschine darf mehrere Riemen haben (etwa einen je
   Achse); ein Riemen, der auf einer Trommel endet, hat keine solche Summe.
 - Die Masse auf Achse i ist die Summe der Körper, die sich mit ihr bewegen; die Achsen gelten als rechtwinklig
-  zueinander, die Massenmatrix der Körper ist also diagonal. Scheiben und Läufer (J_Scheibe + i² J_Läufer je Motor, die
+  zueinander, die Massenmatrix der Körper ist also diagonal, bis auf die Körper auf Drehachsen oder quer auf einer
+  gierenden Brücke, die m J^T J, ihren Teil der Schwerkraft und die Kräfte ihrer Geschwindigkeit hinzufügen
+  ([oben](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)). Scheiben und Läufer (J_Scheibe + i² J_Läufer je Motor, die
   Riemenmasse zu gleichen Teilen auf die Scheiben gelegt) kommen als K^T J K hinzu. Die Schwerkraft zieht Achse i mit
   m_i g sin(Neigung_i).
 - Getriebe (Lose, Steifigkeit, Wirkungsgrad), Motorreibung, Drehmomentwelligkeit und Rastmoment, Zahneingriff,
@@ -607,7 +709,15 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   `transmission::Converter` dahinter), und seine "Scheibe" ist die Achse selbst: K hat für ihn die Zeile e_i, die Achse
   nimmt den Abtrieb des Getriebes als ihre Kraft, die Gleichungen des Riemens überlassen ihm die Achse (in Ruhe und bei
   den starren Spannungen), und im elastischen Modell folgen die Zustände der Scheibe der Achse. Die Masse einer
-  Drehachse ist die Trägheit ihres Rundtischs, ohne Schwerkraft entlang ihr.
+  Drehachse ist die Trägheit ihres Rundtischs und dessen, was auf ihr mitfährt. Ein Antrieb an der Seite einer
+  gierenden Brücke hat die Zeile e_i + Seite e_psi.
+- Das Gieren eines Portals (`machine.gantry`, `effects.gantry_yaw`): eine Koordinate psi mehr nach den Achsen, mit
+  Feder und Dämpfer, die Gierbeiwerte der Riemenabschnitte in C, die Seiten der Antriebe in K. Wo weniger Motoren als
+  Koordinaten es festlegen (ein Antrieb, oder Riemen), legen die Motoren die Achsen fest und die Feder das Gieren
+  (`forward` und die Vorsteuerung nehmen die Zeilen der Achsen); wo Riemen ihre Länge damit nicht halten können (ein
+  CoreXY), hat das starre Modell kein Gieren.
+- Ein Werkzeugmittelpunkt (`machine.tcp`): die Stellung des Werkzeugs geht über die Drehung von `tool_m` durch die
+  Drehachsen in die Achsen über und zurück; Geschwindigkeiten und Beschleunigungen durch Ableiten dieser Abbildung.
 - Eine Schneckenstufe (`machine.worm`): der Abtrieb ihres Getriebes bekommt t eta^x und ihr Läufer t / i,
   x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0); eine selbsthemmende gibt dem Läufer
   treibend x t / i und zurück angetrieben nichts. Im starren Modell werden mit einer selbsthemmenden Schnecke die
@@ -638,9 +748,17 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   jeder treibt eine Achse gerade, und das eine Koppelgetriebe ist das des ebenen Delta, das sich nicht mit ihnen
   mischt. Eine Scherenhubbühne ist kein Fall davon: ein Motor treibt eine senkrechte Achse über eine Spindel oder
   einen Zylinder am Fuß der Schere, z = n L sin phi; dazu bräuchte es eine Spindel, die ein Koppelgetriebe statt
-  einer Achse treibt. Ein Körper kann nicht auf einer
-  Drehachse mitfahren (er bewegte sich auf einem Kreis, nicht entlang rechtwinkliger Achsen), und eine Drehachse hat
-  keine eigene Lagerreibung (nur die ihres Motors und Getriebes).
+  einer Achse treibt. Eine Drehachse hat keine eigene Lagerreibung (nur die ihres Motors und Getriebes).
+- Das Gieren eines Portals: eines je Datei, kleine Winkel (die Seiten fahren um die Breite mal den Winkel); die Antriebe
+  folgen jeder dem gemeinsamen Sollwert, es gibt also keinen Master/Slave- oder kreuzgekoppelten Gleichlauf in den
+  Antrieben (das wäre Sache der Regelung), und der Gleichlauffehler ist, was zwei gleiche Lageregler übrig lassen. Die
+  Gierbeiwerte eines Abschnitts sind Zahlen aus seiner Führung, nicht aus seiner `route` gerechnet; ein Körper auf der
+  Brücke, der nicht quer fährt, sitzt in ihrer Mitte; Umlenkrollen und Trums folgen dem Gieren nicht.
+- Ein Körper auf Drehachsen ist eine Punktmasse in seinem Schwerpunkt: seine eigene Trägheit um ihn steckt im
+  `inertia_kgm2` des Rundtischs. Ein Werkzeugmittelpunkt braucht drei rechtwinklige Linearachsen (x, y, z der
+  3D-Ansicht) und die Drehachsen auf der Seite des Werkzeugs (ein Kopf): ein Rundtisch, der das Werkstück trägt, ist
+  noch keiner. Einschwingen und Bahnfehler der Auswertung zählen den Fehler einer Drehachse in rad zu dem der
+  Linearachsen in m.
 - `effects.belt_tooth_jump` zusammen mit Spindel, Zahnstange, Linearmotor oder Rundtisch: seine Zustände liegen je
   Motor, und ein Motor ohne Scheibe hat keine; die Datei wird abgelehnt.
 - Die Steifigkeit einer Spindel ist die bei der weichsten Mutterstellung für den ganzen Hub, wie im Gelenkbaukasten;

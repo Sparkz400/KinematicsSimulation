@@ -184,6 +184,8 @@ pub(crate) fn read(
         frame: None,
         spans: Vec::new(),
         lean: None,
+        gantry: None,
+        tcp: None,
         refs,
         values: Vec::new(),
         linkage: Some(LinkageNode { id: id_of(node), gearboxes: arms.map(|i| id_of(&gearboxes[i])), values }),

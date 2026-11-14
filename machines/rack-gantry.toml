@@ -119,6 +119,9 @@ shaper_follows_pose = false
 # Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
 # (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
 crash = false
+# The bridge yaws: its one rack drives it at one end, the other end lags ([machine.gantry], values in [gantry]). Off,
+# so that earlier results stay as they were; machines/dual-gantry.toml drives both ends.
+gantry_yaw = false
 
 [geometry]
 pulley_radius_m = 0.02
@@ -241,6 +244,15 @@ pinion_inertia_kgm2 = 1.0e-4
 # The pair's permissible feed force, and the application factor K_A for smooth running.
 rated_feed_force_n = 3000.0
 service_factor = 1.25
+
+# The bridge's yaw with effects.gantry_yaw [estimate]: the distance between its two X guides (the rack at the first);
+# its own inertia about a vertical axis through its centre (10 kg over 1.0 m, m L^2 / 12, and the drive unit of 2 kg at
+# 0.5 m); the stiffness of its joints on the X carriages against yawing, and its damping.
+[gantry]
+width_m = 1.0
+inertia_kgm2 = 1.33
+stiffness_nm_rad = 2.0e5
+damping_nm_s_rad = 50.0
 
 [pulley]
 inertia_kgm2 = 1.0e-4
@@ -530,6 +542,9 @@ rack_x.stiffness_n_m = [6.0e7, 1.5e8]
 gearbox.mx.stiffness_nm_rad = [25000.0, 40000.0]
 gearbox.mx.damping_nm_s_rad = [2.0, 10.0]
 
+gantry.inertia_kgm2 = [1.0, 2.0]
+gantry.stiffness_nm_rad = [5.0e4, 5.0e5]
+gantry.damping_nm_s_rad = [10.0, 200.0]
 [start]
 pose = [0.2, 0.1]
 
@@ -639,3 +654,16 @@ axis = "y"
 friction = "friction_y"
 carries = ["y_carriage"]
 pos = [900, 300]
+
+# The bridge's yaw (effects.gantry_yaw): the rack drives it at its first end, 0.5 m from its centre; only the joints'
+# spring holds the other end, which lags behind while the bridge accelerates.
+[[machine.gantry]]
+id = "bridge_yaw"
+axis = "x"
+across = "y"
+width_m = "gantry.width_m"
+inertia_kgm2 = "gantry.inertia_kgm2"
+stiffness_nm_rad = "gantry.stiffness_nm_rad"
+damping_nm_s_rad = "gantry.damping_nm_s_rad"
+drives = { mx = -0.5 }
+pos = [1050, 150]
