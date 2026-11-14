@@ -440,11 +440,16 @@ impl Controller {
         let profile_cycle = n_profile as f64 * dt;
         let setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", profile_cycle)?;
         let params = DriveParams::from_config(cfg, dt, n_velocity as f64 * dt)?;
-        let motor_params = machine
+        let mut motor_params = machine
             .motors()
             .iter()
             .map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt))
             .collect::<Result<Vec<_>>>()?;
+        // The DC links are the machine's (`catalog::motor_config`): a drive named per motor (an S210 switches the shared
+        // link off, an S120 on) leaves them as the shared config has them, else its own link is stepped as well.
+        for p in &mut motor_params {
+            p.shared_dc_link = params.shared_dc_link;
+        }
         let fault_settings = machine
             .motors()
             .iter()

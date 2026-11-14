@@ -206,7 +206,7 @@ pub trait Machine: Send {
     /// Coriolis part of the torque): from a kinematics that is not linear, and from a mass matrix that changes with the
     /// pose (an arm in joint space, whose motor angles are linear in its joints, has them too). The controller uses
     /// this one; the default leaves the speed out, which is exact only where the motor angles are linear in the tool
-    /// pose and the inertia the motors see does not change with it (a gantry, a single axis).
+    /// pose and the inertia the motors see does not change with it (a gantry, one linear axis).
     fn feedforward_torque_moving(&self, tool_pos: &[f64], _tool_vel: &[f64], tool_acc: &[f64], out: &mut [f64]) {
         self.feedforward_torque(tool_pos, tool_acc, out);
     }

@@ -1716,7 +1716,7 @@ fn modes_write_the_resonances_over_the_stroke() {
 /// search fell back to 400 V and found nothing.
 #[test]
 fn search_takes_the_configs_own_supply() {
-    let out = cli(&["search", "single-axis", "--series", "1FK7040-2AK7", "--set", "parts.motor_supply=\"s120\""]);
+    let out = cli(&["search", MACHINES[1].id, "--series", "1FK7040-2AK7", "--set", "parts.motor_supply=\"s120\""]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let table = text(&out.stdout);
     assert_eq!(table.lines().count(), 2, "{table}");

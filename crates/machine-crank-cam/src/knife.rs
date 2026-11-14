@@ -120,8 +120,10 @@ impl Mechanism for RotaryKnife {
         out.extend([self.radius * qd[0], self.cut_force(q[0], qd[0])]);
     }
 
+    /// The blades: at the roll's outer radius they meet an obstacle first, and they are boxes of the scene (the roll is a
+    /// cylinder, which no collision box stands for).
     fn collision_parts(&self) -> &'static [&'static str] {
-        &["knife-roll"]
+        &["blade"]
     }
 
     /// Seen along the roll: the roll with its blades turning above the web, the anvil roll beneath, the motor behind.

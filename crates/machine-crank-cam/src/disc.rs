@@ -218,7 +218,13 @@ impl Mechanism for DiscCam {
             [0.2, 0.22, 0.26],
         ));
         let top = [e, 0.0, roller[2] + 0.15];
-        out.parts.push(Part::new("follower", Shape::Segment { to: top, width: 0.02 }, roller, [0.75, 0.75, 0.78]));
+        // A rod as a box, so that it is the follower's collision box (`collision_parts`).
+        out.parts.push(Part::new(
+            "follower",
+            Shape::Box { size: [0.02, 0.02, 0.15] },
+            [e, 0.0, roller[2] + 0.075],
+            [0.75, 0.75, 0.78],
+        ));
         if self.attached && self.payload > 0.0 {
             out.parts.push(Part::new("payload", Shape::Box { size: [0.06, 0.06, 0.04] }, top, [0.2, 0.7, 0.3]));
         }

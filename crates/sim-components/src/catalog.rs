@@ -626,8 +626,8 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 ///
 /// Another maker's motor (`vendor_of`): the drive its row names in `paired_drive`, the maker's own pairing, where
 /// the maker's drive table has it at that line voltage; else by the same rule as the 1FK2 on S120, the smallest drive of
-/// the maker at that line voltage whose rated current carries the motor's stall current, a single-axis one before a
-/// multi-axis one. "" where there is none.
+/// the maker at that line voltage whose rated current carries the motor's stall current, a Single Motor Module before a
+/// Double Motor Module. "" where there is none.
 pub fn paired_drive(article: &str, supply: &str) -> &'static str {
     if let Some((vendor, line)) = vendor_supply(supply) {
         let drives = vendor_rows("drives_", vendor, line);
@@ -719,7 +719,7 @@ impl std::str::FromStr for Drives {
 
 /// The drives of a supply (`SUPPLIES`) with their rated and maximum output current, smallest rated current first (of
 /// two alike, the higher maximum current first): the S210 converters for "230v" (1 AC and 3 AC) and "400v" (3 AC), the
-/// new 6SL5310 ones for "s210new-...", the single-axis Motor Modules for "s120", another maker's drives at the line
+/// new 6SL5310 ones for "s210new-...", the Single Motor Modules for "s120", another maker's drives at the line
 /// voltage. A maker that prints no maximum current (Mitsubishi) has NaN there.
 // shortcut: the S120 Double Motor Modules are left out (per axis they are the single ones' sizes); add them when a
 // search sizes two axes on one module.

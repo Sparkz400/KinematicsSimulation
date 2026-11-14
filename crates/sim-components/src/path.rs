@@ -736,7 +736,7 @@ fn arc3(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo
 /// a SCARA's or a delta's turn, an arm's orientation in tool space.
 ///
 /// shortcut: an arm's orientation (rx, ry, rz) goes along as its rotation vector, evenly per component, which is a
-/// rotation at an even rate only about a fixed axis; take the arm's quaternion slerp (machine-joint-kit tool.rs) here
+/// rotation at an even rate only about a fixed axis; take the arm's quaternion slerp (the arms' tool space) here
 /// if tool-space arcs that turn the tool about two axes at once have to keep its rate of turning even.
 fn arc_on(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo> {
     let arc = arc3(&from[..3], &to[..3], centre, clockwise)?;
