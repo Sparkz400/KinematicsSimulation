@@ -21,6 +21,10 @@ belt = ""
 axis = ""
 
 # One switch per effect.
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 [effects]
 gravity = true
 payload = true
@@ -100,6 +104,20 @@ crash = false
 
 # With effects.part_heating: each gearbox (with the screw behind it) warms with its loss; the legs have couplings, so
 # nothing warms but the motors. [estimate] as for the delta picker's planetary gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+braking_resistor_heating = true
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
 [thermal]
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
@@ -151,6 +169,12 @@ tension_reserve = 0.8
 tension_margin_n = 0.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
 
 [sim]
 dt_s = 62.5e-6
@@ -276,6 +300,14 @@ torque_constant_at_max_current_nm_a = 0.83333
 brake_torque_nm = 8.0
 
 # [estimate] The platform's speeds: 0.2 m/s takes a leg to at most some 0.25 m/s, 1500 r/min of its screw.
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 2.822
 [axis.x]
 max_velocity_m_s = 0.2
 max_acceleration_m_s2 = 3.0
@@ -363,6 +395,24 @@ braking_module = false
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged. The
 # screws' own checks (speed, d n, buckling and static load under the leg's force, life) come from [screw] and
 # ratings.required_life_h, for each leg.
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
 [ratings]
 settling_tolerance_m = 0.00005
 # The DC link of the S210 converter. [estimate] as for the delta picker.
@@ -440,3 +490,25 @@ thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
+
+[base]
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+inertia_x_kgm2 = 40.0
+inertia_y_kgm2 = 40.0
+inertia_z_kgm2 = 40.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 150.0
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 2.4e6
+stiffness_y_n_m = 2.4e6
+stiffness_z_n_m = 1.5e7
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 0.0

@@ -15,6 +15,10 @@ belt = ""
 axis = ""
 
 # One switch per effect.
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 [effects]
 gravity = true
 payload = true
@@ -96,6 +100,20 @@ crash = false
 
 # With effects.part_heating: each winch's gearbox warms with its loss. [estimate] as for the delta picker's planetary
 # gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+braking_resistor_heating = true
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
 [thermal]
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
@@ -147,3 +165,31 @@ tension_reserve = 0.8
 tension_margin_n = 0.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
+
+[base]
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+inertia_x_kgm2 = 10.0
+inertia_y_kgm2 = 10.0
+inertia_z_kgm2 = 20.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 100.0
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 7.1e5

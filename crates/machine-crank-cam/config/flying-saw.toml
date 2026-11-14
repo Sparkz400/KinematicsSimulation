@@ -48,6 +48,25 @@ backlash_rad = 0.0
 stiffness_nm_rad = 35752.6
 damping_nm_s_rad = 5.0
 inertia_at_input_kgm2 = 4.06e-5
+# The torque at which `efficiency` holds: the strain wave gear's rated torque, as Harmonic Drive gives its efficiency
+# ([estimate] as strain_wave.rated_torque_nm).
+efficiency_torque_nm = 137.0
+hysteresis_rad = 2.909e-4
+# With effects.gearbox_lost_motion: no backlash and no band (the flexspline's teeth are in mesh preloaded);
+# [catalogue] the hysteresis loss, Harmonic Drive's Table 44 (size 32, ratio 50 and up): 2.9e-4 rad (1 arcmin).
+lost_motion_band_rad = 0.0
+no_load_speed_rpm = 2000.0
+# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC. [catalogue] read
+# off Harmonic Drive's chart (CSF/CSG engineering data, "No Load Running Torque", housed unit, grease SK-1A/SK-2,
+# ratio 100, size 32, 2000 r/min, 20 degC): about 50 N cm, to about 20 %. The chart's fall from 20 to 40 degC (a
+# factor of about 0.54 for size 32) is what Palmgren's law with thermal_feedback.viscosity_slope_k gives (0.56).
+no_load_torque_nm = 0.5
+stiffness_k2_nm_rad = 110000.0
+stiffness_k3_nm_rad = 120000.0
+# With effects.gearbox_stiffness_curve: [catalogue] Harmonic Drive's Table 43 (ratio 80 and up, size 32): K1 is
+# stiffness_nm_rad up to T1, K2 up to T2, K3 beyond.
+stiffness_t1_nm = 29.0
+stiffness_t2_nm = 108.0
 
 [motor]
 # [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
@@ -84,6 +103,18 @@ torque_constant_at_max_current_nm_a = 0.83333
 brake_torque_nm = 8.0
 
 # [estimate] 1.2 m/s is 1800 r/min of the motor behind ratio 5.
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 4.35
 [axis.x]
 max_velocity_m_s = 1.2
 max_acceleration_m_s2 = 10.0
@@ -135,6 +166,27 @@ current_noise_a = 0.01
 noise_seed = 1
 # Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
 braking_module = false
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+# [estimate] The highest speed the motor may turn at: here its no-load speed, where the torque-speed
+# curve ends. A motor by name sets the catalogue's.
+max_speed_rad_s = 615.07
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
 
 [ratings]
 # [estimate] 0.5 mm where the carriage waits: the cut's accuracy comes from the synchronous run, not from home.

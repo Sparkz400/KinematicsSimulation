@@ -160,6 +160,10 @@ crash = false
 # [estimate] Williams' IRB 360-1/1600 figures (R 164, r 44, upper arm 524, forearm 1244 mm, for a working radius of
 # 720 mm), scaled towards this working radius of 600 mm and rounded; with these the whole working range is reachable,
 # the arm angles stay between -44 and +80 degrees and the condition number of the Jacobian below 3.6.
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
 [geometry]
 base_radius_m = 0.2
 platform_radius_m = 0.05
@@ -475,6 +479,24 @@ noise_seed = 1
 braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
 [ratings]
 # How far the tool may be from its target in the second half of a dwell, when the gripper acts. It counts the
 # gearboxes' twist and backlash under the platform's weight, which the motors' encoders do not see, and the tool's turn

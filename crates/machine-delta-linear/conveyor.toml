@@ -140,6 +140,10 @@ crash = false
 # The kinematics. e = column_radius_m - plate_radius_m is what the equations use.
 # [estimate] all: rods of 1.1 m reach the far rim of the working range (0.925 m from a column's joint line) at 57 degrees,
 # and the carriages stay within 0.70 m of stroke for 100 mm of height.
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
 [geometry]
 column_radius_m = 0.52
 plate_radius_m = 0.07
@@ -376,6 +380,24 @@ noise_seed = 1
 braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
 [ratings]
 # [estimate] what the EGC-80's belt takes; Festo gives the axis's feed force, not the belt's tension.
 belt_max_tension_n = 1000.0
@@ -608,3 +630,8 @@ place = [0.0, -0.25, -1.155]
 place_direction = [1.0, 0.0, 0.0]
 place_speed_m_s = 0.0
 tracking_tolerance_m = 0.001
+
+[thermal]
+gearbox_max_rise_k = 50.0
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0

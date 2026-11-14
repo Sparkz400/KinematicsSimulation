@@ -114,6 +114,10 @@ magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
 motor_stiction = false
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
 [thermal]
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
@@ -171,3 +175,25 @@ shaper_type = "zvd"
 trajectory_spline = "c2"
 up_acceleration_ratio = 1.0
 vertical_axis = ""
+
+[base]
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+inertia_x_kgm2 = 10.0
+inertia_y_kgm2 = 10.0
+inertia_z_kgm2 = 20.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 100.0
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 7.1e5

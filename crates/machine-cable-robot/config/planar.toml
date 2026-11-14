@@ -107,6 +107,14 @@ brake_torque_nm = 8.0
 
 # [estimate] 1.5 m/s of the carriage asks at most some 1.5 m/s of a cable: 3000 r/min of the motor through 5:1 on the
 # 25 mm drum.
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 4.35
 [axis.x]
 max_velocity_m_s = 1.5
 max_acceleration_m_s2 = 10.0
@@ -177,6 +185,24 @@ braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged. The
 # cables' own checks (highest tension against the rating, tension below the least) come from [cable].
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
 [ratings]
 # [estimate] What a cable robot of this size is asked to hold at a dwell; the carriage settles to 0.15 mm (sim-cli analyze).
 settling_tolerance_m = 0.0003
