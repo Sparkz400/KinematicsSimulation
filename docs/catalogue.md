@@ -43,6 +43,14 @@ These files are read by the simulator itself. They are compiled into `sim-compon
 
 A motor named in `[parts]` does not bring its drive: the drive is named on its own. The search names the paired one.
 
+### The drive sizes beside the paired one
+
+`search --drives neighbours` tries each motor with the paired drive and the next size down and up, `--drives all` with every drive of the supply (`catalog::drives_for`, `drive_neighbours`). The sizes are ordered by rated output current (of two alike, the higher maximum current first): at `400v` the eight 3 AC S210 converters of `converters_s210.csv`, at `230v` its 1 AC and 3 AC ones (twelve), at `s210new-*` the 6SL5310 ones the same way, at `s120` the Single Motor Modules of `motor_modules_s120.csv` (the Double Motor Modules are left out), at `<vendor>-<volts>v` the maker's drives at that line voltage. The next size down is the largest with a lower rated current, the next up the smallest with a higher one.
+
+### What the data leaves to estimates
+
+The search's column `estimated` (`catalog::estimated_data`) names what a motor and drive do not bring from the catalogue, so that the config's own estimates stay for it: `motor-winding` (phase resistance and inductance, printed for the 1FK7 and 1FT7 only), `motor-thermal-time`, `motor-pole-pairs`, `motor-standstill` and `motor-rated` (another maker printing no standstill or no rated values), `drive-max-current` (Mitsubishi's amplifiers print no peak current) and `drive-base-load` (only the S120 Motor Modules print a base load current). The lightest non-Siemens winners of a search often run on such estimates; this column says so beside them.
+
 ### What stands in for the price
 
 No file has a price. Siemens' list prices are in its Industry Mall, which refuses automated access (HTTP 403), and none of the catalogues read here prints one; Festo's and Bahr's are not public. The search ranks by installed weight instead: `cost_kg` = number of motors × (motor without brake + gearbox) + the axis at the config's strokes (where one of the catalogue is tried). Weight goes roughly with size and so with price within a family; across makers and families it does not, which is why this is a stand-in and called so. The drive's weight is not counted (the converter files have none).

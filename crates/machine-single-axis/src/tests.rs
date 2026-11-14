@@ -557,7 +557,7 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
     // The rigid model's belt does not stretch: both sections pull the pulley shaft with the pretension, 2 * 300 N.
     assert_eq!(
         find(&all, "gearbox-radial-load").unwrap(),
-        Verdict { check: "gearbox-radial-load", motor: None, value: 600.0, limit: 1500.0, ok: true }
+        Verdict { check: "gearbox-radial-load", motor: Some(0), value: 600.0, limit: 1500.0, ok: true }
     );
     // The guide carries the carriage of 4 kg (this config has no payload): 39.23 N, against 2000 N.
     let guide = find(&all, "guide-load").unwrap();

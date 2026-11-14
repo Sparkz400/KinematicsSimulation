@@ -76,6 +76,9 @@ pub struct MotorLoad {
     /// Where the machine reports the radial load on this motor's pulley shaft (`pulley.<motor>.radial_load`): its cubic
     /// mean weighted with the speed, the equivalent load P of the bearings' rating life (ISO 281), once per millisecond.
     pub radial_load_equivalent: Option<f64>,
+    /// Where the machine reports that radial load: its highest over the pass, N, sampled as `CycleLoad::radial_load_peak`
+    /// is. Judged per motor against that motor's `ratings.shaft_max_radial_load_n` ("gearbox-radial-load").
+    pub radial_load_peak: Option<f64>,
     /// With effects.belt_wrap, where the machine gives its belt geometry (`Machine::belt_wraps`): the smallest angle by
     /// which the belt wrapped this motor's pulley over the pass, rad, once per millisecond. For the teeth in mesh.
     pub belt_wrap: Option<f64>,
@@ -141,7 +144,7 @@ pub const BUDGET_TOLERANCE: f64 = 1e-3;
 /// of the supply: the error of the fourth-order integration of the winding's energy over a base step.
 pub const ELECTRICAL_TOLERANCE: f64 = 1e-6;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CycleLoad {
     pub duration: f64,
     /// Lowest and highest tension of any belt section during the cycle, for machines that report
@@ -371,6 +374,8 @@ struct Tally {
     /// Per motor the signal of its pulley shaft's radial load, and the sums of load^3 |speed| and |speed| per sample.
     pulley_radial: Vec<Option<usize>>,
     radial_sums: Vec<(f64, f64)>,
+    /// Per motor the highest radial load on its pulley shaft, sampled as `radial_peak`.
+    radial_peaks: Vec<f64>,
     /// Per motor with a gearbox output torque: the sum of |torque|^(10/3) |speed|, and its peak per speed band.
     gear_life: Vec<f64>,
     gear_bands: Vec<Vec<f64>>,
@@ -555,6 +560,7 @@ impl Tally {
                 .map(|m| infos.iter().position(|s| s.id == format!("pulley.{}.radial_load", m.id)))
                 .collect(),
             radial_sums: vec![(0.0, 0.0); motors],
+            radial_peaks: vec![0.0; motors],
             gear_life: vec![0.0; motors],
             gear_bands: vec![Vec::new(); motors],
             gear_spectrum: vec![Vec::new(); motors],
@@ -616,6 +622,11 @@ impl Tally {
             }
             for &i in &self.radial {
                 self.radial_peak = self.radial_peak.max(self.sample[i]);
+            }
+            for (peak, signal) in self.radial_peaks.iter_mut().zip(&self.pulley_radial) {
+                if let Some(i) = *signal {
+                    *peak = peak.max(self.sample[i]);
+                }
             }
             if let Some(i) = self.condition {
                 self.condition_peak = self.condition_peak.max(self.sample[i]);
@@ -831,6 +842,7 @@ impl Tally {
             let (cubed, weight) = self.radial_sums[k];
             load.radial_load_equivalent =
                 self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
+            load.radial_load_peak = self.pulley_radial[k].map(|_| self.radial_peaks[k]);
             let p = sim.control.drive_params_of(k);
             load.winding_rise = p.settled_rise(load.rms_current);
             if let (true, Some(n)) = (p.heating, &p.thermal_nodes) {
@@ -1262,6 +1274,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         if let (Some((peak, _)), Some(limit)) = (m.gearbox_torque, rating("pulley_max_torque_nm")) {
             out.push(at_most("pulley-torque", Some(k), peak, limit));
         }
+        // The radial load on this motor's shaft against its own gearbox's rating (a smaller Z gearbox has its own).
+        if let (Some(peak), Some(limit)) = (m.radial_load_peak, rating("shaft_max_radial_load_n")) {
+            out.push(at_most("gearbox-radial-load", Some(k), peak, limit));
+        }
         if let (Some((_, cubic_mean)), Some(limit)) = (m.gearbox_torque, rating("gearbox_rated_torque_nm")) {
             out.push(at_most("gearbox-continuous", Some(k), cubic_mean, limit));
         }
@@ -1414,7 +1430,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     if let (Some(value), Some(limit)) = (load.condition_peak, rating("max_condition_number")) {
         out.push(at_most("singularity", None, value, limit));
     }
-    if let (Some(value), Some(limit)) = (load.radial_load_peak, rating("shaft_max_radial_load_n")) {
+    // Once for the machine only where no motor's shaft reports its own (judged per motor above); before 14 November 2026
+    // always so, the highest of all shafts against the shared rating.
+    let per_motor = load.motors.iter().any(|m| m.radial_load_peak.is_some());
+    if let (Some(value), Some(limit), false) = (load.radial_load_peak, rating("shaft_max_radial_load_n"), per_motor) {
         out.push(at_most("gearbox-radial-load", None, value, limit));
     }
     if let (Some((peak, _)), Some(limit)) = (load.guide_load, rating("guide_max_load_n")) {
@@ -1852,7 +1871,7 @@ fn judge_each(
 }
 
 /// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other.
-fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let worker = || -> Vec<(usize, T)> {
         let mut done = Vec::new();
@@ -2288,17 +2307,23 @@ pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
 /// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
 /// a point that is there twice is kept once.
 pub fn non_dominated(points: &[FrontPoint]) -> Vec<FrontPoint> {
-    let figures = |p: &FrontPoint| [p.duration, p.energy, p.utilisation];
-    let beats = |a: &FrontPoint, b: &FrontPoint| {
-        figures(a).iter().zip(figures(b)).all(|(x, y)| *x <= y) && figures(a) != figures(b)
-    };
-    let mut front: Vec<FrontPoint> = Vec::new();
-    for p in points {
-        if !points.iter().any(|q| beats(q, p)) && !front.iter().any(|q| figures(q) == figures(p)) {
-            front.push(p.clone());
+    let figures: Vec<Vec<f64>> = points.iter().map(|p| vec![p.duration, p.energy, p.utilisation]).collect();
+    let mut front: Vec<FrontPoint> = non_dominated_indices(&figures).into_iter().map(|i| points[i].clone()).collect();
+    front.sort_by(|a, b| a.duration.total_cmp(&b.duration));
+    front
+}
+
+/// The indices of the rows of figures (each the same number of figures, lower better) that no other row beats: none
+/// other is as good in every figure and better in one. A row that is there twice is kept once, the first; in the order
+/// of the rows. For the optimiser's front (`non_dominated`) and the catalogue search's (`search::front`).
+pub fn non_dominated_indices(figures: &[Vec<f64>]) -> Vec<usize> {
+    let beats = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| x <= y) && a != b;
+    let mut front: Vec<usize> = Vec::new();
+    for (i, p) in figures.iter().enumerate() {
+        if !figures.iter().any(|q| beats(q, p)) && !front.iter().any(|&k| figures[k] == *p) {
+            front.push(i);
         }
     }
-    front.sort_by(|a, b| a.duration.total_cmp(&b.duration));
     front
 }
 

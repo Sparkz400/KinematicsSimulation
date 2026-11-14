@@ -17,6 +17,16 @@ item are in [PROGRESS.md](PROGRESS.md).
   replaying every step since initialisation; a serialized state still replays (format `sim-fmi state 2`).
 - Python: `Config(machine_file=...)`, `sweep`, `optimise`, `fit` and `identify`, as the command line has them.
 - CI: clippy of sim-py in the job "python", and the CAD mass tests (`tools/cad/test_cadmass.py`) with cadquery-ocp.
+- Search: the wide table (cycle time, energy per cycle, thermal and drive current utilisation, following and settling
+  error, inertia ratio load/motor, failing checks, what the catalogue left to estimates, one `u_<check>` column per
+  check), `--rank-by` (cost, margin, energy, error, thermal, inertia, drive or a weighted mix), the non-dominated front,
+  `--drives paired|neighbours|all` (the next drive sizes by rated current), a duty mix (several `--config` with
+  `--weights`: worst result per check, heat and energy over the mix) and `--robust N` (the best ones judged again at
+  their worst corner). Python `sizing` gives the same columns and options.
+- `sim-cli transmission`: a sweep of the gear ratio or pulley radius with the inertia ratio and the margins, the classic
+  optimum, and the catalogue gearboxes around the best ratio.
+- `sim-cli compare-kinematics TASK.toml --machines ...`: one tool-space pick-and-place task (examples/pick-place-task.toml)
+  mapped onto each machine's cycle, unreachable poses refused with the reason, and the best combination per kinematics.
 
 ### Changed
 
@@ -34,6 +44,10 @@ item are in [PROGRESS.md](PROGRESS.md).
   (`effects.gearbox_stiffness_curve`, `gearbox.stiffness_t1_nm`, `_t2_nm`, `_k2_nm_rad`, `_k3_nm_rad`).
 - `catalog/siemens/gearbox_sp.csv`: Siemens' SP100 precision planetary gearbox (WITTENSTEIN SP+ 100), two stages,
   with its reduced backlash (schema column `backlash_reduced_rad`).
+- `search --gearboxes` offers gearboxes on a direct drive too (ratio 1), around each motor's classic optimum ratio,
+  beside the motor without one.
+- `gearbox-radial-load` is judged per motor against that motor's own `ratings.shaft_max_radial_load_n`; once for the
+  machine only where no motor's shaft reports its own radial load.
 
 ### Changed
 
@@ -57,6 +71,7 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Fixed
 
+- `sim-netlist` scissor node: the free joint's shaft friction (fields added by the friction merge), so main compiles.
 - A self-locking worm in a machine file holds its load: driven back the motor has to push to lower it, a lowering load
   with no torque brakes to a stop, and in the rigid model its output sticks at rest within what the worm can take
   (before, it lowered the load with no torque and crept).

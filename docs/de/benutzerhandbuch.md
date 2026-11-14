@@ -303,7 +303,7 @@ Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der 
 | `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2`, `1FT2105`, `1FK7`, `AM804` oder `AKM2G` |
 | `--vendor NAME` | Die Netzspannungen dieses Herstellers, alle, wenn `--supply` keine nennt: `siemens`, `beckhoff`, `br`, `kollmorgen`, `lenze`, `mitsubishi`, `rexroth`, `sew`, `yaskawa`, oder `all` für jede Netzspannung jedes Herstellers. Die Kandidaten aller werden zusammen geordnet; die Spalten `vendor` und `supply` sagen, wessen jeder ist. Z. B. `--vendor beckhoff --series AM804` |
 | `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). `s210new-230v`, `s210new-400v`: die Motoren des S210 mit den neuen Umrichtern 6SL5310, die D 32 neben ihnen nennt. `<hersteller>-<volt>v` (z. B. `beckhoff-400v`, `kollmorgen-240v`): die Motoren eines anderen Herstellers bei dieser Netzspannung, jeder mit dem Antrieb, den der Hersteller ihm zuordnet, oder, wo er keine Zuordnung veröffentlicht, dem kleinsten seiner Antriebe, der den Stillstandsstrom des Motors trägt ([der Katalog](../catalogue.md#other-makers)). Standard `400v` |
-| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut) |
+| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt; bei einem Direktantrieb (Übersetzung 1) zwischen der Hälfte und dem Doppelten des klassischen Optimums für diesen Motor, neben dem Motor ohne Getriebe (siehe [welcher Antrieb passt am besten](#welcher-antrieb-passt-am-besten-rangfolge-lastmix-übersetzung-und-kinematikvergleich)). Nur für die Motoren, für die die Baureihe gebaut ist |
 | `--axes` | Zusätzlich jede Achse des Katalogs probieren, die zur Art der Maschine passt (siehe unten) |
 | `--motor-id ID` | Einen Motor einer Maschine mit mehreren auslegen, den Motor `ID` einer Maschinendatei: jeder Kandidat wird `[parts.ID]`, die anderen Motoren bleiben, wie die Datei sie hat, die eigene Drehzahlverstärkung dieses Motors wird nachgestellt, `--gearboxes` passt zu seiner eigenen Übersetzung, und `cost_kg` ist das Gewicht dieses einen Motors (siehe [Maschinendateien](maschinendateien.md#motoren-die-sich-unterscheiden)). Nicht mit `--axes` |
 
@@ -398,6 +398,103 @@ Grenzen bei dieser Aufgabe:
 - Die Achssuche behält alles von der Konfiguration, was die Achse nicht setzt: Getriebe, Reibung, Rahmen, Input Shaper und Verstärkungen. Die Einzelachsen von Bahr nennen keine bewegte Masse, also bleibt bei ihnen der Schlitten der Konfiguration; die maximalen Längen von Bahr gelten als längster Hub.
 - Riemen werden nicht variiert; ein Riemen wird mit `--belt` benannt. Kombinationen verschiedener Motoren je Achse werden nicht gesucht.
 - Die Zwischenkreiskapazität und der Bremswiderstand bleiben, wie die Konfiguration sie hat; die Einschaltspannung des Bremswiderstands und die Abschaltspannung werden auf die Zwischenkreisspannung des Motors skaliert (siehe den vorigen Abschnitt). Bei einer Standardkonfiguration werden die Zeilen zum Bremsen bei jedem Kandidaten gegen Platzhalter beurteilt.
+
+## Welcher Antrieb passt am besten: Rangfolge, Lastmix, Übersetzung und Kinematikvergleich
+
+Die Suche oben beantwortet „welcher ist der leichteste Motor, der besteht“. Mit diesen Optionen beantwortet dieselbe Suche mehr; die Tabelle hat dieselben Zeilen und mehr Spalten.
+
+**Die breite Tabelle.** Nach `winding_rise_k` hat jede Zeile:
+
+| Spalte | Bedeutung |
+| --- | --- |
+| `rank` | Der Platz der Zeile in der Rangfolge (`--rank-by`, unten) |
+| `front` | `true` für einen bestandenen Kandidaten, den kein anderer bestandener in Kosten, Antriebsgröße (sein Nennstrom), Reserve (`tightest_utilisation`), Energie und Schleppfehler zugleich schlägt: die Kandidaten, die einen Blick wert sind, was auch immer am meisten zählt |
+| `cycle_s` | Zykluszeit (mit Lastmix das gewichtete Mittel je Zyklus) |
+| `energy_j` | Energie aus dem Netz je Zyklus, J: was die Antriebe aufnahmen, weniger was sie zurückspeisten, plus was der Bremswiderstand verheizte (wie die Front des Optimierers sie zählt) |
+| `thermal_utilisation` | Effektivmoment über dem Dauermoment des Motors, das höchste der Motoren |
+| `drive_current_utilisation` | Effektivstrom des Antriebs über seinem Nennstrom (die Prüfung `drive-current`) |
+| `following_error_m`, `settling_error_m` | Wie weit das Werkzeug seinem Sollwert höchstens nachlief, und wie weit es spät in einer Verweilzeit höchstens neben seinem Ziel stand, m |
+| `inertia_ratio` | Last- über Motorträgheit in der Mitte des Verfahrwegs: was der Motor außer seinem Läufer dreht (die Last und das Getriebe selbst), auf seine Welle bezogen, über der Trägheit des Läufers; die höchste der Motoren (mit `--motor-id` die dieses Motors). Je Achse ist sie das Moment der starren Maschine je Beschleunigung dieser Achse über der Motorbeschleunigung, die das braucht, im Stand |
+| `failing` | Jede Prüfung, die nicht besteht, getrennt durch `;` |
+| `estimated` | Was Motor und Antrieb den Schätzwerten der Konfiguration überlassen (leer: alles aus dem Katalog): `motor-winding` (kein Wicklungswiderstand und keine Induktivität; Siemens druckt sie nur für 1FK7 und 1FT7), `motor-thermal-time`, `motor-pole-pairs`, `motor-standstill` und `motor-rated` (ein anderer Hersteller druckt keine Stillstands- oder keine Bemessungswerte; die jeweils anderen stehen dafür), `drive-max-current` (kein Spitzenstrom gedruckt: Mitsubishi), `drive-base-load` (kein Grundlaststrom: jeder Antrieb außer den S120 Motor Modules) |
+| `u_<prüfung>` | Eine Spalte je Prüfung irgendeines Kandidaten: ihre Auslastung, Wert über Grenze (bei einer Lebensdauer Grenze über Wert), die höchste der Motoren. Leer, wo ein Kandidat diese Prüfung nicht hat |
+
+**Nach dem ordnen, was zählt.** `--rank-by` ordnet die bestandenen Kandidaten nach `cost` (Vorgabe), `margin` (Auslastung der knappsten Prüfung), `energy`, `error` (Schleppfehler), `thermal`, `inertia` (Trägheitsverhältnis) oder `drive` (Nennstrom des Antriebs), oder nach einer gewichteten Mischung wie `--rank-by cost=1,energy=0.5`: jede Größe über der besten aller bestandenen Kandidaten, mal ihr Gewicht, summiert, sodass Kilogramm und Joule so zählen, wie die Gewichte sagen. Die nicht bestandenen folgen wie bisher.
+
+**Der Antrieb als Suchdimension.** `--drives neighbours` probiert jeden Motor mit dem Antrieb, den der Katalog ihm zuordnet, und mit der nächstkleineren und nächstgrößeren Baugröße nach Nennausgangsstrom: unter den S210-Umrichtern der Netzspannung (bei 230 V die 1 AC und 3 AC, bei 400 V die 3 AC), den S120 Single Motor Modules oder den Antrieben des Herstellers bei dieser Netzspannung. `--drives all` probiert jeden Antrieb der Netzspannung. Ein kleinerer Antrieb wird gegen seine eigenen Ströme beurteilt (`drive-current`, `drive-peak-current`) und begrenzt mit effects.drive_current_limit den simulierten Strom. Am EXCT-30 läuft der 1FK2104-4AF am 6SL3210-5HE10-4UF0 (1,2 A) mit 0,98 seines Nennstroms, an seinem zugeordneten 5HE10-8UF0 (2,3 A) mit 0,51:
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2 --drives neighbours
+motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,inertia_ratio,estimated
+1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,drive-current,0.9751,1,true,2.0480,179.78,0.9428,0.9751,55.723,motor-winding;motor-pole-pairs;drive-base-load
+1FK2104-4AF,6SL3210-5HE10-8UF0,4.10,ok,motor-thermal,0.9547,2,true,2.0480,179.78,0.9428,0.5088,55.723,motor-winding;motor-pole-pairs;drive-base-load
+1FK2104-5AF,6SL3210-5HE10-4UF0,5.70,ok,drive-current,0.8976,3,true,2.0480,176.85,0.5088,0.8976,34.827,motor-winding;motor-pole-pairs;drive-base-load
+...
+```
+
+(Spalten aus der Tabelle ausgewählt.) Der Katalog kennt kein Gewicht eines Antriebs, daher lässt `cost_kg` den Antrieb aus; die Front und `--rank-by drive` zählen stattdessen seine Größe.
+
+**Lastmix.** Eine Maschine fährt selten nur einen Zyklus. Jeden Zyklus als eigene Konfiguration angeben, mehrere `--config DATEI`, und mit `--weights G1,G2,...`, wie oft jeder läuft (ohne: je 1): Gewicht 3 gegen 1 sind drei Zyklen des ersten auf einen des zweiten. Jeder Kandidat fährt jeden Zyklus mit denselben Teilen und wird nach dem schlechtesten Ergebnis je Prüfung beurteilt (eine Spitze, eine Drehzahl, eine Lebensdauer), die Wärme aber über den Mix, da die Zyklen sich abwechseln: die Übertemperatur der Wicklung als zeitgewichtetes Mittel der Zyklen, der Effektivstrom des Antriebs als sqrt(Σ w I² t / Σ w t) der Effektivströme I der Zyklen; `thermal_utilisation` ebenso, `energy_j` und `cycle_s` als gewichtetes Mittel je Zyklus. Das setzt voraus, dass die Zyklen schneller wechseln, als die Wicklung warm wird (Minuten); ein Mix, der eine Stunde den einen und dann den anderen fährt, braucht jeden Zyklus für sich. Die Teile und `--set` der Kommandozeile gehen in jede Konfiguration; auf der ersten wird die Suche aufgesetzt. Jede Konfiguration darf ihre eigene Bahn oder Zeitplanung haben. Am EXCT-30 mit drei Zyklen leerem Greifer auf einen mit 3 kg Nutzlast sinkt die thermische Auslastung des 1FK2104-4AF von 0,94 auf 0,84, und seine knappste Prüfung wird sein Spitzenmoment (das des beladenen Zyklus):
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --config exct-30-empty.toml --weights 1,3 --series 1FK2 --rank-by cost=1,energy=1
+motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation
+1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,motor-peak,0.8561,1,true,2.0480,166.40,0.8350,0.8540
+1FK2104-5AF,6SL3210-5HE10-8UF0,5.70,ok,settling,0.5320,2,true,2.0480,164.48,0.4482,0.4118
+...
+```
+
+**Robuste Rangfolge.** `--robust N` beurteilt die ersten N bestandenen Kandidaten noch einmal, jeden an der ungünstigsten Ecke der Grenzen seiner eigenen Konfiguration (`verdicts --bands --worst`; die Grenzen folgen einem eingesetzten Teil wie bei `verdicts`), und fügt die Spalten `robust_rank`, `robust_result`, `robust_check` und `robust_utilisation` hinzu; die Fehlerausgabe sagt, ob sich die Reihenfolge der N ändert (wer an der ungünstigsten Ecke besteht, zuerst). Das kostet je Kandidat eine Suche nach der ungünstigsten Ecke, einige hundert Zyklen bei einer Konfiguration mit vielen Grenzen: am EXCT-30 brauchten vier Kandidaten 11 Minuten auf 16 Kernen. Dort bestehen alle vier an ihrer ungünstigsten Ecke `pulley-bearing-life` nicht (Auslastung 2,0), und die Reihenfolge bleibt. Mit Lastmix wird nur die Ecke der ersten Konfiguration beurteilt.
+
+**Übersetzung und Riemenscheibenradius.** `sim-cli transmission MASCHINE` fährt die Getriebeübersetzung (`--key gearbox.ratio`, Vorgabe) oder den Riemenscheibenradius (`--key geometry.pulley_radius_m`) von `--from` bis `--to` in `--count` logarithmisch gleich verteilten Werten durch (ohne Angabe die Hälfte bis das Doppelte des Werts der Konfiguration, 9 Werte), jeden auf dem Zyklus mit dafür nachgestellter Drehzahlverstärkung, und fügt das klassische Optimum hinzu: den Wert, bei dem die Motoren das kleinste Moment je Beschleunigung brauchen (bei reiner Trägheit ist J_m i + J_L / i bei i = sqrt(J_L / J_m) am kleinsten). Jede Zeile hat das Moment je Beschleunigung (jeder Achse nacheinander, summiert), das Trägheitsverhältnis, die Zykluszeit und das Ergebnis mit der knappsten Prüfung; die Fehlerausgabe nennt das klassische Optimum und den besten Wert für den Zyklus (die bestandene Zeile mit der meisten Reserve). Mit `--gearboxes BAUREIHE` und einem Motor (`--motor` oder `[parts] motor` der Konfiguration) laufen zusätzlich die Getriebe der Baureihe, die zwischen der Hälfte und dem Doppelten der besten Übersetzung an den Motor passen, als Zeilen `catalogue`. Das EXCT-30 ist ein Direktantrieb (Übersetzung 1):
+
+```text
+$ sim-cli transmission t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2104-5AF --from 1 --to 20 --count 7 --gearboxes NRK
+Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1707, 1.6475
+kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation
+sweep,1.000000,,0.390498,34.8269,2.0480,ok,settling,0.5320
+sweep,1.647549,,0.251668,12.8303,2.0480,ok,gearbox-radial-load,0.5007
+sweep,2.714418,,0.176891,4.7267,2.0480,ok,motor-speed,0.6074
+sweep,4.472136,,0.147134,1.7413,2.0480,FAIL,belt-slack,inf
+classic,5.170667,,0.145598,1.3026,2.0480,FAIL,belt-slack,inf
+...
+catalogue,3.000000,NRK070-04-3,0.182418,4.2179,2.0480,ok,motor-speed,0.6712
+...
+```
+
+Das klassische Optimum (5,2) braucht das kleinste Moment, besteht aber nicht: der Riemen wird schlaff. Bis zur Übersetzung 2,7 besteht der Zyklus, darüber naht die Höchstdrehzahl des Motors. Am besten für diesen Zyklus ist 1,65; das nächste NRK-Getriebe, das an den Flansch passt, hat die Übersetzung 3. `search --gearboxes BAUREIHE` macht dasselbe bei einem Direktantrieb: es probiert jeden Motor ohne Getriebe und mit den Getrieben der Baureihe um sein eigenes klassisches Optimum (die Wurzel aus Last- über Läuferträgheit); bei einer Maschine mit Getriebe wie bisher um die Übersetzung der Konfiguration.
+
+**Querkraft am Getriebe je Motor.** `gearbox-radial-load` wird je Motor beurteilt: die höchste Querkraft jeder Welle gegen das eigene `ratings.shaft_max_radial_load_n` dieses Motors (ein kleineres Z-Getriebe hat sein eigenes, `[ratings.<id>]`). Vor dem 14. November wurde sie einmal für die Maschine beurteilt, die höchste Welle gegen das gemeinsame Rating; bei einer Maschine, die keine Welle ihrer eigenen Motoren meldet, ist das weiterhin so.
+
+### Welche Kinematik für eine Aufgabe
+
+`sim-cli compare-kinematics AUFGABE.toml --machines ID,ID,...` fährt eine Aufgabe auf mehreren Kinematiken und gibt je Maschine die beste Kombination von Teilen nebeneinander aus. Die Aufgabendatei ([`examples/pick-place-task.toml`](../../examples/pick-place-task.toml)) steht im Werkzeugraum:
+
+| Schlüssel | Bedeutung |
+| --- | --- |
+| `pick`, `place` | x, y, z in m vom Ursprung jeder Maschine aus, z nach oben |
+| `lift_m` | Wie weit das Werkzeug über Aufnahme und Ablage hebt |
+| `dwell_s` | Wie lange der Greifer bei Aufnahme und Ablage wirkt |
+| `payload_kg` | Die Nutzlast, in `mass.payload_kg` jeder Konfiguration (abgelehnt bei einer Maschine, deren Konfiguration keine hat) |
+| `cycle_time_s` oder `rate_per_min` | Das Ziel: eine Aufnahme und eine Ablage in dieser Zeit; `meets` sagt, ob der beste Kandidat besteht und so schnell ist |
+| `via` | Wahlweise Punkte, durch die der Weg hinüber führt (das `via` von `[[cycle.segment]]`) |
+| `set` | Wahlweise Einstellungen für die Konfiguration jeder Maschine, z. B. `['cycle.timing = "time_optimal"']` |
+| `[origin]` | Wahlweise je Maschinen-ID ihr Ursprung in ihren eigenen Werkzeugkoordinaten (ein Wert je Achse); ohne Angabe die Mitte ihrer Achsbereiche |
+
+Jede Maschine bekommt den Zyklus: Start über der Aufnahme, hinab (der Greifer schließt und verweilt), hoch, hinüber durch die Via-Punkte, hinab zur Ablage (er öffnet), hoch, zurück. Eine Position der Aufgabe geht an die Achse der Maschine mit der ID `x`, `y` oder `z` (in m); ihre anderen Achsen bleiben am Ursprung. Eine Maschine, auf die die Aufgabe nicht passt, steht mit dem Grund in der Liste: `task-axis-missing` (die Aufgabe bewegt längs einer Achse, die die Maschine nicht hat, z. B. z beim H-Bot), `task-out-of-range` (eine Pose jenseits eines Achsbereichs), der eigene Grund der Maschine für eine Pose, die sie nicht erreicht (z. B. außerhalb des Arbeitsraums eines Deltas), `task-payload`, `task-origin` oder `task-set`. Dann läuft auf jeder die Katalogsuche, bei der eigenen Netzspannung jeder Maschine, wenn `--supply` oder `--vendor` keine nennt, mit `--series`, `--gearboxes`, `--drives` und `--rank-by` wie bei `search`. Maschinen nach ID und zusätzlich jede `--machine-file DATEI`, jede mit ihrer Vorgabekonfiguration und `--set`.
+
+```text
+$ sim-cli compare-kinematics examples/pick-place-task.toml --machines t-gantry,delta-d3,delta-d2 --machine-file machines/h-bot.toml --series 1FK2
+machine,result,refused,motor,gearbox,drive,supply,cost_kg,cycle_s,target_s,meets,energy_j,tightest_check,tightest_utilisation,thermal_utilisation,following_error_m,inertia_ratio,passing,tried,estimated
+t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,36.49,settling,0.4882,0.4124,4.0218e-4,4.368,26,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.07,settling,0.7638,0.7867,1.7895e-3,41.220,20,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,31.44,settling,0.8709,0.7025,1.1112e-3,24.979,21,28,motor-winding;motor-pole-pairs;drive-base-load
+h-bot,refused,task-axis-missing z,,,,,,,1.5000,false,,,,,,,0,0,
+```
+
+Der leichteste Motor des Portals besteht, sein Zyklus dauert bei den eigenen Achsgrenzen des Portals aber 2,07 s statt der verlangten 1,5 s; beide Deltas schaffen ihn in 0,76 s. Der Zyklus ist so geplant, wie jede Konfiguration ihn plant; für einen Vergleich an den Grenzen der Motoren die Zeitplanung in `set` setzen.
+
+Die Python-Funktion `sizing` gibt dieselben Spalten aus ([Python](python.md)).
 
 ## Einfluss unsicherer Parameter erkennen und mit Fehlerbändern beurteilen
 

@@ -3025,3 +3025,65 @@ Left open:
 - The scissor lift's mass leaves out the arms' turning and the feet's sideways motion; one screw on the lowest foot; it
   and a linkage cannot sit beside other mechanisms in one file; the spatial delta's modes take arm 1's gearbox for all.
 - Arms and scissor in the 3D view are drawn plainly (no bearings, no screw thread).
+
+
+## Search workflow: which drive with which path and kinematics (14 November)
+
+The catalogue search kept the cycle and every other part fixed, gave each motor its one paired drive, ranked passing
+candidates by weight and showed one tightest check. It is now a workflow: a wide table of typed figures per candidate
+(`sim_components::search::Figures`, for the app's later views), ranking by any criterion, the drive as a dimension,
+duty mixes, a ratio sweep, robust ranking, and one tool-space task compared across kinematics.
+
+| What | How | Test |
+| --- | --- | --- |
+| Wide table | `Candidate::figures`: per check its utilisation (`u_<check>`, the highest of the motors; for `--motor-id` that motor's and the machine's), the failing checks, energy per cycle (`supply_energy`), thermal and drive current utilisation, following and settling error, inertia ratio, cycle time, and `estimated` (`catalog::estimated_data`: motor-winding, motor-thermal-time, motor-pole-pairs, motor-standstill, motor-rated, drive-max-current, drive-base-load). CLI columns appended after the old ones (`rank`, `front`, ...) | `a_search_tries_the_neighbouring_drives_and_names_what_is_estimated` (1FK2104-6AF on S210: motor-winding, motor-pole-pairs, drive-base-load) |
+| Inertia ratio | `catalog::inertia_ratios`: per motor and axis the rigid torque per unit axis acceleration (`torque_per_acceleration`, factored out of `inertia_seen` and `with_motor_part`) over the motor acceleration it takes (central difference of `Machine::inverse`), less the rotor, over the rotor; the largest over the axes. The gearbox's own inertia counts as load | `the_inertia_ratio_of_a_belt_axis_is_the_load_at_the_shaft_over_the_rotor`: single axis, ((4 + 2) * 0.02^2 + 1e-4 + 0.1 * 2.6 * 0.02^2) / 25 / 0.3e-4 = 0.002604 / 25 / 0.3e-4 = 3.472 (the belt's mass is lumped on the pulley) |
+| Rank by | `search::rank_by`, `--rank-by` cost, margin, energy, error, thermal, inertia, drive, or `name=weight,...`: each figure over the best passing one, times its weight, summed | `a_search_ranks_by_any_criterion_and_marks_its_front` (cost 10/20/30, energy 300/100/150: by cost=1,energy=1 scores 4, 3, 4.5); `a_ranking_is_one_criterion_or_a_weighted_mix` |
+| Front | `analysis::non_dominated_indices` (generalised from `non_dominated`, which uses it), `search::front` over cost, drive size, margin, energy and following error of the passing ones. The drive's rated current is a criterion of its own: the catalogue has no drive weight, and without it a bigger drive of the same cost always dominated | same test: 10 kg and 20 kg on the front, 30 kg beaten |
+| Drive dimension | `catalog::Drives`, `drives_for` (the supply's drives by rated current: S210 3 AC at 400 V, 1 AC and 3 AC at 230 V, S120 Single Motor Modules, a maker's at its line voltage), `drive_neighbours` (paired, next lower, next higher rated current); the job carries its drive | `the_next_drive_sizes_are_chosen_by_rated_current`: 1FK2104-6AF paired 5HE11-0UF0 (3 A), neighbours 5HE10-8UF0 (2.3 A) and 5HE11-5UF0 (5 A); 8 drives at 400 V, 12 at 230 V; S120 3 A then 5 A |
+| Duty mix | `catalog::Options::duties` (several `--config`, `--weights`; Python `duties=[(cfg, w)]`): each candidate runs every duty with the same parts (`job_config`); `search::mix_verdicts` takes the worst duty per check, but motor-thermal as the time-weighted mean rise and drive-current as the time-weighted RMS; thermal utilisation `mix_rms`, energy and cycle time weighted means | `a_two_cycle_duty_mix_has_the_time_weighted_rms`: sqrt((3 * 4 * 1 + 1 * 16 * 2) / 5) = 2.9665; `a_duty_mix_is_judged_on_the_worst_peak_and_the_mean_heat` (22 K of 30 K passes though one duty has 40 K); `a_duty_mix_judges_the_heat_of_the_mix` (single axis with and without payload, 3:1) |
+| Ratio and pulley sweep | `search::transmission_sweep`, `sim-cli transmission`: log-spaced values of `gearbox.ratio` or `geometry.pulley_radius_m`, each with the gain retuned (`catalog::with_value`; the retuning factored into `retuned`) and run; the classic optimum by golden section of the torque per unit acceleration; the best passing value; with `--gearboxes` and a motor the fitting catalogue gearboxes (`fitting_gearboxes`, catalog-mech's) run as rows `catalogue` | `the_ratio_sweep_finds_the_classic_optimum_of_a_pure_inertia`: sqrt(0.002604 / 0.3e-4) = 9.3167, torque there 2 sqrt(J_L J_m) / r = 0.027951 N m per m/s^2; radius sqrt((1e-4 + 25 * 0.3e-4) / 6.26) = 11.65 mm |
+| Gearboxes on a direct drive | `motor_jobs`: with a series on a machine of ratio 1, each motor without a gearbox and with the series' gearboxes around its classic optimum (`direct_drive_ratio`: the busiest motor's load over the article's rotor). Before, never | `a_direct_drive_is_offered_gearboxes_around_its_optimum` (1FK2104-6AF: sqrt(0.002604 / 0.76e-4) = 5.85, NRK frame 04) |
+| Robust ranking | `search::robust_ranking`, `--robust N`: the first N passing candidates, each config rebuilt (`catalog::candidate_config`), judged by `verdict_worst` on its own bounds; robust order (passing at the worst corner first) and whether it changed | run on the EXCT-30 (below); no unit test (each candidate costs a worst-corner search) |
+| Radial load per motor | `MotorLoad::radial_load_peak` from `pulley.<motor>.radial_load`; `gearbox-radial-load` per motor against its own `ratings.shaft_max_radial_load_n`, the machine-wide check only where no motor reports one (the limits session's left-open item) | `the_radial_load_is_judged_per_motor`: 2 * 300 N against 500 N of `[ratings.m]` fails (before: judged against the shared 1500 N, passed); the single-axis test now expects `motor: Some(0)` |
+| Kinematics comparison | `search::Task` (TOML: pick, place, via, lift_m, dwell_s, payload_kg, cycle_time_s or rate_per_min, set, [origin]), `task_config` (task x/y/z to the machine's axes of those ids from its origin, by default the middle of its ranges; a six-segment cycle with payload and via; refusals `task-axis-missing`, `task-out-of-range`, the machine's `unreachable` key, `task-payload`, `task-origin`, `task-set`), `compare_kinematics`, `sim-cli compare-kinematics TASK --machines ... [--machine-file ...]`; `examples/pick-place-task.toml` | `the_kinematics_comparison_refuses_an_unreachable_pose`: the example maps onto the T-gantry and the D3; y on the gantry refused, x = 2 m out of range on the D3, the corner of the D3's axis box refused with its own `unreachable` key |
+| Python | `sizing(..., drives=, rank_by=, duties=)` with the same columns | `test_sizing_gives_the_wide_table_and_ranks_by_energy` (not run here) |
+| Docs | user-guide "Which drive works best" (+ German), catalogue (drive sizes, what is estimated), python (+ German), README, CLI usage (en, de) | -- |
+
+EXCT-30, `search --series 1FK2 --drives neighbours` (77 candidates, 14.8 s on 16 cores): the 1FK2104-4AF passes on the
+1.2 A 5HE10-4UF0 at 0.975 of its rated current and on its paired 2.3 A 5HE10-8UF0 at 0.509; inertia ratio 55.7 (34.8 for
+the 1FK2104-5AF); `estimated` motor-winding, motor-pole-pairs, drive-base-load for every 1FK2 on S210. With a duty mix of
+the loaded cycle and three empty ones (`--config exct-30.toml --config exct-30-empty.toml --weights 1,3`) the
+1FK2104-4AF's thermal utilisation falls from 0.943 to 0.835, energy per cycle from 179.8 to 166.4 J, and its tightest
+check becomes motor-peak 0.856 (the loaded cycle's). `transmission --motor 1FK2104-5AF --from 1 --to 20 --count 7
+--gearboxes NRK`: classic optimum 5.17 (inertia ratio 1.30), but from 4.5 up the belt goes slack; best for the cycle
+1.65 (gearbox-radial-load 0.50), NRK070-04-3 the nearest catalogue gearbox (motor-speed 0.67). `--robust 4 --rank-by
+margin` (11.5 min): all four fail pulley-bearing-life (2.0) at their worst corners; the order stays.
+
+Three kinematics, `compare-kinematics examples/pick-place-task.toml --machines t-gantry,delta-d3,delta-d2
+--machine-file machines/h-bot.toml --series 1FK2` (18.5 s): T-gantry 1FK2203-2AK, 2.32 kg, 2.07 s against 1.5 s (passes,
+misses the rate); D3 1FK2104-5AF, 8.55 kg, 0.76 s, settling 0.76, inertia ratio 41; D2 1FK2104-5AF, 5.70 kg, 0.76 s,
+settling 0.87; H-bot refused (`task-axis-missing z`).
+
+Outside the area, kept small: `analysis.rs` (`MotorLoad::radial_load_peak` and the per-motor check, `CycleLoad` derives
+Default, `non_dominated_indices`, `on_all_cores` pub(crate)), `catalog.rs` beyond the search (`retuned`/`with_value`
+factored out of `with_named`, `torque_per_acceleration` out of `inertia_seen` and `with_motor_part`; `Candidate` derives
+Default), `machine-single-axis/src/tests.rs` (the radial verdict's motor), `sim-machines/tests/catalog.rs` and
+`review2.rs` (`..Candidate::default()`), `sim-netlist/src/scissor.rs` (one line, `ShaftFriction::NONE`: main did not
+compile after the friction merge), sim-py `sizing` and its test, README, CLI i18n. Only this session's new tests were run
+(`search_workflow`, `search::tests`); no suite.
+
+Left open:
+
+- The app's search views (the table is `Figures`, typed); a `[[duty]]` table in a config (the mix is repeated
+  `--config` and Python `duties`).
+- The mix's heat assumes the duties alternate faster than the thermal time constants; robust ranking judges the first
+  duty's corner only and costs a worst-corner search per candidate.
+- The inertia ratio is taken at mid travel, standing; on a delta it changes over the workspace.
+- A swept pulley radius keeps the config's pulley inertia; the classic optimum assumes a unimodal torque over the range.
+- The kinematics comparison maps x/y/z only (no tool orientation; a joint-space arm is refused as task-axis-missing),
+  uses each machine's default config, and reports the target cycle time rather than tuning axis limits to meet it (a
+  cycle at the motor limits comes with the planner's `cycle.timing`, through the task's `set`).
+- Python has no `transmission`, `compare_kinematics` or `robust`; the drive's cost is its size, not a price; the S120
+  Double Motor Modules are not among the drive sizes.
+- "Search time" on the error stream includes the robust ranking's runs.

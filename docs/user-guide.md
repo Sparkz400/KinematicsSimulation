@@ -289,7 +289,7 @@ axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tig
 ,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-slack,inf,12.5580,11.25
 ```
 
-On the EXCT-30 the lightest passing motor, the 1FK2104-4AF, uses 0.98 of its drive's rated current and settles 95.5 K warm; the next ones come near no limit. Their tightest check is the dwell (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required. Before 14 November the 1FK2104-4AF and 1FK2208-3AC were ruled out without a simulation by the shared rated speed and peak torque (13 of the 28; see below), though both pass every verdict.
+(The columns from `rank` on are left out here; see [which drive works best](#which-drive-works-best-rank-mix-sweep-and-compare).) On the EXCT-30 the lightest passing motor, the 1FK2104-4AF, uses 0.98 of its drive's rated current and settles 95.5 K warm; the next ones come near no limit. Their tightest check is the dwell (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required. Before 14 November the 1FK2104-4AF and 1FK2208-3AC were ruled out without a simulation by the shared rated speed and peak torque (13 of the 28; see below), though both pass every verdict.
 
 The search runs every motor of the catalogue that is offered at the supply on the config's cycle, each with the drive the catalogue pairs with it, on all processor cores. Passing motors come first, cheapest first. Failing ones follow, nearest to passing first. A candidate whose drives trip on DC link overvoltage comes after all of these, with `inf` as its `tightest_utilisation`: its figures end at the trip.
 
@@ -300,7 +300,7 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `--series PREFIX` | Only article numbers that start this way, e.g. `1FK2`, `1FT2105`, `1FK7`, `AM804` or `AKM2G` |
 | `--vendor NAME` | The supplies of that maker, all of them unless `--supply` names one: `siemens`, `beckhoff`, `br`, `kollmorgen`, `lenze`, `mitsubishi`, `rexroth`, `sew`, `yaskawa`, or `all` for every supply of every maker. The candidates of all of them are ranked together; the columns `vendor` and `supply` say whose each is. E.g. `--vendor beckhoff --series AM804` |
 | `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). `s210new-230v`, `s210new-400v`: the S210 motors with the new 6SL5310 converters D 32 lists beside them. `<vendor>-<volts>v` (e.g. `beckhoff-400v`, `kollmorgen-240v`): another maker's motors at that line voltage, each with the drive the maker pairs it with, or where the maker publishes no pairing the smallest of its drives that carries the motor's stall current ([the catalogue](catalogue.md#other-makers)). Default `400v` |
-| `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's. Only on a machine whose config has a ratio above 1, and only for 1FK2 and 1FT2 motors (the gearboxes are made for them) |
+| `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's; on a direct drive (ratio 1) between half and twice the classic optimum for that motor, beside the motor without a gearbox (see [which drive works best](#which-drive-works-best-rank-mix-sweep-and-compare)). Only for the motors the series is made for |
 | `--axes` | Also try every axis of the catalogue of the machine's kind (below) |
 | `--motor-id ID` | Size one motor of a machine with several, a machine file's motor `ID`: each candidate becomes `[parts.ID]`, the other motors stay as the file has them, that motor's own velocity gain is retuned, `--gearboxes` fits its own ratio, and `cost_kg` is that one motor's weight (see [machine files](machine-files.md#motors-that-differ)). Not with `--axes` |
 
@@ -380,6 +380,107 @@ Limits for this task:
 - The axis search keeps everything of the config that the axis does not set: its gearbox, friction, frame, shaper and gains. Bahr's single axes state no moved mass, so the config's carriage stays for them; Bahr's maximum lengths are taken as the longest stroke.
 - Belts are not searched; a belt is named with `--belt`. Combinations of different motors per axis are not searched.
 - The DC link capacitance and the braking resistor stay as the config has them; the braking threshold and the trip level are scaled to the motor's DC link voltage (see the previous section). On a default config the braking rows of every candidate are judged against placeholders.
+
+## Which drive works best: rank, mix, sweep and compare
+
+The search above answers "which is the lightest motor that passes". The same search answers more with these options; the table has the same rows and more columns.
+
+**The wide table.** After `winding_rise_k` every row has:
+
+| Column | Meaning |
+| --- | --- |
+| `rank` | The row's place in the ranking (`--rank-by`, below) |
+| `front` | `true` for a passing candidate that no other passing one beats in all of cost, drive size (its rated current), margin (`tightest_utilisation`), energy and following error at once: the candidates worth a look whatever weighs most |
+| `cycle_s` | Cycle time (with a duty mix the mean per cycle, weighted) |
+| `energy_j` | Energy from the supply per cycle, J: what the drives drew less what they fed back, plus what the braking resistor burned (as the optimiser's front counts it) |
+| `thermal_utilisation` | RMS torque over the torque the motor gives continuously, the highest of the motors |
+| `drive_current_utilisation` | The drive's RMS current over its rated current (the `drive-current` check) |
+| `following_error_m`, `settling_error_m` | The most the tool lagged behind its setpoint, and the most it was off its target late in a dwell, m |
+| `inertia_ratio` | Load over motor inertia at mid travel: what the motor turns besides its rotor (the load, and a gearbox's own inertia), reflected to its shaft, over the rotor's; the highest of the motors (with `--motor-id` that motor's). Per axis it is the rigid machine's torque per unit of that axis's acceleration over the motor acceleration it takes, standing |
+| `failing` | Every check that fails, separated by `;` |
+| `estimated` | What the motor and drive leave to the config's estimates (empty: everything from the catalogue): `motor-winding` (no phase resistance and inductance; Siemens prints them for the 1FK7 and 1FT7 only), `motor-thermal-time`, `motor-pole-pairs`, `motor-standstill` and `motor-rated` (another maker prints no standstill or no rated values; the other ones stand for them), `drive-max-current` (no peak current printed: Mitsubishi), `drive-base-load` (no base load current: every drive but the S120 Motor Modules) |
+| `u_<check>` | One column per check of any candidate: its utilisation, value over limit (for a life, limit over value), the highest of the motors. Empty where a candidate has no such check |
+
+**Rank by what matters.** `--rank-by` orders the passing candidates by `cost` (the default), `margin` (the tightest check's utilisation), `energy`, `error` (following error), `thermal`, `inertia` (inertia ratio) or `drive` (the drive's rated current), or by a weighted mix such as `--rank-by cost=1,energy=0.5`: each figure over the best one of the passing candidates, times its weight, summed, so that kilograms and joules weigh as the weights say. Failing candidates follow as before.
+
+**The drive as a dimension.** `--drives neighbours` tries each motor with the drive the catalogue pairs with it and with the next size down and up by rated output current: among the S210 converters of the supply (at 230 V the 1 AC and 3 AC ones, at 400 V the 3 AC ones), the S120 Single Motor Modules, or the maker's drives at the line voltage. `--drives all` tries every drive of the supply. A smaller drive is judged against its own currents (`drive-current`, `drive-peak-current`) and, with effects.drive_current_limit, limits the simulated current. On the EXCT-30 the 1FK2104-4AF runs on the 6SL3210-5HE10-4UF0 (1.2 A) at 0.98 of its rated current, on its paired 5HE10-8UF0 (2.3 A) at 0.51:
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2 --drives neighbours
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 77 candidates
+Search time on 16: 14.8 s
+motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,inertia_ratio,estimated
+1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,drive-current,0.9751,1,true,2.0480,179.78,0.9428,0.9751,55.723,motor-winding;motor-pole-pairs;drive-base-load
+1FK2104-4AF,6SL3210-5HE10-8UF0,4.10,ok,motor-thermal,0.9547,2,true,2.0480,179.78,0.9428,0.5088,55.723,motor-winding;motor-pole-pairs;drive-base-load
+1FK2104-5AF,6SL3210-5HE10-4UF0,5.70,ok,drive-current,0.8976,3,true,2.0480,176.85,0.5088,0.8976,34.827,motor-winding;motor-pole-pairs;drive-base-load
+1FK2104-5AF,6SL3210-5HE10-8UF0,5.70,ok,settling,0.5320,4,true,2.0480,176.85,0.5088,0.4683,34.827,motor-winding;motor-pole-pairs;drive-base-load
+...
+```
+
+(Columns picked from the table.) The catalogue has no weight of a drive, so `cost_kg` leaves the drive out; the front and `--rank-by drive` count its size instead.
+
+**Duty mix.** A machine rarely runs one cycle only. Give each cycle as a config of its own, several `--config FILE`, and how often each runs with `--weights W1,W2,...` (1 each without): weight 3 against 1 is three cycles of the first to one of the second. Each candidate runs every cycle with the same parts and is judged on the worst result per check (a peak, a speed, a life) but on the heat over the mix, as the cycles take turns: the winding rise as the time-weighted mean of the cycles' rises, the drive's RMS current as sqrt(Σ w I² t / Σ w t) of the cycles' RMS currents I; `thermal_utilisation` the same way, `energy_j` and `cycle_s` the weighted mean per cycle. That assumes the cycles alternate faster than the winding warms (minutes); a mix that runs one cycle for an hour and then another needs each cycle on its own. The parts and `--set` of the command line go into every config; the first config is the one the search is set up on. Each config may have its own path or timing. On the EXCT-30 with three cycles of an empty gripper to one with the 3 kg payload, the 1FK2104-4AF's thermal utilisation drops from 0.94 to 0.84, and its tightest check becomes its peak torque (the loaded cycle's):
+
+```text
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --config exct-30-empty.toml --weights 1,3 --series 1FK2 --rank-by cost=1,energy=1
+motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation
+1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,motor-peak,0.8561,1,true,2.0480,166.40,0.8350,0.8540
+1FK2104-5AF,6SL3210-5HE10-8UF0,5.70,ok,settling,0.5320,2,true,2.0480,164.48,0.4482,0.4118
+1FK2204-5AF,6SL3210-5HE10-8UF0,5.80,ok,gearbox-radial-load,0.5019,3,true,2.0480,167.17,0.4620,0.4536
+...
+```
+
+**Robust ranking.** `--robust N` judges the first N passing candidates once more, each at the worst corner of the bounds of its own config (`verdicts --bands --worst`; the bounds follow a part put in, as for `verdicts`), and adds the columns `robust_rank`, `robust_result`, `robust_check` and `robust_utilisation`; the error stream says whether the order of the N changes (those that pass at the worst corner first). It costs a worst-corner search per candidate, a few hundred cycles on a config with many bounds: on the EXCT-30 four candidates took 11 minutes on 16 cores. There all four fail `pulley-bearing-life` at their worst corner (utilisation 2.0), and the order stays. With a duty mix the first config's corner alone is judged.
+
+**Gear ratio and pulley radius.** `sim-cli transmission MACHINE` sweeps the gearbox ratio (`--key gearbox.ratio`, the default) or the pulley radius (`--key geometry.pulley_radius_m`) from `--from` to `--to` in `--count` values spaced evenly on a log scale (by default half to twice the config's, 9 values), each run on the cycle with the velocity gain retuned for it, and adds the classic optimum: the value at which the motors need the least torque per unit acceleration (for a pure inertia J_m i + J_L / i is least at i = sqrt(J_L / J_m)). Each row has the torque per unit acceleration (of every axis in turn, summed), the inertia ratio, the cycle time and the result with its tightest check; the error stream says the classic optimum and the best value for the cycle (the passing row with the most margin). With `--gearboxes SERIES` and a motor (`--motor`, or the config's `[parts] motor`) the series' gearboxes that fit the motor within half to twice the best ratio are run as well, rows `catalogue`. The EXCT-30 is a direct drive (ratio 1):
+
+```text
+$ sim-cli transmission t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2104-5AF --from 1 --to 20 --count 7 --gearboxes NRK
+Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1707, 1.6475
+kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation
+sweep,1.000000,,0.390498,34.8269,2.0480,ok,settling,0.5320
+sweep,1.647549,,0.251668,12.8303,2.0480,ok,gearbox-radial-load,0.5007
+sweep,2.714418,,0.176891,4.7267,2.0480,ok,motor-speed,0.6074
+sweep,4.472136,,0.147134,1.7413,2.0480,FAIL,belt-slack,inf
+classic,5.170667,,0.145598,1.3026,2.0480,FAIL,belt-slack,inf
+...
+catalogue,3.000000,NRK070-04-3,0.182418,4.2179,2.0480,ok,motor-speed,0.6712
+...
+```
+
+The classic optimum (5.2) needs the least torque but fails: the belt goes slack. Up to a ratio of 2.7 the cycle passes, beyond it the motor's speed limit nears. The best for this cycle is 1.65, and the NRK gearbox nearest it that fits the frame has the ratio 3. `search --gearboxes SERIES` does the same on a direct drive: it tries each motor without a gearbox and with the series' gearboxes around its own classic optimum (the square root of the load's inertia over its rotor's); on a geared machine around the config's ratio, as before.
+
+**Gearbox radial load per motor.** `gearbox-radial-load` is judged per motor: each shaft's peak radial load against that motor's own `ratings.shaft_max_radial_load_n` (a smaller Z gearbox has its own, `[ratings.<id>]`). Before 14 November it was judged once for the machine, the highest shaft against the shared rating; a machine that reports no shaft of its own motors still is.
+
+### Which kinematics for a task
+
+`sim-cli compare-kinematics TASK.toml --machines ID,ID,...` runs one task on several kinematics and gives per machine the best combination of parts side by side. The task file ([`examples/pick-place-task.toml`](../examples/pick-place-task.toml)) is in tool space:
+
+| Key | Meaning |
+| --- | --- |
+| `pick`, `place` | x, y, z in m from each machine's origin, z up |
+| `lift_m` | How far the tool lifts above pick and place |
+| `dwell_s` | How long the gripper acts at pick and at place |
+| `payload_kg` | The payload, put into each config's `mass.payload_kg` (refused on a machine whose config has none) |
+| `cycle_time_s` or `rate_per_min` | The target: one pick and one place in this time; `meets` says whether the best candidate passes and is that fast |
+| `via` | Optional points the way across passes through (the `via` of `[[cycle.segment]]`) |
+| `set` | Optional settings made on every machine's config, e.g. `['cycle.timing = "time_optimal"']` |
+| `[origin]` | Optional, per machine id, its origin in its own tool coordinates (one value per axis); by default the middle of its axis ranges |
+
+Each machine gets the cycle: start above the pick, down to it (the gripper closes and dwells), up, across through the via points, down to the place (it opens), up, back. A task position goes to the machine's axis of id `x`, `y` or `z` (in m); its other axes stay at the origin. A machine the task cannot be mapped onto is listed with why: `task-axis-missing` (the task moves along an axis the machine has not, e.g. z on the H-bot), `task-out-of-range` (a pose beyond an axis's range), the machine's own reason for a pose it cannot reach (e.g. outside a delta's working range), `task-payload`, `task-origin` or `task-set`. Then the catalogue search runs on each, at each machine's own supply unless `--supply` or `--vendor` names one, with `--series`, `--gearboxes`, `--drives` and `--rank-by` as for `search`. Machines by id, and each `--machine-file FILE` as well, each with its default config and `--set`.
+
+```text
+$ sim-cli compare-kinematics examples/pick-place-task.toml --machines t-gantry,delta-d3,delta-d2 --machine-file machines/h-bot.toml --series 1FK2
+machine,result,refused,motor,gearbox,drive,supply,cost_kg,cycle_s,target_s,meets,energy_j,tightest_check,tightest_utilisation,thermal_utilisation,following_error_m,inertia_ratio,passing,tried,estimated
+t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,36.49,settling,0.4882,0.4124,4.0218e-4,4.368,26,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.07,settling,0.7638,0.7867,1.7895e-3,41.220,20,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,31.44,settling,0.8709,0.7025,1.1112e-3,24.979,21,28,motor-winding;motor-pole-pairs;drive-base-load
+h-bot,refused,task-axis-missing z,,,,,,,1.5000,false,,,,,,,0,0,
+```
+
+The gantry's lightest motor passes, but its cycle at the gantry's own axis limits takes 2.07 s against the 1.5 s asked; both deltas make it in 0.76 s. The cycle is timed as each config times it; to compare at the motors' limits, set the timing in `set`.
+
+The Python function `sizing` gives the same columns ([Python](python.md)).
 
 ## See which unknown parameters matter, and judge with error bands
 
