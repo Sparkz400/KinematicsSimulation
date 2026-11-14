@@ -3,9 +3,11 @@
     Library: CODESYS OPC UA Client SL (the PLCopen "OPC UA Client for IEC 61131-3" function blocks UA_Connect,
     UA_NamespaceGetIndex, UA_NodeGetHandle, UA_Read, UA_Write, UA_NodeReleaseHandle, UA_Disconnect).
 
-    NOT COMPILED: this file follows the PLCopen OPC UA client specification (v1.1) and has not been built in
-    CODESYS. Type and member names can differ by library version (marked "CHECK"); depending on the library, the
-    names may need the library's namespace prefix.
+    NOT COMPILED: CODESYS needs a CODESYS Store account to download, so this file was not built. The names follow
+    the PLCopen specification OPC 30001 (PLCopen-CFB) v1.02, checked 14 November 2026 at
+    reference.opcfoundation.org. CHECK: CODESYS's public help shows only its object-oriented "OPC UA Client"
+    library, not these PLCopen blocks; a library that offers them may need its namespace prefix. Spec v1.02 lists
+    UA_NamespaceGetIndex, UA_NodeGetHandle, UA_Read and UA_Write as phased out in favour of their *List variants.
 
     The structure is the one of ../twincat/sim_plcopen.st. The PLCopen UA_Read and UA_Write take the value as
     VAR_IN_OUT of type ANY, so SIM_Access keeps one buffer per data type instead of a pointer.
@@ -38,8 +40,8 @@ VAR
     fbReadBool, fbReadReal, fbReadUint    : UA_Read;
     fbWriteBool, fbWriteReal, fbWriteUint : UA_Write;
     fbRelease   : UA_NodeReleaseHandle;
-    stNodeID    : UANodeID;                (* CHECK: type name *)
-    stInfo      : UANodeAdditionalInfo;    (* CHECK: type name *)
+    stNodeID    : UANodeID;
+    stInfo      : UANodeAdditionalInfo;
     hNode       : DWORD;
     iStep       : INT;
     xLast       : BOOL;
@@ -51,7 +53,7 @@ IF xExecute AND NOT xLast THEN
     xDone := FALSE; xError := FALSE; dwErrorID := 0; xBusy := TRUE;
     stNodeID.NamespaceIndex := uiNamespace;
     stNodeID.Identifier := sNode;
-    stNodeID.IdentifierType := UAIdentifierType.UAIdentifierType_String;   (* CHECK: enumeration name *)
+    stNodeID.IdentifierType := UAIdentifierType.UAIT_String;
     stInfo.AttributeID := 13;   (* the Value attribute *)
     iStep := 1;
 END_IF
@@ -342,7 +344,7 @@ VAR
     fbConnect    : UA_Connect;
     fbNamespace  : UA_NamespaceGetIndex;
     fbDisconnect : UA_Disconnect;
-    stSession    : UASessionConnectInfo;   (* CHECK: type and member names *)
+    stSession    : UASessionConnectInfo;
     hConnection  : DWORD;
     uiNamespace  : UINT;
     fbPower      : SIM_MC_Power;
@@ -356,8 +358,8 @@ END_VAR
 
 CASE iStep OF
 0:  stSession.ApplicationName := 'CODESYS sim client';
-    stSession.SecurityMsgMode := UASecurityMsgMode.UASecurityMsgMode_None;            (* CHECK *)
-    stSession.SecurityPolicyUri := 'http://opcfoundation.org/UA/SecurityPolicy#None'; (* CHECK *)
+    stSession.SecurityMsgMode := UASecurityMsgMode.UASMM_None;
+    stSession.SecurityPolicy := UASecurityPolicy.UASP_None;
     fbConnect(Execute := TRUE, ServerEndpointUrl := 'opc.tcp://192.168.0.10:4840', SessionConnectInfo := stSession, Timeout := T#5S);
     IF fbConnect.Done THEN hConnection := fbConnect.ConnectionHdl; fbConnect(Execute := FALSE); iStep := 10;
     ELSIF fbConnect.Error THEN fbConnect(Execute := FALSE); iStep := 900; END_IF

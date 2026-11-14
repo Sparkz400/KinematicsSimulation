@@ -1301,12 +1301,12 @@ In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m 
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang en
 ```
 
-This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1), `--cycle-ms` (default 10) and the security options `--pki`, `--trust-all` and `--user` are the only arguments. A machine the simulator does not have, a port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
+This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name (or `--machine-file`), `--config`, `--set` and `--trajectory` as `sim-cli` reads them, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1), `--cycle-ms` (default 10) and the security options `--pki`, `--trust-all`, `--user`, `--user-cert` and `--renew-certificate` are the only arguments. A machine the simulator does not have, a config, port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
 
 | Property | Value |
 | --- | --- |
 | Endpoint | `opc.tcp://127.0.0.1:PORT/` |
-| Security | None, and Basic256Sha256 with Sign and with SignAndEncrypt; anonymous unless `--user` (see [Security](plc.md#security)) |
+| Security | None, and Basic256Sha256, Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss with Sign and with SignAndEncrypt; anonymous unless `--user` or `--user-cert` (see [Security](plc.md#security)) |
 | Namespace | `urn:kinematics-simulation` |
 | Node ids | Strings in that namespace, as in the table below |
 | Update rate | Every signal is published 100 times a second |
@@ -1329,7 +1329,7 @@ This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the 
 How commands behave:
 
 - The servo loops stay inside the simulator. The PLC sends targets or position setpoints, not torque.
-- Numbers may be written as Double, Float, Int16, Int32 or Int64. Anything else is answered with `BadTypeMismatch`.
+- Numbers may be written as Double, Float, SByte, Byte, Int16, UInt16, Int32, UInt32, Int64 or UInt64 (64-bit integers up to 2^53). Anything else is answered with `BadTypeMismatch`.
 - Setpoints of several axes written within the same 10 ms are taken together as one setpoint.
 - An axis that is not written stays where it is. `command.target.<axis id>` reads the planned position until it is written, and again once the move it was written for has been commanded. `command.setpoint.<axis id>` reads the setpoint the controller follows, which is the planned position whenever no setpoint is on its way. So after a move or a cycle, a write to one axis does not send the others back to where they were before.
 - A path is written first and then started: write `command.path` (and `command.path_time_optimal`) together with `command.run_path`, or before it. Written together, `command.path` and `command.path_time_optimal` count in whichever order they come in the write: the path run is the one written last. The commands of one write are carried out in the order written, and the path is planned when its turn comes, from where the machine stands then (after a `command.enable` written before it, for example), exactly as `sim-cli run --path` plans it, and runs in real time.

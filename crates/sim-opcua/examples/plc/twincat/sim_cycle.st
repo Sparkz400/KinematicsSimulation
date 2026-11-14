@@ -2,8 +2,9 @@
     A PLC cycle against the KinematicsSimulation link (sim-opcua), for TwinCAT 3 with TF6100 (library
     Tc3_PLCopen_OpcUa). Uses SIM_Access, SIM_MC_Power and SIM_MC_MoveAbsolute from sim_plcopen.st in this folder.
 
-    NOT COMPILED: written against the Tc3_PLCopen_OpcUa documentation, not built in TwinCAT (none was available).
-    Names that can differ between library versions are marked "CHECK".
+    NOT COMPILED: TwinCAT needs a Beckhoff account to download, so it was not built. The names were checked on
+    14 November 2026 against Beckhoff Infosys (TF6100 TwinCAT 3 OPC UA Client, documentation 1.3.0 of 8 April 2026)
+    and Beckhoff's TF6100_Samples on GitHub; what those do not settle is marked "CHECK".
 
     PRG_SimCycle:
       - connects with Basic256Sha256 SignAndEncrypt (or None, see bSecure), optionally with user name and password;
@@ -39,7 +40,7 @@ VAR
     fbRead      : UA_Read;
     fbRelease   : UA_NodeReleaseHandle;
     stNodeID    : ST_UANodeID;
-    stInfo      : ST_UANodeAdditionalInfo;   (* CHECK: member name of the attribute id *)
+    stInfo      : ST_UANodeAdditionalInfo;
     hNode       : DWORD;
     nStep       : INT;
 END_VAR
@@ -48,8 +49,8 @@ CASE nStep OF
 0:  IF bEnable THEN
         stNodeID.nNamespaceIndex := nNamespace;
         stNodeID.sIdentifier := sNode;
-        stNodeID.eIdentifierType := eUAIdentifierType.String;
-        stInfo.nAttributeID := 13;   (* the Value attribute *)
+        stNodeID.eIdentifierType := eUAIdentifierType_String;
+        stInfo.eAttributeID := eUAAI_Value;   (* the Value attribute, 13 *)
         bError := FALSE; nErrorID := 0;
         nStep := 1;
     END_IF
@@ -115,24 +116,25 @@ END_VAR
 
 CASE nStep OF
 0:  stSession.sApplicationName := 'TwinCAT sim client';
-    stSession.eTransportProfileUri := eUATransportProfileUri.UATcp;
-    stSession.nSessionTimeout := T#60S;
+    stSession.eTransportProfileUri := eUATransportProfileUri_UATcp;
+    stSession.tSessionTimeout := T#60S;
     IF bSecure THEN
-        (* TF6100 creates its own client certificate on the first secured connection (CHECK: its PKI folder in the
-           TwinCAT documentation). sim-opcua refuses it once and stores it in pki/rejected; move it to pki/trusted,
-           or start sim-opcua with --trust-all while commissioning. The server's certificate must be trusted in
-           TF6100's PKI as well. *)
-        stSession.eSecurityMode := eUASecurityMsgMode.SignAndEncrypt;
-        stSession.eSecurityPolicyUri := eUASecurityPolicyUri.Basic256Sha256;
+        (* TF6100 creates its own self-signed client certificate on its first start, in its PKI folder
+           (%TcInstallDir%\3.1\Target\OpcUa\Client\PKI for client 2.x, %ProgramData%\Beckhoff\TF6100-OPC-UA\
+           TcOpcUaClient\PKI for 1.x; Infosys "Application directories"). sim-opcua refuses it once and stores it in
+           pki/rejected; move it to pki/trusted, or start sim-opcua with --trust-all while commissioning. TF6100
+           likewise puts the server's certificate into its own rejected folder on the first attempt: move it to
+           trusted there. *)
+        stSession.eSecurityMode := eUASecurityMsgMode_Sign_Encrypt;
+        stSession.eSecurityPolicyUri := eUASecurityPolicy_Basic256Sha256;
     ELSE
-        stSession.eSecurityMode := eUASecurityMsgMode.None;
-        stSession.eSecurityPolicyUri := eUASecurityPolicyUri.None;
+        stSession.eSecurityMode := eUASecurityMsgMode_None;
+        stSession.eSecurityPolicyUri := eUASecurityPolicy_None;
     END_IF
     IF LEN(sUser) > 0 THEN
-        (* CHECK: member names of the user identity token *)
-        stSession.stUserIdentityToken.eUserIdentityTokenType := eUAUserIdentityTokenType.UserName;
-        stSession.stUserIdentityToken.sUserName := sUser;
-        stSession.stUserIdentityToken.sPassword := sPassword;
+        stSession.stUserIdentTokenType.eUserIdentTokenType := eUAUITT_Username;
+        stSession.stUserIdentTokenType.sTokenParam1 := sUser;
+        stSession.stUserIdentTokenType.sTokenParam2 := sPassword;
     END_IF
     fbConnect(Execute := TRUE, ServerURL := sServerUrl, SessionConnectInfo := stSession, Timeout := T#5S);
     IF fbConnect.Done THEN hConnection := fbConnect.ConnectionHdl; fbConnect(Execute := FALSE); nStep := 10;
@@ -152,7 +154,9 @@ CASE nStep OF
 40: (* the path: its text, then command.run_path *)
     fbWrite(bExecute := FALSE);
     fbWrite(bExecute := TRUE, hConnection := hConnection, nNamespace := nNamespace, sNode := 'command.path',
-            bWrite := TRUE, pData := ADR(sPath), cbData := LEN(sPath));   (* CHECK: cbData of a STRING *)
+            bWrite := TRUE, pData := ADR(sPath), cbData := LEN(sPath));
+            (* CHECK: UA_Write documents cbData only as the size of the values to write; whether a STRING takes
+               LEN (without the terminating null) or SIZEOF (the whole declared buffer) it does not say. *)
     nStep := 41;
 41: fbWrite(bExecute := TRUE);
     IF fbWrite.bDone THEN nStep := 42; ELSIF fbWrite.bError THEN nStep := 900; END_IF

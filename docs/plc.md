@@ -12,6 +12,10 @@ cargo run --release -p sim-opcua -- t-gantry --port 4840 --host 192.168.0.10 --c
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `MACHINE` | `t-gantry` | The machine, first if given |
+| `--machine-file FILE` | none | A machine defined in a file ([machine files](machine-files.md)), in place of `MACHINE` |
+| `--config FILE` | the machine's default | The machine's config, read as `sim-cli` reads it: a key the machine does not have is refused by name |
+| `--set PATH=VALUE` | none | One config value on top of the config, in TOML syntax (`--set "start.pose = [0.2, 0.3]"`); repeatable, applied in order |
+| `--trajectory FILE` | none | Poses at times to run at the start, as `sim-cli run --trajectory` takes them: a line per pose, the time in s, then one position per axis, separated by commas |
 | `--port N` | 4840 | TCP port |
 | `--host IP` | 127.0.0.1 | Address to listen on. A PLC on the network needs an address of this computer that it can reach. Give the address itself, not `0.0.0.0`: the server advertises it in its endpoint URL |
 | `--lang en\|de` | en | Language of the messages and the variable labels |
@@ -19,6 +23,8 @@ cargo run --release -p sim-opcua -- t-gantry --port 4840 --host 192.168.0.10 --c
 | `--pki DIR` | `pki` | Folder of the server's certificate and of the trusted and rejected client certificates, relative to the working directory (see [Security](#security)) |
 | `--trust-all` | off | Accept every client certificate and store it among the trusted ones. For commissioning only |
 | `--user NAME` | none | Clients must log in with this user name and the password in the environment variable `SIM_OPCUA_PASSWORD`; anonymous clients are refused and the endpoint without security is not offered. Without the variable the link does not start |
+| `--user-cert FILE` | none | A user certificate (`.der` or `.pem`): a client that signs with its private key logs in as that user (X.509 user token). Repeatable; as with `--user`, anonymous clients are refused and the endpoint without security is not offered |
+| `--renew-certificate` | off | Set the server's certificate and key aside (`.old`) and make new ones, valid for 365 days |
 
 Ctrl+C stops the link and prints the measured pacing in a line of this form (the numbers are those of the soak run below, not of a Ctrl+C run):
 
@@ -26,7 +32,7 @@ Ctrl+C stops the link and prints the measured pacing in a line of this form (the
 Real-time pacing (period, largest and RMS jitter in ms, overruns, real-time factor): 10.017 · 16.116 · 4.581 · 42 · 1.0000
 ```
 
-At the start the link also prints the absolute path of its pki folder, and whether `--trust-all` or `--user` are on. At the end it prints the intervals of the clients' writes and reads (see [The client's cycle](#the-clients-cycle)), here those of the pattern in `sim-opcua/tests/interop.rs`, nine intervals of 10 ms and one of 40 ms three times over:
+At the start the link also prints the absolute path of its pki folder, whether `--trust-all`, `--user` or `--user-cert` are on, and a warning when the server's certificate expires within 30 days. At the end it prints the intervals of the clients' writes and reads (see [The client's cycle](#the-clients-cycle)), here those of the pattern in `sim-opcua/tests/interop.rs`, nine intervals of 10 ms and one of 40 ms three times over:
 
 ```text
 Client writes (intervals, mean, standard deviation, largest in ms): 30 · 13.000 · 9.000 · 40.000
@@ -35,15 +41,24 @@ Client reads (intervals, mean, standard deviation, largest in ms): 30 · 13.000 
 
 ## Security
 
-The server offers three endpoints, all at the same URL `opc.tcp://HOST:PORT/`:
+The server offers seven endpoints, all at the same URL `opc.tcp://HOST:PORT/`:
 
 | Security policy | Message security mode | Client certificate checked |
 | --- | --- | --- |
-| None | None | No |
-| Basic256Sha256 | Sign | Yes |
-| Basic256Sha256 | SignAndEncrypt | Yes |
+| None | None | No (not offered with `--user` or `--user-cert`) |
+| Basic256Sha256 | Sign, SignAndEncrypt | Yes |
+| Aes128_Sha256_RsaOaep | Sign, SignAndEncrypt | Yes |
+| Aes256_Sha256_RsaPss | Sign, SignAndEncrypt | Yes |
 
-Basic256Sha256 is the policy that S7-1500, TwinCAT TF6100 and the CODESYS OPC UA client all offer. The newer Aes128-Sha256-RsaOaep and Aes256-Sha256-RsaPss are not served.
+Basic256Sha256 is the policy that S7-1500, TwinCAT TF6100 and the CODESYS OPC UA client all offer; the two Aes policies are the newer ones of OPC UA 1.04 and later, for clients that have them. These are all the policies async-opcua 0.19 has that OPC UA does not deprecate: Basic128Rsa15 and Basic256 are left out.
+
+**Residual risk: RSA timing (RUSTSEC-2023-0071, "Marvin").** async-opcua 0.19.0, the newest release (checked 14 November 2026), uses the `rsa` crate 0.9, whose RSA decryption is not constant-time; `rsa` 0.10.0 (8 November 2026) fixes it, but no async-opcua release uses it yet. The server decrypts with its private key on every secured endpoint: the OpenSecureChannel request is always encrypted, in Sign mode as well as in SignAndEncrypt, and async-opcua decrypts it before it looks whether the client's certificate is trusted; an encrypted password is decrypted as well. So anyone who can reach the port can send handshakes and time the answers, and with very many of them might recover the server's private key, then decrypt recorded sessions or pose as the server. Neither Sign-only nor trusting only known client certificates closes this. What limits it:
+
+- The link listens on 127.0.0.1 unless `--host` names another address. Give `--host` only an address on a commissioning network that untrusted machines cannot reach, never one routed from the internet; a firewall rule that admits only the PLC's address keeps the others from even starting a handshake.
+- The key is the server's own, made on this computer and used for nothing else: `--renew-certificate` replaces it whenever exposure is suspected, and at the latest after a year.
+- The simulator is a commissioning tool, not a production server: do not leave it running unattended on a shared network.
+
+The ignore in `deny.toml` stays until an async-opcua release uses `rsa` 0.10.
 
 **The server's certificate.** On the first start the link creates its application instance certificate in the pki folder (`--pki`, default `pki` in the working directory; `/pki` is ignored by git):
 
@@ -54,7 +69,7 @@ Basic256Sha256 is the policy that S7-1500, TwinCAT TF6100 and the CODESYS OPC UA
 | `trusted/` | Client certificates the server accepts |
 | `rejected/` | Client certificates the server refused |
 
-A PLC that connects with security has to trust `own/cert.der`: import it into the PLC's certificate store as a trusted partner (TIA Portal: certificate manager of the CPU; TwinCAT TF6100 and CODESYS: see below). After a year, or after a change of host name or address that the PLC checks, delete `own/` and `private/` and start again: a new certificate is made, which the PLC has to trust anew.
+A PLC that connects with security has to trust `own/cert.der`: import it into the PLC's certificate store as a trusted partner (TIA Portal: certificate manager of the CPU; TwinCAT TF6100 and CODESYS: see below). From 30 days before the certificate expires every start warns. Then, or after a change of host name or address that the PLC checks, start once with `--renew-certificate`: the old certificate and key are kept beside the new ones as `own/cert.der.old` and `private/private.pem.old`, and the new certificate, valid for 365 days, has to be trusted by the PLC anew.
 
 **Client certificates.** A client on a secured endpoint whose certificate is not in `trusted/` is refused, and its certificate is written to `rejected/`. To trust it, move the file from `rejected/` to `trusted/`; the next connection is accepted, without a restart. A certificate that lies in `rejected/` is refused even with `--trust-all`: move or delete it first. `--trust-all` accepts every client certificate and copies it into `trusted/`, where it stays after the link is stopped: use it while commissioning, then delete from `trusted/` what should not stay. The endpoint without security does not check client certificates; it is there for tools such as UaExpert on the same computer and for the tests.
 
@@ -65,6 +80,8 @@ SIM_OPCUA_PASSWORD=secret cargo run --release -p sim-opcua -- t-gantry --user pl
 ```
 
 (PowerShell: `$env:SIM_OPCUA_PASSWORD = "secret"` before the command.) With `--user` the endpoint without security is not offered, so that the password never travels in clear: the PLC connects with Sign or SignAndEncrypt. Anonymous clients are then refused. There is one user; roles (read only, write) are not distinguished.
+
+**User certificates.** With `--user-cert FILE` (repeatable) a client logs in with an X.509 user token: it signs the server's certificate and nonce with the private key of that certificate, and the link lets it in as the user named after the file (`plc.der`: `plc`). Only the certificates given are accepted, compared by thumbprint; their trust chain is not checked. async-opcua asks the client to sign the token with Basic128Rsa15's algorithm (RSA PKCS#1 v1.5 with SHA-1), whatever the endpoint's policy; that is the library's choice and cannot be set. User name and certificates can be given together.
 
 ## Node ids and data types
 
@@ -94,7 +111,7 @@ What the PLC clients need:
 - **Beckhoff TF6100** (`UA_Connect`, `UA_GetNamespaceIndex`, `UA_NodeGetHandle`, `UA_Read`, `UA_Write`): the value goes as a pointer and a size, so the PLC variable's type decides what is sent. LREAL for every Double: a REAL writes a Float, which the link accepts, but a Double read into a REAL does not fit. `STRING(255)` by default; a longer path needs a longer STRING.
 - **CODESYS OPC UA client** (PLCopen blocks `UA_Connect`, `UA_NamespaceGetIndex`, `UA_NodeGetHandle`, `UA_Read`, `UA_Write`): the value is an IN_OUT of type ANY, so its declared type is the one on the wire.
 
-The link takes on a write of a number a Double, Float, Int16, Int32 or Int64, and on a write of a flag a Boolean; anything else is refused with `BadTypeMismatch`.
+The link takes on a write of a number a Double, Float, SByte, Byte, Int16, UInt16, Int32, UInt32, Int64 or UInt64 (IEC LREAL, REAL, SINT, USINT, INT, UINT, DINT, UDINT, LINT, ULINT), and on a write of a flag a Boolean; anything else is refused with `BadTypeMismatch`, and so is a 64-bit integer beyond 2^53, which a Double cannot hold exactly.
 
 ## PLCopen axes
 
@@ -105,7 +122,7 @@ Every axis of the machine has a folder `axis.<axis id>` with one set of handshak
 | `axis.<id>.Power.Enable` | Boolean | write | MC_Power.Enable: `true` powers the axis |
 | `axis.<id>.Power.Status` | Boolean | read | Enable is true and the drives are on |
 | `axis.<id>.Power.Valid` | Boolean | read | Status and no axis error |
-| `axis.<id>.Power.Error`, `.ErrorID` | Boolean, UInt16 | read | The axis error while Enable is true |
+| `axis.<id>.Power.Error`, `.ErrorID` | Boolean, UInt16 | read | The axis error, also while Enable is false: the axis stays in ErrorStop until MC_Reset |
 | `axis.<id>.Home.Execute` | Boolean | write | MC_Home |
 | `axis.<id>.MoveAbsolute.Execute` | Boolean | write | MC_MoveAbsolute |
 | `axis.<id>.MoveAbsolute.Position` | Double | write | Target, m |
@@ -141,9 +158,10 @@ How the blocks behave:
 - `Done`, `CommandAborted` and `Error` stay true while `Execute` is true. Falling `Execute` clears them once the block has finished. If `Execute` falls while the block is busy, the block runs on and its outputs stay until the next rising edge, so that a polling client sees them.
 - The outputs are published once per loop cycle. A client that reads `Done` right after writing `Execute` can read the last command's value. The handshake that works: write `Execute` false, wait until `Done` reads false, write the inputs and `Execute` true, then poll `Busy`, `Done`, `CommandAborted` and `Error`. The Structured Text examples do this.
 - Moves and Stop take over from the motion under way at the position and velocity the axis has. The block that was running reports `CommandAborted`, unless it is the same block started again: that one starts anew with cleared outputs.
+- `Done`, `Busy`, `CommandAborted` and `Error` of one block are never true together. A block started again while busy whose new inputs are refused (a target out of range, `Velocity` 0, ...) reports `Error` alone and gives up its motion: the axis brakes to standstill with that motion's deceleration, in `DiscreteMotion`, and no block reports `Done` for it. A new move may take over the braking. PLCopen Part 1 leaves this case open; keeping the old motion running under a block that shows `Error` would leave the PLC without a block that owns it.
 - MC_Stop brakes with `Stop.Deceleration` to standstill and then reports `Done`. The axis stays in `Stopping` as long as `Stop.Execute` is true, and refuses moves there (ErrorID 2). It goes to `Standstill` when `Stop.Execute` falls.
 - MC_Home moves the axis to its home position, at half the axis velocity and acceleration limits, and sets `IsHomed`. The home position is the axis value of the machine's start pose (`[start] pose` in the config). It does not search a switch and does not set a new zero: positions in the simulator are absolute.
-- MC_Reset clears the axis error and leaves ErrorStop for Standstill (or Disabled when `Power.Enable` is false). After an ErrorID 7 or 8 it switches the drives on again; after a crash the axis can then be moved out of the obstacle, and a move further into it trips the drives again.
+- An axis error holds through `Power.Enable` false, as in PLCopen's state diagram: the axis stays in ErrorStop, and `Power.Error` and `Power.ErrorID` show the error. MC_Reset clears the axis error and leaves ErrorStop for Standstill (or Disabled when `Power.Enable` is false). After an ErrorID 7 or 8 it switches the drives on again; after a crash the axis can then be moved out of the obstacle, and a move further into it trips the drives again.
 - MC_Power: the controller has one enable for all drives. The drives go on when an axis is powered, and off when the last axis is switched off. An axis whose `Power.Enable` is false is Disabled and refuses blocks, but its motor still holds position while another axis keeps the drives on. Switching an axis off aborts its motion.
 - Parameters above the axis limits are cut to the limits. The profile is a trapezoid: velocity, acceleration and deceleration are kept, `Jerk` is accepted and not used.
 - Do not mix the PLCopen blocks with `command.setpoint.*`, `command.move`, `command.cycle` or `command.run_path` on the same machine at the same time. Blocks started while those run fail with ErrorID 5; a stream started while blocks run makes the controller refuse one of the two.
@@ -191,14 +209,14 @@ Next to its own loop, the link measures how regularly the clients reach it: the 
 | `status.client_write_max_s`, `status.client_read_max_s` | Double | Largest interval, s |
 
 - One request counts once, however many variables it reads or writes. A PLC that reads two variables with two `UA_Read` blocks in the same cycle sends two requests and shows intervals of half a cycle: read with one request per cycle (`OPC_UA_ReadList`, or one block) while measuring. The Structured Text example `sim_cycle.st` has a switch for that.
-- Only reads of variable values count; browsing (the other attributes) and subscriptions do not. A read is counted after it is answered, so a read of these variables does not appear in its own answer.
+- Only reads of variable values count; browsing (the other attributes) and subscriptions do not. A subscription does not carry the client's cycle: the server samples and publishes on its own publishing interval, and the client's Publish requests only fetch what is queued, so their timing would show the server's interval and the network, not the PLC task. A read is counted after it is answered, so a read of these variables does not appear in its own answer.
 - All clients count together: while measuring, connect only the PLC (close UaExpert).
 - `command.reset_pacing` starts these figures anew together with the loop's, in the write itself.
 - The link prints them when it stops (see [Start the link](#start-the-link)).
 
 ## Structured Text examples
 
-[`crates/sim-opcua/examples/plc/twincat/sim_plcopen.st`](../crates/sim-opcua/examples/plc/twincat/sim_plcopen.st) is for TwinCAT 3 with the library Tc3_PLCopen_OpcUa (UA_Connect, UA_GetNamespaceIndex, UA_NodeGetHandle, UA_Read, UA_Write, UA_NodeReleaseHandle, UA_Disconnect). [`crates/sim-opcua/examples/plc/codesys/sim_plcopen.st`](../crates/sim-opcua/examples/plc/codesys/sim_plcopen.st) is for CODESYS with the CODESYS OPC UA Client SL, which provides the PLCopen OPC UA client blocks.
+[`crates/sim-opcua/examples/plc/twincat/sim_plcopen.st`](../crates/sim-opcua/examples/plc/twincat/sim_plcopen.st) is for TwinCAT 3 with the library Tc3_PLCopen_OpcUa (UA_Connect, UA_GetNamespaceIndex, UA_NodeGetHandle, UA_Read, UA_Write, UA_NodeReleaseHandle, UA_Disconnect). [`crates/sim-opcua/examples/plc/codesys/sim_plcopen.st`](../crates/sim-opcua/examples/plc/codesys/sim_plcopen.st) uses the PLCopen OPC UA client blocks as the PLCopen specification OPC 30001 (PLCopen-CFB) v1.02 names them, for a CODESYS library that provides them.
 
 Both files contain:
 
@@ -209,7 +227,12 @@ Both files contain:
 | `SIM_MC_Power`, `SIM_MC_Home`, `SIM_MC_MoveAbsolute`, `SIM_MC_MoveRelative`, `SIM_MC_Stop`, `SIM_MC_Reset` | Wrappers with the PLCopen inputs and outputs, plus the connection handle, the namespace index and the axis id |
 | `PRG_SimDemo` | Connects, powers the axis, homes it, starts a move, stops it after 0.5 s, switches off and disconnects |
 
-**These files were not compiled.** Neither TwinCAT nor CODESYS was available here. They follow the libraries' documentation and IEC 61131-3; names that may differ between library versions are marked `CHECK`. Every access gets and releases a node handle, which costs three round trips; production code keeps the handles. Adapt the server URL, the axis id and the positions to the machine.
+**These files were not compiled, and cannot be here.** TwinCAT and CODESYS can only be downloaded with a vendor account login, which this project's development does not have. On 14 November 2026 the names were checked against the public documentation instead:
+
+- TwinCAT: Beckhoff Infosys, TF6100 TwinCAT 3 OPC UA Client (documentation 1.3.0 of 8 April 2026), and Beckhoff's `TF6100_Samples` on GitHub. Every name is settled but one: whether `UA_Write` takes `LEN` or `SIZEOF` of a STRING as `cbData`, which the documentation does not say (marked `CHECK`).
+- CODESYS: CODESYS's public help shows only its object-oriented "OPC UA Client" library (Client, Read, Write, ...), not PLCopen's `UA_*` blocks; whether a CODESYS library offers them, under which namespace prefix, could not be checked (marked `CHECK` at the top of each file). The names follow PLCopen's specification v1.02, which also lists `UA_NamespaceGetIndex`, `UA_NodeGetHandle`, `UA_Read` and `UA_Write` as phased out in favour of their `*List` variants.
+
+Treat the files as a starting point to compile and test on a real PLC. Every access gets and releases a node handle, which costs three round trips; production code keeps the handles. Adapt the server URL, the axis id and the positions to the machine.
 
 `sim_cycle.st` in each folder adds `PRG_SimCycle`, a program for a 10 ms task that does what a PLC program does against the machine: connect with Basic256Sha256 SignAndEncrypt (or None) and, if set, user name and password; find the namespace index; switch the drives on with MC_Power; run MC_MoveAbsolute; write a path (`command.path`) and run it (`command.run_path`) until `status.busy` falls; switch off and disconnect. Meanwhile `SIM_CyclicRead` reads the axis position (`signal.axis.<id>.position`) and following error (`signal.axis.<id>.following_error`) every cycle through node handles that are got once, and the program keeps the largest following error. It uses the blocks of `sim_plcopen.st`. The path is written for the T-gantry (axes x and z, start pose x 0.1 m, z 0.35 m); change it and the target for another machine.
 
@@ -232,16 +255,16 @@ It listens on `opc.tcp://127.0.0.1:4840/`, the URL in `PRG_SimCycle`, and prints
 3. Add the code: TwinCAT does not import `.st` files directly. For each `FUNCTION_BLOCK` and `PROGRAM` in `twincat/sim_plcopen.st` and `twincat/sim_cycle.st` add a POU of that name and paste the declaration (from the header to `END_VAR`) into its upper part and the body into the lower part. Put `E_SimKind` into a DUT.
 4. Call `PRG_SimCycle` from the PLC task and set the task's cycle to 10 ms.
 5. Activate the configuration, set the target to run mode (the local runtime needs a free core or Hyper-V settings as Beckhoff describes), log in and start.
-6. TF6100 makes a client certificate on the first secured connection and checks the server's: if the connection fails with a certificate error, trust `pki/own/cert.der` in TF6100's PKI folder (see the TF6100 manual: it moves an unknown server certificate to its `rejected` folder, from where it is moved to `trusted`).
+6. TF6100 makes its own client certificate on its first start, in its PKI folder: `%TcInstallDir%\3.1\Target\OpcUa\Client\PKI` for client 2.x, `%ProgramData%\Beckhoff\TF6100-OPC-UA\TcOpcUaClient\PKI` for 1.x. On the first secured connection it puts the server's certificate into its `rejected` folder: move it to `trusted` there and connect again.
 7. Watch `nStep` go to 100, `fbPosition.fValue` follow the move and the path, and `fLargestError`. In the link's terminal the client certificate now lies in `pki/trusted`: from now on start the link without `--trust-all`.
 
 **2b. CODESYS Control Win.**
 
 1. Install CODESYS Development System V3.5 with CODESYS Control Win (SoftPLC), start the SoftPLC from its tray icon.
-2. Make a Standard project for the device "CODESYS Control Win V3 x64" and add the library "OPC UA Client" (CODESYS OPC UA Client SL) in the Library Manager. Without a licence it runs in demo mode for a limited time.
+2. Make a Standard project for the device "CODESYS Control Win V3 x64" and add, in the Library Manager, a library that provides the PLCopen OPC UA client blocks (`UA_Connect`, `UA_NodeGetHandle`, ...). CODESYS's own "OPC UA Client" library is object-oriented and does not, as far as its public help shows: then the files have to be ported to its Client, Read and Write blocks.
 3. Add a POU for each block of `codesys/sim_plcopen.st` and `codesys/sim_cycle.st` and paste the declaration and the body; `E_SimKind` into a DUT.
 4. In the task configuration make a cyclic task of 10 ms that calls `PRG_SimCycle`.
-5. For the secured connection create the OPC UA client's certificate in the Security Screen and trust the server's (`pki/own/cert.der`) there; names differ between versions (`CHECK` in the file). Or set `xSecure := FALSE` for a first test on the endpoint without security.
+5. For the secured connection create the client's certificate in View > Security Screen, Devices tab, for the device. On the first attempt the server's certificate (`pki/own/cert.der`) lands under "Certificates in Quarantine" there: drag it to "Trusted Certificates". Or set `xSecure := FALSE` for a first test on the endpoint without security.
 6. Log in, download, start. Watch `iStep` go to 100, `fbPosition.lrValue` and `lrLargestError`.
 
 **3. Read the cycle jitter.** Set `bReadFollowingError` (TwinCAT) or `xReadFollowingError` (CODESYS) to FALSE, so that the program sends one Read request per cycle, and stop the link with Ctrl+C after the program has run: the line `Client reads ...` gives the number of intervals, their mean (the task cycle, 10 ms, when each read returns within a cycle; 20 ms when it takes up to two), their standard deviation and the largest. While the program runs, the same figures are in `status.client_read_*`.

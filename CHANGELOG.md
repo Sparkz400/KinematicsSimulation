@@ -130,6 +130,31 @@ item are in [PROGRESS.md](PROGRESS.md).
 - `sim-cli search --motor-id ID`: the catalogue search for one motor of a machine file, the others kept
   (`catalog::search_motor`, `catalog::with_motor_part`).
 
+### Added
+
+- `sim-opcua`: `--config FILE`, `--set PATH=VALUE` and `--trajectory FILE`, read as `sim-cli` reads them
+  (`sim_opcua::configured`, `Link::run_trajectory`).
+- `sim-opcua`: Aes128_Sha256_RsaOaep and Aes256_Sha256_RsaPss endpoints (Sign, SignAndEncrypt) beside Basic256Sha256;
+  X.509 user tokens with `--user-cert FILE`; a warning from 30 days before the server's certificate expires and
+  `--renew-certificate` (`certificate_days_left`, `renew_certificate`).
+
+### Fixed
+
+- `sim-opcua` PLCopen: a block started again while busy whose new inputs are refused showed Busy beside Error and then
+  Done beside Error. It now shows Error alone and the axis brakes to a stop with the motion's deceleration.
+- `sim-opcua` PLCopen: `Power.Error` and `Power.ErrorID` were hidden while `Power.Enable` was false, although the axis
+  stays in ErrorStop until MC_Reset; they now show the axis error as State does.
+- `sim-opcua`: writes of SByte, Byte, UInt16, UInt32 and UInt64 (IEC SINT, USINT, UINT, UDINT, ULINT) to numeric
+  inputs were refused with BadTypeMismatch; 64-bit integers beyond 2^53 are refused now.
+
+### Changed
+
+- `deny.toml`: the reason for ignoring RUSTSEC-2023-0071 (rsa, Marvin) was false since the secured endpoints came; it
+  now says the advisory applies, with the residual risk in docs/plc.md and SECURITY.md.
+- PLC Structured Text examples: TwinCAT names checked against Beckhoff Infosys and Beckhoff's samples (attribute id,
+  identifier type, session timeout, security mode and policy, user identity token, TF6100's PKI folder); CODESYS
+  names aligned with the PLCopen specification v1.02.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

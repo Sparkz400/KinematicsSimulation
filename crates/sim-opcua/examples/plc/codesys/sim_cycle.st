@@ -3,9 +3,11 @@
     SL (PLCopen "OPC UA Client for IEC 61131-3" blocks). Uses SIM_Access, SIM_MC_Power and SIM_MC_MoveAbsolute from
     sim_plcopen.st in this folder.
 
-    NOT COMPILED: follows the PLCopen OPC UA client specification (v1.1), not built in CODESYS (none was available).
-    Type and member names can differ by library version (marked "CHECK"); depending on the library, the names may
-    need the library's namespace prefix.
+    NOT COMPILED: CODESYS needs a CODESYS Store account to download, so it was not built. The names follow the
+    PLCopen specification OPC 30001 (PLCopen-CFB) v1.02, checked 14 November 2026 at reference.opcfoundation.org.
+    CHECK: CODESYS's public help shows only its object-oriented "OPC UA Client" library (Client, Read, Write, ...),
+    not these PLCopen blocks; a library that offers them may need its namespace prefix. Spec v1.02 also lists
+    UA_NamespaceGetIndex, UA_NodeGetHandle, UA_Read and UA_Write as phased out in favour of their *List variants.
 
     PRG_SimCycle does what ../twincat/sim_cycle.st does: connect with Basic256Sha256 SignAndEncrypt (or None) and
     optionally user name and password, find the namespace index, power the axis, MC_MoveAbsolute, write a path and
@@ -35,8 +37,8 @@ VAR
     fbGetHandle : UA_NodeGetHandle;
     fbRead      : UA_Read;
     fbRelease   : UA_NodeReleaseHandle;
-    stNodeID    : UANodeID;                (* CHECK: type name *)
-    stInfo      : UANodeAdditionalInfo;    (* CHECK: type name *)
+    stNodeID    : UANodeID;
+    stInfo      : UANodeAdditionalInfo;
     hNode       : DWORD;
     iStep       : INT;
 END_VAR
@@ -45,7 +47,7 @@ CASE iStep OF
 0:  IF xEnable THEN
         stNodeID.NamespaceIndex := uiNamespace;
         stNodeID.Identifier := sNode;
-        stNodeID.IdentifierType := UAIdentifierType.UAIdentifierType_String;   (* CHECK: enumeration name *)
+        stNodeID.IdentifierType := UAIdentifierType.UAIT_String;
         stInfo.AttributeID := 13;   (* the Value attribute *)
         xError := FALSE; dwErrorID := 0;
         iStep := 1;
@@ -97,8 +99,8 @@ VAR
     fbGetHandle : UA_NodeGetHandle;
     fbWrite     : UA_Write;
     fbRelease   : UA_NodeReleaseHandle;
-    stNodeID    : UANodeID;                (* CHECK: type name *)
-    stInfo      : UANodeAdditionalInfo;    (* CHECK: type name *)
+    stNodeID    : UANodeID;
+    stInfo      : UANodeAdditionalInfo;
     hNode       : DWORD;
     iStep       : INT;
     xLast       : BOOL;
@@ -108,7 +110,7 @@ IF xExecute AND NOT xLast THEN
     xDone := FALSE; xError := FALSE; dwErrorID := 0;
     stNodeID.NamespaceIndex := uiNamespace;
     stNodeID.Identifier := sNode;
-    stNodeID.IdentifierType := UAIdentifierType.UAIdentifierType_String;   (* CHECK *)
+    stNodeID.IdentifierType := UAIdentifierType.UAIT_String;
     stInfo.AttributeID := 13;
     iStep := 1;
 END_IF
@@ -153,7 +155,7 @@ VAR
     fbConnect    : UA_Connect;
     fbNamespace  : UA_NamespaceGetIndex;
     fbDisconnect : UA_Disconnect;
-    stSession    : UASessionConnectInfo;   (* CHECK: type and member names *)
+    stSession    : UASessionConnectInfo;
     hConnection  : DWORD;
     uiNamespace  : UINT;
     fbPower      : SIM_MC_Power;
@@ -173,20 +175,20 @@ END_VAR
 CASE iStep OF
 0:  stSession.ApplicationName := 'CODESYS sim client';
     IF xSecure THEN
-        (* The client certificate: create it in the CODESYS security screen (Devices > Security; CHECK: name in your
-           version) for the OPC UA client. sim-opcua refuses it once and stores it in pki/rejected; move it to
-           pki/trusted, or run sim-opcua with --trust-all while commissioning. Trust the server's certificate
-           (pki/own/cert.der) in the CODESYS certificate store. *)
-        stSession.SecurityMsgMode := UASecurityMsgMode.UASecurityMsgMode_SignAndEncrypt;                (* CHECK *)
-        stSession.SecurityPolicyUri := 'http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256';      (* CHECK *)
+        (* The client certificate: create it in View > Security Screen, Devices tab, for the device. sim-opcua
+           refuses it once and stores it in pki/rejected; move it to pki/trusted, or run sim-opcua with --trust-all
+           while commissioning. The server's certificate (pki/own/cert.der) lands in the device's "Certificates in
+           Quarantine" on the first attempt: drag it to "Trusted Certificates" in the same tab. *)
+        stSession.SecurityMsgMode := UASecurityMsgMode.UASMM_SignEncrypt;
+        stSession.SecurityPolicy := UASecurityPolicy.UASP_Basic256Sha256;
     ELSE
-        stSession.SecurityMsgMode := UASecurityMsgMode.UASecurityMsgMode_None;                          (* CHECK *)
-        stSession.SecurityPolicyUri := 'http://opcfoundation.org/UA/SecurityPolicy#None';                (* CHECK *)
+        stSession.SecurityMsgMode := UASecurityMsgMode.UASMM_None;
+        stSession.SecurityPolicy := UASecurityPolicy.UASP_None;
     END_IF
     IF LEN(sUser) > 0 THEN
-        stSession.UserIdentityToken.UserIdentityTokenType := UAUserIdentityTokenType.UAUITT_Username;   (* CHECK *)
-        stSession.UserIdentityToken.TokenParam1 := sUser;                                               (* CHECK *)
-        stSession.UserIdentityToken.TokenParam2 := sPassword;                                           (* CHECK *)
+        stSession.UserIdentityToken.UserIdentityTokenType := UAUserIdentityTokenType.UAUITT_Username;
+        stSession.UserIdentityToken.TokenParam1 := sUser;
+        stSession.UserIdentityToken.TokenParam2 := sPassword;
     END_IF
     fbConnect(Execute := TRUE, ServerEndpointUrl := sServerUrl, SessionConnectInfo := stSession, Timeout := T#5S);
     IF fbConnect.Done THEN hConnection := fbConnect.ConnectionHdl; fbConnect(Execute := FALSE); iStep := 10;
