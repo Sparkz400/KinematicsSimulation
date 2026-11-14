@@ -509,7 +509,7 @@ impl Delta {
 
     /// The spatial delta of a machine file's linkage node with three arms.
     pub fn from_node(cfg: &Config, net: &Netlist, node: &LinkageNode) -> Result<Self, ConfigError> {
-        Self::build(cfg, node, Arms::of_file(cfg, net, node)?)
+        Self::build(cfg, node, Arms::of_file(cfg, net)?)
     }
 
     /// The machine from its numbers (`n`, by their paths in a crate's tables) and its drives; the effects from `cfg`.

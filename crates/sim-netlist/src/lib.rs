@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod linkage;
 pub mod machine;
 pub mod netlist;
+pub mod scissor;
 pub mod spatial;
 pub mod worm;
 
@@ -24,6 +25,9 @@ use toml::{Table, Value};
 /// `MachineEntry::build` of every machine file: the netlist is in the config itself.
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let net = Netlist::parse(cfg)?;
+    if let Some(scissor) = &net.scissor {
+        return Ok(Box::new(scissor::ScissorMachine::from_node(cfg, &net, scissor)?));
+    }
     match &net.linkage {
         Some(linkage) if linkage.gearboxes.len() == 3 => Ok(Box::new(spatial::Delta::from_node(cfg, &net, linkage)?)),
         Some(linkage) => Ok(Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?)),

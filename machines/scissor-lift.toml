@@ -1,0 +1,346 @@
+# A scissor lift table as a machine file (a scissor node, see docs/machine-files.md): two stages of crossed arms, 1 m
+# from pin to pin, raise a platform from 0.6 to 1.4 m; a ball screw of 10 mm lead, turned by the motor through its
+# gearbox, pulls the sliding foot of the lowest stage towards the fixed one. The drive train is the planar delta's
+# (machines/planar-delta.toml): Siemens 1FK2105-4AF behind a planetary gearbox of ratio 20.
+# Every value says where it comes from:
+#   [catalogue]  read from a maker's document: Siemens catalogue D 32 and the planetary gearbox manual
+#                (catalog/siemens/*.csv), as for the planar delta.
+#   [estimate]   ours: the lift's geometry, masses, screw and limits are those of a small lift table of this size, not
+#                a maker's.
+# Units are in the field names. The frame: z up from the base, the fixed foot at -x. The tool pose is the platform's
+# height (z).
+format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.0, 0.0, -0.65], size_m = [0.1, 0.1, 0.1] }]
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). Named here, they
+# would replace the numbers below when the config is loaded; the numbers below are those parts' own, written out
+# (motor 1FK2105-4AF at 400 V, gearbox NRB080-05-20, converter 6SL3210-5HE11-5UF0), so that the config reads as it
+# runs. "" names none.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+[effects]
+gravity = true
+payload = true
+# The gearbox twists under load (stiffness, damping, backlash): motor and screw are two bodies. Off, the machine is
+# the rigid reference model, in which the motor turns with the screw times the ratio.
+joint_elasticity = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+holding_brake = true
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = false
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there (see docs/model-reference.md). Off by default.
+crash = false
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.01
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min (1FK2 configuration manual); 15 N m at the
+# maximum current of 18 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# With effects.holding_brake: while the drives are disabled, a brake holds each motor shaft up to this torque.
+# [estimate] the D 32 gives no brake torque.
+brake_torque_nm = 8.0
+
+# The gearbox. [catalogue] Siemens NRB080-05-20 (catalog/siemens/gearbox_nrb.csv): ratio 20, 96 % at full load,
+# 10.4 N m/arcmin, 0.406 kg cm2 at the input, and its torque ratings below. [estimate] 1 arcmin backlash, as on the
+# planar delta (the catalogue's 9 arcmin is not modelled here either).
+# The ratio: the screw holds up to 31 N m at the lowest height with the payload (W = (60 + 200 + 20) 9.80665 N,
+# F = W 2 cot(alpha) = 17470 N on the foot, F c / 0.9 at the screw), 1.6 N m at the motor.
+[gearbox]
+ratio = 20.0
+efficiency = 0.96
+backlash_rad = 2.909e-4
+stiffness_nm_rad = 35752.6
+# [estimate]
+damping_nm_s_rad = 5.0
+inertia_at_input_kgm2 = 4.06e-5
+
+# With effects.part_heating: the gearbox warms with its loss (power.gearbox_*). [estimate] as for the D3.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as the lift has no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+
+# The lift's own values, which the scissor node names. [estimate] all.
+[lift]
+stages = 2.0
+arm_m = 1.0
+# A ball screw 32 x 10.
+lead_m = 0.01
+screw_efficiency = 0.9
+# Steel, 32 mm, 0.8 m: pi / 32 * 7850 kg/m3 * 0.8 m * 0.032^4 m^4.
+screw_inertia_kgm2 = 6.47e-4
+min_height_m = 0.6
+max_height_m = 1.4
+# Four arm pairs of steel tube with their pins.
+arms_kg = 40.0
+platform_kg = 60.0
+payload_kg = 200.0
+
+# The platform's limits. [estimate] slow, as lift tables go: at the top (dh/dtheta = 3.25 mm/rad) 0.05 m/s turns the
+# motor at 20 * 0.05 / 0.00325 = 308 rad/s, about its rated 3000 r/min.
+[axis.z]
+max_velocity_m_s = 0.05
+max_acceleration_m_s2 = 0.5
+max_jerk_m_s3 = 5.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# Velocity loop gain, the D3's (same motor and gearbox). [estimate] not tuned for the lift's inertia.
+velocity_kp_nm_s_rad = 0.25
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+[ratings]
+# How far the platform may be from its target in the second half of a dwell. [estimate] 1 mm for a lift table.
+settling_tolerance_m = 0.001
+# [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
+gearbox_rated_torque_nm = 120.0
+gearbox_max_torque_nm = 192.0
+# [estimate] a gearbox of this size; not in the catalogue's files.
+gearbox_max_input_speed_rpm = 6000.0
+# The DC link of the S210 converter. [estimate] as for the EXCT-30: 66 uF for 1.5 kW, the chopper at 770 V.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] its internal braking resistor and trip level (catalog/siemens/braking_s210.csv, operating instructions
+# 09/2022): 100 W, 5.7 kW, 820 V.
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+# Reliability of the bearing lives, %: the life factor a1 of ISO 281 (see docs/config-reference.md). 90 to 99.95.
+bearing_reliability_percent = 90.0
+# The output speed at which the planet bearings last 20000 h at the rated torque, for the gearbox life.
+# [estimate] as on the D3: not printed for the NRB080-05-20.
+gearbox_reference_speed_rpm = 100.0
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0, which D 32 pairs with the 1FK2105-4AF at 400 V: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 4.25
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: the lift has no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+# Not used on a nonlinear machine (see docs/user-guide.md): paths run as given.
+path_tolerance_m = 0.0
+# For `sim-cli optimise`: the clearance kept from every obstacle.
+min_clearance_m = 0.025
+
+# Low and high bound of the values that are estimates (see the other machines' configs).
+[bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.008, 0.012]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+gearbox.damping_nm_s_rad = [2.0, 10.0]
+gearbox.backlash_rad = [1.454e-4, 5.818e-4]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+lift.arms_kg = [30.0, 50.0]
+lift.platform_kg = [50.0, 70.0]
+lift.screw_efficiency = [0.85, 0.95]
+
+
+# At the bottom, loaded.
+[start]
+pose = [0.6]
+
+# Up with the payload, which is taken off at the top; down empty, loaded again at the bottom. "payload" is the state
+# once the segment has arrived.
+[[cycle.segment]]
+target = [1.4]
+dwell_s = 1.0
+payload = false
+
+[[cycle.segment]]
+target = [0.6]
+dwell_s = 1.0
+payload = true
+
+# The machine as a netlist: the motor turns the screw through its gearbox; the scissor node's numbers name the values
+# of [lift]. The axis has no stroke: min_height_m and max_height_m set its range.
+[machine]
+version = 1
+id = "scissor-lift"
+name = "Scissor lift (machine file)"
+
+[[machine.axis]]
+id = "z"
+key = "axis-z"
+pos = [600, 0]
+
+[[machine.motor]]
+id = "lift"
+pos = [0, 0]
+
+[[machine.gearbox]]
+id = "gearbox"
+motor = "lift"
+pos = [150, 0]
+
+[[machine.scissor]]
+id = "scissor"
+gearbox = "gearbox"
+axis = "z"
+stages = "lift.stages"
+arm_m = "lift.arm_m"
+lead_m = "lift.lead_m"
+screw_efficiency = "lift.screw_efficiency"
+screw_inertia_kgm2 = "lift.screw_inertia_kgm2"
+min_height_m = "lift.min_height_m"
+max_height_m = "lift.max_height_m"
+arms_kg = "lift.arms_kg"
+platform_kg = "lift.platform_kg"
+payload_kg = "lift.payload_kg"
+pos = [350, 0]

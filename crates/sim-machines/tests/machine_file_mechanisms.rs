@@ -99,6 +99,10 @@ fn a_screw_axis_takes_the_hand_calculated_torque_and_has_its_critical_speed() {
 /// 35.0515 N while driving. The motor's torque for it, i / r = 314.159 rad/m, the gearbox 95 % and the rack 97 %, the
 /// rotor 3e-5 and the pinion 1e-4 / 10^2 kg m2 on the rotor side: T = 3.1e-5 * 2 * 314.159 + 34 / (314.159 * 0.95 *
 /// 0.97) = 0.0194778 + 0.1174449 = 0.1369228 N m.
+///
+/// The pinion loads the gearbox's output shaft sideways with the tooth force and the force that pushes pinion and
+/// rack apart, F tan 20 deg / cos 19.5283 deg = 0.3861849 F at right angles to it: 35.0515 sqrt(1 + 0.3861849^2) =
+/// 35.0515 * 1.0719789 = 37.5745 N, judged against the gearbox's shaft_max_radial_load_n, 1500 N.
 #[test]
 fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     let machine = rigid("rack-gantry.toml");
@@ -120,12 +124,21 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     assert!(close(rates[2], acc, 1e-9), "X acceleration {} against {acc} by hand", rates[2]);
     assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.0, 1e-9));
     assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.0 / 0.97, 1e-9));
+    let radial = signal(machine.as_ref(), &state, &torques, "rack.mx.radial_load");
+    let apart = 20f64.to_radians().tan() / 19.5283f64.to_radians().cos();
+    assert!(
+        close(radial, 34.0 / 0.97 * (1.0 + apart * apart).sqrt(), 1e-9) && close(radial, 37.5745, 1e-6),
+        "{radial}"
+    );
     let check = machine.rating_checks();
     assert!(
-        check.len() == 1
+        check.len() == 2
             && check[0].check == "rack-feed-force"
             && check[0].signal == "rack.mx.feed_force"
-            && check[0].limit == 2400.0,
+            && check[0].limit == 2400.0
+            && check[1].check == "gearbox-radial-load"
+            && check[1].signal == "rack.mx.radial_load"
+            && check[1].limit == 1500.0,
         "{check:?}"
     );
 }
@@ -272,8 +285,13 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
                 assert!(close(x, y, 1e-9), "{what}: {id}: crate {x}, file {y}");
             }
         }
+        // The file judges a rack pinion's radial load on the gearbox's shaft too, which the kit does not model.
         let checks = |m: &dyn Machine| {
-            m.rating_checks().into_iter().map(|c| (c.check, c.signal, c.motor, c.limit, c.life)).collect::<Vec<_>>()
+            m.rating_checks()
+                .into_iter()
+                .filter(|c| c.check != "gearbox-radial-load")
+                .map(|c| (c.check, c.signal, c.motor, c.limit, c.life))
+                .collect::<Vec<_>>()
         };
         assert_eq!(checks(kit.as_ref()), checks(from_file.as_ref()), "{what}");
     }

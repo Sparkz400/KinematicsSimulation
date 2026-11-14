@@ -115,8 +115,8 @@ impl Numbers for LinkageNode {
     }
 }
 
-/// A linkage's drives and names: per arm its joint, its motor and its gearbox's id (for its warmth); per axis of the
-/// tool its id and key.
+/// A linkage's drives and names: per arm its joint, its motor and its gearbox's id for its warmth (`gearbox_<motor>`, as
+/// its loss is named); per axis of the tool its id and key.
 pub struct Arms<const N: usize> {
     pub joints: [RotaryJoint; N],
     pub motors: [MotorInfo; N],
@@ -141,7 +141,7 @@ impl<const N: usize> Arms<N> {
     }
 
     /// A file's: per arm the joint of its motor's own config (`catalog::motor_config`), the netlist's motors and axes.
-    pub fn of_file(cfg: &Config, net: &Netlist, node: &LinkageNode) -> Result<Self, ConfigError> {
+    pub fn of_file(cfg: &Config, net: &Netlist) -> Result<Self, ConfigError> {
         let joints = (0..N)
             .map(|k| RotaryJoint::from_config(&motor_config(cfg, &net.motors[k].id)?))
             .collect::<Result<Vec<_>, _>>()?;
@@ -151,7 +151,8 @@ impl<const N: usize> Arms<N> {
                 id: intern(&net.motors[k].id),
                 key: intern(&net.motors[k].key),
             }),
-            gearboxes: std::array::from_fn(|k| intern(&node.gearboxes[k])),
+            // The warmth's id is that of the gearbox's loss, `power.gearbox_<motor>`.
+            gearboxes: std::array::from_fn(|k| intern(&format!("gearbox_{}", net.motors[k].id))),
             axes: std::array::from_fn(|k| (intern(&net.axes[k].id), intern(&net.axes[k].key))),
         })
     }
@@ -337,6 +338,7 @@ pub(crate) fn read(
             path: node.path.clone(),
             values,
         }),
+        scissor: None,
     })
 }
 
@@ -549,7 +551,7 @@ impl LinkageMachine {
 
     /// The planar linkage of a machine file's node.
     pub fn from_node(cfg: &Config, net: &Netlist, node: &LinkageNode) -> Result<Self, ConfigError> {
-        Self::build(cfg, node, Arms::of_file(cfg, net, node)?)
+        Self::build(cfg, node, Arms::of_file(cfg, net)?)
     }
 
     /// The machine from its numbers (`n`, by their paths in a crate's tables) and its drives; the effects from `cfg`.

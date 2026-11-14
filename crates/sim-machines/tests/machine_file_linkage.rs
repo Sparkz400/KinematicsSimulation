@@ -435,3 +435,69 @@ fn a_broken_linkage_is_refused_with_its_key_and_line() {
     let (e, _) = refused("upper_arm_kg = \"", "upper_arm_kgs = \"");
     assert_eq!(e, ConfigError::Unknown("machine.linkage[delta].upper_arm_kgs".into()));
 }
+
+fn scissor_file() -> &'static MachineEntry {
+    load_file(&root().join("machines/scissor-lift.toml")).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The scissor lift of machines/scissor-lift.toml held at two heights, rigid, without the screw's and gearbox's loss
+/// and the ripple, by hand. The weight is the platform, the payload and half the arms: W = (60 + 200 + 20) 9.80665 =
+/// 2745.862 N. Two stages of 1 m arms stand s = h / 2 high with the feet u = sqrt(1 - s^2) apart; the screw pulls the
+/// foot with F = W n u / s = W 2 cot(alpha):
+/// - at h = 0.6 m: u = 0.953939, cot = 3.179797, F = 17462.57 N, the screw (lead 10 mm, c = 1.591549 mm/rad) holds
+///   F c = 27.79254 N m, the motor behind ratio 20 1.389627 N m;
+/// - at h = 1.4 m: u = 0.714143, cot = 1.020204, F = 5602.68 N, 8.916941 N m, the motor 0.445847 N m.
+///
+/// The force ratio between the two, 3.11679, is cot over cot: the lift needs three times the force low down.
+#[test]
+fn the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_heights() {
+    let mut cfg = scissor_file().config();
+    for off in ["joint_elasticity", "gearbox_efficiency", "torque_ripple"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    let machine = (scissor_file().build)(&cfg).unwrap();
+    for (h, force, motor) in [(0.6, 17_462.57, 1.389_627), (1.4, 5602.68, 0.445_847)] {
+        let (mut state, mut torque) = (Vec::new(), [0.0]);
+        machine.equilibrium(&[h], &mut state, &mut torque);
+        assert!((torque[0] - motor).abs() < 1e-6, "h = {h}: motor {} N m against {motor}", torque[0]);
+        let mut values = Vec::new();
+        machine.signals(&state, &torque, &mut values);
+        let at = machine.signal_infos().iter().position(|s| s.id == "scissor.scissor.actuator_force").unwrap();
+        assert!((values[at] - force).abs() < 0.01, "h = {h}: {} N on the foot against {force}", values[at]);
+        let (mut pos, mut vel) = ([0.0], [0.0]);
+        machine.tool_state(&state, &mut pos, &mut vel);
+        assert!((pos[0] - h).abs() < 1e-12, "{pos:?}");
+    }
+    assert!((3.179_797 / 1.020_204f64 - 3.11679).abs() < 1e-5);
+}
+
+/// The scissor lift passes the standard suite (round trip, static hold, determinism, energy without losses, the loss
+/// budget with them), rigid and elastic, with and without the payload. The loss-free configs leave gravity out: held
+/// by a constant torque the lift is unstable at every height, as it needs less torque the higher it stands (the
+/// gravity's stiffness -g m_g h'' is negative, h'' < 0); at mid height (s = 0.5 m) that is 2746 N * 4.05e-5 m/rad2 =
+/// 0.111 N m/rad against the 0.094 kg m2 the screw sees (mostly the rotor, 20^2 * 2.1e-4), growing at
+/// sqrt(0.111 / 0.094) = 1.09 per second, e^11 over the suite's 10 s: out of its range. The drive's position loop holds
+/// it; the default config, with gravity, takes the suite's short runs.
+#[test]
+fn the_scissor_lift_file_passes_the_standard_suite() {
+    use std::sync::Mutex;
+    static LOSSLESS: Mutex<Vec<Config>> = Mutex::new(Vec::new());
+    fn lossless() -> Vec<Config> {
+        LOSSLESS.lock().unwrap().clone()
+    }
+    let shipped = scissor_file();
+    let mut configs = Vec::new();
+    for (elastic, payload) in [(false, true), (false, false), (true, true), (true, false)] {
+        let mut cfg = shipped.config();
+        for effect in sim_netlist::scissor::LOSSY_EFFECTS {
+            cfg.set_text(&format!("effects.{effect} = false")).unwrap();
+        }
+        cfg.set_text("gearbox.damping_nm_s_rad = 0.0").unwrap();
+        cfg.set_text(&format!("effects.joint_elasticity = {elastic}")).unwrap();
+        cfg.set_text(&format!("effects.payload = {payload}")).unwrap();
+        cfg.set_text("effects.gravity = false").unwrap();
+        configs.push(cfg);
+    }
+    *LOSSLESS.lock().unwrap() = configs;
+    sim_core::testkit::run_standard_suite(&MachineEntry { suite_configs: lossless, ..*shipped });
+}

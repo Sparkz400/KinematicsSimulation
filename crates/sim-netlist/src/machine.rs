@@ -144,6 +144,22 @@ struct Direct {
     lever: Option<f64>,
     /// `ratings.required_life_h` of its motor, where set.
     required_life: Option<f64>,
+    /// `ratings.shaft_max_radial_load_n` of its motor, where set: what a rack's pinion may load the gearbox's output
+    /// shaft with sideways (`pinion_radial_load`).
+    radial_limit: Option<f64>,
+}
+
+/// The standard pressure angle of a rack and pinion's teeth (DIN 867), in the normal section.
+/// shortcut: every rack is taken at 20 degrees; give `[rack]` a pressure angle if a file uses another.
+const RACK_PRESSURE_ANGLE_DEG: f64 = 20.0;
+
+/// The radial load the pinion puts on the gearbox's output shaft for the force `tooth_force` on its teeth: the tooth
+/// force itself, tangential to the pinion and so across the shaft, and the force that pushes pinion and rack apart,
+/// F tan(alpha_n) / cos(beta), at right angles to it: |F| sqrt(1 + (tan(alpha_n) / cos(beta))^2). The axial force of a
+/// helical pinion, F tan(beta), and the tilt it puts on the shaft are left out.
+fn pinion_radial_load(rack: &RackPinion, tooth_force: f64) -> f64 {
+    let apart = RACK_PRESSURE_ANGLE_DEG.to_radians().tan() / rack.helix_angle.cos();
+    tooth_force.abs() * (1.0 + apart * apart).sqrt()
 }
 
 enum DirectKind {
@@ -605,7 +621,13 @@ impl ConfigMachine {
             (gears[kk], j_rotor[kk], shafts[kk], ripples[kk], brakes[kk]) =
                 (gearbox, rotor_inertia, shaft, ripple, brake);
             (coupled[kk], extra_efficiency[kk]) = (coupling, extra);
-            direct.push(Some(Direct { axis, kind, lever, required_life: own.f64("ratings.required_life_h").ok() }));
+            direct.push(Some(Direct {
+                axis,
+                kind,
+                lever,
+                required_life: own.f64("ratings.required_life_h").ok(),
+                radial_limit: own.f64("ratings.shaft_max_radial_load_n").ok(),
+            }));
         }
         let worms = worm_stages(cfg, net, &mut gears, &extra_efficiency)?;
         let axes = net
@@ -2282,7 +2304,10 @@ impl Machine for ConfigMachine {
             ));
             match &d.kind {
                 DirectKind::Screw(screw) => out.extend(screw.signal_infos(motor.id, motor.key)),
-                DirectKind::Rack(rack) => out.push(rack.signal_info(motor.id, motor.key)),
+                DirectKind::Rack(rack) => out.extend([
+                    rack.signal_info(motor.id, motor.key),
+                    SignalInfo::new(format!("rack.{}.radial_load", motor.id), motor.key, "quantity-radial-load", "N"),
+                ]),
                 DirectKind::Rotary(Some(gear)) => out.push(gear.signal_info(motor.id, motor.key)),
                 _ => {}
             }
@@ -2300,7 +2325,16 @@ impl Machine for ConfigMachine {
             let id = self.motors[kk].id;
             match &d.kind {
                 DirectKind::Screw(screw) => out.extend(screw.rating_checks(id, kk, d.required_life)),
-                DirectKind::Rack(rack) => out.extend(rack.rating_checks(id, kk)),
+                DirectKind::Rack(rack) => {
+                    out.extend(rack.rating_checks(id, kk));
+                    out.extend(d.radial_limit.map(|limit| RatingCheck {
+                        check: "gearbox-radial-load",
+                        signal: format!("rack.{id}.radial_load"),
+                        motor: Some(kk),
+                        limit,
+                        life: false,
+                    }));
+                }
                 DirectKind::Rotary(Some(gear)) => {
                     out.extend(d.required_life.map(|life| gear.rating_check(id, kk, life)))
                 }
@@ -2411,7 +2445,10 @@ impl Machine for ConfigMachine {
             out.push(force);
             match &d.kind {
                 DirectKind::Screw(screw) => screw.signals(speed, force, out),
-                DirectKind::Rack(_) => out.push(RackPinion::feed_force(force, speed, self.extra_efficiency[kk])),
+                DirectKind::Rack(rack) => {
+                    let teeth = RackPinion::feed_force(force, speed, self.extra_efficiency[kk]);
+                    out.extend([teeth, pinion_radial_load(rack, teeth)]);
+                }
                 DirectKind::Rotary(Some(gear)) => out.push(gear.signal(force, speed * self.ratio[kk])),
                 _ => {}
             }

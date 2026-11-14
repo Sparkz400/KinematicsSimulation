@@ -453,6 +453,36 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         ],
     ),
     (
+        "scissor",
+        "A scissor lift (crate sim-netlist, scissor.rs): stages of crossed arm pairs on the base, a screw turned by the gearbox's output pulling the sliding foot of the lowest stage towards the fixed one; the tool is the platform's height. A file with a scissor lift has one axis (no stroke: min_height_m and max_height_m set its range), one motor, its gearbox and the scissor; nothing else, and no belt effect on.",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns the screw."),
+            field("axis", Kind::Ref("axis"), true, "The platform's height."),
+            field("stages", Kind::Number, true, "Stages of crossed arms, a whole number."),
+            field("arm_m", Kind::Number, true, "An arm from pin to pin, m."),
+            field("lead_m", Kind::Number, true, "The screw's lead: the foot moves this far per turn, m."),
+            field("min_height_m", Kind::Number, true, "The platform's lowest height, above 0, m."),
+            field("max_height_m", Kind::Number, true, "Its highest, below stages times arm_m, m."),
+            field("arms_kg", Kind::Number, true, "All the arms together, kg."),
+            field("platform_kg", Kind::Number, true, "The platform, kg."),
+            field(
+                "payload_kg",
+                Kind::Number,
+                false,
+                "Payload on the platform while effects.payload is on and the payload is attached, kg. Default 0.",
+            ),
+            field(
+                "screw_efficiency",
+                Kind::Number,
+                false,
+                "The screw's efficiency, with effects.gearbox_efficiency; above 0, at most 1. Default 1.",
+            ),
+            field("screw_inertia_kgm2", Kind::Number, false, "The screw's inertia about its axis, kg m^2. Default 0."),
+            POS,
+        ],
+    ),
+    (
         "lean",
         "A body leaning on its carriage along a horizontal axis (effects.tool_flex, elastic model only): its centre of mass moves sideways by u against the guide, which gives way sideways and in tilt, and the tool tip below it moves with it. At most one.",
         &[
@@ -650,6 +680,8 @@ pub struct Netlist {
     /// The linkage of a file that has one, planar (`crate::linkage`) or spatial (`crate::spatial`); its netlist has no
     /// belts, bodies or guides.
     pub linkage: Option<crate::linkage::LinkageNode>,
+    /// The scissor lift of a file that has one (`crate::scissor`); its netlist has one axis and one motor.
+    pub scissor: Option<crate::scissor::ScissorNode>,
 }
 
 /// One node of a list, with the path its errors name: `machine.<list>[<id>]`, or `machine.<list>[#<n>]` (from 1)
@@ -801,7 +833,7 @@ impl Netlist {
         let (bodies, guides, idlers, frames, spans) =
             (take("body"), take("guide"), take("idler"), take("frame"), take("span"));
         let (screws, racks, linears, rotaries) = (take("screw"), take("rack"), take("linear_motor"), take("rotary"));
-        let (leans, worms, linkages) = (take("lean"), take("worm"), take("linkage"));
+        let (leans, worms, linkages, scissors) = (take("lean"), take("worm"), take("linkage"), take("scissor"));
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
@@ -817,6 +849,13 @@ impl Netlist {
                 }
                 Some(_) => return Err(ConfigError::Type(format!("machine.{key}"))),
             }
+        }
+        if !scissors.is_empty() {
+            let others = [
+                &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries,
+                &leans, &worms, &linkages,
+            ];
+            return crate::scissor::read(cfg, &axes, &motors, &gearboxes, &scissors, &others.map(|n| &n[..]));
         }
         if !linkages.is_empty() {
             let others = [
@@ -1260,6 +1299,7 @@ impl Netlist {
             refs,
             values,
             linkage: None,
+            scissor: None,
         })
     }
 }
