@@ -491,7 +491,7 @@ fn record_path(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<Vec<Vec<f6
     Ok(rows)
 }
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
-const NOTES: [&str; 23] = [
+const NOTES: [&str; 25] = [
     "ui-overlay-exported",
     "ui-report-written",
     "ui-report-failed",
@@ -503,6 +503,8 @@ const NOTES: [&str; 23] = [
     "ui-analysis-stale",
     "ui-analysis-tripped",
     "ui-drive-tripped",
+    "ui-drive-fault",
+    "ui-drive-stopped",
     "ui-search-bad-supply",
     "ui-search-none",
     "ui-search-no-gearbox",

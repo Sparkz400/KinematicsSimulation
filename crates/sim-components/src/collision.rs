@@ -1,12 +1,22 @@
 //! Obstacles of the config and the clearance the machine keeps from them: along a path before it runs (`check_path`,
 //! `check_cycle`), and in the simulation as it runs (`Sim`). The machine tells which of its parts can hit an obstacle
-//! (`Machine::collision_bodies`); obstacles and parts are boxes along the scene's axes.
+//! (`Machine::collision_bodies`, `collision_capsules`); obstacles are boxes along the scene's axes, the parts boxes too
+//! or, slanted, capsules.
 
 use crate::conveyor::Conveyor;
-use sim_core::{Aabb, Config, ConfigError, Machine, MachineEntry, Obstacle};
+use sim_core::{Aabb, Capsule, Config, ConfigError, Machine, MachineEntry, Obstacle};
+
+/// An obstacle's contact stiffness and damping where its entry gives none (effects.crash): [estimate] a fixture of
+/// steel profile on a machine bed, some 10 N/um at the point of contact, damped near critically for a few kilograms
+/// (2 sqrt(k m) = 2 sqrt(1e7 * 2.5) = 1e4 N s/m). [bounds] 1e6 to 1e8 N/m: from an aluminium profile on a slender
+/// stand to a solid steel block.
+pub const CONTACT_STIFFNESS: f64 = 1e7;
+pub const CONTACT_DAMPING: f64 = 1e4;
 
 /// The obstacles of the config: `obstacles`, a list of tables each with a `name`, the box's `centre_m` and `size_m`
-/// (three numbers each, in scene coordinates; the sizes above 0). A config without the list has none.
+/// (three numbers each, in scene coordinates; the sizes above 0), and optionally its contact `stiffness_n_m` (above 0)
+/// and `damping_n_s_m` (not negative), by default `CONTACT_STIFFNESS` and `CONTACT_DAMPING`. A config without the
+/// list has none.
 pub fn obstacles(cfg: &Config) -> Result<Vec<Obstacle>, ConfigError> {
     let Ok(list) = cfg.get("obstacles") else { return Ok(Vec::new()) };
     let list = list.as_array().ok_or_else(|| ConfigError::Type("obstacles".into()))?;
@@ -24,24 +34,51 @@ pub fn obstacles(cfg: &Config) -> Result<Vec<Obstacle>, ConfigError> {
                 values.try_into().ok().filter(|v: &[f64; 3]| v.iter().all(|x| x.is_finite()))
             };
             // A misspelt key in an entry would otherwise pass silently, as `Config::check_keys` leaves arrays out.
-            if item.as_table().is_none_or(|t| t.keys().any(|k| !["name", "centre_m", "size_m"].contains(&k.as_str()))) {
+            let keys = ["name", "centre_m", "size_m", "stiffness_n_m", "damping_n_s_m"];
+            if item.as_table().is_none_or(|t| t.keys().any(|k| !keys.contains(&k.as_str()))) {
                 return Err(bad());
             }
             let name = item.get("name").and_then(|n| n.as_str()).ok_or_else(bad)?;
             let centre = three("centre_m").ok_or_else(bad)?;
             let size = three("size_m").filter(|s| s.iter().all(|x| *x > 0.0)).ok_or_else(bad)?;
-            Ok(Obstacle { name: name.into(), aabb: Aabb { centre, size }, contact: false })
+            let number = |key: &str, default: f64| match item.get(key) {
+                None => Some(default),
+                Some(v) => v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|x| x.is_finite()),
+            };
+            let stiffness = number("stiffness_n_m", CONTACT_STIFFNESS).filter(|k| *k > 0.0).ok_or_else(bad)?;
+            let damping = number("damping_n_s_m", CONTACT_DAMPING).filter(|c| *c >= 0.0).ok_or_else(bad)?;
+            Ok(Obstacle { name: name.into(), aabb: Aabb { centre, size }, contact: false, stiffness, damping })
         })
         .collect()
 }
 
+/// The parts of a machine that can hit an obstacle at a state: its boxes and its capsules.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Bodies {
+    pub boxes: Vec<Aabb>,
+    pub capsules: Vec<Capsule>,
+}
+
+impl Bodies {
+    pub fn of(machine: &dyn Machine, state: &[f64]) -> Self {
+        Self { boxes: machine.collision_bodies(state), capsules: machine.collision_capsules(state) }
+    }
+
+    /// The nearest points and the clearance (`Aabb::gap`, `Capsule::gap`) of the part nearest to the box `other`;
+    /// `None` without parts.
+    pub fn gap(&self, other: &Aabb) -> Option<([f64; 3], [f64; 3], f64)> {
+        let boxes = self.boxes.iter().map(|b| b.gap(other));
+        boxes.chain(self.capsules.iter().map(|c| c.gap(other))).min_by(|a, b| a.2.total_cmp(&b.2))
+    }
+}
+
 /// The least clearance between the parts `bodies` and the obstacles: which obstacle, the nearest points and the
-/// clearance (`Aabb::gap`, negative in an overlap). `None` without parts or obstacles.
-pub fn nearest(bodies: &[Aabb], obstacles: &[Obstacle]) -> Option<(usize, ([f64; 3], [f64; 3], f64))> {
+/// clearance (negative in an overlap). `None` without parts or obstacles.
+pub fn nearest(bodies: &Bodies, obstacles: &[Obstacle]) -> Option<(usize, ([f64; 3], [f64; 3], f64))> {
     obstacles
         .iter()
         .enumerate()
-        .flat_map(|(k, o)| bodies.iter().map(move |b| (k, b.gap(&o.aabb))))
+        .filter_map(|(k, o)| Some((k, bodies.gap(&o.aabb)?)))
         .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
 }
 
@@ -67,7 +104,7 @@ pub fn check_path(machine: &dyn Machine, obstacles: &[Obstacle], poses: &[Vec<f6
     let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
     let mut at = |pose: &[f64]| {
         machine.equilibrium(pose, &mut state, &mut torque);
-        let gap = nearest(&machine.collision_bodies(&state), obstacles).map_or(f64::INFINITY, |(_, (_, _, gap))| gap);
+        let gap = nearest(&Bodies::of(machine, &state), obstacles).map_or(f64::INFINITY, |(_, (_, _, gap))| gap);
         if gap < check.clearance {
             (check.clearance, check.nearest) = (gap, Some(pose.to_vec()));
         }

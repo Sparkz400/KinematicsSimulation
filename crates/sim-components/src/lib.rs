@@ -19,6 +19,7 @@ pub mod control;
 pub mod conveyor;
 pub mod dataset;
 pub mod drive;
+pub mod fault;
 pub mod identify;
 pub mod import;
 pub mod joint;

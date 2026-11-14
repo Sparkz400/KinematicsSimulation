@@ -109,8 +109,10 @@ pub struct Aabb {
 
 impl Aabb {
     /// The nearest points of the two boxes, one on each, and the clearance between them: the distance of the two
-    /// points; where the boxes overlap, the depth of the overlap along the axis where it is least, negative (both
-    /// points then lie in the middle of the overlap).
+    /// points; where the boxes overlap, the depth of the overlap, negative: how far one box would have to move to part
+    /// from the other, along the axis where that is least (both points then lie in the middle of the overlap). A box
+    /// inside the other along an axis has to leave by the nearer face; the intersection's width (the depth until 14
+    /// November) is the depth only where neither box holds the other, and was 0 for a point inside a box.
     pub fn gap(&self, other: &Aabb) -> ([f64; 3], [f64; 3], f64) {
         let (mut p, mut q, mut apart, mut overlap) = ([0.0; 3], [0.0; 3], 0.0, f64::INFINITY);
         for i in 0..3 {
@@ -121,7 +123,7 @@ impl Aabb {
             } else if other_hi < lo {
                 (lo, other_hi)
             } else {
-                overlap = f64::min(overlap, hi.min(other_hi) - lo.max(other_lo));
+                overlap = f64::min(overlap, f64::min(hi - other_lo, other_hi - lo));
                 let middle = (lo.max(other_lo) + hi.min(other_hi)) / 2.0;
                 (middle, middle)
             };
@@ -131,12 +133,67 @@ impl Aabb {
     }
 }
 
-/// An obstacle of the config (`[[obstacles]]`), and whether a part of the machine touches it now.
+/// A capsule: every point within `radius` of the segment from `from` to `to`. A slanted rod, arm or shaft as a part
+/// that can hit an obstacle (`Machine::collision_capsules`), where a box along the scene's axes around it would be up to
+/// its length wider than it. Metres, in scene coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Capsule {
+    pub from: [f64; 3],
+    pub to: [f64; 3],
+    pub radius: f64,
+}
+
+impl Capsule {
+    /// The nearest points of the capsule and the box, one on each, and the clearance between them, as `Aabb::gap` has
+    /// them: the least signed distance of the segment's points to the box, less the radius. Negative in an overlap,
+    /// where it is the depth to the box face nearest to the segment's deepest point (both points then on the
+    /// segment). The signed distance of a point to a box is convex along a line, so its least along the segment is
+    /// found by a golden-section search, to the last bit of the segment's parameter: exact, as is the box's.
+    pub fn gap(&self, other: &Aabb) -> ([f64; 3], [f64; 3], f64) {
+        let at = |t: f64| -> [f64; 3] { std::array::from_fn(|i| self.from[i] + t * (self.to[i] - self.from[i])) };
+        let signed = |t: f64| {
+            let q: [f64; 3] = std::array::from_fn(|i| (at(t)[i] - other.centre[i]).abs() - other.size[i] / 2.0);
+            q.iter().map(|v| v.max(0.0).powi(2)).sum::<f64>().sqrt() + q[0].max(q[1]).max(q[2]).min(0.0)
+        };
+        let golden = (5f64.sqrt() - 1.0) / 2.0;
+        let (mut a, mut b) = (0.0, 1.0);
+        let (mut c, mut d) = (b - golden * (b - a), a + golden * (b - a));
+        let (mut fc, mut fd) = (signed(c), signed(d));
+        // 0.618^80 is 2e-17: the interval is down to the last bit of the parameter.
+        for _ in 0..80 {
+            if fc < fd {
+                (b, d, fd) = (d, c, fc);
+                c = b - golden * (b - a);
+                fc = signed(c);
+            } else {
+                (a, c, fc) = (c, d, fd);
+                d = a + golden * (b - a);
+                fd = signed(d);
+            }
+        }
+        let t = [0.0, 1.0, 0.5 * (a + b)].into_iter().min_by(|x, y| signed(*x).total_cmp(&signed(*y))).unwrap_or(0.0);
+        let (p, distance) = (at(t), signed(t));
+        if distance <= 0.0 {
+            return (p, p, distance - self.radius);
+        }
+        let q: [f64; 3] = std::array::from_fn(|i| {
+            p[i].clamp(other.centre[i] - other.size[i] / 2.0, other.centre[i] + other.size[i] / 2.0)
+        });
+        let surface = std::array::from_fn(|i| p[i] + (q[i] - p[i]) * (self.radius / distance).min(1.0));
+        (surface, q, distance - self.radius)
+    }
+}
+
+/// An obstacle of the config (`[[obstacles]]`), and whether a part of the machine touches it now. With effects.crash
+/// it pushes back on a part that goes into it with `stiffness` (N/m) times the depth and `damping` (N s/m) times the
+/// speed into it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Obstacle {
     pub name: String,
     pub aabb: Aabb,
     pub contact: bool,
+    pub stiffness: f64,
+    pub damping: f64,
 }
 
 /// The boxes among `parts` (as a machine draws them in its scene) whose id is one of `ids`, turned or not: what
@@ -305,6 +362,17 @@ mod tests {
     /// By hand: a 0.2 m cube at the origin and a 0.1 m cube at (0.4, 0.3, 0): 0.25 m apart in x (0.4 - 0.1 - 0.05),
     /// 0.15 m in y, overlapping in z, so 0.29155 m apart. Moved to (0.12, 0, 0.02) they overlap by 0.03 m in x, the
     /// least of 0.03, 0.1 and 0.1.
+    /// By hand: a point at (0.02, 0, 0.01) inside a 0.1 m cube at the origin leaves it by the nearest face, x = 0.05,
+    /// 0.03 m away (z = 0.05 is 0.04 away). A 0.02 m cube there leaves by 0.03 + 0.01 = 0.04 m.
+    #[test]
+    fn a_box_inside_another_is_as_deep_as_its_way_out() {
+        let cube = Aabb { centre: [0.0; 3], size: [0.1; 3] };
+        let (_, _, d) = cube.gap(&Aabb { centre: [0.02, 0.0, 0.01], size: [0.0; 3] });
+        assert!((d + 0.03).abs() < 1e-12, "{d}");
+        let (_, _, d) = cube.gap(&Aabb { centre: [0.02, 0.0, 0.01], size: [0.02; 3] });
+        assert!((d + 0.04).abs() < 1e-12, "{d}");
+    }
+
     #[test]
     fn gap_between_boxes_by_hand() {
         let big = Aabb { centre: [0.0; 3], size: [0.2; 3] };
@@ -314,6 +382,26 @@ mod tests {
         assert!(near(p, [0.1, 0.1, 0.0]) && near(q, [0.35, 0.25, 0.0]), "{p:?} {q:?}");
         let (_, _, d) = big.gap(&Aabb { centre: [0.12, 0.0, 0.02], size: [0.1; 3] });
         assert!((d + 0.03).abs() < 1e-12, "{d}");
+    }
+
+    /// By hand: a rod of radius 6 mm slanted at 45 degrees in the x-z plane, from (0, 0, 0) to (0.3, 0, 0.3), and a
+    /// 0.1 m cube centred at (0.25, 0, 0.05). The cube's top edge nearest to the rod runs along y through
+    /// (0.2, y, 0.1); the rod's line x = z is (0.2 - 0.1) / sqrt(2) = 70.711 mm from it, its nearest point (0.15, 0,
+    /// 0.15) within the segment, so the clearance is 70.711 - 6 = 64.711 mm. The old box around the rod (0.312 m wide)
+    /// overlapped the cube. Shifted to centre (0.15, 0, 0.1), the cube holds the rod's point (0.125, 0, 0.125), 25 mm
+    /// inside its top face and its left face: the overlap is 25 + 6 = 31 mm deep.
+    #[test]
+    fn a_slanted_capsule_keeps_the_hand_calculated_clearance_to_a_box() {
+        let rod = Capsule { from: [0.0; 3], to: [0.3, 0.0, 0.3], radius: 0.006 };
+        let (p, q, d) = rod.gap(&Aabb { centre: [0.25, 0.0, 0.05], size: [0.1; 3] });
+        assert!((d - (0.1 / 2f64.sqrt() - 0.006)).abs() < 1e-12, "{d}");
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        let s = 0.006 / 2f64.sqrt();
+        assert!(near(q, [0.2, 0.0, 0.1]) && near(p, [0.15 + s, 0.0, 0.15 - s]), "{p:?} {q:?}");
+        let boxed = Aabb { centre: [0.15, 0.0, 0.15], size: [0.312, 0.012, 0.312] };
+        assert!(boxed.gap(&Aabb { centre: [0.25, 0.0, 0.05], size: [0.1; 3] }).2 < 0.0);
+        let (_, _, d) = rod.gap(&Aabb { centre: [0.15, 0.0, 0.1], size: [0.1; 3] });
+        assert!((d + 0.031).abs() < 1e-12, "{d}");
     }
 
     #[test]

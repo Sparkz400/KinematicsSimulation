@@ -810,6 +810,13 @@ pub struct Drive {
     pub discharge_power: f64,
     /// The drive's own stream of sensor noise.
     pub noise: Noise,
+    /// Whether the velocity loop's output was beyond the torque limit at its last cycle (`fault::Watch`).
+    pub at_limit: bool,
+    /// While the drive stops on a fault (`fault::Reaction`): the speed setpoint of its stop ramp, which the velocity
+    /// loop follows without the position loop and without feedforward. And once its pulses are off: no voltage, no
+    /// current, no torque, while the others may still be stopping.
+    pub fault_speed: Option<f64>,
+    pub pulses_off: bool,
     current_integral: f64,
     integral: f64,
     encoder: f64,
@@ -944,11 +951,14 @@ impl Drive {
         // Velocity feedforward, interpolated between profile cycles. Holding it for a whole profile
         // cycle would make the speed command a staircase and the torque a sawtooth.
         let speed_set = self.vel_set + self.acc_set * self.since_setpoint;
-        self.speed_command = self.position_part + p.velocity_ff * speed_set;
+        self.speed_command = self.fault_speed.unwrap_or(self.position_part + p.velocity_ff * speed_set);
 
         let error = self.speed_command - self.speed;
         self.controller_torque = p.kp * error + self.integral;
-        self.feedforward_torque = p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set);
+        self.feedforward_torque = match self.fault_speed {
+            Some(_) => 0.0,
+            None => p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set),
+        };
         let wanted = self.controller_torque + self.feedforward_torque;
         self.filtered += p.torque_filter * (wanted - self.filtered);
         let mut out = self.filtered;
@@ -964,6 +974,7 @@ impl Drive {
             (low, high) = (low.max(-most), high.min(most));
         }
         self.torque_demand = out;
+        self.at_limit = out + self.torque_injection > high || out + self.torque_injection < low;
         self.torque_command =
             delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
         // Anti-windup: the integrator stops while it would push further into the limit.

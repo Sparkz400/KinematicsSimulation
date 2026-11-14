@@ -44,10 +44,50 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
     Ok(parts)
 }
 
-/// How far a part in contact with an obstacle may go further into it, m, in all, before it counts as moving in
-/// (effects.crash, `Sim::check_obstacles`): drives enabled again at rest against the obstacle settle some 25 nm into
-/// it (and rounding moves it by 1e-16 m), and they tripped on that. A drive that pushes on goes further.
-const CREEP: f64 = 1e-6;
+/// How near an obstacle a part has to come before the obstacle's push is worked out (effects.crash, `Sim::pushes`), m:
+/// the push acts on the motors through the rigid kinematics, whose parts may be some millimetres from the real ones
+/// (a carriage swinging on its belt).
+const PUSH_RANGE: f64 = 0.01;
+
+/// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
+/// central differences.
+const SLOPE_STEP: f64 = 1e-6;
+
+/// An obstacle's push on the machine over one base step (effects.crash), linear in the motors' angles about where the
+/// step starts: the depth of the machine in it there (the clearance of the rigid kinematics at those angles, negated),
+/// how the clearance grows with each motor's angle (m/rad), and the obstacle's stiffness and damping.
+#[derive(Debug, Clone, PartialEq)]
+struct Push {
+    depth: f64,
+    slope: Vec<f64>,
+    stiffness: f64,
+    damping: f64,
+}
+
+impl Push {
+    /// The obstacle's force at the motor angles `angle` and speeds `speed`, N: the stiffness times the depth there plus
+    /// the damping times the speed into it, pushing only (an obstacle does not pull a part back).
+    fn force(&self, from: &[f64], angle: &[f64], speed: &[f64]) -> f64 {
+        let moved: f64 = self.slope.iter().zip(angle.iter().zip(from)).map(|(g, (a, f))| g * (a - f)).sum();
+        let into = -self.slope.iter().zip(speed).map(|(g, w)| g * w).sum::<f64>();
+        let depth = self.depth - moved;
+        if depth > 0.0 { (self.stiffness * depth + self.damping * into).max(0.0) } else { 0.0 }
+    }
+}
+
+/// The motor torques of the pushes, added to `out`: each force times its clearance's slope at the motor, which is the
+/// force's virtual work per radian. Returns the sum of the forces, N.
+fn push_torques(pushes: &[Push], from: &[f64], angle: &[f64], speed: &[f64], out: &mut [f64]) -> f64 {
+    let mut total = 0.0;
+    for push in pushes {
+        let force = push.force(from, angle, speed);
+        total += force;
+        for (torque, g) in out.iter_mut().zip(&push.slope) {
+            *torque += force * g;
+        }
+    }
+    total
+}
 
 /// Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
 /// copper loss and the work on the shaft.
@@ -67,13 +107,13 @@ pub struct Sim {
     /// torques at a stage of the integration.
     rk_joint: Rk4,
     joint: Vec<f64>,
-    motor_buffers: [Vec<f64>; 3],
+    motor_buffers: [Vec<f64>; 4],
     payload_attached: bool,
     /// What switching the payload has added to the machine's energy since the start: a payload picked up brings
     /// its energy along, one put down takes it away. For the energy budget.
     pub payload_energy: f64,
-    /// The machine's energy that the stops at obstacles took since the start (effects.crash, `check_obstacles`): lost
-    /// in the impact. For the energy budget.
+    /// The work the obstacles' pushes took out of the machine since the start (effects.crash, `pushes`): what the
+    /// contacts' damping lost and their springs hold. For the energy budget.
     pub crash_energy: f64,
     /// Axis limits that exceed what the drives allow, found when the config was applied.
     pub limit_violations: Vec<LimitViolation>,
@@ -91,8 +131,9 @@ pub struct Sim {
     losses: Vec<f64>,
     /// The obstacles of the config (`collision::obstacles`), each marked while a part of the machine touches it.
     pub obstacles: Vec<Obstacle>,
-    /// effects.crash: the obstacles are rigid; a part moving into one stops dead and the drives go off
-    /// (`check_obstacles`).
+    /// effects.crash: an obstacle pushes back on a part that goes into it, with its contact stiffness and damping
+    /// (`pushes`), so that the axes in contact are blocked; what trips the drives then is their monitoring
+    /// (effects.drive_monitoring).
     pub crash: bool,
     /// `profile.min_clearance_m`: the least clearance to the obstacles a time-optimal path may keep (`plan_path`).
     pub min_clearance: f64,
@@ -102,22 +143,33 @@ pub struct Sim {
     pub least_clearance: f64,
     /// The first contact with an obstacle since the start.
     pub contact: Option<Contact>,
-    /// Whether the drives went off at an obstacle (effects.crash) and have not been enabled since.
+    /// Whether the drives tripped (effects.drive_monitoring) while a part touched an obstacle, and have not been
+    /// enabled since. Which monitor, and the stopping distances, are in `control.fault`.
     pub crashed: bool,
-    /// Per obstacle the clearance, and the tool's pose, after the last step: whether a part moves into an obstacle,
-    /// and where along the step it met its face (`check_obstacles`).
+    /// The obstacles' force on the machine over the last step (at its end), N.
+    pub contact_force: f64,
+    /// Per obstacle the clearance after the last step (`check_obstacles`).
     gaps: Vec<f64>,
-    last_pose: Vec<f64>,
+    /// The obstacles' pushes over the step under way, and the motor angles they are linear about.
+    pushes: Vec<Push>,
+    push_from: Vec<f64>,
+    /// The work the pushes have taken since the first contact, J.
+    absorbed: f64,
 }
 
 /// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
-/// how fast the tool went then (the length of its speed vector, axis units per second) and which obstacle.
+/// how fast the tool went then (the length of its speed vector, axis units per second) and which obstacle. With
+/// effects.crash, from then on: the largest force of the obstacles on the machine (N) and the impact energy, the most
+/// work their pushes had taken out of the machine at any time (J; at the deepest point of a blocked impact, the
+/// kinetic energy the impact took).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Contact {
     pub time: f64,
     pub pose: Vec<f64>,
     pub speed: f64,
     pub obstacle: usize,
+    pub peak_force: f64,
+    pub impact_energy: f64,
 }
 
 /// What a running simulation has come to apart from its machine (`Sim::snapshot`): the integrated state, the controller
@@ -139,8 +191,9 @@ pub struct Snapshot {
     least_clearance: f64,
     contact: Option<Contact>,
     crashed: bool,
+    contact_force: f64,
     gaps: Vec<f64>,
-    last_pose: Vec<f64>,
+    absorbed: f64,
 }
 
 /// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
@@ -229,7 +282,7 @@ impl Sim {
         let motors = torque.len();
         Ok(Self {
             rk: Rk4::new(state.len()),
-            rk_joint: Rk4::new(state.len() + WINDING_STATES * motors),
+            rk_joint: Rk4::new(state.len() + WINDING_STATES * motors + 1),
             joint: Vec::new(),
             motor_buffers: std::array::from_fn(|_| vec![0.0; motors]),
             machine,
@@ -255,8 +308,11 @@ impl Sim {
             least_clearance: f64::INFINITY,
             contact: None,
             crashed: false,
+            contact_force: 0.0,
             gaps: Vec::new(),
-            last_pose: Vec::new(),
+            pushes: Vec::new(),
+            push_from: Vec::new(),
+            absorbed: 0.0,
         })
     }
 
@@ -295,7 +351,7 @@ impl Sim {
         }
         self.control.motors_shifted(&after);
         self.rk = Rk4::new(self.state.len());
-        self.rk_joint = Rk4::new(self.state.len() + WINDING_STATES * motors);
+        self.rk_joint = Rk4::new(self.state.len() + WINDING_STATES * motors + 1);
         self.motor_buffers = std::array::from_fn(|_| vec![0.0; motors]);
         self.limit_violations = check_limits(machine.as_ref(), &self.control.motor_drives(machine.as_ref()));
         // A part that is still there keeps its warmth.
@@ -332,8 +388,9 @@ impl Sim {
             least_clearance: self.least_clearance,
             contact: self.contact.clone(),
             crashed: self.crashed,
+            contact_force: self.contact_force,
             gaps: self.gaps.clone(),
-            last_pose: self.last_pose.clone(),
+            absorbed: self.absorbed,
         }
     }
 
@@ -360,7 +417,7 @@ impl Sim {
         (self.clearance, self.least_clearance, self.crashed) = (s.clearance, s.least_clearance, s.crashed);
         self.contact.clone_from(&s.contact);
         self.gaps.clone_from(&s.gaps);
-        self.last_pose.clone_from(&s.last_pose);
+        (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
         // What the machine keeps between steps, as `step` sets it.
         self.payload_attached = s.payload_attached;
         self.machine.set_payload_attached(s.payload_attached);
@@ -429,7 +486,6 @@ impl Sim {
     /// together (with the drives disabled, the mechanics alone without torque).
     pub fn step(&mut self) {
         self.control.update(self.step, self.machine.as_ref(), &self.state, &mut self.torque);
-        self.crashed &= !self.control.enabled();
         if self.control.payload_attached != self.payload_attached {
             self.payload_attached = self.control.payload_attached;
             let before = self.machine.energy(&self.state);
@@ -441,15 +497,25 @@ impl Sim {
         // The temperatures the last step ended with; fed back here and not after the parts warm, so that the losses
         // the parts warmed with are those the machine reports after the step.
         self.feed_temperatures_back();
+        self.pushes();
         if self.control.enabled() {
             self.advance_with_windings();
-        } else {
+        } else if self.pushes.is_empty() {
             advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+        } else {
+            self.advance_pushed();
         }
         self.machine.after_step(&mut self.state, self.dt);
+        let taken = self.pushed();
         if !self.obstacles.is_empty() {
             self.check_obstacles();
         }
+        if let Some(contact) = &mut self.contact {
+            self.absorbed += taken;
+            contact.peak_force = contact.peak_force.max(self.contact_force);
+            contact.impact_energy = contact.impact_energy.max(self.absorbed);
+        }
+        self.crashed = self.control.fault.is_some() && (self.crashed || self.obstacles.iter().any(|o| o.contact));
         if self.part_heating && !self.heated.is_empty() {
             // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
             self.losses.clear();
@@ -463,74 +529,135 @@ impl Sim {
         self.step += 1;
     }
 
-    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact. With
-    /// effects.crash the obstacles are rigid: a part that touches one and moves further into it (its clearance more
-    /// than `CREEP` less than after the step before) stops dead, a perfectly plastic impact, whether the drives are on
-    /// or off. The
-    /// machine is put at rest (`Machine::equilibrium`, so belts and gears hold what they held at rest there) at the
-    /// pose along the step where the part met the face, and drives that were on go off, as a real drive trips on the
-    /// following error of a blocked axis; holding brakes engage. A part in contact that stands or moves out of the
-    /// obstacle is left to move, so drives enabled again after a crash can take the machine away. The energy the stop
-    /// takes (the kinetic energy, and what springs held beyond their rest) is lost in the impact: `crash_energy`.
+    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact.
     fn check_obstacles(&mut self) {
-        let bodies = self.machine.collision_bodies(&self.state);
-        let gap_to = |bodies: &[sim_core::Aabb], o: &Obstacle| {
-            bodies.iter().map(|b| b.gap(&o.aabb).2).fold(f64::INFINITY, f64::min)
-        };
-        let mut gaps: Vec<f64> = self.obstacles.iter().map(|o| gap_to(&bodies, o)).collect();
-        let (mut nearest, mut stop) = ((f64::INFINITY, 0), None::<f64>);
-        let (known, mut held) = (self.gaps.len() == gaps.len(), false);
-        for (k, (obstacle, gap)) in self.obstacles.iter_mut().zip(&mut gaps).enumerate() {
-            obstacle.contact = *gap <= 0.0;
-            if *gap < nearest.0 {
-                nearest = (*gap, k);
+        let bodies = crate::collision::Bodies::of(self.machine.as_ref(), &self.state);
+        let mut nearest = (f64::INFINITY, 0);
+        self.gaps.clear();
+        for (k, obstacle) in self.obstacles.iter_mut().enumerate() {
+            let gap = bodies.gap(&obstacle.aabb).map_or(f64::INFINITY, |g| g.2);
+            obstacle.contact = gap <= 0.0;
+            if gap < nearest.0 {
+                nearest = (gap, k);
             }
-            let Some(&before) = self.gaps.get(k).filter(|_| known) else { continue };
-            if *gap <= 0.0 && *gap < before - CREEP {
-                // Where the clearance reached 0, linearly from the pose it was measured at (the last step's, or where
-                // the part stood in contact before it crept in); at that pose if it was in contact already.
-                let at = (before / (before - *gap)).clamp(0.0, 1.0);
-                stop = Some(stop.map_or(at, |s| s.min(at)));
-            } else if *gap <= 0.0 && *gap < before {
-                // In contact and a little further in: judged from where it was, so that creeping in adds up.
-                (*gap, held) = (before, true);
-            }
+            self.gaps.push(gap);
         }
         self.clearance = nearest.0;
         self.least_clearance = self.least_clearance.min(nearest.0);
-        let n = self.machine.axes().len();
-        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
-        self.machine.tool_state(&self.state, &mut pos, &mut vel);
         if nearest.0 <= 0.0 && self.contact.is_none() {
+            let n = self.machine.axes().len();
+            let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            self.machine.tool_state(&self.state, &mut pos, &mut vel);
             let speed = vel.iter().map(|v| v * v).sum::<f64>().sqrt();
             // The step counter moves on after this check.
-            self.contact =
-                Some(Contact { time: (self.step + 1) as f64 * self.dt, pose: pos.clone(), speed, obstacle: nearest.1 });
+            let time = (self.step + 1) as f64 * self.dt;
+            let (peak_force, impact_energy) = (self.contact_force, 0.0);
+            self.contact = Some(Contact { time, pose: pos, speed, obstacle: nearest.1, peak_force, impact_energy });
         }
-        self.gaps = gaps;
-        if self.crash
-            && let Some(at) = stop
-            && self.last_pose.len() == n
-        {
-            pos = self.last_pose.iter().zip(&pos).map(|(from, to)| from + at * (to - from)).collect();
-            let mut torque = vec![0.0; self.machine.motors().len()];
-            let before = self.machine.energy(&self.state);
-            self.machine.equilibrium(&pos, &mut self.state, &mut torque);
-            self.crash_energy += before - self.machine.energy(&self.state);
-            if self.control.enabled() {
-                let _ = self.control.command(Command::Disable, self.machine.as_ref());
-                self.crashed = true;
+    }
+
+    /// effects.crash: the obstacles' pushes over the coming step (`Push`), for each obstacle a part comes within
+    /// `PUSH_RANGE` of. The depth and its slopes are those of the rigid kinematics at the motors' angles (`forward`,
+    /// then `equilibrium`), so that the push is a spring on the motors' angles, which the step integrates with the rest.
+    // shortcut: the push acts on the motors, not on the part that touches; a load on a soft belt or gearbox swings on
+    // into the obstacle by its transmission's give (millimetres on a belt at 1 m/s) instead of stopping at its face.
+    // Push on the part itself once `Machine` can take an external force at a body.
+    fn pushes(&mut self) {
+        self.pushes.clear();
+        let near: Vec<usize> =
+            (0..self.obstacles.len()).filter(|&k| self.gaps.get(k).is_some_and(|g| *g < PUSH_RANGE)).collect();
+        if !self.crash || near.is_empty() {
+            return;
+        }
+        let machine = self.machine.as_ref();
+        let (motors, axes) = (machine.motors().len(), machine.axes().len());
+        let (mut angle, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
+        machine.motor_state(&self.state, &mut angle, &mut speed);
+        let (mut tool, mut state, mut torque) = (vec![0.0; axes], Vec::new(), vec![0.0; motors]);
+        let mut gaps_at = |at: &[f64]| -> Vec<f64> {
+            machine.forward(at, &mut tool);
+            machine.equilibrium(&tool, &mut state, &mut torque);
+            let bodies = crate::collision::Bodies::of(machine, &state);
+            near.iter().map(|&k| bodies.gap(&self.obstacles[k].aabb).map_or(f64::INFINITY, |g| g.2)).collect()
+        };
+        let depths: Vec<f64> = gaps_at(&angle).into_iter().map(|g| -g).collect();
+        let mut slopes = vec![vec![0.0; motors]; near.len()];
+        for m in 0..motors {
+            let mut at = angle.clone();
+            at[m] += SLOPE_STEP;
+            let up = gaps_at(&at);
+            at[m] -= 2.0 * SLOPE_STEP;
+            let down = gaps_at(&at);
+            for (j, slope) in slopes.iter_mut().enumerate() {
+                slope[m] = (up[j] - down[j]) / (2.0 * SLOPE_STEP);
             }
-            // Moving on from the face is judged from where the stop left the parts.
-            let bodies = self.machine.collision_bodies(&self.state);
-            for (gap, o) in self.gaps.iter_mut().zip(&self.obstacles) {
-                *gap = gap_to(&bodies, o);
+        }
+        for ((&k, depth), slope) in near.iter().zip(depths).zip(slopes) {
+            let (stiffness, damping) = (self.obstacles[k].stiffness, self.obstacles[k].damping);
+            if depth.is_finite() && slope.iter().all(|g| g.is_finite()) {
+                self.pushes.push(Push { depth, slope, stiffness, damping });
             }
-            held = false;
         }
-        if !held || self.last_pose.len() != n {
-            self.last_pose = pos;
+        self.push_from = angle;
+    }
+
+    /// The step done: the obstacles' force at its end (`contact_force`), and the work their pushes took out of the
+    /// machine over it (J), integrated with the motion (the last entry of `joint`), which goes to `crash_energy`.
+    fn pushed(&mut self) -> f64 {
+        if self.pushes.is_empty() {
+            self.contact_force = 0.0;
+            return 0.0;
         }
+        let motors = self.push_from.len();
+        let (mut angle, mut speed, mut torque) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
+        self.machine.motor_state(&self.state, &mut angle, &mut speed);
+        self.contact_force = push_torques(&self.pushes, &self.push_from, &angle, &speed, &mut torque);
+        let taken = self.joint.last().copied().unwrap_or(0.0);
+        self.crash_energy += taken;
+        taken
+    }
+
+    /// A step with the drives disabled and the obstacles pushing: the mechanics alone, the pushes' torques worked out at
+    /// every stage of the integration, and the work they take out of the machine integrated with it (as with the
+    /// windings, whose entries rest at zero here).
+    fn advance_pushed(&mut self) {
+        let Self {
+            machine,
+            rk_joint,
+            joint,
+            state,
+            torque,
+            pushes,
+            push_from,
+            motor_buffers: [angle, speed, stage, push],
+            dt,
+            substeps,
+            ..
+        } = self;
+        let n = state.len();
+        joint.clear();
+        joint.extend_from_slice(state);
+        joint.resize(n + WINDING_STATES * torque.len() + 1, 0.0);
+        let h = *dt / *substeps as f64;
+        for _ in 0..*substeps {
+            rk_joint.step(
+                |y, dy| {
+                    let (mech, (dmech, rest)) = (&y[..n], dy.split_at_mut(n));
+                    machine.motor_state(mech, angle, speed);
+                    push.fill(0.0);
+                    push_torques(pushes, push_from, angle, speed, push);
+                    for k in 0..stage.len() {
+                        stage[k] = torque[k] + push[k];
+                    }
+                    rest.fill(0.0);
+                    rest[rest.len() - 1] = -push.iter().zip(speed.iter()).map(|(t, w)| t * w).sum::<f64>();
+                    machine.derivatives(mech, stage, dmech);
+                },
+                joint,
+                h,
+            );
+        }
+        state.copy_from_slice(&joint[..n]);
     }
 
     /// With effects.thermal_feedback, tells the machine its parts' rises (`Machine::set_part_temperatures`).
@@ -552,9 +679,11 @@ impl Sim {
             torque,
             rk_joint,
             joint,
-            motor_buffers: [angle, speed, stage_torque],
+            motor_buffers: [angle, speed, stage_torque, push],
             dt,
             substeps,
+            pushes,
+            push_from,
             ..
         } = self;
         let (n, drives) = (state.len(), &control.drives);
@@ -563,6 +692,8 @@ impl Sim {
         for d in drives {
             joint.extend([d.current, 0.0, 0.0, 0.0]);
         }
+        // The work the obstacles' pushes take out of the machine over the step (`pushed`).
+        joint.push(0.0);
         let h = *dt / *substeps as f64;
         for _ in 0..*substeps {
             rk_joint.step(
@@ -570,6 +701,12 @@ impl Sim {
                     let ((mech, windings), (dmech, dwindings)) = (y.split_at(n), dy.split_at_mut(n));
                     machine.motor_state(mech, angle, speed);
                     for (k, d) in drives.iter().enumerate() {
+                        // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
+                        if d.pulses_off {
+                            stage_torque[k] = 0.0;
+                            dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
+                            continue;
+                        }
                         let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
                         stage_torque[k] = p.torque_with(i, d.d_current, d.flux(p));
                         dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(
@@ -581,6 +718,13 @@ impl Sim {
                             d.flux(p),
                         ));
                     }
+                    push.fill(0.0);
+                    push_torques(pushes, push_from, angle, speed, push);
+                    for (stage, push) in stage_torque.iter_mut().zip(push.iter()) {
+                        *stage += push;
+                    }
+                    let work = dwindings.len() - 1;
+                    dwindings[work] = -push.iter().zip(speed.iter()).map(|(t, w)| t * w).sum::<f64>();
                     machine.derivatives(mech, stage_torque, dmech);
                 },
                 joint,
@@ -735,8 +879,8 @@ impl Sim {
         self.machine.scene(&self.state, out);
         out.tool = self.tool_point();
         out.obstacles.clone_from(&self.obstacles);
-        out.clearance =
-            crate::collision::nearest(&self.machine.collision_bodies(&self.state), &self.obstacles).map(|(_, gap)| gap);
+        let bodies = crate::collision::Bodies::of(self.machine.as_ref(), &self.state);
+        out.clearance = crate::collision::nearest(&bodies, &self.obstacles).map(|(_, gap)| gap);
         out.first_contact = self.contact.as_ref().map(|c| c.time);
         let mut colour = |id: &str, index: usize, heat: f64| {
             if let Some(part) = out.parts.iter_mut().filter(|p| p.id == id).nth(index) {
@@ -777,17 +921,22 @@ impl Sim {
             below(start, part),
             [0.15, 0.15, 0.17],
         ));
-        // shortcut: the slats are boxes along the scene's axes, right for a belt along x or y and too wide on a slant;
-        // turned boxes if a slanted belt is ever drawn.
+        // Each slat a strip 10 mm wide square across the belt, however the belt runs in the floor's plane.
         let unit = [end[0] - start[0], end[1] - start[1]];
         let norm = unit[0].hypot(unit[1]).max(1e-9);
-        let (dx, dy) = (unit[0].abs() / norm, unit[1].abs() / norm);
-        let size = [0.01 * dx + width * dy, 0.01 * dy + width * dx, 0.006];
+        let across = [-unit[1] / norm * width / 2.0, unit[0] / norm * width / 2.0];
         let spacing = 0.1;
         let shift = conveyor.belt(self.time()) % spacing;
         for i in 0..(conveyor.length / spacing).floor() as usize {
             if let Some(p) = self.machine.scene_point(&along(shift + i as f64 * spacing)) {
-                out.parts.push(Part::new("conveyor-slat", Shape::Box { size }, below(p, part), [0.35, 0.35, 0.38]));
+                let [x, y, z] = below(p, part);
+                let (from, to) = ([x - across[0], y - across[1], z], [x + across[0], y + across[1], z]);
+                out.parts.push(Part::new(
+                    "conveyor-slat",
+                    Shape::Segment { to, width: 0.01 },
+                    from,
+                    [0.35, 0.35, 0.38],
+                ));
             }
         }
         for (k, _) in conveyor.parts_on_belt(self.time(), pass) {

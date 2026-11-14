@@ -443,15 +443,16 @@ fn every_effect_switch_changes_the_traces() {
             base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
-        // A crash needs an obstacle, and the configs have none. The thermal warm start acts on the cycle analysis, not on
-        // a run. A swinging payload is the arms' alone (the joint kit's other machines read the switch but have no payload
-        // to hang, the SCARA's sits at its flange with no length to swing on), and it brings joints and signals of its
-        // own. Their own tests show them working.
+        // A crash needs an obstacle, and the configs have none; drive monitoring acts only on a trip, which a cycle never
+        // has. The thermal warm start acts on the cycle analysis, not on a run. A swinging payload is the arms' alone (the
+        // joint kit's other machines read the switch but have no payload to hang, the SCARA's sits at its flange with no
+        // length to swing on), and it brings joints and signals of its own. Their own tests show them working.
         let skipped = [
             "effects.hard_stops",
             "effects.holding_brake",
             "effects.shaper_follows_pose",
             "effects.crash",
+            "effects.drive_monitoring",
             "effects.thermal_warm_start",
             "effects.payload_swing",
         ];

@@ -169,6 +169,24 @@ notch_bandwidth_hz = 20.0
 encoder_noise_counts = 4.0
 current_noise_a = 0.01
 noise_seed = 1
+# effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s
+# from the rated speed (S120 p1121), "off3" in off3_ramp_s (p1135), "sto" takes the torque off at once (the motor
+# coasts), "current_limit" brakes at the torque limit; at standstill, below pulse_off_speed_rad_s (p1226), the pulses
+# go off. [estimate] OFF3 in 0.1 s, as commissioned for a fast stop; OFF1 1 s.
+fault_reaction = "off3"
+off1_ramp_s = 1.0
+off3_ramp_s = 0.1
+pulse_off_speed_rad_s = 2.09
+# What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
+# standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
+# blocked_speed_rad_s for blocked_time_s (F07900: p2175, p2177 3 s); the torque further from the model's expected
+# torque than torque_band times the peak torque (0: off), as a robot controller detects a collision. [estimate]
+following_error_window_rad = 1.0
+standstill_window_rad = 0.1
+standstill_time_s = 1.0
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+torque_band = 0.0
 # Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
 braking_module = false
 

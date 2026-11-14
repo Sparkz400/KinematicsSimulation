@@ -184,6 +184,8 @@ pub struct CycleLoad {
     pub dwell_angle_error_peak: f64,
     /// A drive tripped on DC link overvoltage and took all drives off: the run ended there, and the figures
     /// are those up to the trip.
+    /// A drive tripped on DC link overvoltage, or a drive's monitoring tripped (effects.drive_monitoring), and took all
+    /// drives off: the run ended there, and the figures are those up to the trip and the stop.
     pub tripped: bool,
     pub motors: Vec<MotorLoad>,
     /// Where the energy drawn from the supply went, for a machine that reports its losses. `None` also where the
@@ -915,14 +917,14 @@ impl Tally {
             guide_load,
             guide_speed,
             path_error_peak: self.path_error[0].0,
-            path_error_rms: (self.path_error[0].1 / samples).sqrt(),
+            path_error_rms: (self.path_error[0].1 / self.path_error[0].2.max(1) as f64).sqrt(),
             tracking_error_peak: self.tracking_error[0],
             dwell_error_peak: self.dwell_error[0],
             path_angle_error_peak: self.path_error[1].0,
-            path_angle_error_rms: (self.path_error[1].1 / samples).sqrt(),
+            path_angle_error_rms: (self.path_error[1].1 / self.path_error[1].2.max(1) as f64).sqrt(),
             tracking_angle_error_peak: self.tracking_error[1],
             dwell_angle_error_peak: self.dwell_error[1],
-            tripped: sim.control.drives.iter().any(|d| d.tripped),
+            tripped: sim.control.drives.iter().any(|d| d.tripped) || sim.control.fault.is_some(),
             motors: self.loads,
             budget,
             part_rises,

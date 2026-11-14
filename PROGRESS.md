@@ -3796,3 +3796,83 @@ Left open:
   rest as the D3's is.
 - The shipped config's geometry was checked for reach and condition number by a script after the crate's equations, not
   against a Quattro: Omron publishes none of it.
+
+## Collision and crash handling (14 November)
+
+What: a crash no longer stops the whole machine dead and switches the drives off on 1 µm of creep. An obstacle pushes
+back on a part that goes into it with its contact stiffness and damping (`effects.crash`), so the axes in contact are
+blocked and the others go on; the drives watch themselves as servo drives do (`effects.drive_monitoring`, new, off by
+default) and, once one trips, every drive stops by its own fault reaction. Slanted parts are capsules with an exact
+clearance instead of boxes around them.
+
+How:
+- `sim_core::Capsule` (segment and radius) with `gap` to a box: the least signed distance of the segment to the box,
+  less the radius, by golden-section search (the signed distance is convex along a line), to the last bit.
+  `Machine::collision_capsules` (default none) beside `collision_bodies`; `collision::Bodies` holds both and is what
+  `nearest`, `check_path`, the live check and the scene use. The D3 gives its six rods (radius 6 mm) and three upper
+  arms (20 mm) as capsules along the drawn segments, the D4 also its telescope's tube and inner shaft; only the
+  collision-body functions of the two crates changed.
+- `Aabb::gap` took the intersection's width as the depth of an overlap: 0 for a point inside a box (the default
+  collision body of the machine files), too little for any box inside another along an axis. Now how far it has to
+  move to part.
+- Obstacles take optional `stiffness_n_m` and `damping_n_s_m` ([estimate] 1e7 N/m and 1e4 N s/m). `Sim::pushes`: for
+  each obstacle a part has come within 10 mm of, the depth of the rigid kinematics at the motors' angles and its slope
+  per motor (central differences of 1 µrad through `forward` and `equilibrium`); over the step the push F = k d + c ḋ,
+  linear in the angles, acts as torques F g on the motors at every RK4 stage, enabled or not, and the work it takes
+  is integrated with the motion as one more entry of the joint state (`crash_energy`, the budget's `crash` row; a
+  trapezoid missed the T-gantry's budget by 0.046 J against 0.017 J allowed). `Sim::contact_force`; `Contact` has
+  `peak_force` and `impact_energy`. The dead stop, `CREEP` and `last_pose` are gone.
+- New `fault.rs`: `Reaction` (OFF1, OFF3, STO, current limit), `Monitor`, `Settings` from `[drive]` (per motor
+  through `catalog::motor_config`), `Watch::check` (following error window, standstill window after a standing time,
+  blocked at the torque limit below a speed for a time, optional torque band around the torque feedforward), `Fault`.
+  `Controller` runs the watches every base step with the switch on; `trip` drops the motion and starts `react`: per
+  drive a speed ramp from its measured speed that the velocity and current loops follow with the position loop open
+  (`Drive::fault_speed`; no feedforward), pulses off once the ramp is down and the motor below
+  `pulse_off_speed_rad_s` (`Drive::pulses_off`: `disabled_step`, its winding left out of the integration), STO at
+  once; all off, the drives are disabled and the brakes engage. `track_stop` follows each tool axis's distance from
+  the trip pose until every motor stands. Commands but Enable and Disable are refused while they stop
+  (`error-fault`); Enable acknowledges. `Drive::at_limit` records the velocity loop asking beyond the torque limit.
+- `CycleLoad::tripped` also on a monitor's trip. `sim-cli run` says the impact (largest force, force now, energy), the
+  trip (monitor, motor, time, each drive's reaction) and the stopping distances. The app says the trip, the monitor
+  and each drive's reaction at once in Messages (while the 3D view and scopes show the ramps and the coasting) and the
+  stopping distances once the machine stands. The conveyor's slats are strips square across the belt.
+- Ten new `[drive]` keys and `effects.drive_monitoring` in all 24 / 19 shipped configs (a config without them gets
+  the shipped values, monitoring off). With monitoring on, no shipped cycle trips (12 machines and 8 machine files,
+  8 s each, checked with sim-cli).
+
+Tests (hand calculations in their comments):
+- `a_slanted_capsule_keeps_the_hand_calculated_clearance_to_a_box`: a 6 mm rod at 45 degrees and a cube, (0.2 - 0.1)
+  / sqrt 2 - 0.006 = 64.711 mm and the nearest points; the cube moved onto the rod, 25 + 6 = 31 mm overlap.
+- `a_box_inside_another_is_as_deep_as_its_way_out`: a point 30 mm, a 20 mm cube 40 mm deep (failed before: 0 and 20).
+- `a_forearm_rod_is_no_wider_than_its_radius` (D3): a 0.1 mm cube 20 mm from each rod's middle keeps 14 mm, within
+  0.1 mm (the old boxes: up to 95 mm less).
+- `each_monitor_trips_at_its_hand_counted_step`, `a_stop_ramp_takes_the_deceleration_off_and_ends_at_zero` (fault.rs).
+- `a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error`: the single axis at 1 m/s, 250 rad/s
+  at the motor, trips on its following error 1 rad / 250 rad/s = 4 ms after the contact (measured 4.9 ms: one
+  position cycle).
+- `a_blocked_axis_pushes_with_the_hand_calculated_force_at_the_current_limit`: 3.8 N m * 5 / 0.02 m = 950 N
+  (measured 948.6 N; the motor's Coulomb friction is at most 5 N).
+- `the_axis_not_in_contact_stops_on_its_fault_reaction_ramp`: the xyz portal's Z blocked on a slab trips after
+  1 / 125 = 8 ms (9 ms); X from 0.8 m/s stops on OFF3 in 26.3 mm against v^2 / (2a) = 25.48 mm, on OFF1 in 254.9 mm
+  against 254.8 mm, and coasts 148 mm on STO.
+- Rewritten for the push: the crash tests of sim-machines' collision.rs (the coasting single axis now springs back up
+  to 20 mm; the T-gantry rests 51 µm into the table, its budget closes to 0.9 mJ against 17 mJ), the D3's arm and rod
+  crashes, the PLCopen crash (monitoring on); the collision-bodies test checks the capsules against the drawn segments.
+
+Outside the area, kept small: `Drive` fields `at_limit`, `fault_speed`, `pulses_off` and two lines in
+`velocity_loop` (drive.rs); `Controller` fields, `apply_config` reads the settings (control.rs); `Sim::reconfigure`
+sizes the joint integrator one larger (sim.rs); `CycleLoad::tripped` (analysis.rs); the app's session messages; the
+skip lists of the two "switching an effect" tests; the i18n test's key list; sim-opcua's crash test; config files.
+
+Left open:
+
+- The push acts on the motors through the rigid kinematics, not on the part that touches: a load on a soft belt
+  swings 2.6 mm into a wall at 1 m/s and springs back. Pushing on the part needs a `Machine` method for an external
+  force at a body.
+- The holding brake is the machine's: it engages once all drives are off, not per axis as each stops.
+- The PLCopen axis goes to ErrorStop when the drives are off, some 0.1 s after the trip, not at the trip.
+- The D2's and the linear delta's rods are not collision bodies yet (capsules would do); collisions between links.
+- No quick-stop command (OFF3 from the PLC); a trip on DC link overvoltage still switches all drives off at once
+  (OFF2), outside `Controller::fault`.
+- The monitoring windows are settings in motor radians; a window in the axis' units (Siemens' LU) would read better
+  on machines with different ratios.

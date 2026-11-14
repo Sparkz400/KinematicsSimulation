@@ -476,28 +476,18 @@ impl Delta4 {
         ]
     }
 
-    /// The telescope's tube and inner shaft as collision boxes, `PIECES` along each, each piece widened by its width.
-    fn shaft_boxes(&self, p: V3) -> Vec<sim_core::Aabb> {
-        let mut out = Vec::new();
-        for (from, to, width) in self.telescope(p) {
-            out.extend((0..PIECES).map(|n| {
-                let at = |f: f64| -> V3 { std::array::from_fn(|i| from[i] + f * (to[i] - from[i])) };
-                let (a, b) = (at(n as f64 / PIECES as f64), at((n + 1) as f64 / PIECES as f64));
-                sim_core::Aabb {
-                    centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])),
-                    size: std::array::from_fn(|i| (b[i] - a[i]).abs() + width),
-                }
-            }));
-        }
-        out
+    /// The telescope's tube and inner shaft as collision capsules, each of half its width along the segment drawn.
+    fn shaft_capsules(&self, p: V3) -> Vec<sim_core::Capsule> {
+        self.telescope(p)
+            .into_iter()
+            .map(|(from, to, width)| sim_core::Capsule { from, to, radius: width / 2.0 })
+            .collect()
     }
 }
 
-/// The telescope's outer tube and inner shaft as drawn and as collision bodies, m, and the pieces the collision boxes
-/// cut each into.
+/// The telescope's outer tube and inner shaft as drawn and as collision capsules (twice their radius), m.
 const TUBE_WIDTH: f64 = 0.03;
 const INNER_WIDTH: f64 = 0.016;
-const PIECES: usize = 6;
 
 impl Machine for Delta4 {
     /// The D3's, plus the tool's turn (tool, gripper, payload and the shaft's spin) and its rotor about z.
@@ -777,12 +767,16 @@ impl Machine for Delta4 {
         self.arms.scene_point(&tool_pose[..3])
     }
 
-    /// The D3's bodies (platform, payload, forearm rods) and the telescopic shaft between its joints.
-    // shortcut: the shaft's pieces are boxes along the scene's axes, as the D3's rods; the motor and gearbox above the
-    // base are not bodies.
+    /// The D3's boxes: platform and payload.
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
-        let mut out = self.arms.collision_bodies(&s[..self.n3]);
-        out.extend(self.shaft_boxes(self.platform(s).0));
+        self.arms.collision_bodies(&s[..self.n3])
+    }
+
+    /// The D3's capsules (forearm rods, upper arms) and the telescopic shaft between its joints.
+    // shortcut: the motor and gearbox above the base are not bodies; add them if an obstacle above the base matters.
+    fn collision_capsules(&self, s: &[f64]) -> Vec<sim_core::Capsule> {
+        let mut out = self.arms.collision_capsules(&s[..self.n3]);
+        out.extend(self.shaft_capsules(self.platform(s).0));
         out
     }
 }
