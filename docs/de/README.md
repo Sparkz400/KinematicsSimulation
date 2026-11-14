@@ -83,6 +83,9 @@ linear-motor-axis	Linearmotorachse
 rotary-table	Rundschalttisch
 urdf-arm	Sechsachsroboter (URDF)
 scara	SCARA-Roboter (URDF)
+hexapod	Hexapod (6 elektrische Zylinder)
+cable-planar	Ebener Seilroboter (4 Seile)
+cable-spatial	Räumlicher Seilroboter (8 Seile)
 ```
 
 Alle Befehle schreiben CSV auf die Standardausgabe oder mit `--out FILE` in eine Datei. Meldungen und Fehler gehen auf die Fehlerausgabe. Die Spaltennamen der CSV-Ausgabe sind englische Bezeichner und werden nicht übersetzt.

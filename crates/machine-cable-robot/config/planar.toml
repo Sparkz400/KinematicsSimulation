@@ -1,0 +1,257 @@
+# Planar cable robot: a carriage of 3 kg with up to 2 kg on it, a point in a vertical plane (x across, z up), hung in
+# 4 cables from pulleys at the corners of a frame 2 m wide and 1.6 m high; each cable on the drum of a winch behind a
+# planetary gearbox 5:1 on a servo motor (top winches above their pulleys, bottom ones below). Generic proportions;
+# every value says where it comes from:
+#   [catalogue]  read from a maker's document (catalog/siemens/*.csv, Siemens D 32).
+#   [estimate]   ours: parts of this size as the makers' catalogues list them, not one maker's article.
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# [estimate] The carriage is a point: the cables meet at its centre, so it does not turn.
+[platform]
+spatial = false
+mass_kg = 3.0
+payload_kg = 2.0
+
+# [estimate] Where each cable runs onto its pulley (the pulley's swivel point, x y z in m) and the direction the cable
+# comes from its winch (the pulley's swivel axis); the pulleys face the frame's centre.
+[frame]
+exits_m = [[-1.0, 0.0, 1.6], [1.0, 0.0, 1.6], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]
+winch_directions = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]
+
+[pulley]
+# [estimate] a deflection pulley for a 2 mm rope.
+radius_m = 0.025
+
+# [estimate] A 2 mm rope of Dyneema (UHMWPE): EA, its material damping (N s/m times the free length, so c / l), its
+# breaking load and the safety the band's top keeps (breaking load / safety factor = 400 N); the least tension that
+# keeps it taut, and the tension the distribution keeps the cables near.
+[cable]
+ea_n = 1.0e5
+specific_damping_n_s = 60.0
+breaking_load_n = 4000.0
+safety_factor = 10.0
+min_tension_n = 10.0
+reference_tension_n = 120.0
+
+# [estimate] The winch: its drum, the friction of its bearings and the pulley at the cable, its capacity, and buffers at
+# an empty and a full drum.
+[winch]
+drum_radius_m = 0.025
+drum_inertia_kgm2 = 2.0e-4
+capacity_m = 5.0
+friction_coulomb_n = 2.0
+friction_viscous_n_s_m = 1.0
+friction_smoothing_m_s = 0.002
+stop_stiffness_n_m = 1.0e6
+stop_damping_n_s_m = 1000.0
+
+# [estimate] A planetary gearbox 5:1 of this size, its values at the output (as on every machine): 5 arcmin of
+# backlash, 10 N m/arcmin.
+[gearbox]
+ratio = 5.0
+efficiency = 0.95
+backlash_rad = 1.45e-3
+stiffness_nm_rad = 3.4e4
+damping_nm_s_rad = 1.0
+inertia_at_input_kgm2 = 3.0e-5
+efficiency_torque_nm = 20.0
+no_load_torque_nm = 0.08
+no_load_speed_rpm = 3000.0
+lost_motion_band_rad = 3.0e-4
+hysteresis_rad = 1.0e-4
+stiffness_t1_nm = 4.0
+stiffness_t2_nm = 12.0
+stiffness_k2_nm_rad = 4.0e4
+stiffness_k3_nm_rad = 4.5e4
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.01
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min; 15 N m at the maximum current of 18 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# [estimate]
+brake_torque_nm = 8.0
+
+# [estimate] 1.5 m/s of the carriage asks at most some 1.5 m/s of a cable: 3000 r/min of the motor through 5:1 on the
+# 25 mm drum.
+[axis.x]
+max_velocity_m_s = 1.5
+max_acceleration_m_s2 = 10.0
+max_jerk_m_s3 = 500.0
+
+[axis.z]
+max_velocity_m_s = 1.5
+max_acceleration_m_s2 = 10.0
+max_jerk_m_s3 = 500.0
+
+# The box the carriage may move in (x, z in m); the poses in it outside the wrench-feasible workspace are refused.
+[workspace]
+tool_min = [-0.6, 0.3]
+tool_max = [0.6, 1.3]
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# [estimate] scaled from the delta picker's 0.25 by the inertia at the motor: rotor, gearbox input and drum
+# 2.2e-4 kg m^2 plus the platform's share on the cable through the ratio.
+velocity_kp_nm_s_rad = 0.1
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
+# moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
+# speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
+torque_feedforward_model = "rigid"
+# With effects.friction_feedforward: the friction characteristic, torque over speed at rising speeds, linear between
+# the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
+friction_feedforward_speed_rad_s = [10.0]
+friction_feedforward_torque_nm = [0.0]
+# The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
+# it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
+precontrol_balance_s = 0.0
+# With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
+load_encoder_step = 1.0e-6
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
+# torque-speed curve ends. The time-optimal plan turns the motor up to it along that curve; the verdict motor-speed
+# judges the cycle's peak speed against it. A motor by name sets the catalogue's.
+max_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
+braking_module = false
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged. The
+# cables' own checks (highest tension against the rating, tension below the least) come from [cable].
+[ratings]
+# [estimate] What a cable robot of this size is asked to hold at a dwell; the carriage settles to 0.15 mm (sim-cli analyze).
+settling_tolerance_m = 0.0003
+# The DC link of the S210 converter. [estimate] as for the delta picker.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 4.25
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+
+[start]
+pose = [0.0, 0.8]
+
+[[cycle.segment]]
+target = [0.5, 1.2]
+dwell_s = 0.1
+payload = false
+
+[[cycle.segment]]
+target = [-0.5, 0.4]
+dwell_s = 0.1
+payload = true
+
+[[cycle.segment]]
+target = [0.0, 0.8]
+dwell_s = 0.1
+payload = true
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.008, 0.012]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+platform.mass_kg = [2.5, 3.5]
+cable.ea_n = [0.6e5, 1.6e5]
+cable.specific_damping_n_s = [20.0, 150.0]
+cable.breaking_load_n = [3500.0, 4500.0]
+winch.drum_inertia_kgm2 = [1.5e-4, 3.0e-4]
+winch.friction_coulomb_n = [1.0, 4.0]
+winch.friction_viscous_n_s_m = [0.5, 2.0]
+gearbox.efficiency = [0.93, 0.97]
+gearbox.backlash_rad = [0.9e-3, 2.0e-3]
+gearbox.stiffness_nm_rad = [2.5e4, 4.5e4]
+gearbox.damping_nm_s_rad = [0.5, 2.0]
+gearbox.no_load_torque_nm = [0.04, 0.15]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]

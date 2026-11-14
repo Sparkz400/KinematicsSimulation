@@ -13,6 +13,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | D4 | [`crates/machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml) | Four-axis delta picker D4: the D3 with a turning tool on a telescopic shaft, sized after the ABB IRB 360 with its fourth axis. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d4) |
 
 | L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
+| H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
+| CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
@@ -720,6 +722,82 @@ and a cycle of straight lines in tool space (and the arm's settling tolerance 5 
 | `axis.c` (SCARA), `axis.rx`, `axis.ry`, `axis.rz` (arm): `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | In tool space: the turn's limits | SCARA 4, 30, 1000; arm 2, 8, 150; estimates |
 
 These are choices and design rules, not properties of a part, so they have no `[bounds]`.
+
+## Hexapod
+
+The hexapod's config ([`machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml)) has the tables of the
+ball screw axis (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[sim]`, `[screw]`, `[gearbox]`
+here a coupling of ratio 1, `[motor]`, `[drive]`, `[ratings]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
+meanings; one motor, coupling, screw and drive per leg, all alike. The screw is a 25 x 10 (`lead_m` 0.01, `length_m`
+0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`: 145
+Hz, 89 degrees, 10.6 dB); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
+ry, rz (rad, a rotation vector); `[axis.x]`, `[axis.y]`, `[axis.z]` take `max_velocity_m_s`, `max_acceleration_m_s2`,
+`max_jerk_m_s3` (0.2, 3, 100, estimates), `[axis.rx]`, `[axis.ry]`, `[axis.rz]` the same in rad (0.8, 10, 400,
+estimates). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
+stretch; off: the rigid reference model), `joint_friction` (the rod's guide and the nut's preload), `hard_stops` (the
+legs' stroke ends), the gearbox and motor effects; shipped as there. Its own keys (all estimates; the masses and the
+legs' friction bounded):
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `hexapod.base_radius_m` | m | Circle of the base joints | 0.4 |
+| `hexapod.base_half_angle_deg` | ° | A base pair's joints sit at 120 k ± this | 15 |
+| `hexapod.platform_radius_m` | m | Circle of the platform joints (also the length the condition number weighs turns by) | 0.2 |
+| `hexapod.platform_half_angle_deg` | ° | A platform pair's joints sit at 120 k ± (60 − this) | 10 |
+| `leg.closed_length_m` | m | A leg retracted, joint to joint | 0.45 |
+| `leg.stroke_m` | m | Its stroke (the joint's range, its stops) | 0.2 |
+| `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 20, 60, 0.002 |
+| `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
+| `leg.mass_kg` | kg | A leg: body, motor, rod and nut | 4 |
+| `leg.platform_share` | – | The share of it that moves with the platform joint; the rest sits still at the base | 0.3 |
+| `mass.platform_kg` | kg | The platform | 25 |
+| `mass.platform_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (the legs' shares are added) | 0.4, 0.4, 0.7 |
+| `mass.payload_kg` | kg | Payload, a point mass at the centre (`effects.payload`) | 30 |
+| `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges | −0.06, −0.06, 0.44, −0.08, −0.08, −0.12 to 0.06, 0.06, 0.54, 0.08, 0.08, 0.12 |
+| `workspace.max_joint_angle_deg` | ° | Steepest leg against the base's or the platform's normal; beyond: `error-hexapod-joint-angle` | 40 |
+| `workspace.max_condition_number` | – | Of the Jacobian, turns weighed by the platform radius; beyond: `error-hexapod-singularity` | 20 |
+
+## Cable robots
+
+The configs of `cable-planar` and `cable-spatial` ([`machine-cable-robot/config/`](../crates/machine-cable-robot/config/),
+`common.toml` and the machine's own file) have the tables of the ball screw axis but `[screw]` and `[slide]`, with
+`[gearbox]` a planetary gearbox 5:1 at each winch (estimates: 0.95, 5 arcmin, 3.4e4 N m/rad, bounded) and
+`profile.vertical_axis` "z". The tool pose is x, z (m) for the planar one, x, y, z (m), rx, ry, rz (rad, a rotation
+vector) for the spatial one; the `[axis.<id>]` tables as on the hexapod (planar 1.5 m/s, 10 m/s², 500 m/s³; spatial 1,
+8, 400 and 1 rad/s, 10, 400; estimates). `ratings.settling_tolerance_m` is 0.3 mm (planar) and 1 mm (spatial), a
+requirement of their size (estimate). Effects:
+
+| Switch | Default | What it models |
+| --- | --- | --- |
+| `cable_stretch` | on | The cables stretch (EA / l) and go slack, each winch's gearbox twists: platform, drums and rotors are bodies of their own. **Off selects the rigid reference model**: the cables keep their length, the motors turn with them |
+| `cable_damping` | on | With `cable_stretch`: the cables' material damping, `cable.specific_damping_n_s` / l |
+| `winch_friction` | on | Friction of the winches' bearings and the pulleys, at the cable |
+
+The gearbox, motor and drive effects as on every machine (`hard_stops`: an empty and a full drum). Own keys (all
+estimates, values planar / spatial; bounded where they are a part's property):
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `platform.spatial` | – | Six degrees of freedom; off: a point in the x-z plane (no `anchors_m`, `inertia_kgm2`) | false / true |
+| `platform.mass_kg` | kg | The carriage or platform | 3 / 4 |
+| `platform.payload_kg` | kg | Payload, a point mass at the centre (`effects.payload`) | 2 / 4 |
+| `platform.inertia_kgm2` | kg m² | Spatial: its inertia about its centre, x, y, z | – / 0.03, 0.03, 0.05 |
+| `platform.anchors_m` | m | Spatial: each cable's anchor on the platform, in its frame (the planar one's meet at its centre) | – / the corners of 200 x 200 x 100 mm |
+| `frame.exits_m` | m | Each cable's pulley, where the cable runs onto it (the swivel point); 4 or 8 entries, one per winch and motor | the corners of 2 x 1.6 m / of 2 x 1.6 x 1.8 m |
+| `frame.winch_directions` | – | The direction from each pulley to its winch (its swivel axis); the pulley faces the frame's centre at rest | up for the top pulleys, down for the bottom ones |
+| `pulley.radius_m` | m | The pulleys' radius | 0.025 / 0.03 |
+| `cable.ea_n` | N | The cable's EA: a cable of free length l is a spring of EA / l | 1e5 / 3e5 |
+| `cable.specific_damping_n_s` | N s | Its damping times its free length: c = this / l (`effects.cable_damping`) | 60 / 150 |
+| `cable.breaking_load_n` | N | Its breaking load | 4000 / 10000 |
+| `cable.safety_factor` | – | The band's top is the breaking load over this (the rating of `cable-max-tension`) | 10 |
+| `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`) | 10 / 20 |
+| `cable.reference_tension_n` | N | The pretension the distribution keeps the tensions nearest to | 120 / 250 |
+| `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
+| `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
+| `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |
+| `winch.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | Bearings and pulley at the cable (`effects.winch_friction`) | 2, 1 / 3, 2; 0.002 |
+| `winch.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The stops (`effects.hard_stops`) | 1e6, 1000 |
+| `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges; poses in it outside the wrench-feasible workspace are refused (`error-cable-wrench-infeasible`) | −0.6, 0.3 to 0.6, 1.3 / −0.4, −0.3, 0.8, −0.05 (each turn) to 0.4, 0.3, 1.4, 0.05 |
 
 ## `[[cycle.segment]]`
 

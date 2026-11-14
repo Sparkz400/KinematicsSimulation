@@ -99,6 +99,9 @@ linear-motor-axis	Linear motor axis
 rotary-table	Rotary indexing table
 urdf-arm	Six-axis arm (URDF)
 scara	SCARA arm (URDF)
+hexapod	Hexapod (6 electric cylinders)
+cable-planar	Planar cable robot (4 cables)
+cable-spatial	Spatial cable robot (8 cables)
 ```
 
 A machine file is run like a registered machine: `sim-cli verdicts --machine-file machines/h-bot.toml`, or `sim-app --machine-file machines/h-bot.toml`.
@@ -309,6 +312,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [`sim-components`](crates/sim-components/src) | Components | Belt, friction, gearbox, rotary joint, drive, controller, profiles, paths (lines, arcs and splines on two and three axes), analysis, catalogue lookup, trace replay and fit. Knows no machine |
 | [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis), [`machine-delta-d3`](crates/machine-delta-d3) | Machines | Transformation, assembly, signals, 3D scene description, configs. The delta: kinematics with its Jacobian and working range, the Codourey/Olsson dynamics, three rotary joints |
 | [`machine-joint-kit`](crates/machine-joint-kit) | Machines | Ball screw, rack and pinion, linear motor, rotary table, and arms from URDF files (a six-axis arm, a SCARA), built from one kit of joints and transmissions |
+| [`machine-hexapod`](crates/machine-hexapod), [`machine-cable-robot`](crates/machine-cable-robot) | Machines | Parallel kinematics: a hexapod on six ball-screw cylinders, and cable robots on 4 (planar) and 8 (spatial) winches with a QP tension distribution and the wrench-feasible workspace |
 | [`sim-netlist`](crates/sim-netlist) | Machines | Machines from TOML or JSON machine files ([`machines/`](machines/)), wired together from components like a netlist |
 | [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines, the loader of machine files; cross-machine tests |
 | [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 and 3.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |

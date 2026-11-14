@@ -8,7 +8,7 @@ use sim_machines::MACHINES;
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
 /// gearboxes' elasticity on one of arms.
 fn model_switch(cfg: &Config) -> &'static str {
-    ["effects.belt_stretch", "effects.joint_elasticity"]
+    ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch"]
         .into_iter()
         .find(|key| cfg.bool(key).is_ok())
         .expect("a machine with an elastic and a rigid model")

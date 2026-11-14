@@ -46,7 +46,7 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
             "rigid".into(),
             edited(&[&format!(
                 "{} = false",
-                ["effects.belt_stretch", "effects.joint_elasticity"]
+                ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch"]
                     .into_iter()
                     .find(|key| entry.config().bool(key).is_ok())
                     .unwrap()
