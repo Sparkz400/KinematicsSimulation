@@ -128,6 +128,10 @@ fn set(cfg: &mut Config, path: &str, value: f64) -> Result<(), ConfigError> {
     cfg.set_text(&format!("{path} = {value:?}"))
 }
 
+/// The base load current of an S210 converter per its rated current [estimate]: the lowest share of the S120 Motor
+/// Modules of up to 30 A, the range of the S210, in `motor_modules_s120.csv` (15.3 A of 18 A; 0.85 to 0.87 there).
+pub const S210_BASE_LOAD_SHARE: f64 = 0.85;
+
 /// Sets a value only where the config has the key: ratings a config leaves out are not judged.
 fn set_if_present(cfg: &mut Config, path: &str, value: f64) -> Result<(), ConfigError> {
     if cfg.get(path).is_ok() { set(cfg, path, value) } else { Ok(()) }
@@ -177,6 +181,8 @@ struct MotorData {
     thermal_seconds: Option<f64>,
     /// Phase resistance at 20 °C in ohms and rotating field inductance in henries, where a data sheet prints them.
     winding: Option<(f64, f64)>,
+    /// Pole pairs, where the catalogue prints them (`motors_s120.csv`, the 1FK7 and 1FT7).
+    pole_pairs: Option<f64>,
     mass: f64,
 }
 
@@ -200,6 +206,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 rated_speed: get(&m, "rated_speed_rad_s")?,
                 thermal_seconds: number(&sheet, "thermal_time_constant_s"),
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
+                pole_pairs: number(&m, "pole_pairs"),
                 mass: get(&m, "mass_kg")?,
             });
         }
@@ -220,6 +227,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             rated_speed: get("rated_speed_rad_s")?,
             thermal_seconds: number(&m, "thermal_time_constant_s"),
             winding: None,
+            pole_pairs: None,
             mass: get("mass_kg")?,
         });
     }
@@ -241,6 +249,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         rated_speed: rated("speed", "rad_s")?,
         thermal_seconds: manual.as_ref().and_then(|r| number(r, "thermal_time_constant_s")),
         winding: None,
+        pole_pairs: None,
         mass: get("mass_kg")?,
     })
 }
@@ -293,6 +302,11 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set(cfg, "motor.inductance_h", inductance)?;
         set(cfg, "drive.current_kp_v_a", inductance / time_constant)?;
         set(cfg, "drive.current_tn_s", inductance / resistance)?;
+        // effects.field_weakening: the data sheet's one rotating field inductance for both axes, as for surface magnets.
+        set_if_present(cfg, "motor.d_inductance_h", inductance)?;
+    }
+    if let Some(pairs) = m.pole_pairs {
+        set_if_present(cfg, "motor.pole_pairs", pairs)?;
     }
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
     let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley / ratio);
@@ -385,6 +399,10 @@ pub fn paired_drive(article: &str, supply: &str) -> &'static str {
 /// judged against the S210 converter's internal resistor the config had (100 W, 5.7 kW on the EXCT-30). And it sets
 /// `drive.braking_module`, so that `verdicts` judges the axes' braking power together against the one module (an S210
 /// clears it); until the eleventh review each axis was judged against the whole module.
+///
+/// And `ratings.drive_base_load_current_a`, the current the drive falls back to when its thermal image trips
+/// (effects.drive_overload): an S120 Motor Module's from `motor_modules_s120.csv`; for an S210 converter, whose base load
+/// current Siemens does not publish, `S210_BASE_LOAD_SHARE` of its rated current [estimate].
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     // An S210 brakes into a resistor of its own, the axes of an S120 line-up into its one Braking Module.
     let braking_module = |cfg: &mut Config, on: bool| {
@@ -394,7 +412,7 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
             Ok(())
         }
     };
-    let (rated, max) =
+    let (rated, max, base) =
         if let Some(c) = rows(table("siemens/converters_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
             braking_module(cfg, false)?;
             if let Some(b) = rows(table("siemens/braking_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
@@ -412,7 +430,9 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
                     set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
                 }
             }
-            (number(&c, "rated_output_current_a"), number(&c, "max_output_current_a"))
+            // Siemens publishes no base load current for the S210 (`S210_BASE_LOAD_SHARE`).
+            let rated = number(&c, "rated_output_current_a");
+            (rated, number(&c, "max_output_current_a"), rated.map(|r| S210_BASE_LOAD_SHARE * r))
         } else {
             let m = rows(table("siemens/motor_modules_s120.csv"))
                 .into_iter()
@@ -441,7 +461,11 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
             set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
             set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
             braking_module(cfg, true)?;
-            (number(&m, "rated_output_current_a"), number(&m, "max_output_current_a"))
+            (
+                number(&m, "rated_output_current_a"),
+                number(&m, "max_output_current_a"),
+                number(&m, "base_load_output_current_a"),
+            )
         };
     if let Some(capacitance) = rows(table("siemens/dc_link_measured.csv"))
         .into_iter()
@@ -451,8 +475,9 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     {
         set_if_present(cfg, "ratings.dc_link_capacitance_uf", capacitance)?;
     }
-    let (rated, max) = rated.zip(max).ok_or_else(|| unknown("drive", article))?;
+    let ((rated, max), base) = rated.zip(max).zip(base).ok_or_else(|| unknown("drive", article))?;
     set_if_present(cfg, "ratings.drive_rated_current_a", rated)?;
+    set_if_present(cfg, "ratings.drive_base_load_current_a", base)?;
     set_if_present(cfg, "ratings.drive_max_current_a", max)
 }
 

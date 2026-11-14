@@ -68,9 +68,9 @@ The cycle is the list of `[[cycle.segment]]` in the config: target pose, dwell t
 ```text
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h
-a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,
-b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
+a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,,0.00,0.0000
+b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,,0.00,0.0000
 ```
 
 The simulator starts the cycle, lets the first pass go by, and measures the second. One row per motor. Columns that describe the machine, not one motor, repeat in every row.
@@ -108,6 +108,8 @@ The simulator starts the cycle, lets the first pass go by, and measures the seco
 | `belt_tooth_utilisation` | fraction | The belt's tooth load on this motor's pulley over what its teeth allow at the pulley's speed (Megadyne's method, with `ratings.belt_service_factor`), the highest over the cycle. Not a life: no belt maker publishes one |
 | `gearbox_gearing_life_h` | h | Life of the gearbox's gearing from the torque above its rated torque (Palmgren–Miner on Siemens' two torque figures). Empty where the cycle never takes the gearbox above `ratings.gearbox_rated_torque_nm` |
 | `motor_bearing_life_h` | h | Life of the motor's bearings under the belt's pull. Only where the pulley sits on the motor shaft (`ratings.motor_bearing_load_rating_n` set, no gearbox); empty in every shipped config |
+| `housing_rise_k` | K | With `effects.motor_thermal_nodes`: the rise the motor's stator and housing settle at, the winding's times the housing's share of the thermal resistance; 0 without |
+| `drive_overload` | 1 = rated current held | With `effects.drive_overload`: the highest the drive's thermal image (i²t) reaches when the cycle repeats for long; 0 without |
 
 The exact definitions are in the [model reference](model-reference.md#analysis-quantities).
 
@@ -144,7 +146,8 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | Check | Value | Limit | Unit |
 | --- | --- | --- | --- |
 | `motor-peak` | `utilisation` (the torque asked for, not the torque delivered) | 1 | fraction |
-| `motor-thermal` | `winding_rise_k` | `motor.rated_temperature_rise_k` | K |
+| `motor-thermal` | `winding_rise_k` (with `effects.motor_thermal_nodes` the winding node's, which settles where the one node does) | `motor.rated_temperature_rise_k` | K |
+| `drive-overload` | `drive_overload`, with `effects.drive_overload` only | the image's trip level, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = maximum over rated current | 1 = rated current held |
 | `pulley-torque` | peak of the torque at the gearbox output (signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | cubic mean of the torque at the gearbox output, weighted with speed | `ratings.gearbox_rated_torque_nm` | N m |
 | `gearbox-input-speed` | peak motor speed | `ratings.gearbox_max_input_speed_rpm` | r/min |

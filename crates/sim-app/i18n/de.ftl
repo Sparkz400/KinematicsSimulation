@@ -189,6 +189,8 @@ ui-analysis-resistor-energy = Bremswiderstand, Energie [J]
 ui-analysis-resistor-power = Bremswiderstand, mittlere Leistung [W]
 ui-analysis-dc-link-peak = Höchste Zwischenkreisspannung [V]
 ui-analysis-mains-energy = Ins Netz zurückgespeist [J]
+ui-analysis-housing-rise = Übertemperatur von Ständer und Gehäuse, eingeschwungen [K]
+ui-analysis-drive-overload = Thermisches Abbild des Antriebs, Spitze (1 = Bemessungsstrom dauernd)
 ui-analysis-band-low = Kleinster Wert
 ui-analysis-band-high = Größter Wert
 ui-analysis-band-worst = Ungünstigster Fall

@@ -244,12 +244,17 @@ impl Controller {
         // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step.
         // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
         // if a budget across an enable ever needs to close there.
-        let kept: Vec<(f64, f64)> = self.drives.iter().map(|d| (d.temperature_rise, d.dc_voltage)).collect();
+        // So does a housing (effects.motor_thermal_nodes), and a drive's thermal image (effects.drive_overload).
+        let kept: Vec<_> = self
+            .drives
+            .iter()
+            .map(|d| ((d.temperature_rise, d.housing_rise, d.overload_image, d.overloaded), d.dc_voltage))
+            .collect();
         self.drives =
             (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
-        for (k, (drive, (rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
+        for (k, (drive, (heat, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
-            drive.temperature_rise = rise;
+            (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overloaded) = heat;
             if p.dc_link {
                 drive.dc_voltage = (voltage * voltage
                     - p.inductance * drive.current * drive.current / p.dc_capacitance)

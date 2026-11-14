@@ -437,12 +437,13 @@ impl Sim {
                     machine.motor_state(mech, angle, speed);
                     for (k, d) in drives.iter().enumerate() {
                         let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
-                        stage_torque[k] = p.torque_of(i);
+                        stage_torque[k] = p.torque_with(i, d.d_current);
                         dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(
                             d.voltage,
                             d.winding_resistance(p),
                             i,
                             speed[k],
+                            d.d_current,
                         ));
                     }
                     machine.derivatives(mech, stage_torque, dmech);

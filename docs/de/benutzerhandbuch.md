@@ -69,9 +69,9 @@ Der Zyklus ist die Liste der `[[cycle.segment]]` in der Konfiguration: Zielpose,
 ```text
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h
-a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,
-b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
+a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,,0.00,0.0000
+b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,,0.00,0.0000
 ```
 
 Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und misst den zweiten. Je Motor entsteht eine Zeile. Spalten, die die ganze Maschine beschreiben und nicht einen Motor, wiederholen sich in jeder Zeile.
@@ -109,6 +109,8 @@ Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und m
 | `belt_tooth_utilisation` | Anteil | Zahnbelastung des Riemens an der Scheibe dieses Motors geteilt durch das, was seine Zähne bei der Drehzahl der Scheibe zulassen (Verfahren von Megadyne, mit `ratings.belt_service_factor`), das Höchste im Zyklus. Keine Lebensdauer: kein Riemenhersteller veröffentlicht eine |
 | `gearbox_gearing_life_h` | h | Lebensdauer der Verzahnung des Getriebes aus dem Moment über seinem Nennmoment (Palmgren–Miner mit den zwei Momentangaben von Siemens). Leer, wo der Zyklus das Getriebe nie über `ratings.gearbox_rated_torque_nm` bringt |
 | `motor_bearing_life_h` | h | Lebensdauer der Motorlager unter dem Riemenzug. Nur wo die Scheibe auf der Motorwelle sitzt (`ratings.motor_bearing_load_rating_n` gesetzt, kein Getriebe); in keiner mitgelieferten Konfiguration |
+| `housing_rise_k` | K | Mit `effects.motor_thermal_nodes`: die Übertemperatur, auf der Ständer und Gehäuse des Motors einschwingen, die der Wicklung mal dem Anteil des Gehäuses am Wärmewiderstand; ohne 0 |
+| `drive_overload` | 1 = Bemessungsstrom dauernd | Mit `effects.drive_overload`: das Höchste, was das thermische Abbild (i²t) des Antriebs erreicht, wenn sich der Zyklus lange wiederholt; ohne 0 |
 
 Die genauen Definitionen stehen in der [Modellreferenz](../model-reference.md#analysis-quantities).
 
@@ -147,7 +149,8 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | Prüfung | Name in der App | Wert | Grenze | Einheit |
 | --- | --- | --- | --- | --- |
 | `motor-peak` | Genutzter Anteil der Drehmoment-Drehzahl-Kennlinie | `utilisation` (das verlangte Moment, nicht das abgegebene) | 1 | Anteil |
-| `motor-thermal` | Übertemperatur der Wicklung, eingeschwungen | `winding_rise_k` | `motor.rated_temperature_rise_k` | K |
+| `motor-thermal` | Übertemperatur der Wicklung, eingeschwungen | `winding_rise_k` (mit `effects.motor_thermal_nodes` die des Wicklungsknotens, die dort einschwingt, wo der eine Knoten es tut) | `motor.rated_temperature_rise_k` | K |
+| `drive-overload` | Thermisches Abbild des Antriebs, Spitze, gegen seine Auslöseschwelle | `drive_overload`, nur mit `effects.drive_overload` | die Auslöseschwelle des Abbilds, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = Maximal- durch Bemessungsstrom | 1 = Bemessungsstrom dauernd |
 | `pulley-torque` | Moment an der Riemenscheibe | Spitze des Getriebe-Abtriebsmoments (Signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | Getriebe-Abtriebsmoment, kubisches Mittel | kubisches Mittel des Getriebe-Abtriebsmoments, gewichtet mit der Drehzahl | `ratings.gearbox_rated_torque_nm` | N m |
 | `gearbox-input-speed` | Getriebe-Antriebsdrehzahl, Spitze | höchste Motordrehzahl | `ratings.gearbox_max_input_speed_rpm` | 1/min |

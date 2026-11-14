@@ -1898,3 +1898,45 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## Motor and drive model for sizing: field weakening, drive overload, three thermal nodes (14 November 2026)
+
+Three switches for goal 2, each read as off where a config has no switch (a config of before keeps working) and each
+reading its keys only when on; all three are off in every shipped config (T-gantry default and EXCT-30, single axis, the
+four deltas, the joint machines' `common.toml` and `config/*.toml`, `machines/*.toml`), which carry the keys with their
+`[estimate]` marks and `[bounds]`. The bounds count only with their effect on (`PATH_EFFECTS`).
+
+| What | How | Test |
+| --- | --- | --- |
+| Field weakening | `effects.field_weakening`, `drive::FieldWeakening` (`motor.pole_pairs`, `motor.d_inductance_h`). The one winding is the q axis of a d-q model of the PMSM, scaled as it was (RMS phase current, three times the RMS phase voltage), the d axis alike; ψ = k_e / p. Every current cycle the drive sets the least negative d current that brings the steady voltage vector within sqrt(3/2) U_dc (`d_current_for`, a quadratic in i_d), adds ω_e L_d i_d to the back-EMF it feeds forward and gives the q axis what u_d leaves. The d current is held over the base step like the voltage: `winding_rates` adds u_d i_d, R i_d² and the reluctance torque, so the energy still closes. The torque-speed curve is the most torque inside the voltage and current circles over i_d in [−I_max, 0] (golden section), motoring and braking apart, up to the peak torque (`torque_curve`; `motor-peak`, the report's and the app's curve). The RMS current of the analysis, the heating and the drive's image use sqrt(i_q² + i_d²) (`Drive::phase_current`). A 1FK7 or 1FT7 by name sets the pole pairs (`motors_s120.csv`) and L_d = L_q from its data sheet | `field_weakening_gives_the_hand_calculated_torque_above_the_voltage_limit` (0.45 N m/A, 190 V, 9.5 A, p = 4, 10 mH, R → 0, 500 rad/s: i_d = −50625 / 9000 = −5.625 A, i_q = sqrt(90.25 − 31.64) = 7.6557 A, 3.4451 N m where the fading curve gives 0; the current loop settles there on the voltage circle, power = copper + shaft); `the_d_q_model_holds_the_published_points_of_a_1fk7` (1FK7042-2AF7 at 600 V from its data sheet: rated 2.6 N m at 2.0 A within 6 % and inside the curve with no d current, 527 V of 734.8 V; torque at n_max,inv = 670.2 rad/s where the fade ends at 538.9; best i_d at 942.5 rad/s within 1 % of −ψ / L_d = −3.247 A) |
+| Drive overload | `effects.drive_overload`, `drive::Overload` from `ratings.drive_rated_current_a`, `drive_max_current_a`, `drive_base_load_current_a`, `drive_overload_time_constant_s`, `drive_max_current_time_s`. The power unit's i²t image x' = ((i / I_rated)² − x) / τ, stepped exactly each base step; trip = r² − (r² − 1) e^(−t_max / τ), the level the maximum current reaches in t_max from the rated load. At the trip the velocity loop's torque range falls to the torque of the base load current until x is back at 1. A drive by name sets the base load current: an S120 Motor Module's from the catalogue, an S210's as 0.85 of its rated current (`catalog::S210_BASE_LOAD_SHARE`, the share of the S120 modules up to 30 A). Verdict `drive-overload`: the image's peak when the cycle repeats (`analysis::repeating_peak`: the image is linear in its start, the repeating start x₀ = f / (1 − e^(−T/τ))) against the trip; `MotorLoad::drive_overload` | `a_step_at_twice_the_rated_current_clamps_after_the_hand_calculated_time` (3 A, 2.6 A, 9 A for 0.25 s, τ 10 s: trip 1.19752; 6 A from cold clamps after −10 ln(1 − 1.19752/4) = 3.558 s, released 5.842 s later); `the_overload_image_of_a_repeated_cycle_peaks_at_the_hand_calculated_level` (2.25 held; 2.04999 for 2 I_rated half the time) |
+| Three thermal nodes | `effects.motor_thermal_nodes`, `drive::ThermalNodes` (`motor.winding_resistance_share` s, `motor.winding_time_constant_s` τ_w): winding and housing as two heat capacities in a chain to the surroundings; the resistances add up to the one node's, rated rise over rated loss, the capacities too (housing (τ_th − τ_w / s) / R, refused unless τ_w < s τ_th). The settled winding rise, which `motor-thermal` judges, is the one node's; `MotorLoad::housing_rise`, `Drive::housing_rise`; the warm start and a rebuild keep or set the housing. The one node stays the fallback | `three_thermal_nodes_settle_at_the_sum_of_the_resistances_and_step_as_by_hand` (s 0.25, 60 s, 1800 s: eigenvalues −7.362e-4 and −1.9349e-2 1/s, winding 16.18 K at 60 s and 78.32 K at 1800 s against the one node's 3.28 and 63.21 K; settled 100 K and 75 K) |
+
+Shown: `sim-cli analyze` has the columns `housing_rise_k` and `drive_overload` at the end; `verdicts`, the report and the
+app's verdict table have `drive-overload` (the app's `CHECKS`, now 40); the app's motor table has the two rows; the report's
+and the app's torque-speed curves follow the d-q model with field weakening on. `sim-cli search` simulates every motor with
+its paired drive through `apply_motor`, `apply_drive` and `verdicts`, so with the switches on it ranks by the new curve,
+the overload verdict and the base load currents of the catalogue. Labels EN and DE. Docs: model reference (three
+sections), config reference, user guide and Benutzerhandbuch (columns, verdict), validation.
+
+Not checked against Siemens' torque-speed curves themselves: they are printed as graphs in the data sheets and manuals,
+which are not in the repository and which were not to be downloaded; the 1FK2 (the shipped motors) have neither R, L, k_E
+nor pole pairs in any catalogue file. The load duty cycles of the S120 and S210 are not in the catalogue files either, so
+the image's time constant and the maximum current's time are `[estimate]`s (10 s, 0.25 s).
+
+Ran here: the five new tests and the rest of `drive::tests` (25 pass); `cargo check` of sim-components, sim-cli, sim-app
+and sim-machines with their tests; clippy and fmt. Not run: the suites (the coordinator's). Changed outside drive.rs:
+`sim.rs` (the d current into the integration), `control.rs` (a rebuild keeps housing and image), `analysis.rs` (phase
+current, `repeating_peak`, the verdict, `PATH_EFFECTS`), `catalog.rs`, sim-cli's analyze CSV and its header test in
+`tests/cli.rs`, sim-app's `CHECKS` and motor table.
+
+Left open:
+
+- The d current has no winding state of its own: it follows its setpoint at once, and the back-EMF in its choice and in
+  the curve is unsaturated. `check_limits` still holds the axis speed to the rated speed, so a cycle cannot plan into
+  field weakening yet; the planner's torque (`path.rs`, at the rated speed) is untouched.
+- The image is one node; real drives have a fast one (the semiconductors) and a slow one (the heat sink), which no
+  single τ fits for both the 0.25 s and the 60 s load cycles. With Siemens' duty cycles in the catalogue, fit two.
+- No signals for the d current, the housing and the image (scopes, CSV, PLC): adding signals changes every signal list
+  the FMI and OPC UA tests count.
+- Switching the three on in the shipped configs, and the example outputs and test numbers that would change with it.

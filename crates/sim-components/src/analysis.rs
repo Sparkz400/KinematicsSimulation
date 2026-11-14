@@ -32,6 +32,12 @@ pub struct MotorLoad {
     pub peak_current: f64,
     /// Temperature rise the winding settles at when the cycle repeats for long.
     pub winding_rise: f64,
+    /// With effects.motor_thermal_nodes: the rise the stator and housing settle at, K, the winding's times the housing's
+    /// share of the thermal resistance (`drive::ThermalNodes`); 0 without.
+    pub housing_rise: f64,
+    /// With effects.drive_overload: the highest the drive's thermal image reaches when the cycle repeats for long
+    /// (`drive::Overload`, 1 at the rated current held), judged against its trip level ("drive-overload"); 0 without.
+    pub drive_overload: f64,
     /// Electrical energy over the cycle: drawn from the DC link, and fed back into it while braking.
     pub energy_in: f64,
     pub energy_regenerated: f64,
@@ -235,8 +241,13 @@ fn settled_rises(sim: &Sim, load: &CycleLoad) -> Vec<f64> {
 fn set_rises(sim: &mut Sim, rises: &[f64]) {
     let mut rises = rises.iter();
     if sim.control.drive_params().heating {
-        for (drive, rise) in sim.control.drives.iter_mut().zip(&mut rises) {
+        let shares: Vec<f64> = (0..sim.control.drives.len())
+            .map(|k| sim.control.drive_params_of(k).thermal_nodes.map_or(1.0, |n| n.winding_share))
+            .collect();
+        for ((drive, rise), share) in sim.control.drives.iter_mut().zip(&mut rises).zip(shares) {
             drive.temperature_rise = *rise;
+            // With effects.motor_thermal_nodes the housing where that rise settles it (0 without).
+            drive.housing_rise = rise * (1.0 - share);
         }
     }
     if sim.thermal_feedback {
@@ -289,6 +300,20 @@ fn warm_pass(
     None
 }
 
+/// The highest a drive's thermal image (`drive::Overload`) reaches when a pass repeats for long. The pass ran from the
+/// image `start` and ended at `end` (time, image), with `samples` (time, image) between. The image is linear in its
+/// start: one started at x0 lies (x0 - start) exp(-t / tau) above the pass's at every t. The start a repeating pass
+/// returns to is x0 = f / (1 - exp(-T / tau)), where f = end - start exp(-T / tau) is what the pass itself added.
+///
+/// shortcut: where the image tripped in the pass the drive lowered its current and the image is no longer linear in its
+/// start; the peak is then that of the pass as it ran, corrected as if it were. It is at or above the trip anyway.
+pub fn repeating_peak(o: &crate::drive::Overload, start: f64, samples: &[(f64, f64)], (t_end, end): (f64, f64)) -> f64 {
+    let decay = |t: f64| (-t / o.time_constant).exp();
+    let added = end - start * decay(t_end);
+    let x0 = if t_end > 0.0 { added / (1.0 - decay(t_end)) } else { start };
+    samples.iter().chain([(t_end, end)].iter()).map(|&(t, x)| x + (x0 - start) * decay(t)).fold(x0, f64::max)
+}
+
 /// What a run adds up step by step, for a cycle or a trajectory.
 struct Tally {
     loads: Vec<MotorLoad>,
@@ -297,6 +322,9 @@ struct Tally {
     steps: u64,
     /// Steps per millisecond: belt tensions, operating points and the path are sampled that often.
     every: u64,
+    /// Per motor with effects.drive_overload: its drive's thermal image when the pass began, and (time, image) once per
+    /// millisecond, for `repeating_peak`.
+    overload: Vec<(f64, Vec<(f64, f64)>)>,
     tensions: Vec<usize>,
     /// Signals of the pulley shafts' radial loads and of the guide loads, and the slack-time counter.
     radial: Vec<usize>,
@@ -528,6 +556,7 @@ impl Tally {
             speed: vec![0.0; motors],
             steps: 0,
             every: (1e-3 / sim.dt).round().max(1.0) as u64,
+            overload: sim.control.drives.iter().map(|d| (d.overload_image, Vec::new())).collect(),
             tensions,
             sample: Vec::new(),
             base_only,
@@ -696,7 +725,8 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             let torque = sim.control.drives[k].torque;
             load.peak_torque = load.peak_torque.max(torque.abs());
-            let (current, power) = (sim.control.drives[k].current, sim.control.drives[k].power);
+            // The RMS phase current: with field weakening the d current flows too.
+            let (current, power) = (sim.control.drives[k].phase_current(), sim.control.drives[k].power);
             load.rms_current += current * current;
             load.peak_current = load.peak_current.max(current.abs());
             if sim.control.drive_params().drive_max_current.is_finite() {
@@ -734,6 +764,9 @@ impl Tally {
             load.utilisation = load.utilisation.max(demand.abs() / available.max(1e-9));
             if sampled {
                 load.points.push((self.speed[k], torque));
+                if sim.control.drive_params_of(k).overload.is_some() {
+                    self.overload[k].1.push(((self.steps + 1) as f64 * sim.dt, drive.overload_image));
+                }
             }
         }
         let (drives, p) = (&sim.control.drives, sim.control.drive_params());
@@ -764,7 +797,16 @@ impl Tally {
             let (cubed, weight) = self.radial_sums[k];
             load.radial_load_equivalent =
                 self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
-            load.winding_rise = sim.control.drive_params_of(k).settled_rise(load.rms_current);
+            let p = sim.control.drive_params_of(k);
+            load.winding_rise = p.settled_rise(load.rms_current);
+            if let (true, Some(n)) = (p.heating, &p.thermal_nodes) {
+                load.housing_rise = load.winding_rise * (1.0 - n.winding_share);
+            }
+            if let Some(o) = &p.overload {
+                let (start, samples) = &self.overload[k];
+                let end = (self.steps as f64 * sim.dt, sim.control.drives[k].overload_image);
+                load.drive_overload = repeating_peak(o, *start, samples, end);
+            }
             load.thermal_utilisation = load.rms_torque / sim.control.drive_params_of(k).rated_torque;
             load.torque_parts =
                 self.parts[k].map(|_| self.part_sums[k].map(|(peak, squares)| (peak, (squares / steps).sqrt())));
@@ -1136,6 +1178,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         }
         if let Some(limit) = rating("drive_max_current_a") {
             out.push(at_most("drive-peak-current", Some(k), m.peak_current, limit));
+        }
+        // effects.drive_overload: the thermal image's peak, the cycle repeated, against the level at which the drive
+        // lowers its current to the base load current.
+        if let Some(o) = crate::drive::Overload::from_config(cfg)? {
+            out.push(at_most("drive-overload", Some(k), m.drive_overload, o.trip));
         }
         if let (Some((peak, _)), Some(limit)) = (m.gearbox_torque, rating("pulley_max_torque_nm")) {
             out.push(at_most("pulley-torque", Some(k), peak, limit));
@@ -1635,8 +1682,15 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 5] = [
+const PATH_EFFECTS: [(&str, &[&str]); 12] = [
     ("thermal.", &["part_heating", "thermal_feedback"]),
+    ("motor.pole_pairs", &["field_weakening"]),
+    ("motor.d_inductance_h", &["field_weakening"]),
+    ("motor.winding_resistance_share", &["motor_thermal_nodes"]),
+    ("motor.winding_time_constant_s", &["motor_thermal_nodes"]),
+    ("ratings.drive_base_load_current_a", &["drive_overload"]),
+    ("ratings.drive_overload_time_constant_s", &["drive_overload"]),
+    ("ratings.drive_max_current_time_s", &["drive_overload"]),
     ("thermal_feedback.", &["thermal_feedback"]),
     ("belt.tooth_jump_factor", &["belt_tooth_jump"]),
     ("ratings.line_module_efficiency", &["regenerative_supply"]),
