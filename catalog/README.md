@@ -1,6 +1,6 @@
 # Open drive-train component catalogue
 
-Data of servo motors, drives, gearboxes, belts and belt axes, read from the makers' public documents, in one vendor-neutral format: SI units, the same column name for the same quantity whatever the maker calls it, and for every value the document, page or table, date and method it came from. The kinematics simulator in the parent repository reads it; anything else can too, it is CSV.
+Data of servo motors, linear motors, drives, gearboxes, ball screws, profile rail guides, belts and belt axes, read from the makers' public documents, in one vendor-neutral format: SI units, the same column name for the same quantity whatever the maker calls it, and for every value the document, page or table, date and method it came from. The kinematics simulator in the parent repository reads it; anything else can too, it is CSV.
 
 - [Layout](#layout)
 - [Schema 1](#schema-1)
@@ -31,7 +31,7 @@ tools/tests/                 tests of the tools
 
 ## Schema 1
 
-Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor` (the last three have a schema and no data yet). A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `gearbox/mass`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
+Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
 
 The rules every table keeps:
 

@@ -44,6 +44,28 @@
       "type": "number",
       "minimum": 0,
       "unit": "m"
+    },
+    "min_pulley_teeth": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "1",
+      "description": "Fewest teeth of a pulley the belt may run on (the maker's flexion table)."
+    },
+    "min_pulley_diameter_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "stiffness_ea_per_width_n_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N/m",
+      "description": "Specific stiffness: force per unit stretch per metre of width (c_spec, EA / width), where the maker prints it."
+    },
+    "thickness_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
     }
   },
   "$defs": {

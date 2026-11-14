@@ -1,0 +1,27 @@
+schema_version = 1
+class = "belt"
+table = "tooth_load"
+key = ["profile", "speed_rad_s"]
+default_source = "gates-tpu"
+notes = '''
+Source: Gates, "Thermoplastic Polyurethane Belt Program, Product and Technical Information", catalog no. 20166,
+edition 2025, part "Synchro-Power LINEAR" (pages 11 to 23) and "Technical design" (page 113, tables 2 and 3).
+Extracted by catalog/tools/extract_gates.py.
+Gates prints no tooth load over pulley speed. It prints per width an "Allowable effective force / minimum 12 teeth
+  in mesh" Feall (N), reduced by a teeth-in-mesh factor tm = Ze / 12 below 12 teeth (table 2) and by a speed factor
+  tv over the BELT speed in m/s (table 3: 1.00 at 0 m/s, 0.86 at 1 m/s, 0.35 at 20 m/s): Feallapp = Feall x tm x tv.
+One row per profile at standstill only: specific_tooth_load_n_m = Feall / 12 / width, from the widest standard belt
+  (least rounding), rounded to 1 N/m: T5 2500 N / 12 / 0.1 m = 2083 N/m. The narrower widths give the same value
+  within 1.5 % (T10 12 mm: 683 N / 12 / 0.012 m = 4743 N/m).
+Not taken: the speed factor tv, because it is over belt speed (m/s) and this table is over pulley speed (rad/s);
+  converting needs the pulley diameter. The schema has no belt-speed column.
+'''
+
+[[sources]]
+id = "gates-tpu"
+document = "Gates, Thermoplastic Polyurethane Belt Program, Product and Technical Information, catalog no. 20166"
+date = "2025"
+locator = "Synchro-Power LINEAR, pages 11 to 23: Allowable effective force / minimum 12 teeth in mesh; page 113, table 2"
+method = "script:tools/extract_gates.py"
+url = "https://www.gates.com/content/dam/documents-library/catalogs/thermoplastic-polyurethane-belt-catalogue-en.pdf"
+retrieved = "2026-11-14"

@@ -1,0 +1,47 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "tp"
+notes = '''
+Source: WITTENSTEIN alpha, "Technical data / Dimension sheets TP+" (ALPHA-ADVANCED-LINE-TP.PDF), MF tables, extracted by
+catalog/tools/extract_wittenstein.py.
+One row per size, number of stages, ratio and clamping hub: every MF (standard flange, output shaft) table of the
+  document, 1- and 2-stage. The values of a table are WITTENSTEIN's; the layout is ours.
+size: series, size and version without blanks ("TP+110MF"). motor_frame: the clamping hub bore in mm as printed
+  ("19"); clamping_hub_diameter_m the same in m. A smaller motor shaft takes a bushing (dimension sheet, footnote 4).
+  Hub code letters (B 11, C 14, E 19, G 24, H 28, I 32, K 38, M 48, N 55, O 60) are not kept. The "optimized mass
+  inertia version, available on request" is not tabled and not here.
+rated_output_torque: T2N, nominal torque at n1N. max_output_torque: T2B, max. acceleration torque (max. 1000 cycles
+  per hour). emergency_stop_output_torque: T2Not (permitted 1000 times during the service life; at max. 10 % of
+  M2KMax). The higher "Max. torque T2alpha" (at max. 10 % of M2KMax) has no column and is left out.
+rated_input_speed: n1N, permitted average input speed at T2N and 20 degC ambient (reduce at higher ambient).
+  max_input_speed: n1Max.
+no_load_torque: T012, mean no load running torque at the input, at n1 = 3000 rpm (2000 rpm for TP+ 300 and 500) and
+  20 degC gearbox temperature as printed; the speed is in no_load_torque_speed_rad_s.
+backlash: jt "Standard", backlash_reduced: jt "Reduced", both maxima in arcmin, one value per table (per stages). The
+  documents do not say what the reduced backlash costs or changes (no derating printed).
+torsional_stiffness: Ct21 in Nm/arcmin times 10800/pi.
+max_axial_force: F2AMax. max_radial_force: empty, the TP+ (flange output) tables give no lateral force; the load on the output
+  flange is limited by M2KMax and F2AMax.
+  Force reference point (footnote c): "refers to center of the output shaft or flange".
+max_tilting_moment: M2KMax. efficiency_full_load: eta in % / 100. mass_kg: weight m incl. standard adapter plate.
+inertia_at_input: J1 "relates to the drive", per clamping hub, kg cm2 times 1e-4. The script checks the 10^-3 in lb s2
+  row printed under each against it.
+Footnote b) "Valid for standard clamping hub diameter" is printed at T2alpha, T2B, T2Not, T012 and Ct21 and n1Max: the rows of the other
+  hubs repeat these values as the table prints them once per ratio. The standard hub is marked in the dimension
+  drawing (footnote 5) and is not recorded.
+Left out: the MC (motor-mounted, MA HIGH TORQUE 2- and 3-stage, TP+ 2000) tables, T2alpha, tilting rigidity C2K, service life, operating noise, temperatures,
+  protection class, coupling recommendation, the in.lb / lbf / lbm rows (used only to check the metric ones).
+Misprints kept as printed: TP+ 110 MF 2-stage, ratio 16: T012 7.0 Nm, but 52 in.lb (5.9 Nm, the value of ratio 20);
+  the Nm value is kept. In the same table the text layer runs the in.lb row of T2N together, so that row is not
+  compared (the Nm row reads cleanly).
+'''
+
+[[sources]]
+id = "tp"
+document = "WITTENSTEIN alpha, Technical data / Dimension sheets TP+, ALPHA-ADVANCED-LINE-TP.PDF, file id 3246, search TP+ in the download centre (extract of the alpha Advanced Line catalogue)"
+date = "2026-05-29"
+locator = "TP+ MF 1-stage and 2-stage tables, PDF pages 3 to 29 (odd), printed pages 80 to 106; edition date: the file's Last-Modified on the download server, the document prints none"
+method = "script:tools/extract_wittenstein.py"
+url = "https://www.wittenstein-group.com/en-us/services/downloads"
+retrieved = "2026-11-14"

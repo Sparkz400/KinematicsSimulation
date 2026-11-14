@@ -3,7 +3,7 @@
   "$id": "urn:open-drive-catalogue:schema:1:linear_guide",
   "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
   "title": "linear_guide",
-  "description": "A profile rail guide: one size and carriage type. No data yet.",
+  "description": "A profile rail guide: one size and carriage type.",
   "type": "object",
   "required": [
     "part_number"
@@ -28,7 +28,8 @@
     "dynamic_load_rating_n": {
       "type": "number",
       "minimum": 0,
-      "unit": "N"
+      "unit": "N",
+      "description": "C as printed, for the travel in dynamic_load_rating_distance_m."
     },
     "static_load_rating_n": {
       "type": "number",
@@ -77,6 +78,48 @@
       "type": "number",
       "minimum": 0,
       "unit": "N"
+    },
+    "carriage_type": {
+      "type": "string",
+      "description": "The maker's carriage type as printed (flange, square, long ...)."
+    },
+    "dynamic_moment_x_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "dynamic_moment_y_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "dynamic_moment_z_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "seal_drag_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N",
+      "description": "Friction of the carriage's standard end seals alone, per carriage."
+    },
+    "carriage_length_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "height_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m",
+      "description": "Height from the bottom of the rail to the top of the carriage."
+    },
+    "dynamic_load_rating_distance_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m",
+      "description": "The travel the maker gives dynamic_load_rating_n for: 50 km (50000) or 100 km (100000) as printed. The life in that distance is reached by 90 % of guides at a load equal to C."
     },
     "source": {
       "type": "string",

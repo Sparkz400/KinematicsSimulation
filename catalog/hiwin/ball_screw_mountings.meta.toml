@@ -1,0 +1,32 @@
+schema_version = 1
+class = "ball_screw"
+table = "mounting"
+key = ["mounting"]
+default_source = "hiwin-ballscrew"
+notes = '''
+Source: HIWIN Technologies, "Ballscrew Technical Information", FORM S99TE22-2009, chapter 4.5, page 32. Extracted by
+catalog/tools/extract_hiwin_screws.py.
+HIWIN prints its own form of the formulas, with dr the root diameter and Lt the distance between the support bearings
+in mm:
+  buckling (M29): Fk = 40720 Nf dr^4 / Lt^2 (kgf), permissible Fp = 0.5 Fk (M30);
+    Nf = 1.0 fixed-fixed, 0.5 fixed-supported, 0.25 supported-supported, 0.0625 fixed-free.
+  critical speed (M31): Nc = 2.71e8 Mf dr / Lt^2 (r/min), permissible Np = 0.8 Nc (M32);
+    Mf = 1 fixed-fixed, 0.689 fixed-supported, 0.441 supported-supported, 0.157 fixed-free.
+The columns hold these in the schema's form, the factors of the critical (not the permissible) values, without
+HIWIN's safety factors 0.8 and 0.5:
+  critical_speed_factor f = 27.1 Mf, so that n = f dr / L^2 1e7 equals HIWIN's Nc.
+  buckling_factor m = 4.072 Nf x 9.80665, so that F = m dr^4 / L^2 1e4 in N equals HIWIN's Fk (1 kgf = 9.80665 N;
+  HIWIN's own note says 1 kgf = 9.8 N).
+Fig 4.27 (page 33) pairs some arrangements with another case for buckling than for critical speed (a screw fixed at
+  one end and free at the other: critical speed fixed-free, buckling load fixed-fixed, as the nut on its guide holds
+  the screw); the simulator's mounting is one arrangement for both.
+'''
+
+[[sources]]
+id = "hiwin-ballscrew"
+document = "HIWIN Technologies, Ballscrew Technical Information, FORM S99TE22-2009"
+date = "2020-09"
+locator = "chapter 4.5, formulas M29 to M32 with the factors Nf and Mf, page 32"
+method = "script:tools/extract_hiwin_screws.py"
+url = "https://hiwin.com/wp-content/uploads/2026/08/HIWIN-Ballscrew-Catalog-1.pdf"
+retrieved = "2026-11-14"

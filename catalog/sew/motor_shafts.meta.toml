@@ -1,0 +1,29 @@
+schema_version = 1
+class = "servo_motor"
+table = "shaft"
+key = ["part_number_prefix"]
+default_source = "cmp-catalog"
+notes = '''
+Shaft end and mounting flange of the SEW-EURODRIVE CMP servomotors in sew/motors_cmp.csv (part numbers such as
+CMP63M/4500): what a gearbox's clamping hub (bore) and adapter plate must take. A row holds for every motor whose
+part_number starts with part_number_prefix (the longest matching prefix wins); a prefix is a motor size.
+Columns (the catalogue's letters, mm as printed, here in m):
+  shaft_diameter_m: d1 "Shaft Ø";
+  shaft_length_m: l, printed "Wave length" (a misprint for shaft length, kept in the source, meaning clear from the
+    drawing);
+  centering_diameter_m: b5 "Centering Ø";
+  flange_square_m: g5 "Flange square";
+  bolt_circle_diameter_m: e5 "Hole circle Ø".
+The table is for the standard CMP (plain shaft; keyway and key optional, same diameter). CMP112 is in the table
+though not in motors_cmp.csv. Left out: s5 (bore Ø of the flange holes), the key dimensions; the schema has no
+column for them.
+'''
+
+[[sources]]
+id = "cmp-catalog"
+document = "SEW-EURODRIVE, catalogue Synchronous Servomotors CMP40 - CMP112 High Dynamics, 27799468/EN"
+date = "2023-11"
+locator = "section 4.2 \"Overview of motor dimensions\", first table (d1, l, b5, e5, s5, g5), page 32"
+method = "script:tools/extract_sew_cmp_shafts.py"
+url = "https://download.sew-eurodrive.com/download/pdf/27799468.pdf"
+retrieved = "2026-11-14"

@@ -46,7 +46,7 @@
     },
     "motor_frame": {
       "type": "string",
-      "description": "The motor frame code the gearbox fits, as text (e.g. \"04\")."
+      "description": "The motor frame code the gearbox fits, as text: for Siemens' geared motors the frame in the motor's article number (e.g. \"04\"); for makers that fit any motor through an adapter, the input bore code as printed (e.g. \"19\" for a 19 mm clamping hub, see clamping_hub_diameter_m)."
     },
     "rated_output_torque_nm": {
       "type": "number",
@@ -73,6 +73,96 @@
       "type": "number",
       "minimum": 0,
       "unit": "N m/rad"
+    },
+    "clamping_hub_diameter_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m",
+      "description": "Bore of the input's clamping hub (or wave generator): the largest motor shaft it takes; a smaller one takes a bushing. For makers that fit any motor through an adapter plate; empty for the Siemens geared motors, which fit by motor_frame."
+    },
+    "rated_input_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s",
+      "description": "Nominal (thermally permissible mean) input speed: WITTENSTEIN n1N, Neugart n1N, Harmonic Drive's limit for the average input speed."
+    },
+    "max_input_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s",
+      "description": "Highest input speed, briefly."
+    },
+    "no_load_torque_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m",
+      "description": "Torque at the input to turn the gearbox without load, at no_load_torque_speed_rad_s and the maker's reference temperature (in the table's notes)."
+    },
+    "no_load_torque_speed_rad_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad/s",
+      "description": "Input speed at which no_load_torque_nm holds."
+    },
+    "max_radial_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N",
+      "description": "Highest radial force on the output shaft, at the maker's reference point (in the notes)."
+    },
+    "max_axial_force_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "max_tilting_moment_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m"
+    },
+    "mass_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "stiffness_t1_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m",
+      "description": "Strain-wave gears: torque up to which stiffness_k1_nm_rad holds."
+    },
+    "stiffness_t2_nm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m",
+      "description": "Strain-wave gears: torque up to which stiffness_k2_nm_rad holds (above it stiffness_k3_nm_rad)."
+    },
+    "stiffness_k1_nm_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/rad"
+    },
+    "stiffness_k2_nm_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/rad"
+    },
+    "stiffness_k3_nm_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N m/rad"
+    },
+    "hysteresis_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad",
+      "description": "Hysteresis loss of the torsion curve, referred to the output."
+    },
+    "lost_motion_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad",
+      "description": "Lost motion at the maker's test torque, referred to the output."
     }
   },
   "$defs": {

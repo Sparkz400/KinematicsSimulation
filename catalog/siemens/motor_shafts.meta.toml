@@ -1,0 +1,53 @@
+schema_version = 1
+class = "servo_motor"
+table = "shaft"
+key = ["part_number_prefix"]
+default_source = "d32"
+notes = '''
+Shaft end and mounting flange of the Siemens servomotors in siemens/motors_s210.csv, motors_1fk2_s120.csv,
+motors_1ft2_s120.csv and motors_s120.csv: what a gearbox's clamping hub (bore) and adapter plate must take.
+A row holds for every motor whose part_number starts with part_number_prefix (the longest matching prefix wins).
+The catalogues give these dimensions per shaft height (frame), so a prefix is a frame of a series, e.g. 1FK2104
+(1FK2 High Dynamic, shaft height 40) or 1FK703 (1FK7, shaft height 36); for 1FT7 the prefix also carries the cooling
+letters (5A natural, 5W/7W water, 5S/7S forced ventilation), because the 1FT7 tables are headed by them.
+Columns (all in mm as printed, here in m):
+  shaft_diameter_m: D (1FK2/1FT2 drawings "d", "Ø d k6/h6"), the plain shaft of the standard version;
+  shaft_length_m: E (1FK2/1FT2 "l"), the shaft extension from the flange face;
+  centering_diameter_m: N (the "Ø ... j6" spigot);
+  flange_square_m: AB (the "□" edge length of the flange);
+  bolt_circle_diameter_m: M (the "Ø" of the bolt circle).
+1FK2/1FT2 (catalogue D 32, the S210 chapter; the S120 motors of the same frame are the same motor: the S120
+  configuration manuals list the same shaft d x l per frame and refer to the catalogue for further dimensions):
+  shaft heights 20 (1F.2102), 30 (1F.2.03), 40 (1F.2.04), 48 (1F.2205), 52 (1F.2105), 63 (1F.2.06), 80 (1F.2.08) and
+  100 (1F.2210). For shaft heights 30 and 40 the drawings also give an alternative smaller shaft (SH 30: 11 k6 x 23,
+  SH 40: 14 k6 x 30), chosen by the shaft option of the full article number, which the motor tables do not carry;
+  the standard shaft (SH 30: 14 h6 x 30, SH 40: 19 k6 x 40) is in the table.
+  1FK2210-5AC and 1FT2210-5A. (S120 only) are not in the D 32 drawing of shaft height 100 (it lists -2A, -3A, -4A);
+  the prefix 1FK2210 / 1FT2210 covers them as the same frame (the 1FK2 S120 configuration manual, section 9.7, draws
+  1F.2210-3 to -5 in one drawing).
+1FK7 and 1FT7 (catalogue D 21.4, 2017, dimensional drawings): the dimensions are the same for the versions with and
+  without DRIVE-CLiQ, with resolver, with and without brake, and for the 1FT7 "flange compatible with 1FT6/1FK7" and
+  "recessed flange" versions (only the length differs).
+Left out: 1FK2306 and 1FK2308 (motors_1fk2_s120.csv): neither D 32 nor the 1FK2 S120 configuration manual (02/2022)
+  has their dimensions. 1FT7...-1A (High Dynamic, natural cooling; motors_s120.csv): the D 21.4 dimension tables list
+  only -5A, -.W and -.S types, so no prefix covers them.
+No misprints found.
+'''
+
+[[sources]]
+id = "d32"
+document = "Siemens, catalogue D 32, SINAMICS S210 servo drive system, January 2024"
+date = "2024-01"
+locator = "dimensional drawings of SIMOTICS S-1FK2 (pages 3.1/11, 3.1/13, 3.1/16, 3.1/20, 3.1/22, 3.1/24, 3.1/27, 3.1/30; PDF pages 99, 101, 104, 108, 110, 112, 115, 118) and S-1FT2 (PDF pages 136, 138, 141, 145, 148, 152, 159, 166, 170)"
+method = "manual: typed in from the dimensional drawings (the dimensions are labels in the drawing, not a text table; read from the rendered page), checked once more"
+url = "https://cache.industry.siemens.com/dl/files/381/109754381/att_1261452/v1/motion-control-drives-D32-complete-English-2024-01.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "d21-4"
+document = "Siemens, catalogue D 21.4, SINAMICS S120 and SIMOTICS, 2017"
+date = "2017"
+locator = "SIMOTICS servomotors, dimensional drawings: 1FT7 pages 8/66 to 8/71 (PDF pages 432 to 437), 1FK7 pages 8/72, 8/73, 8/75 (PDF pages 438, 439, 441); columns D, E, N, AB, M"
+method = "manual: typed in from the dimension tables (pdftotext merges the rows of shaft heights 80 and 100 and the inch values into one block), checked once more against the rendered pages"
+url = "https://assets.new.siemens.com/siemens/assets/api/uuid:ef8b99bf-acb1-4efd-bada-76f046c0ccc3/catalogo-simotics-1fk7-1ft7-1ph8-1pn-1fw.pdf"
+retrieved = "2026-11-14"

@@ -11,6 +11,12 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
+mod mechanics;
+pub use mechanics::{
+    GUIDE_CARRIAGES, GUIDE_STATIC_SAFETY, is_linear_motor, linear_motor_articles_for, magnet_track_weight, mech_axes,
+    motor_shaft_diameter,
+};
+
 /// The catalogue's schema version this simulator reads. A catalogue of another version is refused.
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -33,6 +39,7 @@ const TABLES: &[(&str, &str)] = &tables![
     "siemens/gearbox_nrb.csv",
     "siemens/gearbox_nrk.csv",
     "siemens/gearbox_nlc.csv",
+    "siemens/gearbox_sp.csv",
     "siemens/gearbox_mass.csv",
     "megadyne/belts.csv",
     "megadyne/belt_tooth_load.csv",
@@ -58,6 +65,27 @@ const TABLES: &[(&str, &str)] = &tables![
     "sew/drives_movic.csv",
     "yaskawa/motors_sigma7.csv",
     "yaskawa/drives_sigma7.csv",
+    "wittenstein/gearbox_sp.csv",
+    "wittenstein/gearbox_tp.csv",
+    "neugart/gearbox_ple.csv",
+    "neugart/gearbox_pln.csv",
+    "neugart/gearbox_plfe.csv",
+    "apex/gearbox_peii.csv",
+    "apex/gearbox_af.csv",
+    "harmonicdrive/gearbox_csf.csv",
+    "harmonicdrive/gearbox_csg.csv",
+    "harmonicdrive/gearbox_shg.csv",
+    "siemens/motor_shafts.csv",
+    "beckhoff/motor_shafts.csv",
+    "sew/motor_shafts.csv",
+    "yaskawa/motor_shafts.csv",
+    "hiwin/ball_screws.csv",
+    "hiwin/linear_guides.csv",
+    "siemens/linear_motors_1fn3.csv",
+    "beckhoff/linear_motors_al8000.csv",
+    "festo/belt_axes_egc.csv",
+    "festo/belt_axes_elga.csv",
+    "rexroth/belt_axes_ckr.csv",
     "catalog.toml",
 ];
 
@@ -77,10 +105,6 @@ const S120_DC_LINK_TRIP_V: f64 = 820.0;
 
 fn motor_manuals() -> [&'static str; 2] {
     [table("siemens/motors_1fk2_s120.csv"), table("siemens/motors_1ft2_s120.csv")]
-}
-
-fn gearboxes() -> [&'static str; 3] {
-    [table("siemens/gearbox_nrb.csv"), table("siemens/gearbox_nrk.csv"), table("siemens/gearbox_nlc.csv")]
 }
 
 /// Reads the catalogue from a directory in place of the compiled-in one, for the rest of the process: a copy of
@@ -292,10 +316,37 @@ struct MotorData {
     /// Pole pairs, where the catalogue prints them (`motors_s120.csv`, the 1FK7 and 1FT7).
     pole_pairs: Option<f64>,
     mass: f64,
+    /// A linear motor's force constant as printed (N/A), which stands in for the torque constant static over stall.
+    force_constant: Option<f64>,
+    /// A linear motor's magnetic attraction (N) and pole pitch (m).
+    linear: Option<(f64, f64)>,
 }
 
 fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
     let missing = || unknown("motor", &format!("{article}, {supply}"));
+    // A linear motor (`mechanics::linear_rows`): forces for torques, the coil's mass for the rotor's inertia, m/s for rad/s.
+    if let Some(m) = mechanics::linear_motor_row(article, supply) {
+        let get = |column: &str| number(&m, column).ok_or_else(missing);
+        let max_speed = get("max_speed_m_s")?;
+        return Ok(MotorData {
+            rotor_kgm2: get("coil_mass_kg")?,
+            static_torque: get("continuous_force_n")?,
+            stall_current: get("continuous_current_a")?,
+            max_torque: get("peak_force_n")?,
+            max_current: get("peak_current_a")?,
+            rated_current: get("continuous_current_a")?,
+            rated_torque: get("continuous_force_n")?,
+            // Full force up to the speed the maker gives the peak force at, else up to its highest speed.
+            rated_speed: number(&m, "max_speed_at_peak_force_m_s").unwrap_or(max_speed),
+            max_speed,
+            thermal_seconds: number(&m, "thermal_time_constant_s"),
+            winding: number(&m, "phase_resistance_20c_ohm").zip(number(&m, "phase_inductance_h")),
+            pole_pairs: None,
+            mass: get("coil_mass_kg")?,
+            force_constant: number(&m, "force_constant_n_a"),
+            linear: number(&m, "attraction_force_n").zip(number(&m, "pole_pitch_m")),
+        });
+    }
     if let Some((vendor, line)) = vendor_supply(supply) {
         let m = vendor_rows("motors_", vendor, line)
             .into_iter()
@@ -323,6 +374,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 .map(|(r, l)| (r / 2.0, l / 2.0)),
             pole_pairs: number(&m, "pole_pairs"),
             mass: get("mass_kg")?,
+            force_constant: None,
+            linear: None,
         });
     }
     if supply == "s120" {
@@ -346,6 +399,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
                 pole_pairs: number(&m, "pole_pairs"),
                 mass: get(&m, "mass_kg")?,
+                force_constant: None,
+                linear: None,
             });
         }
         let m = motor_manuals()
@@ -368,6 +423,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             winding: None,
             pole_pairs: None,
             mass: get("mass_kg")?,
+            force_constant: None,
+            linear: None,
         });
     }
     let motor = rows(table("siemens/motors_s210.csv"))
@@ -392,6 +449,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         winding: None,
         pole_pairs: None,
         mass: get("mass_kg")?,
+        force_constant: None,
+        linear: None,
     })
 }
 
@@ -419,12 +478,17 @@ pub fn motor_mass(article: &str, supply: &str) -> Option<f64> {
 /// controller is retuned with them: Kp = L / T for the config's own current loop time constant T (its L over its
 /// Kp), Tn = L / R. For every other motor they stay as the config has them, and so do the current loop's gains.
 /// The velocity gain stays here too; `resolve` and `with_parts` retune it for the new rotor.
+///
+/// A linear motor (`<maker>/linear_motors_*.csv`: the Siemens 1FN3 at "s120", another maker's at its supply) reads in N
+/// for N m and m for rad, as a linear motor config does: its printed force constant for the torque constant, the
+/// coil's mass for the rotor's inertia, the continuous and peak force and current, the speeds in m/s, the winding's
+/// phase values as the 1FK7's are put in, and its magnetic attraction and pole pitch into `[linear_motor]`.
 pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     if !SUPPLIES.contains(&supply) {
         return Err(unknown("motor", &format!("{article}, {supply}")));
     }
     let m = motor_data(article, supply)?;
-    let kt = m.static_torque / m.stall_current;
+    let kt = m.force_constant.unwrap_or(m.static_torque / m.stall_current);
     let rated_speed = m.rated_speed;
     set(cfg, "motor.rotor_inertia_kgm2", m.rotor_kgm2)?;
     set(cfg, "motor.torque_constant_nm_a", kt)?;
@@ -449,6 +513,10 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     if let Some(pairs) = m.pole_pairs {
         set_if_present(cfg, "motor.pole_pairs", pairs)?;
+    }
+    if let Some((attraction, pitch)) = m.linear {
+        set_if_present(cfg, "linear_motor.attraction_force_n", attraction)?;
+        set_if_present(cfg, "linear_motor.pole_pitch_m", pitch)?;
     }
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
     let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley / ratio);
@@ -704,39 +772,49 @@ fn apply_vendor_dc_link(cfg: &mut Config, d: &Row) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// A gearbox by name, its catalogue row: size, motor frame size and ratio, e.g. "NRK070-04-5".
-fn gearbox_row(name: &str) -> Option<Row> {
-    let parts: Vec<&str> = name.split('-').collect();
-    let all: Vec<Row> = gearboxes().into_iter().flat_map(|text| rows(text)).collect();
-    all.into_iter()
-        .find(|r| parts.len() == 3 && r["size"] == parts[0] && r["motor_frame"] == parts[1] && r["ratio"] == parts[2])
-}
-
-/// Mass of a gearbox by name, from the 01/2023 configuration manual (`gearbox_mass.csv`); `None` for a name the
-/// catalogue does not have.
+/// Mass of a gearbox by name (`apply_gearbox`): a Siemens one's from the 01/2023 configuration manual
+/// (`gearbox_mass.csv`), another maker's from its own row; `None` for a name the catalogue does not have or a gearbox
+/// whose mass it has not.
 pub fn gearbox_mass(name: &str) -> Option<f64> {
-    let parts: Vec<&str> = name.split('-').collect();
+    let base = name.strip_suffix("-r").unwrap_or(name);
+    let parts: Vec<&str> = base.split('-').collect();
     let row = rows(table("siemens/gearbox_mass.csv")).into_iter().find(|r| {
         parts.len() == 3
             && r["size"] == parts[0]
             && r["motor_frames"].split(' ').any(|f| f == parts[1])
             && r["ratio"] == parts[2]
-    })?;
-    number(&row, "mass_kg")
+    });
+    row.and_then(|r| number(&r, "mass_kg")).or_else(|| mechanics::own_mass(base))
 }
 
-/// Puts a gearbox of the catalogue into a config. The name is size, motor frame size and ratio, e.g.
-/// "NRK070-04-5". Sets ratio, efficiency, torsional stiffness, backlash and the gearbox's own inertia,
-/// and sets the torque ratings where the config has them.
+/// Puts a gearbox of the catalogue into a config. The name is size, motor frame (for the gearboxes fitted through an
+/// adapter plate the clamping hub's bore in mm) and ratio, e.g. "NRK070-04-5" or "SP+100MF-19-20", with "-r" after it
+/// for the maker's reduced backlash ("SP100-05-20-r"). Sets ratio, efficiency, torsional stiffness, backlash and the
+/// gearbox's own inertia, and sets the torque ratings where the config has them. Where the row has them and the config
+/// the keys: the torque the efficiency holds at (the rated torque: makers give the efficiency at full load), the
+/// no-load running torque and its speed, and the stiffness curve (a strain wave gear's K1 to K3 with its knees T1 and
+/// T2 and its hysteresis; a gearbox without one is linear, both knees at its rated torque and K2 = K3 = its stiffness,
+/// as `docs/config-reference.md` says for a planetary gearbox).
 pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
-    let gearbox = gearbox_row(name).ok_or_else(|| unknown("gearbox", name))?;
-    let get = |column: &str| number(&gearbox, column);
+    let (gearbox, reduced) = mechanics::find_gearbox(name).ok_or_else(|| unknown("gearbox", name))?;
+    let get = |column: &str| number(&gearbox.row, column);
     let need = |column: &str| get(column).ok_or_else(|| unknown("gearbox", name));
+    let curve = get("stiffness_k1_nm_rad").zip(get("stiffness_k2_nm_rad")).zip(get("stiffness_k3_nm_rad"));
+    let curve = curve.zip(get("stiffness_t1_nm")).zip(get("stiffness_t2_nm"));
     set(cfg, "gearbox.ratio", need("ratio")?)?;
-    set(cfg, "gearbox.efficiency", need("efficiency_full_load")?)?;
-    set(cfg, "gearbox.stiffness_nm_rad", need("torsional_stiffness_nm_rad")?)?;
+    // Harmonic Drive prints the efficiency as charts only: the config's stays then.
+    if let Some(efficiency) = get("efficiency_full_load") {
+        set(cfg, "gearbox.efficiency", efficiency)?;
+    }
+    let stiffness = match curve {
+        Some(((((k1, _), _), _), _)) => k1,
+        None => need("torsional_stiffness_nm_rad")?,
+    };
+    set(cfg, "gearbox.stiffness_nm_rad", stiffness)?;
     // The manual leaves backlash and inertia open for a few gearboxes; the config's values stay then.
-    if let Some(backlash) = get("backlash_rad") {
+    if reduced {
+        set(cfg, "gearbox.backlash_rad", need("backlash_reduced_rad")?)?;
+    } else if let Some(backlash) = get("backlash_rad") {
         set(cfg, "gearbox.backlash_rad", backlash)?;
     }
     // Kept apart from the rotor's: added into it, the next motor put into the config would wipe it out.
@@ -749,6 +827,24 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
         if cfg.f64(&format!("ratings.{rating}")).is_ok() {
             set(cfg, &format!("ratings.{rating}"), need(column)?)?;
         }
+    }
+    let rated = need("rated_output_torque_nm")?;
+    set_if_present(cfg, "gearbox.efficiency_torque_nm", rated)?;
+    if let (Some(torque), Some(speed)) = (get("no_load_torque_nm"), get("no_load_torque_speed_rad_s")) {
+        set_if_present(cfg, "gearbox.no_load_torque_nm", torque)?;
+        set_if_present(cfg, "gearbox.no_load_speed_rpm", in_unit(speed, 30.0 / PI))?;
+    }
+    let (t1, t2, k2, k3) = match curve {
+        Some(((((_, k2), k3), t1), t2)) => (t1, t2, k2, k3),
+        None => (rated, rated, stiffness, stiffness),
+    };
+    for (key, value) in
+        [("stiffness_t1_nm", t1), ("stiffness_t2_nm", t2), ("stiffness_k2_nm_rad", k2), ("stiffness_k3_nm_rad", k3)]
+    {
+        set_if_present(cfg, &format!("gearbox.{key}"), value)?;
+    }
+    if let Some(hysteresis) = get("hysteresis_rad") {
+        set_if_present(cfg, "gearbox.hysteresis_rad", hysteresis)?;
     }
     Ok(())
 }
@@ -855,8 +951,10 @@ struct AxisData {
     /// Bahr: any Z stroke up to the longest; Festo: only the strokes listed.
     z_up_to: bool,
     pulley_radius: f64,
-    /// Megadyne belt that gives the belt's mass, allowable pull and tooth load: profile and width in m.
-    belt: (String, f64),
+    /// Megadyne belt that gives the belt's mass, allowable pull and tooth load: profile and width in m. `None` for an
+    /// axis whose maker names no profile Megadyne has (Festo EGC and ELGA: neoprene with glass cords); the config's belt
+    /// stays then.
+    belt: Option<(String, f64)>,
     /// EA where the maker states the belt's stretch (Festo), else the belt table's.
     ea: Option<f64>,
     teeth: f64,
@@ -875,18 +973,30 @@ struct AxisData {
     weight: (f64, f64, f64),
 }
 
-/// The axes of the catalogue by name: the Festo EXCT sizes ("EXCT-30") and the Bahr axes and X/Z gantries
-/// ("ELZI-40", "ELZ-60S": series and size). The Bahr XY gantries (no machine of that kind) and the DLZPVI (a gear
-/// unit built in, whose ratio is not extracted) are left out.
+/// The axes of the catalogue by name: the Festo EXCT sizes ("EXCT-30"), the Bahr axes and X/Z gantries
+/// ("ELZI-40", "ELZ-60S": series and size) and the other makers' single belt axes (`<maker>/belt_axes_*.csv`: Festo
+/// "EGC-TB-KF-70", "ELGA-TB-G-80", Rexroth "CKR-110"). The Bahr XY gantries (no machine of that kind) and the DLZPVI (a
+/// gear unit built in, whose ratio is not extracted) are left out.
 pub fn axis_names() -> Vec<String> {
     let mut out = festo_sizes();
-    out.extend(
-        rows(table("bahr/belt_axes.csv"))
-            .iter()
-            .filter(|r| r["kind"] != "xy_gantry" && r["series"] != "DLZPVI")
-            .map(|r| format!("{}-{}", r["series"], r["size"])),
-    );
+    out.extend(belt_axis_rows().iter().map(|(_, r)| format!("{}-{}", r["series"], r["size"])));
     out
+}
+
+/// The rows of the belt axes other than the EXCT (`festo/belt_axes.csv`, with its torque formula): Bahr's, then the
+/// other makers' `belt_axes_*.csv`, with the maker; without Bahr's XY gantries and DLZPVI (`axis_names`).
+fn belt_axis_rows() -> Vec<(&'static str, Row)> {
+    let mut names: Vec<&str> = TABLES
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.split_once('/').is_some_and(|(_, file)| file.starts_with("belt_axes_")))
+        .collect();
+    names.insert(0, "bahr/belt_axes.csv");
+    names
+        .into_iter()
+        .flat_map(|name| rows(table(name)).into_iter().map(move |r| (name.split('/').next().unwrap_or(""), r)))
+        .filter(|(_, r)| r["kind"] != "xy_gantry" && r["series"] != "DLZPVI")
+        .collect()
 }
 
 /// The Festo sizes by name, in the order of their names.
@@ -922,7 +1032,7 @@ fn axis_data(name: &str) -> Option<AxisData> {
             z_up_to: false,
             pulley_radius: diameter / 2.0,
             // The EXCT belt is steel-cord polyurethane; by its stretch of the AT class (see exct-30.toml).
-            belt: (format!("AT{}", in_unit(pitch, 1e3)), get("belt_width_m")?),
+            belt: Some((format!("AT{}", in_unit(pitch, 1e3)), get("belt_width_m")?)),
             ea: Some(get("belt_elongation_force_n")? / get("belt_elongation")?),
             teeth: (PI * diameter / pitch).round(),
             pulley_torque: get("max_pulley_torque_nm")?,
@@ -935,16 +1045,15 @@ fn axis_data(name: &str) -> Option<AxisData> {
             weight: (get("mass_at_zero_stroke_kg")?, get("mass_per_stroke_kg_m")?, get("mass_per_stroke_z_kg_m")?),
         });
     }
-    let all = rows(table("bahr/belt_axes.csv"));
-    let r = all.iter().find(|r| {
-        format!("{}-{}", r["series"], r["size"]) == name && r["kind"] != "xy_gantry" && r["series"] != "DLZPVI"
-    })?;
+    let all = belt_axis_rows();
+    let (maker, r) = all.iter().find(|(_, r)| format!("{}-{}", r["series"], r["size"]) == name)?;
+    let bahr = *maker == "bahr";
     let kind = if r["kind"] == "xz_gantry" { Kind::XzGantry } else { Kind::Single };
     let radius = number(r, "feed_per_rev_m")? / (2.0 * PI);
     let m = |column: &str| number(r, column);
     let (stroke_x, strokes_z) = match kind {
         Kind::XzGantry => (m("max_length_x_m")?, vec![m("max_length_z_m")?]),
-        Kind::Single => (m("max_length_one_piece_m").unwrap_or(f64::INFINITY), Vec::new()),
+        Kind::Single => (m("max_length_one_piece_m").or(m("stroke_x_max_m")).unwrap_or(f64::INFINITY), Vec::new()),
     };
     let moved = match kind {
         Kind::XzGantry => Some((number(r, "moved_mass_x_kg")?, number(r, "moved_mass_z_kg")?)),
@@ -952,18 +1061,25 @@ fn axis_data(name: &str) -> Option<AxisData> {
     };
     Some(AxisData {
         kind,
-        stroke_x: (0.0, stroke_x),
+        stroke_x: (if bahr { 0.0 } else { m("stroke_x_min_m").unwrap_or(0.0) }, stroke_x),
         strokes_z,
         z_up_to: true,
         pulley_radius: radius,
-        belt: (format!("MTD{}", in_unit(number(r, "belt_pitch_m")?, 1e3)), number(r, "belt_width_m")?),
-        ea: None,
+        // Bahr's belts are HTD (Megadyne's MTD); Rexroth names its AT profile; Festo's EGC and ELGA name none.
+        belt: if bahr {
+            Some((format!("MTD{}", in_unit(number(r, "belt_pitch_m")?, 1e3)), number(r, "belt_width_m")?))
+        } else {
+            r.get("belt").filter(|b| b.starts_with("AT")).map(|b| b.to_string()).zip(number(r, "belt_width_m"))
+        },
+        // The maker's stretch where it states one (ELGA: at the highest feed force).
+        ea: number(r, "belt_elongation_force_n").zip(number(r, "belt_elongation")).map(|(f, e)| f / e),
         teeth: number(r, "pulley_teeth")?,
-        pulley_torque: number(r, "feed_force_peak_n")? * radius,
+        // Bahr gives the peak feed force; Festo and Rexroth the torque at the pulley as well, which holds where given.
+        pulley_torque: number(r, "max_pulley_torque_nm").unwrap_or(number(r, "feed_force_peak_n")? * radius),
         payload_kg: None,
         slide_load_n: number(r, "fz_dynamic_n"),
         max_speed: number(r, "max_speed_m_s")?,
-        max_acceleration: None,
+        max_acceleration: if bahr { None } else { number(r, "max_acceleration_m_s2") },
         moved,
         festo_formula: Vec::new(),
         weight: (
@@ -1046,8 +1162,13 @@ fn axis_weight(cfg: &Config, axis: &AxisData) -> f64 {
 /// machine at hand (`entry`) the carriage is set so that the machine's own torque at 45 degrees (ax = az, a = 1 m/s²,
 /// no payload, the gearbox taken out) is Festo's, as the hand-written `exct-30.toml` was; without one (a config only
 /// read for its ratings) the carriage stays.
+///
+/// A mechanical axis (`mech_axes`): ball screws by part number and guide sets as "<part number>x<carriages>", joined by
+/// "+" (e.g. "R25-20K4-FSC+HGH25CAx4"), as `mechanics::apply_mech_axis` puts them in.
 pub fn apply_axis(cfg: &mut Config, name: &str, entry: Option<&MachineEntry>) -> Result<(), ConfigError> {
-    let axis = axis_data(name).ok_or_else(|| unknown("axis", name))?;
+    let Some(axis) = axis_data(name) else {
+        return mechanics::apply_mech_axis(cfg, name).unwrap_or_else(|| Err(unknown("axis", name)));
+    };
     match axis_refusal(cfg, &axis) {
         "axis-kind" => return Err(ConfigError::Invalid("parts.axis".into())),
         "axis-stroke" => {
@@ -1057,7 +1178,9 @@ pub fn apply_axis(cfg: &mut Config, name: &str, entry: Option<&MachineEntry>) ->
         }
         _ => {}
     }
-    apply_belt_at(cfg, &axis.belt.0, axis.belt.1).ok_or_else(|| unknown("belt", &axis.belt.0))??;
+    if let Some((profile, width)) = &axis.belt {
+        apply_belt_at(cfg, profile, *width).ok_or_else(|| unknown("belt", profile))??;
+    }
     if let Some(ea) = axis.ea {
         set(cfg, "belt.stiffness_ea_n", ea)?;
     }
@@ -1384,21 +1507,32 @@ pub fn with_named(entry: &MachineEntry, cfg: &Config, parts: &Parts) -> Result<C
     Ok(out)
 }
 
-/// The catalogue gearboxes of a series (a prefix of the size, e.g. "NRK" or "NRK070") that fit a motor's
-/// frame and whose ratio is between half and twice `ratio`, named as `apply_gearbox` takes them. The
-/// frame is in the article number: 1FK2104 and 1FK2204 have frame "04". The gearboxes are for the 1FK2 and 1FT2
-/// only.
+/// The catalogue gearboxes that fit a motor, at every ratio, named as `apply_gearbox` takes them: the question the
+/// search asks before it sweeps ratios. `series` picks makers and series: "" all of them, a maker ("wittenstein",
+/// "neugart", "siemens"), a maker's table ("wittenstein-sp", "neugart-ple", "siemens-nrk", "harmonicdrive-csf"), or a
+/// prefix of the size ("NRK", "NRK070"). Siemens' NRB, NRK and NLC fit the 1FK2 and 1FT2 of their frame (1FK2104 and
+/// 1FK2204 have frame "04"), its SP+ the 1FT2 only, as Siemens sells them; another maker's gearbox fits a motor whose
+/// shaft its clamping hub takes (`motor_shaft_diameter`; one hub per size and ratio, the smallest that does).
+pub fn gearboxes_for_motor(article: &str, series: &str) -> Vec<String> {
+    mechanics::fitting(article, series).into_iter().map(|(name, _)| name).collect()
+}
+
+/// `gearboxes_for_motor` with a ratio between half and twice `ratio`.
 pub fn fitting_gearboxes(article: &str, series: &str, ratio: f64) -> Vec<String> {
-    if article.get(3..4) != Some("2") {
-        return Vec::new();
-    }
-    let all = gearboxes().into_iter().flat_map(|text| rows(text));
-    let fits = |r: &Row| {
-        r["size"].starts_with(series)
-            && article.get(5..7) == Some(r["motor_frame"])
-            && number(r, "ratio").is_some_and(|n| n >= 0.5 * ratio && n <= 2.0 * ratio)
-    };
-    all.filter(fits).map(|r| format!("{}-{}-{}", r["size"], r["motor_frame"], r["ratio"])).collect()
+    let near = |n: f64| n >= 0.5 * ratio && n <= 2.0 * ratio;
+    mechanics::fitting(article, series).into_iter().filter(|(_, n)| near(*n)).map(|(name, _)| name).collect()
+}
+
+/// The axes of the catalogue a config's machine can be built from, each with why it is refused ("" where it is not)
+/// by its catalogue numbers alone: the belt axes of its kind (`axis_names`, `axis_refusal`) and the mechanical axes
+/// (`mech_axes`: ball screws, and guide sets where the config rates guides). The question the search asks before it
+/// tries motors on them.
+pub fn axes_for(cfg: &Config) -> Vec<(String, &'static str)> {
+    let belts = axis_names().into_iter().filter_map(|name| {
+        let reason = axis_refusal(cfg, &axis_data(&name)?);
+        (reason != "axis-kind").then_some((name, reason))
+    });
+    belts.chain(mech_axes(cfg).into_iter().map(|(name, reason, _)| (name, reason))).collect()
 }
 
 /// One combination to try: the config (with the axis named, where one is tried), motor, gearbox ("" the config's),
@@ -1413,8 +1547,15 @@ struct Job {
     motor: String,
 }
 
-/// The jobs of one config: every motor `wanted` takes at the supply, each with every fitting gearbox of the series
-/// where the machine has a gearbox (ratio above 1).
+/// The motors a config's machine can take at a supply: a linear motor machine (`is_linear_motor`) the linear motors
+/// of the supply (`linear_motor_articles_for`), every other the rotary ones (`motor_articles_for`).
+fn articles_for(cfg: &Config, supply: &str) -> Vec<&'static str> {
+    if is_linear_motor(cfg) { linear_motor_articles_for(supply) } else { motor_articles_for(supply) }
+}
+
+/// The jobs of one config: every motor `wanted` takes at the supply (`articles_for`), each with every fitting gearbox
+/// of the series where the machine has a gearbox (ratio above 1). A linear motor's magnet track at the config's stroke
+/// counts into the axis's weight.
 fn motor_jobs(
     cfg: &Config,
     supply: &str,
@@ -1425,7 +1566,8 @@ fn motor_jobs(
 ) -> Vec<Job> {
     let ratio = parts_applied(cfg).ok().and_then(|own| own.f64("gearbox.ratio").ok()).unwrap_or(1.0);
     let mut out = Vec::new();
-    for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
+    for article in articles_for(cfg, supply).into_iter().filter(|a| wanted(a)) {
+        let axis_weight = axis_weight + magnet_track_weight(cfg, article, supply);
         let names = match gearboxes {
             // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
             Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))
@@ -1575,7 +1717,9 @@ pub fn search_motors(
 /// Bahr's X/Z gantries for a config with a Z stroke, Bahr's single axes for one with one stroke), keeping the
 /// config's cycle and payload. An axis that cannot carry the machine by its catalogue numbers (`axis_refusal`:
 /// stroke, payload, speed) is listed once, with `article` "" and the reason in `refused`, and no motor is tried on
-/// it. The rest are ranked together, cheapest first: the axis's weight counts into `cost`.
+/// it. The rest are ranked together, cheapest first: the axis's weight counts into `cost`. A screw, rack or linear
+/// motor machine is tried on the mechanical axes as well (`mech_axes`: every ball screw, with the guide sets where the
+/// config rates guides), a linear motor machine with the linear motors of the supply in place of rotary motors.
 pub fn search_axes(
     entry: &MachineEntry,
     cfg: &Config,
@@ -1584,12 +1728,13 @@ pub fn search_axes(
     gearboxes: Option<&str>,
 ) -> Vec<Candidate> {
     let (mut jobs, mut refused) = (Vec::new(), Vec::new());
-    for name in axis_names() {
-        let Some(axis) = axis_data(&name) else { continue };
+    let belts = axis_names().into_iter().filter_map(|name| {
+        let axis = axis_data(&name)?;
         let reason = axis_refusal(cfg, &axis);
-        if reason == "axis-kind" {
-            continue;
-        }
+        (reason != "axis-kind").then(|| (name, reason, axis_weight(cfg, &axis)))
+    });
+    let all: Vec<(String, &'static str, f64)> = belts.chain(mech_axes(cfg)).collect();
+    for (name, reason, weight) in all {
         if !reason.is_empty() {
             refused.push(Candidate {
                 article: "",
@@ -1609,7 +1754,7 @@ pub fn search_axes(
         if with_axis.set_text(&format!("parts.axis = {name:?}")).is_err() {
             continue; // a config without `[parts]` names no part
         }
-        jobs.extend(motor_jobs(&with_axis, supply, wanted, gearboxes, &name, axis_weight(cfg, &axis)));
+        jobs.extend(motor_jobs(&with_axis, supply, wanted, gearboxes, &name, weight));
     }
     run_jobs(entry, supply, jobs, refused)
 }
@@ -1659,7 +1804,7 @@ pub fn search_motor(
     }
     let ratio = parts_applied(&motor_config(cfg, motor)?)?.f64("gearbox.ratio").unwrap_or(1.0);
     let mut jobs = Vec::new();
-    for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
+    for article in articles_for(cfg, supply).into_iter().filter(|a| wanted(a)) {
         let names = match gearboxes {
             // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
             Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))

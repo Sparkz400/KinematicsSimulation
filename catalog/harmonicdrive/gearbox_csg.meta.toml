@@ -1,0 +1,46 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "csg-csf-component"
+notes = '''
+One row per size and ratio of the rating table. The CSF/CSG/SHG component sets are single-stage strain wave gears
+  (wave generator, flexspline, circular spline); the rating table's ratio is for input wave generator, circular spline
+  fixed, output flexspline.
+size: the series and the size number without "-" (CSF-32-100-2A-GR is size CSF32, ratio 100).
+motor_frame: the wave generator's standard bore phi V "Standard (H7)" in mm, as text (Table 041-1, common to CSG and CSF); clamping_hub_diameter_m:
+  "Max. size" of phi V in the same table, the largest bore the wave generator hub (with Oldham coupling) takes.
+  Table 027-1 of the general part gives the same; without the Oldham coupling larger bores are possible (Table 027-2,
+  not taken).
+rated_output_torque: "Rated torque at 2000 rpm" input. max_output_torque: "Limit for repeated peak torque".
+  emergency_stop_output_torque: "Limit for momentary peak torque". The "Limit for average torque" has no column in the
+  schema and is not taken.
+rated_input_speed: "Limit for average input speed", GREASE lubrication; max_input_speed: "Maximum input speed",
+  GREASE lubrication (the standard lubrication, Harmonic Grease SK-1A/SK-2). The oil-lubrication limits (higher) are
+  not taken. r/min * pi/30.
+inertia_at_input: "Moment of inertia I" (x10^-4 kg m2), of the component set at the input; per size, the same for
+  every ratio.
+mass_kg: "Mass (kg)" of the dimensions table (Table 041-1, common to CSG and CSF), per size, one row for the whole component set (the CSG and CSF share it).
+Torsional stiffness (Tables 042-4 and 043-1, common to CSG and CSF): T1, T2 per size (all ratios); K1, K2, K3 (x10^4 N m/rad as printed) from the block of
+  the row's ratio: ratio 30, ratio 50, "80 or more". torsional_stiffness_nm_rad = K3 = stiffness_k3_nm_rad. The
+  document calls the values reference values, the minimum about 80 % of them.
+hysteresis_rad: "Hysteresis loss" (Table 042-2, common to CSG and CSF, x10^-4 rad as printed), rows ratio 30, 50, "80 or more" (sizes 40 and up: the column "40 or more").
+Left out: backlash_rad. The document prints a "Backlash" table per size and ratio (Table 042-3), but it is the clearance
+  of the wave generator's Oldham coupling referred to the output (the
+  document's definition of terms: the gear itself has none; what is measured comes from the Oldham coupling's clearance); not a gear backlash, so
+  not put into backlash_rad (task instruction). lost_motion_rad: no table for component sets. no_load_torque: only
+  graphs (ratio 100, plus a compensation table per ratio); efficiency: only graphs; both left out. Starting torque,
+  backdriving torque, ratcheting and buckling torque, positional accuracy: tables, no schema column.
+Kept as printed: CSG17 ratio 120 has a lower momentary peak torque (112 N m) than ratio 100 (143 N m).
+Source: Harmonic Drive LLC, Component Sets CSG/CSF, Engineering Data (TI-26108 REV 1, 08/2026), rating table 038-1.
+  Extracted by catalog/tools/extract_harmonicdrive.py; the numbers are Harmonic Drive's, the layout is ours. CSG sizes
+  14 to 65, all ratios printed (44 rows).
+'''
+
+[[sources]]
+id = "csg-csf-component"
+document = "Harmonic Drive LLC, Reducer Catalog, Component Sets CSG/CSF, Engineering Data, TI-26108 REV 1"
+date = "2026-08"
+locator = "pages 38 to 43: rating tables 038-1 (CSG), 038-2 and 039-1 (CSF), dimensions 041-1, hysteresis loss 042-2, torsional stiffness 042-4 and 043-1"
+method = "script:tools/extract_harmonicdrive.py"
+url = "https://www.harmonicdrive.net/_hd/content/documents1/CSG-CSF_Component.pdf"
+retrieved = "2026-11-14"

@@ -1,0 +1,8 @@
+part_number_prefix,series,shaft_diameter_m,shaft_length_m,centering_diameter_m,flange_square_m,bolt_circle_diameter_m
+CMP40,CMP,0.009,0.02,0.04,0.057,0.063
+CMP50,CMP,0.011,0.023,0.06,0.073,0.075
+CMP63,CMP,0.014,0.03,0.08,0.088,0.1
+CMP71,CMP,0.024,0.05,0.11,0.116,0.13
+CMP80,CMP,0.028,0.06,0.13,0.138,0.165
+CMP100,CMP,0.032,0.06,0.155,0.163,0.19
+CMP112,CMP,0.038,0.08,0.18,0.19,0.215

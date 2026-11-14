@@ -1,0 +1,53 @@
+schema_version = 1
+class = "belt_axis"
+key = ["series", "size"]
+default_source = "ckk_ckr_2025"
+notes = '''
+Bosch Rexroth compact modules with toothed belt drive CKR-070 to CKR-280 (two integrated preloaded ball rail
+systems, aluminium profile), single axes, without gear unit (gear ratio 1). Source: Bosch Rexroth catalogue "Compact
+modules CKK/CKR", R999000499/2025-05, pages 64 and 65 ("Technical data", "General technical data", "Drive data",
+"Maximum permissible loads" and the mass, friction and belt table). Extracted by tools/extract_rexroth_ckr.py; the
+numbers are the catalogue's, the layout is ours.
+series: CKR. size: as printed ("070"), the short carriage; "<size>L" is the same size with the long carriage (the
+  catalogue prints two carriage lengths per size, e.g. Lca 80 and 108 mm for the 070; the 280 has one).
+  Carriage values are those of the version "without connection plate".
+kind: axis (a single axis, as the Bahr axes in bahr/belt_axes.csv).
+belt: "Belt type" (AT3, AT5, AT10). belt_pitch_m: the pitch the AT code names (3, 5, 10 mm); the table prints no
+  separate pitch. belt_width_m: Bt [mm]. pulley_effective_diameter_m: "Belt pulley diameter" d3 [mm].
+feed_per_rev_m, max_pulley_torque_nm, max_speed_m_s: drive data at gear ratio 1, "Feed constant" u [mm/rev], "Max.
+  drive torque" MP [Nm], "Max. speed" vmax [m/s]. The CKR-200 prints a second MP of 99.80 Nm for the version with
+  keyway; the column holds 112.70.
+pulley_teeth: not printed; the feed constant over the belt pitch (a whole number for every size; it agrees with
+  pi x d3 / pitch).
+no_load_torque_nm: "Friction torque" MRs [Nm] of the system, per carriage length.
+feed_force_peak_n: "Max. belt drive transmission force" Fbp [N], the maximum force the teeth meshing with the pulley
+  transmit. Not extracted: "Belt elasticity limit" Ft perm (the plastic limit of the belt cross section; the catalogue
+  says not to use it for the drive torque; no schema column).
+max_acceleration_m_s2: amax [m/s2], printed once as a merged cell over all sizes (50).
+fy/fz/mx/my/mz_dynamic: "Maximum permissible loads" Fy max, Fz1 max / Fz2 max, Mx max, My max, Mz max per carriage.
+  The catalogue gives one set of maximum loads (no static/dynamic split); they are put in the dynamic columns.
+  fz_dynamic_n is the lower of Fz1 max and Fz2 max (equal for all sizes but the 280: 86,685 and 60,000 N).
+mass_at_zero_stroke_kg: not printed as a number; from the catalogue's weight calculation (page 177) ms = kg fix +
+  kg var x L + mca with L = smax + Lca + Lad (page 176, stroke reserve 0) at smax = 0, i.e. kg fix + kg var x
+  (Lca + Lad) + mca, carriage without connection plate; without motor, switch mounting and motor attachment.
+mass_per_stroke_kg_m: kg var [kg/mm]. moved_mass_x_kg: "Moved mass of system" mca [kg], without connection plate.
+stroke_x_min_m: smin [mm], "minimum required travel range to ensure a reliable lubrication distribution".
+max_length_one_piece_m: Lmax [mm], the maximum module length L (not the stroke).
+Printed as is and kept: the Lmax of the 280 is printed "5, 500" (read as 5500); the drive data print the 280's
+  gearing column as German "ohne" (= "–", no gear); the drive data give the 110's carriage with connection plate as
+  60 mm long, the general data as 110 mm (only the "without" carriage, 170 mm, is used here).
+Not printed per size and empty: repeatability (the overview says "up to +-0.05 mm" for the series), static loads, Fx
+  loads, belt elongation, continuous feed force.
+Not extracted: dynamic load capacities Cgw, Mt, ML and the mass moments of inertia kJ fix, kJ var, kJ m (no schema
+  columns), planar moments of inertia, point of force application, the gear units PG040 to PG120 and PG115, motor
+  attachments, carriages with connection plate, the CKR-280-DB, dimensions, options.
+'''
+
+[[sources]]
+id = "ckk_ckr_2025"
+document = "Bosch Rexroth AG, catalogue \"Compact modules CKK/CKR\", R999000499, English"
+date = "2025-05"
+locator = "pages 64-65 (CKR technical data); pages 176-177 (length and weight calculation)"
+method = "script:tools/extract_rexroth_ckr.py"
+url = "https://www.boschrexroth.com/media/e8278bcd-f4c8-4191-814e-9e557f6c5f27"
+retrieved = "2026-11-14"

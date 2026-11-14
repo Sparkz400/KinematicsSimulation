@@ -1,0 +1,95 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "neugart-ple"
+notes = '''
+Source: Neugart, product catalogue chapter "PLE" (Economy Line, output shaft), edition 05.2026, English, "Technical data" pages
+20 to 23. Extracted by catalog/tools/extract_neugart.py; the numbers are Neugart's, the layout is ours. Definitions
+from the glossary of Neugart's Complete gearbox catalog 05.2026 (100324320), pages 206 and 207.
+Sizes: PLE040, PLE060, PLE080, PLE120, PLE160; one to three stages, ratios 3 to 512 (PLE160 one and two stages only). The stage of a ratio is the "p" column of the tables.
+rated_output_torque: Continuous torque T2D per size and ratio (S1, 20,000 h with n1D; glossary of the complete
+  catalogue 05.2026, page 206). This edition no longer prints a nominal torque T2N: the 05.2025 edition's T2N values
+  are now (mostly) printed as the Cyclic torque T2Z, which lies between T2D and T2max; the schema has no column for
+  T2Z, so it is not taken.
+max_output_torque: Maximum torque T2max ("highest permissible torque in the regular application cycle").
+emergency_stop_output_torque: Emergency stop torque T2Stop, permitted 1,000 times.
+All torques per ratio are "based on reference clamping system diameter" (footnote 4).
+rated_input_speed: Continuous input speed n1D per size and ratio (S1 with T2D, thermal boundary conditions of the
+  glossary: 20 degC ambient, no heat exchange with the motor); max_input_speed: Max. mechanical input speed n1max,
+  one value per size. r/min to rad/s.
+motor_frame: the reference clamping system bore D26 in mm (the bore marked with footnote 5, "Reference clamping
+  system diameter"); clamping_hub_diameter_m is the same bore in m. One row per size and ratio with that bore; the
+  other bores of the table are left out (no per-ratio values printed for them).
+backlash: Standard backlash per size and stage, printed as "< x arcmin", a maximum; to rad.
+max_radial_force / max_axial_force / max_tilting_moment: Fr max, Fa max, MK max per size. Fr max refers to the
+  center of the output shaft (or the end of a flange output shaft; glossary).
+efficiency_full_load: Efficiency per stage, all sizes; determined at the cyclic torque, n1 = 1000 r/min and 70 degC
+  gearbox temperature (glossary); percent to 1.
+mass_kg, no_load_torque_nm (T0 at n1 = 3,000 r/min and 20 degC gearbox temperature, glossary; so
+  no_load_torque_speed is 3000 r/min), torsional_stiffness (C2t, N m/arcmin to N m/rad) and inertia_at_input (J1 at
+  the reference bore, kg cm2 to kg m2): the chapter prints one value or one range per size and stage; the
+  ratio-dependent values are only in Neugart's online Tec Data Finder (a configurator, not a document, not read).
+  A single printed number is taken as printed (source of the table). For a range the script takes the conservative
+  end, an ESTIMATE with its own source "neugart-range-estimate" and [[provenance]] entries naming exactly those
+  values: the LOWER end of the stiffness range, the UPPER end of the inertia, weight and idle torque ranges.
+Left out: T2Z, running noise, bending moment Mb1, service life, dimensions.
+
+Single numbers per size and stage, taken as printed for every ratio: PLE040 idle torque 0.05 N m (all
+  stages), PLE060 0.10 N m (two and three stages; one stage is a range), masses PLE040 0.4 kg (one stage) and 0.5 kg
+  (three stages), PLE060 0.9 kg (one stage).
+No misprints found.
+'''
+
+[[sources]]
+id = "neugart-ple"
+document = "Neugart, product catalogue chapter PLE, 05.2026, English"
+date = "2026-05"
+locator = "Technical data, printed pages 20 to 23: Gearbox characteristics, Output shaft loads, Input characteristics, Output torques (T2Z, T2max, T2D, T2Stop), Input speeds (n1D, n1max)"
+method = "script:tools/extract_neugart.py"
+url = "https://cdn.neugart.com/fileadmin/user_upload/Downloads/Catalog_Chapters/05_2026/PLE/PLE_2026_05_EN.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "neugart-glossary"
+document = "Neugart, Complete gearbox catalog 05.2026 (100324320), English"
+date = "2026-05"
+locator = "Glossary, pages 206 and 207 (definitions of T0 and its 3000 r/min reference speed, T2D, n1D, T2max, T2Stop, efficiency)"
+method = "manual: definitions read from the glossary; only no_load_torque_speed_rad_s (3000 r/min) is a number from it, set in the script"
+url = "https://cdn.neugart.com/fileadmin/user_upload/Downloads/Product_Catalogs/05_2026/Complete_Gearbox_Catalog_2026_05_EN.pdf"
+retrieved = "2026-11-14"
+
+[[provenance]]
+rows = ["*"]
+fields = ["no_load_torque_speed_rad_s"]
+source = "neugart-glossary"
+
+[[sources]]
+id = "neugart-range-estimate"
+document = "Neugart, product catalogue chapter PLE, 05.2026, English"
+date = "2026-05"
+locator = "Technical data, printed page 20: Gearbox characteristics (torsional stiffness, gearbox weight) and Input characteristics (mass moment of inertia input, average idle torque), one range per size and stage"
+method = "[estimate] the conservative end of the range the chapter prints per size and stage (lower stiffness, higher inertia, mass and idle torque); the per-ratio values are only in Neugart's Tec Data Finder"
+url = "https://cdn.neugart.com/fileadmin/user_upload/Downloads/Catalog_Chapters/05_2026/PLE/PLE_2026_05_EN.pdf"
+retrieved = "2026-11-14"
+
+# Provenance of the range estimates: written by tools/extract_neugart.py, do not edit below.
+
+[[provenance]]
+rows = ["*"]
+fields = ["torsional_stiffness_nm_rad"]
+source = "neugart-range-estimate"
+
+[[provenance]]
+rows = ["*"]
+fields = ["inertia_at_input_kgm2"]
+source = "neugart-range-estimate"
+
+[[provenance]]
+rows = ["PLE040|9|9", "PLE040|9|12", "PLE040|9|15", "PLE040|9|16", "PLE040|9|20", "PLE040|9|25", "PLE040|9|32", "PLE040|9|40", "PLE040|9|64", "PLE060|14|9", "PLE060|14|12", "PLE060|14|15", "PLE060|14|16", "PLE060|14|20", "PLE060|14|25", "PLE060|14|32", "PLE060|14|40", "PLE060|14|64", "PLE060|14|60", "PLE060|14|80", "PLE060|14|100", "PLE060|14|120", "PLE060|14|160", "PLE060|14|200", "PLE060|14|256", "PLE060|14|320", "PLE060|14|512", "PLE080|19|3", "PLE080|19|4", "PLE080|19|5", "PLE080|19|7", "PLE080|19|8", "PLE080|19|10", "PLE080|19|9", "PLE080|19|12", "PLE080|19|15", "PLE080|19|16", "PLE080|19|20", "PLE080|19|25", "PLE080|19|32", "PLE080|19|40", "PLE080|19|64", "PLE080|19|60", "PLE080|19|80", "PLE080|19|100", "PLE080|19|120", "PLE080|19|160", "PLE080|19|200", "PLE080|19|256", "PLE080|19|320", "PLE080|19|512", "PLE120|24|3", "PLE120|24|4", "PLE120|24|5", "PLE120|24|7", "PLE120|24|8", "PLE120|24|10", "PLE120|24|9", "PLE120|24|12", "PLE120|24|15", "PLE120|24|16", "PLE120|24|20", "PLE120|24|25", "PLE120|24|32", "PLE120|24|40", "PLE120|24|64", "PLE120|24|60", "PLE120|24|80", "PLE120|24|100", "PLE120|24|120", "PLE120|24|160", "PLE120|24|200", "PLE120|24|256", "PLE120|24|320", "PLE120|24|512", "PLE160|35|3", "PLE160|35|4", "PLE160|35|5", "PLE160|35|8", "PLE160|35|12", "PLE160|35|15", "PLE160|35|16", "PLE160|35|20", "PLE160|35|25", "PLE160|35|32", "PLE160|35|40", "PLE160|35|64"]
+fields = ["mass_kg"]
+source = "neugart-range-estimate"
+
+[[provenance]]
+rows = ["PLE060|14|3", "PLE060|14|4", "PLE060|14|5", "PLE060|14|7", "PLE060|14|8", "PLE060|14|10", "PLE080|19|3", "PLE080|19|4", "PLE080|19|5", "PLE080|19|7", "PLE080|19|8", "PLE080|19|10", "PLE080|19|9", "PLE080|19|12", "PLE080|19|15", "PLE080|19|16", "PLE080|19|20", "PLE080|19|25", "PLE080|19|32", "PLE080|19|40", "PLE080|19|64", "PLE080|19|60", "PLE080|19|80", "PLE080|19|100", "PLE080|19|120", "PLE080|19|160", "PLE080|19|200", "PLE080|19|256", "PLE080|19|320", "PLE080|19|512", "PLE120|24|3", "PLE120|24|4", "PLE120|24|5", "PLE120|24|7", "PLE120|24|8", "PLE120|24|10", "PLE120|24|9", "PLE120|24|12", "PLE120|24|15", "PLE120|24|16", "PLE120|24|20", "PLE120|24|25", "PLE120|24|32", "PLE120|24|40", "PLE120|24|64", "PLE120|24|60", "PLE120|24|80", "PLE120|24|100", "PLE120|24|120", "PLE120|24|160", "PLE120|24|200", "PLE120|24|256", "PLE120|24|320", "PLE120|24|512", "PLE160|35|3", "PLE160|35|4", "PLE160|35|5", "PLE160|35|8", "PLE160|35|12", "PLE160|35|15", "PLE160|35|16", "PLE160|35|20", "PLE160|35|25", "PLE160|35|32", "PLE160|35|40", "PLE160|35|64"]
+fields = ["no_load_torque_nm"]
+source = "neugart-range-estimate"

@@ -10,8 +10,14 @@ HTD-compatible profile: MTD3, MTD5, MTD8 fit Bahr's 3M, 5M, 8M belts.
 One row per profile and standard width. Average values, as the handbook says.
 mass: "Weight (gr/m)". max_traction_load: the allowable pull of the cords, a quarter of the breaking strength
   (the handbook's figures); elongation_at_mtl: the stretch at that pull, so EA = max_traction_load / (elongation / 1000).
-Not extracted: the other cord materials (Kevlar, HP, HF, HPF, stainless), the flexion table (minimum pulley teeth),
-  pulley diameters, thickness and tolerances.
+min_pulley_teeth: "FLEXION RESISTANCE" table on the page after each profile's page, row of the standard cords
+  ("Standard steel cords"; for MTD8 "HP = Standard", the cord of its first traction block), first column ZMIN: the
+  linear drive (the picture shows a clamped belt over two pulleys). The other two columns (omega drive and drive
+  with a back-bending idler: ZMIN and IDLER MIN DIA) are not taken; the schema has no column for them.
+thickness_m: "Standard thickness" of the profile's page (the nominal value, without its tolerance).
+min_pulley_diameter_m: empty; the handbook prints minimum diameters only for idlers, the pulley minimum as ZMIN.
+Not extracted: the other cord materials (Kevlar, HP, HF, HPF, stainless), idler diameters, pulley tables and
+  tolerances.
 '''
 
 [[sources]]

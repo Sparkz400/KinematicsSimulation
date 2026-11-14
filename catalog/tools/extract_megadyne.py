@@ -5,17 +5,22 @@ The handbook is not part of this repository. Get the PDF from Megadyne
 (https://megadynegroup.com/files/resources/attachments/md_manu_en_megalinear_web.pdf), then:
 
     pdftotext -table -enc UTF-8 md_manu_en_megalinear_web.pdf megalinear.txt      (xpdf 4.x)
-    python extract_megadyne.py megalinear.txt ../megadyne
+    python tools/extract_megadyne.py megalinear.txt megadyne
 
-Each profile's page has a row of standard widths, a row of weights, a tooth resistance table over
-r/min and a traction table per cord material. Only the standard steel cords are read (the first
-traction block). A row that does not have one value per width or per speed stops the script.
+It writes the schema-1 tables (SI units) directly. Each profile's first page has a row of standard widths, a row of
+weights, the standard thickness, a tooth resistance table over r/min and a traction table per cord material; its
+second page has the "FLEXION RESISTANCE" table. Only the standard cords are read (the first traction block and the
+first flexion row: "Standard steel cords", for MTD8 "HP = Standard"). A row that does not have one value per width
+or per speed stops the script.
 """
+import csv
 import re
 import sys
 from pathlib import Path
 
-SOURCE = "Megadyne (Ammega), MEGALINEAR technical handbook, 02.2026"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cataloglib.units import to_si  # noqa: E402
+
 # Profile, pitch in mm. MTD is Megadyne's HTD-compatible profile (Bahr's 3M, 5M, 8M).
 PROFILES = [("T5", 5), ("AT3", 3), ("AT5", 5), ("AT10", 10), ("MTD3", 3), ("MTD5", 5), ("MTD8", 8)]
 SPEEDS = [0, 20, 40, 60, 80, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 8000]
@@ -35,9 +40,25 @@ def section(lines, profile):
     return lines[start:end]
 
 
+def flexion(lines, profile):
+    """Z min of the standard cords in a linear drive (first column of the flexion table on the profile's second page)."""
+    heading = re.compile(rf"^\s*{profile} OPEN-ENDED\s*$")
+    pages = [i for i, line in enumerate(lines) if heading.match(line)]
+    if len(pages) < 2:
+        raise ValueError(f"{profile}: no flexion page")
+    head = next(i for i in range(pages[1], len(lines)) if "ZMIN" in lines[i])
+    row = next(line for line in lines[head + 1:] if line.strip())
+    m = re.match(r"^\s*(Standard\s+steel cords|HP = Standard)\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s*$", row)
+    if m is None:
+        raise ValueError(f"{profile}: flexion row {row.strip()!r}")
+    return m.group(2)
+
+
 def profile_rows(lines, profile, pitch):
     part = section(lines, profile)
-    find = lambda label: next(line for line in part if label in line)
+    thickness = re.search(r"Standard\s+thickness\s+([\d,]+) \+", find_in(part, "thickness")).group(1).replace(",", ".")
+    z_min = flexion(lines, profile)
+    find = lambda label: find_in(part, label)
     # "STANDARD 6 10 ..." with "WIDTHS (mm)" on the next line, or "STANDARD WIDTHS (mm) 10 20 ...".
     widths = values(find("STANDARD").replace("WIDTHS (mm)", ""), "STANDARD")
     weights = values(find("Weight (gr/m)"), "Weight (gr/m)")
@@ -54,8 +75,28 @@ def profile_rows(lines, profile, pitch):
             raise ValueError(f"{profile}: {name} {row} for widths {widths}")
     if cords != widths:
         raise ValueError(f"{profile}: traction table widths {cords} differ from {widths}")
-    belts = [[profile, str(pitch), w, g, t, b, e] for w, g, t, b, e in zip(widths, weights, traction, breaking, elongation)]
-    return belts, [[profile, str(s), f] for s, f in zip(SPEEDS, tooth)]
+    belts = [{"profile": profile, "pitch_m": to_si(str(pitch), "milli"), "width_m": to_si(w, "milli"),
+              "mass_kg_m": to_si(g, "milli"), "max_pull_n": t, "breaking_strength_n": b,
+              "elongation_at_max_pull": to_si(e, "milli"), "min_pulley_teeth": z_min,
+              "thickness_m": to_si(thickness, "milli")}
+             for w, g, t, b, e in zip(widths, weights, traction, breaking, elongation)]
+    teeth = [{"profile": profile, "speed_rad_s": to_si(str(s), "rpm"), "specific_tooth_load_n_m": to_si(f, "centi_inverse")}
+             for s, f in zip(SPEEDS, tooth)]
+    return belts, teeth
+
+
+def find_in(part, label):
+    line = next((line for line in part if label in line), None)
+    if line is None:
+        raise ValueError(f"no line {label!r}")
+    return line
+
+
+def write(path, rows):
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
 
 
 def main(text_file, out_dir):
@@ -67,23 +108,8 @@ def main(text_file, out_dir):
         teeth += t
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    head = f"""# Source: {SOURCE} (megadynegroup.com, md_manu_en_megalinear_web.pdf), the page of each profile.
-# Extracted by catalog/tools/extract_megadyne.py; the numbers are the handbook's, the layout is ours.
-# Open-ended polyurethane belts with standard steel cords (S and Z torsion zinked steel). MTD is Megadyne's
-# HTD-compatible profile: MTD3, MTD5, MTD8 fit Bahr's 3M, 5M, 8M belts.
-"""
-    (out / "belts.csv").write_text(head + """# One row per profile and standard width. Average values, as the handbook says.
-# mass: "Weight (gr/m)". max_traction_load: the allowable pull of the cords, a quarter of the breaking strength
-#   (the handbook's figures); elongation_at_mtl: the stretch at that pull, so EA = max_traction_load / (elongation / 1000).
-# Not extracted: the other cord materials (Kevlar, HP, HF, HPF, stainless), the flexion table (minimum pulley teeth),
-#   pulley diameters, thickness and tolerances.
-profile,pitch_mm,width_mm,mass_g_m,max_traction_load_n,breaking_strength_n,elongation_at_mtl_mm_m
-""" + "".join(",".join(r) + "\n" for r in belts), encoding="utf-8", newline="\n")
-    (out / "belt_tooth_load.csv").write_text(head + """# The "tooth resistance" table: specific tooth load Fp spec in N per cm of width and per tooth in mesh, over the
-#   pulley's r/min. The handbook sizes by effective pull * service factor <= Fp spec * width in cm * teeth in mesh
-#   (at most 12 for open-ended belts), page 9.
-profile,rpm,specific_tooth_load_n_cm
-""" + "".join(",".join(r) + "\n" for r in teeth), encoding="utf-8", newline="\n")
+    write(out / "belts.csv", belts)
+    write(out / "belt_tooth_load.csv", teeth)
     print(f"{len(belts)} belts, {len(teeth)} tooth load points")
 
 

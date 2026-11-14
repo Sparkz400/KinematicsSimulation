@@ -17,14 +17,16 @@ efficiency: Table 6-66, full load, two stages. torsional_stiffness: chapter 6.5.
 backlash: standard, Table 6-67 (5 arcmin for two stages); backlash_reduced: the reduced-backlash option (order codes
   M5 to M7), Table 6-68 (3 arcmin). Both are maxima.
 inertia: Tables 6-70, at the input.
-Not extracted: the other SP+ sizes, one stage, TP+, masses, forces, reference speeds, bending moments.
+mass: Table 6-72, two stages (added 14 November 2026): 7.1 kg for frames 03 and 04 (one column); frame 05 prints
+  7.2 kg with a 1FT2205 and 7.3 kg with a 1FT2105, and the row keeps the 7.3 kg of the 1FT2105 (the delta pickers').
+Not extracted: the other SP+ sizes, one stage, TP+, forces, reference speeds, bending moments.
 '''
 
 [[sources]]
 id = "gearboxes"
 document = "Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, A5E54515894B AA"
 date = "2025-04"
-locator = "chapter 6.5, Tables 6-61, 6-64, 6-66 to 6-68, 6-70 and chapter 6.5.2, pages 140 to 148"
+locator = "chapter 6.5, Tables 6-61, 6-64, 6-66 to 6-68, 6-70, 6-72 and chapter 6.5.2, pages 140 to 149"
 method = "manual: typed in from the rendered tables of chapter 6.5 and checked against them once more"
 url = "https://docs.rs-online.com/f6f5/A700000014746827.pdf"
 retrieved = "2026-11-14"

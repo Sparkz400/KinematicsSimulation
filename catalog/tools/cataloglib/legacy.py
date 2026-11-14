@@ -204,19 +204,13 @@ TABLES = {
         ("ratio", "ratio", "same"),
         ("mass_kg", "mass_kg", "same"),
     ]),
+    # tools/extract_megadyne.py writes schema columns in SI since 14 November 2026 (with min_pulley_teeth, thickness_m).
     "megadyne/belts.csv": ("megadyne/belts.csv", "belt", None, [
-        ("profile", "profile", "same"),
-        ("pitch_mm", "pitch_m", "milli"),
-        ("width_mm", "width_m", "milli"),
-        ("mass_g_m", "mass_kg_m", "milli"),
-        ("max_traction_load_n", "max_pull_n", "same"),
-        ("breaking_strength_n", "breaking_strength_n", "same"),
-        ("elongation_at_mtl_mm_m", "elongation_at_max_pull", "milli"),
+        (c, c, "same") for c in ("profile", "pitch_m", "width_m", "mass_kg_m", "max_pull_n", "breaking_strength_n",
+                                 "elongation_at_max_pull", "min_pulley_teeth", "thickness_m")
     ]),
     "megadyne/belt_tooth_load.csv": ("megadyne/belt_tooth_load.csv", "belt", "tooth_load", [
-        ("profile", "profile", "same"),
-        ("rpm", "speed_rad_s", "rpm"),
-        ("specific_tooth_load_n_cm", "specific_tooth_load_n_m", "centi_inverse"),
+        (c, c, "same") for c in ("profile", "speed_rad_s", "specific_tooth_load_n_m")
     ]),
     "bahr/belt_axes.csv": ("bahr/belt_axes.csv", "belt_axis", None, [
         ("series", "series", "same"),
