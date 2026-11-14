@@ -189,12 +189,28 @@ fn samples(events: &[Event]) -> Vec<&Vec<f64>> {
 /// A config in which every effect has something to act on: low pretension so the belt can go
 /// slack, a weak drive so the torque limit is reached, a low bus voltage so the voltage limit is, a via point so corner blending has a corner.
 /// The machine's default config with one more cycle segment: a pass through the middle of the
-/// workspace without stopping. It gives every machine's cycle a corner that blending can round.
+/// workspace without stopping. It gives every machine's cycle a corner that blending can round. Where a segment already
+/// ends in the middle, or a machine of one axis would turn back there, the pass is halfway from the last segment's
+/// target to the first's instead: a stop that blending can leave out (as sim-machines' control test has it since 14
+/// November 2026).
 fn with_via_point(entry: &MachineEntry) -> Config {
     let cfg = entry.config();
     let machine = (entry.build)(&cfg).unwrap();
-    let middle: Vec<String> = machine.axes().iter().map(|a| format!("{:?}", 0.5 * (a.min + a.max))).collect();
-    let gripper = cfg.array("cycle.segment").unwrap().last().unwrap().get("payload").unwrap().as_bool().unwrap();
+    let segments = cfg.array("cycle.segment").unwrap();
+    let target = |k: usize| -> Vec<f64> {
+        segments[k]["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect()
+    };
+    let (first, last) = (target(0), target(segments.len() - 1));
+    let mut middle: Vec<f64> = machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
+    let at = |target: &[f64]| {
+        middle.iter().zip(target).zip(machine.axes()).all(|((m, t), a)| (m - t).abs() < 1e-9 * (a.max - a.min))
+    };
+    let between = machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0;
+    if (0..segments.len()).any(|k| at(&target(k))) || !between {
+        middle = first.iter().zip(&last).map(|(f, l)| 0.5 * (f + l)).collect();
+    }
+    let middle: Vec<String> = middle.iter().map(|m| format!("{m:?}")).collect();
+    let gripper = segments.last().unwrap().get("payload").unwrap().as_bool().unwrap();
     let segment =
         format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
     Config::parse(&format!("{}{segment}", entry.default_config)).unwrap()
@@ -271,33 +287,58 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         ];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Runner::new(entry, &base).unwrap().sim.machine.motors().len() < 2;
-        // Nor does backlash or a gearbox's loss act where the config has none (the screw's and the linear motor's couplings;
-        // the screw's own loss is under the same switch), motor friction where the motor has none (the linear motor: no
-        // bearings of its own), gravity along a horizontal slide (the screw, rack and linear motor axes) or on the table
-        // about its vertical axis, or part heating and its feedback where no part warms but the motors (a coupling of
-        // ratio 1; the linear delta's belt axes, whose guides' heat is not modelled), as sim-machines' control test has it.
+        // Nor does a switch act whose values are all zero (or all one) in this config, gravity where it loads no motor, part
+        // heating where no part warms but the motors, and the rest of what sim-machines' control test
+        // (`every_effect_switch_changes_the_traces`) leaves out, with its reasons there.
         let machine = (entry.build)(&base).unwrap();
-        let tight = base.f64("gearbox.backlash_rad").is_ok_and(|b| b == 0.0);
-        let lossless = base.f64("gearbox.efficiency").is_ok_and(|e| e == 1.0)
-            && base.get("screw").is_err()
-            && base.get("rack").is_err();
-        let level = base.f64("slide.incline_deg").is_ok_and(|i| i == 0.0) || base.get("table").is_ok();
-        let frictionless = ["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]
-            .iter()
-            .all(|k| base.f64(k).is_ok_and(|f| f == 0.0));
+        let zero = |keys: &[&str]| keys.iter().all(|k| base.f64(k).map_or(true, |v| v == 0.0));
+        let hold = |cfg: &Config| {
+            let m = (entry.build)(cfg).unwrap();
+            let (mut state, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(&cfg.f64s("start.pose").unwrap(), &mut state, &mut hold);
+            hold
+        };
+        let mut level = base.clone();
+        level.set_text("effects.gravity = false").unwrap();
+        let unloaded = hold(&base) == hold(&level);
         let cold = machine.thermal_parts().is_empty();
+        let place = MACHINES.iter().position(|m| m.id == entry.id).unwrap();
+        let idle = |e: &str| match e {
+            "effects.gearbox_backlash" => zero(&["gearbox.backlash_rad", "rack.backlash_m"]),
+            "effects.motor_friction" => zero(&["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]),
+            "effects.gearbox_efficiency" => {
+                ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"]
+                    .iter()
+                    .all(|k| base.f64(k).map_or(true, |v| v == 1.0))
+                    || base.bool("effects.gearbox_drag").unwrap_or(false)
+                        && 1.0 / base.f64("gearbox.efficiency").unwrap()
+                            - base.f64("gearbox.ratio").unwrap() * base.f64("gearbox.no_load_torque_nm").unwrap()
+                                / base.f64("gearbox.efficiency_torque_nm").unwrap()
+                            <= 1.0
+            }
+            "effects.gearbox_drag" => zero(&["gearbox.no_load_torque_nm"]) || base.f64("gearbox.ratio").unwrap() == 1.0,
+            "effects.motor_stiction" => {
+                base.f64("motor.friction_breakaway_nm").unwrap() <= base.f64("motor.friction_coulomb_nm").unwrap()
+            }
+            "effects.gearbox_lost_motion" => zero(&["gearbox.lost_motion_band_rad", "gearbox.hysteresis_rad"]),
+            "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
+                .iter()
+                .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
+            "effects.gravity" => unloaded,
+            "effects.part_heating" | "effects.thermal_feedback" => cold,
+            "effects.link_bending" => base.get("link_bending").is_err(),
+            "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
+            "effects.base_compliance" => {
+                let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+                machine.equilibrium(&base.f64s("start.pose").unwrap(), &mut state, &mut torque);
+                machine.frame_momentum(&state).is_none()
+            }
+            _ => false,
+        } || UNREAD.contains(&(place, e))
+            || CANNOT_ACT.contains(&(place, e));
         let effects: Vec<String> = effects
             .into_iter()
-            .filter(|e| {
-                !skipped.contains(&e.as_str())
-                    && !(alone && e == "effects.shared_dc_link")
-                    && !(tight && e == "effects.gearbox_backlash")
-                    && !(lossless && e == "effects.gearbox_efficiency")
-                    && !(frictionless && e == "effects.motor_friction")
-                    && !(level && e == "effects.gravity")
-                    && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback"))
-                    && !(e == "effects.link_bending" && base.get("link_bending").is_err())
-            })
+            .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e))
             .collect();
         // A switch that acts only in a setting the base has not is switched from that setting, in both runs: the belt's
         // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
@@ -319,21 +360,27 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
             "ratings.drive_overload_time_constant_s = 0.05".into(),
             "ratings.drive_max_current_time_s = 0.01".into(),
         ];
-        // Fine interpolation (since 14 November 2026) runs the setpoint on between profile cycles, so it acts only where the
-        // profile cycle is longer than the position loop's (1 ms both in the configs): 4 ms, as in sim-machines' control
-        // test, with a setpoint interval of whole profile cycles.
-        let interpolated = ["profile.cycle_s = 4.0e-3".into(), "profile.setpoint_interval_s = 12.0e-3".into()];
-        // Friction feedforward (the same day) acts by its characteristic, which the configs leave at nothing: 0.1 N m (or
-        // N) from 10 rad/s (or m/s) on.
-        let characteristic = [
-            "drive.friction_feedforward_speed_rad_s = [10.0]".into(),
-            "drive.friction_feedforward_torque_nm = [0.1]".into(),
-        ];
-        let through: [(&str, &[String]); 5] = [
+        // The switches of 14 November 2026, as sim-machines' control test flips them: the braking resistor warms only
+        // where it burns, so its chopper switches in just above the (low) bus; fine interpolation acts between profile
+        // cycles, at a profile cycle of 2 ms against the position loop's 1 ms; the arm tube's inertia goes into the arms'
+        // bending (effects.link_elasticity); the iron loss is what the stall current's copper loss has more than the
+        // rated current's (equal in the shipped motors), so the stall current is a fifth above the rated one; and the
+        // shipped friction feedforward has no torque in its characteristic, so it gets 0.05 N m.
+        let resistor =
+            [format!("ratings.braking_threshold_v = {:?}", 1.05 * base.f64("drive.bus_voltage_v").unwrap_or(0.0))];
+        let stall = [format!("motor.stall_current_a = {:?}", 1.2 * base.f64("motor.rated_current_a").unwrap())];
+        let characteristic = [format!(
+            "drive.friction_feedforward_torque_nm = {:?}",
+            vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
+        )];
+        let through: [(&str, &[String]); 8] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &capped),
             ("effects.drive_overload", &overload),
-            ("effects.fine_interpolation", &interpolated),
+            ("effects.braking_resistor_heating", &resistor),
+            ("effects.fine_interpolation", &["profile.cycle_s = 2.0e-3".into()]),
+            ("effects.arm_tube_inertia", &["effects.link_elasticity = true".into()]),
+            ("effects.iron_loss", &stall),
             ("effects.friction_feedforward", &characteristic),
         ];
         for effect in effects {
@@ -347,13 +394,20 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
                 runner.handle(Request::Command(Command::StartCycle), events);
                 runner.advance(0.5, events);
             }
-            assert!(samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500);
+            assert!(
+                samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500,
+                "{}: {effect}: {} and {} samples, the same: {}",
+                entry.id,
+                samples(&events[0]).len(),
+                samples(&events[1]).len(),
+                samples(&events[0]) == samples(&events[1])
+            );
 
             let mut flipped = base.clone();
             flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
             let mut answer = Vec::new();
             runners[1].handle(Request::Reconfigure(flipped), &mut answer);
-            assert!(matches!(answer[..], [Event::Configured(Ok(_))]), "{}: {effect} was refused", entry.id);
+            assert!(matches!(answer[..], [Event::Configured(Ok(_))]), "{}: {effect} was refused: {answer:?}", entry.id);
 
             let mut changed_after = None;
             while changed_after.is_none() && runners[0].sim.time() < 0.5 + limit {
@@ -372,6 +426,30 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         }
     });
 }
+
+/// Effect switches a machine's config has but the machine does not read, by the machine's place in `MACHINES` (no
+/// machine is named outside its crate), as sim-machines' control test lists them: the four-arm delta's arm tube
+/// inertia, the disc cam's process force and the first gantry's yaw (read by machine files' gantries only).
+const UNREAD: [(usize, &str); 3] =
+    [(7, "effects.arm_tube_inertia"), (21, "effects.process_force"), (0, "effects.gantry_yaw")];
+
+/// Effect switches that cannot act in the test's weak-drive cycle on a machine, as sim-machines' control test lists them:
+/// the palletiser's motors and drives are named per motor, and the catalogue's replace the weak drive and the low bus;
+/// the flying saw never gets fast enough for the voltage limit; the disc cam's cycle stays within the weak drive's torque.
+/// And here, where the bus gives three quarters of the default cycle's top back EMF (`demanding`): the SCARA of parallel
+/// arms, whose weak drive moves it slower than its default cycle, never meets the voltage limit, so neither that switch
+/// nor field weakening changed anything within a cycle (14 November 2026).
+const CANNOT_ACT: [(usize, &str); 9] = [
+    (17, "effects.torque_limit"),
+    (17, "effects.voltage_limit"),
+    (17, "effects.field_weakening"),
+    (17, "effects.drive_current_limit"),
+    (16, "effects.voltage_limit"),
+    (16, "effects.field_weakening"),
+    (21, "effects.torque_limit"),
+    (4, "effects.voltage_limit"),
+    (4, "effects.field_weakening"),
+];
 
 /// Effects that act all the time show up at once: within one position-loop cycle of 1 ms.
 #[test]
@@ -898,8 +976,11 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
 /// of the energy budget; in German too.
 #[test]
 fn the_regenerative_supply_shows_in_the_apps_tables() {
-    for entry in MACHINES.iter().copied() {
+    // Every machine on a thread of its own: one after the other, the 22 of 14 November 2026 took over 7 minutes alone.
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        // The machine in the app stands meanwhile (`optimised_in_the_app`).
+        model.set_paused(true);
         model.set_param("effects.regenerative_supply", toml::Value::Boolean(true));
         model.run_analysis(Analysis::Cycle);
         wait_for_analysis(&mut model);
@@ -938,7 +1019,7 @@ fn the_regenerative_supply_shows_in_the_apps_tables() {
         model.set_language("de");
         assert!(row(&model.cycle_tables()[1], "Ins Netz zurückgespeist [J]").len() == load.motors.len());
         assert!(model.budget_table().unwrap().iter().any(|cells| cells[0].ends_with("In das Netz zurückgespeist")));
-    }
+    });
 }
 
 /// The machines slowest to simulate, by their place in `MACHINES` (no machine is named outside its crate): the six-axis
@@ -1870,8 +1951,11 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         model.set_speed(20.0);
         model.command(Command::MoveTo(ends.clone()));
         simulate(&mut model, 4.0);
+        // To 1 mm, or the machine's settling tolerance where that is wider: the palletiser's arms at full reach stand
+        // 1.8 mm off with the twist of their gears, which the encoders do not see (its tolerance is 4 mm for that).
+        let near = entry.config().f64("ratings.settling_tolerance_m").map_or(1e-3, |t| t.max(1e-3));
         assert!(
-            (latest(&model, &position) - ends[0]).abs() < 1e-3,
+            (latest(&model, &position) - ends[0]).abs() < near,
             "{}: at {} for {} at {} s ({:?})",
             entry.id,
             latest(&model, &position),
@@ -1895,7 +1979,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             wait_for_analysis(&mut model);
             simulate(&mut model, 4.0);
             assert!(
-                (latest(&model, &position) - to[0]).abs() < 1e-3,
+                (latest(&model, &position) - to[0]).abs() < near,
                 "{}: {name}: the machine stands at {} ({:?})",
                 entry.id,
                 latest(&model, &position),
@@ -2638,8 +2722,10 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
 /// the rated speed backwards to the rated speed forwards (on the gantry 1.27 N m up to 314 rad/s).
 #[test]
 fn the_operating_points_are_shown_over_the_torque_speed_curve() {
-    for entry in MACHINES.iter().copied() {
+    // Every machine on a thread of its own, the machine in the app standing meanwhile (`optimised_in_the_app`).
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        model.set_paused(true);
         assert!(
             model.points_plot(Analysis::Cycle).is_none()
                 && model.points_plot(Analysis::Path).is_none()
@@ -2710,7 +2796,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
         assert_eq!(model.points_table(0..1).unwrap().1[0][1], "Motordrehzahl [rad/s]");
         model.clear_analysis();
         assert!(model.points_plot(Analysis::Cycle).is_none());
-    }
+    });
 }
 
 /// A frequency response as `sim-cli sweep` writes it.
