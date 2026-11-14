@@ -399,6 +399,107 @@ fn s120_motors_by_name_bring_winding_rated_values_and_their_motor_module() {
     }
 }
 
+/// What a motor of the catalogue brings beyond its rated values, against the catalogue rows. The 1FK2205-4AF on 400 V
+/// (motors_s210.csv): 0.51 kg cm2 and 5.2 kg, with the holding brake 0.60 kg cm2 and 6.2 kg; its highest speed 6000 rpm
+/// = 628.32 rad/s; its stall current 4.7 A. Its inductance [estimate] from Siemens' short-circuit braking table
+/// (dynamic_braking_1fk2.csv: 13 N m at most) and the EXCT-30's 4 pole pairs: kt^2 / (2 p M) = (6 / 4.7)^2 / 104 =
+/// 15.670 mH, the current loop retuned for it with the config's T = 10 mH / 40 V/A = 0.25 ms: Kp = 62.68 V/A.
+/// The 1FK2102-0AG on 230 V has no S120 manual row; its thermal time constant, 14 min, comes from the S210 operating
+/// instructions (motors_s210_oi.csv). The encoder: 22 bit (4 194 304 counts) for a 1FK2, 26 bit (67 108 864) only for a
+/// 1FT2. An S120 Motor Module switches the shared DC link on and brings the Active Line Modules' trip, 820 V; an S210
+/// converter switches it off.
+#[test]
+fn a_motor_by_name_brings_its_brake_encoder_speed_and_winding_estimates() {
+    use sim_components::catalog::{motor_mass_for, motor_max_speed};
+    let value = |cfg: &Config, path: &str| cfg.f64(path).unwrap();
+    let mut cfg = exct_30();
+    apply_motor(&mut cfg, "1FK2205-4AF", "400v").unwrap();
+    let inductance = (6.0f64 / 4.7).powi(2) / (2.0 * 4.0 * 13.0);
+    for (path, want) in [
+        ("motor.rotor_inertia_kgm2", 0.51e-4 * 10.0),
+        ("drive.max_speed_rad_s", 6000.0 * std::f64::consts::PI / 30.0),
+        ("motor.stall_current_a", 4.7),
+        ("motor.thermal_time_constant_s", 1860.0),
+        ("motor.inductance_h", inductance),
+        ("motor.d_inductance_h", inductance),
+        ("drive.current_kp_v_a", inductance / 2.5e-4),
+        ("drive.current_tn_s", inductance / 2.0),
+    ] {
+        assert!(close(value(&cfg, path), want, 1e-9), "{path}: {} against {want}", value(&cfg, path));
+    }
+    assert!(close(inductance, 0.015670, 1e-4));
+    assert_eq!(motor_max_speed("1FK2205-4AF", "400v"), Some(6000.0 * std::f64::consts::PI / 30.0));
+    let mut braked = exct_30();
+    braked.set_text("parts.motor_brake = true").unwrap();
+    apply_motor(&mut braked, "1FK2205-4AF", "400v").unwrap();
+    assert!(close(value(&braked, "motor.rotor_inertia_kgm2"), 0.6e-3, 1e-9));
+    assert_eq!(motor_mass_for(&braked, "1FK2205-4AF", "400v"), Some(6.2));
+    assert_eq!(motor_mass_for(&exct_30(), "1FK2205-4AF", "400v"), Some(5.2));
+    let mut small = exct_30();
+    apply_motor(&mut small, "1FK2102-0AG", "230v").unwrap();
+    assert_eq!(value(&small, "motor.thermal_time_constant_s"), 840.0);
+    for (article, encoder, counts) in [
+        ("1FK2205-4AF", "AM22DQC", Some(4_194_304.0)),
+        ("1FK2205-4AF", "AS26DQC", None),
+        ("1FT2104-4AF", "AS26DQC", Some(67_108_864.0)),
+    ] {
+        let mut cfg = exct_30();
+        cfg.set_text(&format!("parts.motor_encoder = {encoder:?}")).unwrap();
+        let applied = apply_motor(&mut cfg, article, "400v");
+        assert_eq!(applied.ok().map(|_| value(&cfg, "drive.encoder_counts_per_rev")), counts, "{article} {encoder}");
+    }
+    let mut s120 = exct_30();
+    apply_drive(&mut s120, "6SL3120-1TE15-0AD0", "s120").unwrap();
+    assert!(s120.bool("effects.shared_dc_link").unwrap() && value(&s120, "ratings.dc_link_overvoltage_v") == 820.0);
+    apply_drive(&mut s120, "6SL3210-5HE11-5UF0", "400v").unwrap();
+    assert!(!s120.bool("effects.shared_dc_link").unwrap());
+}
+
+/// Siemens' S1 check on the EXCT-30's 1FK2205-4AF at 400 V: static torque kt I_0 = 6 N m at standstill, rated 4.6 N m at
+/// 314.16 rad/s, so at a mean speed of 157.08 rad/s the S1 curve gives 6 + (4.6 - 6) / 2 = 5.3 N m. A cycle with 5 N m
+/// RMS there passes, 5.5 N m fails ("motor-s1"); the peak speed is judged against 628.32 rad/s ("motor-speed").
+#[test]
+fn the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand() {
+    use sim_components::analysis::{CycleLoad, MotorLoad, s1_torque, verdicts};
+    let cfg = resolve(&machine_t_gantry::ENTRY, &exct_30()).unwrap();
+    let limit = s1_torque(&cfg, 157.08).unwrap().unwrap();
+    assert!((limit - 5.3).abs() < 1e-4, "{limit} N m");
+    let judge = |rms_torque: f64| {
+        let motor = MotorLoad { rms_torque, mean_speed: 157.08, peak_speed: 700.0, ..Default::default() };
+        let load = CycleLoad {
+            duration: 1.0,
+            belt_tension: None,
+            belt_slack_time: None,
+            belt_tooth_jumps: None,
+            belt_span_detuning: None,
+            radial_load_peak: None,
+            condition_peak: None,
+            guide_load: None,
+            guide_speed: None,
+            path_error_peak: 0.0,
+            path_error_rms: 0.0,
+            tracking_error_peak: 0.0,
+            dwell_error_peak: 0.0,
+            tripped: false,
+            motors: vec![motor.clone(), motor],
+            budget: None,
+            part_rises: Vec::new(),
+            checks: Vec::new(),
+            clearance: None,
+            contact: None,
+            braking_power_peak: 0.0,
+            warm_start: None,
+            conveyor: None,
+        };
+        let all = verdicts(&cfg, &load).unwrap();
+        let find = |check: &str| all.iter().find(|v| v.check == check && v.motor == Some(0)).unwrap().clone();
+        (find("motor-s1").ok, find("motor-speed"))
+    };
+    assert!(judge(5.0).0 && !judge(5.5).0);
+    let speed = judge(5.0).1;
+    assert!(!speed.ok && (speed.limit - 628.3185).abs() < 1e-3, "{speed:?}");
+}
+
 /// Three passing motors on the EXCT-30, ranked by hand: two motors of 3.4, 5.2 and 6.3 kg (1FK2104-6AF,
 /// 1FK2205-4AF, 1FK2206-2AF, without gearbox), costs 6.8, 10.4 and 12.6 kg.
 #[test]

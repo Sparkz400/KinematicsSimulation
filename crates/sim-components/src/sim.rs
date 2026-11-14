@@ -437,13 +437,14 @@ impl Sim {
                     machine.motor_state(mech, angle, speed);
                     for (k, d) in drives.iter().enumerate() {
                         let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
-                        stage_torque[k] = p.torque_with(i, d.d_current);
+                        stage_torque[k] = p.torque_with(i, d.d_current, d.flux(p));
                         dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(
                             d.voltage,
                             d.winding_resistance(p),
                             i,
                             speed[k],
                             d.d_current,
+                            d.flux(p),
                         ));
                     }
                     machine.derivatives(mech, stage_torque, dmech);
@@ -506,6 +507,13 @@ impl Sim {
                 ("speed-command", "rad/s"),
                 ("following-error", "rad"),
                 ("angle-setpoint", "rad"),
+                // The electrical and thermal states, 0 where their effect is off.
+                ("d-current", "A"),
+                ("housing-temperature", "K"),
+                ("drive-overload-image", ""),
+                ("drive-overload-chip", ""),
+                ("iron-loss", "W"),
+                ("braking-resistor-temperature", "K"),
             ] {
                 out.push(SignalInfo::new(
                     format!("motor.{}.{}", motor.id, name.replace('-', "_")),
@@ -563,6 +571,12 @@ impl Sim {
                 d.speed_command,
                 d.following_error,
                 d.pos_set,
+                d.d_current,
+                d.housing_rise,
+                d.overload_image,
+                d.overload_chip,
+                d.iron_loss,
+                d.resistor_rise,
             ]);
         }
         self.machine.base_signals(&self.state, &self.torque, out);

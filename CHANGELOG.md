@@ -7,6 +7,33 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Motor model: `effects.iron_loss` (iron loss from Siemens' stall and rated data, on in the shipped configs),
+  `effects.magnet_temperature` (torque constant over the magnets' temperature, off), `effects.braking_resistor_heating`
+  (the braking resistor's temperature, on); the drive's thermal image in two nodes, heat sink and chips
+  (`ratings.drive_chip_share`, `drive_chip_time_constant_s`); the d current follows its setpoint with the current loop's
+  time constant. New checks `motor-s1` (RMS torque at the mean speed against the S1 curve) and `motor-speed` (peak
+  speed against `drive.max_speed_rad_s`); new signals per motor `d_current`, `housing_temperature`,
+  `drive_overload_image`, `drive_overload_chip`, `iron_loss`, `braking_resistor_temperature`.
+- Catalogue: thermal time constants of the 1FK2 from the S210 operating instructions (`motors_s210_oi.csv`, with the
+  230 V windings), the 1FK2/1FT2 encoders (`encoders_1fk2_1ft2.csv`), the S120 DC link trip (`dc_link_trip_s120.csv`);
+  motor options `parts.motor_brake` and `parts.motor_encoder`; `drive.max_speed_rad_s` and `motor.stall_current_a` from
+  the catalogue; a 1FK2's inductance estimated from Siemens' short-circuit braking table.
+
+### Changed
+
+- `effects.field_weakening` is on in the shipped configs: the torque-speed curve is the d-q model's at the voltage
+  limit, not the linear fade from rated to no-load speed.
+- The line module (or an S210's rectifier) loses `ratings.line_module_efficiency` when drawing too; the key is read
+  whenever `effects.dc_link` is on. An S120 Motor Module by name switches `effects.shared_dc_link` on, an S210 off.
+- The d current's setpoint and u_d use the winding's warm resistance.
+
+### Fixed
+
+- A drive enabled without the DC link simulated drew its winding's first L i^2 / 2 from nowhere; it is booked on the
+  supply now.
+
 ### Fixed
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it

@@ -147,6 +147,8 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | --- | --- | --- | --- |
 | `motor-peak` | `utilisation` (the torque asked for, not the torque delivered) | 1 | fraction |
 | `motor-thermal` | `winding_rise_k` (with `effects.motor_thermal_nodes` the winding node's, which settles where the one node does) | `motor.rated_temperature_rise_k` | K |
+| `motor-s1` | `rms_torque_nm` at the cycle's mean speed, as Siemens sizes a cycle | the S1 curve there: the static torque k_t `motor.stall_current_a` at standstill, straight to `drive.rated_torque_nm` at the rated speed | N m |
+| `motor-speed` | `peak_speed_rad_s` | `drive.max_speed_rad_s`, the motor's highest speed | rad/s |
 | `drive-overload` | `drive_overload`, with `effects.drive_overload` only | the image's trip level, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = maximum over rated current | 1 = rated current held |
 | `pulley-torque` | peak of the torque at the gearbox output (signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | cubic mean of the torque at the gearbox output, weighted with speed | `ratings.gearbox_rated_torque_nm` | N m |
@@ -241,7 +243,8 @@ dc-link-overvoltage,a,770.0,820.0,ok
 
 What a part by name does **not** set, and what follows from that:
 
-- **Winding resistance and inductance.** Siemens does not publish them for the 1FK2 and 1FT2. The config's values stay, and the current controller's gains with them. (For the 1FK7 and 1FT7 on S120 they are set, see above.)
+- **Winding resistance and inductance.** Siemens does not publish them for the 1FK2 and 1FT2. The config's resistance stays. A 1FK2 gets an inductance [estimate] from its maximum short-circuit braking torque in Siemens' braking table, k_t² / (2 p M_br,max), and the current controller is retuned for it; a 1FT2 keeps the config's inductance and gains. (For the 1FK7 and 1FT7 on S120 both are set from the data sheet, see above.)
+- **Brake and encoder.** `parts.motor_brake = true` takes the motor's inertia and weight with its holding brake (the search weighs it so too); `parts.motor_encoder` names the encoder (`AS22DQC`, `AM22DQC`, for a 1FT2 also the 26-bit `AS26DQC`, `AM26DQC`) and sets `drive.encoder_counts_per_rev`.
 - **The drive with the motor.** Naming a motor does not name its drive; the config's drive ratings stay. The search pairs each motor with its drive (below).
 - **The DC link capacitance and the braking resistor's powers.** They stay as the config has them. The braking threshold and the trip level keep their ratio to the DC link voltage, which is sound for placeholders and no more: set all five DC link ratings for the real drive before trusting the braking rows.
 - **Gearbox input speed, radial load and life.** The gearbox files do not have them. `ratings.gearbox_max_input_speed_rpm`, `ratings.shaft_max_radial_load_n`, `ratings.pulley_bearing_load_rating_n` and `ratings.gearbox_reference_speed_rpm` stay as the config has them.

@@ -150,6 +150,8 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | --- | --- | --- | --- | --- |
 | `motor-peak` | Genutzter Anteil der Drehmoment-Drehzahl-Kennlinie | `utilisation` (das verlangte Moment, nicht das abgegebene) | 1 | Anteil |
 | `motor-thermal` | Übertemperatur der Wicklung, eingeschwungen | `winding_rise_k` (mit `effects.motor_thermal_nodes` die des Wicklungsknotens, die dort einschwingt, wo der eine Knoten es tut) | `motor.rated_temperature_rise_k` | K |
+| `motor-s1` | Effektivmoment bei mittlerer Drehzahl gegen die S1-Kennlinie | `rms_torque_nm` bei der mittleren Drehzahl des Zyklus, wie Siemens einen Zyklus auslegt | die S1-Kennlinie dort: das Stillstandsmoment k_t `motor.stall_current_a` im Stillstand, gerade bis `drive.rated_torque_nm` bei Bemessungsdrehzahl | N m |
+| `motor-speed` | Höchste Motordrehzahl gegen die Höchstdrehzahl des Motors | `peak_speed_rad_s` | `drive.max_speed_rad_s` | rad/s |
 | `drive-overload` | Thermisches Abbild des Antriebs, Spitze, gegen seine Auslöseschwelle | `drive_overload`, nur mit `effects.drive_overload` | die Auslöseschwelle des Abbilds, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = Maximal- durch Bemessungsstrom | 1 = Bemessungsstrom dauernd |
 | `pulley-torque` | Moment an der Riemenscheibe | Spitze des Getriebe-Abtriebsmoments (Signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | Getriebe-Abtriebsmoment, kubisches Mittel | kubisches Mittel des Getriebe-Abtriebsmoments, gewichtet mit der Drehzahl | `ratings.gearbox_rated_torque_nm` | N m |
@@ -244,7 +246,8 @@ dc-link-overvoltage,a,770.0,820.0,ok
 
 Was ein Bauteil nach Namen **nicht** setzt und was daraus folgt:
 
-- **Wicklungswiderstand und Wicklungsinduktivität.** Siemens veröffentlicht sie für 1FK2 und 1FT2 nicht. Die Werte der Konfiguration bleiben, und mit ihnen die Verstärkungen des Stromreglers. (Für 1FK7 und 1FT7 am S120 werden sie gesetzt, siehe oben.)
+- **Wicklungswiderstand und Wicklungsinduktivität.** Siemens veröffentlicht sie für 1FK2 und 1FT2 nicht. Der Widerstand der Konfiguration bleibt. Ein 1FK2 bekommt eine Induktivität [Schätzung] aus seinem größten Kurzschlussbremsmoment in Siemens' Bremstabelle, k_t² / (2 p M_br,max), und der Stromregler wird darauf neu eingestellt; ein 1FT2 behält Induktivität und Verstärkungen der Konfiguration. (Für 1FK7 und 1FT7 am S120 werden beide aus dem Datenblatt gesetzt, siehe oben.)
+- **Bremse und Geber.** `parts.motor_brake = true` nimmt Trägheit und Gewicht des Motors mit Haltebremse (auch die Suche wiegt ihn so); `parts.motor_encoder` nennt den Geber (`AS22DQC`, `AM22DQC`, für einen 1FT2 auch die 26-Bit-Geber `AS26DQC`, `AM26DQC`) und setzt `drive.encoder_counts_per_rev`.
 - **Der Antrieb zum Motor.** Einen Motor zu benennen benennt nicht seinen Antrieb; die Antriebs-Grenzwerte der Konfiguration bleiben. Die Suche ordnet jedem Motor seinen Antrieb zu (unten).
 - **Die Zwischenkreiskapazität und die Leistungen des Bremswiderstands.** Sie bleiben, wie die Konfiguration sie hat. Die Einschaltspannung des Bremswiderstands und die Abschaltspannung behalten ihr Verhältnis zur Zwischenkreisspannung. Für Platzhalter ist das vertretbar, mehr nicht: Setzen Sie alle fünf Zwischenkreis-Grenzwerte für den realen Antrieb, bevor Sie den Zeilen zum Bremsen trauen.
 - **Antriebsdrehzahl, Radialkraft und Lebensdauer des Getriebes.** Die Getriebedateien enthalten sie nicht. `ratings.gearbox_max_input_speed_rpm`, `ratings.shaft_max_radial_load_n`, `ratings.pulley_bearing_load_rating_n` und `ratings.gearbox_reference_speed_rpm` bleiben, wie die Konfiguration sie hat.

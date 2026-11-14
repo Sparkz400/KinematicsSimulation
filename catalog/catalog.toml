@@ -11,7 +11,9 @@ tables = [
     "siemens/braking_s210.csv",
     "siemens/converters_s210.csv",
     "siemens/dc_link_measured.csv",
+    "siemens/dc_link_trip_s120.csv",
     "siemens/dynamic_braking_1fk2.csv",
+    "siemens/encoders_1fk2_1ft2.csv",
     "siemens/gearbox_mass.csv",
     "siemens/gearbox_nlc.csv",
     "siemens/gearbox_nrb.csv",
@@ -24,4 +26,5 @@ tables = [
     "siemens/motors_s120.csv",
     "siemens/motors_s120_electrical.csv",
     "siemens/motors_s210.csv",
+    "siemens/motors_s210_oi.csv",
 ]

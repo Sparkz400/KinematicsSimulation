@@ -1,0 +1,22 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number"]
+default_source = "s210-oi-2020"
+notes = '''
+Source: Siemens, SINAMICS S210 servo drive system, Operating Instructions, 06/2020, A5E41702836B AE, section 11.1 "Technical data and properties of the motor".
+Extracted by catalog/tools/extract_siemens_s210_oi.py; the numbers are the manual's, the layout is ours.
+One row per 1FK2 motor winding with a data sheet there; this edition has no 1FT2. thermal_time_constant: of the winding.
+static_torque and max_current only to match the rows against motors_s210.csv. The S120 configuration manual
+(motors_1fk2_s120.csv) gives the same thermal time constant for the motors in both but two (below); this table adds the 230 V
+windings (1FK2...-.AG), which that manual does not have.
+Kept as printed although the newer manual differs: 1FK2205-2AF 22 min here, 29 min there; 1FK2206-2AF 22 min here,
+  21 min there. The simulator takes the manual's where it has the motor.
+'''
+
+[[sources]]
+id = "s210-oi-2020"
+document = "Siemens, SINAMICS S210 servo drive system, Operating Instructions, A5E41702836B AE"
+date = "2020-06"
+locator = "section 11.1 \"Technical data and properties of the motor\", the data sheet of each motor"
+method = "script:tools/extract_siemens_s210_oi.py"
+url = "https://cache.industry.siemens.com/dl/files/874/109781874/att_1031957/v1/S210_1FK2_op_instr_en-US.pdf"

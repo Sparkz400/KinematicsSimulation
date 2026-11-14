@@ -501,3 +501,13 @@ check-belt-tooth-load = Belt tooth load, share of its rating
 effect-crash = Crash: contact with an obstacle stops the machine and takes the drives off
 check-collision = Clearance to the obstacles, least in the run [m]
 error-path-collision = The time-optimal path comes nearer to an obstacle than profile.min_clearance_m, or touches one.
+
+# Motor electrical and thermal model (14 November 2026)
+quantity-d-current = d current (field weakening)
+quantity-housing-temperature = Housing temperature rise
+quantity-drive-overload-image = Drive thermal image (1 = rated current held)
+quantity-drive-overload-chip = Drive thermal image, chips' node
+quantity-iron-loss = Iron loss
+quantity-braking-resistor-temperature = Braking resistor temperature rise
+check-motor-s1 = RMS torque at the mean speed against the S1 curve [N m]
+check-motor-speed = Highest motor speed against the motor's highest speed [rad/s]

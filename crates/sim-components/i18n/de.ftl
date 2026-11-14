@@ -501,3 +501,13 @@ check-belt-tooth-load = Zahnbelastung des Riemens, Anteil der zulässigen
 effect-crash = Crash: Berührung eines Hindernisses hält die Maschine an und schaltet die Antriebe ab
 check-collision = Abstand zu den Hindernissen, kleinster im Lauf [m]
 error-path-collision = Die zeitoptimale Bahn kommt einem Hindernis näher als profile.min_clearance_m oder berührt es.
+
+# Motor electrical and thermal model (14 November 2026)
+quantity-d-current = d-Strom (Feldschwächung)
+quantity-housing-temperature = Übertemperatur des Gehäuses
+quantity-drive-overload-image = Thermisches Abbild des Antriebs (1 = Bemessungsstrom dauernd)
+quantity-drive-overload-chip = Thermisches Abbild des Antriebs, Knoten der Chips
+quantity-iron-loss = Eisenverluste
+quantity-braking-resistor-temperature = Übertemperatur des Bremswiderstands
+check-motor-s1 = Effektivmoment bei mittlerer Drehzahl gegen die S1-Kennlinie [N m]
+check-motor-speed = Höchste Motordrehzahl gegen die Höchstdrehzahl des Motors [rad/s]

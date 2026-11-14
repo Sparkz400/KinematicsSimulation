@@ -1,0 +1,22 @@
+schema_version = 1
+class = "drive"
+table = "braking"
+key = ["part_number"]
+default_source = "gh2"
+notes = '''
+Source: Siemens, SINAMICS S120 Equipment Manual Booksize Power Sections (GH2), 12/2004, 6SL3097-2AC00-0BP1, Table 3-10
+"Technical specifications of Active Line Modules": overvoltage trip threshold 820 V DC +- 2 % for every Active Line
+Module with internal air cooling, 6SL3130-7TE21-6AAx to 7TE31-2AAx (x: any version).
+Typed in from the manual; the numbers are the manual's, the layout is ours.
+One row per Active Line Module of line_modules_s120.csv that the table covers, by that file's article number.
+The trip level is the DC link's, so it holds for every Motor Module on that DC link; the simulator takes it for an S120
+drive line-up.
+'''
+
+[[sources]]
+id = "gh2"
+document = "Siemens, SINAMICS S120 Equipment Manual Booksize Power Sections (GH2), 6SL3097-2AC00-0BP1"
+date = "2004-12"
+locator = "Table 3-10 \"Technical specifications of Active Line Modules\", overvoltage trip threshold"
+method = "manual: typed in from the manual"
+url = "https://cache.industry.siemens.com/dl/files/713/103189713/att_60920/v1/GH2_1204_en.pdf"

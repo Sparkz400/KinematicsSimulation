@@ -250,6 +250,34 @@
     }
   },
   "$defs": {
+    "encoder": {
+      "type": "object",
+      "required": [
+        "part_number"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "part_number": {
+          "type": "string",
+          "description": "The maker's designation of the encoder, as printed."
+        },
+        "series": {
+          "type": "string",
+          "description": "The motor series the encoder is offered for, space-separated."
+        },
+        "resolution_counts": {
+          "type": "number",
+          "minimum": 1,
+          "unit": "1"
+        },
+        "multiturn_revolutions": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "1"
+        }
+      },
+      "description": "An encoder a motor series can be ordered with: positions per revolution, and the revolutions it counts absolutely (0 for a singleturn encoder)."
+    },
     "dynamic_braking": {
       "type": "object",
       "required": [

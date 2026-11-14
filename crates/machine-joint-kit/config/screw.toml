@@ -80,6 +80,14 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 4.35
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
 # [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min; 15 N m at the maximum current of 18 A.
 rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
@@ -119,6 +127,9 @@ rated_torque_nm = 4.6
 rated_speed_rad_s = 314.159
 # sqrt(3/2) * 540 V / 1.07527 N m/A
 no_load_speed_rad_s = 615.07
+# [catalogue] a motor named in [parts] brings its highest speed (the lower of the mechanical limit and what the
+# converter allows); here the no-load speed where the motor is an estimate. "motor-speed" judges the peak speed against it.
+max_speed_rad_s = 615.07
 # [estimate] a 22-bit encoder
 encoder_counts_per_rev = 4194304.0
 velocity_filter_s = 0.1e-3
@@ -141,6 +152,11 @@ braking_threshold_v = 770.0
 # [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
 braking_resistor_continuous_w = 100.0
 braking_resistor_peak_w = 5700.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 dc_link_overvoltage_v = 820.0
 dc_link_discharge_time_constant_s = 130.0
 # [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
@@ -156,6 +172,11 @@ drive_max_current_a = 19.0
 # (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
 # of the image, and how long the drive gives its maximum current from the rated load.
 drive_base_load_current_a = 4.25
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+# [bounds] share 0 ... 0.5, time constant 0.1 ... 5 s
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
 
@@ -175,6 +196,11 @@ payload = true
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
 motor.pole_pairs = [3.0, 5.0]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
 motor.winding_time_constant_s = [20.0, 120.0]

@@ -23,6 +23,10 @@ substeps = 4
 [parts]
 motor = ""
 motor_supply = "400v"
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 gearbox = ""
 drive = ""
 belt = ""
@@ -64,9 +68,16 @@ drive_current_limit = true
 # Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
 # overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
 # drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
-field_weakening = false
+field_weakening = true
 drive_overload = false
 motor_thermal_nodes = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
+braking_resistor_heating = true
 corner_blending = false
 input_shaping = false
 back_emf = true
@@ -189,6 +200,14 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 2.822
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
 # With effects.winding_heating: the winding warms with its copper loss and its resistance rises with it. At
 # the rated current it settles at the rated temperature rise. Here the rated torque over the torque
 # constant; a catalogue's own rated current can be some percent higher.
@@ -312,6 +331,9 @@ rated_torque_nm = 1.27
 # Full torque up to the rated speed, falling to zero at the no-load speed (voltage limit).
 rated_speed_rad_s = 314.0
 no_load_speed_rad_s = 420.0
+# [catalogue] a motor named in [parts] brings its highest speed (the lower of the mechanical limit and what the
+# converter allows); here the no-load speed where the motor is an estimate. "motor-speed" judges the peak speed against it.
+max_speed_rad_s = 420.0
 encoder_counts_per_rev = 1048576.0
 velocity_filter_s = 0.2e-3
 torque_filter_s = 0.2e-3
@@ -346,6 +368,11 @@ dc_link_capacitance_uf = 470.0
 braking_threshold_v = 224.65
 braking_resistor_continuous_w = 20.0
 braking_resistor_peak_w = 500.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 # With effects.dc_link the four values above are also what the simulated DC link is built from, and the
 # drive trips when the voltage passes this one.
 dc_link_overvoltage_v = 257.6
@@ -409,6 +436,11 @@ drive_max_current_a = 10.9
 # (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
 # of the image, and how long the drive gives its maximum current from the rated load.
 drive_base_load_current_a = 2.55
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+# [bounds] share 0 ... 0.5, time constant 0.1 ... 5 s
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
 
@@ -461,6 +493,11 @@ min_clearance_m = 0.3
 # the DC link's discharge, which acts only while the drives are disabled.
 [bounds]
 motor.pole_pairs = [3.0, 5.0]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
 motor.winding_time_constant_s = [20.0, 120.0]

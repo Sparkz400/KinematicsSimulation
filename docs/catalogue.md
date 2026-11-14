@@ -396,3 +396,11 @@ Then:
    ```
 
    `catalog_golden` lists every value the simulator takes from the catalogue that changed; when the change is meant, write its snapshot anew with `UPDATE_GOLDEN=1`. `exct_30_config_agrees_with_the_catalogue` holds the EXCT-30 config to the files, and the search tests depend on which motors exist.
+
+## Motor and drive data added on 14 November 2026
+
+- `siemens/motors_s210_oi.csv`: the thermal time constants of the 1FK2 from the S210 operating instructions (06/2020), with the 230 V windings the S120 manual lacks (six motors). The 28 1FT2 still without one need the 09/2022 edition, which Siemens' support site would not serve to a script.
+- `siemens/encoders_1fk2_1ft2.csv`: the encoders the 1FK2 and 1FT2 are ordered with (22 bit, 26 bit for the 1FT2 only), for `parts.motor_encoder`.
+- `siemens/dc_link_trip_s120.csv`: the S120 DC link's overvoltage trip, 820 V, from the booksize equipment manual (formerly typed into the simulator).
+- Brake data (inertia and weight with brake) of `motors_s210.csv` and the S120 manuals now reach the config with `parts.motor_brake = true`; the maximum-speed columns set `drive.max_speed_rad_s`.
+- Winding resistance and inductance of the 1FK2 and 1FT2 are still published nowhere Siemens serves (checked: the S120 configuration manuals 02/2022, the S210 operating instructions 06/2020, the data sheet service for S210 and S120 variants). A 1FK2 by name gets an inductance estimated from its row of `dynamic_braking_1fk2.csv` (`catalog::apply_motor`); its resistance stays the config's estimate.
