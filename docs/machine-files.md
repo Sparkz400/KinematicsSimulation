@@ -2,7 +2,7 @@
 
 A machine file defines a machine without Rust code and without a rebuild: the components of `sim-components` wired
 together like a netlist (motor, gearbox, pulley, belt sections, carriages, guides, and ball screws, racks, linear motors
-and rotary tables beside the belts), with the axes, ratings, bounds,
+and rotary tables beside the belts, or a planar parallel linkage), with the axes, ratings, bounds,
 control loops and cycle of a machine config. CLI, app and PLC link load it from a path at run time.
 Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 
@@ -12,6 +12,7 @@ Deutsche Fassung: [Maschinendateien](de/maschinendateien.md).
 - [The nodes](#the-nodes)
 - [Motors that differ](#motors-that-differ)
 - [Screws, racks, linear motors and rotary tables](#screws-racks-linear-motors-and-rotary-tables)
+- [A linkage: the planar delta](#a-linkage-the-planar-delta)
 - [The other examples: a CoreXY and an XYZ portal](#the-other-examples-a-corexy-and-an-xyz-portal)
 - [What is checked, and how errors read](#what-is-checked-and-how-errors-read)
 - [The model behind it](#the-model-behind-it)
@@ -353,6 +354,61 @@ the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gan
 verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 180 of 2400 N). The joint kit's
 screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
 
+## A linkage: the planar delta
+
+A `linkage` node is a planar parallel linkage: two arms in the vertical x-z plane, one at each side of the base, each
+turned by a motor through its gearbox and carrying a pair of forearms down to a plate that keeps its orientation (a
+five-bar whose lower links are parallelograms). The tool is the plate's centre, x across and z up from the shoulders'
+axis. `machines/planar-delta.toml` is the registered planar delta (`delta-d2`) written so, its values unchanged:
+
+```toml
+[[machine.axis]]           # no stroke: the linkage's working range sets the range
+id = "x"
+
+[[machine.axis]]
+id = "z"
+
+[[machine.motor]]          # and "2"; key = "motor-arm-1" names it as the crate does
+id = "1"
+
+[[machine.gearbox]]        # and gearbox_2 on motor 2
+id = "gearbox_1"
+motor = "1"
+
+[[machine.linkage]]
+id = "delta"
+arms = ["gearbox_1", "gearbox_2"]   # the arm at +x, then the one at -x
+axes = ["x", "z"]                    # across, then up
+base_radius_m = "geometry.base_radius_m"
+upper_arm_m = "geometry.upper_arm_m"
+forearm_m = "geometry.forearm_m"
+upper_arm_kg = "mass.upper_arm_kg"
+# ... the other lengths, masses and the working range, see the file
+```
+
+Its fields: the geometry (`base_radius_m`, `platform_radius_m`, `upper_arm_m`, `forearm_m` longer than the upper arm,
+`forearm_spacing_m` for the 3D view), the masses (`upper_arm_kg` with its `upper_arm_cg_m` and
+`upper_arm_inertia_kgm2` about the shoulder, `elbow_kg`, `forearm_pair_kg` with the `forearm_elbow_share` counted at the
+elbow, `platform_kg`, `payload_kg`) and the working range (`half_width_m`, `top_z_m`, `height_edge_m`,
+`height_centre_m`: a band below the top whose bottom is an arc through both edges and the centre) with the highest
+condition number of the Jacobian a target may have, `max_condition_number`. Each is a number or the path of one; the
+planar delta's file names the crate's `[geometry]`, `[mass]` and `[workspace]`.
+
+The model is the crate's ([model reference](model-reference.md)): inverse kinematics elbow out, forward kinematics as
+the lower meeting point of two circles of the forearm's length round the elbows, the Jacobian J = J_x^-1 J_q of the
+leg constraints, and the dynamics of two arms about their joints plus a point mass at the plate (each forearm pair's
+mass split, the share r at the elbow): M(theta) theta'' = tau_gear + Q_g - m_nt J^T J_x^-1 w + tau_joint with
+M = I_b 1 + m_nt J^T J. Each arm's joint is a `RotaryJoint`, elastic or rigid (`effects.joint_elasticity`), its drive
+train from its motor's own config ([above](#motors-that-differ)), its bearing friction and stops from `[joint]`. A
+target outside the working range, out of reach, beyond a joint's stop or above the condition number is refused with
+the crate's reasons, and the `singularity` verdict judges the cycle against `ratings.max_condition_number`. The signals
+are the crate's: `arm.<motor>.angle`, `gearbox.<motor>.output_torque`, `kinematics.condition`, the torque breakdown, loss
+powers and energies; the gearboxes warm under the gearbox nodes' ids.
+
+A file with a linkage has two axes (with a `key` at most: no stroke, incline or cable chain), two motors, a gearbox on
+each and the linkage; a pulley, section, body, guide, idler, frame, span, screw, rack, linear motor or rotary beside it
+is refused, as is a second linkage. The effects are the crate's (`[effects]` as in its config); the belt's are not read.
+
 ## The other examples: a CoreXY and an XYZ portal
 
 `machines/corexy.toml` is a CoreXY table. Its two motors stand at the front corners; each drives a belt clamped to the
@@ -452,8 +508,10 @@ machine; nothing about them is particular to machine files.
 - `belt_wrap`: the belt's wrap angle at each pulley from where the pulleys and idlers stand. A netlist gives section
   lengths, not the pulleys' places in the plane, so a file keeps `ratings.belt_teeth_in_mesh`; one that switches the
   wrap on is refused the same way.
-- Linkages (a five-bar, a scissor lift) and worm gears: the mechanisms beside belts are screws, racks, linear motors
-  and rotary tables, each driving one axis straight. A body cannot ride on a rotary axis (it would move on a circle,
+- A scissor lift and worm gears: the mechanisms beside belts are screws, racks, linear motors and rotary tables, each
+  driving one axis straight, and the one linkage is the planar delta's, which does not mix with them. A scissor lift is
+  not a case of it: one motor drives one vertical axis through a screw or a cylinder on the scissor's foot, z = n L sin
+  phi, which needs a screw that drives a linkage instead of an axis. A body cannot ride on a rotary axis (it would move on a circle,
   not along square axes), and a rotary axis has no bearing friction of its own (only its motor's and gearbox's).
 - `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
   a motor without a pulley has none; the file is refused.
@@ -504,6 +562,16 @@ kinematics, rest state, derivatives, energy, feedforward, the screw's signals an
 hand, the screw portal's Z motor torque for a load and acceleration and its screw's critical speed, the rack gantry's
 motor angle x i / r and feed force, a linear motor's current for a force and its guide load, a rotary table's torque in
 rad; both new files pass the standard suite; and a broken screw is refused by key and line.
+
+`crates/sim-machines/tests/machine_file_linkage.rs` holds the linkage: `machines/planar-delta.toml` is the planar delta's
+crate to 1e-9 in its default config and with each of its 36 effects switched from its default, one at a time (axes and
+motors, kinematics, rest state and holding torque, the derivatives of a state moved off rest, energy, both
+feedforwards, every signal, the parts' warmth, what the working range refuses); its cycle, elastic, rigid and with
+every effect that is off by default switched on, gives the crate's signals at every 16th step of the first half second
+and the crate's motor loads and verdicts, to 1e-9 (the two sum in the same order, so they agree to the bit, encoder
+counts and all); the file passes the standard suite with the crate's loss-free configs; by hand, the arm angles at
+(0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.358 N m at
+each gearbox); and a broken linkage is refused by key and line.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was
 fixed: a machine with two or three separate belt loops (its rest state was wrong where an axis is vertical), a

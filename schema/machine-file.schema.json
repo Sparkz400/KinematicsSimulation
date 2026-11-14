@@ -489,6 +489,299 @@
           },
           "type": "array"
         },
+        "linkage": {
+          "description": "A planar parallel linkage (crate sim-netlist, linkage.rs): two driven arms in the vertical x-z plane, one at each side of the base, each with a pair of forearms down to a plate that keeps its orientation (a five-bar with parallelograms, the planar delta). The tool is the plate's centre. A file with a linkage has two axes (no stroke: the working range below sets their range), two motors, a gearbox on each and the linkage; nothing else. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arms": {
+                "description": "The gearboxes that turn the arms: the first the arm at +x, the second the one at -x. Ids of machine.gearbox nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "axes": {
+                "description": "The tool's axes: the first across (x), the second up (z), from the shoulders' axis. Ids of machine.axis nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "base_radius_m": {
+                "description": "Shoulder axis from the centre, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "elbow_kg": {
+                "description": "Elbow block at the arm's end, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "forearm_elbow_share": {
+                "description": "Share of a forearm pair's mass counted at the elbow, the rest at the plate, 0 to 1.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "forearm_m": {
+                "description": "Forearm, elbow to plate, m; longer than the upper arm.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "forearm_pair_kg": {
+                "description": "One forearm pair, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "forearm_spacing_m": {
+                "description": "Distance between the two rods of a forearm pair, m; the 3D view only. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "half_width_m": {
+                "description": "Working range: half its width, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "height_centre_m": {
+                "description": "Working range: its height at the centre, m; the bottom is an arc through both edges and the centre.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "height_edge_m": {
+                "description": "Working range: its height at the edges, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "max_condition_number": {
+                "description": "Targets where the Jacobian's condition number is above this are refused (near a singularity).",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "payload_kg": {
+                "description": "Payload at the plate while effects.payload is on and the payload is attached, kg. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "platform_kg": {
+                "description": "Plate, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "platform_radius_m": {
+                "description": "Forearms' joints on the plate from its centre, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "top_z_m": {
+                "description": "Working range: its top, z, m (below 0: under the shoulders).",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "upper_arm_cg_m": {
+                "description": "Its centre of mass from the shoulder axis, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "upper_arm_inertia_kgm2": {
+                "description": "Its inertia about the shoulder axis, kg m^2.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "upper_arm_kg": {
+                "description": "Upper arm's tube, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "upper_arm_m": {
+                "description": "Upper arm, shoulder to elbow, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "arms",
+              "axes",
+              "base_radius_m",
+              "platform_radius_m",
+              "upper_arm_m",
+              "forearm_m",
+              "upper_arm_kg",
+              "upper_arm_cg_m",
+              "upper_arm_inertia_kgm2",
+              "elbow_kg",
+              "forearm_pair_kg",
+              "forearm_elbow_share",
+              "platform_kg",
+              "half_width_m",
+              "top_z_m",
+              "height_edge_m",
+              "height_centre_m",
+              "max_condition_number"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "motor": {
           "description": "A servo motor with its drive; its data is in [motor] and [drive], shared by all motors; [motor.<id>], [drive.<id>], [gearbox.<id>], [ratings.<id>] and [parts.<id>] give one motor its own.",
           "items": {

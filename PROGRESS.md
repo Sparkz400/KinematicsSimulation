@@ -2045,3 +2045,48 @@ Left open:
 - One step of the payload per trace, between a tenth and nine tenths of it; several picks and drops would need a split
   per gripper event (a gripper column in the trace format, where the drive or PLC records one).
 - The per-axis fit (`fit_rigid`, the belt machines) has neither: its payload is in the axis's moved mass.
+
+## Machine files: a linkage node, the planar delta as a file (14 November)
+
+What: machine files describe a planar parallel linkage. A `[[machine.linkage]]` node names the two gearboxes that turn
+the arms (arm 1 at +x, arm 2 at -x), the tool's two axes (across, up), the geometry (base and platform radius, upper
+arm, forearm, rod spacing), the masses (arm with its centre of mass and inertia, elbow, forearm pair with its elbow
+share, plate, payload) and the working range (half width, top, heights at edge and centre, highest condition number),
+each a number or a path. `machines/planar-delta.toml` is the planar delta's default config with such a node.
+
+How: `crates/sim-netlist/src/linkage.rs`. `Netlist::parse` hands a file with a linkage to `linkage::read` right after
+the generic node checks (the only change to the belt parser besides the node list and moving the `machine.id`/`name`
+check up); a linkage file has axes without stroke, two motors, a gearbox on each and the linkage, and anything else
+beside it is refused by name. `sim_netlist::build` builds a `LinkageMachine` for it: the planar delta crate's model
+line for line (kinematics, Jacobian, rest sag, rigid and elastic dynamics, losses, torque breakdown, scene), with the
+values from the node, each arm's `RotaryJoint` from its motor's own config (`catalog::motor_config`), axis and motor
+ids and keys from the netlist, the gearboxes' warmth under their nodes' ids. The crate stays as it was; the
+architecture forbids sim-netlist to depend on it, so the formulas are copied, not shared. No new config key, effect
+or label (the crate's translation keys serve, as all machines' are loaded). JSON schema regenerated.
+
+Tests (`crates/sim-machines/tests/machine_file_linkage.rs`):
+- `the_planar_delta_file_is_its_crate_with_every_effect`: default and each of the crate's 36 effects switched from its
+  default: axes, motors, thermal parts, state length, setpoint slack, inverse and forward kinematics, rest state and
+  holding torques, moving state, derivatives off rest, energy, both feedforwards, every signal id and value, the
+  working range's refusals, at three poses (payload held, set down, braked), to 1e-9.
+- `the_planar_delta_file_runs_its_crates_cycle`: elastic, rigid, and every effect that is off by default on at once:
+  every signal at every 16th step of the first 0.5 s, and the cycle's motor loads and verdicts, to 1e-9. Seen first
+  with `sim-cli verdicts` on the crate and on the file in those three variants: the outputs are identical.
+- `the_planar_delta_file_passes_the_standard_suite`: the crate's four loss-free configs, applied to the file.
+- `the_linkage_inverse_kinematics_at_a_pose_is_the_hand_calculation`: at (0.1, -0.5) m arm 1 sees x' = e, so A = 0,
+  sin t = -C / B = -0.08 / 0.4: t_1 = -asin 0.2 = -0.2013579 rad; arm 2 solves 0.16 cos t - 0.4 sin t = 0.04,
+  t_2 = acos(0.04 / 0.430813) - atan2(0.4, 0.16) = 0.287525 rad; both elbows 0.7 m from the plate; motors at 20 t.
+- `the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque`: the crate's hand calculation at
+  (0, -0.5) m, t = 1.4290 deg, -g m_LG cos t + m_nt g dz/dt = -5.490 - 12.868 = -18.358 N m per gearbox.
+- `a_broken_linkage_is_refused_with_its_key_and_line`: a forearm shorter than the arm (with its line), an unknown and a
+  repeated arm, a stroke on a linkage axis (with its line), a body beside the linkage, a misspelt field.
+
+Left open:
+- A scissor lift: not a case of this node. One motor lifts one vertical axis through a screw or cylinder on the
+  scissor's foot (z = n L sin phi); it needs a screw that drives a linkage instead of an axis, a node of its own.
+- One linkage, the planar delta's topology; it does not mix with belts or screws in one file, and the three-arm delta
+  (D3) is no file yet. A spatial linkage node would generalise `Legs` to three legs at azimuths.
+- The linkage machine is a copy of the crate's model; a change to one has to be made to the other (the 1e-9 test
+  catches a difference). Moving the shared model into sim-components would end that, against the rule that the D2
+  crate stays as it is.
+- The belt effects are not refused in a linkage file, only not read.

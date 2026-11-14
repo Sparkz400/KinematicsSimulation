@@ -2,7 +2,7 @@
 
 Eine Maschinendatei beschreibt eine Maschine ohne Rust-Code und ohne Neuübersetzen: die Bauteile aus `sim-components`
 wie eine Netzliste verschaltet (Motor, Getriebe, Riemenscheibe, Riemenabschnitte, Wagen, Führungen, und neben den
-Riemen Kugelgewindetriebe, Zahnstangen, Linearmotoren und Rundtische), dazu Achsen,
+Riemen Kugelgewindetriebe, Zahnstangen, Linearmotoren und Rundtische, oder ein ebenes Parallelkoppelgetriebe), dazu Achsen,
 Grenzwerte, Fehlerbänder, Regelkreise und Zyklus einer Maschinenkonfiguration. Kommandozeile, App und SPS-Anbindung
 laden sie zur Laufzeit aus einem Pfad. Die englische Fassung ist [machine-files.md](../machine-files.md); die
 Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
@@ -13,6 +13,7 @@ Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
 - [Die Knoten](#die-knoten)
 - [Motoren, die sich unterscheiden](#motoren-die-sich-unterscheiden)
 - [Spindeln, Zahnstangen, Linearmotoren und Rundtische](#spindeln-zahnstangen-linearmotoren-und-rundtische)
+- [Ein Koppelgetriebe: der ebene Delta](#ein-koppelgetriebe-der-ebene-delta)
 - [Die anderen Beispiele: ein CoreXY und ein XYZ-Portal](#die-anderen-beispiele-ein-corexy-und-ein-xyz-portal)
 - [Was geprüft wird, und wie Fehler lauten](#was-geprüft-wird-und-wie-fehler-lauten)
 - [Das Modell dahinter](#das-modell-dahinter)
@@ -368,6 +369,65 @@ Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 180 von
 Zahnstangen-, Linearmotor- und Rundtischachse des Gelenkbaukastens als Dateien geschrieben geben die Urteile des
 Baukastens Ziffer für Ziffer.
 
+## Ein Koppelgetriebe: der ebene Delta
+
+Ein `linkage`-Knoten ist ein ebenes Parallelkoppelgetriebe: zwei Arme in der senkrechten x-z-Ebene, je einer an jeder
+Seite der Basis, jeder von einem Motor über sein Getriebe gedreht, jeder mit einem Unterarmpaar hinab zu einer Platte,
+die ihre Lage hält (ein Fünfgelenk, dessen untere Glieder Parallelogramme sind). Das Werkzeug ist die Mitte der
+Platte, x quer und z nach oben, von der Achse der Schultern aus. `machines/planar-delta.toml` ist der registrierte
+ebene Delta (`delta-d2`) so geschrieben, mit unveränderten Werten:
+
+```toml
+[[machine.axis]]           # ohne Hub: der Arbeitsraum des Koppelgetriebes gibt den Bereich
+id = "x"
+
+[[machine.axis]]
+id = "z"
+
+[[machine.motor]]          # und "2"; key = "motor-arm-1" benennt ihn wie das Crate
+id = "1"
+
+[[machine.gearbox]]        # und gearbox_2 an Motor 2
+id = "gearbox_1"
+motor = "1"
+
+[[machine.linkage]]
+id = "delta"
+arms = ["gearbox_1", "gearbox_2"]   # der Arm bei +x, dann der bei -x
+axes = ["x", "z"]                    # quer, dann nach oben
+base_radius_m = "geometry.base_radius_m"
+upper_arm_m = "geometry.upper_arm_m"
+forearm_m = "geometry.forearm_m"
+upper_arm_kg = "mass.upper_arm_kg"
+# ... die übrigen Längen, Massen und der Arbeitsraum, siehe die Datei
+```
+
+Seine Felder: die Geometrie (`base_radius_m`, `platform_radius_m`, `upper_arm_m`, `forearm_m` länger als der Oberarm,
+`forearm_spacing_m` für die 3D-Ansicht), die Massen (`upper_arm_kg` mit `upper_arm_cg_m` und `upper_arm_inertia_kgm2`
+um die Schulter, `elbow_kg`, `forearm_pair_kg` mit dem am Ellbogen gezählten Anteil `forearm_elbow_share`,
+`platform_kg`, `payload_kg`) und der Arbeitsraum (`half_width_m`, `top_z_m`, `height_edge_m`, `height_centre_m`: ein
+Band unter der Oberkante, dessen Boden ein Bogen durch beide Ränder und die Mitte ist) mit der höchsten Konditionszahl
+der Jacobi-Matrix, die ein Ziel haben darf, `max_condition_number`. Jedes ist eine Zahl oder der Pfad einer Zahl; die
+Datei des ebenen Delta nennt `[geometry]`, `[mass]` und `[workspace]` des Crates.
+
+Das Modell ist das des Crates (Modellreferenz, englisch): inverse Kinematik mit Ellbogen außen, direkte Kinematik als
+unterer Schnittpunkt zweier Kreise von Unterarmlänge um die Ellbogen, die Jacobi-Matrix J = J_x^-1 J_q der
+Beinbedingungen, und die Dynamik zweier Arme um ihre Gelenke mit einer Punktmasse an der Platte (die Masse jedes
+Unterarmpaars geteilt, der Anteil r am Ellbogen): M(theta) theta'' = tau_gear + Q_g - m_nt J^T J_x^-1 w + tau_joint mit
+M = I_b 1 + m_nt J^T J. Das Gelenk jedes Arms ist ein `RotaryJoint`, elastisch oder starr (`effects.joint_elasticity`),
+sein Antriebsstrang aus der eigenen Konfiguration seines Motors ([oben](#motoren-die-sich-unterscheiden)), seine
+Lagerreibung und Anschläge aus `[joint]`. Ein Ziel außerhalb des Arbeitsraums, außer Reichweite, jenseits eines
+Gelenkanschlags oder über der Konditionszahl wird mit den Gründen des Crates abgelehnt, und die Prüfung `singularity`
+misst den Zyklus an `ratings.max_condition_number`. Die Signale sind die des Crates: `arm.<motor>.angle`,
+`gearbox.<motor>.output_torque`, `kinematics.condition`, die Momentaufteilung, Verlustleistungen und Energien; die
+Getriebe erwärmen sich unter den Ids der Getriebeknoten.
+
+Eine Datei mit Koppelgetriebe hat zwei Achsen (höchstens mit `key`: ohne Hub, Neigung oder Energiekette), zwei
+Motoren, an jedem ein Getriebe, und das Koppelgetriebe; eine Scheibe, ein Abschnitt, Körper, eine Führung, Umlenkrolle,
+ein Rahmen, Trum, eine Spindel, Zahnstange, ein Linearmotor oder Rundtisch daneben wird abgelehnt, ebenso ein zweites
+Koppelgetriebe. Die Effekte sind die des Crates (`[effects]` wie in seiner Konfiguration); die des Riemens werden nicht
+gelesen.
+
 ## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
 
 `machines/corexy.toml` ist ein CoreXY-Tisch. Seine beiden Motoren stehen an den vorderen Ecken; jeder treibt einen
@@ -478,8 +538,11 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
 - `belt_wrap`: der Umschlingungswinkel des Riemens an jeder Scheibe aus der Lage von Scheiben und Umlenkrollen.
   Eine Netzliste gibt Trumlängen, nicht die Lage der Scheiben in der Ebene, also behält eine Datei
   `ratings.belt_teeth_in_mesh`; eine, die ihn einschaltet, wird ebenso abgelehnt.
-- Koppelgetriebe (ein Fünfgelenk, eine Scherenhubbühne) und Schneckengetriebe: die Mechanismen neben Riemen sind
-  Spindeln, Zahnstangen, Linearmotoren und Rundtische, jeder treibt eine Achse gerade. Ein Körper kann nicht auf einer
+- Eine Scherenhubbühne und Schneckengetriebe: die Mechanismen neben Riemen sind Spindeln, Zahnstangen, Linearmotoren
+  und Rundtische, jeder treibt eine Achse gerade, und das eine Koppelgetriebe ist das des ebenen Delta, das sich nicht
+  mit ihnen mischt. Eine Scherenhubbühne ist kein Fall davon: ein Motor treibt eine senkrechte Achse über eine Spindel
+  oder einen Zylinder am Fuß der Schere, z = n L sin phi; dazu bräuchte es eine Spindel, die ein Koppelgetriebe statt
+  einer Achse treibt. Ein Körper kann nicht auf einer
   Drehachse mitfahren (er bewegte sich auf einem Kreis, nicht entlang rechtwinkliger Achsen), und eine Drehachse hat
   keine eigene Lagerreibung (nur die ihres Motors und Getriebes).
 - `effects.belt_tooth_jump` zusammen mit Spindel, Zahnstange, Linearmotor oder Rundtisch: seine Zustände liegen je
@@ -538,6 +601,17 @@ die Momentaufteilung, ihre Prüfungen); von Hand das Moment des Z-Motors des Spi
 Beschleunigung und die kritische Drehzahl seiner Spindel, Motorwinkel x i / r und Vorschubkraft des
 Zahnstangenportals, der Strom eines Linearmotors für eine Kraft und seine Führungslast, das Moment eines Rundtischs in
 rad; beide neuen Dateien bestehen die Standardprüfung; und eine kaputte Spindel wird mit Schlüssel und Zeile abgelehnt.
+
+`crates/sim-machines/tests/machine_file_linkage.rs` hält das Koppelgetriebe: `machines/planar-delta.toml` ist das Crate
+des ebenen Delta auf 1e-9, in seiner Grundkonfiguration und mit jedem seiner 36 Effekte einzeln umgeschaltet (Achsen und
+Motoren, Kinematik, Ruhelage und Haltemoment, die Ableitungen eines aus der Ruhe verschobenen Zustands, Energie, beide
+Vorsteuerungen, jedes Signal, die Erwärmung der Teile, was der Arbeitsraum ablehnt); sein Zyklus, elastisch, starr und
+mit allen standardmäßig ausgeschalteten Effekten eingeschaltet, gibt die Signale des Crates in jedem 16. Schritt der
+ersten halben Sekunde und seine Motorlasten und Urteile, auf 1e-9 (beide summieren in derselben Reihenfolge und stimmen
+bitgenau überein, Encoderstriche eingeschlossen); die Datei besteht die Standardprüfung mit den verlustfreien
+Konfigurationen des Crates; von Hand die Armwinkel bei (0,1, -0,5) m (-asin 0,2 = -11,537 Grad und 16,474 Grad) und das
+Haltemoment in der Mitte (-18,358 N m an jedem Getriebe); und ein kaputtes Koppelgetriebe wird mit Schlüssel und Zeile
+abgelehnt.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden
 hat und was behoben ist: eine Maschine mit zwei oder drei getrennten Riemen (ihre Ruhelage war falsch, wo eine Achse

@@ -343,6 +343,69 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "linkage",
+        "A planar parallel linkage (crate sim-netlist, linkage.rs): two driven arms in the vertical x-z plane, one at each side of the base, each with a pair of forearms down to a plate that keeps its orientation (a five-bar with parallelograms, the planar delta). The tool is the plate's centre. A file with a linkage has two axes (no stroke: the working range below sets their range), two motors, a gearbox on each and the linkage; nothing else. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
+        &[
+            ID,
+            field(
+                "arms",
+                Kind::Refs("gearbox"),
+                true,
+                "The gearboxes that turn the arms: the first the arm at +x, the second the one at -x.",
+            ),
+            field(
+                "axes",
+                Kind::Refs("axis"),
+                true,
+                "The tool's axes: the first across (x), the second up (z), from the shoulders' axis.",
+            ),
+            field("base_radius_m", Kind::Number, true, "Shoulder axis from the centre, m."),
+            field("platform_radius_m", Kind::Number, true, "Forearms' joints on the plate from its centre, m."),
+            field("upper_arm_m", Kind::Number, true, "Upper arm, shoulder to elbow, m."),
+            field("forearm_m", Kind::Number, true, "Forearm, elbow to plate, m; longer than the upper arm."),
+            field(
+                "forearm_spacing_m",
+                Kind::Number,
+                false,
+                "Distance between the two rods of a forearm pair, m; the 3D view only. Default 0.",
+            ),
+            field("upper_arm_kg", Kind::Number, true, "Upper arm's tube, kg."),
+            field("upper_arm_cg_m", Kind::Number, true, "Its centre of mass from the shoulder axis, m."),
+            field("upper_arm_inertia_kgm2", Kind::Number, true, "Its inertia about the shoulder axis, kg m^2."),
+            field("elbow_kg", Kind::Number, true, "Elbow block at the arm's end, kg."),
+            field("forearm_pair_kg", Kind::Number, true, "One forearm pair, kg."),
+            field(
+                "forearm_elbow_share",
+                Kind::Number,
+                true,
+                "Share of a forearm pair's mass counted at the elbow, the rest at the plate, 0 to 1.",
+            ),
+            field("platform_kg", Kind::Number, true, "Plate, kg."),
+            field(
+                "payload_kg",
+                Kind::Number,
+                false,
+                "Payload at the plate while effects.payload is on and the payload is attached, kg. Default 0.",
+            ),
+            field("half_width_m", Kind::Number, true, "Working range: half its width, m."),
+            field("top_z_m", Kind::Number, true, "Working range: its top, z, m (below 0: under the shoulders)."),
+            field("height_edge_m", Kind::Number, true, "Working range: its height at the edges, m."),
+            field(
+                "height_centre_m",
+                Kind::Number,
+                true,
+                "Working range: its height at the centre, m; the bottom is an arc through both edges and the centre.",
+            ),
+            field(
+                "max_condition_number",
+                Kind::Number,
+                true,
+                "Targets where the Jacobian's condition number is above this are refused (near a singularity).",
+            ),
+            POS,
+        ],
+    ),
 ];
 
 pub struct AxisNode {
@@ -461,27 +524,29 @@ pub struct Netlist {
     /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
     /// as ("screw", ...), and its path in the file.
     pub values: Vec<(&'static str, String)>,
+    /// The planar linkage of a file that has one (`crate::linkage`); its netlist has no belts, bodies or guides.
+    pub linkage: Option<crate::linkage::LinkageNode>,
 }
 
 /// One node of a list, with the path its errors name: `machine.<list>[<id>]`, or `machine.<list>[#<n>]` (from 1)
 /// before its id is known.
-struct Node<'a> {
-    table: &'a Table,
-    path: String,
+pub(crate) struct Node<'a> {
+    pub(crate) table: &'a Table,
+    pub(crate) path: String,
     fields: &'static [Field],
 }
 
 impl Node<'_> {
-    fn at(&self, name: &str) -> String {
+    pub(crate) fn at(&self, name: &str) -> String {
         format!("{}.{name}", self.path)
     }
-    fn get(&self, name: &str) -> Option<&Value> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Value> {
         self.table.get(name)
     }
     fn required(&self, name: &str) -> Result<&Value> {
         self.get(name).ok_or_else(|| ConfigError::Missing(self.at(name)))
     }
-    fn text(&self, name: &str) -> Result<Option<&str>> {
+    pub(crate) fn text(&self, name: &str) -> Result<Option<&str>> {
         self.get(name).map(|v| v.as_str().ok_or_else(|| ConfigError::Type(self.at(name)))).transpose()
     }
     fn bool(&self, name: &str) -> Result<bool> {
@@ -500,7 +565,7 @@ impl Node<'_> {
             _ => Err(ConfigError::Type(self.at(name))),
         }
     }
-    fn id_list(&self, name: &str) -> Result<Vec<&str>> {
+    pub(crate) fn id_list(&self, name: &str) -> Result<Vec<&str>> {
         let Some(value) = self.get(name) else { return Ok(Vec::new()) };
         let err = || ConfigError::Type(self.at(name));
         value.as_array().ok_or_else(err)?.iter().map(|v| v.as_str().ok_or_else(err)).collect()
@@ -508,7 +573,7 @@ impl Node<'_> {
 }
 
 /// A number field: a number, or the path of one. NaN and infinity are refused, as everywhere in a config.
-fn number(cfg: &Config, value: &Value, at: &str, refs: &mut Vec<String>) -> Result<f64> {
+pub(crate) fn number(cfg: &Config, value: &Value, at: &str, refs: &mut Vec<String>) -> Result<f64> {
     match value {
         Value::Float(f) if f.is_finite() => Ok(*f),
         Value::Float(_) => Err(ConfigError::Invalid(at.into())),
@@ -605,12 +670,28 @@ impl Netlist {
             racks,
             linears,
             rotaries,
-        ] = <[Vec<Node>; 14]>::try_from(lists).ok().expect("one list per entry of NODES");
+            linkages,
+        ] = <[Vec<Node>; 15]>::try_from(lists).ok().expect("one list per entry of NODES");
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
                 return Err(ConfigError::Missing(format!("machine.{list}")));
             }
+        }
+        for (key, check) in [("id", true), ("name", false)] {
+            match machine.get(key) {
+                None => {}
+                Some(Value::String(text)) if !check || valid_id(text) => {}
+                Some(Value::String(_)) => {
+                    return Err(ConfigError::Invalid(format!("machine.{key} (letters, digits, _ and - only)")));
+                }
+                Some(_) => return Err(ConfigError::Type(format!("machine.{key}"))),
+            }
+        }
+        if !linkages.is_empty() {
+            let others =
+                [&pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries];
+            return crate::linkage::read(cfg, &axes, &motors, &gearboxes, &linkages, &others.map(|n| &n[..]));
         }
         let id_of = |node: &Node| node.table["id"].as_str().unwrap_or_default().to_string();
         // A reference to a node of a list, as its index there.
@@ -1042,16 +1123,6 @@ impl Netlist {
         {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
-        for (key, check) in [("id", true), ("name", false)] {
-            match machine.get(key) {
-                None => {}
-                Some(Value::String(text)) if !check || valid_id(text) => {}
-                Some(Value::String(_)) => {
-                    return Err(ConfigError::Invalid(format!("machine.{key} (letters, digits, _ and - only)")));
-                }
-                Some(_) => return Err(ConfigError::Type(format!("machine.{key}"))),
-            }
-        }
         if motor_nodes.len() != axis_nodes.len() {
             return Err(ConfigError::Invalid("machine.motor (as many motors as axes)".into()));
         }
@@ -1066,6 +1137,7 @@ impl Netlist {
             spans: span_nodes,
             refs,
             values,
+            linkage: None,
         })
     }
 }

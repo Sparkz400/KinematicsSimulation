@@ -34,6 +34,13 @@ item are in [PROGRESS.md](PROGRESS.md).
   (`payload_step_s`). `Machine::links` and `Machine::set_link_change`. `sim-cli fit` and the app's trace panel show
   both.
 
+### Added
+
+- Machine files: a `linkage` node, a planar parallel linkage (two driven arms, forearm pairs, a plate that keeps its
+  orientation), with inverse and forward kinematics, Jacobian, working range, condition-number check and the planar
+  delta's dynamics; `machines/planar-delta.toml`, the planar delta as a file, gives the crate's signals and verdicts to
+  the bit with each of its effects.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.
