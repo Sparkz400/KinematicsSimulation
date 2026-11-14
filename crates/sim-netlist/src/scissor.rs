@@ -237,7 +237,7 @@ impl ScissorMachine {
         let span_low = (arm * arm - (min_height / stages).powi(2)).sqrt();
         let own = motor_config(cfg, &net.motors[0].id)?;
         let theta_max = (span_low - (arm * arm - (max_height / stages).powi(2)).sqrt()) / lever;
-        let free = ShaftFriction { coulomb: 0.0, viscous: 0.0, smoothing: 1.0 };
+        let free = ShaftFriction::NONE;
         let mut joint = RotaryJoint::with(&own, free, HardStop { stiffness: 0.0, damping: 0.0 }, (0.0, theta_max))?;
         let counts = cfg.bool("effects.gearbox_efficiency")?;
         let screw_efficiency = if counts { v("screw_efficiency") } else { 1.0 };
