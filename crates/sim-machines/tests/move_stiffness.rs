@@ -1,7 +1,7 @@
 //! The belt's stiffness from an ordinary move's trace, no sweep (`identify::fit_move_stiffness`).
 
 use sim_components::Command;
-use sim_components::identify::{BELT_STIFFNESS_KEY, MOVE_STIFFNESS_LIMIT, fit_move_stiffness};
+use sim_components::identify::{BELT_STIFFNESS_KEY, MOVE_RINGING_RATIO, MOVE_STIFFNESS_LIMIT, fit_move_stiffness};
 use sim_components::sim::Sim;
 use sim_components::trace::Trace;
 use sim_core::testkit::Noise;
@@ -36,8 +36,9 @@ fn move_trace(entry: &MachineEntry, cfg: &Config, targets: &[f64], rows: usize, 
 ///
 /// What rings the belt in a move is the jerk at the ramps and, at speed, the motor's ripple sweeping through the mode
 /// (24 per turn of the motor, 5 turns per turn of the pulley of 20 mm: 70 Hz at 0.073 m/s). A move of 2 mm at 1 m/s³
-/// and 0.2 m/s² rings neither: refused, the sum of squares having no minimum the replays resolve (the criterion: a
-/// standard error above a tenth of the factor, or none).
+/// and 0.2 m/s² rings neither: refused. Its standard error, 0.045 to 0.053 of 0.83 (Windows, CI), passes a tenth of the factor;
+/// what refuses it is that it rings at the noise: 4.87 mN m RMS, of which the replay leaves 4.82 mN m, a ringing power of
+/// 1.02 times the residual's against `MOVE_RINGING_RATIO` 1.25 (the two 0.8 m moves: (7.6 / 4.9)² = 2.4).
 #[test]
 fn the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused() {
     let entry = sim_machines::find("single-axis").unwrap();
@@ -50,6 +51,7 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused() {
     // What the fitted replay leaves is the noise: 0.005 N m times sqrt(20 / 21).
     let noise = 0.005 * (20.0f64 / 21.0).sqrt();
     assert!(fit.residual < 1.05 * noise && fit.ringing > 1.4 * noise, "{fit:?}");
+    assert!(fit.ringing.powi(2) > 1.5 * MOVE_RINGING_RATIO * fit.residual.powi(2), "{fit:?}");
     assert_eq!(fit.advice().0, "fit-move-stiffness");
 
     // The start is at 0.1 m (`start.pose`); 2 mm out and back at 1 m/s³ and 0.2 m/s², config and machine alike.
@@ -62,7 +64,7 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused() {
     let tiny = move_trace(entry, &gentle(&truth), &[0.102, 0.1], 1300, &mut Noise(2));
     let refused = fit_move_stiffness(entry, &gentle(&cfg), &tiny, BELT_STIFFNESS_KEY).unwrap_err();
     assert_eq!(refused.key, "fit-move-not-excited", "{refused:?}");
-    assert_eq!(MOVE_STIFFNESS_LIMIT, 0.1);
+    assert_eq!((MOVE_STIFFNESS_LIMIT, MOVE_RINGING_RATIO), (0.1, 1.25));
     // A config without the key is refused before anything is replayed.
     assert_eq!(fit_move_stiffness(entry, &cfg, &trace, "belt.no_such_key").unwrap_err().key, "fit-move-no-key");
 }

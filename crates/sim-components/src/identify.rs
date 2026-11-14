@@ -883,6 +883,11 @@ pub fn fit_sweep(
 /// Above this standard error, over the factor, a trace is taken not to excite the mode enough (`fit_move_stiffness`).
 pub const MOVE_STIFFNESS_LIMIT: f64 = 0.1;
 
+/// Below this ratio of the trace's ringing power to what the fitted replay leaves of it, a trace is taken not to ring
+/// above its noise (`fit_move_stiffness`): 1.25 is the replay explaining an RMS of at least half what it leaves,
+/// ringing² − residual² ≥ (residual / 2)².
+pub const MOVE_RINGING_RATIO: f64 = 1.25;
+
 /// The config key `fit_move_stiffness` scales unless told another: the belts' stiffness, of every belt machine.
 pub const BELT_STIFFNESS_KEY: &str = "belt.stiffness_ea_n";
 
@@ -936,8 +941,9 @@ fn ringing(trace: &Trace) -> Vec<f64> {
 /// independent), plus the variance of the vertex from the points' scatter about the parabola (on a trace without noise
 /// that is all there is: 0.70 on the belt axis came out 0.681 ± 0.001 without it).
 ///
-/// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor or the best
-/// factor lies at an end of the range: the trace's moves did not ring the load enough against its noise (a gentle
+/// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor, the best
+/// factor lies at an end of the range, or the trace's ringing power is below `MOVE_RINGING_RATIO` times what the
+/// fitted replay leaves (the standard error alone let a move that rings at its noise level through): the trace's moves did not ring the load enough against its noise (a gentle
 /// move, a low jerk, a heavily damped mode). With `fit-move-no-key` where the config has no number at `key`.
 pub fn fit_move_stiffness(
     entry: &MachineEntry,
@@ -996,10 +1002,11 @@ pub fn fit_move_stiffness(
     let factor = u.exp();
     let error = factor * (2.0 * variance / curvature + jagged * jagged).sqrt();
     let rms = |x: &[f64]| (x.iter().map(|v| v * v).sum::<f64>() / x.len().max(1) as f64).sqrt();
-    if !(error <= MOVE_STIFFNESS_LIMIT * factor) {
+    let (ringing, residual) = (rms(&measured), rms(&residuals));
+    if !(error <= MOVE_STIFFNESS_LIMIT * factor && ringing * ringing >= MOVE_RINGING_RATIO * residual * residual) {
         return Err(not_excited(format!("× {factor:.2} ± {error:.2}")));
     }
-    Ok(MoveStiffness { factor, error, ringing: rms(&measured), residual: rms(&residuals) })
+    Ok(MoveStiffness { factor, error, ringing, residual })
 }
 
 #[cfg(test)]
