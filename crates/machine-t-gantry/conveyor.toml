@@ -104,9 +104,10 @@ torque_limit = true
 # The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
 # the torque of that current where it is below the motor's limit. Without the rating nothing is held.
 drive_current_limit = true
-# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
-# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
-# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+# Off here (14 November 2026): the drive's overload over time by its thermal image (ratings.drive_base_load_current_a,
+# drive_overload_time_constant_s, drive_max_current_time_s) and the motor's three thermal nodes
+# (motor.winding_resistance_share, winding_time_constant_s). On: field weakening of the d-q motor model
+# (motor.pole_pairs, d_inductance_h).
 field_weakening = true
 drive_overload = false
 motor_thermal_nodes = false
