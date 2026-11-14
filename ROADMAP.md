@@ -42,8 +42,10 @@ What is not built yet, from the "Left open" lists at the end of each section of 
 - In the app: `--set` (values are changed in the parameter panel).
 - FMI: asynchronous steps, a darwin64 binary; import tested in Simulink or Dymola (checked with fmpy in CI, run in
   OpenModelica 1.27.1 through OMSimulator). A Model Exchange FMU, which Modelica tools import as a block, is not
-  written (docs/fmi.md says why). Restoring an FMU state replays every step from initialisation, so it costs as long
-  as simulating to that point.
+  written (docs/fmi.md says why). A serialized FMU state carries its steps, not the simulation's snapshot, so setting
+  a deserialized state replays them from initialisation (states kept in memory are snapshots and set at once).
+- Python: `step`, `bode`, `tuning`, `margins`, `modes`, `sensitivity`, `replay`, `compare`, `report`, `check-dataset` and
+  `fmu` as functions (docs/python.md).
 
 ## Release
 

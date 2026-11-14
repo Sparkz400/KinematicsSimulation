@@ -2,8 +2,9 @@
 //!
 //! One binary serves both versions: the `fmi2*` functions are in `api`, the `fmi3*` ones in `api3`, and both drive
 //! the same `api::Instance`. Model Exchange is not offered (docs/fmi.md says why: the controller is a sampled
-//! controller whose internal states the importer's integrator cannot see). FMU state get, set and serialization
-//! work by replaying the inputs from a fresh simulation; the directional derivatives of the outputs with respect to
+//! controller whose internal states the importer's integrator cannot see). An FMU state holds a snapshot of the
+//! simulation, which setting it restores at once; a serialized one replays the inputs from a fresh simulation (`api`).
+//! The directional derivatives of the outputs with respect to
 //! the inputs are exactly zero, because an input acts on the outputs only through the next communication step.
 //!
 //! The FMU carries one generic binary (`sim_fmi.dll`, `sim_fmi.so`) for every machine; which machine and which
@@ -18,6 +19,12 @@
 //! | every other signal id       | Real    | output      | every signal of the simulation, with its unit         |
 //! | `command.setpoint.<axis>`   | Real    | input       | position setpoint, interpolated as from a PLC         |
 //! | `command.enable`            | Boolean | input       | false switches the drives off (brakes on)             |
+//! | `command.cycle`             | Boolean | input       | true starts the configured cycle, false stops it      |
+//! | `command.target.<axis>`     | Real    | input       | the target of a move                                  |
+//! | `command.move`              | Boolean | input       | turning true moves to the targets                     |
+//! | `command.path`              | String  | input       | a path as the text of a path file                     |
+//! | `command.path_file`         | String  | input       | a path file, used instead of `command.path`           |
+//! | `command.run_path`          | Boolean | input       | turning true plans the path from here and runs it     |
 //! | `machine`                   | String  | parameter   | the machine of the registry                           |
 //! | `config_file`               | String  | parameter   | a config file to use instead of the one in the FMU    |
 //! | `effects.<name>`            | Boolean | parameter   | the effect switches, overriding the config's          |
@@ -29,6 +36,9 @@
 //! controller follows; the controller interpolates towards it over `profile.setpoint_interval_s`, so the
 //! communication step should be that interval (the model description's default step). `fmi2DoStep` and `fmi3DoStep`
 //! run whole base steps (`sim.dt_s`) and refuse a communication step that is not a whole multiple of it.
+//! The triggers (`command.cycle`, `command.move`, `command.run_path`) act at the communication point where they have
+//! changed since the last one; a setpoint input, once set, takes the axes over whenever it differs from the setpoint
+//! the controller follows, so an importer drives the machine either by setpoints or by cycle, moves and paths.
 
 pub mod api;
 pub mod api3;
@@ -43,6 +53,15 @@ pub static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("d
 /// The name of the binary in the FMU and of the C functions' library.
 pub const MODEL_IDENTIFIER: &str = "sim_fmi";
 
+/// The log categories of the model description, with their descriptions' keys: the commands the inputs gave and the
+/// states set, warnings, errors; `logAll` stands for all of them (`fmi2SetDebugLogging`, `fmi3SetDebugLogging`).
+pub const LOG_CATEGORIES: [(&str, &str); 4] = [
+    ("logEvents", "fmi-log-events"),
+    ("logStatusWarning", "fmi-log-warning"),
+    ("logStatusError", "fmi-log-error"),
+    ("logAll", "fmi-log-all"),
+];
+
 /// What a variable stands for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
@@ -51,6 +70,16 @@ pub enum Kind {
     /// The position setpoint of the axis at this place.
     Setpoint(usize),
     Enable,
+    /// True runs the configured cycle (`Command::StartCycle` when it turns true), false stops it after its segment.
+    Cycle,
+    /// The target of a move for the axis at this place, and the trigger that starts it when it turns true.
+    Target(usize),
+    Move,
+    /// A path as the text of a path file (`sim_components::path`), or the name of such a file, which wins when it is
+    /// not empty; the trigger plans it from where the machine stands and runs it when it turns true.
+    PathText,
+    PathFile,
+    RunPath,
     Machine,
     ConfigFile,
     /// The switch `effects.<name>`.
@@ -72,15 +101,22 @@ impl Variable {
         match self.kind {
             Kind::Signal(0) => "independent",
             Kind::Signal(_) => "output",
-            Kind::Setpoint(_) | Kind::Enable => "input",
-            _ => "parameter",
+            Kind::Setpoint(_)
+            | Kind::Enable
+            | Kind::Cycle
+            | Kind::Target(_)
+            | Kind::Move
+            | Kind::PathText
+            | Kind::PathFile
+            | Kind::RunPath => "input",
+            Kind::Machine | Kind::ConfigFile | Kind::Effect(_) => "parameter",
         }
     }
     pub fn type_name(&self) -> &'static str {
         match self.kind {
-            Kind::Signal(_) | Kind::Setpoint(_) => "Real",
-            Kind::Enable | Kind::Effect(_) => "Boolean",
-            Kind::Machine | Kind::ConfigFile => "String",
+            Kind::Signal(_) | Kind::Setpoint(_) | Kind::Target(_) => "Real",
+            Kind::Enable | Kind::Cycle | Kind::Move | Kind::RunPath | Kind::Effect(_) => "Boolean",
+            Kind::Machine | Kind::ConfigFile | Kind::PathText | Kind::PathFile => "String",
         }
     }
 }
@@ -183,6 +219,18 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
         start: Some(start.to_string()),
     };
     out.push(flag("command.enable", Kind::Enable, "fmi-enable", true));
+    out.push(flag("command.cycle", Kind::Cycle, "fmi-cycle", false));
+    for (i, axis) in sim.machine.axes().iter().enumerate() {
+        let description = format!("{} · {}", tr.tr(axis.key), tr.tr("fmi-target"));
+        out.push(Variable {
+            name: format!("command.target.{}", axis.id),
+            kind: Kind::Target(i),
+            description,
+            unit: axis.unit.into(),
+            start: Some(format!("{:?}", sim.control.set_pos[i])),
+        });
+    }
+    out.push(flag("command.move", Kind::Move, "fmi-move", false));
     let text = |name: &str, kind: Kind, key: &str, start: &str| Variable {
         name: name.into(),
         kind,
@@ -190,6 +238,9 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
         unit: String::new(),
         start: Some(start.into()),
     };
+    out.push(text("command.path", Kind::PathText, "fmi-path", ""));
+    out.push(text("command.path_file", Kind::PathFile, "fmi-path-file", ""));
+    out.push(flag("command.run_path", Kind::RunPath, "fmi-run-path", false));
     out.push(text("machine", Kind::Machine, "fmi-machine", machine));
     out.push(text("config_file", Kind::ConfigFile, "fmi-config-file", ""));
     for (path, value) in cfg.leaves() {
@@ -251,6 +302,11 @@ fn description(
         let _ = writeln!(x, r#"    <Unit name="{}"/>"#, escape(unit));
     }
     let _ = writeln!(x, "  </UnitDefinitions>");
+    let _ = writeln!(x, "  <LogCategories>");
+    for (name, key) in LOG_CATEGORIES {
+        let _ = writeln!(x, r#"    <Category name="{name}" description="{}"/>"#, escape(tr.tr(key)));
+    }
+    let _ = writeln!(x, "  </LogCategories>");
     let _ = writeln!(
         x,
         r#"  <DefaultExperiment startTime="0" stepSize="{:?}"/>"#,

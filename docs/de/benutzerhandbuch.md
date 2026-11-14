@@ -1398,6 +1398,9 @@ Ohne weitere Angabe nimmt `fmu` die neben `sim-cli` gebaute Binärdatei (`target
 | jedes andere Signal der [Signaltabelle](#signale-aufzeichnen-antriebe-sperren) | Real | output | Z. B. `axis.x.position`, `motor.a.torque`, `belt.1.tension`, mit seiner Einheit |
 | `command.setpoint.<Achskennung>` | Real | input | Lagesollwert, wie `command.setpoint.<Achskennung>` über OPC UA. Startwert: die Startpose |
 | `command.enable` | Boolean | input | `false` schaltet die Antriebe ab (Bremsen fallen ein), `true` wieder ein. Startwert `true` |
+| `command.cycle` | Boolean | input | Wechsel auf `true` startet den konfigurierten Zyklus, Wechsel auf `false` hält ihn am Ende seines Segments an |
+| `command.target.<Achs-ID>`, `command.move` | Real, Boolean | input | `command.move` fährt beim Wechsel auf `true` zu den Zielen (Startwert: die Startpose) |
+| `command.path`, `command.path_file`, `command.run_path` | String, String, Boolean | input | `command.run_path` plant beim Wechsel auf `true` die Bahn (Text einer Bahndatei oder die genannte Datei) ab der Stelle, an der die Maschine steht, und fährt sie |
 | `machine` | String | parameter | Die Maschinenkennung |
 | `config_file` | String | parameter | Eine Konfigurationsdatei statt der in der FMU; leer (der Startwert) für die in der FMU |
 | `effects.<Name>` | Boolean | parameter | Jeder Effektschalter, Startwert wie in der Konfiguration; ein hier gesetzter Wert gilt vor dem der Konfigurationsdatei |
@@ -1416,8 +1419,8 @@ Wie ein Schritt abläuft:
 Grenzen bei dieser Aufgabe:
 
 - Geprüft mit fmpy und OMSimulator (Prüfung gegen das FMI-Schema, Simulation verglichen mit `sim-cli run`; die Befehle stehen in [FMI-Export](fmi.md#prüfung)). In OpenModelica 1.27.1 mit OMSimulator gerechnet (FMI 2.0; sein Modelica-Import nimmt nur Model Exchange); der Import in Simulink oder Dymola ist ungeprüft.
-- Nur Co-Simulation, kein Model Exchange ([warum](fmi.md#warum-es-kein-model-exchange-gibt)). Der FMU-Zustand arbeitet durch Wiederholen jedes Schritts seit der Initialisierung; einen Zustand wiederherzustellen dauert also so lange, wie bis zu ihm zu simulieren. Die Richtungsableitungen sind null, weil kein Ausgang direkt von einem Eingang abhängt. Keine asynchronen Schritte.
-- Eingänge sind nur Lagesollwerte: keine Fahrziele, kein Zyklus- oder Bahnbefehl und kein Momenteingang. Die Regelkreise bleiben in der FMU.
+- Nur Co-Simulation, kein Model Exchange ([warum](fmi.md#warum-es-kein-model-exchange-gibt)). Ein FMU-Zustand hält eine Momentaufnahme der Simulation und ist sofort gesetzt; ein serialisierter wiederholt jeden Schritt seit der Initialisierung, sein Setzen dauert also so lange, wie bis zu ihm zu simulieren ([FMU-Zustand](fmi.md#fmu-zustand)). Die Richtungsableitungen sind null, weil kein Ausgang direkt von einem Eingang abhängt. Keine asynchronen Schritte.
+- Eingänge sind Lagesollwerte und die Auslöser für Zyklus, Fahrt und Bahn ([FMI-Export](fmi.md#zyklus-fahrten-und-bahnen)); ein einmal gesetzter Sollwerteingang übernimmt die Achsen von Zyklus, Fahrt oder Bahn. Kein Momenteingang: Die Regelkreise bleiben in der FMU.
 - Meldungen und Beschreibungen in einer Sprache, der von `--lang` beim Schreiben der FMU.
 - Eine 64-Bit-Binärdatei für Windows, solange keine für Linux wie oben hinzukommt; keine 32-Bit-Binärdateien.
 

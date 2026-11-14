@@ -122,7 +122,8 @@ jobs:
           name: sizing-page
           path: site
 
-  # The Python module: an abi3 wheel per platform, its pytest suite (against sim-cli) and the example notebook.
+  # The Python module: an abi3 wheel per platform, its clippy, its pytest suite (against sim-cli) and the example
+  # notebook; and the CAD mass tools' tests (tools/cad) against the same sim-cli.
   python:
     strategy:
       fail-fast: false
@@ -134,10 +135,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
         with:
           toolchain: "1.98.1"
+          components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
+      # pyo3 needs the interpreter set up above, which the job "test" does not have when it runs clippy.
+      - name: Clippy of sim-py
+        run: cargo clippy -p sim-py --release --all-targets --locked -- -D warnings
       - name: Build sim-cli (the tests compare against it)
         run: cargo build -p sim-cli --release --locked
       - name: Wheel and tests
@@ -147,6 +152,13 @@ jobs:
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
           pip install target/wheels/*.whl "pytest==9.2.0" pandas matplotlib nbformat nbclient ipykernel
           pytest crates/sim-py/tests -q
+      # STEP reading needs OpenCascade (cadquery-ocp); the FreeCAD macro's test skips without FreeCAD. The tests find
+      # the sim-cli built above in target/release.
+      - name: CAD mass tests
+        shell: bash
+        run: |
+          pip install cadquery-ocp==8.0.1.1.0
+          python -m unittest discover -s tools/cad -p test_cadmass.py -v
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheel-${{ matrix.os }}

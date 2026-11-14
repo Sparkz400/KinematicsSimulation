@@ -2543,3 +2543,70 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## FMI snapshots, inputs and logging; Python's missing commands; CI for sim-py (14 November)
+
+What, from the audit of 14 November (sim-fmi, sim-py, the Python parts of CI):
+
+- FMU state set atomically: `Instance::set_state` builds the simulation for the state's parameters before it changes
+  anything (`build_sim`, split from `ensure_sim`), so a state whose config file has gone is refused and the instance
+  steps on. Before, it was left in step mode with no simulation and refused every later step.
+- Real snapshots: `Sim::snapshot` / `Sim::restore` (sim-components, generic) copy everything but the machine: state,
+  controller with drives (now `Clone`), winding and part warmth, payload, obstacle record; restore sets again what the
+  machine keeps between steps (payload, brakes, dwelling, part temperatures). An FMU state carries the snapshot and its
+  outputs; setting it builds the machine and restores, independent of how far it is from the start. A serialized state
+  carries the steps and replays them (format `sim-fmi state 2`, with the triggers and the commands they gave).
+- Inputs `command.cycle`, `command.target.<axis>` + `command.move`, `command.path` / `command.path_file` +
+  `command.run_path`, acting on their change at a communication point; a path is planned from where the machine
+  stands, within the axis limits, and logged in the step's record as the planned trajectory. A path that cannot be
+  planned is a warning. Outputs stay generated from `Sim::signal_infos`: the overload image and housing temperature
+  are not signals at this commit (the `motor` session adds them); once they are, every FMU has them as outputs.
+- `fmi2SetDebugLogging` / `fmi3SetDebugLogging`: categories `logEvents` (commands, states set; on with `loggingOn`),
+  `logStatusWarning`, `logStatusError` (on from the start), `logAll`; declared in `<LogCategories>`. FMI 2.0 messages
+  are passed as the format with `%` doubled (fmpy's Python callback saw only `%s` before).
+- Python: `Config(machine_file=...)`, `sweep`, `optimise`, `fit`, `identify` as the CLI computes them (dicts of
+  columns, `advice` / `notes` / `overlay`); `OverflowError` for an int beyond 64 bits; `run` refuses more than 1e8 base
+  steps or 2.5e8 sampled values.
+- CI: `cargo clippy -p sim-py` in the job "python" (after setup-python: pyo3 needs the interpreter); the CAD mass tests
+  with cadquery-ocp 8.0.1.1.0 there too. sim-py has no Rust tests, so nextest needs no change.
+
+Tests (sim-fmi's run by the coordinator; the fmpy check and the new pytest cases run here):
+
+- `a_state_that_cannot_be_set_leaves_the_instance_as_it_was`: the cycle through `command.cycle` beside a plain `Sim`;
+  the config file removed at step 8, the state of step 4 refused (`fmi2Error`), steps 8 to 11 bit for bit the plain
+  `Sim`'s. Fails before the fix (step 8 refused, no simulation).
+- `a_restored_snapshot_continues_as_the_simulation_did_on_every_machine`: every registered machine and three machine
+  files, cycle running; the state of step 15 set after step 30 gives the outputs at step 15 and steps 15 to 29 bit for
+  bit; serialized and set on a new instance, replayed, the same.
+- `the_move_and_path_inputs_move_the_machine`: every machine moved by up to 5 % of its first axis's range through the
+  inputs, bit for bit `Command::MoveTo` on a plain `Sim`, ending within 0.1 % of the range of the target; on the first
+  machine a line back along `command.path`, bit for bit `plan_path` + `Command::Trajectory`; a text that is no path
+  gives `fmi2Warning`.
+- `debug_logging_switches_the_log_categories` (FMI 3.0, a recording logger): off, a refused call is one
+  `logStatusError` and the cycle start no message; `logEvents` on, stopping the cycle is one `logEvents` message with
+  `Stop`; an unknown category refused; all off, nothing; `logAll`, both again. Every category is declared.
+- `tools/check_fmu.py` part 4 (fmpy 0.3.32): a move of 10 mm through the inputs against `sim-cli run --move`, worst
+  4.5e-10 (the CLI's 9 printed digits); one `logEvents` message, none with logging off. Passed for the four FMUs CI
+  checks (t-gantry, single-axis, EXCT-30 as FMI 2.0, the h-bot file as FMI 3.0), all with 0 validator problems.
+- pytest, 10 new: machine file against `sim-cli run --machine-file` (1e-8), refusals and a bad file naming itself;
+  `2**63`, `-(2**63) - 1` and `numpy.uint64(2**63)` raise OverflowError (2^63 = 9223372036854775808 is one past
+  i64::MAX) and leave the value; `run(time=1e12)` refused for its steps, `run(time=1e8 * dt, every=1)` for its values
+  (1e8 rows times every signal > 2.5e8); `sweep`, `optimise` (3 runs, nominal), `fit` and `identify` against the CLI on
+  one 6.2 s pass of the first machine's cycle. All passed (Windows, CPython 3.14). `test_cadmass.py`: 14 tests OK with
+  cadquery-ocp 8.0.1.1.0.
+
+Outside the area, kept small: `#[derive(Clone)]` on `Controller` (control.rs), `Snapshot` with `snapshot` / `restore`
+in sim.rs and its re-export in lib.rs; docs user-guide.md and benutzerhandbuch.md (FMI section), ROADMAP (FMI line).
+
+Left open:
+
+- A serialized FMU state replays (and grows by 21 bytes plus 9 per axis each communication step): writing the
+  snapshot as bytes needs the controller, drives and conveyor written out field by field.
+- After a restore, a machine's per-step diagnostic (a belt tooth jump's loss) reads 0 until the next step inside
+  `Sim`; the FMU hands out the outputs saved with the snapshot, so its outputs are unaffected.
+- No time-optimal option for `command.run_path` (the CLI's `--time-optimal`), no trajectory-file input.
+- Python: `step`, `bode`, `tuning`, `margins`, `modes`, `sensitivity`, `replay`, `compare`, `report`, `check-dataset`,
+  `fmu`, `verdicts --worst` and `search --motor-id`; `fit` and `identify` raise at the first failure where the CLI
+  writes the table first.
+- The overload image and housing temperature as FMI outputs wait for the `motor` session's signals (nothing to do
+  here once they are in `signal_infos`).
