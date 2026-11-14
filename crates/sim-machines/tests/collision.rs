@@ -190,6 +190,70 @@ fn the_optimiser_lifts_each_traverse_over_a_box_across_it_by_hand() {
     assert!((load.duration - found.after.duration).abs() < 1e-9);
 }
 
+/// The height profile of a lift follows the obstacles' shape. T-gantry, clearance 0.05 m (the lifts go down to 0.1 m
+/// without obstacles), two boxes 0.1 m wide across the traverse: at x = 0.45 in the view (0.3 m of the axis, the view is
+/// 0.15 m to the right) with its top at -0.7, and at 0.85 (0.7 m) with its top at -0.6. On the way to the place the
+/// payload hangs lowest, its bottom 0.802 m below the tool: the via points pass the first box at
+/// -0.7 + 0.05 + 0.802 = 0.152 m and the second at -0.6 + 0.05 + 0.802 = 0.252 m, two points each (where the traverse at
+/// 0.1 m begins and ends to come nearer than the clearance), the first pair before the second. On the way back the
+/// flange is lowest, 0.702 m below the tool: at 0.1 m it keeps 0.1 - 0.702 + 0.7 = 0.098 m from the first box, so only
+/// the second is in the way and there is no profile (one box: the lift at -0.6 + 0.05 + 0.702 = 0.152 m, as before).
+/// With the first box alone there is none either way. The optimised cycle runs with effects.crash on, touches nothing
+/// and passes every verdict.
+#[test]
+fn the_lift_passes_two_boxes_each_at_its_own_height() {
+    use sim_components::analysis::{lift_profiles, optimise_cycle};
+    let entry = find("t-gantry").unwrap();
+    let clearance = "profile.min_clearance_m = 0.05";
+    let boxes = r#"obstacles = [
+        { name = "low", centre_m = [0.45, -0.05, -0.75], size_m = [0.1, 0.2, 0.1] },
+        { name = "high", centre_m = [0.85, -0.05, -0.65], size_m = [0.1, 0.2, 0.1] },
+    ]"#;
+    let cfg = with(entry, &[clearance, boxes]);
+    let profiles = lift_profiles(entry, &cfg).unwrap();
+    assert_eq!(profiles.len(), 1, "{profiles:?}");
+    let (segments, points, raised) = &profiles[0];
+    assert_eq!(*segments, [1, 2, 3]);
+    let heights: Vec<f64> = points.iter().map(|p| p[1]).collect();
+    let (low, high) = (-0.7 + 0.05 + 0.802, -0.6 + 0.05 + 0.802);
+    assert!(heights.len() == 4, "{points:?}");
+    for (height, by_hand) in heights.iter().zip([low, low, high, high]) {
+        assert!((height - by_hand).abs() < 1e-6, "{points:?}, by hand {by_hand} m");
+    }
+    // Along the traverse in order, the first pair around the first box (0.3 m), the second around the second (0.7 m).
+    let x: Vec<f64> = points.iter().map(|p| p[0]).collect();
+    assert!(x.windows(2).all(|w| w[0] < w[1]) && x[0] < 0.3 && x[1] > 0.3 && x[2] < 0.7 && x[3] > 0.7, "{x:?}");
+    let one = r#"obstacles = [{ name = "low", centre_m = [0.45, -0.05, -0.75], size_m = [0.1, 0.2, 0.1] }]"#;
+    assert!(lift_profiles(entry, &with(entry, &[clearance, one])).unwrap().is_empty());
+
+    // The cycle through the profile, its points raised as the optimiser raises them for the spline's sag (about 12 mm
+    // here, never more than the 0.1 m between the two heights): the lift, traverse and lower are one segment from the
+    // pick at 0.05 m up to 0.1 m, through the points, down at the place.
+    assert!(*raised >= 0.0 && *raised < 0.1, "{raised} m");
+    let mut via = vec![vec![0.1, 0.1]];
+    via.extend(points.iter().map(|p| vec![p[0], p[1] + raised]));
+    via.push(vec![0.9, 0.1]);
+    let profiled = format!(
+        "cycle.segment = [{{ target = [0.1, 0.05], dwell_s = 0.1, payload = true }}, \
+         {{ target = [0.9, 0.05], dwell_s = 0.1, payload = false, via = {via:?} }}, \
+         {{ target = [0.9, 0.35], dwell_s = 0.0, payload = false }}, \
+         {{ target = [0.1, 0.35], dwell_s = 0.0, payload = false }}]"
+    );
+    let crashing = with(entry, &[clearance, boxes, "effects.crash = true", &profiled]);
+    let load = analyse_cycle(&mut Sim::new(entry, &crashing).unwrap()).unwrap();
+    // At rest the spline keeps the clearance; the run sways the payload some hundredths of a millimetre nearer.
+    assert!(load.contact.is_none() && load.clearance.is_some_and(|c| c > 0.05 - 1e-3), "{:?}", load.clearance);
+
+    let found = optimise_cycle(entry, &cfg, 40).unwrap();
+    let mut applied = with(entry, &[clearance, boxes, "effects.crash = true"]);
+    for (path, _, after) in &found.changes {
+        applied.set_text(&format!("{path} = {after}")).unwrap();
+    }
+    let load = analyse_cycle(&mut Sim::new(entry, &applied).unwrap()).unwrap();
+    assert!(load.contact.is_none() && load.clearance.is_some_and(|c| c >= 0.05), "{:?}", load.clearance);
+    assert!(verdicts(&applied, &load).unwrap().iter().all(|v| v.ok));
+}
+
 /// The time-optimal plan respects the obstacles: a path that comes nearer than `profile.min_clearance_m` is refused,
 /// the same path within the axis limits is planned (and `check_plan` says how near it comes).
 #[test]

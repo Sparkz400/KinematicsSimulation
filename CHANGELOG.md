@@ -55,6 +55,20 @@ item are in [PROGRESS.md](PROGRESS.md).
   iteration `lowest_mode`); `Legs::rods` takes the elbow's move out of the arm's plane; `Legs::rod_middle` is gone
   (`Delta::load_n` builds every point mass from its Jacobian).
 
+### Added
+
+- `sim-cli optimise --worst` (in the app: "worst corner" beside "with error bands"): the optimiser's result judged at the
+  worst corner of all bounds at once (`verdict_worst`) instead of the one-at-a-time bands, rows `worst_*`. The
+  worst-corner search stops at the first failing batch of runs, starts from the previous step's worst corners, and the
+  search's steps are bisected (`OptimiseOptions::worst`, `Robust::worst`). Not the default: 16 min on the default
+  T-gantry.
+- Lift height profiles: where two or more obstacles are in a traverse's way, the optimiser also tries a path through
+  two via points per obstacle at its own height (`analysis::lift_profiles`), and takes it where it is faster.
+
+### Changed
+
+- `LiftChange::via` is a list of via points (`Option<Vec<Vec<f64>>>`); the CLI's `via_m` row puts `; ` between them.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

@@ -12,6 +12,7 @@ cli-error-worst = --worst needs --bands and goes without --samples and --seed
 cli-error-axis-index = --axis-index takes the number of one of the machine's axes, a whole number from 0 to { $arg }
 cli-worst-runs = Cycles simulated in the search for the worst corners: { $arg }
 cli-optimise-runs = Cycles simulated: search + error bands { $arg }
+cli-optimise-runs-worst = Cycles simulated: search + worst corners { $arg }
 cli-report-pass = Report written, every check passes: { $arg }
 cli-report-fail = Report written, some checks fail: { $arg }
 cli-planned-clearance = Planned path: least clearance to the obstacles { $arg } mm

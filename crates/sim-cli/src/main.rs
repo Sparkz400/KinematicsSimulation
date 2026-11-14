@@ -141,7 +141,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
-        Some("optimise") => &["--runs", "--nominal", "--pareto"],
+        Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst"],
         Some("search") => &["--series", "--gearboxes", "--axes"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
@@ -675,8 +675,9 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 /// the cycle time and what to change in the config; per changed lift its segments, height before and after, and via point.
 /// The result passes every verdict in the error bands of the config's `[bounds]` too: where the fastest setting found
 /// fails there, the search's steps are gone back to the fastest that passes (rows `bands_*`, and on the error stream
-/// what the bands cost). `--nominal` judges the config as written alone. `--pareto FILE` writes the settings that no
-/// other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
+/// what the bands cost). `--worst` judges at the worst corner of all bounds at once instead (`verdict_worst`, rows
+/// `worst_*`), bisecting over the search's steps. `--nominal` judges the config as written alone. `--pareto FILE`
+/// writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
 fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let runs = args.number("--runs")?.unwrap_or(40.0) as usize;
@@ -684,6 +685,7 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
         max_runs: runs,
         robust: !args.flag("--nominal"),
         pareto: args.option("--pareto").is_some(),
+        worst: args.flag("--worst"),
     };
     let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options)?;
     let mut out = output(args, "--out")?;
@@ -692,13 +694,16 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     writeln!(out, "dwell_error_peak_m,{:.3e},{:.3e}", found.before.dwell_error_peak, found.after.dwell_error_peak)
         .map_err(io)?;
     if let Some(robust) = &found.robust {
-        // The fastest setting on the verdicts as written, what it fails in the bands, and how far the result went back.
-        writeln!(out, "bands_fastest_cycle_s,,{:.4}", robust.nominal_duration).map_err(io)?;
-        writeln!(out, "bands_fastest_fails,,{}", robust.nominal_fails.join(" ")).map_err(io)?;
-        writeln!(out, "bands_steps_back,,{}", robust.steps_back).map_err(io)?;
-        // Failed in the bands by the cycle as configured already: the result is not judged on them.
-        writeln!(out, "bands_excused,,{}", robust.excused.join(" ")).map_err(io)?;
-        eprintln!("{}", tr.tr_arg("cli-optimise-runs", &format!("{} + {}", found.runs, robust.runs)));
+        // The fastest setting on the verdicts as written, what it fails in the bands (or at the worst corner), and how
+        // far the result went back.
+        let judged = if robust.worst { "worst" } else { "bands" };
+        writeln!(out, "{judged}_fastest_cycle_s,,{:.4}", robust.nominal_duration).map_err(io)?;
+        writeln!(out, "{judged}_fastest_fails,,{}", robust.nominal_fails.join(" ")).map_err(io)?;
+        writeln!(out, "{judged}_steps_back,,{}", robust.steps_back).map_err(io)?;
+        // Failed by the cycle as configured already: the result is not judged on them.
+        writeln!(out, "{judged}_excused,,{}", robust.excused.join(" ")).map_err(io)?;
+        let key = if robust.worst { "cli-optimise-runs-worst" } else { "cli-optimise-runs" };
+        eprintln!("{}", tr.tr_arg(key, &format!("{} + {}", found.runs, robust.runs)));
     }
     if let Some(path) = args.option("--pareto") {
         let mut front = std::io::BufWriter::new(std::fs::File::create(path).map_err(io)?);
@@ -722,8 +727,10 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let [a, b, c] = lift.segments;
         writeln!(out, "cycle.segment[{a}-{b}-{c}].lift_m,{:.4},{:.4}", lift.before, lift.after).map_err(io)?;
         if let Some(via) = &lift.via {
-            let point: Vec<String> = via.iter().map(|x| format!("{x:.4}")).collect();
-            writeln!(out, "cycle.segment[{a}-{b}-{c}].via_m,,{}", point.join(" ")).map_err(io)?;
+            // Points apart by "; " (several for a height profile), axes by spaces.
+            let point: Vec<String> =
+                via.iter().map(|point| point.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(" ")).collect();
+            writeln!(out, "cycle.segment[{a}-{b}-{c}].via_m,,{}", point.join("; ")).map_err(io)?;
         }
     }
     out.flush().map_err(io)

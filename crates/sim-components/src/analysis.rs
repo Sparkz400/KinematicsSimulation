@@ -1887,6 +1887,21 @@ pub fn verdict_worst_and_bands(
     cfg: &Config,
     bounds: &[(String, f64, f64)],
 ) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
+    worst_search(entry, cfg, bounds, &[], &|_| false)
+}
+
+/// `verdict_worst_and_bands`, started from the worst corners `from` found for another config with the same bounds (the
+/// optimiser's previous step): per verdict, where `from` has one, its corner (a parameter it left as configured at the
+/// sign corner's bound) is run beside the sign corner, and the worse of the two starts the passes. And the search ends
+/// after the first batch of runs in which a verdict `stop` picks out came up: the worst it reports is then only what was
+/// found so far (enough to say that a check fails).
+fn worst_search(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+    from: &[Worst],
+    stop: &(dyn Fn(&Verdict) -> bool + Sync),
+) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let n = bounds.len();
     let set = |cfg: &mut Config, i: usize, high: bool| {
@@ -1921,12 +1936,23 @@ pub fn verdict_worst_and_bands(
         .map(|&id| (0..n).filter(|&i| bad(&alone[2 * i + 2], id) != bad(&alone[2 * i + 1], id)).collect())
         .collect();
 
+    // The previous worst corners, where there are any: a parameter left as configured there takes the sign corner's bound.
+    let warm: Vec<Option<Vec<bool>>> = ids
+        .iter()
+        .zip(&corners)
+        .map(|(&id, sign)| {
+            let w = from.iter().find(|w| (w.verdict.check, w.verdict.motor) == id && w.high.len() == n)?;
+            Some(w.high.iter().zip(sign).map(|(h, s)| h.unwrap_or(*s)).collect())
+        })
+        .collect();
+
     let mut seen: std::collections::HashMap<Vec<bool>, Vec<Verdict>> = std::collections::HashMap::new();
     let mut runs = alone.len();
-    // Runs the corners not run before.
+    let mut stopped = alone.iter().flatten().any(stop);
+    // Runs the corners not run before; whether one of them has a verdict `stop` picks out.
     let mut run_corners = |wanted: Vec<Vec<bool>>,
                            seen: &mut std::collections::HashMap<Vec<bool>, Vec<Verdict>>|
-     -> Result<(), ConfigError> {
+     -> Result<bool, ConfigError> {
         let mut new: Vec<Vec<bool>> = Vec::new();
         for corner in wanted {
             if !seen.contains_key(&corner) && !new.contains(&corner) {
@@ -1941,12 +1967,22 @@ pub fn verdict_worst_and_bands(
             Ok(changed)
         });
         runs += new.len();
+        let mut hit = false;
         for (corner, verdicts) in new.into_iter().zip(judged) {
-            seen.insert(corner, verdicts?);
+            let verdicts = verdicts?;
+            hit |= verdicts.iter().any(stop);
+            seen.insert(corner, verdicts);
         }
-        Ok(())
+        Ok(hit)
     };
-    run_corners(corners.clone(), &mut seen)?;
+    if !stopped {
+        stopped = run_corners(corners.iter().cloned().chain(warm.iter().flatten().cloned()).collect(), &mut seen)?;
+        for (k, warm) in warm.into_iter().enumerate() {
+            if let Some(warm) = warm.filter(|w| bad(&seen[w], ids[k]) > bad(&seen[&corners[k]], ids[k])) {
+                corners[k] = warm;
+            }
+        }
+    }
     let flipped = |corner: &[bool], flips: &[usize]| {
         let mut out = corner.to_vec();
         for &i in flips {
@@ -1955,10 +1991,15 @@ pub fn verdict_worst_and_bands(
         out
     };
     for _ in 0..WORST_PASSES {
+        if stopped {
+            break;
+        }
         let singles: Vec<Vec<bool>> = (0..ids.len())
             .flat_map(|k| moves[k].iter().map(|&i| flipped(&corners[k], &[i])).collect::<Vec<_>>())
             .collect();
-        run_corners(singles, &mut seen)?;
+        if run_corners(singles, &mut seen)? {
+            break;
+        }
         // Per verdict the flips that made it worse, and all of them together.
         let worse: Vec<Vec<usize>> = (0..ids.len())
             .map(|k| {
@@ -1969,7 +2010,7 @@ pub fn verdict_worst_and_bands(
                     .collect()
             })
             .collect();
-        run_corners(
+        stopped = run_corners(
             (0..ids.len()).filter(|&k| worse[k].len() > 1).map(|k| flipped(&corners[k], &worse[k])).collect(),
             &mut seen,
         )?;
@@ -2027,19 +2068,23 @@ pub struct Optimised {
 
 /// What to optimise for: at most `max_runs` cycles in the search; `robust`: the result has to pass every verdict in the
 /// error bands too (`verdict_bands`, one bound of `[bounds]` at a time), not only as configured; `pareto`: the
-/// non-dominated set of cycle time, energy and peak utilisation (`Optimised::front`), with a sweep of slower settings.
+/// non-dominated set of cycle time, energy and peak utilisation (`Optimised::front`), with a sweep of slower settings;
+/// `worst` (with `robust`): judged at the worst corner of all bounds at once (`verdict_worst`) instead of the bands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OptimiseOptions {
     pub max_runs: usize,
     pub robust: bool,
     pub pareto: bool,
+    pub worst: bool,
 }
 
 /// The fastest setting the search found on the verdicts as configured, judged in the error bands: its cycle time and
 /// the checks it fails there (none where it passes); the checks the cycle as configured fails in the bands already,
 /// which the result is not judged on (it cannot take back a margin the config does not have); how many accepted steps
 /// the result went back from the fastest to the fastest one that passes the other checks in the bands; and the cycles
-/// the bands took (2 n + 1 per setting judged, n the bounds).
+/// the bands took (2 n + 1 per setting judged, n the bounds). With `worst`, all of it at the worst corner instead: there
+/// the search stops at the first batch of runs that fails a check judged on, so `nominal_fails` are the checks found
+/// failing by then (not every one), and `runs` counts the worst-corner searches' cycles.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Robust {
     pub nominal_duration: f64,
@@ -2047,6 +2092,7 @@ pub struct Robust {
     pub excused: Vec<&'static str>,
     pub steps_back: usize,
     pub runs: usize,
+    pub worst: bool,
 }
 
 /// A setting on the energy-against-time front: cycle time (s), energy per cycle from the supply (`supply_energy`, J),
@@ -2095,15 +2141,16 @@ pub fn non_dominated(points: &[FrontPoint]) -> Vec<FrontPoint> {
 }
 
 /// A lift, traverse and lower of the cycle that the optimiser changed: the three segments of the configured cycle
-/// (counted from 0), the height of the traverse (the last axis) before and after, and the via point the path is rounded
-/// through, where it took one (then the three segments are one: a path up, through the via point and down, see
-/// `control::via_pieces`).
+/// (counted from 0), the height of the traverse (the last axis) before and after, and the via points the path is rounded
+/// through, where it took them (then the three segments are one: a path up, through the via points and down, see
+/// `control::via_pieces`): one over the middle or over the nearest obstacle, or two per obstacle in the way, the height
+/// profile (`lift_profiles`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiftChange {
     pub segments: [usize; 3],
     pub before: f64,
     pub after: f64,
-    pub via: Option<Vec<f64>>,
+    pub via: Option<Vec<Vec<f64>>>,
 }
 
 /// A lift, traverse and lower of a configured cycle (`lifts`): segment `lift` goes from `from` straight along the last
@@ -2122,6 +2169,7 @@ struct Lift {
     lowest: f64,
     needed: f64,
     over: Option<Vec<f64>>,
+    profile: Option<Vec<Vec<f64>>>,
     payload: bool,
 }
 
@@ -2181,7 +2229,18 @@ fn lifts(cfg: &Config, clearance: f64) -> Result<Vec<Lift>, ConfigError> {
         if up * (height - lowest) >= 0.0 {
             // The segments run with the payload as the one before left it, which `quiet` keeps.
             let payload = segments[a].get("payload").and_then(|p| p.as_bool()).unwrap_or(true);
-            out.push(Lift { segments: [a, b, c], from, to, height, up, lowest, needed: lowest, over: None, payload });
+            out.push(Lift {
+                segments: [a, b, c],
+                from,
+                to,
+                height,
+                up,
+                lowest,
+                needed: lowest,
+                over: None,
+                profile: None,
+                payload,
+            });
         }
     }
     Ok(out)
@@ -2229,12 +2288,114 @@ fn over_obstacles(
     best.map(|(height, nearest)| (height, if height == lift.lowest { None } else { nearest }))
 }
 
-/// The cycle with each lift at `heights` and, where `vias` has one, rounded through that via point (see `LiftChange`).
+/// The height profile of a lift over the obstacles in its way: per obstacle that raises the traverse (`over_obstacles`
+/// with it alone), two via points at its own height, where the traverse at `lowest` begins and ends to come nearer to it
+/// than `clearance` (looked at every millimetre, the collision bodies at rest with the payload as the lift carries it).
+/// Obstacles whose stretches overlap are passed as one, at the higher of their heights. `None` with fewer than two such
+/// stretches (one box: the lift at `needed`, as without a profile), or where an obstacle cannot be cleared.
+fn profile(
+    machine: &mut dyn sim_core::Machine,
+    obstacles: &[sim_core::Obstacle],
+    lift: &Lift,
+    clearance: f64,
+    axis: &sim_core::AxisInfo,
+) -> Option<Vec<Vec<f64>>> {
+    let z = lift.from.len() - 1;
+    let at = |s: f64, height: f64| -> Vec<f64> {
+        (0..z).map(|i| lift.from[i] + s * (lift.to[i] - lift.from[i])).chain([height]).collect()
+    };
+    let width = (0..z).map(|i| (lift.to[i] - lift.from[i]).powi(2)).sum::<f64>().sqrt();
+    let steps = (width / 1e-3).ceil().max(1.0) as usize;
+    let mut stretches: Vec<(f64, f64, f64)> = Vec::new();
+    for one in obstacles.chunks(1) {
+        let (height, over) = over_obstacles(machine, one, lift, clearance, axis)?;
+        if over.is_none() {
+            continue;
+        }
+        machine.set_payload_attached(lift.payload);
+        let near = (0..=steps).map(|k| k as f64 / steps as f64).filter(|&s| {
+            let mut check = crate::collision::PlanCheck::default();
+            crate::collision::check_path(&*machine, one, &[at(s, lift.lowest)], &mut check);
+            check.clearance < clearance - 1e-9
+        });
+        let (first, last) = near.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), s| (a.min(s), b.max(s)));
+        if first <= last {
+            stretches.push((first, last, height));
+        }
+    }
+    stretches.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64, f64)> = Vec::new();
+    for (first, last, height) in stretches {
+        match merged.last_mut() {
+            Some(m) if first <= m.1 => {
+                (m.1, m.2) = (m.1.max(last), if lift.up > 0.0 { m.2.max(height) } else { m.2.min(height) })
+            }
+            _ => merged.push((first, last, height)),
+        }
+    }
+    (merged.len() >= 2)
+        .then(|| merged.iter().flat_map(|&(first, last, height)| [at(first, height), at(last, height)]).collect())
+}
+
+/// The points with the last axis moved by `by`.
+fn raised(points: &[Vec<f64>], by: f64) -> Vec<Vec<f64>> {
+    points
+        .iter()
+        .map(|p| p.iter().enumerate().map(|(i, x)| if i + 1 == p.len() { x + by } else { *x }).collect())
+        .collect()
+}
+
+/// A lift's height profile (`profile`) and how far its points have to be raised (on the side `up`) for the planner's
+/// spline through them to keep the clearance: the spline sags between the points, so they are raised by what the
+/// planned path lacks and 1 um, three times at most. `None` where there is no profile or it still does not clear.
+/// `planned`: the axes, the profile cycle and the path tolerance the planner times it with.
+fn smoothed_profile(
+    machine: &mut dyn sim_core::Machine,
+    obstacles: &[sim_core::Obstacle],
+    lift: &Lift,
+    clearance: f64,
+    planned: (&[sim_core::AxisInfo], f64, f64),
+) -> Option<(Vec<Vec<f64>>, f64)> {
+    let (axes, cycle, tolerance) = planned;
+    let points = profile(machine, obstacles, lift, clearance, &axes[lift.from.len() - 1])?;
+    let mut by = 0.0;
+    for _ in 0..4 {
+        let via = raised(&points, lift.up * by);
+        let gap =
+            planned_clearance(axes, cycle, tolerance, lift, lift.lowest, &via, (&mut *machine, obstacles, clearance))?;
+        if gap >= clearance - 1e-9 {
+            return Some((points, by));
+        }
+        by += clearance - gap + 1e-6;
+    }
+    None
+}
+
+/// Per lift of the cycle with two or more obstacles in its way (as the optimiser finds them, `optimise_cycle_with`): its
+/// three segments, its height profile as `profile` builds it, and how far the optimiser raises those points for the
+/// planned spline through them to keep the clearance (`smoothed_profile`). Empty without obstacles; lifts with fewer
+/// than two obstacles in the way, or whose profile does not clear, are left out.
+pub fn lift_profiles(entry: &MachineEntry, cfg: &Config) -> Result<Vec<([usize; 3], Vec<Vec<f64>>, f64)>, ConfigError> {
+    let mut probe = Sim::new(entry, cfg)?;
+    let clearance = cfg.non_negative("profile.min_clearance_m")?;
+    let (cycle, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
+    let (axes, obstacles) = (probe.machine.axes().to_vec(), probe.obstacles.clone());
+    let mut out = Vec::new();
+    for lift in lifts(cfg, clearance)?.iter().filter(|_| !obstacles.is_empty()) {
+        let planned = (axes.as_slice(), cycle, tolerance);
+        if let Some((points, by)) = smoothed_profile(probe.machine.as_mut(), &obstacles, lift, clearance, planned) {
+            out.push((lift.segments, points, by));
+        }
+    }
+    Ok(out)
+}
+
+/// The cycle with each lift at `heights` and, where `vias` has some, rounded through those via points (see `LiftChange`).
 fn cycle_with(
     cfg: &Config,
     lifts: &[Lift],
     heights: &[f64],
-    vias: &[Option<Vec<f64>>],
+    vias: &[Option<Vec<Vec<f64>>>],
 ) -> Result<toml::Value, ConfigError> {
     let mut segments = cfg.array("cycle.segment")?.clone();
     let number_list = |p: &[f64]| toml::Value::Array(p.iter().map(|x| toml::Value::Float(*x)).collect());
@@ -2257,12 +2418,14 @@ fn cycle_with(
                     }
                 }
             }
-            Some(point) => {
-                let via = toml::Value::Array(vec![
-                    number_list(&at_height(&lift.from)),
-                    number_list(point),
-                    number_list(&at_height(&lift.to)),
-                ]);
+            Some(points) => {
+                let via = toml::Value::Array(
+                    std::iter::once(at_height(&lift.from))
+                        .chain(points.iter().cloned())
+                        .chain([at_height(&lift.to)])
+                        .map(|p| number_list(&p))
+                        .collect(),
+                );
                 if let Some(t) = segments[c].as_table_mut() {
                     t.insert("via".into(), via);
                 }
@@ -2284,35 +2447,53 @@ fn clears(
     tolerance: f64,
     lift: &Lift,
     height: f64,
-    via: &[f64],
+    via: &[Vec<f64>],
     bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64),
 ) -> bool {
+    let clearance = bodies.2;
+    planned_clearance(axes, cycle, tolerance, lift, height, via, bodies).is_some_and(|gap| gap >= clearance - 1e-9)
+}
+
+/// The least clearance to the obstacles of the planned path of a lift rounded through `via` (infinite without
+/// obstacles); `None` where it is not planned or comes nearer to pick and place than `lowest` (see `clears`).
+fn planned_clearance(
+    axes: &[sim_core::AxisInfo],
+    cycle: f64,
+    tolerance: f64,
+    lift: &Lift,
+    height: f64,
+    via: &[Vec<f64>],
+    bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64),
+) -> Option<f64> {
     let z = lift.from.len() - 1;
     let at_height = |p: &[f64]| {
         let mut p = p.to_vec();
         p[z] = height;
         p
     };
-    let pieces = crate::control::via_pieces(&[at_height(&lift.from), via.to_vec(), at_height(&lift.to)], &lift.to);
-    let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK) else {
-        return false;
-    };
+    let via: Vec<Vec<f64>> =
+        std::iter::once(at_height(&lift.from)).chain(via.iter().cloned()).chain([at_height(&lift.to)]).collect();
+    let pieces = crate::control::via_pieces(&via, &lift.to);
+    let points = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK).ok()?;
     let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
     let width = across.iter().map(|d| d * d).sum::<f64>();
     let above = points.iter().all(|(_, pose)| {
         let along = (0..z).map(|i| (pose[i] - lift.from[i]) * across[i]).sum::<f64>() / width;
         along <= 0.0 || along >= 1.0 || lift.up * (pose[z] - lift.lowest) >= -tolerance - 1e-9
     });
-    let (machine, obstacles, clearance) = bodies;
-    if !above || obstacles.is_empty() {
-        return above;
+    let (machine, obstacles, _) = bodies;
+    if !above {
+        return None;
+    }
+    if obstacles.is_empty() {
+        return Some(f64::INFINITY);
     }
     machine.set_payload_attached(lift.payload);
     let mut check = crate::collision::PlanCheck::default();
     let poses: Vec<Vec<f64>> =
         std::iter::once(lift.from.clone()).chain(points.into_iter().map(|(_, pose)| pose)).collect();
     crate::collision::check_path(&*machine, obstacles, &poses, &mut check);
-    check.clearance >= clearance - 1e-9
+    Some(check.clearance)
 }
 
 /// Shortens the cycle of a config without breaking a verdict. Tries corner blending, then raises speed,
@@ -2342,7 +2523,7 @@ fn clears(
 /// is an improvement. Judged on the verdicts as configured, at most `max_runs` cycles: `optimise_cycle_with` for the
 /// error bands and the energy front.
 pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Result<Optimised, ConfigError> {
-    optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false })
+    optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false, worst: false })
 }
 
 /// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
@@ -2374,6 +2555,9 @@ pub fn optimise_cycle_with(
             let axis = &axis_infos[lift.from.len() - 1];
             (lift.needed, lift.over) = over_obstacles(probe.machine.as_mut(), &obstacles, lift, clearance, axis)
                 .unwrap_or((lift.height, None));
+            let planned = (axis_infos.as_slice(), cycle_s, tolerance);
+            lift.profile = smoothed_profile(probe.machine.as_mut(), &obstacles, lift, clearance, planned)
+                .map(|(points, by)| raised(&points, lift.up * by));
         }
     }
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
@@ -2397,7 +2581,7 @@ pub fn optimise_cycle_with(
         follows: bool,
         second: bool,
         heights: Vec<f64>,
-        vias: Vec<Option<Vec<f64>>>,
+        vias: Vec<Option<Vec<Vec<f64>>>>,
     }
     let build = |setting: &Setting| -> Result<Config, ConfigError> {
         let mut changed = cfg.clone();
@@ -2469,7 +2653,7 @@ pub fn optimise_cycle_with(
             lifts.iter().enumerate().filter(|(k, lift)| lift.over.is_some() && setting.heights[*k] != lift.height)
         {
             higher.heights[k] += lift.up * lack;
-            if let Some(z) = higher.vias[k].as_mut().and_then(|via| via.last_mut()) {
+            for z in higher.vias[k].iter_mut().flatten().filter_map(|point| point.last_mut()) {
                 *z += lift.up * lack;
             }
         }
@@ -2514,7 +2698,7 @@ pub fn optimise_cycle_with(
         for (k, lift) in lifts.iter().enumerate() {
             let z = lift.from.len() - 1;
             let width = (0..z).map(|i| (lift.to[i] - lift.from[i]).powi(2)).sum::<f64>().sqrt();
-            let with_via = |via: Option<Vec<f64>>| {
+            let with_via = |via: Option<Vec<Vec<f64>>>| {
                 let mut out = best.clone();
                 out.vias[k] = via;
                 out
@@ -2524,25 +2708,37 @@ pub fn optimise_cycle_with(
                     for above in [0.5, 0.25, 0.125] {
                         let mut via: Vec<f64> = (0..z).map(|i| 0.5 * (lift.from[i] + lift.to[i])).collect();
                         via.push(best.heights[k] + lift.up * above * width);
-                        candidates.push(with_via(Some(via)));
+                        candidates.push(with_via(Some(vec![via])));
                     }
                     // Over the obstacle that raised the lift, the ends as low as pick and place allow.
                     for above in [0.0, 0.125] {
                         if let Some(over) = &lift.over {
                             let via =
                                 over[..z].iter().copied().chain([lift.needed + lift.up * above * width]).collect();
-                            candidates
-                                .push(Setting { heights: lower(&best, k, lift.lowest).heights, ..with_via(Some(via)) });
+                            candidates.push(Setting {
+                                heights: lower(&best, k, lift.lowest).heights,
+                                ..with_via(Some(vec![via]))
+                            });
                         }
                     }
+                    // The height profile over the obstacles in the way, the ends as low as pick and place allow.
+                    if let Some(points) = &lift.profile {
+                        candidates.push(Setting {
+                            heights: lower(&best, k, lift.lowest).heights,
+                            ..with_via(Some(points.clone()))
+                        });
+                    }
                 }
-                Some(via) => {
-                    for step in [0.125, 1.0 / 32.0] {
-                        for axis in 0..=z {
-                            for sign in [-1.0, 1.0] {
-                                let mut moved = via.clone();
-                                moved[axis] += sign * step * width;
-                                candidates.push(with_via(Some(moved)));
+                // One via point is moved; a profile is kept or dropped.
+                Some(points) => {
+                    for via in points.iter().filter(|_| points.len() == 1) {
+                        for step in [0.125, 1.0 / 32.0] {
+                            for axis in 0..=z {
+                                for sign in [-1.0, 1.0] {
+                                    let mut moved = via.clone();
+                                    moved[axis] += sign * step * width;
+                                    candidates.push(with_via(Some(vec![moved])));
+                                }
                             }
                         }
                     }
@@ -2606,7 +2802,80 @@ pub fn optimise_cycle_with(
         }
     }
     let mut robust = None;
-    if options.robust {
+    if options.robust && options.worst {
+        let (mut corner_runs, last) = (0, accepted.len() - 1);
+        // The checks a setting fails at the worst corner, the least clearance to the obstacles there, and its worst
+        // corners. With `ignore`, the search stops at the first batch of runs that fails a check not in it.
+        let mut at_worst = |setting: &Setting,
+                            ignore: Option<&[&'static str]>,
+                            from: &[Worst]|
+         -> Result<(Vec<&'static str>, f64, Vec<Worst>), ConfigError> {
+            let changed = build(setting)?;
+            let stop = |v: &Verdict| ignore.is_some_and(|ignore| !v.ok && !ignore.contains(&v.check));
+            let (worst, _, runs) = worst_search(entry, &changed, &bounds(&changed)?, from, &stop)?;
+            corner_runs += runs;
+            let least =
+                worst.iter().find(|w| w.verdict.check == "collision").map_or(f64::INFINITY, |w| w.verdict.value);
+            let mut out: Vec<&'static str> = worst.iter().filter(|w| !w.verdict.ok).map(|w| w.verdict.check).collect();
+            out.sort();
+            out.dedup();
+            Ok((out, least, worst))
+        };
+        let (nominal_fails, _, mut from) = at_worst(&best, Some(&[]), &[])?;
+        let excused = match (nominal_fails.is_empty(), last) {
+            (true, _) => Vec::new(),
+            (false, 0) => nominal_fails.clone(),
+            (false, _) => at_worst(&accepted[0].0, None, &from)?.0,
+        };
+        let judged_on = |checks: &[&'static str]| -> Vec<&'static str> {
+            checks.iter().copied().filter(|c| !excused.contains(c)).collect()
+        };
+        // Whether accepted step k passes what it is judged on at the worst corner, or with its lifts over the obstacles
+        // higher by what the corner lacked (less than a millimetre); and its worst corners, where the next search starts.
+        let mut pass = |k: usize, from: &[Worst]| -> Result<(Option<(Setting, CycleLoad)>, Vec<Worst>), ConfigError> {
+            let (fails, least, worst) = at_worst(&accepted[k].0, Some(&excused), from)?;
+            let failing = judged_on(&fails);
+            if failing.is_empty() {
+                return Ok((Some(accepted[k].clone()), worst));
+            }
+            if failing == ["collision"] && clearance - least < 1e-3 {
+                let higher = raised_by(&accepted[k].0, clearance - least + 1e-6);
+                if higher != accepted[k].0
+                    && let Some((load, _)) = judged(&higher).filter(|(_, failed)| failed.is_empty())
+                    && judged_on(&at_worst(&higher, Some(&excused), &worst)?.0).is_empty()
+                {
+                    return Ok((Some((higher, load)), worst));
+                }
+            }
+            Ok((None, worst))
+        };
+        // Bisection over the accepted steps: step 0 (the cycle as configured) passes what it is judged on by definition,
+        // the fastest is judged first. Each search starts from the worst corners of the one before.
+        // shortcut: bisection takes pass or fail to follow the steps (a faster step fails where a slower one does); where
+        // it does not, the result still passes but may be slower than a step that passes, judge them all if that matters.
+        let (mut lo, mut hi, mut result) = (0, last, accepted[0].clone());
+        if nominal_fails.is_empty() {
+            (lo, result) = (last, (best.clone(), best_load.clone()));
+        } else if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
+            let (passed, worst) = pass(last, &from)?;
+            from = worst;
+            if let Some(passed) = passed {
+                (lo, result) = (last, passed);
+            }
+        }
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            let (passed, worst) = pass(mid, &from)?;
+            from = worst;
+            match passed {
+                Some(passed) => (lo, result) = (mid, passed),
+                None => hi = mid,
+            }
+        }
+        let (nominal_duration, steps_back) = (best_load.duration, last - lo);
+        (best, best_load) = result;
+        robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: corner_runs, worst: true });
+    } else if options.robust {
         let mut band_runs = 0;
         // The checks a setting fails in the bands, each once, and the least clearance to the obstacles there.
         let mut fails = |setting: &Setting| -> Result<(Vec<&'static str>, f64), ConfigError> {
@@ -2658,7 +2927,7 @@ pub fn optimise_cycle_with(
         };
         let (nominal_duration, steps_back) = (best_load.duration, last - k);
         (best, best_load) = result;
-        robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: band_runs });
+        robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: band_runs, worst: false });
     }
     let mut front = Vec::new();
     if options.pareto {

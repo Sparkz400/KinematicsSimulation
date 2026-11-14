@@ -12,6 +12,7 @@ cli-error-worst = --worst braucht --bands und geht nicht zusammen mit --samples 
 cli-error-axis-index = --axis-index nimmt die Nummer einer Achse der Maschine, eine ganze Zahl von 0 bis { $arg }
 cli-worst-runs = Für die Suche nach den ungünstigsten Ecken simulierte Zyklen: { $arg }
 cli-optimise-runs = Simulierte Zyklen: Suche + Fehlerbänder { $arg }
+cli-optimise-runs-worst = Simulierte Zyklen: Suche + ungünstigste Ecken { $arg }
 cli-report-pass = Bericht geschrieben, alle Prüfungen bestanden: { $arg }
 cli-report-fail = Bericht geschrieben, Prüfungen nicht bestanden: { $arg }
 cli-planned-clearance = Geplante Bahn: kleinster Abstand zu den Hindernissen { $arg } mm
