@@ -31,8 +31,8 @@ What is not built yet, from the "Left open" lists at the end of each section of 
   trace is not followed.
 - Optimiser: the robust check uses the error bands one bound at a time, not the worst corner of all of them; one lift
   height per traverse, not a height profile over the obstacles.
-- Machine files: `tool_flex` and `belt_wrap` (both need geometry a netlist does not have), linkages and worm gears;
-  the catalogue search sizes the shared motor only.
+- Machine files: linkages; `belt_wrap` beside a screw, rack, linear motor or rotary; a self-locking worm that sticks
+  (and takes the motor's push to lower a load) in place of fading in over 0.5 W.
 
 ## Front ends
 

@@ -1898,3 +1898,83 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## Machine files: the belt's wrap, a leaning axis, worm gears and a search per motor (14 November)
+
+What, how, test:
+
+- **Belt wrap from geometry** (`effects.belt_wrap`, off in every shipped file). Pulleys and idlers get a `clockwise`
+  field (Bool, default false: the sense the belt runs round them, seen from the front, followed along the routes). Per
+  motor, the wheels before and after its pulley along the belt are the last point but one of the route of the section
+  that ends at it and the second of the route of the section that starts there (`machine::wrap_neighbours`); at the pose
+  their places are the 3D view's (`at_m`, an idler from its body, a body as the clamp). `geometry::wrap` takes the
+  straight runs as the tangents of circles with radii signed by their sense (t = cos a e + sin a e_left, sin a =
+  -(rho_b - rho_a) / D) and returns how far the belt turns round the pulley, 0 to 2 pi; for the crates' layouts that is
+  `mech::wrap_angle`. `Machine::belt_wraps` gives it (the analysis takes the smallest of the pass for the tooth load) and
+  `after_step` sets each tooth-jump law's climb-out from it, as the crates do. Refused by name: a motor without a pulley
+  (`not with a screw, rack, linear motor or rotary yet`), a pulley that does not end one route and start another, a
+  wheel without `at_m`. The T-gantry file now places its pulleys span_min_m beyond the ends of X at the carriage's
+  height (the crate's layout), its carriage idlers clockwise.
+- **A leaning axis** (`machine.lean`, `effects.tool_flex`, off in machines/t-gantry.toml as compared, on in the crate):
+  body, horizontal axis it moves with, `com_drop_m`, `tool_drop_m`, optional `lever_axis`, the guide's lateral and tilt
+  stiffness and the damping (numbers or paths: the file names `[tool_flex]` and `geometry.z_*_drop_m`). In the elastic
+  model it adds one state w after the frame's: the axes' mass matrix grows by a row and column, the body's mass coupling
+  w to its axis, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], and the lever axis takes
+  -w^2 / 2 dk/dz (`ConfigMachine::lean_acc`, `geometry::flex_at` as the crate's `flex_at`). Energy (m w' (v_a + w'/2),
+  k w^2 / 2), `power.tool_flex`, `axis.<a>.tool_deflection`, the tool at the tip (`tool_state`, and the process power on
+  it), the body's inertia in the torque breakdown, and the belt mode's coordinate. `UNSUPPORTED_EFFECTS` is gone; the
+  effect without the node is refused `machine.lean (effects.tool_flex)`.
+- **Worm gears** (`machine.worm`: gearbox, `ratio` in place of the gearbox's, `efficiency`, `back_efficiency`; counted
+  with `effects.gearbox_efficiency` as the kit's table counts its worm, its gearbox then keeping only a screw's or rack's
+  share). `worm::factors` gives the factors on the output's and the rotor's torque at the power t w through the output,
+  faded over the gearbox's 0.5 W: forward eta^x and 1, back eta_back^x and 1; a self-locking worm (eta_back <= 0)
+  forward eta^x and x, back 1 and 0, so a back-driving load never reaches its rotor and at rest it holds with no motor
+  torque (`equilibrium` gives 0). Elastic: `gear_torque` and `gear_loss_power` wrap the gearbox's. Rigid: with a
+  self-locking worm `rigid_locking` solves the outputs beside the accelerations ([fixed, -K^T; out R K, rotor] [a; o]),
+  so a rotor factor of 0 stays solvable; without one the old elimination runs as before (loss = output / rotor factor).
+  A drag in proportion to the gear's torque for eta_back < 0 was tried first and dropped: driven back it has no
+  consistent rigid solution (a friction paradox); below 0 counts as 0 (`// shortcut:` in worm.rs).
+- **A search per motor**: `sim-cli search --machine-file FILE --motor-id ID` (not with `--axes`) runs
+  `catalog::search_motor`: each candidate goes into `[parts.ID]` (`catalog::with_motor_part`, which also retunes
+  `drive.ID.velocity_kp_nm_s_rad` by the square root of the ratio of the inertia that motor alone turns, its column of
+  the feedforward, times that of its rotor's), the other motors stay, `--gearboxes` fits that motor's own ratio, and the
+  cost is one motor's weight. An unknown id is refused. `cli-usage` (en, de) names it.
+- **Netlist**: the lists are taken by name from `NODES` (no fixed 14-array to grow), the per-field type check runs in
+  the node loop, and the new nodes are read in functions of their own (`worm_node`, `lean_node`).
+
+Tests (`crates/sim-machines/tests/machine_file_geometry.rs`, and `machine_files.rs`):
+
+- the wrap by hand on the single axis with an offset idler (r 0.012 m, 0.3 along and 0.06 below the pulley, inner
+  tangent: lean 0.1973956 - 0.1047869 = 0.0926086 rad) and a clamp 0.03 above the pulley's centre (lean 0.0498344 rad
+  at x = 0, 0.0099987 at x = 0.8 m): 2.9991496 and 3.0389854 rad; a broken route refused by name; `geometry::wrap`'s
+  unit test (level runs give pi; mirrored and reversed layouts the same wrap);
+- the T-gantry file against its crate to 1e-9 with `tool_flex` and with `belt_wrap` switched on (elastic and rigid, and
+  with all effects together), the wraps compared too: `the_effects_of_a_machine_file_are_its_crates` (the state gap of
+  a lean without a frame is the crate's frame, 6 and 14);
+- the worm against the joint kit's table with `table.gear = "worm"` (eta = tan 8 deg / tan(8 deg + atan(0.04 /
+  cos 20 deg)) = 0.762938 both ways), rigid and elastic, driving and braking: rates, `gearbox.1.output_torque`,
+  `power.gearbox_1`, `motor.1.torque_inertia` to 1e-9;
+- by hand, rigid, process torque -10 N m on the table (4.5 kg m2) behind ratio 40 (R = 1600 * 3.1e-4 = 0.496 kg m2):
+  a worm with eta_back 0.5 turning back at -10 rad/s accelerates -10 / (4.5 + 0.992) = -1.820830 rad/s2, from rest
+  -10 / 4.996 = -2.001601; a self-locking one 0 at rest and at -10 rad/s, its gear taking 10 N m; elastic with the gear
+  twisted by 10 / 67000 rad the table stands for both, the turning worm's rotor turns back at 0.25 / 3.1e-4 =
+  806.4516 rad/s2, the locking one's stands; a worm on a missing gearbox and an efficiency above 1 refused; the factors'
+  unit test (tanh(1) = 0.761594 and 0.8^0.761594 = 0.843711 at 0.5 W);
+- the XYZ portal's Z motor searched alone with a 1FK2103-2AH: `[parts.mz]` gives rotor 9.3e-6 kg m2, X and Y keep the
+  shared rotor and gain 0.04, the Z gain retuned below its 0.01, the candidate's mass and cost 1.18 kg (one motor);
+- refusals with key and line: `tool_flex` without the lean node, `belt_wrap` with a pulley without `at_m`, a lean's
+  unknown lever axis (line of its `lever_axis`).
+
+Only the schema test was run with cargo test (`MACHINE_SCHEMA_WRITE=1`). The tests above were compiled into a
+throwaway example and run once in release before the commit; all passed. clippy and fmt clean.
+
+Left open:
+
+- `belt_wrap` beside a screw, rack, linear motor or rotary (wraps are per motor); a pulley riding on a body; section
+  lengths not checked against the places.
+- One lean per file, along a horizontal axis; `Machine::modes` of a file gives the belt mode only (it includes the
+  lean), not the crate's two-mass modes with their damping.
+- A self-locking worm lowering a load takes no motor torque (eta_back < 0 counts as 0) and fades in over 0.5 W instead
+  of sticking; a worm's efficiencies do not follow its temperature; thermal feedback leaves a worm motor's gearbox alone.
+- The per-motor search keeps the shared `[parts]`; a shared `belt` or `axis` there makes `motor_config` refuse any
+  per-motor part (as before).

@@ -103,10 +103,12 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
         machine.set_part_temperatures(rises);
     }
     // The crate's elastic T-gantry keeps the states of its frame and tool flex (position and rate, 6 7 and 14 15)
-    // with those effects off; the file machine has its frame's, where it sways, at 6 and 13 (the crate's 14),
-    // and no tool flex. Elsewhere the states are laid out alike.
+    // with those effects off; the file machine has its frame's where it sways and its leaning Z axis's where that
+    // leans, in that order after the rotors. Elsewhere the states are laid out alike.
+    let on = |effect: &str| cb.bool(&format!("effects.{effect}")).unwrap_or(false);
     let gaps: &[usize] = match a.state_len() - b.state_len() {
         0 => &[],
+        2 if on("tool_flex") && !on("frame_compliance") => &[6, 14],
         2 => &[7, 15],
         _ => &[6, 7, 14, 15],
     };
@@ -132,6 +134,7 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
         a.inverse(pose, &mut ma);
         b.inverse(pose, &mut mb);
         assert_close(&format!("{what}: inverse"), &ma, &mb, 1e-12);
+        assert_close(&format!("{what}: belt wraps"), &a.belt_wraps(pose), &b.belt_wraps(pose), 1e-9);
         let mut back = vec![0.0; n];
         b.forward(&mb, &mut back);
         assert_close(&format!("{what}: forward"), pose, &back, 1e-12);
@@ -192,10 +195,11 @@ fn the_netlist_machines_are_their_crates() {
     }
 }
 
-/// The effects machine files have had since 13 November, each switched on in the T-gantry crate and its file (which
-/// names its idlers, frame, cable chain and spans), elastic and rigid, and all of them together: the same machine as
-/// above, to 1e-9. Their hand checks are the crate's (crates/machine-t-gantry/src/tests.rs); the file's netlist has to
-/// give the same numbers. The parts warm by 10 to 40 K for the thermal feedback.
+/// The effects machine files have had since 13 November, and since 14 November the leaning Z axis and the belt's wrap,
+/// each switched on in the T-gantry crate and its file (which names its idlers, frame, cable chain, spans, leaning Z
+/// axis and the places of its pulleys and idlers), elastic and rigid, and all of them together: the same machine as
+/// above, to 1e-9, and the same wraps. Their hand checks are the crate's (crates/machine-t-gantry/src/tests.rs); the
+/// file's netlist has to give the same numbers. The parts warm by 10 to 40 K for the thermal feedback.
 #[test]
 fn the_effects_of_a_machine_file_are_its_crates() {
     let effects = [
@@ -206,6 +210,8 @@ fn the_effects_of_a_machine_file_are_its_crates() {
         "thermal_feedback",
         "belt_tooth_jump",
         "belt_span_vibration",
+        "tool_flex",
+        "belt_wrap",
     ];
     let rises = [10.0, 20.0, 30.0, 40.0];
     for rigid in [false, true] {
@@ -410,10 +416,22 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     assert_eq!(e, ConfigError::Invalid("machine.body[carriage].mass_kg".into()));
     assert_eq!(line, Some(line_with(&text, "mass_kg = \"mass.carriage_kg\"")));
 
-    // The effect machine files do not have, and a later version of the format.
-    let (e, line) = refused(one("tool_flex = false", "tool_flex = true"));
-    assert_eq!(e, ConfigError::Invalid("effects.tool_flex (not in machine files yet)".into()));
-    assert_eq!(line, Some(line_with(&text, "tool_flex = false")));
+    // An effect whose node the file leaves out, a wrap without the places it is worked out from, and a later version
+    // of the format.
+    let without_lean = |t: &str| {
+        let start = t.find("[[machine.lean]]").unwrap();
+        let end = start + t[start..].find("\n\n").unwrap();
+        format!("{}{}", &t[..start], &t[end..]).replacen("tool_flex = false", "tool_flex = true", 1)
+    };
+    let (e, _) = refused(without_lean);
+    assert_eq!(e, ConfigError::Missing("machine.lean (effects.tool_flex)".into()));
+    let (e, _) = refused(|t: &str| {
+        t.replacen("belt_wrap = false", "belt_wrap = true", 1).replacen("at_m = [1.15, -0.05, 0.06]\n", "", 1)
+    });
+    assert_eq!(e, ConfigError::Invalid("effects.belt_wrap (pulley_b has no at_m)".into()));
+    let (e, line) = refused(one("lever_axis = \"z\"\nlateral", "lever_axis = \"y\"\nlateral"));
+    assert_eq!(e, ConfigError::Invalid("machine.lean[z_lean].lever_axis = \"y\"".into()));
+    assert_eq!(line, Some(line_with(&text, "lateral_stiffness_n_m = \"tool_flex") - 1));
     let (e, line) = refused(one("[machine]\nversion = 1", "[machine]\nversion = 2"));
     assert_eq!(e, ConfigError::Version("machine.version".into()));
     assert_eq!(line, Some(text.lines().position(|l| l == "[machine]").unwrap() + 2));

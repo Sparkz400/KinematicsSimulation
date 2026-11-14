@@ -94,7 +94,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `torque_ripple` | T E S | on | Torque ripple (proportional to torque) and cogging (independent of it) |
 | `tooth_meshing` | T E S | on | A small periodic force at the tooth-pass frequency |
 | `frame_compliance` | T E | on | One spring-mass mode of the frame in X |
-| `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip |
+| `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
 | `idlers` | T E | off | Inertia and bearing friction of the five idlers |
 | `cable_chain` | T E S | off | A cable chain whose moving mass grows with x, plus drag. On an inclined single axis the moving run is lifted too |
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
@@ -122,7 +122,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `thermal_feedback` | T E S | off | Guide friction and gearbox losses follow the parts' temperatures, the belt's EA the ambient temperature (`[thermal_feedback]`, see the [model reference](model-reference.md#temperature-feedback)). Warms the parts as `part_heating` does, whether that is on or not. Replaces `temperature`: its hand-set factors are not used while this is on. Off by default, so that earlier results stay as they were |
 | `belt_tooth_jump` | T E S | off | Elastic model: the belt's teeth climb out of a driven pulley's grooves when the effective pull there exceeds `belt.tooth_jump_factor` · `ratings.belt_teeth_in_mesh` · pitch / radius times the slack side's tension, and the belt slides over the pulley until it falls into the next groove (a jump) or back. Signals `pulley.<motor>.tooth_jumps`, `.tooth_slip`, `power.tooth_jump`; check `belt-tooth-jump`. Needs `belt_mass`. See the [model reference](model-reference.md#belt-tooth-jump). Off by default |
 | `belt_span_vibration` | T E S | off | The first sideways mode of each free belt span, a string at its section's live tension (signals `belt.span.<i>.frequency`), against the tooth mesh and the motors' ripple and cogging (`belt.span_detuning`); check `belt-span-resonance` against `ratings.belt_span_resonance_band` at steady speed. Signals and a check only. Off by default |
-| `belt_wrap` | T E S | off | The teeth in mesh on each driven pulley from the angle the belt wraps it at the pose, found from the places of the pulleys and idlers: wrap · r / `belt.tooth_pitch_m`, in place of `ratings.belt_teeth_in_mesh`, in the tooth-jump law (the climb-out limit becomes `belt.tooth_jump_factor` · wrap) and the tooth load (the smallest wrap of the pass). In these machines the spans leave the motor pulleys level at every pose: half a turn, 12.6 teeth (T S) and 10 (E). See the [model reference](model-reference.md#belt-wrap). Off by default, so that earlier results stay as they were |
+| `belt_wrap` | T E S | off | The teeth in mesh on each driven pulley from the angle the belt wraps it at the pose, found from the places of the pulleys and idlers (in a machine file their `at_m` and `clockwise` along the sections' routes, see [machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis); off in `machines/t-gantry.toml`): wrap · r / `belt.tooth_pitch_m`, in place of `ratings.belt_teeth_in_mesh`, in the tooth-jump law (the climb-out limit becomes `belt.tooth_jump_factor` · wrap) and the tooth load (the smallest wrap of the pass). In these machines the spans leave the motor pulleys level at every pose: half a turn, 12.6 teeth (T S) and 10 (E). See the [model reference](model-reference.md#belt-wrap). Off by default, so that earlier results stay as they were |
 | `torque_saturation` | T E S | on | The torque constant falls towards the maximum current |
 | `drive_delay` | T E S | on | Computation delay of the current and the velocity loop, in whole cycles |
 | `dc_link` | T E S | on | A simulated DC link per drive with capacitance, braking chopper, resistor and overvoltage trip, built from `[ratings]`. The ratings of T and S are placeholders. Off, the DC link voltage stays at `drive.bus_voltage_v` and the braking checks are estimates |
@@ -247,7 +247,7 @@ T-gantry, and machine files whose `machine.frame` names these values. With `effe
 
 ## `[tool_flex]`
 
-T-gantry only. With `effects.tool_flex`: the guide of the Z axis gives way sideways and in tilt.
+T-gantry, and machine files whose `machine.lean` node names these values (`machines/t-gantry.toml`). With `effects.tool_flex`: the guide of the Z axis gives way sideways and in tilt.
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |

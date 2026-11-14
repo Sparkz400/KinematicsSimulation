@@ -142,7 +142,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto"],
-        Some("search") => &["--series", "--gearboxes", "--axes"],
+        Some("search") => &["--series", "--gearboxes", "--axes", "--motor-id"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis-index", "--size", "--time"],
@@ -728,7 +728,9 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// PREFIX` limits it to article numbers starting that way, `--supply` picks 230v or 400v (S210) or s120 (the S120
 /// motors and Motor Modules). `--gearboxes SERIES` (e.g. NRK) also tries each motor with the fitting gearboxes of
 /// that series, on a machine that has a gearbox. `--axes` tries every motor on every axis of the catalogue of the
-/// machine's kind as well, the axis's weight in the cost. Says on the error stream how many candidates the
+/// machine's kind as well, the axis's weight in the cost. `--motor-id ID` sizes one motor of a machine with several (a
+/// machine file's): each candidate becomes that motor's own `[parts.ID]`, the other motors stay as the config has them,
+/// and the cost is that motor's alone (`catalog::search_motor`); not with `--axes`. Says on the error stream how many candidates the
 /// catalogue numbers ruled out before any cycle was simulated (they are in the table too) and how long the search
 /// took on how many processors.
 fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
@@ -739,7 +741,12 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             article.starts_with(prefix)
         });
     let started = std::time::Instant::now();
-    let found = if args.flag("--axes") {
+    let found = if let Some(motor) = args.option("--motor-id") {
+        if args.flag("--axes") {
+            return Err(Failure("cli-usage", String::new()));
+        }
+        sim_components::catalog::search_motor(entry, &cfg, supply, &wanted, gearboxes, motor)?
+    } else if args.flag("--axes") {
         sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes)
     } else {
         sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)

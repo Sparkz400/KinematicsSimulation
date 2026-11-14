@@ -51,6 +51,12 @@ const fn field(name: &'static str, kind: Kind, required: bool, doc: &'static str
 const ID: Field = field("id", Kind::Id, true, "Stable id of the node; signals and other nodes refer to it.");
 const POS: Field =
     field("pos", Kind::Position, false, "Where a node editor draws the node, [x, y]. Not read by the simulation.");
+const CLOCKWISE: Field = field(
+    "clockwise",
+    Kind::Bool,
+    false,
+    "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+);
 
 /// The node lists of `[machine]`, in the order they are read, each with its fields.
 pub const NODES: &[(&str, &str, &[Field])] = &[
@@ -104,8 +110,9 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis.",
+                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z), which the wrap is worked out from.",
             ),
+            CLOCKWISE,
             POS,
         ],
     ),
@@ -224,8 +231,9 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m (from its body where it has one).",
+                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z).",
             ),
+            CLOCKWISE,
             POS,
         ],
     ),
@@ -343,6 +351,44 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "lean",
+        "A body leaning on its carriage along a horizontal axis (effects.tool_flex, elastic model only): its centre of mass moves sideways by u against the guide, which gives way sideways and in tilt, and the tool tip below it moves with it. At most one.",
+        &[
+            ID,
+            field("body", Kind::Ref("body"), true, "The body that leans; it moves with axis."),
+            field("axis", Kind::Ref("axis"), true, "The horizontal axis it leans along."),
+            field("com_drop_m", Kind::Number, true, "Its centre of mass below the guide with lever_axis at 0, m."),
+            field("tool_drop_m", Kind::Number, true, "The tool tip below the guide with lever_axis at 0, m."),
+            field(
+                "lever_axis",
+                Kind::Ref("axis"),
+                false,
+                "An axis whose travel raises both towards the guide (shortens the lever).",
+            ),
+            field("lateral_stiffness_n_m", Kind::Number, true, "The guide's stiffness sideways, N/m."),
+            field("tilt_stiffness_nm_rad", Kind::Number, true, "The guide's stiffness in tilt, N m/rad."),
+            field("damping_n_s_m", Kind::Number, true, "The damping of the lean at the centre of mass, N s/m."),
+            POS,
+        ],
+    ),
+    (
+        "worm",
+        "A worm gear: the gearbox it names is a worm stage of this ratio, which loses by its forward efficiency while the motor drives and by its back efficiency while the load drives it back; with a back efficiency of 0 or less it locks itself. The efficiencies count with effects.gearbox_efficiency on.",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that is the worm stage; one worm per gearbox."),
+            field("ratio", Kind::Number, true, "Its ratio (wheel teeth per worm start), in place of the gearbox's."),
+            field("efficiency", Kind::Number, true, "Driven by the worm, above 0 and at most 1."),
+            field(
+                "back_efficiency",
+                Kind::Number,
+                true,
+                "Driven back by the wheel, at most 1; 0 or less locks itself.",
+            ),
+            POS,
+        ],
+    ),
 ];
 
 pub struct AxisNode {
@@ -373,9 +419,34 @@ pub struct MotorNode {
     pub inertia: f64,
     pub pulley: String,
     pub at: Option<[f64; 3]>,
+    /// The belt runs round its pulley clockwise (`machine.pulley.clockwise`).
+    pub clockwise: bool,
     pub transmission: Transmission,
     /// The axis its screw, rack, linear motor or rotary drives; `None` for a belt.
     pub axis: Option<usize>,
+    /// Its gearbox is a worm stage.
+    pub worm: Option<WormNode>,
+}
+
+/// A worm stage (`machine.worm`): its ratio and its efficiencies driven forward and back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WormNode {
+    pub ratio: f64,
+    pub efficiency: f64,
+    pub back_efficiency: f64,
+}
+
+/// A body leaning on its carriage along a horizontal axis (`machine.lean`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeanNode {
+    pub body: usize,
+    pub axis: usize,
+    pub com_drop: f64,
+    pub tool_drop: f64,
+    pub lever_axis: Option<usize>,
+    pub lateral: f64,
+    pub tilt: f64,
+    pub damping: f64,
 }
 
 pub struct SectionNode {
@@ -406,6 +477,7 @@ pub struct IdlerNode {
     pub friction: f64,
     pub body: Option<usize>,
     pub at: Option<[f64; 3]>,
+    pub clockwise: bool,
 }
 
 pub struct FrameNode {
@@ -456,6 +528,7 @@ pub struct Netlist {
     pub idlers: Vec<IdlerNode>,
     pub frame: Option<FrameNode>,
     pub spans: Vec<SpanNode>,
+    pub lean: Option<LeanNode>,
     /// Every dotted path a number field named: these keys of the file are in use.
     pub refs: Vec<String>,
     /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
@@ -468,7 +541,6 @@ pub struct Netlist {
 struct Node<'a> {
     table: &'a Table,
     path: String,
-    fields: &'static [Field],
 }
 
 impl Node<'_> {
@@ -554,7 +626,7 @@ impl Netlist {
             };
             for (n, item) in items.iter().enumerate() {
                 let table = item.as_table().ok_or_else(|| ConfigError::Type(format!("machine.{list}[#{}]", n + 1)))?;
-                let mut node = Node { table, path: format!("machine.{list}[#{}]", n + 1), fields };
+                let mut node = Node { table, path: format!("machine.{list}[#{}]", n + 1) };
                 let id = node.required("id")?.as_str().ok_or_else(|| ConfigError::Type(node.at("id")))?;
                 if !valid_id(id) {
                     return Err(ConfigError::Invalid(format!(
@@ -586,26 +658,34 @@ impl Netlist {
                         return Err(ConfigError::Type(node.at("pos")));
                     }
                 }
+                // A field of the schema with the wrong type, which the reading below may pass over.
+                for f in fields.iter() {
+                    let Some(value) = node.get(f.name) else { continue };
+                    let ok = match f.kind {
+                        Kind::Id | Kind::Key | Kind::Table | Kind::Ref(_) => value.is_str(),
+                        Kind::Bool => value.is_bool(),
+                        Kind::Refs(_) | Kind::Route(_) => value.is_array(),
+                        _ => true,
+                    };
+                    if !ok {
+                        return Err(ConfigError::Type(node.at(f.name)));
+                    }
+                }
                 nodes.push(node);
             }
             lists.push(nodes);
         }
-        let [
-            axes,
-            motors,
-            gearboxes,
-            pulleys,
-            sections,
-            bodies,
-            guides,
-            idlers,
-            frames,
-            spans,
-            screws,
-            racks,
-            linears,
-            rotaries,
-        ] = <[Vec<Node>; 14]>::try_from(lists).ok().expect("one list per entry of NODES");
+        // The nodes of a list by its name in `NODES`.
+        let mut take = |list: &str| {
+            let at = NODES.iter().position(|(name, ..)| *name == list).expect("a list of NODES");
+            std::mem::take(&mut lists[at])
+        };
+        let (axes, motors, gearboxes, pulleys, sections) =
+            (take("axis"), take("motor"), take("gearbox"), take("pulley"), take("section"));
+        let (bodies, guides, idlers, frames, spans) =
+            (take("body"), take("guide"), take("idler"), take("frame"), take("span"));
+        let (screws, racks, linears, rotaries) = (take("screw"), take("rack"), take("linear_motor"), take("rotary"));
+        let (leans, worms) = (take("lean"), take("worm"));
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
@@ -685,6 +765,7 @@ impl Netlist {
         for motor in &motors {
             let id = id_of(motor);
             let key = motor.text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
+            let mut worm = None;
             let (node, transmission) =
                 match (&refers(&gearboxes, "motor", &id)[..], &refers(&linears, "motor", &id)[..]) {
                     ([], [l]) => {
@@ -693,6 +774,7 @@ impl Netlist {
                     ([g], []) => {
                         let gearbox = &gearboxes[*g];
                         let gearbox_id = id_of(gearbox);
+                        worm = worm_node(cfg, &worms, &gearbox_id, &mut refs)?;
                         let outputs: Vec<(usize, usize)> = [&pulleys, &screws, &racks, &rotaries]
                             .into_iter()
                             .enumerate()
@@ -731,8 +813,10 @@ impl Netlist {
                                     inertia,
                                     pulley: id_of(pulley),
                                     at: pulley.point("at_m")?,
+                                    clockwise: pulley.bool("clockwise")?,
                                     transmission: Transmission::Belt,
                                     axis: None,
+                                    worm,
                                 });
                                 continue;
                             }
@@ -789,8 +873,10 @@ impl Netlist {
                 inertia: 0.0,
                 pulley: String::new(),
                 at: None,
+                clockwise: false,
                 transmission,
                 axis: Some(axis),
+                worm,
             });
         }
         for gearbox in &gearboxes {
@@ -802,6 +888,7 @@ impl Netlist {
             (&racks, "gearbox", &gearboxes),
             (&rotaries, "gearbox", &gearboxes),
             (&linears, "motor", &motors),
+            (&worms, "gearbox", &gearboxes),
         ] {
             for node in nodes {
                 find(targets, node, field, node.text(field)?.unwrap_or_default())?;
@@ -968,6 +1055,7 @@ impl Netlist {
                 friction,
                 body,
                 at: node.point("at_m")?,
+                clockwise: node.bool("clockwise")?,
             });
         }
 
@@ -1017,27 +1105,7 @@ impl Netlist {
                 axes: coefficients(node, "axes", &mut refs)?,
             });
         }
-        // Checked here: a field of the schema with the wrong type that the reading above passed over.
-        for node in [
-            &axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws,
-            &racks, &linears, &rotaries,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for f in node.fields {
-                let Some(value) = node.get(f.name) else { continue };
-                let ok = match f.kind {
-                    Kind::Id | Kind::Key | Kind::Table | Kind::Ref(_) => value.is_str(),
-                    Kind::Bool => value.is_bool(),
-                    Kind::Refs(_) | Kind::Route(_) => value.is_array(),
-                    _ => true,
-                };
-                if !ok {
-                    return Err(ConfigError::Type(node.at(f.name)));
-                }
-            }
-        }
+        let lean = lean_node(cfg, &leans, &axes, &bodies, &axis_nodes, &body_nodes, &mut refs)?;
         if let Some(i) = (0..axis_nodes.len()).find(|&i| !axis_nodes[i].rotary && !body_nodes.iter().any(|b| b.axes[i]))
         {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
@@ -1064,10 +1132,96 @@ impl Netlist {
             idlers: idler_nodes,
             frame,
             spans: span_nodes,
+            lean,
             refs,
             values,
         })
     }
+}
+
+/// The worm stage on the gearbox `gearbox` (`machine.worm`), where one names it: its ratio above 0, its efficiency
+/// above 0 and at most 1, its back efficiency at most 1 (0 or less locks itself).
+fn worm_node(cfg: &Config, worms: &[Node], gearbox: &str, refs: &mut Vec<String>) -> Result<Option<WormNode>> {
+    let mine: Vec<&Node> =
+        worms.iter().filter(|w| w.table.get("gearbox").and_then(Value::as_str) == Some(gearbox)).collect();
+    let node = match mine[..] {
+        [] => return Ok(None),
+        [node] => node,
+        [_, second, ..] => {
+            return Err(ConfigError::Invalid(format!("{} (one worm per gearbox)", second.at("gearbox"))));
+        }
+    };
+    let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+    let worm = WormNode {
+        ratio: value("ratio", refs)?,
+        efficiency: value("efficiency", refs)?,
+        back_efficiency: value("back_efficiency", refs)?,
+    };
+    if worm.ratio <= 0.0 {
+        return Err(ConfigError::Invalid(node.at("ratio")));
+    }
+    if worm.efficiency <= 0.0 || worm.efficiency > 1.0 {
+        return Err(ConfigError::Invalid(format!("{} (above 0, at most 1)", node.at("efficiency"))));
+    }
+    if worm.back_efficiency > 1.0 {
+        return Err(ConfigError::Invalid(format!("{} (at most 1)", node.at("back_efficiency"))));
+    }
+    Ok(Some(worm))
+}
+
+/// The leaning body (`machine.lean`), at most one: on a horizontal straight axis the body moves with, stiffnesses above
+/// 0, damping not below.
+fn lean_node(
+    cfg: &Config,
+    leans: &[Node],
+    axes: &[Node],
+    bodies: &[Node],
+    axis_nodes: &[AxisNode],
+    body_nodes: &[BodyNode],
+    refs: &mut Vec<String>,
+) -> Result<Option<LeanNode>> {
+    let node = match leans {
+        [] => return Ok(None),
+        [node] => node,
+        [_, second, ..] => return Err(ConfigError::Invalid(format!("{} (one lean at most)", second.path))),
+    };
+    let find = |nodes: &[Node], name: &str, id: &str| {
+        nodes
+            .iter()
+            .position(|n| n.table["id"].as_str() == Some(id))
+            .ok_or_else(|| ConfigError::Invalid(format!("{}.{name} = \"{id}\"", node.path)))
+    };
+    let body = find(bodies, "body", node.text("body")?.unwrap_or_default())?;
+    let axis = find(axes, "axis", node.text("axis")?.unwrap_or_default())?;
+    let lever_axis = node.text("lever_axis")?.map(|id| find(axes, "lever_axis", id)).transpose()?;
+    // A lean along a sloped axis would move the body's weight with it.
+    if axis_nodes[axis].incline_deg != 0.0 || axis_nodes[axis].rotary {
+        return Err(ConfigError::Invalid(format!("{} (a body leans along a horizontal axis)", node.at("axis"))));
+    }
+    if !body_nodes[body].axes[axis] {
+        return Err(ConfigError::Invalid(format!("{} (the body does not move with axis)", node.at("body"))));
+    }
+    let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+    let lean = LeanNode {
+        body,
+        axis,
+        com_drop: value("com_drop_m", refs)?,
+        tool_drop: value("tool_drop_m", refs)?,
+        lever_axis,
+        lateral: value("lateral_stiffness_n_m", refs)?,
+        tilt: value("tilt_stiffness_nm_rad", refs)?,
+        damping: value("damping_n_s_m", refs)?,
+    };
+    for (name, bad) in [
+        ("lateral_stiffness_n_m", lean.lateral <= 0.0),
+        ("tilt_stiffness_nm_rad", lean.tilt <= 0.0),
+        ("damping_n_s_m", lean.damping < 0.0),
+    ] {
+        if bad {
+            return Err(ConfigError::Invalid(node.at(name)));
+        }
+    }
+    Ok(Some(lean))
 }
 
 /// The JSON Schema (draft 2020-12) of a machine file, from `NODES`, as a value for a JSON writer (`sim_machines`

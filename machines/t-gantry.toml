@@ -1,7 +1,7 @@
 # The T-gantry of crates/machine-t-gantry as a machine file: the same values, with the machine wired up in [machine]
 # at the end instead of in Rust. crates/sim-machines/tests/machine_files.rs checks it against the crate, with each of
-# the effects off by default switched on too. The crate has its frame on, and its tool flex, which machine files do not
-# have (so the tool flex table is left out); here the frame is off, as compared.
+# the effects off by default switched on too. The crate has its frame and its tool flex on; here both are off, as
+# compared (machine.frame and machine.lean give them, with effects.frame_compliance and effects.tool_flex).
 # Placeholder values; units are in the field names. See docs/machine-files.md.
 format_version = 1
 # Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), or as
@@ -47,7 +47,7 @@ torque_ripple = true
 tooth_meshing = true
 # The frame sways along X on its spring ([frame], machine.frame); elastic model only.
 frame_compliance = false
-# The Z axis leaning on its carriage: not in machine files (see docs/machine-files.md); has to stay off.
+# The Z axis leaning on its carriage ([tool_flex], machine.lean); elastic model only.
 tool_flex = false
 # The idlers' inertia and bearing friction ([idler], machine.idler).
 idlers = false
@@ -88,6 +88,10 @@ belt_tooth_jump = false
 # excites (tooth mesh, torque ripple, cogging); judged at steady speed against ratings.belt_span_resonance_band.
 # Signals and a check only, nothing acts back on the motion. Off by default.
 belt_span_vibration = false
+# The teeth in mesh on each driven pulley from the angle the belt wraps it at the pose, found from the places of pulleys
+# and idlers (at_m, clockwise): wrap r / tooth pitch, in place of ratings.belt_teeth_in_mesh, in the tooth-jump law and
+# the belt's tooth load. Off by default (half a turn on both pulleys at every pose here, as in the crate).
+belt_wrap = false
 torque_saturation = true
 drive_delay = true
 # The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.
@@ -219,6 +223,13 @@ inertia_kgm2 = 1.0e-4
 mass_kg = 30.0
 stiffness_n_m = 7.4e5
 damping_n_s_m = 190.0
+
+# With effects.tool_flex: the Z axis leans against the carriage when X accelerates. The guide gives way sideways and in
+# tilt; the tilt counts with the distance of the Z axis's centre of mass from the carriage. machine.lean names these.
+[tool_flex]
+lateral_stiffness_n_m = 2.0e7
+tilt_stiffness_nm_rad = 1.2e4
+damping_n_s_m = 80.0
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -593,11 +604,15 @@ id = "gearbox_b"
 motor = "b"
 pos = [150, 300]
 
+# The motor pulleys span_min_m beyond the ends of X, at the height of the carriage (whose idlers sit r + r_idler above
+# and below it): the belt leaves both level, half a turn, as in the crate (effects.belt_wrap). The belt runs round them
+# anticlockwise, round the carriage idlers next to them clockwise, following the routes.
 [[machine.pulley]]
 id = "pulley_a"
 gearbox = "gearbox_a"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
+at_m = [-0.15, -0.05, 0.06]
 pos = [300, 0]
 
 [[machine.pulley]]
@@ -605,6 +620,7 @@ id = "pulley_b"
 gearbox = "gearbox_b"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
+at_m = [1.15, -0.05, 0.06]
 pos = [300, 300]
 
 # Clamp to motor A: 2 span_min_m + x + z.
@@ -685,6 +701,7 @@ inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
 at_m = [-0.042, -0.02, 0.032]
+clockwise = true
 pos = [1050, -80]
 
 [[machine.idler]]
@@ -695,6 +712,7 @@ inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
 at_m = [0.042, -0.02, 0.032]
+clockwise = true
 pos = [1050, 0]
 
 [[machine.idler]]
@@ -705,6 +723,7 @@ inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
 at_m = [-0.042, -0.02, -0.032]
+clockwise = true
 pos = [1050, 80]
 
 [[machine.idler]]
@@ -715,6 +734,7 @@ inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
 at_m = [0.042, -0.02, -0.032]
+clockwise = true
 pos = [1050, 160]
 
 [[machine.idler]]
@@ -735,6 +755,20 @@ mass_kg = "frame.mass_kg"
 stiffness_n_m = "frame.stiffness_n_m"
 damping_n_s_m = "frame.damping_n_s_m"
 pos = [900, 450]
+
+# The Z axis leans on its carriage along X (effects.tool_flex): its centre of mass and the tool tip hang below the
+# carriage and rise with z.
+[[machine.lean]]
+id = "z_lean"
+body = "z_axis"
+axis = "x"
+com_drop_m = "geometry.z_com_drop_m"
+tool_drop_m = "geometry.z_tool_drop_m"
+lever_axis = "z"
+lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
+tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
+damping_n_s_m = "tool_flex.damping_n_s_m"
+pos = [900, 550]
 
 # The free spans (effects.belt_span_vibration), from the left clamp: section 1 runs clamp to upper idler (span_min_m
 # + z) and idler to motor A (span_min_m + x); section 2 motor A to lower idler, down the Z axis and up again
