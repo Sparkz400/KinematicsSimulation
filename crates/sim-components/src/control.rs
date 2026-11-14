@@ -627,7 +627,7 @@ impl Controller {
         let points = if time_optimal {
             path::plan_time_optimal(
                 machine,
-                &self.params,
+                &self.motor_drives(machine),
                 &self.plan_limits,
                 &self.raw_pos,
                 pieces,
@@ -656,7 +656,7 @@ impl Controller {
         if time_optimal {
             path::deviation_time_optimal(
                 machine,
-                &self.params,
+                &self.motor_drives(machine),
                 &self.plan_limits,
                 &self.raw_pos,
                 pieces,
@@ -742,6 +742,11 @@ impl Controller {
     /// Motor and drive data of motor `k`: `drive_params` with that motor's own values (`catalog::motor_config`).
     pub fn drive_params_of(&self, k: usize) -> &DriveParams {
         self.motor_params.get(k).unwrap_or(&self.params)
+    }
+
+    /// Each motor's own drive and motor data (`drive_params_of`), in the order of `Machine::motors`.
+    pub fn motor_drives(&self, machine: &dyn Machine) -> Vec<&DriveParams> {
+        (0..machine.motors().len()).map(|k| self.drive_params_of(k)).collect()
     }
 
     /// The motors stand `shift` from where they stood without having turned there: the machine's model was
@@ -1296,12 +1301,18 @@ pub struct LimitViolation {
     pub allowed: f64,
 }
 
-/// Checks that the axis limits do not exceed the motor limits. A diagonal move loads one motor
-/// with both axes, so every combination of axis directions is tried.
-pub fn check_limits(machine: &dyn Machine, cfg: &Config) -> Result<Vec<LimitViolation>> {
+/// Checks that the axis limits do not ask more of a motor than its drive and motor allow (`drives`, each motor's own, in
+/// the order of `Machine::motors`): the motor speed at the highest axis speeds against the motor's maximum speed
+/// (`DriveParams::max_speed`), and the torque of the rigid machine at the highest axis accelerations against its
+/// torque-speed curve at that speed (or the torque of the drive's maximum current, where lower). A diagonal move loads
+/// one motor with both axes, so every combination of axis directions is tried, at the middle pose.
+///
+/// A warning about the axis limits, not a verdict: it takes every axis at its highest speed and acceleration at once,
+/// which a cycle need not ask. So nothing is refused by it; the search simulates every candidate and the verdicts judge
+/// what the cycle asks ("motor-peak" against the curve, "motor-speed" against the maximum speed).
+pub fn check_limits(machine: &dyn Machine, drives: &[&DriveParams]) -> Vec<LimitViolation> {
     let (axes, motors) = (machine.axes(), machine.motors().len());
     let pose = sim_core::testkit::mid_pose(machine);
-    let (max_speed, max_torque) = (cfg.positive("drive.rated_speed_rad_s")?, cfg.positive("drive.peak_torque_nm")?);
     let (mut speed, mut torque) = (vec![0f64; motors], vec![0f64; motors]);
     let (mut a, mut b) = (vec![0.0; motors], vec![0.0; motors]);
     for combo in 0..1u32 << axes.len() {
@@ -1322,13 +1333,20 @@ pub fn check_limits(machine: &dyn Machine, cfg: &Config) -> Result<Vec<LimitViol
         }
     }
     let mut out = Vec::new();
-    for k in 0..motors {
-        if speed[k] > max_speed {
-            out.push(LimitViolation { key: "limit-motor-speed", motor: k, needed: speed[k], allowed: max_speed });
+    for (k, drive) in drives.iter().enumerate().take(motors) {
+        if speed[k] > drive.max_speed {
+            out.push(LimitViolation { key: "limit-motor-speed", motor: k, needed: speed[k], allowed: drive.max_speed });
         }
-        if torque[k] > max_torque {
-            out.push(LimitViolation { key: "limit-motor-torque", motor: k, needed: torque[k], allowed: max_torque });
+        // Accelerating at that speed: the curve there, driving.
+        let curve = drive.torque_curve(speed[k].min(drive.max_speed)).1;
+        let allowed = if drive.drive_max_current.is_finite() {
+            curve.min(drive.torque_of(drive.drive_max_current))
+        } else {
+            curve
+        };
+        if torque[k] > allowed {
+            out.push(LimitViolation { key: "limit-motor-torque", motor: k, needed: torque[k], allowed });
         }
     }
-    Ok(out)
+    out
 }

@@ -295,14 +295,13 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
 
 /// The gearbox search on the single axis (ratio 5, 1 m/s over a 20 mm pulley radius: 50 rad/s at the pulley).
 /// Two motors with the NRK070 gearboxes for their frame, ratios 3 to 10. The 1FK2104-4AF is rated for
-/// 3000 r/min = 314 rad/s, so ratios 7 and above (350 rad/s) are ruled out without a simulation; the
-/// 1FK2104-5AK for 6000 r/min, so none is. What was ruled out does run above its rated speed when it is
-/// simulated all the same. (Its cycle may still pass the verdicts: above the rated speed the drive has torque
-/// left as long as the DC link has voltage. The rated speed is the catalogue's limit, so it stays ruled out.)
+/// 3000 r/min = 314 rad/s, so ratios 7 and above (350 rad/s and more) take it beyond its rated speed. Before, the
+/// search ruled those out by the rated speed without a simulation; the rated speed is no limit (above it the curve
+/// falls until the back-EMF uses up the DC link), its maximum speed is: 7200 r/min = 754 rad/s. Now every candidate is
+/// simulated, and the 1FK2104-4AF behind the fast ratios turns above its rated speed, within its maximum, and passes.
 #[test]
 fn the_gearbox_search_rules_out_by_catalogue_numbers_only_what_would_fail() {
-    use sim_components::analysis::analyse_cycle;
-    use sim_components::catalog::{search_motors, with_parts};
+    use sim_components::catalog::search_motors;
     let entry = &machine_single_axis::ENTRY;
     let cfg = entry.config();
     let found = search_motors(
@@ -317,18 +316,14 @@ fn the_gearbox_search_rules_out_by_catalogue_numbers_only_what_would_fail() {
     for c in &found {
         let ratio = c.gearbox.strip_prefix("NRK070-04-").unwrap_or_else(|| panic!("{}", c.gearbox));
         let fast = ratios.iter().position(|r| *r == ratio).unwrap() >= 3;
-        assert_eq!(c.refused == "limit-motor-speed", c.article == "1FK2104-4AF" && fast, "{} {}", c.article, c.gearbox);
-        assert_eq!(c.result.is_none(), c.refused == "limit-motor-speed");
-        if c.result.is_none() {
-            let with = with_parts(entry, &cfg, c.article, "400v", &c.gearbox).unwrap();
-            let load = analyse_cycle(&mut sim_components::Sim::new(entry, &with).unwrap()).unwrap();
-            let (reached, rated) = (load.motors[0].peak_speed, with.f64("drive.rated_speed_rad_s").unwrap());
-            assert!(
-                reached > rated,
-                "{} {} was ruled out and stays at {reached} of {rated} rad/s",
-                c.article,
-                c.gearbox
-            );
+        let Some((load, verdicts)) = &c.result else {
+            panic!("{} {} was not simulated: {}", c.article, c.gearbox, c.refused)
+        };
+        if c.article == "1FK2104-4AF" && fast {
+            let speed = verdicts.iter().find(|v| v.check == "motor-speed").unwrap();
+            assert!(close(speed.limit, 7200.0 * std::f64::consts::PI / 30.0, 1e-9), "{speed:?}");
+            assert!(load.motors[0].peak_speed > 314.16 && speed.ok, "{} {}: {speed:?}", c.article, c.gearbox);
+            assert!(c.passes(), "{} {}", c.article, c.gearbox);
         }
     }
     // Passing ones first, lightest motor first (the gearbox files have no mass), then the rest.
@@ -394,15 +389,12 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
         let found = search_motors(entry, &entry.config(), "400v", &wanted, None);
         assert_eq!(found.len(), 4, "{}", entry.id);
         for c in &found {
-            // Rated for 2000 r/min: too slow for either machine behind its 5:1 gearbox.
-            assert_eq!(
-                c.refused == "limit-motor-speed",
-                c.article == "1FK2208-3AC",
-                "{} {}: {}",
-                entry.id,
-                c.article,
-                c.refused
-            );
+            // Every candidate is simulated. The 1FK2208-3AC, rated for 2000 r/min, was ruled out by its rated speed before
+            // (too slow behind the 5:1 gearbox); it turns 200 and 250 rad/s there, within its maximum of 429 rad/s.
+            assert!(c.refused.is_empty(), "{} {}: {}", entry.id, c.article, c.refused);
+            if c.article == "1FK2208-3AC" {
+                assert!(c.passes(), "{} {}", entry.id, c.article);
+            }
             let Some((load, verdicts)) = &c.result else { continue };
             let settling = verdicts.iter().find(|v| v.check == "settling").unwrap();
             assert!(
@@ -539,6 +531,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         gearbox: String::new(),
         drive: "",
         axis: String::new(),
+        motor: String::new(),
         mass: 1.0,
         cost: 1.0,
         result: Some((load.clone(), verdicts)),
@@ -599,6 +592,103 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), clear]).tightest(),
         Some(("gearbox-radial-load", 0.42))
     );
+    // The belt's slack counts once it fails (a section at -12 N against 0.5 N: infinitely far over), so a candidate
+    // that fails it ranks behind every near miss; while it passes it says nothing of a limit and is left out. Before, it
+    // was left out either way, and the failing candidate ranked by its motor-peak of 0.7.
+    let pushed = Verdict { motor: None, ..verdict("belt-slack", -12.0, 0.5, false) };
+    assert_eq!(
+        candidate(vec![verdict("motor-peak", 0.7, 1.0, true), pushed]).tightest(),
+        Some(("belt-slack", f64::INFINITY))
+    );
+    let taut = Verdict { motor: None, ..verdict("belt-slack", 200.0, 0.5, true) };
+    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), taut]).tightest(), Some(("motor-peak", 0.7)));
+}
+
+/// With --motor-id the search judges one motor: its tightest check is among its own checks (and those of the whole
+/// machine where they fail), not another motor's. Two motors, "mx" at index 0 with a gearbox radial load of 0.41 judged
+/// for the machine and a motor-peak of 0.9, "mz" at index 1 with a motor-peak of 0.3: for "mz" the tightest is its own
+/// 0.3. Before, every Z candidate of the XYZ portal showed the machine's gearbox-radial-load 0.4127.
+#[test]
+fn the_tightest_check_of_a_one_motor_search_is_that_motors() {
+    use sim_components::analysis::{CycleLoad, MotorLoad, Verdict};
+    use sim_components::catalog::Candidate;
+    let load = CycleLoad {
+        duration: 1.0,
+        belt_tension: None,
+        belt_slack_time: None,
+        belt_tooth_jumps: None,
+        belt_span_detuning: None,
+        radial_load_peak: None,
+        condition_peak: None,
+        guide_load: None,
+        guide_speed: None,
+        path_error_peak: 0.0,
+        path_error_rms: 0.0,
+        tracking_error_peak: 0.0,
+        dwell_error_peak: 0.0,
+        tripped: false,
+        motors: vec![
+            MotorLoad { id: "mx".into(), ..MotorLoad::default() },
+            MotorLoad { id: "mz".into(), ..MotorLoad::default() },
+        ],
+        budget: None,
+        part_rises: Vec::new(),
+        checks: Vec::new(),
+        clearance: None,
+        contact: None,
+        braking_power_peak: 0.0,
+        warm_start: None,
+        conveyor: None,
+    };
+    let verdicts = vec![
+        Verdict { check: "motor-peak", motor: Some(0), value: 0.9, limit: 1.0, ok: true },
+        Verdict { check: "motor-peak", motor: Some(1), value: 0.3, limit: 1.0, ok: true },
+        Verdict { check: "gearbox-radial-load", motor: None, value: 0.41, limit: 1.0, ok: true },
+    ];
+    let candidate = |motor: &str, verdicts: Vec<Verdict>| Candidate {
+        article: "",
+        gearbox: String::new(),
+        drive: "",
+        axis: String::new(),
+        motor: motor.into(),
+        mass: 1.0,
+        cost: 1.0,
+        result: Some((load.clone(), verdicts)),
+        refused: "",
+    };
+    assert_eq!(candidate("mz", verdicts.clone()).tightest(), Some(("motor-peak", 0.3)));
+    assert_eq!(candidate("", verdicts.clone()).tightest(), Some(("motor-peak", 0.9)));
+    // A check of the whole machine that fails is the one motor's business too.
+    let mut failing = verdicts;
+    failing[2] = Verdict { value: 1.2, ok: false, ..failing[2].clone() };
+    assert_eq!(candidate("mz", failing).tightest(), Some(("gearbox-radial-load", 1.2)));
+}
+
+/// `search --gearboxes` keeps a motor that no gearbox of the series fits, tried with the config's own gearbox (gearbox
+/// ""). The 1FK7 04x on S120 have no NRK gearbox for their frame: before, the single axis's search gave 0 candidates
+/// of 9; now all 9 are simulated.
+#[test]
+fn the_gearbox_search_keeps_motors_that_no_gearbox_fits() {
+    use sim_components::catalog::search_motors;
+    let entry = &machine_single_axis::ENTRY;
+    let found = search_motors(entry, &entry.config(), "s120", &|a: &str| a.starts_with("1FK704"), Some("NRK"));
+    assert_eq!(found.len(), 9);
+    assert!(found.iter().all(|c| c.gearbox.is_empty() && c.result.is_some()), "{found:?}");
+}
+
+/// The cost of a search counts the motors that take the candidate: on the XYZ portal X and Y share the motor, Z has its
+/// own ([motor.mz]), so a 1FK2103-2AH (1.18 kg) costs 2 * 1.18 = 2.36 kg there, not 3 * 1.18. And a one-motor search's
+/// mass is that motor's with its own gearbox (Z has none by name: 1.18 kg).
+#[test]
+fn the_search_cost_counts_the_motors_that_take_the_candidate() {
+    use sim_components::catalog::{search_motor, search_motors};
+    let entry = sim_machines::load_file(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/xyz-portal.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let article = "1FK2103-2AH";
+    let found = search_motors(entry, &entry.config(), "400v", &|a: &str| a == article, None);
+    assert!(close(found[0].cost, 2.0 * 1.18, 1e-12), "{}", found[0].cost);
+    let one = search_motor(entry, &entry.config(), "400v", &|a: &str| a == article, None, "mz").unwrap();
+    assert!(close(one[0].cost, 1.18, 1e-12) && close(one[0].mass, 1.18, 1e-12), "{:?}", (one[0].cost, one[0].mass));
 }
 
 /// The EXCT-30 config passes every check with margin: in the worst case of both band modes. One at a time,

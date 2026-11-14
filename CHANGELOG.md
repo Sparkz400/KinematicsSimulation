@@ -9,6 +9,22 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Fixed
 
+- The time-optimal plan holds each motor to its own drive and motor (`[drive.<id>]`, `[motor.<id>]`, `[parts.<id>]`),
+  not the shared `[drive]`, and turns it up to its maximum speed along its torque-speed curve instead of stopping at
+  the rated speed; above the rated speed it keeps back the same torque for friction as at a standstill.
+- `check_limits` judges each motor against its maximum speed and its curve at that speed, and only warns: the
+  catalogue search and the optimiser no longer use it as a screen (it ruled out 32 of 84 motors on EXCT-30 at 400 V
+  that pass every verdict, 21 on the CoreXY).
+- A motor's peak current is computed with its own motor and drive.
+- `[bounds]` follow a part named in `[parts]` or on the command line: scaled by the part's value over the config's
+  (`verdicts --bands` with a 230 V motor on EXCT-30 aborted on the braking threshold's bounds).
+- `optimise` says which check the cycle as configured fails, or why it does not run.
+- `search --gearboxes` keeps a motor that no gearbox of the series fits, with the config's own gearbox, and says how
+  many; `search --motor-id` shows that motor's tightest check, peak torque and winding rise, and its mass with its own
+  gearbox; the cost counts only the motors that take the candidate.
+- The tightest check counts a failing belt-slack; a check judged from below at or below zero (a pushed belt section)
+  is infinitely far over, not a margin above 100 %.
+
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
@@ -27,6 +43,9 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- `drive.max_speed_rad_s`: the motor's highest speed, in every config (the no-load speed, [estimate], where no
+  catalogue motor is named; EXCT-30 the 1FK2205-4AF's 628.3 rad/s); a motor by name sets the catalogue's. The verdict
+  `motor-speed` judges the cycle's peak speed against it.
 - Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
   SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted
   only where no value's variance is inflated by more than 100; the others are folded in, with their shares named),

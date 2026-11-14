@@ -216,7 +216,7 @@ acceleration the run reached; the rack's feed force and gearbox torque are m a a
 at ±pi/2 and joint 1 at 0 or 1.404514 rad by hand; forward of inverse returns poses within 1e-9 (the SCARA's whole
 range, the arm's sampled around its home, its wrist on the home's side); every planned pose of a line lies within 1 um
 of it and the arm's orientation within 1e-6 rad; the joint speeds are J^-1 v by hand (1.538462 rad/s); a line into the
-stretched SCARA arm is refused; the time-optimal plan keeps the motors within their rated speed along a line; both tool
+stretched SCARA arm is refused; the time-optimal plan keeps the motors within their maximum speed and torque-speed curve along a line; both tool
 cycles pass their verdicts. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
 screw's fails `screw-life`. With losses: the rack's gearbox torque and feed force are the load's force over 0.97, the
 screw's life shrinks by a1 at 99 % reliability, and the temperature feedback keeps the efficiency of screw, rack and

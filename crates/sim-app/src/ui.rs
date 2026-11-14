@@ -276,7 +276,8 @@ fn usage(v: &Verdict) -> Option<f64> {
     let share = utilisation(v);
     // "belt-slack" passes only above its limit, the others at it too.
     let judged_by_share = v.ok == if v.check == "belt-slack" { share < 1.0 } else { share <= 1.0 };
-    (share.is_finite() && share >= 0.0 && judged_by_share).then_some(share)
+    // Infinitely far over (`utilisation`: an at-least check at or below zero) is a full gauge, as a limit of 0 failed.
+    (share >= 0.0 && judged_by_share && (share.is_finite() || !v.ok)).then_some(share)
 }
 
 /// Per check of the analysed cycle, its worst motor: (check, share or `None`, passes), failed ones first, then the

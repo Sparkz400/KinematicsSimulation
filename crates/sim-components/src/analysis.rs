@@ -759,10 +759,10 @@ impl Tally {
             let (current, power) = (sim.control.drives[k].phase_current(), sim.control.drives[k].power);
             load.rms_current += current * current;
             load.peak_current = load.peak_current.max(current.abs());
-            if sim.control.drive_params().drive_max_current.is_finite() {
-                load.peak_current = load
-                    .peak_current
-                    .max(sim.control.drive_params().current_for(sim.control.drives[k].torque_demand).abs());
+            // Each motor's own drive and motor (`[drive.<id>]`, `[motor.<id>]`, `[parts.<id>]`).
+            let own = sim.control.drive_params_of(k);
+            if own.drive_max_current.is_finite() {
+                load.peak_current = load.peak_current.max(own.current_for(sim.control.drives[k].torque_demand).abs());
             }
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
@@ -1162,10 +1162,11 @@ pub const AT_LEAST: [&str; 10] = [
     "collision",
 ];
 
-/// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
-/// Above 1 it fails (but "belt-slack" at exactly 1). A contact ("collision" at no clearance) is infinitely far over.
+/// Above 1 it fails (but "belt-slack" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
+/// clearance; a belt section pushed, "belt-slack" with a negative tension) is infinitely far over: limit over value would
+/// be negative there, and read as a margin above 100 %.
 pub fn utilisation(v: &Verdict) -> f64 {
-    if v.check == "collision" && v.value <= 0.0 {
+    if AT_LEAST.contains(&v.check) && v.value <= 0.0 {
         return f64::INFINITY;
     }
     if AT_LEAST.contains(&v.check) { v.limit / v.value } else { v.value / v.limit }
@@ -1237,6 +1238,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         // Peak torque against the torque-speed curve, and the settled winding temperature against the rated rise.
         out.push(at_most("motor-peak", Some(k), m.utilisation, 1.0));
         out.push(at_most("motor-thermal", Some(k), m.winding_rise, rated_rise));
+        // The peak speed against the motor's maximum speed, where the config gives it (a catalogue motor does).
+        if cfg.get("drive.max_speed_rad_s").is_ok() {
+            out.push(at_most("motor-speed", Some(k), m.peak_speed, cfg.positive("drive.max_speed_rad_s")?));
+        }
         // The drive's output current: the cycle's RMS against its rated current (a cycle of seconds against a power
         // unit that warms in seconds to minutes), its peak against the maximum current.
         if let Some(limit) = rating("drive_rated_current_a") {
@@ -1723,6 +1728,7 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
 /// not have, or one that is not a low and a high number, is refused. A bound on a value that only an effect that
 /// is off uses (`PATH_EFFECTS`, e.g. `thermal.*` without effects.part_heating), or that no cycle uses (the DC link's
 /// discharge while disabled), is checked and left out.
+/// A part by name (`[parts]`, `--motor`, `--drive`, ...) re-centres the bounds of the values it puts in: they are/// scaled by the part's value over the config's own (`catalog::set`), so that a band written for the config's motor and/// drive keeps its relative width around the named part's value. A list taken from a config before its parts were/// applied is read anew from the resolved config by the functions that run the bounds (`followed`).
 pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
     fn walk(
         path: &str,
@@ -1748,6 +1754,22 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
     }
     out.retain(|(path, ..)| !effect_off(cfg, path));
     Ok(out)
+}
+
+/// `bounds` as the resolved config `cfg` has them: a part by name has re-centred those of the values it set (see
+/// `bounds`). A path the resolved config has no bound for keeps the one given.
+fn followed(cfg: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
+    let at = |path: &String, given: (f64, f64)| match cfg.f64s(&format!("bounds.{path}")).as_deref() {
+        Ok([low, high]) => (*low, *high),
+        _ => given,
+    };
+    bounds
+        .iter()
+        .map(|(path, low, high)| {
+            let (low, high) = at(path, (*low, *high));
+            (path.clone(), low, high)
+        })
+        .collect()
 }
 
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
@@ -1895,6 +1917,7 @@ pub fn verdict_bands(
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<Band>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
+    let bounds = &followed(cfg, bounds);
     envelope(entry, cfg, 2 * bounds.len(), |run| {
         let ((path, low, high), mut changed) = (&bounds[run / 2], cfg.clone());
         changed.set_text(&format!("{path} = {:?}", if run % 2 == 0 { low } else { high }))?;
@@ -1926,6 +1949,7 @@ pub fn verdict_bands_sampled(
         return Err(ConfigError::Invalid("samples".into()));
     }
     let cfg = &crate::catalog::resolve(entry, cfg)?;
+    let bounds = &followed(cfg, bounds);
     let mut random = sim_core::testkit::Noise(seed);
     let columns: Vec<Vec<f64>> = bounds
         .iter()
@@ -2028,6 +2052,7 @@ fn worst_search(
     stop: &(dyn Fn(&Verdict) -> bool + Sync),
 ) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
+    let bounds = &followed(cfg, bounds);
     let n = bounds.len();
     let set = |cfg: &mut Config, i: usize, high: bool| {
         cfg.set_text(&format!("{} = {:?}", bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 }))
@@ -2738,9 +2763,6 @@ pub fn optimise_cycle_with(
         runs.set(runs.get() + 1);
         let changed = build(setting).ok()?;
         let mut sim = Sim::new(entry, &changed).ok()?;
-        if !sim.limit_violations.is_empty() {
-            return None;
-        }
         let load = analyse_cycle_with(&mut sim, false).ok()?;
         let failed: Vec<&'static str> =
             verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
@@ -2769,7 +2791,17 @@ pub fn optimise_cycle_with(
     };
     let before = match judged(&start) {
         Some((load, failed)) if failed.is_empty() => load,
-        _ => return Err(ConfigError::Invalid("the cycle as configured fails a verdict".into())),
+        Some((_, failed)) => {
+            return Err(ConfigError::Invalid(format!("the cycle as configured fails {}", failed.join(", "))));
+        }
+        // Said by what stops it: the config (its own error), or the cycle that does not run (its key).
+        None => {
+            let changed = build(&start)?;
+            let why =
+                |e: CommandError| ConfigError::Invalid(format!("the cycle as configured does not run: {}", e.key));
+            verdicts(&changed, &analyse_cycle_with(&mut Sim::new(entry, &changed)?, false).map_err(why)?)?;
+            return Err(ConfigError::Invalid("the cycle as configured cannot be judged".into()));
+        }
     };
     // The setting with the lifts the obstacles raised (where it changed them) higher by `lack`, their via points with them.
     let raised_by = |setting: &Setting, lack: f64| {
@@ -3616,6 +3648,7 @@ pub fn velocity_loop_margins(
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
+    let bounds = &followed(cfg, bounds);
     let (frequencies, amplitude, motors) =
         (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
     let mut runs = vec![(String::new(), cfg.clone())];
@@ -3827,6 +3860,17 @@ mod tests {
         // A life is judged from below: 6944 h against 20000 h is 2.88 times too short, and the search's badness says so.
         let v = at_least("guide-life", None, 6944.444, 20000.0);
         assert!(!v.ok && (utilisation(&v) - 2.88).abs() < 0.001 && (badness(&v) - 13055.556).abs() < 0.001);
+    }
+
+    /// A check judged from below at or below zero is infinitely far over: a belt section pushed (belt-slack with a
+    /// tension of -12 N against 0.5 N) would otherwise have limit over value -0.0417, and the report a margin of
+    /// +104.2 % beside "not ok". Above zero it stays limit over value: 0.5 / 2 = 0.25.
+    #[test]
+    fn an_at_least_check_at_or_below_zero_is_infinitely_far_over() {
+        let pushed = Verdict { check: "belt-slack", motor: None, value: -12.0, limit: 0.5, ok: false };
+        assert_eq!(utilisation(&pushed), f64::INFINITY);
+        assert_eq!(utilisation(&Verdict { value: 0.0, ..pushed.clone() }), f64::INFINITY);
+        assert_eq!(utilisation(&Verdict { value: 2.0, ok: true, ..pushed }), 0.25);
     }
 
     /// a_ISO of ISO 281:2007 by hand from the standard's formulae (worked out separately in Python). Rated viscosity

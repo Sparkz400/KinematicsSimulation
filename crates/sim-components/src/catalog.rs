@@ -124,7 +124,18 @@ fn in_unit(si: f64, factor: f64) -> f64 {
     format!("{value:.11e}").parse().unwrap_or(value)
 }
 
+/// Puts a part's value into a config. A `[bounds]` entry of that value was written for the config's own value, so it
+/// follows the part's: scaled by the same factor, new over old (the band keeps its width relative to the value). A
+/// bound of a value that was 0 stays as written.
 fn set(cfg: &mut Config, path: &str, value: f64) -> Result<(), ConfigError> {
+    let bound = format!("bounds.{path}");
+    if let (Ok(old), Ok([low, high])) = (cfg.f64(path), cfg.f64s(&bound).as_deref())
+        && old != 0.0
+        && old != value
+    {
+        let (low, high) = (low * value / old, high * value / old);
+        cfg.set_text(&format!("{bound} = [{:?}, {:?}]", low.min(high), low.max(high)))?;
+    }
     cfg.set_text(&format!("{path} = {value:?}"))
 }
 
@@ -178,6 +189,9 @@ struct MotorData {
     rated_current: f64,
     rated_torque: f64,
     rated_speed: f64,
+    /// The highest speed: mechanical (S210 table), what the converter allows (1FK2, 1FT2 on S120), or the lower of the
+    /// two (1FK7, 1FT7).
+    max_speed: f64,
     thermal_seconds: Option<f64>,
     /// Phase resistance at 20 °C in ohms and rotating field inductance in henries, where a data sheet prints them.
     winding: Option<(f64, f64)>,
@@ -204,6 +218,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 rated_current: get(&m, "rated_current_a")?,
                 rated_torque: get(&m, "rated_torque_nm")?,
                 rated_speed: get(&m, "rated_speed_rad_s")?,
+                max_speed: get(&sheet, "max_speed_mechanical_rad_s")?.min(get(&sheet, "max_speed_inverter_rad_s")?),
                 thermal_seconds: number(&sheet, "thermal_time_constant_s"),
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
                 pole_pairs: number(&m, "pole_pairs"),
@@ -225,6 +240,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             rated_current: get("rated_current_a")?,
             rated_torque: get("rated_torque_nm")?,
             rated_speed: get("rated_speed_rad_s")?,
+            max_speed: get("max_speed_inverter_rad_s")?,
             thermal_seconds: number(&m, "thermal_time_constant_s"),
             winding: None,
             pole_pairs: None,
@@ -247,6 +263,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         rated_current: rated("current", "a")?,
         rated_torque: rated("torque", "nm")?,
         rated_speed: rated("speed", "rad_s")?,
+        max_speed: get("max_speed_rad_s")?,
         thermal_seconds: manual.as_ref().and_then(|r| number(r, "thermal_time_constant_s")),
         winding: None,
         pole_pairs: None,
@@ -313,6 +330,7 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     set(cfg, "drive.peak_torque_nm", m.max_torque.min(allowed))?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
+    set(cfg, "drive.max_speed_rad_s", m.max_speed)?;
     let bus = if supply == "230v" { 325.0 } else { 540.0 };
     let scale = bus / cfg.positive("drive.bus_voltage_v")?;
     for rating in ["ratings.braking_threshold_v", "ratings.dc_link_overvoltage_v"] {
@@ -1032,10 +1050,13 @@ pub struct Candidate {
     pub drive: &'static str,
     /// The axis of the catalogue the motor was tried on; "" for the config's own.
     pub axis: String,
+    /// The one motor the candidate is for (`search_motor`, its id); "" for every motor that takes the shared one.
+    pub motor: String,
     /// Motor and gearbox of one drive axis, kg.
     pub mass: f64,
     /// The stand-in for the price, which no catalogue file has: the installed weight of everything the combination
-    /// names, kg. Motor and gearbox times the number of motors, and the axis at the config's strokes.
+    /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
+    /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
     /// The cycle and its verdicts; `None` where the cycle was not run, with the reason in `refused`.
     pub result: Option<(CycleLoad, Vec<Verdict>)>,
@@ -1048,7 +1069,7 @@ impl Candidate {
     }
 
     /// The check closest to (or furthest beyond) its limit, with value over limit (`analysis::utilisation`: for a
-    /// life limit over value). The belt's slack does not count. Two checks of the DC link do not count while they
+    /// life limit over value). The belt's slack does not count while it passes. Two checks of the DC link do not count while they
     /// pass, because their ratio is no measure of how close the cycle is to failing: with a braking resistor
     /// behind them the capacitors fill to their limit by design, in every cycle that brakes hard enough, and
     /// the resistor's checks say what that costs; and the voltage is never below the bus, so its ratio to
@@ -1056,7 +1077,9 @@ impl Candidate {
     /// well the run was measured, not how close a part is to its limit.
     ///
     /// A run whose drives tripped is infinitely far beyond: its figures end at the trip, where the DC link
-    /// was just past its limit, and by that ratio it would rank as the nearest to passing.
+    /// was just past its limit, and by that ratio it would rank as the nearest to passing. For one motor (`search_motor`,
+    /// `motor`) only its own checks count, and those of the whole machine where they fail: the other motors' are the
+    /// config's, and a check of the whole machine (the shafts' radial load, judged once) mostly theirs.
     pub fn tightest(&self) -> Option<(&'static str, f64)> {
         let (load, verdicts) = self.result.as_ref()?;
         if load.tripped {
@@ -1073,8 +1096,14 @@ impl Candidate {
         // A limit of 0 gives no share while it passes ("collision" at `profile.min_clearance_m` 0); one that fails counts.
         verdicts
             .iter()
-            .filter(|v| (v.limit > 0.0 || !v.ok) && v.check != "belt-slack" && !by_design(v))
-            .filter(|v| !(v.ok && v.check == "thermal-warm-start"))
+            .filter(|v| (v.limit > 0.0 || !v.ok) && !by_design(v))
+            // Slack while it passes and the warm start's convergence while it passes say nothing of a limit; failing, they count.
+            .filter(|v| !v.ok || !["belt-slack", "thermal-warm-start"].contains(&v.check))
+            // For one motor (`search_motor`): its own checks, and those of the whole machine where they fail.
+            .filter(|v| {
+                self.motor.is_empty()
+                    || v.motor.map_or(!v.ok, |k| load.motors.get(k).is_some_and(|m| m.id == self.motor))
+            })
             .map(|v| (v.check, crate::analysis::utilisation(v)))
             .max_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -1191,7 +1220,10 @@ fn motor_jobs(
     let mut out = Vec::new();
     for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
         let names = match gearboxes {
-            Some(series) if ratio > 1.0 => fitting_gearboxes(article, series, ratio),
+            // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
+            Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))
+                .filter(|g| !g.is_empty())
+                .unwrap_or_else(|| vec![String::new()]),
             _ => vec![String::new()],
         };
         out.extend(names.into_iter().map(|gearbox| Job {
@@ -1209,10 +1241,10 @@ fn motor_jobs(
 /// Runs the jobs on all processors and ranks them: the passing ones first, cheapest first (`Candidate::cost`, then
 /// `mass`), the others after them, nearest to passing first. A motor not offered at the supply is left out.
 ///
-/// Before a cycle is simulated the catalogue numbers are checked against the axis limits: the motor speed at the
-/// highest axis speed against the rated speed, and the torque of the rigid machine at the highest acceleration
-/// against the motor's maximum torque (`check_limits`). A candidate that fails there is not simulated; it is
-/// returned with `result` empty and the limit in `refused`.
+/// Every candidate is simulated: the axis limits are not a screen (`check_limits` takes every axis at its highest speed
+/// and acceleration at once, which the cycle need not ask, and so ruled out motors that passed every verdict). What the
+/// cycle asks of a motor is judged by the verdicts: "motor-peak" against its torque-speed curve, "motor-speed" against
+/// its maximum speed. A candidate whose config or cycle cannot run is returned with `result` empty and why in `refused`.
 fn run_jobs(entry: &MachineEntry, supply: &str, jobs: Vec<Job>, mut out: Vec<Candidate>) -> Vec<Candidate> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let work = || {
@@ -1267,18 +1299,29 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
     // Not offered at this supply, or a part the config cannot take.
     let (with_parts, motors) = if job.motor.is_empty() {
         let with_parts = with_named(entry, &job.cfg, &parts).ok()?;
-        let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().len()) as f64;
-        (with_parts, motors)
+        // The motors that take the shared motor: not those with a motor of their own (`[motor.<id>]`, `[parts.<id>]`).
+        let shared = |id: &str| {
+            job.cfg.get(&format!("motor.{id}")).is_err()
+                && job.cfg.get(&format!("parts.{id}.motor")).ok().and_then(|v| v.as_str()).is_none_or(str::is_empty)
+        };
+        let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().iter().filter(|m| shared(m.id)).count());
+        (with_parts, motors as f64)
     } else {
         (with_motor_part(entry, &job.cfg, &job.motor, job.article, supply, &job.gearbox, drive).ok()?, 1.0)
     };
-    let gearbox_mass = if parts.gearbox.is_empty() { 0.0 } else { gearbox_mass(parts.gearbox).unwrap_or(f64::NAN) };
+    // The gearbox the motor drives through: the candidate's, else for one motor its own (`[parts.<id>]`).
+    let own_gearbox = (job.gearbox.is_empty() && !job.motor.is_empty())
+        .then(|| Some(Parts::of(&motor_config(&job.cfg, &job.motor).ok()?).ok()?.gearbox.to_string()))
+        .flatten();
+    let gearbox = own_gearbox.as_deref().unwrap_or(parts.gearbox);
+    let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(f64::NAN) };
     let mass = motor_mass(job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
     let mut candidate = Candidate {
         article: job.article,
         gearbox: job.gearbox.clone(),
         drive,
         axis: job.axis.clone(),
+        motor: job.motor.clone(),
         mass,
         cost: motors * mass + job.axis_weight,
         result: None,
@@ -1286,8 +1329,6 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
     };
     match Sim::new(entry, &with_parts) {
         Err(_) => candidate.refused = "config",
-        // The axis limits ask for more speed or torque than this motor has.
-        Ok(sim) if !sim.limit_violations.is_empty() => candidate.refused = sim.limit_violations[0].key,
         Ok(mut sim) => match analyse_cycle_with(&mut sim, false) {
             Err(e) => candidate.refused = e.key,
             Ok(load) => match verdicts(&with_parts, &load) {
@@ -1306,9 +1347,10 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
 /// and gearbox stands in for it (`Candidate::cost`).
 ///
 /// With `gearboxes` (a series, see `fitting_gearboxes`) and a config whose machine has a gearbox (ratio
-/// above 1), each motor is tried with every fitting gearbox of that series in place of the config's.
+/// above 1), each motor is tried with every fitting gearbox of that series in place of the config's; a motor that none
+/// fits is tried with the config's own gearbox (`gearbox` "": before, it was left out without a word).
 ///
-/// What fails the catalogue screen is listed and not simulated (`run_jobs`).
+/// Every candidate is simulated (`run_jobs`).
 pub fn search_motors(
     entry: &MachineEntry,
     cfg: &Config,
@@ -1346,6 +1388,7 @@ pub fn search_axes(
                 gearbox: String::new(),
                 drive: "",
                 axis: name,
+                motor: String::new(),
                 mass: f64::NAN,
                 cost: f64::NAN,
                 result: None,
@@ -1381,7 +1424,10 @@ pub fn search_motor(
     let mut jobs = Vec::new();
     for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
         let names = match gearboxes {
-            Some(series) if ratio > 1.0 => fitting_gearboxes(article, series, ratio),
+            // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
+            Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))
+                .filter(|g| !g.is_empty())
+                .unwrap_or_else(|| vec![String::new()]),
             _ => vec![String::new()],
         };
         jobs.extend(names.into_iter().map(|gearbox| Job {

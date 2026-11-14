@@ -104,6 +104,10 @@ peak_torque_nm = 900.0
 rated_torque_nm = 300.0
 rated_speed_rad_s = 3.0
 no_load_speed_rad_s = 10.175
+# [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
+# torque-speed curve ends. The time-optimal plan turns the motor up to it along that curve; the verdict motor-speed
+# judges the cycle's peak speed against it. A motor by name sets the catalogue's.
+max_speed_rad_s = 10.175
 # [estimate] a linear scale of 1 um: counts per 2 pi m.
 encoder_counts_per_rev = 6283185.3
 velocity_filter_s = 0.1e-3

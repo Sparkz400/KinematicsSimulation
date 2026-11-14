@@ -475,6 +475,7 @@ report-signature = Signature
 report-default-config = built-in default configuration
 check-motor-peak = Share of the torque-speed curve used
 check-motor-thermal = Winding rise, settled [K]
+check-motor-speed = Motor speed, peak [rad/s]
 check-pulley-torque = Torque at the pulley [N m]
 check-gearbox-continuous = Gearbox output torque, cubic mean [N m]
 check-gearbox-peak = Gearbox output torque, peak [N m]

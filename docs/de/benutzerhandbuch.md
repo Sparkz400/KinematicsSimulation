@@ -150,6 +150,7 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | --- | --- | --- | --- | --- |
 | `motor-peak` | Genutzter Anteil der Drehmoment-Drehzahl-Kennlinie | `utilisation` (das verlangte Moment, nicht das abgegebene) | 1 | Anteil |
 | `motor-thermal` | Übertemperatur der Wicklung, eingeschwungen | `winding_rise_k` (mit `effects.motor_thermal_nodes` die des Wicklungsknotens, die dort einschwingt, wo der eine Knoten es tut) | `motor.rated_temperature_rise_k` | K |
+| `motor-speed` | Motordrehzahl, Spitze | `peak_speed_rad_s`, wo die Konfiguration `drive.max_speed_rad_s` angibt (ein Katalogmotor setzt sie) | `drive.max_speed_rad_s` | rad/s |
 | `drive-overload` | Thermisches Abbild des Antriebs, Spitze, gegen seine Auslöseschwelle | `drive_overload`, nur mit `effects.drive_overload` | die Auslöseschwelle des Abbilds, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = Maximal- durch Bemessungsstrom | 1 = Bemessungsstrom dauernd |
 | `pulley-torque` | Moment an der Riemenscheibe | Spitze des Getriebe-Abtriebsmoments (Signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | Getriebe-Abtriebsmoment, kubisches Mittel | kubisches Mittel des Getriebe-Abtriebsmoments, gewichtet mit der Drehzahl | `ratings.gearbox_rated_torque_nm` | N m |
@@ -270,34 +271,36 @@ Die Achse von `exct-30.toml` mit Namen einzusetzen gibt deren eigene Zahlen zur�
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
-Search time on 16: 0.6 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 28 candidates
+Search time on 16: 11.9 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,,6SL3210-5HE10-4UF0,2.05,4.10,ok,drive-current,0.9753,3.2072,95.50
 ,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
 ,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
 ,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
 ,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4466,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5157,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
+...
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,ok,motor-peak,0.5318,6.6454,2.84
 ...
 ,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
-,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
-,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,motor-thermal,inf,1.8530,inf
+,1FK2103-2AH,,6SL3210-5HE10-4UF0,1.18,2.36,FAIL,motor-thermal,inf,1.9530,inf
+,1FK2210-4AB,,6SL3210-5HE15-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5939,8.04
+,1FK2210-4AC,,6SL3210-5HE17-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5580,11.25
 ```
 
-An der EXCT-30 kommt kein Motor, der besteht, in die Nähe einer Grenze. Die knappste Prüfung ist bei den leichtesten Motoren das Verweilen (0,53 der Toleranz), beim 1FK2204-5AF der Strom des Antriebs und bei den übrigen der Zug des Riemens an einer Scheibenwelle (1000 N von 2000 N), der kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`. Die Lager der Scheibenwellen halten etwa 325000 h, bei 20000 h gefordert.
+An der EXCT-30 nutzt der leichteste Motor, der besteht, der 1FK2104-4AF, 0,98 des Bemessungsstroms seines Antriebs und wird eingeschwungen 95,5 K warm; die nächsten kommen in die Nähe keiner Grenze. Ihre knappste Prüfung ist das Verweilen (0,53 der Toleranz), beim 1FK2204-5AF der Strom des Antriebs und bei den übrigen der Zug des Riemens an einer Scheibenwelle (1000 N von 2000 N), der kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`. Die Lager der Scheibenwellen halten etwa 325000 h, bei 20000 h gefordert. Vor dem 14. November schlossen die gemeinsame Bemessungsdrehzahl und das gemeinsame Maximalmoment den 1FK2104-4AF und den 1FK2208-3AC ohne Simulation aus (13 der 28; siehe unten), obwohl beide jede Prüfung bestehen.
 
 Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der für die Netzspannung angeboten wird, jeden mit dem Antrieb, den der Katalog ihm zuordnet, auf allen Prozessorkernen. Zuerst kommen die Motoren, die bestehen, der günstigste voran. Danach folgen die, die nicht bestehen, der knappste voran. Ein Kandidat, dessen Antriebe wegen Überspannung im Zwischenkreis abschalten, steht hinter allen diesen, mit `inf` als `tightest_utilisation`: Seine Werte enden mit dem Abschalten.
 
-**Kosten.** Keine Katalogdatei enthält einen Preis, und Siemens veröffentlicht keine Listenpreise auf einem Server, der sich automatisch lesen lässt (die Industry Mall lehnt solche Zugriffe ab). Für den Preis steht die eingebaute Masse: `cost_kg` ist Motor und Getriebe mal der Zahl der Motoren, dazu die Achse, wo eine des Katalogs probiert wird (`--axes`). Bestandene Kandidaten werden danach geordnet, dann nach `mass_kg`. Bei einer Motorsuche an einer festen Maschine ergeben beide dieselbe Reihenfolge.
+**Kosten.** Keine Katalogdatei enthält einen Preis, und Siemens veröffentlicht keine Listenpreise auf einem Server, der sich automatisch lesen lässt (die Industry Mall lehnt solche Zugriffe ab). Für den Preis steht die eingebaute Masse: `cost_kg` ist Motor und Getriebe mal der Zahl der Motoren, die den Kandidaten bekommen (nicht die mit einem eigenen Motor, `[motor.<id>]` oder `[parts.<id>]`), dazu die Achse, wo eine des Katalogs probiert wird (`--axes`). Bestandene Kandidaten werden danach geordnet, dann nach `mass_kg`. Bei einer Motorsuche an einer festen Maschine ergeben beide dieselbe Reihenfolge.
 
 | Option | Wirkung |
 | --- | --- |
 | `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2`, `1FT2105` oder `1FK7` |
-| `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). Standard `400v` |
-| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut) |
+| `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). Standard: das eigene `parts.motor_supply` der Konfiguration, sonst `400v` |
+| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut). Ein Motor, dem kein Getriebe der Baureihe passt, wird mit dem Getriebe der Konfiguration versucht (`gearbox` leer; vorher fiel er wortlos weg) |
 | `--axes` | Zusätzlich jede Achse des Katalogs probieren, die zur Art der Maschine passt (siehe unten) |
 | `--motor-id ID` | Einen Motor einer Maschine mit mehreren auslegen, den Motor `ID` einer Maschinendatei: jeder Kandidat wird `[parts.ID]`, die anderen Motoren bleiben, wie die Datei sie hat, die eigene Drehzahlverstärkung dieses Motors wird nachgestellt, `--gearboxes` passt zu seiner eigenen Übersetzung, und `cost_kg` ist das Gewicht dieses einen Motors (siehe [Maschinendateien](maschinendateien.md#motoren-die-sich-unterscheiden)). Nicht mit `--axes` |
 
@@ -309,12 +312,12 @@ Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der 
 | `mass_kg` | Masse des Motors ohne Bremse und seines Getriebes (Projektierungshandbuch von Siemens 01/2023, siehe [den Katalog](../catalogue.md)) |
 | `cost_kg` | Was für den Preis steht: die eingebaute Masse, siehe oben |
 | `result` | `ok`, wenn jede Prüfung bestanden ist |
-| `tightest_check` | Die Prüfung, die ihrer Grenze am nächsten kommt oder sie am weitesten überschreitet. Zwei Zwischenkreisprüfungen bleiben außen vor, solange sie bestehen, weil ihr Verhältnis nichts über die Reserve sagt: `dc-link-energy`, wenn ein Bremswiderstand arbeitet (die Kondensatoren füllen sich dann planmäßig bis zur Grenze), und `dc-link-overvoltage` (die Spannung liegt nie unter dem Ruhewert des Zwischenkreises). Bei einem Kandidaten, der nicht simuliert wurde: der Grund (`limit-motor-speed`, `limit-motor-torque`, `axis-stroke`, `axis-payload`, `axis-speed`) |
+| `tightest_check` | Die Prüfung, die ihrer Grenze am nächsten kommt oder sie am weitesten überschreitet. Zwei Zwischenkreisprüfungen bleiben außen vor, solange sie bestehen, weil ihr Verhältnis nichts über die Reserve sagt: `dc-link-energy`, wenn ein Bremswiderstand arbeitet (die Kondensatoren füllen sich dann planmäßig bis zur Grenze), und `dc-link-overvoltage` (die Spannung liegt nie unter dem Ruhewert des Zwischenkreises). Der Durchhang des Riemens zählt, sobald er nicht besteht (ein gedrückter Abschnitt: `inf`). Mit `--motor-id` zählen nur die Prüfungen dieses Motors, und die der ganzen Maschine, wo sie nicht bestehen. Bei einem Kandidaten, der nicht simuliert wurde: der Grund (`config`, ein Fehler des Zyklus, `axis-stroke`, `axis-payload`, `axis-speed`) |
 | `tightest_utilisation` | Wert geteilt durch Grenze dieser Prüfung |
-| `peak_torque_nm` | Höchstes Spitzenmoment aller Motoren der Maschine |
-| `winding_rise_k` | Höchste eingeschwungene Übertemperatur der Wicklung über alle Motoren |
+| `peak_torque_nm` | Höchstes Spitzenmoment aller Motoren der Maschine; mit `--motor-id` das dieses Motors |
+| `winding_rise_k` | Höchste eingeschwungene Übertemperatur der Wicklung über alle Motoren; mit `--motor-id` die dieses Motors |
 
-Bevor ein Zyklus simuliert wird, werden die Katalogwerte gegen die Achsgrenzwerte geprüft: die Motordrehzahl bei der höchsten Achsgeschwindigkeit gegen die Bemessungsdrehzahl, das Moment des Starrkörpermodells bei der höchsten Beschleunigung gegen das Maximalmoment des Motors. Was hier scheitert, wird mit `NaN` aufgeführt und nicht simuliert. Der Fehlerkanal nennt, wie viele Kandidaten das waren und wie lange die Suche auf wie vielen Kernen gedauert hat.
+Jeder Kandidat wird simuliert. Vor dem 14. November waren die Katalogwerte erst ein Sieb: die Motordrehzahl bei den höchsten Achsgeschwindigkeiten gegen die gemeinsame Bemessungsdrehzahl, das Starrkörpermoment bei den höchsten Beschleunigungen gegen das gemeinsame Maximalmoment, jede Achse zugleich an ihren Grenzen. Das schloss Motoren aus, die jede Prüfung bestehen (an der EXCT-30 bei 400 V 32 von 84, an der CoreXY 21); nun urteilen die Prüfungen: `motor-peak` gegen die Drehmoment-Drehzahl-Kennlinie, `motor-speed` gegen die Höchstdrehzahl. Ein Kandidat, der nicht laufen kann (ein Teil, das die Konfiguration nicht aufnimmt, ein abgelehnter Zyklus), steht mit `NaN` und dem Grund da. Der Fehlerkanal nennt, wie viele Kandidaten das waren, mit `--gearboxes` wie viele Motoren kein Getriebe der Baureihe passt (sie werden mit dem Getriebe der Konfiguration versucht, `gearbox` leer), und wie lange die Suche auf wie vielen Kernen gedauert hat.
 
 Die Drehzahlverstärkung jedes Kandidaten wird nach der Regel aus [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen) nachgeführt: Quadratwurzel aus (Verhältnis der Trägheiten, die die Motoren drehen) × (Verhältnis der Rotorträgheiten), bezogen auf die Zahlen der Konfiguration. `--gearbox NAME` für die ganze Suche und `--gearboxes SERIES` liefern für dasselbe Paar dasselbe Ergebnis: Die Trägheit des Getriebes hat einen eigenen Schlüssel (`gearbox.inertia_at_input_kgm2`) und bleibt, wenn ein Motor eingesetzt wird.
 
@@ -322,9 +325,11 @@ Mit Getrieben, an der Einzelachse:
 
 ```text
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
-Ohne Simulation eines Zyklus ausgeschlossen, nach Katalogwerten gegen die Achsgrenzwerte: 12 / 35 Kandidaten
-Dauer der Suche auf 16: 0.5 s
+Nicht simuliert (ein Teil, das die Konfiguration nicht aufnimmt, oder ein Zyklus, der nicht läuft; der Grund steht in der Tabelle): 0 / 35 Kandidaten
+Kein Getriebe der Baureihe passt, daher mit dem Getriebe der Konfiguration versucht (Getriebe leer in der Tabelle): 0 Kandidaten
+Dauer der Suche auf 16: 2.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,NRK070-04-10,6SL3210-5HE10-4UF0,3.45,3.45,ok,motor-speed,0.6633,0.4615,1.31
 ,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
 ,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4567,0.6007,2.50
 ,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
@@ -335,9 +340,10 @@ Die Motoren des S120 an der EXCT-30:
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
-Search time on 16: 1.1 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 61 candidates
+Search time on 16: 16.6 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK7042-2AC7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5053,16.34
 ,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
 ,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
 ...
@@ -347,8 +353,8 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 124 / 338 candidates
-Search time on 16: 7.8 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 2 / 338 candidates
+Search time on 16: 33.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
 ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9056,3.9951,25.02
 ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9200,3.9968,51.69
@@ -370,11 +376,9 @@ Grenzen bei dieser Aufgabe:
 
 - **Das Gewicht steht für den Preis.** Siehe oben. Das Gewicht des Antriebs zählt nicht mit: Die Umrichterdateien enthalten keines.
 - Das Nachführen der Verstärkung ist eine Faustregel, keine Reglereinstellung nach dem Frequenzgang der Maschine. Ein Kandidat kann immer noch an seiner Verstärkung scheitern. Prüfen Sie einen gewählten Motor mit `tuning`.
-- Die Vorauswahl nach dem Moment lässt den Getriebewirkungsgrad außer Acht.
 - Die Achssuche behält alles von der Konfiguration, was die Achse nicht setzt: Getriebe, Reibung, Rahmen, Input Shaper und Verstärkungen. Die Einzelachsen von Bahr nennen keine bewegte Masse, also bleibt bei ihnen der Schlitten der Konfiguration; die maximalen Längen von Bahr gelten als längster Hub.
 - Riemen werden nicht variiert; ein Riemen wird mit `--belt` benannt. Kombinationen verschiedener Motoren je Achse werden nicht gesucht.
 - Die Zwischenkreiskapazität und der Bremswiderstand bleiben, wie die Konfiguration sie hat; die Einschaltspannung des Bremswiderstands und die Abschaltspannung werden auf die Zwischenkreisspannung des Motors skaliert (siehe den vorigen Abschnitt). Bei einer Standardkonfiguration werden die Zeilen zum Bremsen bei jedem Kandidaten gegen Platzhalter beurteilt.
-- Ein Kandidat, der an den Achsgrenzwerten mehr als seine Bemessungsdrehzahl verlangt, besteht nie, auch wenn sein simulierter Zyklus bestehen würde.
 
 ## Einfluss unsicherer Parameter erkennen und mit Fehlerbändern beurteilen
 
@@ -385,6 +389,8 @@ Eine Konfiguration gibt jedem unsicheren Wert eine untere und eine obere Grenze.
 belt.pretension_n = [350.0, 550.0]
 friction_x.coulomb_n = [12.0, 26.0]
 ```
+
+Ein Bauteil, das `[parts]` oder `--motor`, `--supply`, `--drive`, ... benennt, bringt seine eigenen Werte mit, und die Grenzen dieser Werte folgen ihm: Sie werden mit dem Verhältnis des Bauteilwerts zum eigenen Wert der Konfiguration skaliert, so behält ein Band seine Breite im Verhältnis zum Wert. Die Grenzen der Bremsschwelle der EXCT-30, 750 bis 790 V um 770 V am Zwischenkreis von 540 V, gehen für einen Motor und Antrieb an 230 V mit der Schwelle mit, die dem Zwischenkreis von 325 V folgt.
 
 **Empfindlichkeit.** Der Zyklus wird mit jedem Parameter an seinem unteren und an seinem oberen Wert gefahren, immer einer allein. Die Zeilen sind danach sortiert, wie stark sich die Ergebnisse ändern. `ratings.bearing_reliability_percent` bleibt außen vor: Es ist eine Wahl, wie beurteilt wird, und 20 % nach beiden Seiten verlassen seinen Bereich von 90 bis 99,95 %:
 
