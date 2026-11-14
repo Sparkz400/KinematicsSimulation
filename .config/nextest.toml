@@ -3,9 +3,9 @@
 # cargo test --doc --workspace --release --exclude sim-py
 
 [profile.default]
-# A test still running after a minute is reported as slow; none is stopped for it (the longest take up to seven
-# minutes in a full run, up to two alone).
-slow-timeout = "60s"
+# A test still running after a minute is reported as slow, and one still running after 15 is stopped as hung (the
+# longest take up to nine minutes in a full run; on 14 November 2026 a hung OPC UA test held a local run for 20).
+slow-timeout = { period = "60s", terminate-after = 15 }
 # Run every test and report every failure, not just the first.
 fail-fast = false
 # No retries: a test that passes on the second try still has a defect to find.
