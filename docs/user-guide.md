@@ -1256,12 +1256,12 @@ In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2192 m 
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang en
 ```
 
-This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1) and `--cycle-ms` (default 10) are the only arguments. A machine the simulator does not have, a port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
+This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1), `--cycle-ms` (default 10) and the security options `--pki`, `--trust-all` and `--user` are the only arguments. A machine the simulator does not have, a port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
 
 | Property | Value |
 | --- | --- |
 | Endpoint | `opc.tcp://127.0.0.1:PORT/` |
-| Security | None. Anonymous access |
+| Security | None, and Basic256Sha256 with Sign and with SignAndEncrypt; anonymous unless `--user` (see [Security](plc.md#security)) |
 | Namespace | `urn:kinematics-simulation` |
 | Node ids | Strings in that namespace, as in the table below |
 | Update rate | Every signal is published 100 times a second |

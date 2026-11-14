@@ -49,6 +49,7 @@ The simulator steps its physics at 62.5 µs, which is fast enough: one step cost
 
 - PROFINET RT class 1 at 1 to 4 ms: needs a loop that wakes every bus cycle with jitter well under a cycle. On Linux with PREEMPT_RT and a pinned thread this is ordinary practice. On Windows it is not reachable without a real-time extension.
 - EtherCAT with DC at 250 µs to 1 ms: the ESC takes the timing; the simulator must deliver the next actual position before the next SYNC0, every cycle. With an ESC on SPI (LAN9252) that is a hard real-time loop on Linux at 1 kHz or faster.
+- Before any bus, the OPC UA link measures how regularly a PLC reaches it (`status.client_read_*`, `status.client_write_*`, see [The client's cycle](plc.md#the-clients-cycle)): the jitter of the PLC's task plus that of this computer, which is what a bus cycle would have to beat.
 - The simulator's own setpoint interpolation (`profile.setpoint_interval_s`) would become the bus cycle, and its fieldbus delay and jitter effects (`profile.fieldbus_delay_cycles`, `fieldbus_jitter_cycles`) would be replaced by the real bus.
 
 ## Licences

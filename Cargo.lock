@@ -6124,6 +6124,7 @@ name = "sim-opcua"
 version = "1.0.0-rc.1"
 dependencies = [
  "async-opcua",
+ "async-trait",
  "sim-components",
  "sim-core",
  "sim-machines",

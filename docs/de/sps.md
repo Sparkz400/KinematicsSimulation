@@ -16,12 +16,85 @@ cargo run --release -p sim-opcua -- t-gantry --port 4840 --host 192.168.0.10 --c
 | `--host IP` | 127.0.0.1 | Adresse, auf der der Server lauscht. Eine SPS im Netz braucht eine Adresse dieses Rechners, die sie erreicht. Die Adresse selbst angeben, nicht `0.0.0.0`: Der Server nennt sie in seiner Endpunkt-URL |
 | `--lang en\|de` | en | Sprache der Meldungen und der Variablenbeschriftungen |
 | `--cycle-ms N` | 10 | Takt der Simulationsschleife, 1 bis 1000 ms |
+| `--pki DIR` | `pki` | Ordner des Server-Zertifikats und der vertrauten und abgewiesenen Client-Zertifikate, relativ zum Arbeitsverzeichnis (siehe [Sicherheit](#sicherheit)) |
+| `--trust-all` | aus | Jedes Client-Zertifikat annehmen und bei den vertrauten ablegen. Nur zur Inbetriebnahme |
+| `--user NAME` | keiner | Clients müssen sich mit diesem Benutzernamen und dem Passwort aus der Umgebungsvariablen `SIM_OPCUA_PASSWORD` anmelden; anonyme Clients werden abgewiesen. Ohne die Variable startet die Kopplung nicht |
 
 Strg+C beendet die Kopplung und gibt den gemessenen Takt in einer Zeile dieser Form aus (die Zahlen sind die des Dauertests unten, nicht eines Laufs mit Strg+C):
 
 ```text
 Echtzeittakt (Taktdauer, größter und effektiver Jitter in ms, Überläufe, Echtzeitfaktor): 10.017 · 16.116 · 4.581 · 42 · 1.0000
 ```
+
+Beim Start gibt die Kopplung außerdem den absoluten Pfad ihres pki-Ordners aus und ob `--trust-all` oder `--user` gesetzt sind. Am Ende gibt sie die Abstände der Schreib- und Lesezugriffe der Clients aus (siehe [Der Takt des Clients](#der-takt-des-clients)), hier die des Musters in `sim-opcua/tests/interop.rs`, neun Abstände von 10 ms und einer von 40 ms, dreimal:
+
+```text
+Client-Schreibzugriffe (Abstände, Mittel, Standardabweichung, größter in ms): 30 · 13.000 · 9.000 · 40.000
+Client-Lesezugriffe (Abstände, Mittel, Standardabweichung, größter in ms): 30 · 13.000 · 9.000 · 40.000
+```
+
+## Sicherheit
+
+Der Server bietet drei Endpunkte, alle unter derselben URL `opc.tcp://HOST:PORT/`:
+
+| Sicherheitsrichtlinie | Nachrichtensicherheit | Client-Zertifikat geprüft |
+| --- | --- | --- |
+| None | None | Nein |
+| Basic256Sha256 | Sign | Ja |
+| Basic256Sha256 | SignAndEncrypt | Ja |
+
+Basic256Sha256 bieten S7-1500, TwinCAT TF6100 und der CODESYS-OPC-UA-Client alle an. Die neueren Aes128-Sha256-RsaOaep und Aes256-Sha256-RsaPss werden nicht angeboten.
+
+**Das Zertifikat des Servers.** Beim ersten Start legt die Kopplung ihr Anwendungsinstanz-Zertifikat im pki-Ordner an (`--pki`, Standard `pki` im Arbeitsverzeichnis; `/pki` ignoriert git):
+
+| Datei | Was sie ist |
+| --- | --- |
+| `own/cert.der` | Das Zertifikat: selbst signiert, RSA 2048 Bit, 365 Tage gültig. Anwendungs-URI `urn:kinematics-simulation:server`; die alternativen Namen enthalten diesen URI, `localhost`, den Rechnernamen und seine IP-Adressen |
+| `private/private.pem` | Sein privater Schlüssel. Er bleibt auf diesem Rechner |
+| `trusted/` | Client-Zertifikate, die der Server annimmt |
+| `rejected/` | Client-Zertifikate, die der Server abgewiesen hat |
+
+Eine SPS, die sich mit Sicherheit verbindet, muss `own/cert.der` vertrauen: es in den Zertifikatsspeicher der SPS als vertrauten Partner importieren (TIA Portal: Zertifikatsmanager der CPU; TwinCAT TF6100 und CODESYS: siehe unten). Nach einem Jahr, oder wenn sich Rechnername oder Adresse ändern und die SPS sie prüft, `own/` und `private/` löschen und neu starten: Ein neues Zertifikat entsteht, dem die SPS neu vertrauen muss.
+
+**Client-Zertifikate.** Ein Client an einem gesicherten Endpunkt, dessen Zertifikat nicht in `trusted/` liegt, wird abgewiesen, und sein Zertifikat wird nach `rejected/` geschrieben. Um ihm zu vertrauen, die Datei von `rejected/` nach `trusted/` verschieben; die nächste Verbindung wird angenommen, ohne Neustart. Ein Zertifikat, das in `rejected/` liegt, wird auch mit `--trust-all` abgewiesen: Es erst verschieben oder löschen. `--trust-all` nimmt jedes Client-Zertifikat an und kopiert es nach `trusted/`, wo es nach dem Beenden bleibt: Während der Inbetriebnahme verwenden, danach aus `trusted/` löschen, was nicht bleiben soll. Der Endpunkt ohne Sicherheit prüft keine Client-Zertifikate; er ist für Werkzeuge wie UaExpert auf demselben Rechner und für die Tests da.
+
+**Benutzername und Passwort.** Mit `--user NAME` verlangt jeder Endpunkt diesen Benutzernamen und das Passwort aus `SIM_OPCUA_PASSWORD`, das aus der Umgebung gelesen wird, damit es nicht in der Prozessliste erscheint:
+
+```sh
+SIM_OPCUA_PASSWORD=geheim cargo run --release -p sim-opcua -- t-gantry --user sps
+```
+
+(PowerShell: vorher `$env:SIM_OPCUA_PASSWORD = "geheim"`.) Das Passwort geht an jedem Endpunkt mit dem Schlüssel des Servers verschlüsselt (Basic256Sha256), auch an dem ohne Sicherheit. Anonyme Clients werden dann abgewiesen. Es gibt einen Benutzer; Rollen (nur lesen, schreiben) werden nicht unterschieden.
+
+## Knoten-IDs und Datentypen
+
+Jede Variable ist ein Skalar (ValueRank −1) im Namensraum `urn:kinematics-simulation`, mit einer Zeichenketten-Knoten-ID, die bei jedem Start derselben Maschine gleich ist: Sie entsteht aus den Signal-, Achsen- und Bausteinnamen, nie durch Nummerieren. Der Namensraumindex ist derzeit 2 (0 ist der von OPC UA, 1 der Anwendungs-URI des Servers); ein Client sollte ihn trotzdem über den URI ermitteln (`OPC_UA_NamespaceGetIndexList`, `UA_GetNamespaceIndex`, `UA_NamespaceGetIndex`). Die Tabelle nennt für jeden Knoten den OPC-UA-Datentyp und den IEC-61131-3-Typ, den eine SPS-Variable zum Lesen oder Schreiben braucht; `*` steht für beliebigen Text, und die erste passende Zeile gilt. Ein Test (`sim-opcua/tests/interop.rs`) durchsucht jede Variable jeder Maschine und prüft DataType, ValueRank, AccessLevel und Wert gegen die englische Fassung dieser Tabelle.
+
+| Knoten-ID | OPC-UA-Typ | IEC 61131-3 | Zugriff |
+| --- | --- | --- | --- |
+| `signal.*` | Double | LREAL | lesen |
+| `command.target.*`, `command.setpoint.*` | Double | LREAL | lesen, schreiben |
+| `command.move`, `command.cycle`, `command.disable`, `command.enable`, `command.path_time_optimal`, `command.run_path`, `command.reset_pacing` | Boolean | BOOL | lesen, schreiben |
+| `command.path` | String | STRING | lesen, schreiben |
+| `status.busy` | Boolean | BOOL | lesen |
+| `status.refused` | String | STRING | lesen |
+| `status.overruns`, `status.cycles`, `status.steps`, `status.client_writes`, `status.client_reads` | UInt64 | ULINT | lesen |
+| `status.*` | Double | LREAL | lesen |
+| `axis.*.ActualPosition`, `axis.*.ActualVelocity` | Double | LREAL | lesen |
+| `axis.*.Enable`, `axis.*.Execute` | Boolean | BOOL | lesen, schreiben |
+| `axis.*.Position`, `axis.*.Distance`, `axis.*.Velocity`, `axis.*.Acceleration`, `axis.*.Deceleration`, `axis.*.Jerk` | Double | LREAL | lesen, schreiben |
+| `axis.*.ErrorID` | UInt16 | UINT | lesen |
+| `axis.*.StateID` | Int32 | DINT | lesen |
+| `axis.*.State` | String | STRING | lesen |
+| `axis.*.Status`, `axis.*.Valid`, `axis.*.Error`, `axis.*.Done`, `axis.*.Busy`, `axis.*.Active`, `axis.*.CommandAborted`, `axis.*.IsHomed` | Boolean | BOOL | lesen |
+
+Was die SPS-Clients brauchen:
+
+- **Siemens S7-1500** (`OPC_UA_Connect`, `OPC_UA_NamespaceGetIndexList`, `OPC_UA_NodeGetHandleList`, `OPC_UA_ReadList`, `OPC_UA_WriteList`): die Variablen der Listen in einem Datenbaustein, mit den IEC-Typen oben (LReal, Bool, UInt, DInt, ULInt, String). Ein S7-`String` fasst höchstens 254 Zeichen; für ein längeres `command.path` `WString` nehmen, das der Client ebenfalls auf OPC-UA-String abbildet. Die S7-1200 kennt kein `ULInt`: die UInt64-Zähler mit einer S7-1500 lesen oder weglassen.
+- **Beckhoff TF6100** (`UA_Connect`, `UA_GetNamespaceIndex`, `UA_NodeGetHandle`, `UA_Read`, `UA_Write`): Der Wert geht als Zeiger und Größe, also bestimmt der Typ der SPS-Variablen, was gesendet wird. LREAL für jedes Double: Ein REAL schreibt ein Float, das die Kopplung annimmt, aber ein Double passt beim Lesen nicht in ein REAL. Standardmäßig `STRING(255)`; eine längere Bahn braucht einen längeren STRING.
+- **CODESYS-OPC-UA-Client** (PLCopen-Bausteine `UA_Connect`, `UA_NamespaceGetIndex`, `UA_NodeGetHandle`, `UA_Read`, `UA_Write`): Der Wert ist ein IN_OUT vom Typ ANY, also ist sein deklarierter Typ der auf der Leitung.
+
+Die Kopplung nimmt beim Schreiben einer Zahl Double, Float, Int16, Int32 oder Int64 an, beim Schreiben eines Merkers Boolean; alles andere wird mit `BadTypeMismatch` abgewiesen.
 
 ## PLCopen-Achsen
 
@@ -106,6 +179,23 @@ Die Kopplung misst die Zeit zwischen den Aufwachvorgängen seit dem Start oder s
 
 Unter Windows folgt der Timer der Laufzeitumgebung der Systemuhr von 15,6 ms. Bei einem Takt von 10 ms kommen die Aufwachvorgänge daher 0 bis 15,6 ms zu spät; das zeigt sich als Jitter von einigen Millisekunden, während die mittlere Periode und der Echtzeitfaktor genau bleiben. Ein eigener Thread mit dem hochauflösenden Sleep der Standardbibliothek wurde erprobt und war auf einem belasteten Rechner schlechter. Unter Linux hat der Timer eine Auflösung von etwa 1 ms. Keins von beiden ist ein Echtzeitsystem: Andere Last auf dem Rechner zeigt sich unmittelbar im Jitter.
 
+### Der Takt des Clients
+
+Neben ihrer eigenen Schleife misst die Kopplung, wie regelmäßig die Clients sie erreichen: die Zeit zwischen einer Leseanforderung an die Variablen des Simulators und der nächsten, und dasselbe für Schreibanforderungen. Eine SPS, die in jedem Tasktakt einmal liest und schreibt, zeigt hier ihre Zykluszeit und ihren Jitter, wie der Server sie sieht: den Jitter der SPS-Task, dazu den des Netzes und der Ablaufsteuerung dieses Rechners.
+
+| Knoten | Typ | Bedeutung |
+| --- | --- | --- |
+| `status.client_writes`, `status.client_reads` | UInt64 | Gemessene Abstände (eins weniger als Anforderungen) |
+| `status.client_write_mean_s`, `status.client_read_mean_s` | Double | Mittlerer Abstand, s |
+| `status.client_write_std_s`, `status.client_read_std_s` | Double | Standardabweichung der Abstände (der Grundgesamtheit, durch ihre Anzahl geteilt), s |
+| `status.client_write_max_s`, `status.client_read_max_s` | Double | Größter Abstand, s |
+
+- Eine Anforderung zählt einmal, wie viele Variablen sie auch liest oder schreibt. Eine SPS, die zwei Variablen mit zwei `UA_Read`-Bausteinen im selben Takt liest, sendet zwei Anforderungen und zeigt Abstände eines halben Takts: Beim Messen mit einer Anforderung je Takt lesen (`OPC_UA_ReadList` oder ein Baustein). Das Beispiel `sim_cycle.st` hat dafür einen Schalter.
+- Nur das Lesen von Variablenwerten zählt; Durchsuchen (die übrigen Attribute) und Abonnements nicht. Ein Lesen wird gezählt, nachdem es beantwortet ist, also erscheint ein Lesen dieser Variablen nicht in seiner eigenen Antwort.
+- Alle Clients zählen zusammen: Beim Messen nur die SPS verbinden (UaExpert schließen).
+- `command.reset_pacing` beginnt diese Werte zusammen mit denen der Schleife neu, im Schreibzugriff selbst.
+- Die Kopplung gibt sie beim Beenden aus (siehe [Kopplung starten](#kopplung-starten)).
+
 ## Beispiele in Strukturiertem Text
 
 [`crates/sim-opcua/examples/plc/twincat/sim_plcopen.st`](../../crates/sim-opcua/examples/plc/twincat/sim_plcopen.st) ist für TwinCAT 3 mit der Bibliothek Tc3_PLCopen_OpcUa (UA_Connect, UA_GetNamespaceIndex, UA_NodeGetHandle, UA_Read, UA_Write, UA_NodeReleaseHandle, UA_Disconnect). [`crates/sim-opcua/examples/plc/codesys/sim_plcopen.st`](../../crates/sim-opcua/examples/plc/codesys/sim_plcopen.st) ist für CODESYS mit dem CODESYS OPC UA Client SL, der die PLCopen-Bausteine für OPC-UA-Clients bereitstellt.
@@ -120,6 +210,41 @@ Beide Dateien enthalten:
 | `PRG_SimDemo` | Verbindet, schaltet die Achse ein, referenziert sie, startet eine Fahrt, stoppt sie nach 0,5 s, schaltet aus und trennt |
 
 **Diese Dateien wurden nicht übersetzt.** Weder TwinCAT noch CODESYS standen hier zur Verfügung. Sie folgen der Dokumentation der Bibliotheken und IEC 61131-3; Namen, die sich zwischen Bibliotheksversionen unterscheiden können, sind mit `CHECK` markiert. Jeder Zugriff holt ein Knoten-Handle und gibt es wieder frei, was drei Umläufe kostet; Produktionscode behält die Handles. Server-URL, Achsen-ID und Lagen sind an die Maschine anzupassen.
+
+`sim_cycle.st` in jedem Ordner fügt `PRG_SimCycle` hinzu, ein Programm für eine 10-ms-Task, das tut, was ein SPS-Programm mit der Maschine tut: sich mit Basic256Sha256 SignAndEncrypt (oder None) und, falls gesetzt, Benutzername und Passwort verbinden; den Namensraumindex ermitteln; die Antriebe mit MC_Power einschalten; MC_MoveAbsolute fahren; eine Bahn schreiben (`command.path`) und fahren (`command.run_path`), bis `status.busy` fällt; ausschalten und trennen. Währenddessen liest `SIM_CyclicRead` in jedem Takt die Achslage (`signal.axis.<id>.position`) und den Schleppfehler (`signal.axis.<id>.following_error`) über Knoten-Handles, die einmal geholt werden, und das Programm merkt sich den größten Schleppfehler. Es verwendet die Bausteine aus `sim_plcopen.st`. Die Bahn ist für das T-Portal geschrieben (Achsen x und z, Startpose x 0,1 m, z 0,35 m); für eine andere Maschine sie und das Ziel ändern.
+
+## Die Beispiele gegen sim-opcua auf demselben Rechner fahren
+
+Beide brauchen die SPS-Laufzeit auf diesem Rechner; nichts davon liegt diesem Projekt bei. Die Schritte folgen der Dokumentation der Hersteller und konnten hier nicht ausprobiert werden.
+
+**1. Die Kopplung starten**, in einem Terminal im Ordner des Repositorys, für die erste Verbindung mit `--trust-all`:
+
+```sh
+cargo run --release -p sim-opcua -- t-gantry --port 4840 --trust-all --lang de
+```
+
+Sie lauscht auf `opc.tcp://127.0.0.1:4840/`, der URL in `PRG_SimCycle`, und nennt den pki-Ordner.
+
+**2a. TwinCAT 3 (TF6100).**
+
+1. In TwinCAT XAE (Visual Studio) ein neues TwinCAT-XAE-Projekt anlegen und ein SPS-Projekt hinzufügen (Standard PLC Project).
+2. Unter References `Tc3_PLCopen_OpcUa` hinzufügen. TF6100 braucht eine Lizenz; eine 7-Tage-Testlizenz lässt sich unter System > License aktivieren.
+3. Den Code einfügen: TwinCAT importiert `.st`-Dateien nicht direkt. Für jeden `FUNCTION_BLOCK` und jedes `PROGRAM` aus `twincat/sim_plcopen.st` und `twincat/sim_cycle.st` eine POU dieses Namens anlegen, die Deklaration (vom Kopf bis `END_VAR`) in den oberen Teil und den Rumpf in den unteren Teil kopieren. `E_SimKind` in eine DUT.
+4. `PRG_SimCycle` aus der SPS-Task aufrufen und deren Zykluszeit auf 10 ms setzen.
+5. Die Konfiguration aktivieren, das Zielsystem in den Run-Modus setzen (die lokale Laufzeit braucht einen freien Kern oder Hyper-V-Einstellungen, wie Beckhoff sie beschreibt), einloggen und starten.
+6. TF6100 erzeugt beim ersten gesicherten Verbindungsaufbau ein Client-Zertifikat und prüft das des Servers: Scheitert die Verbindung mit einem Zertifikatsfehler, `pki/own/cert.der` im PKI-Ordner von TF6100 vertrauen (siehe Handbuch TF6100: ein unbekanntes Server-Zertifikat landet in dessen `rejected`-Ordner und wird von dort nach `trusted` verschoben).
+7. Beobachten, wie `nStep` auf 100 geht, `fbPosition.fValue` der Fahrt und der Bahn folgt, und `fLargestError`. Im Terminal der Kopplung liegt das Client-Zertifikat jetzt in `pki/trusted`: Von nun an die Kopplung ohne `--trust-all` starten.
+
+**2b. CODESYS Control Win.**
+
+1. CODESYS Development System V3.5 mit CODESYS Control Win (SoftSPS) installieren und die SoftSPS über ihr Taskleistensymbol starten.
+2. Ein Standardprojekt für das Gerät „CODESYS Control Win V3 x64“ anlegen und im Bibliotheksverwalter die Bibliothek „OPC UA Client“ (CODESYS OPC UA Client SL) hinzufügen. Ohne Lizenz läuft sie eine begrenzte Zeit im Demomodus.
+3. Für jeden Baustein aus `codesys/sim_plcopen.st` und `codesys/sim_cycle.st` eine POU anlegen und Deklaration und Rumpf einfügen; `E_SimKind` in eine DUT.
+4. In der Taskkonfiguration eine zyklische Task von 10 ms anlegen, die `PRG_SimCycle` aufruft.
+5. Für die gesicherte Verbindung im Security Screen das Zertifikat des OPC-UA-Clients erzeugen und dort dem des Servers (`pki/own/cert.der`) vertrauen; die Namen unterscheiden sich zwischen Versionen (`CHECK` in der Datei). Oder für einen ersten Test am Endpunkt ohne Sicherheit `xSecure := FALSE` setzen.
+6. Einloggen, laden, starten. Beobachten, wie `iStep` auf 100 geht, `fbPosition.lrValue` und `lrLargestError`.
+
+**3. Den Takt-Jitter ablesen.** `bReadFollowingError` (TwinCAT) oder `xReadFollowingError` (CODESYS) auf FALSE setzen, damit das Programm eine Leseanforderung je Takt sendet, und die Kopplung nach dem Lauf mit Strg+C beenden: Die Zeile `Client-Lesezugriffe ...` nennt die Zahl der Abstände, ihr Mittel (der Tasktakt, 10 ms, wenn jedes Lesen innerhalb eines Takts zurückkommt; 20 ms, wenn es bis zu zwei braucht), ihre Standardabweichung und den größten. Während das Programm läuft, stehen dieselben Werte in `status.client_read_*`.
 
 ## Dauertest
 

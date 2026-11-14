@@ -53,10 +53,10 @@ jobs:
       # The PLC tests run against the wall clock: on a runner busy with the simulation tests they miss their times, so
       # they run afterwards, one at a time.
       - name: Test
-        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci -E "not (package(sim-opcua) & (binary(plc) | binary(soak)))"
+        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci -E "not (package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop)))"
 
       - name: PLC tests
-        run: cargo nextest run -p sim-opcua --release --locked --profile ci -E "binary(plc) | binary(soak)" --test-threads 1
+        run: cargo nextest run -p sim-opcua --release --locked --profile ci -E "binary(plc) | binary(soak) | binary(interop)" --test-threads 1
 
       # What the default filter of .config/nextest.toml leaves out of the step "Test": the long sweeps of the velocity
       # loops' margins across the bounds. Each spreads its loop measurements over every core, so one at a time.
