@@ -13,6 +13,7 @@ pub mod catalog;
 pub mod chain;
 pub mod collision;
 pub mod control;
+pub mod conveyor;
 pub mod dataset;
 pub mod drive;
 pub mod identify;

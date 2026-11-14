@@ -598,6 +598,49 @@ impl Sim {
                 colour(h.part.scene_part, h.part.scene_index, h.rise / h.max_rise);
             }
         }
+        self.conveyor_scene(out);
+    }
+
+    /// With `[conveyor]`: the belt as a band under the grip poses, slats across it that run with it, and the parts on
+    /// it, where the machine maps tool poses into the scene.
+    fn conveyor_scene(&self, out: &mut Scene) {
+        use sim_core::scene::{Part, Shape};
+        let Some((conveyor, pass)) = self.control.conveyor() else { return };
+        let along =
+            |s: f64| -> Vec<f64> { conveyor.origin.iter().zip(&conveyor.direction).map(|(o, d)| o + d * s).collect() };
+        let (Some(start), Some(end)) =
+            (self.machine.scene_point(&along(0.0)), self.machine.scene_point(&along(conveyor.length)))
+        else {
+            return;
+        };
+        // The parts are 50 mm cubes under the grip pose; the band lies under them, 300 mm wide.
+        let (part, width) = (0.05, 0.3);
+        let below = |p: [f64; 3], by: f64| [p[0], p[1], p[2] - by];
+        out.parts.push(Part::new(
+            "conveyor-belt",
+            Shape::Segment { to: below(end, part), width },
+            below(start, part),
+            [0.15, 0.15, 0.17],
+        ));
+        // shortcut: the slats are boxes along the scene's axes, right for a belt along x or y and too wide on a slant;
+        // turned boxes if a slanted belt is ever drawn.
+        let unit = [end[0] - start[0], end[1] - start[1]];
+        let norm = unit[0].hypot(unit[1]).max(1e-9);
+        let (dx, dy) = (unit[0].abs() / norm, unit[1].abs() / norm);
+        let size = [0.01 * dx + width * dy, 0.01 * dy + width * dx, 0.006];
+        let spacing = 0.1;
+        let shift = conveyor.belt(self.time()) % spacing;
+        for i in 0..(conveyor.length / spacing).floor() as usize {
+            if let Some(p) = self.machine.scene_point(&along(shift + i as f64 * spacing)) {
+                out.parts.push(Part::new("conveyor-slat", Shape::Box { size }, below(p, part), [0.35, 0.35, 0.38]));
+            }
+        }
+        for (k, _) in conveyor.parts_on_belt(self.time(), pass) {
+            if let Some(p) = self.machine.scene_point(&conveyor.part_pose(k, self.time())) {
+                let size = [part; 3];
+                out.parts.push(Part::new("conveyor-part", Shape::Box { size }, below(p, part / 2.0), [0.9, 0.55, 0.1]));
+            }
+        }
     }
 
     /// Where the tool is in the scene right now; `None` where the machine has no mapping.

@@ -837,6 +837,25 @@ Lauf: erste Berührung eines Hindernisses (Name: Zeit, Geschwindigkeit des Werkz
 - Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste.
 - Der Abstand gilt zwischen Quadern: Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet, nicht ihre CAD-Formen. Die Unterarmstäbe des Delta-Pickers sind je zehn Quader entlang des gezeichneten Stabs, wo er schräg steht bis zu einer Stücklänge (95 mm) breiter als der Stab; seine Oberarme werden nicht geprüft.
 
+## Von einem laufenden Förderband greifen
+
+[`crates/machine-delta-d3/conveyor.toml`](../../crates/machine-delta-d3/conveyor.toml) ist die Standardkonfiguration des D3 mit einer Tabelle [`[conveyor]`](../config-reference.md#conveyor): Ein Band in x-Richtung bringt mit 0,3 m/s jede Sekunde ein Teil durch ein 0,5 m langes Greiffenster; der Delta trifft jedes Teil mit der Geschwindigkeit des Bands, fährt beim Schließen des Greifers mit ihm, hebt es ab und legt es an einem festen Ablageort ab. Die Tabelle wirkt genauso bei den anderen Deltas und den Portalen (ein Wert je Werkzeugachse).
+
+```text
+$ sim-cli analyze delta-d3 --config crates/machine-delta-d3/conveyor.toml --lang de
+Förderband: Griffe, Folgefehler beim Greifen längs des Bands, verpasste Teile 60.00 / min, 0.444 mm, 0.00 / min
+$ sim-cli verdicts delta-d3 --config crates/machine-delta-d3/conveyor.toml
+...
+pick-tracking,,0.0004440,0.001000,ok
+parts-missed,,0,0,ok
+```
+
+- Der eigene Durchlauf des Delta dauert 0,94 s; bei einem Teil je Sekunde wartet er, bis jedes Teil das Fenster erreicht, und greift 60 in der Minute, alle, die das Band bringt. Bei einem Teil alle 0,5 s (`--set conveyor.pitch_s=0.5`) kommt er nicht nach: Teile, die das Fenster ungegriffen verlassen, sind verpasst, und `parts-missed` ist nicht bestanden.
+- `pick-tracking` ist der größte Abstand des Werkzeugs vom Teil längs des Bands, während der Greifer schließt, gegen `conveyor.tracking_tolerance_m`.
+- `run --cycle` fährt die Durchläufe wie jeden Zyklus; die Aufzeichnung zeigt die Nutzlast am Ende jedes Griffs angehängt.
+- In der App die Datei mit „Öffnen…“ im Konfigurationsbereich laden und den Zyklus starten: Die 3D-Ansicht zeichnet das Band, seine mitlaufenden Leisten und die Teile darauf.
+- Wie jede Bewegung eines Durchlaufs geplant wird und was ein Griff oder ein verpasstes Teil ist, steht in der [Modellreferenz](../model-reference.md#picking-from-a-conveyor) (englisch).
+
 ## Regler einstellen und Input Shaping nutzen
 
 Die Verstärkungen stehen in `[drive]`: `kv_1_s` (Lageverstärkung Kv), `velocity_kp_nm_s_rad` und `velocity_tn_s` (Drehzahlregler: Verstärkung Kp und Nachstellzeit Tn), `current_kp_v_a` und `current_tn_s` (Stromregler). Die drei folgenden Befehle geben ein Testsignal nur auf den Lagesollwert, ohne Vorsteuerung. Sie zeigen also die Regelkreise selbst.

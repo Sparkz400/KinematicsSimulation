@@ -947,6 +947,15 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     .map_err(|e| Failure(e.key, String::new()))?;
     tell_start(tr, load.warm_start.map(|w| w.change));
+    if let Some(c) = load.conveyor {
+        let detail = format!(
+            "{:.2} / min, {:.3} mm, {:.2} / min",
+            c.picks_per_minute,
+            c.tracking_peak * 1e3,
+            c.missed_per_minute
+        );
+        eprintln!("{}", tr.tr_arg("cli-conveyor", &detail));
+    }
     let mut out = output(args, "--out")?;
     writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h").map_err(io)?;
     // Empty where the machine does not report the signal or the config has no load rating for the guide.

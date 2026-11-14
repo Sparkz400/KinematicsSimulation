@@ -21,3 +21,4 @@ cli-run-contact = Lauf: erste Berührung eines Hindernisses (Name: Zeit, Geschwi
 cli-thermal-start-cold = Thermischer Start: kalt (Teile und Wicklungen bei den Temperaturen, mit denen der Lauf begann)
 cli-thermal-start-warm = Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K
 cli-thermal-start-unsettled = Thermischer Start: warm, aber in den Warmdurchläufen NICHT konvergiert; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K
+cli-conveyor = Förderband: Griffe, Folgefehler beim Greifen längs des Bands, verpasste Teile { $arg }

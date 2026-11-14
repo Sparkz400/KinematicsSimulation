@@ -9,6 +9,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
 | D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
 | D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
+| C | [`crates/machine-delta-d3/conveyor.toml`](../crates/machine-delta-d3/conveyor.toml) | The D3's default with a [`[conveyor]`](#conveyor) table: it picks from a belt conveyor instead of running the Adept cycle |
 | D4 | [`crates/machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml) | Four-axis delta picker D4: the D3 with a turning tool on a telescopic shaft, sized after the ABB IRB 360 with its fourth axis. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d4) |
 
 | L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
@@ -27,8 +28,8 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 ## Rules
 
 - `format_version = 1` is required. Any other value is refused.
-- A config has to be complete. There are no built-in defaults for a missing key: a key that the machine reads and the file lacks is refused (`Configuration value is missing: ...`). Only `[ratings]` entries, `[parts]`, `[bounds]`, `obstacles` and `drive.braking_module` (off) may be left out, and `effects.thermal_warm_start` and `effects.drive_current_limit` (off: a config written before 13 November 2026).
-- A config file (`--config`) may not have a key that the machine's default config lacks: it is refused by name (`Configuration has a value this machine does not know: ...`), so a misspelt key cannot pass for the default's value. `[bounds]` has its own check, and `ratings.pulley_max_torque_nm` is the one rating no default config has. A name in `[parts]` has to be text.
+- A config has to be complete. There are no built-in defaults for a missing key: a key that the machine reads and the file lacks is refused (`Configuration value is missing: ...`). Only `[ratings]` entries, `[parts]`, `[bounds]`, `obstacles`, `[conveyor]` and `drive.braking_module` (off) may be left out, and `effects.thermal_warm_start` and `effects.drive_current_limit` (off: a config written before 13 November 2026).
+- A config file (`--config`) may not have a key that the machine's default config lacks: it is refused by name (`Configuration has a value this machine does not know: ...`), so a misspelt key cannot pass for the default's value. `[bounds]` has its own check, `ratings.pulley_max_torque_nm` and `ratings.motor_bearing_load_rating_n` are the ratings no default config has, and `[conveyor]` the table none has. A name in `[parts]` has to be text.
 - `--set path=value` and the app's parameter panel can only change values that exist, and cannot change their type. An integer is accepted where a float is expected.
 - Most physical values must be strictly positive (masses, radii, stiffnesses, cycle times, friction levels). A zero there is refused as out of range.
 - Values that may be zero must not be negative: the payload, dampings, viscous and shaft friction, backlash, belt pretension and belt mass, the gearbox's inertia, idler and cable chain values, feedforward factors, the blend time, the path tolerance, the start temperature rise.
@@ -666,3 +667,26 @@ The cycle is a list of segments, run in order and repeated. All three configs ha
 | `via` | m | Optional, in no shipped file. Via points, each one position per axis inside the strokes: the segment then runs a path planned within the axis limits (`path::plan`, with the transition curves of `profile.path_tolerance_m`) instead of the straight move: a line to the first via point, a smooth curve (spline) through the others, and a line from the last to `target`. With via points straight above pick and place and one between, a lift, traverse and lower without a stop; the optimiser writes such segments. One via point is two lines with a stop between. The path is planned from the segment before's target when the config is read, and refused (`cycle.segment[i].via`) where it cannot be planned or leaves the strokes. A segment with via points does not blend (`corner_blending`) with the one before. The first segment of a run starts from the start pose; were its path refused from there, it runs the straight move |
 
 T and E: lower, dwell (grip), lift, traverse, lower, dwell (release), lift, traverse back; six segments. S: a shuttle between x = 0.9 and x = 0.1 with a dwell of 0.1 s at each end; two segments.
+
+## `[conveyor]`
+
+Picking from a moving belt conveyor (goal 3), for every machine whose tool axes are Cartesian positions: the deltas D3, D2 (x and z only: a belt along x), D4 and the linear delta, and the gantries. Only in C; no default config has the table, and a config without it runs its `[[cycle.segment]]` as before. With it (and `enabled = true`) the cycle (`--cycle`, `analyze`, `verdicts`, the app's cycle) is one pass per part instead of the segments, which stay in the file unused: from rest above the place to above the part, meeting it with the belt's speed; down onto it, the grip moving with it, up; to above the place, down, the release (moving with a second belt, if the place is on one), up; and, from a moving place, to rest above it. How each move is planned, and what is a pick or a miss, is in the [model reference](model-reference.md#picking-from-a-conveyor). All keys are choices of the process, not properties of the machine: no `[bounds]`. Poses and directions are tool coordinates, one value per axis (0 on the D4's rotation).
+
+| Key | Unit | Meaning | C |
+| --- | --- | --- | --- |
+| `enabled` | true/false | The cycle picks from the belt; `false` runs `[[cycle.segment]]` | true |
+| `direction` | – | Along the belt, one value per axis; scaled to length 1, not all 0 | [1, 0, 0] |
+| `speed_m_s` | m/s | The belt's speed, not negative (0: parts stand where they come) | 0.3 |
+| `ramp_s` | s | The belt reaches its speed this long after the start, at a constant acceleration; no pass starts before (0: at once) | 0 |
+| `origin` | m | The grip pose of a part where it enters the belt, belt position 0 | [−0.5, 0.25, −0.8] |
+| `length_m` | m | The belt's length from the origin, above 0; the 3D view draws it and the parts on it | 1.0 |
+| `pitch_s` | s | Parts pass the origin at n `pitch_s` + each of `arrivals_s`, n = 0, 1, …; above 0 | 1.0 |
+| `arrivals_s` | s | The times within a pitch, at least one, each from 0 to below `pitch_s` | [0.0] |
+| `window_m` | m | The stretch along the belt from the origin in which a grip may run, [start, end], 0 ≤ start ≤ end ≤ `length_m`. A part the tool would meet before the start is waited for; one whose grip would end beyond the end is missed | [0.3, 0.8] |
+| `lift` | m | Added to a grip or place pose for the pose above it, which the tool comes from and lifts to | [0, 0, 0.05] |
+| `grip_s`, `release_s` | s | How long the tool moves with the part while the gripper closes, and with the place while it opens; the payload is attached at the end of the grip and let go at the end of the release | 0.035, 0.035 |
+| `place` | m | The place pose | [0, −0.3, −0.8] |
+| `place_direction`, `place_speed_m_s` | –, m/s | A second belt the place lies on, as `direction` and `speed_m_s`; speed 0: a fixed place | [1, 0, 0], 0 |
+| `tracking_tolerance_m` | m | The verdict `pick-tracking`: the most the tool may be from the part along the belt during a grip, above 0 | 0.001 |
+
+The results: `analyze` says the picks a minute (60 / the measured pass's time, one part per pass), the tracking error and the parts missed a minute on its error stream; `verdicts` judges `pick-tracking` against `tracking_tolerance_m` and `parts-missed` (parts a minute that pass the window unpicked) against 0.

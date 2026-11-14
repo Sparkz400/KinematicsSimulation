@@ -1898,3 +1898,56 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## Picking from a moving conveyor (14 November)
+
+Goal 3: a cycle that picks parts riding on a belt conveyor, for every machine whose tool axes are Cartesian positions
+(the four deltas, the gantries), generic in sim-components (`conveyor.rs`, no machine named).
+
+- A `[conveyor]` table (optional, in no default config; `analysis::RATINGS_BEYOND_DEFAULT` lets a config file have it):
+  the belt's direction in tool coordinates, speed and ramp, the grip pose where parts enter, parts at a pitch with
+  listed times within it, the pick window along the belt, the lift, grip and release times, the place (fixed, or on a
+  second belt with its direction and speed), and the tracking tolerance. Keys in docs/config-reference.md.
+- Each move of a pass is a jerk-limited `profile::Move` to Q plus a belt term whose velocity blends from va to vb with
+  h(u) = 3u^2 - 2u^3 (no jump in acceleration at either end). A target at P moving with vb is met at T with its velocity
+  where Q = P + T (vb - va) / 2; the move runs with each axis's limits less what the belt term takes (max(|va|, |vb|),
+  1.5 |dv| / T, 6 |dv| / T^2), and T, on which both depend, is found by bisection (`conveyor::intercept`).
+- A pass: to above the part, down, the grip moving with it (payload attached at its end), up, to above the place, down,
+  the release, up, and from a moving place to rest. A part the tool would meet before the window is waited for (the
+  pass starts later, by bisection on its start); one gripped beyond the window, or whose pass leaves the range, is
+  missed. The controller runs a pass as `Motion::Conveyor` on the simulated time; one pass is one cycle pass, so
+  `analyse_cycle`, the CLI (`analyze`, `verdicts`, `run --cycle`) and the app run it unchanged.
+- Results (`CycleLoad::conveyor`): picks a minute = 60 / the measured pass; the tracking error (measured tool against
+  the part along the belt during the grip) as the verdict `pick-tracking` against `conveyor.tracking_tolerance_m`;
+  parts missed a minute (beyond the picks a minute, or counted in the pass, whichever is more) as `parts-missed`
+  against 0. `analyze` says the three on its error stream.
+- The scene draws the belt as a band, slats that run with it and the parts on it; the app needs nothing of its own
+  (the belt gets the rubber finish, the two checks their labels).
+- `crates/machine-delta-d3/conveyor.toml`: the D3 picking from a belt at 0.3 m/s, a part a second: 60 picks a minute,
+  0.444 mm tracking error, none missed. Run as well on the D2, D4 (onto a second belt), linear delta and T-gantry
+  from scratch configs.
+
+Found: a faster belt need not raise the RMS torque against a stationary pick, as the task expected. The moves give the
+belt term its share of the limits for their whole length, so they get gentler and longer; on the single axis with
+inertia alone, a belt at 0.3 m/s lowers the RMS torque by 11 % (hand 0.8876, simulated 0.8877), and on the D3 motor 1
+falls 8 % and motor 3 rises 3 %. The test checks the share by hand, whichever sign it has.
+
+Tests: `conveyor.rs` (unit): the intercept against the closed form of a trapezoidal move (0.89395 s), arrival on the
+part with its speed within the limits, the plan on the part at the belt's speed during the grip (beginning at 1 s, the
+window's start), two parts beyond the window missed, every part missed with the place out of reach.
+`sim-machines/tests/conveyor.rs`: the D3 example at a pass a pitch (1 s, 60 / min = 60 / cycle time, none missed),
+the measured speed along the belt during the grip 0.3 m/s within tolerance / grip time, a belt at 0.5 s pitch missing at
+least 120 - picks a minute, the RMS share on the single axis, belt, slats and parts in the scene, an obstacle at the place
+failing `collision`.
+
+Left open:
+
+- Passes start once the belt has its speed (no pick during the ramp); the gripper acts on the plan's time, so with input
+  shaping on it closes up to a shaper period early.
+- The reserved limits are conservative: a planner that shares the limits along the move would be faster.
+- The second belt carries no parts in the scene and has no slots (the part goes wherever the place pose is when the tool
+  leaves for it); a vision system's latency or a part's position error are not modelled.
+- `check_cycle` checks no conveyor pass before the run (they are planned as the parts come); the live check judges them.
+- `sim-cli optimise` changes the unused `[[cycle.segment]]` of a conveyor config, not the conveyor's passes.
+- Only the D3 ships a conveyor config.
+

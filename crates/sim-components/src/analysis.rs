@@ -191,6 +191,22 @@ pub struct CycleLoad {
     /// With effects.thermal_warm_start, and windings or parts whose warmth acts back on the run: how the measured pass
     /// was started warm. `None`: from cold.
     pub warm_start: Option<WarmStart>,
+    /// With `[conveyor]`: what the measured pass, one pick, did on the belt.
+    pub conveyor: Option<ConveyorLoad>,
+}
+
+/// One pick from the conveyor (`[conveyor]`), the measured pass of the cycle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConveyorLoad {
+    /// 60 / the pass's duration: one part per pass.
+    pub picks_per_minute: f64,
+    /// The most the tool was from the part along the belt while the gripper closed, m (the verdict `pick-tracking`).
+    pub tracking_peak: f64,
+    /// The parts that left the window unpicked from the measured pick's plan to the next's.
+    pub missed: u64,
+    /// Parts a minute that pass the window unpicked (the verdict `parts-missed`): those the belt brings beyond the picks a
+    /// minute, which one pass cannot see when the misses come in bursts, or those missed in the pass, whichever is more.
+    pub missed_per_minute: f64,
 }
 
 /// How far the rises a warm pass starts at may lie from those it settles at for the warm start to count as converged,
@@ -383,6 +399,9 @@ struct Tally {
     path_error: (f64, f64, u64),
     tracking_error: f64,
     dwell_error: f64,
+    /// With `[conveyor]`: the most the tool was from the gripped part along the belt, and the parts missed before.
+    pick_tracking: f64,
+    missed_before: u64,
 }
 
 /// Distance from `p` to the piece of line between `a` and `b`.
@@ -538,6 +557,8 @@ impl Tally {
             path_error: (0.0, 0.0, 0),
             tracking_error: 0.0,
             dwell_error: 0.0,
+            pick_tracking: 0.0,
+            missed_before: sim.control.conveyor().map_or(0, |(c, _)| c.missed),
         }
     }
 
@@ -548,6 +569,15 @@ impl Tally {
     /// Adds the step the simulation has just made.
     fn step(&mut self, sim: &Sim) {
         sim.machine.motor_state(&sim.state, &mut self.pos, &mut self.speed);
+        if let Some((conveyor, Some(pass))) = sim.control.conveyor()
+            && let Some(part) = conveyor.gripping(pass, sim.time())
+        {
+            let n = part.len();
+            let (mut tool, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            sim.machine.tool_state(&sim.state, &mut tool, &mut vel);
+            let along: f64 = tool.iter().zip(&part).zip(&conveyor.direction).map(|((t, p), d)| (t - p) * d).sum();
+            self.pick_tracking = self.pick_tracking.max(along.abs());
+        }
         let sampled = self.steps.is_multiple_of(self.every);
         if sampled {
             self.sample_now(sim);
@@ -815,6 +845,17 @@ impl Tally {
             contact: sim.contact.clone(),
             braking_power_peak: self.braking_peak,
             warm_start: None,
+            conveyor: sim.control.conveyor().map(|(c, _)| {
+                let missed = c.missed - self.missed_before;
+                ConveyorLoad {
+                    picks_per_minute: 60.0 / duration,
+                    tracking_peak: self.pick_tracking,
+                    missed,
+                    missed_per_minute: (missed as f64 * 60.0 / duration)
+                        .max(c.offered_per_minute() - 60.0 / duration)
+                        .max(0.0),
+                }
+            }),
         }
     }
 
@@ -942,6 +983,10 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
         if sim.time() > 600.0 {
             return Err(CommandError { key: "error-cycle-timeout" });
         }
+        // A conveyor cycle ends where no part can be picked any more.
+        if !sim.control.busy() && sim.control.enabled() {
+            return Err(CommandError { key: "error-conveyor-unreachable" });
+        }
         tally.step(sim);
         // Drives that tripped on DC link overvoltage never finish the cycle; the verdicts say why.
         if !sim.control.enabled() {
@@ -1028,8 +1073,29 @@ pub struct Verdict {
     pub ok: bool,
 }
 
-/// Ratings that `verdicts` judges and no default config has: a config file may add them (see `load_config`).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 2] = ["ratings.pulley_max_torque_nm", "ratings.motor_bearing_load_rating_n"];
+/// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
+/// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
+pub const RATINGS_BEYOND_DEFAULT: [&str; 19] = [
+    "ratings.pulley_max_torque_nm",
+    "ratings.motor_bearing_load_rating_n",
+    "conveyor",
+    "conveyor.enabled",
+    "conveyor.direction",
+    "conveyor.speed_m_s",
+    "conveyor.ramp_s",
+    "conveyor.origin",
+    "conveyor.length_m",
+    "conveyor.pitch_s",
+    "conveyor.arrivals_s",
+    "conveyor.window_m",
+    "conveyor.lift",
+    "conveyor.grip_s",
+    "conveyor.release_s",
+    "conveyor.place",
+    "conveyor.place_direction",
+    "conveyor.place_speed_m_s",
+    "conveyor.tracking_tolerance_m",
+];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
     Verdict { check, motor, value, limit, ok: value <= limit }
@@ -1317,6 +1383,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // a winding that does not settle), whose cause fails a verdict of its own (the trip's, the crash's, motor-thermal).
     if let Some(warm) = load.warm_start.filter(|w| w.change.is_finite()) {
         out.push(at_most("thermal-warm-start", None, warm.change, WARM_START_TOLERANCE_K));
+    }
+    // A pick from the conveyor: the tool on the part along the belt while the gripper closes, and no part left unpicked.
+    if let Some(c) = load.conveyor {
+        out.push(at_most("pick-tracking", None, c.tracking_peak, cfg.positive("conveyor.tracking_tolerance_m")?));
+        out.push(at_most("parts-missed", None, c.missed_per_minute, 0.0));
     }
     Ok(out)
 }
@@ -3398,6 +3469,7 @@ mod tests {
             contact: None,
             braking_power_peak: 0.0,
             warm_start: None,
+            conveyor: None,
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

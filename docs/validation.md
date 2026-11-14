@@ -352,6 +352,20 @@ The D4's arms are the D3's (checked above); these check what the fourth axis add
 | The tool's torsional mode | 1 / (1/8594.4 + 1/500) = 472.51 N m/rad against 7.08e-3 kg m²: 41.116 Hz (75.857 Hz without the payload), 2.05 % damping; among `modes` | 1e-5 | `the_tools_torsional_mode_is_the_hand_calculated` |
 | The default cycle with a 90° turn | The tool at 90° in the pick to 1.5 mrad; every verdict passes (settling 0.39 mm); with the catalogue's 9 and 10 arcmin backlash settling fails alone (1.21 mm) | – | `the_default_cycle_turns_the_tool_and_passes_its_verdicts` |
 
+## Hand calculations: picking from a conveyor
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Intercept time of a trapezoidal move (v_max 2 m/s, a 20 m/s², jerk 1e9) from rest at 0 to a part at 1 m moving at 0.5 m/s | The root of the quadratic of T = D / v′ + v′ / a′, D = 1 + v T / 2, v′ = 1.5 m/s, a′ = a − 1.5 v / T: 0.89395 s | 1e-5 s | `the_intercept_of_a_trapezoidal_move_is_the_closed_form`, conveyor (unit) |
+| Arrival on the part, speed and limits on the way | The part's pose and speed, the axis limits | 1e-9 | `the_tool_arrives_on_the_part_with_the_belts_speed_within_its_limits`, conveyor (unit) |
+| Plan during the grip; when it begins | The part's pose and the belt's speed; the part at the window's start, 0.5 m at 0.5 m/s: 1 s | 1e-9; 1e-6 s | `during_the_grip_the_plan_moves_with_the_part`, conveyor (unit) |
+| Parts beyond the window or out of reach | Parts at 0, 2 and 4 s are 2.5, 1.5 and 0.5 m on at 5 s, the window ending at 1 m: two missed; a place out of reach: all missed | exact | `a_part_beyond_the_window_counts_as_missed`, `a_part_out_of_reach_counts_as_missed`, conveyor (unit) |
+| Picks a minute of the D3 example | 60 / cycle time; the passes a pitch apart, 1 s: 60 a minute, none missed | 1e-12; 1 ms | `the_example_picks_a_part_each_pitch_and_misses_none`, conveyor |
+| The D3's speed along the belt during the grip, measured | 0.3 m/s ± tolerance / grip time = 0.0286 m/s; the plan exactly 0.3 m/s | as said | `during_the_grip_the_tool_moves_along_the_belt_at_its_speed`, conveyor |
+| Parts missed a minute at a part every 0.5 s | At least 120 − picks a minute | – | `a_belt_faster_than_the_picks_misses_parts`, conveyor |
+| RMS torque of a belt pick at 0.3 m/s against a stationary pick, single axis with inertia alone | sqrt of the ratio of ∫a² dt of the bang-bang moves with the reduced acceleration plus 1.2 v² / T per blend: 0.8876 (measured 0.8877) | 0.02 | `a_belt_pick_changes_the_rms_torque_by_the_hand_estimated_share`, conveyor |
+| Belt, slats and parts in the scene; an obstacle at the place | 1 band, 10 slats, part 0 at 0.15 m at 0.5 s; `collision` fails | 1e-9 m | `the_scene_draws_the_belt_its_slats_and_its_parts`, `an_obstacle_at_the_place_fails_the_collision_check`, conveyor |
+
 ## Vendor formulas and vendor documents
 
 | What is compared | Against | Tolerance | Test |

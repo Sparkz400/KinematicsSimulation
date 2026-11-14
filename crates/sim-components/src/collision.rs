@@ -92,11 +92,12 @@ pub fn check_path(machine: &dyn Machine, obstacles: &[Obstacle], poses: &[Vec<f6
 /// target with the payload attached (as the controller starts), then each segment from the target before it with the
 /// payload as that one left it, and round from the last to the first again. A segment with via points takes the path
 /// the planner times through them; the straight moves are taken as lines, which corner blending would cut short (the
-/// simulation itself is checked as it runs). `None` without obstacles.
+/// simulation itself is checked as it runs). `None` without obstacles, and with `[conveyor]`, whose passes are planned
+/// as the parts come: the simulation's live check judges them.
 pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanCheck>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let obstacles = obstacles(cfg)?;
-    if obstacles.is_empty() {
+    if obstacles.is_empty() || cfg.get("conveyor").is_ok() && cfg.bool("conveyor.enabled")? {
         return Ok(None);
     }
     let mut machine = (entry.build)(cfg)?;

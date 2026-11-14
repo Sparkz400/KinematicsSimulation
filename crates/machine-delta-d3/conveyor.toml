@@ -1,0 +1,443 @@
+# Delta picker D3 picking from a belt conveyor: default.toml with a [conveyor] table at its end, which replaces the Adept
+# cycle by picks from the belt (conveyor.enabled = false runs the Adept cycle again), and the start pose above the place.
+# Everything else, and where each value comes from, is as in default.toml.
+#
+# Delta picker D3: three rotary arms on a base, three parallelograms of forearms down to a platform that stays level
+# (Clavel's delta). Sized like the Autonox DELTA RL3-1200-3kg (A_00035-02): working range 1200 mm across, 200 mm high at
+# its edge and 386 mm at its centre, 3 kg payload, with the Siemens 1FK2105-4AF Autonox recommends for it.
+# Every value says where it comes from:
+#   [catalogue]  read from a maker's document: the Autonox Finder product page and connecting dimensions of the
+#                RL3-1200-3kg, Siemens catalogue D 32 and the planetary gearbox manual (catalog/siemens/*.csv).
+#   [estimate]   ours. Autonox keeps arm lengths, masses and inertias behind a registration this project does not
+#                have; the geometry is scaled from Williams' estimate of an ABB IRB 360 (Ohio University, 2016) to the
+#                Autonox working range, and checked to reach all of it with condition numbers below 3.6.
+# Units are in the field names. The frame: origin at the centre of the shoulder axes' plane, z up, so the platform
+# works below zero; arm 1 points along +x, arms 2 and 3 at 120 and 240 degrees.
+format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.0, 0.0, -0.95], size_m = [0.1, 0.1, 0.1] }]
+# (between pick and place, 50 mm below the payload as it passes: `collision` passes at profile.min_clearance_m 0.025)
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). Named here, they
+# would replace the numbers below when the config is loaded; the numbers below are those parts' own, written out
+# (motor 1FK2105-4AF at 400 V, gearbox NRB080-05-20, converter 6SL3210-5HE11-5UF0), so that the config reads as it
+# runs. "" names none.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+[effects]
+gravity = true
+payload = true
+# The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the arm times the ratio and backlash, gearbox
+# stiffness and damping have no meaning.
+joint_elasticity = true
+# Each forearm pair a rigid rod with its mass and rotational inertia (a sixth of its mass at each end, two thirds at its
+# middle: exact for a slender rod). Off: the lumped model of Codourey and Olsson, mass.forearm_elbow_share at the elbow
+# and the rest at the platform, the rods' rotational inertia left out. On in the shipped config.
+forearm_inertia = true
+# The upper arms bend (spring and damper, [upper_arm]): the elbow turns against the arm's root, and the platform rings
+# after a move. Off in the shipped config: its stiffness is an estimate.
+link_elasticity = false
+# Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+# Stops at both ends of each arm's angle range ([joint]).
+hard_stops = true
+holding_brake = true
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
+# (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
+crash = false
+
+# The kinematics. e = base_radius_m - platform_radius_m is what the equations use.
+# [estimate] Williams' IRB 360-1/1600 figures (R 164, r 44, upper arm 524, forearm 1244 mm, for a working radius of
+# 720 mm), scaled towards this working radius of 600 mm and rounded; with these the whole working range is reachable,
+# the arm angles stay between -44 and +80 degrees and the condition number of the Jacobian below 3.6.
+[geometry]
+base_radius_m = 0.2
+platform_radius_m = 0.05
+upper_arm_m = 0.4
+forearm_m = 0.95
+# Distance between the two rods of a forearm pair, for the 3D view only.
+forearm_spacing_m = 0.1
+
+# The working range: a cylinder with a spherical bottom, as Autonox draws it.
+# [catalogue] Autonox RL3-1200-3kg: 1200 mm across, 200 mm high at the edge, about 386 mm at the centre; the drawing's
+# R1060.74 is the bottom sphere, (600^2 + 186^2) / (2 * 186) = 1060.7 mm.
+# [estimate] its top 675 mm below the shoulder plane: the bottom sphere's centre then lies on the shoulder plane.
+[workspace]
+radius_m = 0.6
+top_z_m = -0.675
+height_edge_m = 0.2
+height_centre_m = 0.386
+# Targets where the Jacobian's condition number is above this are refused: near a singularity. Above anything in
+# the working range (3.6). The cycle is judged against ratings.max_condition_number.
+# [estimate]
+max_condition_number = 10.0
+
+# [estimate] all: a carbon tube arm with an aluminium elbow block, carbon rods with ball cups, an aluminium platform
+# with the ISO 9409-1-63 flange. Autonox's 32 kg of mechanics are mostly base frame.
+[mass]
+upper_arm_kg = 0.9
+# Centre of mass of the arm's tube from the shoulder axis, and its inertia about the shoulder axis (uniform tube:
+# m L^2 / 3 = 0.048 kg m^2), without the elbow block.
+upper_arm_cg_m = 0.2
+upper_arm_inertia_kgm2 = 0.048
+elbow_kg = 0.3
+forearm_pair_kg = 0.5
+# The share of a forearm pair's mass counted at the elbow (the rest at the platform): 2/3 matches the rod's inertia
+# about its end, m L^2 / 3 (Codourey 1998, Olsson 2009). Only with effects.forearm_inertia off (the lumped model).
+forearm_elbow_share = 0.6667
+platform_kg = 1.2
+# [catalogue] Autonox: rated payload 3 kg
+payload_kg = 3.0
+
+# With effects.link_elasticity: each upper arm bends in the plane it turns in, a turn of the elbow against the arm's
+# root. [estimate] a carbon tube 50 x 2 mm, E 100 GPa: I = pi (50^4 - 46^4) / 64 mm^4 = 8.70e-8 m^4, and a cantilever's
+# tip deflection F L^3 / (3 E I) as a turn about the shoulder: k = 3 E I / L_a = 3 * 8700 / 0.4 = 65250 N m/rad. The
+# damping about 2 % of critical at the platform's sideways mode.
+[upper_arm]
+bending_stiffness_nm_rad = 65000.0
+bending_damping_nm_s_rad = 5.0
+
+# Each arm's joint at the base.
+[joint]
+# [estimate] two angular contact bearings of the arm's shaft, about 1 % of the arm's holding torque.
+friction_coulomb_nm = 0.3
+friction_viscous_nm_s_rad = 0.05
+friction_smoothing_rad_s = 0.01
+# The stops. [estimate] beyond the -44 to +80 degrees the working range needs. Autonox draws a maximum upper-arm
+# deflection of about 235 (unit and meaning not stated).
+min_angle_deg = -55.0
+max_angle_deg = 95.0
+# [estimate] a rubber buffer.
+stop_stiffness_nm_rad = 2.0e4
+stop_damping_nm_s_rad = 20.0
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min (1FK2 configuration manual); 15 N m at the
+# maximum current of 18 A. With effects.winding_heating the winding settles at the rated rise at the rated current.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# With effects.holding_brake: while the drives are disabled, a brake holds each motor shaft up to this torque.
+# [estimate] Autonox lists the motor with brake (-0MB0) beside the one without; the D 32 gives no brake torque.
+brake_torque_nm = 8.0
+
+# The gearbox of each arm. Autonox fits its own "Getriebe Typ 3", whose ratio is behind the registration.
+# [catalogue] Siemens NRB080-05-20 (catalog/siemens/gearbox_nrb.csv): ratio 20, 96 % at full load, 10.4 N m/arcmin,
+# 9 arcmin backlash, 0.406 kg cm2 at the input. Twist and backlash put the tool off the motors' pose at rest by 0.64 mm
+# at pick and place and up to 2.09 mm at the rim's lower edge, and the cycle fails settling against 0.5 mm with it
+# (0.68 mm in the dwell): a sizing finding, the NRB080 is too loose for this class of delta (3 arcmin passes with
+# 0.33 mm). No limit cycle at rest: peak-to-peak below 2e-8 m at five poses (a limit cycle of +-4 mm reported before
+# 13 November 2026 was not found again).
+# The ratio is chosen: with all three axes at their 3 m/s at once at the middle of the range the motors turn at
+# 259 rad/s, 82 % of the rated 314 rad/s (16 gives 207, 25 gives 324); and 50 m/s2 along all three at once needs at
+# most 12.1 N m of the 15 N m (16: 14.7 N m). 20 is the highest catalogue ratio below the rated speed.
+[gearbox]
+ratio = 20.0
+efficiency = 0.96
+backlash_rad = 2.618e-3
+stiffness_nm_rad = 35752.6
+# [estimate]
+damping_nm_s_rad = 5.0
+inertia_at_input_kgm2 = 4.06e-5
+
+# With effects.part_heating: each gearbox warms with its loss (power.gearbox_*). [estimate] as for the other machines'
+# planetary gearboxes of this size.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as the delta has no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+# The tool's limits along x, y and z. [estimate] Autonox publishes none. 3 m/s and 50 m/s2 (about 5 g) are below what
+# deltas of this class are sold for (ABB IRB 360: 10 m/s, 100 m/s2), chosen for the 1FK2105 behind ratio 20 (see
+# [gearbox]); 2500 m/s3 reaches the acceleration in 20 ms.
+[axis.x]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+[axis.y]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+[axis.z]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# Velocity loop gain, tuned with `sim-cli margins delta-d3 --bands` for a phase margin of at least 35 degrees and a gain
+# margin of at least 6 dB in every run, also with motor and joint friction off. The loop crosses over near 230 Hz, where
+# the rotor alone is left (above the gearboxes' resonance), so the filters below are 0.1 ms (0.2 ms on the belt
+# machines). Found: at least 41.7 degrees and 8.1 dB (friction off), 47.0 degrees and 8.6 dB (on), with the catalogue's
+# 9 arcmin backlash. 0.2 left 30.9 degrees.
+velocity_kp_nm_s_rad = 0.25
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# The axes brake through one braking resistor for all, an S120 line-up's Braking Module: verdicts judges the
+# sum of their braking power against ratings.braking_resistor_continuous_w and _peak_w. Off: each axis has a
+# resistor of its own (an S210). A drive by name sets it.
+braking_module = false
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+[ratings]
+# How far the tool may be from its target in the second half of a dwell, when the gripper acts. It counts the
+# gearboxes' twist and backlash under the platform's weight, which the motors' encoders do not see: 0.68 mm in the
+# dwell (0.64 mm of it static), so the cycle fails it with the catalogue gearbox (see [gearbox]). [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue 2024/12); the
+# 0.1 mm the makers state is the repeatability, which a constant sag does not spoil.
+settling_tolerance_m = 0.0005
+# [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
+gearbox_rated_torque_nm = 120.0
+gearbox_max_torque_nm = 192.0
+# [estimate] a gearbox of this size; not in the catalogue's files.
+gearbox_max_input_speed_rpm = 6000.0
+# The DC link of the S210 converter. [estimate] as for the EXCT-30: 66 uF for 1.5 kW, the chopper at 770 V.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] its internal braking resistor and trip level (catalog/siemens/braking_s210.csv, operating instructions
+# 09/2022): 100 W, 5.7 kW, 820 V.
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+# Reliability of the bearing lives, %: the life factor a1 of ISO 281 (see docs/config-reference.md). 90 to 99.95.
+bearing_reliability_percent = 90.0
+# The output speed at which the planet bearings last 20000 h at the rated torque, for the gearbox life.
+# [estimate] the NRB060 ratio 5 figure (175 r/min, Table 7-15 of the manual) scaled with the ratio's slower planets:
+# not printed for the NRB080-05-20.
+gearbox_reference_speed_rpm = 100.0
+# The fatigue of the gearbox's gearing above its rated torque, by Palmgren and Miner's damage sum over the cycle's
+# output torque (Siemens' own method is in its gearbox manual, which is not in this repository), on a Woehler line
+# through Siemens' two figures: gearbox_max_torque_nm (M2max) for at most 30000 output revolutions (equipment manual
+# 04/2025, chapter 6), and no damage at or below gearbox_rated_torque_nm (M2N). A torque M between allows
+# 30000 * (M2max / M)^k output revolutions.
+# [estimate] k = 8.7, the slope of the tooth root's S-N line of case-hardened gears in ISO 6336-3 (life factor 2.5 at
+# 10^3 load cycles, 1 from 3 * 10^6: ln(3000) / ln(2.5)), the root stress in proportion to the torque.
+gearbox_gearing_wohler_exponent = 8.7
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0, which D 32 pairs with the 1FK2105-4AF at 400 V: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# The highest condition number of the Jacobian the cycle may reach ("singularity"). [estimate] a design rule: the
+# working range has up to 3.6, the Adept cycle about 2.
+max_condition_number = 5.0
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: the delta has no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+# Not used on three axes (see docs/user-guide.md): paths run as given.
+path_tolerance_m = 0.0
+# For `sim-cli optimise`: the cycle's own 25 mm lift, as if something that high stood between pick and place. The
+# same clearance is kept from every obstacle (check "collision", and a time-optimal path that comes nearer is refused).
+min_clearance_m = 0.025
+
+# Low and high bound of the values that are estimates (see the other machines' configs).
+[bounds]
+geometry.base_radius_m = [0.18, 0.22]
+geometry.platform_radius_m = [0.04, 0.06]
+geometry.upper_arm_m = [0.38, 0.42]
+geometry.forearm_m = [0.92, 0.98]
+mass.upper_arm_kg = [0.6, 1.2]
+mass.upper_arm_inertia_kgm2 = [0.032, 0.064]
+mass.elbow_kg = [0.2, 0.45]
+mass.forearm_pair_kg = [0.35, 0.7]
+mass.forearm_elbow_share = [0.5, 0.667]
+mass.platform_kg = [0.8, 1.6]
+upper_arm.bending_stiffness_nm_rad = [40000.0, 100000.0]
+upper_arm.bending_damping_nm_s_rad = [2.0, 10.0]
+joint.friction_coulomb_nm = [0.1, 0.6]
+joint.friction_viscous_nm_s_rad = [0.02, 0.1]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+gearbox.damping_nm_s_rad = [2.0, 10.0]
+gearbox.stiffness_nm_rad = [25000.0, 40000.0]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
+
+# Above the place position of the cycle. (Further out, near the edge of the range, one arm carries little of the
+# platform's weight and its velocity loop measures badly in `sim-cli margins`.)
+[start]
+pose = [0.0, -0.3, -0.75]
+
+# The Adept cycle 25/305/25 mm (Omron/Adept, ABB): up 25 mm, across 305 mm, down 25 mm, and back. Each leg is a move of
+# its own, stopping at the corners; at the bottom the gripper acts for 35 ms (ABB's figure for its 2009 cycle times). It
+# lies on y = 0, across the centre, 100 mm below the top of the working range. "payload" is the state of the gripper
+# once the segment has arrived. One pass of the six segments is one Adept cycle: one place and one pick.
+[[cycle.segment]]
+target = [0.1525, 0.0, -0.775]
+dwell_s = 0.035
+payload = false
+
+[[cycle.segment]]
+target = [0.1525, 0.0, -0.75]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -0.75]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -0.775]
+dwell_s = 0.035
+payload = true
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -0.75]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [0.1525, 0.0, -0.75]
+dwell_s = 0.0
+payload = true
+
+# Picking from a belt conveyor (see docs/config-reference.md): a belt along x at y = 0.25 m, parts on it every 1.0 s
+# (60 a minute), gripped 25 mm below the Adept cycle's top inside a window 0.5 m long across the middle of the working
+# range, and placed at a fixed place on the other side. All of it is a choice of the process (a typical
+# secondary-packaging line), not a property of the machine: nothing to bound. All poses are tool poses (x, y, z), m.
+[conveyor]
+enabled = true
+direction = [1.0, 0.0, 0.0]
+speed_m_s = 0.3
+ramp_s = 0.0
+# The grip pose of a part where it enters the belt, and the belt's length from there.
+origin = [-0.5, 0.25, -0.8]
+length_m = 1.0
+pitch_s = 1.0
+arrivals_s = [0.0]
+window_m = [0.3, 0.8]
+lift = [0.0, 0.0, 0.05]
+grip_s = 0.035
+release_s = 0.035
+place = [0.0, -0.3, -0.8]
+place_direction = [1.0, 0.0, 0.0]
+place_speed_m_s = 0.0
+tracking_tolerance_m = 0.001
