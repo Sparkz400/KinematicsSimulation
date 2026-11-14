@@ -19,7 +19,7 @@ use sim_components::motor_fit::{
     Estimate, Identified, TwoMass, frequency_response, ringing, two_mass, two_mass_from_ringing,
 };
 use sim_components::trace::{Trace, TraceError, per_axis_fit};
-use sim_components::{Command, Sim, load_config};
+use sim_components::{Command, DriveMode, Sim, load_config};
 use sim_core::{ConfigError, MachineEntry, MotorInfo, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::path::{Path, PathBuf};
@@ -402,6 +402,16 @@ fn analyze(
             Ok((motors, load))
         })
         .map_err(PyValueError::new_err)?;
+    Ok(load_columns(py, motors, &load, points)?.unbind())
+}
+
+/// The columns of `analyze`, one row per motor.
+fn load_columns<'py>(
+    py: Python<'py>,
+    motors: Vec<&'static str>,
+    load: &CycleLoad,
+    points: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
     let column = |f: fn(&sim_components::analysis::MotorLoad) -> f64| {
         PyArray1::from_vec(py, load.motors.iter().map(f).collect())
@@ -445,7 +455,7 @@ fn analyze(
         }
         out.set_item("points", list)?;
     }
-    Ok(out.unbind())
+    Ok(out)
 }
 
 /// The config with `path` (the text of a path file or of robot moves as CSV; with `path_file` a program by that file's
@@ -1487,9 +1497,181 @@ fn fmu(config: &PyConfig, path: PathBuf, binaries: Vec<PathBuf>, fmi: u8, lang: 
     std::fs::write(&path, sim_fmi::zip(&files)).map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))
 }
 
+/// A simulation stepped from Python, for a controller of the user's own: each `step` runs one controller cycle
+/// (`profile.setpoint_interval_s`, or `time` seconds) with the given torques, speeds or position setpoints held over it
+/// (`sim_components::DriveMode`), and returns every signal at its end. What it ran is recorded as `analyze` measures a
+/// cycle, so `analyze()` and `verdicts()` judge it as they judge the built-in controller's run.
+/// shortcut: a step holds the GIL (a cycle is short); release it if long steps from several threads are wanted.
+#[pyclass(name = "Sim", module = "kinematics_sim", unsendable)]
+struct PySim {
+    entry: &'static MachineEntry,
+    cfg: sim_core::Config,
+    sim: Sim,
+    tally: sim_components::analysis::Tally,
+    cycle: f64,
+    ids: Vec<String>,
+    sample: Vec<f64>,
+}
+
+impl PySim {
+    fn signal_dict<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.sim.sample(&mut self.sample);
+        let out = PyDict::new(py);
+        for (id, value) in self.ids.iter().zip(&self.sample) {
+            out.set_item(id, *value)?;
+        }
+        Ok(out)
+    }
+
+    fn refused(&self, key: &str) -> PyErr {
+        PyValueError::new_err(texts(self.entry).tr(key).to_string())
+    }
+
+    /// One finite value per motor; `what` names them in the message.
+    fn per_motor(&self, values: &[f64], what: &str) -> PyResult<()> {
+        let motors = self.sim.machine.motors().len();
+        if values.len() != motors || values.iter().any(|v| !v.is_finite()) {
+            return Err(PyValueError::new_err(format!("{what}: {motors} finite values, one per motor")));
+        }
+        Ok(())
+    }
+
+    fn load(&self) -> CycleLoad {
+        self.tally.clone().finish(&self.sim, self.sim.time())
+    }
+}
+
+#[pymethods]
+impl PySim {
+    /// The machine of `config` at rest at its start pose, drives enabled, every motor in position mode.
+    #[new]
+    fn new(config: &PyConfig) -> PyResult<Self> {
+        let (entry, cfg) = (config.entry, config.cfg.clone());
+        let sim = Sim::new(entry, &cfg).map_err(|e| config_error(entry, e))?;
+        let cycle = cfg.positive("profile.setpoint_interval_s").map_err(|e| config_error(entry, e))?;
+        let tally = sim_components::analysis::Tally::new(&sim, false);
+        let ids = sim.signal_infos().into_iter().map(|s| s.id).collect();
+        Ok(Self { entry, cfg, sim, tally, cycle, ids, sample: Vec::new() })
+    }
+
+    /// Runs one controller cycle, or `time` seconds (whole base steps), and returns every signal at its end as
+    /// `{signal id: float}`. At most one of: `torque` (N m per motor: torque mode), `velocity` (rad/s per motor:
+    /// velocity mode), `setpoint` (per tool axis: position mode, interpolated over `profile.setpoint_interval_s` as
+    /// from a PLC). With none, the drives keep their modes and setpoints.
+    #[pyo3(signature = (*, torque=None, velocity=None, setpoint=None, time=None))]
+    fn step<'py>(
+        &mut self,
+        py: Python<'py>,
+        torque: Option<Vec<f64>>,
+        velocity: Option<Vec<f64>>,
+        setpoint: Option<Vec<f64>>,
+        time: Option<f64>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        if [torque.is_some(), velocity.is_some(), setpoint.is_some()].iter().filter(|g| **g).count() > 1 {
+            return Err(PyValueError::new_err("give at most one of torque, velocity, setpoint"));
+        }
+        let time = time.unwrap_or(self.cycle);
+        let steps = (time / self.sim.dt).round();
+        if !(1.0..=MAX_RUN_STEPS).contains(&steps) {
+            return Err(PyValueError::new_err(format!("time = {time} s: 1 to {MAX_RUN_STEPS:.0e} base steps")));
+        }
+        let motors = self.sim.machine.motors().len();
+        let modes: Option<Vec<DriveMode>> = match (&torque, &velocity) {
+            (Some(t), _) => {
+                self.per_motor(t, "torque")?;
+                Some(t.iter().map(|t| DriveMode::Torque(*t)).collect())
+            }
+            (_, Some(v)) => {
+                self.per_motor(v, "velocity")?;
+                Some(v.iter().map(|v| DriveMode::Velocity(*v)).collect())
+            }
+            _ => setpoint.as_ref().map(|_| vec![DriveMode::Position; motors]),
+        };
+        for (k, mode) in modes.into_iter().flatten().enumerate() {
+            if mode != self.sim.control.drives[k].mode() {
+                self.sim.set_drive_mode(k, mode).map_err(|e| self.refused(e.key))?;
+            }
+        }
+        if let Some(target) = setpoint
+            && target != self.sim.control.external_setpoint()
+        {
+            self.sim.command(Command::Setpoint(target)).map_err(|e| self.refused(e.key))?;
+        }
+        for _ in 0..steps as u64 {
+            self.sim.step();
+            self.tally.step(&self.sim);
+        }
+        self.signal_dict(py)
+    }
+
+    /// Every signal now, as `{signal id: float}`.
+    fn signals<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.signal_dict(py)
+    }
+
+    /// The simulated time, s.
+    #[getter]
+    fn time(&self) -> f64 {
+        self.sim.time()
+    }
+
+    /// The base step, s.
+    #[getter]
+    fn dt(&self) -> f64 {
+        self.sim.dt
+    }
+
+    /// The controller cycle a `step` runs by default, s (`profile.setpoint_interval_s`).
+    #[getter]
+    fn cycle(&self) -> f64 {
+        self.cycle
+    }
+
+    /// Each motor's mode: "position", "velocity" or "torque".
+    #[getter]
+    fn modes(&self) -> Vec<&'static str> {
+        let name = |d: &sim_components::drive::Drive| match d.mode() {
+            DriveMode::Position => "position",
+            DriveMode::Velocity(_) => "velocity",
+            DriveMode::Torque(_) => "torque",
+        };
+        self.sim.control.drives.iter().map(name).collect()
+    }
+
+    /// Back to the start: at rest at the start pose, position mode, time 0, the recording empty.
+    fn reset(&mut self) -> PyResult<()> {
+        self.sim = Sim::new(self.entry, &self.cfg).map_err(|e| config_error(self.entry, e))?;
+        self.tally = sim_components::analysis::Tally::new(&self.sim, false);
+        Ok(())
+    }
+
+    /// The load per motor over the run since the start or the last `reset`, in the columns of `analyze`
+    /// ("cycle_s" is the time run).
+    #[pyo3(signature = (*, points=false))]
+    fn analyze<'py>(&self, py: Python<'py>, points: bool) -> PyResult<Bound<'py, PyDict>> {
+        load_columns(py, self.sim.machine.motors().iter().map(|m| m.id).collect(), &self.load(), points)
+    }
+
+    /// The verdicts on the run since the start or the last `reset`, in the columns of `verdicts`: "check", "motor",
+    /// "value", "limit", "ok".
+    fn verdicts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let found =
+            sim_components::analysis::verdicts(&self.cfg, &self.load()).map_err(|e| config_error(self.entry, e))?;
+        let motors: Vec<&'static str> = self.sim.machine.motors().iter().map(|m| m.id).collect();
+        let out = PyDict::new(py);
+        out.set_item("check", found.iter().map(|v| v.check).collect::<Vec<_>>())?;
+        out.set_item("motor", found.iter().map(|v| v.motor.map(|k| motors[k])).collect::<Vec<_>>())?;
+        out.set_item("value", PyArray1::from_vec(py, found.iter().map(|v| v.value).collect()))?;
+        out.set_item("limit", PyArray1::from_vec(py, found.iter().map(|v| v.limit).collect()))?;
+        out.set_item("ok", PyArray1::from_vec(py, found.iter().map(|v| v.ok).collect()))?;
+        Ok(out)
+    }
+}
+
 #[pymodule]
 fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConfig>()?;
+    m.add_class::<PySim>()?;
     m.add_function(wrap_pyfunction!(machines, m)?)?;
     m.add_function(wrap_pyfunction!(signals, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;

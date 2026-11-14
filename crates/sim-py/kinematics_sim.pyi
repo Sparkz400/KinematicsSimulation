@@ -8,7 +8,7 @@ import numpy.typing as npt
 
 __version__: str
 __all__ = [
-    "Config", "machines", "signals", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
+    "Config", "Sim", "machines", "signals", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
     "step", "bode", "tuning", "margins", "modes", "sensitivity", "replay", "compare", "report", "check_dataset", "fmu",
     "__version__",
 ]
@@ -43,6 +43,39 @@ class Config:
     def copy(self) -> Config: ...
     def leaves(self) -> dict[str, Any]: ...
     def to_toml(self) -> str: ...
+
+@final
+class Sim:
+    """A simulation stepped from Python, for a controller of your own (docs/python.md, "Test your own controller")."""
+
+    def __new__(cls, config: Config) -> Sim:
+        """At rest at the start pose, drives enabled, every motor in position mode."""
+    def step(
+        self,
+        *,
+        torque: Sequence[float] | None = None,
+        velocity: Sequence[float] | None = None,
+        setpoint: Sequence[float] | None = None,
+        time: float | None = None,
+    ) -> dict[str, float]:
+        """One controller cycle (`cycle`), or `time` seconds in whole base steps, with at most one of: `torque` (N m
+        per motor, torque mode), `velocity` (rad/s per motor, velocity mode), `setpoint` (per tool axis, position
+        mode). Every signal at its end. A refused mode or setpoint raises ValueError."""
+    def signals(self) -> dict[str, float]: ...
+    @property
+    def time(self) -> float: ...
+    @property
+    def dt(self) -> float: ...
+    @property
+    def cycle(self) -> float:
+        """profile.setpoint_interval_s: what a step runs without `time`."""
+    @property
+    def modes(self) -> list[Literal["position", "velocity", "torque"]]: ...
+    def reset(self) -> None: ...
+    def analyze(self, *, points: bool = False) -> dict[str, Any]:
+        """The columns of `analyze` over the run since the start or the last `reset`."""
+    def verdicts(self) -> dict[str, Any]:
+        """"check", "motor", "value", "limit", "ok" on the run since the start or the last `reset`."""
 
 def machines(lang: Literal["en", "de"] = "en") -> list[MachineRow]: ...
 def signals(config: Config) -> dict[str, list[str]]:

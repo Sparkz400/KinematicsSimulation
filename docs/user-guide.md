@@ -1717,6 +1717,7 @@ By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_f
 | `command.cycle` | Boolean | input | Turning `true` starts the configured cycle, turning `false` stops it at the end of its segment |
 | `command.target.<axis id>`, `command.move` | Real, Boolean | input | `command.move` turning `true` moves to the targets (start value: the start pose) |
 | `command.path`, `command.path_file`, `command.run_path` | String, String, Boolean | input | `command.run_path` turning `true` plans the path (the text of a path file, or the file named) from where the machine stands and runs it |
+| `command.mode.<motor id>`, `command.torque.<motor id>`, `command.velocity.<motor id>` | String, Real, Real | input | The drive's mode, "position" (start value), "velocity" or "torque", and its speed or torque setpoint from your own controller ([below](#test-your-own-controller)) |
 | `machine` | String | parameter | The machine id |
 | `config_file` | String | parameter | A config file to use instead of the one in the FMU; empty (the start value) for the one in the FMU |
 | `effects.<name>` | Boolean | parameter | Each effect switch, start value as in the config; a value set here wins over the config file's |
@@ -1736,9 +1737,26 @@ Limits for this task:
 
 - Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Run in OpenModelica 1.27.1 through OMSimulator (FMI 2.0; its Modelica import takes Model Exchange only); import into Simulink or Dymola is untested.
 - Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). An FMU state holds a snapshot of the simulation and is set at once; a serialized one replays every step since initialisation, so setting it takes as long as simulating up to it ([FMU state](fmi.md#fmu-state)). The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
-- Inputs are position setpoints and the cycle, move and path triggers ([FMI export](fmi.md#cycle-moves-and-paths)); a setpoint input once set takes the axes over from a cycle, move or path. No torque input: the servo loops stay inside the FMU.
+- Inputs are position setpoints and the cycle, move and path triggers ([FMI export](fmi.md#cycle-moves-and-paths)); a setpoint input once set takes the axes over from a cycle, move or path. Torque and speed setpoints per motor go in through torque and velocity mode ([Test your own controller](#test-your-own-controller)); the current loop stays inside the FMU.
 - Messages and descriptions in one language, the one of `--lang` when the FMU was written.
 - A 64-bit Windows binary unless a Linux one is added as above; no 32-bit binaries.
+
+## Test your own controller
+
+The built-in drive closes the position, velocity and current loops itself. To try a control law of your own on the
+simulated mechanics, put a drive in torque mode (your torque replaces its velocity loop's output) or velocity mode
+(your speed replaces its position loop's output), as a real servo drive offers them; the torque limit, current loop,
+winding and DC link stay in, so the current, voltage and thermal limits are true.
+
+- In Python: `sim = ks.Sim(cfg)`, then per cycle of your controller `out = sim.step(torque=[...], time=0.001)` with the
+  signals of the step's end in `out`; `sim.analyze()` and `sim.verdicts()` judge the run as the built-in drive's
+  ([Python module](python.md#test-your-own-controller); the example `crates/sim-py/examples/own_controller.py` runs a
+  PD against the built-in cascade).
+- In Simulink or Modelica: the FMU's inputs `command.mode.<motor id>` ("torque" or "velocity") and
+  `command.torque.<motor id>` / `command.velocity.<motor id>` ([FMI export](fmi.md#your-own-controller-torque-and-velocity-mode)).
+
+Switching mode does not make the torque jump where the drive's loops take over; while a drive is out of position mode
+the cycle, moves, paths and setpoints are refused.
 
 ## Use the app
 

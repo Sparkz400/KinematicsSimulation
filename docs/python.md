@@ -90,6 +90,43 @@ functions return what the others found, and list each fit that found nothing in 
 the table). Check it: an empty list means every fit asked for is there. What keeps every fit from starting (a refused
 config, an unreadable trace or sweep file) still raises `ValueError`.
 
+## Test your own controller
+
+`ks.Sim(cfg)` is a simulation you step yourself, so that a controller written in Python closes the loop on the
+simulated mechanics:
+
+```python
+sim = ks.Sim(cfg)                      # at rest at the start pose, drives on, every motor in position mode
+out = sim.step(torque=[0.3])           # one cycle (sim.cycle = profile.setpoint_interval_s) in torque mode, N m per motor
+out = sim.step(velocity=[20.0], time=0.001)   # 1 ms in velocity mode, rad/s per motor
+out = sim.step(setpoint=[0.5])         # position mode: a setpoint per tool axis, interpolated as from a PLC
+out["motor.a.angle"], out["motor.a.speed"], out["motor.a.current"]   # every signal at the end of the step
+sim.signals(), sim.time, sim.dt, sim.modes   # ["torque"], ...
+sim.analyze()                          # the columns of ks.analyze over the run since the start or reset()
+sim.verdicts()                         # the verdicts on that run: check, motor, value, limit, ok
+sim.reset()
+```
+
+The modes are a servo drive's: in torque mode your torque replaces the velocity loop's output, in velocity mode your
+speed replaces the position loop's; either way it still passes the drive's torque filter, torque limit and delay, the
+current loop, the winding and the DC link, so a torque above the limit is clamped and current, voltage and winding
+temperature are as real. A step with none of `torque`, `velocity`, `setpoint` keeps the modes and setpoints. A mode
+switch does not make the torque jump where the drive's own loops take over (their PI starts from the torque last asked
+for); a setpoint or another plan command is refused while a drive is out of position mode, and a setpoint puts every
+drive back in it. [FMI export](fmi.md#your-own-controller-torque-and-velocity-mode) has the details, which are the
+same.
+
+`analyze()` and `verdicts()` judge your controller's run as `ks.analyze` and `ks.verdicts` judge the built-in drive on
+the cycle: peak and RMS torque, thermal utilisation, winding rise, energy and the DC link, the gearbox and belt checks.
+"cycle_s" is the time run. The path and tracking errors there are measured against the controller's plan, which stands
+still while you drive: judge the following of your own setpoints yourself.
+
+`crates/sim-py/examples/own_controller.py` is a worked example: it measures the inertia at the motor with two torques
+(1.344e-4 kg m^2 on the belt axis, by hand 6 kg (0.02/5)^2 + 0.26 kg of belt (0.02/5)^2 + 1e-4/25 + 0.3e-4), tunes a
+PD on the motor angle for 20 Hz, runs it at 1 kHz on the move the built-in cascade runs, and prints both runs' load and
+failing checks. The PD needs about the RMS torque of the cascade (0.172 against 0.174 N m) and, having no integrator,
+stops 0.05 rad short against the guides' friction.
+
 ## Parameter sweeps
 
 Every long call releases Python's global interpreter lock, so a thread pool runs several on all processors:

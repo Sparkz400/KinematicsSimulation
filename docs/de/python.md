@@ -92,6 +92,45 @@ Ergebnis in `ergebnis["errors"]` auf (ihre Zeilen fehlen in der Tabelle). Prüfe
 verlangte Anpassung ist da. Was jede Anpassung am Start hindert (eine abgelehnte Konfiguration, eine unlesbare Trace-
 oder Frequenzgangdatei), löst weiter `ValueError` aus.
 
+## Eigenen Regler prüfen
+
+`ks.Sim(cfg)` ist eine Simulation, die man selbst weiterschaltet, sodass ein in Python geschriebener Regler den Kreis
+über die simulierte Mechanik schließt:
+
+```python
+sim = ks.Sim(cfg)                      # in Ruhe in der Startpose, Antriebe an, jeder Motor in Lageregelung
+out = sim.step(torque=[0.3])           # ein Takt (sim.cycle = profile.setpoint_interval_s) in Momentenregelung, N m je Motor
+out = sim.step(velocity=[20.0], time=0.001)   # 1 ms in Drehzahlregelung, rad/s je Motor
+out = sim.step(setpoint=[0.5])         # Lageregelung: ein Sollwert je Werkzeugachse, interpoliert wie von einer SPS
+out["motor.a.angle"], out["motor.a.speed"], out["motor.a.current"]   # jedes Signal am Ende des Schritts
+sim.signals(), sim.time, sim.dt, sim.modes   # ["torque"], ...
+sim.analyze()                          # die Spalten von ks.analyze über den Lauf seit dem Start oder reset()
+sim.verdicts()                         # die Urteile über diesen Lauf: check, motor, value, limit, ok
+sim.reset()
+```
+
+Die Betriebsarten sind die eines Servoantriebs: In Momentenregelung ersetzt das eigene Moment den Ausgang des
+Drehzahlreglers, in Drehzahlregelung die eigene Drehzahl den des Lagereglers; in beiden durchläuft es weiter
+Momentenfilter, Momentengrenze und Totzeit des Antriebs, den Stromregler, die Wicklung und den Zwischenkreis. Ein Moment
+über der Grenze wird also begrenzt, und Strom, Spannung und Wicklungstemperatur sind wie echt. Ein Schritt ohne
+`torque`, `velocity` und `setpoint` behält Betriebsarten und Sollwerte. Ein Wechsel lässt das Moment nicht springen, wo
+die Regler des Antriebs übernehmen (ihr PI beginnt beim zuletzt verlangten Moment); ein Sollwert oder ein anderer Befehl
+an die Steuerung wird abgelehnt, solange ein Antrieb nicht in Lageregelung ist, und ein Sollwert setzt jeden Antrieb
+wieder in Lageregelung. [FMI-Export](fmi.md#eigener-regler-momenten--und-drehzahlregelung) hat die Einzelheiten; sie sind
+dieselben.
+
+`analyze()` und `verdicts()` beurteilen den Lauf des eigenen Reglers, wie `ks.analyze` und `ks.verdicts` den
+eingebauten Antrieb im Zyklus beurteilen: Spitzen- und Effektivmoment, thermische Auslastung, Wicklungserwärmung,
+Energie und Zwischenkreis, die Prüfungen von Getriebe und Riemen. "cycle_s" ist die gelaufene Zeit. Bahn- und
+Folgefehler dort sind gegen den Plan der Steuerung gemessen, der stillsteht, während man selbst regelt: Das Folgen der
+eigenen Sollwerte selbst beurteilen.
+
+`crates/sim-py/examples/own_controller.py` ist ein ausgearbeitetes Beispiel: Es misst das Trägheitsmoment am Motor mit
+zwei Momenten (1,344e-4 kg m^2 an der Riemenachse, von Hand 6 kg (0,02/5)^2 + 0,26 kg Riemen (0,02/5)^2 + 1e-4/25 +
+0,3e-4), legt einen PD auf den Motorwinkel für 20 Hz aus, rechnet ihn mit 1 kHz auf der Fahrt, die die eingebaute
+Kaskade fährt, und gibt Last und nicht bestandene Prüfungen beider Läufe aus. Der PD braucht etwa das Effektivmoment der
+Kaskade (0,172 gegen 0,174 N m) und bleibt ohne Integrator 0,05 rad vor dem Ziel an der Führungsreibung stehen.
+
 ## Parameterstudien
 
 Jeder lange Aufruf gibt Pythons globale Interpretersperre frei, so dass ein Thread-Pool mehrere auf allen Prozessoren
