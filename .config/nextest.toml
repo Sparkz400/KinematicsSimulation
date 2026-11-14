@@ -3,8 +3,8 @@
 # cargo test --doc --workspace --release --exclude sim-py
 
 [profile.default]
-# A test still running after a minute is reported as slow; none is stopped for it (the longest takes about six and a
-# half minutes in a full run, 85 s alone).
+# A test still running after a minute is reported as slow; none is stopped for it (the longest take up to seven
+# minutes in a full run, up to two alone).
 slow-timeout = "60s"
 # Run every test and report every failure, not just the first.
 fail-fast = false
@@ -46,8 +46,8 @@ package(sim-app) & binary(app) & not (
 """
 test-group = "real-time"
 
-# The longest tests first, so that the run does not end waiting for one of them: each takes 1.5 to 6.5 minutes in a
-# full run (10 s to 1.5 min alone; the ones on one thread the longest there).
+# The longest tests first, so that the run does not end waiting for one of them: each takes 1.5 to 7 minutes in a
+# full run (10 s to 2 min alone; the ones on one thread the longest there).
 [[profile.default.overrides]]
 filter = """
 test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
@@ -75,7 +75,7 @@ test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
 priority = 50
 
 # CI: a test still running after 30 minutes is stopped and fails, so that one that hangs cannot hold a runner until the
-# job's own limit. The longest of the default run takes 1.5 minutes alone on an 8-core machine; the margin sweeps, which
+# job's own limit. The longest of the default run takes 2 minutes alone on an 8-core machine; the margin sweeps, which
 # CI runs one at a time, take the most: the arms' and the D4's some 1100 to 1700 s of processor each (estimated from the
 # cost of one loop measurement), about 7 minutes on 4 cores.
 [profile.ci]

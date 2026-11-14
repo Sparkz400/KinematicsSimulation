@@ -1801,10 +1801,12 @@ time in the full run: there a test of 30 s on one thread took up to 550 s, waiti
 spread over every core held them. One test, the velocity loops' margins across the bounds of every shipped config, took
 8590 s of processor, more than all the others together (608 s alone).
 
-Now 7 min 38 s, twice (457 s of tests, 6230 s of processor), 580 tests with 13 left out by the default filter (below).
-The 9 tests that failed in every run before and after (the paths on the D2 and D4 in the CLI, the app and the PLC, the
-architecture's two, the direct drive's gearbox, switching an effect and ranking the parameters in the app) are under
-repair elsewhere; their times when they pass are not in these numbers.
+Now 7 min 38 s, twice (457 s of tests, 6230 s of processor), 580 tests with 13 left out by the default filter (below),
+of which 9 failed in every run before and after: the paths on the D2 and D4 in the CLI, the app and the PLC, the
+architecture's two, the direct drive's gearbox, switching an effect and ranking the parameters in the app, repaired
+meanwhile on main (a7586c6). With those repairs merged in and all 580 passing: 7 min 59 s (477 s of tests); planning a
+path in the app (112 s alone on one thread, 432 s in the run) and the PLC's two long tests, which the group `real-time`
+runs last, end the run.
 
 Production code, every result the same to the bit (compared on all twelve machines against the code before: every
 motor's sweep at 9 frequencies, the closed loop at 5, the margins with one bound at both ends):
@@ -1822,21 +1824,22 @@ Tests (processor time in the full run before → after; alone on the quiet machi
 
 | Test | What took the time | Change | Processor, s | Alone, s |
 | --- | --- | --- | --- | --- |
-| margins across the bounds (control) | 13 configs, friction on and off, every bound at both ends, every motor, 60 frequencies | `the_shipped_velocity_loops_keep_their_margins`: every config as configured, friction on and off. The sweep is `across_the_bounds::*`, a test per config: the default filter leaves it out, CI runs it in a step of its own, one at a time; `every_shipped_config_is_swept_across_its_bounds` keeps the list whole | 8590 → 220 | 608 → 14 |
-| `step_bode_and_tuning_write_csv_for_every_machine` (CLI) | `tuning` on 35 axes, 30 frequencies each one after the other; the margins measured twice per machine | the production changes above; the margins' figures against the library on the one-axis belt machine (every machine's are measured in the control test) | 641 → 494 | about 300 (its commands added up) → 59 |
+| margins across the bounds (control) | 13 configs, friction on and off, every bound at both ends, every motor, 60 frequencies | `the_shipped_velocity_loops_keep_their_margins`: every config as configured without friction, the EXCT-30 with it too (the machines' default configs with friction are judged by `margins` in the CLI's step, Bode and tuning test). The sweep is `across_the_bounds::*`, a test per config: the default filter leaves it out, CI runs it in a step of its own, one at a time; `every_shipped_config_is_swept_across_its_bounds` keeps the list whole | 8590 → 220 | 608 → 14 |
+| `step_bode_and_tuning_write_csv_for_every_machine` (CLI) | `tuning` on 35 axes, 30 frequencies each one after the other; the margins measured twice per machine | the production changes above; the margins' figures against the library on the one-axis belt machine, every machine's against 35 degrees and 6 dB as printed | 641 → 494 | about 300 (its commands added up) → 59 |
 | `the_supply_converges_with_the_integration_step_on_every_config` (effects) | 3 × 100 warm cycles at 4, 8 and 16 sub-steps; the 16 are compared on one config | from cold; 16 sub-steps on that config only | 857 → 253 | 21 now |
 | `the_checks_get_error_bands_in_the_app` | the app's bands and the library's again, warm, one machine after the other | from cold, a machine to a thread; the library's on the machine with the fewest bounds, on every machine the table against the app's bands, and the width and worst case of the peak torque's band (from the CLI test) | 862 → 333 | 24 now |
 | `verdicts_judge_the_default_cycle_of_every_machine` (CLI) | the bands and three sets of samples on every machine | the bands' printing on the machine with the fewest bounds, from cold | 546 → 32 | 15 now |
 | `the_app_optimises_the_cycle_and_applies_the_settings` | 12 optimisers one after the other; failed at the 300 s of `wait_for_jobs` under load | a machine to a thread, from cold; `wait_for_jobs` waits up to 20 minutes for the job to end | 373 → 311 | 43 now |
-| EXCT-30 worst corner (catalog) | about 2400 cycles of four passes each with the warm start | the bands from the search's own first runs (`verdict_worst_and_bands`, 2 n + 1 cycles fewer); still warm, it judges the thermal checks | 1230 → 1230 | 95 → 85 |
+| EXCT-30 worst corner (catalog) | about 2400 cycles of four passes each with the warm start | the bands from the search's own first runs (`verdict_worst_and_bands`, 2 n + 1 cycles fewer), and the bands test of both modes judges its one-at-a-time bands on them instead of running them again; still warm, it judges the thermal checks | 1230 → 1230 (the bands test 135 cycles fewer of its 196) | 95 → 85 |
 | CLI worst corner, CLI sensitivity, the part thermal verdicts, the regenerative supply, the app's worst corner, motor search and lower lifts | the warm start | from cold: they judge nothing thermal (the app's worst corner also takes its bands from the search) | 295 → 169, 131 → 87, 186 → 141, 121 → 77, 235 → 129, 165 → 118, 44 → 32 | |
 | the default sweep (sweep.rs) | 5 sweeps of 120 frequencies on one thread | `frequency_sweep` in parallel | 25 → 24 | 23 → 2 |
+| the frequency response in the app | every motor's sweep in the app and again in the test | against `frequency_sweep` on the first machine, on every machine the table against the app's sweep: half the sweeps | 216 → (not measured) | |
 | loops over every machine on one thread: profile cycle changed on the way, the cycle visits every segment, every effect switch, corner blending, the shaper's dwell (control); `analyze --breakdown`, `analyze` and `sweep`, the trace (CLI); trace, trip, motor search, cycle, effect views (app); the standard suite of every machine | up to a minute alone, up to ten in the full run | a machine to a thread (`on_every_machine`, the thread named after the machine) | unchanged | profile cycle 47 → 9, CLI trace 66 → 7, `analyze --breakdown` 37 → 9, app trace 34 → 5, trip 31 → 4, every machine's standard suite 16 now |
 
-`.config/nextest.toml`: the default filter; the app's eight long analyses out of the group `real-time` (they wait for
-their jobs, up to 20 minutes, and judge nothing against the clock; in the group they held one of its four places for 5
-of the 8 minutes); the 17 longest tests first. CONTRIBUTING and the CI workflow (a step "Margin sweeps") say how the
-sweeps run.
+`.config/nextest.toml`: the default filter; the app's nine long analyses and switching an effect (stepped on the test's
+own thread) out of the group `real-time` (they wait for their jobs, up to 20 minutes, and judge nothing against the
+clock; in the group they held one of its four places for 5 of the 8 minutes); the 21 longest tests first. CONTRIBUTING
+and the CI workflow (a step "Margin sweeps") say how the sweeps run.
 
 The 15 slowest of the full run (s): EXCT-30 worst corner 380, the app's optimiser 301, every machine file's standard
 suite 299, a path from an end of a stroke 292, the netlist machines' cycles 244, step, Bode and tuning 241, a changed
@@ -1856,3 +1859,7 @@ Left as they are:
 - The loss budget on the integrator's sub-steps costs 0.1 to 1.1 s per config, a tenth of a standard suite: left.
 - Long tests on one thread that are not loops over the machines (every machine file's standard suite, a path from an end
   of a stroke, the netlist machines' cycles: 30 to 46 s alone) start first instead.
+- The tests repaired on main meanwhile were not changed here (only scheduled): planning a path in the app goes through
+  the machines one after the other against the clock (112 s alone), switching an effect too (73 s, no clock).
+- The PLC tests run last in the group `real-time`, in the order of the binaries; started early they would run beside
+  the busiest tests, against the clock. Their two longest (50 s each) end the run.
