@@ -239,6 +239,7 @@ impl Legs {
     }
 }
 
+#[derive(Clone)]
 pub struct LinearDelta {
     legs: Legs,
     /// The geometry as configured, for the scene: column and plate radius, the rods' spacing.
@@ -281,8 +282,9 @@ pub struct LinearDelta {
     max_condition: f64,
     axes: [AxisInfo; 3],
     motors: [MotorInfo; 3],
-    /// `Machine::setpoint_slack`, worked out once (`rest_sag`).
-    rest_slack: f64,
+    /// `Machine::setpoint_slack`, worked out once (`rest_sag`) when first asked for: its 600 equilibria take 8 ms, 50
+    /// times what the rest of a build takes, and a run that plans no path (a loop measurement, a sweep) never asks.
+    rest_slack: std::sync::OnceLock<f64>,
 }
 
 // Elastic state: [h 1..3, pulley angle 1..3, rotor angle 1..3, h' 1..3, pulley speed 1..3, rotor speed 1..3,
@@ -372,13 +374,12 @@ impl LinearDelta {
             max_condition: cfg.positive("workspace.max_condition_number")?,
             axes: [axis("x", "axis-x", -radius, radius)?, axis("y", "axis-y", -radius, radius)?, axis("z", "axis-z", bottom, top)?],
             motors: [MotorInfo { id: "1", key: "motor-column-1" }, MotorInfo { id: "2", key: "motor-column-2" }, MotorInfo { id: "3", key: "motor-column-3" }],
-            rest_slack: 0.0,
+            rest_slack: std::sync::OnceLock::new(),
         };
         let geo = m.geo(0.0);
         m.mat0 = geo.map(|g| m.belt.rest_length(g));
         // The whole belt runs at carriage speed, so all of its mass sits on the pulley.
         m.j_pulley += m.belt.mass_per_m * (geo[0] + geo[1] - 2.0 * m.belt.tooth_length) * r * r;
-        m.rest_slack = m.rest_sag();
         Ok(m)
     }
 
@@ -902,7 +903,8 @@ impl Machine for LinearDelta {
 
     /// What the belts stretch and the couplings twist at rest anywhere in the working range (`rest_sag`).
     fn setpoint_slack(&self) -> f64 {
-        self.rest_slack
+        // On a copy: `rest_sag` switches the payload, and nothing else it reads changes after `new`.
+        *self.rest_slack.get_or_init(|| self.clone().rest_sag())
     }
 
     fn unreachable(&self, tool: &[f64], slack: f64) -> Option<&'static str> {

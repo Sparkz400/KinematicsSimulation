@@ -11,6 +11,17 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
+/// panicked"): the tests that ran the command line on one machine after the other took half a minute alone.
+fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
+    let check = &check;
+    std::thread::scope(|scope| {
+        for entry in MACHINES.iter().copied() {
+            std::thread::Builder::new().name(entry.id.into()).spawn_scoped(scope, move || check(entry)).unwrap();
+        }
+    });
+}
+
 /// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload or the
 /// rotary table's payload inertia (the slides have one; the arms and the table have none).
 fn payload_key(cfg: &sim_core::Config) -> &'static str {
@@ -111,7 +122,7 @@ fn a_catalogue_directory_is_read_and_a_missing_one_refused() {
 
 #[test]
 fn analyze_and_sweep_write_csv_for_every_machine() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let motors = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.motors().len();
         let points = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-points.csv", entry.id));
         let out = cli(&["analyze", entry.id, "--points", points.to_str().unwrap()]);
@@ -155,7 +166,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let swept = sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &sim_components::analysis::log_spaced(10.0, 100.0, 4), sim_components::analysis::default_sweep_amplitude(entry, &entry.config()).unwrap()).unwrap();
         let rows: Vec<String> = swept.iter().map(|p| format!("{:.4},{:.6e},{:.3}", p.frequency, p.gain, p.phase_deg)).collect();
         assert_eq!(table.lines().skip(1).collect::<Vec<_>>(), rows, "{}", entry.id);
-    }
+    });
 }
 
 /// `--axis-index` takes a whole number naming an axis: -1, 1.7 and one past the last axis are refused in words that
@@ -211,15 +222,23 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
-        // The margins of the config as it is: one row per motor, the figures of `velocity_loop_margins`.
+        // The margins of the config as it is: one row per motor, each loop stable with at least 35 degrees and 6 dB.
         let margins = table(&["margins", entry.id]);
-        let found = sim_components::analysis::velocity_loop_margins(entry, &entry.config(), &[]).unwrap();
         assert_eq!(margins.lines().next().unwrap(), "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result");
-        for (row, m) in margins.lines().skip(1).zip(&found[0].1) {
-            assert_eq!(row.split(',').nth(3).unwrap(), format!("{:.1}", m.phase_margin_deg), "{}: {row}", entry.id);
-            assert!(m.valid && m.phase_margin_deg > 35.0 && m.gain_margin_db > 6.0 && row.ends_with(",ok"), "{}: {row}", entry.id);
+        let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        for row in &rows {
+            let (phase, gain): (f64, f64) = (row[3].parse().unwrap(), row[4].parse().unwrap());
+            assert!(phase > 35.0 && gain > 6.0 && row[7] == "ok", "{}: {row:?}", entry.id);
         }
-        assert_eq!(margins.lines().count(), 1 + found[0].1.len());
+        assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
+        // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
+        // the one with a belt axis (`the_shipped_velocity_loops_keep_their_margins` measures every machine's in sim-machines).
+        if entry.id == one_belt_axis().id {
+            let found = sim_components::analysis::velocity_loop_margins(entry, &entry.config(), &[]).unwrap();
+            for (row, m) in rows.iter().zip(&found[0].1) {
+                assert!(row[3] == format!("{:.1}", m.phase_margin_deg) && m.valid && m.phase_margin_deg > 35.0 && m.gain_margin_db > 6.0, "{}: {row:?}", entry.id);
+            }
+        }
     }
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
@@ -294,7 +313,9 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
             "arm" => &["arm", "joint"],
             group => &[group],
         };
-        let run = cli(&[&["sensitivity", entry.id, "--delta", "0.1"][..], &groups.iter().flat_map(|g| ["--group", g]).collect::<Vec<_>>()].concat());
+        // From cold: the ranking and the bounds are judged here, nothing thermal, and the warm start runs every cycle once more.
+        let cold = ["--set", "effects.thermal_warm_start=false"];
+        let run = cli(&[&["sensitivity", entry.id, "--delta", "0.1"][..], &cold, &groups.iter().flat_map(|g| ["--group", g]).collect::<Vec<_>>()].concat());
         assert!(run.status.success(), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let mut lines = out.lines();
@@ -313,7 +334,7 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
         if cfg.get("friction_x").is_err() {
             continue;
         }
-        let run = cli(&["sensitivity", entry.id, "--group", "friction_x", "--delta", "0.1"]);
+        let run = cli(&[&["sensitivity", entry.id, "--group", "friction_x", "--delta", "0.1"][..], &cold].concat());
         let out = text(&run.stdout);
         let coulomb: Vec<&str> = out.lines().find(|l| l.starts_with("friction_x.coulomb_n,")).unwrap_or_else(|| panic!("{out}")).split(',').collect();
         assert_eq!((number(coulomb[2]), number(coulomb[3])), (10.0, 20.0), "{out}");
@@ -323,6 +344,7 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
 /// Every machine's default cycle passes every check its config has ratings for.
 #[test]
 fn verdicts_judge_the_default_cycle_of_every_machine() {
+    let fewest = MACHINES.iter().copied().min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len()).unwrap();
     for entry in MACHINES {
         let run = cli(&["verdicts", entry.id]);
         assert!(run.status.success(), "{}", text(&run.stderr));
@@ -348,10 +370,23 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         let settling = rows.iter().find(|r| r[0] == "settling").unwrap();
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
         assert!(value > 1e-6 && (value < limit) == (settling[4] == "ok") && limit == entry.config().f64("ratings.settling_tolerance_m").unwrap() && settling[2].trim_start_matches("0.0").len() >= 4, "{}: {settling:?}", entry.id);
+        // The bands as the command line prints them, on the machine with the fewest bounded values: it prints them alike
+        // for every machine, and every machine's bands are computed in the app's test of them
+        // (`the_checks_get_error_bands_in_the_app`, with the width of the peak torque's band and its worst case).
+        if entry.id != fewest.id {
+            continue;
+        }
 
         // With bands: the same checks and values, each with the lowest and highest value over the config's
-        // bounds around it. More friction needs more torque, so the bands have a width.
-        let run = cli(&["verdicts", entry.id, "--bands"]);
+        // bounds around it. More friction needs more torque, so the bands have a width. From cold, here and with the
+        // samples: the warm start would run each of their cycles once more, and what is judged is how the bands are
+        // printed, nothing thermal. So their checks and values are those of the cycle from cold.
+        let cold = ["--set", "effects.thermal_warm_start=false"];
+        let run = cli(&[&["verdicts", entry.id][..], &cold].concat());
+        assert!(run.status.success(), "{}", text(&run.stderr));
+        let out = text(&run.stdout);
+        let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        let run = cli(&[&["verdicts", entry.id, "--bands"][..], &cold].concat());
         assert!(run.status.success(), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case");
@@ -365,7 +400,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
 
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
         let sampled = |seed: &str| {
-            let run = cli(&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed]);
+            let run = cli(&[&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed][..], &cold].concat());
             assert!(run.status.success(), "{}", text(&run.stderr));
             text(&run.stdout)
         };
@@ -394,9 +429,13 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     use sim_components::analysis::{bounds, verdict_worst};
     // The machine with the fewest bounded values, so that the search stays short.
     let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
-    let run = cli(&["verdicts", entry.id, "--bands", "--worst"]);
+    // From cold, here and below: what the search prints is judged, nothing thermal, and the warm start runs each of its
+    // cycles once more.
+    let cold = ["--set", "effects.thermal_warm_start=false"];
+    let run = cli(&[&["verdicts", entry.id, "--bands", "--worst"][..], &cold].concat());
     assert!(run.status.success(), "{}", text(&run.stderr));
-    let (out, cfg) = (text(&run.stdout), entry.config());
+    let (out, mut cfg) = (text(&run.stdout), entry.config());
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
     let (worst, runs) = verdict_worst(entry, &cfg, &bounded).unwrap();
     assert_eq!(text(&run.stderr).trim(), format!("Cycles simulated in the search for the worst corners: {runs}"));
@@ -413,7 +452,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
             assert!(named(row[5]) == (*high == Some(true)) && named(row[6]) == (*high == Some(false)), "{}: {row:?}", bound.0);
         }
     }
-    let german = cli(&["verdicts", entry.id, "--bands", "--worst", "--lang", "de"]);
+    let german = cli(&[&["verdicts", entry.id, "--bands", "--worst", "--lang", "de"][..], &cold].concat());
     assert!(text(&german.stderr).starts_with("Für die Suche nach den ungünstigsten Ecken simulierte Zyklen: ") && text(&german.stdout) == out);
     for bad in [&["--worst"][..], &["--bands", "--worst", "--samples", "6"], &["--bands", "--worst", "--seed", "2"]] {
         let run = cli(&[&["verdicts", entry.id], bad].concat());
@@ -429,7 +468,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
 /// fitted in their motors' coordinates (`identify::fit_joints`).
 #[test]
 fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let per_axis = sim_components::trace::per_axis_fit(sim.machine.as_ref());
         let file = |name: &str| std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}.csv", entry.id)).to_str().unwrap().to_string();
@@ -484,7 +523,7 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         // stage 2 has nothing to fit.
         let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
         if sim_components::identify::resonance(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap()).is_none() {
-            continue;
+            return;
         }
         let sweep = file("sweep");
         let large = ["--amplitude", "1.5"];
@@ -505,7 +544,7 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         let falling = file("sweep-falling");
         std::fs::write(&falling, lines.join("\n")).unwrap();
         assert_eq!(table(&[&["fit", entry.id, "--sweep", &falling], &large[..]].concat()), fit, "{}", entry.id);
-    }
+    });
 }
 
 /// `--motor` and `--gearbox` name parts for every command; a part the catalogue does not have is refused in
@@ -753,7 +792,7 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
 #[test]
 fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
     use sim_components::analysis::{BUDGET_TOLERANCE, analyse_cycle};
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
         let (breakdown, budget) = (dir.join(format!("{}-breakdown.csv", entry.id)), dir.join(format!("{}-budget.csv", entry.id)));
         let out = cli(&["analyze", entry.id, "--breakdown", breakdown.to_str().unwrap(), "--budget", budget.to_str().unwrap()]);
@@ -799,7 +838,7 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
             let energy = b.rows.iter().find(|r| r.id == id).unwrap().energy;
             assert!(written.lines().any(|l| l == format!("{id},{energy:.6e},{:.6}", energy / b.supply)), "{}: {written}", entry.id);
         }
-    }
+    });
 }
 
 /// `compare` writes the cycle with an effect on and off side by side, and the differences as `Comparison` has them.

@@ -18,15 +18,20 @@ pub fn run_standard_suite(entry: &MachineEntry) {
     loss_budget(default.as_ref());
     let configs = (entry.suite_configs)();
     assert!(!configs.is_empty(), "{}: no loss-free config for the suite", entry.id);
-    for config in &configs {
-        let machine = (entry.build)(config).unwrap();
-        round_trip(machine.as_ref());
-        static_hold(machine.as_ref());
-        energy_conservation(machine.as_ref());
-        step_convergence(machine.as_ref());
-        determinism(machine.as_ref());
-        loss_budget(machine.as_ref());
-    }
+    // A config to a thread: the six-axis arm's four took half a minute one after the other.
+    std::thread::scope(|scope| {
+        for config in &configs {
+            scope.spawn(move || {
+                let machine = (entry.build)(config).unwrap();
+                round_trip(machine.as_ref());
+                static_hold(machine.as_ref());
+                energy_conservation(machine.as_ref());
+                step_convergence(machine.as_ref());
+                determinism(machine.as_ref());
+                loss_budget(machine.as_ref());
+            });
+        }
+    });
 }
 
 /// Repeatable measurement noise from a linear congruential generator: for tests, and for the drives'

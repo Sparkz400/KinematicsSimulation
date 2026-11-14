@@ -4,9 +4,13 @@ use sim_machines::MACHINES;
 
 #[test]
 fn every_machine_passes_the_standard_suite() {
-    for entry in MACHINES {
-        sim_core::testkit::run_standard_suite(entry);
-    }
+    // A machine to a thread, named for the machine (a failure says "thread 'scara' panicked"): the arm's suite alone
+    // takes half a minute.
+    std::thread::scope(|scope| {
+        for entry in MACHINES {
+            std::thread::Builder::new().name(entry.id.into()).spawn_scoped(scope, move || sim_core::testkit::run_standard_suite(entry)).unwrap();
+        }
+    });
 }
 
 #[test]

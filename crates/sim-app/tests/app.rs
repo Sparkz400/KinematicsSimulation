@@ -466,11 +466,12 @@ fn tuning_measures_the_axis_with_the_current_gains() {
     assert!(faster_rise < 0.8 * rise && wider_band > 1.3 * band, "Kv doubled: {rise} -> {faster_rise} s, {band} -> {wider_band} Hz");
 }
 
-/// Polls until the analysis jobs have answered, whatever they say.
+/// Polls until the analysis jobs have answered, whatever they say. The bound only stops a job that never ends: an
+/// optimiser run takes minutes on a machine busy with the rest of the suite, and 300 s were too few for it once.
 #[track_caller]
 fn wait_for_jobs(model: &mut Model) {
     let start = Instant::now();
-    while model.analysis_running() && start.elapsed() < Duration::from_secs(300) {
+    while model.analysis_running() && start.elapsed() < Duration::from_secs(1200) {
         model.poll();
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -519,12 +520,24 @@ fn temp_file(entry: &MachineEntry, name: &str) -> String {
     std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-app-{name}", entry.id)).to_str().unwrap().to_string()
 }
 
+/// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
+/// panicked"). One machine after the other, a test took up to five minutes of the full run, mostly waiting for a
+/// processor, some of them in one of the four places of the group `real-time` (.config/nextest.toml).
+fn on_every_machine(check: impl Fn(&'static MachineEntry) + Sync) {
+    let check = &check;
+    std::thread::scope(|scope| {
+        for entry in MACHINES.iter().copied() {
+            std::thread::Builder::new().name(entry.id.into()).spawn_scoped(scope, move || check(entry)).unwrap();
+        }
+    });
+}
+
 /// The app shows what the command line computes: the analysed cycle with its headline numbers, the load on
 /// each motor and one row per check, for every machine, in the background while the machine runs on, and
 /// in both languages. The numbers are those of the analysis functions.
 #[test]
 fn the_cycle_is_analysed_and_judged_in_the_app() {
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
         assert!(model.cycle_tables().is_empty());
         model.run_analysis(Analysis::Cycle);
@@ -648,7 +661,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         assert!(checks.iter().any(|row| row[0].starts_with("Übertemperatur der Wicklung") && row[4] == "NICHT BESTANDEN"), "{checks:?}");
         model.clear_analysis();
         assert!(model.cycle_tables().is_empty());
-    }
+    });
 }
 
 /// With the regenerative supply switched on in the app, its tables show what the analysis computes: per motor the energy
@@ -712,60 +725,67 @@ fn the_app_ranks_the_uncertain_parameters() {
 /// puts them into the config and the running simulation, whose cycle is then as short as promised.
 #[test]
 fn the_app_optimises_the_cycle_and_applies_the_settings() {
-    for entry in MACHINES.iter().copied() {
-        let mut model = Model::new(entry, "en");
-        model.run_analysis(Analysis::Optimise);
-        // The optimiser starts only from a cycle that passes every verdict, which the delta's does not (`settling`).
-        let cfg = entry.config();
-        let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
-        let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
-        if !judged.iter().all(|v| v.ok) {
-            wait_for_jobs(&mut model);
-            assert!(model.messages.iter().any(|m| m.0 == "error-config-invalid"), "{}: {:?}", entry.id, model.messages);
-            continue;
-        }
-        // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
-        // a faster move uses up (the screw's 46 of 50 um: 2.9 % shorter by acceleration and jerk alone).
-        let settling = judged.iter().find(|v| v.check == "settling").unwrap();
-        let shorter = if settling.value > 0.9 * settling.limit { 0.98 } else { 0.95 };
-        wait_for_analysis(&mut model);
-        let table = model.optimised_table().unwrap();
-        let found = model.optimised.clone().unwrap();
-        assert_eq!(table[0], ["Setting", "Before", "After"]);
-        assert_eq!(table[1][0], "Cycle time [s]");
-        let (before, after) = (number(&table[1][1]), number(&table[1][2]));
-        assert!(after < shorter * before && (before - cycle_time(entry, &entry.config())).abs() < 2e-3, "{}: {before} s to {after} s", entry.id);
-        let cycle = found.changes.iter().filter(|c| c.0 == "cycle.segment").count();
-        let lift_rows = found.lifts.len() + found.lifts.iter().filter(|l| l.via.is_some()).count();
-        assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len() - cycle + lift_rows);
-        assert!(table[3..].iter().all(|row| row[1] != row[2] && !row[0].contains("param-") && !row[0].contains("effect-")), "{table:?}");
+    on_every_machine(optimised_in_the_app);
+}
 
-        // An edit made since the optimiser ran: its settings, absolute values, used to be written over it
-        // without a word. Now nothing is applied, with a message, until the edit is taken back.
-        let key = payload_key(&model.config);
-        let payload = model.config.f64(key).unwrap();
-        model.set_param(key, toml::Value::Float(payload + 0.5));
-        model.apply_optimised();
-        assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{}", entry.id);
-        assert!(model.optimised_table().is_some());
-        for (path, before, _) in &found.changes {
-            assert_eq!(&model.config.get(path).unwrap().to_string(), before, "{path} was applied over a changed config");
-        }
-        model.set_param(key, toml::Value::Float(payload));
+/// `the_app_optimises_the_cycle_and_applies_the_settings` on one machine. From cold, in the app and here: the cycle
+/// times and how the settings are shown and applied are judged, nothing thermal, and the warm start runs each of the
+/// optimiser's cycles once more.
+fn optimised_in_the_app(entry: &'static MachineEntry) {
+    let mut model = Model::new(entry, "en");
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    model.run_analysis(Analysis::Optimise);
+    // The optimiser starts only from a cycle that passes every verdict, which the delta's does not (`settling`).
+    let mut cfg = entry.config();
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
+    let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
+    if !judged.iter().all(|v| v.ok) {
+        wait_for_jobs(&mut model);
+        assert!(model.messages.iter().any(|m| m.0 == "error-config-invalid"), "{}: {:?}", entry.id, model.messages);
+        return;
+    }
+    // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
+    // a faster move uses up (the screw's 46 of 50 um: 2.9 % shorter by acceleration and jerk alone).
+    let settling = judged.iter().find(|v| v.check == "settling").unwrap();
+    let shorter = if settling.value > 0.9 * settling.limit { 0.98 } else { 0.95 };
+    wait_for_analysis(&mut model);
+    let table = model.optimised_table().unwrap();
+    let found = model.optimised.clone().unwrap();
+    assert_eq!(table[0], ["Setting", "Before", "After"]);
+    assert_eq!(table[1][0], "Cycle time [s]");
+    let (before, after) = (number(&table[1][1]), number(&table[1][2]));
+    assert!(after < shorter * before && (before - cycle_time(entry, &entry.config())).abs() < 2e-3, "{}: {before} s to {after} s", entry.id);
+    let cycle = found.changes.iter().filter(|c| c.0 == "cycle.segment").count();
+    let lift_rows = found.lifts.len() + found.lifts.iter().filter(|l| l.via.is_some()).count();
+    assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len() - cycle + lift_rows);
+    assert!(table[3..].iter().all(|row| row[1] != row[2] && !row[0].contains("param-") && !row[0].contains("effect-")), "{table:?}");
 
-        model.apply_optimised();
-        assert!(model.optimised_table().is_none());
-        for (path, _, value) in &found.changes {
-            assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
-        }
-        assert!((cycle_time(entry, &model.config) - after).abs() < 2e-3, "{}", entry.id);
-        // The running simulation took the config: no refusal comes back.
-        std::thread::sleep(Duration::from_millis(100));
-        model.poll();
-        assert!(model.messages.iter().all(|m| m.0.starts_with("limit-") || m.0 == "ui-analysis-stale"), "{:?}", model.messages);
-        for (path, _, value) in &found.changes {
-            assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
-        }
+    // An edit made since the optimiser ran: its settings, absolute values, used to be written over it
+    // without a word. Now nothing is applied, with a message, until the edit is taken back.
+    let key = payload_key(&model.config);
+    let payload = model.config.f64(key).unwrap();
+    model.set_param(key, toml::Value::Float(payload + 0.5));
+    model.apply_optimised();
+    assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{}", entry.id);
+    assert!(model.optimised_table().is_some());
+    for (path, before, _) in &found.changes {
+        assert_eq!(&model.config.get(path).unwrap().to_string(), before, "{path} was applied over a changed config");
+    }
+    model.set_param(key, toml::Value::Float(payload));
+
+    model.apply_optimised();
+    assert!(model.optimised_table().is_none());
+    for (path, _, value) in &found.changes {
+        assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
+    }
+    assert!((cycle_time(entry, &model.config) - after).abs() < 2e-3, "{}", entry.id);
+    // The running simulation took the config: no refusal comes back.
+    std::thread::sleep(Duration::from_millis(100));
+    model.poll();
+    assert!(model.messages.iter().all(|m| m.0.starts_with("limit-") || m.0 == "ui-analysis-stale"), "{:?}", model.messages);
+    for (path, _, value) in &found.changes {
+        assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
     }
 }
 
@@ -777,6 +797,8 @@ fn the_app_shows_and_applies_lower_lifts() {
     let entry = MACHINES.iter().copied().find(|e| e.config().f64s("start.pose").unwrap().len() == 2).unwrap();
     let mut model = Model::new(entry, "en");
     model.set_param("profile.min_clearance_m", toml::Value::Float(0.1));
+    // From cold: the lifts are judged, nothing thermal, and the warm start runs each of the optimiser's cycles once more.
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     model.run_analysis(Analysis::Optimise);
     wait_for_analysis(&mut model);
     let table = model.optimised_table().unwrap();
@@ -890,13 +912,17 @@ fn a_refused_config_value_is_rolled_back_and_reported_once() {
 /// analysis also searches it (`verdict_worst`) and shows per check the worst value found, its limit, the result
 /// and which bounded values are at their high and which at their low bound; in both languages. Without the option,
 /// or without the bands, there is no such table. On the machine with the fewest bounded values (some 300 cycles).
-/// The bands beside it come from the search's first runs (`verdict_worst_and_bands`) and are those of `verdict_bands`.
+/// The bands beside it come from the search's first runs (`verdict_worst_and_bands`, whose bands are those of
+/// `verdict_bands`: `the_worst_corner_search_finds_the_hand_calculated_corner` of the single axis).
 #[test]
 fn the_app_searches_the_worst_corner_of_the_bounds() {
-    use sim_components::analysis::{bounds, verdict_bands, verdict_worst};
+    use sim_components::analysis::{bounds, verdict_worst_and_bands};
     // The machine with the fewest bounded values, so that the search stays short.
     let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
     let mut model = Model::new(entry, "en");
+    // From cold, in the app and below: how the search is shown is judged here, nothing thermal, and the warm start runs
+    // each of its cycles once more.
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     model.inputs.worst = true;
     model.run_analysis(Analysis::Cycle);
     wait_for_analysis(&mut model);
@@ -904,9 +930,10 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
     model.inputs.bands = true;
     model.run_analysis(Analysis::Cycle);
     wait_for_analysis(&mut model);
-    let cfg = entry.config();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
-    let (worst, _) = verdict_worst(entry, &cfg, &bounded).unwrap();
+    let (worst, bands, _) = verdict_worst_and_bands(entry, &cfg, &bounded).unwrap();
     let table = model.worst_table().unwrap();
     assert_eq!(table[0], ["Check", "Motor", "Worst value", "Limit", "Result", "At the high bound", "At the low bound"]);
     assert_eq!(table.len(), 1 + worst.len());
@@ -919,7 +946,6 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
             assert!(named(&row[5]) == (*high == Some(true)) && named(&row[6]) == (*high == Some(false)), "{}: {row:?}", bound.0);
         }
     }
-    let bands = verdict_bands(entry, &cfg, &bounded).unwrap();
     let tables = model.cycle_tables();
     assert_eq!(tables[3].len(), 1 + bands.len());
     for (row, band) in tables[3][1..].iter().zip(&bands) {
@@ -939,61 +965,77 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
 /// value it took and the worst-case result. A result is marked when the config has changed since.
 #[test]
 fn the_checks_get_error_bands_in_the_app() {
-    use sim_components::analysis::{bounds, verdict_bands};
-    for entry in MACHINES.iter().copied() {
-        let mut model = Model::new(entry, "en");
-        model.inputs.bands = true;
-        model.run_analysis(Analysis::Cycle);
-        assert!(model.running(Analysis::Cycle) && !model.running(Analysis::Sensitivity) && !model.has_result(Analysis::Cycle));
-        wait_for_analysis(&mut model);
-        assert!(model.has_result(Analysis::Cycle));
-        let cfg = entry.config();
-        let bands = verdict_bands(entry, &cfg, &bounds(&cfg).unwrap()).unwrap();
-        // A fourth table beside the three of the cycle: per check and motor the band and the worst-case result.
-        let tables = model.cycle_tables();
-        let [_, _, checks, banded] = &tables[..] else { panic!("{} tables", tables.len()) };
-        assert_eq!(checks[0].len(), 5);
-        assert_eq!(banded[0], ["Check", "Motor", "Lowest", "Highest", "Worst case", "Runs passed [%]"]);
-        assert_eq!(banded.len(), 1 + bands.len(), "{}", entry.id);
-        for (row, band) in banded[1..].iter().zip(&bands) {
-            assert_eq!(row[0], model.tr.tr(&format!("check-{}", band.verdict.check)));
-            assert_eq!((row[1].is_empty(), row[4].as_str()), (band.verdict.motor.is_none(), if band.ok { "ok" } else { "FAIL" }));
-            // The share as the app shows it, cut at four decimals (`Band::share_shown`): 1 of 45 is 2.22 %.
-            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
-            assert!(band.low <= band.verdict.value && band.verdict.value <= band.high);
-        }
-        // The bounds move the checks: a band is not a line.
-        assert!(bands.iter().any(|band| band.high > 1.05 * band.low), "{}: {bands:?}", entry.id);
-        model.set_language("de");
-        assert_eq!(model.cycle_tables()[3][0][2..], ["Kleinster Wert", "Größter Wert", "Ungünstigster Fall", "Bestandene Läufe [%]"]);
-        model.set_language("en");
-        assert_eq!(model.band_samples, 0);
+    use sim_components::analysis::bounds;
+    // The app runs the same code for every machine: that its bands are those of the library is checked on the machine
+    // with the fewest bounded values, and on every machine that the tables show the bands the app found.
+    let fewest = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    on_every_machine(|entry| banded_in_the_app(entry, entry.id == fewest.id));
+}
 
-        // The result is of the config it was computed for, and says so once that has changed.
-        assert!(!model.outdated(Analysis::Cycle));
-        let key = payload_key(&model.config);
-        let payload = model.config.f64(key).unwrap();
-        model.set_param(key, toml::Value::Float(payload + 0.5));
-        assert!(model.outdated(Analysis::Cycle) && !model.outdated(Analysis::Search));
-        model.set_param(key, toml::Value::Float(payload));
-        assert!(!model.outdated(Analysis::Cycle));
-        // With a number of samples the bands are those of `verdict_bands_sampled` with the seed 1.
-        model.inputs.samples = 6;
-        model.run_analysis(Analysis::Cycle);
-        wait_for_analysis(&mut model);
-        let sampled = sim_components::analysis::verdict_bands_sampled(entry, &cfg, &bounds(&cfg).unwrap(), 6, 1).unwrap();
-        let tables = model.cycle_tables();
-        assert_eq!((model.band_samples, tables[3].len()), (6, 1 + sampled.len()), "{}", entry.id);
-        for (row, band) in tables[3][1..].iter().zip(&sampled) {
-            assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
-        }
-        assert!(sampled.iter().zip(&bands).any(|(sampled, alone)| sampled.high != alone.high), "{}", entry.id);
-        // Without the option there are the three tables again.
-        model.inputs.bands = false;
-        model.run_analysis(Analysis::Cycle);
-        wait_for_analysis(&mut model);
-        assert_eq!(model.cycle_tables().len(), 3);
+/// `the_checks_get_error_bands_in_the_app` on one machine, with `library` against `verdict_bands` and
+/// `verdict_bands_sampled`. From cold, in the app and here: how the bands are shown is judged, nothing thermal, and
+/// the warm start runs each of their cycles once more.
+fn banded_in_the_app(entry: &'static MachineEntry, library: bool) {
+    use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled};
+    let mut model = Model::new(entry, "en");
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    model.inputs.bands = true;
+    model.run_analysis(Analysis::Cycle);
+    assert!(model.running(Analysis::Cycle) && !model.running(Analysis::Sensitivity) && !model.has_result(Analysis::Cycle));
+    wait_for_analysis(&mut model);
+    assert!(model.has_result(Analysis::Cycle));
+    let mut cfg = entry.config();
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
+    let bands = if library { verdict_bands(entry, &cfg, &bounds(&cfg).unwrap()).unwrap() } else { model.bands.clone().unwrap() };
+    // A fourth table beside the three of the cycle: per check and motor the band and the worst-case result.
+    let tables = model.cycle_tables();
+    let [_, _, checks, banded] = &tables[..] else { panic!("{} tables", tables.len()) };
+    assert_eq!(checks[0].len(), 5);
+    assert_eq!(banded[0], ["Check", "Motor", "Lowest", "Highest", "Worst case", "Runs passed [%]"]);
+    assert_eq!(banded.len(), 1 + bands.len(), "{}", entry.id);
+    for (row, band) in banded[1..].iter().zip(&bands) {
+        assert_eq!(row[0], model.tr.tr(&format!("check-{}", band.verdict.check)));
+        assert_eq!((row[1].is_empty(), row[4].as_str()), (band.verdict.motor.is_none(), if band.ok { "ok" } else { "FAIL" }));
+        // The share as the app shows it, cut at four decimals (`Band::share_shown`): 1 of 45 is 2.22 %.
+        assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
+        assert!(band.low <= band.verdict.value && band.verdict.value <= band.high);
     }
+    // The bounds move the checks: a band is not a line.
+    assert!(bands.iter().any(|band| band.high > 1.05 * band.low), "{}: {bands:?}", entry.id);
+    // The gearbox's peak torque, or the motor's where no gearbox is rated: more friction needs more torque, so its band
+    // has a width, and it passes in the worst case (checked on the command line's bands until 14 November 2026).
+    let peak = if cfg.get("ratings.gearbox_max_torque_nm").is_ok() { "gearbox-peak" } else { "motor-peak" };
+    let band = bands.iter().find(|b| b.verdict.check == peak).unwrap();
+    assert!(band.high > 1.02 * band.low && band.ok, "{}: {band:?}", entry.id);
+    model.set_language("de");
+    assert_eq!(model.cycle_tables()[3][0][2..], ["Kleinster Wert", "Größter Wert", "Ungünstigster Fall", "Bestandene Läufe [%]"]);
+    model.set_language("en");
+    assert_eq!(model.band_samples, 0);
+
+    // The result is of the config it was computed for, and says so once that has changed.
+    assert!(!model.outdated(Analysis::Cycle));
+    let key = payload_key(&model.config);
+    let payload = model.config.f64(key).unwrap();
+    model.set_param(key, toml::Value::Float(payload + 0.5));
+    assert!(model.outdated(Analysis::Cycle) && !model.outdated(Analysis::Search));
+    model.set_param(key, toml::Value::Float(payload));
+    assert!(!model.outdated(Analysis::Cycle));
+    // With a number of samples the bands are those of `verdict_bands_sampled` with the seed 1.
+    model.inputs.samples = 6;
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    let sampled = if library { verdict_bands_sampled(entry, &cfg, &bounds(&cfg).unwrap(), 6, 1).unwrap() } else { model.bands.clone().unwrap() };
+    let tables = model.cycle_tables();
+    assert_eq!((model.band_samples, tables[3].len()), (6, 1 + sampled.len()), "{}", entry.id);
+    for (row, band) in tables[3][1..].iter().zip(&sampled) {
+        assert!(shows(&row[2], band.low) && shows(&row[3], band.high) && shows(&row[5], 100.0 * band.share_shown(4)), "{row:?} against {band:?}");
+    }
+    assert!(sampled.iter().zip(&bands).any(|(sampled, alone)| sampled.high != alone.high), "{}", entry.id);
+    // Without the option there are the three tables again.
+    model.inputs.bands = false;
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    assert_eq!(model.cycle_tables().len(), 3);
 }
 
 /// The motor search in the app, as `sim-cli search`: the motors whose article number starts as asked, each
@@ -1011,8 +1053,13 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
     // What the running simulation says of a motor too weak for the machine: its limits, and on an arm that falls with it
     // the drive's trip (its DC link takes what the falling arm feeds back).
     let weak = |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-drive-tripped";
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        // From cold, in the app and in the library's search below: what is judged is how the motors are ranked, shown and
+        // named, nothing thermal, and the warm start runs each candidate's cycle once more.
+        model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+        let mut cold = entry.config();
+        cold.set_text("effects.thermal_warm_start = false").unwrap();
         assert!(model.search_table().is_none());
         model.inputs.supply = "110v".into();
         model.run_analysis(Analysis::Search);
@@ -1029,7 +1076,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         model.inputs.series = series.into();
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
-        let found = search_motors(entry, &entry.config(), "400v", &|article| article.starts_with(series), None);
+        let found = search_motors(entry, &cold, "400v", &|article| article.starts_with(series), None);
         let table = model.search_table().unwrap();
         assert_eq!(table[0], ["Motor", "Gearbox", "Axis", "Motor and gearbox [kg]", "Installed mass [kg]", "Result", "Tightest check", "Value / limit"]);
         assert!(found.len() >= 3 && table.len() == 1 + found.len(), "{}: {table:?}", entry.id);
@@ -1081,7 +1128,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         assert_eq!((said, part(&model, "motor")), (Some("ui-analysis-stale"), found[1].article.to_string()));
         model.clear(Analysis::Search);
         assert!(model.search_table().is_none() && !model.outdated(Analysis::Search));
-    }
+    });
 
     // With a gearbox series every motor is tried with the gearboxes of the series that fit it, and the
     // button names both.
@@ -1340,7 +1387,7 @@ fn twist_in_scene(machine: &dyn sim_core::Machine, pose: &[f64]) -> f64 {
 /// fitted in their motors' coordinates (`identify::fit_joints`).
 #[test]
 fn a_trace_is_replayed_and_fitted_in_the_app() {
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let per_axis = sim_components::trace::per_axis_fit((entry.build)(&entry.config()).unwrap().as_ref());
         // A trace as a run writes it: one pass of the cycle, a row per millisecond. The gripper stays
         // empty, because a trace does not say when a payload comes and goes.
@@ -1421,7 +1468,7 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         assert_eq!(refused(&mut model, other).0, "error-trace-short");
         // The result that was there stays.
         assert_eq!(model.trace_tables().len(), 3);
-    }
+    });
 }
 
 /// A drive that trips on DC link overvoltage takes all drives off, which used to show only as a machine that
@@ -1432,7 +1479,7 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
 fn a_drive_that_trips_is_reported() {
     let weak = [("ratings.dc_link_capacitance_uf", 4.7), ("ratings.braking_resistor_peak_w", 5.0)];
     let trips = |events: &[Event]| events.iter().filter(|e| matches!(e, Event::Refused("ui-drive-tripped", _))).count();
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let mut cfg = entry.config();
         weak.iter().for_each(|(path, value)| cfg.set_text(&format!("{path} = {value:?}")).unwrap());
         let mut runner = Runner::new(entry, &cfg).unwrap();
@@ -1463,7 +1510,7 @@ fn a_drive_that_trips_is_reported() {
             model.set_language(lang);
             assert!(model.tr.has("ui-drive-tripped") && model.tr.has("ui-analysis-tripped"));
         }
-    }
+    });
 }
 
 /// The travelled path for the 3D view. From the simulation steps, not from the frames: a point per 0.1 mm of
@@ -1927,8 +1974,12 @@ fn the_frequency_response_is_measured_in_the_app() {
         let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
         let table = model.sweep_table().unwrap();
         assert_eq!(table[0][0], "Figure");
+        let mut first = Vec::new();
         for (k, points) in sweeps.iter().enumerate() {
             let expected = sim_components::analysis::frequency_sweep(entry, &entry.config(), k, &frequencies, 1.5).unwrap();
+            if k == 0 {
+                first = expected.clone();
+            }
             assert!(points.len() == 30 && points.iter().zip(&expected).all(|(a, b)| (a.frequency, a.gain, a.phase_deg) == (b.frequency, b.gain, b.phase_deg)), "{}: motor {k}", entry.id);
             match sim_components::identify::resonance(&expected) {
                 Some(r) => assert!(shows(&row(&table, "Resonance [Hz]")[k], r.frequency) && shows(&row(&table, "Damping ratio")[k], r.damping), "{}: {table:?}", entry.id),
@@ -1937,7 +1988,7 @@ fn the_frequency_response_is_measured_in_the_app() {
         }
         // The first motor of both belt machines has its dip in this range (59.9 Hz and 84.5 Hz); the delta's gearboxes
         // put no dip there, and the rest is about one.
-        let Some(rising) = sim_components::identify::resonance(&sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap()) else {
+        let Some(rising) = sim_components::identify::resonance(&first) else {
             assert!(row(&table, "Resonance [Hz]")[0].is_empty() && (entry.build)(&entry.config()).unwrap().belt_sections().is_empty(), "{}", entry.id);
             continue;
         };
@@ -2036,7 +2087,7 @@ fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app() {
 #[test]
 fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
     use sim_components::analysis::{BUDGET_TOLERANCE, analyse_cycle};
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
         assert!(model.breakdown_table().is_none() && model.budget_table().is_none());
         model.command(Command::StartCycle);
@@ -2134,7 +2185,7 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction() {
         }
         model.clear_analysis();
         assert!(model.breakdown_table().is_none() && model.budget_table().is_none());
-    }
+    });
 }
 
 /// The workspace map of the delta, a slice at z = -1.0 m, ends where the hand-calculated reach ends. Along the row

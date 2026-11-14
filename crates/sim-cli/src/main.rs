@@ -895,9 +895,18 @@ fn tuning(args: &Args) -> Result<(), Failure> {
     let axes: Vec<&str> = (entry.build)(&cfg)?.axes().iter().map(|a| a.id).collect();
     let mut out = output(args, "--out")?;
     writeln!(out, "axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz").map_err(io)?;
+    // The bandwidth needs the response up to its first point below -3 dB: measured a batch of frequencies at a time, as
+    // many as there are processors, lowest first, up to the batch that has that point.
+    let batch = std::thread::available_parallelism().map_or(1, |n| n.get());
     for (i, axis) in axes.iter().enumerate() {
         let step = step_response(entry, &cfg, i, number(args, "--size", 0.001)?, 0.5)?;
-        let response = closed_loop_response(entry, &cfg, i, &log_spaced(1.0, 200.0, 30), number(args, "--amplitude", 0.0005)?)?;
+        let mut response = Vec::new();
+        for frequencies in log_spaced(1.0, 200.0, 30).chunks(batch) {
+            response.extend(closed_loop_response(entry, &cfg, i, frequencies, number(args, "--amplitude", 0.0005)?)?);
+            if bandwidth(&response).is_some() {
+                break;
+            }
+        }
         let band = bandwidth(&response).map_or(String::new(), |f| format!("{f:.3}"));
         writeln!(out, "{axis},{:.5},{:.4},{:.5},{band}", step.rise_time, step.overshoot, step.settling_time).map_err(io)?;
     }

@@ -441,12 +441,13 @@ fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() 
 /// shaper at 17.5 Hz (with the 25 Hz shaper alone it was 0.115 mm against 0.1 mm), and so does every other check but
 /// the pulley shaft bearings' life: about 10000 h there, with the pretension, the bearings' load rating and fatigue load
 /// limit, the lubricant's viscosity and the cleanliness at their bad bounds (see the test above). About 2400 cycles,
-/// 50 s on all cores of this machine.
+/// each with the warm start's passes (it judges the thermal checks too): 85 s on all 16 threads of this machine.
 #[test]
 fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
-    use sim_components::analysis::{bounds, verdict_bands, verdict_worst};
+    use sim_components::analysis::{bounds, verdict_worst_and_bands};
     let cfg = sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap();
-    let (worst, runs) = verdict_worst(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap();
+    // The bands from the runs the search starts with, which are those of `verdict_bands`: 2 n + 1 cycles fewer.
+    let (worst, bands, runs) = verdict_worst_and_bands(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap();
     let failed: Vec<_> = worst.iter().filter(|w| !w.verdict.ok && w.verdict.check != "pulley-bearing-life").map(|w| &w.verdict).collect();
     assert!(failed.is_empty(), "{failed:?}");
     let settling = worst.iter().find(|w| w.verdict.check == "settling").unwrap();
@@ -455,7 +456,7 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
     // The worst is never better than the bands of one value at a time: "dc-link-energy" was reported at 4.47 J (its
     // margin is 0 at every corner where the resistor takes over, and the corner with the least room came out) against
     // bands up to 33 J.
-    for band in verdict_bands(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap() {
+    for band in bands {
         let id = (band.verdict.check, band.verdict.motor);
         let w = &worst.iter().find(|w| (w.verdict.check, w.verdict.motor) == id).unwrap().verdict;
         let below = sim_components::analysis::AT_LEAST.contains(&id.0);
