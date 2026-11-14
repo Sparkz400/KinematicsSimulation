@@ -10,7 +10,7 @@
 use sim_core::AxisInfo;
 
 /// The shape of a move from rest to rest (`profile.shape`, or `shape` of a `[[cycle.segment]]`).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Shape {
     /// Seven segments: jerk up, constant acceleration, jerk down, cruise, and the same braking.
     #[default]
@@ -80,7 +80,7 @@ pub struct Limits {
 
 /// A ramp from rest to a speed `speed` in `time`: an S-curve's (jerk for `tj`, constant acceleration, jerk back for
 /// `tj`) or a sin²'s. It covers speed * time / 2 (both are symmetric about their middle).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Ramp {
     sine: bool,
     time: f64,
@@ -138,7 +138,7 @@ impl Ramp {
 }
 
 /// A move from rest to rest over `dist` in one of the shapes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Profile {
     /// The S-curve with the same acceleration and braking, in closed form.
     SCurve(SCurve),
@@ -272,7 +272,7 @@ impl Profile {
 /// How the moves of a machine are shaped: the shape, the braking limit as a share of the acceleration limit
 /// (`profile.deceleration_ratio`), and an axis that lifts against gravity (`profile.vertical_axis`): its index, the
 /// sign of up along it, and the share of its acceleration limit it has upwards (`profile.up_acceleration_ratio`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MotionLaw {
     pub shape: Shape,
     pub deceleration_ratio: f64,
@@ -287,7 +287,7 @@ impl Default for MotionLaw {
 
 /// Seven-segment S-curve over a distance, from rest to rest:
 /// jerk up, constant acceleration, jerk down, cruise, and the mirror image.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SCurve {
     pub dist: f64,
     jerk: f64,
@@ -358,7 +358,7 @@ impl SCurve {
 
 /// A straight-line move of all axes that start and finish together.
 /// One profile runs the path from 0 to 1; its limits are the tightest of all axes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Move {
     start: Vec<f64>,
     target: Vec<f64>,

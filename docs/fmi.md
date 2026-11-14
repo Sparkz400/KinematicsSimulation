@@ -33,8 +33,9 @@ The variables are the same in both versions; only the type names differ. The val
 | `command.cycle` | Boolean | Boolean | input | discrete |
 | `command.target.<axis id>` | Real | Float64 | input | continuous |
 | `command.move` | Boolean | Boolean | input | discrete |
-| `command.path`, `command.path_file` | String | String | input | discrete |
+| `command.path`, `command.path_file`, `command.trajectory_file` | String | String | input | discrete |
 | `command.run_path` | Boolean | Boolean | input | discrete |
+| `time_optimal` | Boolean | Boolean | parameter | fixed |
 | `machine`, `config_file` | String | String | parameter | fixed |
 | `effects.<name>` | Boolean | Boolean | parameter | fixed |
 
@@ -50,9 +51,9 @@ Besides the setpoints, three trigger inputs command the machine as `sim-cli run 
 | --- | --- | --- |
 | `command.cycle` | turns true / turns false | starts the configured cycle / stops it at the end of its segment |
 | `command.move` | turns true | moves to `command.target.<axis id>` (start: the start pose) |
-| `command.run_path` | turns true | plans the path from where the machine stands, within the axis limits, and runs it |
+| `command.run_path` | turns true | plans the path from where the machine stands, within the axis limits (with `time_optimal` as fast as the motors allow), and runs it; or runs the poses of `command.trajectory_file` |
 
-The path is the text of a path file ([user guide](user-guide.md#run-a-path-and-read-path-error)) in `command.path`, or the file named in `command.path_file`, which wins when it is not empty. A path that cannot be read or planned, and a command the controller refuses (the drives off, a target out of range), gives `fmi2Warning` / `fmi3Warning` with the reason, and the machine goes on as before. A setpoint input, once set, takes the axes over whenever it differs from the setpoint the controller follows, and so replaces a cycle, move or path at the next step: drive the machine either by setpoints or by triggers.
+The path is the text of a path file ([user guide](user-guide.md#run-a-path-and-read-path-error)) in `command.path`, or the file named in `command.path_file`, which wins when it is not empty; a file is read by its extension as `sim-cli run --path` reads it (G-code, KRL, RAPID, robot moves as CSV, else a path file), a program with feeds planned run by run. The parameter `time_optimal` (false by default) times the path as `--time-optimal` does: as fast as the motors' torque and the belts allow instead of within the axis limits. `command.trajectory_file` names a trajectory file (per line the time and one position per axis, as `sim-cli run --trajectory` reads it); where it is not empty, `command.run_path` runs its poses instead of a path. Both match the command line bit for bit (`crates/sim-fmi/tests/fmi.rs`, and against `sim-cli run --path FILE --time-optimal` through fmpy in `tools/check_fmu.py`). A path that cannot be read or planned, and a command the controller refuses (the drives off, a target out of range), gives `fmi2Warning` / `fmi3Warning` with the reason, and the machine goes on as before. A setpoint input, once set, takes the axes over whenever it differs from the setpoint the controller follows, and so replaces a cycle, move or path at the next step: drive the machine either by setpoints or by triggers.
 
 In FMI 3.0 the start value of a String is a `<Start value="..."/>` element, as the FMI 3.0 schema demands. The model structure lists every output as an output and as an initial unknown. The outputs carry `dependencies=""`: no output depends directly on an input, because a setpoint reaches the outputs only through the next communication step. The initial unknowns carry no dependency list, which means they may depend on every parameter.
 
@@ -79,18 +80,18 @@ FMI 3.0 functions that need what this FMU does not have return `fmi3Error` with 
 
 `fmi2GetFMUstate` / `fmi3GetFMUState` copy the state of an instance; `fmi2SetFMUstate` / `fmi3SetFMUState` restore it; the free, size, serialize and deserialize functions do what the standard says.
 
-What a state holds: the instance's mode, the start time, every value the importer has set (inputs and parameters), the triggers as the last step saw them, for each communication step since initialisation the number of base steps, the enable input, the commands the triggers gave (a path as it was planned) and the setpoint inputs it applied, and a snapshot of the simulation with its outputs (`Sim::snapshot`: the integrated state, the controller with its drives, loops, filters, windings, thermal and overload images, the parts' warmth and the obstacle record; everything but the machine, which the parameters build again).
+What a state holds: the instance's mode, the start time, every value the importer has set (inputs and parameters), the triggers as the last step saw them, and in step mode a snapshot of the simulation with its outputs (`Sim::snapshot`: the integrated state, the controller with its drives, loops, filters, windings, thermal and overload images, the parts' warmth and the obstacle record; everything but the machine, which the parameters build again).
 
-Setting a state builds the machine from the state's parameters and restores the snapshot into it: as long as building the machine takes, however far the state is from the start. A deserialized state has no snapshot; setting it replays its steps from a fresh simulation, as long as simulating up to it took. Both give bit for bit the signals of the simulation that was saved: on every registered machine and machine file of `machines/` with its cycle running (`crates/sim-fmi/tests/fmi.rs`, `tests/fmi3.rs`, and through fmpy in `tools/check_fmu.py`).
+Setting a state builds the machine from the state's parameters and restores the snapshot into it: as long as building the machine takes, however far the state is from the start. A serialized state carries the snapshot as bytes, so a deserialized one is set as fast, on the same instance or another one. Both give bit for bit the signals of the simulation that was saved: on every registered machine and machine file of `machines/` with its cycle running (`crates/sim-fmi/tests/fmi.rs`, `tests/fmi3.rs`, and through fmpy in `tools/check_fmu.py`).
 
 Everything is built before the instance is changed: a state that cannot be set (its `config_file` gone, a config that is refused now) is refused with `fmi2Error` / `fmi3Error`, and the instance goes on where it was.
 
 Limits:
 
-- A serialized state carries the steps, not the snapshot: it grows by 21 bytes plus, per axis, 9 bytes with each communication step (1 byte for an axis whose setpoint has not been set; a planned path adds 16 bytes per point plus 8 per axis and point), and deserialized it is replayed. Writing the snapshot itself as bytes needs every part of the controller and the drives written out; the code marks this with `shortcut:` in `crates/sim-fmi/src/api.rs`.
+- A serialized state does not grow with the steps since initialisation; its size is that of the snapshot (the machine's state, the controller with its plan and drives), a few kilobytes, more while a path or cycle with many points is under way.
 - With `config_file` set, setting a state reads that file again. A file changed on disk since the state was taken gives another simulation, or a refusal if its signals differ.
-- A serialized state is checked against the FMU's GUID or instantiation token and its number of variables; a state of another FMU, a cut-off state or one with bytes left over is refused with `fmi2Error` / `fmi3Error`. Bit-identical replay was tested within one build of the binary; a state replayed by a binary built by another compiler or for another platform is replayed with that binary's floating-point results.
-- The serialized format is little-endian: the text `sim-fmi state 2` and a zero byte, the GUID, the mode, the start time, the three triggers, the set values and the steps with their commands. States of version 1 (before 14 November 2026) are refused.
+- A serialized state is checked against the FMU's GUID or instantiation token and its number of variables; a state of another FMU, a cut-off state or one with bytes left over is refused with `fmi2Error` / `fmi3Error`. The snapshot's numbers are written with all their bits, so the next steps are bit for bit those of the saved simulation on the same binary; on a binary built by another compiler or for another platform they follow that binary's floating-point results from the state on.
+- The serialized format: the text `sim-fmi state 3` and a zero byte, the FMU's version (`1.0.0-rc.1`), the GUID, the mode, the start time, the three triggers and the set values, little-endian, then the outputs at the state and the snapshot as `postcard` 1 writes it (serde's data model, field by field in declaration order). The snapshot's layout follows the simulator's types, so a state is set only by the version of the FMU that saved it: one of another version, and the replayed states of format 2 (14 November 2026) and 1 (before), are refused with `fmi2Error` / `fmi3Error` and a message naming the version or format.
 
 ## Log categories
 
@@ -118,7 +119,7 @@ Point 2 alone means 16 000 events per simulated second. The importer's integrato
 
 Done on Windows 11 x86_64 on 13 November 2026 with the binary from `cargo build --release -p sim-fmi -p sim-cli`. The FMUs were the default configs of `t-gantry` and `single-axis` and `t-gantry` with `crates/machine-t-gantry/exct-30.toml`, each as FMI 2.0 and FMI 3.0.
 
-Rust tests (`cargo test -p sim-fmi -p sim-cli --release`): the FMI 2.0 and FMI 3.0 functions called as an importer calls them; every machine's signals bit for bit equal to a plain `Sim` with the same setpoints, and with the same move and path through the trigger inputs; FMU state restored bit for bit on the same instance (from its snapshot, on every machine with its cycle running) and, serialized, on a second instance (replayed); a state that cannot be set leaves the instance going on; the log categories switched; derivatives against the finite difference by hand; refusals.
+Rust tests (`cargo test -p sim-fmi -p sim-cli --release`): the FMI 2.0 and FMI 3.0 functions called as an importer calls them; every machine's signals bit for bit equal to a plain `Sim` with the same setpoints, and with the same move and path through the trigger inputs; FMU state restored bit for bit on the same instance (from its snapshot, on every machine with its cycle running) and, serialized with its snapshot, on a second instance; a time-optimal path through `command.path_file` and the poses of `command.trajectory_file` as `Sim::plan_path` and `Command::Trajectory` run them; states of another format or version refused as such; a state that cannot be set leaves the instance going on; the log categories switched; derivatives against the finite difference by hand; refusals.
 
 fmpy 0.3.32 with numpy 2.3.4 on Python 3.13.17, installed from PyPI into a virtual environment:
 
@@ -130,7 +131,7 @@ python -m venv .venv
 .venv/Scripts/fmpy simulate t-gantry-3.fmu --stop-time 0.1 --output-file sim3.csv
 ```
 
-`tools/check_fmu.py` validates the FMU with fmpy's validator (the XSD of the FMU's FMI version, variable names, model structure, start values, causality and variability, units), simulates it with fmpy for 1 s at its default step, compares every output with `sim-cli run`, and then, through fmpy's bindings of the C functions, takes an FMU state after 5 steps, checks that the 7 steps after it come back bit for bit on the same instance and serialized on a second one, and checks that the directional derivative and the finite difference are zero. Result for all six FMUs:
+`tools/check_fmu.py` validates the FMU with fmpy's validator (the XSD of the FMU's FMI version, variable names, model structure, start values, causality and variability, units), simulates it with fmpy for 1 s at its default step, compares every output with `sim-cli run`, and then, through fmpy's bindings of the C functions, takes an FMU state after 5 steps, checks that the 7 steps after it come back bit for bit on the same instance and serialized on a second one, and checks that the directional derivative and the finite difference are zero; then a move and a time-optimal path through the inputs against the command line (parts 4 and 5, below). Result for all six FMUs:
 
 ```
 FMU state: restored bit for bit, serialized 360 bytes and restored bit for bit; directional derivative and finite difference zero
@@ -172,6 +173,23 @@ t-gantry crates/machine-t-gantry/exct-30.toml (FMI 2.0): 0 validator problems, 9
 FMU state: restored bit for bit, serialized 407 bytes and restored bit for bit; directional derivative and finite difference zero
 move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 90 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_rest): ok
+```
+
+Later on 14 November 2026 it gained a fifth part: the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
+
+```
+FMU state: restored bit for bit, serialized 3840 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+t-gantry  (FMI 2.0): 0 validator problems, 102 outputs, 101 rows, worst 4.9e-10 (axis.z.friction_load_scale): ok
+FMU state: restored bit for bit, serialized 2244 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+single-axis  (FMI 2.0): 0 validator problems, 54 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+FMU state: restored bit for bit, serialized 3750 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+machines/h-bot.toml  (FMI 3.0): 0 validator problems, 96 outputs, 101 rows, worst 4.9e-10 (motor.b.torque): ok
 ```
 
 Not run: the Modelica Association's `fmusim` (Reference-FMUs) and the FMU Compliance Checker. Neither is published on a package registry: `pip index versions` finds no distribution named `fmusim`, `reference-fmus`, `fmi-compliance-checker` or `fmucheck`, and conda is not installed here. Both are distributed as binaries on GitHub releases, which were not downloaded.

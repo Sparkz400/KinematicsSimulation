@@ -3,7 +3,7 @@
 //! One binary serves both versions: the `fmi2*` functions are in `api`, the `fmi3*` ones in `api3`, and both drive
 //! the same `api::Instance`. Model Exchange is not offered (docs/fmi.md says why: the controller is a sampled
 //! controller whose internal states the importer's integrator cannot see). An FMU state holds a snapshot of the
-//! simulation, which setting it restores at once; a serialized one replays the inputs from a fresh simulation (`api`).
+//! simulation, which setting it restores at once, serialized or not (`api`).
 //! The directional derivatives of the outputs with respect to
 //! the inputs are exactly zero, because an input acts on the outputs only through the next communication step.
 //!
@@ -24,7 +24,9 @@
 //! | `command.move`              | Boolean | input       | turning true moves to the targets                     |
 //! | `command.path`              | String  | input       | a path as the text of a path file                     |
 //! | `command.path_file`         | String  | input       | a path file, used instead of `command.path`           |
+//! | `command.trajectory_file`   | String  | input       | poses at times, run instead of a path where not empty |
 //! | `command.run_path`          | Boolean | input       | turning true plans the path from here and runs it     |
+//! | `time_optimal`              | Boolean | parameter   | paths timed as fast as the motors allow               |
 //! | `machine`                   | String  | parameter   | the machine of the registry                           |
 //! | `config_file`               | String  | parameter   | a config file to use instead of the one in the FMU    |
 //! | `effects.<name>`            | Boolean | parameter   | the effect switches, overriding the config's          |
@@ -79,7 +81,12 @@ pub enum Kind {
     /// not empty; the trigger plans it from where the machine stands and runs it when it turns true.
     PathText,
     PathFile,
+    /// A trajectory file (poses at times, `path::parse_trajectory`), which `RunPath` runs instead of a path where it is
+    /// not empty.
+    TrajectoryFile,
     RunPath,
+    /// Whether a path is timed as fast as the motors allow (`sim-cli --time-optimal`) or within the axis limits.
+    TimeOptimal,
     Machine,
     ConfigFile,
     /// The switch `effects.<name>`.
@@ -108,15 +115,16 @@ impl Variable {
             | Kind::Move
             | Kind::PathText
             | Kind::PathFile
+            | Kind::TrajectoryFile
             | Kind::RunPath => "input",
-            Kind::Machine | Kind::ConfigFile | Kind::Effect(_) => "parameter",
+            Kind::Machine | Kind::ConfigFile | Kind::TimeOptimal | Kind::Effect(_) => "parameter",
         }
     }
     pub fn type_name(&self) -> &'static str {
         match self.kind {
             Kind::Signal(_) | Kind::Setpoint(_) | Kind::Target(_) => "Real",
-            Kind::Enable | Kind::Cycle | Kind::Move | Kind::RunPath | Kind::Effect(_) => "Boolean",
-            Kind::Machine | Kind::ConfigFile | Kind::PathText | Kind::PathFile => "String",
+            Kind::Enable | Kind::Cycle | Kind::Move | Kind::RunPath | Kind::TimeOptimal | Kind::Effect(_) => "Boolean",
+            Kind::Machine | Kind::ConfigFile | Kind::PathText | Kind::PathFile | Kind::TrajectoryFile => "String",
         }
     }
 }
@@ -240,7 +248,9 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
     };
     out.push(text("command.path", Kind::PathText, "fmi-path", ""));
     out.push(text("command.path_file", Kind::PathFile, "fmi-path-file", ""));
+    out.push(text("command.trajectory_file", Kind::TrajectoryFile, "fmi-trajectory-file", ""));
     out.push(flag("command.run_path", Kind::RunPath, "fmi-run-path", false));
+    out.push(flag("time_optimal", Kind::TimeOptimal, "fmi-time-optimal", false));
     out.push(text("machine", Kind::Machine, "fmi-machine", machine));
     out.push(text("config_file", Kind::ConfigFile, "fmi-config-file", ""));
     for (path, value) in cfg.leaves() {

@@ -3025,3 +3025,32 @@ Left open:
 - The scissor lift's mass leaves out the arms' turning and the feet's sideways motion; one screw on the lowest foot; it
   and a linkage cannot sit beside other mechanisms in one file; the spatial delta's modes take arm 1's gearbox for all.
 - Arms and scissor in the 3D view are drawn plainly (no bearings, no screw thread).
+
+
+## Python and FMI parity with the command line (14 November)
+
+| What | How | Test |
+| --- | --- | --- |
+| Python: the rest of the commands | `step`, `bode`, `tuning`, `margins`, `modes`, `sensitivity`, `replay`, `compare`, `report`, `check_dataset`, `fmu` in `crates/sim-py/src/lib.rs`, each over the sim-components call the CLI makes (tuning's batches, sensitivity's fixed groups and order, replay's overlay as arrays, report from the config's own text and source), tables as dicts of columns, refusals as ValueError (an unknown signal of `compare` KeyError). `fmu` takes the sim-fmi binaries by name (sim-py now depends on sim-fmi's rlib) | one pytest each against `sim-cli` on the first registered machine: numbers to the CLI's printed digits, the same report HTML, the same FMU bytes for FMI 2.0 and 3.0 |
+| `verdicts(worst=True)`, `sizing(motor_id=)` | `verdict_worst` with the parameters at each bound as lists, and `runs`; `search_supplies(.., motor)` with peak torque and the new `winding_rise_k` of the searched motor alone; `sizing` defaults to the config's own supply as `search` does | `test_verdicts_at_the_worst_corner_match_the_cli`; `test_sizing_of_one_motor_and_by_vendor_match_the_cli` (first machine file with two motors, its last motor, series 1FK2104; and `vendor="siemens"`) |
+| Partial results of `fit` and `identify` | Chosen: a result with `errors` (list of messages) rather than an exception carrying the table: the table stays a dict pandas takes, and the CLI's own "write what was found, then fail" maps to a non-empty list. A fit that finds nothing (stiffness, resonance, response, two-mass, ringing) is listed and its rows are missing; what stops every fit (config, unreadable file) still raises | `test_fit_and_identify_return_what_they_found_beside_the_fits_that_found_nothing`: a sweep of a pure inertia, J = 0.01 kg m2, gain 1 / (J 2 pi f) at 8 frequencies from 5 to 500 Hz, has no dip and no peak, so `fit` has no resonance and `identify` no two-mass model; both give the rows the CLI writes before it exits 2, and the one message it prints |
+| FMI: time-optimal paths and trajectory files | Parameter `time_optimal` (Boolean, false) and input `command.trajectory_file` (String); `command.run_path` runs the trajectory file's poses where it is set, else plans the path as `sim-cli run --path` does through `program::read` (by extension: G-code, KRL, RAPID, robot CSV, path file) and `plan_path` / `plan_program` with `time_optimal` | `a_time_optimal_path_and_a_trajectory_file_run_as_with_the_cli` (bit for bit against `plan_path(.., true)` + `Command::Trajectory`, and the planned poses written with every digit as a trajectory file; the time-optimal plan differs from the one at the axis limits); `tools/check_fmu.py` part 5 against `sim-cli run --path --time-optimal`: 4.5e-10 on t-gantry, single-axis (FMI 2.0), h-bot (FMI 3.0) |
+| FMI: serialized states are snapshots | `Snapshot` and every type inside it derive serde (`Controller`, `Drive`, `DriveParams`, profiles, shapers, conveyor, `Obstacle`, `Aabb`, `Noise`; 28 one-line derives in sim-core and sim-components, serde =1.0.229, both already in the lock). `ThermalPart` (its `&'static str` ids) is skipped and `Sim::restore` keeps the machine's own parts. `FmuState` lost its step log; bytes are `sim-fmi state 3\0`, the crate version, the set values, the outputs, then `postcard` =1.1.3 (`alloc` only). Format 2, 1 and another version are refused as `fmi-error-fmu-state-version` (en, de) | `a_restored_snapshot_continues_as_the_simulation_did_on_every_machine` and `a_saved_fmu_state_restores_the_simulation_bit_for_bit` now go through the serialized snapshot (no replay code left); `a_state_of_another_format_or_version_is_refused_by_name` (format 2 header, version "0.9.0", garbage, one byte extra); fmpy: 3840, 2244 and 3750 bytes, restored bit for bit |
+
+Outside the area, kept small: one-line serde derives in `sim-core` (scene.rs, testkit.rs, machine.rs `Default` on
+`ThermalPart`) and `sim-components` (control.rs, conveyor.rs, drive.rs, path.rs, profile.rs, sim.rs with the
+`HeatedPart` restore), serde/postcard in the workspace `Cargo.toml`, `tools/check_fmu.py` part 5, the CI python job
+building `sim-fmi` too. `sim-netlist/src/scissor.rs`: main did not compile (`ShaftFriction` gained fields on the friction
+branch); `ShaftFriction::NONE` has the same three values. No full test suite was run; the new and changed FMI tests
+(4) and the new pytest cases with the existing fit and identify ones (16) were run alone, and pass.
+
+Left open:
+
+- A new field in the snapshot's types needs a serde-capable type; a `&'static str` or a trait object there breaks the
+  build of sim-components until it is skipped as `ThermalPart` is. The layout is tied to the crate version, so a state
+  is refused by an FMU of another version even where the layout did not change.
+- The 13 new pytest cases take some 19 minutes on Windows, most of it `verdicts(worst=True)` and the two sizings; the
+  CI python job grows by that.
+- Python's `path=` takes path-file text only (no G-code or robot program as the CLI's `--path FILE`); `analyze` has no
+  `breakdown`/`budget`; what the CLI prints on the error stream (clearances, thermal start, search timing) is not
+  returned.

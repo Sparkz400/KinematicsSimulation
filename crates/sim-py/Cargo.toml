@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 sim-core.workspace = true
 sim-components.workspace = true
 sim-machines.workspace = true
+# The FMU export, as sim-cli has it (`fmu`).
+sim-fmi = { path = "../sim-fmi" }
 toml.workspace = true
 # Only the Python module may depend on these two; numpy's release follows pyo3's.
 pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }

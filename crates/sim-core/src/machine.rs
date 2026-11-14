@@ -81,7 +81,7 @@ pub const TEMPERATURE_PREFIX: &str = "temperature.";
 /// A part that warms with one of the machine's loss powers, `power.<id>`, with effects.part_heating: of which kind
 /// (`THERMAL_KINDS`), who it belongs to as a translation key, and which part of the scene shows it: the
 /// `scene_index`-th part with the id `scene_part`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ThermalPart {
     pub id: &'static str,
     pub kind: &'static str,

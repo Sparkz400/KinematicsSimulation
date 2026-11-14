@@ -31,3 +31,6 @@ fmi-log-command = Command given at { $arg }
 fmi-log-state = FMU state set: { $arg }
 fmi-error-category = No such log category: { $arg }
 fmi-error-path = The path cannot be run: { $arg }
+fmi-trajectory-file = Trajectory file (poses at times, as sim-cli run --trajectory reads it) run by command.run_path instead of a path (empty: the path)
+fmi-time-optimal = Paths timed as fast as the motors allow (sim-cli --time-optimal) instead of within the axis limits
+fmi-error-fmu-state-version = This FMU state was saved by another version of the FMU; a state is set by the version that saved it: { $arg }

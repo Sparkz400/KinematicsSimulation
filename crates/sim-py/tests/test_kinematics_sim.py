@@ -4,6 +4,7 @@ import csv
 import io
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -286,3 +287,214 @@ def test_the_example_notebook_runs():
     nb = nbformat.read(ROOT / "crates" / "sim-py" / "examples" / "parameter_sweep.ipynb", as_version=4)
     nbclient.NotebookClient(nb, timeout=900, kernel_name="python3").execute()
     assert not [o for c in nb.cells if c.cell_type == "code" for o in c.outputs if o.output_type == "error"]
+
+
+def cli_run(*args: str) -> subprocess.CompletedProcess:
+    """sim-cli as it is, for commands that may fail or write no CSV."""
+    if not CLI.exists():
+        pytest.skip("build sim-cli first: cargo build -p sim-cli --release")
+    return subprocess.run([str(CLI), *args], capture_output=True, text=True)
+
+
+def floats(rows: list[dict[str, str]], column: str) -> list[float]:
+    """A column of the CLI's CSV; an empty cell is NaN, as the module gives it."""
+    return [float(r[column]) if r[column] != "" else float("nan") for r in rows]
+
+
+def configured() -> "ks.Config":
+    """FIRST as the trace fixture ran it: no payload, exact encoders."""
+    cfg = ks.Config(FIRST)
+    cfg["effects.payload"] = False
+    cfg["effects.encoder_resolution"] = False
+    return cfg
+
+
+def test_step_matches_the_cli():
+    cfg = ks.Config(FIRST)
+    result = ks.step(cfg, size=0.002, time=0.2)
+    rows = cli("step", FIRST, "--size", "0.002", "--time", "0.2")
+    # The CLI prints the time with 6 decimals and the response with 10 digits.
+    np.testing.assert_allclose(result["time_s"], floats(rows, "time_s"), atol=1e-6)
+    np.testing.assert_allclose(result["response"], floats(rows, "response"), rtol=1e-8, atol=1e-15)
+    assert np.all(result["setpoint"] == 0.002) and 0 < result["rise_time_s"] < 0.2
+    with pytest.raises(ValueError):
+        ks.step(cfg, axis_index=99)
+    with pytest.raises(ValueError):
+        ks.step(cfg, size=0.0)
+
+
+def test_bode_matches_the_cli():
+    result = ks.bode(ks.Config(FIRST), from_hz=5.0, to_hz=50.0, count=3)
+    rows = cli("bode", FIRST, "--from", "5", "--to", "50", "--count", "3")
+    np.testing.assert_allclose(result["frequency_hz"], floats(rows, "frequency_hz"), atol=1e-4)
+    np.testing.assert_allclose(result["gain"], floats(rows, "gain"), rtol=1e-6)
+    np.testing.assert_allclose(result["gain_db"], floats(rows, "gain_db"), atol=1e-3)
+    np.testing.assert_allclose(result["phase_deg"], floats(rows, "phase_deg"), atol=1e-3)
+
+
+def test_tuning_matches_the_cli():
+    result = ks.tuning(ks.Config(FIRST))
+    rows = cli("tuning", FIRST)
+    assert result["axis"] == [r["axis"] for r in rows]
+    # As many decimals as the CLI prints: half a unit of the last one apart at most.
+    for column, places in (("rise_time_s", 5), ("overshoot", 4), ("settling_time_s", 5), ("bandwidth_hz", 3)):
+        np.testing.assert_allclose(result[column], floats(rows, column), atol=0.51 * 10**-places, err_msg=column)
+
+
+def test_margins_match_the_cli():
+    result = ks.margins(ks.Config(FIRST))
+    rows = cli("margins", FIRST)
+    assert result["run"] == [r["run"] for r in rows] and result["motor"] == [r["motor"] for r in rows]
+    assert [("ok" if ok else "FAIL") for ok in result["ok"]] == [r["result"] for r in rows]
+    for column, places in (("crossover_hz", 1), ("phase_margin_deg", 1), ("gain_margin_db", 2), ("peak_sensitivity", 3)):
+        np.testing.assert_allclose(result[column], floats(rows, column), atol=0.51 * 10**-places, err_msg=column)
+
+
+def test_modes_match_the_cli():
+    result = ks.modes(ks.Config(FIRST), points=4)
+    rows = cli("modes", FIRST, "--points", "4")
+    assert list(result) == list(rows[0])
+    for column in rows[0]:
+        np.testing.assert_allclose(result[column], floats(rows, column), atol=1e-4, err_msg=column)
+    with pytest.raises(ValueError):
+        ks.modes(ks.Config(FIRST), points=1)
+
+
+def test_sensitivity_matches_the_cli():
+    cfg = ks.Config(FIRST)
+    group = next(k for k in cfg.leaves() if k.endswith("payload_kg")).split(".")[0]
+    result = ks.sensitivity(cfg, groups=[group])
+    rows = cli("sensitivity", FIRST, "--group", group)
+    assert result["parameter"] == [r["parameter"] for r in rows] and len(rows) > 0
+    np.testing.assert_allclose(result["low"], floats(rows, "low"))
+    for side in ("low", "high"):
+        for name in ("peak_torque", "rms_torque", "cycle_time"):
+            column = f"{name}_{side}"
+            np.testing.assert_allclose(result[column], floats(rows, column), atol=0.51e-4, err_msg=column)
+        column = f"belt_tension_min_{side}_n"
+        np.testing.assert_allclose(result[column], floats(rows, column), atol=0.0051, err_msg=column)
+
+
+def test_replay_matches_the_cli(trace, tmp_path):
+    result = ks.replay(configured(), trace_file=trace)
+    overlay = tmp_path / "overlay.csv"
+    rows = cli("replay", FIRST, "--trace", str(trace), "--out", str(overlay), *SETS)
+    assert result["motor"] == [r["motor"] for r in rows]
+    for column in ("torque_rms_nm", "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"):
+        np.testing.assert_allclose(result[column], floats(rows, column), rtol=1e-6, atol=1e-15, err_msg=column)
+    written = list(csv.DictReader(overlay.open(encoding="utf-8")))
+    assert list(result["overlay"]) == list(written[0])
+    for column in written[0]:
+        np.testing.assert_allclose(result["overlay"][column], floats(written, column), rtol=1e-8, atol=1e-15, err_msg=column)
+
+
+def test_compare_matches_the_cli(tmp_path):
+    cfg = ks.Config(FIRST)
+    signals = ks.signals(cfg)
+    signal, unit = signals["id"][5], signals["unit"][5]
+    result = ks.compare(cfg, effect="payload", signals=[signal])
+    differences = tmp_path / "differences.csv"
+    rows = cli("compare", FIRST, "--effect", "payload", "--signal", signal, "--differences", str(differences))
+    for side in ("on", "off"):
+        np.testing.assert_allclose(result[f"{signal}.{side}"], floats(rows, f"{signal}.{side}[{unit}]"), rtol=1e-8, atol=1e-15)
+    written = list(csv.DictReader(differences.open(encoding="utf-8")))
+    assert result["differences"]["signal"] == [r["signal"] for r in written]
+    for column in ("peak_difference", "rms_difference"):
+        np.testing.assert_allclose(result["differences"][column], floats(written, column), rtol=1e-6, atol=1e-15)
+    with pytest.raises(KeyError):
+        ks.compare(cfg, effect="payload", signals=["no.such.signal"])
+    with pytest.raises(ValueError):
+        ks.compare(cfg, effect="no_such_effect")
+
+
+def test_report_matches_the_cli(tmp_path):
+    mine, theirs = tmp_path / "python.html", tmp_path / "cli.html"
+    passed = ks.report(ks.Config(FIRST), mine)
+    done = cli_run("report", FIRST, "--out", str(theirs))
+    assert done.returncode == 0, done.stderr
+    # The same page, dated the same day.
+    assert mine.read_text(encoding="utf-8") == theirs.read_text(encoding="utf-8")
+    assert passed == ("every check passes" in done.stderr)
+    pdf = tmp_path / "report.pdf"
+    ks.report(ks.Config(FIRST), pdf, lang="de")
+    assert pdf.read_bytes().startswith(b"%PDF")
+
+
+def test_check_dataset_matches_the_cli(tmp_path):
+    for folder in (ROOT / "datasets" / "example-synthetic-belt-axis", tmp_path):
+        problems = ks.check_dataset(folder)
+        done = cli_run("check-dataset", str(folder))
+        # The CLI prints one line per problem, or one saying the folder is ready, and fails with problems.
+        assert (done.returncode == 0) == (problems == []), done.stdout
+        assert len(done.stdout.splitlines()) == max(len(problems), 1)
+    assert ks.check_dataset(tmp_path), "an empty folder is no dataset"
+
+
+def test_fmu_matches_the_cli(tmp_path):
+    name = "sim_fmi.dll" if os.name == "nt" else "libsim_fmi.dylib" if sys.platform == "darwin" else "libsim_fmi.so"
+    binary = CLI.with_name(name)
+    if not binary.exists():
+        pytest.skip("build the FMU binary first: cargo build -p sim-fmi --release")
+    for fmi in (2, 3):
+        mine, theirs = tmp_path / f"python-{fmi}.fmu", tmp_path / f"cli-{fmi}.fmu"
+        ks.fmu(ks.Config(FIRST), mine, binaries=[binary], fmi=fmi)
+        done = cli_run("fmu", FIRST, "--fmi", str(fmi), "--out", str(theirs))
+        assert done.returncode == 0, done.stderr
+        assert mine.read_bytes() == theirs.read_bytes(), f"FMI {fmi}"
+    with pytest.raises(ValueError):
+        ks.fmu(ks.Config(FIRST), tmp_path / "none.fmu", binaries=[])
+    with pytest.raises(ValueError):
+        ks.fmu(ks.Config(FIRST), tmp_path / "four.fmu", binaries=[binary], fmi=4)
+
+
+def test_verdicts_at_the_worst_corner_match_the_cli():
+    cfg = ks.Config(FIRST)
+    result = ks.verdicts(cfg, bands=True, worst=True)
+    rows = cli("verdicts", FIRST, "--bands", "--worst")
+    assert result["check"] == [r["check"] for r in rows] and result["runs"] >= 1
+    assert [("ok" if ok else "FAIL") for ok in result["worst_ok"]] == [r["worst_case"] for r in rows]
+    assert [";".join(b) for b in result["at_high_bound"]] == [r["at_high_bound"] for r in rows]
+    assert [";".join(b) for b in result["at_low_bound"]] == [r["at_low_bound"] for r in rows]
+    for bad in ({"worst": True}, {"worst": True, "bands": True, "samples": 3}):
+        with pytest.raises(ValueError):
+            ks.verdicts(cfg, **bad)
+
+
+def test_sizing_of_one_motor_and_by_vendor_match_the_cli():
+    # The first machine file of machines/ with two motors or more; its last motor sized on its own.
+    files = sorted((ROOT / "machines").glob("*.toml"))
+    path = next(p for p in files if len(ks.analyze(ks.Config(machine_file=p))["motor"]) > 1)
+    cfg = ks.Config(machine_file=path)
+    motor = ks.analyze(cfg)["motor"][-1]
+    result = ks.sizing(cfg, motor_id=motor, series="1FK2104")
+    rows = cli("search", "--machine-file", str(path), "--motor-id", motor, "--series", "1FK2104")
+    assert result["motor"] == [r["motor"] for r in rows] and len(rows) > 0
+    assert [("ok" if p else "FAIL") for p in result["passes"]] == [r["result"] for r in rows]
+    np.testing.assert_allclose(result["peak_torque_nm"], floats(rows, "peak_torque_nm"), atol=0.51e-4)
+    np.testing.assert_allclose(result["winding_rise_k"], floats(rows, "winding_rise_k"), atol=0.0051)
+    with pytest.raises(ValueError):
+        ks.sizing(cfg, motor_id=motor, axes=True)
+    by_vendor = ks.sizing(ks.Config(LAST), vendor="siemens", series="1FK2104")
+    rows = cli("search", LAST, "--vendor", "siemens", "--series", "1FK2104")
+    assert by_vendor["supply"] == [r["supply"] for r in rows] and by_vendor["motor"] == [r["motor"] for r in rows]
+    assert set(by_vendor["vendor"]) == {"siemens"}
+
+
+def test_fit_and_identify_return_what_they_found_beside_the_fits_that_found_nothing(trace, tmp_path):
+    # A pure inertia of 0.01 kg m2: gain 1 / (J 2 pi f), no dip and no peak, so no resonance and no two-mass model.
+    flat = tmp_path / "inertia.csv"
+    lines = "".join(f"{f!r},{1 / (0.01 * 2 * np.pi * f)!r},-90\n" for f in np.geomspace(5.0, 500.0, 8).tolist())
+    flat.write_text("frequency_hz,gain_rad_s_per_nm,phase_deg\n" + lines, encoding="utf-8")
+    result = ks.fit(configured(), trace_file=trace, sweep_file=flat)
+    done = cli_run("fit", FIRST, "--trace", str(trace), "--sweep", str(flat), *SETS)
+    # The CLI writes what the trace gave, then fails; the module returns the same rows and the failure.
+    assert done.returncode != 0
+    rows = list(csv.DictReader(io.StringIO(done.stdout)))
+    assert len(rows) > 0 and result["quantity"] == [r["quantity"] for r in rows]
+    assert len(result["errors"]) == 1 and result["errors"][0] in done.stderr
+    found = ks.identify(trace_file=trace, config=ks.Config(FIRST), sweep_file=flat)
+    done = cli_run("identify", FIRST, "--trace", str(trace), "--sweep", str(flat))
+    assert done.returncode != 0
+    assert found["quantity"] == [r["quantity"] for r in csv.DictReader(io.StringIO(done.stdout))]
+    assert len(found["errors"]) == 1 and found["errors"][0] in done.stderr
+    assert ks.fit(configured(), trace_file=trace)["errors"] == []
