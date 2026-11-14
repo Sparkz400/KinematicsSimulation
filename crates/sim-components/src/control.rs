@@ -547,6 +547,34 @@ impl Controller {
         pieces: &[Piece],
         time_optimal: bool,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        // An arc or a spline can swing out of the range although every point given is inside. Said here,
+        // because `Command::Trajectory` refuses such poses with a message about poses at times.
+        let reachable = |points: &[(f64, Vec<f64>)]| {
+            if points.iter().all(|(_, pose)| near_start(machine, &self.raw_pos, pose)) {
+                Ok(())
+            } else {
+                Err(CommandError { key: "error-path-range" })
+            }
+        };
+        let within_axis_limits = || {
+            path::plan(
+                machine.axes(),
+                &self.raw_pos,
+                pieces,
+                self.profile_cycle,
+                self.path_tolerance,
+                machine.setpoint_slack(),
+            )
+        };
+        if time_optimal {
+            // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
+            // turn infinitely fast) would time the plan to a standstill there: so the same path is checked first as
+            // planned within the axis limits, where the timing does not depend on the kinematics (what that plan
+            // refuses otherwise is left to the time-optimal one).
+            if let Ok(points) = within_axis_limits() {
+                reachable(&points)?;
+            }
+        }
         let points = if time_optimal {
             path::plan_time_optimal(
                 machine,
@@ -560,20 +588,9 @@ impl Controller {
                 machine.setpoint_slack(),
             )
         } else {
-            path::plan(
-                machine.axes(),
-                &self.raw_pos,
-                pieces,
-                self.profile_cycle,
-                self.path_tolerance,
-                machine.setpoint_slack(),
-            )
+            within_axis_limits()
         }?;
-        // An arc or a spline can swing out of the range although every point given is inside. Said here,
-        // because `Command::Trajectory` refuses such poses with a message about poses at times.
-        if !points.iter().all(|(_, pose)| near_start(machine, &self.raw_pos, pose)) {
-            return Err(CommandError { key: "error-path-range" });
-        }
+        reachable(&points)?;
         Ok(points)
     }
 

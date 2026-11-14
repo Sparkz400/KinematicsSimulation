@@ -667,6 +667,27 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 
 The fourth motor is the arms' 1FK2105-4AF with the same drive settings (the drive reads one `[motor]` and `[drive]` per machine); the common gearbox checks of motor 4 are judged against the arms' `[ratings]`, the tool's gearbox by `tool-gearbox-peak`.
 
+## Arms in tool space (SCARA, six-axis arm)
+
+The configs of `scara` ([`config/scara.toml`](../crates/machine-joint-kit/config/scara.toml)) and `urdf-arm`
+([`config/arm.toml`](../crates/machine-joint-kit/config/arm.toml)) have these keys; shipped with tool space off, so the
+axes are the joints as before. [`config/scara-tool.toml`](../crates/machine-joint-kit/config/scara-tool.toml) and
+[`config/arm-tool.toml`](../crates/machine-joint-kit/config/arm-tool.toml) are the same configs with it on, a start pose
+and a cycle of straight lines in tool space (and the arm's settling tolerance 5 mm instead of 3 mrad). See
+[mechanisms](mechanisms.md#tool-space).
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `kinematics.tool_space` | – | On: the axes are the flange's pose (SCARA x, y, z, c; six joints x, y, z, rx, ry, rz), `start.pose` and the cycle's targets too; off: the joints | off, choice |
+| `kinematics.elbow` | – | SCARA only: "right" (joint 2 counter-clockwise from the stretched arm) or "left" | "right", choice |
+| `kinematics.home_joints` | rad | Six joints only: the joint pose whose branch the inverse keeps; it follows the line from its flange pose to each target | 0, 0.4, 0.2, 0, 0.97, 0 (flange 0.99 m out, 0.83 m up, pointing down), choice |
+| `workspace.tool_min`, `tool_max` | m, rad | In tool space: each axis's range, x, y, z in m, the turn(s) in rad; poses in it out of reach or beyond a joint's stop are refused | SCARA 0.15 to 0.6, −0.45 to 0.45, 0 to 0.2, −3 to 3; arm 0.5 to 1.2, −0.6 to 0.6, 0.3 to 1.1, −3.1 to 3.1 each turn; choice |
+| `workspace.max_condition_number` | – | In tool space: a target whose Jacobian has a higher condition number is refused (`error-arm-singularity`); SCARA: of d(x, y)/d(joints 1, 2); arm: the 6 x 6 geometric Jacobian, its turn rows times the flange's distance from joint 2 at the home | SCARA 25 (11° of elbow), arm 30 (5.0 at the home), estimates (design rules) |
+| `axis.x`, `axis.y`, `axis.z`: `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` | m/s, m/s², m/s³ | In tool space: the flange's limits along each axis | SCARA 1, 5, 200 (z 0.8, 8, 400); arm 1, 4, 80; estimates |
+| `axis.c` (SCARA), `axis.rx`, `axis.ry`, `axis.rz` (arm): `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | In tool space: the turn's limits | SCARA 4, 30, 1000; arm 2, 8, 150; estimates |
+
+These are choices and design rules, not properties of a part, so they have no `[bounds]`.
+
 ## `[[cycle.segment]]`
 
 The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited in the parameter panel; `--set "cycle.segment = [{...}, ...]"` replaces it whole (TOML inline tables), and so does "Apply" of the app's optimiser where it changed the cycle's lifts.

@@ -2255,3 +2255,78 @@ Left open:
 
 - A setpoint within a rest sag of a stroke's end can push the planning model's tool out of range; the plan then keeps
   the last tool pose that started, up to one sag off (`// shortcut:` in the path job).
+
+## Tool-space paths for the SCARA and the six-axis arm (14 November)
+
+Goal 3. The SCARA and the URDF arm moved in joint space only, so no line of the tool was straight. Now
+`kinematics.tool_space = true` makes their axes the flange's pose, behind the `sim_core::Machine` interface as on the
+deltas: every planner, the cycle, the CLI and the app work on tool poses unchanged. Off in the shipped configs; two new
+configs have it on (`config/scara-tool.toml`, `config/arm-tool.toml`, also `SCARA_TOOL_CONFIG`, `ARM_TOOL_CONFIG`).
+Chosen over mapping tool-space path files in the planner: the `Mechanism` trait of `chain::JointMachine` already had
+`forward`, `inverse` and `unreachable`, and the joint machine already turned tool speeds into joint speeds through the
+Jacobian of `forward`; only the mechanism's side was missing.
+
+How (`machine-joint-kit/src/tool.rs`, wired in `arm.rs`):
+
+- SCARA: x, y, z (m), c (rad) in closed form from the URDF at zero (arm lengths and directions, joint 1's place, the
+  quill's direction, the flange's turn), checked against the chain at three poses; the elbow by `kinematics.elbow`
+  ("right": joint 2 counter-clockwise from the stretched arm). Condition number of d(x, y)/d(q1, q2).
+- Six joints: x, y, z (m) and the rotation vector rx, ry, rz (rad, from the base frame). Damped least squares on the
+  geometric Jacobian (lambda 1 mm, turn rows times the flange's distance from joint 2 at the home), followed from
+  `kinematics.home_joints` along the line (orientation by slerp) to the target in steps of 20 mm / 0.05 rad, settled to
+  1 um, the last to 1e-13 m: the solution stays on the home's branch; a step that does not settle refuses the pose.
+  About 90 us per inverse in release. Condition number of the scaled 6 x 6 geometric Jacobian, by Jacobi rotations.
+- Refusals: `error-arm-out-of-reach`, `error-arm-singularity` (above `workspace.max_condition_number`: SCARA 25, arm
+  30), `error-arm-orientation-half-turn` (|r| within 0.01 rad of pi, where the rotation vector jumps); the joint
+  machine's `error-joint-beyond-stop`. Ranges `workspace.tool_min` / `tool_max`, limits `[axis.x]` ... `[axis.c]` /
+  `[axis.rz]`.
+- `sim-components/src/chain.rs` (shared, small): `Mechanism::condition` (passed on as `Machine::condition`, so the
+  workspace map and `ratings.max_condition_number` work), `Mechanism::tool_is_joints`, and where the tool is not the
+  joints `feedforward_torque_moving` with the speed terms (q'' = J^-1 (a - J' q'), J' q' by a second difference of
+  `forward`, then `rigid_motor_torque` with Coriolis and centripetal torques); in joint space unchanged. `JointSpec`
+  got the joint's `unit`, which the joint signals used to take from the axes (wrong once the axes are the tool's).
+- `sim-components/src/control.rs` (shared, small): `plan_path` with `time_optimal` first checks the path as planned
+  within the axis limits for poses the machine cannot go to. A line ending at the SCARA's stretched arm made the
+  time-optimal timing slow to a standstill and ask for 64 GB of points; now it is refused with `error-path-range`.
+
+Measured (`sim-cli verdicts`, release): the SCARA's tool cycle (pick 100 mm down, 500 mm across turning 1.5 rad, back)
+2.542 s, every verdict passes, settling 0.04 mm; the arm's (the same, flange pointing down) 3.774 s, every verdict
+passes with `settling_tolerance_m` 5 mm: under the payload its flange rests 4.0 mm below the encoders' pose (0.2 mm
+rigid). The time-optimal line across the SCARA: 1.542 s against 1.750 s within the axis limits, motor 1 at 307.5 of its
+rated 314.16 rad/s.
+
+Tests (`machine-joint-kit`):
+
+- `the_scara_closed_form_gives_the_joints_of_a_pose_by_hand`: at (0.325, 0.275, 0.1, 0.3), cos(elbow) = 0: right elbow
+  pi/2 with joint 1 = 0, left -pi/2 with joint 1 = 2 atan2(0.275, 0.325) = 1.404514; joint 3 = 0.1 m; 1e-12.
+- `inverse_then_forward_returns_sampled_tool_poses_within_1e_9`: the SCARA over its tool range (standard suite's grid),
+  the arm at 40 poses around its home (turns up to 0.3 rad), its wrist on the home's side; static hold of both.
+- `every_planned_pose_of_a_straight_tool_line_lies_within_1_um_of_it`: the SCARA's line (x = 0.4, z = 0.15,
+  c = 3 (y + 0.25)) within the axis limits and time-optimal; the arm's line with (0, pi/2, 0) held within 1e-6 rad, read
+  back through the URDF chain.
+- `the_joint_speeds_along_a_tool_line_are_the_inverse_jacobian_times_the_tool_speed`: at (0.325, 0.275), J =
+  [[-0.275, -0.275], [0.325, 0]], 0.5 m/s along y: joint 1 0.5 / 0.325 = 1.538462 rad/s, joint 2 the opposite, joint 4
+  0, the motors times 100 and 80; condition number 2.4691 from the eigenvalues of J^T J.
+- `a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason`: x = 0.598 (elbow 0.1639 rad) refused with
+  `error-arm-singularity`, 0.59 (0.3669 rad) goes, 0.61 `error-arm-out-of-reach`, a line ending at 0.6 `error-path-range`
+  (both planners).
+- `the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line`: no motor above 314.159
+  rad/s (+0.1 %), the fastest above 0.9 of it and faster than within the axis limits.
+- `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`,
+  `the_tool_space_cycles_pass_their_verdicts`.
+
+Left open:
+
+- Orientation along a line is the linear interpolation of the rotation vector: the slerp only where both ends' vectors
+  are parallel (held, or a turn about one axis through the base frame's orientation); a turn about the vertical of a
+  flange pointing down is close to the slerp, not it. A slerp needs the planner to interpolate orientations.
+- Arcs and splines take two or three axes, so on the arm (six axes) and the SCARA (four) only lines; an arc in x, y with
+  the rest held would need the planner to carry the other axes along.
+- The six-axis inverse follows the line from the home on every call (90 us); a warm start from the last solution would
+  make the arm's tool-space cycle (8 s of computing) several times faster.
+- The time-optimal planner itself still asks for unbounded points where a reachable pose on a path slows a motor to
+  nearly zero speed (only poses the machine refuses are caught before it); planner-optimal's area.
+- In joint space the controller's feedforward still leaves out the arms' Coriolis and centripetal torques; switching
+  them on there changes the shipped arms' figures.
+- The friction view spans each joint's friction over its axis's speed limit, which in tool space is the tool's (m/s for
+  joint 1 of the SCARA).

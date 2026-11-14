@@ -46,7 +46,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         ratio: joint.ratio(),
     };
     let c = axis(cfg, "c", "axis-c", "rad", joint.range)?;
-    machine(cfg, table, vec![(joint, None)], vec![c])
+    machine(cfg, table, vec![(joint, None, "rad")], vec![c])
 }
 
 impl Mechanism for Table {

@@ -93,7 +93,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
         geared: !joint.coupled,
     };
     let x = axis(cfg, "x", "axis-x", "m", joint.range)?;
-    machine(cfg, slide, vec![(joint, lever)], vec![x])
+    machine(cfg, slide, vec![(joint, lever, "m")], vec![x])
 }
 
 impl Slide {

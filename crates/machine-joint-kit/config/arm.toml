@@ -1,7 +1,8 @@
 # Serial six-axis arm: bodies, joints, masses and inertias from a URDF file, here the example in urdf/six-axis.urdf
 # (6 kg payload, 1.4 m reach), each joint driven by the same motor through a strain wave gear.
 #   [estimate]   all but the motor and drive (as the delta picker's).
-# The tool pose is the six joint angles, rad.
+# The tool pose is the six joint angles, rad. With kinematics.tool_space it is the flange's x, y, z (m) and its
+# orientation as a rotation vector (rad) instead: see config/arm-tool.toml.
 
 [sim]
 dt_s = 62.5e-6
@@ -17,6 +18,55 @@ gear_ratios = [120.0, 120.0, 120.0, 80.0, 80.0, 80.0]
 payload_kg = 6.0
 # From the URDF's flange frame.
 payload_offset_m = [0.05, 0.0, 0.0]
+
+# Off (as shipped): the axes are the joints, [axis.j1] to [axis.j6]. On: the axes are the flange's x, y, z (m) and its
+# orientation rx, ry, rz (rad: the rotation from the base frame as axis times angle), [axis.x] to [axis.rz], each piece
+# of a path a straight line of the tool with its orientation held (or turned about a fixed axis). The joints by damped
+# least squares, followed from home_joints along the line to the target: the solution stays on the home's branch
+# (shoulder, elbow, wrist). The home: the flange 0.99 m out, 0.83 m up, pointing down (ry = pi/2), wrist bent.
+[kinematics]
+tool_space = false
+home_joints = [0.0, 0.4, 0.2, 0.0, 0.97, 0.0]
+
+# In tool space: the range of x, y, z (m) and rx, ry, rz (rad); poses in it out of reach, beyond a joint's stop or with
+# the flange turned near half a turn from the base frame (where the rotation vector jumps) are refused, and those where
+# the condition number of the Jacobian (its turn rows times the flange's distance from joint 2 at the home, 0.86 m) is
+# above max_condition_number: near the stretched arm or the wrist's axes 4 and 6 in line (5.0 at the home). [estimate]
+[workspace]
+tool_min = [0.5, -0.6, 0.3, -3.1, -3.1, -3.1]
+tool_max = [1.2, 0.6, 1.1, 3.1, 3.1, 3.1]
+max_condition_number = 30.0
+
+# The tool's limits in tool space. [estimate] below what the joints' limits allow near the home.
+[axis.x]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 80.0
+
+[axis.y]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 80.0
+
+[axis.z]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 80.0
+
+[axis.rx]
+max_velocity_rad_s = 2.0
+max_acceleration_rad_s2 = 8.0
+max_jerk_rad_s3 = 150.0
+
+[axis.ry]
+max_velocity_rad_s = 2.0
+max_acceleration_rad_s2 = 8.0
+max_jerk_rad_s3 = 150.0
+
+[axis.rz]
+max_velocity_rad_s = 2.0
+max_acceleration_rad_s2 = 8.0
+max_jerk_rad_s3 = 150.0
 
 # Each joint's bearings and stops. [estimate]
 # The joints' limits ([estimate]: about 2000 r/min of the motors at the highest speeds).

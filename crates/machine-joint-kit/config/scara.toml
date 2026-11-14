@@ -2,7 +2,8 @@
 # flange; bodies from urdf/scara.urdf, 3 kg payload. Joints 1, 2 and 4 behind strain wave gears, joint 3 coupled to its
 # screw.
 #   [estimate]   all but the motor and drive (as the delta picker's).
-# The tool pose is the four joints: rad, rad, m (down), rad.
+# The tool pose is the four joints: rad, rad, m (down), rad. With kinematics.tool_space it is the flange's x, y, z (m)
+# and its turn c (rad) instead: see config/scara-tool.toml.
 
 [sim]
 dt_s = 62.5e-6
@@ -16,6 +17,44 @@ urdf_file = "builtin:scara"
 gear_ratios = [100.0, 80.0, 1.0, 50.0]
 payload_kg = 3.0
 payload_offset_m = [0.0, 0.0, 0.0]
+
+# Off (as shipped): the axes are the joints, [axis.j1] to [axis.j4]. On: the axes are the flange's x, y, z (m) and its
+# turn c about the vertical (rad, joints 1 + 2 + 4), [axis.x] to [axis.c], each piece of a path a straight line of the
+# tool; the joints by the closed form, with the elbow "right" (joint 2 turned counter-clockwise from the stretched arm,
+# seen from above: the elbow lies to the right of the line from the base to the tool) or "left".
+[kinematics]
+tool_space = false
+elbow = "right"
+
+# In tool space: the range of x, y, z (m) and c (rad); poses in it out of the arm's reach (600 mm, 50 mm inside) or
+# beyond a joint's stop are refused. Targets where the condition number of the arm's Jacobian in the plane
+# (d(x, y)/d(joint 1, joint 2)) is above max_condition_number are refused: near the stretched arm (25 at 11 degrees
+# of elbow, 9.6 at the default start pose's 29 degrees). [estimate] a design rule.
+[workspace]
+tool_min = [0.15, -0.45, 0.0, -3.0]
+tool_max = [0.6, 0.45, 0.2, 3.0]
+max_condition_number = 25.0
+
+# The tool's limits in tool space. [estimate] below what the joints' limits allow at the middle of the range.
+[axis.x]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 5.0
+max_jerk_m_s3 = 200.0
+
+[axis.y]
+max_velocity_m_s = 1.0
+max_acceleration_m_s2 = 5.0
+max_jerk_m_s3 = 200.0
+
+[axis.z]
+max_velocity_m_s = 0.8
+max_acceleration_m_s2 = 8.0
+max_jerk_m_s3 = 400.0
+
+[axis.c]
+max_velocity_rad_s = 4.0
+max_acceleration_rad_s2 = 30.0
+max_jerk_rad_s3 = 1000.0
 
 # Each joint's bearings and stops. [estimate]
 # The joints' limits ([estimate]; the quill in m): each below the motor's rated 314 rad/s behind its ratio.

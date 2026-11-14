@@ -703,6 +703,20 @@ thermal-warm-start,,0.02011,0.1000,ok
 
 Every check passes. Motor 1 carries a little more than on the D3 (peak 0.563 against 0.510 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor works at 5 % of its peak: the 1FK2105 is far larger than the turn needs, but a machine has one motor type here. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) settling fails, 1.22 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` settling fails: it reaches 0.53 mm at a bound of the estimates. A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
 
+### SCARA and six-axis arm in tool space
+
+By default the SCARA's and the arm's axes are their joints, so a move is a straight line of the joints and a curve of the tool. With `kinematics.tool_space = true` the axes are the flange's pose (SCARA: x, y, z in m and the turn c in rad; arm: x, y, z and the orientation rx, ry, rz as a rotation vector), and moves, paths and cycles are straight lines of the tool, as on the deltas. Two configs have it on, with a cycle of straight lines:
+
+```bash
+sim-cli verdicts scara --config crates/machine-joint-kit/config/scara-tool.toml
+```
+
+```bash
+sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
+```
+
+Both pass every check. The SCARA picks 100 mm down, carries the part 500 mm across at x = 0.4 m turning it by 1.5 rad, and back: 2.542 s, motor 1 at 5 % of its peak and 288 of its 314 rad/s (the arm swings fastest where the line passes nearest the base), settling 0.04 mm. The arm does the same with its flange pointing down all along (ry = π/2): 3.774 s, motor 2 at 23 % of its peak, settling 4.0 mm of the 5 the config allows: under the 6 kg payload the gears twist and the flange rests 4 mm below where the encoders put it (0.2 mm in the rigid model, `--set effects.joint_elasticity=false`). A path in tool space is written `line,x,y,z,c` (or six numbers on the arm); `--time-optimal` times it as fast as the motors allow through the inverse kinematics: the SCARA's line across takes 1.542 s instead of 1.750 s, motor 1 at 307.5 of its 314.2 rad/s. A target the arm cannot reach is refused with the reason (`The arm cannot reach the target.`), as is one too near a singularity (the SCARA's stretched arm: `workspace.max_condition_number`, 25), and a path through one. The SCARA's elbow is `kinematics.elbow` ("right" or "left"); the arm keeps the branch of `kinematics.home_joints` (shoulder, elbow and wrist as there).
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

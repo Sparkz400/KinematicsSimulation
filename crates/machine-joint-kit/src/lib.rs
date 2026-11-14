@@ -13,6 +13,7 @@
 mod arm;
 mod slide;
 mod table;
+mod tool;
 
 use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
@@ -44,6 +45,11 @@ entry!(LINEAR_MOTOR, "linear-motor-axis", "linear-motor.toml", |cfg| slide::buil
 entry!(ROTARY_TABLE, "rotary-table", "table.toml", table::build);
 entry!(URDF_ARM, "urdf-arm", "arm.toml", arm::build);
 entry!(SCARA, "scara", "scara.toml", arm::build);
+
+/// The full configs of the SCARA and the six-axis arm in tool space (`kinematics.tool_space = true`), with a cycle of
+/// straight lines of the tool: for `--config`.
+pub const SCARA_TOOL_CONFIG: &str = include_str!("../config/scara-tool.toml");
+pub const ARM_TOOL_CONFIG: &str = include_str!("../config/arm-tool.toml");
 
 const G: f64 = 9.80665;
 
@@ -120,18 +126,24 @@ fn axis(
     })
 }
 
-/// A joint machine of `joints` (each with its gear lever, `None` where the joint is driven without a converter) and
-/// `axes`, one motor per joint.
+/// A joint machine of `joints` (each with its gear lever, `None` where the joint is driven without a converter, and
+/// its unit, "m" or "rad") and `axes`, one motor per joint.
 fn machine<M: Mechanism + 'static>(
     cfg: &Config,
     mechanism: M,
-    joints: Vec<(RotaryJoint, Option<f64>)>,
+    joints: Vec<(RotaryJoint, Option<f64>, &'static str)>,
     axes: Vec<AxisInfo>,
 ) -> Result<Box<dyn Machine>, ConfigError> {
     let specs = joints
         .into_iter()
         .enumerate()
-        .map(|(k, (drive, gear_lever))| JointSpec { drive, id: MOTOR_IDS[k], key: JOINT_KEYS[k], gear_lever })
+        .map(|(k, (drive, gear_lever, unit))| JointSpec {
+            drive,
+            id: MOTOR_IDS[k],
+            key: JOINT_KEYS[k],
+            gear_lever,
+            unit,
+        })
         .collect::<Vec<_>>();
     let motors = (0..specs.len()).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect();
     Ok(Box::new(JointMachine::new(

@@ -1,5 +1,6 @@
 use super::*;
 use sim_components::analysis::{CycleLoad, Verdict};
+use sim_components::{Command, Sim};
 
 #[test]
 fn screw_axis_passes_the_standard_suite() {
@@ -301,6 +302,225 @@ fn the_jacobian_mass_matrix_is_newton_eulers() {
                     tau[i]
                 );
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tool space (`kinematics.tool_space`, `tool`).
+
+fn tool_config(entry: &MachineEntry, text: &str) -> Config {
+    sim_components::load_config(entry, text).unwrap()
+}
+
+/// The SCARA's arms from `urdf/scara.urdf`: 325 and 275 mm, the flange 0.2 m above the floor at joint 3 = 0.
+const L1: f64 = 0.325;
+const L2: f64 = 0.275;
+
+#[test]
+fn the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling() {
+    for (entry, text) in [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG)] {
+        let (default, mut tool) = (entry.config(), tool_config(entry, text));
+        assert!(tool.bool("kinematics.tool_space").unwrap());
+        tool.set_text("kinematics.tool_space = false").unwrap();
+        // The arm's settling tolerance is in m in tool space, in rad in joints.
+        for key in ["start.pose", "cycle", "ratings.settling_tolerance_m"] {
+            tool.set(key, default.get(key).unwrap().clone()).unwrap();
+        }
+        assert_eq!(tool.to_text().unwrap(), default.to_text().unwrap(), "{}", entry.id);
+    }
+}
+
+/// At x = 0.325, y = 0.275 the cosine law gives cos(elbow) = (0.18125 - 0.325^2 - 0.275^2) / (2 0.325 0.275) = 0: the
+/// right-handed elbow at +pi/2 with joint 1 at atan2(0.275, 0.325) - atan2(0.275, 0.325) = 0 (arm 1 along x, arm 2
+/// along y); the left-handed at -pi/2 with joint 1 at 2 atan2(0.275, 0.325) = 1.404514. Joint 3 = (0.2 - z) / 1 m,
+/// joint 4 = c - joint 1 - joint 2.
+#[test]
+fn the_scara_closed_form_gives_the_joints_of_a_pose_by_hand() {
+    let chain = arm::chain(&SCARA.config()).unwrap();
+    let tool = [L1, L2, 0.1, 0.3];
+    let half = std::f64::consts::FRAC_PI_2;
+    let left_j1 = 2.0 * L2.atan2(L1);
+    assert!((left_j1 - 1.404514).abs() < 1e-6);
+    for (elbow, by_hand) in [(1.0, [0.0, half, 0.1, 0.3 - half]), (-1.0, [left_j1, -half, 0.1, 0.3 - left_j1 + half])] {
+        let scara = tool::Scara::new(&chain, elbow).unwrap();
+        let mut q = [0.0; 4];
+        assert!(scara.inverse(&tool, &mut q));
+        for k in 0..4 {
+            assert!((q[k] - by_hand[k]).abs() < 1e-12, "elbow {elbow}: joints {q:?}, by hand {by_hand:?}");
+        }
+        // And the URDF chain itself puts the flange there.
+        let tip = chain.tip(&q).1;
+        assert!((tip[0] - L1).abs() < 1e-12 && (tip[1] - L2).abs() < 1e-12 && (tip[2] - 0.1).abs() < 1e-12);
+    }
+}
+
+/// Forward of inverse returns the pose within 1e-9 over the SCARA's tool range (the grid of the standard suite), and
+/// the six-axis arm's at poses sampled around its home, orientations turned up to 0.3 rad; each arm holds still at rest
+/// in tool space. The arm's wrist stays on the home's side (joint 5 > 0): the branch the inverse starts on.
+#[test]
+fn inverse_then_forward_returns_sampled_tool_poses_within_1e_9() {
+    let scara = (SCARA.build)(&tool_config(&SCARA, SCARA_TOOL_CONFIG)).unwrap();
+    sim_core::testkit::round_trip(scara.as_ref());
+    sim_core::testkit::static_hold(scara.as_ref());
+
+    let arm = (URDF_ARM.build)(&tool_config(&URDF_ARM, ARM_TOOL_CONFIG)).unwrap();
+    let (mut motors, mut back, mut tried) = ([0.0; 6], [0.0; 6], 0);
+    for k in 0..40 {
+        let f = |i: usize| ((k * 7 + i * 13) % 11) as f64 / 10.0 - 0.5;
+        let pose = [
+            0.9 + 0.5 * f(0),
+            0.8 * f(1),
+            0.7 + 0.5 * f(2),
+            0.6 * f(3),
+            std::f64::consts::FRAC_PI_2 + 0.6 * f(4),
+            0.6 * f(5),
+        ];
+        if arm.unreachable(&pose, 0.0).is_some() {
+            continue;
+        }
+        tried += 1;
+        arm.inverse(&pose, &mut motors);
+        arm.forward(&motors, &mut back);
+        for i in 0..6 {
+            assert!((pose[i] - back[i]).abs() < 1e-9, "round trip at {pose:?} gave {back:?}");
+        }
+        assert!(motors[4] > 0.0, "wrist flipped at {pose:?}: motors {motors:?}");
+    }
+    assert!(tried >= 20, "only {tried} of 40 poses reachable");
+    sim_core::testkit::static_hold(arm.as_ref());
+}
+
+/// A line of the tool, planned within the axis limits and as fast as the motors allow: every planned pose lies on it
+/// within 1 um (and the turn c along it as y says), and the joints the inverse gives there put the flange on it too.
+/// The six-axis arm's line holds its orientation within 1e-6 rad, read back from the joints through the URDF chain.
+#[test]
+fn every_planned_pose_of_a_straight_tool_line_lies_within_1_um_of_it() {
+    let sim = Sim::new(&SCARA, &tool_config(&SCARA, SCARA_TOOL_CONFIG)).unwrap();
+    let line = sim_components::path::parse("line, 0.4, 0.25, 0.15, 1.5").unwrap();
+    let (mut motors, mut back) = ([0.0; 4], [0.0; 4]);
+    for time_optimal in [false, true] {
+        let points = sim.plan_path(&line, time_optimal).unwrap();
+        assert!(points.len() > 100);
+        for (_, p) in &points {
+            // From the start (0.4, -0.25, 0.15, 0): x and z fixed, c = 1.5 (y + 0.25) / 0.5.
+            let off = [p[0] - 0.4, p[2] - 0.15, p[3] - 3.0 * (p[1] + 0.25)];
+            assert!(off.iter().all(|o| o.abs() < 1e-6), "{p:?} is off the line by {off:?}");
+            sim.machine.inverse(p, &mut motors);
+            sim.machine.forward(&motors, &mut back);
+            assert!(p.iter().zip(&back).all(|(a, b)| (a - b).abs() < 1e-6), "{p:?}: joints put the flange at {back:?}");
+        }
+    }
+
+    // Rigid: the elastic arm's setpoint at rest is where its motors stand, 2.3 mm above the sagging flange.
+    let mut cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+    let down = std::f64::consts::FRAC_PI_2;
+    let line = sim_components::path::parse(&format!("line, 0.9, 0.3, 0.7, 0.0, {down}, 0.0")).unwrap();
+    let (mut motors, mut back) = ([0.0; 6], [0.0; 6]);
+    let points = sim.plan_path(&line, false).unwrap();
+    assert!(points.len() > 100);
+    for (_, p) in &points {
+        sim.machine.inverse(p, &mut motors);
+        sim.machine.forward(&motors, &mut back);
+        // From (0.9, -0.3, 0.7) along y.
+        assert!((back[0] - 0.9).abs() < 1e-6 && (back[2] - 0.7).abs() < 1e-6, "{back:?} off the line");
+        let turn = [back[3], back[4] - down, back[5]];
+        assert!(turn.iter().map(|t| t * t).sum::<f64>().sqrt() < 1e-6, "orientation {back:?}");
+    }
+}
+
+/// At x = 0.325, y = 0.275 (joint 1 at 0, joint 2 at pi/2) the arm's Jacobian in the plane is
+/// [[-L1 sin 0 - L2 sin pi/2, -L2 sin pi/2], [L1 cos 0 + L2 cos pi/2, L2 cos pi/2]] = [[-0.275, -0.275], [0.325, 0]]:
+/// along y at 0.5 m/s, joint 1 turns 0.5 / 0.325 = 1.538462 rad/s and joint 2 the opposite (the first row is 0), and
+/// joint 4 turns back what they turn together (0), so that c stays. The motors: those times the ratios 100, 80.
+/// Its condition number: from the eigenvalues of J^T J = [[0.18125, 0.075625], [0.075625, 0.075625]], 2.4691.
+#[test]
+fn the_joint_speeds_along_a_tool_line_are_the_inverse_jacobian_times_the_tool_speed() {
+    let machine = (SCARA.build)(&tool_config(&SCARA, SCARA_TOOL_CONFIG)).unwrap();
+    let pose = [L1, L2, 0.1, 0.3];
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    machine.equilibrium(&pose, &mut state, &mut torque);
+    machine.set_tool_velocity(&mut state, &[0.0, 0.5, 0.0, 0.0]);
+    let (mut motors, mut speeds) = ([0.0; 4], [0.0; 4]);
+    machine.motor_state(&state, &mut motors, &mut speeds);
+    let by_hand = 0.5 / L1;
+    assert!((by_hand - 1.538462).abs() < 1e-6);
+    for (k, want) in [100.0 * by_hand, -80.0 * by_hand, 0.0, 0.0].into_iter().enumerate() {
+        assert!((speeds[k] - want).abs() < 1e-4, "motor {k}: {} rad/s, by hand {want}", speeds[k]);
+    }
+    let (tr, det): (f64, f64) = (0.18125 + 0.075625, 0.18125 * 0.075625 - 0.075625 * 0.075625);
+    let root = (tr * tr / 4.0 - det).sqrt();
+    let cond = ((tr / 2.0 + root) / (tr / 2.0 - root)).sqrt();
+    assert!((cond - 2.4691).abs() < 1e-4);
+    assert!((machine.condition(&pose).unwrap() - cond).abs() < 1e-9);
+}
+
+/// The stretched SCARA arm is a singularity: at x = 0.598 (elbow acos((0.598^2 - L1^2 - L2^2) / (2 L1 L2)) =
+/// 0.1639 rad) the condition number is above the config's 25, and a move there is refused with that reason; at 0.59
+/// (elbow 0.3669 rad) it goes. A line of the tool that ends at the stretched arm (x = 0.6) is refused as running out of
+/// what the machine can go to, as on the deltas; beyond the reach (0.61 m) the reason is the reach.
+#[test]
+fn a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason() {
+    let mut sim = Sim::new(&SCARA, &tool_config(&SCARA, SCARA_TOOL_CONFIG)).unwrap();
+    let elbow = |x: f64| ((x * x - L1 * L1 - L2 * L2) / (2.0 * L1 * L2)).acos();
+    assert!((elbow(0.598) - 0.1639).abs() < 1e-4 && (elbow(0.59) - 0.3669).abs() < 1e-4);
+    assert!(sim.machine.condition(&[0.598, 0.0, 0.1, 0.0]).unwrap() > 25.0);
+    assert!(sim.machine.condition(&[0.6, 0.0, 0.1, 0.0]).unwrap() > 1e6);
+    let refused = |sim: &mut Sim, x: f64| sim.command(Command::MoveTo(vec![x, 0.0, 0.1, 0.0])).err().map(|e| e.key);
+    assert_eq!(refused(&mut sim, 0.598), Some("error-arm-singularity"));
+    assert_eq!(sim.machine.unreachable(&[0.61, 0.0, 0.1, 0.0], 0.0), Some("error-arm-out-of-reach"));
+    let line = sim_components::path::parse("line, 0.6, 0.0, 0.15, 0.0").unwrap();
+    for time_optimal in [false, true] {
+        assert_eq!(sim.plan_path(&line, time_optimal).err().map(|e| e.key), Some("error-path-range"));
+    }
+    assert_eq!(refused(&mut sim, 0.59), None);
+}
+
+/// The time-optimal plan of a line of the SCARA's tool takes the motors' limits through the inverse kinematics: no
+/// motor turns faster than its rated 314.159 rad/s anywhere along it (speeds by differences of the joints the planned
+/// poses ask for, over the planning cycle), and the fastest gets near it, faster than in the plan within the axis
+/// limits (1 m/s along y), which so takes longer.
+#[test]
+fn the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line() {
+    let cfg = tool_config(&SCARA, SCARA_TOOL_CONFIG);
+    let sim = Sim::new(&SCARA, &cfg).unwrap();
+    let rated = cfg.positive("drive.rated_speed_rad_s").unwrap();
+    let line = sim_components::path::parse("line, 0.4, 0.25, 0.15, 1.5").unwrap();
+    let fastest = |time_optimal: bool| {
+        let points = sim.plan_path(&line, time_optimal).unwrap();
+        let motors: Vec<Vec<f64>> = points
+            .iter()
+            .map(|(_, p)| {
+                let mut m = vec![0.0; 4];
+                sim.machine.inverse(p, &mut m);
+                m
+            })
+            .collect();
+        let most = motors
+            .windows(2)
+            .zip(points.windows(2))
+            .flat_map(|(m, t)| (0..4).map(move |k| (m[1][k] - m[0][k]).abs() / (t[1].0 - t[0].0)))
+            .fold(0.0, f64::max);
+        (most, points.last().unwrap().0)
+    };
+    let ((optimal, optimal_time), (limited, limited_time)) = (fastest(true), fastest(false));
+    assert!(optimal <= rated * 1.001, "{optimal} rad/s above the rated {rated}");
+    assert!(optimal > 0.9 * rated && optimal > limited, "{optimal} rad/s, within the axis limits {limited}");
+    assert!(optimal_time < limited_time, "{optimal_time} s against {limited_time} s");
+}
+
+/// The tool-space configs' cycles of straight lines pass every verdict, as the defaults' do: the SCARA's in 2.542 s
+/// (settling 0.04 mm), the arm's in 3.774 s (settling 4.0 mm of its 5: the gears' twist under the payload).
+#[test]
+fn the_tool_space_cycles_pass_their_verdicts() {
+    for (entry, text) in [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG)] {
+        let cfg = tool_config(entry, text);
+        let (load, verdicts) = judged(entry, &cfg);
+        assert!(!load.tripped, "{}", entry.id);
+        for v in verdicts {
+            assert!(v.ok, "{}: {} of motor {:?} is {} against {}", entry.id, v.check, v.motor, v.value, v.limit);
         }
     }
 }

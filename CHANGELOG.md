@@ -91,6 +91,16 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 - A path planned in the app starts at the live setpoint; on the planar delta it started 0.26 mm off it, one rest sag.
 
+- SCARA and six-axis arm in tool space (`kinematics.tool_space`, off in the shipped configs): the axes are the
+  flange's pose (SCARA x, y, z, c in closed form with `kinematics.elbow`; arm x, y, z and a rotation vector, damped
+  least squares followed from `kinematics.home_joints`), so moves, paths and cycles are straight lines of the tool;
+  refusals `error-arm-out-of-reach`, `error-arm-singularity` (`workspace.max_condition_number`),
+  `error-arm-orientation-half-turn`; new configs `config/scara-tool.toml` and `config/arm-tool.toml` with cycles of
+  straight lines. `Mechanism::condition`, `Mechanism::tool_is_joints` and `JointSpec::unit` in `chain.rs`; in tool
+  space the joint machine's feedforward takes the speed terms.
+- Fixed: a time-optimal path through a pose the machine cannot go to (an arm's singularity) slowed to a standstill and
+  asked for unbounded memory; it is refused with `error-path-range` first.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.
