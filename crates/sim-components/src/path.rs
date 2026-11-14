@@ -1714,11 +1714,17 @@ pub fn plan_at(
             [v.min(feed), a, j]
         })
         .collect();
-    Ok(timed(axes, &geo, &limits, cycle))
+    timed(axes, &geo, &limits, cycle)
 }
 
-/// The timing of `plan` for pieces with their speed, acceleration and jerk limits along the path.
-fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec<(f64, Vec<f64>)> {
+/// The timing of `plan` for pieces with their speed, acceleration and jerk limits along the path; refused where it would
+/// take more than `PLAN_POINTS_MOST` poses (a feed of 0.000001 mm/min).
+fn timed(
+    axes: &[AxisInfo],
+    geo: &[Geo],
+    limits: &[[f64; 3]],
+    cycle: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let n = geo.len();
     // Two cycles at steady speed on either side of a junction, so that the jerk of a ramp and the steps of
     // the junction never fall into the same three cycles.
@@ -1766,6 +1772,9 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 
     let duration = |i: usize| phases[i].iter().map(|p| p.0).sum::<f64>();
     let total: f64 = (0..n).map(duration).sum();
+    if !(total / cycle <= PLAN_POINTS_MOST) {
+        return Err(CommandError { key: "error-path-long" });
+    }
     let mut points = Vec::new();
     for k in 0..=(total / cycle - 1e-9).ceil() as usize {
         // The piece this moment falls into, and the time since its start.
@@ -1784,7 +1793,7 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
         }
         points.push((k as f64 * cycle, within(axes, geo[i].at(s.min(geo[i].length()))[0].clone())));
     }
-    points
+    Ok(points)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2218,7 +2227,7 @@ const LEVELS: usize = 32;
 /// The most steps of a run along a piece (`follow`): one that takes longer is held back by a ceiling near zero and
 /// refused. 2^18 steps are 65 s at a profile cycle of 1 ms.
 const RUN_STEPS: usize = 1 << 18;
-/// The most points a time-optimal plan may have: ten million, 2.8 hours at a planning cycle of 1 ms (160 MB of
+/// The most points a plan may have: ten million, 2.8 hours at a planning cycle of 1 ms (160 MB of
 /// six-axis poses).
 const PLAN_POINTS_MOST: f64 = 1e7;
 
