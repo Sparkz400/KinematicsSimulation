@@ -103,6 +103,22 @@ impl Slide {
 }
 
 impl Mechanism for Slide {
+    /// Along the axis, x, with z across it: the carriage and payload, and the drive's rotor, a screw's about x, a
+    /// pinion's about y; a linear motor's forcer moves with the carriage.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let (sin, cos) = self.incline.sin_cos();
+        let mut f = sim_core::FrameMomentum { gravity: [-self.g * sin, 0.0, -self.g * cos], ..Default::default() };
+        sim_components::base::add_point(&mut f, self.moving(), [q[0], 0.0, 0.0], [qd[0], 0.0, 0.0]);
+        match self.drive {
+            Drive::Screw(_) => f.angular[0] += rotor_spin[0],
+            Drive::Rack(..) => f.angular[1] += rotor_spin[0],
+            Drive::Linear(_, forcer) => {
+                f.linear[0] += rotor_spin[0];
+                f.first_moment[0] += forcer * q[0];
+            }
+        }
+        Some(f)
+    }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         mass[0] = self.moving();
         bias[0] = self.moving() * self.g * self.incline.sin();

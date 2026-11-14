@@ -128,6 +128,20 @@ pub struct Body {
     pub limits: Option<(f64, f64)>,
 }
 
+/// A body of a chain as it moves (`Chain::body_states`), in the base frame: its inertial (the payload merged into the
+/// last), its frame's rotation and origin, its joint's axis, its centre of mass and that centre's velocity, and its
+/// angular velocity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyState {
+    pub inertial: Inertial,
+    pub rot: M3,
+    pub origin: V3,
+    pub axis: V3,
+    pub com: V3,
+    pub velocity: V3,
+    pub spin: V3,
+}
+
 /// A serial chain on a fixed base, z up in the base frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chain {
@@ -330,6 +344,47 @@ impl Chain {
                 energy
             })
             .sum()
+    }
+
+    /// Every body in the base frame at joints `q` and speeds `qd`, `extra` merged into the last (`BodyState`).
+    pub fn body_states(&self, q: &[f64], qd: &[f64], extra: Option<(f64, V3)>) -> Vec<BodyState> {
+        let frames = self.frames(q);
+        let n = self.len();
+        let mut out: Vec<BodyState> = Vec::with_capacity(n);
+        for (k, &(rot, origin)) in frames.iter().enumerate() {
+            let b = &self.bodies[k];
+            let mut inertial = b.inertial;
+            if let (true, Some((m, at))) = (k + 1 == n, extra) {
+                inertial = inertial.merged(&Inertial { mass: m, com: at, inertia: [[0.0; 3]; 3] }, &IDENTITY, [0.0; 3]);
+            }
+            let (axis, com) = (mul(&rot, b.axis), add(origin, mul(&rot, inertial.com)));
+            // A revolute joint j moves the centre by a_j x (c - o_j) q_j' and turns it by a_j q_j'; a prismatic one moves
+            // it by a_j q_j'.
+            let (mut velocity, mut spin) = ([0.0; 3], [0.0; 3]);
+            for (j, before) in out.iter().map(|s| (s.axis, s.origin)).chain([(axis, origin)]).enumerate() {
+                let (a, o) = before;
+                if self.bodies[j].prismatic {
+                    velocity = add(velocity, scale(a, qd[j]));
+                } else {
+                    velocity = add(velocity, scale(cross(a, sub(com, o)), qd[j]));
+                    spin = add(spin, scale(a, qd[j]));
+                }
+            }
+            out.push(BodyState { inertial, rot, origin, axis, com, velocity, spin });
+        }
+        out
+    }
+
+    /// The chain's linear momentum and its angular momentum about the base's origin, at joints `q` and speeds `qd`.
+    pub fn momentum(&self, q: &[f64], qd: &[f64], extra: Option<(f64, V3)>) -> (V3, V3) {
+        let (mut linear, mut angular) = ([0.0; 3], [0.0; 3]);
+        for b in self.body_states(q, qd, extra) {
+            let p = scale(b.velocity, b.inertial.mass);
+            let turned = matmul(&matmul(&b.rot, &b.inertial.inertia), &transpose(&b.rot));
+            linear = add(linear, p);
+            angular = add(angular, add(cross(b.com, p), mul(&turned, b.spin)));
+        }
+        (linear, angular)
     }
 
     /// Reads a chain from URDF text.

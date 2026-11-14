@@ -19,9 +19,10 @@
 
 use crate::tool::{Scara, Six, Tool};
 use crate::{axis, gravity, machine, payload, required_life};
-use sim_components::chain::{JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
+use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, tube_second_moment};
+use sim_components::chain::{FlexMode, JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
-use sim_components::rigid::{Chain, Inertial, V3, mul};
+use sim_components::rigid::{Chain, Inertial, V3, add, cross, dot, mul};
 use sim_components::transmission::{BallScrew, StrainWave};
 use sim_core::{Config, ConfigError, Label, Machine, Part, RatingCheck, Scene, Shape, SignalInfo};
 use std::f64::consts::{PI, TAU};
@@ -53,6 +54,67 @@ pub struct Arm {
     tool: Tool,
     /// `workspace.max_condition_number`: tool poses beyond it are refused.
     max_condition: f64,
+    /// effects.link_bending: the links that bend, each in one mode.
+    bending: Vec<BentLink>,
+}
+
+/// A link that bends (effects.link_bending) in its first Euler-Bernoulli mode as a cantilever from its joint, in the
+/// plane its joint turns it in: from the joint's origin to the next joint (the flange after the last) along `dir`, by
+/// its tip's deflection along `across`, so that it turns about `dir x across`; all in its body's frame. Its own mass
+/// is the URDF link's, taken as spread evenly along it; what the chain carries beyond it sits at its tip.
+// shortcut: one mode per link, in the plane its joint turns it in (none where the link lies along the joint's axis);
+// out of that plane and in torsion it is rigid, and the bodies beyond move with its tip but their own turning inertia
+// is left out of its mode. Add the second plane where a payload hangs off to the side.
+#[derive(Debug, Clone, Copy)]
+struct BentLink {
+    body: usize,
+    length: f64,
+    dir: V3,
+    across: V3,
+    ei: f64,
+    damping_ratio: f64,
+}
+
+/// The bending links of effects.link_bending: per joint from `link_bending.outer_diameter_m` and `wall_m` (a tube; a
+/// diameter of 0 keeps that link rigid) and `youngs_modulus_pa`, all with `damping_ratio`.
+fn bent_links(cfg: &Config, chain: &Chain) -> Result<Vec<BentLink>, ConfigError> {
+    if !cfg.bool("effects.link_bending")? {
+        return Ok(Vec::new());
+    }
+    let n = chain.len();
+    let per_link = |key: &str| -> Result<Vec<f64>, ConfigError> {
+        let v = cfg.f64s(&format!("link_bending.{key}"))?;
+        if v.len() != n || v.iter().any(|x| !(*x >= 0.0)) {
+            return Err(ConfigError::Invalid(format!("link_bending.{key}")));
+        }
+        Ok(v)
+    };
+    let (outer, wall) = (per_link("outer_diameter_m")?, per_link("wall_m")?);
+    let (e, damping_ratio) =
+        (cfg.positive("link_bending.youngs_modulus_pa")?, cfg.non_negative("link_bending.damping_ratio")?);
+    let mut links = Vec::new();
+    for (body, b) in chain.bodies.iter().enumerate() {
+        let to = chain.bodies.get(body + 1).map_or(chain.tip_pos, |next| next.origin_pos);
+        let length = dot(to, to).sqrt();
+        if outer[body] == 0.0 || length < 1e-3 || b.prismatic {
+            continue;
+        }
+        let dir = to.map(|v| v / length);
+        let side = cross(b.axis, dir);
+        let size = dot(side, side).sqrt();
+        if size < 0.1 {
+            continue;
+        }
+        links.push(BentLink {
+            body,
+            length,
+            dir,
+            across: side.map(|v| v / size),
+            ei: e * tube_second_moment(outer[body], wall[body]),
+            damping_ratio,
+        });
+    }
+    Ok(links)
 }
 
 /// The chain of `arm.urdf_file`.
@@ -164,6 +226,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         built: chain.bodies.iter().map(|b| b.inertial).collect(),
         max_condition: cfg.positive("workspace.max_condition_number")?,
         tool,
+        bending: bent_links(cfg, &chain)?,
         chain,
     };
     machine(cfg, arm, joints, axes)
@@ -187,6 +250,108 @@ impl Arm {
 }
 
 impl Mechanism for Arm {
+    /// The bodies' (`Chain::momentum`, the payload with the last) and each rotor spinning about its joint's axis.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let (linear, mut angular) = self.chain.momentum(q, qd, self.extra());
+        let (mut mass, mut first_moment) = (0.0, [0.0; 3]);
+        for (b, spin) in self.chain.body_states(q, qd, self.extra()).iter().zip(rotor_spin) {
+            angular = add(angular, b.axis.map(|a| a * spin));
+            mass += b.inertial.mass;
+            first_moment = add(first_moment, b.com.map(|c| c * b.inertial.mass));
+        }
+        Some(sim_core::FrameMomentum {
+            linear,
+            angular,
+            mass,
+            first_moment,
+            gravity: [0.0, 0.0, -self.g],
+            ..Default::default()
+        })
+    }
+
+    /// Per bending link its cantilever mode (`beam::cantilever_mode`): its own mass spread along it, everything the
+    /// chain carries beyond it at its tip.
+    fn flex_modes(&self) -> Vec<FlexMode> {
+        let masses: Vec<f64> = self
+            .chain
+            .body_states(&vec![0.0; self.chain.len()], &vec![0.0; self.chain.len()], self.extra())
+            .iter()
+            .map(|b| b.inertial.mass)
+            .collect();
+        self.bending
+            .iter()
+            .map(|l| {
+                let (mass, stiffness) =
+                    cantilever_mode(l.ei, masses[l.body], masses[l.body + 1..].iter().sum(), l.length);
+                FlexMode { link: l.body, mass, stiffness, damping: 2.0 * l.damping_ratio * (mass * stiffness).sqrt() }
+            })
+            .collect()
+    }
+
+    /// Across each bending link: the force and the moment the bodies beyond it need from its tip to move as they do
+    /// against gravity (their m (a - g), the accelerations by central differences over +-1 us along q' and q''), taken
+    /// back, the moment through the tip's slope; and its own body's m (a - g), as a load spread evenly along it.
+    fn flex_loads(&self, q: &[f64], qd: &[f64], qdd: &[f64], out: &mut [f64]) {
+        let h = 1e-6;
+        let at = |s: f64| {
+            let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
+            let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
+            self.chain.body_states(&q, &qd, self.extra())
+        };
+        let (now, before, after) = (at(0.0), at(-h), at(h));
+        let need: Vec<V3> = (0..now.len())
+            .map(|k| {
+                let a: V3 = std::array::from_fn(|i| (after[k].velocity[i] - before[k].velocity[i]) / (2.0 * h));
+                [a[0], a[1], a[2] + self.g].map(|v| v * now[k].inertial.mass)
+            })
+            .collect();
+        for (link, load) in self.bending.iter().zip(out.iter_mut()) {
+            let b = &now[link.body];
+            let tip = add(b.origin, mul(&b.rot, link.dir.map(|v| v * link.length)));
+            let (across, turn) = (mul(&b.rot, link.across), mul(&b.rot, cross(link.dir, link.across)));
+            let (mut force, mut moment) = ([0.0; 3], [0.0; 3]);
+            for k in link.body + 1..now.len() {
+                force = add(force, need[k]);
+                moment = add(moment, cross(std::array::from_fn(|i| now[k].com[i] - tip[i]), need[k]));
+            }
+            *load = -dot(across, force)
+                - CANTILEVER_PARTICIPATION * dot(across, need[link.body])
+                - dot(turn, moment) * CANTILEVER_TIP_SLOPE / link.length;
+        }
+    }
+
+    /// The flange moves with each bending link's tip and turns with its slope: by d across it and by 1.3765 d / L about
+    /// dir x across, about the tip. In joint space the tool is the joints, which the bending does not move.
+    fn flex_shift(&self, q: &[f64], d: &[f64], out: &mut [f64]) {
+        out.iter_mut().for_each(|o| *o = 0.0);
+        if matches!(self.tool, Tool::Joints) {
+            return;
+        }
+        let frames = self.chain.frames(q);
+        let (flange_rot, flange) = self.chain.tip(q);
+        let (mut moved, mut turned) = ([0.0; 3], [0.0; 3]);
+        for (link, d) in self.bending.iter().zip(d) {
+            let (rot, origin) = frames[link.body];
+            let tip = add(origin, mul(&rot, link.dir.map(|v| v * link.length)));
+            let turn = mul(&rot, cross(link.dir, link.across)).map(|v| v * CANTILEVER_TIP_SLOPE * d / link.length);
+            let swing = cross(turn, std::array::from_fn(|i| flange[i] - tip[i]));
+            moved = add(moved, add(mul(&rot, link.across).map(|v| v * d), swing));
+            turned = add(turned, turn);
+        }
+        out[..3].copy_from_slice(&moved);
+        match &self.tool {
+            Tool::Scara(_) => out[3] = turned[2],
+            Tool::Six(_) => {
+                let (before, after) = (
+                    crate::tool::log(&flange_rot),
+                    crate::tool::log(&sim_components::rigid::matmul(&crate::tool::exp(turned), &flange_rot)),
+                );
+                (0..3).for_each(|k| out[3 + k] = after[k] - before[k]);
+            }
+            Tool::Joints => {}
+        }
+    }
+
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         self.chain.dynamics(q, qd, self.g, self.extra(), mass, bias);
     }

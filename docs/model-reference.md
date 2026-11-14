@@ -525,7 +525,7 @@ J_rotor  · d²φ_k/dt² = ripple(τ_motor,k, φ_k) − τ_gear,rotor − τ_sha
 
 ### Frame mode
 
-`effects.frame_compliance`: the beam and its mounting are one mass `frame.mass_kg` on a spring `frame.stiffness_n_m` with damping, in X only. Belt, guide, idlers, chain and end stop push back on the beam with the force they put on the carriage. This is the only structural mode of the frame.
+`effects.frame_compliance`: the beam and its mounting are one mass `frame.mass_kg` on a spring `frame.stiffness_n_m` with damping, in X only. Belt, guide, idlers, chain and end stop push back on the beam with the force they put on the carriage. This is the portal's own sway, coupled to the belt both ways. What the whole gantry stands on is the [compliant base](#compliant-base) (`effects.base_compliance`), in series with it.
 
 ### Leaning Z axis
 
@@ -543,7 +543,29 @@ The axis is softer the further it hangs below the carriage. The spring gets stif
 
 A machine file's `machine.lean` node is the same for any body leaning along a horizontal axis, its lean w beside the axes with the body's mass coupling it to its axis, [[M, m e_a], [m e_a^T, m]] · [a; ẅ] = [F; tip · F_p,a − k w − c ẇ] ([machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis)); the T-gantry's file gives this crate's numbers to 1e-9.
 
-Assumptions: the Z axis is a rigid body on a compliant guide; it does not bend. Only its lean in X is a degree of freedom, not in Y and not in rotation as a state of its own. The payload sits at the centre of mass used for h.
+`effects.z_axis_bending`: the Z axis also bends, a cantilever from the carriage of bending stiffness E I (`tool_flex.z_axis_bending_stiffness_nm2`), in series with the guide's give (alone with `tool_flex` off, whose stiffnesses are then infinite):
+
+```text
+k(z)   = 1 / ( 1/k_lat + h²/k_tilt + h³/(3 E I) )
+tip    = k · ( 1/k_lat + h · h_tool / k_tilt + h² (3 h_tool − h) / (6 E I) )
+dk/dz  = k² · ( 2 h / k_tilt + h² / (E I) )
+```
+
+The Z axis alone at z = 0: k = 3 · 1.4e4 / 0.3³ = 1.556e6 N/m, the tool moving (3 h_t − h)/(2 h) = 3 times as far as the centre of mass; with the guide 1.2206e5 N/m against 1.3333e5 without the bending.
+
+Assumptions: the Z axis is a rigid body on a compliant guide (with `z_axis_bending` one bending cantilever lumped at its centre of mass, the same state u). Only its lean in X is a degree of freedom, not in Y and not in rotation as a state of its own. The payload sits at the centre of mass used for h.
+
+### Beam sag
+
+`effects.beam_sag` (elastic model): the X beam is a simple span `beam.span_m` between the posts, E I `beam.bending_stiffness_nm2`, the carriage `beam.carriage_at_zero_m` from the left post at x = 0. Carriage, Z axis and payload sag it under the carriage, and the tool is that much lower:
+
+```text
+a = carriage_at_zero + x,  b = L − a
+sag(x) = (m_c + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newton in the middle)
+z_tool = z − sag(x),   ż_tool = ż − sag'(x) ẋ
+```
+
+At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. Quasi-static: the beam's vertical mode with the carriage on it (about 100 Hz) lies above the Z axis's mode on its belt, and the Z axis's acceleration does not add to the load (shortcut, `Beam`).
 
 The modes the machine reports (`modes`; the lower one is `resonance_hz`, the input shaper's) are those of two masses in a row: the carriage on the belt's X stiffness k_b = EA/L₁ + EA/L₃ (pulleys taken as held), and the Z axis on k(z):
 
@@ -758,6 +780,8 @@ M_d(θ + δ, y) (θ̈ + δ̈, ÿ) = Q_d − v_d − (k_b δ + c_b δ̇, k_l y + 
 
 and out of that plane the elbow moves by y_i along its axis a_i, on the tube's lateral stiffness k_l = 3 E I / L_a³ with a damper c_l (`upper_arm.lateral_stiffness_n_m`, `lateral_damping_n_s_m`). The elbow is then c_i + y_i a_i: the kinematics take it (the forward and inverse kinematics with the elbows moved, `Legs::forward_moved`, `inverse_moved`), and the platform's Jacobian by the moves is J_x⁻¹ diag(u_i · a_i) (`Legs::jacobians`), so a move pushes the platform only where the forearm is not square to the axis. M_d is 6 × 6: every point mass (platform, rods' middles, the elbow mass on the moves) with its Jacobian in (θ + δ, y), the rods' spin too. The kinematics (tool, condition number, scene, collision bodies) take the elbow angles and moves; the arm angle signal, the stops and the gearbox the joint's. At rest δ = Q_d / k_b and y = Q_y / k_l (three rounds from y = 0; Q_y hardly changes with y). Both dampers' loss is `power.arm_bending`, both springs' energy is elastic energy. The feedforward stays the rigid model's. In the Adept cycle the tracking error grows from 4.0 to 5.3 mm, the dwell error from 0.68 to 0.73 mm; the moves out of the plane add little (motor 1 RMS 2.6121 to 2.6122 N m, motors 2 and 3 peak 4.0400 to 4.0381 N m, dwell error 0.7295 to 0.7313 mm: the cycle runs on y = 0, where leg 1's forearm is square to its axis).
 
+**The tube's own share and the elbow's twist** (`effects.arm_tube_inertia`, with `link_elasticity`; off as shipped). The tube bends in its first cantilever mode, φ(L) = 1 at the elbow: a quarter of its mass moves with the elbow's bend, so m L_a²/4 of its inertia about the shoulder and 0.3915 m L_a of its first moment (what its weight drives the mode with, ∫φ) go from the root to the elbow; the arm turned whole keeps both sums. Out of the plane a quarter of its mass moves with the elbow's move y, and the elbow block turns with the tube's tip slope, 1.3765 y / L_a, about the arm's normal: its twist inertia (`mass.elbow_twist_inertia_kgm2`, plus the forearms' share at the rods' ends, s m_fb (spacing/2)²) counts J (1.3765 / L_a)² on y. Default arm: 0.036 kg m² and 0.1409 kg m to the elbow (the root keeps 0.012 and 0.0391), the lateral mass 0.383 + 0.225 + 0.0054 = 0.614 kg, which lowers the elbows' lateral mode from sqrt(4e5 / 0.383) / 2π = 162.6 Hz to 128.5 Hz. The twist turns the rods' ends at the elbow in opposite senses along the arm; their mean, which the platform follows, stays (to first order the platform does not move).
+
 **Resonance** (`Machine::modes`, `resonance_hz`, `mode_shape`; what `effects.shaper_follows_pose` sets the input shaper to). The modes with the motors held by their position loops: per arm the gearbox's spring k_g (with `joint_elasticity`) from the held rotor to the arm's root, the bending spring k_b (with `link_elasticity`) from the root to the elbow, the lateral spring k_l on the elbow's move, the root I_arm and everything beyond the mass matrix M_d at the elbow angles (and moves). The coordinates (roots, elbow angles, moves) with the flexibility per arm K⁻¹ = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] and 1/k_l (a rigid spring 0): with M = L Lᵀ (Cholesky) the eigenvalues μ = 1/ω² of the symmetric Lᵀ K⁻¹ L by Jacobi rotations, a rigid connection's μ = 0 left out (`arm_modes`). Each mode's damping ratio is vᵀCv / (2 ω vᵀMv) with C the gearboxes', the bending's and the lateral dampers (the cross terms of a damping that is not proportional left out). 3 modes with the gearboxes alone, 6 with the bending alone, 9 with both; `resonance_hz` is the lowest. Gravity's stiffness (a few N m/rad) and backlash are left out. With rigid gearboxes and arms there is none. At the centre with the arms level the lowest is the platform's sideways mode (twice): the forearms lumped, 28.14 Hz on the gearboxes alone, 38.76 Hz on the bending alone, 22.88 Hz with both (vertical: 68.39 Hz on the bending alone). There every forearm is square to its axis, so the elbows' moves ring on their own: lumped sqrt(k_l / (m_elbow + s m_fb)) / 2π = 126.48 Hz three times; with the rods, whose middles also move with the platform, 147.35 Hz for all three elbows moving the same way round and up to 0.3 % more for the two that couple to the sideways modes.
 
 ### Signals
@@ -871,7 +895,48 @@ feedforward τ = (M q̈ + h(q, q̇)) / i + J_rotor i q̈   per motor (in joint s
 condition   κ = √(λ_max / λ_min) of Jᵀ J (Jacobi rotations): SCARA of ∂(x, y)/∂(q1, q2), six joints of the geometric 6 × 6 with turn rows × ℓ
 ```
 
+**Link bending** (`effects.link_bending`, the arms only; off as shipped). Each link with a section in `[link_bending]` bends as a cantilever from its joint to the next (the flange after the last) in its first Euler-Bernoulli mode, in the plane its joint turns it in (across = axis × along), one state d (its tip's deflection) and its rate per link, after the joint machine's states (`chain::Mechanism::flex_modes`, `beam::cantilever_mode`):
+
+```text
+E I = E π (D⁴ − d⁴) / 64,   L the link's length,   m its URDF mass (spread evenly),   M everything beyond it (payload too)
+m_mod = m / 4 + M,   k_mod = 1.875104⁴ / 4 · E I / L³ = 3.0906 E I / L³,   c = 2 ζ sqrt(k m)
+m_mod d̈ + c ḋ + k_mod d = −across · F_beyond − 0.3915 across · m (a_c − g) − 1.3765 / L · turn · M_beyond
+F_beyond = Σ_beyond m_k (a_k − g),   M_beyond = Σ_beyond (c_k − tip) × m_k (a_k − g),   turn = along × across
+```
+
+so a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending. In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). Default six-axis arm: the upper arm, 0.6 m, 12 kg with 20.5 kg beyond it, as a 140 × 8 mm aluminium tube rings at 88.5 Hz. A link along its joint's axis (the base column) has no mode in that plane; out of the plane and in torsion the links are rigid (shortcut in `arm.rs`).
+
 The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
+
+## Compliant base
+
+Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:
+
+```text
+M d'' + 2 ζ sqrt(k M) d' + k d = L                          (per direction; M = base.mass_kg, or base.inertia_*_kgm2 for a tilt)
+F = −dp/dt + m g + F_ext,   T = −dL/dt + c × g + r_ext × F_ext   (about the origin; about the pivot T − P × F)
+L = (F, T) − (F, T) at rest at the start pose
+```
+
+p and L are the momentum and the angular momentum of everything that moves on the base (`Machine::frame_momentum`: bodies, arms, rotors and pulleys spinning), m and c its mass and first moment, F_ext a process force from a workpiece on the floor; the motors push on their stators as they push the load, so the base takes dp/dt back. dp/dt is taken along the machine's own state rates, by central differences over ±1 µs. What stays put cancels against the start pose's load, at which the base was set up: a machine's weight does not sag it, its weight moving out does. M is everything that sways with the base, the machine on it included, so a direction's frequency is sqrt(k / M) / 2π (the modes list them, and `resonance_hz` takes the lowest that moves the tool along its first axis, for the input shaper).
+
+The tool rides on the base and the workpiece stands on the floor: the tool pose is the machine's plus the base's move at the tool, u + θ × (r − P) for the axes x, y, z and θ for the turns (rx, ry, rz, c about z; `Machine::base_shift`); the motors' angles are measured on the base and do not see it. At rest the machine stands off by the base's deflection under its load so that the tool is at its pose. The scene moves as a whole by the base's move at the tool, exaggerated. Signals `base.<x|y|z|rx|ry|rz>`.
+
+Checks: a force held at rest moves the base and the tool by F / k (single axis, 50 N on 2.5e6 N/m: 20 µm); after a move an undamped base rings at sqrt(k / M) / 2π (100 kg on 2.5e6 N/m: 25.165 Hz, half period 19.869 ms, in the tool's position); every machine's momentum is the rate of its first moment (`testkit::frame_momentum_moves_its_first_moment`).
+
+Assumptions (shortcut in `base.rs`): one-way. The machine's own dynamics do not feel the base's acceleration: the motors neither see the sway in their following error nor hold against it. That is exact where the base is much heavier than what moves on it or the servo holds the axes stiffly to it; the frame of the T-gantry and the machine files (`frame_compliance`) is the coupled one along one axis. The base's energy is not in the energy budget. The rotors' spin is left out where the machine does not know their axes (machine files' belt drives), the table's worm motor is taken about z, the T-gantry's idlers and the D3's forearm spin are left out.
+
+The cycles with the shipped estimates (`[base]` of each config; base on against off): tracking error peak and dwell error peak (what the settling verdict judges), m.
+
+| Machine | Base | Tracking peak off → on | Dwell peak off → on |
+| --- | --- | --- | --- |
+| D2 | 300 kg, 15/15/40 Hz | 2.200e-3 → 2.410e-3 | 3.475e-4 → 3.400e-4 |
+| D3 | 300 kg, 15/15/40 Hz | 4.017e-3 → 4.180e-3 | 6.760e-4 → 6.674e-4 |
+| D4 | 300 kg, 15/15/40 Hz | 5.517e-3 → 5.552e-3 | 4.035e-4 → 3.841e-4 |
+| Linear delta | 300 kg, 15/15/40 Hz | 5.514e-4 → 5.568e-4 | 7.375e-5 → 9.009e-5 |
+| T-gantry | 150 kg, 20/20/50 Hz | 1.706e-4 → 2.408e-4 | 4.734e-5 → 4.921e-5 |
+
+The deltas' dwell error is their own settling, which the base's 0.1 mm sway shifts in phase (a little less at the D2, D3 and D4's dwells, more at the linear delta's); the T-gantry's tracking error grows by 41 %, its traverse pushing the stand along x.
 
 ## Motion controller
 

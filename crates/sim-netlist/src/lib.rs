@@ -24,8 +24,8 @@ use toml::{Table, Value};
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let net = Netlist::parse(cfg)?;
     match &net.linkage {
-        Some(linkage) => Ok(Box::new(linkage::LinkageMachine::new(cfg, &net, linkage)?)),
-        None => Ok(Box::new(ConfigMachine::new(cfg, &net)?)),
+        Some(linkage) => sim_components::base::mount(cfg, Box::new(linkage::LinkageMachine::new(cfg, &net, linkage)?)),
+        None => sim_components::base::mount(cfg, Box::new(ConfigMachine::new(cfg, &net)?)),
     }
 }
 

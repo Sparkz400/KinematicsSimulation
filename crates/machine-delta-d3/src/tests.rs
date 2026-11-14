@@ -955,3 +955,27 @@ line,-0.5,0.0,-0.85",
     println!("with M2max: {slower} s, output torque used to {output}");
     assert!(output <= 1.001 && output > 0.99 && slower > duration + 0.01, "{output} of 0.8 M2max, {slower} s");
 }
+
+/// With bending arms and effects.arm_tube_inertia the tube's own share goes into the bends. The default arm: tube
+/// 0.9 kg, 0.4 m, I 0.048 kg m^2 about the shoulder, first moment 0.9 x 0.2 = 0.18 kg m. To the elbow go
+/// m L^2 / 4 = 0.9 x 0.16 / 4 = 0.036 kg m^2 and 0.391496 m L = 0.140939 kg m (root keeps 0.012 and 0.039061); the
+/// arm turned whole keeps its inertia and its weight's moment. Out of the plane: the elbow block and a sixth of the
+/// forearm pair (rigid rods), 0.3 + 0.5 / 6 = 0.383333 kg, plus a quarter of the tube, 0.225 kg, plus the twist,
+/// (2.5e-4 + 0.5 / 6 x 0.1^2 / 4) (1.37651 / 0.4)^2 = 4.58333e-4 x 11.8423 = 5.4277e-3 kg: 0.614 kg.
+#[test]
+fn the_arm_tube_and_the_elbow_twist_take_part_in_the_bending() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.link_elasticity = true").unwrap();
+    let plain = Delta::new(&cfg).unwrap();
+    cfg.set_text("effects.arm_tube_inertia = true").unwrap();
+    let shared = Delta::new(&cfg).unwrap();
+    assert!(
+        (shared.root_inertia - 0.012).abs() < 1e-12 && (shared.tip_inertia - plain.tip_inertia - 0.036).abs() < 1e-12
+    );
+    assert!((shared.root_moment - 0.039_061).abs() < 1e-6, "{}", shared.root_moment);
+    assert!((shared.tip_moment - plain.tip_moment - 0.140_939).abs() < 1e-6);
+    assert!((shared.arm_inertia() - plain.arm_inertia()).abs() < 1e-12);
+    assert!((shared.arm_moment() - plain.arm_moment()).abs() < 1e-12);
+    assert!((plain.m_lateral - 0.383_333).abs() < 1e-6, "{}", plain.m_lateral);
+    assert!((shared.m_lateral - (0.383_333 + 0.225 + 5.4277e-3)).abs() < 1e-6, "{}", shared.m_lateral);
+}

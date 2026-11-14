@@ -94,7 +94,10 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `gearbox_efficiency` | T S on, E off | | Torque loss in the direction of power flow. Off in E: direct drive |
 | `torque_ripple` | T E S | on | Torque ripple (proportional to torque) and cogging (independent of it) |
 | `tooth_meshing` | T E S | on | A small periodic force at the tooth-pass frequency |
-| `frame_compliance` | T E | on | One spring-mass mode of the frame in X |
+| `frame_compliance` | T E | on | One spring-mass mode of the frame in X: the portal's posts swaying under its beam, coupled to the belt both ways |
+| `base_compliance` | every machine and machine file | off | The base the whole machine stands on gives way ([`[base]`](#base)): up to six spring-mass directions under the motors' reactions and the moving masses, the tool moving with it. In series with `frame_compliance` |
+| `z_axis_bending` | T E | off | The Z axis bends as a cantilever from the carriage (`tool_flex.z_axis_bending_stiffness_nm2`), in series with its guide's give; with `tool_flex` off it only bends. Elastic model |
+| `beam_sag` | T E | off | The X beam sags under the carriage and the Z axis as a simple span ([`[beam]`](#beam)), quasi-static, lowering the tool. Elastic model |
 | `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
 | `idlers` | T E | off | Inertia and bearing friction of the five idlers |
 | `cable_chain` | T E S | off | A cable chain whose moving mass grows with x, plus drag. On an inclined single axis the moving run is lifted too |
@@ -262,6 +265,41 @@ T-gantry, and machine files whose `machine.lean` node names these values (`machi
 | `lateral_stiffness_n_m` | T E | N/m | Sideways stiffness of the Z guide | estimate |
 | `tilt_stiffness_nm_rad` | T E | N m/rad | Tilt stiffness of the Z guide | estimate |
 | `damping_n_s_m` | T E | N s/m | Damping of the leaning motion | estimate |
+| `z_axis_bending_stiffness_nm2` | T E | N m² | With `effects.z_axis_bending`: the Z axis's bending stiffness E I. Its centre of mass h below the carriage gives way h³ / (3 E I) more, and the tool at h_t moves h² (3 h_t − h) / (6 E I) per newton there. An aluminium profile of about 60 × 40 mm: 1.4e4; bounds 0.7e4 to 2.8e4 | estimate |
+
+## `[beam]`
+
+T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts; carriage, Z axis and payload, m g, sag it under the carriage at a from the left post by m g a² b² / (3 E I L), b = L − a (L³ / (48 E I) per newton in the middle), and the tool is that much lower. Quasi-static: the beam's own vertical mode with the carriage (about 100 Hz) lies above the Z axis's on its belt.
+
+| Key | In | Unit | Meaning | Source |
+| --- | --- | --- | --- | --- |
+| `span_m` | T E | m | Span between the posts. T: the motors at `geometry.span_min_m` beyond each end of the stroke, 1.3; E: Festo's drive heads 1354 mm apart | T geometry, E CAD |
+| `carriage_at_zero_m` | T E | m | The carriage's distance from the left post at x = 0. T 0.15, E 0.177 (the stroke in the middle) | T geometry, E estimate |
+| `bending_stiffness_nm2` | T E | N m² | The beam's E I: an aluminium profile of about 80 × 80 mm, 8.4e4; bounds 4.2e4 to 1.7e5 | estimate |
+
+## `[base]`
+
+Every machine and machine file. With `effects.base_compliance` the frame or stand under the whole machine is a rigid body on springs: each direction with a stiffness above 0 is a state of its own (`sim_components::base`, model reference "Compliant base"). Directions in the frame of the tool pose's x, y, z (the slides' x along their axis); a tilt turns about `pivot_m`. Off in every shipped config: the values are typical, not measured. Signals `base.<x|y|z|rx|ry|rz>` (m, rad).
+
+| Key | Unit | Meaning |
+| --- | --- | --- |
+| `pivot_m` | m | The point the base tilts about, (x, y, z) in the tool pose's frame |
+| `mass_kg` | kg | Everything that sways with the base, the machine on it included: the frequency of a direction is sqrt(k / M) / 2π |
+| `inertia_x_kgm2`, `inertia_y_kgm2`, `inertia_z_kgm2` | kg m² | The same about the axes through the pivot, for the tilts |
+| `stiffness_x_n_m`, `stiffness_y_n_m`, `stiffness_z_n_m` | N/m | Translation stiffness; 0 rigid |
+| `tilt_stiffness_x_nm_rad`, `tilt_stiffness_y_nm_rad`, `tilt_stiffness_z_nm_rad` | N m/rad | Tilt stiffness; 0 rigid |
+| `damping_ratio_x`, `_y`, `_z`, `_rx`, `_ry`, `_rz` | – | Damping ratio of each direction, c = 2 ζ sqrt(k M); 0.02 (welded steel) in all configs |
+
+The shipped values, all estimates with `[bounds]` (stiffness ÷ 2.5 to × 2.5, mass 0.6 to 1.6 times, damping 0.01 to 0.05):
+
+| Machines | Base | Values |
+| --- | --- | --- |
+| D2, D3 (and its conveyor config), D4, linear delta, `planar-delta.toml` | A welded steel picker frame with the robot, 300 kg | x, y 2.7e6 N/m (15 Hz), z 1.9e7 N/m (40 Hz); tilts rigid |
+| T-gantry, EXCT-30, the gantry machine files | The stand under the gantry with it, 150 kg | x, y 2.4e6 N/m (20 Hz), z 1.5e7 N/m (50 Hz); tilts rigid |
+| Single axis, screw, rack and linear motor axes, `single-axis.toml` | The machine bed, 100 kg | along the axis 2.5e6 N/m (25 Hz); the rest rigid |
+| Rotary table | The table's stand, 20 kg m² about z | twist 7.1e5 N m/rad (30 Hz) |
+| Six-axis arm | The pedestal, 60 kg m² about the floor in tilt, 10 about z | tilts 1.5e6 N m/rad (25 Hz), twist 6.3e5 N m/rad (40 Hz) |
+| SCARA | The column and its table, 30 kg m² in tilt, 5 about z | tilts 1.1e6 N m/rad (30 Hz), twist 3.2e5 N m/rad (40 Hz) |
 
 ## `[idler]`
 
@@ -512,6 +550,7 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | `joint_elasticity` | The gearboxes twist (stiffness, damping, backlash): motor and arm are two bodies per joint. Off: the rigid reference model (the switch that `belt_stretch` is on the belt machines) | true |
 | `forearm_inertia` | Each forearm pair a rigid rod with its mass and rotational inertia (m/6 at each end, 2m/3 at its middle: exact for a slender rod), and the rods' spin about their own axes as the pair's plane turns (`mass.forearm_rod_spin_inertia_kgm2`; one switch, as it is the rest of the same rigid body's inertia). Off: the lumped model, `mass.forearm_elbow_share` at the elbow, the rest at the platform | true |
 | `link_elasticity` | The upper arms bend (`[upper_arm]`): in the plane they turn in, the elbow turns against the arm's root on a spring and damper; out of it, the elbow moves along its axis on the tube's lateral spring and damper. The platform rings after a move. The stiffnesses are estimates | false |
+| `arm_tube_inertia` | With `link_elasticity`: the arm tube's own share of the bending modes, as a cantilever's first mode (a quarter of its mass, m L_a² / 4 of its inertia and 0.3915 m L_a of its first moment move from the root to the elbow; a quarter of its mass moves with the elbow out of the plane), and the elbow block's twist as the arm bends out of its plane (`mass.elbow_twist_inertia_kgm2` and the forearms' share at the rods' ends, times (1.3765 / L_a)²) | false |
 | `joint_friction` | Friction in the arms' joints at the base, `[joint]` | true |
 | `hard_stops` | The stops at the ends of the arms' angle range, `[joint]` | true |
 | `gravity`, `payload`, `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `holding_brake` | As on the other machines | true |
@@ -547,6 +586,7 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | `forearm_pair_kg` | kg | A pair of forearm rods with their ball cups | 0.5 |
 | `forearm_elbow_share` | share | The share of a pair's mass counted at the elbow, the rest at the platform (0 to 1), with `effects.forearm_inertia` off. 2/3 matches the rod's inertia about its end (Codourey, Olsson) | 0.6667 |
 | `forearm_rod_spin_inertia_kgm2` | kg m² | Each rod's inertia about its own axis, with `effects.forearm_inertia`. A carbon tube 20 × 1.5 mm of 0.15 kg: m (r_o² + r_i²) / 2 = 1.29e-5; bounds 0.6e-5 to 2.6e-5 | 1.3e-5, estimate |
+| `elbow_twist_inertia_kgm2` | kg m² | With `effects.arm_tube_inertia`: the elbow block's inertia about the arm's normal through it. An aluminium block of 0.3 kg, 0.1 m across: m w² / 12 = 2.5e-4; bounds 1.2e-4 to 5e-4 | 2.5e-4, estimate |
 | `platform_kg` | kg | The platform with its flange | 1.2 |
 | `payload_kg` | kg | Payload, with `effects.payload` | 3.0, catalogue (Autonox rated payload) |
 
@@ -688,6 +728,18 @@ and a cycle of straight lines in tool space (and the arm's settling tolerance 5 
 | `axis.c` (SCARA), `axis.rx`, `axis.ry`, `axis.rz` (arm): `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | In tool space: the turn's limits | SCARA 4, 30, 1000; arm 2, 8, 150; estimates |
 
 These are choices and design rules, not properties of a part, so they have no `[bounds]`.
+
+`effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
+arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
+first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
+its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast aluminium.
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `outer_diameter_m` | m | Per joint, the link as a round tube: its outer diameter; 0 keeps the link rigid. A link along its joint's axis (the arm's base column) does not bend in that plane | arm 0, 0.14, 0.12, 0.1, 0.08, 0; SCARA 0.12, 0.1, 0, 0; estimates |
+| `wall_m` | m | Per joint, the tube's wall | arm 0, 0.008, 0.008, 0.006, 0.005, 0; SCARA 0.008, 0.006, 0, 0; estimates |
+| `youngs_modulus_pa` | Pa | E of all links: cast aluminium 7e10; bounds 6.5e10 to 7.2e10 | 7.0e10, estimate |
+| `damping_ratio` | – | Of every link's mode; bounds 0.01 to 0.05 | 0.02, estimate |
 
 ## `[[cycle.segment]]`
 

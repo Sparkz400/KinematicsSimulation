@@ -1839,6 +1839,64 @@ impl ConfigMachine {
 }
 
 impl Machine for ConfigMachine {
+    /// Each body moving with its axes (an axis with the id x, y or z along that direction), over ground with the frame's
+    /// sway and the lean; the frame's own mass in its sway; a rotary axis's inertia turning about z; the process force on
+    /// the tool. What does not move is left out (see `FrameMomentum`).
+    // shortcut: the pulleys', idlers' and rotors' spin is left out (their axes are not in the netlist), and a linear
+    // axis whose id is not x, y or z moves nothing; add them once the netlist places them.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let n = self.n();
+        let along: Vec<Option<usize>> =
+            self.axes.iter().map(|a| ["x", "y", "z"].iter().position(|id| *id == a.id)).collect();
+        let g = self.g_along.first().zip(self.g_across.first()).map_or(0.0, |(a, b)| a.hypot(*b));
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -g], ..Default::default() };
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        self.tool_state(s, &mut pos, &mut vel);
+        let (q, v) = self.positions(s);
+        let (mut ground, mut place) = (v.to_vec(), q.to_vec());
+        if let Some(fr) = &self.frame {
+            let (u, du) = self.sway(s);
+            ground[fr.axis] += du;
+            place[fr.axis] += u;
+            if let Some(k) = along[fr.axis] {
+                f.linear[k] += fr.mass * du;
+                f.first_moment[k] += fr.mass * u;
+            }
+        }
+        for (b, body) in self.bodies.iter().enumerate() {
+            let (mut r, mut w) = ([0.0; 3], [0.0; 3]);
+            for i in (0..n).filter(|&i| body.axes[i]) {
+                if let Some(k) = along[i] {
+                    (r[k], w[k]) = (place[i], ground[i]);
+                }
+            }
+            // A body that does not move along the frame's axis rides on the frame.
+            if let Some(k) = self.frame.as_ref().filter(|fr| !body.axes[fr.axis]).and_then(|fr| along[fr.axis]) {
+                let (u, du) = self.sway(s);
+                (r[k], w[k]) = (r[k] + u, w[k] + du);
+            }
+            if let Some(k) = self.lean.as_ref().filter(|l| l.body == b).and_then(|lean| along[lean.axis]) {
+                let (x, dx) = self.leaning(s);
+                (r[k], w[k]) = (r[k] + x, w[k] + dx);
+            }
+            sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
+        }
+        for i in (0..n).filter(|&i| self.axes[i].unit == "rad") {
+            let turned = self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
+            f.angular[2] += turned * v[i];
+        }
+        for (i, force) in self.process_force().iter().enumerate() {
+            if let Some(k) = along[i] {
+                f.external[k] = *force;
+            }
+        }
+        for (i, k) in along.iter().enumerate() {
+            if let Some(k) = k {
+                f.external_at[*k] = pos[i];
+            }
+        }
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

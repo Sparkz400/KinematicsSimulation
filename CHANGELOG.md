@@ -7,6 +7,19 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- A compliant base under every machine and machine file (`effects.base_compliance`, `[base]`, off): up to six
+  spring-mass directions taking the rate of change of the momentum of everything that moves on it
+  (`Machine::frame_momentum`, written for every machine), the tool moving with it (`Machine::base_shift`); signals
+  `base.<dof>`, its modes in `modes`. Typical frame stiffnesses as estimates in `[bounds]`.
+- The URDF arms' links bend, one Euler-Bernoulli cantilever mode each (`effects.link_bending`, `[link_bending]`, off;
+  `sim_components::beam`, `chain::Mechanism::flex_modes`); signals `link.<n>.bend`.
+- T-gantry: the Z axis's bending (`effects.z_axis_bending`) and the X beam's sag under the carriage
+  (`effects.beam_sag`, `[beam]`), both off.
+- D3 and D4: the arm tube's own share of the bending modes and the elbow block's twist (`effects.arm_tube_inertia`,
+  with `link_elasticity`; off).
+
 ### Fixed
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it

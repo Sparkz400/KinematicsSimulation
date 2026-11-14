@@ -243,8 +243,54 @@ target = [0.0, 0.5, 0.05, 0.0]
 dwell_s = 0.05
 payload = true
 
+# With effects.link_bending [estimate]: each link from its joint to the next as a round tube, outer diameter and
+# wall per joint (0: rigid; the quill and the tool flange do not bend), cast aluminium. Both arms bend in the
+# horizontal plane they turn in.
+[link_bending]
+outer_diameter_m = [0.12, 0.1, 0.0, 0.0]
+wall_m = [0.008, 0.006, 0.0, 0.0]
+youngs_modulus_pa = 7.0e10
+damping_ratio = 0.02
+
+# With effects.base_compliance [estimate]: the SCARA's column and its table tilt about x and y at 30 Hz (30 kg m^2
+# about the floor: k = 30 (2 pi 30)^2 = 1.1e6 N m/rad) and twist about z at 40 Hz (5 kg m^2, 3.2e5 N m/rad);
+# typical, not measured.
+[base]
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 120.0
+inertia_x_kgm2 = 30.0
+inertia_y_kgm2 = 30.0
+inertia_z_kgm2 = 5.0
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 1.1e6
+tilt_stiffness_y_nm_rad = 1.1e6
+tilt_stiffness_z_nm_rad = 3.2e5
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.damping_ratio = [0.01, 0.05]
+base.mass_kg = [72.0, 192.0]
+base.tilt_stiffness_x_nm_rad = [4.4e5, 2.75e6]
+base.inertia_x_kgm2 = [18.0, 48.0]
+base.damping_ratio_rx = [0.01, 0.05]
+base.tilt_stiffness_y_nm_rad = [4.4e5, 2.75e6]
+base.inertia_y_kgm2 = [18.0, 48.0]
+base.damping_ratio_ry = [0.01, 0.05]
+base.tilt_stiffness_z_nm_rad = [1.28e5, 8.0e5]
+base.inertia_z_kgm2 = [3.0, 8.0]
+base.damping_ratio_rz = [0.01, 0.05]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]

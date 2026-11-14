@@ -38,6 +38,9 @@ axis = ""
 
 # One switch per effect.
 [effects]
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
 gravity = true
 payload = true
 # The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
@@ -53,6 +56,10 @@ forearm_inertia = true
 # root; out of it, the elbow moves along its axis. The platform rings after a move. Off in the shipped config: the
 # stiffnesses are estimates.
 link_elasticity = false
+# With link_elasticity: the arm tube's own share of the bending modes (a quarter of its mass in each, as a
+# cantilever's first mode) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
+# link_elasticity.
+arm_tube_inertia = false
 # Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
 joint_friction = true
 motor_friction = true
@@ -137,6 +144,9 @@ upper_arm_kg = 0.9
 upper_arm_cg_m = 0.2
 upper_arm_inertia_kgm2 = 0.048
 elbow_kg = 0.3
+# With effects.arm_tube_inertia: the elbow block's inertia about the arm's normal through it, which turns as the arm
+# bends out of its plane. [estimate] an aluminium block of 0.3 kg and 0.1 m across: m w^2 / 12 = 2.5e-4 kg m^2.
+elbow_twist_inertia_kgm2 = 2.5e-4
 forearm_pair_kg = 0.5
 # The share of a forearm pair's mass counted at the elbow (the rest at the platform): 2/3 matches the rod's inertia
 # about its end, m L^2 / 3 (Codourey 1998, Olsson 2009). Only with effects.forearm_inertia off (the lumped model).
@@ -379,8 +389,40 @@ path_tolerance_m = 0.0
 # same clearance is kept from every obstacle (check "collision", and a time-optimal path that comes nearer is refused).
 min_clearance_m = 0.025
 
+# With effects.base_compliance [estimate]: the welded steel frame the picker hangs from, about 300 kg with the
+# robot, swaying at 15 Hz across (k = 300 (2 pi 15)^2 = 2.7e6 N/m) and 40 Hz up and down (1.9e7 N/m); typical
+# for a picker cell's frame (10 to 25 Hz across), not measured. Rigid in its tilts: its sway is the plate's move.
+[base]
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 300.0
+inertia_x_kgm2 = 100.0
+inertia_y_kgm2 = 100.0
+inertia_z_kgm2 = 100.0
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 2.7e6
+stiffness_y_n_m = 2.7e6
+stiffness_z_n_m = 1.9e7
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 0.0
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+
 # Low and high bound of the values that are estimates (see the other machines' configs).
 [bounds]
+base.mass_kg = [180.0, 480.0]
+base.stiffness_x_n_m = [1.08e6, 6.75e6]
+base.damping_ratio_x = [0.01, 0.05]
+base.stiffness_y_n_m = [1.08e6, 6.75e6]
+base.damping_ratio_y = [0.01, 0.05]
+base.stiffness_z_n_m = [7.6e6, 4.75e7]
+base.damping_ratio_z = [0.01, 0.05]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
@@ -395,6 +437,7 @@ geometry.forearm_m = [0.92, 0.98]
 mass.upper_arm_kg = [0.6, 1.2]
 mass.upper_arm_inertia_kgm2 = [0.032, 0.064]
 mass.elbow_kg = [0.2, 0.45]
+mass.elbow_twist_inertia_kgm2 = [1.2e-4, 5.0e-4]
 mass.forearm_pair_kg = [0.35, 0.7]
 mass.forearm_elbow_share = [0.5, 0.667]
 mass.platform_kg = [0.8, 1.6]

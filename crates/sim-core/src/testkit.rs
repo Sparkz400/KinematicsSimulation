@@ -13,6 +13,7 @@ const PULSE_ACC: f64 = 0.1;
 pub fn run_standard_suite(entry: &MachineEntry) {
     let default = (entry.build)(&entry.config()).unwrap();
     round_trip(default.as_ref());
+    frame_momentum_moves_its_first_moment(default.as_ref());
     static_hold(default.as_ref());
     determinism(default.as_ref());
     loss_budget(default.as_ref());
@@ -258,6 +259,34 @@ pub fn step_convergence(m: &dyn Machine) {
     for (c, f) in coarse.iter().zip(&fine) {
         assert!(f.abs() > 1e-6, "axis did not move, the check would be empty");
         assert!((c - f).abs() < 0.01 * f.abs(), "step halving changed travel from {c} to {f}");
+    }
+}
+
+/// Where a machine tells its `frame_momentum`, the linear momentum is the rate of the first moment of what moves: at the
+/// middle of the axes, every axis moving at a tenth of its top speed, d/dt sum m r by central differences over +-1 us
+/// along the state's rate equals sum m v within 1e-6 of it (plus 1e-9 N s).
+pub fn frame_momentum_moves_its_first_moment(m: &dyn Machine) {
+    let pose = mid_pose(m);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+    m.equilibrium(&pose, &mut state, &mut torque);
+    let Some(_) = m.frame_momentum(&state) else { return };
+    let vel: Vec<f64> = m.axes().iter().map(|a| 0.1 * a.max_vel).collect();
+    m.set_tool_velocity(&mut state, &vel);
+    let mut rate = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut rate);
+    let h = 1e-6;
+    let at = |s: f64| {
+        let moved: Vec<f64> = state.iter().zip(&rate).map(|(x, r)| x + s * r).collect();
+        m.frame_momentum(&moved).unwrap()
+    };
+    let (now, before, after) = (at(0.0), at(-h), at(h));
+    for k in 0..3 {
+        let moved = (after.first_moment[k] - before.first_moment[k]) / (2.0 * h);
+        assert!(
+            (moved - now.linear[k]).abs() <= 1e-6 * now.linear[k].abs() + 1e-9,
+            "{k}: the first moment moves at {moved} kg m/s, the momentum is {} N s",
+            now.linear[k]
+        );
     }
 }
 

@@ -43,3 +43,10 @@ belt-span-5 = Belt span, Z-bottom idler to the lower right carriage idler
 belt-span-6 = Belt span, lower right carriage idler to motor B
 belt-span-7 = Belt span, motor B to the carriage idler
 belt-span-8 = Belt span, carriage idler up to the right clamp
+effect-z_axis_bending = Z axis bends as a cantilever from the carriage
+effect-beam_sag = X beam sags under the carriage (quasi-static)
+group-beam = X beam
+param-span_m = Span between the posts [m]
+param-carriage_at_zero_m = Carriage from the left post at x = 0 [m]
+param-bending_stiffness_nm2 = Bending stiffness E I [N m²]
+param-z_axis_bending_stiffness_nm2 = Z axis bending stiffness E I [N m²]

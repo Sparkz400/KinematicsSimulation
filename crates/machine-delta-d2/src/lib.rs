@@ -51,7 +51,7 @@ pub const LOSSY_EFFECTS: [&str; 5] =
     ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(Delta2::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(Delta2::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -653,6 +653,33 @@ impl Delta2 {
 }
 
 impl Machine for Delta2 {
+    /// In the plane y = 0: the plate (with the payload and the forearms' share) at the tool, each arm turning about its
+    /// joint at the base radius with its elbow's share, and the rotors spinning about the joints' axes (+-y). What does
+    /// not move is left out (see `FrameMomentum`).
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin, add_turning};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (t, w) = self.arms(s);
+        let (p, j) = self.pose(t);
+        let pv = mul(&j, w);
+        add_point(&mut f, self.m_nt(), [p[0], 0.0, p[1]], [pv[0], 0.0, pv[1]]);
+        let rotor_speed = self.rotors(s).1;
+        for i in 0..2 {
+            let (side, (sin, cos)) = (SIDE[i], t[i].sin_cos());
+            let (dir, ddir) = ([side * cos, 0.0, -sin], [-side * sin, 0.0, -cos]);
+            add_turning(
+                &mut f,
+                [side * self.base_radius, 0.0, 0.0],
+                dir,
+                ddir,
+                w[i],
+                self.arm_inertia,
+                self.arm_moment,
+            );
+            add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
+        }
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

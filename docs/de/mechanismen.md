@@ -211,6 +211,24 @@ Werkzeuggetriebe (`effects.shaft_torsion`), ihr Gewichtsanteil belastet die Arme
 Gleitreibung des Teleskops zieht längs der Welle an der Plattform (`effects.telescope_friction`). Siehe die
 Modellreferenz (docs/model-reference.md, Abschnitt „Delta picker D4“).
 
+## Biegende Glieder und das Gestell unter der Maschine
+
+Mit `effects.link_bending` (ausgeliefert aus) biegt sich jedes Glied eines Roboters mit einem Querschnitt in
+`[link_bending]` (ein rundes Rohr je Gelenk: Außendurchmesser, Wand, Elastizitätsmodul) als Kragarm von seinem Gelenk
+bis zum nächsten in seiner ersten Euler-Bernoulli-Eigenform, in der Ebene, in der sein Gelenk es dreht: modale Masse ein
+Viertel seiner URDF-Masse plus alles dahinter, Steifigkeit 1,875104^4 / 4 E I / L^3, angetrieben von dem, was die Körper
+dahinter von seiner Spitze brauchen (ihr m (a - g), ihr Moment über die Neigung der Spitze), und von seinem eigenen
+Gewicht und seiner Trägheit längs des Glieds. Das Werkzeug schwingt im Werkzeugraum mit; die Gelenke spüren es nicht
+(einseitig). Ein Stahlrohr 60 x 4 mm, 0,8 m lang und 4,5 kg schwer, schwingt allein mit den 88,96 Hz nach
+Euler-Bernoulli und hängt unter seinem Gewicht 49,2 um durch, 1,3 % über dem exakten q L^4 / (8 E I).
+
+Mit `effects.base_compliance` (jede Maschine und jede Maschinendatei, ausgeliefert aus) steht die Maschine auf einem
+Gestell mit bis zu sechs Feder-Masse-Richtungen (`[base]`): Es nimmt die Änderung des Impulses alles dessen auf, was sich
+auf ihm bewegt, die Rotoren eingeschlossen (`Machine::frame_momentum`; Schlitten, Tisch und Roboter geben ihren über
+`Mechanism::frame_momentum`), und das Werkzeug bewegt sich mit ihm. Der Roboter auf seinem Sockel kippt, der Ständer des
+Tisches verdreht sich, das Bett eines Schlittens schwingt längs der Achse. Siehe die Modellreferenz
+(docs/model-reference.md, Abschnitt „Compliant base“).
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -238,6 +256,9 @@ Lebensdauer der Spindel schrumpft bei 99 % Zuverlässigkeit um a1, und die Tempe
 von Spindel, Zahnstange und Schnecke.
 
 ## Grenzen
+
+- Ein Glied biegt sich in einer Eigenform in der Ebene, in der sein Gelenk es dreht; aus dieser Ebene heraus und in
+  Torsion ist es starr, und Biegung und Gestell wirken nicht auf die Gelenke zurück (einseitig).
 
 - Die Roboter werden im Gelenkraum ausgelegt: keine kartesischen Bahnen und keine inverse Kinematik des Werkzeugs.
 - Jedes Gelenk eines Roboters hat denselben Motor, Antrieb und dasselbe Getriebe (nur die Übersetzung unterscheidet sich je

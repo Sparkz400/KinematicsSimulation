@@ -21,6 +21,13 @@ axis = ""
 
 # One switch per effect.
 [effects]
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
+# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
+# sections are [estimate]s.
+link_bending = false
 gravity = true
 payload = true
 # Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
@@ -370,8 +377,55 @@ target = [0.9, -0.3, 0.7, 0.0, 1.5707963267948966, 0.0]
 dwell_s = 0.0
 payload = false
 
+# With effects.link_bending [estimate]: each link from its joint to the next as a round tube, outer diameter and
+# wall per joint (0: rigid; the base column turns about its own length and does not bend in its mode's plane), cast
+# aluminium. The upper arm (joint 2, 0.6 m, 12 kg, 20.5 kg beyond it) as 140 x 8 mm: E I = 5.1e5 N m^2, its mode at
+# sqrt(3.09 E I / L^3 / (12 / 4 + 20.5)) / 2 pi = 88 Hz.
+[link_bending]
+outer_diameter_m = [0.0, 0.14, 0.12, 0.1, 0.08, 0.0]
+wall_m = [0.0, 0.008, 0.008, 0.006, 0.005, 0.0]
+youngs_modulus_pa = 7.0e10
+damping_ratio = 0.02
+
+# With effects.base_compliance [estimate]: the pedestal the arm stands on tilts about x and y at 25 Hz with the arm
+# on it (60 kg m^2 about the floor: k = 60 (2 pi 25)^2 = 1.5e6 N m/rad) and twists about z at 40 Hz (10 kg m^2,
+# 6.3e5 N m/rad); typical for a floor-bolted pedestal, not measured.
+[base]
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 250.0
+inertia_x_kgm2 = 60.0
+inertia_y_kgm2 = 60.0
+inertia_z_kgm2 = 10.0
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 1.5e6
+tilt_stiffness_y_nm_rad = 1.5e6
+tilt_stiffness_z_nm_rad = 6.3e5
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.damping_ratio = [0.01, 0.05]
+base.mass_kg = [150.0, 400.0]
+base.tilt_stiffness_x_nm_rad = [6.0e5, 3.75e6]
+base.inertia_x_kgm2 = [36.0, 96.0]
+base.damping_ratio_rx = [0.01, 0.05]
+base.tilt_stiffness_y_nm_rad = [6.0e5, 3.75e6]
+base.inertia_y_kgm2 = [36.0, 96.0]
+base.damping_ratio_ry = [0.01, 0.05]
+base.tilt_stiffness_z_nm_rad = [2.52e5, 1.575e6]
+base.inertia_z_kgm2 = [6.0, 16.0]
+base.damping_ratio_rz = [0.01, 0.05]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
