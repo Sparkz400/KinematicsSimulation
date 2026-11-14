@@ -2543,3 +2543,52 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## The browser page (14 November)
+
+What: the page (crates/sim-wasm) loads machine files, runs paths, draws obstacles, a trail and time plots, and runs in
+Web Workers; its sizing check has every column of `sim-cli analyze`; a sweep and a trace fit are there; it speaks
+German. How:
+
+- machine files: the eight of `machines/` built into the module (`file:<name>.toml`, read on first use) and a TOML file
+  opened or pasted (request 4, `upload:<name>`), checked by `sim_netlist::from_text` as `sim-cli --machine-file`
+  checks one, errors with file and line. The page hands a file to both workers.
+- paths: option `path` (and `time-optimal`) on requests 2 and 3 runs the path text after a line `---` through
+  `Sim::plan_path`, with `analyse_trajectory_with` for the sizing check and `Command::Trajectory` for the view; the
+  path deviation warning as in `sim-cli`. Sweep (request 5, `frequency_sweep`, 40 points on the page) and fit (request 6,
+  `fit_rigid`/`fit_joints` on a trace in the simulator's own columns) added.
+- the frame: head of 8 floats (obstacle and sample counts added), obstacles as see-through records (mesh 2, red on
+  contact), and samples of 1 ms each holding per motor the lowest and highest torque, torque command, speed, speed
+  command and following error over its base steps, plus the tool point and its distance from the plan. The page draws
+  the trail from those (colour on a fixed scale set on the page, magenta beyond) and three time plots with its own
+  canvas plotter: per pixel column the lowest and highest of the samples it spans, so one-step peaks stay visible;
+  setpoints dashed. The same plotter draws the operating points over `DriveParams::torque_curve` and the S1 box, and
+  the sweep.
+- the sizing check gives every per-motor and machine-wide column of `sim-cli analyze` (housing rise, drive overload,
+  RMS and peak current, energies, DC link, lives, belt tension, path errors, warm start change) by its CSV name.
+- bug: `frame(seconds)` with an infinite or huge time saturated the step count and hung the page; now a time not finite
+  or outside 0..=60 s is refused, null with the error as the answer.
+- speed: two workers (view, analysis), one frame request in flight carrying all the owed time (at most 0.25 s), the
+  frame transferred. Profiled in Node: the module ran the T-gantry at about 10 to 14 times real time per processor
+  second, before and after, so the reported third of real time was the page's main thread, not the module; headless
+  Chrome now runs it at 1.01 times real time while a sizing check runs. A `wasm` cargo profile (LTO, one codegen unit)
+  gives some 5 % and 10 % size; CI and Pages build with it.
+- German: `crates/sim-wasm/i18n/{en,de}.ftl` with the page's texts, served by request 7 with the simulator's own
+  quantity names; language switch, the browser's language first.
+
+Test: 11 new tests in crates/sim-wasm/tests/wasm.rs (machine files listed, handed in, refused by line; a path in the
+sizing check against `analyse_trajectory` and in the view against a native run; frame refusal of inf, NaN, -1, 61 s
+and 1e300; 500 samples in 0.5 s at 62.5 µs steps and 1 ms samples with the native step-by-step torque peak and
+following-error low; an obstacle's record by hand; analyze columns against the native analysis; the torque-speed
+curve's corners and S1 box by hand; the sweep at 10, 100, 1000 Hz against `frequency_sweep`; a trace without the
+columns refused; texts in both languages). The existing frame test reads the new layout. Not run here (the coordinator
+runs the suites); compiled, clippy and fmt clean. The page was driven in headless Chrome with puppeteer-core (English
+T-gantry cycle; German CoreXY file with a path, sizing check and sweep); screenshots in the session notes.
+
+Left open:
+
+- JSON machine files in the page (`sim_machines::load_file` converts them; the page reads TOML only).
+- The fit takes no mapping file for vendor exports and fits no stiffness or sweep; no catalogue search, error bands or
+  optimiser in the page (they would need many runs in one thread).
+- wasm-opt is not used: binaryen is not among CI's tools, and the module already runs ten times real time.
+- The planned path is not drawn in the view (the trail shows the travelled one); the trail keeps its last 40,000 points.

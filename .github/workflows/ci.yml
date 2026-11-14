@@ -111,10 +111,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build for wasm32
         run: |
-          cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
+          cargo build -p sim-wasm --profile wasm --locked --target wasm32-unknown-unknown
           mkdir -p site
           cp crates/sim-wasm/web/index.html site/
-          cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
+          cp target/wasm32-unknown-unknown/wasm/sim_wasm.wasm site/
       - name: Native tests of the module
         run: cargo test -p sim-wasm --release --locked
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
