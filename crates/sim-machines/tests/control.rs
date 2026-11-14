@@ -253,7 +253,9 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         let segments = cfg.array("cycle.segment").unwrap().len();
         sim.command(Command::StartCycle).unwrap();
         let payload = sim.signal_index("payload").unwrap();
-        let (mut visited, mut payload_seen, mut worst_error) = (vec![0u32; segments], [false; 2], 0f64);
+        let axes = sim.machine.axes().to_vec();
+        let (mut visited, mut payload_seen, mut worst_error) =
+            (vec![0u32; segments], [false; 2], vec![0f64; axes.len()]);
         let (mut last, mut sample) = (None, Vec::new());
         sim.run(8.0, |s| {
             let now = s.control.cycle_segment();
@@ -265,7 +267,7 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
             }
             s.sample(&mut sample);
             payload_seen[sample[payload] as usize] = true;
-            worst_error = s.control.tool_error.iter().fold(worst_error, |w, e| w.max(e.abs()));
+            worst_error.iter_mut().zip(&s.control.tool_error).for_each(|(w, e)| *w = w.max(e.abs()));
         });
         // Every segment ran, and the cycle started over.
         assert!(
@@ -275,15 +277,21 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         );
         let carried = if NO_GRIPPER.contains(&entry.id) { [false, true] } else { [true, true] };
         assert!(payload_seen == carried, "{}: the payload seen {payload_seen:?}", entry.id);
-        // 0.5 mm, and on a fast machine 0.03 mm per m/s2 of its fastest axis: the delta (50 m/s2, 1.5 mm) has up to
+        // 0.5 mm, and on a fast machine 0.03 mm per m/s2 of its fastest linear axis: the delta (50 m/s2, 1.5 mm) has up to
         // 1.23 mm at the motors in its Adept cycle, from the gearboxes' springs that the rigid feedforward leaves out.
-        let fastest = sim.machine.axes().iter().map(|a| a.max_acc).fold(0.0, f64::max);
+        // A turning axis in rad, as the same limit 100 mm from its axis (a gripper's reach): it had been held to the
+        // limit in m, and its rad/s2 counted among the m/s2 (palletiser rz 0.53 mrad, cable-spatial 0.81 mrad, 14 Nov).
+        let fastest = axes.iter().filter(|a| a.unit == "m").map(|a| a.max_acc).fold(0.0, f64::max);
         let limit = f64::max(5e-4, 3e-5 * fastest);
-        assert!(
-            worst_error < limit,
-            "{}: following error up to {worst_error} m in the cycle, limit {limit} m",
-            entry.id
-        );
+        for (axis, worst) in axes.iter().zip(&worst_error) {
+            let (limit, unit) = if axis.unit == "rad" { (limit / 0.1, "rad") } else { (limit, "m") };
+            assert!(
+                *worst < limit,
+                "{}: following error up to {worst} {unit} on {} in the cycle, limit {limit} {unit}",
+                entry.id,
+                axis.id
+            );
+        }
         // Stop ends the cycle after the segment under way.
         sim.command(Command::Stop).unwrap();
         sim.run(3.0, |_| {});
@@ -917,24 +925,36 @@ fn a_cycle_of_one_segment_is_analysed() {
 /// its setpoint. The new model used to start at rest under a setpoint that went on moving.
 #[test]
 fn switching_the_model_at_speed_carries_the_motion_over() {
+    // The model `elastic` at its cruise: the sim, its config and the switch's key.
+    let cruise = |entry: &'static MachineEntry, elastic: bool| {
+        let switch = model_switch(&entry.config());
+        // 50 ms before the switch and 200 ms after it, all in the cruise (with 50 ms to spare): on the D2 at its
+        // 3 m/s the braking at the end of its short cruise fell into them, 8.6 N m with no switch at all.
+        // Without the process force (the press's), a load on the move that comes and goes beside the switch.
+        let process = if entry.config().bool("effects.process_force").is_ok() { "false" } else { "" };
+        let mut edits = vec![format!("{switch} = {elastic}")];
+        edits.extend((!process.is_empty()).then(|| format!("effects.process_force = {process}")));
+        let edits: Vec<&str> = edits.iter().map(String::as_str).collect();
+        let cfg = cruising(entry, config(entry, &edits), 0.3);
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        to_low_end(&mut sim);
+        sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+        let max_vel = sim.machine.axes()[0].max_vel;
+        while sim.control.set_vel[0] < max_vel - 1e-9 {
+            sim.step();
+        }
+        (sim, cfg, switch)
+    };
+    let lag = |s: &Sim| {
+        let n = s.machine.axes().len();
+        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+        s.machine.tool_state(&s.state, &mut pos, &mut vel);
+        (pos[0] - s.control.set_pos[0]).abs()
+    };
     for entry in MACHINES {
         for elastic in [true, false] {
-            let switch = model_switch(&entry.config());
-            // 50 ms before the switch and 200 ms after it, all in the cruise (with 50 ms to spare): on the D2 at its
-            // 3 m/s the braking at the end of its short cruise fell into them, 8.6 N m with no switch at all.
-            // Without the process force (the press's), a load on the move that comes and goes beside the switch.
-            let process = if entry.config().bool("effects.process_force").is_ok() { "false" } else { "" };
-            let mut edits = vec![format!("{switch} = {elastic}")];
-            edits.extend((!process.is_empty()).then(|| format!("effects.process_force = {process}")));
-            let edits: Vec<&str> = edits.iter().map(String::as_str).collect();
-            let cfg = cruising(entry, config(entry, &edits), 0.3);
-            let mut sim = Sim::new(entry, &cfg).unwrap();
-            to_low_end(&mut sim);
-            sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+            let (mut sim, cfg, switch) = cruise(entry, elastic);
             let axes = sim.machine.axes().to_vec();
-            while sim.control.set_vel[0] < axes[0].max_vel - 1e-9 {
-                sim.step();
-            }
             let tool = |s: &Sim| {
                 let (mut pos, mut vel) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
                 s.machine.tool_state(&s.state, &mut pos, &mut vel);
@@ -962,6 +982,13 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
                 torque = s.control.drives.iter().map(|d| d.torque_command.abs()).fold(torque, f64::max);
                 off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
             });
+            // The lag the new model has of its own, where it grows in those 200 ms: the slider-crank's elastic crank,
+            // twisted by the speed term of J(theta), lags by 8.126 mrad there with no switch at all (7.846 rigid).
+            if off >= behind + 2e-4 {
+                let mut own = cruise(entry, !elastic).0;
+                own.run(0.05, |_| {});
+                own.run(0.2, |s| behind = behind.max(lag(s)));
+            }
             assert!(
                 torque < 0.5 * peak && off < behind + 2e-4,
                 "{}, from elastic {elastic}: {torque} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",

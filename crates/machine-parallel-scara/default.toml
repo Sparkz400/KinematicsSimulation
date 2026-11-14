@@ -180,7 +180,10 @@ payload_kg = 5.0
 # [estimate] two angular contact bearings of the arm's shaft, about 1 % of the arm's holding torque.
 friction_coulomb_nm = 0.3
 friction_viscous_nm_s_rad = 0.05
-friction_smoothing_rad_s = 0.01
+# Half the deltas' 0.01 (14 November): laid flat, nothing holds an arm on a flank of its gearbox's play, and below this
+# speed the smoothed Coulomb step is a damper (0.3 N m over 0.01 rad/s: the arm crept on through the play with a time
+# constant of 65 ms, 21.7 um at the tool 0.3 s after a move; 33 ms and 1.1 um at 0.005).
+friction_smoothing_rad_s = 0.005
 # The stops. [estimate] beyond the -49 to +70 degrees the working range needs (+81 for the standard suite's range,
 # 150 mm lower).
 min_angle_deg = -60.0

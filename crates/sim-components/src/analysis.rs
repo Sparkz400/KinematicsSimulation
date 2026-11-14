@@ -3768,7 +3768,7 @@ pub struct LoopMargins {
     /// The gain crossover (|L| = 1) with the smallest phase margin; NaN without one.
     pub crossover_hz: f64,
     /// 180 degrees plus the phase of L at that crossover, the phase unwrapped along the frequency axis and taken
-    /// between -360 and 0 degrees at the first crossover; infinite without a crossover. Negative: the loop is unstable.
+    /// between -270 and 90 degrees at the first point; infinite without a crossover. Negative: the loop is unstable.
     pub phase_margin_deg: f64,
     /// By how much the gain may rise before L reaches -1, in dB, at the worst crossing of the negative real axis
     /// where the phase falls through -180 degrees and that a later rising crossing beyond -1 does not undo;
@@ -3827,12 +3827,10 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
         .filter(|&i| gain[i - 1].signum() != gain[i].signum())
         .map(|i| (i, gain[i - 1] / (gain[i - 1] - gain[i])))
         .collect();
-    // The turn is fixed by the phase at the first crossover, taken in (-360, 0]; without a crossover by the first
-    // point, taken in (-270, 90] (a loop with up to three integrators, or a lead, there).
-    let shift = match crossovers.first() {
-        Some(&(i, share)) => -360.0 * ((phase[i - 1] + (phase[i] - phase[i - 1]) * share) / 360.0).ceil(),
-        None => phase.first().map_or(0.0, |p| -360.0 * ((p - 90.0) / 360.0).ceil()),
-    };
+    // The turn is fixed by the phase at the first point, taken in (-270, 90] (a loop with up to three integrators, or
+    // a lead, there). Not at the first crossover: one rising out of an anti-resonance has a phase lead above 0 (the
+    // parallel SCARA's arm 2, +8 degrees at 18 Hz) and turned every phase after it by -360 degrees.
+    let shift = phase.first().map_or(0.0, |p| -360.0 * ((p - 90.0) / 360.0).ceil());
     phase.iter_mut().for_each(|p| *p += shift);
     for &(i, share) in &crossovers {
         let margin = 180.0 + phase[i - 1] + (phase[i] - phase[i - 1]) * share;
@@ -4401,6 +4399,24 @@ mod tests {
                 && (m.crossover_hz / 1516.0 - 1.0).abs() < 0.01,
             "{m:?}"
         );
+    }
+
+    /// The parallel SCARA's arm 2 as measured: the main crossover just below the first point, then an anti-resonance
+    /// (zeros at 14 Hz) and a resonance (poles at 40 Hz), both damped 0.05, and 1 ms of dead time: L = (2 pi 9.7 / s)
+    /// (1 + 0.1 s/wz + s^2/wz^2) / (1 + 0.1 s/wp + s^2/wp^2) e^(-s 1 ms). Its first crossover, rising out of the
+    /// notch at 22.5 Hz, has a phase of +71.4 degrees (a margin of 251.4); the one that counts, at 94.3 Hz, -121.9
+    /// (by hand from the formula on a fine grid): 58.1 degrees, not 58.1 - 360 as the phase turned at that first one.
+    #[test]
+    fn a_crossover_with_phase_lead_before_the_one_that_counts_does_not_turn_the_phase() {
+        let m = loop_margins(&loop_points(log_spaced(10.0, 2000.0, 60), |w| {
+            let pair = |wn: f64| {
+                let (re, im) = (1.0 - (w / wn).powi(2), 0.1 * w / wn);
+                (re.hypot(im), im.atan2(re))
+            };
+            let ((zg, zp), (pg, pp)) = (pair(std::f64::consts::TAU * 14.0), pair(std::f64::consts::TAU * 40.0));
+            (std::f64::consts::TAU * 9.7 / w * zg / pg, -std::f64::consts::FRAC_PI_2 + zp - pp - w * 1e-3)
+        }));
+        assert!((m.phase_margin_deg - 58.1).abs() < 0.5 && (m.crossover_hz / 94.3 - 1.0).abs() < 0.02, "{m:?}");
     }
 
     /// With the belt's wrap known (effects.belt_wrap) the teeth in mesh are wrap r / p in place of

@@ -461,7 +461,11 @@ kv_1_s = 50.0
 # machines). Found: at least 41.7 degrees and 8.1 dB (friction off), 47.0 degrees and 8.6 dB (on), with the catalogue's
 # 9 arcmin backlash. 0.2 left 30.9 degrees.
 velocity_kp_nm_s_rad = 0.25
-velocity_tn_s = 0.03
+# Tn 0.06 s, not 0.03 (14 November): the loop with the arms' load crosses over near 10 Hz, close to the position
+# loop's 8 Hz, and the integrator's lag there left x 1.535 mm behind in the cycle (1.344 mm now; 0.549 mm rigid, the
+# rest the gearboxes' springs). `sim-cli margins delta-d4`: 53.1 degrees and 9.29 dB as configured, 45.5 and 8.57
+# with friction off.
+velocity_tn_s = 0.06
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
