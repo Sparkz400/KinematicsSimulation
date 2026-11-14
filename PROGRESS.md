@@ -1898,3 +1898,38 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## 3D view in the browser page (14 November)
+
+The browser page (`crates/sim-wasm/web/index.html`, GitHub Pages) shows the selected machine in 3D running its cycle,
+beside the sizing check as before. Request 3 sets the machine at its start pose, commands its cycle and answers the base
+step and the sphere round the start scene (`centre`, `radius`) the camera is fitted to; then `frame(seconds)` steps the
+`Sim` and hands back a flat float array, no JSON per frame: a head (time, cycle time, tool x y z, part count) and per
+part 20 floats, the mesh (unit cube or unit cylinder along y), the 4 × 4 matrix taking it to the part and its colour.
+The shape rides in the matrix with the pose, because belt spans change length and the number of belt strips can change
+between frames; the page draws whatever a frame holds. The cycle time is the latest pass from one start of the cycle
+to the next, counted as `analyse_cycle` counts passes. `heat_color` and `part_color` moved from sim-app's model.rs to
+`sim_core::scene` (sim-app re-exports them), so the page colours belt tension and warmth as the app does.
+
+Rendering is plain WebGL2 in the page (no library: nothing loaded from elsewhere, no SRI hash to keep, works offline;
+two meshes, one light and an orbit camera are about a hundred lines). Drag turns, the wheel zooms, Pause/Play and
+Restart (with the config in the editor); light and dark follow the page's colour scheme; a legend gives time, cycle
+time and tool position, an orange cube marks the tool. Real time, falling behind (at most 50 ms simulated per frame) on
+a machine the browser cannot step that fast. The module grew from 1,979,671 to 2,001,582 bytes.
+
+Looked at in the desktop app's built-in Chromium pane, served from 127.0.0.1: all twelve machines start without error;
+the T-gantry's view shows a cycle of 6.079 s against the sizing check's 6.080 s; drag, wheel, light and dark work; the
+sizing check still runs beside the view.
+
+Tests (`crates/sim-wasm/tests/wasm.rs`): the frame of every machine against its native scene at the start pose and
+after 0.5 s of its cycle (mesh, centre, stretch along each axis and colour of every part, tool position, time); two
+records and a bounding box by hand (a 0.2 × 0.4 × 0.6 m box at (1, 2, 3) turned a quarter turn: x side along +z, z side
+along -x, reaching 0.3, 0.2, 0.1 m out; a strip from the origin to (3, 0, 4): 5 m along (0.6, 0, 0.8), thickness along
+(-0.8, 0, 0.6), centred at (1.5, 0, 2)); the view's cycle time against the sizing check's to one base step.
+
+Left open:
+
+- The T-gantry (236 parts, its belts) runs at about a third of real time in the browser pane (measured with the pane
+  hidden, so throttled; not measured in the foreground). Instanced drawing or fewer belt teeth would help if it is slow
+  in a normal browser.
+- No obstacles, arrows, labels or tool trail in the page's view; no pinch zoom on touch screens.
