@@ -142,7 +142,19 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst"],
-        Some("search") => &["--vendor", "--series", "--gearboxes", "--axes", "--motor-id"],
+        Some("search") => &[
+            "--vendor",
+            "--series",
+            "--gearboxes",
+            "--axes",
+            "--motor-id",
+            "--drives",
+            "--rank-by",
+            "--weights",
+            "--robust",
+        ],
+        Some("transmission") => &["--key", "--from", "--to", "--count", "--gearboxes"],
+        Some("compare-kinematics") => &["--machines", "--vendor", "--series", "--gearboxes", "--drives", "--rank-by"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis-index", "--size", "--time"],
@@ -188,6 +200,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("sensitivity") => sensitivity(args),
         Some("verdicts") => verdicts(args, tr),
         Some("search") => search(args, tr),
+        Some("transmission") => transmission(args, tr),
+        Some("compare-kinematics") => compare_kinematics(args, tr),
         Some("optimise") => optimise(args, tr),
         Some("step") => step(args),
         Some("bode") => bode(args),
@@ -785,32 +799,121 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// not with `--axes`. Says on the error stream how many candidates could not be simulated (the reason is in the table),
 /// with `--gearboxes` how many motors no gearbox of the series fits, and how long the search
 /// took on how many processors.
-fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
-    use sim_components::catalog::{Parts, motor_config, resolve};
-    let (entry, cfg) = machine_and_config(args)?;
-    let prefix = args.option("--series").unwrap_or("");
-    // The config's own supply where it names one (`parts.motor_supply`, which `--supply` sets), else 400 V.
-    let own_supply = Parts::of(&cfg).map(|p| p.supply.to_string()).unwrap_or_default();
+///
+/// The wide table (`search::Figures`) follows the parts and the tightest check: rank, front (`search::front`), cycle
+/// time, energy, thermal and drive current utilisation, following and settling error, inertia ratio, the failing checks,
+/// what is estimated, and one column `u_<check>` per check. `--rank-by` orders the passing ones (`search::rank_by`),
+/// `--drives paired|neighbours|all` the drives tried with each motor (`catalog::Drives`), several `--config FILE` with
+/// `--weights` a duty mix (`catalog::Options::duties`), and `--robust N` judges the first N passing ones at the worst
+/// corner of their bounds (`search::robust_ranking`), with four columns more and on the error stream whether the order
+/// changes.
+/// The supplies a search on `cfg` runs at: `--supply`, else the config's own (`parts.motor_supply`), else 400 V; with
+/// `--vendor` that maker's supplies ("all": every one), all of them unless `--supply` names one.
+fn search_supplies_of(args: &Args, cfg: &Config) -> Result<Vec<&'static str>, Failure> {
+    use sim_components::catalog::{Parts, SUPPLIES, vendor_of};
+    let own_supply = Parts::of(cfg).map(|p| p.supply.to_string()).unwrap_or_default();
     let supply = args.option("--supply").or(Some(own_supply.as_str()).filter(|s| !s.is_empty())).unwrap_or("400v");
-    let (gearboxes, wanted) = (args.option("--gearboxes"), |article: &str| article.starts_with(prefix));
-    use sim_components::catalog::{SUPPLIES, search_supplies, vendor_of};
-    // `--vendor` that maker's supplies ("all": every one), all of them unless `--supply` names one.
     let vendor = args.option("--vendor").filter(|v| *v != "all");
-    let supplies: Vec<&str> = match (args.option("--supply"), args.option("--vendor")) {
-        (None, Some(_)) => SUPPLIES.to_vec(),
-        _ => vec![supply],
-    };
-    let supplies: Vec<&str> = supplies.into_iter().filter(|s| vendor.is_none_or(|v| vendor_of(s) == v)).collect();
-    if supplies.is_empty() || !supplies.iter().all(|s| SUPPLIES.contains(s)) {
+    let every = args.option("--supply").is_none() && args.option("--vendor").is_some();
+    let supplies: Vec<&'static str> = SUPPLIES
+        .iter()
+        .copied()
+        .filter(|s| (every || *s == supply) && vendor.is_none_or(|v| vendor_of(s) == v))
+        .collect();
+    if supplies.is_empty() {
         let given = [args.option("--vendor"), args.option("--supply")].into_iter().flatten().collect::<Vec<_>>();
         return Err(Failure("cli-error-bad-argument", given.join(" ")));
     }
+    Ok(supplies)
+}
+
+/// `--drives paired|neighbours|all` and `--rank-by CRITERIA` of `search` and `compare-kinematics`.
+fn search_choices(
+    args: &Args,
+) -> Result<(sim_components::catalog::Drives, Vec<(sim_components::search::Criterion, f64)>), Failure> {
+    let drives = args.option("--drives").unwrap_or("paired");
+    let drives = drives.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--drives {drives}")))?;
+    let by = args.option("--rank-by").unwrap_or("cost");
+    let by = sim_components::search::parse_ranking(by)
+        .ok_or_else(|| Failure("cli-error-bad-argument", format!("--rank-by {by}")))?;
+    Ok((drives, by))
+}
+
+/// The duty mix of `search`: with several `--config FILE`, each file's config (with the parts and `--set` of the command
+/// line, as `machine_and_config` makes them) and its weight from `--weights W1,W2,...` (1 each without); empty for one.
+fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)>, Failure> {
+    let files = args.options("--config");
+    let weights: Vec<f64> = match args.option("--weights") {
+        None => vec![1.0; files.len()],
+        Some(text) => text
+            .split(',')
+            .map(|w| w.trim().parse().ok().filter(|w: &f64| *w > 0.0 && w.is_finite()))
+            .collect::<Option<_>>()
+            .filter(|w: &Vec<f64>| w.len() == files.len())
+            .ok_or_else(|| Failure("cli-error-bad-argument", format!("--weights {text}")))?,
+    };
+    if files.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for (file, weight) in files.into_iter().zip(weights) {
+        let mut cfg = sim_components::load_config(entry, &read(file)?)?;
+        let named = [
+            ("motor", "--motor"),
+            ("motor_supply", "--supply"),
+            ("gearbox", "--gearbox"),
+            ("drive", "--drive"),
+            ("belt", "--belt"),
+            ("axis", "--axis"),
+        ];
+        for (key, option) in named {
+            if let Some(name) = args.option(option) {
+                cfg.set_text(&format!("parts.{key} = {name:?}"))?;
+            }
+        }
+        let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
+        for assignment in args.options("--set") {
+            cfg.set_text(assignment)?;
+        }
+        out.push((cfg, weight));
+    }
+    Ok(out)
+}
+
+/// A list for one CSV cell: the names joined with ";".
+fn cell(names: &[&str]) -> String {
+    names.join(";")
+}
+
+fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::catalog::{motor_config, resolve};
+    use sim_components::search::{front, rank_by, robust_ranking};
+    let (entry, cfg) = machine_and_config(args)?;
+    let duties = duties(args, entry)?;
+    // With a duty mix the first file's config is searched on.
+    let cfg = duties.first().map_or(cfg, |(first, _)| first.clone());
+    let prefix = args.option("--series").unwrap_or("");
+    let (gearboxes, wanted) = (args.option("--gearboxes"), |article: &str| article.starts_with(prefix));
+    use sim_components::catalog::vendor_of;
+    let supplies = search_supplies_of(args, &cfg)?;
     let (motor, axes) = (args.option("--motor-id"), args.flag("--axes"));
     if motor.is_some() && axes {
         return Err(Failure("cli-usage", String::new()));
     }
+    let (drives, by) = search_choices(args)?;
+    let robust: Option<usize> = args
+        .option("--robust")
+        .map(|n| n.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--robust {n}"))))
+        .transpose()?;
     let started = std::time::Instant::now();
-    let found = search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, motor)?;
+    let options = sim_components::catalog::Options { gearboxes, axes, motor, drives, duties: &duties };
+    let mut found = sim_components::catalog::search(entry, &cfg, &supplies, &wanted, &options)?;
+    rank_by(&mut found, &by);
+    let on_front = front(&found);
+    let robust = robust.map(|top| robust_ranking(entry, &cfg, &found, top));
+    if let Some((_, changed)) = &robust {
+        eprintln!("{}", tr.tr(if *changed { "cli-search-robust-changed" } else { "cli-search-robust-same" }));
+    }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let tried = found.iter().filter(|c| !c.article.is_empty());
     eprintln!(
@@ -828,8 +931,18 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     eprintln!("{}", tr.tr_arg("cli-search-time", &format!("{threads}: {:.1} s", started.elapsed().as_secs_f64())));
     let mut out = output(args, "--out")?;
-    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
-    for c in &found {
+    // Every check of any candidate, one column of utilisation each, in the order they first come up.
+    let mut checks: Vec<&str> = Vec::new();
+    for (check, _) in found.iter().filter_map(|c| c.figures.as_ref()).flat_map(|f| &f.checks) {
+        if !checks.contains(check) {
+            checks.push(check);
+        }
+    }
+    let columns: String = checks.iter().map(|c| format!(",u_{c}")).collect();
+    let robust_columns =
+        if robust.is_some() { ",robust_rank,robust_result,robust_check,robust_utilisation" } else { "" };
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns}").map_err(io)?;
+    for (rank, c) in found.iter().enumerate() {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
         // Of the searched motor alone with --motor-id (the others are the config's, alike for every candidate).
         let (peak, rise) = c.result.as_ref().map_or((f64::NAN, f64::NAN), |(load, _)| {
@@ -840,7 +953,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
         });
         let result = if c.passes() { "ok" } else { "FAIL" };
-        writeln!(
+        write!(
             out,
             "{},{},{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
             c.axis,
@@ -853,6 +966,198 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             c.cost
         )
         .map_err(io)?;
+        let f = c.figures.clone().unwrap_or_else(|| sim_components::search::Figures {
+            energy_j: f64::NAN,
+            thermal: f64::NAN,
+            drive_current: f64::NAN,
+            following_error_m: f64::NAN,
+            settling_error_m: f64::NAN,
+            inertia_ratio: f64::NAN,
+            cycle_s: f64::NAN,
+            ..Default::default()
+        });
+        write!(
+            out,
+            ",{},{},{:.4},{:.2},{:.4},{:.4},{:.4e},{:.4e},{:.3},{},{}",
+            rank + 1,
+            on_front[rank],
+            f.cycle_s,
+            f.energy_j,
+            f.thermal,
+            f.drive_current,
+            f.following_error_m,
+            f.settling_error_m,
+            f.inertia_ratio,
+            cell(&f.failing),
+            cell(&f.estimated)
+        )
+        .map_err(io)?;
+        if let Some((rows, _)) = &robust {
+            match rows.iter().position(|r| r.index == rank) {
+                Some(at) => {
+                    let r = &rows[at];
+                    let (check, u) = r.tightest.unwrap_or(("", f64::NAN));
+                    let result = if !r.refused.is_empty() {
+                        r.refused.replace(',', ";")
+                    } else if r.passes {
+                        "ok".into()
+                    } else {
+                        "FAIL".into()
+                    };
+                    write!(out, ",{},{result},{check},{u:.4}", at + 1).map_err(io)?;
+                }
+                None => write!(out, ",,,,").map_err(io)?,
+            }
+        }
+        for check in &checks {
+            match f.checks.iter().find(|(c, _)| c == check) {
+                Some((_, u)) => write!(out, ",{u:.4}").map_err(io)?,
+                None => write!(out, ",").map_err(io)?,
+            }
+        }
+        writeln!(out).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `transmission <machine>`: sweeps the gearbox ratio (`--key gearbox.ratio`, the default) or the pulley radius (`--key
+/// geometry.pulley_radius_m`) of the config from `--from` to `--to` in `--count` values (by default half to twice the
+/// config's, 9 values), each with the velocity gain retuned and run on the cycle, and the classic optimum (the least
+/// torque per unit acceleration; for a pure inertia sqrt(J_load / J_motor)) beside them
+/// (`search::transmission_sweep`). Per row: the value, the torque per unit acceleration, the inertia ratio, the cycle
+/// time, and the result with its tightest check. With `--gearboxes SERIES` and a motor (`--motor` or the config's
+/// `parts.motor`), the series' gearboxes that fit it around the best ratio are run as well, as rows "catalogue". The
+/// error stream says the classic optimum and the best value for the cycle.
+fn transmission(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let (entry, named) = named_config(args)?;
+    let parts = sim_components::catalog::Parts::of(&named)?;
+    let (motor, supply) = (parts.motor.to_string(), parts.supply.to_string());
+    let (entry, cfg) = (entry, machine_and_config(args)?.1);
+    let key = args.option("--key").unwrap_or("gearbox.ratio");
+    if !["gearbox.ratio", "geometry.pulley_radius_m"].contains(&key) {
+        return Err(Failure("cli-error-bad-argument", format!("--key {key}")));
+    }
+    let own = cfg.positive(key)?;
+    let (from, to) = (args.number("--from")?.unwrap_or(own / 2.0), args.number("--to")?.unwrap_or(own * 2.0));
+    let count = match args.number("--count")? {
+        Some(n) if n >= 2.0 && n.fract() == 0.0 => n as usize,
+        Some(n) => return Err(Failure("cli-error-bad-argument", format!("--count {n}"))),
+        None => 9,
+    };
+    let snap = args
+        .option("--gearboxes")
+        .filter(|_| !motor.is_empty())
+        .map(|series| (series, motor.as_str(), supply.as_str()));
+    let sweep = sim_components::search::transmission_sweep(entry, &cfg, key, (from, to, count), snap)?;
+    eprintln!("{}", tr.tr_arg("cli-transmission-optimum", &format!("{key}: {:.4}, {:.4}", sweep.classic, sweep.best)));
+    let mut out = output(args, "--out")?;
+    writeln!(
+        out,
+        "kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation"
+    )
+    .map_err(io)?;
+    let rows = sweep.rows.iter().map(|r| (if r.value == sweep.classic { "classic" } else { "sweep" }, r));
+    for (kind, r) in rows.chain(sweep.snapped.iter().map(|r| ("catalogue", r))) {
+        let (check, u) = r.tightest.unwrap_or((r.refused, f64::NAN));
+        let result = if r.passes { "ok" } else { "FAIL" };
+        writeln!(
+            out,
+            "{kind},{:.6},{},{:.6},{:.4},{:.4},{result},{check},{u:.4}",
+            r.value, r.gearbox, r.torque_per_acceleration, r.inertia_ratio, r.cycle_s
+        )
+        .map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `compare-kinematics TASK.toml --machines ID,ID,...`: the task (`search::Task`: pick and place in tool space, payload,
+/// target cycle time) mapped onto each machine's own cycle (`search::task_config`; a machine the task cannot be mapped
+/// onto is listed with the reason), the catalogue search run on each (with `--supply`, `--vendor`, `--series`,
+/// `--gearboxes`, `--drives` and `--rank-by` as `search` takes them), and per machine the best combination and its
+/// figures side by side. Machines by id, and every `--machine-file FILE` as well; each with its default config and
+/// `--set`.
+fn compare_kinematics(args: &Args, _tr: &Translations) -> Result<(), Failure> {
+    let file = args.positional(1).ok_or(Failure("cli-usage", String::new()))?;
+    let task = sim_components::search::Task::parse(&read(file)?)
+        .map_err(|e| Failure("cli-error-bad-argument", format!("{file}: {e}")))?;
+    let mut machines: Vec<(&'static MachineEntry, Config)> = Vec::new();
+    let ids = args.option("--machines").map(|m| m.split(',').map(str::trim).collect::<Vec<_>>()).unwrap_or_default();
+    let entries: Vec<&'static MachineEntry> = ids
+        .iter()
+        .map(|id| find(id).ok_or(Failure("cli-error-unknown-machine", id.to_string())))
+        .chain(args.options("--machine-file").into_iter().map(|path| {
+            sim_machines::load_file(std::path::Path::new(path))
+                .map_err(|e| Failure(e.error.key(), format!("{path}: {}", e.error.detail())))
+        }))
+        .collect::<Result<_, _>>()?;
+    if entries.is_empty() {
+        return Err(Failure("cli-usage", String::new()));
+    }
+    for entry in entries {
+        let mut cfg = entry.config();
+        for assignment in args.options("--set") {
+            cfg.set_text(assignment)?;
+        }
+        machines.push((entry, cfg));
+    }
+    let prefix = args.option("--series").unwrap_or("");
+    let (drives, by) = search_choices(args)?;
+    let options =
+        sim_components::catalog::Options { gearboxes: args.option("--gearboxes"), drives, ..Default::default() };
+    // Each machine at its own supply, unless the command line names one.
+    let supplies = |cfg: &Config| search_supplies_of(args, cfg).unwrap_or_default();
+    for (_, cfg) in &machines {
+        search_supplies_of(args, cfg)?;
+    }
+    let rows = sim_components::search::compare_kinematics(
+        &task,
+        &machines,
+        &supplies,
+        &|article: &str| article.starts_with(prefix),
+        &options,
+        &by,
+    );
+    let mut out = output(args, "--out")?;
+    writeln!(out, "machine,result,refused,motor,gearbox,drive,supply,cost_kg,cycle_s,target_s,meets,energy_j,tightest_check,tightest_utilisation,thermal_utilisation,following_error_m,inertia_ratio,passing,tried,estimated").map_err(io)?;
+    for row in &rows {
+        let nan = f64::NAN;
+        let target = row.target_s.map_or(String::new(), |t| format!("{t:.4}"));
+        match (&row.refused, &row.best) {
+            (Some(r), _) => writeln!(
+                out,
+                "{},refused,{} {},,,,,,,{target},false,,,,,,,0,0,",
+                row.machine,
+                r.key,
+                r.detail.replace(',', ";")
+            )
+            .map_err(io)?,
+            (None, None) => writeln!(out, "{},none,,,,,,,,{target},false,,,,,,,0,0,", row.machine).map_err(io)?,
+            (None, Some(c)) => {
+                let f = c.figures.clone().unwrap_or_default();
+                let (check, u) = c.tightest().unwrap_or((c.refused, nan));
+                writeln!(
+                    out,
+                    "{},{},,{},{},{},{},{:.2},{:.4},{target},{},{:.2},{check},{u:.4},{:.4},{:.4e},{:.3},{},{},{}",
+                    row.machine,
+                    if c.passes() { "ok" } else { "FAIL" },
+                    c.article,
+                    c.gearbox,
+                    c.drive,
+                    c.supply,
+                    c.cost,
+                    f.cycle_s,
+                    row.meets(),
+                    f.energy_j,
+                    f.thermal,
+                    f.following_error_m,
+                    f.inertia_ratio,
+                    row.passing,
+                    row.tried,
+                    cell(&f.estimated)
+                )
+                .map_err(io)?
+            }
+        }
     }
     out.flush().map_err(io)
 }

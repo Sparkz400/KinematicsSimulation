@@ -1,0 +1,18 @@
+# A pick-and-place task in tool space, for `sim-cli compare-kinematics examples/pick-place-task.toml --machines ...`
+# (docs/user-guide.md, "Which kinematics for a task"). Positions are x, y, z in m from each machine's origin, by default
+# the middle of its axis ranges; z is up. Each machine gets the cycle: down to the pick (the gripper closes and dwells),
+# up by lift_m, across to above the place (through the via points), down (it opens), up, and back.
+pick = [-0.15, 0.0, -0.04]
+place = [0.15, 0.0, -0.04]
+lift_m = 0.03
+dwell_s = 0.05
+payload_kg = 1.0
+# The target: one cycle (one pick and one place) in this time, or `rate_per_min = 60` instead.
+cycle_time_s = 1.5
+# Optional: points the way across passes through, here a rise in the middle (on each machine with an axis z).
+# via = [[0.0, 0.0, 0.0]]
+# Optional: settings made on every machine's config, e.g. the cycle timed at the motor limits once that exists:
+# set = ['cycle.timing = "time_optimal"']
+# Optional: an origin of a machine's own, one value per axis of its tool coordinates (here x, z of the T gantry).
+# [origin]
+# t-gantry = [0.5, 0.2]

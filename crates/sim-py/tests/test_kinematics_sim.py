@@ -168,6 +168,15 @@ def test_sizing_ranks_passing_motors_first():
     assert passes == sorted(passes, reverse=True)
 
 
+def test_sizing_gives_the_wide_table_and_ranks_by_energy():
+    # The columns of `sim-cli search`: figures per candidate, one utilisation column per check, and the front.
+    found = ks.sizing(ks.Config(LAST), series="1FK2104", drives="neighbours", rank_by="energy")
+    for column in ["rank", "front", "energy_j", "thermal_utilisation", "inertia_ratio", "estimated", "u_motor-peak"]:
+        assert len(found[column]) == len(found["motor"]), column
+    passing = [e for e, ok in zip(found["energy_j"], found["passes"]) if ok]
+    assert passing == sorted(passing)
+
+
 def test_calls_release_the_gil():
     cfg = ks.Config(LAST)
     results = []

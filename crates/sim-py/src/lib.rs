@@ -530,12 +530,21 @@ fn verdicts(
 /// `series` keeps article numbers starting with it, `supply` is one of the catalogue's supplies ("230v", "400v", "s120",
 /// "s210new-400v", "beckhoff-400v", ...), `vendor` keeps that maker's supplies ("all": every maker's; all of them where
 /// `supply` is left out; without either the config's own `parts.motor_supply`, else "400v"), `gearboxes` names a gearbox
-/// series to try as well, and `axes=True` tries every axis of the catalogue too. `motor_id` sizes one motor of a machine
-/// with several (a machine file's): each candidate becomes that motor's own `[parts.ID]`, and the cost, the tightest
-/// check, the peak torque and the winding rise are that motor's alone; not with `axes`. The candidates of several
-/// supplies are ranked together; `vendor` and `supply` say whose each is.
+/// series to try as well (on a direct drive around the classic optimum ratio), and `axes=True` tries every axis of the
+/// catalogue too. `motor_id` sizes one motor of a machine with several (a machine file's): each candidate becomes that
+/// motor's own `[parts.ID]`, and the cost, the tightest check, the peak torque and the winding rise are that motor's
+/// alone; not with `axes`. The candidates of several supplies are ranked together; `vendor` and `supply` say whose each
+/// is.
+/// together; `vendor` and `supply` say whose each is. `drives` is "paired", "neighbours" (the paired drive and the next
+/// size down and up) or "all"; `rank_by` orders the passing ones as `--rank-by` does ("cost", "margin", "energy",
+/// "error", "thermal", "inertia" or a weighted mix "cost=1,energy=0.5"); `duties` a duty mix, a list of (config,
+/// weight), the first the config searched on. The columns are those of `sim-cli search`: beside the parts "rank",
+/// "front", "cycle_s", "energy_j", "thermal_utilisation", "drive_current_utilisation", "following_error_m",
+/// "settling_error_m", "inertia_ratio", "failing" and "estimated" (lists), and "u_<check>" per check (NaN where a
+/// candidate has no such check).
 #[pyfunction]
-#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false, motor_id=None))]
+#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false, motor_id=None, drives="paired", rank_by="cost", duties=None))]
+#[allow(clippy::too_many_arguments)]
 fn sizing(
     py: Python<'_>,
     config: &PyConfig,
@@ -545,8 +554,12 @@ fn sizing(
     gearboxes: Option<&str>,
     axes: bool,
     motor_id: Option<&str>,
+    drives: &str,
+    rank_by: &str,
+    duties: Option<Vec<(PyRef<'_, PyConfig>, f64)>>,
 ) -> PyResult<Py<PyDict>> {
-    use sim_components::catalog::{Parts, SUPPLIES, search_supplies, vendor_of};
+    use sim_components::catalog::{Candidate, Drives, Options, Parts, SUPPLIES, search, vendor_of};
+    use sim_components::search::{front, parse_ranking, rank_by as ranked};
     if motor_id.is_some() && axes {
         return Err(PyValueError::new_err("give motor_id or axes=True, not both"));
     }
@@ -561,15 +574,28 @@ fn sizing(
     if supplies.is_empty() || !supplies.iter().all(|s| SUPPLIES.contains(s)) {
         return Err(PyValueError::new_err(format!("no supply of the catalogue: {supply:?}, vendor {vendor:?}")));
     }
+    let drives: Drives = drives.parse().map_err(|_| PyValueError::new_err(format!("drives: {drives}")))?;
+    let by = parse_ranking(rank_by).ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
+    let mix: Vec<(sim_core::Config, f64)> =
+        duties.unwrap_or_default().iter().map(|(c, w)| (c.cfg.clone(), *w)).collect();
+    if mix.iter().any(|(_, w)| !(*w > 0.0 && w.is_finite())) {
+        return Err(PyValueError::new_err("duties: weights above 0"));
+    }
+    let cfg = mix.first().map_or(cfg, |(first, _)| first.clone());
     let found = py
         .detach(|| {
             let wanted = |article: &str| article.starts_with(series);
-            search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, motor_id)
+            let options = Options { gearboxes, axes, motor: motor_id, drives, duties: &mix };
+            search(entry, &cfg, &supplies, &wanted, &options).map(|mut found| {
+                ranked(&mut found, &by);
+                found
+            })
         })
         .map_err(|e| config_error(entry, e))?;
     let out = PyDict::new(py);
-    let numbers =
-        |f: &dyn Fn(&sim_components::catalog::Candidate) -> f64| PyArray1::from_vec(py, found.iter().map(f).collect());
+    let numbers = |f: &dyn Fn(&Candidate) -> f64| PyArray1::from_vec(py, found.iter().map(f).collect());
+    let figure =
+        |f: &dyn Fn(&sim_components::search::Figures) -> f64| numbers(&|c| c.figures.as_ref().map_or(f64::NAN, f));
     out.set_item("axis", found.iter().map(|c| c.axis.clone()).collect::<Vec<_>>())?;
     out.set_item("motor", found.iter().map(|c| c.article).collect::<Vec<_>>())?;
     out.set_item("gearbox", found.iter().map(|c| c.gearbox.clone()).collect::<Vec<_>>())?;
@@ -592,6 +618,31 @@ fn sizing(
     };
     out.set_item("peak_torque_nm", numbers(&|c| most(c, |m| m.peak_torque)))?;
     out.set_item("winding_rise_k", numbers(&|c| most(c, |m| m.winding_rise)))?;
+    out.set_item("rank", PyArray1::from_vec(py, (1..=found.len()).collect()))?;
+    out.set_item("front", PyArray1::from_vec(py, front(&found)))?;
+    out.set_item("cycle_s", figure(&|f| f.cycle_s))?;
+    out.set_item("energy_j", figure(&|f| f.energy_j))?;
+    out.set_item("thermal_utilisation", figure(&|f| f.thermal))?;
+    out.set_item("drive_current_utilisation", figure(&|f| f.drive_current))?;
+    out.set_item("following_error_m", figure(&|f| f.following_error_m))?;
+    out.set_item("settling_error_m", figure(&|f| f.settling_error_m))?;
+    out.set_item("inertia_ratio", figure(&|f| f.inertia_ratio))?;
+    let lists = |f: &dyn Fn(&sim_components::search::Figures) -> Vec<&'static str>| {
+        found.iter().map(|c| c.figures.as_ref().map_or_else(Vec::new, f)).collect::<Vec<_>>()
+    };
+    out.set_item("failing", lists(&|f| f.failing.clone()))?;
+    out.set_item("estimated", lists(&|f| f.estimated.clone()))?;
+    let mut checks: Vec<&str> = Vec::new();
+    for (check, _) in found.iter().filter_map(|c| c.figures.as_ref()).flat_map(|f| &f.checks) {
+        if !checks.contains(check) {
+            checks.push(check);
+        }
+    }
+    for check in checks {
+        let of =
+            |f: &sim_components::search::Figures| f.checks.iter().find(|(c, _)| *c == check).map_or(f64::NAN, |c| c.1);
+        out.set_item(format!("u_{check}"), figure(&of))?;
+    }
     Ok(out.unbind())
 }
 

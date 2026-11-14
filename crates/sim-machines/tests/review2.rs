@@ -522,6 +522,7 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
         cost: 1.0,
         result: Some((load, judged)),
         refused: "",
+        ..Candidate::default()
     };
     assert!(!candidate.passes());
     assert_eq!(candidate.tightest(), Some(("dc-link-overvoltage", f64::INFINITY)));

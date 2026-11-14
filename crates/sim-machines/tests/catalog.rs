@@ -541,6 +541,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         cost: 1.0,
         result: Some((load.clone(), verdicts)),
         refused: "",
+        ..Candidate::default()
     };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
     let with_resistor = candidate(vec![
@@ -665,6 +666,7 @@ fn the_tightest_check_of_a_one_motor_search_is_that_motors() {
         cost: 1.0,
         result: Some((load.clone(), verdicts)),
         refused: "",
+        ..Candidate::default()
     };
     assert_eq!(candidate("mz", verdicts.clone()).tightest(), Some(("motor-peak", 0.3)));
     assert_eq!(candidate("", verdicts.clone()).tightest(), Some(("motor-peak", 0.9)));

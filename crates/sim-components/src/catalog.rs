@@ -626,6 +626,123 @@ fn paired_s120(article: &str, supply: &str) -> &'static str {
     }
 }
 
+/// Which drives the search tries with each motor: the one the catalogue pairs with it (`paired_drive`), that one and
+/// the next size down and up (`drive_neighbours`), or every drive of the supply (`drives_for`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Drives {
+    #[default]
+    Paired,
+    Neighbours,
+    All,
+}
+
+impl std::str::FromStr for Drives {
+    type Err = ();
+    fn from_str(text: &str) -> Result<Self, ()> {
+        match text {
+            "paired" => Ok(Drives::Paired),
+            "neighbours" | "neighbors" => Ok(Drives::Neighbours),
+            "all" => Ok(Drives::All),
+            _ => Err(()),
+        }
+    }
+}
+
+/// The drives of a supply (`SUPPLIES`) with their rated and maximum output current, smallest rated current first (of
+/// two alike, the higher maximum current first): the S210 converters for "230v" (1 AC and 3 AC) and "400v" (3 AC), the
+/// new 6SL5310 ones for "s210new-...", the single-axis Motor Modules for "s120", another maker's drives at the line
+/// voltage. A maker that prints no maximum current (Mitsubishi) has NaN there.
+// shortcut: the S120 Double Motor Modules are left out (per axis they are the single ones' sizes); add them when a
+// search sizes two axes on one module.
+pub fn drives_for(supply: &str) -> Vec<(&'static str, f64, f64)> {
+    let current = |r: &Row| {
+        (r["part_number"], number(r, "rated_output_current_a"), number(r, "max_output_current_a").unwrap_or(f64::NAN))
+    };
+    let rows: Vec<Row> = match (vendor_supply(supply), s210_supply(supply), supply) {
+        (Some((vendor, line)), ..) => vendor_rows("drives_", vendor, line),
+        (_, Some((voltage, new)), _) => rows(table("siemens/converters_s210.csv"))
+            .into_iter()
+            .filter(|r| (r["series"] == "S210 (New)") == new && (voltage == "230v" || r["supply"].ends_with("3 AC")))
+            .collect(),
+        (.., "s120") => {
+            rows(table("siemens/motor_modules_s120.csv")).into_iter().filter(|r| r["axes"] == "1").collect()
+        }
+        _ => Vec::new(),
+    };
+    let mut out: Vec<(&'static str, f64, f64)> =
+        rows.iter().map(current).filter_map(|(part, rated, max)| Some((part, rated?, max))).collect();
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).then(b.2.total_cmp(&a.2)).then(a.0.cmp(b.0)));
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+/// The paired drive (`paired_drive`) and the next size down and up by rated output current among the supply's drives
+/// (`drives_for`): the largest with a lower rated current and the smallest with a higher one (of two alike, the higher
+/// maximum current). Smallest first; the paired one alone where it is not in the list, none where there is none.
+pub fn drive_neighbours(article: &str, supply: &str) -> Vec<&'static str> {
+    let paired = paired_drive(article, supply);
+    let all = drives_for(supply);
+    let Some(&(_, rated, _)) = all.iter().find(|d| d.0 == paired) else {
+        return [paired].into_iter().filter(|p| !p.is_empty()).collect();
+    };
+    let lower = all.iter().filter(|d| d.1 < rated).map(|d| d.1).reduce(f64::max);
+    let higher = all.iter().find(|d| d.1 > rated).map(|d| d.1);
+    let first_at = |current: Option<f64>| current.and_then(|c| all.iter().find(|d| d.1 == c)).map(|d| d.0);
+    [first_at(lower), Some(paired), first_at(higher)].into_iter().flatten().collect()
+}
+
+/// The drives the search tries with a motor at a supply (`Drives`); "" alone where the catalogue pairs none, and the
+/// config's drive stays.
+fn drives_tried(article: &str, supply: &str, drives: Drives) -> Vec<&'static str> {
+    let out = match drives {
+        Drives::Paired => vec![paired_drive(article, supply)],
+        Drives::Neighbours => drive_neighbours(article, supply),
+        Drives::All => drives_for(supply).into_iter().map(|d| d.0).collect(),
+    };
+    if out.iter().all(|d| d.is_empty()) { vec![""] } else { out }
+}
+
+/// What a motor and drive of the catalogue leave to the config's estimates, by name: "motor-winding" (no phase
+/// resistance and inductance: Siemens prints them for the 1FK7 and 1FT7 only), "motor-thermal-time" (no thermal time
+/// constant), "motor-pole-pairs" (none printed), "drive-max-current" (the maker prints no peak current, the motor's
+/// stands for it), "drive-base-load" (no base load current: `S210_BASE_LOAD_SHARE` of the rated one), and for another
+/// maker's motor "motor-standstill" or "motor-rated" where it prints no standstill or no rated values (the other ones
+/// stand for them, see `motor_data`). Empty: everything from the catalogue.
+pub fn estimated_data(article: &str, supply: &str, drive: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if let Ok(m) = motor_data(article, supply) {
+        if m.winding.is_none() {
+            out.push("motor-winding");
+        }
+        if m.thermal_seconds.is_none() {
+            out.push("motor-thermal-time");
+        }
+        if m.pole_pairs.is_none() {
+            out.push("motor-pole-pairs");
+        }
+    }
+    if let Some((vendor, line)) = vendor_supply(supply)
+        && let Some(m) = vendor_rows("motors_", vendor, line).into_iter().find(|r| r["part_number"] == article)
+    {
+        if number(&m, "static_torque_nm").is_none() || number(&m, "stall_current_a").is_none() {
+            out.push("motor-standstill");
+        }
+        if number(&m, "rated_torque_nm").is_none() || number(&m, "rated_current_a").is_none() {
+            out.push("motor-rated");
+        }
+    }
+    if !drive.is_empty() {
+        let s120 = rows(table("siemens/motor_modules_s120.csv")).into_iter().any(|r| r["part_number"] == drive);
+        if !s120 {
+            out.push("drive-base-load");
+        }
+        if drives_for(supply).iter().any(|d| d.0 == drive && d.2.is_nan()) {
+            out.push("drive-max-current");
+        }
+    }
+    out
+}
+
 /// Puts a drive into a config: an S210 converter of `converters_s210.csv` or an S120 Motor Module of
 /// `motor_modules_s120.csv`, by article number. It sets the drive's rated and maximum output current as
 /// `ratings.drive_rated_current_a` and `drive_max_current_a`, where the config has them; `verdicts` judges the
@@ -1340,7 +1457,7 @@ pub fn resolve(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError
 
 /// One combination of parts tried on a machine's cycle: a motor with its drive, with or without a gearbox, on the
 /// config's axis or one of the catalogue's.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Candidate {
     /// "" for an axis ruled out before any motor was tried on it.
     pub article: &'static str,
@@ -1360,9 +1477,14 @@ pub struct Candidate {
     /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
     /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
-    /// The cycle and its verdicts; `None` where the cycle was not run, with the reason in `refused`.
+    /// The cycle and its verdicts; `None` where the cycle was not run, with the reason in `refused`. With a duty mix
+    /// (`Options::duties`) the first duty's cycle and the verdicts of the mix (`search::mix_verdicts`).
     pub result: Option<(CycleLoad, Vec<Verdict>)>,
     pub refused: &'static str,
+    /// With a duty mix: each duty's weight and cycle, in the order of `Options::duties`; empty for one cycle.
+    pub duties: Vec<(f64, CycleLoad)>,
+    /// The figures of the search's table (`search::Figures`), where the cycle ran.
+    pub figures: Option<crate::search::Figures>,
 }
 
 impl Candidate {
@@ -1381,7 +1503,7 @@ impl Candidate {
     /// A run whose drives tripped is infinitely far beyond: its figures end at the trip, where the DC link
     /// was just past its limit, and by that ratio it would rank as the nearest to passing. For one motor (`search_motor`,
     /// `motor`) only its own checks count, and those of the whole machine where they fail: the other motors' are the
-    /// config's, and a check of the whole machine (the shafts' radial load, judged once) mostly theirs.
+    /// config's, and a check of the whole machine mostly theirs.
     pub fn tightest(&self) -> Option<(&'static str, f64)> {
         let (load, verdicts) = self.result.as_ref()?;
         if load.tripped {
@@ -1415,19 +1537,76 @@ impl Candidate {
 /// needs per unit of acceleration at the middle of its travel, summed over axes and motors, over the gear
 /// ratio (a motor behind a higher ratio turns faster for the same axis acceleration).
 fn inertia_seen(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigError> {
+    let per_axis = torque_per_acceleration(entry, cfg)?;
+    Ok(per_axis.iter().flatten().map(|t| t.abs()).sum::<f64>() / cfg.f64("gearbox.ratio").unwrap_or(1.0))
+}
+
+/// The torque each motor of the rigid machine needs per unit of each axis's acceleration at the middle of its travel,
+/// standing: `[axis][motor]`, gravity taken out.
+pub(crate) fn torque_per_acceleration(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Vec<f64>>, ConfigError> {
     let machine = (entry.build)(cfg)?;
     let pose = sim_core::testkit::mid_pose(machine.as_ref());
     let (axes, motors) = (machine.axes().len(), machine.motors().len());
     let (mut holding, mut moving) = (vec![0.0; motors], vec![0.0; motors]);
     machine.feedforward_torque(&pose, &vec![0.0; axes], &mut holding);
-    let mut sum = 0.0;
+    let mut out = Vec::new();
     for axis in 0..axes {
         let mut acc = vec![0.0; axes];
         acc[axis] = 1.0;
         machine.feedforward_torque(&pose, &acc, &mut moving);
-        sum += moving.iter().zip(&holding).map(|(m, h)| (m - h).abs()).sum::<f64>();
+        out.push(moving.iter().zip(&holding).map(|(m, h)| m - h).collect());
     }
-    Ok(sum / cfg.f64("gearbox.ratio").unwrap_or(1.0))
+    Ok(out)
+}
+
+/// The inertia ratio of each motor, load over motor, at the middle of the travel: the inertia the motor turns
+/// besides its rotor (the load, and the gearbox's own inertia with it) over the rotor's inertia, where the rotor's is
+/// that of the motor's own config (`motor_config`). Per axis the inertia the motor turns is the torque the rigid machine
+/// needs per unit of that axis's acceleration (`torque_per_acceleration`) over the motor's acceleration it takes (from
+/// `Machine::inverse`, standing: no speed, so no term of the speed squared); of the axes that move the motor the
+/// largest. NaN for a motor no axis moves. Assumes the machine's feedforward has the rotors in, as every machine's has.
+pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, ConfigError> {
+    let torques = torque_per_acceleration(entry, cfg)?;
+    let machine = (entry.build)(cfg)?;
+    let pose = sim_core::testkit::mid_pose(machine.as_ref());
+    let motors = machine.motors().to_vec();
+    let angles = |pose: &[f64]| {
+        let mut out = vec![0.0; motors.len()];
+        machine.inverse(pose, &mut out);
+        out
+    };
+    let mut out = Vec::new();
+    for (k, motor) in motors.iter().enumerate() {
+        let rotor = motor_config(cfg, motor.id)?.positive("motor.rotor_inertia_kgm2")?;
+        let mut ratio = f64::NAN;
+        for (axis, torque) in torques.iter().enumerate() {
+            // A central difference of a step small against the travel: exact for a linear map, 1e-8 off for the rest.
+            let step = 1e-6 * (machine.axes()[axis].max - machine.axes()[axis].min).abs().max(1e-3);
+            let (mut ahead, mut behind) = (pose.clone(), pose.clone());
+            ahead[axis] += step;
+            behind[axis] -= step;
+            let rate = (angles(&ahead)[k] - angles(&behind)[k]) / (2.0 * step);
+            if rate.abs() > 1e-9 {
+                let load = torque[k] / rate - rotor;
+                ratio = if ratio.is_nan() { load / rotor } else { ratio.max(load / rotor) };
+            }
+        }
+        out.push(ratio);
+    }
+    Ok(out)
+}
+
+/// The velocity gain of `before` scaled for the parts of `after` as `with_parts` says: by the square root of the ratio
+/// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's).
+fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<(), ConfigError> {
+    let rotor = |cfg: &Config| {
+        Ok::<f64, ConfigError>(
+            cfg.positive("motor.rotor_inertia_kgm2")? + cfg.non_negative("gearbox.inertia_at_input_kgm2")?,
+        )
+    };
+    let ratio = inertia_seen(entry, after)? / inertia_seen(entry, before)? * rotor(after)? / rotor(before)?;
+    let gain = before.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
+    set(after, "drive.velocity_kp_nm_s_rad", gain)
 }
 
 /// The config with a candidate's parts in it and the velocity loop retuned for them. Without this a
@@ -1467,15 +1646,17 @@ pub fn with_named(entry: &MachineEntry, cfg: &Config, parts: &Parts) -> Result<C
     let mut out = cfg.clone();
     apply_parts(&mut out, parts, Some(entry))?;
     if parts.moves() {
-        let rotor = |cfg: &Config| {
-            Ok::<f64, ConfigError>(
-                cfg.positive("motor.rotor_inertia_kgm2")? + cfg.non_negative("gearbox.inertia_at_input_kgm2")?,
-            )
-        };
-        let ratio = inertia_seen(entry, &out)? / inertia_seen(entry, cfg)? * rotor(&out)? / rotor(cfg)?;
-        let gain = cfg.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
-        set(&mut out, "drive.velocity_kp_nm_s_rad", gain)?;
+        retuned(entry, cfg, &mut out)?;
     }
+    Ok(out)
+}
+
+/// A config with one value changed that moves what the motors turn (`gearbox.ratio`, `geometry.pulley_radius_m`), the
+/// velocity gain retuned for it as `with_parts` retunes it for a part. `cfg` has its parts in (`resolve`).
+pub fn with_value(entry: &MachineEntry, cfg: &Config, path: &str, value: f64) -> Result<Config, ConfigError> {
+    let mut out = cfg.clone();
+    set(&mut out, path, value)?;
+    retuned(entry, cfg, &mut out)?;
     Ok(out)
 }
 
@@ -1496,46 +1677,88 @@ pub fn fitting_gearboxes(article: &str, series: &str, ratio: f64) -> Vec<String>
     all.filter(fits).map(|r| format!("{}-{}-{}", r["size"], r["motor_frame"], r["ratio"])).collect()
 }
 
-/// One combination to try: the config (with the axis named, where one is tried), motor, gearbox ("" the config's),
-/// axis name and the axis's weight.
+/// One combination to try: motor, gearbox ("" the config's), drive ("" the config's), axis name ("" the config's) and the
+/// axis's weight.
+#[derive(Debug, Clone, Default)]
 struct Job {
-    cfg: Config,
     article: &'static str,
     gearbox: String,
+    drive: &'static str,
     axis: String,
     axis_weight: f64,
     /// The id of the one motor the candidate is for (`search_motor`); "" for all of them.
     motor: String,
 }
 
-/// The jobs of one config: every motor `wanted` takes at the supply, each with every fitting gearbox of the series
-/// where the machine has a gearbox (ratio above 1).
+/// What a search tries beside the motors (`search`): `gearboxes` a series to try with each motor (`fitting_gearboxes`),
+/// `axes` every axis of the catalogue (`search_axes`), `motor` one motor of a machine with several (`search_motor`),
+/// `drives` which drives with each motor (`Drives`), and `duties` the duty mix: each duty's config and weight (how many
+/// of its cycles to one of weight 1), the first the config searched on; empty for that config alone. With a mix each
+/// candidate runs every duty and is judged by `search::mix_verdicts`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options<'a> {
+    pub gearboxes: Option<&'a str>,
+    pub axes: bool,
+    pub motor: Option<&'a str>,
+    pub drives: Drives,
+    pub duties: &'a [(Config, f64)],
+}
+
+/// The gearbox ratio a series' gearboxes are picked around for a machine without one (ratio 1, a direct drive): the
+/// classic optimum for a pure inertia, the square root of the load's inertia over the rotor's (`search::optimum_ratio`),
+/// for the motor `article` and the busiest motor of the config. `None` where it cannot be told.
+fn direct_drive_ratio(entry: &MachineEntry, cfg: &Config, article: &str, supply: &str) -> Option<f64> {
+    let own = parts_applied(cfg).ok()?;
+    let rotor = own.positive("motor.rotor_inertia_kgm2").ok()?;
+    let load = inertia_ratios(entry, &own).ok()?.into_iter().filter(|r| r.is_finite()).reduce(f64::max)? * rotor;
+    Some(crate::search::optimum_ratio(load, motor_data(article, supply).ok()?.rotor_kgm2))
+}
+
+/// The jobs of one config: every motor `wanted` takes at the supply, each with the drives `drives` picks and, with a
+/// series, every fitting gearbox of it: around the config's ratio where the machine has a gearbox (ratio above 1), around
+/// the classic optimum (`direct_drive_ratio`) where it is a direct drive, which is tried without a gearbox as well.
+#[allow(clippy::too_many_arguments)]
 fn motor_jobs(
+    entry: &MachineEntry,
     cfg: &Config,
     supply: &str,
     wanted: &dyn Fn(&str) -> bool,
-    gearboxes: Option<&str>,
+    options: &Options,
     axis: &str,
     axis_weight: f64,
+    motor: &str,
 ) -> Vec<Job> {
-    let ratio = parts_applied(cfg).ok().and_then(|own| own.f64("gearbox.ratio").ok()).unwrap_or(1.0);
+    let own = if motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, motor) };
+    let ratio =
+        own.and_then(|own| parts_applied(&own)).ok().and_then(|own| own.f64("gearbox.ratio").ok()).unwrap_or(1.0);
     let mut out = Vec::new();
     for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
-        let names = match gearboxes {
+        let names = match options.gearboxes {
             // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
             Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))
                 .filter(|g| !g.is_empty())
                 .unwrap_or_else(|| vec![String::new()]),
+            // A direct drive: as it is, and with the gearboxes around the optimum.
+            Some(series) if motor.is_empty() => std::iter::once(String::new())
+                .chain(
+                    direct_drive_ratio(entry, cfg, article, supply)
+                        .map_or_else(Vec::new, |optimum| fitting_gearboxes(article, series, optimum)),
+                )
+                .collect(),
             _ => vec![String::new()],
         };
-        out.extend(names.into_iter().map(|gearbox| Job {
-            cfg: cfg.clone(),
-            article,
-            gearbox,
-            axis: axis.to_string(),
-            axis_weight,
-            motor: String::new(),
-        }));
+        for gearbox in names {
+            for drive in drives_tried(article, supply, options.drives) {
+                out.push(Job {
+                    article,
+                    gearbox: gearbox.clone(),
+                    drive,
+                    axis: axis.to_string(),
+                    axis_weight,
+                    motor: motor.to_string(),
+                });
+            }
+        }
     }
     out
 }
@@ -1547,12 +1770,18 @@ fn motor_jobs(
 /// and acceleration at once, which the cycle need not ask, and so ruled out motors that passed every verdict). What the
 /// cycle asks of a motor is judged by the verdicts: "motor-peak" against its torque-speed curve, "motor-speed" against
 /// its maximum speed. A candidate whose config or cycle cannot run is returned with `result` empty and why in `refused`.
-fn run_jobs(entry: &MachineEntry, supply: &str, jobs: Vec<Job>, mut out: Vec<Candidate>) -> Vec<Candidate> {
+fn run_jobs(
+    entry: &MachineEntry,
+    (cfg, duties): (&Config, &[(Config, f64)]),
+    supply: &str,
+    jobs: Vec<Job>,
+    mut out: Vec<Candidate>,
+) -> Vec<Candidate> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let work = || {
         let mut done = Vec::new();
         while let Some(job) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-            done.push(try_job(entry, supply, job));
+            done.push(try_job(entry, cfg, duties, supply, job));
         }
         done
     };
@@ -1585,60 +1814,102 @@ pub fn rank(found: &mut [Candidate]) {
             .then(a.axis.cmp(&b.axis))
             .then(a.article.cmp(b.article))
             .then(a.gearbox.cmp(&b.gearbox))
+            .then(a.drive.cmp(b.drive))
     });
 }
 
-fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
-    let drive = paired_drive(job.article, supply);
-    let mut parts = Parts::of(&job.cfg).ok()?;
+/// A job's config made from a duty's config `base`: the axis named, then the parts put in as `with_named` (or, for one
+/// motor, `with_motor_part`) puts them; and how many motors take the shared motor (1 for one motor's job).
+fn job_config(entry: &MachineEntry, base: &Config, supply: &str, job: &Job) -> Result<(Config, f64), ConfigError> {
+    let mut cfg = base.clone();
+    if !job.axis.is_empty() {
+        cfg.set_text(&format!("parts.axis = {:?}", job.axis))?;
+    }
+    if !job.motor.is_empty() {
+        return Ok((with_motor_part(entry, &cfg, &job.motor, job.article, supply, &job.gearbox, job.drive)?, 1.0));
+    }
+    let mut parts = Parts::of(&cfg)?;
     (parts.motor, parts.supply) = (job.article, supply);
     if !job.gearbox.is_empty() {
         parts.gearbox = &job.gearbox;
     }
-    if !drive.is_empty() {
-        parts.drive = drive;
+    if !job.drive.is_empty() {
+        parts.drive = job.drive;
     }
-    // Not offered at this supply, or a part the config cannot take.
-    let (with_parts, motors) = if job.motor.is_empty() {
-        let with_parts = with_named(entry, &job.cfg, &parts).ok()?;
-        // The motors that take the shared motor: not those with a motor of their own (`[motor.<id>]`, `[parts.<id>]`).
-        let shared = |id: &str| {
-            job.cfg.get(&format!("motor.{id}")).is_err()
-                && job.cfg.get(&format!("parts.{id}.motor")).ok().and_then(|v| v.as_str()).is_none_or(str::is_empty)
-        };
-        let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().iter().filter(|m| shared(m.id)).count());
-        (with_parts, motors as f64)
-    } else {
-        (with_motor_part(entry, &job.cfg, &job.motor, job.article, supply, &job.gearbox, drive).ok()?, 1.0)
+    let with_parts = with_named(entry, &cfg, &parts)?;
+    // The motors that take the shared motor: not those with a motor of their own (`[motor.<id>]`, `[parts.<id>]`).
+    let shared = |id: &str| {
+        cfg.get(&format!("motor.{id}")).is_err()
+            && cfg.get(&format!("parts.{id}.motor")).ok().and_then(|v| v.as_str()).is_none_or(str::is_empty)
     };
-    // The gearbox the motor drives through: the candidate's, else for one motor its own (`[parts.<id>]`).
-    let own_gearbox = (job.gearbox.is_empty() && !job.motor.is_empty())
-        .then(|| Some(Parts::of(&motor_config(&job.cfg, &job.motor).ok()?).ok()?.gearbox.to_string()))
-        .flatten();
-    let gearbox = own_gearbox.as_deref().unwrap_or(parts.gearbox);
+    let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().iter().filter(|m| shared(m.id)).count());
+    Ok((with_parts, motors as f64))
+}
+
+/// The config a candidate of a search on `cfg` ran with (its axis, motor, gearbox and drive put in, the velocity gain
+/// retuned): for judging it further, in the error bands (`search::robust_ranking`) or on its own.
+pub fn candidate_config(entry: &MachineEntry, cfg: &Config, c: &Candidate) -> Result<Config, ConfigError> {
+    let job = Job {
+        article: c.article,
+        gearbox: c.gearbox.clone(),
+        drive: c.drive,
+        axis: c.axis.clone(),
+        axis_weight: 0.0,
+        motor: c.motor.clone(),
+    };
+    Ok(job_config(entry, cfg, c.supply, &job)?.0)
+}
+
+/// The cycle of a config judged; the reason where it cannot run.
+fn judge(entry: &MachineEntry, cfg: &Config) -> Result<(CycleLoad, Vec<Verdict>), &'static str> {
+    let mut sim = Sim::new(entry, cfg).map_err(|_| "config")?;
+    let load = analyse_cycle_with(&mut sim, false).map_err(|e| e.key)?;
+    let v = verdicts(cfg, &load).map_err(|_| "config")?;
+    Ok((load, v))
+}
+
+fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply: &str, job: &Job) -> Option<Candidate> {
+    // Not offered at this supply, or a part the config cannot take.
+    let (with_parts, motors) = job_config(entry, cfg, supply, job).ok()?;
+    // The gearbox the motor drives through: the candidate's, else its own (`[parts.<id>]` for one motor).
+    let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
+    let own_gearbox = own.ok().and_then(|own| Some(Parts::of(&own).ok()?.gearbox.to_string())).unwrap_or_default();
+    let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(f64::NAN) };
-    let mass = motor_mass_for(&job.cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
+    let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
     let mut candidate = Candidate {
         article: job.article,
         gearbox: job.gearbox.clone(),
-        drive,
+        drive: job.drive,
         supply: SUPPLIES.iter().copied().find(|s| *s == supply).unwrap_or(""),
         axis: job.axis.clone(),
         motor: job.motor.clone(),
         mass,
         cost: motors * mass + job.axis_weight,
-        result: None,
-        refused: "",
+        ..Candidate::default()
     };
-    match Sim::new(entry, &with_parts) {
-        Err(_) => candidate.refused = "config",
-        Ok(mut sim) => match analyse_cycle_with(&mut sim, false) {
-            Err(e) => candidate.refused = e.key,
-            Ok(load) => match verdicts(&with_parts, &load) {
-                Ok(v) => candidate.result = Some((load, v)),
-                Err(_) => candidate.refused = "config",
-            },
-        },
+    // Every duty of the mix, with the same parts; the first is the config searched on.
+    let mut runs: Vec<(f64, CycleLoad, Vec<Verdict>)> = Vec::new();
+    let others =
+        duties.iter().skip(1).map(|(base, weight)| (job_config(entry, base, supply, job).map(|c| c.0), *weight));
+    for (duty, weight) in std::iter::once((Ok(with_parts.clone()), duties.first().map_or(1.0, |d| d.1))).chain(others) {
+        match duty.map_err(|_| "config").and_then(|duty| judge(entry, &duty)) {
+            Ok((load, v)) => runs.push((weight, load, v)),
+            Err(reason) => {
+                candidate.refused = reason;
+                return Some(candidate);
+            }
+        }
+    }
+    let estimated = estimated_data(job.article, supply, job.drive);
+    candidate.figures = Some(crate::search::figures(entry, &with_parts, &job.motor, &runs, estimated));
+    if runs.len() == 1 {
+        let (_, load, v) = runs.pop()?;
+        candidate.result = Some((load, v));
+    } else {
+        let mixed = crate::search::mix_verdicts(&runs);
+        candidate.duties = runs.iter().map(|(w, load, _)| (*w, load.clone())).collect();
+        candidate.result = Some((runs.swap_remove(0).1, mixed));
     }
     Some(candidate)
 }
@@ -1661,9 +1932,20 @@ pub fn search_motors(
     wanted: &dyn Fn(&str) -> bool,
     gearboxes: Option<&str>,
 ) -> Vec<Candidate> {
+    search_motors_with(entry, cfg, supply, wanted, &Options { gearboxes, ..Options::default() })
+}
+
+fn search_motors_with(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supply: &str,
+    wanted: &dyn Fn(&str) -> bool,
+    options: &Options,
+) -> Vec<Candidate> {
     let own_axis = Parts::of(cfg).ok().map(|p| p.axis.to_string()).unwrap_or_default();
     let weight = axis_data(&own_axis).map_or(0.0, |axis| axis_weight(cfg, &axis));
-    run_jobs(entry, supply, motor_jobs(cfg, supply, wanted, gearboxes, &own_axis, weight), Vec::new())
+    let jobs = motor_jobs(entry, cfg, supply, wanted, options, &own_axis, weight, "");
+    run_jobs(entry, (cfg, options.duties), supply, jobs, Vec::new())
 }
 
 /// The motor search on every axis of the catalogue that is of the config's kind (`axis_names`: the EXCT sizes and
@@ -1678,6 +1960,16 @@ pub fn search_axes(
     wanted: &dyn Fn(&str) -> bool,
     gearboxes: Option<&str>,
 ) -> Vec<Candidate> {
+    search_axes_with(entry, cfg, supply, wanted, &Options { gearboxes, ..Options::default() })
+}
+
+fn search_axes_with(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supply: &str,
+    wanted: &dyn Fn(&str) -> bool,
+    options: &Options,
+) -> Vec<Candidate> {
     let (mut jobs, mut refused) = (Vec::new(), Vec::new());
     for name in axis_names() {
         let Some(axis) = axis_data(&name) else { continue };
@@ -1687,16 +1979,11 @@ pub fn search_axes(
         }
         if !reason.is_empty() {
             refused.push(Candidate {
-                article: "",
-                gearbox: String::new(),
-                drive: "",
-                supply: "",
                 axis: name,
-                motor: String::new(),
                 mass: f64::NAN,
                 cost: f64::NAN,
-                result: None,
                 refused: reason,
+                ..Candidate::default()
             });
             continue;
         }
@@ -1704,9 +1991,9 @@ pub fn search_axes(
         if with_axis.set_text(&format!("parts.axis = {name:?}")).is_err() {
             continue; // a config without `[parts]` names no part
         }
-        jobs.extend(motor_jobs(&with_axis, supply, wanted, gearboxes, &name, axis_weight(cfg, &axis)));
+        jobs.extend(motor_jobs(entry, &with_axis, supply, wanted, options, &name, axis_weight(cfg, &axis), ""));
     }
-    run_jobs(entry, supply, jobs, refused)
+    run_jobs(entry, (cfg, options.duties), supply, jobs, refused)
 }
 
 /// The search at several supplies (`SUPPLIES`; `vendor_of` tells a supply's maker), ranked together (`rank`): with `motor`
@@ -1722,12 +2009,24 @@ pub fn search_supplies(
     axes: bool,
     motor: Option<&str>,
 ) -> Result<Vec<Candidate>, ConfigError> {
+    search(entry, cfg, supplies, wanted, &Options { gearboxes, axes, motor, ..Options::default() })
+}
+
+/// `search_supplies` with every option of `Options`: the drives beside the paired one, and a duty mix. With a mix,
+/// `cfg` is the first duty's config (`Options::duties`).
+pub fn search(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supplies: &[&str],
+    wanted: &dyn Fn(&str) -> bool,
+    options: &Options,
+) -> Result<Vec<Candidate>, ConfigError> {
     let mut all = Vec::new();
     for supply in supplies {
-        let found = match motor {
-            Some(id) => search_motor(entry, cfg, supply, wanted, gearboxes, id)?,
-            None if axes => search_axes(entry, cfg, supply, wanted, gearboxes),
-            None => search_motors(entry, cfg, supply, wanted, gearboxes),
+        let found = match options.motor {
+            Some(id) => search_motor_with(entry, cfg, supply, wanted, options, id)?,
+            None if options.axes => search_axes_with(entry, cfg, supply, wanted, options),
+            None => search_motors_with(entry, cfg, supply, wanted, options),
         };
         let refused_before = |c: &Candidate| c.article.is_empty() && all.iter().any(|a: &Candidate| a.axis == c.axis);
         let new: Vec<Candidate> = found.into_iter().filter(|c| !refused_before(c)).collect();
@@ -1749,29 +2048,23 @@ pub fn search_motor(
     gearboxes: Option<&str>,
     motor: &str,
 ) -> Result<Vec<Candidate>, ConfigError> {
+    search_motor_with(entry, cfg, supply, wanted, &Options { gearboxes, ..Options::default() }, motor)
+}
+
+fn search_motor_with(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supply: &str,
+    wanted: &dyn Fn(&str) -> bool,
+    options: &Options,
+    motor: &str,
+) -> Result<Vec<Candidate>, ConfigError> {
     if !(entry.build)(cfg)?.motors().iter().any(|m| m.id == motor) {
         return Err(ConfigError::Invalid(format!("machine.motor[{motor}] (no motor of the machine has this id)")));
     }
-    let ratio = parts_applied(&motor_config(cfg, motor)?)?.f64("gearbox.ratio").unwrap_or(1.0);
-    let mut jobs = Vec::new();
-    for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
-        let names = match gearboxes {
-            // A motor no gearbox of the series fits is tried with the config's own (gearbox "").
-            Some(series) if ratio > 1.0 => Some(fitting_gearboxes(article, series, ratio))
-                .filter(|g| !g.is_empty())
-                .unwrap_or_else(|| vec![String::new()]),
-            _ => vec![String::new()],
-        };
-        jobs.extend(names.into_iter().map(|gearbox| Job {
-            cfg: cfg.clone(),
-            article,
-            gearbox,
-            axis: String::new(),
-            axis_weight: 0.0,
-            motor: motor.to_string(),
-        }));
-    }
-    Ok(run_jobs(entry, supply, jobs, Vec::new()))
+    parts_applied(&motor_config(cfg, motor)?)?;
+    let jobs = motor_jobs(entry, cfg, supply, wanted, options, "", 0.0, motor);
+    Ok(run_jobs(entry, (cfg, options.duties), supply, jobs, Vec::new()))
 }
 
 /// The config with the catalogue motor `article` at `supply`, its drive `drive` and the gearbox `gearbox` ("" each: the
@@ -1819,19 +2112,7 @@ pub fn with_motor_part(
     };
     // The torque motor `index` needs per unit of each axis's acceleration at the middle of the travel, over its ratio.
     let seen = |cfg: &Config| -> Result<f64, ConfigError> {
-        let machine = (entry.build)(cfg)?;
-        let pose = sim_core::testkit::mid_pose(machine.as_ref());
-        let (axes, motors) = (machine.axes().len(), machine.motors().len());
-        let (mut holding, mut moving) = (vec![0.0; motors], vec![0.0; motors]);
-        machine.feedforward_torque(&pose, &vec![0.0; axes], &mut holding);
-        let mut sum = 0.0;
-        for axis in 0..axes {
-            let mut acc = vec![0.0; axes];
-            acc[axis] = 1.0;
-            machine.feedforward_torque(&pose, &acc, &mut moving);
-            sum += (moving[index] - holding[index]).abs();
-        }
-        Ok(sum / rotor(cfg)?.1)
+        Ok(torque_per_acceleration(entry, cfg)?.iter().map(|t| t[index].abs()).sum::<f64>() / rotor(cfg)?.1)
     };
     let ratio = seen(&out)? / seen(cfg)? * rotor(&out)?.0 / rotor(cfg)?.0;
     let gain = motor_config(cfg, motor)?.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();

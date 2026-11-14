@@ -88,8 +88,11 @@ def sizing(
     gearboxes: str | None = None,
     axes: bool = False,
     motor_id: str | None = None,
+    drives: str = "paired",
+    rank_by: str = "cost",
+    duties: list[tuple[Config, float]] | None = None,
 ) -> dict[str, Any]:
-    """Every catalogue motor on the config's cycle, passing and cheapest first; motor_id sizes one motor of several."""
+    """Every catalogue motor on the config's cycle, passing first, ranked by `rank_by`; the columns of `sim-cli search`."""
 
 def sweep(
     config: Config,
