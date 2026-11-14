@@ -4,7 +4,10 @@
 //! quantity (`Channel`): a motor's torque, speed and following error by the motor's place in the machine's list, and
 //! the tool's position error. The views draw what this module gives them; it draws nothing itself.
 
+use sim_components::Sim;
 use sim_components::analysis::Verdict;
+use sim_components::charts::{self, TorqueSpeed};
+use sim_components::drive::DriveParams;
 use sim_core::{AxisInfo, MotorInfo, SignalInfo};
 use std::borrow::Cow;
 
@@ -144,6 +147,13 @@ pub struct Run {
     pub motors: Vec<String>,
     /// Per motor its drive's rated (S1) and peak torque in N m, for the utilisation; empty where not known (a trace).
     pub ratings: Vec<(f64, f64)>,
+    /// Per motor its drive, for the torque-speed chart and the utilisation (`charts`); empty where not known (a trace).
+    pub drives: Vec<DriveParams>,
+    /// The machine's resonances at its start pose in Hz (`Machine::modes`), marked in the spectrum.
+    pub modes: Vec<f64>,
+    /// For an analysed cycle or path: the tool's distance to the path every millisecond as the analysis measured it
+    /// (`CycleLoad::path_error_series`, [time, place m, turn rad]); empty otherwise.
+    pub off_path: Vec<[f64; 3]>,
     /// Per signal its values, the first the time in s from the run's start.
     pub columns: Vec<Vec<f64>>,
     /// The checks, for a run that was judged (a cycle or a path).
@@ -168,7 +178,19 @@ impl Run {
             columns[0].iter_mut().for_each(|t| *t -= start);
         }
         let motors = motors.iter().map(|m| m.id.to_string()).collect();
-        Self { label, kind, machine, signals, motors, ratings: Vec::new(), columns, verdicts: None }
+        Self {
+            label,
+            kind,
+            machine,
+            signals,
+            motors,
+            ratings: Vec::new(),
+            drives: Vec::new(),
+            modes: Vec::new(),
+            off_path: Vec::new(),
+            columns,
+            verdicts: None,
+        }
     }
 
     /// A trace (measured, or its replay) as a run: per motor its angle, speed, torque and following error.
@@ -194,7 +216,48 @@ impl Run {
             columns.extend([m.angle.clone(), m.speed.clone(), m.torque.clone(), m.following_error()]);
         }
         let motors = motors.iter().map(|m| m.id.to_string()).collect();
-        Self { label, kind: RunKind::Trace, machine, signals, motors, ratings: Vec::new(), columns, verdicts: None }
+        Self {
+            label,
+            kind: RunKind::Trace,
+            machine,
+            signals,
+            motors,
+            ratings: Vec::new(),
+            drives: Vec::new(),
+            modes: Vec::new(),
+            off_path: Vec::new(),
+            columns,
+            verdicts: None,
+        }
+    }
+
+    /// With what `sim`, of the machine and config the run is of, says about them: per motor its rated and peak torque
+    /// and its drive, and the machine's resonances at the start pose.
+    // shortcut: the modes at the start pose only; take them along the run's poses once a view needs them moving.
+    pub fn rated(self, sim: &Sim) -> Self {
+        let drives: Vec<DriveParams> =
+            (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).clone()).collect();
+        let axes = sim.machine.axes().len();
+        let (mut pose, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
+        sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
+        Self {
+            ratings: drives.iter().map(|d| (d.rated_torque, d.peak_torque)).collect(),
+            drives,
+            modes: sim.machine.modes(&pose).iter().map(|m| m.hz).collect(),
+            ..self
+        }
+    }
+
+    /// Per motor its torque-speed chart from its own drive, at the lowest DC link voltage the run saw
+    /// (`charts::dc_link_of`); empty where the run knows no drives.
+    pub fn torque_speed(&self) -> Vec<TorqueSpeed> {
+        self.drives
+            .iter()
+            .zip(&self.motors)
+            .map(|(d, id)| {
+                charts::torque_speed(d, charts::dc_link_of(d, self.column(&format!("motor.{id}.dc_link_voltage"))))
+            })
+            .collect()
     }
 
     pub fn time(&self) -> &[f64] {
@@ -336,7 +399,7 @@ impl Quantity {
         }
     }
 
-    pub fn unit(self) -> &'static str {
+    pub const fn unit(self) -> &'static str {
         match self {
             Self::Torque => "N m",
             Self::Speed => "rad/s",
@@ -547,4 +610,11 @@ pub fn trail_until(points: &[crate::session::TrailPoint], time: Option<f64>) -> 
         Some(time) => &points[..points.partition_point(|p| p.time <= time)],
         None => points,
     }
+}
+
+/// A torque-speed chart with its speeds times `factor` (`Units`), its torques as they are.
+pub fn scaled_speeds(chart: &TorqueSpeed, factor: f64) -> TorqueSpeed {
+    let scale =
+        |lines: &[Vec<[f64; 2]>; 2]| lines.clone().map(|line| line.into_iter().map(|[w, t]| [w * factor, t]).collect());
+    TorqueSpeed { peak: scale(&chart.peak), s1: scale(&chart.s1), voltage: scale(&chart.voltage), ..chart.clone() }
 }

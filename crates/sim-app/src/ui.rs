@@ -69,7 +69,7 @@ const NOTE: Color32 = PLAN;
 /// One colour per axis or motor, the same in every scope. None is amber, cyan, green or red: those mean planned,
 /// measured, passing and over the limit.
 /// Each at least 24 apart (CIE76) from the others and from the reserved colours and the text colours.
-const PALETTE: [Color32; 6] = [
+pub const PALETTE: [Color32; 6] = [
     Color32::from_rgb(90, 140, 235),
     Color32::from_rgb(232, 124, 186),
     Color32::from_rgb(184, 148, 242),
@@ -241,6 +241,8 @@ pub enum ToolTab {
     Tuning,
     /// The runs kept for comparing, and their key figures side by side.
     Runs,
+    /// Torque and error views of the reference run (`views`).
+    Views,
 }
 
 /// What the window keeps for the panels between frames.
@@ -1025,6 +1027,7 @@ pub fn tools(
     actions: &mut Vec<Action>,
     scroll: Option<f32>,
     ghost: bool,
+    tolerance: Option<f64>,
 ) {
     let all = [
         (ToolTab::Cycle, "ui-analysis"),
@@ -1035,6 +1038,7 @@ pub fn tools(
         (ToolTab::Sweep, "ui-sweep-tab"),
         (ToolTab::Tuning, "ui-tuning"),
         (ToolTab::Runs, "ui-runs"),
+        (ToolTab::Views, "ui-views"),
     ];
     if let Some(tab) = tabs(ui, model, panels.tools, &all) {
         actions.push(Action::Panels(PanelState { tools: tab, ..panels }));
@@ -1061,6 +1065,7 @@ pub fn tools(
             ToolTab::Sweep => sweep(ui, model, &mut inputs, actions),
             ToolTab::Tuning => tuning(ui, model, actions),
             ToolTab::Runs => runs(ui, model, &mut inputs, ghost, actions),
+            ToolTab::Views => crate::views::views(ui, model, tolerance, actions),
         }
         if inputs != model.inputs {
             actions.push(Action::Inputs(inputs));
@@ -1108,7 +1113,7 @@ fn tick_label(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
 }
 
 /// A plot as every panel draws it: with the ticks of `ticks`.
-fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
+pub fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
     // Labels at full strength from `TICK_PIXELS` apart; egui_plot fades them in from 20 to 30.
     let axis = AxisHints::new_y().label_spacing(TICK_PIXELS - 4.0..=TICK_PIXELS).formatter(tick_label);
     Plot::new(id).grid_spacing(GRID_PIXELS..=300.0).y_grid_spacer(ticks).custom_y_axes(vec![axis])
@@ -1116,7 +1121,7 @@ fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
 
 /// A right click on a plot offers to save it: as SVG, drawn as the sizing report draws its plots, or as PNG, a picture
 /// of the plot as the window shows it. `series` (name, points, drawn as dots) is only worked out when one is picked.
-fn save_menu(
+pub fn save_menu(
     response: &egui::Response,
     model: &Model,
     title: &str,
@@ -1529,7 +1534,7 @@ fn motor_keys(ui: &mut Ui, model: &Model) {
 
 /// What the lines of the plot below are, each in its colour, dashed ones marked so: in place of a legend in the plot,
 /// which would cover the lines.
-fn key_row(ui: &mut Ui, keys: &[(String, Color32, bool)]) {
+pub fn key_row(ui: &mut Ui, keys: &[(String, Color32, bool)]) {
     ui.horizontal_wrapped(|ui| {
         for (label, color, dashed) in keys {
             // Each name whole on its line: the row wraps between names, not inside one.
@@ -1542,7 +1547,7 @@ fn key_row(ui: &mut Ui, keys: &[(String, Color32, bool)]) {
 }
 
 /// A colour scale as a bar between two labels.
-fn scale_bar(ui: &mut Ui, low: &str, high: &str, color: impl Fn(f32) -> [f32; 3]) {
+pub fn scale_bar(ui: &mut Ui, low: &str, high: &str, color: impl Fn(f32) -> [f32; 3]) {
     ui.horizontal(|ui| {
         ui.weak(low);
         let (rect, _) = ui.allocate_exact_size(vec2(160.0, 12.0), Sense::hover());
@@ -2101,6 +2106,7 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
     if !overlay.is_empty() {
         motor_keys(ui, model);
     }
+    let residual_below = !overlay.is_empty();
     for (key, motors) in overlay {
         // The speed in the unit chosen; drawn with the peaks kept: a trace may have a sample per 125 us for minutes.
         let (title, factor) = match *key {
@@ -2135,53 +2141,18 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
             actions,
         );
     }
+    if residual_below {
+        crate::views::trace_residual(ui, model, actions);
+    }
 }
 
 /// The operating points of the analysed cycle (`Analysis::Cycle`) or of the path that was run (`Analysis::Path`)
-/// over the motors' torque-speed curves, peak dashed and S1 dotted; each motor's points in its colour, hidden by a
-/// click on its name in the legend.
+/// over each motor's own torque-speed chart (`views::analysis_torque_speed`).
 fn torque_speed(ui: &mut Ui, model: &Model, kind: Analysis, actions: &mut Vec<Action>) {
-    let tr = |key: &str| model.tr.tr(key).to_string();
-    let Some((points, [high, low, s1_high, s1_low])) = model.points_plot(kind) else { return };
-    heading(ui, model, "ui-points", kind);
-    motor_keys(ui, model);
-    key_row(ui, &[(tr("ui-points-curve"), Color32::GRAY, true), (tr("ui-points-s1"), chalk(), true)]);
-    let drawn = plot(("ui-points", kind as u8))
-        .height(220.0)
-        .x_axis_label(model.speed_label())
-        .y_axis_label(tr("ui-points-torque"))
-        .show(ui, |plot| {
-            for ((motor, points), color) in model.session.motors.iter().zip(&points).zip(PALETTE.iter().cycle()) {
-                plot.points(Points::new(tr(motor.key), points.clone()).color(*color).radius(1.0));
-            }
-            for line in [&high, &low] {
-                plot.line(
-                    Line::new(tr("ui-points-curve"), line.clone())
-                        .color(Color32::GRAY)
-                        .style(LineStyle::dashed_dense())
-                        .width(1.5),
-                );
-            }
-            for line in [&s1_high, &s1_low] {
-                plot.line(
-                    Line::new(tr("ui-points-s1"), line.clone())
-                        .color(chalk())
-                        .style(LineStyle::dotted_dense())
-                        .width(1.5),
-                );
-            }
-        });
-    let series = || {
-        let motors = model.session.motors.iter().zip(&points).map(|(m, p)| (tr(m.key), p.clone(), true));
-        let curves = [
-            (&high, "ui-points-curve"),
-            (&low, "ui-points-curve"),
-            (&s1_high, "ui-points-s1"),
-            (&s1_low, "ui-points-s1"),
-        ];
-        motors.chain(curves.map(|(line, key)| (tr(key), line.clone(), false))).collect()
-    };
-    save_menu(&drawn.response, model, &tr("ui-points-torque"), &model.speed_label(), series, actions);
+    if model.points_plot(kind).is_some() {
+        heading(ui, model, "ui-points", kind);
+        crate::views::analysis_torque_speed(ui, model, &format!("ui-points-{}", kind as u8), kind, actions);
+    }
 }
 
 /// The lines of a plot as the report's SVG takes them: name, points, drawn as a line.

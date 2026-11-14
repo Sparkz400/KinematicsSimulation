@@ -23,6 +23,13 @@ item are in [PROGRESS.md](PROGRESS.md).
   operating points on their torque-speed curves, and why each failing one fails; a ratio sweep view (inertia ratio and
   tightest check over the gear ratio or pulley radius, optimum and catalogue gearboxes marked) and a kinematics
   comparison of one task file. Path tab: maps of peak torque and following error from a grid of short moves.
+
+- App tab "Torque & error" and report charts: per motor its own torque-speed chart (peak, S1, the voltage limit at
+  the run's lowest DC link from R, L, kE and U_dc, the drive's current limit, points coloured by time, RMS point, several
+  runs overlaid); the tool's error normal and tangential to the path with tolerance band and histogram, the angle error
+  apart; the torque split stacked and feedforward against feedback; a utilisation timeline per motor; spectra and a
+  spectrogram with the machine's resonances; the trace's residual; an error arrow in 3D at the scrub time
+  (`sim_components::charts`, `DriveParams::voltage_limited_torque`, `CycleLoad::path_error_series`).
 - Drive monitoring and fault reactions (`effects.drive_monitoring`, off by default): each drive trips on its
   following error window (S120 p2546), a standstill window (p2542/p2543), a motor blocked at its torque limit (F07900)
   and optionally a band around the expected torque, and every drive then stops by its own `drive.fault_reaction`
@@ -86,6 +93,8 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Changed
 
+- The operating points in the app are drawn per motor over that motor's own drive curves, sampled at 241 speeds; before,
+  one drive's five corners stood for every motor.
 - `effects.crash`: an obstacle pushes back on a part in it with its contact stiffness and damping, blocking the axes
   in contact, instead of stopping the whole machine dead and switching the drives off on 1 µm of creep; the drives'
   monitoring trips them. The budget's `crash` row is the work of the pushes, integrated with the motion. The contact

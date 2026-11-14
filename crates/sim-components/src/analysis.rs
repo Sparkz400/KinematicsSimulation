@@ -185,6 +185,9 @@ pub struct CycleLoad {
     pub path_angle_error_rms: f64,
     pub tracking_angle_error_peak: f64,
     pub dwell_angle_error_peak: f64,
+    /// The tool's distance to the path every millisecond of the measured pass, of which `path_error_peak` is the most:
+    /// [time from the pass's start in s, place in m, turn in rad], for the error views (`charts::tool_error`).
+    pub path_error_series: Vec<[f64; 3]>,
     /// A drive tripped on DC link overvoltage and took all drives off: the run ended there, and the figures
     /// are those up to the trip.
     /// A drive tripped on DC link overvoltage, or a drive's monitoring tripped (effects.drive_monitoring), and took all
@@ -474,6 +477,8 @@ struct Tally {
     path: std::collections::VecDeque<Vec<f64>>,
     /// Of the axes in m and of those in rad (`groups`): peak, sum of squares and count; tracking; dwell.
     path_error: [(f64, f64, u64); 2],
+    /// [time, place, turn] per sample (`CycleLoad::path_error_series`), the time as the simulation counts it.
+    path_series: Vec<[f64; 3]>,
     tracking_error: [f64; 2],
     dwell_error: [f64; 2],
     /// The tool's axes in m and those in rad, by index.
@@ -637,6 +642,7 @@ impl Tally {
             braking_peak: 0.0,
             path: std::collections::VecDeque::new(),
             path_error: [(0.0, 0.0, 0); 2],
+            path_series: Vec::new(),
             tracking_error: [0.0; 2],
             dwell_error: [0.0; 2],
             groups: [false, true].map(|turn| {
@@ -741,6 +747,7 @@ impl Tally {
             // the nearest, and is skipped. The smallest distance is the same as over all pieces. The place (axes in m)
             // and the turn (axes in rad) each by itself: each its own nearest piece.
             let dwelling = sim.control.dwell_progress().is_some_and(|done| done >= 0.5);
+            let mut series = [sim.time(), 0.0, 0.0];
             for (g, group) in self.groups.iter().enumerate() {
                 let mut off_path = distance_to_piece(&tool, now, now, group);
                 for (b, a) in self.path.iter().rev().zip(self.path.iter().rev().skip(1)) {
@@ -754,12 +761,14 @@ impl Tally {
                 }
                 let (peak, squares, count) = self.path_error[g];
                 self.path_error[g] = (peak.max(off_path), squares + off_path * off_path, count + 1);
+                series[g + 1] = off_path;
                 self.tracking_error[g] = self.tracking_error[g].max(distance_to_piece(&tool, now, now, group));
                 if dwelling {
                     let target = sim.control.planned_pos();
                     self.dwell_error[g] = self.dwell_error[g].max(distance_to_piece(&tool, target, target, group));
                 }
             }
+            self.path_series.push(series);
         }
         if self.views && (self.parts.iter().any(Option::is_some) || !self.losses.is_empty()) {
             self.machine_signals.clear();
@@ -959,6 +968,10 @@ impl Tally {
             path_angle_error_rms: (self.path_error[1].1 / self.path_error[1].2.max(1) as f64).sqrt(),
             tracking_angle_error_peak: self.tracking_error[1],
             dwell_angle_error_peak: self.dwell_error[1],
+            path_error_series: {
+                let start = self.path_series.first().map_or(0.0, |s| s[0]);
+                self.path_series.iter().map(|&[t, place, turn]| [t - start, place, turn]).collect()
+            },
             tripped: sim.control.drives.iter().any(|d| d.tripped) || sim.control.fault.is_some(),
             motors: self.loads,
             budget,
@@ -4086,6 +4099,7 @@ mod tests {
             path_angle_error_rms: 0.0,
             tracking_angle_error_peak: 0.0,
             dwell_angle_error_peak: 0.0,
+            path_error_series: Vec::new(),
             tripped: false,
             motors: vec![m.clone()],
             budget: None,

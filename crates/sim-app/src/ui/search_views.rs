@@ -314,7 +314,7 @@ fn operating_points(ui: &mut Ui, model: &Model, candidates: &[sim_components::ca
                     let points: Vec<[f64; 2]> = m.points.iter().map(|(s, t)| [s * rpm, *t]).collect();
                     plot.points(Points::new(m.id.to_string(), points).color(*color).radius(1.0));
                 }
-                for (k, line) in curves.iter().enumerate() {
+                for (k, line) in curves.iter().flat_map(|chart| chart.peak.iter().chain(chart.s1.iter()).enumerate()) {
                     let (key, color, style) = if k < 2 {
                         ("ui-points-curve", Color32::GRAY, LineStyle::dashed_dense())
                     } else {

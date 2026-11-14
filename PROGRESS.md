@@ -4304,3 +4304,37 @@ Left open:
 - The maps run each move from rest on a fresh simulation (cold, the config's thermal state); n is kept to 15 per side.
   No map of the cycle's own moves, and the out-of-plane axes stay at `start.pose`.
 - Search table columns unchanged (drive, supply, energy are in the views and hover, not the table: its header is tested).
+
+## Torque and error views (14 November)
+
+| What | How | Test |
+| --- | --- | --- |
+| Chart math | New `sim_components::charts`, used by the app and the report alike, on a run's signals as columns: `torque_speed` (peak curve from `torque_curve`, S1 line, voltage limit, the drive's current limit as Kt times `drive_max_current`, all sampled at 241 speeds up to 1.1 times the no-load or speed limit), `dc_link_of` (the lowest DC link the run saw, else the bus), `rms_point`, `split` and `tool_error`, `histogram`, `torque_parts` and `stack`, `available_torque`, `torque_utilisation`, `utilisation` (shares of each limit), `spectrum` and `spectrogram` (radix-2 FFT written here, Hann window, no dependency) | `the_rms_point_is_the_root_mean_square_torque_at_the_mean_speed`: speeds 1, -3, 2, 0 and torques 1, -2, 3, 0 give (1.5, sqrt 3.5 = 1.8708); `a_known_offset_on_a_straight_line_splits_into_its_normal_and_tangential_parts`: (1, 0) mm against the motion (3, 4) is 0.6 mm along, 0.8 mm across; `the_spectrum_of_a_pure_sine_lands_at_its_bin`: 0.3 on bin 50 of 1024 at 1 ms is 48.828 Hz and 0.3 there; `stacked_parts_end_at_their_sum`; `the_utilisation_is_the_torque_over_what_is_available_at_that_speed`: peak 10 N m faded from 100 to 200 rad/s leaves 5 N m at 150 rad/s, so 2.5 N m is 0.5, braking 0.25, with 4 A drive limit 0.625; `a_histogram_counts_each_value_once` |
+| Voltage-limit curve | `DriveParams::voltage_limited_torque(speed, dc_voltage)`: with field weakening the d-q model's circles at sqrt(3/2) U_dc (`field_weakened_torque` now takes the voltage), without it R i + kE w = U, i = (U - kE w) / R in the direction of motion (the model's winding has no d axis, so L drops out of the steady state), within the motor's maximum current | `the_voltage_limit_without_field_weakening_is_the_hand_calculated_one_and_the_chart_follows_it`: kt = kE = 1, R = 2 Ohm, 300 V: U = 367.42 V, at 360 rad/s (367.42 - 360) / 2 = 3.7117 N m, at 300 rad/s held at 10 A, at 400 rad/s none; every sampled point of the chart is the model's. `the_voltage_limit_with_field_weakening_is_the_d_q_models`: 15.614 N m at 600 rad/s on 540 V, the drive's own hand calculation, above the peak torque 12 N m that `torque_curve` stops at |
+| Path error series | `CycleLoad::path_error_series`: the analysis's distance to the drawn path every millisecond ([time from the pass's start, place m, turn rad]), of which it kept only the peak and RMS; the cycle and path runs carry it (`Run::off_path`) | `the_torque_and_error_views_hold_the_motor_model_and_add_up`: its top is `path_error_peak`, it starts at 0 s |
+| Runs know their drives | `Run::rated(sim)` sets per motor the ratings, the `DriveParams` and the machine's modes at the start pose (replaces `ratings_of`/`Model::ratings`); `Run::torque_speed()` gives per motor its own chart at the lowest DC link of the run | the same test, over every machine: per motor the chart's voltage curve equals `voltage_limited_torque` at the run's lowest DC link at every sampled speed; RMS point from the run's columns by hand; stacked parts end at the motor torque (1e-9); normal and tangential make up the axes' error length |
+| Per-motor operating points | The cycle and path analyses' torque-speed plot (`Model::points_plot`) is now per motor from its own drive (`Curves` is a `Vec<TorqueSpeed>`), drawn as small multiples with the points coloured by time and the RMS point; it drew one drive's five corners for every motor before | `the_operating_points_are_shown_over_the_torque_speed_curve` (per motor `torque_curve` at all 241 speeds, peak at standstill, S1) and `a_path_is_planned_run_and_analysed_in_the_app` updated |
+| Torque & error tab | New tools tab (`views.rs`, ui.rs only wired): run picker (the store's reference) and "Keep window as run"; torque over speed per motor with every shown run in its own marker; tool error normal and tangential with the analysis's off-path line, the 3D overlay's tolerance as a band, histogram, angle error apart; torque split stacked and feedforward against feedback (PI); utilisation timeline in % (torque of available, current q and d of the limit, both overload nodes of the trip level, winding and housing rise, DC link of the overvoltage trip with the braking threshold); spectra of following error and torque with `Machine::modes` marked, and a spectrogram per motor (egui_plot `Heatmap`) | by eye in the app (screenshots in the notes folder). The error is the real one, setpoint less `axis.<id>.position`: the drives' `axis.<id>.following_error` is their encoder-side error mapped to the tool and left out belt stretch and sag (on the T-gantry the analysis's distance to the path stood at about 25 µm at rest where it showed none) |
+| 3D error arrow | Scrubbed, the 3D view draws the tool's error at that moment as an arrow from the path to the tool, times the exaggeration (main.rs `draw_paths`) | by eye |
+| Trace residual | Under the trace overlay, measured less simulated per motor for torque and following error, on the overlay's time axis and cursor (`views::trace_residual`) | by eye |
+| Report | Per motor its own chart (points in four quarters of the cycle, RMS point, peak, S1, voltage and current limit), the tool's error normal and tangential with its histogram, the torque split stacked, the utilisation per motor; the one-drive five-corner chart is gone | `report.rs` tests unchanged (not run here) |
+| Docs | user guide (+de): operating points per motor, the new tab, the residual | -- |
+
+Outside the area, kept small: `analysis.rs` (the series in `Tally::step` and `CycleLoad`, one field; four test literals
+in `analysis.rs` and `sim-machines/tests/catalog*.rs` got `path_error_series: Vec::new()`), `drive.rs`
+(`voltage_limited_torque`, `field_weakened_torque` takes the voltage), `main.rs` (`mod views`, the arrow, `tools` gets the
+tolerance), `ui.rs` (the tab, `torque_speed` delegates, `trace` calls the residual, five helpers made `pub`),
+`tests/app.rs` (`views.rs` in the window sources, `charts-` keys checked, two tests updated, one new).
+
+Left open:
+
+- No S3 line: no catalogue the simulator reads gives S3 data.
+- The torque split has the machines' four parts (inertia, gravity, friction, rest); belt/coupling and process are both
+  in "rest" until the machines report them apart.
+- The housing is held against the winding's rated rise (no housing limit in the configs); the DC link has no lower
+  limit drawn (no undervoltage in the model).
+- Kept runs count their time from their own start, so the views are not linked to the live timeline; only the 3D arrow
+  follows the scrub. A run's modes are those at the start pose.
+- The real error's setpoint is the one sampled with the position, held over the profile cycle: at speed the
+  tangential part can carry up to a cycle's way of setpoint lag (shortcut in `charts::tool_error`).
+- The spectrum takes the reference run (the scopes' window once kept), not the live window directly.

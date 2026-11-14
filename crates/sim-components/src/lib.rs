@@ -14,6 +14,7 @@ pub mod beam;
 pub mod cam;
 pub mod catalog;
 pub mod chain;
+pub mod charts;
 pub mod collision;
 pub mod control;
 pub mod conveyor;

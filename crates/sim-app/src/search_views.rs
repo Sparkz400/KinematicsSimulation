@@ -5,7 +5,7 @@
 //! kinematics on one task (`sim-cli compare-kinematics`); and for the path tab maps of peak torque and following error
 //! over a plane of the workspace, from a grid of short moves (`move_map`). The window draws them in `ui/search_views.rs`.
 
-use crate::model::{Curves, Inputs, Message, Table, short, torque_speed_curves};
+use crate::model::{Curves, Inputs, Message, Table, short};
 use sim_components::analysis::{Verdict, utilisation};
 use sim_components::catalog::{self, Candidate, Drives, Options, SUPPLIES, vendor_of};
 use sim_components::search::{self, KinematicsRow, Task, TransmissionSweep};
@@ -182,7 +182,8 @@ pub fn run_search(entry: &MachineEntry, config: &Config, inputs: &Inputs) -> Res
             let sim = Sim::new(entry, &catalog::candidate_config(entry, config, c).ok()?).ok()?;
             // One motor's search: that motor's own drive and motor data.
             let k = sim.machine.motors().iter().position(|m| m.id == c.motor).unwrap_or(0);
-            Some(torque_speed_curves(sim.control.drive_params_of(k)))
+            let drive = sim.control.drive_params_of(k);
+            Some(vec![sim_components::charts::torque_speed(drive, sim_components::charts::dc_link_of(drive, None))])
         })
         .collect();
     Ok(Found { candidates: found, curves })

@@ -89,7 +89,7 @@ fn string_literals(source: &str) -> Vec<String> {
 }
 
 fn window_sources() -> String {
-    ["src/main.rs", "src/ui.rs", "src/ui/search_views.rs"]
+    ["src/main.rs", "src/ui.rs", "src/ui/search_views.rs", "src/views.rs"]
         .map(|f| std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(f)).unwrap())
         .concat()
 }
@@ -125,7 +125,7 @@ fn window_code_holds_no_text_for_the_user() {
 fn every_label_exists_in_every_language() {
     let ui_keys: Vec<String> = string_literals(&window_sources())
         .into_iter()
-        .filter(|l| (l.starts_with("ui-") || l.starts_with("lang-")) && !l.contains('{'))
+        .filter(|l| (l.starts_with("ui-") || l.starts_with("lang-") || l.starts_with("charts-")) && !l.contains('{'))
         .collect();
     assert!(ui_keys.len() >= 15);
     let mut model = Model::new(MACHINES[0], "en");
@@ -1515,7 +1515,10 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         // The operating points of the path, as its analysis has them, over the curves the cycle's plot has.
         let run = model.path_run.as_ref().unwrap();
         let (points_of_path, curves) = model.points_plot(Analysis::Path).unwrap();
-        assert_eq!(curves, sim_app::model::torque_speed_curves(sim.control.drive_params()));
+        // Per motor its own drive's chart, as the path's run has it.
+        let recorded = model.runs.iter().find(|r| r.kind == sim_app::runs::RunKind::Path).unwrap();
+        assert_eq!(curves, recorded.torque_speed(), "{}", entry.id);
+        assert_eq!(curves.len(), sim.machine.motors().len());
         for (k, m) in run.load.motors.iter().enumerate() {
             assert!(
                 m.points.len() > 100 && points_of_path[k] == m.points.iter().map(|(s, t)| [*s, *t]).collect::<Vec<_>>(),
@@ -2490,22 +2493,28 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
         let (_, window) = model.points_table(count - 3..count + 5).unwrap();
         assert!(window.len() == 4 && shows(&window[3][2], all[count - 1].1.1), "{window:?}");
 
-        let (points, [high, low, s1_high, s1_low]) = model.points_plot(Analysis::Cycle).unwrap();
+        let (points, curves) = model.points_plot(Analysis::Cycle).unwrap();
         for (k, m) in load.motors.iter().enumerate() {
             assert_eq!(points[k], m.points.iter().map(|(s, t)| [*s, *t]).collect::<Vec<_>>());
         }
-        let resolved = sim_components::catalog::resolve(entry, &entry.config()).unwrap();
-        let [peak, rated, no_load] = ["drive.peak_torque_nm", "drive.rated_speed_rad_s", "drive.no_load_speed_rad_s"]
-            .map(|path| resolved.f64(path).unwrap());
-        assert_eq!(high, [[-no_load, peak], [-rated, peak], [0.0, peak], [rated, peak], [no_load, 0.0]]);
-        assert_eq!(low, [[-no_load, 0.0], [-rated, -peak], [0.0, -peak], [rated, -peak], [no_load, -peak]]);
-        let continuous = resolved.f64("drive.rated_torque_nm").unwrap();
-        assert!(
-            s1_high == [[-rated, continuous], [rated, continuous]]
-                && s1_low == [[-rated, -continuous], [rated, -continuous]],
-            "{}",
-            entry.id
-        );
+        // Per motor its own drive's curves, sampled densely: the peak curve is `torque_curve` at every sampled speed
+        // (with the fade without field weakening: the peak torque at standstill, nothing at the no-load speed in the
+        // direction of motion), the S1 line the rated torque up to the rated speed both ways.
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        assert_eq!(curves.len(), load.motors.len());
+        let (mut peak, mut rated) = (0f64, f64::INFINITY);
+        for (k, chart) in curves.iter().enumerate() {
+            let drive = sim.control.drive_params_of(k);
+            assert_eq!(chart.peak[0].len(), sim_components::charts::CURVE_POINTS);
+            for (high, low) in chart.peak[0].iter().zip(&chart.peak[1]) {
+                assert_eq!((low[1], high[1]), drive.torque_curve(high[0]), "{}: motor {k}", entry.id);
+            }
+            let middle = sim_components::charts::CURVE_POINTS / 2;
+            assert_eq!(chart.peak[0][middle], [0.0, drive.peak_torque]);
+            let (w, t) = (drive.rated_speed, drive.rated_torque);
+            assert!(chart.s1 == [vec![[-w, t], [w, t]], vec![[-w, -t], [w, -t]]], "{}", entry.id);
+            (peak, rated) = (peak.max(drive.peak_torque), rated.min(drive.rated_speed));
+        }
         // Nothing of a path before one was run.
         assert!(model.points_plot(Analysis::Path).is_none());
         // The cycle runs inside the curve.
@@ -3880,4 +3889,68 @@ fn a_move_map_cell_is_the_peak_torque_of_a_hand_run_short_move() {
     }
     assert!(peak > 0.1 && (map.torque[0] - peak).abs() <= 1e-12 * peak, "{} against {peak}", map.torque[0]);
     assert!(map.torque.iter().chain(&map.error).all(|v| v.is_finite() && *v > 0.0), "{map:?}");
+}
+
+/// The torque and error views on the analysed cycle's run of every machine (`sim_components::charts`): per motor the
+/// chart's voltage-limit curve is the motor model's (`DriveParams::voltage_limited_torque`) at the lowest DC link the run
+/// saw, at every sampled speed; the RMS point is sqrt(mean T²) at the mean |speed|, worked out here from the run's own
+/// columns; the stacked torque parts end at the motor torque; the tool's error splits into a normal and a tangential part
+/// whose lengths make up the axes' error where the tool moves; and the analysis's distance to the path is kept as a
+/// series whose top is the peak the analysis reports.
+#[test]
+fn the_torque_and_error_views_hold_the_motor_model_and_add_up() {
+    use sim_components::charts;
+    for entry in MACHINES.iter().copied() {
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap_or_else(|e| panic!("{}: {e:?}", entry.id));
+        let mut model = Model::new(entry, "en");
+        model.run_analysis(Analysis::Cycle);
+        wait_for_analysis(&mut model);
+        let run = model.runs.iter().find(|r| r.kind == sim_app::runs::RunKind::Cycle).unwrap();
+        assert_eq!(run.drives.len(), run.motors.len(), "{}", entry.id);
+        for (k, (chart, motor)) in run.torque_speed().iter().zip(&run.motors).enumerate() {
+            let drive = sim.control.drive_params_of(k);
+            let dc = run.column(&format!("motor.{motor}.dc_link_voltage")).unwrap();
+            let lowest = dc.iter().copied().filter(|u| *u > 0.0).fold(f64::INFINITY, f64::min);
+            let lowest = if lowest.is_finite() { lowest } else { drive.bus_voltage };
+            assert_eq!(chart.dc_voltage, lowest, "{}", entry.id);
+            for (high, low) in chart.voltage[0].iter().zip(&chart.voltage[1]) {
+                assert_eq!((low[1], high[1]), drive.voltage_limited_torque(high[0], lowest), "{}", entry.id);
+            }
+            let (speed, torque) = (
+                run.column(&format!("motor.{motor}.speed")).unwrap(),
+                run.column(&format!("motor.{motor}.torque")).unwrap(),
+            );
+            let n = torque.len() as f64;
+            let by_hand = [
+                speed.iter().map(|w| w.abs()).sum::<f64>() / n,
+                (torque.iter().map(|t| t * t).sum::<f64>() / n).sqrt(),
+            ];
+            let rms = charts::rms_point(speed, torque);
+            assert!((rms[0] - by_hand[0]).abs() < 1e-12 && (rms[1] - by_hand[1]).abs() < 1e-12, "{}", entry.id);
+            let parts = charts::torque_parts(&run.signals, &run.columns, motor);
+            if !parts.is_empty() {
+                let stacked = charts::stack(&parts.iter().map(|(_, v)| *v).collect::<Vec<_>>());
+                let top = stacked.last().unwrap();
+                let off = top.iter().zip(torque).fold(0f64, |m, (s, t)| m.max((s - t).abs()));
+                assert!(off < 1e-9 * (1.0 + torque.iter().fold(0f64, |m, t| m.max(t.abs()))), "{}: {off}", entry.id);
+            }
+        }
+        let error = charts::tool_error(&run.signals, &run.columns).unwrap_or_default();
+        // The real error: setpoint less where the tool is, of the axes in m.
+        let place: Vec<(&[f64], &[f64])> = run
+            .signals
+            .iter()
+            .filter(|s| s.unit == "m" && s.id.starts_with("axis.") && s.id.ends_with(".position"))
+            .filter_map(|s| Some((run.column(&format!("{}_setpoint", s.id))?, run.column(&s.id)?)))
+            .collect();
+        for i in (0..error.normal.len()).step_by(37).filter(|_| !place.is_empty()) {
+            let length = place.iter().map(|(s, a)| (s[i] - a[i]).powi(2)).sum::<f64>().sqrt();
+            let split = error.normal[i].hypot(error.tangential[i]);
+            assert!((split - length).abs() <= 1e-9 * length.max(1e-9), "{}: {split} against {length}", entry.id);
+        }
+        let (load, _, _) = model.cycle_report.as_ref().unwrap();
+        let top = run.off_path.iter().fold(0f64, |m, s| m.max(s[1]));
+        assert!(!run.off_path.is_empty() && top == load.path_error_peak, "{}: {top}", entry.id);
+        assert_eq!(run.off_path[0][0], 0.0);
+    }
 }

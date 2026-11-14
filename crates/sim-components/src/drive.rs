@@ -744,6 +744,27 @@ impl DriveParams {
         let (peak, motoring) = (self.peak_torque, self.peak_torque * fade);
         if speed >= 0.0 { (-peak, motoring) } else { (-motoring, peak) }
     }
+
+    /// The torque (lowest, highest) the winding's voltage leaves at a speed with a DC link of `dc_voltage`, within the
+    /// motor's maximum current, steady and cold, whether or not the limit is switched on: the voltage-limit curve of the
+    /// torque-speed chart. With field weakening the d-q model's (`torque_curve`'s, before the peak torque caps it);
+    /// without it the winding has no d axis in this model, so its steady voltage is R i + kE w and the limit is
+    /// i = (U - kE w) / R in the direction of motion (the inductance drops out of the steady state).
+    pub fn voltage_limited_torque(&self, speed: f64, dc_voltage: f64) -> (f64, f64) {
+        let umax = WINDING_PER_DC_LINK * dc_voltage;
+        let (motoring, braking) = match &self.field_weakening {
+            Some(fw) => (
+                self.field_weakened_torque(fw, speed.abs(), umax, true),
+                self.field_weakened_torque(fw, speed.abs(), umax, false),
+            ),
+            None => {
+                let current = |u: f64| (u / self.resistance).clamp(0.0, self.max_current);
+                let emf = self.ke * speed.abs();
+                (self.torque_of(current(umax - emf)), self.torque_of(current(umax + emf)))
+            }
+        };
+        if speed >= 0.0 { (-braking, motoring) } else { (-motoring, braking) }
+    }
 }
 
 /// Biquad notch (b0, b1, b2, a1, a2), normalised by a0.

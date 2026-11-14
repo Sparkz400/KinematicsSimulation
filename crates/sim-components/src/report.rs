@@ -4,7 +4,7 @@
 //! PDF. The PDF is written here: A4, the standard Helvetica fonts, no compression, so no dependency is needed.
 
 use crate::analysis::{Band, bounds, record_cycle, utilisation, verdict_bands};
-use crate::{Sim, catalog};
+use crate::{Sim, catalog, charts};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -104,7 +104,6 @@ pub fn make(
     let sim = Sim::new(entry, &resolved)?;
     let motors = sim.machine.motors().to_vec();
     let signals = sim.signal_infos();
-    let drive = sim.control.drive_params().clone();
     let judged = verdict_bands(entry, &resolved, &if bands { bounds(&resolved)? } else { Vec::new() })?;
     let rows = record_cycle(entry, &resolved)?;
     let t = |key: &str| tr.tr(key).to_string();
@@ -174,33 +173,100 @@ pub fn make(
             .map(|(n, p, d)| (n, p.iter().map(|q| [q[0], q[1] * 60.0 / std::f64::consts::TAU]).collect(), d))
             .collect(),
     }));
-    // The operating points against the drive's torque-speed curve (`DriveParams::torque_curve`, straight between these speeds).
-    let mut points: Vec<(String, Vec<[f64; 2]>, bool)> = motors
-        .iter()
-        .filter_map(|m| {
-            let (speed, torque) = (column(format!("motor.{}.speed", m.id))?, column(format!("motor.{}.torque", m.id))?);
-            Some((m.id.to_string(), rows.iter().map(|r| [r[speed], r[torque]]).collect(), true))
-        })
-        .collect();
+    // Per motor its operating points against its own drive's torque-speed chart (`charts::torque_speed`), the points in
+    // four quarters of the cycle's time, with the RMS point; then the tool's error, the torque split and the utilisation.
+    let columns: Vec<Vec<f64>> = (0..signals.len()).map(|i| rows.iter().map(|r| r[i]).collect()).collect();
     let rpm = 60.0 / std::f64::consts::TAU;
-    points.iter_mut().for_each(|s| s.1.iter_mut().for_each(|p| p[0] *= rpm));
-    let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
-    for (name, side) in [(t("report-curve-max"), 1), (t("report-curve-min"), 0)] {
-        points.push((
-            name,
-            corners
-                .iter()
-                .map(|&s| [s * rpm, if side == 1 { drive.torque_curve(s).1 } else { drive.torque_curve(s).0 }])
-                .collect(),
-            false,
-        ));
+    let in_rpm = |line: &[[f64; 2]]| line.iter().map(|p| [p[0] * rpm, p[1]]).collect::<Vec<_>>();
+    for (k, m) in motors.iter().enumerate() {
+        let drive = sim.control.drive_params_of(k);
+        let get = |name: &str| column(format!("motor.{}.{name}", m.id)).map(|c| columns[c].as_slice());
+        let (Some(speed), Some(torque)) = (get("speed"), get("torque")) else { continue };
+        let chart = charts::torque_speed(drive, charts::dc_link_of(drive, get("dc_link_voltage")));
+        let n = speed.len();
+        let mut series: Vec<(String, Vec<[f64; 2]>, bool)> = (0..4)
+            .map(|q| {
+                let points = (q * n / 4..(q + 1) * n / 4).map(|i| [speed[i] * rpm, torque[i]]).collect();
+                (format!("{}–{} %", q * 25, (q + 1) * 25), points, true)
+            })
+            .collect();
+        let [w, rms] = charts::rms_point(speed, torque);
+        series.push((t("charts-rms-point"), vec![[w * rpm, rms]], true));
+        for (key, lines) in
+            [("charts-peak", &chart.peak), ("charts-s1", &chart.s1), ("charts-voltage-limit", &chart.voltage)]
+        {
+            series.extend(lines.iter().map(|line| (t(key), in_rpm(line), false)));
+        }
+        if let Some(limit) = chart.current_limit {
+            let top = chart.peak[0].last().map_or(0.0, |p| p[0] * rpm);
+            for sign in [1.0, -1.0] {
+                series.push((t("charts-current-limit"), vec![[-top, sign * limit], [top, sign * limit]], false));
+            }
+        }
+        blocks.push(Block::Plot(Plot {
+            title: format!("{} · {} ({:.0} V)", motor_name(Some(k)), t("report-plot-curve"), chart.dc_voltage),
+            x_label: "n [1/min]".into(),
+            y_label: "M [N m]".into(),
+            series,
+        }));
     }
-    blocks.push(Block::Plot(Plot {
-        title: t("report-plot-curve"),
-        x_label: "n [1/min]".into(),
-        y_label: "M [N m]".into(),
-        series: points,
-    }));
+    if let Some(error) = charts::tool_error(&signals, &columns).filter(|e| !e.normal.is_empty()) {
+        let micro = |v: &[f64]| v.iter().zip(&error.time).map(|(v, t)| [*t, v * 1e6]).collect::<Vec<_>>();
+        blocks.push(Block::Plot(Plot {
+            title: t("charts-tool-error"),
+            x_label: "t [s]".into(),
+            y_label: "e [µm]".into(),
+            series: vec![
+                (t("charts-normal"), micro(&error.normal), false),
+                (t("charts-tangential"), micro(&error.tangential), false),
+            ],
+        }));
+        let steps = charts::histogram(&error.normal, 40)
+            .iter()
+            .flat_map(|(low, high, n)| [[low * 1e6, *n as f64], [high * 1e6, *n as f64]])
+            .collect();
+        blocks.push(Block::Plot(Plot {
+            title: t("charts-histogram"),
+            x_label: format!("{} [µm]", t("charts-normal")),
+            y_label: "n".into(),
+            series: vec![(t("charts-normal"), steps, false)],
+        }));
+    }
+    for (k, m) in motors.iter().enumerate() {
+        let parts = charts::torque_parts(&signals, &columns, m.id);
+        if !parts.is_empty() {
+            let stacked = charts::stack(&parts.iter().map(|(_, v)| *v).collect::<Vec<_>>());
+            let series = parts
+                .iter()
+                .zip(&stacked)
+                .map(|((part, _), v)| {
+                    let line = v.iter().zip(&columns[0]).map(|(v, t)| [*t, *v]).collect();
+                    (format!("+ {}", t(&format!("quantity-torque-{part}"))), line, false)
+                })
+                .collect();
+            blocks.push(Block::Plot(Plot {
+                title: format!("{} · {}", motor_name(Some(k)), t("charts-torque-split")),
+                x_label: "t [s]".into(),
+                y_label: "M [N m]".into(),
+                series,
+            }));
+        }
+        let shares = charts::utilisation(sim.control.drive_params_of(k), &signals, &columns, m.id);
+        if !shares.is_empty() {
+            let series = shares
+                .iter()
+                .map(|(key, v)| {
+                    (t(key), v.iter().zip(&columns[0]).map(|(v, t)| [*t, (v * 100.0).min(1e4)]).collect(), false)
+                })
+                .collect();
+            blocks.push(Block::Plot(Plot {
+                title: format!("{} · {}", motor_name(Some(k)), t("charts-utilisation")),
+                x_label: "t [s]".into(),
+                y_label: "[%]".into(),
+                series,
+            }));
+        }
+    }
 
     blocks.push(Block::Heading(t("report-verdicts")));
     blocks.push(Block::Text(t("report-verdicts-text")));
