@@ -401,6 +401,7 @@ One drive per motor, all with the same settings.
 | `rated_torque_nm` | T E S | N m | What the motor can give continuously. The analysis reports the RMS torque over it (`thermal_utilisation`); the winding's heating rests on `motor.rated_current_a` | datasheet | analysis |
 | `rated_speed_rad_s` | T E S | rad/s | Full torque up to this speed. 314 rad/s is 3000 r/min | datasheet | `torque_limit`; analysis always |
 | `no_load_speed_rad_s` | T E S | rad/s | The torque-speed curve falls linearly from the rated speed to zero here. E: 518 rad/s | datasheet, or sqrt(3/2) × DC link voltage over torque constant | `torque_limit`; analysis always |
+| `max_speed_rad_s` | T E S D | rad/s | The highest speed the motor may turn at. E: 628.3 rad/s, the 1FK2205-4AF's 6000 r/min [catalogue]; elsewhere [estimate] the no-load speed, where the torque-speed curve ends. A motor by name sets the catalogue's: the S210 table's mechanical limit, the converter's for a 1FK2 or 1FT2 on S120, the lower of the two for a 1FK7 or 1FT7. The time-optimal plan turns each motor up to it along its torque-speed curve; `check_limits` warns of axis limits beyond it; the verdict `motor-speed` judges the peak speed against it. Per motor in `[drive.<id>]` where the file has the key there. Not in `[bounds]`: a limit, not a property to measure | datasheet | time-optimal plan, `check_limits`, `motor-speed` |
 | `encoder_counts_per_rev` | T E S | counts | Encoder resolution. 1048576 is 20 bit, 4194304 is 22 bit | datasheet | `encoder_resolution`, `sensor_noise` |
 | `velocity_filter_s` | T E S | s | Time constant of the speed filter | choice | `velocity_filter` |
 | `torque_filter_s` | T E S | s | Time constant of the torque setpoint filter | choice | `torque_filter` |
@@ -486,6 +487,7 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 - A bound has to be two numbers with low ≤ high.
 - A test holds every bound around its value (`the_bounds_of_every_config_bracket_their_values`).
 - Arrays are not shown in the parameter panel, so bounds cannot be edited in the app.
+- A bound follows a part named in `[parts]` (or by `--motor`, `--supply`, `--drive`, ...): where the part puts its own value in place of the config's, the bound is scaled by the same factor, the part's value over the config's (a bound of a value that was 0 stays as written). So a band written for the config's own motor and drive keeps its width relative to the value around the named part's: EXCT-30's braking threshold has bounds of 750 to 790 V around its 770 V on a 540 V bus; a 230 V motor and drive by name scale the threshold and the bounds with the bus. Before, the bounds stayed absolute and `verdicts --bands` aborted there (`out of range: ratings.braking_threshold_v`), and the DC link capacitance and base load current bands stayed those of the config's drive.
 
 | Config | Bounded values | What is bounded | What is not |
 | --- | --- | --- | --- |

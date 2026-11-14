@@ -1,7 +1,7 @@
 //! Control and profiles on every registered machine, through the same controller:
 //! following error, feedforward, the pick-and-place cycle, limits, determinism, convergence.
 
-use sim_components::{Command, Sim, check_limits};
+use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
@@ -276,28 +276,36 @@ fn external_setpoints_are_interpolated() {
     }
 }
 
-/// A diagonal move loads one motor with both axes: the check catches limits the drive cannot meet.
+/// A diagonal move loads one motor with both axes: the check catches limits the drive cannot meet. Each motor is
+/// judged by its own drive and motor (`[drive.<id>]`), against its maximum speed and its torque-speed curve.
 #[test]
 fn axis_limits_are_checked_against_motor_limits() {
     for entry in MACHINES {
-        let violations = |edit: &[&str]| {
-            let cfg = config(entry, edit);
-            check_limits((entry.build)(&cfg).unwrap().as_ref(), &cfg).unwrap()
-        };
+        let violations = |edit: &[&str]| Sim::new(entry, &config(entry, edit)).unwrap().limit_violations;
         assert!(violations(&[]).is_empty(), "{}: the default config violates its own limits", entry.id);
-        // A drive with 10 % headroom on the fastest move stops being enough when every axis runs 20 % faster.
+        // A drive with 10 % headroom on the fastest move stops being enough when every axis runs 50 % faster and the
+        // motor may turn no faster than its rated speed.
         let sim = Sim::new(entry, &entry.config()).unwrap();
-        let mut faster: Vec<String> = Vec::new();
+        let rated = sim.control.drive_params().rated_speed;
+        let mut faster: Vec<String> = vec![format!("drive.max_speed_rad_s = {rated:?}")];
         for axis in sim.machine.axes() {
             faster.push(format!("axis.{}.max_velocity_{}_s = {:?}", axis.id, axis.unit, axis.max_vel * 1.5));
         }
         let faster: Vec<&str> = faster.iter().map(String::as_str).collect();
-        assert!(violations(&faster).iter().any(|v| v.key == "limit-motor-speed"), "{}", entry.id);
+        assert!(violations(&faster).iter().any(|v| v.key == "limit-motor-speed" && v.allowed == rated), "{}", entry.id);
         assert!(
             violations(&["drive.peak_torque_nm = 0.2"]).iter().any(|v| v.key == "limit-motor-torque"),
             "{}",
             entry.id
         );
+        // One motor's own drive table: only that motor is short of torque. (Before, the check read the shared
+        // `[drive]` for every motor and found nothing.)
+        let first = sim.machine.motors()[0].id;
+        if sim.machine.motors().len() > 1 {
+            let own = format!("drive.{first}.peak_torque_nm = 0.2");
+            let found = violations(&[own.as_str()]);
+            assert!(!found.is_empty() && found.iter().all(|v| v.motor == 0), "{}: {found:?}", entry.id);
+        }
     }
 }
 

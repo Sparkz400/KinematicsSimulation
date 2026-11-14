@@ -2712,3 +2712,74 @@ Left open:
   writes the table first.
 - The overload image and housing temperature as FMI outputs wait for the `motor` session's signals (nothing to do
   here once they are in `signal_infos`).
+
+## Per-motor limits, the limit screen and search correctness (14 November)
+
+What: the audit's ten faults of per-motor limits, the axis-limit screen and the catalogue search.
+
+- **Time-optimal plan per motor, up to the maximum speed.** `path::plan_time_optimal` and `deviation_time_optimal` take
+  each motor's own `DriveParams` (`Controller::motor_drives`: `[drive.<id>]`, `[motor.<id>]`, `[parts.<id>]`), not
+  the shared `[drive]`. A motor turns up to its maximum speed (`drive.max_speed_rad_s`, new in every config: the
+  no-load speed as [estimate], EXCT-30 the 1FK2205-4AF's 628.3 rad/s [catalogue]; `apply_motor` sets the catalogue's)
+  along its torque-speed curve (`MotorCurve`: read at 257 speeds, lowered to never rise, taken at the next speed up),
+  driving or braking. The reserve keeps back (1 - reserve) times the standstill torque at every speed, since friction
+  does not shrink with the speed: a share of a falling curve left the XYZ portal's Z motor at 4 times its curve at
+  418 rad/s. On the XYZ portal (path 0.1,0.1,0.25 / 0.1,0.1,0.02 / 0.3,0.2,0.2) the plan now runs Z at 402 rad/s,
+  above its rated 314, with motor-peak 0.39; with `drive.mz.peak_torque_nm = 0.2` it slows (1.203 to 1.226 s) and holds
+  the Z motor's rigid torque to its own 0.16 N m. The run still saturates there: Z's own motor friction at 400 rad/s,
+  0.02 + 1e-4 * 400 = 0.06 N m, is more than the 0.04 N m the reserve keeps; with `profile.torque_reserve = 0.5` it
+  passes (motor-peak 0.98, 0.17 mm). The geometry's transition curves stay sized at each motor's rated speed and full
+  torque (a `shortcut:`).
+- **`check_limits` per motor, a warning only.** Each motor against its own maximum speed and its curve at that speed
+  (and the drive's maximum current), with every axis at its limits at once, at the middle pose. Since that is not what a
+  cycle asks, the search (`run_jobs`) and the optimiser (`judged`) no longer use it as a screen: every candidate is
+  simulated, and the new verdict `motor-speed` (peak speed against `drive.max_speed_rad_s`) and `motor-peak` (against
+  the curve) judge. EXCT-30 at 400 V: 0 of 84 ruled out (was 32), 63 pass, 21 fail on verdicts; the 1FT2205-2AC (the
+  audit's "1FK2205-2AC", which is not in the catalogue) passes in both `search` and `verdicts`. CoreXY at 400 V: 0 of 84
+  ruled out (was 21 of 28 in the audit's run), 50 pass, 34 fail motor-peak (one checked by `verdicts`: the 1FT2206-3AF
+  at 367 times its curve); the 1FK2104-5AF passes at 400 of its 702 rad/s. The arm-tool warning "Motor joint 5: 370.5
+  > 314.2" is gone: 370.5 rad/s is below that motor's no-load speed of 615 rad/s and its torque fits the curve there; the
+  config is unchanged.
+- **Peak current per motor** (`Tally`): the demand's current by the motor's own `current_for` and drive limit.
+- **`[bounds]` follow a named part.** `catalog::set` scales a value's bound by the part's value over the config's when
+  it puts the part's value in; the band functions (`verdict_bands`, `_sampled`, `worst_search`,
+  `velocity_loop_margins`) read the bounds anew from the resolved config (`followed`). `verdicts t-gantry --config
+  exct-30.toml --supply 230v --motor 1FK2104-5AF --drive 6SL3210-5HB10-4UF0 --bands` runs (it aborted on the braking
+  threshold's 750 to 790 V against a 325 V bus).
+- **`optimise`** names the failing checks ("the cycle as configured fails settling") or why the cycle does not run.
+- **`search --gearboxes`** keeps motors that no gearbox of the series fits, with the config's own gearbox, and says how
+  many (single axis, `--supply s120 --series 1FK704 --gearboxes NRK`: 9 candidates, was 0).
+- **`search --motor-id`**: `Candidate::motor`; the tightest check is that motor's (and the whole machine's where it
+  fails), the peak torque and rise columns are that motor's, its mass takes its own gearbox; the cost of a shared search
+  counts only the motors without a motor of their own (XYZ portal: 2 * 1.18 kg).
+- **`tightest()`** counts a failing belt-slack; **`utilisation`** of a check judged from below at or below zero is
+  infinite, and the app's `usage()` shows that as a full gauge.
+- **`search --supply`** defaults to the config's `parts.motor_supply`, else 400v.
+
+Tests (written, not run here; compiled, clippy and fmt clean): `limits.rs` — max speed 200 rad/s on the single axis
+cruises at 200 / 250 = 0.8 m/s (was 1.256); the default single axis goes above its rated 314 rad/s up to
+420 - 106 * 0.76 / 3.8 = 398.8 rad/s (1.5952 m/s; sim-cli shows 397.5); the XYZ portal's Z with `max_speed_rad_s =
+100` in `[drive.mz]` cruises at 100 * 0.002 = 0.2 m/s while X stays faster; the Z motor's peak current at its own
+maximum, 4.75 A (demand past 0.889 * 0.45 * 4.75 = 1.90 N m; the shared curve gave 9.5 A); EXCT-30's threshold bounds
+scale with the threshold. `control.rs` — the check with a rated-speed maximum, and `[drive.<id>]` lowering one motor's
+peak torque warns of that motor only. `catalog.rs` — the gearbox search's 1FK2104-4AF behind ratios 7 to 10 is
+simulated and passes (motor-speed limit 7200 r/min); the 1FK2208-3AC on the default configs passes; a failing
+belt-slack is the tightest; the one-motor tightest; motors no gearbox fits; the cost of shared motors. analysis — an
+at-least check at or below zero is infinitely far over (-12 N against 0.5 N). machine-single-axis — the optimiser's
+refusal names settling. sim-cli — `search` takes the config's supply.
+
+Touched outside the area: `catalog.rs` motor data (`max_speed` in `MotorData` and `apply_motor`, the motor session's
+area), every config file's `[drive]` (one key), `sim-app` ui.rs `usage()` and model.rs `CHECKS` (the new check),
+`sim-cli` search output and i18n, docs (config-reference, model-reference, user-guide, benutzerhandbuch, mechanisms).
+
+Left open:
+
+- `catalog_golden.txt` and `catalog_snapshot.txt` print what `apply_motor` sets and need writing anew
+  (`UPDATE_GOLDEN=1`) for `drive.max_speed_rad_s`; tests elsewhere that time a time-optimal plan or count verdicts may
+  move with the above-rated speeds and the new `motor-speed` check.
+- The rigid plan leaves friction to the reserve; a small motor (the XYZ portal's Z at 0.2 N m) has less reserve than
+  friction. Friction torque by speed into `MotorCurve` would close that.
+- `[drive.<id>]` can only hold keys the machine file has there, so a per-motor `max_speed_rad_s` needs the key written
+  in the file; `--set` cannot add it.
+- The shafts' radial load is judged once for the machine (`gearbox-radial-load`), not per motor.
+- The user guide's time-optimal example ("reaches the rated speed on its first line") was not rerun.

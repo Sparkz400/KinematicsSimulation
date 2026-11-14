@@ -426,6 +426,9 @@ rated_torque_nm = 4.6
 # DC link gives the winding, 661 V / 1.277 N m/A.
 rated_speed_rad_s = 314.0
 no_load_speed_rad_s = 518.0
+# [catalogue] maximum speed of the 1FK2205-4AF, 6000 r/min (mechanical). The time-optimal plan turns the motor up to it
+# along its torque-speed curve; the verdict motor-speed judges the cycle's peak speed against it.
+max_speed_rad_s = 628.3185307179587
 # [catalogue] 22-bit encoder
 encoder_counts_per_rev = 4194304.0
 

@@ -29,6 +29,7 @@
 use crate::control::CommandError;
 use crate::drive::DriveParams;
 use sim_core::{AxisInfo, Machine};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Piece {
@@ -1408,6 +1409,66 @@ fn motor_torque(drive: &DriveParams) -> f64 {
     if drive.drive_max_current.is_finite() { curve.min(drive.torque_of(drive.drive_max_current)) } else { curve }
 }
 
+/// Speeds at which a motor's torque-speed curve is read for the time-optimal plan (`MotorCurve`), evenly from zero to
+/// its maximum speed.
+const CURVE_SAMPLES: usize = 256;
+
+/// What one motor gives the time-optimal plan by its speed: its torque-speed curve (`DriveParams::torque_curve`, which
+/// falls above the rated speed: linearly to the no-load speed, or with effects.field_weakening as the d-q model has it),
+/// or the torque of the drive's maximum current where that is lower, as it drives (`motoring`, torque in the direction
+/// it turns) and as it brakes, less what the reserve keeps at a standstill ((1 - reserve) times the torque there: for
+/// friction and elasticity, which do not shrink with the speed), read at `CURVE_SAMPLES` + 1 speeds `step` apart from
+/// zero to its maximum speed (`DriveParams::max_speed`) and lowered so that neither rises with the speed. Up to the
+/// rated speed that is `reserve` times the curve, as before; above it the room falls faster than the curve.
+#[derive(Debug)]
+struct MotorCurve {
+    step: f64,
+    motoring: Vec<f64>,
+    braking: Vec<f64>,
+}
+
+impl MotorCurve {
+    fn new(drive: &DriveParams, reserve: f64) -> Self {
+        let step = drive.max_speed / CURVE_SAMPLES as f64;
+        let most =
+            if drive.drive_max_current.is_finite() { drive.torque_of(drive.drive_max_current) } else { f64::INFINITY };
+        let at = |speed: f64| {
+            let (low, high) = drive.torque_curve(speed);
+            [high.min(most), (-low).min(most)]
+        };
+        // What friction and elasticity keep of the torque at a standstill, they keep at every speed: where the curve has
+        // less than that left, the rigid torque has to stay as far on the other side (below zero here).
+        let kept = at(0.0).map(|t| (1.0 - reserve) * t);
+        let (mut motoring, mut braking) = (Vec::new(), Vec::new());
+        let (mut drives, mut brakes) = (f64::INFINITY, f64::INFINITY);
+        for i in 0..=CURVE_SAMPLES {
+            let [high, low] = at(i as f64 * step);
+            drives = drives.min((1.0 - KEPT_BACK) * (high - kept[0]));
+            brakes = brakes.min((1.0 - KEPT_BACK) * (low - kept[1]));
+            motoring.push(drives);
+            braking.push(brakes);
+        }
+        Self { step, motoring, braking }
+    }
+
+    /// The highest speed the motor may turn at.
+    fn max_speed(&self) -> f64 {
+        self.step * CURVE_SAMPLES as f64
+    }
+
+    /// The lowest and the highest torque at the (signed) motor speed `speed` and at every speed of its sign below it: the
+    /// curve as read at the next speed up, which is no higher, as the curve does not rise. Beyond the maximum speed an
+    /// empty range.
+    fn range(&self, speed: f64) -> (f64, f64) {
+        // The rounding of a speed at the maximum is not beyond it.
+        let i = (speed.abs() / self.step * (1.0 - 1e-12)).ceil() as usize;
+        let (Some(drives), Some(brakes)) = (self.motoring.get(i), self.braking.get(i)) else {
+            return (f64::INFINITY, f64::NEG_INFINITY);
+        };
+        if speed >= 0.0 { (-brakes, *drives) } else { (-drives, *brakes) }
+    }
+}
+
 /// Plans the timing of a path as fast as the motors allow, within the jerk limits of the axes, point by point.
 ///
 /// The path is the one `plan` times (transition curves included, their lengths for the speeds the motors allow per
@@ -1415,9 +1476,11 @@ fn motor_torque(drive: &DriveParams) -> f64 {
 /// Within a piece the limits are read at places about 2 mm apart (`piece_limits`): at each the rigid model gives how
 /// fast each motor turns per speed along the path, and its torque as c a + d v^2 + e for the acceleration a and the
 /// speed v along the path (with the centripetal and Coriolis torque of the speed, `Machine::feedforward_torque_moving`,
-/// and e the torque that holds the tool there). A motor may turn at its rated speed and give `reserve` times its
-/// torque-speed curve (which is level up to that speed), or of the torque of the drive's maximum current where that is
-/// lower (effects.drive_current_limit), each way as gravity pushes. The rest is for friction and elasticity, which the
+/// and e the torque that holds the tool there). Each motor is judged by its own drive and motor (`drives`, in the order
+/// of `Machine::motors`): it may turn up to its maximum speed (`DriveParams::max_speed`) and give `reserve` times its
+/// torque-speed curve at the speed it turns (level up to the rated speed, falling above it: `MotorCurve`), or of the
+/// torque of the drive's maximum current where that is lower (effects.drive_current_limit), each way as gravity pushes
+/// and as it drives or brakes. The rest is for friction and elasticity, which the
 /// rigid model leaves out. Each axis keeps its jerk limit: on a line the ramps use it in full, on a curve 0.4 of it,
 /// and the rest is for the jerk that speed and acceleration make on the curve.
 ///
@@ -1442,7 +1505,7 @@ fn motor_torque(drive: &DriveParams) -> f64 {
 /// overshoots by up to the rigid model's change of tension, either way.
 pub fn plan_time_optimal(
     machine: &dyn Machine,
-    drive: &DriveParams,
+    drives: &[&DriveParams],
     limits: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
@@ -1450,8 +1513,10 @@ pub fn plan_time_optimal(
     tolerance: f64,
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let ((geo, _), _) = time_optimal_geometry(machine, drive, limits, start, pieces, tolerance, slack)?;
-    let places = geo.iter().map(|piece| piece_limits(machine, drive, limits, piece)).collect::<Result<Vec<_>, _>>()?;
+    let ((geo, _), _) = time_optimal_geometry(machine, drives, limits, start, pieces, tolerance, slack)?;
+    let curves: Arc<[MotorCurve]> = drives.iter().map(|drive| MotorCurve::new(drive, limits.reserve)).collect();
+    let places =
+        geo.iter().map(|piece| piece_limits(machine, &curves, limits, piece)).collect::<Result<Vec<_>, _>>()?;
     timed_by_motors(machine.axes(), &geo, &places, cycle)
 }
 
@@ -1460,14 +1525,14 @@ pub fn plan_time_optimal(
 /// or turns no motor, or where the belt holding the tool there is already beyond its tension limits.
 fn time_optimal_geometry(
     machine: &dyn Machine,
-    drive: &DriveParams,
+    drives: &[&DriveParams],
     &PlanLimits { reserve, tension, .. }: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     tolerance: f64,
     slack: f64,
 ) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
-    let piece_limits = motor_limits(machine, drive, reserve, tension);
+    let piece_limits = motor_limits(machine, drives, reserve, tension);
     let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0], slack)?;
     let mut limited = Vec::new();
     let usable = |limits: &[f64; 3]| limits.iter().all(|l| l.is_finite() && *l > 0.0);
@@ -1476,7 +1541,7 @@ fn time_optimal_geometry(
         if !usable(&limits) {
             // Said by what is short: the torque, or the belt alone.
             let torque_alone =
-                usable(&motor_limits(machine, drive, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
+                usable(&motor_limits(machine, drives, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
             return Err(CommandError { key: if torque_alone { "error-path-tension" } else { "error-path-torque" } });
         }
         limited.push(limits);
@@ -1488,27 +1553,30 @@ fn time_optimal_geometry(
 /// motors allow need them to be, not the speeds of the axis limits. Refused as that plan is.
 pub fn deviation_time_optimal(
     machine: &dyn Machine,
-    drive: &DriveParams,
+    drives: &[&DriveParams],
     limits: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     tolerance: f64,
     slack: f64,
 ) -> Result<f64, CommandError> {
-    Ok(time_optimal_geometry(machine, drive, limits, start, pieces, tolerance, slack)?.0.1)
+    Ok(time_optimal_geometry(machine, drives, limits, start, pieces, tolerance, slack)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
 /// from the motors and the belt's tension limits, jerk from the axes.
 fn motor_limits<'a>(
     machine: &'a dyn Machine,
-    drive: &'a DriveParams,
+    drives: &'a [&'a DriveParams],
     reserve: f64,
     [lowest, highest, share]: [f64; 3],
 ) -> impl Fn(&Geo) -> [f64; 3] + 'a {
     let axes = machine.axes();
     let [_, _, jerk] = axis_bounds(axes);
-    let (torque, h) = (reserve * motor_torque(drive), 1e-3);
+    let h = 1e-3;
+    // shortcut: the transition curves are sized for the corner of each motor's curve (its rated speed at its full torque);
+    // the timing then uses the whole curve. Size them along the curve if a plan above the rated speed needs longer ones.
+    let torque = move |m: usize| reserve * motor_torque(drives[m]);
     move |piece| {
         let per_motor = |f: &dyn Fn(&mut [f64])| {
             let mut out = vec![0.0; machine.motors().len()];
@@ -1541,8 +1609,8 @@ fn motor_limits<'a>(
                 })
                 .collect();
             for m in 0..hold.len() {
-                vel.push((turn.iter().map(|per_axis| per_axis[m]).collect(), drive.rated_speed));
-                acc.push((per_acc.iter().map(|per_axis| per_axis[m] - hold[m]).collect(), torque - hold[m].abs()));
+                vel.push((turn.iter().map(|per_axis| per_axis[m]).collect(), drives[m].rated_speed));
+                acc.push((per_acc.iter().map(|per_axis| per_axis[m] - hold[m]).collect(), torque(m) - hold[m].abs()));
             }
             if lowest.is_finite() || highest.is_finite() {
                 let tensions = |acc: &[f64]| {
@@ -1605,6 +1673,10 @@ struct Place {
     /// squared: the centripetal and Coriolis part, e the torque that holds the tool), per belt section its change of
     /// tension (e = 0).
     rows: Vec<[f64; 5]>,
+    /// Per motor (the first rows), how fast it turns per speed along the path (rad/m, signed): its row's low and high
+    /// are then those of its curve (`curves`) at that speed, not the row's own (which are those at a standstill).
+    turn: Vec<f64>,
+    curves: Arc<[MotorCurve]>,
     /// Per axis, 3 |p''| v |a| + |p'''| v^3 <= room as [3 |p''|, |p'''|, room]: the part of the axis jerk that speed and
     /// acceleration take on a curve. The rest of the jerk limit is for the ramps.
     bends: Vec<[f64; 3]>,
@@ -1613,12 +1685,22 @@ struct Place {
 }
 
 impl Place {
+    /// The low and high of row `i` at the speed `v` along the path, and at every speed below it.
+    fn bounds(&self, i: usize, v: f64) -> (f64, f64) {
+        match self.turn.get(i) {
+            Some(turn) => self.curves[i].range(turn * v),
+            None => (self.rows[i][3], self.rows[i][4]),
+        }
+    }
+
     /// The most acceleration (`sign` 1) or deceleration (-1) along the path that holds every row and bend here at
-    /// every speed from zero to `top`. Rows are linear in v^2, so the two ends of that range are the worst; the bends
-    /// get tighter with the speed, so `top` is.
+    /// every speed from zero to `top`. Rows are linear in v^2, so the two ends of that range are the worst, against
+    /// bounds that do not widen with the speed (a motor's curve), so those at `top`; the bends get tighter with the
+    /// speed, so `top` is.
     fn most(&self, top: f64, sign: f64) -> f64 {
         let x = top * top;
-        let rows = self.rows.iter().filter(|r| r[0] != 0.0).map(|[c, d, e, low, high]| {
+        let rows = self.rows.iter().enumerate().filter(|(_, r)| r[0] != 0.0).map(|(i, [c, d, e, ..])| {
+            let (low, high) = self.bounds(i, top);
             let room = |at: f64| if c * sign > 0.0 { high - at } else { at - low };
             room(*e).min(room(d * x + e)) / c.abs()
         });
@@ -1753,7 +1835,7 @@ fn ceiling(places: &[Place], curve: &[f64], spacing: f64, jerk: f64, sign: f64, 
 /// room, or where the piece turns no motor.
 fn piece_limits(
     machine: &dyn Machine,
-    drive: &DriveParams,
+    curves: &Arc<[MotorCurve]>,
     limits: &PlanLimits,
     geo: &Geo,
 ) -> Result<PieceLimits, CommandError> {
@@ -1788,7 +1870,8 @@ fn piece_limits(
         .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs()))
         .fold(f64::INFINITY, f64::min);
     let jerk = if matches!(geo, Geo::Line { .. }) { 1.0 } else { 0.4 } * along;
-    let torque = (1.0 - KEPT_BACK) * reserve * motor_torque(drive);
+    // What each motor gives at a standstill, either way: the bounds of its row, and what holds the tool.
+    let torque: Vec<f64> = curves.iter().map(|c| c.motoring[0].min(c.braking[0])).collect();
     let zero = vec![0.0; axes.len()];
     let mut places = Vec::new();
     for [pose, d1, d2, d3] in &derivatives {
@@ -1799,11 +1882,12 @@ fn piece_limits(
         };
         // At the speed v and the acceleration a along the path the tool moves at v p' and accelerates at a p' + v^2 p''.
         let (hold, per_acc, per_speed) = (torques(&zero, &zero), torques(&zero, d1), torques(d1, d2));
-        if hold.iter().any(|t| t.abs() >= torque) {
+        if hold.iter().zip(&torque).any(|(t, most)| t.abs() >= *most) {
             return Err(CommandError { key: "error-path-torque" });
         }
-        let mut rows: Vec<[f64; 5]> =
-            (0..motors).map(|m| [per_acc[m] - hold[m], per_speed[m] - hold[m], hold[m], -torque, torque]).collect();
+        let mut rows: Vec<[f64; 5]> = (0..motors)
+            .map(|m| [per_acc[m] - hold[m], per_speed[m] - hold[m], hold[m], -torque[m], torque[m]])
+            .collect();
         if lowest.is_finite() || highest.is_finite() {
             let tensions = |acc: &[f64]| {
                 let mut out = Vec::new();
@@ -1870,17 +1954,33 @@ fn piece_limits(
             .enumerate()
             .map(|(i, a)| [3.0 * d2[i].abs(), d3[i].abs(), a.max_jerk - jerk * d1[i].abs()])
             .collect();
-        // The highest speed squared: each motor at its rated speed, each row and bend without acceleration.
-        let mut x = (0..motors)
-            .map(|m| (drive.rated_speed * 2.0 * TURN_STEP / (ahead[m] - behind[m]).abs()).powi(2))
-            .fold(f64::INFINITY, f64::min);
-        for [_, d, e, low, high] in rows.iter().filter(|r| r[1] != 0.0) {
+        // The highest speed squared: each motor at its maximum speed, each row and bend without acceleration; the rows
+        // of fixed bounds and the bends directly, then the motors' rows against their curves, which do not widen with
+        // the speed, by halving.
+        let turn: Vec<f64> = (0..motors).map(|m| (ahead[m] - behind[m]) / (2.0 * TURN_STEP)).collect();
+        let mut x = (0..motors).map(|m| (curves[m].max_speed() / turn[m].abs()).powi(2)).fold(f64::INFINITY, f64::min);
+        for [_, d, e, low, high] in rows[motors..].iter().filter(|r| r[1] != 0.0) {
             x = x.min(if *d > 0.0 { (high - e) / d } else { (e - low) / -d });
         }
         for [_, p3, room] in bends.iter().filter(|b| b[1] > 0.0) {
             x = x.min((room / p3).max(0.0).powf(2.0 / 3.0));
         }
-        places.push(Place { rows, bends, top: x.sqrt() });
+        let mut place = Place { rows, turn, curves: curves.clone(), bends, top: x.sqrt() };
+        let holds = |place: &Place, v: f64| {
+            (0..motors).all(|m| {
+                let ([_, d, e, ..], (low, high)) = (place.rows[m], place.bounds(m, v));
+                (low..=high).contains(&(d * v * v + e))
+            })
+        };
+        if place.top.is_finite() && !holds(&place, place.top) {
+            let (mut slow, mut fast) = (0.0, place.top);
+            for _ in 0..60 {
+                let v = 0.5 * (slow + fast);
+                if holds(&place, v) { slow = v } else { fast = v }
+            }
+            place.top = slow;
+        }
+        places.push(place);
     }
     let lowest = places.iter().map(|p| p.top).fold(f64::INFINITY, f64::min);
     // A piece that turns no motor has no speed limit: refused as the per-piece limits refuse it.
@@ -3290,6 +3390,8 @@ line,0.3,0.13",
         let places: Vec<Place> = (0..41)
             .map(|k| Place {
                 rows: vec![[1.0, 0.0, 0.0, -10.0, 10.0]],
+                turn: Vec::new(),
+                curves: Arc::from([]),
                 bends: Vec::new(),
                 top: if k == 20 { 0.5 } else { 1.0 },
             })

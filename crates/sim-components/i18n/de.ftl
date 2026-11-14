@@ -486,6 +486,7 @@ report-signature = Unterschrift
 report-default-config = eingebaute Standardkonfiguration
 check-motor-peak = Genutzter Anteil der Drehmoment-Drehzahl-Kennlinie
 check-motor-thermal = Übertemperatur der Wicklung, eingeschwungen [K]
+check-motor-speed = Motordrehzahl, Spitze [rad/s]
 check-pulley-torque = Moment an der Riemenscheibe [N m]
 check-gearbox-continuous = Getriebe-Abtriebsmoment, kubisches Mittel [N m]
 check-gearbox-peak = Getriebe-Abtriebsmoment, Spitze [N m]

@@ -147,6 +147,7 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | --- | --- | --- | --- |
 | `motor-peak` | `utilisation` (the torque asked for, not the torque delivered) | 1 | fraction |
 | `motor-thermal` | `winding_rise_k` (with `effects.motor_thermal_nodes` the winding node's, which settles where the one node does) | `motor.rated_temperature_rise_k` | K |
+| `motor-speed` | `peak_speed_rad_s`, where the config gives `drive.max_speed_rad_s` (a catalogue motor sets it) | `drive.max_speed_rad_s` | rad/s |
 | `drive-overload` | `drive_overload`, with `effects.drive_overload` only | the image's trip level, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = maximum over rated current | 1 = rated current held |
 | `pulley-torque` | peak of the torque at the gearbox output (signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |
 | `gearbox-continuous` | cubic mean of the torque at the gearbox output, weighted with speed | `ratings.gearbox_rated_torque_nm` | N m |
@@ -267,34 +268,36 @@ Naming the axis of `exct-30.toml` gives its own numbers back (the test `an_axis_
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
-Search time on 16: 0.6 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 28 candidates
+Search time on 16: 11.9 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,,6SL3210-5HE10-4UF0,2.05,4.10,ok,drive-current,0.9753,3.2072,95.50
 ,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
 ,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
 ,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
 ,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4466,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5157,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
+...
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,ok,motor-peak,0.5318,6.6454,2.84
 ...
 ,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
-,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
-,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,motor-thermal,inf,1.8530,inf
+,1FK2103-2AH,,6SL3210-5HE10-4UF0,1.18,2.36,FAIL,motor-thermal,inf,1.9530,inf
+,1FK2210-4AB,,6SL3210-5HE15-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5939,8.04
+,1FK2210-4AC,,6SL3210-5HE17-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5580,11.25
 ```
 
-On the EXCT-30 no passing motor comes near a limit. The tightest check is the dwell for the lightest motors (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required.
+On the EXCT-30 the lightest passing motor, the 1FK2104-4AF, uses 0.98 of its drive's rated current and settles 95.5 K warm; the next ones come near no limit. Their tightest check is the dwell (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required. Before 14 November the 1FK2104-4AF and 1FK2208-3AC were ruled out without a simulation by the shared rated speed and peak torque (13 of the 28; see below), though both pass every verdict.
 
 The search runs every motor of the catalogue that is offered at the supply on the config's cycle, each with the drive the catalogue pairs with it, on all processor cores. Passing motors come first, cheapest first. Failing ones follow, nearest to passing first. A candidate whose drives trip on DC link overvoltage comes after all of these, with `inf` as its `tightest_utilisation`: its figures end at the trip.
 
-**Cost.** No catalogue file has a price, and Siemens publishes no list prices on a server that can be read automatically (its Industry Mall refuses such access). The installed weight stands in for the price: `cost_kg` is motor and gearbox times the number of motors, plus the axis where one of the catalogue is tried (`--axes`). Passing candidates are ranked by it, then by `mass_kg`. For a motor search on a fixed machine the two give the same order.
+**Cost.** No catalogue file has a price, and Siemens publishes no list prices on a server that can be read automatically (its Industry Mall refuses such access). The installed weight stands in for the price: `cost_kg` is motor and gearbox times the number of motors that take the candidate (not those with a motor of their own, `[motor.<id>]` or `[parts.<id>]`), plus the axis where one of the catalogue is tried (`--axes`). Passing candidates are ranked by it, then by `mass_kg`. For a motor search on a fixed machine the two give the same order.
 
 | Option | Effect |
 | --- | --- |
 | `--series PREFIX` | Only article numbers that start this way, e.g. `1FK2`, `1FT2105` or `1FK7` |
-| `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). Default `400v` |
-| `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's. Only on a machine whose config has a ratio above 1, and only for 1FK2 and 1FT2 motors (the gearboxes are made for them) |
+| `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). Default: the config's own `parts.motor_supply`, else `400v` |
+| `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's. Only on a machine whose config has a ratio above 1, and only for 1FK2 and 1FT2 motors (the gearboxes are made for them). A motor that no gearbox of the series fits is tried with the config's own gearbox (`gearbox` empty; before, it was left out without a word) |
 | `--axes` | Also try every axis of the catalogue of the machine's kind (below) |
 | `--motor-id ID` | Size one motor of a machine with several, a machine file's motor `ID`: each candidate becomes `[parts.ID]`, the other motors stay as the file has them, that motor's own velocity gain is retuned, `--gearboxes` fits its own ratio, and `cost_kg` is that one motor's weight (see [machine files](machine-files.md#motors-that-differ)). Not with `--axes` |
 
@@ -306,12 +309,12 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `mass_kg` | Mass of the motor without brake and of its gearbox (Siemens' configuration manual 01/2023, see [the catalogue](catalogue.md)) |
 | `cost_kg` | The stand-in for the price: installed weight, see above |
 | `result` | `ok` if every verdict passes |
-| `tightest_check` | The check closest to its limit, or furthest beyond it. Two DC link checks are left out while they pass, because their ratio says nothing about the margin: `dc-link-energy` when a braking resistor is in use (the capacitors then fill to their limit by design) and `dc-link-overvoltage` (the voltage is never below the DC link's own level). For a candidate that was not simulated: why (`limit-motor-speed`, `limit-motor-torque`, `axis-stroke`, `axis-payload`, `axis-speed`) |
+| `tightest_check` | The check closest to its limit, or furthest beyond it. Two DC link checks are left out while they pass, because their ratio says nothing about the margin: `dc-link-energy` when a braking resistor is in use (the capacitors then fill to their limit by design) and `dc-link-overvoltage` (the voltage is never below the DC link's own level). The belt's slack counts once it fails (a pushed section: `inf`). With `--motor-id` only that motor's checks count, and the whole machine's where they fail. For a candidate that was not simulated: why (`config`, a cycle error, `axis-stroke`, `axis-payload`, `axis-speed`) |
 | `tightest_utilisation` | Value over limit of that check |
-| `peak_torque_nm` | Highest peak torque of any motor of the machine |
-| `winding_rise_k` | Highest settled winding rise of any motor |
+| `peak_torque_nm` | Highest peak torque of any motor of the machine; with `--motor-id` of that motor |
+| `winding_rise_k` | Highest settled winding rise of any motor; with `--motor-id` of that motor |
 
-Before a cycle is simulated, the catalogue numbers are checked against the axis limits: motor speed at the highest axis speed against the rated speed, rigid-model torque at the highest acceleration against the motor's maximum torque. What fails there is listed with `NaN` and not simulated. The error stream says how many candidates that were and how long the search took on how many cores.
+Every candidate is simulated. Before 14 November the catalogue numbers were a screen first: the motor speed at the highest axis speeds against the shared rated speed, the rigid torque at the highest accelerations against the shared peak torque, every axis at its limits at once. That ruled out motors that pass every verdict (on EXCT-30 at 400 V 32 of 84, on the CoreXY 21), so the verdicts judge now: `motor-peak` against the torque-speed curve, `motor-speed` against the maximum speed. A candidate that cannot run (a part the config cannot take, a cycle refused) is listed with `NaN` and why. The error stream says how many candidates that were, with `--gearboxes` how many motors no gearbox of the series fits (they are tried with the config's own, `gearbox` empty), and how long the search took on how many cores.
 
 Each candidate's velocity gain is retuned by the rule of [parts by name](#check-a-real-catalogue-machine): the square root of (ratio of the inertia the motors turn) × (ratio of the rotor inertias), against the config's own numbers. `--gearbox NAME` for the whole search and `--gearboxes SERIES` give the same result for the same pair: the gearbox's inertia has a key of its own (`gearbox.inertia_at_input_kgm2`) and stays when a motor goes in.
 
@@ -319,9 +322,11 @@ With gearboxes, on the single axis:
 
 ```text
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 12 / 35 candidates
-Search time on 16: 0.5 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 35 candidates
+No gearbox of the series fits, so tried with the config's own gearbox (gearbox empty in the table): 0 candidates
+Search time on 16: 2.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,NRK070-04-10,6SL3210-5HE10-4UF0,3.45,3.45,ok,motor-speed,0.6633,0.4615,1.31
 ,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
 ,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4567,0.6007,2.50
 ,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
@@ -332,9 +337,10 @@ The S120 motors on the EXCT-30:
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
-Search time on 16: 1.1 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 61 candidates
+Search time on 16: 16.6 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK7042-2AC7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5053,16.34
 ,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
 ,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
 ...
@@ -344,8 +350,8 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
-Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 124 / 338 candidates
-Search time on 16: 7.8 s
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 2 / 338 candidates
+Search time on 16: 33.3 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
 ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9056,3.9951,25.02
 ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9200,3.9968,51.69
@@ -367,11 +373,9 @@ Limits for this task:
 
 - **Weight stands in for price.** See above. The drive's weight is not counted: the converter files have none.
 - The retuning is a rule of thumb, not a tuning from the machine's frequency response. A candidate can still fail for its gain. Check a chosen motor with `tuning`.
-- The torque screen leaves out gearbox efficiency.
 - The axis search keeps everything of the config that the axis does not set: its gearbox, friction, frame, shaper and gains. Bahr's single axes state no moved mass, so the config's carriage stays for them; Bahr's maximum lengths are taken as the longest stroke.
 - Belts are not searched; a belt is named with `--belt`. Combinations of different motors per axis are not searched.
 - The DC link capacitance and the braking resistor stay as the config has them; the braking threshold and the trip level are scaled to the motor's DC link voltage (see the previous section). On a default config the braking rows of every candidate are judged against placeholders.
-- A candidate that asks for more than its rated speed at the axis limits never passes, even if its simulated cycle would.
 
 ## See which unknown parameters matter, and judge with error bands
 
@@ -382,6 +386,8 @@ A config gives each uncertain value a low and a high bound in `[bounds]`, a tabl
 belt.pretension_n = [350.0, 550.0]
 friction_x.coulomb_n = [12.0, 26.0]
 ```
+
+A part named in `[parts]` or by `--motor`, `--supply`, `--drive`, ... carries its own values, and the bounds of those values follow it: they are scaled by the part's value over the config's own, so a band keeps its width relative to the value (see [config reference](config-reference.md#bounds)). EXCT-30's braking threshold bounds, 750 to 790 V around 770 V on its 540 V bus, move with the threshold for a 230 V motor and drive, which follows their 325 V bus.
 
 **Sensitivity.** The cycle is run with each parameter at its low and at its high value, one at a time, and the rows are sorted by how much the results change. `ratings.bearing_reliability_percent` is left out: it is a choice of how to judge, and 20 % either way leaves its range of 90 to 99.95 %:
 
@@ -761,7 +767,7 @@ Two planners time the path:
 
 | | Default | `--time-optimal` |
 | --- | --- | --- |
-| Speed and acceleration | The limits of every axis (`[axis.*]`) | What the motors allow: their rated speed, and `profile.torque_reserve` times their torque-speed curve or the torque of the drive's maximum current (`effects.drive_current_limit`), and the same share of the gearbox's and the pulley's torque rating at the output; the guides' and the belt's ratings |
+| Speed and acceleration | The limits of every axis (`[axis.*]`) | What each motor allows by its own drive and motor: up to its maximum speed (`drive.max_speed_rad_s`), its torque-speed curve at the speed it turns (above the rated speed falling) or the torque of the drive's maximum current (`effects.drive_current_limit`), less (1 − `profile.torque_reserve`) of its torque at a standstill at every speed, and the same share of the gearbox's and the pulley's torque rating at the output; the guides' and the belt's ratings |
 | Jerk | The limit of every axis | The same |
 | At a corner (direction turns by more than 1 mrad) | Stops | Stops |
 | Where a line meets an arc | Slows down so far that the step in acceleration stays within half the jerk limit; with `profile.path_tolerance_m` a transition curve takes the path into the arc at speed (below) | The same |
@@ -769,7 +775,7 @@ Two planners time the path:
 | Where a spline meets a line or an arc | The curvature steps, so it slows down as from a line into an arc; with `profile.path_tolerance_m` the spline's end is eased to the curvature of its neighbour, and the junction is passed at speed (below) | The same |
 | Model used to plan | None, only the axis limits | The rigid model: no friction, no belt stretch |
 
-The time-optimal plan keeps every motor within the reserve and the rated speed and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.79 s plus rest at 2000 m/s³, where the belt's tension limits it).
+The time-optimal plan keeps every motor within its curve less the reserve and within its maximum speed, and every axis within its jerk limit at every planned pose. With the default jerk limit of 100 m/s³ the jerk decides nearly everywhere: the example reaches the rated speed on its first line and uses 0.16 of the torque it may. A higher jerk limit makes it faster (0.79 s plus rest at 2000 m/s³, where the belt's tension limits it).
 
 Reading the result:
 

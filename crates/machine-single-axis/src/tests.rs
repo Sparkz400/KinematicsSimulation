@@ -965,10 +965,12 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
     );
     assert!(load.dwell_error_peak <= cfg.f64("ratings.settling_tolerance_m").unwrap());
 
-    // With a tolerance no machine meets, the cycle as configured fails and there is nothing to start from.
+    // With a tolerance no machine meets, the cycle as configured fails and there is nothing to start from; the refusal
+    // names the check (before, it said "fails a verdict" for that and for a screen of the axis limits alike).
     let mut strict = cfg.clone();
     strict.set_text("ratings.settling_tolerance_m = 1.0e-9").unwrap();
-    assert!(optimise_cycle(&ENTRY, &strict, 14).is_err());
+    let refused = optimise_cycle(&ENTRY, &strict, 14).unwrap_err();
+    assert_eq!(refused.detail(), "the cycle as configured fails settling", "{refused:?}");
 }
 
 /// The robust optimiser steps back to the fastest setting that passes in the error bands. With one bound, the payload

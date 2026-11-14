@@ -44,6 +44,10 @@ pub struct DriveParams {
     pub rated_torque: f64,
     pub rated_speed: f64,
     pub no_load_speed: f64,
+    /// The highest speed the motor may turn at, `drive.max_speed_rad_s` (the catalogue's mechanical or inverter limit);
+    /// the no-load speed where the config leaves it out. The time-optimal plan keeps within it (`path`), "motor-speed"
+    /// judges a cycle against it where the config gives it, and `check_limits` warns of axis limits beyond it.
+    pub max_speed: f64,
     pub limit: bool,
     /// Encoder step in rad; 0 for an ideal encoder.
     pub encoder_step: f64,
@@ -246,6 +250,11 @@ impl DriveParams {
         if no_load_speed <= rated_speed {
             return Err(ConfigError::Invalid("drive.no_load_speed_rad_s".into()));
         }
+        let max_speed = if cfg.get("drive.max_speed_rad_s").is_ok() {
+            cfg.positive("drive.max_speed_rad_s")?
+        } else {
+            no_load_speed
+        };
         let kt_at_max = cfg.positive("motor.torque_constant_at_max_current_nm_a")?;
         if kt_at_max > kt {
             return Err(ConfigError::Invalid("motor.torque_constant_at_max_current_nm_a".into()));
@@ -381,6 +390,7 @@ impl DriveParams {
             rated_torque: cfg.positive("drive.rated_torque_nm")?,
             rated_speed,
             no_load_speed,
+            max_speed,
             limit: on("torque_limit")?,
             encoder_step: if on("encoder_resolution")? {
                 TAU / cfg.positive("drive.encoder_counts_per_rev")?
@@ -1010,6 +1020,7 @@ mod tests {
             rated_torque: 1.27,
             rated_speed: 314.0,
             no_load_speed: 420.0,
+            max_speed: 420.0,
             limit: true,
             encoder_step: 0.0,
             velocity_filter: 1.0,

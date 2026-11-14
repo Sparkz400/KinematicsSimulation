@@ -1702,3 +1702,16 @@ fn modes_write_the_resonances_over_the_stroke() {
     }
     assert!(!cli(&["modes", one_belt_axis().id, "--points", "1"]).status.success());
 }
+
+/// `search` takes the config's own supply when no `--supply` is given: a config on S120 (`parts.motor_supply = "s120"`)
+/// finds the 1FK7040-2AK7, which only the S120 offers, and says how many it could not simulate (none). Before, the
+/// search fell back to 400 V and found nothing.
+#[test]
+fn search_takes_the_configs_own_supply() {
+    let out = cli(&["search", "single-axis", "--series", "1FK7040-2AK7", "--set", "parts.motor_supply=\"s120\""]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let table = text(&out.stdout);
+    assert_eq!(table.lines().count(), 2, "{table}");
+    assert!(table.lines().nth(1).unwrap().starts_with(",1FK7040-2AK7,,6SL3120-1TE13-0AD0,"), "{table}");
+    assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
+}

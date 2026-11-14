@@ -516,6 +516,7 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
         gearbox: String::new(),
         drive: "",
         axis: String::new(),
+        motor: String::new(),
         mass: 1.0,
         cost: 1.0,
         result: Some((load, judged)),

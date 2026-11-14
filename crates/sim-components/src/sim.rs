@@ -190,7 +190,7 @@ impl Sim {
         let mut torque = vec![0.0; machine.motors().len()];
         machine.equilibrium(&start, &mut state, &mut torque);
         let control = Controller::new(cfg, machine.as_ref(), &state)?;
-        let limit_violations = check_limits(machine.as_ref(), cfg)?;
+        let limit_violations = check_limits(machine.as_ref(), &control.motor_drives(machine.as_ref()));
         let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, heats(cfg)?);
         let motors = torque.len();
         Ok(Self {
@@ -252,7 +252,7 @@ impl Sim {
         self.rk = Rk4::new(self.state.len());
         self.rk_joint = Rk4::new(self.state.len() + WINDING_STATES * motors);
         self.motor_buffers = std::array::from_fn(|_| vec![0.0; motors]);
-        self.limit_violations = check_limits(machine.as_ref(), cfg)?;
+        self.limit_violations = check_limits(machine.as_ref(), &self.control.motor_drives(machine.as_ref()));
         // A part that is still there keeps its warmth.
         let mut heated = heated_parts(cfg, machine.as_ref())?;
         for part in &mut heated {

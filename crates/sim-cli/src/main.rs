@@ -739,22 +739,26 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// `search <machine>`: every motor of the catalogue on the cycle of the config, each with the drive the catalogue
 /// pairs with it, the passing ones first, cheapest first (installed weight stands in for the price). `--series
 /// PREFIX` limits it to article numbers starting that way, `--supply` picks 230v or 400v (S210) or s120 (the S120
-/// motors and Motor Modules). `--gearboxes SERIES` (e.g. NRK) also tries each motor with the fitting gearboxes of
-/// that series, on a machine that has a gearbox. `--axes` tries every motor on every axis of the catalogue of the
+/// motors and Motor Modules), by default the config's own `parts.motor_supply`, else 400v. `--gearboxes SERIES` (e.g.
+/// NRK) also tries each motor with the fitting gearboxes of that series, on a machine that has a gearbox; a motor none
+/// fits with the config's own gearbox. `--axes` tries every motor on every axis of the catalogue of the
 /// machine's kind as well, the axis's weight in the cost. `--motor-id ID` sizes one motor of a machine with several (a
 /// machine file's): each candidate becomes that motor's own `[parts.ID]`, the other motors stay as the config has them,
-/// and the cost is that motor's alone (`catalog::search_motor`); not with `--axes`. Says on the error stream how many candidates the
-/// catalogue numbers ruled out before any cycle was simulated (they are in the table too) and how long the search
+/// and the cost, the tightest check, the peak torque and the winding rise are that motor's alone (`catalog::search_motor`);
+/// not with `--axes`. Says on the error stream how many candidates could not be simulated (the reason is in the table),
+/// with `--gearboxes` how many motors no gearbox of the series fits, and how long the search
 /// took on how many processors.
 fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::catalog::{Parts, motor_config, resolve};
     let (entry, cfg) = machine_and_config(args)?;
     let prefix = args.option("--series").unwrap_or("");
-    let (supply, gearboxes, wanted) =
-        (args.option("--supply").unwrap_or("400v"), args.option("--gearboxes"), |article: &str| {
-            article.starts_with(prefix)
-        });
+    // The config's own supply where it names one (`parts.motor_supply`, which `--supply` sets), else 400 V.
+    let own_supply = Parts::of(&cfg).map(|p| p.supply.to_string()).unwrap_or_default();
+    let supply = args.option("--supply").or(Some(own_supply.as_str()).filter(|s| !s.is_empty())).unwrap_or("400v");
+    let (gearboxes, wanted) = (args.option("--gearboxes"), |article: &str| article.starts_with(prefix));
     let started = std::time::Instant::now();
-    let found = if let Some(motor) = args.option("--motor-id") {
+    let motor = args.option("--motor-id");
+    let found = if let Some(motor) = motor {
         if args.flag("--axes") {
             return Err(Failure("cli-usage", String::new()));
         }
@@ -765,6 +769,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
         sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)
     };
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let tried = found.iter().filter(|c| !c.article.is_empty());
     eprintln!(
         "{}",
         tr.tr_arg(
@@ -772,15 +777,23 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             &format!("{} / {}", found.iter().filter(|c| c.result.is_none()).count(), found.len())
         )
     );
+    // With a series of gearboxes, on a machine (or motor) that has a gearbox: the motors none of them fits.
+    let own = motor.map_or(Ok(cfg.clone()), |id| motor_config(&cfg, id))?;
+    if gearboxes.is_some() && resolve(entry, &own)?.f64("gearbox.ratio").unwrap_or(1.0) > 1.0 {
+        let count = tried.filter(|c| c.gearbox.is_empty()).count();
+        eprintln!("{}", tr.tr_arg("cli-search-own-gearbox", &count.to_string()));
+    }
     eprintln!("{}", tr.tr_arg("cli-search-time", &format!("{threads}: {:.1} s", started.elapsed().as_secs_f64())));
     let mut out = output(args, "--out")?;
     writeln!(out, "axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
     for c in &found {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
+        // Of the searched motor alone with --motor-id (the others are the config's, alike for every candidate).
         let (peak, rise) = c.result.as_ref().map_or((f64::NAN, f64::NAN), |(load, _)| {
+            let searched = || load.motors.iter().filter(|m| c.motor.is_empty() || m.id == c.motor);
             (
-                load.motors.iter().map(|m| m.peak_torque).fold(0.0, f64::max),
-                load.motors.iter().map(|m| m.winding_rise).fold(0.0, f64::max),
+                searched().map(|m| m.peak_torque).fold(0.0, f64::max),
+                searched().map(|m| m.winding_rise).fold(0.0, f64::max),
             )
         });
         let result = if c.passes() { "ok" } else { "FAIL" };
