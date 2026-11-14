@@ -72,6 +72,18 @@ What it does not cover:
 - The script [`scipy_reference.py`](../crates/machine-t-gantry/reference/scipy_reference.py) runs against the current default config again. It asserts that the fourteen effects it models are on and that the six effects of the machine it does not model are off (tooth stiffness, material damping, idlers, cable chain, process force, temperature); the leaning Z axis is switched off on the Rust side; the switches of drive and controller, the hard stops and the brakes take no part in a move driven by given torques. Run on 11 November 2026 with the pinned packages, it reproduced the committed trace exactly (all 601 samples to the last printed digit).
 - It is the same person's reading of the same equations, written twice. It catches integration and coding errors, not a wrong equation.
 
+### The arms against MuJoCo
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Per URDF (`six-axis`, `scara`, `five-axis`, `seven-axis`, `palletiser`), at 60 random states (q, q̇, q̈) inside the joints' limits, seed 20261114: the joint torques of inverse dynamics with gravity, the gravity torques alone, the mass matrix, the flange's position and rotation | [MuJoCo](https://mujoco.org) 4.0.1 reading the same URDF files (`mj_inverse`, `mj_fullM`, the bias forces at rest, the flange body's pose), written by [`mujoco_reference.py`](../crates/machine-joint-kit/reference/mujoco_reference.py) into one committed CSV per URDF in [`reference/`](../crates/machine-joint-kit/reference/) | 1e-9 of the largest magnitude of each quantity in a state (the worst seen is 2e-14) | `*_matches_mujoco` in `machine-joint-kit/tests/reference.rs` |
+
+The crate's side is the machine as built from its config (the default configs; `arm5-tool.toml` and `arm7-tool.toml` with joint space for the five- and seven-axis arms): its loss-free rigid torques with the rotors held still (`Machine::rigid_split_torque` with no rotor acceleration), so the Newton-Euler chain of `rigid::Chain`, the mass matrix from the bodies' Jacobians, the motors' ratios and the arm's wiring are all in it; the flange from `rigid::Chain::tip`. MuJoCo is an independent implementation by other people: unlike the SciPy reference it can catch a wrong equation, not only a coding slip. Pinocchio, the first choice, has no wheel for Windows; MuJoCo has, and runs the same on Linux from the pinned [`requirements.txt`](../crates/machine-joint-kit/reference/requirements.txt). Run on 14 November 2026, the script reproduced the committed CSVs exactly. With one link's mass (six-axis, link 3) or one inertia (palletiser, forearm iyy) changed by 1 % the tests fail by 6e-3 and 6e-4.
+
+The palletiser's parallelogram is the config's `arm.joint_coupling` (the URDF's five joints as sums of the four motors' joints, q_urdf = C q). MuJoCo works on the serial URDF chain at C q, C q̇, C q̈; the script takes its numbers to the motors' joints, M = Cᵀ M_urdf C and τ = Cᵀ τ_urdf, as a mimic joint would. That map is written twice (here and in `arm.rs`), so it is checked as the T-gantry's equations are: a slip, not a wrong idea.
+
+What it does not cover: the motors' rotors, the gearboxes' inertia, efficiency and elasticity, friction, the drives, the payload (and its swing), bending links and the compliant base; the parallelogram's bars as bodies of their own (they are in the links they move with, in the URDF as in the reference); the tool-space kinematics (`tool::Pose`, `tool::Scara`) beyond the flange's pose.
+
 ## Hand calculations: mechanics
 
 | What is compared | Against | Tolerance | Test |
