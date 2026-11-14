@@ -8,10 +8,11 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::{LANGUAGES, MACHINES};
 use std::time::{Duration, Instant};
 
-/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload or the
-/// rotary table's payload inertia (the slides have one; the arms and the table have none).
+/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, that of
+/// a platform hung in cables or the rotary table's payload inertia (the slides have one; the arms, the platforms in
+/// cables and the table have none).
 fn payload_key(cfg: &Config) -> &'static str {
-    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2"]
+    ["mass.payload_kg", "arm.payload_kg", "platform.payload_kg", "table.payload_inertia_kgm2"]
         .into_iter()
         .find(|k| cfg.get(k).is_ok())
         .unwrap()
@@ -52,7 +53,11 @@ fn every_machine_runs_in_the_same_app_model() {
             let lines: Vec<_> =
                 model.scopes.iter().filter(|s| s.quantity_key == quantity).flat_map(|s| &s.lines).collect();
             assert_eq!(lines.iter().filter(|l| l.reference).count(), references, "{}: {quantity}", entry.id);
-            assert_eq!(lines.iter().filter(|l| !l.reference).count(), references, "{}: {quantity}", entry.id);
+            // The axes' and motors' own values: a machine's further positions (the slider-crank's slider, the disc
+            // cam's follower, since 13 November 2026) are asked for by no setpoint.
+            let own = |id: &str| id.starts_with("axis.") || id.starts_with("motor.");
+            let actual = lines.iter().filter(|l| !l.reference && own(&model.session.signals[l.signal].id)).count();
+            assert_eq!(actual, references, "{}: {quantity}", entry.id);
         }
         assert!(!model.scene.labels.is_empty(), "{}: no live values in the 3D view", entry.id);
         assert_eq!(model.target.len(), model.session.axes.len());
@@ -184,12 +189,28 @@ fn samples(events: &[Event]) -> Vec<&Vec<f64>> {
 /// A config in which every effect has something to act on: low pretension so the belt can go
 /// slack, a weak drive so the torque limit is reached, a low bus voltage so the voltage limit is, a via point so corner blending has a corner.
 /// The machine's default config with one more cycle segment: a pass through the middle of the
-/// workspace without stopping. It gives every machine's cycle a corner that blending can round.
+/// workspace without stopping. It gives every machine's cycle a corner that blending can round. Where a segment already
+/// ends in the middle, or a machine of one axis would turn back there, the pass is halfway from the last segment's
+/// target to the first's instead: a stop that blending can leave out (as sim-machines' control test has it since 14
+/// November 2026).
 fn with_via_point(entry: &MachineEntry) -> Config {
     let cfg = entry.config();
     let machine = (entry.build)(&cfg).unwrap();
-    let middle: Vec<String> = machine.axes().iter().map(|a| format!("{:?}", 0.5 * (a.min + a.max))).collect();
-    let gripper = cfg.array("cycle.segment").unwrap().last().unwrap().get("payload").unwrap().as_bool().unwrap();
+    let segments = cfg.array("cycle.segment").unwrap();
+    let target = |k: usize| -> Vec<f64> {
+        segments[k]["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect()
+    };
+    let (first, last) = (target(0), target(segments.len() - 1));
+    let mut middle: Vec<f64> = machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
+    let at = |target: &[f64]| {
+        middle.iter().zip(target).zip(machine.axes()).all(|((m, t), a)| (m - t).abs() < 1e-9 * (a.max - a.min))
+    };
+    let between = machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0;
+    if (0..segments.len()).any(|k| at(&target(k))) || !between {
+        middle = first.iter().zip(&last).map(|(f, l)| 0.5 * (f + l)).collect();
+    }
+    let middle: Vec<String> = middle.iter().map(|m| format!("{m:?}")).collect();
+    let gripper = segments.last().unwrap().get("payload").unwrap().as_bool().unwrap();
     let segment =
         format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
     Config::parse(&format!("{}{segment}", entry.default_config)).unwrap()
@@ -240,10 +261,11 @@ fn cycle_time(entry: &'static MachineEntry, cfg: &Config) -> f64 {
 }
 
 /// Switching one effect off (or on) changes the traces within one cycle, without a restart.
-/// Checked for every switch of every machine, against a run that was left alone.
+/// Checked for every switch of every machine, against a run that was left alone. Every machine on a thread of its own:
+/// one after the other, the 22 machines of 14 November 2026 with some 80 switches each took too long.
 #[test]
 fn switching_an_effect_changes_the_traces_within_one_cycle() {
-    for entry in MACHINES.iter().copied() {
+    on_every_machine(|entry| {
         let base = demanding(entry);
         let limit = cycle_time(entry, &base);
         let effects: Vec<String> =
@@ -265,33 +287,58 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         ];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Runner::new(entry, &base).unwrap().sim.machine.motors().len() < 2;
-        // Nor does backlash or a gearbox's loss act where the config has none (the screw's and the linear motor's couplings;
-        // the screw's own loss is under the same switch), motor friction where the motor has none (the linear motor: no
-        // bearings of its own), gravity along a horizontal slide (the screw, rack and linear motor axes) or on the table
-        // about its vertical axis, or part heating and its feedback where no part warms but the motors (a coupling of
-        // ratio 1; the linear delta's belt axes, whose guides' heat is not modelled), as sim-machines' control test has it.
+        // Nor does a switch act whose values are all zero (or all one) in this config, gravity where it loads no motor, part
+        // heating where no part warms but the motors, and the rest of what sim-machines' control test
+        // (`every_effect_switch_changes_the_traces`) leaves out, with its reasons there.
         let machine = (entry.build)(&base).unwrap();
-        let tight = base.f64("gearbox.backlash_rad").is_ok_and(|b| b == 0.0);
-        let lossless = base.f64("gearbox.efficiency").is_ok_and(|e| e == 1.0)
-            && base.get("screw").is_err()
-            && base.get("rack").is_err();
-        let level = base.f64("slide.incline_deg").is_ok_and(|i| i == 0.0) || base.get("table").is_ok();
-        let frictionless = ["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]
-            .iter()
-            .all(|k| base.f64(k).is_ok_and(|f| f == 0.0));
+        let zero = |keys: &[&str]| keys.iter().all(|k| base.f64(k).map_or(true, |v| v == 0.0));
+        let hold = |cfg: &Config| {
+            let m = (entry.build)(cfg).unwrap();
+            let (mut state, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(&cfg.f64s("start.pose").unwrap(), &mut state, &mut hold);
+            hold
+        };
+        let mut level = base.clone();
+        level.set_text("effects.gravity = false").unwrap();
+        let unloaded = hold(&base) == hold(&level);
         let cold = machine.thermal_parts().is_empty();
+        let place = MACHINES.iter().position(|m| m.id == entry.id).unwrap();
+        let idle = |e: &str| match e {
+            "effects.gearbox_backlash" => zero(&["gearbox.backlash_rad", "rack.backlash_m"]),
+            "effects.motor_friction" => zero(&["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]),
+            "effects.gearbox_efficiency" => {
+                ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"]
+                    .iter()
+                    .all(|k| base.f64(k).map_or(true, |v| v == 1.0))
+                    || base.bool("effects.gearbox_drag").unwrap_or(false)
+                        && 1.0 / base.f64("gearbox.efficiency").unwrap()
+                            - base.f64("gearbox.ratio").unwrap() * base.f64("gearbox.no_load_torque_nm").unwrap()
+                                / base.f64("gearbox.efficiency_torque_nm").unwrap()
+                            <= 1.0
+            }
+            "effects.gearbox_drag" => zero(&["gearbox.no_load_torque_nm"]) || base.f64("gearbox.ratio").unwrap() == 1.0,
+            "effects.motor_stiction" => {
+                base.f64("motor.friction_breakaway_nm").unwrap() <= base.f64("motor.friction_coulomb_nm").unwrap()
+            }
+            "effects.gearbox_lost_motion" => zero(&["gearbox.lost_motion_band_rad", "gearbox.hysteresis_rad"]),
+            "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
+                .iter()
+                .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
+            "effects.gravity" => unloaded,
+            "effects.part_heating" | "effects.thermal_feedback" => cold,
+            "effects.link_bending" => base.get("link_bending").is_err(),
+            "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
+            "effects.base_compliance" => {
+                let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+                machine.equilibrium(&base.f64s("start.pose").unwrap(), &mut state, &mut torque);
+                machine.frame_momentum(&state).is_none()
+            }
+            _ => false,
+        } || UNREAD.contains(&(place, e))
+            || CANNOT_ACT.contains(&(place, e));
         let effects: Vec<String> = effects
             .into_iter()
-            .filter(|e| {
-                !skipped.contains(&e.as_str())
-                    && !(alone && e == "effects.shared_dc_link")
-                    && !(tight && e == "effects.gearbox_backlash")
-                    && !(lossless && e == "effects.gearbox_efficiency")
-                    && !(frictionless && e == "effects.motor_friction")
-                    && !(level && e == "effects.gravity")
-                    && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback"))
-                    && !(e == "effects.link_bending" && base.get("link_bending").is_err())
-            })
+            .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e))
             .collect();
         // A switch that acts only in a setting the base has not is switched from that setting, in both runs: the belt's
         // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
@@ -313,10 +360,28 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
             "ratings.drive_overload_time_constant_s = 0.05".into(),
             "ratings.drive_max_current_time_s = 0.01".into(),
         ];
-        let through: [(&str, &[String]); 3] = [
+        // The switches of 14 November 2026, as sim-machines' control test flips them: the braking resistor warms only
+        // where it burns, so its chopper switches in just above the (low) bus; fine interpolation acts between profile
+        // cycles, at a profile cycle of 2 ms against the position loop's 1 ms; the arm tube's inertia goes into the arms'
+        // bending (effects.link_elasticity); the iron loss is what the stall current's copper loss has more than the
+        // rated current's (equal in the shipped motors), so the stall current is a fifth above the rated one; and the
+        // shipped friction feedforward has no torque in its characteristic, so it gets 0.05 N m.
+        let resistor =
+            [format!("ratings.braking_threshold_v = {:?}", 1.05 * base.f64("drive.bus_voltage_v").unwrap_or(0.0))];
+        let stall = [format!("motor.stall_current_a = {:?}", 1.2 * base.f64("motor.rated_current_a").unwrap())];
+        let characteristic = [format!(
+            "drive.friction_feedforward_torque_nm = {:?}",
+            vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
+        )];
+        let through: [(&str, &[String]); 8] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &capped),
             ("effects.drive_overload", &overload),
+            ("effects.braking_resistor_heating", &resistor),
+            ("effects.fine_interpolation", &["profile.cycle_s = 2.0e-3".into()]),
+            ("effects.arm_tube_inertia", &["effects.link_elasticity = true".into()]),
+            ("effects.iron_loss", &stall),
+            ("effects.friction_feedforward", &characteristic),
         ];
         for effect in effects {
             let mut base = base.clone();
@@ -329,13 +394,20 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
                 runner.handle(Request::Command(Command::StartCycle), events);
                 runner.advance(0.5, events);
             }
-            assert!(samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500);
+            assert!(
+                samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500,
+                "{}: {effect}: {} and {} samples, the same: {}",
+                entry.id,
+                samples(&events[0]).len(),
+                samples(&events[1]).len(),
+                samples(&events[0]) == samples(&events[1])
+            );
 
             let mut flipped = base.clone();
             flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
             let mut answer = Vec::new();
             runners[1].handle(Request::Reconfigure(flipped), &mut answer);
-            assert!(matches!(answer[..], [Event::Configured(Ok(_))]), "{}: {effect} was refused", entry.id);
+            assert!(matches!(answer[..], [Event::Configured(Ok(_))]), "{}: {effect} was refused: {answer:?}", entry.id);
 
             let mut changed_after = None;
             while changed_after.is_none() && runners[0].sim.time() < 0.5 + limit {
@@ -352,8 +424,32 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
                 entry.id
             );
         }
-    }
+    });
 }
+
+/// Effect switches a machine's config has but the machine does not read, by the machine's place in `MACHINES` (no
+/// machine is named outside its crate), as sim-machines' control test lists them: the four-arm delta's arm tube
+/// inertia, the disc cam's process force and the first gantry's yaw (read by machine files' gantries only).
+const UNREAD: [(usize, &str); 3] =
+    [(7, "effects.arm_tube_inertia"), (21, "effects.process_force"), (0, "effects.gantry_yaw")];
+
+/// Effect switches that cannot act in the test's weak-drive cycle on a machine, as sim-machines' control test lists them:
+/// the palletiser's motors and drives are named per motor, and the catalogue's replace the weak drive and the low bus;
+/// the flying saw never gets fast enough for the voltage limit; the disc cam's cycle stays within the weak drive's torque.
+/// And here, where the bus gives three quarters of the default cycle's top back EMF (`demanding`): the SCARA of parallel
+/// arms, whose weak drive moves it slower than its default cycle, never meets the voltage limit, so neither that switch
+/// nor field weakening changed anything within a cycle (14 November 2026).
+const CANNOT_ACT: [(usize, &str); 9] = [
+    (17, "effects.torque_limit"),
+    (17, "effects.voltage_limit"),
+    (17, "effects.field_weakening"),
+    (17, "effects.drive_current_limit"),
+    (16, "effects.voltage_limit"),
+    (16, "effects.field_weakening"),
+    (21, "effects.torque_limit"),
+    (4, "effects.voltage_limit"),
+    (4, "effects.field_weakening"),
+];
 
 /// Effects that act all the time show up at once: within one position-loop cycle of 1 ms.
 #[test]
@@ -591,8 +687,12 @@ fn row<'a>(table: &'a [Vec<String>], label: &str) -> &'a [String] {
 }
 
 /// A cell shows this value, to the digits the tables give: four digits and at most three decimals, and
-/// three digits for a value below 0.01 or from 100 000 up.
+/// three digits for a value below 0.01 or from 100 000 up. An infinite value is shown as such (a winding that runs away,
+/// `settled_rise`, uses an infinite share of its rating).
 fn shows(cell: &str, value: f64) -> bool {
+    if value.is_infinite() {
+        return number(cell) == value;
+    }
     let digits = value.abs() < 0.01 || value.abs() >= 1e5;
     (number(cell) - value).abs() <= if digits { 0.01 * value.abs() } else { 0.00051 * value.abs().max(1.0) }
 }
@@ -619,6 +719,43 @@ fn temp_file(entry: &MachineEntry, name: &str) -> String {
         .to_str()
         .unwrap()
         .to_string()
+}
+
+/// `on_every_machine` with at most `threads` machines at a time, for a test that runs each machine live in real time:
+/// the 22 of 14 November 2026 at once want more processors than there are, and one after the other took over 15 minutes.
+fn on_every_machine_by(threads: usize, check: impl Fn(&'static MachineEntry) + Sync) {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    let (check, next, failed) = (&check, AtomicUsize::new(0), AtomicBool::new(false));
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                while let Some(&entry) = MACHINES.get(next.fetch_add(1, Relaxed)) {
+                    let named = std::thread::Builder::new().name(entry.id.into());
+                    if named.spawn_scoped(scope, move || check(entry)).unwrap().join().is_err() {
+                        failed.store(true, Relaxed);
+                    }
+                }
+            });
+        }
+    });
+    assert!(!failed.load(Relaxed), "a machine failed");
+}
+
+/// The paths of the parts of this kind ("motor", "drive") the config names per motor, `parts.<motor>.<part>` (the
+/// palletiser's motors and S210s, since 13 November 2026): their catalogue values come over the config's own
+/// (`catalog::motor_config`), so a value set in `[motor]` or `[ratings]` reaches only motors that name no such part.
+fn named_per_motor(cfg: &Config, part: &str) -> Vec<String> {
+    let named = |path: &String| matches!(path.split('.').collect::<Vec<_>>()[..], ["parts", _, p] if p == part);
+    cfg.leaves().into_iter().map(|(path, _)| path).filter(named).collect()
+}
+
+/// The machine with one motor and the fewest bounded values, so that a search over the bounds stays short: since 13
+/// November 2026 the platforms hung in cables have fewer (17 against the linear motor's 19), on four and eight motors
+/// whose cycle takes five to nine times as long to compute.
+fn fewest_bounds() -> &'static MachineEntry {
+    let motors = |e: &MachineEntry| (e.build)(&e.config()).unwrap().motors().len();
+    let bounded = |e: &MachineEntry| sim_components::analysis::bounds(&e.config()).unwrap().len();
+    MACHINES.iter().copied().filter(|e| motors(e) == 1).min_by_key(|e| bounded(e)).unwrap()
 }
 
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
@@ -652,6 +789,8 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(model.history.len() > before, "{}: the simulation stood still meanwhile", entry.id);
+        // That seen, it stands for the rest (`optimised_in_the_app`).
+        model.set_paused(true);
 
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
@@ -681,7 +820,8 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
         // tells its guides' load per carriage only); a machine without belts, pulleys and guides (the delta) has the first
         // three.
         let belted = !sim.machine.belt_sections().is_empty();
-        let rated = entry.config().get("ratings.guide_dynamic_load_rating_n").is_ok();
+        // Rated since 13 November 2026, the linear delta's guides are still loaded per carriage only.
+        let rated = entry.config().get("ratings.guide_dynamic_load_rating_n").is_ok() && load.guide_load.is_some();
         if belted {
             assert!(
                 expected[..6].iter().all(|(_, value)| value.is_some()) && load.radial_load_peak.unwrap() > 100.0,
@@ -694,7 +834,14 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
                 entry.id
             );
         }
-        let expected: Vec<(&str, Option<f64>)> = expected.into_iter().filter(|(_, value)| value.is_some()).collect();
+        // And where the tool turns (an axis in rad, since 13 November 2026), its path and dwell errors in mrad.
+        let turns = load.path_angle_error_peak > 0.0 || load.dwell_angle_error_peak > 0.0;
+        let turned = [
+            ("Path error of the turn, peak [mrad]", turns.then_some(load.path_angle_error_peak * 1e3)),
+            ("Turned off target while dwelling, peak [mrad]", turns.then_some(load.dwell_angle_error_peak * 1e3)),
+        ];
+        let expected: Vec<(&str, Option<f64>)> =
+            expected.into_iter().chain(turned).filter(|(_, value)| value.is_some()).collect();
         assert!(expected.len() >= 3);
         assert_eq!(summary.len(), 1 + expected.len(), "{}: {summary:?}", entry.id);
         for (label, value) in expected {
@@ -744,9 +891,14 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
                     entry.id
                 );
             }
+            // The cubic mean is weighted with the speed and the RMS with the time, so the first is not always the larger,
+            // as checked here until 14 November 2026: the winches of the spatial platform in eight cables hold their
+            // cables' tension at rest (1.51 N m against an RMS of 1.64 N m on its first).
             assert!(
-                m.cubic_mean_torque > m.rms_torque
-                    && m.peak_dc_link_voltage > entry.config().f64("drive.bus_voltage_v").unwrap()
+                m.peak_dc_link_voltage > entry.config().f64("drive.bus_voltage_v").unwrap(),
+                "{}: motor {k}: DC link {} V",
+                entry.id,
+                m.peak_dc_link_voltage
             );
             assert!(
                 shows(&row(motors, "Braking resistor, energy [J]")[k], m.resistor_energy)
@@ -792,11 +944,22 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
                 && checks.iter().any(|row| row[0] == "Off target while dwelling [m]")
         );
 
-        // A motor too weak for the cycle fails its check, in the words of the chosen language.
+        // A motor too weak for the cycle fails its check, in the words of the chosen language. With effects.iron_loss (on
+        // since 14 November 2026) the winding settles at its rated rise at the stall current, so that is the weak one; a
+        // motor named per motor would come over both (`named_per_motor`). The palletiser's own [motor] in place of its
+        // named ones trips its drives on the way, which the app says beside the checks.
         model.set_language("de");
+        for path in named_per_motor(&model.config, "motor") {
+            model.set_param(&path, toml::Value::String(String::new()));
+        }
         model.set_param("motor.rated_current_a", toml::Value::Float(0.02));
+        if model.config.get("motor.stall_current_a").is_ok() {
+            model.set_param("motor.stall_current_a", toml::Value::Float(0.02));
+        }
         model.run_analysis(Analysis::Cycle);
-        wait_for_analysis(&mut model);
+        wait_for_jobs(&mut model);
+        let noted = |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-analysis-tripped";
+        assert!(model.messages.iter().all(noted), "{}: {:?}", entry.id, model.messages);
         let checks = &model.cycle_tables()[2];
         assert_eq!(checks[0][0], "Prüfung");
         assert!(
@@ -813,8 +976,11 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
 /// of the energy budget; in German too.
 #[test]
 fn the_regenerative_supply_shows_in_the_apps_tables() {
-    for entry in MACHINES.iter().copied() {
+    // Every machine on a thread of its own: one after the other, the 22 of 14 November 2026 took over 7 minutes alone.
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        // The machine in the app stands meanwhile (`optimised_in_the_app`).
+        model.set_paused(true);
         model.set_param("effects.regenerative_supply", toml::Value::Boolean(true));
         model.run_analysis(Analysis::Cycle);
         wait_for_analysis(&mut model);
@@ -853,41 +1019,80 @@ fn the_regenerative_supply_shows_in_the_apps_tables() {
         model.set_language("de");
         assert!(row(&model.cycle_tables()[1], "Ins Netz zurückgespeist [J]").len() == load.motors.len());
         assert!(model.budget_table().unwrap().iter().any(|cells| cells[0].ends_with("In das Netz zurückgespeist")));
-    }
+    });
+}
+
+/// The machines slowest to simulate, by their place in `MACHINES` (no machine is named outside its crate): the six-axis
+/// arm, the palletiser, the six-legged platform and the spatial platform in eight cables, whose cycles take 5 to 11 s
+/// each to compute (14 November 2026). The app's analyses that run tens of cycles on every machine check them in tests
+/// of their own, so that each test stays within the 15 minutes of a full run: the optimiser, which runs its up to 46
+/// cycles one after the other (2.5 to 9 minutes alone on each of these; the next slowest, the SCARA and the gantry, some
+/// 2 minutes), and the sensitivity (some 40 cycles each, 1100 of the 2600 s of processor time on all machines).
+const SLOW_TO_SIMULATE: [usize; 4] = [12, 17, 18, 20];
+
+/// Whether this machine is one of `SLOW_TO_SIMULATE`.
+fn slow_to_simulate(entry: &MachineEntry) -> bool {
+    SLOW_TO_SIMULATE.iter().any(|&k| MACHINES[k].id == entry.id)
+}
+
+/// `check` on every machine slow to simulate (`SLOW_TO_SIMULATE`), or on every other one.
+fn on_every_machine_slow(slow: bool, check: impl Fn(&'static MachineEntry) + Sync) {
+    on_every_machine(|entry| {
+        if slow_to_simulate(entry) == slow {
+            check(entry);
+        }
+    });
 }
 
 /// The sensitivity ranking in the app: the values the config gives bounds, each run at its low and its high
 /// bound, strongest first, the top rows shown with the parameter panel's names.
 #[test]
 fn the_app_ranks_the_uncertain_parameters() {
-    for entry in MACHINES.iter().copied() {
-        let mut model = Model::new(entry, "en");
-        assert!(model.sensitivity_table().is_none());
-        model.run_analysis(Analysis::Sensitivity);
-        wait_for_analysis(&mut model);
-        let bounds = sim_components::analysis::bounds(&model.config).unwrap();
-        let (nominal, rows) = model.sensitivity.as_ref().unwrap();
-        assert_eq!(rows.len(), bounds.len(), "{}", entry.id);
-        assert!(
-            rows.windows(2).all(|w| w[0].strength(nominal) >= w[1].strength(nominal))
-                && rows[0].strength(nominal) > 0.01,
-            "{}",
-            entry.id
+    for entry in MACHINES.iter().copied().filter(|e| !slow_to_simulate(e)) {
+        ranked_in_the_app(entry);
+    }
+}
+
+/// `the_app_ranks_the_uncertain_parameters` on the machines slow to simulate (`SLOW_TO_SIMULATE`).
+#[test]
+fn the_app_ranks_the_uncertain_parameters_of_the_machines_slow_to_simulate() {
+    for entry in MACHINES.iter().copied().filter(|e| slow_to_simulate(e)) {
+        ranked_in_the_app(entry);
+    }
+}
+
+/// `the_app_ranks_the_uncertain_parameters` on one machine, one after the other: each sensitivity runs on every processor.
+fn ranked_in_the_app(entry: &'static MachineEntry) {
+    let mut model = Model::new(entry, "en");
+    assert!(model.sensitivity_table().is_none());
+    model.run_analysis(Analysis::Sensitivity);
+    wait_for_analysis(&mut model);
+    let bounds = sim_components::analysis::bounds(&model.config).unwrap();
+    let (nominal, rows) = model.sensitivity.as_ref().unwrap();
+    assert_eq!(rows.len(), bounds.len(), "{}", entry.id);
+    assert!(
+        rows.windows(2).all(|w| w[0].strength(nominal) >= w[1].strength(nominal)) && rows[0].strength(nominal) > 0.01,
+        "{}",
+        entry.id
+    );
+    let table = model.sensitivity_table().unwrap();
+    assert_eq!((table.len(), table[0].len()), (9, 6), "{}: {table:?}", entry.id);
+    assert_eq!(table[0][0], "Parameter");
+    for (shown, row) in table[1..].iter().zip(rows) {
+        // "Belt · Pretension [N]": group and parameter as the parameter panel names them, a table within a table by
+        // both names ("motor.4" is "group-motor-4", bounded on the D4 and the SCARA of parallel arms since 13 November
+        // 2026).
+        let (group, leaf) = row.path.rsplit_once('.').unwrap();
+        let group = group.replace('.', "-");
+        assert_eq!(
+            shown[0],
+            format!("{} · {}", model.tr.tr(&format!("group-{group}")), model.tr.tr(&format!("param-{leaf}")))
         );
-        let table = model.sensitivity_table().unwrap();
-        assert_eq!((table.len(), table[0].len()), (9, 6), "{}: {table:?}", entry.id);
-        assert_eq!(table[0][0], "Parameter");
-        for (shown, row) in table[1..].iter().zip(rows) {
-            // "Belt · Pretension [N]": group and parameter as the parameter panel names them.
-            let (group, leaf) = row.path.rsplit_once('.').unwrap();
-            assert_eq!(
-                shown[0],
-                format!("{} · {}", model.tr.tr(&format!("group-{group}")), model.tr.tr(&format!("param-{leaf}")))
-            );
-            assert_eq!((number(&shown[1]), number(&shown[2])), (row.bounds.0, row.bounds.1));
-            let peak = row.changes(nominal);
-            assert_eq!(shown[3], format!("{:+.1} / {:+.1}", peak[0] * 100.0, peak[1] * 100.0));
-        }
+        // To the digits the tables give: a bound of four digits below 0.01 (2.909e-4, since 13 November 2026) shows
+        // three.
+        assert!(shows(&shown[1], row.bounds.0) && shows(&shown[2], row.bounds.1), "{shown:?} against {row:?}");
+        let peak = row.changes(nominal);
+        assert_eq!(shown[3], format!("{:+.1} / {:+.1}", peak[0] * 100.0, peak[1] * 100.0));
     }
 }
 
@@ -895,7 +1100,13 @@ fn the_app_ranks_the_uncertain_parameters() {
 /// puts them into the config and the running simulation, whose cycle is then as short as promised.
 #[test]
 fn the_app_optimises_the_cycle_and_applies_the_settings() {
-    on_every_machine(optimised_in_the_app);
+    on_every_machine_slow(false, optimised_in_the_app);
+}
+
+/// `the_app_optimises_the_cycle_and_applies_the_settings` on the machines slow to simulate (`SLOW_TO_SIMULATE`).
+#[test]
+fn the_app_optimises_the_cycle_of_the_machines_slow_to_simulate() {
+    on_every_machine_slow(true, optimised_in_the_app);
 }
 
 /// `the_app_optimises_the_cycle_and_applies_the_settings` on one machine. From cold, in the app and here: the cycle
@@ -903,6 +1114,9 @@ fn the_app_optimises_the_cycle_and_applies_the_settings() {
 /// optimiser's cycles once more.
 fn optimised_in_the_app(entry: &'static MachineEntry) {
     let mut model = Model::new(entry, "en");
+    // The machine in the app stands meanwhile, and takes the settings all the same: the live simulations of the 22
+    // machines (14 November 2026) alone want more processors than there are, the slowest a whole one each.
+    model.set_paused(true);
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     model.run_analysis(Analysis::Optimise);
     // The optimiser starts only from a cycle that passes every verdict (the D3's did not before 14 November 2026).
@@ -932,9 +1146,16 @@ fn optimised_in_the_app(entry: &'static MachineEntry) {
     );
     let cycle = found.changes.iter().filter(|c| c.0 == "cycle.segment").count();
     let lift_rows = found.lifts.len() + found.lifts.iter().filter(|l| l.via.is_some()).count();
-    assert!(!found.changes.is_empty() && table.len() == 3 + found.changes.len() - cycle + lift_rows);
+    // Where the tool turns (since 13 November 2026) a row of how far it turned off target while dwelling, after the
+    // dwell error.
+    let head = 3 + usize::from(found.before.dwell_angle_error_peak > 0.0);
     assert!(
-        table[3..].iter().all(|row| row[1] != row[2] && !row[0].contains("param-") && !row[0].contains("effect-")),
+        !found.changes.is_empty() && table.len() == head + found.changes.len() - cycle + lift_rows,
+        "{}: {table:?}",
+        entry.id
+    );
+    assert!(
+        table[head..].iter().all(|row| row[1] != row[2] && !row[0].contains("param-") && !row[0].contains("effect-")),
         "{table:?}"
     );
 
@@ -1144,8 +1365,7 @@ fn a_refused_config_value_is_rolled_back_and_reported_once() {
 #[test]
 fn the_app_searches_the_worst_corner_of_the_bounds() {
     use sim_components::analysis::{bounds, verdict_worst_and_bands};
-    // The machine with the fewest bounded values, so that the search stays short.
-    let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    let entry = fewest_bounds();
     let mut model = Model::new(entry, "en");
     // From cold, in the app and below: how the search is shown is judged here, nothing thermal, and the warm start runs
     // each of its cycles once more.
@@ -1207,10 +1427,9 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
 /// value it took and the worst-case result. A result is marked when the config has changed since.
 #[test]
 fn the_checks_get_error_bands_in_the_app() {
-    use sim_components::analysis::bounds;
     // The app runs the same code for every machine: that its bands are those of the library is checked on the machine
     // with the fewest bounded values, and on every machine that the tables show the bands the app found.
-    let fewest = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    let fewest = fewest_bounds();
     on_every_machine(|entry| banded_in_the_app(entry, entry.id == fewest.id));
 }
 
@@ -1220,6 +1439,8 @@ fn the_checks_get_error_bands_in_the_app() {
 fn banded_in_the_app(entry: &'static MachineEntry, library: bool) {
     use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled};
     let mut model = Model::new(entry, "en");
+    // The machine in the app stands meanwhile (`optimised_in_the_app`).
+    model.set_paused(true);
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     model.inputs.bands = true;
     model.run_analysis(Analysis::Cycle);
@@ -1320,6 +1541,8 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
     let weak = |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-drive-tripped";
     on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        // The machine in the app stands meanwhile (`optimised_in_the_app`); it takes a named motor all the same.
+        model.set_paused(true);
         // From cold, in the app and in the library's search below: what is judged is how the motors are ranked, shown and
         // named, nothing thermal, and the warm start runs each candidate's cycle once more.
         model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
@@ -1338,10 +1561,14 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         assert!(model.search_table().is_none() && !model.has_result(Analysis::Search));
         model.messages.clear();
 
-        model.inputs.series = series.into();
+        // A linear motor machine is offered the linear motors of a supply (since 13 November 2026), not the rotary ones:
+        // the Siemens 1FN3 at the S120.
+        let (series, supply) =
+            if model.config.get("linear_motor").is_ok() { ("1FN3050", "s120") } else { (series, "400v") };
+        (model.inputs.series, model.inputs.supply) = (series.into(), supply.into());
         model.run_analysis(Analysis::Search);
         wait_for_analysis(&mut model);
-        let found = search_motors(entry, &cold, "400v", &|article| article.starts_with(series), None);
+        let found = search_motors(entry, &cold, supply, &|article| article.starts_with(series), None);
         let table = model.search_table().unwrap();
         assert_eq!(
             table[0],
@@ -1371,19 +1598,16 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
                 None => assert!(row[6].contains(' ') && row[7].is_empty(), "{row:?}"),
             }
         }
-        // A 2000 r/min motor is too slow for the axis speed by its catalogue numbers alone: it is listed as
-        // failed with that reason, and no cycle is simulated for it. Not on the linear motor, whose motor values are in N
-        // and m: the catalogue's rotary motors are no motors for it (the search tries them all the same).
-        model.inputs.series = "1FK2208-3AC".into();
-        model.run_analysis(Analysis::Search);
-        wait_for_analysis(&mut model);
+        // A 2000 r/min motor was screened out as too slow for the axis speed by its catalogue numbers alone. Since 14
+        // November 2026 every candidate is simulated (`catalog::run_jobs`: the axis limits ruled out motors that passed
+        // every verdict), so its row has the tightest check of its cycle and a figure. Not on the linear motor, which is
+        // offered no rotary motors.
         if model.config.get("linear_motor").is_err() {
-            assert_eq!(
-                model.search_table().unwrap()[1][5..],
-                ["FAIL", "Motor speed at the highest axis speed", ""],
-                "{}",
-                entry.id
-            );
+            model.inputs.series = "1FK2208-3AC".into();
+            model.run_analysis(Analysis::Search);
+            wait_for_analysis(&mut model);
+            let row = &model.search_table().unwrap()[1];
+            assert!(row[0].starts_with("1FK2208-3AC") && number(&row[7]) > 0.0, "{}: {row:?}", entry.id);
         }
         model.inputs.series = series.into();
         model.run_analysis(Analysis::Search);
@@ -1394,7 +1618,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
         settle(&mut model);
         assert_eq!(
             (part(&model, "motor"), part(&model, "motor_supply"), part(&model, "gearbox")),
-            (found[0].article.to_string(), "400v".to_string(), String::new())
+            (found[0].article.to_string(), supply.to_string(), String::new())
         );
         assert!(model.messages.iter().all(weak), "{}: {:?}", entry.id, model.messages);
         // Naming a motor does not outdate the search, which put its own motors in: another row can follow.
@@ -1454,7 +1678,7 @@ fn the_app_searches_motors_and_names_one_in_the_config() {
 #[test]
 fn a_path_is_planned_run_and_analysed_in_the_app() {
     use sim_components::analysis::{analyse_trajectory, verdicts};
-    for entry in MACHINES.iter().copied() {
+    on_every_machine_by(4, |entry| {
         let mut model = Model::new(entry, "en");
         wait_for_data(&mut model);
         let axes = model.session.axes.clone();
@@ -1487,12 +1711,18 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             entry.id,
             load.duration
         );
-        let behind = number(&row(summary, "Behind the setpoint, peak [mm]")[0]);
+        // In mm where the tool moves, in mrad where it only turns (the rotary table): the tool's error is split into the
+        // two since 13 November 2026.
+        let (label, peak) = if load.tracking_error_peak > 0.0 {
+            ("Behind the setpoint, peak [mm]", load.tracking_error_peak)
+        } else {
+            ("Turn behind the setpoint, peak [mrad]", load.tracking_angle_error_peak)
+        };
+        let behind = number(&row(summary, label)[0]);
         assert!(
-            load.tracking_error_peak > 1e-5 && (behind / (load.tracking_error_peak * 1e3) - 1.0).abs() < 0.05,
-            "{}: {} m in {summary:?}",
-            entry.id,
-            load.tracking_error_peak
+            peak > 1e-5 && (behind / (peak * 1e3) - 1.0).abs() < 0.05,
+            "{}: {peak} m or rad in {summary:?}",
+            entry.id
         );
         assert_eq!(row(summary, "Planned path off the given one, at most [mm]")[0], "0.000");
         // A path has no cycle time and no dwell.
@@ -1666,26 +1896,35 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         let payload = model.config.f64(key).unwrap();
         model.set_param(key, toml::Value::Float(payload + 0.5));
         wait_for_jobs(&mut model);
-        assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{:?}", model.messages);
-        let fast = number(&row(&model.path_tables()[0], "Duration [s]")[0]);
-        // Sooner where the motors bind before the belts: where the axis limits take a belt section below the tension the
-        // time-optimal plan keeps, that plan is slower (the linear delta; cli.rs checks that it keeps the belts above it).
-        let cfg = entry.config();
-        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
-            + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
-        let belts_bind = load.belt_tension.is_some_and(|(slackest, _)| slackest < floor);
-        // Likewise where the axis limits take a gearbox's or pulley's output torque above the share of its rating the
-        // time-optimal plan keeps (profile.torque_reserve; a limit of that plan since 14 November): the planar delta's
-        // lines within the axis limits take its gearbox 1 to 248 N m of its 192 N m, the plan keeps 0.8 * 192 = 153.6 N m
-        // in its rigid model and takes 0.588 s against 0.581 s (sim-cli's test checks it is gentler then).
-        let reserve = cfg.f64("profile.torque_reserve").unwrap();
-        let gears_bind =
-            judged.iter().any(|v| matches!(v.check, "gearbox-peak" | "pulley-torque") && v.value > reserve * v.limit);
-        assert!(
-            (fast < slow || belts_bind || gears_bind) && model.outdated(Analysis::Path),
-            "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits",
-            entry.id
-        );
+        // Where the motors cannot hold the load within the torque reserve somewhere on these lines, the plan is refused
+        // as the library refuses it, and the machine stays (the turned and tilted poses of the six-legged platform and of
+        // the spatial platform in eight cables, since 13 November 2026).
+        let refused = sim_components::Sim::new(entry, &entry.config()).unwrap().plan_path(&pieces, true).err();
+        if let Some(refused) = refused {
+            assert_eq!(model.messages.last().map(|m| m.0), Some(refused.key), "{}: {:?}", entry.id, model.messages);
+        } else {
+            assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{:?}", model.messages);
+            let fast = number(&row(&model.path_tables()[0], "Duration [s]")[0]);
+            // Sooner where the motors bind before the belts: where the axis limits take a belt section below the tension the
+            // time-optimal plan keeps, that plan is slower (the linear delta; cli.rs checks that it keeps the belts above it).
+            let cfg = entry.config();
+            let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
+                + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+            let belts_bind = load.belt_tension.is_some_and(|(slackest, _)| slackest < floor);
+            // Likewise where the axis limits take a gearbox's or pulley's output torque above the share of its rating the
+            // time-optimal plan keeps (profile.torque_reserve; a limit of that plan since 14 November): the planar delta's
+            // lines within the axis limits take its gearbox 1 to 248 N m of its 192 N m, the plan keeps 0.8 * 192 = 153.6 N m
+            // in its rigid model and takes 0.588 s against 0.581 s (sim-cli's test checks it is gentler then).
+            let reserve = cfg.f64("profile.torque_reserve").unwrap();
+            let gears_bind = judged
+                .iter()
+                .any(|v| matches!(v.check, "gearbox-peak" | "pulley-torque") && v.value > reserve * v.limit);
+            assert!(
+                (fast < slow || belts_bind || gears_bind) && model.outdated(Analysis::Path),
+                "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits",
+                entry.id
+            );
+        }
         simulate(&mut model, 0.5);
         assert!(
             (latest(&model, &position) - home[0]).abs() < 1e-3,
@@ -1712,7 +1951,18 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         model.set_speed(20.0);
         model.command(Command::MoveTo(ends.clone()));
         simulate(&mut model, 4.0);
-        assert!((latest(&model, &position) - ends[0]).abs() < 1e-3);
+        // To 1 mm, or the machine's settling tolerance where that is wider: the palletiser's arms at full reach stand
+        // 1.8 mm off with the twist of their gears, which the encoders do not see (its tolerance is 4 mm for that).
+        let near = entry.config().f64("ratings.settling_tolerance_m").map_or(1e-3, |t| t.max(1e-3));
+        assert!(
+            (latest(&model, &position) - ends[0]).abs() < near,
+            "{}: at {} for {} at {} s ({:?})",
+            entry.id,
+            latest(&model, &position),
+            ends[0],
+            model.history.back().unwrap()[0],
+            model.messages
+        );
         for (name, to) in [("from-the-ends.csv", point(0.5)), ("onto-the-ends.csv", ends.clone())] {
             let file = temp_file(entry, name);
             std::fs::write(
@@ -1729,7 +1979,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             wait_for_analysis(&mut model);
             simulate(&mut model, 4.0);
             assert!(
-                (latest(&model, &position) - to[0]).abs() < 1e-3,
+                (latest(&model, &position) - to[0]).abs() < near,
                 "{}: {name}: the machine stands at {} ({:?})",
                 entry.id,
                 latest(&model, &position),
@@ -1741,7 +1991,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         // 50 mm radius and a line, towards the middle of the workspace. With a tolerance of 0.1 mm the
         // planned path is off by the 0.1 mm the library reports, which the table shows, and takes less time.
         if axes.len() != 2 {
-            continue;
+            return;
         }
         let towards = |i: usize| (0.5 * (axes[i].min + axes[i].max) - home[i]).signum();
         let (dx, dz) = (towards(0), towards(1));
@@ -1788,7 +2038,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
             entry.id
         );
         assert!(shorter < 0.95 * given, "{}: {shorter} s with transition curves, {given} s without", entry.id);
-    }
+    });
 }
 
 /// Where an arm's tool is drawn off its pose by the gears' twist under its weight: the distance in the scene of the tool
@@ -1834,6 +2084,8 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         let measured = sim_components::trace::Trace::parse(&rows.join("\n"), sim.machine.motors()).unwrap();
 
         let mut model = Model::new(entry, "en");
+        // The machine in the app stands meanwhile (`optimised_in_the_app`).
+        model.set_paused(true);
         assert!(model.trace_tables().is_empty() && model.trace_advice().is_empty());
         model.set_param("effects.payload", toml::Value::Boolean(false));
         model.set_param("effects.encoder_resolution", toml::Value::Boolean(false));
@@ -1938,6 +2190,9 @@ fn a_drive_that_trips_is_reported() {
     let trips = |events: &[Event]| events.iter().filter(|e| matches!(e, Event::Refused("ui-drive-tripped", _))).count();
     on_every_machine(|entry| {
         let mut cfg = entry.config();
+        // A drive named per motor brings its own DC link and resistor from the catalogue: the weak link is had without it.
+        let named = named_per_motor(&cfg, "drive");
+        named.iter().for_each(|path| cfg.set_text(&format!("{path} = \"\"")).unwrap());
         weak.iter().for_each(|(path, value)| cfg.set_text(&format!("{path} = {value:?}")).unwrap());
         let mut runner = Runner::new(entry, &cfg).unwrap();
         let mut events = Vec::new();
@@ -1959,6 +2214,7 @@ fn a_drive_that_trips_is_reported() {
         assert_eq!(trips(&events), 1, "{}", entry.id);
 
         let mut model = Model::new(entry, "en");
+        named.iter().for_each(|path| model.set_param(path, toml::Value::String(String::new())));
         weak.iter().for_each(|(path, value)| model.set_param(path, toml::Value::Float(*value)));
         model.run_analysis(Analysis::Cycle);
         wait_for_jobs(&mut model);
@@ -2380,8 +2636,10 @@ fn typed_part_names_give_the_config_of_the_search_button_and_the_command_line() 
 /// (`trace::overlay_csv`, which `cli.rs` checks against the command line's file).
 #[test]
 fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
-    // Since 13 November the delta too: replay takes a transformation that is not linear.
-    for entry in MACHINES.iter().copied() {
+    // Since 13 November the delta too: replay takes a transformation that is not linear. Every machine on a thread of
+    // its own: one after the other, the 22 machines of 14 November 2026 (twice as many as before, some of them ten
+    // times as slow to simulate, replay and fit) took over 15 minutes.
+    on_every_machine(|entry| {
         let mut cfg = entry.config();
         cfg.set_text("effects.payload = false").unwrap();
         let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
@@ -2411,6 +2669,8 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
         let simulated = sim_components::trace::replay(entry, &cfg, &measured).unwrap();
 
         let mut model = Model::new(entry, "en");
+        // The machine in the app stands meanwhile (`optimised_in_the_app`).
+        model.set_paused(true);
         assert!(model.overlay().is_empty());
         model.set_param("effects.payload", toml::Value::Boolean(false));
         model.inputs.trace_file = file;
@@ -2452,7 +2712,7 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
         );
         model.clear(Analysis::Trace);
         assert!(model.overlay().is_empty());
-    }
+    });
 }
 
 /// The operating points in the app, as `sim-cli analyze --points` writes them (`MotorLoad::points`, which
@@ -2462,8 +2722,10 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
 /// the rated speed backwards to the rated speed forwards (on the gantry 1.27 N m up to 314 rad/s).
 #[test]
 fn the_operating_points_are_shown_over_the_torque_speed_curve() {
-    for entry in MACHINES.iter().copied() {
+    // Every machine on a thread of its own, the machine in the app standing meanwhile (`optimised_in_the_app`).
+    on_every_machine(|entry| {
         let mut model = Model::new(entry, "en");
+        model.set_paused(true);
         assert!(
             model.points_plot(Analysis::Cycle).is_none()
                 && model.points_plot(Analysis::Path).is_none()
@@ -2502,7 +2764,6 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
         // direction of motion), the S1 line the rated torque up to the rated speed both ways.
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         assert_eq!(curves.len(), load.motors.len());
-        let (mut peak, mut rated) = (0f64, f64::INFINITY);
         for (k, chart) in curves.iter().enumerate() {
             let drive = sim.control.drive_params_of(k);
             assert_eq!(chart.peak[0].len(), sim_components::charts::CURVE_POINTS);
@@ -2510,20 +2771,32 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve() {
                 assert_eq!((low[1], high[1]), drive.torque_curve(high[0]), "{}: motor {k}", entry.id);
             }
             let middle = sim_components::charts::CURVE_POINTS / 2;
-            assert_eq!(chart.peak[0][middle], [0.0, drive.peak_torque]);
+            // At standstill the peak torque; with field weakening (on by default since 13 November 2026) that of the d-q
+            // model within the maximum current, a hair below it where the catalogue rounds (14.99994 of 15 N m).
+            let standstill = drive.torque_curve(0.0).1;
+            assert!(standstill <= drive.peak_torque && standstill > 0.999 * drive.peak_torque, "{}", entry.id);
+            assert_eq!(chart.peak[0][middle], [0.0, standstill]);
             let (w, t) = (drive.rated_speed, drive.rated_torque);
             assert!(chart.s1 == [vec![[-w, t], [w, t]], vec![[-w, -t], [w, -t]]], "{}", entry.id);
-            (peak, rated) = (peak.max(drive.peak_torque), rated.min(drive.rated_speed));
+            // The cycle runs inside the motor's curve.
+            for (speed, torque) in &load.motors[k].points {
+                assert!(
+                    speed.abs() < drive.max_speed && torque.abs() <= drive.peak_torque,
+                    "{}: motor {k} at {speed} rad/s and {torque} N m, rated speed {} rad/s, maximum {} rad/s, peak {} N m",
+                    entry.id,
+                    drive.rated_speed,
+                    drive.max_speed,
+                    drive.peak_torque
+                );
+            }
         }
         // Nothing of a path before one was run.
         assert!(model.points_plot(Analysis::Path).is_none());
-        // The cycle runs inside the curve.
-        assert!(all.iter().all(|(_, (speed, torque))| speed.abs() < rated && torque.abs() <= peak), "{}", entry.id);
         model.set_language("de");
         assert_eq!(model.points_table(0..1).unwrap().1[0][1], "Motordrehzahl [rad/s]");
         model.clear_analysis();
         assert!(model.points_plot(Analysis::Cycle).is_none());
-    }
+    });
 }
 
 /// A frequency response as `sim-cli sweep` writes it.
@@ -3098,9 +3371,12 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation() {
                 );
             }
         }
-        // The friction the machine has: of its guides, or of its arms' joints.
-        let effect =
-            if model.config.get("effects.guide_friction").is_ok() { "guide_friction" } else { "joint_friction" };
+        // The friction the machine has: of its guides, of its arms' joints, or of the winches of a platform in cables
+        // (since 13 November 2026).
+        let effect = ["guide_friction", "joint_friction", "winch_friction"]
+            .into_iter()
+            .find(|e| model.config.get(&format!("effects.{e}")).is_ok())
+            .unwrap();
 
         // Over the analysed cycle: where windings and parts settle.
         model.run_analysis(Analysis::Cycle);

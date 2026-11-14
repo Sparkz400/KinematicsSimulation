@@ -1866,11 +1866,14 @@ impl Model {
                                     break;
                                 }
                                 tool.iter_mut().zip(&off).for_each(|(t, d)| *t += d);
-                                from_here.set_text(&format!("start.pose = {tool:?}")).map_err(refused)?;
+                                let mut closer = from_here.clone();
+                                closer.set_text(&format!("start.pose = {tool:?}")).map_err(refused)?;
                                 // shortcut: a tool pose pushed past a stroke's end keeps the plan of the last one that
                                 // started, up to one sag off; a setpoint within a sag of the end is rare.
-                                match Sim::new(entry, &from_here) {
-                                    Ok(closer) => sim = closer,
+                                // The config stays that of the last one too: the run store's simulation below starts
+                                // from it, and a refused pose refused the whole path.
+                                match Sim::new(entry, &closer) {
+                                    Ok(started) => (sim, from_here) = (started, closer),
                                     Err(_) => break,
                                 }
                             }
