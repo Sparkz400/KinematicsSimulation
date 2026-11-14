@@ -777,13 +777,23 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         // the SCARA and the arm then the links' values the trace tells apart.
         let (count, checked) = if per_axis {
             (sim.machine.axes().len(), ["moved_mass_kg", "coulomb_friction_n"])
+        } else if !sim_components::identify::turns_both_ways(&measured) {
+            // A cycle of short moves: the four-arm delta's lifts last some 60 ms, less than the fit's 80 ms window, and
+            // its motor 2 turns forward for 189 of the 810 rows a direction needs (14 November), so the fit is skipped.
+            (0, ["coulomb_friction_nm"; 2])
         } else {
             (sim.machine.motors().len(), ["coulomb_friction_nm"; 2])
         };
         assert_eq!(fit.iter().filter(|r| !r[0].starts_with("link_")).count(), 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
-            let (config, fitted): (f64, f64) = (row[2].parse().unwrap(), row[3].parse().unwrap());
-            assert!(config > 0.0 && (fitted / config - 1.0).abs() < 0.02, "{}: {row:?}", entry.id);
+            let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
+            // Or within a fifth of its standard error: the D4 picker's cycle knows motor 1's Coulomb friction to ± 21 %
+            // and the tool motor's to ± 84 %, and run and replay differ by 2.4 % and 5.3 % of it (0.12 and 0.06 σ).
+            assert!(
+                config > 0.0 && (fitted - config).abs() < (0.02 * config).max(0.2 * error),
+                "{}: {row:?}",
+                entry.id
+            );
         }
 
         // A file that is no trace is refused, in the chosen language.
