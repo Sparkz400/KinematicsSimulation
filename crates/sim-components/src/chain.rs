@@ -590,6 +590,23 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// Exact in joint coordinates, velocity terms included (`feedforward_torque` leaves them out): M q'' + h at the
     /// joint over the ratio, plus the rotor's own J_rotor i q''.
     fn rigid_motor_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.rigid_split_torque(angle, speed, acc, acc, out);
+    }
+
+    /// Elastic: the gearbox's static twist under what reaches it, (torque − J_rotor acc) i at the joint (ripple, motor
+    /// friction and the gearbox's losses and damping left out), times the ratio. Zeros where the joints are rigid.
+    fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        for (k, joint) in self.joints.iter().enumerate() {
+            let j = &joint.drive;
+            out[k] = if self.elastic {
+                j.ratio() * j.gearbox.static_twist((torque[k] - j.rotor_inertia * acc[k]) * j.ratio())
+            } else {
+                0.0
+            };
+        }
+    }
+
+    fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], rotor_acc: &[f64], out: &mut [f64]) {
         let n = self.n();
         let joint = |x: &[f64]| -> Vec<f64> { (0..n).map(|k| x[k] / self.joints[k].drive.ratio()).collect() };
         let (q, qd, qdd) = (joint(angle), joint(speed), joint(acc));
@@ -597,7 +614,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         for k in 0..n {
             let j = &self.joints[k].drive;
             let at_joint: f64 = (0..n).map(|c| mass[k * n + c] * qdd[c]).sum::<f64>() + bias[k];
-            out[k] = at_joint / j.ratio() + j.rotor_inertia * j.ratio() * qdd[k];
+            out[k] = at_joint / j.ratio() + j.rotor_inertia * rotor_acc[k];
         }
     }
 

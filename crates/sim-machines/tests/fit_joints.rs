@@ -12,7 +12,7 @@ use sim_core::{Config, MachineEntry};
 /// An exciting trajectory, as robot identification takes it: every axis swings about the start pose with its own
 /// amplitude and frequency (`swing`: amplitude, Hz), faded in and out over a second, for `seconds`; recorded every
 /// millisecond, then noise on what a drive measures (torque, speed, angle) of the size the single axis's fit takes,
-/// the torque's scaled to the motor. With `pick`, the payload is not held until that time and held from it on.
+/// the torque's scaled to the motor. With `held`, the payload is held at the times it says.
 fn noisy_trace(
     entry: &MachineEntry,
     cfg: &Config,
@@ -20,7 +20,7 @@ fn noisy_trace(
     seconds: f64,
     torque_noise: f64,
     noise: &mut Noise,
-    pick: Option<f64>,
+    held: Option<fn(f64) -> bool>,
 ) -> Trace {
     let mut sim = Sim::new(entry, cfg).unwrap();
     let n = swing.len();
@@ -38,8 +38,8 @@ fn noisy_trace(
     sim.command(Command::Trajectory(points)).unwrap();
     let mut trace = Trace::default();
     for _ in 0..(seconds * 1000.0) as usize {
-        if let Some(at) = pick {
-            sim.control.payload_attached = sim.time() >= at - 1e-9;
+        if let Some(held) = held {
+            sim.control.payload_attached = held(sim.time());
         }
         trace.record(&sim);
         sim.run(1e-3, |_| {});
@@ -127,7 +127,7 @@ fn the_delta_fit_finds_a_heavier_payload_and_more_joint_friction() {
         change_is(&fit, "constant_torque_nm", motor, 0.0);
     }
     assert!(fit.alike.is_empty(), "{:?}", fit.advice());
-    assert_eq!(fit.payload_step, None);
+    assert_eq!(fit.payload_steps, vec![]);
     // The advice says the payload's factor first, then per motor.
     assert_eq!(fit.advice()[0].0, "fit-payload");
 }
@@ -269,7 +269,7 @@ fn the_scara_fit_finds_heavier_links_in_the_values_they_combine_with() {
     }
     base_changes_are(&fit, &[("link_mass_factor arm2", 0.25), ("link_mass_factor quill", 0.5)]);
     assert!(own(&fit, "payload_factor payload").unwrap().error < 0.01);
-    assert_eq!(fit.payload_step, None);
+    assert_eq!(fit.payload_steps, vec![]);
     // The advice names what each value combines.
     assert!(
         fit.advice().iter().any(|(key, detail)| *key == "fit-combined" && detail.contains("link_mass_factor quill"))
@@ -277,8 +277,8 @@ fn the_scara_fit_finds_heavier_links_in_the_values_they_combine_with() {
 }
 
 /// The six-axis arm with link 2 1.2 times and link 3 1.3 times as heavy (mass and inertia), every joint swung about the
-/// start pose, gearbox losses off; its gears rigid (`joint_elasticity` off: with them elastic, a heavier arm's trace came
-/// out with a payload step and Coulomb friction 0.08 N m off at joint 2 even without the links' columns, see PROGRESS).
+/// start pose, gearbox losses off; its gears rigid (`joint_elasticity` off; the shipped elastic gears in
+/// `the_arm_fit_with_elastic_gears_finds_heavier_links`).
 ///
 /// By hand: link 1 turns about joint 1's fixed vertical axis, its centre on it: its factor adds I_zz = 0.25 kg m² over
 /// 120² = 1.736e-5 kg m² to motor 1's inertia. Link 2 swings about joint 2's horizontal axis under gravity, so its factor
@@ -304,7 +304,7 @@ fn the_arm_fit_finds_heavier_links_and_folds_one_its_trace_does_not_excite() {
     let link2 = own(&fit, "link_mass_factor link2").unwrap();
     assert!(link2.error < 0.02, "{link2:?}");
     base_changes_are(&fit, &[("link_mass_factor link2", 0.2), ("link_mass_factor link3", 0.3)]);
-    assert_eq!(fit.payload_step, None);
+    assert_eq!(fit.payload_steps, vec![]);
 
     swing[1].0 = 0.01;
     let held =
@@ -325,9 +325,17 @@ fn the_arm_fit_finds_heavier_links_and_folds_one_its_trace_does_not_excite() {
 fn a_payload_picked_during_the_trace_is_found_with_when() {
     let entry = sim_machines::find("delta-d3").unwrap();
     let cfg = entry.config();
-    let trace = noisy_trace(entry, &cfg, &[(0.2, 0.6), (0.2, 0.9), (0.06, 1.1)], 8.0, 0.01, &mut Noise(1), Some(3.5));
+    let trace = noisy_trace(
+        entry,
+        &cfg,
+        &[(0.2, 0.6), (0.2, 0.9), (0.06, 1.1)],
+        8.0,
+        0.01,
+        &mut Noise(1),
+        Some(|t| t >= 3.5 - 1e-9),
+    );
     let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
-    let (time, error) = fit.payload_step.unwrap();
+    let [(time, error)] = fit.payload_steps[..] else { panic!("{:?}", fit.payload_steps) };
     assert!((time - 3.5).abs() <= 0.005 && error <= 0.005, "{time} ± {error}");
     for (quantity, expected) in [("payload_factor_before", 0.0), ("payload_factor_after", 1.0)] {
         let (config, fitted, error) = value(&fit, quantity, "payload");
@@ -336,4 +344,61 @@ fn a_payload_picked_during_the_trace_is_found_with_when() {
     }
     assert!(own(&fit, "payload_factor payload").is_none());
     assert_eq!(fit.advice()[0].0, "fit-payload-step");
+}
+
+/// The six-axis arm as shipped, its gears elastic (`joint_elasticity` on, 67 000 N m/rad at each joint), with link 2
+/// 1.2 and link 3 1.3 times as heavy, the rigid arm's swing and noise, gearbox losses off. Before 14 November this
+/// fitted link 2's factor −9.4 ± 0.9 and found a payload step that was not there: the rigid model at the motors' angles
+/// took the gears' twist and ringing (joint 2's at some 9 Hz, 0.67 N m RMS at its motor) for the links' motion. Now the
+/// load is put where the twist that the motor's torque holds puts it (`Machine::twist`, a two-mass model per joint).
+///
+/// By hand as for the rigid arm: link 1's factor into motor 1's inertia with 0.25 / 120² (to 1e-6); link 2's value up by
+/// 0.2 + 1.217 × 0.3 = 0.565 through what it combines. Measured (14 November): + 0.558 ± 0.025. Tolerance: every base
+/// value within three of its standard errors of the truth, link 2's error below 0.04, no payload step.
+#[test]
+fn the_arm_fit_with_elastic_gears_finds_heavier_links() {
+    let entry = sim_machines::find("urdf-arm").unwrap();
+    let mut cfg = entry.config();
+    assert!(cfg.bool("effects.joint_elasticity").unwrap());
+    cfg.set_text("effects.gearbox_efficiency = false").unwrap();
+    let urdf = include_str!("../../machine-joint-kit/urdf/six-axis.urdf");
+    let truth = with_links(&cfg, urdf, &[("link2", 1.2), ("link3", 1.3)], "elastic-arm-links");
+    let swing = [(0.5, 0.5), (0.3, 0.7), (0.4, 0.6), (0.5, 0.8), (0.4, 0.9), (0.5, 1.0)];
+    let trace = noisy_trace(entry, &truth, &swing, 8.0, 0.02, &mut Noise(1), None);
+    let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
+    let coefficient = folded_into(&fit, "link_mass_factor link1", "added_inertia_kg_m2 1");
+    assert!((coefficient / (0.25 / 14400.0) - 1.0).abs() < 1e-6, "{coefficient:e}");
+    let link2 = own(&fit, "link_mass_factor link2").unwrap();
+    assert!(link2.error < 0.04, "{link2:?}");
+    base_changes_are(&fit, &[("link_mass_factor link2", 0.2), ("link_mass_factor link3", 0.3)]);
+    assert!(fit.payload_steps.is_empty(), "{:?}", fit.payload_steps);
+}
+
+/// The delta picker as shipped, its gripper empty for the first 2.5 s of the swing, holding its 3 kg until 5.5 s and
+/// empty again from then on: two steps in one trace. By hand: the steps at 2.5 and 5.5 s, each within three of its
+/// standard errors, which stay below 20 ms (the regressor is smoothed over ±40 ms), the payload's factor 0 before the first, 1 between (`payload_factor_after` of `payload 1`) and 0 after
+/// the second (of `payload 2`), each within three standard errors and with a band below 0.02. Measured (14 November):
+/// 2.489 ± 0.019 s and 5.502 ± 0.002 s; × 0.006, 0.990, 0.007, each ± 0.015.
+#[test]
+fn two_payload_steps_in_one_trace_are_found_with_when() {
+    let entry = sim_machines::find("delta-d3").unwrap();
+    let cfg = entry.config();
+    let held: fn(f64) -> bool = |t| (2.5 - 1e-9..5.5 - 1e-9).contains(&t);
+    let trace = noisy_trace(entry, &cfg, &[(0.2, 0.6), (0.2, 0.9), (0.06, 1.1)], 8.0, 0.01, &mut Noise(1), Some(held));
+    let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
+    assert_eq!(fit.payload_steps.len(), 2, "{:?}", fit.payload_steps);
+    for ((time, error), truth) in fit.payload_steps.iter().zip([2.5, 5.5]) {
+        assert!((time - truth).abs() <= 3.0 * error.max(0.002) && *error <= 0.02, "{time} ± {error}, in truth {truth}");
+    }
+    for (quantity, of, expected) in [
+        ("payload_factor_before", "payload", 0.0),
+        ("payload_factor_after", "payload 1", 1.0),
+        ("payload_factor_after", "payload 2", 0.0),
+    ] {
+        let (config, fitted, error) = value(&fit, quantity, of);
+        let (factor, band) = (fitted / config, error / config);
+        assert!((factor - expected).abs() < 3.0 * band && band < 0.02, "{quantity} {of}: × {factor:.4} ± {band:.4}");
+    }
+    let steps: Vec<&str> = fit.advice().iter().filter(|(key, _)| *key == "fit-payload-step").map(|_| "step").collect();
+    assert_eq!(steps.len(), 2);
 }

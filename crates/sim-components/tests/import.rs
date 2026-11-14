@@ -205,3 +205,43 @@ fn a_grid_far_finer_than_the_signals_is_refused() {
     let text = "time,pos,torque\n0,0,0\n1,1,0\n2,2,0\n3,3,0\n";
     assert_eq!(import(text, &plain_map("sample_time_s = 1e-10")).unwrap_err().key, "error-import-time");
 }
+
+/// Found by the audit of 14 November: a time column without a unit was read as seconds, so a Startdrive export in ms
+/// without `time_unit` came out 1000 times too slow. A step that is a whole number of the 125 µs base cycle, from
+/// 0.5 on, is a drive cycle in ms: rows 1 apart are 1 ms apart, row 4 at 4 ms, with a note. `time_unit = "s"` in the
+/// mapping keeps seconds (row 4 at 4 s), and a step of 0.125 stays seconds (`real_world_csv_quirks`).
+#[test]
+fn a_time_column_without_unit_that_steps_like_a_drive_cycle_is_read_in_ms() {
+    let text = "time;pos;torque\n0;0;0\n1;1;0\n2;2;0\n3;3;0\n4;4;0\n";
+    let imported = import(text, &plain_map("")).unwrap();
+    close(imported.trace.time[4], 0.004);
+    assert_eq!(imported.notes, vec![("note-import-time-ms", "time: 1".to_string())]);
+    let seconds = import(text, &plain_map("time_unit = \"s\"")).unwrap();
+    close(seconds.trace.time[4], 4.0);
+    assert!(seconds.notes.is_empty());
+}
+
+/// Found by the audit of 14 November: a line of numbers above the header (`1000;8` under `Sample time;0,001`) was
+/// taken for the first data row, and the header under it then failed as a row. The data are the rows of numbers at
+/// the end of the file; the two lines above the header are skipped with a note.
+#[test]
+fn metadata_lines_above_the_header_are_skipped_with_a_note() {
+    let text = "Sample time;0,001\n1000;8\ntime [s];pos;torque\n0;0;0\n0,001;1;0\n0,002;2;0\n0,003;3;0\n";
+    let imported = import(text, &plain_map("")).unwrap();
+    assert_eq!(imported.trace.time.len(), 4);
+    close(imported.trace.time[3], 0.003);
+    close(imported.trace.motors[0].angle[2], 2.0);
+    assert_eq!(imported.notes, vec![("note-import-skipped", "2: Sample time;0,001 | 1000;8".to_string())]);
+}
+
+/// Found by the audit of 14 November: times that do not rise reached the fits, where a zero step divided by zero.
+/// They are refused naming the signal and the row (row 3 under the header repeats the 1 ms of row 2), here and in a
+/// trace in the simulator's own columns.
+#[test]
+fn times_that_do_not_rise_are_refused_naming_the_row() {
+    let text = "time [s];pos;torque\n0;0;0\n0,001;1;0\n0,001;2;0\n0,003;3;0\n";
+    let e = import(text, &plain_map("")).unwrap_err();
+    assert_eq!((e.key, e.detail.as_str()), ("error-import-time", "pos: row 3: 0.001 s after 0.001 s"));
+    let e = sim_components::trace::Trace::parse("time\n0\n0.001\n0.0005\n", &[]).unwrap_err();
+    assert_eq!((e.key, e.detail.as_str()), ("error-import-time", "row 3: 0.0005 s after 0.001 s"));
+}

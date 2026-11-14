@@ -7,6 +7,8 @@ error-import-signal = Die Tracedatei hat kein Signal { $arg }
 error-import-ambiguous = Mehr als ein Signal der Tracedatei passt zu { $arg }; den vollen Namen angeben.
 error-import-map = Die Zuordnungsdatei fehlt oder hat einen falschen Wert: { $arg }
 error-import-time = Die Zeiten des Trace lassen sich nicht auf ein Raster legen: { $arg }
+note-import-skipped = Zeilen über der Kopfzeile übersprungen (Metadaten): { $arg }
+note-import-time-ms = Die Zeitspalte hat keine Einheit und Schritte wie ein Antriebstakt in ms, sie wird daher in ms gelesen; time_unit = "s" in der Zuordnung, wenn sie in Sekunden ist: { $arg }
 error-identify-friction = Motor { $arg }: keine Trägheit und Reibung ermittelt. Der Trace muss ihn je mindestens 0,1 s in beide Richtungen drehen.
 error-identify-lag = Motor { $arg }: keine Verzögerung ermittelt. Der Trace muss im Stillstand beginnen und der Sollwert muss sich ändern.
 error-identify-two-mass = Kein Zweimassenmodell: der Frequenzgang braucht eine Senke, eine Spitze darüber und drei Punkte unter einem Drittel der Senke.

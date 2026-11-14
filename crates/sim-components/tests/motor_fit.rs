@@ -352,3 +352,11 @@ fn a_response_needs_eight_windows() {
     let coherence = frequency_response(&time, &a, &b, &[20.0, 100.0]).unwrap();
     assert!(coherence.iter().all(|(_, c)| *c < 0.5), "{coherence:?}");
 }
+
+/// Found by the audit of 14 November: rows at one time made the smoothing window `0.005 / 0` rows, cast to
+/// `usize::MAX`, and `2 w + 1` overflowed. Times that do not rise give no fit.
+#[test]
+fn a_trace_whose_times_do_not_rise_gives_no_friction_fit() {
+    let speed: Vec<f64> = (0..40).map(|i| if i < 20 { 1.0 } else { -1.0 }).collect();
+    assert!(friction(&[0.0; 40], &[0.0; 40], &speed, &[0.1; 40]).is_none());
+}

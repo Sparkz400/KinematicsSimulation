@@ -194,7 +194,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("tuning") => tuning(args),
         Some("margins") => margins(args),
         Some("modes") => modes(args),
-        Some("replay") => replay(args),
+        Some("replay") => replay(args, tr),
         Some("fit") => fit(args, tr),
         Some("identify") => identify(args, tr),
         Some("check-dataset") => check_dataset(args, tr),
@@ -364,11 +364,11 @@ fn read(path: &str) -> Result<String, Failure> {
 /// Prints per motor how far simulated torque and following error are from the measured ones; `--out FILE`
 /// also writes measured and simulated torque, speed and following error side by side, one line per row
 /// of the trace.
-fn replay(args: &Args) -> Result<(), Failure> {
+fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     let motors = machine.motors().to_vec();
-    let measured = load_trace(args, &motors)?.trace;
+    let measured = load_trace(args, &motors, tr)?.trace;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
     println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
     for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
@@ -404,22 +404,25 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (mut advice, mut result) = (Vec::new(), Ok(()));
     writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
-        let measured = load_trace(args, machine.motors())?.trace;
+        let measured = load_trace(args, machine.motors(), tr)?.trace;
         match fit_joints(entry, &cfg, &measured)? {
             Some(fit) => {
                 for v in &fit.values {
                     writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", v.quantity, v.of, v.config, v.fitted, v.error)
                         .map_err(io)?;
                 }
-                if let Some((time, error)) = fit.payload_step {
-                    writeln!(out, "payload_step_s,payload,,{time:.6e},{error:.3e}").map_err(io)?;
+                // One step's row is of `payload`, several are numbered as their factors after them are.
+                for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
+                    let of =
+                        if fit.payload_steps.len() == 1 { "payload".to_string() } else { format!("payload {}", j + 1) };
+                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e}").map_err(io)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
             None => advice.push(tr.tr("fit-joints-skipped").to_string()),
         }
     } else if args.option("--trace").is_some() {
-        let measured = load_trace(args, machine.motors())?.trace;
+        let measured = load_trace(args, machine.motors(), tr)?.trace;
         for (axis, fit) in machine.axes().iter().zip(fit_rigid(entry, &cfg, &measured)?) {
             let Some(fit) = fit else {
                 advice.push(tr.tr_arg("fit-axis-skipped", axis.id));
@@ -431,11 +434,16 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q])
                     .map_err(io)?;
             }
+            // A payload picked or dropped: its time, then the change of the payload's factor there.
+            for (time, time_error, change, error) in &fit.payload_steps {
+                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e}", axis.id).map_err(io)?;
+                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e}", axis.id).map_err(io)?;
+            }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
     }
     if args.flag("--stiffness") {
-        let measured = load_trace(args, machine.motors())?.trace;
+        let measured = load_trace(args, machine.motors(), tr)?.trace;
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
@@ -482,8 +490,9 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see
 /// docs/measurement-procedure.md), or without one in the simulator's own columns for `motors`. Where a
-/// machine is replayed or fitted, the mapping's motors have to be the machine's, in its order.
-fn load_trace(args: &Args, motors: &[sim_core::MotorInfo]) -> Result<Imported, Failure> {
+/// machine is replayed or fitted, the mapping's motors have to be the machine's, in its order. How the export was
+/// read other than it says (lines skipped, a time without unit taken as ms) goes to stderr.
+fn load_trace(args: &Args, motors: &[sim_core::MotorInfo], tr: &Translations) -> Result<Imported, Failure> {
     let path = args.option("--trace").ok_or(Failure("cli-usage", String::new()))?;
     let text = decode(&std::fs::read(path).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?);
     Ok(match args.option("--map") {
@@ -495,6 +504,7 @@ fn load_trace(args: &Args, motors: &[sim_core::MotorInfo]) -> Result<Imported, F
                     format!("{} [[motor]] for {} motors", imported.trace.motors.len(), motors.len()),
                 ));
             }
+            imported.notes.iter().for_each(|(key, detail)| eprintln!("{}", tr.tr_arg(key, detail)));
             imported
         }
         None => {
@@ -502,6 +512,7 @@ fn load_trace(args: &Args, motors: &[sim_core::MotorInfo]) -> Result<Imported, F
             Imported {
                 ids: motors.iter().map(|m| m.id.to_string()).collect(),
                 torque_setpoints: vec![None; trace.motors.len()],
+                notes: Vec::new(),
                 trace,
             }
         }
@@ -559,7 +570,7 @@ fn identify(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 (entry.build)(&cfg)?.motors().to_vec()
             }
         };
-        let imported = load_trace(args, &motors)?;
+        let imported = load_trace(args, &motors, tr)?;
         let k = number(args, "--motor", 0.0)? as usize;
         let (Some(m), Some(id)) = (imported.trace.motors.get(k), imported.ids.get(k)) else {
             return Err(Failure("cli-error-bad-argument", format!("--motor {k}")));

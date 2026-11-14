@@ -280,6 +280,7 @@ fit-joint-coulomb = Coulomb friction at motor { $arg }. Add this, at the motor s
 fit-joint-constant = Constant torque at motor { $arg }. The measured motor needs this much more than the config gives: a weight, a spring or a cable pull the config lacks.
 fit-alike = Not told apart by this trace: { $arg }. Only their sum is known; a trace that swings every axis over more of its range at several frequencies separates them.
 fit-payload-step = Payload picked or dropped during the trace, at { $arg } (factor on its mass before → after). Fit the rest of the trace with these two; the config holds one payload.
+fit-axis-payload-step = Payload picked or dropped during the trace, on axis { $arg } (time, then the change of the factor on the config's payload: +1 picked, −1 dropped). The axis's values are those before the first step.
 fit-link-mass = Link { $arg }. Scale the link's mass and inertia in the URDF by this factor.
 fit-link-moment = First moment along { $arg }. Add this to the link's mass times its centre of mass along that axis of its frame, in the URDF.
 fit-combined = Not told apart: { $arg }. The change shown for the first stands for its own change plus each factor times the other's. Where the rigid model only knows their sum no trace separates them; otherwise a trace that moves the joints they act through over more of their range may.

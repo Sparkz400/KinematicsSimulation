@@ -522,11 +522,12 @@ impl Controller {
                 return Err(ConfigError::Invalid(key));
             }
         }
+        // The belt goes on where it was: the parts picked and missed so far stay so.
+        let mut conveyor = Conveyor::from_config(cfg, machine.axes().len())?;
+        // Nothing fails from here on: a refused config leaves the controller as it was.
         if profile_cycle != self.profile_cycle {
             self.rescale_ticks(self.profile_cycle / profile_cycle);
         }
-        // The belt goes on where it was: the parts picked and missed so far stay so.
-        let mut conveyor = Conveyor::from_config(cfg, machine.axes().len())?;
         if let (Some(new), Some(old)) = (&mut conveyor, &self.conveyor) {
             new.carry_on(old);
         }

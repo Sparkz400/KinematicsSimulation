@@ -7,6 +7,8 @@ error-import-signal = The trace file has no signal { $arg }
 error-import-ambiguous = More than one signal of the trace file matches { $arg }; give its full name.
 error-import-map = The mapping file is missing or has a wrong value: { $arg }
 error-import-time = The times of the trace cannot be put on one grid: { $arg }
+note-import-skipped = Lines above the header skipped (metadata): { $arg }
+note-import-time-ms = The time column has no unit and steps like a drive cycle in ms, so it is read in ms; give time_unit = "s" in the mapping if it is in seconds: { $arg }
 error-identify-friction = Motor { $arg }: no inertia or friction fitted. The trace has to turn it both ways for at least 0.1 s each.
 error-identify-lag = Motor { $arg }: no lag fitted. The trace has to start at rest and the setpoint has to change.
 error-identify-two-mass = No two-mass model: the response needs a dip, a peak above it and three points below a third of the dip.

@@ -108,6 +108,17 @@ pub fn columns(text: &str, names: &[String]) -> Result<Vec<Vec<f64>>, TraceError
     Ok(out)
 }
 
+/// Refuses times that do not rise, naming the first data row (1 = the row under the header) that does not.
+pub fn rising(time: &[f64]) -> Result<(), TraceError> {
+    match time.windows(2).position(|p| !(p[1] > p[0])) {
+        Some(i) => Err(TraceError {
+            key: "error-import-time",
+            detail: format!("row {}: {} s after {} s", i + 2, time[i + 1], time[i]),
+        }),
+        None => Ok(()),
+    }
+}
+
 impl Trace {
     /// Reads a trace whose columns are named like the simulator's signals: `time` and per motor
     /// `motor.<id>.angle_setpoint`, `.angle`, `.speed` and `.torque`. So a file written by a run is a trace.
@@ -118,6 +129,7 @@ impl Trace {
         }
         let mut found = columns(text, &names)?.into_iter();
         let time = found.next().unwrap_or_default();
+        rising(&time)?;
         let mut next = || found.next().unwrap_or_default();
         let motors = motors
             .iter()

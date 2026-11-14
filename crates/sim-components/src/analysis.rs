@@ -1780,8 +1780,10 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
             });
         }
         cfg.f64(path)?;
+        // A value written as an integer is a count (pole pairs, teeth): its bounds are whole numbers too.
+        let whole = |v: f64| !cfg.get(path).is_ok_and(toml::Value::is_integer) || v.fract() == 0.0;
         match cfg.f64s(&format!("bounds.{path}"))?[..] {
-            [low, high] if low <= high => out.push((path.into(), low, high)),
+            [low, high] if low <= high && whole(low) && whole(high) => out.push((path.into(), low, high)),
             _ => return Err(ConfigError::Invalid(format!("bounds.{path}"))),
         }
         Ok(())
@@ -1808,6 +1810,18 @@ fn followed(cfg: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f6
             (path.clone(), low, high)
         })
         .collect()
+}
+
+/// Sets a bounded value in the type its key has. `set_text("{path} = {value:?}")` wrote a float, which an integer key
+/// refused with a Type error that ended the whole band run. An integer key takes the value rounded (`bounds` keeps its
+/// bounds whole; a sampled value between them is rounded to a count).
+pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), ConfigError> {
+    let value = if cfg.get(path)?.is_integer() {
+        toml::Value::Integer(value.round() as i64)
+    } else {
+        toml::Value::Float(value)
+    };
+    cfg.set(path, value)
 }
 
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
@@ -1971,7 +1985,7 @@ pub fn verdict_bands(
     let bounds = &followed(cfg, bounds);
     envelope(entry, cfg, 2 * bounds.len(), |run| {
         let ((path, low, high), mut changed) = (&bounds[run / 2], cfg.clone());
-        changed.set_text(&format!("{path} = {:?}", if run % 2 == 0 { low } else { high }))?;
+        set_bounded(&mut changed, path, if run % 2 == 0 { *low } else { *high })?;
         Ok(changed)
     })
 }
@@ -2017,7 +2031,7 @@ pub fn verdict_bands_sampled(
     envelope(entry, cfg, samples, |run| {
         let mut changed = cfg.clone();
         for ((path, ..), values) in bounds.iter().zip(&columns) {
-            changed.set_text(&format!("{path} = {:?}", values[run]))?;
+            set_bounded(&mut changed, path, values[run])?;
         }
         Ok(changed)
     })
@@ -2106,7 +2120,7 @@ fn worst_search(
     let bounds = &followed(cfg, bounds);
     let n = bounds.len();
     let set = |cfg: &mut Config, i: usize, high: bool| {
-        cfg.set_text(&format!("{} = {:?}", bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 }))
+        set_bounded(cfg, &bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 })
     };
     // Run 0 is the config as it is, then each parameter at its low and at its high bound.
     let alone = judge_each(entry, 2 * n + 1, |run| {
@@ -3256,7 +3270,7 @@ pub fn sensitivity(
         }
         let (path, _, bounds) = varied[(k - 1) / 2];
         let mut changed = cfg.clone();
-        changed.set_text(&format!("{path} = {:?}", if k % 2 == 1 { bounds.0 } else { bounds.1 })).ok()?;
+        set_bounded(&mut changed, path, if k % 2 == 1 { bounds.0 } else { bounds.1 }).ok()?;
         run(&changed)
     })
     .into_iter();
@@ -3708,7 +3722,7 @@ pub fn velocity_loop_margins(
     for (path, low, high) in bounds {
         for value in [low, high] {
             let mut changed = cfg.clone();
-            changed.set_text(&format!("{path} = {value:?}"))?;
+            set_bounded(&mut changed, path, *value)?;
             runs.push((format!("{path}={value:?}"), changed));
         }
     }

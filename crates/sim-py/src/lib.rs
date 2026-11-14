@@ -673,6 +673,7 @@ fn load_trace(tr: &Translations, path: &Path, map: Option<&Path>, motors: &[Moto
                 ids: motors.iter().map(|m| m.id.to_string()).collect(),
                 torque_setpoints: vec![None; trace.motors.len()],
                 trace,
+                notes: Vec::new(),
             })
         }
     }
@@ -751,8 +752,13 @@ fn fit(
                             for v in &fit.values {
                                 rows.push(v.quantity, &v.of, [v.config, v.fitted, v.error]);
                             }
-                            if let Some((time, error)) = fit.payload_step {
-                                rows.push("payload_step_s", "payload", [f64::NAN, time, error]);
+                            for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
+                                let of = if fit.payload_steps.len() == 1 {
+                                    "payload".to_string()
+                                } else {
+                                    format!("payload {}", j + 1)
+                                };
+                                rows.push("payload_step_s", &of, [f64::NAN, *time, *error]);
                             }
                             advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail).to_string()));
                         }

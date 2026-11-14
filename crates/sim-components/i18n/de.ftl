@@ -280,6 +280,7 @@ fit-joint-coulomb = Coulomb-Reibung an Motor { $arg }. Um diesen Betrag, an der 
 fit-joint-constant = Konstantes Moment an Motor { $arg }. So viel mehr braucht der gemessene Motor als die Konfiguration: ein Gewicht, eine Feder oder ein Kabelzug, die der Konfiguration fehlen.
 fit-alike = Von dieser Aufzeichnung nicht getrennt: { $arg }. Bekannt ist nur ihre Summe; eine Aufzeichnung, die jede Achse über mehr ihres Bereichs mit mehreren Frequenzen schwingt, trennt sie.
 fit-payload-step = Nutzlast während der Aufzeichnung gegriffen oder abgelegt, bei { $arg } (Faktor auf ihre Masse vorher → nachher). Den Rest der Aufzeichnung mit diesen beiden anpassen; die Konfiguration hat eine Nutzlast.
+fit-axis-payload-step = Nutzlast während der Aufzeichnung gegriffen oder abgelegt, auf Achse { $arg } (Zeitpunkt, dann die Änderung des Faktors auf die Nutzlast der Konfiguration: +1 gegriffen, −1 abgelegt). Die Werte der Achse sind die vor dem ersten Schritt.
 fit-link-mass = Glied { $arg }. Masse und Trägheit des Glieds in der URDF sind mit diesem Faktor zu multiplizieren.
 fit-link-moment = Statisches Moment entlang { $arg }. Um diesen Betrag ist Masse mal Schwerpunkt des Glieds entlang dieser Achse seines Rahmens in der URDF zu ändern.
 fit-combined = Nicht getrennt: { $arg }. Die für den ersten gezeigte Änderung steht für seine eigene plus jeden Faktor mal der des anderen. Wo das starre Modell nur ihre Summe kennt, trennt sie keine Aufzeichnung; sonst vielleicht eine, die die Gelenke, über die sie wirken, über mehr ihres Bereichs bewegt.

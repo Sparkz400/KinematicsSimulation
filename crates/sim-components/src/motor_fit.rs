@@ -172,10 +172,14 @@ fn propagate(f: &dyn Fn(&[f64]) -> f64, inputs: &[Estimate]) -> Estimate {
     Estimate { value, error }
 }
 
-/// Rows on either side that a smoothing window spans: 5 ms, at least one row.
-fn half_window(time: &[f64]) -> usize {
+/// Rows on either side that a smoothing window spans: 5 ms, at least one row and at most the trace. `None` where
+/// the times do not rise (a zero step made the window `usize::MAX` rows and `2 w + 1` overflowed).
+fn half_window(time: &[f64]) -> Option<usize> {
+    if time.windows(2).any(|p| !(p[1] > p[0])) {
+        return None;
+    }
     let step = (time[time.len() - 1] - time[0]) / (time.len() - 1) as f64;
-    ((0.005 / step).round() as usize).max(1)
+    Some(((0.005 / step).round() as usize).clamp(1, time.len()))
 }
 
 /// Inertia and friction of one motor's drive train, at the motor shaft.
@@ -211,7 +215,7 @@ pub fn friction(time: &[f64], angle: &[f64], speed: &[f64], torque: &[f64]) -> O
     if rows < 20 {
         return None;
     }
-    let w = half_window(time);
+    let w = half_window(time)?;
     let top = speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
     let mean = |x: &[f64], i: usize| x[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64;
     let mut smooth = vec![(0.0, 0.0, 0.0); rows];
