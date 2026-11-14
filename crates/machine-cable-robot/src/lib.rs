@@ -1245,9 +1245,10 @@ impl Machine for CableRobot {
                 continue;
             }
             // Where no pose fits the lengths, the steps shrink only linearly (by 0.89 a step at 8 mm of misfit): settled
-            // once the steps still to come, longest r / (1 - r) at the ratio r, add up to less than 1e-11.
+            // once this step, which is not taken, and those after it, longest / (1 - r) at the ratio r, add up to less
+            // than 1e-11.
             let r = longest / last_exact;
-            if last_exact.is_finite() && r < 0.95 && longest * r / (1.0 - r) < 1e-11 {
+            if last_exact.is_finite() && r < 0.95 && longest / (1.0 - r) < 1e-11 {
                 tool[..n].copy_from_slice(&pose);
                 return;
             }
