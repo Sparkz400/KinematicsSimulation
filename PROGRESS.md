@@ -2543,3 +2543,78 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## The app's data model: runs, peak-keeping plots, caches (14 November)
+
+The desktop app kept one result of each kind and threw the ghost run's samples away; plots thinned long lines by a
+stride, which stepped over peaks; several views rebuilt the machine or rescanned the history every frame. The app now
+keeps runs side by side and compares them, draws every peak, and works out what it shows once per change.
+
+- **Run store** (`crates/sim-app/src/runs.rs`, `Model::runs`): up to eight labelled runs, each every signal once per
+  millisecond with the time from its start: every analysed cycle and every path that was run (with its checks; the
+  cycle's samples come from `analysis::record_cycle`, now public, on a thread beside `analyse_cycle`; the path's from a
+  second simulation of it), the measured trace and its replay, the scopes' window ("Keep window as run"), the ghost's
+  window ("Keep ghost as run": its samples are kept now), and the cycle of any config or machine file with `--set`-style
+  changes ("Record cycle", `Model::record_run`). A run of the same machine, kind and label replaces the one before.
+  Alignment across machines (`runs::Channel`): a motor's torque, speed and following error by the motor's place in its
+  machine's list, and the tool's position error as the length of the axes' following errors in metres; two runs are
+  compared on the channels both have, on the first's time with the second interpolated linearly, over the time both
+  have (`runs::align`). The bottom panel switches between the live scopes and the runs (per quantity, each motor in its
+  colour, each run in its line style, and under it each run less the reference, all on one time axis and cursor); the
+  "Runs" tab lists them and their key figures side by side (`Model::runs_table`: duration, checks passed/failed, per
+  motor peak and RMS torque, peak speed, peak and RMS following error, RMS of rated and peak of the drive's peak
+  torque, electrical energy; the tool's peak and RMS position error). API for the views to come: `Run::channel`,
+  `Run::figures`, `RunStore::against_reference`, `Model::run_plots`.
+- **Peak-keeping thinning** (`report::peak_keeping`, `runs::plot_line`): a line of n points is cut into stretches and
+  each keeps its lowest and highest point, in order; the scopes, the effect views, the comparison, the trace overlay
+  and the sizing report's plots draw with it (3000 stretches in the app, 400 in the report).
+- **Caches**: the machine the config builds (friction, thermal parts, belt sections, workspace) is built once per
+  config; the workspace map once per config, height and grid (`Arc<WorkspaceSlice>`); the scopes' statistics in one
+  pass over the window per new sample or window (`Model::view_key`); the trace overlay once when the trace arrives.
+- **History** (`runs::History`): one flat ring buffer of 60000 rows in place of a `Vec` per sample; Freeze copies the
+  window, not the whole history.
+- **Export**: the scopes' CSV and the overlay CSV are written on a thread of their own, to a file the system's dialog
+  asks for, named with the date and time to start with (`video::now_stamp`).
+- **Timeline**: the travelled path's points carry their time and the view draws them up to the scrubbed time
+  (`runs::trail_until`); the ghost's scenes are recorded at the machine's time and shown at the scrubbed time.
+- **Trail colour bug**: the trail's error was the tool's distance from the plan's newest setpoint, which moves once
+  per profile cycle (1 ms) while the tool moves on: up to the speed times the cycle too much, 0.8 mm at 0.8 m/s. On a
+  square of the T-gantry the trail peaked at 1.089 mm where the path's analysis gave a path error of 0.755 mm. Now
+  `Runner::trail_point` measures the distance from the path the setpoints have drawn (the newest 200, the newest
+  carried on by its speed to now), as the analysis measures its path error: 0.711 mm. The trail's colour scale can be
+  fixed by hand and a tolerance marks points further off in red.
+- **Colours**: one colour per motor in every plot (`runs::owner_slot`: a motor by its place among the motors, an axis
+  among the axes); the scopes had coloured by the place among all owners of the signal list (time, payload and the
+  axes came first), the other plots by the motor's place.
+- **BOM**: trace, mapping, path and sweep files are read through `import::decode`, as the CLI reads them; an Excel
+  file's byte order mark gave "error-trace-column: time".
+- **Look**: a light theme (top bar), one unit choice (rpm for rad/s, mm for m) for the scopes, the run plots, the runs
+  table, the operating points and the overlay, about four labelled ticks on every plot's value axis (egui_plot's own
+  spacing left a 150 px scope with "0" alone), no legends over the traces (names in their colours above or below), and
+  a right click on a plot saves it as SVG (`report::Plot::svg`, the report's writer) or PNG (`video::picture_saver`, a
+  screenshot cut to the plot).
+- Docs: the user guide (English and German) had the scopes on the right (they are at the bottom) and said there is no
+  `--set` (there is); both fixed, and the runs, units, theme, saving plots, the trail's error and the timeline added.
+
+Test (crates/sim-app/tests/app.rs): `a_peak_one_sample_wide_survives_the_thinning_of_a_plotted_line` (a spike at
+sample 31234 of 60000, which a stride of 20 misses, is kept; the report's 400 stretches too),
+`two_runs_overlay_with_aligned_time_and_a_correct_difference` (two machines of two and three motors, 1 ms against
+2 ms samples, slopes 100 and 50: difference 50 t', peak 0.4, RMS 0.05 sqrt(204/9); and in the app a cycle analysed,
+recorded again in its place, and recorded with guide friction off as a second run),
+`the_cache_of_the_views_is_made_anew_when_the_config_changes` (the same `Arc` twice, another after
+`ratings.max_condition_number` changes), `a_trace_file_with_a_byte_order_mark_is_read`,
+`the_trail_is_cut_at_the_scrubbed_time_and_its_error_is_the_path_error` (the T-gantry square: the trail's peak within
+10 % of the analysis's path error; 1.089 against 0.755 mm before), `every_motor_has_one_colour_in_every_plot`. The
+scopes' export test and the overlay test wait for the background writer now. Outside sim-app: `report.rs`
+(`peak_keeping`, `Plot::svg` moved out of `Report::html`) and `analysis.rs` (`record_cycle` public), both small.
+
+Left open:
+
+- The unit choice does not reach every table: the cycle, path, trace and search tables keep their SI units (their
+  headers carry the unit in the translation).
+- Save as SVG/PNG is not on the frequency response, tuning, friction, modes and optimiser plots.
+- A run kept from the live window or the ghost has no checks (only cycle and path runs are judged); the ghost run's
+  ratings are the live config's.
+- Runs are aligned from their starts; an offset to line up two runs that start their motion at different times, and
+  a contour error of a run (beside the tool's position error) are for the views to come.
+- The light theme was checked in a screenshot only; the 3D view keeps its dark studio.

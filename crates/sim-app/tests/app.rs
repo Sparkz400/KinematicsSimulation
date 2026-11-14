@@ -491,9 +491,10 @@ fn scopes_have_a_window_freeze_statistics_and_export() {
             && model.history.back().unwrap()[0] > model.visible_rows().last().unwrap()[0]
     );
 
-    // Export writes what the scopes show.
+    // Export writes what the scopes show, in the background.
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("traces.csv");
     model.export_traces(&path);
+    wait_for_exports(&mut model);
     let csv = std::fs::read_to_string(&path).unwrap();
     assert_eq!(csv.lines().count(), 1 + model.visible_rows().count());
     assert_eq!(csv.lines().next().unwrap().split(',').count(), model.session.signals.len());
@@ -555,6 +556,17 @@ fn wait_for_jobs(model: &mut Model) {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(!model.analysis_running(), "the analysis did not finish");
+}
+
+/// Polls until the CSV files being written in the background are written.
+#[track_caller]
+fn wait_for_exports(model: &mut Model) {
+    let start = Instant::now();
+    while model.exporting() && start.elapsed() < Duration::from_secs(60) {
+        model.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!model.exporting(), "the export did not finish");
 }
 
 /// Polls until the analysis jobs have answered, with a result and no complaint.
@@ -2420,6 +2432,7 @@ fn the_replayed_trace_is_overlaid_and_exported_in_the_app() {
         assert!(overlay[0].1[0][0] != overlay[0].1[0][1]);
         let exported = temp_file(entry, "overlay.csv");
         model.export_overlay(std::path::Path::new(&exported));
+        wait_for_exports(&mut model);
         assert_eq!(model.messages.last().unwrap().0, "ui-overlay-exported");
         let written = std::fs::read_to_string(&exported).unwrap();
         assert!(written == sim_components::trace::overlay_csv(&ids, &measured, &simulated), "{}", entry.id);
@@ -3485,4 +3498,245 @@ fn a_planned_path_starts_at_the_live_setpoint() {
         let off = first.iter().zip(&live).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
         assert!(off < 1e-6, "{}: the plan starts {off} off the live setpoint {live:?}: {first:?}", entry.id);
     });
+}
+
+/// A torque peak one sample wide in a minute of samples, drawn with at most some six thousand points a line: a stride
+/// of 60000 / 3000 = 20 samples stepped over sample 31234 (31234 = 20 · 1561 + 14), so the peak was not drawn. Each
+/// stretch of 20 keeps its lowest and highest sample, and the stretch 1561 (samples 31220 to 31239) has the peak. The
+/// report draws its plots with the same thinning (400 stretches of 150 samples).
+#[test]
+fn a_peak_one_sample_wide_survives_the_thinning_of_a_plotted_line() {
+    let value = |i: usize| if i == 31234 { 5.0 } else { (i as f64 * 1e-3).sin() * 1e-3 };
+    let line = sim_app::runs::plot_line(60_000, |i| [i as f64 * 1e-3, value(i)]);
+    assert!(line.len() <= 6000, "{} points", line.len());
+    assert!(line.contains(&[31.234, 5.0]), "the peak is gone");
+    assert!(line.windows(2).all(|w| w[0][0] < w[1][0]), "the points are out of time order");
+    let strided: Vec<f64> = (0..60_000).step_by(20).map(value).collect();
+    assert!(strided.iter().all(|v| *v < 1.0), "the stride hit the peak: the test shows nothing");
+    // The report's plots.
+    let report = sim_components::report::peak_keeping(60_000, |i| [i as f64 * 1e-3, -value(i)], 400);
+    assert!(report.len() <= 800 && report.contains(&[31.234, -5.0]));
+    // Few points are drawn as they are.
+    assert_eq!(sim_app::runs::plot_line(3, |i| [i as f64, 1.0]), [[0.0, 1.0], [1.0, 1.0], [2.0, 1.0]]);
+}
+
+/// Two runs of two machines, compared on the quantity both have: motor 0's torque. Run A (machine "a", motors a and b)
+/// starts at 10 s with a sample per ms, its torque 1 + 100 t'; run B (machine "b", motors x, y and z) starts at 3 s with
+/// a sample per 2 ms, its torque 1 + 50 t' (t' from each run's start). On A's time, B between its samples: at t' =
+/// 1 ms 1.05 (halfway between 1.0 and 1.1), so A - B = 0.05; in general 50 t', over t' = 0 .. 8 ms where B ends (nine
+/// samples). Peak 50 · 0.008 = 0.4; RMS 50 · 0.001 · sqrt((0 + 1 + 4 + ... + 64) / 9) = 0.05 · sqrt(204 / 9) = 0.23805.
+#[test]
+fn two_runs_overlay_with_aligned_time_and_a_correct_difference() {
+    use sim_app::runs::{Channel, Quantity, Run, RunKind, RunStore, align, shared_channels};
+    use sim_core::{MotorInfo, SignalInfo};
+    let run = |machine: &'static str, motors: &[MotorInfo], start: f64, step: f64, n: usize, slope: f64| {
+        let mut signals = vec![SignalInfo::new("time", "group-sim", "quantity-time", "s")];
+        for m in motors {
+            for (name, unit) in [("torque", "N m"), ("speed", "rad/s"), ("following_error", "rad")] {
+                signals.push(SignalInfo::new(format!("motor.{}.{name}", m.id), m.key, "quantity-torque", unit));
+            }
+        }
+        let rows: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let t = i as f64 * step;
+                [vec![start + t], motors.iter().flat_map(|_| [1.0 + slope * t, 0.0, 0.0]).collect()].concat()
+            })
+            .collect();
+        Run::from_rows(machine.into(), RunKind::Cycle, machine, signals, motors, rows.iter().map(Vec::as_slice))
+    };
+    let two = [MotorInfo { id: "a", key: "motor-a" }, MotorInfo { id: "b", key: "motor-b" }];
+    let three =
+        [MotorInfo { id: "x", key: "motor-x" }, MotorInfo { id: "y", key: "motor-y" }, MotorInfo { id: "z", key: "z" }];
+    let (a, b) = (run("a", &two, 10.0, 1e-3, 11, 100.0), run("b", &three, 3.0, 2e-3, 5, 50.0));
+    assert!(a.time()[0] == 0.0 && (a.time()[10] - 0.01).abs() < 1e-12, "the time is not from the run's start");
+    // Aligned by quantity and motor place: the third motor of B has no partner.
+    let shared = shared_channels(&a, &b);
+    assert_eq!(shared.len(), 2 * 3);
+    assert!(!shared.iter().any(|c| c.motor == 2));
+    let torque = Channel { quantity: Quantity::Torque, motor: 0 };
+    let aligned = align(&a, &b, torque).unwrap();
+    assert_eq!(aligned.time.len(), 9);
+    assert!((aligned.b[1] - 1.05).abs() < 1e-12 && (aligned.difference[1] - 0.05).abs() < 1e-12, "{aligned:?}");
+    for (t, d) in aligned.time.iter().zip(&aligned.difference) {
+        assert!((d - 50.0 * t).abs() < 1e-12, "{d} at {t}");
+    }
+    let (peak, rms) = aligned.difference_peak_rms();
+    assert!((peak - 0.4).abs() < 1e-12 && (rms - 0.05 * (204.0f64 / 9.0).sqrt()).abs() < 1e-12, "{peak} {rms}");
+    // The store compares each run with the reference, the first by default; the reference with nothing.
+    let mut store = RunStore::default();
+    store.add(b.clone());
+    store.add(a.clone());
+    assert!(store.against_reference(0, torque).is_none());
+    let against = store.against_reference(1, torque).unwrap();
+    assert_eq!(against, aligned);
+    // A run again with the same label takes the place of the one before; past eight runs the oldest goes.
+    store.add(a.clone());
+    assert_eq!(store.len(), 2);
+    for i in 0..8 {
+        store.add(Run { label: format!("{i}"), ..a.clone() });
+    }
+    assert_eq!((store.len(), store.get(0).unwrap().label.as_str()), (8, "0"));
+
+    // In the app: the analysed cycle is kept as a run, the same config recorded again takes its place, and the cycle
+    // with another config is a second run, compared with the first on the same time.
+    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let mut model = Model::new(entry, "en");
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    assert_eq!(model.runs.len(), 1);
+    let wait_for_runs = |model: &mut Model| {
+        let start = Instant::now();
+        while model.recording_runs() && start.elapsed() < Duration::from_secs(600) {
+            model.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    model.record_run("", "");
+    wait_for_runs(&mut model);
+    assert_eq!(model.runs.len(), 1, "{:?}", model.runs.iter().map(|r| &r.label).collect::<Vec<_>>());
+    model.record_run("effects.guide_friction = false", "");
+    wait_for_runs(&mut model);
+    assert_eq!(model.runs.len(), 2, "{:?}", model.messages);
+    let table = model.runs_table().unwrap();
+    assert_eq!(table[0].len(), 3);
+    let plots = model.run_plots();
+    let torque = plots.iter().find(|p| p.quantity == Quantity::Torque).unwrap();
+    assert_eq!((torque.lines.len(), torque.differences.len()), (4, 2));
+    let (first, second) = (model.runs.get(0).unwrap(), model.runs.get(1).unwrap());
+    let by_hand = align(second, first, Channel { quantity: Quantity::Torque, motor: 0 }).unwrap();
+    assert!(by_hand.difference_peak_rms().0 > 1e-3, "switching guide friction off changed no torque");
+}
+
+/// The views built from the machine (workspace map, friction, thermal parts, belt) build it once per config, and the
+/// scopes' statistics are worked out once per window shown; a changed config or a new sample makes them anew.
+#[test]
+fn the_cache_of_the_views_is_made_anew_when_the_config_changes() {
+    let entry = MACHINES.iter().copied().find(|e| Model::new(e, "en").workspace_slice(5).is_some()).unwrap();
+    let mut model = Model::new(entry, "en");
+    let first = model.workspace_slice(21).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &model.workspace_slice(21).unwrap()), "worked out again for nothing");
+    let limit = first.limit;
+    model.set_param("ratings.max_condition_number", toml::Value::Float(limit + 2.0));
+    let second = model.workspace_slice(21).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second) && second.limit == limit + 2.0, "{} after {limit}", second.limit);
+    // Another height is another slice too.
+    model.inputs.workspace_z = Some(second.heights.0);
+    assert_eq!(model.workspace_slice(21).unwrap().z, second.heights.0);
+    // The statistics follow the samples.
+    wait_for_data(&mut model);
+    let before = model.stats(0).unwrap().max;
+    simulate(&mut model, 0.05);
+    assert!(model.stats(0).unwrap().max > before);
+}
+
+/// A trace saved by Excel starts with a byte order mark (EF BB BF), which the app read as part of the first column's
+/// name: "error-trace-column: time". The command line decodes it (`import::decode`); now the app does too.
+#[test]
+fn a_trace_file_with_a_byte_order_mark_is_read() {
+    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    let mut measured = sim_components::trace::Trace::default();
+    for step in 0..=(1.0 / sim.dt).round() as u64 {
+        if step % 4 == 0 {
+            measured.record(&sim);
+        }
+        sim.step();
+    }
+    let ids: Vec<&str> = sim.machine.motors().iter().map(|m| m.id).collect();
+    let mut text = String::from("\u{feff}time");
+    for id in &ids {
+        text += &["angle_setpoint", "angle", "speed", "torque"].map(|n| format!(",motor.{id}.{n}")).concat();
+    }
+    for (row, time) in measured.time.iter().enumerate() {
+        text += &format!("\n{time:.9e}");
+        for m in &measured.motors {
+            text += &[m.setpoint[row], m.angle[row], m.speed[row], m.torque[row]].map(|v| format!(",{v:.9e}")).concat();
+        }
+    }
+    let file = temp_file(entry, "bom-trace.csv");
+    std::fs::write(&file, &text).unwrap();
+    assert!(std::fs::read(&file).unwrap().starts_with(&[0xef, 0xbb, 0xbf]));
+    let mut model = Model::new(entry, "en");
+    model.inputs.trace_file = file;
+    model.run_analysis(Analysis::Trace);
+    wait_for_analysis(&mut model);
+    assert!(model.trace_fit.is_some());
+    // The measured trace and its replay are kept as runs, with the motors' torque in them.
+    assert_eq!(model.runs.len(), 2);
+    let torque = sim_app::runs::Channel { quantity: sim_app::runs::Quantity::Torque, motor: 1 };
+    assert!(model.runs.iter().all(|run| run.channel(torque).is_some_and(|t| t.len() == measured.time.len())));
+}
+
+/// The travelled path's points carry the time they were passed: scrubbed back to a time, the 3D view draws the path
+/// up to it and not the newest (`runs::trail_until`). And the path's error is its distance from the path the plan
+/// drew, as the path's analysis measures its path error: on a square of the T-gantry its peak was 1.089 mm against the
+/// analysis's 0.755 mm, since the trail measured from the plan's newest setpoint, which moves once per profile cycle of
+/// 1 ms, while the tool between two moves on by up to its speed times the cycle (0.8 mm at 0.8 m/s).
+#[test]
+fn the_trail_is_cut_at_the_scrubbed_time_and_its_error_is_the_path_error() {
+    use sim_components::path::Piece;
+    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let mut runner = Runner::new(entry, &entry.config()).unwrap();
+    let axes = runner.sim.machine.axes().to_vec();
+    let at = |fx: f64, fy: f64| {
+        vec![axes[0].min + fx * (axes[0].max - axes[0].min), axes[1].min + fy * (axes[1].max - axes[1].min)]
+    };
+    let square: Vec<Piece> = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75), (0.25, 0.25)]
+        .map(|(x, y)| Piece::Line(at(x, y)))
+        .into();
+    let points = runner.sim.plan_path(&square, false).unwrap();
+    let duration = points[points.len() - 1].0;
+    let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+    let analysed = sim_components::analysis::analyse_trajectory(&mut sim, points.clone()).unwrap();
+    let mut events = Vec::new();
+    runner.handle(Request::Command(Command::Trajectory(points)), &mut events);
+    for _ in 0..((duration + 0.5) / 0.016) as usize {
+        runner.advance(0.016, &mut events);
+    }
+    let trail = runner.trail_points.clone();
+    let off = |p: &sim_app::session::TrailPoint| (0..3).map(|i| (p.at[i] - p.planned[i]).powi(2)).sum::<f64>().sqrt();
+    let peak = trail.iter().map(off).fold(0.0, f64::max);
+    let expected = analysed.path_error_peak;
+    // Within 10 %: the trail measures a point per 0.1 mm of travel, the analysis a sample per millisecond.
+    assert!((peak - expected).abs() < 0.1 * expected, "trail error peak {peak} m, path error peak {expected} m");
+
+    use sim_app::runs::trail_until;
+    assert!(trail.windows(2).all(|w| w[0].time <= w[1].time) && trail.len() > 100);
+    let middle = trail[trail.len() / 2].time;
+    let cut = trail_until(&trail, Some(middle));
+    assert!(cut.len() < trail.len() && cut.iter().all(|p| p.time <= middle) && trail[cut.len()].time > middle);
+    assert_eq!(trail_until(&trail, None).len(), trail.len());
+    assert!(trail_until(&trail, Some(trail[0].time - 1.0)).is_empty());
+}
+
+/// One colour per motor in every plot: the scopes coloured a line by its owner's place among all owners of the signal
+/// list (the time, the payload and the axes came first), the other plots by the motor's place in the machine's list.
+/// Now both are the motor's place (`runs::owner_slot`), and an axis has its place among the axes.
+#[test]
+fn every_motor_has_one_colour_in_every_plot() {
+    use sim_app::runs::owner_slot;
+    for entry in MACHINES.iter().copied() {
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let (signals, axes, motors) = (sim.signal_infos(), sim.machine.axes().to_vec(), sim.machine.motors().to_vec());
+        for (k, motor) in motors.iter().enumerate() {
+            let own = signals.iter().filter(|s| s.id.starts_with(&format!("motor.{}.", motor.id)));
+            for signal in own {
+                assert_eq!(owner_slot(&signal.owner_key, &signals, &axes, &motors), k, "{}: {}", entry.id, signal.id);
+            }
+            // The run comparison colours a line by its channel's motor: the same place.
+            let run = sim_app::runs::Run::from_rows(
+                String::new(),
+                sim_app::runs::RunKind::Live,
+                entry.id,
+                signals.clone(),
+                &motors,
+                [],
+            );
+            assert!(run.channels().iter().filter(|c| c.motor == k).count() >= 3, "{}", entry.id);
+        }
+        for (i, axis) in axes.iter().enumerate().filter(|(_, a)| !motors.iter().any(|m| m.key == a.key)) {
+            assert_eq!(owner_slot(axis.key, &signals, &axes, &motors), i, "{}: {}", entry.id, axis.key);
+        }
+    }
 }

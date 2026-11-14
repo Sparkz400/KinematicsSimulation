@@ -2,6 +2,7 @@
 //! the config being edited, the scope history, tuning and analysis results. The window code only draws
 //! this and calls its methods.
 
+use crate::runs::{Channel, History, Quantity, Run, RunKind, RunStore, Units, plot_line};
 use crate::session::{Event, Request, Session, extend_trail};
 use sim_components::analysis::{
     Band, Comparison, CycleLoad, MotorLoad, OptimiseOptions, Optimised, Sensitivity, Verdict, compare_effect,
@@ -12,8 +13,8 @@ use sim_components::analysis::{
 };
 use sim_components::analysis::{
     Worst, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, bounds, gearbox_gearing_life_h, gearbox_life_h,
-    guide_life_h, guide_life_km, motor_bearing_life_h, optimise_cycle_with, pulley_bearing_life_h, sensitivity,
-    verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts,
+    guide_life_h, guide_life_km, motor_bearing_life_h, optimise_cycle_with, pulley_bearing_life_h, record_cycle,
+    sensitivity, verdict_bands, verdict_bands_sampled, verdict_worst_and_bands, verdicts,
 };
 use sim_components::catalog::{Candidate, search_axes, search_motors};
 use sim_components::identify::{
@@ -29,8 +30,8 @@ use sim_core::{
 };
 use sim_machines::{MACHINES, translations};
 use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 use toml::Value;
 
 /// Samples kept for the scopes: one minute at one per millisecond.
@@ -152,6 +153,10 @@ pub struct Inputs {
     pub workspace_z: Option<f64>,
     /// The parameter panel's "path = value" field, applied by `set_value`.
     pub assignment: String,
+    /// For a run of another config (`record_run`): assignments as `--set` takes them, separated by `;`, and a config
+    /// or machine file to start from ("" for the config shown).
+    pub run_set: String,
+    pub run_file: String,
 }
 
 /// The supplies the motor catalogue has data for: the S210 at 230 V and 400 V, and the S120.
@@ -214,13 +219,15 @@ pub struct TraceFit {
 enum Report {
     /// With the error bands, where they were asked for, and the number of samples they are of (0: each
     /// bounded value alone at its bounds).
-    /// And the worst corners, where they were searched, with the paths of the bounds they name.
-    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize, Curves, Option<(Vec<Worst>, Vec<String>)>),
+    /// And the worst corners, where they were searched, with the paths of the bounds they name; and the cycle as a
+    /// run for the run store.
+    Cycle(CycleLoad, Vec<Verdict>, Option<Vec<Band>>, usize, Curves, Option<(Vec<Worst>, Vec<String>)>, Run),
     Sensitivity(CycleLoad, Vec<Sensitivity>),
     Optimised(Optimised),
     /// With the supply that was searched.
     Search(Vec<Candidate>, String),
-    Path(PathRun),
+    /// With the path as a run for the run store.
+    Path(PathRun, Run),
     Trace(TraceFit),
     Sweep(Vec<Vec<SweepPoint>>),
     /// With the motor the sweep was taken on.
@@ -329,6 +336,157 @@ const SWEEP_KEYS: [&str; 2] = ["ui-sweep-resonance", "ui-sweep-damping"];
 const POINTS_KEYS: [&str; 3] = ["ui-analysis-motor", "ui-points-speed", "ui-points-torque"];
 /// The overlay's quantities, in the order of `Model::overlay`.
 const OVERLAY_KEYS: [&str; 3] = ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"];
+
+/// The labels of the run store and its comparison, the kinds of run and the quantities compared among them.
+const RUN_KEYS: [&str; 26] = [
+    "ui-run-live",
+    "ui-run-ghost",
+    "ui-run-cycle",
+    "ui-run-path",
+    "ui-run-trace",
+    "ui-run-tool-error",
+    "ui-run-default",
+    "ui-run-measured",
+    "ui-run-replayed",
+    "ui-run-reference",
+    "ui-run-verdicts",
+    "ui-run-peak-speed",
+    "ui-run-peak-error",
+    "ui-run-rms-error",
+    "ui-run-thermal-use",
+    "ui-run-peak-use",
+    "ui-run-energy",
+    "ui-run-tool-error-peak",
+    "ui-run-tool-error-rms",
+    "ui-plot-saved",
+    "quantity-torque",
+    "quantity-speed",
+    "quantity-following-error",
+    "ui-exported",
+    "ui-points-speed-rpm",
+    "ui-overlay-speed-rpm",
+];
+
+/// The overlay of a replayed trace, per quantity of `OVERLAY_KEYS` and per motor: (time, measured) and (time,
+/// simulated).
+pub type Overlay = Vec<(&'static str, Vec<[Vec<[f64; 2]>; 2]>)>;
+
+/// What the views work out from the history or the config, kept until what it was worked out from changes: a frame
+/// asks for them some sixty times a second, and building the machine from the config takes milliseconds.
+#[derive(Default)]
+struct Cache {
+    /// The statistics of every signal over the scopes' window (`Model::stats`), for the view they were taken of
+    /// (`Model::view_key`).
+    stats: Option<((u64, u64, u64), Arc<Vec<Option<Stats>>>)>,
+    /// The machine the config builds, for the views that ask it (friction, thermal parts, belt sections, workspace).
+    machine: Option<(Config, Option<Box<dyn Machine>>)>,
+    /// The workspace map, for the config, the height asked for and the grid.
+    workspace: Option<((Config, Option<u64>, usize), Option<Arc<WorkspaceSlice>>)>,
+}
+
+/// The overlay of a replayed trace (`Overlay`).
+fn overlay_of(fit: &TraceFit) -> Overlay {
+    let time = &fit.measured.time;
+    let line = |values: &[f64]| time.iter().zip(values).map(|(t, v)| [*t, *v]).collect::<Vec<_>>();
+    let columns = |m: &sim_components::trace::MotorTrace| [m.torque.clone(), m.speed.clone(), m.following_error()];
+    let pairs: Vec<_> =
+        fit.measured.motors.iter().zip(&fit.simulated.motors).map(|(m, s)| (columns(m), columns(s))).collect();
+    OVERLAY_KEYS
+        .iter()
+        .enumerate()
+        .map(|(q, key)| (*key, pairs.iter().map(|(m, s)| [line(&m[q]), line(&s[q])]).collect()))
+        .collect()
+}
+
+/// A short label for a config: the values it has other than the machine's default config, the first three of them
+/// as `path=value` and how many more; "default" where none.
+pub fn config_label(entry: &MachineEntry, config: &Config, tr: &Translations) -> String {
+    let default = entry.config();
+    let changed: Vec<String> = config
+        .leaves()
+        .into_iter()
+        .filter(|(path, value)| default.get(path).ok() != Some(value))
+        .map(|(path, value)| format!("{path}={value}"))
+        .collect();
+    match changed.len() {
+        0 => tr.tr("ui-run-default").to_string(),
+        1..=3 => changed.join(", "),
+        n => format!("{} +{}", changed[..3].join(", "), n - 3),
+    }
+}
+
+/// One plot of the run comparison: one quantity of every shown run, and each run's difference from the reference
+/// (`RunStore::against_reference`).
+pub struct RunPlot {
+    pub quantity: Quantity,
+    /// The quantity with its unit.
+    pub title: String,
+    pub lines: Vec<RunLine>,
+    pub differences: Vec<RunLine>,
+}
+
+/// One line of a `RunPlot`: of which run (its place in the store) and motor (its colour), named, and its points.
+pub struct RunLine {
+    pub run: usize,
+    pub motor: usize,
+    pub name: String,
+    pub points: Vec<[f64; 2]>,
+}
+
+/// Per motor of `sim` its drive's rated and peak torque.
+fn ratings_of(sim: &Sim) -> Vec<(f64, f64)> {
+    (0..sim.machine.motors().len())
+        .map(|k| (sim.control.drive_params_of(k).rated_torque, sim.control.drive_params_of(k).peak_torque))
+        .collect()
+}
+
+/// A run of `kind` from the rows `sim` gave, judged by `verdicts`, labelled with the machine, the kind and `label`.
+fn judged_run(
+    kind: RunKind,
+    label: &str,
+    sim: &Sim,
+    entry: &'static MachineEntry,
+    rows: &[Vec<f64>],
+    verdicts: &[Verdict],
+    tr: &Translations,
+) -> Run {
+    let label = format!("{} · {} · {label}", tr.tr(entry.key), tr.tr(kind.key()));
+    let run =
+        Run::from_rows(label, kind, entry.id, sim.signal_infos(), sim.machine.motors(), rows.iter().map(Vec::as_slice));
+    Run { ratings: ratings_of(sim), verdicts: Some(verdicts.to_vec()), ..run }
+}
+
+/// The configured cycle of `config` as a judged run: its samples as the analysis measures it and its checks, the two
+/// runs side by side.
+fn cycle_run(entry: &'static MachineEntry, config: &Config, tr: &Translations) -> Result<Run, Message> {
+    let refused = |e: ConfigError| (e.key(), e.detail().to_string());
+    let mut sim = Sim::new(entry, config).map_err(refused)?;
+    let (load, rows) = std::thread::scope(|scope| {
+        let rows = scope.spawn(|| record_cycle(entry, config));
+        (analyse_cycle(&mut sim), rows.join().unwrap_or_else(|_| Ok(Vec::new())))
+    });
+    let (load, rows) = (load.map_err(|e| (e.key, String::new()))?, rows.map_err(refused)?);
+    let verdicts = verdicts(config, &load).map_err(refused)?;
+    Ok(judged_run(RunKind::Cycle, &config_label(entry, config, tr), &sim, entry, &rows, &verdicts, tr))
+}
+
+/// Runs `points` on a simulation of `config` and keeps every signal once per millisecond until the trajectory is
+/// through, the time from its start: the path as a run.
+fn record_path(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<Vec<Vec<f64>>, CommandError> {
+    let end = points.last().map_or(0.0, |(t, _)| *t);
+    sim.command(Command::Trajectory(points))?;
+    let (start, every) = (sim.time(), ((1e-3 / sim.dt).round() as u64).max(1));
+    let (mut rows, mut sample) = (Vec::new(), Vec::new());
+    // Until the plan is through and a tenth of a second on, for the tool to settle; at most a minute past its end.
+    while (sim.control.busy() || sim.time() - start < end + 0.1) && sim.time() - start < end + 60.0 {
+        sim.step();
+        if sim.step.is_multiple_of(every) {
+            sim.sample(&mut sample);
+            rows.push(sample.clone());
+        }
+    }
+    Ok(rows)
+}
 /// Messages of the analysis panel, and the reasons a search gives for a motor it did not run.
 const NOTES: [&str; 23] = [
     "ui-overlay-exported",
@@ -587,9 +745,21 @@ pub struct Model {
     /// The end of the simulation thread has been reported.
     ended: bool,
     pub scopes: Vec<Scope>,
-    pub history: VecDeque<Vec<f64>>,
-    /// The history as it was when the scopes were frozen; the simulation runs on meanwhile.
-    pub frozen: Option<VecDeque<Vec<f64>>>,
+    pub history: History,
+    /// The scopes' window as it was when they were frozen; the simulation runs on meanwhile. Only the window is kept,
+    /// not the whole history, which on the six-axis arm is a hundred megabytes.
+    pub frozen: Option<History>,
+    /// How often the scopes were frozen, so that a cache tells one frozen window from the next.
+    freezes: u64,
+    /// The runs kept for comparing (`runs`), and the units speeds and lengths are shown in.
+    pub runs: RunStore,
+    pub units: Units,
+    /// Runs being recorded (`record_run`), and CSV files being written (`export_traces`, `export_overlay`).
+    run_jobs: Vec<Job<Run>>,
+    export_jobs: Vec<Job<Message>>,
+    /// The replayed trace's overlay, worked out once when the trace arrives.
+    overlay: Overlay,
+    cache: Mutex<Cache>,
     /// Seconds of history the scopes show.
     pub window_s: f64,
     pub scene: Scene,
@@ -760,8 +930,15 @@ impl Model {
             config_text: text,
             session,
             ended: false,
-            history: VecDeque::new(),
+            history: History::new(HISTORY),
             frozen: None,
+            freezes: 0,
+            runs: RunStore::default(),
+            units: Units::default(),
+            run_jobs: Vec::new(),
+            export_jobs: Vec::new(),
+            overlay: Vec::new(),
+            cache: Mutex::default(),
             window_s: 5.0,
             scene: Scene::default(),
             paused: false,
@@ -799,6 +976,8 @@ impl Model {
                 compare_quantity: "quantity-torque".into(),
                 workspace_z: None,
                 assignment: String::new(),
+                run_set: String::new(),
+                run_file: String::new(),
             },
             cycle_report: None,
             bands: None,
@@ -840,7 +1019,10 @@ impl Model {
         let (paused, speed, exaggeration, window, inputs) =
             (self.paused, self.speed, self.exaggeration, self.window_s, self.inputs.clone());
         let old_amplitude = default_sweep_amplitude(self.entry, &self.config).ok();
+        // The runs kept are compared across machines and configs: they stay, as do the units.
+        let (runs, units, run_jobs) = (std::mem::take(&mut self.runs), self.units, std::mem::take(&mut self.run_jobs));
         *self = fresh;
+        (self.runs, self.units, self.run_jobs) = (runs, units, run_jobs);
         let parts = std::mem::take(&mut self.inputs.parts);
         let sweep_motor = inputs.sweep_motor.min(self.session.motors.len().saturating_sub(1));
         let sweep_amplitude = if old_amplitude == Some(inputs.sweep_amplitude) {
@@ -1054,12 +1236,7 @@ impl Model {
     pub fn poll(&mut self) {
         for event in self.session.drain() {
             match event {
-                Event::Sample(sample) => {
-                    if self.history.len() == HISTORY {
-                        self.history.pop_front();
-                    }
-                    self.history.push_back(sample);
-                }
+                Event::Sample(sample) => self.history.push(&sample),
                 Event::Scene(scene) => self.scene = scene,
                 Event::TrailStart(at) => self.trail = at.map(|at| vec![at]),
                 // Not after `clear`: the result the trail belonged to is gone.
@@ -1099,6 +1276,17 @@ impl Model {
             self.report_job = None;
             self.say(result.unwrap_or_else(|message| message));
         }
+        let mut said = Vec::new();
+        self.export_jobs.retain(|job| answer(job).map(|r| said.push(r.unwrap_or_else(|m| m))).is_none());
+        let mut recorded = Vec::new();
+        self.run_jobs.retain(|job| answer(job).map(|r| recorded.push(r)).is_none());
+        for result in recorded {
+            match result {
+                Ok(run) => self.runs.add(run),
+                Err(message) => said.push(message),
+            }
+        }
+        said.into_iter().for_each(|message| self.say(message));
         if let Some(result) = self.tuning_job.as_ref().and_then(answer) {
             self.tuning_job = None;
             match result {
@@ -1121,7 +1309,8 @@ impl Model {
             };
             let tripped = |load: &CycleLoad| load.tripped.then_some(("ui-analysis-tripped", String::new()));
             let note = match report {
-                Report::Cycle(load, verdicts, bands, samples, curve, worst) => {
+                Report::Cycle(load, verdicts, bands, samples, curve, worst, run) => {
+                    self.runs.add(run);
                     let note = tripped(&load);
                     (self.cycle_report, self.bands, self.band_samples, self.worst) =
                         (Some((load, verdicts, curve)), bands, samples, worst);
@@ -1139,7 +1328,8 @@ impl Model {
                     self.candidates = Some((found, supply));
                     None
                 }
-                Report::Path(run) => {
+                Report::Path(run, recorded) => {
+                    self.runs.add(recorded);
                     // The machine runs the path as well, if it is still the machine the path was planned
                     // for. It refuses by itself where it has moved since, or is busy.
                     let stale = config != self.config;
@@ -1151,6 +1341,13 @@ impl Model {
                     note
                 }
                 Report::Trace(fit) => {
+                    self.overlay = overlay_of(&fit);
+                    let file = std::path::Path::new(&self.inputs.trace_file).file_name().map(|f| f.to_string_lossy());
+                    let file = file.unwrap_or_default();
+                    for (trace, key) in [(&fit.measured, "ui-run-measured"), (&fit.simulated, "ui-run-replayed")] {
+                        let label = format!("{file} · {}", self.tr.tr(key));
+                        self.runs.add(Run::from_trace(label, self.entry.id, &self.session.motors, trace));
+                    }
                     self.trace_fit = Some(fit);
                     None
                 }
@@ -1177,7 +1374,7 @@ impl Model {
     /// Where the machine's setpoint stands, by the newest sample.
     fn standing(&self) -> Option<Vec<f64>> {
         let row = self.history.back()?;
-        let signal = |axis: &sim_core::AxisInfo| {
+        let signal = |axis: &sim_core::AxisInfo| -> Option<usize> {
             self.session.signals.iter().position(|s| s.id == format!("axis.{}.position_setpoint", axis.id))
         };
         self.session.axes.iter().map(|axis| Some(row[signal(axis)?])).collect()
@@ -1186,41 +1383,284 @@ impl Model {
     // ---------------------------------------------------------------------------------------
     // Scopes
 
-    /// Freezing keeps the traces as they are for a closer look; the simulation runs on.
+    /// Freezing keeps the traces in the window as they are for a closer look; the simulation runs on.
     pub fn set_frozen(&mut self, frozen: bool) {
-        self.frozen = frozen.then(|| self.history.clone());
+        self.freezes += 1;
+        self.frozen = frozen.then(|| self.history.tail(self.window_start(&self.history)));
+    }
+
+    /// The first sample of `rows` in the scopes' window: the last `window_s` seconds.
+    fn window_start(&self, rows: &History) -> usize {
+        rows.first_at(rows.back().map_or(0.0, |last| last[0] - self.window_s))
     }
 
     /// The rows the scopes show: the last `window_s` seconds of the live or the frozen history.
-    pub fn visible_rows(&self) -> impl Iterator<Item = &Vec<f64>> {
+    pub fn visible_rows(&self) -> impl DoubleEndedIterator<Item = &[f64]> + ExactSizeIterator + Clone {
         let rows = self.frozen.as_ref().unwrap_or(&self.history);
-        let from = rows.back().map_or(0.0, |last| last[0] - self.window_s);
-        let first = rows.partition_point(|row| row[0] < from);
-        rows.range(first..)
+        rows.iter().skip(self.window_start(rows))
     }
 
+    /// What the scopes show, as a key for caches: the frozen window or the live history's newest sample, and the
+    /// window's length.
+    fn view_key(&self) -> (u64, u64, u64) {
+        let rows = self.frozen.as_ref().unwrap_or(&self.history);
+        (self.freezes, rows.pushed(), self.window_s.to_bits())
+    }
+
+    /// What a trace did in the scopes' window. All signals' are worked out in one pass over the window and kept while
+    /// the scopes show the same, so a frame with many lines does not go over the window once per line.
     pub fn stats(&self, signal: usize) -> Option<Stats> {
-        let (mut min, mut max, mut sum, mut n) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0usize);
-        for row in self.visible_rows() {
-            let v = row[signal];
-            (min, max, sum, n) = (min.min(v), max.max(v), sum + v * v, n + 1);
-        }
-        (n > 0).then(|| Stats { min, max, rms: (sum / n as f64).sqrt() })
+        self.all_stats().get(signal).copied().flatten()
     }
 
-    /// Writes what the scopes show (every signal, the visible time window) as CSV.
+    fn all_stats(&self) -> Arc<Vec<Option<Stats>>> {
+        let key = self.view_key();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((kept, stats)) = &cache.stats
+            && *kept == key
+        {
+            return stats.clone();
+        }
+        let width = self.session.signals.len();
+        let (mut min, mut max, mut sum, mut n) =
+            (vec![f64::INFINITY; width], vec![f64::NEG_INFINITY; width], vec![0.0; width], 0);
+        for row in self.visible_rows() {
+            for (i, &v) in row.iter().enumerate().take(width) {
+                (min[i], max[i], sum[i]) = (min[i].min(v), max[i].max(v), sum[i] + v * v);
+            }
+            n += 1;
+        }
+        let stats: Arc<Vec<_>> = Arc::new(
+            (0..width)
+                .map(|i| (n > 0).then(|| Stats { min: min[i], max: max[i], rms: (sum[i] / n as f64).sqrt() }))
+                .collect(),
+        );
+        cache.stats = Some((key, stats.clone()));
+        stats
+    }
+
+    /// Writes what the scopes show (every signal, the visible time window) as CSV, in the background: a minute of the
+    /// six-axis arm is some hundred megabytes of text. The message comes with `poll`.
     pub fn export_traces(&mut self, path: &std::path::Path) {
         let header: Vec<String> = self.session.signals.iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
-        let mut text = header.join(",") + "\n";
-        for row in self.visible_rows() {
-            let cells: Vec<String> = row.iter().map(|v| format!("{v:.9e}")).collect();
-            text += &(cells.join(",") + "\n");
-        }
-        let message = match std::fs::write(path, text) {
-            Ok(()) => ("ui-exported", path.display().to_string()),
-            Err(e) => ("ui-export-failed", e.to_string()),
+        let rows: Vec<f64> = self.visible_rows().flatten().copied().collect();
+        let (path, width) = (path.to_path_buf(), header.len().max(1));
+        self.write_in_background(move || {
+            use std::io::Write;
+            let write = || -> std::io::Result<()> {
+                let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+                writeln!(file, "{}", header.join(","))?;
+                for row in rows.chunks(width) {
+                    let cells: Vec<String> = row.iter().map(|v| format!("{v:.9e}")).collect();
+                    writeln!(file, "{}", cells.join(","))?;
+                }
+                file.flush()
+            };
+            match write() {
+                Ok(()) => Ok(("ui-exported", path.display().to_string())),
+                Err(e) => Err(("ui-export-failed", format!("{}: {e}", path.display()))),
+            }
+        });
+    }
+
+    /// Runs `write` in a thread of its own; what it says comes with `poll`.
+    fn write_in_background(&mut self, write: impl FnOnce() -> Result<Message, Message> + Send + 'static) {
+        let (result, job) = channel();
+        std::thread::spawn(move || {
+            let _ = result.send(write());
+        });
+        self.export_jobs.push(Mutex::new(job));
+    }
+
+    /// CSV files still being written.
+    pub fn exporting(&self) -> bool {
+        !self.export_jobs.is_empty()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Runs
+
+    /// Per motor of the config's drives the rated and the peak torque, for the utilisation of a run.
+    pub fn ratings(&self) -> Vec<(f64, f64)> {
+        Sim::new(self.entry, &self.config).map(|sim| ratings_of(&sim)).unwrap_or_default()
+    }
+
+    /// Keeps what the scopes show (the live or frozen window) as a run.
+    pub fn keep_live(&mut self) {
+        let end = self.visible_rows().last().map_or(0.0, |row| row[0]);
+        let label = format!(
+            "{} · {} · {:.1} s",
+            self.tr.tr(RunKind::Live.key()),
+            config_label(self.entry, &self.config, &self.tr),
+            end
+        );
+        let (signals, motors) = (self.session.signals.clone(), &self.session.motors);
+        let run = Run::from_rows(label, RunKind::Live, self.entry.id, signals, motors, self.visible_rows());
+        self.runs.add(Run { ratings: self.ratings(), ..run });
+    }
+
+    /// Records the configured cycle of another config as a run, in the background: the config shown, or the config or
+    /// machine file `file` (of any machine), with each of `assignments` applied as `sim-cli --set` does (separated by
+    /// `;` or new lines), e.g. another motor through `parts.motor = "1FK2208-4AF"` or another gain. A file or an
+    /// assignment that is refused is said, and nothing runs.
+    pub fn record_run(&mut self, assignments: &str, file: &str) {
+        let base =
+            if file.trim().is_empty() { Ok((self.entry, self.config.clone())) } else { self.config_of(file.trim()) };
+        let made = base.and_then(|(entry, mut config)| {
+            for assignment in assignments.split([';', '\n']).map(str::trim).filter(|a| !a.is_empty()) {
+                config.set_text(assignment).map_err(|e| (e.key(), e.detail().to_string()))?;
+            }
+            Ok((entry, config))
+        });
+        let (entry, config) = match made {
+            Ok(made) => made,
+            Err(message) => return self.say(message),
         };
-        self.say(message);
+        let tr = self.tr.clone();
+        let (result, job) = channel();
+        std::thread::spawn(move || {
+            let _ = result.send(cycle_run(entry, &config, &tr));
+        });
+        self.run_jobs.push(Mutex::new(job));
+    }
+
+    /// Runs still being recorded.
+    pub fn recording_runs(&self) -> bool {
+        !self.run_jobs.is_empty()
+    }
+
+    /// The machine and config of a config or machine file, as `open_config` reads it, without opening it.
+    fn config_of(&self, path: &str) -> Result<(&'static MachineEntry, Config), Message> {
+        let text =
+            std::fs::read(path).map(|b| decode(&b)).map_err(|e| ("ui-file-unreadable", format!("{path}: {e}")))?;
+        let machine_file = path.to_ascii_lowercase().ends_with(".json")
+            || Config::parse(&text).ok().is_some_and(|c| c.get("machine").is_ok_and(|m| m.is_table()));
+        if machine_file {
+            let entry = sim_machines::load_file(std::path::Path::new(path))
+                .map_err(|e| (e.error.key(), format!("{path}: {}", e.error.detail())))?;
+            return Ok((entry, entry.config()));
+        }
+        let refused = |e: ConfigError| (e.key(), format!("{path}: {}", e.detail()));
+        let entry = std::iter::once(self.entry)
+            .chain(MACHINES.iter().copied())
+            .find(|m| sim_components::load_config(m, &text).is_ok())
+            .ok_or_else(|| sim_components::load_config(self.entry, &text).err().map(refused).unwrap_or_default())?;
+        Ok((entry, sim_components::load_config(entry, &text).map_err(refused)?))
+    }
+
+    /// The shown runs per quantity of `Quantity::ALL` that one of them has (see `RunPlot`), in the chosen units.
+    pub fn run_plots(&self) -> Vec<RunPlot> {
+        let reference = self.runs.reference();
+        let mut plots = Vec::new();
+        for quantity in Quantity::ALL {
+            let (factor, unit) = self.units.scale(quantity.unit());
+            let scaled = |values: &[f64], time: &[f64]| plot_line(time.len(), |n| [time[n], values[n] * factor]);
+            let mut lines = Vec::new();
+            let mut differences = Vec::new();
+            for (i, run) in self.runs.iter().enumerate().filter(|(i, _)| self.runs.shown(*i)) {
+                for channel in run.channels().into_iter().filter(|c| c.quantity == quantity) {
+                    let Some(values) = run.channel(channel) else { continue };
+                    let name = self.run_line_name(run, channel);
+                    lines.push(RunLine {
+                        run: i,
+                        motor: channel.motor,
+                        name: name.clone(),
+                        points: scaled(&values, run.time()),
+                    });
+                    if let Some(aligned) =
+                        self.runs.against_reference(i, channel).filter(|_| self.runs.shown(reference))
+                    {
+                        differences.push(RunLine {
+                            run: i,
+                            motor: channel.motor,
+                            name,
+                            points: scaled(&aligned.difference, &aligned.time),
+                        });
+                    }
+                }
+            }
+            if !lines.is_empty() {
+                let title = format!("{} [{unit}]", self.tr.tr(quantity.key()));
+                plots.push(RunPlot { quantity, title, lines, differences });
+            }
+        }
+        plots
+    }
+
+    /// "Motor A · run label" for a line of a run, or the run's label alone for the tool's error.
+    fn run_line_name(&self, run: &Run, channel: Channel) -> String {
+        match channel.quantity {
+            Quantity::ToolError => run.label.clone(),
+            _ => {
+                let id = format!("motor.{}.{}", run.motors[channel.motor], channel.quantity.signal().unwrap_or(""));
+                let owner = run.signals.iter().find(|s| s.id == id).map_or(String::new(), |s| s.owner_key.clone());
+                format!("{} · {}", self.tr.tr(&owner), run.label)
+            }
+        }
+    }
+
+    /// The key figures of the kept runs side by side (`runs::Figures`): one column per run, the reference first marked,
+    /// in the chosen units. `None` with no run kept.
+    pub fn runs_table(&self) -> Option<Table> {
+        if self.runs.is_empty() {
+            return None;
+        }
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let figures: Vec<_> = self.runs.iter().map(Run::figures).collect();
+        let mut header = vec![tr("ui-analysis-figure")];
+        for (i, run) in self.runs.iter().enumerate() {
+            let mark =
+                if i == self.runs.reference() { format!(" ({})", tr("ui-run-reference")) } else { String::new() };
+            header.push(format!("{}{mark}", run.label));
+        }
+        let mut table = vec![header];
+        let cell = |value: Option<f64>| value.map_or(String::new(), short);
+        let mut row = |label: String, cells: Vec<String>| table.push([vec![label], cells].concat());
+        row(format!("{} [s]", tr("ui-analysis-duration")), figures.iter().map(|f| short(f.duration)).collect());
+        row(
+            tr("ui-run-verdicts"),
+            figures
+                .iter()
+                .map(|f| f.verdicts.map_or(String::new(), |(ok, failed)| format!("{ok} / {failed}")))
+                .collect(),
+        );
+        let motors = figures.iter().map(|f| f.motors.len()).max().unwrap_or(0);
+        let (speed, speed_unit) = self.units.scale("rad/s");
+        for k in 0..motors {
+            let name = self
+                .runs
+                .iter()
+                .find_map(|run| {
+                    let id = format!("motor.{}.torque", run.motors.get(k)?);
+                    run.signals.iter().find(|s| s.id == id).map(|s| tr(&s.owner_key))
+                })
+                .unwrap_or_else(|| format!("{}", k + 1));
+            let rows: [(&str, String, fn(&crate::runs::MotorFigures) -> Option<f64>, f64); 8] = [
+                ("ui-analysis-peak-torque", "N m".into(), |m| Some(m.peak_torque), 1.0),
+                ("ui-analysis-rms-torque", "N m".into(), |m| Some(m.rms_torque), 1.0),
+                ("ui-run-peak-speed", speed_unit.clone(), |m| Some(m.peak_speed), speed),
+                ("ui-run-peak-error", "rad".into(), |m| Some(m.peak_error), 1.0),
+                ("ui-run-rms-error", "rad".into(), |m| Some(m.rms_error), 1.0),
+                ("ui-run-thermal-use", "%".into(), |m| m.utilisation.map(|u| u.0), 100.0),
+                ("ui-run-peak-use", "%".into(), |m| m.utilisation.map(|u| u.1), 100.0),
+                ("ui-run-energy", "J".into(), |m| m.energy, 1.0),
+            ];
+            for (key, unit, value, factor) in rows {
+                let cells = figures.iter().map(|f| cell(f.motors.get(k).and_then(value).map(|v| v * factor)));
+                row(format!("{name} · {} [{unit}]", tr(key)), cells.collect());
+            }
+        }
+        let (length, length_unit) = self.units.scale("m");
+        for (key, value) in [
+            ("ui-run-tool-error-peak", figures.iter().map(|f| f.tool_error_peak).collect::<Vec<_>>()),
+            ("ui-run-tool-error-rms", figures.iter().map(|f| f.tool_error_rms).collect()),
+        ] {
+            row(
+                format!("{} [{length_unit}]", tr(key)),
+                value.into_iter().map(|v| cell(v.map(|v| v * length))).collect(),
+            );
+        }
+        Some(table)
     }
 
     pub fn report_running(&self) -> bool {
@@ -1316,18 +1756,29 @@ impl Model {
         if kind == Analysis::Search && !SUPPLIES.contains(&inputs.supply.as_str()) {
             return self.say(("ui-search-bad-supply", inputs.supply));
         }
-        let (standing, motors) = (self.standing(), self.session.motors.clone());
+        let (standing, motors, tr) = (self.standing(), self.session.motors.clone(), self.tr.clone());
         let (result, job) = channel();
         std::thread::spawn(move || {
             let refused = |e: ConfigError| (e.key(), e.detail().to_string());
             let command = |e: CommandError| (e.key, String::new());
-            let read =
-                |file: &str| std::fs::read_to_string(file).map_err(|e| ("ui-file-unreadable", format!("{file}: {e}")));
+            // As the command line reads them (`import::decode`): a file saved by Excel starts with a byte order mark,
+            // or is UTF-16, which read as text gave "error-trace-column: time".
+            let read = |file: &str| {
+                std::fs::read(file)
+                    .map(|bytes| decode(&bytes))
+                    .map_err(|e| ("ui-file-unreadable", format!("{file}: {e}")))
+            };
+            let label = config_label(entry, &config, &tr);
             let run = || -> Result<Report, Message> {
                 Ok(match kind {
                     Analysis::Cycle => {
                         let mut sim = Sim::new(entry, &config).map_err(refused)?;
-                        let load = analyse_cycle(&mut sim).map_err(command)?;
+                        // The cycle's samples for the run store, beside the analysis: its pass is the one analysed.
+                        let (load, rows) = std::thread::scope(|scope| {
+                            let rows = scope.spawn(|| record_cycle(entry, &config));
+                            (analyse_cycle(&mut sim), rows.join().unwrap_or_else(|_| Ok(Vec::new())))
+                        });
+                        let (load, rows) = (load.map_err(command)?, rows.map_err(refused)?);
                         let curve = torque_speed_curves(sim.control.drive_params());
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
                         // Two more cycles per bounded value, or one per sample (always with the same seed, so
@@ -1358,7 +1809,8 @@ impl Model {
                                 None,
                             )
                         };
-                        Report::Cycle(load, verdicts, bands, inputs.samples, curve, worst)
+                        let run = judged_run(RunKind::Cycle, &label, &sim, entry, &rows, &verdicts, &tr);
+                        Report::Cycle(load, verdicts, bands, inputs.samples, curve, worst, run)
                     }
                     Analysis::Sensitivity => {
                         // The values the config calls uncertain: those it gives bounds. Two cycles each.
@@ -1441,16 +1893,25 @@ impl Model {
                             )
                         };
                         let scene_line = points.iter().filter_map(|(_, pose)| sim.machine.scene_point(pose)).collect();
+                        // The path's samples for the run store, on a simulation of its own that starts as this one.
+                        let mut again = Sim::new(entry, &from_here).map_err(refused)?;
+                        let rows = record_path(&mut again, points.clone()).map_err(command)?;
                         let load = analyse_trajectory(&mut sim, points.clone()).map_err(command)?;
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
-                        Report::Path(PathRun {
-                            points,
-                            scene_line,
-                            load,
-                            verdicts,
-                            deviation,
-                            curves: torque_speed_curves(sim.control.drive_params()),
-                        })
+                        let file = std::path::Path::new(&inputs.path_file).file_name().map(|f| f.to_string_lossy());
+                        let label = format!("{} · {label}", file.unwrap_or_default());
+                        let recorded = judged_run(RunKind::Path, &label, &again, entry, &rows, &verdicts, &tr);
+                        Report::Path(
+                            PathRun {
+                                points,
+                                scene_line,
+                                load,
+                                verdicts,
+                                deviation,
+                                curves: torque_speed_curves(sim.control.drive_params()),
+                            },
+                            recorded,
+                        )
                     }
                     Analysis::Trace => {
                         let unfit = |e: TraceError| (e.key, e.detail);
@@ -1460,11 +1921,11 @@ impl Model {
                             let none = vec![None; measured.motors.len()];
                             (measured, none)
                         } else {
-                            let bytes = std::fs::read(&inputs.trace_file)
-                                .map_err(|e| ("ui-file-unreadable", format!("{}: {e}", inputs.trace_file)))?;
-                            let imported =
-                                import(&decode(&bytes), &Mapping::parse(&read(&inputs.trace_map)?).map_err(unfit)?)
-                                    .map_err(unfit)?;
+                            let imported = import(
+                                &read(&inputs.trace_file)?,
+                                &Mapping::parse(&read(&inputs.trace_map)?).map_err(unfit)?,
+                            )
+                            .map_err(unfit)?;
                             if imported.trace.motors.len() != motors.len() {
                                 return Err((
                                     "error-import-map",
@@ -1529,7 +1990,7 @@ impl Model {
             Analysis::Optimise => self.optimised = None,
             Analysis::Search => self.candidates = None,
             Analysis::Path => (self.path_run, self.trail) = (None, None),
-            Analysis::Trace => self.trace_fit = None,
+            Analysis::Trace => (self.trace_fit, self.overlay) = (None, Vec::new()),
             Analysis::Sweep => self.sweeps = None,
             Analysis::SweepFit => self.sweep_fit = None,
             Analysis::Compare => self.comparison = None,
@@ -1917,47 +2378,46 @@ impl Model {
 
     /// Measured against simulated, per quantity of `OVERLAY_KEYS` (torque, speed, following error at the motor)
     /// and per motor: (time, measured value) and (time, simulated value). Empty until a trace was replayed.
-    pub fn overlay(&self) -> Vec<(&'static str, Vec<[Vec<[f64; 2]>; 2]>)> {
-        let Some(fit) = &self.trace_fit else { return Vec::new() };
-        let time = &fit.measured.time;
-        let line = |values: &[f64]| time.iter().zip(values).map(|(t, v)| [*t, *v]).collect::<Vec<_>>();
-        let columns = |m: &sim_components::trace::MotorTrace| [m.torque.clone(), m.speed.clone(), m.following_error()];
-        let pairs: Vec<_> =
-            fit.measured.motors.iter().zip(&fit.simulated.motors).map(|(m, s)| (columns(m), columns(s))).collect();
-        OVERLAY_KEYS
-            .iter()
-            .enumerate()
-            .map(|(q, key)| (*key, pairs.iter().map(|(m, s)| [line(&m[q]), line(&s[q])]).collect()))
-            .collect()
+    /// Worked out once, when the trace arrives: a frame used to copy the whole trace for it.
+    pub fn overlay(&self) -> &Overlay {
+        &self.overlay
     }
 
-    /// Writes the overlay as `sim-cli replay --out` does.
+    /// Writes the overlay as `sim-cli replay --out` does, in the background; the message comes with `poll`.
     pub fn export_overlay(&mut self, path: &std::path::Path) {
         let Some(fit) = &self.trace_fit else { return };
         let ids: Vec<&str> = self.session.motors.iter().map(|m| m.id).collect();
-        let message = match std::fs::write(path, overlay_csv(&ids, &fit.measured, &fit.simulated)) {
-            Ok(()) => ("ui-overlay-exported", path.display().to_string()),
-            Err(e) => ("ui-export-failed", e.to_string()),
-        };
-        self.say(message);
+        let (text, path) = (overlay_csv(&ids, &fit.measured, &fit.simulated), path.to_path_buf());
+        self.write_in_background(move || match std::fs::write(&path, text) {
+            Ok(()) => Ok(("ui-overlay-exported", path.display().to_string())),
+            Err(e) => Err(("ui-export-failed", format!("{}: {e}", path.display()))),
+        });
     }
 
     /// The operating points of the analysed cycle, as `sim-cli analyze --points` writes them, motor after motor:
     /// how many there are, and the header with the rows in `rows`. `None` until a cycle was analysed.
     pub fn points_table(&self, rows: std::ops::Range<usize>) -> Option<(usize, Table)> {
         let (load, _, _) = self.cycle_report.as_ref()?;
+        let rpm = self.units.scale("rad/s").0;
         let all = self
             .session
             .motors
             .iter()
             .zip(&load.motors)
             .flat_map(|(motor, m)| m.points.iter().map(move |p| (motor, p)));
-        let shown = all
-            .clone()
-            .skip(rows.start)
-            .take(rows.len())
-            .map(|(motor, (speed, torque))| vec![self.tr.tr(motor.key).to_string(), short(*speed), short(*torque)]);
-        Some((all.count(), [vec![self.header(&POINTS_KEYS)], shown.collect()].concat()))
+        let shown = all.clone().skip(rows.start).take(rows.len()).map(|(motor, (speed, torque))| {
+            vec![self.tr.tr(motor.key).to_string(), short(*speed * rpm), short(*torque)]
+        });
+        let mut header = self.header(&POINTS_KEYS);
+        if self.units.rpm {
+            header[1] = self.tr.tr("ui-points-speed-rpm").to_string();
+        }
+        Some((all.count(), [vec![header], shown.collect()].concat()))
+    }
+
+    /// The label of the motor speed's axis in the unit chosen.
+    pub fn speed_label(&self) -> String {
+        self.tr.tr(if self.units.rpm { "ui-points-speed-rpm" } else { "ui-points-speed" }).to_string()
     }
 
     /// The operating points per motor as (speed, torque), and the torque-speed curves (`Curves`): of the analysed
@@ -1967,9 +2427,15 @@ impl Model {
             Analysis::Path => self.path_run.as_ref().map(|run| (&run.load, &run.curves))?,
             _ => self.cycle_report.as_ref().map(|(load, _, curves)| (load, curves))?,
         };
-        let points =
-            load.motors.iter().map(|m| m.points.iter().map(|(speed, torque)| [*speed, *torque]).collect()).collect();
-        Some((points, curves.clone()))
+        // Speeds in the unit chosen (`units`).
+        let rpm = self.units.scale("rad/s").0;
+        let points = load
+            .motors
+            .iter()
+            .map(|m| m.points.iter().map(|(speed, torque)| [*speed * rpm, *torque]).collect())
+            .collect();
+        let curves = curves.clone().map(|line| line.into_iter().map(|[speed, torque]| [speed * rpm, torque]).collect());
+        Some((points, curves))
     }
 
     /// The parts of each motor's torque over the scopes' time window: per motor its name with the unit, and per
@@ -1977,9 +2443,7 @@ impl Model {
     /// that does not report the parts.
     pub fn breakdown_lines(&self) -> Vec<(String, Vec<(String, Vec<[f64; 2]>)>)> {
         let signals = &self.session.signals;
-        let rows: Vec<&Vec<f64>> = self.visible_rows().collect();
-        // At most about three thousand points per line, as in the scopes.
-        let stride = (rows.len() / 3000).max(1);
+        let rows: Vec<&[f64]> = self.visible_rows().collect();
         let lines = |motor: &sim_core::MotorInfo| -> Option<(String, Vec<(String, Vec<[f64; 2]>)>)> {
             let ids = TORQUE_PARTS
                 .iter()
@@ -1992,9 +2456,7 @@ impl Model {
                 places
                     .iter()
                     .zip(BREAKDOWN_KEYS)
-                    .map(|(&i, key)| {
-                        (self.tr.tr(key).to_string(), rows.iter().step_by(stride).map(|row| [row[0], row[i]]).collect())
-                    })
+                    .map(|(&i, key)| (self.tr.tr(key).to_string(), plot_line(rows.len(), |n| [rows[n][0], rows[n][i]])))
                     .collect(),
             ))
         };
@@ -2084,8 +2546,20 @@ impl Model {
     /// condition number of the kinematics there (`Machine::condition`). The grid spans the first two axes' ranges and
     /// half of their width beyond each end, so that the reach shows where it goes past the travel range. `None` for a
     /// machine with fewer than three axes or no condition to tell, and for a config it does not build.
-    pub fn workspace_slice(&self, n: usize) -> Option<WorkspaceSlice> {
-        let machine = self.machine()?;
+    /// Worked out once per config, height and grid: 3721 nodes each frame cost the path tab its frame rate.
+    pub fn workspace_slice(&self, n: usize) -> Option<Arc<WorkspaceSlice>> {
+        let key = (self.config.clone(), self.inputs.workspace_z.map(f64::to_bits), n);
+        if let Some((kept, slice)) = &self.cache.lock().unwrap_or_else(|e| e.into_inner()).workspace
+            && *kept == key
+        {
+            return slice.clone();
+        }
+        let slice = self.with_machine(|machine| self.workspace_of(machine, n)).flatten().map(Arc::new);
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).workspace = Some((key, slice.clone()));
+        slice
+    }
+
+    fn workspace_of(&self, machine: &dyn Machine, n: usize) -> Option<WorkspaceSlice> {
         let axes = machine.axes();
         let heights = (axes.get(2)?.min, axes[2].max);
         let z = self.inputs.workspace_z.unwrap_or((heights.0 + heights.1) / 2.0).clamp(heights.0, heights.1);
@@ -2112,11 +2586,10 @@ impl Model {
     /// curve runs over the axis's speed limit both ways, with its points closer together near standstill, where the
     /// Stribeck drop is. Empty for a machine that tells no contacts, or a config it does not build.
     pub fn friction_views(&self) -> Vec<FrictionView> {
-        let Ok(machine) =
-            sim_components::catalog::resolve(self.entry, &self.config).and_then(|cfg| (self.entry.build)(&cfg))
-        else {
-            return Vec::new();
-        };
+        self.with_machine(|machine| self.friction_of(machine)).unwrap_or_default()
+    }
+
+    fn friction_of(&self, machine: &dyn Machine) -> Vec<FrictionView> {
         let tr = |key: &str| self.tr.tr(key).to_string();
         let value = |id: String| -> Option<f64> {
             Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?])
@@ -2160,9 +2633,17 @@ impl Model {
         views.collect()
     }
 
-    /// The machine as the config builds it, for what it tells the views; `None` for a config it does not build.
-    fn machine(&self) -> Option<Box<dyn Machine>> {
-        sim_components::catalog::resolve(self.entry, &self.config).and_then(|cfg| (self.entry.build)(&cfg)).ok()
+    /// `f` of the machine as the config builds it, for what it tells the views; `None` for a config it does not build.
+    /// The machine is built once per config, not once per view and frame.
+    fn with_machine<T>(&self, f: impl FnOnce(&dyn Machine) -> T) -> Option<T> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.machine.as_ref().is_none_or(|(config, _)| *config != self.config) {
+            let built =
+                sim_components::catalog::resolve(self.entry, &self.config).and_then(|cfg| (self.entry.build)(&cfg));
+            cache.machine = Some((self.config.clone(), built.ok()));
+        }
+        let machine = cache.machine.as_ref().and_then(|(_, m)| m.as_deref())?;
+        Some(f(machine))
     }
 
     /// The newest sample of a signal, by its id.
@@ -2170,11 +2651,11 @@ impl Model {
         Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?])
     }
 
-    /// The points (time, value times `scale`) of a signal over the scopes' window, at most about three thousand.
+    /// The points (time, value times `scale`) of a signal over the scopes' window, its peaks kept (`plot_line`).
     fn line_of(&self, id: &str, scale: f64) -> Vec<[f64; 2]> {
         let Some(i) = self.session.signals.iter().position(|s| s.id == id) else { return Vec::new() };
-        let rows: Vec<&Vec<f64>> = self.visible_rows().collect();
-        rows.iter().step_by((rows.len() / 3000).max(1)).map(|row| [row[0], row[i] * scale]).collect()
+        let rows: Vec<&[f64]> = self.visible_rows().collect();
+        plot_line(rows.len(), |n| [rows[n][0], rows[n][i] * scale])
     }
 
     /// The thermal view (see `ThermalView`). The windings are rated for `motor.rated_temperature_rise_k`, the parts
@@ -2221,7 +2702,7 @@ impl Model {
         // The temperature feedback warms the parts too (`sim::heats`).
         let parts = on("part_heating") || on("thermal_feedback");
         if parts {
-            for part in self.machine().map(|m| m.thermal_parts()).unwrap_or_default() {
+            for part in self.with_machine(|m| m.thermal_parts()).unwrap_or_default() {
                 let key = |name: &str| format!("thermal.{}_{name}", part.kind);
                 let settles =
                     load.and_then(|l| l.part_rises.iter().find(|(p, _)| p.id == part.id)).map(|(_, rise)| *rise);
@@ -2239,7 +2720,7 @@ impl Model {
 
     /// The belt view (see `BeltView`); `None` for a machine that tells no belt sections. Stretch in mm.
     pub fn belt_view(&self) -> Option<BeltView> {
-        let sections = self.machine()?.belt_sections();
+        let sections = self.with_machine(|m| m.belt_sections())?;
         let pretension = sections.first()?.pretension;
         let rating = self.config.positive("ratings.belt_max_tension_n").ok();
         let tr = |key: &str| self.tr.tr(key).to_string();
@@ -2287,11 +2768,9 @@ impl Model {
         let mut table =
             vec![vec![tr("ui-effects-signal"), unit("ui-effects-difference-peak"), unit("ui-effects-difference-rms")]];
         let mut lines = Vec::new();
-        let stride = (found.on.len() / 3000).max(1);
         for line in scope.lines.iter().filter(|l| !l.reference) {
             let i = line.signal;
-            let points =
-                |rows: &Vec<Vec<f64>>| rows.iter().step_by(stride).map(|row| [row[0], row[i]]).collect::<Vec<_>>();
+            let points = |rows: &Vec<Vec<f64>>| plot_line(rows.len(), |n| [rows[n][0], rows[n][i]]);
             let name = tr(&found.signals[i].owner_key);
             let (peak, rms) = found.difference(i);
             table.push(vec![name.clone(), short(peak), short(rms)]);
@@ -2503,6 +2982,7 @@ impl Model {
             &FRICTION_KEYS,
             &EFFECT_KEYS,
             &VIEW_KEYS,
+            &RUN_KEYS,
         ];
         keys.extend(headers.concat().into_iter().map(String::from));
         keys.extend(

@@ -54,13 +54,28 @@ pub fn extend_trail(trail: &mut Vec<[f64; 3]>, points: &[[f64; 3]]) {
     trail.drain(..trail.len().saturating_sub(TRAIL));
 }
 
-/// A point of the travelled path with what the 3D view may colour it by: where the plan had the tool at that
-/// step, in the scene, and how fast the tool went.
+/// A point of the travelled path with what the 3D view may colour it by: the nearest point of the path the plan drew,
+/// in the scene, and how fast the tool went; and the simulated time it was passed, for cutting the path at the
+/// timeline's time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrailPoint {
     pub at: [f64; 3],
     pub planned: [f64; 3],
     pub speed: f64,
+    pub time: f64,
+}
+
+/// How many of the newest setpoints the travelled path is measured against (`Runner::trail_point`): 0.2 s of path at
+/// one per profile cycle of 1 ms, far more than any tool lags behind its plan.
+const DRAWN: usize = 200;
+
+/// Where on the piece from `a` to `b` the point nearest `p` is (0 at `a`, 1 at `b`), and how far that is from `p`.
+fn nearest_on_piece(p: &[f64], a: &[f64], b: &[f64]) -> (f64, f64) {
+    let length: f64 = a.iter().zip(b).map(|(a, b)| (b - a) * (b - a)).sum();
+    let along: f64 = p.iter().zip(a).zip(b).map(|((p, a), b)| (p - a) * (b - a)).sum();
+    let along = if length > 0.0 { (along / length).clamp(0.0, 1.0) } else { 0.0 };
+    let distance = (0..p.len()).map(|i| (a[i] + along * (b[i] - a[i]) - p[i]).powi(2)).sum::<f64>().sqrt();
+    (along, distance)
 }
 
 /// What only the window reads, apart from `Event`s (which the model drains): the travelled path's points with
@@ -168,6 +183,10 @@ pub struct Runner {
     /// the path started anew meanwhile (`ViewNews`).
     pub trail_points: Vec<TrailPoint>,
     pub trail_restarted: bool,
+    /// The setpoints of the path so far, a new one per profile cycle, the newest `DRAWN`, and the simulated time the
+    /// newest is for: the path the plan has drawn, which the travelled path is measured against.
+    drawn: VecDeque<Vec<f64>>,
+    drawn_at: f64,
 }
 
 impl Runner {
@@ -183,6 +202,8 @@ impl Runner {
             recording: false,
             trail_points: Vec::new(),
             trail_restarted: false,
+            drawn: VecDeque::new(),
+            drawn_at: 0.0,
         })
     }
 
@@ -217,6 +238,7 @@ impl Runner {
 
     fn start_trail(&mut self, at: Option<[f64; 3]>, events: &mut Vec<Event>) {
         // Nothing to end where nothing is recorded: a parameter edit on a machine that runs no path.
+        self.drawn.clear();
         if at.is_some() || self.trail.is_some() {
             events.push(Event::TrailStart(at));
             let first = at.map(|at| self.trail_point(at));
@@ -228,17 +250,35 @@ impl Runner {
         self.recording = at.is_some();
     }
 
-    /// A point of the travelled path, with where the plan has the tool and the tool's speed now.
+    /// A point of the travelled path, with the nearest point of the path the plan has drawn and the tool's speed now.
+    /// The plan is the setpoints the drives follow, after input shaping, as the cycle analysis measures the path error:
+    /// the plan before shaping runs ahead of it by the shaper's delay on purpose, which is not an error. Its newest
+    /// setpoint is carried on by its speed to now: it changes once per profile cycle (1 ms), and the tool between two
+    /// stood up to its speed times the cycle from the last (0.8 mm at 0.8 m/s), which read as error where there was
+    /// none. Measured to the path and not to where the plan is now, the error is the one the path error peak of the
+    /// path's analysis is the largest of: a tool on the path but behind the plan is not off it.
     /// shortcut: the speed is the length of the tool's speed vector, which mixes units on a machine with a turning
     /// axis; upgrade to the speed in the scene when one has such an axis.
     fn trail_point(&self, at: [f64; 3]) -> TrailPoint {
         let axes = self.sim.machine.axes().len();
         let (mut pos, mut vel) = (vec![0.0; axes], vec![0.0; axes]);
         self.sim.machine.tool_state(&self.sim.state, &mut pos, &mut vel);
-        // Against the setpoint the drives follow, after input shaping, as the cycle analysis measures tracking: the
-        // plan before shaping runs ahead of it by the shaper's delay on purpose, which is not an error.
-        let planned = self.sim.machine.scene_point(&self.sim.control.set_pos).unwrap_or(at);
-        TrailPoint { at, planned, speed: vel.iter().map(|v| v * v).sum::<f64>().sqrt() }
+        let control = &self.sim.control;
+        let ahead = if self.drawn.is_empty() { 0.0 } else { self.sim.time() - self.drawn_at };
+        let lead: Vec<f64> = control.set_pos.iter().zip(&control.set_vel).map(|(p, v)| p + v * ahead).collect();
+        let (mut nearest, mut off) = ((&lead, &lead, 0.0), nearest_on_piece(&pos, &lead, &lead).1);
+        let mut newer = &lead;
+        for older in self.drawn.iter().rev() {
+            let (along, distance) = nearest_on_piece(&pos, older, newer);
+            if distance < off {
+                (nearest, off) = ((older, newer, along), distance);
+            }
+            newer = older;
+        }
+        let (a, b, along) = nearest;
+        let nearest: Vec<f64> = a.iter().zip(b).map(|(a, b)| a + along * (b - a)).collect();
+        let planned = self.sim.machine.scene_point(&nearest).unwrap_or(at);
+        TrailPoint { at, planned, speed: vel.iter().map(|v| v * v).sum::<f64>().sqrt(), time: self.sim.time() }
     }
 
     /// Runs whole base steps for `seconds` of simulated time and reports the samples.
@@ -246,6 +286,14 @@ impl Runner {
         let mut travelled = Vec::new();
         for _ in 0..(seconds / self.sim.dt).round() as u64 {
             self.sim.step();
+            // A new setpoint, for the time at the start of the step (the profile runs first in it).
+            if self.recording && self.drawn.back() != Some(&self.sim.control.set_pos) {
+                if self.drawn.len() == DRAWN {
+                    self.drawn.pop_front();
+                }
+                self.drawn.push_back(self.sim.control.set_pos.clone());
+                self.drawn_at = self.sim.time() - self.sim.dt;
+            }
             if let (true, Some(last), Some(tool)) = (self.recording, self.trail, self.sim.tool_point())
                 && (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8
             {

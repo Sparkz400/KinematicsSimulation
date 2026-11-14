@@ -347,6 +347,37 @@ enum Mark {
     Text([f64; 2], String, f64, f64),
 }
 
+/// At most `2 buckets` of the `n` points `point(0)` .. `point(n - 1)`, in their order, for drawing a long line: the
+/// points cut into `buckets` stretches of about equal count, and of each the lowest and the highest point (one, where
+/// they are the same). A stride would step over a peak one sample wide; this keeps every stretch's extremes, so the
+/// drawn line reaches every peak there is. Fewer points than `2 buckets` are given as they are.
+pub fn peak_keeping(n: usize, point: impl Fn(usize) -> [f64; 2], buckets: usize) -> Vec<[f64; 2]> {
+    if n <= 2 * buckets {
+        return (0..n).map(point).collect();
+    }
+    let mut out = Vec::with_capacity(2 * buckets);
+    for b in 0..buckets {
+        let (from, to) = (b * n / buckets, (b + 1) * n / buckets);
+        let (mut low, mut high) = ((from, point(from)[1]), (from, point(from)[1]));
+        for i in from + 1..to {
+            let y = point(i)[1];
+            // NaN is neither: a gap stays out of the extremes.
+            if y < low.1 || low.1.is_nan() {
+                low = (i, y);
+            }
+            if y > high.1 || high.1.is_nan() {
+                high = (i, y);
+            }
+        }
+        let (low, high) = (low.0, high.0);
+        out.push(point(low.min(high)));
+        if low != high {
+            out.push(point(low.max(high)));
+        }
+    }
+    out
+}
+
 /// A step of 1, 2 or 5 times a power of ten that cuts `span` into about five.
 fn tick_step(span: f64) -> f64 {
     let raw = (span / 5.0).max(1e-12);
@@ -400,9 +431,13 @@ fn marks(plot: &Plot, w: f64, h: f64) -> Vec<Mark> {
     let mut legend = left;
     for (i, (name, points, dots)) in plot.series.iter().enumerate() {
         let color = COLORS[i.min(COLORS.len() - 1)];
-        // At most about 800 points a series: a cycle sampled each millisecond would make the PDF large for nothing.
-        let every = (points.len() / 800).max(1);
-        let shown: Vec<[f64; 2]> = points.iter().step_by(every).map(at).collect();
+        // At most about 800 points a series: a cycle sampled each millisecond would make the PDF large for nothing. The
+        // lowest and highest of each stretch stay, so that a peak one sample wide still shows.
+        let shown: Vec<[f64; 2]> = if *dots {
+            points.iter().step_by((points.len() / 800).max(1)).map(at).collect()
+        } else {
+            peak_keeping(points.len(), |i| points[i], 400).iter().map(at).collect()
+        };
         if *dots {
             out.extend(shown.into_iter().map(|p| Mark::Dot(p, color)));
         } else {
@@ -413,6 +448,52 @@ fn marks(plot: &Plot, w: f64, h: f64) -> Vec<Mark> {
         legend += 30.0 + width(name, 7.0, false);
     }
     out
+}
+
+impl Plot {
+    /// The plot as one SVG picture of 720 by 300, as the report draws it; the app saves its plots with it too.
+    pub fn svg(&self) -> String {
+        let plot = self;
+        let mut out = String::new();
+        let (w, h) = (720.0, 300.0);
+        _ = write!(
+            out,
+            "<svg viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" font-family=\"Helvetica,Arial,sans-serif\">"
+        );
+        for mark in marks(plot, w, h) {
+            match mark {
+                Mark::Line(points, c, width) => {
+                    let p: Vec<String> = points.iter().map(|p| format!("{:.1},{:.1}", p[0], p[1])).collect();
+                    _ = write!(
+                        out,
+                        "<polyline fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\" points=\"{}\"/>",
+                        rgb(c),
+                        p.join(" ")
+                    );
+                }
+                Mark::Dot(p, c) => {
+                    _ = write!(out, "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1\" fill=\"{}\"/>", p[0], p[1], rgb(c))
+                }
+                Mark::Text(p, text, size, anchor) => {
+                    let anchor = if anchor == 0.0 {
+                        "start"
+                    } else if anchor == 1.0 {
+                        "end"
+                    } else {
+                        "middle"
+                    };
+                    _ = write!(
+                        out,
+                        "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{size}\" text-anchor=\"{anchor}\">{}</text>",
+                        p[0],
+                        p[1],
+                        escape(&text)
+                    );
+                }
+            }
+        }
+        out + "</svg>"
+    }
 }
 
 fn escape(text: &str) -> String {
@@ -451,53 +532,7 @@ impl Report {
                     }
                     out += "</table>\n";
                 }
-                Block::Plot(plot) => {
-                    let (w, h) = (720.0, 300.0);
-                    _ = write!(
-                        out,
-                        "<svg viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" font-family=\"Helvetica,Arial,sans-serif\">"
-                    );
-                    for mark in marks(plot, w, h) {
-                        match mark {
-                            Mark::Line(points, c, width) => {
-                                let p: Vec<String> =
-                                    points.iter().map(|p| format!("{:.1},{:.1}", p[0], p[1])).collect();
-                                _ = write!(
-                                    out,
-                                    "<polyline fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\" points=\"{}\"/>",
-                                    rgb(c),
-                                    p.join(" ")
-                                );
-                            }
-                            Mark::Dot(p, c) => {
-                                _ = write!(
-                                    out,
-                                    "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1\" fill=\"{}\"/>",
-                                    p[0],
-                                    p[1],
-                                    rgb(c)
-                                )
-                            }
-                            Mark::Text(p, text, size, anchor) => {
-                                let anchor = if anchor == 0.0 {
-                                    "start"
-                                } else if anchor == 1.0 {
-                                    "end"
-                                } else {
-                                    "middle"
-                                };
-                                _ = write!(
-                                    out,
-                                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{size}\" text-anchor=\"{anchor}\">{}</text>",
-                                    p[0],
-                                    p[1],
-                                    escape(&text)
-                                );
-                            }
-                        }
-                    }
-                    out += "</svg>\n";
-                }
+                Block::Plot(plot) => out += &(plot.svg() + "\n"),
                 Block::SignOff(roles, fields) => {
                     out += "<div class=\"sign\">";
                     for role in roles {

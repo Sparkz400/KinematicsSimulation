@@ -174,6 +174,39 @@ impl Recording {
     }
 }
 
+/// What saves a screenshot of the window, cut to `area` (left, top, width, height in physical pixels: a plot), as the
+/// PNG file `path`, for `Screenshot`'s `observe`; what it says (saved, or why not) goes into `said`.
+pub fn picture_saver(
+    area: [u32; 4],
+    path: PathBuf,
+    said: Arc<std::sync::Mutex<Vec<Message>>>,
+) -> impl FnMut(On<ScreenshotCaptured>) + use<> {
+    move |captured| {
+        let saved = (|| -> Result<(), String> {
+            let window = captured.image.clone().try_into_dynamic().map_err(|e| e.to_string())?.to_rgba8();
+            let size = [area[2].max(1), area[3].max(1)];
+            let pixels = cut(&window, [window.width(), window.height()], area, size, [0, 0, 0, 255]);
+            let extent = Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
+            let picture = Image::new(
+                extent,
+                TextureDimension::D2,
+                pixels,
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::default(),
+            );
+            let picture = picture.try_into_dynamic().map_err(|e| e.to_string())?;
+            picture.to_rgb8().save(&path).map_err(|e| e.to_string())
+        })();
+        let message = match saved {
+            Ok(()) => ("ui-plot-saved", path.display().to_string()),
+            Err(e) => ("ui-export-failed", format!("{}: {e}", path.display())),
+        };
+        if let Ok(mut said) = said.lock() {
+            said.push(message);
+        }
+    }
+}
+
 /// A new folder in `parent`, named after `now`; a recording started in the same second gets "_2", "_3" and so on,
 /// since its frames and video would otherwise go over the first one's.
 fn new_folder(parent: &Path, now: SystemTime) -> std::io::Result<PathBuf> {
@@ -273,6 +306,11 @@ fn find_blender(named: Option<OsString>, installs: &Path) -> Option<PathBuf> {
         exe.is_file().then_some((version, exe))
     });
     found.max_by(|a, b| a.0.cmp(&b.0)).map(|(_, exe)| exe)
+}
+
+/// "2026-11-13_08-15-30" for now, in UTC: for names of files saved, so that one does not overwrite the last.
+pub fn now_stamp() -> String {
+    timestamp(SystemTime::now())
 }
 
 /// "2026-11-13_08-15-30" for a time, in UTC.

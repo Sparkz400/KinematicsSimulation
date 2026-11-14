@@ -26,7 +26,8 @@ use bevy_egui::{
     EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures,
     PrimaryEguiContext, egui,
 };
-use sim_app::model::{Analysis, Model};
+use sim_app::model::{Analysis, Message, Model};
+use sim_app::runs::{History, Run, RunKind, trail_until};
 use sim_app::session::{Event, Request, Session, TrailPoint};
 use sim_app::video;
 use sim_components::Command;
@@ -88,6 +89,8 @@ struct State {
     /// The view's recording, while the Record button is on, and the videos still being made from stopped ones.
     recording: Option<video::Recording>,
     encodings: Vec<video::Encoding>,
+    /// What the plot pictures saved say, from the screenshot's observer, for the messages.
+    notes: std::sync::Arc<std::sync::Mutex<Vec<Message>>>,
 }
 
 /// A second run beside the machine's with one effect switched the other way, drawn as a see-through ghost.
@@ -102,6 +105,10 @@ struct Ghost {
     scene: Scene,
     /// Paused, speed and exaggeration as last sent, to follow the machine's run.
     sent: Option<(bool, f64, f64)>,
+    /// Its samples, for keeping its window as a run (`Action::KeepGhost`), and its scenes at the machine's time when
+    /// they arrived, as `State::recorded` has the machine's, so that the timeline shows both at the same time.
+    history: History,
+    recorded: VecDeque<(f64, Scene)>,
 }
 
 /// The ghost's colour: a light neutral grey, see-through, none of the palette's meaning colours.
@@ -195,6 +202,7 @@ fn main() {
             ghost_parts: Vec::new(),
             recording: None,
             encodings: Vec::new(),
+            notes: Default::default(),
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
@@ -530,7 +538,7 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     // clearance to the nearest as a line (its value is a label, `panels`).
     for obstacle in &scene.obstacles {
         let (centre, size) = (to_bevy(obstacle.aabb.centre), to_bevy(obstacle.aabb.size).abs());
-        let colour = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM });
+        let colour = palette(if obstacle.contact { ui::LIMIT } else { ui::dim() });
         gizmos.cube(Transform::from_translation(centre).with_scale(size), colour.with_alpha(0.6));
     }
     if let Some((from, to, _)) = scene.clearance {
@@ -539,19 +547,24 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     if let Some(run) = &state.model.path_run {
         gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
     }
-    // shortcut: the travelled path is the newest even while the timeline shows an older scene; upgrade to cutting it
-    // at the scrubbed time when paths are replayed often.
+    // The travelled path up to the time the timeline shows: scrubbed back, the tool had not been further yet. The
+    // points with their times are the window's (`trail_points`); the plain path has none, so scrubbed it is drawn
+    // from those.
     let Some(trail) = &state.model.trail else { return };
-    let (by, tube, points) = (state.overlays.trail, state.overlays.tube, &state.trail_points);
-    if (by == ui::TrailColor::Plain && !tube) || points.is_empty() {
+    let (by, tube, all) = (state.overlays.trail, state.overlays.tube, &state.trail_points);
+    let points = trail_until(all, state.timeline.time);
+    if all.is_empty() || (by == ui::TrailColor::Plain && !tube && state.timeline.time.is_none()) {
         gizmos.linestrip(trail.iter().map(|p| to_bevy(*p)), palette(ui::ACTUAL));
         return;
     }
     // In the tube each point stands off the plan as many times further as the deflections are drawn.
     let factor = if tube { state.model.exaggeration } else { 1.0 };
     let place = |p: &TrailPoint| to_bevy(std::array::from_fn(|i| p.planned[i] + (p.at[i] - p.planned[i]) * factor));
-    let range = trail_range(points, by);
+    // The scale is the whole path's (or the one fixed), so that it does not change while scrubbing.
+    let range = trail_range(all, by).map(|range| ui::trail_scale(state.overlays, range));
+    let tolerance = state.overlays.tolerance.filter(|_| by == ui::TrailColor::FollowingError);
     let color = |p: &TrailPoint| match range {
+        _ if tolerance.is_some_and(|limit| trail_value(p, by) > limit) => palette(ui::LIMIT),
         Some((low, high)) if by != ui::TrailColor::Plain => {
             let [r, g, b] = ui::trail_color(((trail_value(p, by) - low) / (high - low).max(1e-12)) as f32);
             Color::srgb(r, g, b)
@@ -572,8 +585,8 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     }
 }
 
-/// The value a point of the travelled path is coloured by: the tool's speed in m/s, or its distance from where the
-/// plan had it then in m.
+/// The value a point of the travelled path is coloured by: the tool's speed in m/s, or its distance from the path the
+/// plan drew in m (`Runner::trail_point`).
 fn trail_value(p: &TrailPoint, by: ui::TrailColor) -> f64 {
     match by {
         ui::TrailColor::Speed => p.speed,
@@ -615,10 +628,19 @@ fn start_ghost(state: &mut State, effect: String) {
                 base: model.config.clone(),
                 scene: Scene::default(),
                 sent: None,
+                history: History::new(sim_app::model::HISTORY),
+                recorded: VecDeque::new(),
             })
         }
         Err(e) => model.messages.push((e.key(), e.detail().into())),
     }
+}
+
+/// The ghost's scene the view draws: as `shown` picks the machine's, from the ghost's recorded scenes.
+fn shown_ghost(ghost: &Ghost, timeline: ui::Timeline) -> &Scene {
+    let Some(time) = timeline.time else { return &ghost.scene };
+    let after = ghost.recorded.partition_point(|(t, _)| *t <= time);
+    ghost.recorded.get(after.saturating_sub(1)).map_or(&ghost.scene, |(_, scene)| scene)
 }
 
 /// A command for the machine, and the same for the run compared beside it, so that both do the same.
@@ -630,9 +652,8 @@ fn command(state: &mut State, command: Command) {
 }
 
 /// The compared run: ended where the machine or its config changed, kept running, paused and drawn larger as the
-/// machine's is, and drawn as see-through boxes of its scene's parts, on entities of its own.
-/// shortcut: the ghost shows its newest scene while the timeline shows an older one of the machine; upgrade to
-/// recording its scenes too when runs are compared on the timeline often.
+/// machine's is, and drawn as see-through boxes of its scene's parts, on entities of its own. Its scenes are recorded
+/// as the machine's are: scrubbed, the timeline shows both at the same time.
 fn sync_ghost(
     mut state: ResMut<State>,
     mut commands: Commands,
@@ -657,9 +678,26 @@ fn sync_ghost(
             .for_each(|r| ghost.session.send(r));
         ghost.sent = Some(wanted);
     }
+    let (now, window) = (state.model.history.back().map(|row| row[0]), state.model.window_s);
     for event in ghost.session.drain() {
         match event {
-            Event::Scene(scene) => ghost.scene = scene,
+            Event::Sample(sample) => ghost.history.push(&sample),
+            Event::Scene(scene) => {
+                // Stamped with the machine's time: the two runs started at different times on clocks of their own.
+                if let Some(now) = now.filter(|_| !state.mode_sent) {
+                    let recorded = &mut ghost.recorded;
+                    if recorded.back().is_some_and(|(t, _)| *t > now) {
+                        recorded.clear();
+                    }
+                    if recorded.back().is_none_or(|(t, _)| now - *t >= window / RECORDED as f64) {
+                        recorded.push_back((now, scene.clone()));
+                    }
+                    while recorded.len() > RECORDED || recorded.front().is_some_and(|(t, _)| *t < now - window) {
+                        recorded.pop_front();
+                    }
+                }
+                ghost.scene = scene
+            }
             // A command the compared run refuses leaves it standing: say so, or it looks like the effect did it.
             Event::Refused(key, detail) => {
                 let why = format!("{} {}", state.model.tr.tr(key), detail);
@@ -673,7 +711,7 @@ fn sync_ghost(
             materials.add(StandardMaterial { base_color: GHOST, alpha_mode: AlphaMode::Blend, ..default() })
         })
         .clone();
-    let parts = &ghost.scene.parts;
+    let parts = &shown_ghost(ghost, state.timeline).parts;
     for (entity, _) in state.ghost_parts.drain(parts.len().min(state.ghost_parts.len())..) {
         commands.entity(entity).despawn();
     }
@@ -929,7 +967,7 @@ fn fill_obstacles(
             *transform = Transform::from_translation(to_bevy(obstacle.aabb.centre))
                 .with_scale(to_bevy(obstacle.aabb.size).abs());
         }
-        let color = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM }).with_alpha(0.22);
+        let color = palette(if obstacle.contact { ui::LIMIT } else { ui::dim() }).with_alpha(0.22);
         if materials.get(material).is_some_and(|m| m.base_color != color)
             && let Some(mut m) = materials.get_mut(material)
         {
@@ -1048,13 +1086,14 @@ fn panels(
     camera: Single<(&mut Camera, &GlobalTransform), With<WorldCamera>>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     tool_view: Res<ToolView>,
+    mut commands: Commands,
 ) -> Result {
     let (mut camera, camera_transform) = camera.into_inner();
     let ctx = contexts.ctx_mut()?;
     let state = &mut *state;
     let mut actions = Vec::new();
     if !state.themed {
-        ui::apply_theme(ctx);
+        ui::apply_theme(ctx, state.panels.light);
         state.themed = true;
     }
     let mut root = egui::Ui::new(
@@ -1063,7 +1102,7 @@ fn panels(
         egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
     );
     // The bar on top and the scopes below span the window; setup and tools flank the view between them.
-    let edge = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::symmetric(10, 6));
+    let edge = egui::Frame::new().fill(ui::graphite()).inner_margin(egui::Margin::symmetric(10, 6));
     let top = egui::Panel::top("bar")
         .exact_size(52.0)
         .frame(edge)
@@ -1074,10 +1113,10 @@ fn panels(
         .resizable(true)
         .default_size(250.0)
         .frame(edge)
-        .show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, &mut actions))
+        .show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, state.panels, &mut actions))
         .response
         .rect;
-    let side = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::same(10));
+    let side = egui::Frame::new().fill(ui::graphite()).inner_margin(egui::Margin::same(10));
     let left = egui::Panel::left("setup")
         .resizable(true)
         .default_size(270.0)
@@ -1090,7 +1129,10 @@ fn panels(
         .resizable(true)
         .default_size(430.0)
         .frame(side)
-        .show(&mut root, |ui| ui::tools(ui, &state.model, scene, state.panels, &mut actions, state.scroll))
+        .show(&mut root, |ui| {
+            let ghost = state.ghost.is_some();
+            ui::tools(ui, &state.model, scene, state.panels, &mut actions, state.scroll, ghost)
+        })
         .response
         .rect;
 
@@ -1142,7 +1184,7 @@ fn panels(
         let area = egui::Area::new("tool-view".into())
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(egui::pos2(right.left() - 10.0, above));
-        let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, ui::MACHINED)).corner_radius(3);
+        let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, ui::machined())).corner_radius(3);
         area.show(ctx, |ui| frame.show(ui, |ui| ui.image((tool_view.0, TOOL_VIEW_SIZE)))).response.rect
     });
     // Space replays, the arrow keys step, while the pointer is over the view (or the timeline on it) and no field
@@ -1221,8 +1263,8 @@ fn panels(
         taken.push(frame);
         if !frame.contains(at) {
             // A label moved off its point is tied to it by a thin line.
-            painter.line_segment([at, frame.clamp(at)], egui::Stroke::new(1.0, ui::DIM));
-            painter.circle_filled(at, 2.0, ui::DIM);
+            painter.line_segment([at, frame.clamp(at)], egui::Stroke::new(1.0, ui::dim()));
+            painter.circle_filled(at, 2.0, ui::dim());
         }
         painter.rect_filled(frame, 3.0, egui::Color32::from_rgba_unmultiplied(36, 40, 45, 200));
         painter.galley(frame.min + egui::vec2(5.0, 3.0), galley, egui::Color32::WHITE);
@@ -1271,7 +1313,11 @@ fn panels(
                     set_timeline(state, timeline);
                 }
             }
-            Action::Panels(panels) => state.panels = panels,
+            Action::Panels(panels) => {
+                // Another theme is put in place next frame.
+                state.themed &= panels.light == state.panels.light;
+                state.panels = panels;
+            }
             Action::Exaggeration(factor) => model.set_exaggeration(factor),
             Action::Compare(on, effect) => {
                 state.ghost = None;
@@ -1287,11 +1333,45 @@ fn panels(
             Action::Window(seconds) => model.window_s = seconds,
             Action::Freeze(frozen) => model.set_frozen(frozen),
             Action::Export => {
-                // Named after the simulated time, so that successive exports do not overwrite each other.
-                let time = model.visible_rows().last().map_or(0.0, |row| row[0]);
-                model.export_traces(std::path::Path::new(&format!("traces-{time:.3}.csv")));
+                // Named after the date and time, so that successive exports do not overwrite each other.
+                if let Some(path) = save_path("CSV", "csv", &format!("traces-{}.csv", video::now_stamp())) {
+                    model.export_traces(&path);
+                }
             }
-            Action::ExportOverlay => model.export_overlay(std::path::Path::new("replay-overlay.csv")),
+            Action::ExportOverlay => {
+                if let Some(path) = save_path("CSV", "csv", &format!("replay-overlay-{}.csv", video::now_stamp())) {
+                    model.export_overlay(&path);
+                }
+            }
+            Action::SavePlot(png, plot, rect) => {
+                let (kind, extension) = if png { ("PNG", "png") } else { ("SVG", "svg") };
+                let Some(path) = save_path(kind, extension, &format!("plot-{}.{extension}", video::now_stamp())) else {
+                    continue;
+                };
+                if png {
+                    let scale = window.scale_factor();
+                    let area = [rect.left(), rect.top(), rect.width(), rect.height()]
+                        .map(|v| (v * scale).round().max(0.0) as u32);
+                    let saver = video::picture_saver(area, path, state.notes.clone());
+                    commands.spawn(Screenshot::primary_window()).observe(saver);
+                } else {
+                    let message = match std::fs::write(&path, plot.svg()) {
+                        Ok(()) => ("ui-plot-saved", path.display().to_string()),
+                        Err(e) => ("ui-export-failed", format!("{}: {e}", path.display())),
+                    };
+                    model.messages.push(message);
+                }
+            }
+            Action::Units(units) => model.units = units,
+            Action::KeepLive => model.keep_live(),
+            Action::KeepGhost => keep_ghost(state),
+            Action::RecordRun => {
+                let (set, file) = (model.inputs.run_set.clone(), model.inputs.run_file.clone());
+                model.record_run(&set, &file);
+            }
+            Action::RunShown(i, shown) => model.runs.set_shown(i, shown),
+            Action::RunReference(i) => model.runs.set_reference(i),
+            Action::RemoveRun(i) => model.runs.remove(i),
             Action::ExportReport => {
                 // The dialog holds up the window until it is closed, as the config's does.
                 let picked = rfd::FileDialog::new()
@@ -1401,6 +1481,9 @@ fn record(
         }
     }
     let mut done = Vec::new();
+    if let Ok(mut notes) = state.notes.lock() {
+        done.append(&mut notes);
+    }
     state.encodings.retain_mut(|encoding| encoding.poll().map(|messages| done.extend(messages)).is_none());
     state.model.messages.extend(done);
 }
@@ -1425,6 +1508,27 @@ fn finish_videos(mut exits: MessageReader<AppExit>, mut state: ResMut<State>) {
 fn go_live(state: &mut State) {
     let live = ui::Timeline { time: None, playing: false, ..state.timeline };
     set_timeline(state, live);
+}
+
+/// Keeps the ghost run's window (as long as the scopes') as a run.
+fn keep_ghost(state: &mut State) {
+    let (Some(ghost), model) = (&state.ghost, &mut state.model) else { return };
+    let rows = &ghost.history;
+    let from = rows.first_at(rows.back().map_or(0.0, |last| last[0] - model.window_s));
+    let effect = ghost.effect.strip_prefix("effects.").unwrap_or(&ghost.effect);
+    let effect = model.tr.tr(&format!("effect-{effect}")).to_string();
+    let switched = model.tr.tr_arg(if ghost.on { "ui-compare-ghost-on" } else { "ui-compare-ghost-off" }, &effect);
+    let label = format!("{} · {switched}", model.tr.tr(RunKind::Ghost.key()));
+    let (signals, motors) = (ghost.session.signals.clone(), &ghost.session.motors);
+    let run = Run::from_rows(label, RunKind::Ghost, model.entry.id, signals, motors, rows.iter().skip(from));
+    let ratings = model.ratings();
+    model.runs.add(Run { ratings, ..run });
+}
+
+/// A file to save to, from the system's dialog, starting with `name`; `None` where it is cancelled. The dialog holds
+/// up the window until it is closed, as the config's does.
+fn save_path(kind: &str, extension: &str, name: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new().add_filter(kind, &[extension]).set_file_name(name).save_file()
 }
 
 /// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting
@@ -1520,6 +1624,7 @@ fn developer_hooks(
                 trail,
                 tube: has("tube"),
                 tool_view: has("toolview"),
+                ..Default::default()
             };
             if let Some(effect) = words.iter().find_map(|w| w.strip_prefix("compare-")) {
                 start_ghost(&mut state, format!("effects.{effect}"));
