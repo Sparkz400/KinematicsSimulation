@@ -1,23 +1,39 @@
 name: CI
 
+# A push to a branch other than main runs nothing: its pull request does (otherwise each push of a pull request's
+# branch ran the workflow twice).
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A newer push to a pull request stops the run of the older one; runs on main all finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # A pull request runs the fast tests (profile ci: the default filter of .config/nextest.toml leaves out the tests that
+  # take over 20 s each); a push to main runs every test (profile ci-full) and then the long sweeps.
+  TEST_PROFILE: ${{ github.event_name == 'push' && 'ci-full' || 'ci' }}
+  # The jobs "test" split the tests into this many partitions per platform; keep it equal to the length of their
+  # matrix's list "partition".
+  PARTITIONS: ${{ github.event_name == 'push' && 6 || 2 }}
 
+# The jobs that need the test binaries wait for "build" and run even when it failed for the other platform
+# (`!cancelled()`); where their own platform's archive is missing, they fail at its download. No job skips the steps
+# after a failed one: each check is a job of its own, so one red check hides none of the others.
 jobs:
-  test:
+  # Formatting and clippy, without waiting for any test. Every warning fails; the lints allowed on purpose are in the
+  # root Cargo.toml ([workspace.lints.clippy]).
+  lint:
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      TEST_PROFILE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ci-full' || 'ci' }}
-    # Build, about 500 tests and the FMU check; a stuck test is stopped after 30 minutes (nextest profile ci).
-    timeout-minutes: 240
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -43,40 +59,212 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      # Runs the tests of all binaries at once, each in a process of its own (settings in .config/nextest.toml).
+      # sim-py is linted in the job "python", which has the interpreter pyo3 needs.
+      - name: Clippy
+        run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py -- -D warnings
+
+  # Builds every test binary once per platform and packs them with nextest (`cargo nextest archive`); the jobs "test",
+  # "plc" and "sweeps" run them from the archive without building again.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
+        with:
+          toolchain: "1.98.1"
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev libvulkan-dev
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest
-
       # sim-py is a Python extension: maturin builds it, in the job "python".
-      - name: Build
-        run: cargo build --workspace --release --locked --exclude sim-py
+      - name: Build and archive the tests
+        run: cargo nextest archive --workspace --release --locked --exclude sim-py --archive-file tests.tar.zst
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tests-${{ matrix.os }}
+          path: tests.tar.zst
+          retention-days: 3
+          compression-level: 0
 
-      # A pull request runs the fast tests (profile ci: the default filter of .config/nextest.toml leaves out the 150 that
-      # take over 20 s each); a push to main runs every test (profile ci-full) and then the long sweeps.
-      # The PLC tests run against the wall clock: on a runner busy with the simulation tests they miss their times, so
-      # they run afterwards, one at a time.
+  # The tests in partitions (settings in .config/nextest.toml), each on a runner of its own: nextest deals the tests of
+  # each binary out in turn (`--partition count`). A stuck test is stopped after 30 minutes (profiles ci and ci-full).
+  # The PLC tests run against the wall clock: on a runner busy with the simulation tests they miss their times, so they
+  # run in the job "plc".
+  test:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        partition: ${{ fromJSON(github.event_name == 'push' && '[1, 2, 3, 4, 5, 6]' || '[1, 2]') }}
+    name: test (${{ matrix.os }}, ${{ matrix.partition }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # nextest starts every binary of the archive to list its tests: the app's needs Bevy's libraries on Linux.
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libvulkan-dev
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tests-${{ matrix.os }}
+      # Unpacked into target/ of the checkout, where the binaries were built: the CLI's tests find sim-cli by the
+      # path it had at build time (env!("CARGO_BIN_EXE_sim-cli")), the same on every runner of one platform.
       - name: Test
-        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ${{ env.TEST_PROFILE }} -E "not (package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop)))"
+        shell: bash
+        run: >-
+          cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite
+          --profile $TEST_PROFILE --partition count:${{ matrix.partition }}/$PARTITIONS
+          -E "not (package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop)))"
+      # The times of every test, for tools/slow_tests.py and for sizing the partitions (profile ci-full only).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: ${{ !cancelled() && env.TEST_PROFILE == 'ci-full' }}
+        with:
+          name: junit-${{ matrix.os }}-${{ matrix.partition }}
+          path: target/nextest/ci-full/junit.xml
+          retention-days: 30
+          if-no-files-found: ignore
 
+  # The OPC UA server against a client, one test at a time, so that the runner is not too busy for their times.
+  plc:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libvulkan-dev
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tests-${{ matrix.os }}
       - name: PLC tests
-        run: cargo nextest run -p sim-opcua --release --locked --profile ${{ env.TEST_PROFILE }} -E "binary(plc) | binary(soak) | binary(interop)" --test-threads 1
+        shell: bash
+        run: >-
+          cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite
+          --profile $TEST_PROFILE -E "package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop))" --test-threads 1
 
-      # On a push to main: what every profile leaves out, the long sweeps of the velocity loops' margins across the bounds
-      # and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a time.
+  # On a push to main: what every profile leaves out, the long sweeps of the velocity loops' margins across the bounds
+  # and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a time on a runner, and the
+  # longest apart: 27 minutes for the D4 alone on 4 cores (14 November 2026), 89 minutes for all of them. The last
+  # group takes every sweep the others do not name, so that a new one is run, not left out.
+  sweeps:
+    needs: build
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        group:
+          - name: delta-d4
+            filter: test(=across_the_bounds::delta_d4)
+          - name: urdf-arm-and-exct-30-corner
+            filter: test(=across_the_bounds::urdf_arm) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+          - name: delta-d3-and-scara
+            filter: test(=across_the_bounds::delta_d3) | test(=across_the_bounds::scara)
+          - name: the-rest
+            filter: >-
+              ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
+              | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))
+              & not (test(=across_the_bounds::delta_d4) | test(=across_the_bounds::urdf_arm)
+              | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+              | test(=across_the_bounds::delta_d3) | test(=across_the_bounds::scara))
+    name: sweeps (${{ matrix.os }}, ${{ matrix.group.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libvulkan-dev
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tests-${{ matrix.os }}
       - name: Long sweeps
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci --ignore-default-filter -E "(package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)" --test-threads 1
+        shell: bash
+        run: >-
+          cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite
+          --profile ci --ignore-default-filter -E "${{ matrix.group.filter }}" --test-threads 1
 
-      # nextest does not run doctests.
+  # nextest does not run doctests. They build the workspace's libraries apart from the job "build", in parallel to it.
+  doctests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
+        with:
+          toolchain: "1.98.1"
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev libvulkan-dev
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Doctests
         run: cargo test --doc --workspace --release --locked --exclude sim-py
 
-      # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
+  # Independent FMU check with fmpy: the validator, and every output against sim-cli. On Linux this is the linux64 binary.
+  fmu:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
-
+      - name: Build sim-cli and the FMU binary
+        run: cargo build -p sim-cli -p sim-fmi --release --locked
       - name: FMU check
         shell: bash
         run: |
@@ -89,10 +277,6 @@ jobs:
           python tools/check_fmu.py $cli single-axis.fmu single-axis
           python tools/check_fmu.py $cli exct-30.fmu t-gantry --config crates/machine-t-gantry/exct-30.toml
           $cli fmu --machine-file machines/h-bot.toml --fmi 3 --out h-bot.fmu && python tools/check_fmu.py $cli h-bot.fmu machines/h-bot.toml
-
-      # Every warning fails; the lints allowed on purpose are in the root Cargo.toml ([workspace.lints.clippy]).
-      - name: Clippy
-        run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py -- -D warnings
 
   # Advisories, licences, duplicate versions and sources of the dependency tree, against deny.toml.
   deny:
@@ -134,6 +318,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
@@ -144,26 +329,31 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
-      # pyo3 needs the interpreter set up above, which the job "test" does not have when it runs clippy.
+      # pyo3 needs the interpreter set up above, which the job "lint" does not have.
       - name: Clippy of sim-py
         run: cargo clippy -p sim-py --release --all-targets --locked -- -D warnings
       - name: Build sim-cli and the FMU binary (the tests compare against them)
         run: cargo build -p sim-cli -p sim-fmi --release --locked
-      - name: Wheel and tests
+      - name: Wheel
         shell: bash
         run: |
           pip install maturin==1.16.0
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
-          pip install target/wheels/*.whl "pytest==9.2.0" pandas matplotlib nbformat nbclient ipykernel
-          pytest crates/sim-py/tests -q
+          pip install target/wheels/*.whl "pytest==9.2.0" "pytest-xdist==3.8.0" pandas matplotlib nbformat nbclient ipykernel
+      # One worker per core (-n auto); --durations lists the slowest, to see which test made the job slow.
+      - name: Tests
+        shell: bash
+        run: pytest crates/sim-py/tests -q -n auto --durations=10
       # STEP reading needs OpenCascade (cadquery-ocp); the FreeCAD macro's test skips without FreeCAD. The tests find
       # the sim-cli built above in target/release.
       - name: CAD mass tests
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           pip install cadquery-ocp==8.0.1.1.0
           python -m unittest discover -s tools/cad -p test_cadmass.py -v
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: ${{ !cancelled() }}
         with:
           name: wheel-${{ matrix.os }}
           path: target/wheels/*.whl
