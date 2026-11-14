@@ -3334,3 +3334,111 @@ fn the_sizing_report_is_written_from_the_config_as_edited() {
         }
     }
 }
+
+/// `sim-app --set` at start (`Model::set_at_start`): the single axis stood upright, its frictions, gearbox loss and
+/// ripple off, holds its moved masses with the motor torque m g r / i. 5 kg more payload set at start needs
+/// 5 kg * 9.80665 m/s^2 * 0.02 m / 5 = 0.196133 N m more. The value is in the config, and a key the config does not
+/// have stops the start with the CLI's refusal, with nothing applied.
+#[test]
+fn values_set_at_start_change_the_config_and_the_run() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let upright = [
+        "geometry.incline_deg = 90.0",
+        "effects.guide_friction = false",
+        "effects.load_dependent_friction = false",
+        "effects.motor_friction = false",
+        "effects.gearbox_efficiency = false",
+        "effects.torque_ripple = false",
+        "effects.tooth_meshing = false",
+    ];
+    let holding = |payload: f64| {
+        let mut model = Model::new(entry, "en");
+        let mut sets: Vec<String> = upright.map(String::from).to_vec();
+        sets.push(format!("mass.payload_kg = {payload:?}"));
+        model.set_at_start(&sets).unwrap();
+        assert_eq!(model.config.f64("mass.payload_kg").unwrap(), payload);
+        wait_for_data(&mut model);
+        simulate(&mut model, 0.3);
+        latest(&model, "motor.m.torque")
+    };
+    // (4 kg carriage + 2 kg payload) * 9.80665 * 0.02 / 5 = 0.235360 N m; `sim-cli run` with the same `--set`s gives
+    // 0.235361 and, with 7 kg, 0.43129 (some 2e-4 N m of ringing left at 0.3 s).
+    let (light, heavy) = (holding(2.0), holding(7.0));
+    assert!((light - 0.235360).abs() < 1e-3, "{light} N m for 2 kg");
+    assert!((heavy - light - 0.196133).abs() < 2e-3, "{} N m more for 5 kg", heavy - light);
+    let mut model = Model::new(entry, "en");
+    assert_eq!(
+        model.set_at_start(&["mass.payload_kg = 3.0".into(), "mass.nope_kg = 1.0".into()]),
+        Err(("error-config-missing", "mass.nope_kg".to_string()))
+    );
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), 2.0);
+    assert_eq!(
+        model.set_at_start(&["mass.payload_kg = true".into()]),
+        Err(("error-config-type", "mass.payload_kg".to_string()))
+    );
+}
+
+/// The parameter panel's "key = value" field (`Model::set_value`) applies any key the config has and refuses as
+/// `sim-cli --set` does: an unknown key, a value of another type and text that is no assignment with the messages of
+/// the config's errors, in English and German; a value the simulation refuses (a negative mass) comes back and is
+/// rolled back like any edit.
+#[test]
+fn the_panel_field_sets_any_key_and_refuses_as_the_command_line_does() {
+    let mut model = Model::new(sim_machines::find("single-axis").unwrap(), "en");
+    wait_for_data(&mut model);
+    let answered = |model: &mut Model, done: &dyn Fn(&Model) -> bool| {
+        let start = Instant::now();
+        while !done(model) {
+            assert!(start.elapsed() < Duration::from_secs(10), "no answer within 10 s: {:?}", model.messages);
+            model.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    model.set_value("geometry.span_min_m = 0.2");
+    assert_eq!(model.config.f64("geometry.span_min_m").unwrap(), 0.2);
+    model.set_value("mass.nope_kg = 1.0");
+    let shown = |model: &Model| {
+        let (key, detail) = model.messages.last().unwrap();
+        model.tr.tr_arg(key, detail).to_string()
+    };
+    assert_eq!(model.messages.last().unwrap(), &("error-config-missing", "mass.nope_kg".to_string()));
+    assert_eq!(shown(&model), "Configuration value is missing: mass.nope_kg");
+    model.set_value("mass.payload_kg = \"heavy\"");
+    assert_eq!(model.messages.last().unwrap(), &("error-config-type", "mass.payload_kg".to_string()));
+    model.set_value("mass.payload_kg");
+    assert_eq!(model.messages.last().unwrap().0, "error-config-parse");
+    model.set_language("de");
+    model.set_value("mass.nope_kg = 1.0");
+    assert!(
+        shown(&model).ends_with(": mass.nope_kg") && shown(&model) != "Configuration value is missing: mass.nope_kg"
+    );
+    model.set_value("mass.carriage_kg = -1.0");
+    answered(&mut model, &|model| model.config.f64("mass.carriage_kg").unwrap() == 4.0);
+    assert_eq!(model.messages.last().unwrap().0, "error-config-invalid", "{:?}", model.messages);
+}
+
+/// The app plans a path from where its machine's setpoint stands: the planned path's first pose is the live
+/// setpoint within 1 um (1 urad on an arm's joints), on every machine. The planning model's tool is put one rest sag
+/// below it (0.26 mm on the planar delta) so that its setpoint lands there.
+#[test]
+fn a_planned_path_starts_at_the_live_setpoint() {
+    on_every_machine(|entry| {
+        let mut model = Model::new(entry, "en");
+        wait_for_data(&mut model);
+        simulate(&mut model, 0.2);
+        let axes = model.session.axes.clone();
+        // The lines of `a_path_is_planned_run_and_analysed_in_the_app`, inside every machine's workspace.
+        let point = |share: f64| -> String {
+            axes.iter().map(|a| format!("{:?}", a.min + share * (a.max - a.min))).collect::<Vec<_>>().join(",")
+        };
+        let file = temp_file(entry, "from-setpoint.csv");
+        std::fs::write(&file, format!("line,{}\nline,{}\n", point(0.5), point(0.75))).unwrap();
+        let live: Vec<f64> = axes.iter().map(|a| latest(&model, &format!("axis.{}.position_setpoint", a.id))).collect();
+        model.inputs.path_file = file;
+        model.run_analysis(Analysis::Path);
+        wait_for_analysis(&mut model);
+        let first = &model.path_run.as_ref().unwrap().points[0].1;
+        let off = first.iter().zip(&live).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        assert!(off < 1e-6, "{}: the plan starts {off} off the live setpoint {live:?}: {first:?}", entry.id);
+    });
+}

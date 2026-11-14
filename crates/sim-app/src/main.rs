@@ -159,6 +159,12 @@ fn main() {
     if let Some(file) = args.windows(2).find(|w| w[0] == "--machine-file").map(|w| w[1].clone()) {
         model.open_config(&file);
     }
+    // `sim-app --set path=value`, repeatable: any config value by its dotted path, as `sim-cli --set` takes it.
+    let sets: Vec<String> = args.windows(2).filter(|w| w[0] == "--set").map(|w| w[1].clone()).collect();
+    if let Err((key, detail)) = model.set_at_start(&sets) {
+        eprintln!("{}", model.tr.tr_arg(key, &detail));
+        std::process::exit(2);
+    }
     let window =
         Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
     App::new()
@@ -1322,6 +1328,10 @@ fn panels(
                 }
             }
             Action::ApplyParts => model.apply_parts(),
+            Action::SetValue => {
+                let assignment = model.inputs.assignment.clone();
+                model.set_value(&assignment);
+            }
             Action::CloseAnalysis => model.clear_analysis(),
             Action::Clear(kind) => model.clear(kind),
             Action::ClearMessages => model.messages.clear(),
@@ -1548,6 +1558,12 @@ fn developer_hooks(
             }) {
                 (state.orbit.yaw, state.orbit.pitch) = (yaw.to_radians(), pitch.to_radians());
                 state.fit = true;
+            }
+            // The parameter panel with "path = value" typed in its field and applied.
+            if let Some(assignment) = asked("SIM_APP_SET") {
+                state.panels.setup = ui::SetupTab::Parameters;
+                state.model.set_value(&assignment);
+                state.model.inputs.assignment = assignment;
             }
             let model = &mut state.model;
             let inputs = &mut model.inputs;

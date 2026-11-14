@@ -95,6 +95,8 @@ ui-messages = Messages
 ui-clear = Clear
 ui-effects = Effects
 ui-parameters = Parameters
+ui-set-value = Set a value: key = value
+ui-set-value-apply = Set
 ui-scopes = Scopes
 ui-time = Time [s]
 ui-window = Time window [s]

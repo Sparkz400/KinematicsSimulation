@@ -150,6 +150,8 @@ pub struct Inputs {
     pub compare_quantity: String,
     /// The height of the workspace map's slice, in the unit of the third axis; `None`: the middle of its range.
     pub workspace_z: Option<f64>,
+    /// The parameter panel's "path = value" field, applied by `set_value`.
+    pub assignment: String,
 }
 
 /// The supplies the motor catalogue has data for: the S210 at 230 V and 400 V, and the S120.
@@ -812,6 +814,7 @@ impl Model {
                 compare_effect: String::new(),
                 compare_quantity: "quantity-torque".into(),
                 workspace_z: None,
+                assignment: String::new(),
             },
             cycle_report: None,
             bands: None,
@@ -1028,6 +1031,35 @@ impl Model {
             Ok(()) => self.reconfigure(),
             Err(e) => self.say((e.key(), e.detail().into())),
         }
+    }
+
+    /// Applies one `path = value` (TOML value) to the config and the running simulation, as `sim-cli --set` does:
+    /// a key the config does not have, a value of another type or text that is no assignment is refused with the
+    /// CLI's message; a value the simulation refuses (outside a bound) comes back with `poll`, as with any edit.
+    pub fn set_value(&mut self, assignment: &str) {
+        match self.config.set_text(assignment) {
+            Ok(()) => self.reconfigure(),
+            Err(e) => self.say((e.key(), e.detail().into())),
+        }
+    }
+
+    /// `sim-app --set path=value`, each in turn, before the window opens: the machine restarts with them, and a
+    /// saved file still has the comments and order of the one read. The first refusal is returned, with nothing
+    /// applied.
+    pub fn set_at_start(&mut self, assignments: &[String]) -> Result<(), Message> {
+        if assignments.is_empty() {
+            return Ok(());
+        }
+        let refused = |e: ConfigError| (e.key(), e.detail().to_string());
+        let mut config = self.config.clone();
+        for assignment in assignments {
+            config.set_text(assignment).map_err(refused)?;
+        }
+        let fresh = Self::with_config(self.entry, self.lang, config, self.config_text.clone()).map_err(refused)?;
+        let file = self.inputs.config_file.clone();
+        self.restart(fresh);
+        self.inputs.config_file = file;
+        Ok(())
     }
 
     pub fn command(&mut self, command: Command) {
@@ -1390,6 +1422,26 @@ impl Model {
                             from_here.set_text(&format!("start.pose = {pose:?}")).map_err(refused)?;
                         }
                         let mut sim = Sim::new(entry, &from_here).map_err(refused)?;
+                        // The planning model puts the tool at `start.pose` and its setpoint one rest sag off it (0.26 mm
+                        // on the planar delta): the tool is moved by what is left until the setpoint is the live one.
+                        if let Some(pose) = &standing {
+                            let mut tool = pose.clone();
+                            for _ in 0..8 {
+                                let off: Vec<f64> =
+                                    pose.iter().zip(sim.control.planned_pos()).map(|(want, is)| want - is).collect();
+                                if off.iter().all(|d| d.abs() < 1e-10) {
+                                    break;
+                                }
+                                tool.iter_mut().zip(&off).for_each(|(t, d)| *t += d);
+                                from_here.set_text(&format!("start.pose = {tool:?}")).map_err(refused)?;
+                                // shortcut: a tool pose pushed past a stroke's end keeps the plan of the last one that
+                                // started, up to one sag off; a setpoint within a sag of the end is rare.
+                                match Sim::new(entry, &from_here) {
+                                    Ok(closer) => sim = closer,
+                                    Err(_) => break,
+                                }
+                            }
+                        }
                         let (points, deviation) = if inputs.path_timed {
                             (path::parse_trajectory(&text).map_err(unreadable)?, 0.0)
                         } else {

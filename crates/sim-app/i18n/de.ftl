@@ -95,6 +95,8 @@ ui-messages = Meldungen
 ui-clear = Leeren
 ui-effects = Effekte
 ui-parameters = Parameter
+ui-set-value = Wert setzen: Schlüssel = Wert
+ui-set-value-apply = Setzen
 ui-scopes = Oszilloskope
 ui-time = Zeit [s]
 ui-window = Zeitfenster [s]
