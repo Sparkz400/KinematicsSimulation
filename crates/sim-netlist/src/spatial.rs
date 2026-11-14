@@ -1092,7 +1092,7 @@ impl Delta {
         let mut other = 0.0;
         for k in 0..3 {
             let joint = &self.joints[k];
-            let [friction, stop, shaft] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, into, out)) => {
                     gear_at_rotor[k] = (into[k] - out[k]) / joint.ratio();
@@ -1104,7 +1104,7 @@ impl Delta {
                     joint.gearbox.loss_power(s[6 + k], s[9 + k], s[k], s[3 + k])
                 }
             };
-            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear]);
+            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
             stops += stop;
             other += (torque[k] - joint.ripple.apply(torque[k], rotor[k])) * rotor_speed[k];
         }
@@ -1405,6 +1405,15 @@ impl Machine for Delta {
     }
 
     /// The gearboxes, in the order of `thermal_parts`.
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        if self.elastic {
+            for k in 0..3 {
+                self.joints[k].gearbox.commit(s[6 + k], s[k]);
+            }
+        }
+    }
+
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };
         let geared: Vec<usize> = self.geared().collect();

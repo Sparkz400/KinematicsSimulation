@@ -1,22 +1,24 @@
 schema_version = 1
 class = "servo_motor"
 key = ["part_number"]
-default_source = "s210-oi-2020"
+default_source = "s210-oi-2022"
 notes = '''
-Source: Siemens, SINAMICS S210 servo drive system, Operating Instructions, 06/2020, A5E41702836B AE, section 11.1 "Technical data and properties of the motor".
+Source: Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, 09/2022, A5E41702836B AL,
+section 12.1 "Technical data and properties of the motor".
 Extracted by catalog/tools/extract_siemens_s210_oi.py; the numbers are the manual's, the layout is ours.
-One row per 1FK2 motor winding with a data sheet there; this edition has no 1FT2. thermal_time_constant: of the winding.
-static_torque and max_current only to match the rows against motors_s210.csv. The S120 configuration manual
-(motors_1fk2_s120.csv) gives the same thermal time constant for the motors in both but two (below); this table adds the 230 V
-windings (1FK2...-.AG), which that manual does not have.
-Kept as printed although the newer manual differs: 1FK2205-2AF 22 min here, 29 min there; 1FK2206-2AF 22 min here,
-  21 min there. The simulator takes the manual's where it has the motor.
+One row per 1FK2 and 1FT2 motor winding with a data sheet there (34 1FK2, 40 1FT2). thermal_time_constant: of the winding.
+static_torque and max_current only to match the rows against motors_s210.csv. The S120 configuration manuals
+(motors_1fk2_s120.csv, motors_1ft2_s120.csv) give the same thermal time constant for every motor in both; this table adds
+the 230 V windings (1FK2...-.AG, 1FT2...-.AG) and the 1FT2 that those manuals do not have. The 06/2020 edition (AE, 1FK2
+only) printed 22 min for 1FK2205-2AF and 1FK2206-2AF, where this edition and the S120 manual print 29 and 21 min.
+The 1FT2 windings of motors_s210.csv that this edition lacks (1FT2108, the 1FT2208-.S. and some 1FT2206/1FT2208/1FT2210
+windings, 22 in all) came later and still have no thermal time constant here.
 '''
 
 [[sources]]
-id = "s210-oi-2020"
-document = "Siemens, SINAMICS S210 servo drive system, Operating Instructions, A5E41702836B AE"
-date = "2020-06"
-locator = "section 11.1 \"Technical data and properties of the motor\", the data sheet of each motor"
+id = "s210-oi-2022"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 12.1 \"Technical data and properties of the motor\", the data sheet of each motor"
 method = "script:tools/extract_siemens_s210_oi.py"
-url = "https://cache.industry.siemens.com/dl/files/874/109781874/att_1031957/v1/S210_1FK2_op_instr_en-US.pdf"
+url = "https://cache.industry.siemens.com/dl/files/184/109801184/att_1118289/v1/S210_S-1FK2_S-1FT2_op_instr_0922_en-US.pdf"

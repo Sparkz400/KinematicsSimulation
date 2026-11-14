@@ -743,10 +743,15 @@ impl ShaftFriction {
     }
 
     /// Torque opposing a positive speed.
+    /// The gearbox's drag acts on the rotor with the seals' friction (every machine has this one call on its rotor), but
+    /// its loss is the gearbox's: the machines book `drag_power` in the gearbox's loss, which warms the gearbox.
     pub fn torque(&self, speed: f64) -> f64 {
-        // shortcut: the gearbox's drag is counted with the motor's friction (its loss and heat in the motor's share),
-        // as every machine has this one call on its rotor; split it out where the gearbox's heat matters.
         self.level(speed) * (speed / self.smoothing).tanh() + self.viscous * speed + self.drag.torque(speed, self.oil)
+    }
+
+    /// The power the gearbox's drag (effects.gearbox_drag) takes at a rotor speed, W: the gearbox's loss, not the motor's.
+    pub fn drag_power(&self, speed: f64) -> f64 {
+        self.drag.torque(speed, self.oil) * speed
     }
 }
 
@@ -819,9 +824,12 @@ impl ToothMesh {
 ///
 /// - Lost motion (effects.gearbox_lost_motion): the flanks do not take the load at once. Over a band b beyond the
 ///   backlash the stiffness rises from 0 to K1, T = K1 e^2 / (2 b); beyond it T = K1 (e - b/2). And a hysteresis: the
-///   twist under load lags the torque by a friction torque T_h in the flanks and bearings, which opposes the twist's
-///   rate, so that loading and unloading run on two curves apart by 2 T_h / K1 in angle (Harmonic Drive: "hysteresis
-///   loss", the loop's width at zero torque). Both 0 with the effect off.
+///   twist under load lags the torque by a friction torque T_h in the flanks and bearings, so that loading and unloading
+///   run on two curves apart by 2 T_h / K1 in angle (Harmonic Drive: "hysteresis loss", the loop's width at zero
+///   torque). The friction is a state, Dahl's model on the contact twist x (the twist beyond the backlash, signed):
+///   dz/dx = sigma (1 - sgn(dx) z / T_h), in parallel with the spring. It holds its torque at rest, and at small
+///   amplitudes it is a spring of sigma (the gear is stiffer, K1 + sigma, not locked); over a twist of a few T_h / sigma
+///   it reaches +-T_h. Both 0 with the effect off.
 /// - Three-segment stiffness (effects.gearbox_stiffness_curve): K1 up to T1, K2 from T1 to T2, K3 beyond, as
 ///   Harmonic Drive gives it for its strain wave gears; the twist at T is T / K1 below T1, T1 / K1 + (T - T1) / K2
 ///   below T2, T1 / K1 + (T2 - T1) / K2 + (T - T2) / K3 above. Off: K1 throughout.
@@ -837,6 +845,13 @@ pub struct Gearbox {
     pub band: f64,
     /// T_h, N m.
     pub hysteresis: f64,
+    /// Dahl's sigma, the hysteresis's stiffness at a reversal, N m/rad.
+    /// shortcut: taken as K1 (no maker publishes the loop's shape at a reversal); a config key once a measured loop is.
+    pub dahl_stiffness: f64,
+    /// The hysteresis's state where the last step ended: the contact twist x and its torque z there (`commit`). Within a
+    /// step z follows Dahl's law exactly from it for a twist that runs one way (`hysteresis_torque`). A NaN twist: not
+    /// stepped yet, z is 0 at the twist of the first step's end.
+    pub anchor: [f64; 2],
     /// [T1, T2], N m; infinite with the curve off.
     pub knees: [f64; 2],
     /// [K2, K3], N m/rad.
@@ -853,12 +868,6 @@ pub struct GearTorque {
 
 /// Below this power the efficiency fades out, so a gearbox at rest has no torque step.
 const EFFICIENCY_FADE_W: f64 = 0.5;
-
-/// The twist rate over which the hysteresis torque changes sign, rad/s.
-/// shortcut: a rate-dependent friction, not a hysteresis state: a twist that stands still holds no hysteresis torque,
-/// so the gearbox at rest settles on the middle curve; give the flanks a friction state (as `Lugre`) if a gearbox's
-/// rest position within its loop matters.
-pub const HYSTERESIS_RATE: f64 = 1e-3;
 
 impl Gearbox {
     pub fn from_config(cfg: &Config) -> Result<Self> {
@@ -885,6 +894,8 @@ impl Gearbox {
             },
             band: if lost { band } else { 0.0 },
             hysteresis: if lost { 0.5 * stiffness * width } else { 0.0 },
+            dahl_stiffness: stiffness,
+            anchor: [f64::NAN, 0.0],
             knees: if cfg.bool("effects.gearbox_stiffness_curve")? { knees } else { [f64::INFINITY; 2] },
             upper,
         })
@@ -966,14 +977,44 @@ impl Gearbox {
         self.efficiency.powf((output_torque * output_speed / EFFICIENCY_FADE_W).tanh())
     }
 
+    /// The contact twist x: the twist beyond the dead zone with its sign, 0 inside it.
+    fn contact(twist: f64, e: f64) -> f64 {
+        if e == 0.0 { 0.0 } else { e.copysign(twist) }
+    }
+
+    /// The hysteresis torque z at the contact twist `x` and its slope dz/dx: Dahl's law solved from the anchor for a twist
+    /// that ran one way to `x`, z = s T_h - (s T_h - z0) exp(-sigma |x - x0| / T_h), s the sign of x - x0, or of the
+    /// twist's `rate` at the anchor itself (where a step has just ended).
+    pub fn hysteresis_torque(&self, x: f64, rate: f64) -> (f64, f64) {
+        let (th, [x0, z0]) = (self.hysteresis, self.anchor);
+        if th == 0.0 || x0.is_nan() {
+            return (0.0, 0.0);
+        }
+        let s = if x > x0 || (x == x0 && rate >= 0.0) { 1.0 } else { -1.0 };
+        let z = s * th - (s * th - z0) * (-self.dahl_stiffness * (x - x0).abs() / th).exp();
+        (z, self.dahl_stiffness * (1.0 - s * z / th))
+    }
+
+    /// Ends a step: the hysteresis's state moves on to the twist the step ended at (`Machine::after_step`).
+    pub fn commit(&mut self, rotor_angle: f64, out_angle: f64) {
+        if self.hysteresis == 0.0 {
+            return;
+        }
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        let x = Self::contact(twist, e);
+        self.anchor = [x, self.hysteresis_torque(x, 0.0).0];
+    }
+
     pub fn torque(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> GearTorque {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
-        if e == 0.0 {
+        // In the backlash the flanks are apart; without play they touch at zero twist too, where the hysteresis holds.
+        if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
         let rate = rotor_speed / self.ratio - out_speed;
-        let torque =
-            self.spring(e).0.copysign(twist) + self.damping * rate + self.hysteresis * (rate / HYSTERESIS_RATE).tanh();
+        let torque = self.spring(e).0.copysign(twist)
+            + self.damping * rate
+            + self.hysteresis_torque(Self::contact(twist, e), rate).0;
         // Tooth flanks can push but not pull: while they separate fast, the damping must not reverse the torque.
         if self.has_play() && torque * twist < 0.0 {
             return GearTorque { output: 0.0, rotor: 0.0 };
@@ -995,17 +1036,26 @@ impl Gearbox {
         }
     }
 
+    /// The energy in the spring and in the hysteresis's state, z^2 / (2 sigma).
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
-        self.spring(self.beyond(rotor_angle, out_angle).1).1
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        let z = self.hysteresis_torque(Self::contact(twist, e), 0.0).0;
+        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) }
     }
 
-    /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what the spring
-    /// stores. The efficiency loss, the damping and the hysteresis.
+    /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what spring and
+    /// hysteresis store. The efficiency loss, the damping and the hysteresis's friction, s x' z^2 / T_h.
     pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
         let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
         let (twist, e) = self.beyond(rotor_angle, out_angle);
-        let spring = if e == 0.0 { 0.0 } else { self.spring(e).0.copysign(twist) };
-        t.rotor * rotor_speed - t.output * out_speed - spring * (rotor_speed / self.ratio - out_speed)
+        if e == 0.0 && self.has_play() {
+            return t.rotor * rotor_speed - t.output * out_speed;
+        }
+        let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
+        let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
+        t.rotor * rotor_speed
+            - t.output * out_speed
+            - (self.spring(e).0.copysign(twist) + stored) * (rotor_speed / self.ratio - out_speed)
     }
 }
 
@@ -1295,6 +1345,8 @@ preload_n = 200.0
             efficiency: 1.0,
             band: 0.0,
             hysteresis: 0.0,
+            dahl_stiffness: 1e4,
+            anchor: [f64::NAN, 0.0],
             knees: [f64::INFINITY; 2],
             upper: [1e4; 2],
         }
@@ -1570,14 +1622,11 @@ preload_n = 200.0
         );
     }
 
-    /// The lost-motion band and the hysteresis, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad:
-    /// 1e-4 rad into the band 1e4 * 1e-8 / 4e-4 = 0.25 N m, at its end 1 N m (= K1 b / 2), 1e-4 rad beyond 2 N m; the
-    /// twist for 2 N m is 4e-4 + 2e-4 / 2 + 2e-4 = 7e-4 rad. A strain wave gear's hysteresis of 2.909e-4 rad (1 arcmin)
-    /// on K1 1e4 is a flanks' friction of 1.4545 N m: loading crosses zero torque at -1.4545e-4 rad, unloading at
-    /// +1.4545e-4 rad, a loop 2.909e-4 rad wide. What the hysteresis takes, 1.4545 N m at 0.5 rad/s of twist rate, is
-    /// a loss of 0.72725 W.
+    /// The lost-motion band, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad: 1e-4 rad into the band
+    /// 1e4 * 1e-8 / 4e-4 = 0.25 N m, at its end 1 N m (= K1 b / 2), 1e-4 rad beyond 2 N m; the twist for 2 N m is
+    /// 4e-4 + 2e-4 / 2 + 2e-4 = 7e-4 rad.
     #[test]
-    fn the_lost_motion_band_and_the_hysteresis_loop_are_the_calculated_ones() {
+    fn the_lost_motion_band_is_the_calculated_one() {
         let g = Gearbox { band: 2e-4, ..gearbox() };
         let out = |twist: f64| g.torque(5.0 * twist, 0.0, 0.0, 0.0).output;
         assert!((out(5e-4) - 0.25).abs() < 1e-9 && (out(6e-4) - 1.0).abs() < 1e-9 && (out(7e-4) - 2.0).abs() < 1e-9);
@@ -1587,15 +1636,66 @@ preload_n = 200.0
             let slope = (g.energy(5.0 * (twist + h), 0.0) - g.energy(5.0 * (twist - h), 0.0)) / (2.0 * h);
             assert!((slope - out(twist)).abs() < 1e-5, "{twist}: {slope}");
         }
-        let wave = Gearbox { half_backlash: 0.0, hysteresis: 0.5 * 1e4 * 2.909e-4, ..gearbox() };
-        // Loading: the twist rises (rotor ahead, 1 rad/s at the output); unloading: it falls.
-        let torque = |twist: f64, rate: f64| wave.torque(5.0 * twist, 5.0 * rate, 0.0, 0.0).output;
-        let zero = |rate: f64| -wave.hysteresis * (rate / HYSTERESIS_RATE).tanh() / wave.stiffness;
-        let (up, down) = (zero(1.0), zero(-1.0));
-        assert!((up + 1.4545e-4).abs() < 1e-12 && (down - 1.4545e-4).abs() < 1e-12, "{up} {down}");
-        assert!(torque(up, 1.0).abs() < 1e-9 && torque(down, -1.0).abs() < 1e-9);
-        assert!(((down - up) - 2.909e-4).abs() < 1e-12);
-        assert!((wave.loss_power(5.0 * 1e-4, 5.0 * 0.5, 0.0, 0.0) - 0.72725).abs() < 1e-9);
+    }
+
+    /// A strain wave gear's hysteresis of 2.909e-4 rad (1 arcmin) on K1 1e4 N m/rad: a flanks' friction T_h of
+    /// 1.4545 N m, sigma = K1. Loaded to 0.01 rad (sigma x / T_h = 68.75: z is T_h to the bit) and unloaded, the torque
+    /// is K1 x - T_h + 2 T_h exp(-sigma (0.01 - x) / T_h), zero at x = +1.4545e-4 rad; loaded back from -0.01 rad, zero at
+    /// -1.4545e-4 rad: the loop is 2.909e-4 rad wide. Back at x = 0 the gear holds -1.4545 N m. From z = 0 at x = 0 (the
+    /// first step's end), at x = T_h / sigma = 1.4545e-4 rad z = T_h (1 - 1/e) = 0.919419 N m, and twisting on at
+    /// 0.5 rad/s the hysteresis takes s x' z^2 / T_h = 0.290592 W, the rate of energy lost as the twist runs on, and as
+    /// much when a step ends there and the twist turns back.
+    #[test]
+    fn the_hysteresis_loop_is_as_wide_as_given_and_holds_its_torque_at_rest() {
+        let th = 0.5 * 1e4 * 2.909e-4;
+        let mut g = Gearbox { half_backlash: 0.0, hysteresis: th, ..gearbox() };
+        let torque = |g: &Gearbox, x: f64| g.torque(5.0 * x, 0.0, 0.0, 0.0).output;
+        g.commit(0.0, 0.0);
+        assert_eq!(g.anchor, [0.0, 0.0]);
+        let x = th / 1e4;
+        assert!((torque(&g, x) - (1e4 * x + 0.919419)).abs() < 1e-6, "{}", torque(&g, x));
+        assert!((g.loss_power(5.0 * x, 5.0 * 0.5, 0.0, 0.0) - 0.290592).abs() < 1e-6);
+        // The loss is what the work put in leaves after spring and state: over 1e-9 rad of twist at 0.5 rad/s.
+        let (h, rate) = (1e-9, 0.5);
+        let work = torque(&g, x) * h;
+        let stored = g.energy(5.0 * (x + h), 0.0) - g.energy(5.0 * x, 0.0);
+        assert!((work - stored - g.loss_power(5.0 * x, 5.0 * rate, 0.0, 0.0) * h / rate).abs() < 1e-12);
+        // A step ends there and the twist turns back: the friction still takes s x' z^2 / T_h = (-1)(-0.5) z^2 / T_h, the
+        // same 0.290592 W (the direction comes from the rate at the anchor, not from x - x0 = 0).
+        g.commit(5.0 * x, 0.0);
+        assert!((g.loss_power(5.0 * x, -5.0 * 0.5, 0.0, 0.0) - 0.290592).abs() < 1e-6);
+
+        g.commit(5.0 * 0.01, 0.0);
+        assert!((g.anchor[1] - th).abs() < 1e-12);
+        assert!(torque(&g, 1.4545e-4).abs() < 1e-9, "unloading: {} N m", torque(&g, 1.4545e-4));
+        g.commit(0.0, 0.0);
+        assert!((torque(&g, 0.0) + 1.4545).abs() < 1e-9, "at rest: {} N m", torque(&g, 0.0));
+        g.commit(-5.0 * 0.01, 0.0);
+        assert!(torque(&g, -1.4545e-4).abs() < 1e-9, "loading: {} N m", torque(&g, -1.4545e-4));
+    }
+
+    /// At small amplitudes the hysteresis is a spring of sigma beside K1, not a lock: a twist of 1e-7 rad at 100 Hz,
+    /// stepped at 10 us as `Sim` steps (`commit` at each step's end), gives a first harmonic of torque in phase of
+    /// (K1 + sigma) 1e-7 = 2e-3 N m and almost none in quadrature (sigma x / T_h = 7e-4: the loop is a sliver). The old
+    /// friction on the twist's rate, T_h tanh(x' / 1e-3 rad/s), gave 0.09 N m in quadrature, 45 times the spring's.
+    #[test]
+    fn a_gear_with_hysteresis_answers_small_signals_as_its_stiffness() {
+        let th = 0.5 * 1e4 * 2.909e-4;
+        let mut g = Gearbox { half_backlash: 0.0, hysteresis: th, ..gearbox() };
+        let (amp, w, dt) = (1e-7, std::f64::consts::TAU * 100.0, 1e-5);
+        let (mut inphase, mut quad) = (0.0, 0.0);
+        for k in 0..20_000 {
+            let t = k as f64 * dt;
+            let (x, rate) = (amp * (w * t).sin(), amp * w * (w * t).cos());
+            let torque = g.torque(5.0 * x, 5.0 * rate, 0.0, 0.0).output;
+            g.commit(5.0 * x, 0.0);
+            // The last ten periods.
+            if k >= 10_000 {
+                inphase += torque * (w * t).sin() * 2.0 / 10_000.0;
+                quad += torque * (w * t).cos() * 2.0 / 10_000.0;
+            }
+        }
+        assert!((inphase / amp - 2e4).abs() < 0.01 * 2e4 && (quad / amp).abs() < 0.01 * 2e4, "{inphase} {quad}");
     }
 
     #[test]

@@ -515,7 +515,7 @@ Then:
 
 ## Motor and drive data added on 14 November 2026
 
-- `siemens/motors_s210_oi.csv`: the thermal time constants of the 1FK2 from the S210 operating instructions (06/2020), with the 230 V windings the S120 manual lacks (six motors). The 28 1FT2 still without one need the 09/2022 edition, which Siemens' support site would not serve to a script.
+- `siemens/motors_s210_oi.csv`: the thermal time constants of the 1FK2 and 1FT2 from the S210 operating instructions 09/2022 (A5E41702836B AL, from cache.industry.siemens.com), with the 230 V windings and the 1FT2 the S120 manuals lack; where a manual has the motor too both agree (62 motors; the 06/2020 edition's 22 min for 1FK2205-2AF and 1FK2206-2AF are 29 and 21 min here too). Six 1FT2 of the S210 catalogue got their time constant from it; 22 later 1FT2 windings (1FT2108, the 1FT2208-.S. and some 1FT2206/08/10) are in no edition read and still have none. The motors' torque-speed curves and per-motor R, L, k_E of the 1FK2 and 1FT2 are in none of these documents nor in the configurator's data sheet per article (graphs at most); SIZER, which may export curve points, needs an installation and a login and was not used.
 - `siemens/encoders_1fk2_1ft2.csv`: the encoders the 1FK2 and 1FT2 are ordered with (22 bit, 26 bit for the 1FT2 only), for `parts.motor_encoder`.
 - `siemens/dc_link_trip_s120.csv`: the S120 DC link's overvoltage trip, 820 V, from the booksize equipment manual (formerly typed into the simulator).
 - Brake data (inertia and weight with brake) of `motors_s210.csv` and the S120 manuals now reach the config with `parts.motor_brake = true`; the maximum-speed columns set `drive.max_speed_rad_s`.

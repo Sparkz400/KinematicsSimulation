@@ -916,7 +916,7 @@ impl H4 {
         let (mut stops, mut other) = (0.0, 0.0);
         for k in 0..4 {
             let joint = &self.joints[k];
-            let [friction, stop, shaft] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, into, out)) => {
                     gear_at_rotor[k] = (into[k] - out[k]) / joint.ratio();
@@ -928,7 +928,7 @@ impl H4 {
                     joint.gearbox.loss_power(s[8 + k], s[12 + k], s[k], s[4 + k])
                 }
             };
-            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear]);
+            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
             stops += stop;
             other += (torque[k] - joint.ripple.apply(torque[k], rotor[k])) * rotor_speed[k];
         }

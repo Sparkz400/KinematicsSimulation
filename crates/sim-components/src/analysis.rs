@@ -3613,8 +3613,8 @@ pub fn velocity_loop_response(
             if due {
                 // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
                 sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
-                let (low, high) = sim.control.drive_params_of(motor).torque_range(speed[motor]);
-                let drive = &sim.control.drives[motor];
+                let (p, drive) = (sim.control.drive_params_of(motor), &sim.control.drives[motor]);
+                let (low, high) = p.torque_range_at(speed[motor], drive.max_voltage(p));
                 let e = drive.torque_demand + drive.torque_injection;
                 limited |= !(low < e && e < high);
                 if step >= settle_steps {

@@ -75,6 +75,18 @@ item are in [PROGRESS.md](PROGRESS.md).
 - A gearbox by name also sets its efficiency torque, no-load torque and stiffness curve where the config has the keys;
   `-r` after the name takes the reduced backlash. Siemens' SP100 is read, on 1FT2 motors only.
 - A linear motor machine's search tries linear motors in place of rotary ones.
+
+- The gearbox's hysteresis (`gearbox.hysteresis_rad`, `effects.gearbox_lost_motion`) is a Dahl friction state per
+  gearbox instead of a friction on the twist's rate: it holds its torque at rest and is a spring at the small amplitudes
+  of a frequency response (it locked the flanks there). On in the D2 and D3 configs and the delta machine files, half an
+  arcmin [estimate]; the D3's velocity loop crosses over at 305 Hz (259 Hz without it).
+- The gearbox's drag (`effects.gearbox_drag`) is booked as the gearbox's loss, not the motor shaft's, and with
+  `effects.part_heating` warms the gearbox.
+- The velocity loop's torque limit follows the DC link's voltage of the moment (with `effects.dc_link`): a sagging DC
+  link limits the torque at speed.
+- Catalogue: `siemens/motors_s210_oi.csv` from the S210 operating instructions 09/2022, with the 1FT2: six more 1FT2 of
+  the S210 catalogue get a thermal time constant; `catalog_golden.txt` and `catalog_snapshot.txt` regenerated.
+
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
 

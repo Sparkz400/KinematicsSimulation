@@ -280,10 +280,10 @@ impl Extra {
     /// and what the ripple gives off; and the gearbox's loss as a torque at the rotor.
     fn losses(&self, x: &[f64], torque: f64, engaged: bool, attached: bool) -> ([f64; 5], f64) {
         let i = self.ratio();
-        let [friction, stop, shaft] = self.joint.losses(x[0], x[1], x[1] * i, x[2], engaged);
+        let [friction, stop, shaft, drag] = self.joint.losses(x[0], x[1], x[1] * i, x[2], engaged);
         let (_, into, out) = self.solve(x, torque, engaged, attached);
         let other = (torque - self.joint.ripple.apply(torque, x[0] * i)) * x[1] * i;
-        ([friction, shaft, (into - out) * x[1], stop, other], (into - out) / i)
+        ([friction, shaft, (into - out) * x[1] + drag, stop, other], (into - out) / i)
     }
 
     /// The motor torque's parts (`TORQUE_PARTS`), as the arms'.
@@ -722,7 +722,7 @@ impl ParallelScara {
         let (mut stops, mut other) = (0.0, 0.0);
         for k in 0..2 {
             let joint = &self.joints[k];
-            let [friction, stop, shaft] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] = joint.losses(t[k], w[k], rotor_speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, into, out)) => {
                     gear_at_rotor[k] = (into[k] - out[k]) / joint.ratio();
@@ -734,7 +734,7 @@ impl ParallelScara {
                     joint.gearbox.loss_power(s[4 + k], s[6 + k], s[k], s[2 + k])
                 }
             };
-            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear]);
+            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
             stops += stop;
             other += (torque[k] - joint.ripple.apply(torque[k], rotor[k])) * rotor_speed[k];
         }

@@ -330,6 +330,8 @@ pub struct LinearDelta {
     guide_max_load: Option<f64>,
     guide_rating: Option<f64>,
     required_life: Option<f64>,
+    /// Each axis's gearbox hysteresis state (`Gearbox::anchor`); `gearbox` holds the values all three share.
+    anchors: [[f64; 2]; 3],
     stops: HardStop,
     brake: HoldingBrake,
     /// Rotor with the gearbox's input; pulley with the belt's mass.
@@ -451,6 +453,7 @@ impl LinearDelta {
             guide_max_load: rating("guide_max_load_n"),
             guide_rating: rating("guide_dynamic_load_rating_n"),
             required_life: rating("required_life_h"),
+            anchors: [[f64::NAN, 0.0]; 3],
             stops: HardStop::from_config(cfg)?,
             brake: HoldingBrake::from_config(cfg, j_rotor)?,
             j_rotor,
@@ -681,10 +684,15 @@ impl LinearDelta {
         }
     }
 
+    /// Axis k's gearbox (its own, warmed by its own temperature) with its own hysteresis state.
+    fn gear(&self, k: usize) -> Gearbox {
+        Gearbox { anchor: self.anchors[k], ..self.gears[k].clone() }
+    }
+
     /// The torque each coupling or gearbox passes to its pulley.
     fn gear_output(&self, s: &[f64], torque: &[f64]) -> V3 {
         if self.elastic {
-            std::array::from_fn(|k| self.gears[k].torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]).output)
+            std::array::from_fn(|k| self.gear(k).torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]).output)
         } else {
             self.rigid_solve(s, torque).out
         }
@@ -711,7 +719,7 @@ impl LinearDelta {
                 let (geo, fed) = (self.geo(h[k] - self.h_min()), self.r_mat * s[3 + k]);
                 elastic += self.belt.energy(geo[0], self.mat0[0] - fed)
                     + self.belt.energy(geo[1], self.mat0[1] + fed)
-                    + self.gearbox.energy(s[6 + k], s[3 + k]);
+                    + self.gear(k).energy(s[6 + k], s[3 + k]);
             }
         } else {
             let (r, ratio) = (self.r, self.gearbox.ratio);
@@ -738,19 +746,20 @@ impl LinearDelta {
                     (gear_at_rotor[k] * speed[k], 0.0)
                 }
                 None => {
-                    let g = self.gears[k].torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
+                    let g = self.gear(k).torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
                     gear_at_rotor[k] = g.rotor - g.output / ratio;
                     let (geo, fed, rate) =
                         (self.geo(h[k] - self.h_min()), self.r_mat * s[3 + k], self.r_mat * s[12 + k]);
                     let belt = self.belt.loss_power(geo[0], self.mat0[0] - fed, -v[k], -rate)
                         + self.belt.loss_power(geo[1], self.mat0[1] + fed, v[k], rate);
-                    (self.gears[k].loss_power(s[6 + k], s[15 + k], s[3 + k], s[12 + k]), belt)
+                    (self.gear(k).loss_power(s[6 + k], s[15 + k], s[3 + k], s[12 + k]), belt)
                 }
             };
             powers[4 * k..4 * k + 4].copy_from_slice(&[
                 guide,
-                (self.shaft.torque(speed[k]) + held[k]) * speed[k],
-                gear,
+                // The gearbox's drag acts on the rotor but is the gearbox's loss.
+                (self.shaft.torque(speed[k]) + held[k]) * speed[k] - self.shaft.drag_power(speed[k]),
+                gear + self.shaft.drag_power(speed[k]),
                 belt,
             ]);
             powers[12] += self.stops.loss_power(h[k] - self.h_min(), v[k], self.stroke);
@@ -988,7 +997,7 @@ impl Machine for LinearDelta {
             }
             let (ff, ds) = self.friction[k].eval(v[k], frictions[k], scales[k]);
             rhs[k] = sec[0].tension - sec[1].tension + gravity[k] - velocity[k] - ff + self.stop_force(h[k], v[k]);
-            let gear = self.gears[k].torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
+            let gear = self.gear(k).torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
             let (brake, brake_rate) = self.brake.torque(self.brake_engaged, s[15 + k], brakes[k]);
             out[3 + k] = s[12 + k];
             out[6 + k] = s[15 + k];
@@ -1130,6 +1139,17 @@ impl Machine for LinearDelta {
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        if self.elastic {
+            for k in 0..3 {
+                let mut g = self.gear(k);
+                g.commit(s[6 + k], s[3 + k]);
+                self.anchors[k] = g.anchor;
+            }
+        }
+    }
+
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }

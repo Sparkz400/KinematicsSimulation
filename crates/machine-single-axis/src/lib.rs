@@ -379,8 +379,18 @@ impl SingleAxis {
         let process_in = if self.dwelling { self.process * v } else { 0.0 };
         let other = (torque[0] - self.ripple.apply(torque[0], angle)) * speed - mesh_in - process_in;
         let stops = self.stops.loss_power(x, v, self.axes[0].max);
+        // The gearbox's drag acts on the rotor but is the gearbox's loss.
+        let gear_drag = self.shaft.drag_power(speed);
         (
-            [ff * v, drag * v, (self.shaft.torque(speed) + brake) * speed, gear_power, belt, stops, other],
+            [
+                ff * v,
+                drag * v,
+                (self.shaft.torque(speed) + brake) * speed - gear_drag,
+                gear_power + gear_drag,
+                belt,
+                stops,
+                other,
+            ],
             gear_loss,
             brake,
         )
@@ -670,6 +680,10 @@ impl Machine for SingleAxis {
     /// Belt tooth jump at the motor pulley (`ToothJump`); section 1 is the one a positive slip feeds.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;
+        // The gearbox's hysteresis state moves on to where the step ended (`Gearbox::commit`).
+        if self.elastic {
+            self.gearbox.commit(s[2], s[1]);
+        }
         let Some(mut jump) = self.jump.clone() else { return };
         if let Some(&wrap) = self.belt_wraps(&s[..1]).first() {
             jump.set_wrap(wrap);

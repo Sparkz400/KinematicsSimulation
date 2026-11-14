@@ -1021,7 +1021,7 @@ impl CableRobot {
         });
         for k in 0..m {
             let j = &self.winches[k];
-            let [friction, stop, shaft] = j.losses(free[k], free_rates[k], speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] = j.losses(free[k], free_rates[k], speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, _, into, out)) => {
                     at_rotor[k] = (into[k] - out[k]) / j.ratio();
@@ -1033,7 +1033,7 @@ impl CableRobot {
                     j.gearbox.loss_power(rotor[k], speed[k], free[k], free_rates[k])
                 }
             };
-            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear]);
+            powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
             powers[3 * m + k] = damper.as_ref().map_or(0.0, |d| d[k]);
             powers[4 * m] += stop;
             powers[4 * m + 1] += (torque[k] - j.ripple.apply(torque[k], rotor[k])) * speed[k];

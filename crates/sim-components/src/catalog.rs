@@ -442,8 +442,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
     let voltage = s210_supply(supply).ok_or_else(missing)?.0;
     let rated = |quantity: &str, unit: &str| get(&format!("rated_{quantity}_{voltage}_{unit}"));
     let manual = motor_manuals().into_iter().flat_map(|text| rows(text)).find(|r| r["part_number"] == article);
-    // The S210 operating instructions have the 230 V windings the manual lacks; where both have a motor, the newer
-    // manual's value (two differ, see motors_s210_oi.meta.toml).
+    // The S210 operating instructions (09/2022) have the 230 V windings and the 1FT2 the manuals lack; where both have a
+    // motor they agree.
     let instructions = || rows(table("siemens/motors_s210_oi.csv")).into_iter().find(|r| r["part_number"] == article);
     Ok(MotorData {
         rotor_kgm2: get("rotor_inertia_kgm2")?,

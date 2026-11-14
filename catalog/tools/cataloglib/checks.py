@@ -835,16 +835,20 @@ def vendor_drives_are_plausible(tables):
                     errors.append(f"{path} {name}: braking_threshold_v {on} not below dc_link_overvoltage_v {trip}")
             except ValueError as e:
                 errors.append(f"{path} {name}: {e}")
+    return errors
 
 
 def siemens_s210_operating_instructions_agree_with_the_catalogue_and_the_manual(tables):
-    """1FK2 thermal time constants of the S210 operating instructions: every motor is in the S210 catalogue with the same
-    static torque and maximum current, and where the S120 manual has the motor too it gives the same time constant."""
-    if not have(tables, "siemens/motors_s210_oi.csv", "siemens/motors_s210.csv", "siemens/motors_1fk2_s120.csv"):
+    """1FK2 and 1FT2 thermal time constants of the S210 operating instructions: every motor is in the S210 catalogue with
+    the same static torque and maximum current, and where an S120 manual has the motor too it gives the same time
+    constant."""
+    s120 = ("siemens/motors_1fk2_s120.csv", "siemens/motors_1ft2_s120.csv")
+    if not have(tables, "siemens/motors_s210_oi.csv", "siemens/motors_s210.csv", *s120):
         return []
     oi, errors = tables["siemens/motors_s210_oi.csv"], []
-    catalogue, manual = by_part(tables["siemens/motors_s210.csv"]), by_part(tables["siemens/motors_1fk2_s120.csv"])
-    if len(oi) < 25:
+    catalogue = by_part(tables["siemens/motors_s210.csv"])
+    manual = {**by_part(tables[s120[0]]), **by_part(tables[s120[1]])}
+    if len(oi) < 70:
         errors.append(f"only {len(oi)} rows")
     for m in oi:
         name = m["part_number"]
@@ -858,11 +862,8 @@ def siemens_s210_operating_instructions_agree_with_the_catalogue_and_the_manual(
             for column in ("static_torque_nm", "max_current_a"):
                 if not close(need(m, column), need(c, column), 0.01):
                     errors.append(f"{name}: {column} {m[column]} against {c[column]} in motors_s210.csv")
-            # Two motors differ between the editions (06/2020: 22 and 22 min, 02/2022 manual: 29 and 21 min); both files
-            # keep what they print and the simulator takes the newer manual's.
-            differ = ("1FK2205-2AF", "1FK2206-2AF")
-            if name in manual and name not in differ and m["thermal_time_constant_s"] != manual[name]["thermal_time_constant_s"]:
-                errors.append(f"{name}: thermal_time_constant_s against motors_1fk2_s120.csv")
+            if name in manual and m["thermal_time_constant_s"] != manual[name]["thermal_time_constant_s"]:
+                errors.append(f"{name}: thermal_time_constant_s against the S120 manual")
         except ValueError as e:
             errors.append(f"{name}: {e}")
     return errors

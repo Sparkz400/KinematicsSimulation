@@ -395,3 +395,38 @@ fn a_span_vibrates_at_its_string_frequency_and_a_cruise_on_resonance_fails() {
     let off = judged("belt.mass_kg_m = 0.1");
     assert!(off.ok && off.value == 1.0, "{off:?}");
 }
+
+/// The gearbox's drag warms the gearbox, not the motor (effects.gearbox_drag with part_heating). The single axis at its
+/// cruise of 1 m/s turns its pulley (20 mm) at 50 rad/s and its motor at 5 * 50 = 250 rad/s: by Palmgren's law the drag
+/// is 0.125 N m (250 / 314.159)^(2/3) = 0.107342 N m, 26.8355 W. With the efficiency off and no lost motion the drag is
+/// the gearbox's whole loss in a cruise; with a time constant of 1 ms the gearbox's rise follows it, 2 K/W * 26.8355 W
+/// = 53.671 K. The motor's friction row keeps its own share: its torque at the shaft less the drag.
+#[test]
+fn the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let cfg = edited(
+        entry,
+        &[
+            "effects.part_heating = true",
+            "effects.gearbox_drag = true",
+            "effects.gearbox_efficiency = false",
+            "effects.gearbox_lost_motion = false",
+            "effects.thermal_feedback = false",
+            "thermal.gearbox_resistance_k_w = 2.0",
+            "thermal.gearbox_time_constant_s = 1e-3",
+        ],
+    );
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let axis = sim.machine.axes()[0].clone();
+    let mut target = sim.control.set_pos.clone();
+    target[0] = axis.max - 0.05 * axis.max;
+    sim.command(Command::MoveTo(target)).unwrap();
+    while sim.control.busy() && (signal(&sim, "axis.x.velocity_setpoint") - 1.0).abs() > 1e-9 {
+        sim.step();
+    }
+    sim.run(0.02, |_| {});
+    assert!(sim.control.busy(), "the move ended without a cruise");
+    let gearbox = sim.heated.iter().find(|h| h.part.kind == "gearbox").unwrap();
+    assert!((gearbox.loss_power - 26.8355).abs() < 0.01 * 26.8355, "{} W", gearbox.loss_power);
+    assert!((gearbox.rise - 53.671).abs() < 0.01 * 53.671, "{} K", gearbox.rise);
+}
