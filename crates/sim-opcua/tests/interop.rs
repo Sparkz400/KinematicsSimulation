@@ -362,9 +362,13 @@ fn spin_until(deadline: Instant) {
 /// 250 ms², standard deviation √(250 − 13²) = √81 = 9 ms.
 const PATTERN_MS: [u64; 10] = [10, 10, 10, 10, 10, 10, 10, 10, 10, 40];
 /// The server measures the client's cycle: a client writing on the pattern above (a PLC task of 10 ms that misses
-/// three times for 30 ms) reads 30 intervals, mean 13 ms, largest 40 ms and standard deviation 9 ms back, and so does
-/// a client reading on it. Tolerances: the mean ±0.5 ms (one loopback round trip at either end of 390 ms), the largest
-/// ±5 ms and the standard deviation ±2 ms (a request arriving late on a loaded host).
+/// three times for 30 ms) reads back the count, mean, standard deviation and largest of the 30 intervals it wrote at,
+/// and so does a client reading on it. The client times each request itself, from sending it to its answer; the
+/// server takes its time in between, so each of its intervals is off the client's (between the middles of two
+/// requests) by at most the two half round trips e_i: its mean by at most (h_0 + h_30) / 30 (h the half round trips),
+/// its largest by the largest e_i, its standard deviation by the root mean square of the e_i (a standard deviation is
+/// a seminorm: |std x - std y| <= std (x - y) <= rms (x - y)). On an idle host the client's own figures are the
+/// pattern's 13, 40 and 9 ms; on a loaded one requests go out late, and the server has to follow what they did.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_server_measures_the_cycle_of_a_client_writing_every_10_ms() {
     let pki = scratch("jitter");
@@ -376,15 +380,18 @@ async fn the_server_measures_the_cycle_of_a_client_writing_every_10_ms() {
         // Starts both measurements anew, in the write itself.
         assert!(write(&session, ns, "command.reset_pacing", true.into()).await);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let mut at = Instant::now();
+        let zero = Instant::now();
+        let (mut at, mut timed) = (zero, Vec::new());
         for interval in std::iter::once(0).chain(PATTERN_MS.iter().copied().cycle().take(30)) {
             at += Duration::from_millis(interval);
             spin_until(at);
+            let sent = zero.elapsed().as_secs_f64();
             if kind == "write" {
                 assert!(write(&session, ns, "command.path_time_optimal", false.into()).await);
             } else {
                 read(&session, ns, "status.busy").await;
             }
+            timed.push((sent, zero.elapsed().as_secs_f64()));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         // One read of all four: a read is counted after it is answered, so it is not in its own answer.
@@ -397,9 +404,30 @@ async fn the_server_measures_the_cycle_of_a_client_writing_every_10_ms() {
             ref other => panic!("{}: {other:?}", names[k]),
         });
         assert_eq!(count, 30.0, "{kind}s");
-        assert!((mean - 13.0).abs() < 0.5, "{kind}s: mean {mean} ms");
-        assert!((max - 40.0).abs() < 5.0, "{kind}s: largest {max} ms");
-        assert!((std - 9.0).abs() < 2.0, "{kind}s: standard deviation {std} ms");
+        // The client's own intervals, in ms, and how far the server's may be off each of them.
+        let (middle, half): (Vec<f64>, Vec<f64>) =
+            timed.iter().map(|(sent, answered)| (0.5e3 * (sent + answered), 0.5e3 * (answered - sent))).unzip();
+        let own: Vec<f64> = middle.windows(2).map(|w| w[1] - w[0]).collect();
+        let off: Vec<f64> = half.windows(2).map(|w| w[0] + w[1]).collect();
+        let n = own.len() as f64;
+        let own_mean = own.iter().sum::<f64>() / n;
+        let own_std = (own.iter().map(|x| (x - own_mean).powi(2)).sum::<f64>() / n).sqrt();
+        let own_max = own.iter().copied().fold(0.0, f64::max);
+        let rms = (off.iter().map(|e| e * e).sum::<f64>() / n).sqrt();
+        // The server keeps seconds in f64 and sums squares: 1 ns covers its rounding.
+        let rounding = 1e-6;
+        assert!(
+            (mean - own_mean).abs() <= (half[0] + half[30]) / n + rounding,
+            "{kind}s: mean {mean} ms, the client's {own_mean} ms"
+        );
+        assert!(
+            (max - own_max).abs() <= off.iter().copied().fold(0.0, f64::max) + rounding,
+            "{kind}s: largest {max} ms, the client's {own_max} ms, round trips {off:?}"
+        );
+        assert!(
+            (std - own_std).abs() <= rms + rounding,
+            "{kind}s: standard deviation {std} ms, the client's {own_std} ms, round trips {off:?}"
+        );
     }
     // The figures the log prints at shutdown are the same.
     let reads = link.clients.lock().unwrap().reads.clone();

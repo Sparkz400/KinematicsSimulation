@@ -343,7 +343,8 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
 
 /// A path file is run and analysed on every machine, timed within the axis limits and as fast as the motors
 /// allow: the run ends at the end of the path, and the faster plan takes less time and more torque, or where the belts
-/// bind before the motors keeps them tauter than the axis limits do.
+/// bind before the motors keeps them tauter than the axis limits do, or where a gearbox's rating binds is quicker or
+/// gentler.
 #[test]
 fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
     for entry in MACHINES {
@@ -394,10 +395,32 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
         let cfg = entry.config();
         let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
             + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+        // Where the axis limits take a gearbox's or pulley's output torque above the share of its rating the faster plan
+        // keeps (`profile.torque_reserve`; a limit of that plan since 14 November), it holds the gearbox there: it is
+        // quicker, or slower and gentler. The planar delta's lines within the axis limits take its gearbox 1 to 248 N m of
+        // its 192 N m, the faster plan keeps 0.8 * 192 = 153.6 N m in its rigid model: 0.588 s against 0.581 s, motor 1
+        // at 10.85 N m against 12.87 N m (the deltas' and the arm's other lines are quicker as before).
+        let gears_bind = {
+            let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+            let pieces = sim_components::path::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let points = sim.plan_path(&pieces, false).unwrap();
+            let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+            let reserve = cfg.f64("profile.torque_reserve").unwrap();
+            sim_components::analysis::verdicts(&cfg, &load)
+                .unwrap()
+                .iter()
+                .any(|v| matches!(v.check, "gearbox-peak" | "pulley-torque") && v.value > reserve * v.limit)
+        };
         if slackest < floor {
             assert!(
                 kept > floor,
                 "{}: the faster plan takes a belt to {kept} N, the axis limits to {slackest} N",
+                entry.id
+            );
+        } else if gears_bind {
+            assert!(
+                fast < slow || hard < gentle,
+                "{}: {fast} s and {hard} N m against {slow} s and {gentle} N m",
                 entry.id
             );
         } else {

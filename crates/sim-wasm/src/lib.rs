@@ -197,8 +197,11 @@ pub fn record(part: &Part, out: &mut Vec<f32>) {
         }
         Shape::Segment { to, width } => {
             let along: [f64; 3] = std::array::from_fn(|i| to[i] - part.pos[i]);
-            let length = size(along.iter().map(|v| v * v).sum::<f64>().sqrt());
-            let u = along.map(|v| v / length);
+            let norm = along.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let length = size(norm);
+            // A segment of no length (an arm's last link where the flange sits at its last joint) has no direction: it
+            // lies along x, so that its width and thickness keep theirs and the matrix stays invertible.
+            let u = if norm > 0.0 { along.map(|v| v / norm) } else { [1.0, 0.0, 0.0] };
             // The depth axis, or x for a segment along the depth, made square to the segment.
             let near = if u[1].abs() > 0.99 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
             let dot = (0..3).map(|i| near[i] * u[i]).sum::<f64>();
