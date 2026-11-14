@@ -1909,8 +1909,8 @@ against the OPC UA server: data types, security, cycle jitter").
   name and its addresses, checked with openssl) is made on the first start in `--pki` (default `pki`). A client
   certificate not in `pki/trusted` is refused on the secured endpoints and lands in `pki/rejected`, from where moving it
   trusts it; `--trust-all` (off by default) accepts and stores every one. `--user NAME` asks for that user and the
-  password from `SIM_OPCUA_PASSWORD` (not on the command line), on every endpoint, the password encrypted with the
-  server's key also on None. All of it is async-opcua's own (`ServerEndpoint`, `ServerUserToken`, its certificate
+  password from `SIM_OPCUA_PASSWORD` (not on the command line); the None endpoint is then not offered, because
+  async-opcua accepts a password sent in clear (empty encryption algorithm) whatever the endpoint's password policy. All of it is async-opcua's own (`ServerEndpoint`, `ServerUserToken`, its certificate
   store); `sim_opcua::Security` and `serve_secured` carry it, `serve` keeps the old defaults for the other tests.
 - Data types: every variable checked against the IEC 61131-3 type the PLC clients map it to. Nothing a PLC could not
   read or write was found: all variables are scalars (ValueRank -1) with types the clients know (Double LREAL, Boolean
@@ -1934,14 +1934,14 @@ Test (`sim-opcua/tests/interop.rs`, async-opcua's client; no independent client 
 `a_trusted_client_reads_and_writes_with_basic256sha256_sign_and_encrypt` (the three endpoints offered; an unknown client
 refused, its certificate in rejected/; moved to trusted/, it reads and writes with SignAndEncrypt, and connects with
 Sign), `trust_all_lets_an_unknown_client_in`, `a_user_name_and_password_keep_others_out` (anonymous and a wrong
-password refused, the right one in on SignAndEncrypt and on None), `the_type_table_matches_every_exposed_variable`
+password refused, the right one in on SignAndEncrypt; None not offered), `the_type_table_matches_every_exposed_variable`
 (every variable of every machine browsed; DataType, ValueRank, AccessLevel and value against the table parsed from
 docs/plc.md; every row met; namespace index 2), `the_server_measures_the_cycle_of_a_client_writing_every_10_ms`
 (intervals of nine times 10 ms and one of 40 ms, three times, by spinning on the wall clock: by hand 30 intervals,
 mean 390/30 = 13 ms, largest 40 ms, standard deviation sqrt(250 - 13^2) = 9 ms; for writes and for reads, within 0.5,
 5 and 2 ms). In the crate: `intervals_give_count_mean_standard_deviation_and_largest` (10, 10, 10, 30 ms: mean 15 ms,
-largest 30 ms, standard deviation sqrt(75) = 8.660 ms) and `security_options_are_read`. The new tests were not run here
-(the coordinating session runs the suites); the server was started with and without `--user` and `--trust-all` and
+largest 30 ms, standard deviation sqrt(75) = 8.660 ms) and `security_options_are_read`. `tests/interop.rs` passed here, 5 of 5 in 37 s
+(release, one thread); the crate's unit tests were not run (the coordinating session runs the suites); the server was started with and without `--user` and `--trust-all` and
 made its certificate.
 
 Left open:

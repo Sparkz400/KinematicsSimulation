@@ -18,7 +18,7 @@ cargo run --release -p sim-opcua -- t-gantry --port 4840 --host 192.168.0.10 --c
 | `--cycle-ms N` | 10 | Cycle of the simulation loop, 1 to 1000 ms |
 | `--pki DIR` | `pki` | Folder of the server's certificate and of the trusted and rejected client certificates, relative to the working directory (see [Security](#security)) |
 | `--trust-all` | off | Accept every client certificate and store it among the trusted ones. For commissioning only |
-| `--user NAME` | none | Clients must log in with this user name and the password in the environment variable `SIM_OPCUA_PASSWORD`; anonymous clients are refused. Without the variable the link does not start |
+| `--user NAME` | none | Clients must log in with this user name and the password in the environment variable `SIM_OPCUA_PASSWORD`; anonymous clients are refused and the endpoint without security is not offered. Without the variable the link does not start |
 
 Ctrl+C stops the link and prints the measured pacing in a line of this form (the numbers are those of the soak run below, not of a Ctrl+C run):
 
@@ -64,7 +64,7 @@ A PLC that connects with security has to trust `own/cert.der`: import it into th
 SIM_OPCUA_PASSWORD=secret cargo run --release -p sim-opcua -- t-gantry --user plc
 ```
 
-(PowerShell: `$env:SIM_OPCUA_PASSWORD = "secret"` before the command.) The password is sent encrypted with the server's key (Basic256Sha256) on every endpoint, also on the one without security. Anonymous clients are then refused. There is one user; roles (read only, write) are not distinguished.
+(PowerShell: `$env:SIM_OPCUA_PASSWORD = "secret"` before the command.) With `--user` the endpoint without security is not offered, so that the password never travels in clear: the PLC connects with Sign or SignAndEncrypt. Anonymous clients are then refused. There is one user; roles (read only, write) are not distinguished.
 
 ## Node ids and data types
 

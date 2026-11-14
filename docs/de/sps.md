@@ -18,7 +18,7 @@ cargo run --release -p sim-opcua -- t-gantry --port 4840 --host 192.168.0.10 --c
 | `--cycle-ms N` | 10 | Takt der Simulationsschleife, 1 bis 1000 ms |
 | `--pki DIR` | `pki` | Ordner des Server-Zertifikats und der vertrauten und abgewiesenen Client-Zertifikate, relativ zum Arbeitsverzeichnis (siehe [Sicherheit](#sicherheit)) |
 | `--trust-all` | aus | Jedes Client-Zertifikat annehmen und bei den vertrauten ablegen. Nur zur Inbetriebnahme |
-| `--user NAME` | keiner | Clients müssen sich mit diesem Benutzernamen und dem Passwort aus der Umgebungsvariablen `SIM_OPCUA_PASSWORD` anmelden; anonyme Clients werden abgewiesen. Ohne die Variable startet die Kopplung nicht |
+| `--user NAME` | keiner | Clients müssen sich mit diesem Benutzernamen und dem Passwort aus der Umgebungsvariablen `SIM_OPCUA_PASSWORD` anmelden; anonyme Clients werden abgewiesen, und der Endpunkt ohne Sicherheit wird nicht angeboten. Ohne die Variable startet die Kopplung nicht |
 
 Strg+C beendet die Kopplung und gibt den gemessenen Takt in einer Zeile dieser Form aus (die Zahlen sind die des Dauertests unten, nicht eines Laufs mit Strg+C):
 
@@ -64,7 +64,7 @@ Eine SPS, die sich mit Sicherheit verbindet, muss `own/cert.der` vertrauen: es i
 SIM_OPCUA_PASSWORD=geheim cargo run --release -p sim-opcua -- t-gantry --user sps
 ```
 
-(PowerShell: vorher `$env:SIM_OPCUA_PASSWORD = "geheim"`.) Das Passwort geht an jedem Endpunkt mit dem Schlüssel des Servers verschlüsselt (Basic256Sha256), auch an dem ohne Sicherheit. Anonyme Clients werden dann abgewiesen. Es gibt einen Benutzer; Rollen (nur lesen, schreiben) werden nicht unterschieden.
+(PowerShell: vorher `$env:SIM_OPCUA_PASSWORD = "geheim"`.) Mit `--user` wird der Endpunkt ohne Sicherheit nicht angeboten, damit das Passwort nie im Klartext übertragen wird: Die SPS verbindet sich mit Sign oder SignAndEncrypt. Anonyme Clients werden dann abgewiesen. Es gibt einen Benutzer; Rollen (nur lesen, schreiben) werden nicht unterschieden.
 
 ## Knoten-IDs und Datentypen
 

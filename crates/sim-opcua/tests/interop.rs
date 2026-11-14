@@ -161,8 +161,8 @@ async fn trust_all_lets_an_unknown_client_in() {
     assert!(certificates(server_pki.join("rejected")).is_empty());
 }
 
-/// With a user name and password, anonymous clients and a wrong password are refused, the right one gets in, on the
-/// encrypted endpoint and on the one without security (where the password still goes encrypted with the server's key).
+/// With a user name and password, anonymous clients and a wrong password are refused and the right one gets in. The
+/// endpoint without security is not offered then: async-opcua would take a password sent there in clear.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_user_name_and_password_keep_others_out() {
     let (server_pki, client_pki) = (scratch("user-server"), scratch("user-client"));
@@ -175,7 +175,7 @@ async fn a_user_name_and_password_keep_others_out() {
     let session = connect(&url, &client_pki, encrypted.0, encrypted.1, user("secret")).await.unwrap();
     assert!(matches!(read(&session, link.namespace, "status.busy").await, Variant::Boolean(false)));
     let plain = connect(&url, &client_pki, SecurityPolicy::None, MessageSecurityMode::None, user("secret")).await;
-    assert!(plain.is_some());
+    assert!(plain.is_none());
 }
 
 /// One row of the table "Node ids and data types" in docs/plc.md: the node id patterns (`*` any text), the OPC UA

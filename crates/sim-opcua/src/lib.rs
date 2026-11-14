@@ -87,9 +87,7 @@ use opcua::server::node_manager::memory::{
 use opcua::server::node_manager::{
     MonitoredItemRef, MonitoredItemUpdateRef, ParsedReadValueId, RequestContext, ServerContext, WriteNode,
 };
-use opcua::server::{
-    ANONYMOUS_USER_TOKEN_ID, CreateMonitoredItem, ServerBuilder, ServerEndpoint, ServerHandle, ServerUserToken,
-};
+use opcua::server::{ANONYMOUS_USER_TOKEN_ID, CreateMonitoredItem, ServerBuilder, ServerHandle, ServerUserToken};
 use opcua::sync::RwLock;
 use opcua::types::{
     DataTypeId, DataValue, MessageSecurityMode, MonitoringMode, NodeId, ObjectId, StatusCode, TimestampsToReturn,
@@ -286,7 +284,8 @@ pub struct Security {
     /// Accept every client certificate and store it in `<pki>/trusted` (for commissioning). Off, a client certificate
     /// that is not in `<pki>/trusted` is refused and stored in `<pki>/rejected`, to be moved to `trusted` by hand.
     pub trust_all: bool,
-    /// The user name and password a client must give; `None` lets clients in anonymously.
+    /// The user name and password a client must give; `None` lets clients in anonymously. With a user the endpoint
+    /// without security is not offered, so that the password never travels in clear.
     pub user: Option<(String, String)>,
 }
 
@@ -373,10 +372,12 @@ pub async fn serve_secured(
         ("basic256sha256_sign", SecurityPolicy::Basic256Sha256, MessageSecurityMode::Sign),
         ("basic256sha256_sign_encrypt", SecurityPolicy::Basic256Sha256, MessageSecurityMode::SignAndEncrypt),
     ] {
-        let mut endpoint = ServerEndpoint::from(("/", policy, mode, user_tokens));
-        // A password given on the endpoint without security still goes encrypted with the server's key.
-        endpoint.password_security_policy = Some(SecurityPolicy::Basic256Sha256.to_string());
-        builder = builder.add_endpoint(id, endpoint);
+        // With a password, no endpoint without security: async-opcua takes a password sent in clear (an empty
+        // encryption algorithm) even where the policy asks for it encrypted.
+        if security.user.is_some() && policy == SecurityPolicy::None {
+            continue;
+        }
+        builder = builder.add_endpoint(id, ("/", policy, mode, user_tokens));
     }
     if let Some((user, password)) = &security.user {
         builder = builder.add_user_token("user", ServerUserToken::user_pass(user.as_str(), password.as_str()));
@@ -393,7 +394,7 @@ pub async fn serve_secured(
         .host(address.ip().to_string())
         .port(address.port())
         .discovery_urls(vec![format!("opc.tcp://{address}/")])
-        .default_endpoint("none")
+        .default_endpoint(if security.user.is_some() { "basic256sha256_sign_encrypt" } else { "none" })
         .with_node_manager(InMemoryNodeManagerBuilder::new(timed))
         .build()
         .map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
