@@ -102,6 +102,45 @@ pub struct DriveParams {
     pub overload: Option<Overload>,
     /// effects.motor_thermal_nodes: winding and housing as two heat capacities (`ThermalNodes`); without it one.
     pub thermal_nodes: Option<ThermalNodes>,
+    /// Fine interpolation, the torque feedforward's model, friction feedforward and balancing (`Precontrol`).
+    pub precontrol: Precontrol,
+}
+
+/// What the drive does with the setpoints between and beside the gains, as a SINAMICS S120/S210 in DSC is set up.
+/// The default is the drive before 14 November 2026: setpoint held, rigid model, no friction, no balancing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Precontrol {
+    /// effects.fine_interpolation: between profile cycles the position loop's setpoint runs on from the last
+    /// setpoints as pos + v t + a t^2 / 2, as the speed feedforward runs on as v + a t (its derivative), the drive's
+    /// fine interpolator. Off it is held for the profile cycle, as a position loop closed in the controller at the
+    /// IPO cycle sees it.
+    pub fine_interpolation: bool,
+    /// drive.torque_feedforward_model = "inertia": the torque feedforward is one moment of inertia per motor times the
+    /// motor's acceleration setpoint (S120 p1498 with p1428 speed/torque precontrol), the inertia the rigid model has
+    /// at the start pose; no gravity, no speed terms, no coupling. "rigid" (false): the rigid model's inverse dynamics.
+    pub constant_inertia: bool,
+    /// effects.friction_feedforward: the friction characteristic, (speed rad/s, torque N m) points at rising speeds
+    /// (S120 p3820-p3839); empty when off. See `friction_at`.
+    pub friction: Vec<[f64; 2]>,
+    /// drive.precontrol_balance_s: the position setpoint passes a first-order lag of this time constant before the
+    /// position loop compares it, so that it arrives with the motor that the speed precontrol moves through the
+    /// closed speed loop (S120 p1429 balancing); 0 off.
+    pub balance_time: f64,
+}
+
+impl Precontrol {
+    /// The friction feedforward at a speed setpoint: linear between the points, from (0, 0) to the first, held
+    /// beyond the last, with the sign of the speed.
+    pub fn friction_at(&self, speed: f64) -> f64 {
+        let (s, mut last) = (speed.abs(), [0.0, 0.0]);
+        for &[v, t] in &self.friction {
+            if s <= v {
+                return (last[1] + (t - last[1]) * (s - last[0]) / (v - last[0])).copysign(speed);
+            }
+            last = [v, t];
+        }
+        last[1].copysign(speed)
+    }
 }
 
 /// effects.field_weakening: the permanent-magnet synchronous motor in d-q axes. The one winding is the q axis, scaled as
@@ -267,7 +306,40 @@ impl DriveParams {
         } else {
             None
         };
+        // The keys of 14 November 2026 for the loops: a config without them gets the drive as it was (`Precontrol`).
+        let model = cfg.get("drive.torque_feedforward_model").map(|v| v.as_str());
+        let constant_inertia = match model {
+            Err(_) | Ok(Some("rigid")) => false,
+            Ok(Some("inertia")) => true,
+            Ok(_) => return Err(ConfigError::Invalid("drive.torque_feedforward_model".into())),
+        };
+        let friction = if switched("friction_feedforward")? {
+            let (speeds, torques) = (
+                cfg.f64s("drive.friction_feedforward_speed_rad_s")?,
+                cfg.f64s("drive.friction_feedforward_torque_nm")?,
+            );
+            if speeds.is_empty() || speeds.len() != torques.len() || torques.iter().any(|t| !(*t >= 0.0)) {
+                return Err(ConfigError::Invalid("drive.friction_feedforward_torque_nm".into()));
+            }
+            if !(speeds[0] > 0.0) || speeds.windows(2).any(|w| !(w[1] > w[0])) {
+                return Err(ConfigError::Invalid("drive.friction_feedforward_speed_rad_s".into()));
+            }
+            speeds.iter().zip(&torques).map(|(v, t)| [*v, *t]).collect()
+        } else {
+            Vec::new()
+        };
+        let precontrol = Precontrol {
+            fine_interpolation: switched("fine_interpolation")?,
+            constant_inertia,
+            friction,
+            balance_time: if cfg.get("drive.precontrol_balance_s").is_ok() {
+                cfg.non_negative("drive.precontrol_balance_s")?
+            } else {
+                0.0
+            },
+        };
         Ok(Self {
+            precontrol,
             field_weakening,
             overload: Overload::from_config(cfg)?,
             thermal_nodes,
@@ -527,10 +599,19 @@ pub struct Drive {
     /// Speed setpoint at the last profile cycle, and its rate until the next one.
     pub vel_set: f64,
     pub acc_set: f64,
-    /// Time since the profile generator last wrote the setpoints.
+    /// Time since the profile generator last wrote the setpoints; the controller adds a base step after each.
     pub since_setpoint: f64,
     pub torque_ff: f64,
+    /// The setpoint the position loop compared with at its last cycle: `pos_set` run on between profile cycles
+    /// (`Precontrol::fine_interpolation`) and balanced (`Precontrol::balance_time`). `following_error` is from it.
+    pub position_setpoint: f64,
     pub following_error: f64,
+    /// The position loop's share of the speed command, Kv times the following error, held between its cycles.
+    pub position_part: f64,
+    /// The velocity loop's output at its last cycle in its two parts, before filters and limits: the feedforward
+    /// (`torque_ff` weighted, and friction) and the PI controller's.
+    pub feedforward_torque: f64,
+    pub controller_torque: f64,
     pub speed_command: f64,
     /// What the velocity loop asks for, before the torque limit; `torque_command` is what the limit leaves of it.
     pub torque_demand: f64,
@@ -574,8 +655,6 @@ pub struct Drive {
     /// The drive's own stream of sensor noise.
     pub noise: Noise,
     current_integral: f64,
-    /// Kv times following error, held between position-loop cycles.
-    position_part: f64,
     integral: f64,
     encoder: f64,
     last_encoder: f64,
@@ -602,7 +681,10 @@ impl Drive {
         let encoder = quantise(pos, p.encoder_step);
         Self {
             pos_set: pos,
+            position_setpoint: pos,
             torque_ff,
+            feedforward_torque: p.torque_ff * torque_ff,
+            controller_torque: torque - p.torque_ff * torque_ff,
             torque_demand: torque,
             torque_command: torque,
             torque,
@@ -637,28 +719,48 @@ impl Drive {
         self.current.hypot(self.d_current)
     }
 
+    /// The speed the velocity loop measured at its last cycle, filtered.
+    pub fn measured_speed(&self) -> f64 {
+        self.speed
+    }
+
     /// Moves the encoder's readings so far by `by`, for a motor that was set elsewhere without turning there.
     pub fn shift_encoder(&mut self, by: f64) {
         self.encoder += by;
         self.last_encoder += by;
     }
 
-    /// The position as the encoder reports it: with its noise, in whole counts.
-    fn measure(&mut self, p: &DriveParams, pos: f64) -> f64 {
+    /// Moves the position setpoints by `by`, for a motor that was set elsewhere without turning there.
+    pub fn shift_setpoint(&mut self, by: f64) {
+        self.pos_set += by;
+        self.position_setpoint += by;
+    }
+
+    /// Reads the motor encoder: the position as it reports it, with its noise, in whole counts. Once per base step in
+    /// which a loop is due, so that the position and the velocity loop see the same sample (`encoder`).
+    pub fn read_encoder(&mut self, p: &DriveParams, pos: f64) {
         let noise = if p.encoder_noise > 0.0 { p.encoder_noise * self.noise.next() } else { 0.0 };
-        quantise(pos + noise, p.encoder_step)
+        self.encoder = quantise(pos + noise, p.encoder_step);
     }
 
-    /// Position loop: following error times Kv.
-    pub fn position_loop(&mut self, p: &DriveParams, pos: f64) {
-        self.following_error = self.pos_set - self.measure(p, pos);
+    /// Position loop, every `cycle`: following error times Kv against the position setpoint (`position_setpoint`),
+    /// with the measured position `measured`: the motor encoder's (`encoder`) or a load-side one's.
+    pub fn position_loop(&mut self, p: &DriveParams, measured: f64, cycle: f64) {
+        let (c, t) = (&p.precontrol, self.since_setpoint);
+        let target = if c.fine_interpolation {
+            self.pos_set + (self.vel_set + 0.5 * self.acc_set * t) * t
+        } else {
+            self.pos_set
+        };
+        let share = if c.balance_time > 0.0 { 1.0 - (-cycle / c.balance_time).exp() } else { 1.0 };
+        self.position_setpoint += share * (target - self.position_setpoint);
+        self.following_error = self.position_setpoint - measured;
         self.position_part = p.kv * self.following_error;
-        self.speed_command = self.position_part + p.velocity_ff * self.vel_set;
+        self.speed_command = self.position_part + p.velocity_ff * (self.vel_set + self.acc_set * t);
     }
 
-    /// Velocity loop: PI on the measured speed, plus torque feedforward, then filters and limits.
-    pub fn velocity_loop(&mut self, p: &DriveParams, pos: f64, true_speed: f64) {
-        self.encoder = self.measure(p, pos);
+    /// Velocity loop: PI on the measured speed (from `read_encoder`), plus torque feedforward, then filters and limits.
+    pub fn velocity_loop(&mut self, p: &DriveParams, true_speed: f64) {
         // A real encoder gives positions only; the speed is their difference per cycle.
         let real = p.encoder_step > 0.0 || p.encoder_noise > 0.0;
         let raw = if real { (self.encoder - self.last_encoder) / p.velocity_cycle } else { true_speed };
@@ -667,11 +769,13 @@ impl Drive {
 
         // Velocity feedforward, interpolated between profile cycles. Holding it for a whole profile
         // cycle would make the speed command a staircase and the torque a sawtooth.
-        self.speed_command = self.position_part + p.velocity_ff * (self.vel_set + self.acc_set * self.since_setpoint);
-        self.since_setpoint += p.velocity_cycle;
+        let speed_set = self.vel_set + self.acc_set * self.since_setpoint;
+        self.speed_command = self.position_part + p.velocity_ff * speed_set;
 
         let error = self.speed_command - self.speed;
-        let wanted = p.kp * error + self.integral + p.torque_ff * self.torque_ff;
+        self.controller_torque = p.kp * error + self.integral;
+        self.feedforward_torque = p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set);
+        let wanted = self.controller_torque + self.feedforward_torque;
         self.filtered += p.torque_filter * (wanted - self.filtered);
         let mut out = self.filtered;
         if let Some([b0, b1, b2, a1, a2]) = p.notch {
@@ -879,7 +983,7 @@ pub fn shared_dc_link(p: &DriveParams, drives: &mut [Drive]) {
     }
 }
 
-fn quantise(pos: f64, step: f64) -> f64 {
+pub(crate) fn quantise(pos: f64, step: f64) -> f64 {
     if step > 0.0 { (pos / step).round() * step } else { pos }
 }
 
@@ -940,6 +1044,7 @@ mod tests {
             field_weakening: None,
             overload: None,
             thermal_nodes: None,
+            precontrol: Precontrol::default(),
         }
     }
 
@@ -1147,7 +1252,8 @@ mod tests {
             let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
             let mut sum = 0.0;
             for _ in 0..200_000 {
-                d.velocity_loop(&p, 0.0, 0.0);
+                d.read_encoder(&p, 0.0);
+                d.velocity_loop(&p, 0.0);
                 sum += d.speed * d.speed;
             }
             (sum / 200_000.0f64).sqrt()
@@ -1162,7 +1268,8 @@ mod tests {
         assert!(d.voltage != 0.0 && d.voltage.abs() < 6.0 * 0.4, "{} V", d.voltage);
         // Without noise the encoder is exact and nothing is drawn from the generator.
         let mut d = Drive::at_rest(&params(), 0.0, 0.0, 0.0);
-        d.velocity_loop(&params(), 0.0, 0.0);
+        d.read_encoder(&params(), 0.0);
+        d.velocity_loop(&params(), 0.0);
         assert!(d.speed == 0.0 && d.noise.0 == 1);
     }
 
@@ -1170,11 +1277,65 @@ mod tests {
     fn position_loop_is_kv_times_following_error_plus_feedforward() {
         let mut p = params();
         let mut d = Drive { pos_set: 1.0, vel_set: 10.0, ..Drive::default() };
-        d.position_loop(&p, 0.9);
+        d.position_loop(&p, 0.9, 1e-3);
         assert!((d.following_error - 0.1).abs() < 1e-15 && (d.speed_command - 5.0).abs() < 1e-12);
         p.velocity_ff = 1.0;
-        d.position_loop(&p, 0.9);
+        d.position_loop(&p, 0.9, 1e-3);
         assert!((d.speed_command - 15.0).abs() < 1e-12);
+    }
+
+    /// pos 1 rad, 10 rad/s, 100 rad/s^2, 3 ms after the profile cycle: 1 + 10 * 0.003 + 100 * 0.003^2 / 2 = 1.03045 rad
+    /// with fine interpolation, the setpoint 1 rad held without. Measured at 1 rad: following error 0.03045 rad and
+    /// Kv 50 * 0.03045 = 1.5225 rad/s; the speed feedforward at 1.0 runs on to 10 + 100 * 0.003 = 10.3 rad/s.
+    #[test]
+    fn fine_interpolation_runs_the_setpoint_on_between_profile_cycles() {
+        let mut p = DriveParams { velocity_ff: 1.0, ..params() };
+        let set = Drive { pos_set: 1.0, vel_set: 10.0, acc_set: 100.0, since_setpoint: 3e-3, ..Drive::default() };
+        let mut held = set.clone();
+        held.position_loop(&p, 1.0, 1e-3);
+        assert_eq!((held.position_setpoint, held.following_error), (1.0, 0.0));
+        p.precontrol.fine_interpolation = true;
+        let mut d = set.clone();
+        d.position_loop(&p, 1.0, 1e-3);
+        assert!((d.position_setpoint - 1.03045).abs() < 1e-12 && (d.following_error - 0.03045).abs() < 1e-12);
+        assert!((d.position_part - 1.5225).abs() < 1e-10 && (d.speed_command - (1.5225 + 10.3)).abs() < 1e-10);
+        // At the profile cycle itself the two agree: nothing changes where the position and profile cycles are equal.
+        let (mut a, mut b) = (Drive { since_setpoint: 0.0, ..set.clone() }, Drive { since_setpoint: 0.0, ..set });
+        a.position_loop(&p, 0.9, 1e-3);
+        b.position_loop(&DriveParams { velocity_ff: 1.0, ..params() }, 0.9, 1e-3);
+        assert_eq!(a.speed_command, b.speed_command);
+    }
+
+    /// A characteristic of (10 rad/s, 0.2 N m) and (100 rad/s, 0.3 N m): 5 rad/s gives 0.2 * 5 / 10 = 0.1 N m (from
+    /// (0, 0)), -55 rad/s gives -(0.2 + 0.1 * 45 / 90) = -0.25 N m, 200 rad/s the last point's 0.3 N m, standstill 0.
+    /// In the velocity loop it is the feedforward at the speed setpoint, 4 + 1000 * 1 ms = 5 rad/s: 0.1 N m, beside the
+    /// rigid model's 0.3 N m.
+    #[test]
+    fn the_friction_feedforward_is_the_characteristic_at_the_speed_setpoint() {
+        let c = Precontrol { friction: vec![[10.0, 0.2], [100.0, 0.3]], ..Precontrol::default() };
+        assert!((c.friction_at(5.0) - 0.1).abs() < 1e-15 && (c.friction_at(-55.0) + 0.25).abs() < 1e-15);
+        assert_eq!(
+            (c.friction_at(200.0), c.friction_at(0.0), Precontrol::default().friction_at(50.0)),
+            (0.3, 0.0, 0.0)
+        );
+        let p = DriveParams { torque_ff: 1.0, precontrol: c, ..params() };
+        let mut d = Drive { vel_set: 4.0, acc_set: 1000.0, since_setpoint: 1e-3, torque_ff: 0.3, ..Drive::default() };
+        d.velocity_loop(&p, 0.0);
+        assert!((d.feedforward_torque - 0.4).abs() < 1e-12, "{}", d.feedforward_torque);
+        assert!((d.controller_torque - 0.0).abs() < 1e-12 && (d.torque_demand - 0.4).abs() < 1e-12);
+    }
+
+    /// Balancing with 1 ms at a 1 ms position cycle: a setpoint step from 0 to 1 rad arrives as 1 - e^-1 = 0.632121 rad
+    /// after one cycle and 1 - e^-2 = 0.864665 rad after two.
+    #[test]
+    fn balancing_lags_the_position_setpoint_by_its_time_constant() {
+        let mut p = params();
+        p.precontrol.balance_time = 1e-3;
+        let mut d = Drive { pos_set: 1.0, ..Drive::default() };
+        d.position_loop(&p, 0.0, 1e-3);
+        assert!((d.position_setpoint - 0.632_120_558_8).abs() < 1e-9 && d.following_error == d.position_setpoint);
+        d.position_loop(&p, 0.0, 1e-3);
+        assert!((d.position_setpoint - 0.864_664_716_8).abs() < 1e-9);
     }
 
     #[test]
@@ -1182,9 +1343,9 @@ mod tests {
         let mut p = params();
         p.torque_ff = 1.0;
         let mut d = Drive { position_part: 10.0, torque_ff: 0.3, ..Drive::default() };
-        d.velocity_loop(&p, 0.0, 4.0);
+        d.velocity_loop(&p, 4.0);
         assert!((d.torque_command - (0.08 * 6.0 + 0.3)).abs() < 1e-12);
-        d.velocity_loop(&p, 0.0, 4.0);
+        d.velocity_loop(&p, 4.0);
         assert!((d.torque_command - (0.08 * 6.0 + 8.0 * 6.0 * 125e-6 + 0.3)).abs() < 1e-12);
     }
 
@@ -1197,14 +1358,14 @@ mod tests {
         assert!((high - 1.9).abs() < 1e-12 && low == -3.8);
         assert_eq!(p.torque_range(-500.0), (-0.0, 3.8));
         let mut d = Drive { position_part: 1000.0, ..Drive::default() };
-        d.velocity_loop(&p, 0.0, 0.0);
+        d.velocity_loop(&p, 0.0);
         assert_eq!(d.torque_command, 3.8);
         let before = d.integral;
-        d.velocity_loop(&p, 0.0, 0.0);
+        d.velocity_loop(&p, 0.0);
         assert_eq!(d.integral, before, "the integrator winds up at the limit");
         let unlimited = DriveParams { limit: false, ..params() };
         let mut d = Drive { position_part: 1000.0, ..Drive::default() };
-        d.velocity_loop(&unlimited, 0.0, 0.0);
+        d.velocity_loop(&unlimited, 0.0);
         assert!(d.torque_command > 3.8);
         assert_eq!(unlimited.torque_curve(100.0), (-3.8, 3.8));
     }
@@ -1219,9 +1380,9 @@ mod tests {
         assert_eq!(small.torque_range(100.0), (-2.25, 2.25));
         assert_eq!(small.torque_range(367.0), (-2.25, 1.9), "the torque-speed curve below the drive's limit");
         let mut d = Drive { position_part: 1000.0, ..Drive::default() };
-        d.velocity_loop(&small, 0.0, 0.0);
+        d.velocity_loop(&small, 0.0);
         let before = d.integral;
-        d.velocity_loop(&small, 0.0, 0.0);
+        d.velocity_loop(&small, 0.0);
         assert!(
             d.torque_command == 2.25
                 && d.integral == before
@@ -1238,9 +1399,11 @@ mod tests {
         let mut p = params();
         p.velocity_ff = 1.0;
         let mut d = Drive { vel_set: 10.0, acc_set: 1000.0, ..Drive::default() };
-        d.velocity_loop(&p, 0.0, 0.0);
+        d.velocity_loop(&p, 0.0);
         assert!((d.speed_command - 10.0).abs() < 1e-12);
-        d.velocity_loop(&p, 0.0, 0.0);
+        // The controller advances the time since the setpoints, a base step at a time (two per velocity cycle).
+        d.since_setpoint += 125e-6;
+        d.velocity_loop(&p, 0.0);
         assert!((d.speed_command - (10.0 + 1000.0 * 125e-6)).abs() < 1e-12);
     }
 
@@ -1287,16 +1450,16 @@ mod tests {
     fn the_torque_setpoint_acts_one_velocity_cycle_late() {
         let p = DriveParams { velocity_delay: 1, ..params() };
         let mut d = Drive { position_part: 10.0, ..Drive::default() };
-        d.velocity_loop(&p, 0.0, 4.0);
+        d.velocity_loop(&p, 4.0);
         let first = d.torque_command;
-        d.velocity_loop(&p, 0.0, 4.0);
+        d.velocity_loop(&p, 4.0);
         // The first cycle has nothing older to act; the second acts what the first computed.
         assert!(
             (first - 0.08 * 6.0).abs() < 1e-12 && (d.torque_command - 0.08 * 6.0).abs() < 1e-12,
             "{first}, {}",
             d.torque_command
         );
-        d.velocity_loop(&p, 0.0, 4.0);
+        d.velocity_loop(&p, 4.0);
         assert!((d.torque_command - (0.08 * 6.0 + 8.0 * 6.0 * 125e-6)).abs() < 1e-12);
     }
 
@@ -1439,12 +1602,15 @@ mod tests {
         p.encoder_step = TAU / 4096.0;
         let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
         d.pos_set = 0.4 * p.encoder_step;
-        d.position_loop(&p, 0.0);
+        d.read_encoder(&p, 0.0);
+        d.position_loop(&p, d.encoder(), 1e-3);
         assert_eq!(d.following_error, 0.4 * p.encoder_step);
-        d.position_loop(&p, 0.3 * p.encoder_step);
+        d.read_encoder(&p, 0.3 * p.encoder_step);
+        d.position_loop(&p, d.encoder(), 1e-3);
         assert_eq!(d.following_error, 0.4 * p.encoder_step, "a move below one count is invisible");
         // One count per velocity cycle reads as step / cycle, whatever the true speed is.
-        d.velocity_loop(&p, 1.2 * p.encoder_step, 123.0);
+        d.read_encoder(&p, 1.2 * p.encoder_step);
+        d.velocity_loop(&p, 123.0);
         assert!((d.speed - p.encoder_step / 125e-6).abs() < 1e-9);
     }
 
@@ -1472,8 +1638,9 @@ mod tests {
         let mut p = params();
         p.torque_ff = 1.0;
         let mut d = Drive::at_rest(&p, 2.0, 0.14, 0.137);
-        d.position_loop(&p, 2.0);
-        d.velocity_loop(&p, 2.0, 0.0);
+        d.read_encoder(&p, 2.0);
+        d.position_loop(&p, d.encoder(), 1e-3);
+        d.velocity_loop(&p, 0.0);
         d.current_loop(&p, 0.0);
         assert!((d.torque - 0.14).abs() < 1e-12 && (d.torque_command - 0.14).abs() < 1e-12);
     }
@@ -1604,7 +1771,7 @@ mod tests {
         let mut d = Drive { torque_ff: 0.45 * 6.0, ..Drive::default() };
         let (mut clamped, mut released, mut t) = (None, None, 0.0);
         while t < 10.0 {
-            d.velocity_loop(&p, 0.0, 0.0);
+            d.velocity_loop(&p, 0.0);
             for _ in 0..2 {
                 d.current_loop(&p, 0.0);
                 t += p.current_cycle;
@@ -1625,7 +1792,7 @@ mod tests {
         let off = DriveParams { overload: None, ..p.clone() };
         let mut d = Drive { torque_ff: 0.45 * 6.0, ..Drive::default() };
         for _ in 0..40_000 {
-            d.velocity_loop(&off, 0.0, 0.0);
+            d.velocity_loop(&off, 0.0);
             d.current_loop(&off, 0.0);
         }
         assert!(d.torque_command == 0.45 * 6.0 && !d.overloaded && d.overload_image == 0.0);

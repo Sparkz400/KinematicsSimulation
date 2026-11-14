@@ -9,6 +9,12 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Fixed
 
+- Drive loops: the position setpoint is interpolated between profile cycles (`effects.fine_interpolation`, as a SINAMICS
+  drive in DSC does); a 4 ms IPO no longer doubles the peak torque (single axis 1.02 N m held, 0.507 N m interpolated,
+  0.496 N m at 1 ms). The analysis measures the tool against the plan of the moment, not the setpoint held for the
+  cycle. Both loops read one encoder sample per base step; the current loop's back-EMF feedforward and field weakening
+  use the measured speed; the motor acceleration setpoint has the d(J^-1)/dt v term of a kinematics that is not linear.
+
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
@@ -27,6 +33,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Drive precontrol as commissioned on an S120/S210: `drive.torque_feedforward_model` (`rigid` or `inertia`, one
+  moment of inertia per motor as p1498), friction feedforward from a characteristic (`effects.friction_feedforward`,
+  p3820-p3839), balancing of the position setpoint (`drive.precontrol_balance_s`, p1429), a load-side encoder
+  (`effects.load_encoder`, direct measuring system), and per motor the signals `torque_feedforward`,
+  `torque_feedback` and `speed_from_position`.
 - Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
   SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted
   only where no value's variance is inflated by more than 100; the others are folded in, with their shares named),

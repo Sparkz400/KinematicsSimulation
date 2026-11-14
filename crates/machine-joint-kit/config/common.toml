@@ -31,6 +31,16 @@ hard_stops = true
 holding_brake = true
 velocity_feedforward = true
 torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
+# config has a recorded characteristic.
+friction_feedforward = false
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
 encoder_resolution = true
 velocity_filter = true
 torque_filter = true

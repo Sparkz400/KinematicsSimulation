@@ -1276,7 +1276,8 @@ The signals:
 | `motor.<id>.current`, `.voltage`, `.electrical_power` | A, V, W | Winding |
 | `motor.<id>.winding_temperature` | K | Temperature rise of the winding |
 | `motor.<id>.dc_link_voltage`, `.braking_resistor_power` | V, W | DC link. With `effects.shared_dc_link` the same for every motor |
-| `motor.<id>.speed_command`, `.following_error`, `.angle_setpoint` | rad/s, rad, rad | Position loop |
+| `motor.<id>.speed_command`, `.following_error`, `.angle_setpoint` | rad/s, rad, rad | Position loop; the setpoint is the one the loop compared with (fine interpolation, balancing) |
+| `motor.<id>.torque_feedforward`, `.torque_feedback`, `.speed_from_position` | N m, N m, rad/s | The velocity loop's output in its two parts, feedforward (rigid or inertia model, friction) and PI controller, and the position loop's share of the speed command (Kv times the following error) |
 | `gearbox.<motor id>.output_torque` | N m | Torque at the gearbox output, on the pulley. What the checks `pulley-torque`, `gearbox-peak` and `gearbox-continuous` judge |
 | `belt.<n>.tension` | N | Tension of belt section n |
 | `axis.<id>.belt_stretch` | m | Tool position minus what the pulley angles say |

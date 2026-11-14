@@ -307,7 +307,7 @@ Every base step:
 ```text
 i_meas   = i + noise
 e_i      = i(τ_cmd) − i_meas                       i(τ): τ / k_t, or the inverse of the saturation curve
-u_wanted = K_pi · e_i + I_i + e                    the drive adds the back-EMF e it expects
+u_wanted = K_pi · e_i + I_i + e                    the drive adds the back-EMF e it expects at its measured speed ω_f
 u        = clamp(u_wanted, −U_max, +U_max)
 I_i     += (K_pi / T_ni) · e_i · dt                only while u is not clamped (anti-windup)
 ```
@@ -323,7 +323,9 @@ Every velocity cycle T_v:
 ω_f     += α_v · (ω_raw − ω_f)                     α_v = 1 − exp(−T_v / velocity_filter_s); 1 with the filter off
 ω_cmd    = K_v · e_pos + w_v · (ω_set + α_set · t) speed setpoint interpolated between profile cycles
 e_ω      = ω_cmd − ω_f
-τ_wanted = K_p · e_ω + I_ω + w_τ · τ_ff
+τ_wanted = K_p · e_ω + I_ω + w_τ · τ_ff + τ_fr(ω_set + α_set · t)
+                                                   PI part and feedforward part are the signals
+                                                   motor.<id>.torque_feedback and .torque_feedforward
 τ_filt  += α_τ · (τ_wanted − τ_filt)               torque setpoint filter
 τ_notch  = notch(τ_filt)                           with effects.notch_filter
 τ_cmd    = clamp(τ_notch, torque range at ω_f)
@@ -364,12 +366,36 @@ w_v and w_τ are the feedforward factors (0 with the switch off). The notch is a
 
 ### Position loop
 
-Every position cycle:
+Every position cycle T_p, t the time since the profile cycle wrote the setpoints:
 
 ```text
-e_pos = φ_set − φ_measured
-K_v · e_pos is held until the next position cycle
+φ_target = φ_set + ω_set · t + α_set · t² / 2      effects.fine_interpolation; φ_set held without it
+φ_cmd   += β · (φ_target − φ_cmd)                  β = 1 − exp(−T_p / precontrol_balance_s); 1 with it 0
+e_pos    = φ_cmd − φ_measured                      motor encoder, or the load-side scale (effects.load_encoder)
+K_v · e_pos is held until the next position cycle  signal motor.<id>.speed_from_position
 ```
+
+One encoder sample per base step serves both loops: the position loop and the velocity loop of the same step see the same reading, with the same noise.
+
+#### Fine interpolation and precontrol
+
+A SINAMICS S120 or S210 in DSC (dynamic servo control) closes the position loop in the drive at the speed loop's cycle, with Kv, the controller's position setpoint and its speed precontrol, while the controller's interpolator (IPO) sends them every 2 to 8 ms. Between two setpoints the drive interpolates. `effects.fine_interpolation` does so here: the position setpoint runs on as pos + v t + a t²/2 from the last frame, the derivative of which is the speed feedforward the velocity loop already ran on as v + a t, so the two agree and the following error does not see the setpoint's steps. At the next frame the extrapolation is off by the jerk's j T³/6 (4 ms, 1000 rad/s³: 11 µrad), against v T of a held setpoint (100 rad/s: 0.4 rad). Siemens' cubic fine interpolator needs the next frame and delays by one IPO cycle; this one needs none and is as smooth where the acceleration is continuous. `drive.position_cycle_s` may equal `velocity_cycle_s`. Without the switch (a position loop in the controller, at the IPO cycle) the setpoint is held, and its steps of v T go through Kv into the torque (14 November measurements in PROGRESS).
+
+The motor speed and acceleration setpoints come from the inverse kinematics at the setpoint pose moved a moment h = 1 ms along the plan, x ± v h + a h²/2: the first difference is the speed, the second the whole acceleration, J⁻¹ a plus the term d(J⁻¹)/dt · v that a kinematics that is not linear (the deltas, the arms) adds at speed.
+
+The torque feedforward (`effects.torque_feedforward`, weight `drive.torque_feedforward_factor`) is, by `drive.torque_feedforward_model`:
+
+- `rigid`: the rigid model's inverse dynamics at the setpoint pose, speed and acceleration, gravity included and coupled between the motors. What a controller with a dynamic model sends as torque precontrol. The shipped configs use it.
+- `inertia`: J_k · α_set,k per motor, J_k the torque the rigid model needs for a unit acceleration of motor k alone at `start.pose` less what it needs at rest. What a drive's own speed/torque precontrol does with the load inertia entered (S120 p1498), as the commissioning of a belt axis or a gantry usually leaves it: no gravity (the speed loop's integrator takes it; on a vertical axis the controller often adds it as a supplementary torque), no speed terms, no coupling, one inertia for the whole workspace.
+- off (`effects.torque_feedforward = false`): the speed loop alone.
+
+`effects.friction_feedforward` adds the friction characteristic τ_fr at the speed setpoint, S120 p3820-p3839: points (ω_i, τ_i) at rising speeds, linear between them and from (0, 0) to the first, held beyond the last, with the sign of the speed. A real drive records them at ten constant speeds (p3845); a config takes the recorded points.
+
+`drive.precontrol_balance_s` balances the speed precontrol (S120 p1429): the position setpoint goes through a first-order lag before the position loop compares it. The speed feedforward moves the motor through the closed speed loop, which lags by about its equivalent time constant; delaying the setpoint by as much leaves the position loop less to correct. The following error is then the one against the balanced setpoint. The dead time p1428 is not modelled. Off (0) in the shipped configs, as a drive comes commissioned.
+
+`effects.load_encoder` closes the position loop on a load-side measuring system (S120 direct measuring system): the tool axes as the elastic model has them, in steps of `drive.load_encoder_step`, turned into motor angles by the inverse kinematics. The speed loop stays on the motor encoder. Belt stretch, gear twist and backlash are then inside the position loop, and the following error is the load's.
+
+Tests: `fine_interpolation_runs_the_setpoint_on_between_profile_cycles`, `the_friction_feedforward_is_the_characteristic_at_the_speed_setpoint`, `balancing_lags_the_position_setpoint_by_its_time_constant` (drive.rs); `the_constant_inertia_feedforward_is_j_times_the_motor_acceleration`, `a_load_side_encoder_measures_the_following_error_at_the_load`, `both_loops_read_one_encoder_sample_per_step`, `a_long_profile_cycle_with_fine_interpolation_keeps_the_peak_torque` (sim-machines control tests).
 
 ### Torque-speed curve
 
@@ -881,11 +907,11 @@ The controller plans in tool coordinates and runs one drive per motor. Each prof
 
 1. The motion under way gives position, velocity and acceleration setpoints per tool axis: a point-to-point move, the cycle, a trajectory, or an interpolated external setpoint.
 2. The [input shaper](#input-shaper) spreads them over time, if on.
-3. The inverse transformation gives the motor position setpoints. Motor speed and acceleration setpoints are the inverse transformation applied a moment ahead and behind (central difference).
-4. The machine's rigid model gives the torque feedforward for the setpoint pose and acceleration.
+3. The inverse transformation gives the motor position setpoints. Motor speed and acceleration setpoints are the inverse transformation along the plan a moment ahead and behind (first and second central difference, see [fine interpolation](#fine-interpolation-and-precontrol)).
+4. The machine's rigid model gives the torque feedforward for the setpoint pose, speed and acceleration, or each motor's constant inertia times its acceleration (`drive.torque_feedforward_model`).
 5. With `effects.fieldbus_delay` the drives get what was computed `profile.fieldbus_delay_cycles` cycles ago. With `effects.fieldbus_jitter` each frame takes j more cycles, j drawn evenly from 0 to `profile.fieldbus_jitter_cycles` per frame (pseudo-random from `drive.noise_seed`, a stream of its own, so every run is the same), and the drives use the newest frame that has arrived: a late frame leaves them the one before, and frames never arrive out of order. With N cycles of jitter the frame in use is older than the delay by more than i cycles with probability Π_{k=0..i} (N − k) / (N + 1): N = 1 gives 0 or 1 cycle, half each.
 
-The setpoint signals and the path error of the analysis are the controller's, before the fieldbus delay.
+The setpoint signals and the path error of the analysis are the controller's, before the fieldbus delay. The analysis measures the tool against the plan at the moment of each sample, the last profile cycle's setpoint run on by its speed and acceleration (`Controller::plan_now`), not against the setpoint held for the cycle, which at a 4 ms profile cycle would count the tool off the path by up to the way of a cycle.
 
 | Command | Behaviour |
 | --- | --- |
@@ -898,7 +924,7 @@ The setpoint signals and the path error of the analysis are the controller's, be
 
 The controller's setpoint starts where the motors stand, a few micrometres from the configured start pose (belt stretch and gear twist under load), so the first step has no jolt.
 
-The following error per tool axis (signal `axis.<id>.following_error`) is the motor following errors transformed with the forward transformation. It is an encoder-side figure and does not see belt stretch or the leaning tool.
+The following error per tool axis (signal `axis.<id>.following_error`) is the motor following errors transformed with the forward transformation. It is an encoder-side figure and does not see belt stretch or the leaning tool, unless the position loops close on load-side scales (`effects.load_encoder`).
 
 **Check of axis limits against motor limits.** When a config is applied, for every combination of axis directions at the middle of the workspace: the motor speed at the axis speed limits against `drive.rated_speed_rad_s`, and the feedforward torque at the axis acceleration limits against `drive.peak_torque_nm`. A diagonal move loads one motor with both axes. Violations are reported, not enforced.
 
