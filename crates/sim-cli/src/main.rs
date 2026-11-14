@@ -380,7 +380,10 @@ fn replay(args: &Args) -> Result<(), Failure> {
 /// fitted one and its standard error, and on the error stream what to change in the config. With
 /// `--trace FILE` the rigid values of each axis, or on a machine whose motors do not turn in proportion to its
 /// axes or whose inertia changes with the pose (`trace::per_axis_fit`: the delta, the SCARA, the arm) the payload's
-/// factor and per motor added inertia, friction and constant torque, with the pairs the trace cannot tell apart;
+/// factor and per motor added inertia, friction and constant torque, on an arm or SCARA per link its mass factor and
+/// first moment where the trace tells them from the motors' values, with what each value combines, what the trace
+/// hardly excites and the pairs it cannot tell apart, and where the payload was picked or dropped during the trace
+/// (`payload_step_s`) its factor before and after;
 /// with `--stiffness` also the factor on the stiffness at `--stiffness-key` (the belts' by default) from the trace's
 /// own moves; with `--sweep FILE` (a frequency response as `sweep` writes it, taken on motor `--sweep-motor` with
 /// `--amplitude`) the load's resonance on the belt.
@@ -400,6 +403,9 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 for v in &fit.values {
                     writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", v.quantity, v.of, v.config, v.fitted, v.error)
                         .map_err(io)?;
+                }
+                if let Some((time, error)) = fit.payload_step {
+                    writeln!(out, "payload_step_s,payload,,{time:.6e},{error:.3e}").map_err(io)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }

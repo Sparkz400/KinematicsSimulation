@@ -1810,7 +1810,8 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
         }
         // Per axis the four fitted values next to the config's own: on its own trace the fit finds them.
         assert_eq!(fitted[0], ["Quantity", "Configuration", "Fitted", "Standard error"]);
-        // Per axis four values; in the motors' coordinates four per motor (no payload's factor: the gripper is empty).
+        // Per axis four values; in the motors' coordinates four per motor (no payload's factor: the gripper is empty), and
+        // on the SCARA and the arm the links' values the trace tells apart, by the link's name.
         let (owners, quantities, first) = if per_axis {
             (
                 model.session.axes.iter().map(|a| a.key).collect::<Vec<_>>(),
@@ -1824,7 +1825,13 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
                 ("Inertia at motor ", "Trägheit an Motor "),
             )
         };
-        assert_eq!(fitted.len(), 1 + 4 * owners.len(), "{}: {fitted:?}", entry.id);
+        let link_labels: Vec<String> = sim_components::identify::LINK_QUANTITIES
+            .iter()
+            .map(|q| model.tr.tr(&format!("ui-trace-{}", q.replace('_', "-"))).to_string())
+            .collect();
+        let own_rows =
+            fitted.iter().skip(1).filter(|r| !link_labels.iter().any(|l| r[0].ends_with(l.as_str()))).count();
+        assert_eq!(own_rows, 4 * owners.len(), "{}: {fitted:?}", entry.id);
         for owner in &owners {
             for quantity in quantities {
                 let cells = row(fitted, &format!("{} · {quantity}", model.tr.tr(owner)));
@@ -1836,10 +1843,11 @@ fn a_trace_is_replayed_and_fitted_in_the_app() {
                 );
             }
         }
-        // What to change in the config, four lines per axis or motor, in the chosen language.
+        // What to change in the config, four lines per axis or motor (then the links' and what the values combine), in the
+        // chosen language.
         let advice = model.trace_advice();
         assert!(
-            advice.len() == 4 * owners.len() && advice[0].starts_with(first.0) && advice[0].contains(" ± "),
+            advice.len() >= 4 * owners.len() && advice[0].starts_with(first.0) && advice[0].contains(" ± "),
             "{advice:?}"
         );
         model.set_language("de");

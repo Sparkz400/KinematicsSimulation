@@ -133,7 +133,8 @@ its setpoint so closely that only a dead time is left; that is the expected resu
 
 ### cycle: replay
 
-The machine's real cycle without payload changes, for `sim-cli replay` and `fit`, which compare the trace
+The machine's real cycle without payload changes (on a delta, SCARA or arm one pick or drop is found: see the
+swing below), for `sim-cli replay` and `fit`, which compare the trace
 with the simulator's config of the machine. The config's start pose has to be where the trace starts.
 
 ### swing: a delta, a SCARA or an arm
@@ -148,6 +149,24 @@ faded in and out over a second, 8 s, with the payload held. Over much of the ran
 with the pose; at several frequencies, so that inertia and friction are told apart. The values the trace cannot
 tell apart (their estimates correlate by more than 0.95) are named on the error stream: only their sum is
 known. A rotor and its arm's own inertia about the joint are always one value.
+
+On an arm or a SCARA (a URDF chain) the fit also takes each link's mass factor (its mass, first moment and inertia
+together, as the URDF would be scaled) and the change of its first moment along x, y and z of its frame. Many of
+these the rigid model only knows in sums: a link turning about a fixed axis adds to its motor's inertia and nothing
+else; quill, flange and payload sit on one axis and act as one mass. Others only a trace that moves the right joints
+tells apart: a link's weight against a constant torque only where its joint swings. The fit keeps a value of its own
+only where no value's variance is inflated by more than 100 by the others' (less than a tenth of its column outside
+what the others explain); every other one is folded into the values before it, payload and motors first, and the
+advice names each value's share (`fit-combined`: the change shown is its own change plus each factor times the
+folded one's). For a link's mass, swing the joints it hangs on over much of their range, against gravity. On the
+six-axis arm with its gears elastic, a heavier arm's trace did not fit well even without the links' values (see
+PROGRESS): fit with the gears made rigid in the config, or take the values as a hint.
+
+A payload picked or dropped during the trace is found in the torques (no trace has a gripper column): the payload's
+factor is fitted before and after every row in turn, and the row that leaves the least sum of squares is the step,
+where the factors before and after differ by more than six standard errors more than they do on the config's own
+replay (which holds the payload all along). On the delta a pick at 3.5 s came out at 3.503 s ± 0.001 s, the factor 0
+before and 1 after within 0.01. The step has to lie between a tenth and nine tenths of the trace; one step only.
 
 ### moves: belt stiffness without a sweep
 
@@ -227,7 +246,10 @@ and the motor bearings at the motor shaft. `sim-cli fit MACHINE` splits them by 
 same estimate on its own replay of the trace, so that what the estimate gets wrong on both sides drops out. On a
 delta, SCARA or arm the rows are `payload_factor` (1 for the config) and per motor `added_inertia_kg_m2`
 (near 0 for the config), `viscous_friction_nm_s_rad`, `coulomb_friction_nm` and `constant_torque_nm`, at the
-motor shaft with the gearbox's losses in them; the advice says the change. Strain wave gears lose a quarter of
+motor shaft with the gearbox's losses in them; the advice says the change. On an arm or a SCARA then per link
+`link_mass_factor` (1 for the config) and `link_first_moment_x_kg_m` (`_y_`, `_z_`, near 0 for the config), only
+those the trace tells apart; where the payload was picked or dropped during the trace `payload_factor_before`,
+`payload_factor_after` and `payload_step_s` (its time and standard error) in place of `payload_factor`. Strain wave gears lose a quarter of
 what passes them, and more on a heavier payload: that shows as more Coulomb friction on the joint that carries
 it, and cannot be told from it. `--stiffness` adds `stiffness_factor` with its standard error and the RMS of
 the ringing in the trace and of what the fitted replay leaves of it (the noise, where the fit is good).

@@ -1804,16 +1804,22 @@ impl Model {
                 ]);
             }
         }
-        // In the motors' coordinates: the payload's factor, then per motor.
+        // In the motors' coordinates: the payload's factor (or its step), then per motor, then per link by its name.
         for v in fit.joints.iter().flatten().flat_map(|j| &j.values) {
-            let of =
-                self.session.motors.iter().find(|m| m.id == v.of).map_or_else(|| tr("ui-trace-payload"), |m| tr(m.key));
+            let of = match self.session.motors.iter().find(|m| m.id == v.of) {
+                Some(m) => tr(m.key),
+                None if v.of == "payload" => tr("ui-trace-payload"),
+                None => v.of.clone(),
+            };
             fitted.push(vec![
                 format!("{of} · {}", tr(&joint_label(v.quantity))),
                 short(v.config),
                 short(v.fitted),
                 short(v.error),
             ]);
+        }
+        if let Some((time, error)) = fit.joints.iter().flatten().find_map(|j| j.payload_step) {
+            fitted.push(vec![tr("ui-trace-payload-step"), String::new(), short(time), short(error)]);
         }
         if let Some(Ok(s)) = &fit.stiffness {
             fitted.push(vec![tr("ui-trace-stiffness-factor"), short(1.0), short(s.factor), short(s.error)]);
@@ -2473,6 +2479,12 @@ impl Model {
                 "fit-joint-coulomb",
                 "fit-joint-constant",
                 "fit-alike",
+                "fit-payload-step",
+                "fit-link-mass",
+                "fit-link-moment",
+                "fit-combined",
+                "fit-no-effect",
+                "ui-trace-payload-step",
             ]
             .map(String::from),
         );
@@ -2489,7 +2501,12 @@ impl Model {
             .map(String::from),
         );
         keys.extend(
-            ["payload_factor"].iter().chain(&sim_components::identify::JOINT_QUANTITIES).map(|q| joint_label(q)),
+            ["payload_factor"]
+                .iter()
+                .chain(&sim_components::identify::PAYLOAD_STEP_QUANTITIES)
+                .chain(&sim_components::identify::JOINT_QUANTITIES)
+                .chain(&sim_components::identify::LINK_QUANTITIES)
+                .map(|q| joint_label(q)),
         );
         keys.extend(CHECKS.iter().map(|check| format!("check-{check}")));
         keys.extend(QUANTITIES.iter().map(|name| format!("identify-{name}")));

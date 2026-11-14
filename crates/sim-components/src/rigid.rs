@@ -90,6 +90,23 @@ impl Inertial {
             std::array::from_fn(|r| std::array::from_fn(|c| self.inertia[r][c] + a[r][c] + turned[r][c] + b[r][c]));
         Inertial { mass: m, com, inertia }
     }
+
+    /// Mass, first moment m c and inertia about the frame's origin all times `factor`, then `moment` added to the first
+    /// moment, the mass and the inertia about the origin kept (the parameters the dynamics is linear in); back as mass,
+    /// centre and inertia about it. `factor` has to be positive.
+    pub fn changed(&self, factor: f64, moment: V3) -> Inertial {
+        let shift = |m: f64, c: V3| -> M3 {
+            std::array::from_fn(|r| std::array::from_fn(|k| m * (if r == k { dot(c, c) } else { 0.0 } - c[r] * c[k])))
+        };
+        let about_origin = shift(self.mass, self.com);
+        let mass = factor * self.mass;
+        let com = scale(add(scale(self.com, factor * self.mass), moment), 1.0 / mass);
+        let back = shift(mass, com);
+        let inertia = std::array::from_fn(|r| {
+            std::array::from_fn(|k| factor * (self.inertia[r][k] + about_origin[r][k]) - back[r][k])
+        });
+        Inertial { mass, com, inertia }
+    }
 }
 
 fn sub(a: V3, b: V3) -> V3 {
@@ -716,5 +733,30 @@ mod tests {
             Some((0.0, 0.3))
         );
         assert!(Chain::from_urdf(&urdf("<limit lower=\"0.2\" upper=\"0.0\"/>")).is_err());
+    }
+
+    /// 2 kg with its centre at (0.1, 0, 0) and inertia diag(0.01, 0.02, 0.03) about it, times 3 with 0.2 kg m more first
+    /// moment along y. By hand: about the frame, diag(0.01, 0.02 + 2 · 0.01, 0.03 + 2 · 0.01) = diag(0.01, 0.04, 0.05),
+    /// times 3; mass 6 kg; first moment (0.6, 0.2, 0), centre (0.1, 1/30, 0), c · c = 0.011111; back about the centre:
+    /// xx 0.03 − 6 (0.011111 − 0.01) = 0.023333, yy 0.12 − 6 (0.011111 − 0.001111) = 0.06, zz 0.15 − 6 · 0.011111 =
+    /// 0.083333, xy 0 + 6 · 0.1 / 30 = 0.02. The factor 1 without a moment gives the body back.
+    #[test]
+    fn a_links_change_scales_its_parameters_about_its_frame_and_moves_its_centre() {
+        let body = Inertial {
+            mass: 2.0,
+            com: [0.1, 0.0, 0.0],
+            inertia: [[0.01, 0.0, 0.0], [0.0, 0.02, 0.0], [0.0, 0.0, 0.03]],
+        };
+        let changed = body.changed(3.0, [0.0, 0.2, 0.0]);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(changed.mass, 6.0) && close(changed.com[0], 0.1) && close(changed.com[1], 1.0 / 30.0));
+        let expected = [[0.07 / 3.0, 0.02, 0.0], [0.02, 0.06, 0.0], [0.0, 0.0, 0.25 / 3.0]];
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(close(changed.inertia[r][c], expected[r][c]), "{:?}", changed.inertia);
+            }
+        }
+        let same = body.changed(1.0, [0.0; 3]);
+        assert!((0..3).all(|r| (0..3).all(|c| close(same.inertia[r][c], body.inertia[r][c]))) && same.com == body.com);
     }
 }

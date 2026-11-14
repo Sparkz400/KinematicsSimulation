@@ -724,13 +724,14 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         }
 
         let fit = table(&[&["fit", entry.id, "--trace", &trace], &no_payload[..]].concat());
-        // Per axis four values; in the motors' coordinates four per motor, and no payload's factor without a payload.
+        // Per axis four values; in the motors' coordinates four per motor, and no payload's factor without a payload; on
+        // the SCARA and the arm then the links' values the trace tells apart.
         let (count, checked) = if per_axis {
             (sim.machine.axes().len(), ["moved_mass_kg", "coulomb_friction_n"])
         } else {
             (sim.machine.motors().len(), ["coulomb_friction_nm"; 2])
         };
-        assert_eq!(fit.len(), 4 * count, "{}: {fit:?}", entry.id);
+        assert_eq!(fit.iter().filter(|r| !r[0].starts_with("link_")).count(), 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let (config, fitted): (f64, f64) = (row[2].parse().unwrap(), row[3].parse().unwrap());
             assert!(config > 0.0 && (fitted / config - 1.0).abs() < 0.02, "{}: {row:?}", entry.id);

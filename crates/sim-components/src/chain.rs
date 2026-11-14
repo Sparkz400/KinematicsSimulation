@@ -59,6 +59,11 @@ pub trait Mechanism: Send {
     /// The load's potential energy; its gravity torques are those of h at rest.
     fn potential(&self, q: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);
+    /// As `Machine::links` and `Machine::set_link_change`: the bodies whose inertial parameters a trace can be fitted for.
+    fn links(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn set_link_change(&mut self, _link: usize, _factor: f64, _moment: [f64; 3]) {}
 
     /// Joints to tool pose. The joints themselves by default.
     fn forward(&self, q: &[f64], tool: &mut [f64]) {
@@ -553,6 +558,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.mechanism.set_payload_attached(attached);
+    }
+    fn links(&self) -> Vec<String> {
+        self.mechanism.links()
+    }
+    fn set_link_change(&mut self, link: usize, factor: f64, moment: [f64; 3]) {
+        self.mechanism.set_link_change(link, factor, moment);
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;

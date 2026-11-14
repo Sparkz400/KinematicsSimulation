@@ -17,7 +17,7 @@
 use crate::{axis, gravity, machine, payload, required_life};
 use sim_components::chain::{JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
-use sim_components::rigid::{Chain, V3, mul};
+use sim_components::rigid::{Chain, Inertial, V3, mul};
 use sim_components::transmission::{BallScrew, StrainWave};
 use sim_core::{Config, ConfigError, Label, Machine, Part, RatingCheck, Scene, Shape, SignalInfo};
 use std::f64::consts::TAU;
@@ -31,6 +31,8 @@ const AXIS_IDS: [&str; 7] = ["j1", "j2", "j3", "j4", "j5", "j6", "j7"];
 
 pub struct Arm {
     chain: Chain,
+    /// Each body's inertial as built, which `set_link_change` changes from.
+    built: Vec<Inertial>,
     g: f64,
     /// The payload's mass and where it sits in the last body's frame.
     payload: (f64, V3),
@@ -122,6 +124,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         screw,
         strain_wave,
         required_life: required_life(cfg),
+        built: chain.bodies.iter().map(|b| b.inertial).collect(),
         chain,
     };
     machine(cfg, arm, joints, axes)
@@ -142,6 +145,12 @@ impl Mechanism for Arm {
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
+    }
+    fn links(&self) -> Vec<String> {
+        self.chain.bodies.iter().map(|b| b.name.clone()).collect()
+    }
+    fn set_link_change(&mut self, link: usize, factor: f64, moment: [f64; 3]) {
+        self.chain.bodies[link].inertial = self.built[link].changed(factor, moment);
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
