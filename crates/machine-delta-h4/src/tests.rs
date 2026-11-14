@@ -326,3 +326,46 @@ fn targets_outside_the_working_range_are_refused_with_their_reason() {
         assert_eq!(d.unreachable(&tool, 0.0), None, "{tool:?}");
     }
 }
+
+#[test]
+fn the_four_arm_delta_passes_the_standard_suite() {
+    sim_core::testkit::run_standard_suite(&ENTRY);
+}
+
+/// A machine rebuilt with the gearbox ratio 1 % higher during a move (`Sim::reconfigure`) takes the state over with
+/// the tool where it was, at its speed, on its amplifier's spring as twisted as before (here 1 mrad, the tool turning
+/// 2 rad/s slower than the slide), and each gearbox twisted at its motor as before (here 0.5 mrad at the arm, 10 mrad
+/// at the motor): rebuilt at rest, the spring was unloaded and the gears laid in the middle of their play, a jump of
+/// 0.19 mrad on the tool's turn in the first 10 ms after the change in the default config's move (0.02 kept).
+#[test]
+fn a_changed_ratio_keeps_the_tool_on_its_spring_and_the_gears_twisted() {
+    let (old, new) = (h4(&[]), h4(&["gearbox.ratio = 20.2"]));
+    let (tool, vel) = ([0.1, -0.05, -0.9, 0.3], [1.0, -0.5, 0.3, 5.0]);
+    let (mut s, mut torque) = (Vec::new(), [0.0; 4]);
+    old.equilibrium(&tool, &mut s, &mut torque);
+    old.set_tool_velocity(&mut s, &vel);
+    let at = old.turn_at();
+    (s[at], s[at + 1]) = (tool[3] - 1e-3, vel[3] - 2.0);
+    for k in 0..4 {
+        s[8 + k] = 20.0 * (s[k] + 5e-4);
+    }
+    let adopted = new.adopt_state(&old, &s);
+    let state = |m: &H4, s: &[f64]| {
+        let (mut p, mut v) = ([0.0; 4], [0.0; 4]);
+        m.tool_state(s, &mut p, &mut v);
+        (p, v, m.twist(s).0)
+    };
+    let ((p0, v0, twist0), (p1, v1, twist1)) = (state(&old, &s), state(&new, &adopted));
+    for k in 0..4 {
+        assert!((p1[k] - p0[k]).abs() < 1e-9 && (v1[k] - v0[k]).abs() < 1e-9, "{p1:?} {v1:?} against {p0:?} {v0:?}");
+    }
+    close(twist0, 1e-3, 1e-6, "twist before");
+    close(twist1, twist0, 1e-6, "twist after");
+    let (mut before, mut after) = ([0.0; 4], [0.0; 4]);
+    old.inverse(&[p0[0], p0[1], p0[2], p0[3] + twist0], &mut before);
+    new.inverse(&[p0[0], p0[1], p0[2], p0[3] + twist0], &mut after);
+    for k in 0..4 {
+        close(adopted[8 + k] - after[k], s[8 + k] - before[k], 1e-6, "twist at the motor");
+        close(s[8 + k] - before[k], 0.01, 1e-6, "twist at the motor, before");
+    }
+}

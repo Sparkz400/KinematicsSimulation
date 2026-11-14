@@ -1323,6 +1323,47 @@ impl Machine for H4 {
         self.energy_parts(s).iter().sum()
     }
 
+    /// As `Machine::adopt_state`, the same pose and speed with the gears as at rest there; but from a model to one with
+    /// the same states (`Sim::reconfigure` keeps the entry), as the parallel SCARA's, each gearbox keeps the twist it
+    /// had at its motor, and with effects.amplifier_compliance the tool keeps its angle and speed on the amplifier's
+    /// spring, the slide where the arms had it. Rebuilt at rest, the slide was put under the tool and the spring
+    /// unloaded, and the gears put back in the middle of their play: after a 1 % change of the ratio during a move the
+    /// tool's turn jumped by 0.19 mrad in the first 10 ms (0.02 now).
+    fn adopt_state(&self, old: &dyn Machine, old_state: &[f64]) -> Vec<f64> {
+        let (mut pos, mut vel, mut before, mut after) = ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
+        old.tool_state(old_state, &mut pos, &mut vel);
+        old.inverse(&pos, &mut before);
+        self.inverse(&pos, &mut after);
+        let same = old_state.len() == self.state_len();
+        if same && before == after {
+            return old_state.to_vec();
+        }
+        // The slide's turn, from the old arms in this machine's geometry: the tool's own where it is not on a spring.
+        let (mut slide, mut slide_vel) = (pos, vel);
+        if same && self.amplifier.is_some() {
+            let (t, w) = self.arms(old_state);
+            let (x, j) = self.pose(t);
+            (slide[3], slide_vel[3]) = (self.kappa * x[3], self.kappa * dot4(j[3], w));
+            old.inverse(&slide, &mut before);
+            self.inverse(&slide, &mut after);
+        }
+        let mut state = Vec::new();
+        self.equilibrium(&slide, &mut state, &mut [0.0; 4]);
+        self.set_tool_velocity(&mut state, &slide_vel);
+        if same && self.amplifier.is_some() {
+            let at = self.turn_at();
+            (state[at], state[at + 1]) = (pos[3], vel[3]);
+        }
+        if same && self.elastic {
+            let (mut rotor, mut speed) = ([0.0; 4], [0.0; 4]);
+            old.motor_state(old_state, &mut rotor, &mut speed);
+            for k in 0..4 {
+                state[8 + k] = after[k] + rotor[k] - before[k];
+            }
+        }
+        state
+    }
+
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
