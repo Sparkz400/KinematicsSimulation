@@ -9,7 +9,7 @@ use bevy_egui::egui::{
     Frame, Grid, Label, Layout, Margin, Rect, RichText, ScrollArea, Sense, Slider, Stroke, TextEdit, TextStyle,
     TextWrapMode, Ui, vec2,
 };
-use egui_plot::{GridInput, GridMark, HLine, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
+use egui_plot::{AxisHints, GridInput, GridMark, HLine, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
 use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color, short};
 use sim_app::runs::{owner_slot, plot_line};
 use sim_components::Command;
@@ -1074,20 +1074,39 @@ fn owner_color(model: &Model, owner_key: &str) -> Color32 {
     PALETTE[owner_slot(owner_key, &session.signals, &session.axes, &session.motors) % PALETTE.len()]
 }
 
-/// About four labelled ticks on an axis, at 1, 2 or 5 times a power of ten: egui_plot's own spacing labels only the
-/// steps 20 pixels apart, which on a plot 150 pixels high was often 0 alone.
+/// The fewest pixels between two grid lines (egui_plot's default), from which `ticks` tells a value's size on screen.
+const GRID_PIXELS: f32 = 8.0;
+/// The fewest pixels between two labelled ticks: a line of the plots' text and a little room.
+const TICK_PIXELS: f32 = 20.0;
+
+/// Labelled ticks on a value axis at 1, 2 or 5 times a power of ten, the smallest such step at least `TICK_PIXELS`
+/// apart, between two and five on a scope: egui_plot's own steps of powers of ten, labelled only from 20 pixels
+/// apart, left a plot 150 pixels high (some 100 of them for the values) often with 0 alone.
 fn ticks(input: GridInput) -> Vec<GridMark> {
     let (low, high) = input.bounds;
-    let raw = ((high - low) / 3.5).max(input.base_step_size).max(1e-300);
+    // At most some twenty: a plot not laid out yet has no size to go by.
+    let raw = (TICK_PIXELS as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
+    if !(raw.is_finite() && raw > 0.0) {
+        return Vec::new();
+    }
     let power = 10f64.powf(raw.log10().floor());
     let step = [1.0, 2.0, 5.0, 10.0].into_iter().map(|f| f * power).find(|s| *s >= raw).unwrap_or(10.0 * power);
     let (first, last) = ((low / step).ceil() as i64, (high / step).floor() as i64);
     (first..=last).map(|i| GridMark { value: i as f64 * step, step_size: step }).collect()
 }
 
+/// A tick's value with the decimals its step needs: 0.5 with one. egui_plot rounds the step's logarithm, which
+/// printed the tick at 0.5 as "0".
+fn tick_label(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
+    let decimals = (-mark.step_size.log10().floor()).max(0.0) as usize;
+    format!("{:.*}", decimals, if mark.value.abs() < mark.step_size * 1e-6 { 0.0 } else { mark.value })
+}
+
 /// A plot as every panel draws it: with the ticks of `ticks`.
 fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
-    Plot::new(id).y_grid_spacer(ticks)
+    // Labels at full strength from `TICK_PIXELS` apart; egui_plot fades them in from 20 to 30.
+    let axis = AxisHints::new_y().label_spacing(TICK_PIXELS - 4.0..=TICK_PIXELS).formatter(tick_label);
+    Plot::new(id).grid_spacing(GRID_PIXELS..=300.0).y_grid_spacer(ticks).custom_y_axes(vec![axis])
 }
 
 /// A right click on a plot offers to save it: as SVG, drawn as the sizing report draws its plots, or as PNG, a picture
@@ -1362,8 +1381,9 @@ fn runs(ui: &mut Ui, model: &Model, inputs: &mut Inputs, ghost: bool, actions: &
         return;
     }
     ui.separator();
-    Grid::new("runs-list").striped(true).show(ui, |ui| {
-        for (i, run) in model.runs.iter().enumerate() {
+    // A row per run: shown, reference, its line, forget, and its label in the room left.
+    for (i, run) in model.runs.iter().enumerate() {
+        ui.horizontal(|ui| {
             let mut shown = model.runs.shown(i);
             if ui.checkbox(&mut shown, "").on_hover_text(tr("ui-runs-shown")).changed() {
                 actions.push(Action::RunShown(i, shown));
@@ -1378,13 +1398,12 @@ fn runs(ui: &mut Ui, model: &Model, inputs: &mut Inputs, ghost: bool, actions: &
                 _ => "- - -",
             };
             ui.label(RichText::new(line).color(dim()));
-            ui.add(Label::new(&run.label).truncate());
             if ui.small_button("×").on_hover_text(tr("ui-runs-remove")).clicked() {
                 actions.push(Action::RemoveRun(i));
             }
-            ui.end_row();
-        }
-    });
+            ui.add(Label::new(&run.label).wrap());
+        });
+    }
     if let Some(rows) = model.runs_table() {
         ui.strong(tr("ui-runs-figures"));
         table(ui, "runs-figures", &rows, None);
@@ -2143,7 +2162,9 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
     for (key, motors) in overlay {
         // The speed in the unit chosen; drawn with the peaks kept: a trace may have a sample per 125 us for minutes.
         let (title, factor) = match *key {
-            "ui-overlay-speed" if model.units.rpm => (tr("ui-overlay-speed-rpm"), model.units.scale("rad/s").0),
+            "ui-overlay-speed" if model.units.rpm => {
+                (tr("ui-overlay-speed-rpm"), model.units.scale(sim_app::runs::Quantity::Speed.unit()).0)
+            }
             _ => (tr(key), 1.0),
         };
         let line = |points: &Vec<[f64; 2]>| plot_line(points.len(), |n| [points[n][0], points[n][1] * factor]);

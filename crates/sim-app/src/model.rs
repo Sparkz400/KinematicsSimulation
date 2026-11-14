@@ -1616,7 +1616,7 @@ impl Model {
         let mut table = vec![header];
         let cell = |value: Option<f64>| value.map_or(String::new(), short);
         let mut row = |label: String, cells: Vec<String>| table.push([vec![label], cells].concat());
-        row(format!("{} [s]", tr("ui-analysis-duration")), figures.iter().map(|f| short(f.duration)).collect());
+        row(tr("ui-analysis-duration"), figures.iter().map(|f| short(f.duration)).collect());
         row(
             tr("ui-run-verdicts"),
             figures
@@ -1647,7 +1647,10 @@ impl Model {
             ];
             for (key, unit, value, factor) in rows {
                 let cells = figures.iter().map(|f| cell(f.motors.get(k).and_then(value).map(|v| v * factor)));
-                row(format!("{name} · {} [{unit}]", tr(key)), cells.collect());
+                // The unit, unless the label has it already (the torques' are the analysis tables').
+                let label = tr(key);
+                let label = if label.contains('[') { label } else { format!("{label} [{unit}]") };
+                row(format!("{name} · {label}"), cells.collect());
             }
         }
         let (length, length_unit) = self.units.scale("m");

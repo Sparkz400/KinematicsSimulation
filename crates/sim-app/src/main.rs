@@ -1569,7 +1569,8 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// and "tube" for the deviation tube) switches on what the 3D view draws besides the parts, SIM_APP_EXAGGERATION (a factor) draws
 /// the deflections larger, and SIM_APP_VIEW ("yaw,pitch" in degrees) turns the camera and frames the machine.
 /// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel; SIM_APP_TAB (cycle, effects,
-/// search, path, trace, sweep or tuning) opens that tab of it, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
+/// search, path, trace, sweep, tuning or runs, the last with the runs in the bottom panel) opens that tab of it,
+/// SIM_APP_THEME=light shows the light theme, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
 /// the height of the workspace map in the path tab. SIM_APP_PART (a part's id,
 /// e.g. "motor", or "motor,1" for the second of them) picks that part as a click would. SIM_APP_SCRUB (seconds)
 /// scrubs the timeline that far back from the newest scene, just before the screenshot. SIM_APP_RECORD (seconds)
@@ -1644,12 +1645,16 @@ fn developer_hooks(
                 ("trace", ui::ToolTab::Trace),
                 ("sweep", ui::ToolTab::Sweep),
                 ("tuning", ui::ToolTab::Tuning),
+                ("runs", ui::ToolTab::Runs),
             ];
             if let Some((_, tab)) =
                 asked("SIM_APP_TAB").and_then(|name| tabs.into_iter().find(|(word, _)| *word == name))
             {
-                state.panels.tools = tab;
+                // The runs tab with the runs in the bottom panel.
+                (state.panels.tools, state.panels.runs_view) = (tab, tab == ui::ToolTab::Runs);
             }
+            state.panels.light = asked("SIM_APP_THEME").is_some_and(|theme| theme == "light");
+            state.themed = false;
             if let Some(height) = asked("SIM_APP_WORKSPACE_Z").and_then(|z| z.parse().ok()) {
                 state.model.inputs.workspace_z = Some(height);
             }
