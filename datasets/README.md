@@ -9,6 +9,7 @@ checked against more than the simulator's own output. Each dataset is a folder `
 | `README.md` | What a reader needs to use the data: settings, test moves, anything odd. |
 | one file per recording | The trace as the drive's tool exported it (CSV of Startdrive, TwinCAT Scope, CODESYS, ...). Keep the export as it is; the mapping converts it. |
 | one mapping per format | A TOML file that names the signals and their units ([template/map.toml](template/map.toml)). |
+| `machine.toml` (optional) | The measured machine as a config of one of the simulator's machines, named by `machine.config`. |
 
 Nothing else goes in the folder; the checker refuses files no recording names. Start from
 [template/](template/), and record as [docs/measurement-procedure.md](../docs/measurement-procedure.md)
@@ -21,7 +22,8 @@ Every key is described in [template/dataset.toml](template/dataset.toml). In sho
 - `[dataset]`: `id` (the folder's name), `title`, `description`, `license` (CC0-1.0, CC-BY-4.0,
   CC-BY-SA-4.0, ODbL-1.0 or PDDL-1.0), `contributor` (an organisation or `anonymous`), `recorded` (year and
   month, `YYYY-MM`), `synthetic` (true only for data a simulator made).
-- `[machine]`: `kind`, `transmission`, `mounting`; optional `travel_per_motor_rev_m`, `payload_kg`.
+- `[machine]`: `kind`, `transmission`, `mounting`; optional `travel_per_motor_rev_m`, `payload_kg`, `config` (a TOML
+  file in the folder: the machine as a config of one of the simulator's machines; its README names which).
 - `[drive]`: `vendor`, `family`; optional `current_cycle_s`, `speed_cycle_s`, `position_cycle_s`.
 - `[motor]`: `family`, `rated_torque_nm`; optional `rotor_inertia_kg_m2`, `encoder_counts_per_rev`.
 - `[[recording]]`, one per file: `file`, `map` (not for a frequency response), `test` (one of the test
@@ -65,5 +67,6 @@ whatever the anonymisation check finds. The tests run it on every folder here ex
 | Folder | What | Measured |
 | --- | --- | --- |
 | [example-synthetic-belt-axis](example-synthetic-belt-axis/) | The simulator's single axis in its cycle, written like a drive trace. Shows the format. | No |
+| [isw-ball-screw-axis](isw-ball-screw-axis/) | A ball screw axis with a 400 kg table at ISW Stuttgart: S-profile, sine and constant speed, taken from DaRUS (CC BY 4.0). | Yes, by ISW |
 
-No measured dataset has been published yet.
+The project has measured no machine itself; the measured dataset is a public one, converted.

@@ -49,6 +49,8 @@ impl AxisFit {
             ("fit-constant", change(3, "N")),
         ]
         .into_iter()
+        // Viscous friction the trace does not tell from Coulomb friction (`rigid_values`) has no advice.
+        .filter(|(key, _)| *key != "fit-viscous" || (self.fitted[1].is_finite() && self.config[1].is_finite()))
         .chain(self.payload_steps.iter().map(|(time, time_error, change, error)| {
             ("fit-axis-payload-step", format!("{axis}: {time:.3} s ± {time_error:.3}, {change:+.3} ± {error:.3}"))
         }))
@@ -85,7 +87,8 @@ fn axis_view(machine: &dyn Machine, trace: &Trace) -> Vec<(Vec<f64>, Vec<f64>)> 
 /// columns (one value per row each, by a value of their own) on the rows where the axis moves: values and standard
 /// errors, the four first. Force, speed and the extra columns are averaged over the window, the acceleration is the
 /// slope of the speed across it. Rows slower than 5 % of the top speed are left out, because there friction is neither
-/// of the two terms. `None` if the axis does not move both ways, since one direction alone cannot tell Coulomb friction
+/// of the two terms. Viscous friction is NaN where the speeds used hardly vary (`inflation` above `WEAK`), its share then
+/// in the Coulomb value. `None` if the axis does not move both ways, since one direction alone cannot tell Coulomb friction
 /// from a constant force. The columns are scaled to unit length before the normal matrix is solved, as `solve` does:
 /// accelerations and ones differ by orders of magnitude.
 fn rigid_values(time: &[f64], force: &[f64], speed: &[f64], extra: &[Vec<f64>]) -> Option<(Vec<f64>, Vec<f64>)> {
@@ -106,9 +109,23 @@ fn rigid_values(time: &[f64], force: &[f64], speed: &[f64], extra: &[Vec<f64>]) 
         return None;
     }
     // A column that is zero on every row used (the payload's force on an axis it does not load) has no value.
-    let basis: Vec<usize> = (0..p).filter(|&j| samples.iter().any(|(_, x, _)| x[j] != 0.0)).collect();
+    let mut basis: Vec<usize> = (0..p).filter(|&j| samples.iter().any(|(_, x, _)| x[j] != 0.0)).collect();
+    // At one speed each way (a constant-speed run, measured: inflation 223) the speed is its sign times a constant, and
+    // viscous against Coulomb friction is noise: viscous is left out (NaN) and the Coulomb value holds both.
+    if inflation(&samples, &basis, 1).is_none_or(|f| f > WEAK) {
+        basis.retain(|&j| j != 1);
+    }
     let solved = solve(&samples, Some(&basis), (2 * w + 1) as f64)?;
     Some((solved.values, solved.errors))
+}
+
+/// 1 / (1 − R²) of column `j` on the other columns of `basis`, uncentred and at unit length as `solve` takes them.
+fn inflation(samples: &[Sample], basis: &[usize], j: usize) -> Option<f64> {
+    let dot = |a: usize, b: usize| samples.iter().map(|(_, x, _)| x[a] * x[b]).sum::<f64>();
+    let gram: Vec<Vec<f64>> =
+        basis.iter().map(|&a| basis.iter().map(|&b| dot(a, b) / (dot(a, a) * dot(b, b)).sqrt()).collect()).collect();
+    let k = basis.iter().position(|&c| c == j)?;
+    inverse_of(&gram, &(0..basis.len()).collect::<Vec<_>>()).map(|inverse| inverse[k][k])
 }
 
 /// Stage 1: the rigid values of every axis from a trace, next to the config's. `None` for an axis the
@@ -1042,5 +1059,34 @@ mod tests {
         // The dip at 62 Hz goes down to 0.02, the one at 22 Hz to 0.1.
         let found = resonance(&sweep).unwrap();
         assert!((found.frequency - 22.0).abs() < 0.5 && (found.damping - 0.05).abs() < 0.01, "{found:?}");
+    }
+
+    /// Measured: the ISW ball screw bench (datasets/isw-ball-screw-axis, CC BY 4.0) at 0.1 m/s out and back, 5 s each
+    /// side of the reversal. At one speed each way viscous and Coulomb friction are one value: the viscous column's
+    /// inflation is 279 here (223 on the whole file, 16 on the S-profile), so viscous is left out and Coulomb holds
+    /// both. Hand calculation from the rows at full speed (|v| > 0.099 m/s): mean torque 2.8292 N m out, -2.6337 N m
+    /// back, so
+    /// Coulomb (with the viscous share) (2.8292 + 2.6337) / 2 = 2.7314 N m and constant (2.8292 - 2.6337) / 2 = 0.0977
+    /// N m. Before, viscous was fitted from the ramps alone, and on the whole file the fit advised a factor of -8.6.
+    #[test]
+    fn at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../datasets/isw-ball-screw-axis/");
+        let read = |name: &str| std::fs::read_to_string(format!("{dir}{name}")).unwrap();
+        let mapping = crate::import::Mapping::parse(&read("map.toml")).unwrap();
+        let trace = crate::import::import(&read("constant-speed-v100.csv"), &mapping).unwrap().trace;
+        let rows = 2000..12000;
+        let motor = &trace.motors[0];
+        let (values, errors) =
+            rigid_values(&trace.time[rows.clone()], &motor.torque[rows.clone()], &motor.speed[rows], &[]).unwrap();
+        assert!(values[1].is_nan() && errors[1].is_nan(), "{values:?}");
+        assert!((values[2] - 2.7314).abs() < 0.03 * 2.7314, "{values:?} {errors:?}");
+        assert!((values[3] - 0.0977).abs() < 0.02, "{values:?} {errors:?}");
+        let fit = AxisFit {
+            config: values.clone().try_into().unwrap(),
+            fitted: values.try_into().unwrap(),
+            error: [0.0; 4],
+            payload_steps: Vec::new(),
+        };
+        assert!(fit.advice("x").iter().all(|(key, _)| *key != "fit-viscous"));
     }
 }

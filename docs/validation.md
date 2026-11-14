@@ -2,7 +2,7 @@
 
 What the simulator has been compared with, and what it has not.
 
-**The short version.** Every check below proves one of two things: that the equations are solved correctly, or that the catalogue data was read correctly. None proves that the parameters describe a real machine. No real machine has been measured.
+**The short version.** Every check below proves one of two things: that the equations are solved correctly, or that the catalogue data was read correctly. None proves that the parameters describe a real machine. The project has measured no machine; one public measurement of a ball screw axis is compared [below](#against-measured-data).
 
 All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 417 tests. All of them passed on 13 November 2026 (`cargo nextest run --workspace --release --exclude sim-py`, with the delta picker, obstacles and the twelfth review fixes).
 
@@ -496,15 +496,95 @@ These compare the simulator with itself. They prove repeatability and plumbing, 
 | Dependencies point downwards; every version is pinned; no machine is named outside its crate | [`architecture.rs`](../crates/sim-machines/tests/architecture.rs) |
 | Every label exists in German and English | [`i18n.rs`](../crates/sim-machines/tests/i18n.rs), and in the app's and the link's tests |
 
+## Against measured data
+
+One public measurement, not made by this project: the ball screw test bench of ISW, University of Stuttgart (C. Hinze,
+L. Zeh, DaRUS 2022, [doi:10.18419/darus-3003](https://doi.org/10.18419/darus-3003), CC BY 4.0), converted into
+[datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/). A 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball
+screw that moves a 400 kg table; speed and position loops on a dSPACE board. Three recordings at 1 ms: an S-profile
+(10 to 700 mm and back, 0.3 m/s, 1 m/s²), a sine (±100 mm at 0.1 Hz) and a run at 0.1 m/s out and back. The machine is
+the `screw-axis` of the joint kit with the dataset's `machine.toml`: table, stroke, screw diameter and length, motor and
+position gain from the source, the motor's data from Siemens D 21.4, the rest estimates; the lead (40 mm) is read from
+the screw's article number, the source does not state it.
+
+**Compared**: the measured motor torque (`M_KGT_act`, the S120's torque from its current) with the simulated one when the
+trace's position setpoints are replayed (`sim-cli replay`), before and after applying what `sim-cli fit` on the
+S-profile advises (literally: table −91.7 kg, guide and motor viscous friction × 1.432, Coulomb × 0.879, the constant
++15.4 N as an incline of 0.29°). Differences as a share of the recording's peak measured torque:
+
+| Recording | Peak torque | RMS, config as written | RMS, after the fit | Peak difference, as written | after the fit |
+| --- | --- | --- | --- | --- | --- |
+| S-profile (fitted on) | 8.07 N m | 0.857 N m, 10.6 % | 0.820 N m, 10.2 % | 7.39 N m, 92 % | 5.78 N m, 72 % |
+| Sine, 0.1 to 19.9 s | 3.52 N m | 0.502 N m, 14.3 % | 0.494 N m, 14.0 % | 1.88 N m, 53 % | 1.95 N m, 56 % |
+| Constant speed 0.1 m/s | 14.63 N m | 0.746 N m, 5.1 % | 0.713 N m, 4.9 % | 6.17 N m, 42 % | 6.32 N m, 43 % |
+
+The fit hardly moves the RMS: what is left is not in the rigid values. A rigid model fitted to the S-profile alone
+(`identify`, no simulator) leaves 0.233 N m RMS (2.9 %), the floor for any choice of mass and friction. The rest:
+
+- At standstill (16 % of the S-profile's rows, after its last move) the bench holds about −1.5 N m, friction holding the
+  speed loop's integral torque; the simulation, its Coulomb friction smoothed through zero and without stiction, holds
+  0. That is 1.5 N m RMS on those rows.
+- The peak differences sit where the motion changes abruptly: at the start of braking (2.31 s) the simulated torque
+  swings ±4.5 N m for 5 ms where the measured one bends smoothly; at the sine's reversals (7.5 s, 17.5 s) the measured
+  torque jumps with the friction's sign, the simulated one follows the smoothed Coulomb curve. The simulated speed
+  loop's gains are estimates (the bench's loop ran on dSPACE, in units the source does not give).
+- Over the whole sine file the peak difference is 95 N m (278 %): its setpoint jumps to 0.063 m/s at the first row and
+  back to rest at the last; the bench jolts with 34 N m, the replay, which starts and ends at rest, with ±90 N m for
+  5 ms. Hence the table's 0.1 to 19.9 s; over the whole file the RMS is 1.62 N m (4.7 % of 34.2 N m).
+
+**Found by the fit** (S-profile, the config's value → fitted ± standard error): moved mass at the table 583.6 → 491.9 ±
+3.4 kg (at the motor 0.0199 kg m²), viscous friction 544 → 779 ± 23 N s/m, Coulomb friction 366 → 322 ± 6 N, constant
+force 0 → +15.4 ± 1.6 N. Against the source: it gives the table's 400 kg and no friction. Table and the catalogue's
+rotor (20.7 kg cm²) make 451 kg; the 41 kg left (1.7e-3 kg m² at the motor) is what a steel screw 1.8 m long has at its
+root diameter (1.8e-3; at the full 40 mm 3.6e-3). With a lead of 25 mm the same torques fit a heavier rotor side, so
+this confirms the masses only together with the assumed lead.
+
+The other recordings do not agree with it to within their standard errors, and say why: the constant-speed run gives
+529 ± 3 kg (only its ramps carry mass) and 426 ± 1 N of friction at 0.1 m/s (the S-profile's values give 322 + 78 =
+400 N there); the sine 575 ± 8 kg, all of it from the jolt at its start (its own acceleration is 0.04 m/s²). The
+constant force is the same on both runs out and back (+15.4 and +13.9 N); the source does not say what it is (an
+incline of 0.3°, or the linear motor's magnet pull left over by its compensation). Applied as advised and fitted again,
+the mass and the constant force land on the measured ones (487 kg, 17.2 N); Coulomb friction does not (337 against
+322 N), because the advice scales the guide's and the motor's friction (147 of the config's 366 N) and the rest is the
+nut's preload drag (THK's formula, 0.0887 · 2000 N · 0.04 m / 2π = 1.13 N m, 177 N at the table; `screw.preload_n` an
+estimate) and the screw's efficiency, which the advice does not name.
+
+**What was changed to get there, and what was not tuned.** Before any comparison the replay of the sine stopped after
+2 ms: `machine.toml` still had the 66 µF S210 DC link of the screw axis it was made from, and the jolt tripped it. It
+now names the S120 Motor Module that D 21.4 pairs with the motor (1230 µF) and a regenerative supply, both estimates.
+Nothing else was adjusted to the measurements; friction values and loop gains are the estimates written before the
+first replay, and the fit's advice was applied once, as printed.
+
+**Found in the tools** by this data: on the constant-speed run the speed is its sign times 0.1 m/s, so viscous and
+Coulomb friction cannot be told apart (inflation 223, above the 100 the fit allows elsewhere), and the fit advised
+scaling the viscous friction by −8.6. It now leaves viscous friction out there and reports both as one Coulomb value
+(`at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value`, sim-components). `check-dataset .` run inside
+a dataset's folder refused every dataset (`the_checker_takes_the_name_of_the_folder_it_runs_in`, cli). The inertia
+`identify` reads off the S-profile lies between the bounds the source's masses give by hand
+(`the_measured_ball_screw_has_the_inertia_its_masses_give`, cli). Column names, units (m and m/s through the lead), the
+sampling and the time stamps (1 ms, jitter below 1 ns) imported as they were.
+
+**What this does not show.**
+
+- One machine, a horizontal ball screw axis. Nothing about belts, gearboxes, deltas, arms or gravity loads.
+- Not the drive model: the bench's speed and position loops ran on a dSPACE board, not in the S120, so the simulated
+  S120 loops are stand-ins with estimated gains. The following error is not compared: the simulated one at constant
+  speed is the speed times one position cycle (0.047 rad at 0.3 m/s); the source records setpoint and position in the
+  same cycle (about 0.001 rad apart).
+- Not the current loop, the DC link, the motor's heating, the noise, or the screw's ratings and life.
+- The lead and the moved masses only together (above); friction only at the speeds of these recordings, not its
+  Stribeck shape and not at standstill.
+- A fit on one recording checked on two others, but all three from one bench, in June and August 2022.
+
 ## What is not validated
 
 - **The delta picker D3's geometry, masses and stiffnesses.** Autonox keeps them behind a registration; the arm lengths are scaled from Williams' estimate of an ABB IRB 360, the masses estimated. Its cycle time is compared with ABB's and Omron's printed figures, not asserted (they round the corners and run faster). Its forearms are rigid rods (their spin about their own axis with an estimated inertia), its upper arms' bending stiffnesses (in and out of their planes) estimates for a carbon tube; neither is compared with a measured delta.
 
-**Against a real machine: nothing.**
+**Against a real machine: one public measurement.**
 
-- No measured drive trace has been compared with the simulation. The "Real traces" check of the project plan (stage D4) needs a real axis and does not exist.
+- One set of measured drive traces has been compared with the simulation: a ball screw axis of ISW Stuttgart ([above](#against-measured-data)). The "Real traces" check of the project plan (stage D4) on the project's own axes does not exist.
 - The test runs on a real axis (stage D2) have not been made.
-- Trace import, replay and fit have only seen traces the simulator made itself, with added noise. Column names, units and sampling of a real drive's export are untested.
+- Trace import, replay and fit have seen one real recording, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
 - The following error in particular is harder to match than torque, because drive vendors do not document their internal filters.
 
 **Parameters.** These are estimates in every config, and nothing checks them:

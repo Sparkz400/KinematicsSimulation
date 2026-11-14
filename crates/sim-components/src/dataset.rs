@@ -33,6 +33,7 @@ const SCHEMA: &[(&str, &str, bool, char)] = &[
     ("machine", "mounting", true, 's'),
     ("machine", "travel_per_motor_rev_m", false, 'n'),
     ("machine", "payload_kg", false, 'n'),
+    ("machine", "config", false, 's'),
     ("drive", "vendor", true, 's'),
     ("drive", "family", true, 's'),
     ("drive", "current_cycle_s", false, 'n'),
@@ -127,7 +128,9 @@ pub fn personal_data(file: &str, text: &str) -> Vec<String> {
 /// Everything that keeps the folder `dir` from being published; empty when it is fine.
 pub fn check(dir: &Path) -> Vec<String> {
     let mut problems = Vec::new();
-    let folder = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    // `.` or `..` has no name of its own: the folder's is that of its full path.
+    let full = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let folder = full.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
     let read = |name: &str| std::fs::read(dir.join(name)).map(|b| decode(&b));
     let Ok(text) = read("dataset.toml") else { return vec!["dataset.toml is missing".into()] };
     if read("README.md").is_err() {
@@ -168,6 +171,19 @@ pub fn check(dir: &Path) -> Vec<String> {
         problems.push("[[recording]] is missing".into());
     }
     let mut listed = vec!["dataset.toml".to_string(), "README.md".to_string()];
+    // The measured machine as a config of one of the simulator's machines, a TOML file in the folder.
+    let config = get("machine", "config");
+    if !config.is_empty() {
+        listed.push(config.to_string());
+        match read(config).map(|text| text.parse::<Table>()) {
+            _ if config.contains(['/', '\\', ':']) || config.starts_with('.') => {
+                problems.push("machine.config has to be the plain name of a file in the folder".into())
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => problems.push(format!("machine.config: {e}")),
+            Err(_) => problems.push(format!("machine.config: {config} is missing")),
+        }
+    }
     for (i, r) in recordings.iter().enumerate() {
         let Some(r) = r.as_table() else { continue };
         let before = problems.len();
