@@ -1056,7 +1056,10 @@ fn belt_bound(x: f64) -> f64 {
 /// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
 /// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
 /// 1.4 ms less (0.8517 s). Every planned pose keeps the acceleration within its bound (0.2 %), the rigid tensions within 42.26 N
-/// of holding, the motors within torque and speed and the axes within their jerk limit (`plan_use`).
+/// of holding, the motors within torque and speed and the axes within their jerk limit (`plan_use`). The plan that
+/// follows the limit (14 November) takes the bound at each place between places as straight instead of the lowest of
+/// three places: 0.851565 s against the 0.851693 s of 13 November (`sim-cli`, before rounding up to the cycle), told
+/// apart here on a profile cycle of 125 us, where the earlier plan ended at 0.85175 s.
 #[test]
 fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let mut cfg = ENTRY.config();
@@ -1096,6 +1099,51 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
     println!(
         "{duration} s (one limit per piece {by_hand} s), {of_bound} of the bound, hardest {hardest} m/s^2, {most_change} N"
+    );
+    for e in ["profile.cycle_s = 125.0e-6", "profile.setpoint_interval_s = 125.0e-6"] {
+        cfg.set_text(e).unwrap();
+    }
+    let fine = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+    let points = fine.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
+    let duration = points[points.len() - 1].0;
+    assert!(duration < 0.851693 && duration > 0.8515, "{duration} s, on 13 November 0.85175 s");
+}
+
+/// The guides' load rating limits the time-optimal plan (`Machine::rigid_guide_loads`): along X at z = 0.35 m the Z axis
+/// and its payload (7 kg) tilt on the X carriage, 2 * 7 kg * a * (0.3 - 0.35) / 0.12 m, so the X guide carries the weight
+/// of all it moves (11 kg * 9.80665 = 107.87 N) and 5.833 kg times the X acceleration; the Z guide 7 kg * a * (1 +
+/// 0.8333) = 12.833 kg times it. Rated 150 N, the X guide binds: a = (150 - 107.87) / 5.833 = 7.222 m/s^2 (the motors
+/// allow 11.2, the Z guide 11.69). The line 0.1 -> 0.9 m at the rated speed 1.2559 m/s and 100 m/s^3 then takes
+/// 0.8 / 1.2559 + 1.2559 / 7.222 + 7.222 / 100 = 0.8831 s.
+#[test]
+fn the_guide_load_rating_limits_the_time_optimal_acceleration() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("ratings.guide_max_load_n = 150.0").unwrap();
+    let a: f64 = (150.0 - 11.0 * 9.80665) / (7.0 * 2.0 * 0.05 / 0.12);
+    let by_hand: f64 = 0.8 / 1.2559 + 1.2559 / a + a / 100.0;
+    assert!((a - 7.222).abs() < 1e-3 && (by_hand - 0.8831).abs() < 1e-4, "{a} m/s^2, {by_hand} s");
+    let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+    let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
+    let (c, mut hardest, mut heaviest) = (1e-3, 0f64, 0f64);
+    for w in points.windows(3) {
+        let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
+        let mut loads = Vec::new();
+        sim.machine.rigid_guide_loads(&w[1].1, &acc, &mut loads);
+        hardest = hardest.max(acc[0].abs());
+        heaviest = loads.iter().fold(heaviest, |m, [rest, moving]| m.max(rest + moving.abs()));
+    }
+    let duration = points[points.len() - 1].0;
+    assert!((hardest - a).abs() < 2e-3 * a && heaviest <= 150.0 * 1.0005, "{hardest} m/s^2, {heaviest} N");
+    assert!((duration - by_hand).abs() < 1.5e-3, "{duration} s, by hand {by_hand} s");
+    let used = most_used(&plan_use(&sim, &cfg, &points));
+    assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
+    // The loads as `guide_loads` gives them to the signals.
+    let mut loads = Vec::new();
+    sim.machine.rigid_guide_loads(&[0.5, 0.35], &[2.0, 0.0], &mut loads);
+    assert!(
+        (loads[0][0] - 107.873).abs() < 1e-3
+            && (loads[0][1] + 11.667).abs() < 1e-3
+            && (loads[1][1] - 25.667).abs() < 1e-3
     );
 }
 

@@ -859,14 +859,19 @@ fn a_path_in_a_tilted_plane_gets_its_transition_curves() {
 /// the tool go 7.270 m/s where the motors turn fastest per tool speed (at its end, x = -0.5) and 13.31 m/s where they
 /// turn slowest. The plan with one limit per piece kept the whole line below the slowest place's speed and its
 /// acceleration below the line's weakest pose, and took 0.4290 s (13 November, before it was replaced). Point by point
-/// the plan reaches 8.12 m/s on the second line, more than 1.1 times the slowest place's speed (it passes that place
+/// the plan reaches 8.13 m/s on the second line, more than 1.1 times the slowest place's speed (it passes that place
 /// braking, slower), uses the motors' torque up to the reserve, and takes 0.412 s. Every planned pose
 /// keeps each motor within `profile.torque_reserve` of its torque-speed curve (rigid model, with the centripetal and
 /// Coriolis torque of the speed), within its rated speed, and each axis within its jerk limit, by differences over
-/// one cycle (0.1 %), and the path ends on its end point.
+/// one cycle (0.1 %), and the path ends on its end point. The gearboxes' M2max is lifted out of the way for that: since
+/// 14 November it is a limit of the plan too, and binds here (0.8 times 192 N m at the output against the motors' 0.8
+/// times 15 N m times the ratio 20). With it, each gearbox's output torque, the ratio times the motor's torque less what
+/// turns rotor and gearbox input (2.106e-4 kg m^2 times the motor's angular acceleration), stays within 0.8 * 192 N m
+/// (0.1 %), and the line takes longer.
 #[test]
 fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
-    let cfg = ENTRY.config();
+    let mut cfg = ENTRY.config();
+    cfg.set_text("ratings.gearbox_max_torque_nm = 1.0e6").unwrap();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
     let (from, to) = ([0.5, 0.0, -0.85], [-0.5, 0.0, -0.85]);
     let points =
@@ -918,4 +923,35 @@ fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
     assert!(quickest > 1.1 * slowest, "{quickest} m/s, the slowest place of the line allows {slowest} m/s");
     assert!(duration < 0.4290 - 0.01, "{duration} s, with one limit per piece 0.4290 s");
     assert!((0..3).all(|k| (last[k] - to[k]).abs() < 1e-9), "ends at {last:?}");
+    // With the gearboxes' rating as shipped.
+    let rated = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    let points = rated
+        .plan_path(
+            &sim_components::path::parse(
+                "line,0.5,0.0,-0.85
+line,-0.5,0.0,-0.85",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+    let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
+    let mut output = 0f64;
+    for i in 0..points.len() as isize {
+        let (a, p, b) = (pose(i - 1), pose(i), pose(i + 1));
+        let vel: Vec<f64> = (0..3).map(|k| (b[k] - a[k]) / (2.0 * c)).collect();
+        let acc: Vec<f64> = (0..3).map(|k| (b[k] - 2.0 * p[k] + a[k]) / (c * c)).collect();
+        let (mut torque, mut ahead, mut here, mut behind) = ([0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]);
+        rated.machine.feedforward_torque_moving(p, &vel, &acc, &mut torque);
+        rated.machine.inverse(b, &mut ahead);
+        rated.machine.inverse(p, &mut here);
+        rated.machine.inverse(a, &mut behind);
+        for k in 0..3 {
+            let alpha = (ahead[k] - 2.0 * here[k] + behind[k]) / (c * c);
+            output = output.max((20.0 * (torque[k] - (1.7e-4 + 4.06e-5) * alpha)).abs() / (0.8 * 192.0));
+        }
+    }
+    let slower = points[points.len() - 1].0;
+    println!("with M2max: {slower} s, output torque used to {output}");
+    assert!(output <= 1.001 && output > 0.99 && slower > duration + 0.01, "{output} of 0.8 M2max, {slower} s");
 }

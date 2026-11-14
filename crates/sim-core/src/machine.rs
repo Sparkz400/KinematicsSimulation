@@ -168,6 +168,11 @@ pub trait Machine: Send {
     /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the
     /// acceleration. Appends nothing where the machine has no belt sections to tell.
     fn rigid_tensions(&self, _tool_pos: &[f64], _tool_acc: &[f64], _out: &mut Vec<f64>) {}
+    /// The load of each guide that reports `axis.<id>.guide_load` (N, in that order) in the loss-free rigid model at a
+    /// tool pose and acceleration, as [rest, moving] for the load rest + |moving|: `moving` linear in the acceleration
+    /// and zero without. The time-optimal plan keeps it within `ratings.guide_max_load_n`. Appends nothing where the
+    /// machine does not tell.
+    fn rigid_guide_loads(&self, _tool_pos: &[f64], _tool_acc: &[f64], _out: &mut Vec<[f64; 2]>) {}
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);

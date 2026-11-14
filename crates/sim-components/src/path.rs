@@ -1201,6 +1201,18 @@ fn largest(mut low: f64, mut high: f64, ok: impl Fn(f64) -> bool) -> f64 {
     low
 }
 
+/// `largest` to a share of 1e-9 of `high`: for the time-optimal plan's top speeds, where each try runs a piece.
+fn highest_fitting(mut low: f64, mut high: f64, ok: impl Fn(f64) -> bool) -> f64 {
+    if ok(high) {
+        return high;
+    }
+    while high - low > 1e-9 * high {
+        let mid = 0.5 * (low + high);
+        if ok(mid) { low = mid } else { high = mid }
+    }
+    low
+}
+
 /// What bounds the tool's speed, its acceleration or its jerk: per row a direction in axis space and the most
 /// the rate may be along it. An axis limit is a row along its axis; a motor's rated speed is a row along the
 /// tool movement that turns the motor.
@@ -1364,6 +1376,38 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 // ---------------------------------------------------------------------------------------------
 // Timing as fast as the motors allow.
 
+/// What a time-optimal plan keeps within beside each motor's torque-speed curve, its rated speed and the axes' jerk
+/// limits (see `plan_time_optimal`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanLimits {
+    /// The share of each torque limit the plan may use (`profile.torque_reserve`): of the motor's torque-speed curve, of
+    /// the torque of the drive's maximum current, and of the gearbox's and the pulley's torque rating.
+    pub reserve: f64,
+    /// The lowest and the highest tension a belt section may have and the share of the room to them the plan may use.
+    pub tension: [f64; 3],
+    /// Per motor (in the order of `Machine::motors`) its gearbox: the ratio, the inertia that turns at its input (rotor
+    /// and gearbox, kg m^2) and the most torque at its output (N m), `ratings.gearbox_max_torque_nm` (M2max) or
+    /// `pulley_max_torque_nm` where that is lower. `None` (or no entry) where the machine reports no gearbox output
+    /// torque or the config rates neither.
+    pub gearbox: Vec<Option<[f64; 3]>>,
+    /// The most load a guide may carry, `ratings.guide_max_load_n` (N); infinite without.
+    pub guide: f64,
+}
+
+impl PlanLimits {
+    /// The torque share and the belt only, with no gearbox or guide rating.
+    pub fn new(reserve: f64, tension: [f64; 3]) -> Self {
+        Self { reserve, tension, gearbox: Vec::new(), guide: f64::INFINITY }
+    }
+}
+
+/// The most torque a motor gives the time-optimal plan, before the reserve: its torque-speed curve at the rated speed
+/// (level up to it) or, with effects.drive_current_limit, the torque of the drive's maximum current where that is lower.
+fn motor_torque(drive: &DriveParams) -> f64 {
+    let curve = drive.torque_curve(drive.rated_speed).1;
+    if drive.drive_max_current.is_finite() { curve.min(drive.torque_of(drive.drive_max_current)) } else { curve }
+}
+
 /// Plans the timing of a path as fast as the motors allow, within the jerk limits of the axes, point by point.
 ///
 /// The path is the one `plan` times (transition curves included, their lengths for the speeds the motors allow per
@@ -1372,14 +1416,21 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 /// fast each motor turns per speed along the path, and its torque as c a + d v^2 + e for the acceleration a and the
 /// speed v along the path (with the centripetal and Coriolis torque of the speed, `Machine::feedforward_torque_moving`,
 /// and e the torque that holds the tool there). A motor may turn at its rated speed and give `reserve` times its
-/// torque-speed curve (which is level up to that speed), each way as gravity pushes. The rest of the curve is for
-/// friction and elasticity, which the rigid model leaves out. Each axis keeps its jerk limit: on a line the ramps use
-/// it in full, on a curve 0.4 of it, and the rest is for the jerk that speed and acceleration make on the curve.
+/// torque-speed curve (which is level up to that speed), or of the torque of the drive's maximum current where that is
+/// lower (effects.drive_current_limit), each way as gravity pushes. The rest is for friction and elasticity, which the
+/// rigid model leaves out. Each axis keeps its jerk limit: on a line the ramps use it in full, on a curve 0.4 of it,
+/// and the rest is for the jerk that speed and acceleration make on the curve.
 ///
-/// Each piece then runs a jerk-limited ramp up to its top speed under the acceleration the places allow where the ramp
-/// is (`climb`), cruises, and ramps down the same way, planned from its end (`piece_timing`); its top speed may be
-/// above what its slowest place allows where the ramps pass that place more slowly. The velocity and acceleration
-/// limits of the axes play no part.
+/// A gearbox (`PlanLimits::gearbox`) keeps `reserve` times its output torque rating: the output torque is the ratio
+/// times the motor's torque less what turns the inertia at the input, again of the form c a + d v^2 + e. A guide keeps
+/// its load rating (`PlanLimits::guide`): the machine gives each guide's load as a load at rest plus the size of a part
+/// linear in the acceleration (`Machine::rigid_guide_loads`).
+///
+/// Each piece then follows the highest speed its places allow (`smoothed`: the places' top speeds, lowered where the
+/// speed could not come down in time or would bend too sharply for the jerk) from below, as fast as the jerk and the
+/// acceleration there allow, from its start and from its end (`follow`), and the two runs meet at a top speed at which
+/// both have no acceleration (`piece_timing`): the highest that fits. The velocity and acceleration limits of the axes
+/// play no part.
 ///
 /// The belt is a limit of the plan too: `tension` is the lowest and the highest tension a belt section may have
 /// (`ratings.belt_min_tension_n` and `belt_max_tension_n`, each less `profile.tension_margin_n`; -inf and inf where the
@@ -1392,18 +1443,16 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 pub fn plan_time_optimal(
     machine: &dyn Machine,
     drive: &DriveParams,
-    reserve: f64,
-    tension: [f64; 3],
+    limits: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     cycle: f64,
     tolerance: f64,
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let ((geo, _), _) = time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?;
-    let limits =
-        geo.iter().map(|piece| piece_limits(machine, drive, reserve, tension, piece)).collect::<Result<Vec<_>, _>>()?;
-    timed_by_motors(machine.axes(), &geo, &limits, cycle)
+    let ((geo, _), _) = time_optimal_geometry(machine, drive, limits, start, pieces, tolerance, slack)?;
+    let places = geo.iter().map(|piece| piece_limits(machine, drive, limits, piece)).collect::<Result<Vec<_>, _>>()?;
+    timed_by_motors(machine.axes(), &geo, &places, cycle)
 }
 
 /// The same path as `plan` times, transition curves included, their lengths for the speeds the motors allow, with
@@ -1412,8 +1461,7 @@ pub fn plan_time_optimal(
 fn time_optimal_geometry(
     machine: &dyn Machine,
     drive: &DriveParams,
-    reserve: f64,
-    tension: [f64; 3],
+    &PlanLimits { reserve, tension, .. }: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     tolerance: f64,
@@ -1441,14 +1489,13 @@ fn time_optimal_geometry(
 pub fn deviation_time_optimal(
     machine: &dyn Machine,
     drive: &DriveParams,
-    reserve: f64,
-    tension: [f64; 3],
+    limits: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     tolerance: f64,
     slack: f64,
 ) -> Result<f64, CommandError> {
-    Ok(time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?.0.1)
+    Ok(time_optimal_geometry(machine, drive, limits, start, pieces, tolerance, slack)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
@@ -1461,7 +1508,7 @@ fn motor_limits<'a>(
 ) -> impl Fn(&Geo) -> [f64; 3] + 'a {
     let axes = machine.axes();
     let [_, _, jerk] = axis_bounds(axes);
-    let (torque, h) = (reserve * drive.torque_curve(drive.rated_speed).1, 1e-3);
+    let (torque, h) = (reserve * motor_torque(drive), 1e-3);
     move |piece| {
         let per_motor = |f: &dyn Fn(&mut [f64])| {
             let mut out = vec![0.0; machine.motors().len()];
@@ -1535,13 +1582,21 @@ const KEPT_BACK: f64 = 2e-4;
 const STEPS_PER_CYCLE: f64 = 4.0;
 /// The step of the central differences by which the plan reads the motors' speed per speed along the path (m).
 const TURN_STEP: f64 = 1e-6;
-/// A place that a piece's top speed is above is passed at no more than this share of its own top speed, so that its
-/// torque and tension keep room for the acceleration of the climbs.
-const PASSED_BELOW: f64 = 0.9;
-/// Top speeds above the slowest place's that the plan tries per piece.
-const TOP_TRIES: usize = 16;
-/// The most steps of a climb: one that takes longer is held back by a ceiling near zero and refused.
-const CLIMB_STEPS: usize = 1 << 16;
+/// The step of the second differences by which the plan reads how the motors' speed per speed along the path changes
+/// along it, for the torque that turns a gearbox's input (m, or rad on a path in joint space).
+const BEND_STEP: f64 = 1e-4;
+/// The share of the ceilings of acceleration that the speed curve a piece follows may use (`smoothed`), and the share of
+/// the ramps' jerk its own jerk may use: the rest lets a run catch up with the curve and follow its bends.
+const CURVE_ACCELERATION: f64 = 0.9;
+const CURVE_JERK: f64 = 0.5;
+/// The most sweeps that lower the speed curve until its acceleration and jerk hold.
+const CURVE_SWEEPS: usize = 300;
+/// The speeds, evenly from zero to the curve's highest, at which the ceilings of acceleration are worked out
+/// (`PieceLimits::most`): a run takes the ceilings of the lowest level at or above the speed it can reach.
+const LEVELS: usize = 32;
+/// The most steps of a run along a piece (`follow`): one that takes longer is held back by a ceiling near zero and
+/// refused. 2^18 steps are 65 s at a profile cycle of 1 ms.
+const RUN_STEPS: usize = 1 << 18;
 
 /// What bounds the speed v and the acceleration a along the path at one place of a piece (p', p'', p''': the pose's
 /// derivatives by the distance along the path).
@@ -1577,56 +1632,133 @@ impl Place {
 }
 
 /// A piece as the time-optimal plan sees it: its places, evenly spaced by `spacing` from its start to its end, the
-/// jerk along the path its ramps may use, and the lowest and the highest of the places' speeds without acceleration.
+/// jerk along the path its ramps may use, the lowest of the places' speeds without acceleration, and for a run from
+/// the start ([0]) and one from the end ([1]), each by the distance from where it starts: the speed curve it follows
+/// (`smoothed`, as squared speeds at the places) and, per speed level (`level` apart, `LEVELS` of them), the most
+/// acceleration and deceleration of the run at each place at speeds up to that level (`ceiling`), as
+/// most[run][acceleration or deceleration][level][place].
 struct PieceLimits {
     places: Vec<Place>,
     spacing: f64,
     jerk: f64,
     lowest: f64,
-    highest: f64,
+    curve: [Vec<f64>; 2],
+    /// Per run, the lowest of the curve over 2^i places from each place on, as lowest_ahead[run][i][place].
+    lowest_ahead: [Vec<Vec<f64>>; 2],
+    level: f64,
+    most: [[Vec<Vec<f64>>; 2]; 2],
 }
 
 impl PieceLimits {
-    /// The highest speed at which a plan with the top speed `top` passes the place `p`: top, or where the place holds
-    /// less, `PASSED_BELOW` of what it holds.
-    fn passing(top: f64, p: &Place) -> f64 {
-        if top > p.top { PASSED_BELOW * p.top } else { top }
+    /// The speed level whose ceilings hold up to the speed `v`.
+    fn level_of(&self, v: f64) -> usize {
+        ((v / self.level).ceil() as usize).clamp(1, LEVELS) - 1
     }
 
-    /// The most acceleration (`sign` 1, by the distance from the start) or deceleration (-1, by the distance from the
-    /// end) at each place, at speeds up to `passing`; at no place more than at the places on either side of it, so
-    /// that it holds between places too; and lowered ahead of where it falls, by `jerk` / `top` per distance, so that
-    /// the acceleration can follow it within the jerk.
-    fn ceiling(&self, top: f64, sign: f64) -> Vec<f64> {
-        let fall = self.jerk * self.spacing / top;
-        let mut most = self.along(sign, |p| p.most(Self::passing(top, p), sign));
-        for k in (0..most.len() - 1).rev() {
-            most[k] = most[k].min(most[k + 1] + fall);
-        }
-        most
-    }
-
-    /// `value` at each place, by the distance from the start (`sign` 1) or from the end (-1), and at no place more than
-    /// at the places on either side of it.
-    fn along(&self, sign: f64, value: impl Fn(&Place) -> f64) -> Vec<f64> {
-        let mut at: Vec<f64> = self.places.iter().map(value).collect();
-        if sign < 0.0 {
-            at.reverse();
-        }
-        let n = at.len();
-        (0..n).map(|k| at[k.saturating_sub(1)].min(at[k]).min(at[(k + 1).min(n - 1)])).collect()
+    /// The lowest squared speed of a run's curve between the distances `from` and `to` (by the places around them).
+    fn lowest_between(&self, backward: bool, from: f64, to: f64) -> f64 {
+        let table = &self.lowest_ahead[backward as usize];
+        let last = table[0].len() - 1;
+        let (i, j) = (((from / self.spacing) as usize).min(last), ((to / self.spacing).ceil() as usize).min(last));
+        let (i, j) = (i.min(j), i.max(j));
+        let size = (usize::BITS - 1 - (j - i + 1).leading_zeros()) as usize;
+        table[size][i].min(table[size][j + 1 - (1 << size)])
     }
 }
 
+/// The lowest of `values` over 2^i entries from each entry on, for i from 0 while 2^i fits: a range's lowest is then the
+/// lower of two overlapping such spans.
+fn lowest_ahead(values: &[f64]) -> Vec<Vec<f64>> {
+    let mut table = vec![values.to_vec()];
+    while 2 << (table.len() - 1) <= values.len() {
+        let (half, last) = (1 << (table.len() - 1), &table[table.len() - 1]);
+        let next = (0..=values.len() - 2 * half).map(|k| last[k].min(last[k + half])).collect();
+        table.push(next);
+    }
+    table
+}
+
+/// The speed curve a piece follows from below, as squared speeds x at its places: no place's top exceeded, the
+/// acceleration along it (x' / 2) within `CURVE_ACCELERATION` of the places' ceilings (`Place::most`, at speeds up to
+/// the curve's), and its jerk (v times the change of that acceleration per distance, so |x''| <= 2 j / v) within
+/// `CURVE_JERK` of the ramps' jerk. It starts at the places' tops (infinite ones at the highest finite) and is only ever
+/// lowered, in sweeps forwards and backwards: a rise or a fall too steep lowers its upper end; a peak too sharp is
+/// lowered onto the bound; at a dip too sharp the higher of its two sides is lowered, then both. So it never falls below
+/// its lowest place's top, which is also why the end speeds a piece is planned with (no more than that,
+/// `timed_by_motors`) are always below it.
+///
+/// shortcut: the sweeps stop once one changes the curve by no more than 1e-7 of its highest, or after `CURVE_SWEEPS`
+/// (a sharp dip converges slowly, by about 1 % a sweep); what is left of a bend too sharp is far within the jerk the runs
+/// keep beside the curve's. Solve the bends directly (a parabola in x around each dip) if a machine's dips need more.
+fn smoothed(places: &[Place], spacing: f64, jerk: f64, highest: f64) -> Vec<f64> {
+    let n = places.len();
+    let mut x: Vec<f64> = places.iter().map(|p| p.top.min(highest).powi(2)).collect();
+    let most = |k: usize, x: f64, sign: f64| CURVE_ACCELERATION * places[k].most(x.sqrt(), sign);
+    let bend = 2.0 * CURVE_JERK * jerk * spacing * spacing;
+    let bend_at = |x: &mut Vec<f64>, k: usize| {
+        let (c, d2) = (bend / x[k].sqrt(), x[k - 1] + x[k + 1] - 2.0 * x[k]);
+        if d2 < -c {
+            x[k] = 0.5 * (x[k - 1] + x[k + 1] + c);
+        } else if d2 > c {
+            let (high, low) = if x[k - 1] > x[k + 1] { (k - 1, k + 1) } else { (k + 1, k - 1) };
+            let mut excess = d2 - c;
+            let first = excess.min(x[high] - x[low]);
+            (x[high], excess) = (x[high] - first, excess - first);
+            x[k - 1] -= 0.5 * excess;
+            x[k + 1] -= 0.5 * excess;
+        }
+    };
+    for _ in 0..CURVE_SWEEPS {
+        let before = x.clone();
+        for k in 0..n - 1 {
+            let rise = most(k, x[k + 1], 1.0).min(most(k + 1, x[k + 1], 1.0));
+            x[k + 1] = x[k + 1].min(x[k] + 2.0 * spacing * rise);
+            if k > 0 {
+                bend_at(&mut x, k);
+            }
+        }
+        for k in (0..n - 1).rev() {
+            let fall = most(k, x[k], -1.0).min(most(k + 1, x[k], -1.0));
+            x[k] = x[k].min(x[k + 1] + 2.0 * spacing * fall);
+            if k + 2 < n {
+                bend_at(&mut x, k + 1);
+            }
+        }
+        let top = x.iter().fold(0.0, |a: f64, b| a.max(*b));
+        if x.iter().zip(&before).all(|(now, then)| then - now <= 1e-7 * top) {
+            break;
+        }
+    }
+    x
+}
+
+/// The most acceleration of a run (`sign` 1 for a run from the start: forwards; -1 from the end: the deceleration
+/// forwards) or the most it slows down (the other sign) at each place, by the distance from where the run starts
+/// (`backward` from the end), at speeds up to the run's `curve` there and up to `cap`, lowered ahead of where it falls by
+/// the jerk times the least time between two places (their spacing over that speed), so that the acceleration can
+/// follow it. Between places it is taken as straight (`ceiling_at`), within what the plan keeps back (`KEPT_BACK`).
+fn ceiling(places: &[Place], curve: &[f64], spacing: f64, jerk: f64, sign: f64, backward: bool, cap: f64) -> Vec<f64> {
+    let n = places.len();
+    let at = |k: usize| if backward { n - 1 - k } else { k };
+    let speed: Vec<f64> = curve.iter().map(|x| x.sqrt().min(cap)).collect();
+    let mut most: Vec<f64> = (0..n).map(|k| places[at(k)].most(speed[k], sign)).collect();
+    for k in (0..n - 1).rev() {
+        most[k] = most[k].min(most[k + 1] + jerk * spacing / speed[k].max(speed[k + 1]));
+    }
+    most
+}
+
 /// The places of a piece and what bounds the time-optimal plan at each (see `plan_time_optimal`). Refused where the
-/// torque that holds the tool or the belt's holding tension leaves no room, or where the piece turns no motor.
+/// torque that holds the tool (at a motor or a gearbox), the belt's holding tension or a guide's load at rest leaves no
+/// room, or where the piece turns no motor.
 fn piece_limits(
     machine: &dyn Machine,
     drive: &DriveParams,
-    reserve: f64,
-    [lowest, highest, share]: [f64; 3],
+    limits: &PlanLimits,
     geo: &Geo,
 ) -> Result<PieceLimits, CommandError> {
+    let (reserve, [lowest, highest, share]) = (limits.reserve, limits.tension);
+    let gearbox = |m: usize| limits.gearbox.get(m).copied().flatten();
     let (axes, motors, length) = (machine.axes(), machine.motors().len(), geo.length());
     // The tightest curvature, so that on a tight curve the places are no more than `PLACE_TURN` of its turning apart.
     let tightest = match geo {
@@ -1656,7 +1788,7 @@ fn piece_limits(
         .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs()))
         .fold(f64::INFINITY, f64::min);
     let jerk = if matches!(geo, Geo::Line { .. }) { 1.0 } else { 0.4 } * along;
-    let torque = (1.0 - KEPT_BACK) * reserve * drive.torque_curve(drive.rated_speed).1;
+    let torque = (1.0 - KEPT_BACK) * reserve * motor_torque(drive);
     let zero = vec![0.0; axes.len()];
     let mut places = Vec::new();
     for [pose, d1, d2, d3] in &derivatives {
@@ -1689,18 +1821,56 @@ fn piece_limits(
                 rows.push([per_acc[k] - still[k], per_speed[k] - still[k], 0.0, -room, room]);
             }
         }
+        // The motors' angles a distance h along the path, to second order: pose + h p' + h^2 / 2 p''.
+        let angles = |h: f64| {
+            let mut out = vec![0.0; motors];
+            let moved: Vec<f64> =
+                pose.iter().zip(d1).zip(d2).map(|((p, d1), d2)| p + h * d1 + 0.5 * h * h * d2).collect();
+            machine.inverse(&moved, &mut out);
+            out
+        };
+        let (ahead, behind) = (angles(TURN_STEP), angles(-TURN_STEP));
+        if (0..motors).any(|m| gearbox(m).is_some()) {
+            // The output torque ratio (T - I alpha), alpha = theta' a + theta'' v^2 the input's angular acceleration.
+            // shortcut: lossless, as the rest of the rigid model (the reserve covers the losses with the friction); take
+            // the efficiency in where a gearbox's losses are large against the reserve.
+            let (far, here, back) = (angles(BEND_STEP), angles(0.0), angles(-BEND_STEP));
+            for m in (0..motors).filter_map(|m| Some((m, gearbox(m)?))).collect::<Vec<_>>() {
+                let (m, [ratio, inertia, rated]) = m;
+                let turn = (ahead[m] - behind[m]) / (2.0 * TURN_STEP);
+                let bend = (far[m] - 2.0 * here[m] + back[m]) / (BEND_STEP * BEND_STEP);
+                let [c, d, e, ..] = rows[m];
+                let room = (1.0 - KEPT_BACK) * reserve * rated;
+                if (ratio * e).abs() >= room {
+                    return Err(CommandError { key: "error-path-torque" });
+                }
+                rows.push([ratio * (c - inertia * turn), ratio * (d - inertia * bend), ratio * e, -room, room]);
+            }
+        }
+        if limits.guide.is_finite() {
+            // Each guide's load is its load at rest plus the size of a part linear in the tool's acceleration.
+            // shortcut: no reserve: what friction adds to the acceleration the motors command is not in it; give the
+            // guides a share of their own if the full model's guide loads pass the rating.
+            let loads = |acc: &[f64]| {
+                let mut out = Vec::new();
+                machine.rigid_guide_loads(pose, acc, &mut out);
+                out
+            };
+            let (still, per_acc, per_speed) = (loads(&zero), loads(d1), loads(d2));
+            for k in 0..still.len() {
+                let room = (1.0 - KEPT_BACK) * (limits.guide - still[k][0]);
+                if !(room > 0.0) {
+                    return Err(CommandError { key: "error-path-guide" });
+                }
+                rows.push([per_acc[k][1] - still[k][1], per_speed[k][1] - still[k][1], 0.0, -room, room]);
+            }
+        }
         let bends: Vec<[f64; 3]> = axes
             .iter()
             .enumerate()
             .map(|(i, a)| [3.0 * d2[i].abs(), d3[i].abs(), a.max_jerk - jerk * d1[i].abs()])
             .collect();
         // The highest speed squared: each motor at its rated speed, each row and bend without acceleration.
-        let angles = |sign: f64| {
-            let mut out = vec![0.0; motors];
-            machine.inverse(&pose.iter().zip(d1).map(|(p, d)| p + sign * TURN_STEP * d).collect::<Vec<_>>(), &mut out);
-            out
-        };
-        let (ahead, behind) = (angles(1.0), angles(-1.0));
         let mut x = (0..motors)
             .map(|m| (drive.rated_speed * 2.0 * TURN_STEP / (ahead[m] - behind[m]).abs()).powi(2))
             .fold(f64::INFINITY, f64::min);
@@ -1718,34 +1888,67 @@ fn piece_limits(
         return Err(CommandError { key: "error-path-torque" });
     }
     let highest = places.iter().map(|p| p.top).filter(|t| t.is_finite()).fold(lowest, f64::max);
-    Ok(PieceLimits { places, spacing, jerk, lowest, highest })
+    let forward = smoothed(&places, spacing, jerk, highest);
+    let backward: Vec<f64> = forward.iter().rev().copied().collect();
+    let level = forward.iter().fold(0.0, |a: f64, b| a.max(*b)).sqrt() / LEVELS as f64;
+    let tables = |curve: &[f64], sign: f64, backward: bool| -> Vec<Vec<f64>> {
+        (1..=LEVELS).map(|l| ceiling(&places, curve, spacing, jerk, sign, backward, l as f64 * level)).collect()
+    };
+    let most = [
+        [tables(&forward, 1.0, false), tables(&forward, -1.0, false)],
+        [tables(&backward, -1.0, true), tables(&backward, 1.0, true)],
+    ];
+    let lowest_ahead = [lowest_ahead(&forward), lowest_ahead(&backward)];
+    Ok(PieceLimits { places, spacing, jerk, lowest, curve: [forward, backward], lowest_ahead, level, most })
 }
 
-/// A table of `PieceLimits::ceiling` or `along` at the distance `s`, between its places by straight lines.
+/// A table of `ceiling` at the distance `s`, between its places by straight lines.
 fn ceiling_at(most: &[f64], spacing: f64, s: f64) -> f64 {
     let x = (s / spacing).clamp(0.0, (most.len() - 1) as f64);
     let k = (x as usize).min(most.len() - 2);
     most[k] + (x - k as f64) * (most[k + 1] - most[k])
 }
 
-/// A jerk-limited change of speed from `from` up to `top`, with no acceleration at either end, from the distance
-/// `start` on and ending no further than `end`, under the ceiling of acceleration `most` and below the speed `cap`
-/// (both by distance): its knots (time, distance, speed, acceleration), with the jerk constant between them, at steps
-/// of `step`. As fast as the jerk and the ceiling allow: the acceleration rises at the jerk limit, follows the
-/// ceiling, and falls so that it reaches zero as the speed reaches `top`, at the jerk limit or, where the ceiling held
-/// it lower, less. `None` where it does not get there by `end`, or passes the cap.
-fn climb(
+/// The speed curve of a run (`PieceLimits::curve`) at the distance `s`: its speed, its acceleration v dv/ds (straight
+/// between the middles of the places' gaps) and its jerk, v times the change of that acceleration per distance.
+fn along_curve(curve: &[f64], spacing: f64, s: f64) -> [f64; 3] {
+    let n = curve.len();
+    let x = (s / spacing).clamp(0.0, (n - 1) as f64);
+    let k = (x as usize).min(n - 2);
+    let speed = (curve[k] + (x - k as f64) * (curve[k + 1] - curve[k])).max(0.0).sqrt();
+    let acc = |i: usize| (curve[i + 1] - curve[i]) / (2.0 * spacing);
+    let m = (x - 0.5).clamp(0.0, (n - 2) as f64);
+    let i = (m as usize).min(n - 3);
+    let (a0, a1) = (acc(i), acc(i + 1));
+    [speed, a0 + (m - i as f64) * (a1 - a0), speed * (a1 - a0) / spacing]
+}
+
+/// A jerk-limited run along a piece from the speed `from`, with no acceleration, at the distance `start` from where it
+/// starts (the piece's start, or its end with `backward`, by `PieceLimits::curve` and `most` [1]), until the speed
+/// reaches `top` with no acceleration, no further than `end`. Its knots (time, distance, speed, acceleration) with the
+/// jerk constant between them, at steps of `step`. `None` where it does not reach top by `end`, or stops.
+///
+/// Each step the acceleration rises by as much as the jerk allows, but no more than three things allow: the ceiling of
+/// acceleration ahead; that it can still fall to zero at the jerk limit by the time the speed reaches top; and that it
+/// can still come down onto the speed curve the run follows, at the jerk left beside the curve's own (at least
+/// `1 - CURVE_JERK` of it), by the time the speed reaches the curve. The last is left out while the acceleration can
+/// fall to zero at the jerk limit with the speed below the curve all the way, and the curve keeps room there for its own
+/// slowing down. It falls at most to the ceiling of slowing down. So the run rises along the ceiling, comes onto the
+/// speed curve and follows it, up and down, and on to top; and it is the same run, whatever the top, until it brakes
+/// for it, so that a higher top that fits is the quicker.
+fn follow(
+    limits: &PieceLimits,
     from: f64,
     top: f64,
-    jerk: f64,
     [start, end]: [f64; 2],
-    most: &dyn Fn(f64) -> f64,
-    cap: &dyn Fn(f64) -> f64,
+    backward: bool,
     step: f64,
 ) -> Option<Vec<[f64; 4]>> {
-    let mut knots = vec![[0.0, start, from, 0.0]];
+    let (curve, [up, down]) = (&limits.curve[backward as usize], &limits.most[backward as usize]);
+    let (jerk, spacing) = (limits.jerk, limits.spacing);
     let rise = jerk * step;
-    while knots.len() < CLIMB_STEPS {
+    let mut knots = vec![[0.0, start, from, 0.0]];
+    while knots.len() < RUN_STEPS {
         let [t, s, v, a] = knots[knots.len() - 1];
         if v >= top {
             return Some(knots);
@@ -1762,13 +1965,37 @@ fn climb(
             let h = (2.0 * (top - v) / a).max(0.0);
             let s = s + v * h + a * h * h / 3.0;
             knots.push([t + h, s, top, 0.0]);
-            return (s <= end && top <= cap(s)).then_some(knots);
+            return (s <= end).then_some(knots);
         }
         let ahead = s + v * step + (a / 2.0 + rise / 6.0) * step * step;
-        let du = brake.min(most(ahead) - a).min(rise).max(-rise).max(-a);
+        // Onto the curve: with y the acceleration above the curve's after this step and g the gap to the curve's speed
+        // then, at the jerk k beside the curve's own the gap closes as y falls to zero where y^2 <= 2 k g, and
+        // g = gap - y step / 2, gap = curve - v - (a + curve's a) step / 2 at an acceleration rising evenly to it.
+        let [speed, acc, own] = along_curve(curve, spacing, ahead);
+        let k = (jerk - own.abs()).max((1.0 - CURVE_JERK) * jerk);
+        let gap = speed - v - 0.5 * (a + acc) * step;
+        let y =
+            if gap >= 0.0 { 0.5 * ((k * k * step * step + 8.0 * k * gap).sqrt() - k * step) } else { 2.0 * gap / step };
+        // The ceilings for the most speed the run can reach if its acceleration falls to zero from after this step.
+        let high = (a + rise).max(0.0);
+        let level = limits.level_of(v + (a + rise / 2.0) * step + high * high / (2.0 * jerk));
+        let floor = (-ceiling_at(&down[level], spacing, ahead) - a).clamp(-rise, rise);
+        let du = brake.min(ceiling_at(&up[level], spacing, ahead) - a).min(rise).max(floor);
+        // Below the curve all the way if the acceleration falls to zero from after this step: the speed rises to
+        // `reach` over the time a / jerk; there the curve's own slowing down has to have room (y >= 0 at no gap).
+        let after = a + du;
+        let reach = v + (a + du / 2.0) * step + after.max(0.0).powi(2) / (2.0 * jerk);
+        let there = ahead + reach * after.max(0.0) / jerk;
+        let [end_speed, end_acc, end_own] = along_curve(curve, spacing, there);
+        let room = (jerk - end_own.abs()).max((1.0 - CURVE_JERK) * jerk);
+        // (To the rounding of a run that ends on the curve's speed.)
+        let reach = reach * (1.0 - 1e-9);
+        let clear = reach * reach <= limits.lowest_between(backward, ahead, there)
+            && end_acc.min(0.0).powi(2) <= 2.0 * room * (end_speed - reach).max(0.0);
+        let du = if clear { du } else { du.min(y + acc - a).max(floor) };
         let next = [t + step, s + v * step + (a / 2.0 + du / 6.0) * step * step, v + (a + du / 2.0) * step, a + du];
-        // Past the end or the cap, or held at rest by a ceiling of zero.
-        if next[1] > end || next[2] > cap(next[1]) || (next[2] <= 0.0 && next[3] <= 0.0) {
+        // Past the end, or held at rest by a ceiling of zero.
+        if next[1] > end || (next[2] <= 0.0 && next[3] <= 0.0) {
             return None;
         }
         knots.push(next);
@@ -1777,15 +2004,15 @@ fn climb(
 }
 
 /// The timing of one piece of the length `length` from the speed `v0` at its start to `v1` at its end, with `top` the
-/// highest speed on it: steady for `hold` at each end that is not at rest, a climb from v0 to top, cruise at top, a
-/// climb down to v1 (planned from the end backwards, as a climb under the ceiling of deceleration). As knots (time from
+/// highest speed on it: steady for `hold` at each end that is not at rest, a run from v0 that follows the speed curve
+/// up to top, cruise at top, and a run down to v1 (planned from the end backwards the same way). As knots (time from
 /// the start, distance, speed, acceleration) with the jerk constant between them. `None` where that does not fit into
-/// the piece or passes a place faster than it holds (top may be above the speed of the piece's slowest place, where
-/// the climbs pass that place slower); `slack` is how much more than the piece's length it may take, for rounding.
+/// the piece or the cruise passes a place faster than it holds; `slack` is how much more than the piece's length it
+/// may take, for rounding.
 ///
-/// shortcut: one cruise speed per piece, so a piece whose speed limit rises and falls between its ramps cruises at the
-/// lowest of it there; let the cruise follow the limit (ramps with acceleration across it) if a machine's speed limit
-/// changes much within one cruise.
+/// shortcut: the two runs join on a cruise at top, at no acceleration, so where the runs meet while the speed curve
+/// still rises or falls the plan cruises a little below where they meet (where many pieces join at speed on a speed
+/// limit that changes much, join the runs on the curve instead).
 fn piece_timing(
     limits: &PieceLimits,
     length: f64,
@@ -1795,28 +2022,17 @@ fn piece_timing(
     slack: f64,
 ) -> Option<Vec<[f64; 4]>> {
     let (start, end) = (hold * v0, length + slack - hold * v1);
-    let (up, down) = (limits.ceiling(top, 1.0), limits.ceiling(top, -1.0));
-    let (ahead, behind) =
-        (limits.along(1.0, |p| PieceLimits::passing(top, p)), limits.along(-1.0, |p| PieceLimits::passing(top, p)));
-    let at = |table: &[f64], s: f64| ceiling_at(table, limits.spacing, s);
-    let rise = climb(v0, top, limits.jerk, [start, end], &|s| at(&up, s), &|s| at(&ahead, s), step)?;
+    let rise = follow(limits, v0, top, [start, end], false, step)?;
     let reached = rise[rise.len() - 1][1];
-    let fall = climb(
-        v1,
-        top,
-        limits.jerk,
-        [hold * v1, length + slack - reached],
-        &|s| at(&down, s),
-        &|s| at(&behind, s),
-        step,
-    )?;
+    let fall = follow(limits, v1, top, [hold * v1, length + slack - reached], true, step)?;
     let (braking, took) = ((length - fall[fall.len() - 1][1]).max(reached), fall[fall.len() - 1][0]);
     // The cruise between the climbs holds at top at every place it passes.
     let (first, last) = (
         (reached / limits.spacing).floor() as usize,
         ((braking / limits.spacing).ceil() as usize).min(limits.places.len() - 1),
     );
-    if limits.places[first.min(last)..=last].iter().any(|p| p.top < top) {
+    // (To the rounding of the places' tops, read by differences: a top on the curve is on the places' tops.)
+    if limits.places[first.min(last)..=last].iter().any(|p| p.top < top * (1.0 - 1e-8)) {
         return None;
     }
     let mut knots = vec![[0.0, 0.0, v0, 0.0]];
@@ -1877,29 +2093,14 @@ fn timed_by_motors(
     let mut knots = Vec::new();
     for i in 0..n {
         let (v0, v1) = (speed[i], speed[i + 1]);
-        // The top speed: the highest that fits up to the slowest place; above it, where the climbs pass the slower
-        // places below their speed, whichever of `TOP_TRIES` speeds up to the fastest place's is quickest. (Which top
-        // speeds fit above the slowest place's is not one range: a top just above a place's own speed makes the
-        // climbs pass it at `PASSED_BELOW` of that.)
+        // The top speed: the highest that fits, up to the curve's highest. The runs are the same whatever the top until
+        // they brake for it, so the higher top is the quicker; it fits while the runs reach it before they meet.
+        // shortcut: halving takes the tops that fit as one range from `low`; where the speed curve has two humps with a
+        // dip between them, a top between the dip and the lower hump does not fit and the halving may settle below the
+        // dip. Search each hump's range if machines with such pieces need it.
         let low = v0.max(v1);
-        let mut top = largest(low, limits[i].lowest.max(low), |top| timing(i, v0, v1, top, 0.0).is_some());
-        let mut best = timing(i, v0, v1, top, 0.0).map_or(f64::INFINITY, |k| k[k.len() - 1][0]);
-        // The tries: first over the whole range, then as many again between the tries on either side of the quickest.
-        let (mut from, mut width) = (top, limits[i].highest - top);
-        for _ in 0..2 {
-            if width <= 1e-9 * top {
-                break;
-            }
-            for k in 1..=TOP_TRIES {
-                let tried = from + width * k as f64 / TOP_TRIES as f64;
-                if let Some(took) = timing(i, v0, v1, tried, 0.0).map(|k| k[k.len() - 1][0]).filter(|took| *took < best)
-                {
-                    (top, best) = (tried, took);
-                }
-            }
-            let apart = width / TOP_TRIES as f64;
-            (from, width) = ((top - apart).max(low), 2.0 * apart);
-        }
+        let highest = limits[i].curve[0].iter().fold(low * low, |a: f64, b| a.max(*b)).sqrt();
+        let top = highest_fitting(low, highest, |top| timing(i, v0, v1, top, 0.0).is_some());
         // The look-ahead has made every piece fit; the slack is for a difference in the last bit.
         knots.push(timing(i, v0, v1, top, 1e-9 * geo[i].length()).ok_or(CommandError { key: "error-path" })?);
     }
@@ -3081,5 +3282,55 @@ line,0.3,0.13",
         assert!(distance(&end, &[0.4, 0.25]) < 1e-12 && distance(&dir, &[0.0, 1.0]) < 1e-12, "{end:?} {dir:?}");
         assert_no_steps(&geo, "three quarters");
         assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.4, 0.25], "three quarters");
+    }
+
+    /// Places with the same acceleration bound A = 10 m/s^2 both ways at any speed and a top of 1 m/s, except one of
+    /// 0.5 m/s in the middle, 10 mm apart.
+    fn dip(jerk: f64) -> (Vec<Place>, Vec<f64>) {
+        let places: Vec<Place> = (0..41)
+            .map(|k| Place {
+                rows: vec![[1.0, 0.0, 0.0, -10.0, 10.0]],
+                bends: Vec::new(),
+                top: if k == 20 { 0.5 } else { 1.0 },
+            })
+            .collect();
+        let x = smoothed(&places, 0.01, jerk, 1.0);
+        (places, x)
+    }
+
+    /// The speed curve a piece follows around a slow place. With a jerk too high to matter, the squared speed may change
+    /// by 2 * 0.01 m * 0.9 * 10 m/s^2 = 0.18 m^2/s^2 from place to place, so from the dip's 0.25 it rises 0.43, 0.61,
+    /// 0.79, 0.97 to the tops' 1 on either side. With 50 m/s^3 the bends hold too: |x'' spacing^2| <= 2 * 0.5 * 50 *
+    /// 0.01^2 / v, never above a top, never below the dip.
+    #[test]
+    fn the_speed_curve_comes_down_to_a_slow_place_within_its_acceleration_and_jerk() {
+        let (_, x) = dip(1e9);
+        for (i, want) in [0.25, 0.43, 0.61, 0.79, 0.97, 1.0, 1.0].iter().enumerate() {
+            assert!((x[20 + i] - want).abs() < 1e-12 && (x[20 - i] - want).abs() < 1e-12, "{i}: {x:?}");
+        }
+        let (places, x) = dip(50.0);
+        let lowest = x.iter().fold(f64::INFINITY, |a: f64, b| a.min(*b));
+        assert!((lowest - 0.25).abs() < 1e-12 && x.iter().zip(&places).all(|(x, p)| *x <= p.top * p.top), "{x:?}");
+        for k in 1..40 {
+            let bend = (x[k - 1] + x[k + 1] - 2.0 * x[k]).abs() * x[k].sqrt() / (2.0 * 0.5 * 50.0 * 1e-4);
+            let slope = (x[k + 1] - x[k]).abs() / (2.0 * 0.01 * 0.9 * 10.0);
+            assert!(bend <= 1.0 + 1e-4 && slope <= 1.0 + 1e-9, "at {k}: bend {bend}, slope {slope}, {x:?}");
+        }
+        // The jerk makes the dip wider than the acceleration alone: the curve is lower beside it.
+        assert!(x[21] < 0.43 - 0.01 && x[24] < 0.97, "{x:?}");
+    }
+
+    /// The lowest of a range of values from the table of lowest values over powers of two, against looking at each.
+    #[test]
+    fn the_lowest_over_a_range_is_the_lowest_of_its_values() {
+        let values: Vec<f64> = (0..37).map(|k| ((k * 7919) % 101) as f64).collect();
+        let table = lowest_ahead(&values);
+        for i in 0..values.len() {
+            for j in i..values.len() {
+                let size = (usize::BITS - 1 - (j - i + 1).leading_zeros()) as usize;
+                let lowest = table[size][i].min(table[size][j + 1 - (1 << size)]);
+                assert_eq!(lowest, values[i..=j].iter().fold(f64::INFINITY, |a, b| a.min(*b)), "{i}..={j}");
+            }
+        }
     }
 }

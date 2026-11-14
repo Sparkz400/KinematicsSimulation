@@ -595,6 +595,12 @@ impl Machine for SingleAxis {
         out.extend([p - force * l2 / (l1 + l2), p + force * l1 / (l1 + l2)]);
     }
 
+    /// The guide carries the weight of the carriage and what it carries (as `axis.x.guide_load`), whatever the
+    /// acceleration.
+    fn rigid_guide_loads(&self, _pos: &[f64], _acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        out.push([self.m() * self.g_normal, 0.0]);
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
