@@ -1,0 +1,92 @@
+name: Publish Python
+
+# The Python module (crates/sim-py) for PyPI as `kinematics-sim`: one abi3 wheel per platform (Windows x64, Linux x64
+# manylinux, macOS arm64) and an sdist. On a version tag (v1.0.0) they are uploaded by trusted publishing (OIDC: no
+# token in the repository; the PyPI project names this workflow and the environment "pypi"). Run by hand, it builds
+# and keeps them as artifacts without uploading.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+            manylinux: auto
+          # Not built anywhere else yet: a failure here leaves macOS out of the release instead of holding it up.
+          - os: macos-latest
+            optional: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional || false }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: "1.16.0"
+          rust-toolchain: "1.98.1"
+          working-directory: crates/sim-py
+          manylinux: ${{ matrix.manylinux || 'off' }}
+          args: --release --locked --out dist
+      # The wheel imports and runs one analysis before it is kept.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+      - name: Smoke test
+        shell: bash
+        run: |
+          pip install crates/sim-py/dist/*.whl
+          python -c "import kinematics_sim as ks; print(ks.analyze(ks.Config('single-axis')))"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wheel-${{ matrix.os }}
+          path: crates/sim-py/dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The package version is the workspace's: a tag that names another version is a mistake, not a release.
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} but Cargo.toml has ${version}"; exit 1; }
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: "1.16.0"
+          working-directory: crates/sim-py
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sdist
+          path: crates/sim-py/dist/*.tar.gz
+
+  publish:
+    needs: [wheels, sdist]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kinematics-sim/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist
