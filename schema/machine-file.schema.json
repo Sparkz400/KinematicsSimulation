@@ -475,7 +475,7 @@
                 "type": "array"
               },
               "values": {
-                "description": "The table of its values, laid out as [linear_motor] of the joint kit's linear motor axis (attraction force, pole pitch, guide friction coefficient).",
+                "description": "The table of its values, laid out as [linear_motor] of the registered linear motor axis (attraction force, pole pitch, guide friction coefficient).",
                 "type": "string"
               }
             },
@@ -621,7 +621,7 @@
                 "type": "array"
               },
               "values": {
-                "description": "The table of its values, laid out as [rack] of the joint kit's rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force).",
+                "description": "The table of its values, laid out as [rack] of the registered rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force).",
                 "type": "string"
               }
             },
@@ -689,7 +689,7 @@
                 "type": "array"
               },
               "strain_wave": {
-                "description": "The table of the strain wave gear's life values, laid out as [strain_wave] of the joint kit's rotary table.",
+                "description": "The table of the strain wave gear's life values, laid out as [strain_wave] of the registered rotary table.",
                 "type": "string"
               }
             },
@@ -731,7 +731,7 @@
                 "type": "array"
               },
               "values": {
-                "description": "The table of its values, laid out as [screw] of the joint kit's screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings).",
+                "description": "The table of its values, laid out as [screw] of the registered screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings).",
                 "type": "string"
               }
             },

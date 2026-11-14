@@ -713,7 +713,11 @@ fn a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported() {
         let (corner, end) = ([home[0] + 0.15 * dx, home[1]], [home[0] + 0.2 * dx, home[1] + 0.05 * dz]);
         let turn = if dx * dz > 0.0 { "ccw" } else { "cw" };
         let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-rounded.csv", entry.id)).to_str().unwrap().to_string();
-        let pieces = format!("line,{},{}\narc,{},{},{},{},{turn}\nline,{},{}\n", corner[0], corner[1], end[0], end[1], corner[0], end[1], end[0], end[1] + 0.1 * dz);
+        // First onto the start pose, so that the line after it is the arc's tangent. The plan starts at the setpoint at
+        // rest, which the planar delta's arms hold 0.26 mm above its start pose (they sag that far under the load): a line
+        // from there to the corner would meet the arc 0.26 / 150 = 1.75 mrad off its tangent, a corner (above 1 mrad),
+        // where the path stops with transition curves or without. The stop at the start pose costs both runs alike.
+        let pieces = format!("line,{},{}\nline,{},{}\narc,{},{},{},{},{turn}\nline,{},{}\n", home[0], home[1], corner[0], corner[1], end[0], end[1], corner[0], end[1], end[0], end[1] + 0.1 * dz);
         std::fs::write(&path, pieces).unwrap();
         // `analyze` ends its error stream with how the run was started (effects.thermal_warm_start, since 13 November):
         // what it says before that line.

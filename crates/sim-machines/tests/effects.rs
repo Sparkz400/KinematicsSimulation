@@ -197,12 +197,17 @@ fn with(cfg: &Config, edits: &[&str]) -> Config {
 /// gearboxes among the parts that warm, with the gearbox loss.
 #[test]
 fn a_direct_drive_has_no_gearbox_that_warms() {
+    // Every gearbox of a config by its ratio: `gearbox.ratio`, and a gearbox of one axis in a table of its own (a
+    // `<axis>_gearbox` table such as a turning tool's). Direct is all of them at ratio 1.
+    let ratios = |cfg: &Config| cfg.leaves().into_iter().map(|(key, _)| key).filter(|key| key.ends_with("gearbox.ratio")).collect::<Vec<_>>();
     for entry in MACHINES {
-        for (name, cfg) in configs(entry).into_iter().chain([("ratio 1".to_string(), with(&entry.config(), &["gearbox.ratio = 1.0"]))]) {
+        let direct_drive = ratios(&entry.config()).iter().map(|key| format!("{key} = 1.0")).collect::<Vec<_>>();
+        let direct_drive = with(&entry.config(), &direct_drive.iter().map(String::as_str).collect::<Vec<_>>());
+        for (name, cfg) in configs(entry).into_iter().chain([("ratio 1".to_string(), direct_drive)]) {
             let machine = (entry.build)(&cfg).unwrap();
             // An arm has its ratios per joint (`arm.gear_ratios`), and a SCARA's quill sits on its screw through a
             // coupling: each joint's gearbox warms and is named as such, each coupling neither.
-            let direct = cfg.f64("gearbox.ratio").unwrap() == 1.0 && cfg.get("arm.gear_ratios").is_err();
+            let direct = ratios(&cfg).iter().all(|key| cfg.f64(key).unwrap() == 1.0) && cfg.get("arm.gear_ratios").is_err();
             let gearboxes = machine.thermal_parts().iter().filter(|p| p.kind == "gearbox").count();
             let losses: Vec<_> = machine.signal_infos().into_iter().filter(|s| s.id.starts_with(&format!("{LOSS_PREFIX}gearbox"))).collect();
             let geared = losses.iter().filter(|s| s.quantity_key == "quantity-gearbox-loss-power").count();

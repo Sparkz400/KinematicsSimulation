@@ -41,11 +41,11 @@
 //! written for any C and F: their module comments derive them.
 //!
 //! A motor may drive an axis without a belt (`Direct`): a ball screw or a rack behind its gearbox, a linear motor, or a
-//! rotary table (an axis in rad). Its drive train is the joint kit's (`RotaryJoint` with the screw's or rack's
+//! rotary table (an axis in rad). Its drive train is the registered one-axis machines' (`RotaryJoint` with the screw's or rack's
 //! `transmission::Converter` behind the gearbox): the gearbox is then one in the axis's unit, of ratio i / lever, its
 //! stiffness the gearbox's and the converter's in series, its efficiency both, the screw's or pinion's inertia on the
 //! rotor. Its "pulley" is the axis itself: K has a row e_i for it, the axis takes the gearbox's output as its force,
-//! and in the elastic model the pulley's states follow the axis. So the joint kit's one-axis machines are this with no
+//! and in the elastic model the pulley's states follow the axis. So the registered screw, rack, linear motor and table axes are this with no
 //! belt (crates/sim-machines/tests/machine_files.rs checks the screw axis against its crate). A rotary axis has no
 //! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
@@ -153,7 +153,7 @@ enum DirectKind {
 }
 
 /// The motor's config with its `[<layout>]` (`screw`, `rack`, ...) replaced by the file's table at `table`: what the
-/// joint kit's `from_config` reads.
+/// transmissions' `from_config` reads.
 fn values_config(own: &Config, cfg: &Config, layout: &str, table: &str) -> Result<Config, ConfigError> {
     let mut all: toml::Table = own.to_text()?.parse().map_err(|_| ConfigError::Parse(table.into()))?;
     all.insert(layout.into(), cfg.get(table)?.clone());
@@ -422,7 +422,7 @@ impl ConfigMachine {
         let mut brakes = own.iter().zip(&j_rotor).map(|(c, j)| HoldingBrake::from_config(c, *j)).collect::<Result<Vec<_>, _>>()?;
         let mut coupled: Vec<bool> = gears.iter().map(Gearbox::is_coupling).collect();
         let mut extra_efficiency = vec![1.0; m];
-        // A screw, rack, linear motor or rotary: the drive train as the joint kit builds it, the converter behind the
+        // A screw, rack, linear motor or rotary: the drive train as the registered one-axis machines build it, the converter behind the
         // gearbox, which is then one in the axis's unit (see the module comment).
         let guide_friction = cfg.bool("effects.guide_friction")?;
         let mut direct = Vec::with_capacity(m);
@@ -465,7 +465,7 @@ impl ConfigMachine {
                         return Err(ConfigError::Invalid(format!("{at} (motor {} is a linear motor: its gearbox is the forcer's mounting, ratio 1)", d.id)));
                     }
                     joint.ripple.cogging_order = motor.cogging_order();
-                    // The attraction presses the guides: its friction, as the joint kit adds it.
+                    // The attraction presses the guides: its friction, as the registered one-axis machines add it.
                     if guide_friction {
                         joint.shaft.coulomb += view.non_negative("linear_motor.guide_friction_coefficient").map_err(|e| renamed(e, "linear_motor", values))? * motor.attraction;
                     }
@@ -1629,7 +1629,7 @@ impl Machine for ConfigMachine {
             out.extend(self.spans.iter().enumerate().map(|(i, p)| SignalInfo::new(format!("belt.span.{}.frequency", i + 1), p.key, "quantity-span-frequency", "Hz")));
             out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
         }
-        // Named by the motor, as the joint kit names them by its joint (`joint.1.force`, `screw.1.speed`).
+        // Named by the motor, as the registered one-axis machines name them by their joint (`joint.1.force`, `screw.1.speed`).
         for (kk, d) in self.direct.iter().enumerate() {
             let Some(d) = d else { continue };
             let (motor, axis) = (&self.motors[kk], &self.axes[d.axis]);
@@ -1646,7 +1646,7 @@ impl Machine for ConfigMachine {
     }
 
     /// The checks of the screws (speed, d n, buckling, static load, life), racks (feed force) and strain wave gears
-    /// (life, where the motor's ratings.required_life_h is set), as the joint kit judges them.
+    /// (life, where the motor's ratings.required_life_h is set), as the registered one-axis machines judge them.
     fn rating_checks(&self) -> Vec<RatingCheck> {
         let mut out = Vec::new();
         for (kk, d) in self.direct.iter().enumerate() {
@@ -1723,7 +1723,7 @@ impl Machine for ConfigMachine {
         let acc = if self.guides.iter().any(|g| g.overhang.is_some()) { self.commanded_acc(torque) } else { vec![0.0; n] };
         out.extend(self.guides.iter().map(|g| self.guide_load(g, q, &acc) + self.pressed(g.axis)));
         // Behind a screw or rack the gearbox's own output, ahead of the converter: more than the force times the lever
-        // while it drives, less while the load drives it back (as the joint kit).
+        // while it drives, less while the load drives it back (as the registered one-axis machines).
         out.extend((0..m).map(|kk| match &self.direct[kk] {
             Some(Direct { axis, lever: Some(lever), .. }) => {
                 let (force, e) = (outputs[kk], self.extra_efficiency[kk]);

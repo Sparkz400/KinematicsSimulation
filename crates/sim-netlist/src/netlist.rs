@@ -173,7 +173,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             ID,
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
             field("axis", Kind::Ref("axis"), true, "The axis its nut drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [screw] of the joint kit's screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings)."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [screw] of the registered screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings)."),
             POS,
         ],
     ),
@@ -184,7 +184,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             ID,
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns the pinion."),
             field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [rack] of the joint kit's rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force)."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [rack] of the registered rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force)."),
             POS,
         ],
     ),
@@ -195,7 +195,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             ID,
             field("motor", Kind::Ref("motor"), true, "The motor it is; that motor has no gearbox node."),
             field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [linear_motor] of the joint kit's linear motor axis (attraction force, pole pitch, guide friction coefficient)."),
+            field("values", Kind::Table, true, "The table of its values, laid out as [linear_motor] of the registered linear motor axis (attraction force, pole pitch, guide friction coefficient)."),
             POS,
         ],
     ),
@@ -208,7 +208,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("axis", Kind::Ref("axis"), true, "The axis it turns, which has stroke_rad; no body moves with it."),
             field("inertia_kgm2", Kind::Number, true, "Inertia it turns, kg m^2."),
             field("payload_inertia_kgm2", Kind::Number, false, "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2."),
-            field("strain_wave", Kind::Table, false, "The table of the strain wave gear's life values, laid out as [strain_wave] of the joint kit's rotary table."),
+            field("strain_wave", Kind::Table, false, "The table of the strain wave gear's life values, laid out as [strain_wave] of the registered rotary table."),
             POS,
         ],
     ),
@@ -327,7 +327,7 @@ pub struct Netlist {
     pub spans: Vec<SpanNode>,
     /// Every dotted path a number field named: these keys of the file are in use.
     pub refs: Vec<String>,
-    /// The value tables of screws, racks, linear motors and strain wave gears: the joint kit's table each is laid out
+    /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
     /// as ("screw", ...), and its path in the file.
     pub values: Vec<(&'static str, String)>,
 }

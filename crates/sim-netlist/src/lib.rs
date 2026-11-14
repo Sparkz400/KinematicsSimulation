@@ -100,7 +100,7 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
     }
     let axis = all.get("axis").and_then(|a| a.get("x")).cloned().unwrap_or_else(|| Value::Table(Table::new()));
     let friction = all.get("friction_x").cloned().unwrap_or_else(|| Value::Table(Table::new()));
-    // A rotary axis's limits are in rad: max_velocity_rad_s, as the joint kit's rotary table names them.
+    // A rotary axis's limits are in rad: max_velocity_rad_s, as the registered rotary table names them.
     let turning = match &axis {
         Value::Table(t) => Value::Table(t.iter().map(|(k, v)| (k.replace("_m_s", "_rad_s"), v.clone())).collect()),
         other => other.clone(),
@@ -134,7 +134,7 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
             merge(&mut all, &nested);
         }
     }
-    // The value tables of screws, racks, linear motors and strain wave gears, laid out as the joint kit's.
+    // The value tables of screws, racks, linear motors and strain wave gears, laid out as the registered one-axis machines'.
     for (layout, path) in &net.values {
         let Some(known) = all.get(*layout).cloned() else { continue };
         let nested = path.rsplit('.').fold(known, |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
