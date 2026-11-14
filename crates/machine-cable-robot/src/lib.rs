@@ -1466,12 +1466,10 @@ impl Machine for CableRobot {
                 "quantity-shaft-friction-power",
                 "W",
             ));
-            out.push(SignalInfo::new(
-                format!("{LOSS_PREFIX}gearbox_{}", MOTOR_IDS[k]),
-                MOTOR_KEYS[k],
-                "quantity-gearbox-loss-power",
-                "W",
-            ));
+            // A winch on a coupling (ratio 1) has no gearbox: its loss is the coupling's, as no gearbox warms.
+            let quantity =
+                if self.winches[k].coupled { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", MOTOR_IDS[k]), MOTOR_KEYS[k], quantity, "W"));
         }
         for k in 0..m {
             out.push(SignalInfo::new(
@@ -1619,12 +1617,19 @@ impl Machine for CableRobot {
                 c.exit,
                 [0.3, 0.3, 0.32],
             ));
+            out.parts.push(Part::new(
+                sim_core::scene::MOTOR_PART,
+                Shape::Box { size: [0.08, 0.08, 0.08] },
+                add(back, scale(c.ref_x, -0.1)),
+                [0.9, 0.45, 0.1],
+            ));
+            // The shaft's bar behind the motor turns with the rotor, as on every machine.
             out.parts.push(
                 Part::new(
-                    sim_core::scene::MOTOR_PART,
-                    Shape::Box { size: [0.08, 0.08, 0.08] },
-                    add(back, scale(c.ref_x, -0.1)),
-                    [0.9, 0.45, 0.1],
+                    "rotor-bar",
+                    Shape::Box { size: [0.07, 0.004, 0.012] },
+                    add(back, scale(c.ref_x, -0.15)),
+                    [0.1; 3],
                 )
                 .turned(rotor[k]),
             );

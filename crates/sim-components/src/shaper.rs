@@ -126,19 +126,21 @@ mod tests {
         assert!((residual(&at_10_hz(Kind::Ei, 0.05), 10.0, 0.05) - expected).abs() < 1e-12);
     }
 
-    /// The two-hump EI at V = 5 %: X = (0.0025 (sqrt(0.9975) + 1))^(1/3) = 0.17099, A = (3 X^2 + 2 X + 0.0075) / (16 X)
+    /// The two-hump EI at V = 5 %: X = (0.0025 (sqrt(0.9975) + 1))^(1/3) = 0.17096, A = (3 X^2 + 2 X + 0.0075) / (16 X)
     /// = 0.15980. Undamped it leaves |8 A c^3 + (1 - 8 A) c|, c = cos(pi r / 2): nothing at the design frequency (c = 0),
-    /// and humps where 24 A c^2 = 8 A - 1, of (2/3) (8 A - 1) sqrt((8 A - 1) / (24 A)) = (2/3) 0.27840 * 0.26943 = 0.0500:
-    /// V. At 0 vibration it is ZVDD.
+    /// and humps where 24 A c^2 = 8 A - 1, of (2/3) (8 A - 1) sqrt((8 A - 1) / (24 A)) = (2/3) 0.27838 * 0.26942 = 0.0500:
+    /// V, at c = 0.26942: r = (2 / pi) acos(c) = 0.8263 and 1.1737. From 7 to 13 Hz (c = cos(0.35 pi) = 0.45399 at the
+    /// ends, |1.27838 * 0.09357 - 0.27838 * 0.45399| = 0.0068) the humps are the most it leaves; at 5 Hz (c = 0.7071) it
+    /// leaves 0.255, outside the band it is insensitive over. At 0 vibration it is ZVDD.
     #[test]
     fn the_two_hump_ei_leaves_its_tolerance_at_its_humps_and_is_zvdd_without_one() {
         let x = (0.0025f64 * (0.9975f64.sqrt() + 1.0)).cbrt();
         let a = (3.0 * x * x + 2.0 * x + 0.0075) / (16.0 * x);
-        assert!((x - 0.17099).abs() < 1e-5 && (a - 0.15980).abs() < 1e-5, "{x} {a}");
+        assert!((x - 0.17096).abs() < 1e-5 && (a - 0.15980).abs() < 1e-5, "{x} {a}");
         let two = at_10_hz(Kind::TwoHumpEi, 0.0);
         assert!((two[0].1 - a).abs() < 1e-12 && (two[1].1 - (0.5 - a)).abs() < 1e-12, "{two:?}");
         assert!(residual(&two, 10.0, 0.0) < 1e-12, "{}", residual(&two, 10.0, 0.0));
-        let hump = (0..=2000).map(|i| residual(&two, 5.0 + 10.0 * i as f64 / 2000.0, 0.0)).fold(0.0, f64::max);
+        let hump = (0..=2000).map(|i| residual(&two, 7.0 + 6.0 * i as f64 / 2000.0, 0.0)).fold(0.0, f64::max);
         assert!((hump - 0.05).abs() < 1e-4, "{hump}");
         let zvdd: Vec<f64> = impulses(Kind::TwoHumpEi, 0.0, 0.0).iter().map(|i| i.1).collect();
         assert_eq!(zvdd, [0.125, 0.375, 0.375, 0.125]);

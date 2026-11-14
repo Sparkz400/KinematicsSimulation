@@ -124,10 +124,9 @@ fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
         );
         if parts {
             let first = &sim.heated[0].part;
-            assert_eq!(
-                scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index).unwrap().heat,
-                Some(0.5)
-            );
+            let drawn = scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index);
+            let drawn = drawn.unwrap_or_else(|| panic!("{}: no scene part {first:?}", entry.id));
+            assert_eq!(drawn.heat, Some(0.5), "{}", entry.id);
         }
         // Without the heating effects the parts keep their colours.
         let mut scene = Scene::default();

@@ -229,7 +229,7 @@ backlash_rad = 0.0
 stiffness_nm_rad = 35752.6
 damping_nm_s_rad = 5.0
 inertia_at_input_kgm2 = 4.06e-5
-# The torque at which `efficiency` holds: [estimate] the rated torque of the joint kit's planetary gearbox, whose
+# The torque at which `efficiency` holds: [estimate] the rated torque of the arms' planetary gearbox, whose
 # stiffness and inertia this one has.
 efficiency_torque_nm = 120.0
 # With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC (thermal_feedback
@@ -303,11 +303,11 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# Found with `velocity_loop_margins` over the [bounds], friction on and off: at least 48 degrees and 12 dB. Tn 0.01 s, not
-# 0.03 (14 November): the integrator takes up the friction at the end of a move three times as fast, the dwell error
-# falls from 0.27 to 0.14 mm, and `sim-cli margins flying-saw --bands` still finds at least 11.1 dB.
-velocity_kp_nm_s_rad = 0.15
-velocity_tn_s = 0.01
+# Found with `velocity_loop_margins` over the [bounds], friction on and off (14 November 2026, the merged model): at
+# least 38.2 degrees and 7.5 dB. Kp 0.15 and Tn 0.01 s kept 10 degrees without friction (crossover 14 Hz); Tn 0.03 s at
+# Kp 0.2 left 33.9 degrees at the bounds' worst, 0.05 s 41.0.
+velocity_kp_nm_s_rad = 0.2
+velocity_tn_s = 0.04
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one

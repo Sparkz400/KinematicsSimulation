@@ -152,33 +152,36 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
             entry.id
         );
         for (k, m) in load.motors.iter().enumerate() {
+            // Each motor's lives from its own tables (`catalog::motor_config`), as the verdicts take them: the parallel
+            // SCARA's quill and tool turn have gearboxes and ratings of their own.
+            let own = sim_components::catalog::motor_config(&cfg, &m.id).unwrap();
             // The EXCT-30 has no gearbox and no gearbox rating: its gearbox life is not judged.
             assert_eq!(
                 find(&judged, "gearbox-life", Some(k)).map(|v| v.value),
-                gearbox_life_h(&cfg, m),
+                gearbox_life_h(&own, m),
                 "{}",
                 entry.id
             );
             // The gearing where the config has its S-N line and the cycle takes the gearbox above its rated torque (of the
             // shipped configs only the delta's first arm: about 9000 h, a finding).
-            let gearing = gearbox_gearing_life_h(&cfg, m);
+            let gearing = gearbox_gearing_life_h(&own, m);
             assert_eq!(find(&judged, "gearbox-gearing-life", Some(k)).map(|v| v.value), gearing, "{}", entry.id);
             assert!(gearing.is_none_or(|life| life.is_finite() && life > 0.0), "{}: gearing {gearing:?} h", entry.id);
             // In no shipped config does a belt pull on a motor shaft: no motor bearing life.
             assert!(
-                motor_bearing_life_h(&cfg, m).is_none() && find(&judged, "motor-bearing-life", Some(k)).is_none(),
+                motor_bearing_life_h(&own, m).is_none() && find(&judged, "motor-bearing-life", Some(k)).is_none(),
                 "{}",
                 entry.id
             );
-            let Some(bearing) = pulley_bearing_life_h(&cfg, m) else {
+            let Some(bearing) = pulley_bearing_life_h(&own, m) else {
                 assert!(
                     find(&judged, "pulley-bearing-life", Some(k)).is_none()
-                        && belt_tooth_utilisation(&cfg, m).unwrap().is_none(),
+                        && belt_tooth_utilisation(&own, m).unwrap().is_none(),
                     "{}",
                     entry.id
                 );
                 // A machine without gearbox ratings (a screw on a coupling, a linear motor) has no gearbox life.
-                let Some(life) = gearbox_life_h(&cfg, m) else { continue };
+                let Some(life) = gearbox_life_h(&own, m) else { continue };
                 for (factor, ok) in [(1.001, false), (0.999, true)] {
                     let mut edited = cfg.clone();
                     edited.set_text(&format!("ratings.required_life_h = {:?}", life * factor)).unwrap();
@@ -192,7 +195,7 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
                 continue;
             };
             assert_eq!(find(&judged, "pulley-bearing-life", Some(k)).map(|v| v.value), Some(bearing), "{}", entry.id);
-            let tooth = belt_tooth_utilisation(&cfg, m).unwrap().unwrap();
+            let tooth = belt_tooth_utilisation(&own, m).unwrap().unwrap();
             assert_eq!(find(&judged, "belt-tooth-load", Some(k)).map(|v| v.value), Some(tooth), "{}", entry.id);
             for (factor, ok) in [(1.001, false), (0.999, true)] {
                 let mut edited = cfg.clone();

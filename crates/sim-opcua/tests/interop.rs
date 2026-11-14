@@ -531,7 +531,12 @@ async fn unsigned_and_byte_integers_are_taken_as_numbers() {
 /// the machine's config file is where the move targets read before any move, [0.2, 0.3] m instead of [0.1, 0.35] m.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_config_file_with_set_on_top_is_served() {
-    let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/default.toml"));
+    // The machine's config as a file of its own.
+    let dir = scratch("config-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config.toml");
+    std::fs::write(&file, MACHINES[0].default_config).unwrap();
+    let file = file.as_path();
     let sets = ["start.pose = [0.2, 0.3]".to_string()];
     let (cfg, trajectory) = sim_opcua::configured(MACHINES[0], Some(file), &sets, None).unwrap();
     assert!(trajectory.is_none());

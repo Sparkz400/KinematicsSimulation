@@ -252,7 +252,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
         // A crash needs an obstacle, and the configs have none; drive monitoring acts only on a trip, which a cycle never
         // has. The thermal warm start acts on the cycle analysis, not on a run. A swinging payload is the arms' alone (the
-        // joint kit's other machines read the switch but have no payload to hang, the SCARA's sits at its flange with no
+        // arm crate's other machines read the switch but have no payload to hang, the SCARA's sits at its flange with no
         // length to swing on), and it brings joints and signals of its own. Their own tests show them working.
         let skipped = [
             "effects.hard_stops",
@@ -3593,7 +3593,7 @@ fn two_runs_overlay_with_aligned_time_and_a_correct_difference() {
 
     // In the app: the analysed cycle is kept as a run, the same config recorded again takes its place, and the cycle
     // with another config is a second run, compared with the first on the same time.
-    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let entry = MACHINES[0];
     let mut model = Model::new(entry, "en");
     model.run_analysis(Analysis::Cycle);
     wait_for_analysis(&mut model);
@@ -3647,7 +3647,7 @@ fn the_cache_of_the_views_is_made_anew_when_the_config_changes() {
 /// name: "error-trace-column: time". The command line decodes it (`import::decode`); now the app does too.
 #[test]
 fn a_trace_file_with_a_byte_order_mark_is_read() {
-    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let entry = MACHINES[0];
     let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     sim.command(Command::StartCycle).unwrap();
     let mut measured = sim_components::trace::Trace::default();
@@ -3684,13 +3684,13 @@ fn a_trace_file_with_a_byte_order_mark_is_read() {
 
 /// The travelled path's points carry the time they were passed: scrubbed back to a time, the 3D view draws the path
 /// up to it and not the newest (`runs::trail_until`). And the path's error is its distance from the path the plan
-/// drew, as the path's analysis measures its path error: on a square of the T-gantry its peak was 1.089 mm against the
+/// drew, as the path's analysis measures its path error: on a square of the first machine (a gantry) its peak was 1.089 mm against the
 /// analysis's 0.755 mm, since the trail measured from the plan's newest setpoint, which moves once per profile cycle of
 /// 1 ms, while the tool between two moves on by up to its speed times the cycle (0.8 mm at 0.8 m/s).
 #[test]
 fn the_trail_is_cut_at_the_scrubbed_time_and_its_error_is_the_path_error() {
     use sim_components::path::Piece;
-    let entry = MACHINES.iter().copied().find(|e| e.id == "t-gantry").unwrap();
+    let entry = MACHINES[0];
     let mut runner = Runner::new(entry, &entry.config()).unwrap();
     let axes = runner.sim.machine.axes().to_vec();
     let at = |fx: f64, fy: f64| {
@@ -3757,13 +3757,13 @@ fn every_motor_has_one_colour_in_every_plot() {
 
 /// The search tab's views of one search (`search_views`): a cell of the candidates × checks heat map is that
 /// candidate's utilisation of that check (`Figures::checks`), which for "motor-peak" is the cycle's peak torque demand
-/// over the motor's peak torque (`MotorLoad::utilisation`, judged against 1; the single axis has one motor); and the
+/// over the motor's peak torque (`MotorLoad::utilisation`, judged against 1; the second machine has one motor); and the
 /// scatter of cost against margin marks as its front exactly the candidates of `search::front`, each at 1 less its
 /// tightest check.
 #[test]
 fn the_search_views_show_each_candidates_checks_and_the_front_of_the_search() {
     use sim_app::search_views::{heatmap, scatter};
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = sim_machines::MACHINES[1];
     let mut model = Model::new(entry, "en");
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     (model.inputs.series, model.inputs.search.drives) = ("1FK2104".into(), sim_components::catalog::Drives::Neighbours);
@@ -3810,7 +3810,7 @@ fn the_vendor_filter_keeps_only_that_makers_supplies() {
     assert_eq!(supplies("", "400v"), ["400v"]);
     assert_eq!(supplies("all", "400v"), SUPPLIES);
     assert!(supplies("nobody", "400v").is_empty());
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = sim_machines::MACHINES[1];
     let mut model = Model::new(entry, "en");
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     (model.inputs.series, model.inputs.search.vendor) = ("SGM7J".into(), "yaskawa".into());
@@ -3829,13 +3829,13 @@ fn the_vendor_filter_keeps_only_that_makers_supplies() {
     assert_eq!(model.messages.last().map(|m| m.0), Some("ui-search-bad-supply"));
 }
 
-/// The ratio sweep of the search tab finds the classic optimum of a pure inertia: the single axis without its cable
+/// The ratio sweep of the search tab finds the classic optimum of a pure inertia: the second machine without its cable
 /// chain turns J_L = 0.002604 kg m^2 at the pulley (carriage and payload 6 kg and the belt 0.26 kg at r = 20 mm, the
 /// pulley 1e-4) with a rotor of J_m = 0.3e-4 kg m^2, so the torque J_m i a + J_L a / i is least at
 /// i = sqrt(J_L / J_m) = sqrt(86.8) = 9.3167.
 #[test]
 fn the_ratio_sweep_finds_the_root_of_the_inertia_ratio() {
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = sim_machines::MACHINES[1];
     let mut model = Model::new(entry, "en");
     model.set_param("effects.cable_chain", toml::Value::Boolean(false));
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
@@ -3853,12 +3853,12 @@ fn the_ratio_sweep_finds_the_root_of_the_inertia_ratio() {
     assert!(ratios.windows(2).all(|w| w[1] < w[0]), "{ratios:?}");
 }
 
-/// A cell of the path tab's torque map is the peak motor torque of the short move from that node: the T-gantry at the
+/// A cell of the path tab's torque map is the peak motor torque of the short move from that node: the first machine (a gantry) at the
 /// corner of its travel, moved a tenth of the x travel along x, run here by hand on a simulation of its own.
 #[test]
 fn a_move_map_cell_is_the_peak_torque_of_a_hand_run_short_move() {
     use sim_components::{Command, Sim};
-    let entry = sim_machines::find("t-gantry").unwrap();
+    let entry = sim_machines::MACHINES[0];
     let mut model = Model::new(entry, "en");
     model.inputs.map = sim_app::search_views::MapInputs { plane: [0, 1], axis: 0, distance: 0.0, n: 2 };
     model.views.start(sim_app::search_views::ViewJob::Map, entry, &model.config, &model.inputs);

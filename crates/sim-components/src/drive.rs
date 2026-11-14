@@ -1233,10 +1233,11 @@ pub(crate) fn quantise(pos: f64, step: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn params() -> DriveParams {
+    /// A drive of round numbers for the unit tests (the charts' too).
+    pub(crate) fn params() -> DriveParams {
         DriveParams {
             kv: 50.0,
             kp: 0.08,

@@ -415,7 +415,10 @@ fn the_collision_bodies_are_boxes_of_the_scene() {
                 checked += 1;
             }
         }
-        assert!(checked >= 18, "{}: {checked}", entry.id);
+        // A body each sample and the payload's every other: the rotary knife's one blade and no payload give 12, as the
+        // flying saw's carriage with its saw drawn as a disc.
+        let least = if ["rotary-knife", "flying-saw"].contains(&entry.id) { 12 } else { 18 };
+        assert!(checked >= least, "{}: {checked}", entry.id);
     }
 }
 

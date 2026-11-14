@@ -21,7 +21,7 @@
 //! shortcut: one-way coupling, the machine's own dynamics do not feel the base's acceleration (its motors neither see
 //! the sway in their following error nor hold against it); exact where the servo holds the axes stiffly to the base or
 //! the base is much heavier than what moves; upgrade by passing the base's acceleration to the machines as a
-//! pseudo-gravity once one needs the sway in the motor traces. The T-gantry's and the machine files' own frame mode
+//! pseudo-gravity once one needs the sway in the motor traces. A gantry crate's and the machine files' own frame mode
 //! (effects.frame_compliance) is the coupled one along one axis: the portal's posts swaying under its beam; the base is
 //! what the whole machine stands on, in series with it.
 
@@ -531,20 +531,20 @@ mod tests {
 
     /// A base along x of 200 kg on 8e5 N/m, damping ratio `zeta`, pivot at the origin.
     fn on_base(zeta: f64) -> Box<dyn Machine> {
-        let mut cfg = Config::parse(
-            "[effects]\nbase_compliance = true\n[start]\npose = [0.5]\n[base]\npivot_m = [0.0, 0.0, 0.0]\nmass_kg = 200.0",
-        )
-        .unwrap();
+        // `Config::set_text` only changes keys that are there, so every key is written into the text.
+        let mut text = "format_version = 1\n[effects]\nbase_compliance = true\n[start]\npose = [0.5]\n[base]\n\
+                        pivot_m = [0.0, 0.0, 0.0]\nmass_kg = 200.0\n"
+            .to_string();
         for axis in ["x", "y", "z"] {
             let k = if axis == "x" { 8.0e5 } else { 0.0 };
-            cfg.set_text(&format!("base.stiffness_{axis}_n_m = {k:?}")).unwrap();
-            cfg.set_text(&format!("base.tilt_stiffness_{axis}_nm_rad = 0.0")).unwrap();
-            cfg.set_text(&format!("base.inertia_{axis}_kgm2 = 10.0")).unwrap();
+            text += &format!(
+                "stiffness_{axis}_n_m = {k:?}\ntilt_stiffness_{axis}_nm_rad = 0.0\ninertia_{axis}_kgm2 = 10.0\n"
+            );
         }
         for id in DOFS {
-            cfg.set_text(&format!("base.damping_ratio_{id} = {zeta:?}")).unwrap();
+            text += &format!("damping_ratio_{id} = {zeta:?}\n");
         }
-        mount(&cfg, Box::new(slider())).unwrap()
+        mount(&Config::parse(&text).unwrap(), Box::new(slider())).unwrap()
     }
 
     #[test]

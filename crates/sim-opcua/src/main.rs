@@ -290,9 +290,12 @@ mod tests {
     #[test]
     fn config_set_trajectory_and_certificates_are_read() {
         let read = |args: &[&str]| arguments(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
-        let config = concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/default.toml");
         let dir = std::env::temp_dir().join(format!("sim-opcua-args-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // The machine's config as a file of its own.
+        let config = dir.join("config.toml");
+        std::fs::write(&config, MACHINES[0].default_config).unwrap();
+        let config = config.to_str().unwrap();
         let trajectory = dir.join("poses.csv");
         std::fs::write(
             &trajectory,

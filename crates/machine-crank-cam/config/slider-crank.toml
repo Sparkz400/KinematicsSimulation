@@ -63,7 +63,7 @@ backlash_rad = 0.0
 stiffness_nm_rad = 35752.6
 damping_nm_s_rad = 5.0
 inertia_at_input_kgm2 = 4.06e-5
-# The torque at which `efficiency` holds: [estimate] the rated torque of the joint kit's planetary gearbox, whose
+# The torque at which `efficiency` holds: [estimate] the rated torque of the arms' planetary gearbox, whose
 # stiffness and inertia this one has.
 efficiency_torque_nm = 120.0
 # With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC (thermal_feedback
@@ -212,7 +212,7 @@ gearbox_rated_torque_nm = 120.0
 gearbox_max_torque_nm = 192.0
 gearbox_max_input_speed_rpm = 6000.0
 # [estimate] the speed at which the gearbox's life is rated, and the slope of the tooth root's S-N line (k = 8.7, ISO
-# 6336-3, as the joint kit's planetary gearbox).
+# 6336-3, as the arms' planetary gearbox).
 gearbox_reference_speed_rpm = 400.0
 gearbox_gearing_wohler_exponent = 8.7
 # The DC link of the S210 converter. [estimate] as for the delta picker.

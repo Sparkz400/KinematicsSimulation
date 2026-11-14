@@ -202,6 +202,13 @@ impl Mechanism for FlyingSaw {
             [q[0], -0.2, 0.45],
             [0.9, 0.45, 0.1],
         ));
+        // The gearbox between motor and pinion: the part that warms (`JointMachine::thermal_parts`).
+        out.parts.push(Part::new(
+            "gearbox",
+            Shape::Box { size: [0.1, 0.06, 0.1] },
+            [q[0], -0.13, 0.45],
+            [0.25, 0.25, 0.28],
+        ));
         out.parts.push(
             Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [q[0], -0.27, 0.45], [0.1, 0.1, 0.1])
                 .turned(rotors[0]),

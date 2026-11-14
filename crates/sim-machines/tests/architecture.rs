@@ -62,8 +62,9 @@ fn dependencies_point_downwards() {
                 let built_on = BUILT_ON.contains(&(name.as_str(), dep.as_str()));
                 assert!(layer(&dep) < layer(name) || built_on, "{name} must not depend on {dep}");
             } else if layer(name) < 3 {
-                // Core, components and machines are plain Rust: no graphics, interface or network libraries.
-                assert_eq!(dep, "toml", "{name} must not depend on {dep}");
+                // Core, components and machines are plain Rust: no graphics, interface or network libraries. serde
+                // derives the running simulation's snapshot (sim-fmi's FMU state, sim-py's snapshots).
+                assert!(["toml", "serde"].contains(&dep.as_str()), "{name} must not depend on {dep}");
             }
         }
     }
@@ -106,6 +107,12 @@ fn no_machine_name_outside_its_crate() {
     for name in names.iter().filter(|n| layer(n) != 2 && layer(n) != 3) {
         text_files(&crates_dir().join(name), &mut files);
     }
+    // A machine file of machines/ may have a machine's name: `single-axis.toml` names the file, not the crate.
+    let machine_files: Vec<String> = fs::read_dir(crates_dir().parent().unwrap().join("machines"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap().to_lowercase())
+        .filter(|name| name.ends_with(".toml"))
+        .collect();
     // `sim-netlist` is no machine of its own to be named, but is scanned like the machines for the others' names.
     for machine in names.iter().filter(|n| n.starts_with("machine-")) {
         // A machine may not name another machine either, but the one it is built on.
@@ -117,9 +124,16 @@ fn no_machine_name_outside_its_crate() {
         let name = machine.trim_start_matches("machine-");
         let variants = [name.to_string(), name.replace('-', "_"), name.replace('-', " "), name.replace('-', "")];
         for file in &scanned {
-            let text = fs::read_to_string(file).unwrap().to_lowercase();
+            let mut text = fs::read_to_string(file).unwrap().to_lowercase();
+            for name in &machine_files {
+                text = text.replace(name.as_str(), "");
+            }
             for variant in &variants {
-                assert!(!text.contains(variant), "{} names the machine '{variant}'", file.display());
+                // As a word: "t gantry" is not in "struct gantry" nor "struct gantrysync".
+                let named = text
+                    .match_indices(variant.as_str())
+                    .any(|(at, _)| !text[..at].ends_with(|c: char| c.is_ascii_alphanumeric()));
+                assert!(!named, "{} names the machine '{variant}'", file.display());
             }
         }
     }

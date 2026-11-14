@@ -1079,6 +1079,11 @@ impl<M: Mechanism> JointMachine<M> {
     /// where the tool is the joints.
     pub fn jacobian(&self, q: &[f64]) -> Vec<f64> {
         let (n, rows) = (self.n(), self.axes.len());
+        // Where the tool is the joints, the identity to the bit: the difference quotient of the copy is off by up to
+        // 1e-10, and a model switch that rebuilt the joints changed the tool's speed by that.
+        if self.mechanism.tool_is_joints() {
+            return (0..rows * n).map(|i| if i / n == i % n { 1.0 } else { 0.0 }).collect();
+        }
         let (mut jac, mut a, mut b) = (vec![0.0; rows * n], vec![0.0; rows], vec![0.0; rows]);
         let mut p = q.to_vec();
         for c in 0..n {
