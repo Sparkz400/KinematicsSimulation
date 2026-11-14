@@ -108,8 +108,9 @@ fn the_tool_turns_with_the_motor_through_the_cardan_pair_and_the_shaft_between_u
 }
 
 /// The tool's motor torque for 100 rad/s^2 of the tool's turn, rigid and loss-free: J_c = tool 2e-3 + shaft spin 8e-5 +
-/// payload 5e-3 = 7.08e-3 kg m^2, at the motor 7.08e-3 * 100 / 8 = 0.0885 N m, plus the rotor and the gearbox's
-/// input (1.7e-4 + 3.47e-5) * 8 * 100 = 0.16376 N m: 0.25226 N m. Without the payload 0.0260 + 0.16376 = 0.18976 N m.
+/// payload 5e-3 = 7.08e-3 kg m^2, at the motor 7.08e-3 * 100 / 8 = 0.0885 N m, plus motor 4's rotor and its gearbox's
+/// input ([motor.4], [gearbox.4]: 3.5e-5 + 8.8e-6) * 8 * 100 = 0.03504 N m: 0.12354 N m. Without the payload
+/// 0.0260 + 0.03504 = 0.06104 N m.
 /// Given that torque the model turns the tool at 100 rad/s^2, and the arms' torques do not change.
 #[test]
 fn the_tool_motors_torque_for_a_turn_is_the_hand_calculated() {
@@ -125,7 +126,7 @@ fn the_tool_motors_torque_for_a_turn_is_the_hand_calculated() {
     let (mut moving, mut still) = ([0.0; 4], [0.0; 4]);
     m.feedforward_torque(&pose, &[0.0, 0.0, 0.0, 100.0], &mut moving);
     m.feedforward_torque(&pose, &[0.0; 4], &mut still);
-    close(moving[3] - still[3], 0.25226, 1e-9, "tool motor torque");
+    close(moving[3] - still[3], 0.12354, 1e-9, "tool motor torque");
     assert!((0..3).all(|k| moving[k] == still[k]));
     let (mut state, mut hold) = (Vec::new(), [0.0; 4]);
     m.equilibrium(&pose, &mut state, &mut hold);
@@ -135,7 +136,7 @@ fn the_tool_motors_torque_for_a_turn_is_the_hand_calculated() {
     let mut m = m;
     m.set_payload_attached(false);
     m.feedforward_torque(&pose, &[0.0, 0.0, 0.0, 100.0], &mut moving);
-    close(moving[3], 0.18976, 1e-9, "without the payload");
+    close(moving[3], 0.06104, 1e-9, "without the payload");
 }
 
 /// The arms at rest at the centre, 100 mm below the top, hold the D3's torques plus the shaft's weight share: half of
@@ -208,14 +209,14 @@ fn the_telescopes_friction_is_the_hand_calculated() {
 fn the_tools_torsional_mode_is_the_hand_calculated() {
     let m = d4(&[]);
     let mode = m.tool_mode().unwrap();
-    close(mode.hz, 41.1158, 1e-5, "with the payload");
-    close(mode.damping, 0.020503, 1e-4, "damping ratio");
+    close(mode.hz, 41.0688, 1e-5, "with the payload");
+    close(mode.damping, 0.020526, 1e-4, "damping ratio");
     let mut empty = d4(&[]);
     empty.set_payload_attached(false);
-    close(empty.tool_mode().unwrap().hz, 75.8567, 1e-5, "without");
+    close(empty.tool_mode().unwrap().hz, 75.7700, 1e-5, "without");
     assert!(m.modes(&[0.0, 0.0, -0.8, 0.0]).iter().any(|x| x.hz == mode.hz));
     assert!(d4(&["effects.joint_elasticity = false"]).tool_mode().is_none());
-    close(d4(&["effects.shaft_torsion = false"]).tool_joint().gearbox.stiffness, 8594.4, 1e-12, "the gearbox alone");
+    close(d4(&["effects.shaft_torsion = false"]).tool_joint().gearbox.stiffness, 8250.592, 1e-12, "the gearbox alone");
 }
 
 #[test]
@@ -224,10 +225,10 @@ fn the_d4_passes_the_standard_suite() {
 }
 
 /// The default cycle, the Adept cycle with the tool turned by 90 degrees on each traverse: the tool stands at 90
-/// degrees during the pick (to within 1.5 mrad), and every verdict passes, "settling" with 0.39 mm (its distance to the
+/// degrees during the pick (to within 1.5 mrad), and every verdict passes, "settling" with 0.37 mm (its distance to the
 /// target counts the turn's error in rad with the position's in m, as on every machine), the tool's gearbox peaking at
-/// 2.3 N m of its 29. With the catalogue's backlash on the arms' NRB080 (9 arcmin) and the tool's NRB060 (10 arcmin)
-/// "settling" fails alone, 1.2 mm: 0.6 mm of it the arms' sag under the platform's weight (the D3's finding) and 1 mrad
+/// 2.2 N m of its 29 (motor 4's own gearbox, `[ratings.4]`). With the catalogue's backlash on the arms' NRB080 (9 arcmin) and the tool's NRB060 (10 arcmin)
+/// "settling" fails alone, 1.4 mm: 0.6 mm of it the arms' sag under the platform's weight (the D3's finding) and 1 mrad
 /// the tool resting in its backlash.
 #[test]
 fn the_default_cycle_turns_the_tool_and_passes_its_verdicts() {
@@ -245,11 +246,105 @@ fn the_default_cycle_turns_the_tool_and_passes_its_verdicts() {
     };
     let all = verdicts(&cfg);
     assert!(all.iter().all(|v| v.ok), "{:?}", all.iter().filter(|v| !v.ok).collect::<Vec<_>>());
-    let tool = all.iter().find(|v| v.check == "tool-gearbox-peak").unwrap();
+    // The tool's gearbox judged by the common check of motor 4, against its own [ratings.4].
+    let tool = all.iter().find(|v| v.check == "gearbox-peak" && v.motor == Some(3)).unwrap();
     assert!(tool.value > 1.0 && tool.value < 5.0 && tool.limit == 29.0, "{tool:?}");
     let mut catalogue = cfg.clone();
     catalogue.set_text("gearbox.backlash_rad = 2.618e-3").unwrap();
-    catalogue.set_text("tool_gearbox.backlash_rad = 2.909e-3").unwrap();
+    catalogue.set_text("gearbox.4.backlash_rad = 2.909e-3").unwrap();
     let failed: Vec<_> = verdicts(&catalogue).into_iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["settling"]);
+}
+
+/// Motor 4 reads its own tables ([motor.4], [gearbox.4], [drive.4], [ratings.4] over the shared ones, as
+/// `catalog::motor_config` puts them): the tool's joint turns a rotor of 3.5e-5 + 8.8e-6 kg m^2 behind ratio 8 at 97 %,
+/// its drive gives 3.75 N m (the arms' 15 N m), and its gearbox's limit is 29 N m against the arms' 192 N m. Before, the
+/// tool's joint had the arms' 1FK2105-4AF and its gearbox checks the arms' NRB080.
+#[test]
+fn the_tool_motors_own_tables_are_read() {
+    let m = d4(&[]);
+    close(m.tool_joint().rotor_inertia, 4.38e-5, 1e-12, "rotor and gearbox input");
+    close(m.tool_joint().ratio(), 8.0, 1e-12, "ratio");
+    close(m.tool_joint().gearbox.efficiency, 0.97, 1e-12, "efficiency");
+    close(m.arms().axes().len() as f64, 3.0, 0.0, "arms");
+    let sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    close(sim.control.drive_params_of(3).peak_torque, 3.75, 1e-12, "tool drive's peak");
+    close(sim.control.drive_params_of(0).peak_torque, 15.0, 1e-12, "arm drive's peak");
+    let own = motor_config(&ENTRY.config(), "4").unwrap();
+    close(own.f64("ratings.gearbox_max_torque_nm").unwrap(), 29.0, 0.0, "tool gearbox limit");
+    close(
+        motor_config(&ENTRY.config(), "1").unwrap().f64("ratings.gearbox_max_torque_nm").unwrap(),
+        192.0,
+        0.0,
+        "arms",
+    );
+}
+
+/// The tool motor's values are the catalogue's written out: naming the same parts for motor 4
+/// (`catalog::with_motor_part`: 1FK2104-4AF at 400 V, NRB060-04-8, 6SL3210-5HE10-4UF0) over the shared ones gives the
+/// same numbers, the backlash apart (an estimate: 1 arcmin against the catalogue's 10). The velocity gain it retunes,
+/// 0.25 * sqrt(0.48974 * 0.21397) = 0.08093, is the one [drive.4] explains it left (34.6 degrees, 5.4 dB); the shipped
+/// 0.05 lies below it.
+#[test]
+fn the_tool_motors_values_are_the_catalogues() {
+    let shared = ENTRY.config();
+    // The config with no tables of motor 4's own, as before it had them; then the catalogue's parts named for it.
+    let mut all: toml::Table = shared.to_text().unwrap().parse().unwrap();
+    for table in ["motor", "gearbox", "drive", "ratings"] {
+        all.get_mut(table).unwrap().as_table_mut().unwrap().remove("4");
+    }
+    let base = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
+    let named = sim_components::catalog::with_motor_part(
+        &ENTRY,
+        &base,
+        "4",
+        "1FK2104-4AF",
+        "400v",
+        "NRB060-04-8",
+        "6SL3210-5HE10-4UF0",
+    )
+    .unwrap();
+    let (mine, catalogue) = (motor_config(&shared, "4").unwrap(), motor_config(&named, "4").unwrap());
+    for path in [
+        "motor.rotor_inertia_kgm2",
+        "motor.torque_constant_nm_a",
+        "motor.rated_current_a",
+        "motor.thermal_time_constant_s",
+        "motor.max_current_a",
+        "motor.torque_constant_at_max_current_nm_a",
+        "gearbox.ratio",
+        "gearbox.efficiency",
+        "gearbox.stiffness_nm_rad",
+        "gearbox.inertia_at_input_kgm2",
+        "drive.peak_torque_nm",
+        "drive.rated_torque_nm",
+        "drive.rated_speed_rad_s",
+        "drive.no_load_speed_rad_s",
+        "ratings.gearbox_rated_torque_nm",
+        "ratings.gearbox_max_torque_nm",
+        "ratings.drive_rated_current_a",
+        "ratings.drive_max_current_a",
+        "ratings.braking_resistor_continuous_w",
+        "ratings.braking_resistor_peak_w",
+    ] {
+        close(mine.f64(path).unwrap(), catalogue.f64(path).unwrap(), 1e-6, path);
+    }
+    let gain = "drive.velocity_kp_nm_s_rad";
+    close(catalogue.f64(gain).unwrap(), 0.08093, 1e-3, "retuned velocity gain");
+    assert!(mine.f64(gain).unwrap() < catalogue.f64(gain).unwrap());
+}
+
+/// The three arms share [motor] and [gearbox], which the D3's arms read: a table of an arm's own there is refused
+/// rather than sizing its drive with a motor the arm does not have. One for the tool's motor is taken.
+#[test]
+fn an_arms_own_motor_table_is_refused() {
+    for table in ["motor", "gearbox"] {
+        let mut all: toml::Table = ENTRY.config().to_text().unwrap().parse().unwrap();
+        let mut own = toml::Table::new();
+        own.insert("ratio".into(), toml::Value::Float(10.0));
+        all.get_mut(table).unwrap().as_table_mut().unwrap().insert("2".into(), toml::Value::Table(own));
+        let cfg = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
+        assert!(Delta4::new(&cfg).is_err(), "{table}.2");
+    }
+    assert!(Delta4::new(&ENTRY.config()).is_ok());
 }

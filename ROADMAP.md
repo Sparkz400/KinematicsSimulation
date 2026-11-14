@@ -27,8 +27,7 @@ What is not built yet, from the "Left open" lists at the end of each section of 
   two torque figures, not Siemens' own damage method.
 - The drive: one maximum current, no overload over time (i2t).
 - Delta D3: the arm tube's own share of the bending modes and the elbow block's twist as an arm bends out of its
-  plane. Linear delta: vertical columns only; no guide, pulley-bearing or belt-tooth ratings (its axes are
-  not in the catalogue).
+  plane. Linear delta: the guides' moments (Mx, My, Mz) and warming belts and pulleys.
 - Fit: one added inertia per motor, not a mass factor per link of a URDF arm; a payload picked or dropped during a
   trace is not followed.
 - Optimiser: the robust check uses the error bands one bound at a time, not the worst corner of all of them; one lift

@@ -45,7 +45,8 @@ belt_mass = true
 belt_tooth_stiffness = false
 belt_material_damping = false
 guide_friction = true
-# The guides' friction levels grow with their load across the rail, the rods' pull on the carriage at rest.
+# The guides' friction levels grow with their load across the rail: the rods' pull on the carriage at rest, and on an
+# inclined column the carriage's weight across it.
 load_dependent_friction = true
 motor_friction = true
 gearbox_backlash = true
@@ -86,7 +87,8 @@ input_shaping = false
 back_emf = true
 voltage_limit = true
 winding_heating = true
-# No part of this machine warms but its motors (see docs/model-reference.md): both change nothing here.
+# Off here: the guides (and the gearboxes, where a config has some in place of the couplings) warm with their loss
+# ([thermal]); with thermal_feedback their viscous friction and efficiency follow.
 part_heating = false
 thermal_feedback = false
 # The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
@@ -115,6 +117,11 @@ plate_radius_m = 0.07
 rod_m = 1.1
 # Distance between the two rods of a pair, for the 3D view only.
 rod_spacing_m = 0.08
+# The columns' lean from the vertical, degrees: positive with their tops towards the machine's axis (a tripod whose
+# columns meet above it), negative away from it; below 60 either way. The carriage's place (carriage_top_m, stroke_m) is
+# then its travel along the column, its joint stands at that times the cosine, and column_radius_m is measured at
+# z = 0. Upright, 0, as the shipped machine: Festo gives no angle for the EXPT.
+column_incline_deg = 0.0
 # The carriages' joints at their upper stop, and the stroke below it.
 carriage_top_m = 0.0
 stroke_m = 0.7
@@ -231,6 +238,21 @@ damping_n_s_m = 5.0e3
 friction_scale = 1.5
 belt_stiffness_scale = 1.1
 
+# With effects.part_heating: each guide warms with its loss (power.guide_*), each gearbox with its own
+# (power.gearbox_*; the shipped couplings have none and do not warm), through a thermal resistance to the air: the rise
+# settles at resistance times the mean loss, with the time constant. [estimate] the guide as the one-axis machine's:
+# its heat goes into the rail and the column's aluminium profile, about 0.35 m2 over the EGC-80's 80 mm profile and
+# the column's 1.1 m, at 10 W/(m2 K) with a fin efficiency of about 0.6: 0.5 K/W; about 5 kg of aluminium and steel
+# (5 kJ/K): 40 minutes. The gearbox's [estimate] as the delta picker's planetary gearboxes; without bounds, as no shipped
+# config has one.
+[thermal]
+guide_resistance_k_w = 0.5
+guide_time_constant_s = 2400.0
+guide_max_rise_k = 40.0
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
 # With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines.
 [thermal_feedback]
 ambient_c = 20.0
@@ -321,9 +343,32 @@ belt_max_tension_n = 1000.0
 belt_min_tension_n = 0.0
 # [catalogue] EXPT: positioning accuracy +-0.5 mm (calibrated system); the repeatability is +-0.1 mm.
 settling_tolerance_m = 0.0005
-# [estimate] the EGC-80's drive torque and the radial load its pulley shaft takes.
-pulley_max_torque_nm = 10.0
+# [catalogue] EGC-80-TB-KF: max. driving torque 5 N m (Festo, "Toothed belt axes EGC-TB-KF", 2024/01, page 12; it
+# gives the max. feed force Fx 350 N, the same at the 28.65 mm pulley). [estimate] the radial load its pulley shaft
+# takes.
+pulley_max_torque_nm = 5.0
 shaft_max_radial_load_n = 1500.0
+# [catalogue] the EGC-80-TB-KF's recirculating ball guide, Fy max = Fz max for a service life of 5000 km: 3050 N (same
+# document, page 16; "must not be exceeded during dynamic operation"). The guide load is the force across the column
+# (`carriage.<k>.guide_load`); Festo's torques Mx, My, Mz are not judged (the rods' joints' offset from the slide is
+# not modelled).
+guide_max_load_n = 3050.0
+# The dynamic load rating C of the guide life L10 = (C / P)^3 * 50 km, from the same figure: 3050 N for 5000 km gives
+# C = 3050 * (5000 / 50)^(1/3) = 14157 N; Festo's 100 km figure (page 17, 11236 N) gives 14156 N.
+guide_dynamic_load_rating_n = 14157.0
+# [estimate] the dynamic load rating C of the bearing that takes the belt's pull on the drive pulley's shaft, for its
+# life (C / P)^3 * 10^6 / (60 n) h: Festo publishes neither the bearing nor a radial load for the EGC's drive shaft. A
+# deep-groove ball bearing of the pulley's size (15 x 32 mm, a 6002) has C of about 5.9 kN; 5000 N.
+pulley_bearing_load_rating_n = 5000.0
+# The belt's teeth (sim-components' `belt_tooth_utilisation`): Festo gives no tooth load for the EGC's belt (3 mm pitch,
+# 19.3 mm wide, page 13), only the axis's 350 N of feed force. [estimate] the specific tooth load that gives those 350 N
+# at every speed up to the axis's 5 m/s (3333 r/min) with 12 teeth in mesh and a service factor of 1: 350 / (1.93 *
+# 12) = 15.1 N/cm. Half a turn of the 30-tooth pulley (90 mm / 3 mm) holds 15 teeth, of which the method counts 12.
+belt_tooth_load_rpm = [0.0, 3333.0]
+belt_tooth_load_n_cm = [15.1, 15.1]
+belt_width_mm = 19.3
+belt_service_factor = 1.0
+belt_teeth_in_mesh = 15.0
 # The DC link of the S210 converter. [estimate] as for the delta picker; the chopper at 770 V.
 dc_link_capacitance_uf = 66.0
 braking_threshold_v = 770.0
@@ -409,6 +454,10 @@ thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
+thermal.guide_resistance_k_w = [0.25, 1.0]
+thermal.guide_time_constant_s = [1200.0, 4800.0]
+ratings.pulley_bearing_load_rating_n = [3000.0, 10000.0]
+ratings.belt_service_factor = [1.0, 1.4]
 
 # Where the cycle ends, above its place position, as on every machine (the cycle runs on from there), 10 mm below the
 # working range's top face: on the face, the pose the motors stand at (the belts stretch and the couplings twist a few

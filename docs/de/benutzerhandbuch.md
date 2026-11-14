@@ -652,7 +652,7 @@ Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,31 bis 0,41 mm, Getrie
 
 `delta-linear` ist ein Linear-Delta: drei senkrechte Zahnriemenachsen an den Säulen eines Gestells, jeder Schlitten mit einem Stabpaar hinunter zu einer Platte, die waagerecht bleibt. Ausgelegt ist er wie der Festo-Tripod EXPT-95: Arbeitsraum 950 mm Durchmesser und 100 mm hoch, Zahnriemenachsen EGC-80 ohne Getriebe angetrieben, 1 kg Nennlast bei höchster Dynamik, hier mit drei Siemens 1FK2205-2AF an S210-Umrichtern. Festo veröffentlicht weder Stablänge noch Säulenanordnung noch bewegte Massen; [die Konfiguration](../../crates/machine-delta-linear/default.toml) kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` und gibt den Schätzungen Grenzen. Ihr Zyklus ist der Adept-Zyklus 25/305/25 mm des D3, oben im Arbeitsraum.
 
-Das Werkzeug ist die Mitte der Platte, x, y und z in Metern, z nach oben ab dem oberen Anschlag der Schlitten (die Platte arbeitet bei −1,12 bis −1,22 m). Ein Ziel wird mit seinem Grund abgelehnt, wenn es außerhalb des Zylinders liegt, außer Reichweite der Stäbe, wo ein Stab steiler als 60° zur Senkrechten stünde, wo ein Schlitten seinen Hub verlassen müsste oder zu nahe an einer Singularität.
+Das Werkzeug ist die Mitte der Platte, x, y und z in Metern, z nach oben ab dem oberen Anschlag der Schlitten (die Platte arbeitet bei −1,12 bis −1,22 m). Ein Ziel wird mit seinem Grund abgelehnt, wenn es außerhalb des Zylinders liegt, außer Reichweite der Stäbe, wo ein Stab mehr als 60° gegen seine Säule (senkrecht: gegen die Senkrechte) stünde, wo ein Schlitten seinen Hub verlassen müsste oder zu nahe an einer Singularität.
 
 ```text
 $ sim-cli analyze delta-linear
@@ -667,45 +667,124 @@ Der Zyklus liegt entlang x, auf Säule 1 zu und von ihr weg, also arbeitet Säul
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4429,1.000,ok
+motor-peak,1,0.4424,1.000,ok
 motor-thermal,1,35.34,100.0,ok
 drive-current,1,1.643,3.000,ok
-pulley-torque,1,3.980,10.00,ok
+pulley-torque,1,3.978,5.000,ok
+pulley-bearing-life,1,23536,20000,ok
+belt-tooth-load,1,0.7941,1.000,ok
 ...
-settling,,0.00007375,0.0005000,ok
-belt-tension,,527.7,1000,ok
-belt-slack,,143.2,0,ok
+settling,,0.00007418,0.0005000,ok
+belt-tension,,527.5,1000,ok
+belt-slack,,144.7,0,ok
+guide-load,1,116.1,3050,ok
+guide-life,1,468944829,20000,ok
+...
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,783.0,1500,ok
-thermal-warm-start,,0.02976,0.1000,ok
+gearbox-radial-load,,782.8,1500,ok
+thermal-warm-start,,0.02983,0.1000,ok
 ```
 
-Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Was man daraus liest:
+Jede Prüfung besteht. Mit `--bands` fallen zwei an einer Grenze einer Schätzung durch: die Lebensdauer des Lagers der Riemenscheibe (5084 h an Säule 1 mit C an seiner unteren Grenze von 3000 N; Festo nennt kein Lager für die Antriebswelle der EGC) und die Riemenzähne (1,11 mit einem Betriebsfaktor von 1,4 auf Festos 350 N). Was man daraus liest:
 
 - **Motor.** Ein Compact-Motor, wegen seines Läufers: der High-Dynamic-Motor 1FK2104-5AF hätte das Moment (7,5 N m gegen 4,8 N m Bedarf), aber 0,65 kg cm² Läufer gegen etwa 6 kg cm² aus Schlitten, Platte und Riemenscheibe an seiner Welle: sein Drehzahlregler schwang oberhalb 0,1 N m s/rad bei etwa 450 Hz, und der Zyklus kam nur auf 2,5 mm statt 0,5 mm zur Ruhe. Die 4,0 kg cm² des 1FK2205-2AF vertragen eine Verstärkung von 0,25 mit mindestens 38° Phasenreserve über die Grenzen, und eine Nachstellzeit von 0,012 s (0,01 s ließ 34°), kurz, damit der Integrator die Schlitten nach einer Bewegung bald durch die Reibung ihrer Führungen schiebt.
 - **Riemen.** Der Riemen jeder Säule trägt das Gewicht des Schlittens und seinen Anteil an dem der Platte (22 N in der Mitte) und was ihr Beschleunigen braucht: 143 bis 528 N in seinen beiden Abschnitten, bei 300 N Vorspannung.
 - **Singularität.** Die Konditionszahl ist schon in der Mitte 3,15: ein Meter Schlittenweg bewegt die Platte seitlich weiter als nach oben. Der Arbeitsraum hat bis zu 3,98, am unteren Rand gegenüber einer Säule.
-- **Keine Prüfungen für Getriebe, Riemenscheibenlager, Führungen oder Zahnbelastung**: die Achsen haben kein Getriebe, und für Lager, Führungen und Riemenzähne stehen keine Kennwerte in der Konfiguration (die der EGC-80 sind nicht im Katalog).
+- **Führungen, Lager der Riemenscheiben, Riemenzähne.** Die Führung der EGC-80 trägt quer zu Säule 1 höchstens 116 N (3050 N zulässig für Festos 5000 km): Sie hält im Stillstand das Gewicht der Platte (3,4 N in der Mitte) und über die Stäbe, was das seitliche Beschleunigen der Platte mit 50 m/s² braucht. Ihre Lebensdauer liegt weit über den 20000 h. Das Lager der Riemenscheibenwelle trägt den Zug beider Riemenabschnitte, bis 783 N, und hält an Säule 1 23536 h mit einem geschätzten C von 5000 N. Die Riemenzähne stehen bei 0,79 dessen, was Festos 350 N Vorschubkraft ergibt, wie das Moment an der Riemenscheibe bei 3,978 von 5 N m: Festo gibt für beides eine Zahl. Keine Getriebeprüfungen: die Achsen haben keines.
 
-Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse und die Erwärmung der Führungen. Trace-Wiedergabe und Fit nehmen ihn, den Fit in den Koordinaten seiner Motoren wie beim D3. Siehe die [Modellreferenz](../model-reference.md#linear-delta).
+**Geneigte Säulen.** `geometry.column_incline_deg` neigt die Säulen, positiv mit ihren oberen Enden zur Achse hin; die Schlitten fahren dann längs der Säulen (Hub und oberer Anschlag zählen längs der Säule), der Riemen hält das Gewicht des Schlittens mal dem Kosinus und die Führung den Rest. Die ausgelieferte Maschine steht senkrecht. Arbeitsraum und Zyklus passen zu einer Neigung nach außen und zu kleinen nach innen; bei +20° wird die Ecke (−0,1525, 0, −1,13) des Zyklus abgelehnt, weil der Stab von Säule 1 dort 60° gegen seine Säule stünde:
+
+```text
+$ sim-cli verdicts delta-linear --set geometry.column_incline_deg=-20
+pulley-torque,1,4.611,5.000,ok
+belt-tooth-load,1,0.9204,1.000,ok
+guide-load,1,31.84,3050,ok
+singularity,,3.716,5.000,ok
+settling,,0.0001107,0.0005000,ok
+...
+```
+
+Nach außen geneigt laufen die Säulen fast längs der Stäbe: Die Führungen tragen weniger (32 N gegen 116 N senkrecht), die Konditionszahl steigt (3,72 gegen 3,28) und mit ihr die Momente der Motoren. Um 10° nach innen geneigt besteht jede Prüfung (Führung 149 N); um 20° mit `workspace.max_rod_angle_deg=65` ebenso, bis auf das Lager der Riemenscheibe an Säule 1 (16202 h gegen 20000 h; die Führung trägt 167 N).
+
+Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse, die Momente auf die Führungen und sich erwärmende Riemen und Riemenscheiben (seine Führungen erwärmen sich mit `effects.part_heating`: 9,1 K im Zyklus). Trace-Wiedergabe und Fit nehmen ihn, den Fit in den Koordinaten seiner Motoren wie beim D3. Siehe die [Modellreferenz](../model-reference.md#linear-delta).
+
+### Der Parallel-SCARA
+
+`parallel-scara` ist das Fünfgelenk des D2, flach gelegt wie bei Mitsubishis RP-Baureihe: die beiden Arme drehen um
+senkrechte Achsen, die Platte bewegt sich in der waagerechten x-y-Ebene; an der Platte ein Z-Hub auf einem
+Kugelgewindetrieb (Motor 3, ein 1FK2103-2AH hinter einer Kupplung, 20 mm Steigung, 200 mm Hub) und eine Drehung des
+Werkzeugs um z (Motor 4, ein 1FK2103-2AH hinter einem NRB060-03-8 mit i = 8). Die Schwerkraft wirkt aus der Ebene
+heraus: die Motoren der Arme halten im Stillstand nichts, der Z-Motor hält Schlitten und Nutzlast. Die Werkzeugpose ist
+(x, y, z, c); Bahnen schreibt man `line,x,y,z,c`. Der Zyklus ist der flach gelegte Adept-Zyklus: 25 mm auf dem Hub nach
+unten, hoch, 305 mm hinüber mit 90° Werkzeugdrehung, hinunter, hoch und zurück, die Aufnahme 20 mm über der Ablage, so
+dass sich auf jedem Querweg jede Achse bewegt: 0,906 s.
+
+    $ sim-cli verdicts parallel-scara
+    motor-peak,1,0.5381,1.000,ok
+    gearbox-peak,1,144.8,192.0,ok
+    ...
+    settling,,0.0001873,0.0005000,ok
+    screw-speed,3,1535,5160,ok
+
+Alle Prüfungen bestehen, auch mit `--bands`. Die Platte trägt 12,8 kg (beide Einheiten, Schlitten und Nutzlast) statt
+6,4 kg beim D2, deshalb beschleunigen die Achsen mit 30 m/s² statt 50: bei 50 sähen die Armgetriebe 235 N m bei 192 N m
+Höchstmoment. Eine Achse schaltet `--set z_axis.enabled=false` oder `--set tool_turn.enabled=false` ab; dann brauchen
+die Ziele des Zyklus und `start.pose` entsprechend weniger Werte.
 
 ### Der Vierachs-Delta D4
 
-`delta-d4` ist der D3 mit einer vierten Achse, die das Werkzeug um die Senkrechte dreht, wie ABBs IRB 360 mit seiner vierten Achse: Ein vierter 1FK2105-4AF in der Mitte der Basis treibt hinter einem Planetengetriebe mit Übersetzung 8 (Siemens NRB060-05-8) eine Teleskopwelle mit je einem Kardangelenk an beiden Enden hinab zur Werkzeugwelle in der Plattform. Die Werkzeugpose ist (x, y, z, c), c in rad; `start.pose` und die Ziele des Zyklus haben vier Werte. Sein Zyklus ist der Adept-Zyklus des D3, bei dem sich das Werkzeug auf jeder Querfahrt um 90° dreht (+90° zum Aufnehmen, zurück auf 0° zum Ablegen): weiter 0,720 s, die Drehung passt in die Querfahrt. Beide Kardangelenke sind gleich gebeugt (beide Wellen senkrecht), also dreht das Werkzeug genau mit dem Motor; nur die Welle zwischen ihnen dreht ungleichförmig (`shaft.speed`). Der Gewichtsanteil der Welle und die Reibung des Teleskops belasten die Arme ([die Konfiguration](../../crates/machine-delta-d4/default.toml), Modellreferenz).
+`delta-d4` ist der D3 mit einer vierten Achse, die das Werkzeug um die Senkrechte dreht, wie ABBs IRB 360 mit seiner vierten Achse: Ein vierter, kleinerer Motor in der Mitte der Basis (ein 1FK2104-4AF an einem eigenen S210-Umrichter) treibt hinter einem Planetengetriebe mit Übersetzung 8 (Siemens NRB060-04-8) eine Teleskopwelle mit je einem Kardangelenk an beiden Enden hinab zur Werkzeugwelle in der Plattform. Die Werkzeugpose ist (x, y, z, c), c in rad; `start.pose` und die Ziele des Zyklus haben vier Werte. Sein Zyklus ist der Adept-Zyklus des D3, bei dem sich das Werkzeug auf jeder Querfahrt um 90° dreht (+90° zum Aufnehmen, zurück auf 0° zum Ablegen): weiter 0,720 s, die Drehung passt in die Querfahrt. Beide Kardangelenke sind gleich gebeugt (beide Wellen senkrecht), also dreht das Werkzeug genau mit dem Motor; nur die Welle zwischen ihnen dreht ungleichförmig (`shaft.speed`). Der Gewichtsanteil der Welle und die Reibung des Teleskops belasten die Arme ([die Konfiguration](../../crates/machine-delta-d4/default.toml), Modellreferenz).
 
 ```text
 $ sim-cli verdicts delta-d4
-motor-peak,1,0.5631,1.000,ok
-gearbox-peak,1,149.1,192.0,ok
-motor-peak,4,0.05336,1.000,ok
+motor-peak,1,0.5630,1.000,ok
+gearbox-peak,1,149.0,192.0,ok
 ...
-settling,,0.0004035,0.0005000,ok
-tool-gearbox-peak,4,2.262,29.00,ok
+motor-peak,4,0.1103,1.000,ok
+gearbox-peak,4,2.222,29.00,ok
+...
+settling,,0.0003707,0.0005000,ok
 singularity,,2.072,5.000,ok
 thermal-warm-start,,0.02011,0.1000,ok
 ```
 
-Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,22 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` scheitert das Einschwingen: Es erreicht 0,53 mm an einer Grenze der Schätzungen. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
+Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor hat eigenen Motor, eigenes Getriebe, eigenen Antrieb und eigene Grenzwerte (`[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` über den gemeinsamen Tabellen): ein 1FK2104-4AF bei 11 % seiner Spitze, sein Getriebe von den gemeinsamen `gearbox-*`-Prüfungen gegen seine eigenen 18 und 29 N m geprüft. Der noch kleinere 1FK2103-2AH hat das Moment und besteht den Zyklus, doch sein Rotor ist zu leicht für den Drehzahlregler hinter der weichen Welle: Auf das Einschwingen des Werkzeugs eingestellt, hielt sein Regelkreis an der oberen Grenze der Trägheit der Nutzlast nur 24° Phasenreserve. `sim-cli search delta-d4 --motor-id 4` legt ihn allein aus. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set gearbox.4.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,39 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` besteht ebenfalls jede Prüfung (Einschwingen höchstens 0,43 mm). Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
+
+### Der Delta nach Quattro-Art H4
+
+`delta-h4` ist ein Vierarm-Delta der Bauart Quattro / H4, ausgelegt nahe der Klasse des Omron Quattro s650H: Arbeitsraum
+1300 mm im Durchmesser, 250 mm hoch am Rand und 450 mm in der Mitte, 6 kg Nutzlast, vier Siemens 1FK2105-6AF an
+S210-Umrichtern hinter Planetengetrieben mit Übersetzung 20 (NRB120-05-20). Omron veröffentlicht weder Geometrie noch
+Massen oder Antriebe; jeder solche Wert ist eine Schätzung (`[estimate]`) mit Grenzen
+([die Konfiguration](../../crates/machine-delta-h4/default.toml)). Es gibt keinen vierten Motor für das Werkzeug: Die
+Plattform besteht aus zwei Teilen, die Arme 1 und 2 tragen den einen, die Arme 3 und 4 den anderen, und die Teile
+verschieben sich gegeneinander; ein Ritzel zwischen je einer Zahnstange an jedem Teil und eine Zahnradstufe drehen das
+Werkzeug um 30 rad je Meter halber Verschiebung (Mechanismen, Abschnitt „Zweiteilige Plattform mit
+Zahnstangen-Übersetzung“). Die Werkzeugpose ist (x, y, z, c), c in rad; der Zyklus ist der Adept-Zyklus des D3, bei dem
+sich das Werkzeug auf jeder Querfahrt um 90° dreht, 100 mm unter der Oberkante des Arbeitsraums: 0,720 s. Das Signal
+`plate.slide` ist die Verschiebung der Teile gegeneinander (2 h), `plate.amplifier_twist` die Verdrehung der
+Übersetzung am Werkzeug.
+
+```text
+$ sim-cli verdicts delta-h4
+motor-peak,1,0.5755,1.000,ok
+motor-thermal,1,48.15,100.0,ok
+gearbox-peak,1,242.5,416.0,ok
+...
+settling,,0.004724,0.0005000,FAIL
+singularity,,2.028,5.000,ok
+thermal-warm-start,,0.01730,0.1000,ok
+```
+
+Jede Prüfung besteht außer dem Einschwingen, ein Befund der Bauart: Die Drehung des Werkzeugs ist das 30-Fache der
+Verschiebung der Plattform, also drehen Verdrehung und Spiel der Armgetriebe, die die Geber der Motoren nicht sehen, und
+das Nachschwingen der Verschiebung nach der Querfahrt das Werkzeug in der Verweilzeit um 4,7 mrad (gezählt als 4,7 mm,
+wie der Fehler jeder Drehachse in rad). Mit dem Spiel des Katalogs von 9 Winkelminuten sind es 9,9 mm; mit 1
+Winkelminute und einem Input Shaper bei 12 Hz
+(`--set gearbox.backlash_rad=2.909e-4 --set effects.input_shaping=true --set profile.shaper_frequency_hz=12 --set profile.shaper_damping=0.1`)
+noch 0,70 mm. Motor 1 (entlang +x, der Richtung des Zyklus) arbeitet am meisten: 0,58 seiner Spitze, 48 K Erwärmung der
+Wicklung; die Motoren 2 und 4 tragen 0,26. `sim-cli modes delta-h4` nennt die vier Moden der Arme (in der Mitte zweimal
+30,5 Hz, 46,8 und 51,9 Hz; am Rand 20 Hz) und die Drehung des Werkzeugs an der Übersetzung (76,5 Hz mit Nutzlast).
 
 ### SCARA und Sechsachsroboter im Werkzeugraum
 

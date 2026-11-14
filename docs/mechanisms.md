@@ -27,6 +27,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 | `rotary-table` | table of 3 kg m^2 plus the work | strain wave gear of ratio 100 (or worm, or planetary) | c (rad) | `strain-wave-life` |
 | `urdf-arm` | six-axis arm, `urdf/six-axis.urdf` | strain wave gears of ratio 120 and 80 | six joint angles (rad), or x, y, z, rx, ry, rz in tool space | `strain-wave-life` per joint |
 | `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad), or x, y, z, c in tool space | `strain-wave-life`, the screw's checks on joint 3 |
+| `parallel-scara` | five-bar with parallelogram forearms in the horizontal plane (its own crate, not a joint machine); a Z stroke and a tool turn at the plate | planetary gearboxes of ratio 20 on the arms; the Z stroke on a ball screw 16 x 20 behind a coupling; the turn behind a planetary gearbox of ratio 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` on the Z stroke |
 
 Every one of them also gets the checks every machine gets: motor peak and RMS torque (`motor-peak`, `motor-thermal`),
 drive currents, gearbox peak, cubic-mean torque, input speed and life where `[ratings]` gives them, DC link and braking
@@ -199,6 +200,44 @@ gearbox (`effects.shaft_torsion`), its weight share loads the arms (`effects.sha
 friction pulls on the platform along the shaft (`effects.telescope_friction`). See the
 [model reference](model-reference.md#delta-picker-d4).
 
+## Five-bar in the horizontal plane (parallel-scara)
+
+The parallel SCARA `parallel-scara` (its own crate, not a joint machine) is a five-bar lying flat: two arms turn about
+vertical axes at x = ±R, each carries a pair of forearms (a parallelogram, so the plate keeps its orientation) to the
+plate, as on Mitsubishi's RP series. Its kinematics and dynamics are the planar delta D2's, laid flat (copied into the
+crate: a machine may not use another machine's crate); the plate's coordinates are x and y. Gravity acts along -z, out
+of the plane, on the joints' bearings, so the arms' motors carry no weight at all: they accelerate the plate and what it
+carries, and hold nothing at rest. At the plate two axes can be switched on: a Z stroke (`[z_axis]`, motor 3), a quill
+on a ball screw behind a coupling, which holds the carriage and the payload against gravity (m g lead / 2 pi, 0.187 N m
+for 6 kg on a 20 mm lead), and a turn of the tool about z (`[tool_turn]`, motor 4) behind its own gearbox. Each has
+its own motor, gearbox, drive and ratings tables (`[motor.3]`, `[gearbox.4]`, ...). Everything at the plate (the units
+with their motors, the carriage, the payload) adds to the plate's mass in the plane; the stroke and the turn are
+perpendicular to the plane, so they do not couple with it otherwise. The tool pose is (x, y), (x, y, z), (x, y, c) or
+(x, y, z, c), as the two switches say. The stroke and the turn are rigid joints: the screw's and the turn gearbox's
+twist and backlash are not modelled. See the [model reference](model-reference.md).
+
+## Two-part plate with a rack-and-pinion amplifier (delta-h4)
+
+The four-arm delta `delta-h4` (its own crate, not a joint machine) is of the Quattro / H4 type (Pierrot's H4, the
+Adept/Omron Quattro): four arms on the base at 90 degrees, each with a parallelogram of forearms, down to a travelling
+plate in two parts. Arms 1 and 2 carry part A, arms 3 and 4 part B: two neighbouring arms, whose elbow axes are at
+right angles, so that each part cannot turn at all (a parallelogram leaves its plate end one turn, about its elbow's
+axis; two opposite arms' axes are parallel and would leave a part free to turn about them). The parts slide against each
+other along the horizontal d = (1, -1, 0) / sqrt 2, each by the half slide h from the tool's point the other way; along
+the line between them, d = (1, 1, 0) / sqrt 2, the slide would move the four forearms' ends as the plate's descent does
+at the centre, and the Jacobian would be singular there. A pinion between a rack on each part rolls by h / r_p (its
+centre, on a carriage the parts guide between them, stays at the tool's point), and a gear stage of ratio i_p turns the
+tool: c = kappa h, kappa = i_p / r_p (30 rad/m shipped: +-180 degrees are h = +-104.7 mm).
+
+The kinematics are the D3's per leg at the forearm's end p -+ h d (closed-form inverse; forward by Newton on the four
+constraints from the D3's trilateration), the dynamics the D3's by virtual work with each body's Jacobian: the two parts,
+the carriage and payload at p, and the tool's turn I_t c'^2 / 2 = I_t kappa^2 h'^2 / 2. That last term is the
+machine's character: the tool's inertia counts in the slide times kappa squared (the shipped tool and payload's
+0.013 kg m^2 as 11.7 kg), and the arms' gearbox twist and backlash count in the tool's turn times kappa. With
+`effects.amplifier_compliance` the tool is a body of its own on the amplifier's spring (with
+`effects.amplifier_backlash` a dead band in it), as the D4's tool on its shaft. See the
+[config reference](config-reference.md#quattro-type-delta-h4).
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -231,3 +270,5 @@ worm.
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
 - Not built yet: mechanical cams, electronic cams and flying saw profiles.
+- The linear delta (`delta-linear`, three belt axes on columns that may lean, `geometry.column_incline_deg`) is a
+  parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).
