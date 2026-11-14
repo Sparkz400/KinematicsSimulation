@@ -1020,6 +1020,13 @@ fn the_drives_can_be_disabled_and_enabled_from_the_app() {
         run(&mut model, 0.3);
         assert!(!pushing(&model, 100), "{}: torque while disabled", entry.id);
         model.command(Command::MoveTo(model.target.clone()));
+        // The refusal comes back from the simulation's thread; on a slow machine after more than 0.1 s of simulated
+        // time, so wait for it (10 s at most) rather than for the clock.
+        let asked = Instant::now();
+        while !model.messages.iter().any(|m| m.0 == "error-disabled") && asked.elapsed() < Duration::from_secs(10) {
+            model.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
         run(&mut model, 0.1);
         assert_eq!(
             model.messages.iter().filter(|m| m.0 == "error-disabled").count(),

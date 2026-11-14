@@ -40,7 +40,7 @@ pub fn wrap(from: Wheel, at: Wheel, to: Wheel) -> f64 {
 /// the lever axis, the tool tip's travel per metre the centre of mass moves). The guide gives way sideways (lateral) and
 /// in tilt; a force at the distance h below it tilts it with the arm h, so the compliance at the centre of mass is
 /// 1 / lateral + h^2 / tilt, and the tool tip, h_tool below, moves k (1 / lateral + h h_tool / tilt) per metre of it.
-/// Both distances shrink as the lever axis travels: dk/dz = 2 k^2 h / tilt. As the T-gantry crate's `flex_at`.
+/// Both distances shrink as the lever axis travels: dk/dz = 2 k^2 h / tilt, the leaning axis's own law (`flex_at` in its crate).
 pub fn flex_at(lean: &LeanNode, q: &[f64]) -> (f64, f64, f64) {
     let z = lean.lever_axis.map_or(0.0, |a| q[a]);
     let (h, h_tool) = (lean.com_drop - z, lean.tool_drop - z);

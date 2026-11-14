@@ -799,7 +799,7 @@ impl ConfigMachine {
         let wraps = if on("belt_wrap")? { wrap_neighbours(net, &direct)? } else { Vec::new() };
         let lean = match (net.lean, on("tool_flex")?) {
             (None, true) => return Err(ConfigError::Missing("machine.lean (effects.tool_flex)".into())),
-            // As the T-gantry crate: the lean is a mode of the elastic model.
+            // As in the machine crate with a leaning axis: the lean is a mode of the elastic model.
             (lean, flex) => lean.filter(|_| flex && elastic),
         };
         Ok(Self {
@@ -1184,7 +1184,7 @@ impl ConfigMachine {
     /// [[M, m e_a], [m e_a^T, m]] [acc; w''] = [F; tip p_a - k w - c w'], M the axes' mass matrix and F their forces with
     /// the process force p on the tool: the guide's spring acts between carriage and body, inside, and the process
     /// force at the tool tip, which moves tip per w. The spring stiffens as the lever axis travels, which F there takes
-    /// as -w^2 / 2 dk/dz. The T-gantry crate writes the same out for its one carriage.
+    /// as -w^2 / 2 dk/dz. The machine crate with a leaning axis writes the same out for its one carriage.
     fn lean_acc(&self, lean: &LeanNode, s: &[f64], mut force: Vec<f64>, process: f64) -> (Vec<f64>, f64) {
         let (n, q) = (self.n(), &s[..self.n()]);
         let (w, dw) = self.leaning(s);

@@ -2522,3 +2522,24 @@ Left open:
   of sticking; a worm's efficiencies do not follow its temperature; thermal feedback leaves a worm motor's gearbox alone.
 - The per-motor search keeps the shared `[parts]`; a shared `belt` or `axis` there makes `motor_config` refuse any
   per-motor part (as before).
+
+## Merging the twelve branches of 14 November (14 November 2026)
+
+Twelve branches built side by side (conveyor, motor and drive model, Cartesian arms, the time-optimal plan along the
+limit curve, the robust optimiser's worst corner and lift profiles, the D3's details, machine-file geometry and
+linkages, identification of links and payload changes, the app's `--set`, the browser's 3D view, PLC interop) were
+merged into main; machine-file geometry and linkage both extended the node table and were merged by hand. The first
+run of ten of them failed 19 of 631 tests, all where the branches met; after one fix round 642 tests run and pass
+(the 14 the default filter leaves to CI as well, on CI).
+
+| Defect found by the merge | Fix |
+| --- | --- |
+| The conveyor's grip began 1.5 us late: with no lift, the move down went to the part's pose computed anew, which differs by rounding from where the tool met it, and a 1e-16 m S-curve takes 2 us | The move down starts from where the tool is, less the lift |
+| The browser's 3D view gave a link of no length (the SCARA's last) a matrix with two zero columns | A segment of no length lies along x |
+| Configs written before the other branches' keys (the planar delta file, the SCARA and arm tool configs, the D3's conveyor example) | The keys added with the defaults' comments and marks; a script compared every config with its machine's default |
+| An app test asked for the refusal of a move 0.1 s of simulated time after it, which a slow runner had not delivered | It waits for the message (10 s at most) |
+
+Left open:
+
+- Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
+  not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
