@@ -44,6 +44,12 @@ torque_limit = true
 # The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
 # the torque of that current where it is below the motor's limit. Without the rating nothing is held.
 drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = false
+drive_overload = false
+motor_thermal_nodes = false
 corner_blending = false
 input_shaping = false
 back_emf = true
@@ -243,6 +249,14 @@ torque_constant_nm_a = 1.07527
 # [estimate] Siemens publishes neither for the 1FK2.
 resistance_ohm = 2.0
 inductance_h = 0.010
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.01
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
 # [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min; 15 N m at the maximum current of 18 A.
 rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
@@ -314,6 +328,12 @@ bearing_reliability_percent = 90.0
 # [catalogue] S210 converter 6SL3210-5HE11-5UF0: 5 A rated, 19 A maximum
 drive_rated_current_a = 5.0
 drive_max_current_a = 19.0
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 4.25
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
 
 # In tool space: x, y, z (m), rx, ry, rz (rad); the flange points down (ry = pi/2) all along.
 [start]
@@ -352,6 +372,13 @@ payload = false
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.008, 0.012]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
 joint.friction_coulomb_nm = [0.5, 2.0]
 joint.friction_viscous_nm_s_rad = [0.25, 1.0]
 gearbox.efficiency = [0.65, 0.85]
