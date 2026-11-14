@@ -1,6 +1,7 @@
 //! Motion controller: plans in tool coordinates, transforms to motor setpoints, and runs one drive
 //! per motor. It works on any machine through the machine interface.
 
+use crate::conveyor::{Conveyor, Pass};
 use crate::drive::{Drive, DriveParams, shared_dc_link};
 use crate::path::{self, Piece};
 use crate::profile::Move;
@@ -78,6 +79,8 @@ enum Motion {
         to: Vec<f64>,
         start_tick: u64,
     },
+    /// A pass of the conveyor cycle (`Controller::pass`), waiting for its start and then run.
+    Conveyor,
     /// A cubic curve through the points with the given speeds at them (Hermite interpolation).
     Trajectory {
         points: Vec<(f64, Vec<f64>)>,
@@ -158,6 +161,12 @@ pub struct Controller {
     tick: u64,
     /// Planned setpoints of the last cycles, newest last, as far back as the shaper reaches.
     history: std::collections::VecDeque<[Vec<f64>; 3]>,
+    /// With `[conveyor]`: the cycle picks from the belt instead of running `segments`, one pass per part, and the pass
+    /// under way or last run.
+    conveyor: Option<Conveyor>,
+    pass: Option<Pass>,
+    /// The simulated time at the profile cycle under way, s.
+    clock: f64,
 }
 
 fn steps(cfg: &Config, path: &str, dt: f64) -> Result<u64> {
@@ -214,6 +223,9 @@ impl Controller {
             fieldbus_jitter: 0,
             jitter: Default::default(),
             tick: 0,
+            conveyor: None,
+            pass: None,
+            clock: 0.0,
             history: Default::default(),
         };
         c.apply_config(cfg, machine)?;
@@ -386,9 +398,23 @@ impl Controller {
         if profile_cycle != self.profile_cycle {
             self.rescale_ticks(self.profile_cycle / profile_cycle);
         }
+        // The belt goes on where it was: the parts picked and missed so far stay so.
+        let mut conveyor = Conveyor::from_config(cfg, machine.axes().len())?;
+        if let (Some(new), Some(old)) = (&mut conveyor, &self.conveyor) {
+            new.carry_on(old);
+        }
         // A cycle under way goes on with a segment the new cycle has: the move in progress finishes where it
-        // was going, and the next one starts from there. A cycle that lost all its segments ends.
-        self.cycle = self.cycle.and_then(|i| Some(i.min(segments.len().checked_sub(1)?)));
+        // was going, and the next one starts from there. A cycle that lost all its segments ends; a conveyor cycle
+        // goes on with the new conveyor's next pass.
+        self.cycle = if conveyor.is_some() {
+            self.cycle.map(|_| 0)
+        } else {
+            self.cycle.and_then(|i| Some(i.min(segments.len().checked_sub(1)?)))
+        };
+        if conveyor.is_none() && matches!(self.motion, Motion::Conveyor) {
+            self.motion = Motion::Idle;
+        }
+        self.conveyor = conveyor;
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
@@ -425,7 +451,8 @@ impl Controller {
             }
         };
         match &mut self.motion {
-            Motion::Idle => {}
+            // A conveyor pass runs on the simulated time, which a new profile cycle does not change.
+            Motion::Idle | Motion::Conveyor => {}
             Motion::Moving { start_tick, tail, .. } => {
                 scale(start_tick);
                 if let Some((_, old_start)) = tail {
@@ -479,10 +506,10 @@ impl Controller {
                 if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
                     return Err(CommandError { key: "error-busy" });
                 }
-                if self.segments.is_empty() {
+                if self.segments.is_empty() && self.conveyor.is_none() {
                     return Err(CommandError { key: "error-no-cycle" });
                 }
-                self.cycle = Some(self.segments.len() - 1);
+                self.cycle = Some(self.segments.len().saturating_sub(1));
                 self.stopping = false;
             }
             Command::Stop => self.stopping = true,
@@ -624,7 +651,10 @@ impl Controller {
     /// True while a move, a dwell or the cycle is under way.
     pub fn busy(&self) -> bool {
         self.cycle.is_some()
-            || matches!(self.motion, Motion::Moving { .. } | Motion::Dwell { .. } | Motion::Trajectory { .. })
+            || matches!(
+                self.motion,
+                Motion::Moving { .. } | Motion::Dwell { .. } | Motion::Trajectory { .. } | Motion::Conveyor
+            )
     }
 
     /// False between `Command::Disable` and `Command::Enable`.
@@ -634,6 +664,11 @@ impl Controller {
 
     pub fn cycle_segment(&self) -> Option<usize> {
         self.cycle
+    }
+
+    /// The conveyor of `[conveyor]`, where the config has one, and the pass of its cycle under way or last run.
+    pub fn conveyor(&self) -> Option<(&Conveyor, Option<&Pass>)> {
+        self.conveyor.as_ref().map(|c| (c, self.pass.as_ref()))
     }
 
     /// How often the cycle has started its first segment since the controller was made. The segment index
@@ -721,6 +756,7 @@ impl Controller {
             return;
         }
         if step.is_multiple_of(self.n_profile) {
+            self.clock = step as f64 * self.profile_cycle / self.n_profile as f64;
             self.profile_tick(self.tick + 1, machine);
         }
         if step.is_multiple_of(self.n_position) {
@@ -825,6 +861,28 @@ impl Controller {
                         None => Motion::Moving { mv, start_tick, tail },
                     }
                 };
+            }
+            Motion::Conveyor => {
+                // shortcut: the gripper acts on the plan's time, not once a shaped setpoint has arrived as a cycle
+                // segment's does; with input shaping on, the grip begins up to a shaper period early.
+                if let Some(pass) = &self.pass {
+                    let t = self.clock - pass.start;
+                    if t < 0.0 {
+                        // Waiting for the part, at rest where the last pass ended.
+                        self.set_vel.fill(0.0);
+                        self.set_acc.fill(0.0);
+                        self.motion = Motion::Conveyor;
+                    } else {
+                        pass.at(t, &mut self.set_pos, &mut self.set_vel, &mut self.set_acc);
+                        self.payload_attached = pass.holds(t);
+                        if t < pass.duration() {
+                            self.motion = Motion::Conveyor;
+                        } else {
+                            self.set_vel.fill(0.0);
+                            self.set_acc.fill(0.0);
+                        }
+                    }
+                }
             }
             Motion::Dwell { until_tick } => {
                 if tick >= until_tick {
@@ -1085,6 +1143,18 @@ impl Controller {
         if self.stopping {
             self.cycle = None;
             self.stopping = false;
+            return;
+        }
+        if let Some(conveyor) = &mut self.conveyor {
+            let reachable = |pose: &[f64]| in_range(machine, pose);
+            self.pass = conveyor.plan(machine.axes(), self.clock, &self.set_pos, &reachable);
+            if self.pass.is_some() {
+                self.passes += 1;
+                self.motion = Motion::Conveyor;
+            } else {
+                // No part can be picked: the cycle ends.
+                self.cycle = None;
+            }
             return;
         }
         let next = (last + 1) % self.segments.len();

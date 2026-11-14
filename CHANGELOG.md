@@ -101,6 +101,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 - Fixed: a time-optimal path through a pose the machine cannot go to (an arm's singularity) slowed to a standstill and
   asked for unbounded memory; it is refused with `error-path-range` first.
 
+- Picking from a moving conveyor: a `[conveyor]` table makes the cycle pick parts from a belt (intercept with the belt's
+  speed, tracking during the grip, lift-off, place fixed or onto a second belt), for every Cartesian machine; picks a
+  minute, the verdicts `pick-tracking` and `parts-missed`, the belt and its parts in the 3D view.
+- `crates/machine-delta-d3/conveyor.toml`: the D3 picking from a belt.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

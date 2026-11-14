@@ -471,7 +471,7 @@ fn finish(part: &Part) -> [f32; 3] {
     let long = part_transform(part).scale.max_element() >= 0.15;
     match part.shape {
         Shape::Cylinder { .. } => [0.9, 0.3, 0.5],
-        _ if part.id.starts_with("belt") => [0.0, 0.9, 0.3],
+        _ if part.id.starts_with("belt") || part.id == "conveyor-belt" => [0.0, 0.9, 0.3],
         _ if grey && long => [0.8, 0.35, 0.5],
         _ if grey && r.max(g).max(b) < 0.35 => [0.4, 0.45, 0.5],
         _ => PAINTED,

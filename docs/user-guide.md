@@ -856,6 +856,27 @@ Run: first contact with an obstacle (name: time, speed of the tool, pose) wall: 
 - The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline.
 - The clearance is between boxes: the tool, carriage, Z axis, platform and payload as the 3D view draws them, not their CAD shapes. The delta's forearm rods and upper arms are each ten boxes along the drawn rod or arm, up to a piece's length (95 mm on a rod, 40 mm on an arm) wider than it where it slants.
 
+## Pick from a moving conveyor
+
+[`crates/machine-delta-d3/conveyor.toml`](../crates/machine-delta-d3/conveyor.toml) is the D3's default with a [`[conveyor]`](config-reference.md#conveyor) table: a belt along x at 0.3 m/s brings a part every second through a window 0.5 m long; the delta meets each part with the belt's speed, moves with it while the gripper closes, lifts it off and places it at a fixed place. The table works the same on the other deltas and the gantries (one value per tool axis).
+
+```text
+$ sim-cli analyze delta-d3 --config crates/machine-delta-d3/conveyor.toml
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.014 K
+Conveyor: picks, tracking error during the grip along the belt, parts missed 60.00 / min, 0.444 mm, 0.00 / min
+$ sim-cli verdicts delta-d3 --config crates/machine-delta-d3/conveyor.toml
+...
+pick-tracking,,0.0004440,0.001000,ok
+parts-missed,,0,0,ok
+$ sim-cli analyze delta-d3 --config crates/machine-delta-d3/conveyor.toml --set conveyor.pitch_s=0.5
+Conveyor: picks, tracking error during the grip along the belt, parts missed 63.63 / min, 0.058 mm, 63.63 / min
+```
+
+- The delta's own pass takes 0.94 s; at a part a second it waits for each part to reach the window, and picks 60 a minute, all the belt brings. At a part every 0.5 s it cannot keep up: the parts that leave the window unpicked are missed, and `parts-missed` fails.
+- `pick-tracking` is the most the tool was from the part along the belt while the gripper closed, against `conveyor.tracking_tolerance_m`.
+- `run --cycle` runs the passes as any cycle; its trace shows the payload attached at the end of each grip.
+- In the app, open the file with "Open…" in the config panel and start the cycle: the 3D view draws the belt, its slats running with it, and the parts on it.
+
 ## Tune gains and use input shaping
 
 The gains are in `[drive]`: `kv_1_s` (position), `velocity_kp_nm_s_rad` and `velocity_tn_s` (velocity), `current_kp_v_a` and `current_tn_s` (current). The three commands below put a test signal on the position setpoint only, without feedforward, so they show the feedback loops.

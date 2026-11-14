@@ -304,6 +304,7 @@ fn an_s120_line_up_is_judged_against_its_one_braking_module() {
         contact: None,
         braking_power_peak: 120e3,
         warm_start: None,
+        conveyor: None,
     };
     let braking = |cfg: &Config| -> Vec<(&'static str, Option<usize>, f64, f64, bool)> {
         verdicts(cfg, &load)

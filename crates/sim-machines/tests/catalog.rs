@@ -532,6 +532,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         contact: None,
         braking_power_peak: 0.0,
         warm_start: None,
+        conveyor: None,
     };
     let candidate = |verdicts: Vec<Verdict>| Candidate {
         article: "",
