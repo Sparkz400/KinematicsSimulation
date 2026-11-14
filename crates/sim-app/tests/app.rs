@@ -290,18 +290,32 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
             .collect();
         // A switch that acts only in a setting the base has not is switched from that setting, in both runs: the belt's
         // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
-        // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's).
-        let current = format!(
-            "ratings.drive_max_current_a = {:?}",
-            0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap()
-        );
-        let through = [
-            ("effects.belt_wrap", "effects.belt_tooth_jump = true"),
-            ("effects.drive_current_limit", current.as_str()),
+        // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's). The drive's
+        // overload acts where the current stays above its rating for the image's time (10 s against a cycle of a few,
+        // with the weak drive far below its rating), so its drive has the weak drive's peak current I_p as its maximum,
+        // a quarter of it rated, I_p for 10 ms from the rated load in an image of 50 ms: it trips at
+        // 16 - 15 exp(-0.2) = 3.719, which I_p (16) reaches from cold in -0.05 ln(1 - 3.719 / 16) = 13 ms at the peak,
+        // as in sim-machines' control test.
+        let current = |share: f64| {
+            share * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap()
+        };
+        let capped = [format!("ratings.drive_max_current_a = {:?}", current(0.8))];
+        let peak = current(1.0);
+        let overload = [
+            format!("ratings.drive_max_current_a = {peak:?}"),
+            format!("ratings.drive_rated_current_a = {:?}", 0.25 * peak),
+            format!("ratings.drive_base_load_current_a = {:?}", 0.85 * 0.25 * peak),
+            "ratings.drive_overload_time_constant_s = 0.05".into(),
+            "ratings.drive_max_current_time_s = 0.01".into(),
+        ];
+        let through: [(&str, &[String]); 3] = [
+            ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
+            ("effects.drive_current_limit", &capped),
+            ("effects.drive_overload", &overload),
         ];
         for effect in effects {
             let mut base = base.clone();
-            if let Some((_, setting)) = through.iter().find(|(e, _)| *e == effect) {
+            for setting in through.iter().filter(|(e, _)| *e == effect).flat_map(|(_, s)| s.iter()) {
                 base.set_text(setting).unwrap();
             }
             let mut runners = [Runner::new(entry, &base).unwrap(), Runner::new(entry, &base).unwrap()];
@@ -670,8 +684,10 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             assert!(shows(&row(summary, label)[0], value.unwrap()), "{}: {label} {value:?} in {summary:?}", entry.id);
         }
         // One row per figure and one column per motor: peak, RMS and cubic-mean torque, winding rise, energy
-        // drawn and fed back, the braking resistor's energy and mean power, the highest DC link voltage and the energy
-        // fed back into the mains (zero without the regenerative supply).
+        // drawn and fed back, the braking resistor's energy and mean power, the highest DC link voltage, the energy
+        // fed back into the mains (zero without the regenerative supply), and since the motor and drive model of
+        // 14 November the housing's rise and the drive's overload image (zero with their switches off, as shipped):
+        // 1 + 12 rows.
         assert_eq!(motors[0][0], "Figure");
         assert_eq!(
             motors[0][1..],
@@ -692,7 +708,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
             ];
             figures.iter().filter(|l| l.is_some()).count()
         };
-        assert_eq!(motors.len(), if belted && rated { 14 } else { 11 + lives }, "{}", entry.id);
+        assert_eq!(motors.len(), if belted && rated { 16 } else { 13 + lives }, "{}", entry.id);
         assert!(row(motors, "Fed back into the mains [J]").iter().all(|cell| shows(cell, 0.0)), "{motors:?}");
         for (k, m) in load.motors.iter().enumerate() {
             let figures = [
@@ -1631,8 +1647,15 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
             + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
         let belts_bind = load.belt_tension.is_some_and(|(slackest, _)| slackest < floor);
+        // Likewise where the axis limits take a gearbox's or pulley's output torque above the share of its rating the
+        // time-optimal plan keeps (profile.torque_reserve; a limit of that plan since 14 November): the planar delta's
+        // lines within the axis limits take its gearbox 1 to 248 N m of its 192 N m, the plan keeps 0.8 * 192 = 153.6 N m
+        // in its rigid model and takes 0.588 s against 0.581 s (sim-cli's test checks it is gentler then).
+        let reserve = cfg.f64("profile.torque_reserve").unwrap();
+        let gears_bind =
+            judged.iter().any(|v| matches!(v.check, "gearbox-peak" | "pulley-torque") && v.value > reserve * v.limit);
         assert!(
-            (fast < slow || belts_bind) && model.outdated(Analysis::Path),
+            (fast < slow || belts_bind || gears_bind) && model.outdated(Analysis::Path),
             "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits",
             entry.id
         );
@@ -3343,13 +3366,19 @@ fn the_sizing_report_is_written_from_the_config_as_edited() {
     }
 }
 
-/// `sim-app --set` at start (`Model::set_at_start`): the single axis stood upright, its frictions, gearbox loss and
-/// ripple off, holds its moved masses with the motor torque m g r / i. 5 kg more payload set at start needs
+/// The belt axis that can stand upright, found by its key `geometry.incline_deg` (no test outside a machine's crate names
+/// the machine).
+fn inclinable_axis() -> &'static MachineEntry {
+    MACHINES.iter().copied().find(|e| e.config().get("geometry.incline_deg").is_ok()).unwrap()
+}
+
+/// `sim-app --set` at start (`Model::set_at_start`): the inclinable belt axis stood upright, its frictions, gearbox loss
+/// and ripple off, holds its moved masses with the motor torque m g r / i. 5 kg more payload set at start needs
 /// 5 kg * 9.80665 m/s^2 * 0.02 m / 5 = 0.196133 N m more. The value is in the config, and a key the config does not
 /// have stops the start with the CLI's refusal, with nothing applied.
 #[test]
 fn values_set_at_start_change_the_config_and_the_run() {
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = inclinable_axis();
     let upright = [
         "geometry.incline_deg = 90.0",
         "effects.guide_friction = false",
@@ -3392,7 +3421,7 @@ fn values_set_at_start_change_the_config_and_the_run() {
 /// rolled back like any edit.
 #[test]
 fn the_panel_field_sets_any_key_and_refuses_as_the_command_line_does() {
-    let mut model = Model::new(sim_machines::find("single-axis").unwrap(), "en");
+    let mut model = Model::new(inclinable_axis(), "en");
     wait_for_data(&mut model);
     let answered = |model: &mut Model, done: &dyn Fn(&Model) -> bool| {
         let start = Instant::now();

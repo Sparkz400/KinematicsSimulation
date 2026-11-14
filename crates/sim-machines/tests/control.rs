@@ -478,19 +478,33 @@ fn every_effect_switch_changes_the_traces() {
         // A switch that acts only in a setting the base has not is flipped from that setting, in both runs: the belt's
         // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
         // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's 0.3 N m).
-        let current = format!(
-            "ratings.drive_max_current_a = {:?}",
-            0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap()
-        );
-        let through = [
-            ("effects.belt_wrap", "effects.belt_tooth_jump = true"),
-            ("effects.drive_current_limit", current.as_str()),
+        // The drive's overload acts where the current stays above its rating for the image's time (10 s; the weak
+        // drive's 0.3 N m take 0.3 A of the gantries' rated 3 A): a drive with the weak drive's peak current I_p as its
+        // maximum, rated a quarter of it, I_p for 10 ms from the rated load in an image of 50 ms trips at
+        // 16 - 15 exp(-0.2) = 3.719, which I_p (16) reaches from cold in -0.05 ln(1 - 3.719 / 16) = 13 ms at the peak;
+        // then it gives 0.85 of its rated current.
+        let current = |share: f64| {
+            share * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap()
+        };
+        let limit = [format!("ratings.drive_max_current_a = {:?}", current(0.8))];
+        let peak = current(1.0);
+        let overload = [
+            format!("ratings.drive_max_current_a = {peak:?}"),
+            format!("ratings.drive_rated_current_a = {:?}", 0.25 * peak),
+            format!("ratings.drive_base_load_current_a = {:?}", 0.85 * 0.25 * peak),
+            "ratings.drive_overload_time_constant_s = 0.05".into(),
+            "ratings.drive_max_current_time_s = 0.01".into(),
+        ];
+        let through: [(&str, &[String]); 3] = [
+            ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
+            ("effects.drive_current_limit", &limit),
+            ("effects.drive_overload", &overload),
         ];
         for effect in effects {
             let (from, own);
             let reference = match through.iter().find(|(e, _)| *e == effect) {
                 Some((_, setting)) => {
-                    from = config_of(&base, &[setting]);
+                    from = config_of(&base, setting);
                     own = traces(&from);
                     &own
                 }
@@ -953,10 +967,10 @@ fn every_shipped_config_is_swept_across_its_bounds() {
     assert_eq!(shipped_configs().iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), across_the_bounds::SWEPT);
 }
 
-fn config_of(cfg: &Config, edit: &[&str]) -> Config {
+fn config_of(cfg: &Config, edit: &[impl AsRef<str>]) -> Config {
     let mut cfg = cfg.clone();
     for e in edit {
-        cfg.set_text(e).unwrap();
+        cfg.set_text(e.as_ref()).unwrap();
     }
     cfg
 }

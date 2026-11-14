@@ -694,9 +694,18 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // the axes' 2500 m/s^3 along each (d 0.206 and 0.233 m, j 3381 and 2911 m/s^3): 0.125 + 0.137 = 0.262 s, 6.8 % below
         // the 0.281 s within the axis limits, of which 5 % would ask three quarters. The run keeps to its plan as the slow
         // one does.
+        // Nor where the axis limits take a gearbox's or pulley's output torque above the share of its rating the
+        // time-optimal plan keeps (profile.torque_reserve, a limit of that plan since 14 November): the delta's lines
+        // here, planned in 0.310 s time-optimal against 0.313 s within the axis limits, which ask more of its gearboxes
+        // than 0.8 of their 192 N m.
         let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
             + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
-        if analysed.belt_tension.is_none_or(|(slackest, _)| slackest >= floor) {
+        let reserve = cfg.f64("profile.torque_reserve").unwrap();
+        let gears_bind = sim_components::analysis::verdicts(&cfg, &analysed)
+            .unwrap()
+            .iter()
+            .any(|v| matches!(v.check, "gearbox-peak" | "pulley-torque") && v.value > reserve * v.limit);
+        if !gears_bind && analysed.belt_tension.is_none_or(|(slackest, _)| slackest >= floor) {
             let lifted: Vec<_> = axes
                 .iter()
                 .map(|a| sim_core::AxisInfo { max_vel: 1e3 * a.max_vel, max_acc: 1e3 * a.max_acc, ..a.clone() })
