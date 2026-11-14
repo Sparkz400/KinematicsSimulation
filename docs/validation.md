@@ -93,6 +93,15 @@ Effects: the Rust tests run the crate's `lossless_config` with `effects.joint_el
 
 The payload does not change the difference (it sits at the platform in every model).
 
+**Planar delta D2 and linear delta**: their inverse dynamics by the same route (`reference/lagrange_reference.py` in [machine-delta-d2](../crates/machine-delta-d2/reference) and [machine-delta-linear](../crates/machine-delta-linear/reference), tests in each crate's `tests/reference.rs`), lumped forearms and rods as their models have them.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| D2: motor torques of the rigid model at 60 random states in the working range (seed 2026, up to the axes' limits) | The Lagrangian in the arm angles and the plate's (x, z) with multipliers | 1e-8 of the state's largest torque | `d2_inverse_dynamics_matches_the_lagrangian`, D2 reference |
+| Linear delta: motor torques of the rigid model (`effects.belt_stretch = false`) at 30 random states with the columns upright and 30 leaning 10° inwards, with the pulley, the belt's mass on it and the rotor | The Lagrangian in the carriages' travels and the plate's position with multipliers | 1e-8 of the state's largest torque | `linear_delta_inverse_dynamics_matches_the_lagrangian`, linear delta reference |
+
+Each fails with a mass or a length changed by 1 % (14 November 2026: `mass.forearm_pair_kg`, `geometry.forearm_m` on the D2; `mass.rod_pair_kg`, `geometry.rod_m` on the linear delta). Effects as on the D3 (each crate's `lossless_config`, rigid; on the linear delta also no guide friction). Not covered: their open-loop motion, the elastic models, the belts and guides of the linear delta beyond the belt's mass on the pulley.
+
 What the D3 references do not cover: the elastic model (gearboxes, bending arms), friction and every other loss, the drives and the controller, the planner (the multibody script writes the cycle's S-curve itself), the hard stops. Both references take the model's assumptions about the real machine (the parallelogram's rods turning with the pair's plane, rigid rods and ball joints, the estimated masses), so like the T-gantry's they catch coding and integration errors and, here, a wrong equation for the model as documented, not a wrong model of a real delta.
 
 ## Hand calculations: mechanics
