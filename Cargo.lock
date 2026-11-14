@@ -4328,6 +4328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-cable-robot"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "machine-crank-cam"
 version = "1.0.0-rc.1"
 dependencies = [
@@ -4373,6 +4381,14 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-linear"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
+name = "machine-hexapod"
 version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
@@ -6126,12 +6142,14 @@ dependencies = [
 name = "sim-machines"
 version = "1.0.0-rc.1"
 dependencies = [
+ "machine-cable-robot",
  "machine-crank-cam",
  "machine-delta-d2",
  "machine-delta-d3",
  "machine-delta-d4",
  "machine-delta-h4",
  "machine-delta-linear",
+ "machine-hexapod",
  "machine-joint-kit",
  "machine-parallel-scara",
  "machine-single-axis",

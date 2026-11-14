@@ -25,6 +25,9 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_crank_cam::ROTARY_KNIFE,
     &machine_crank_cam::FLYING_SAW,
     &machine_joint_kit::PALLETISER,
+    &machine_hexapod::ENTRY,
+    &machine_cable_robot::PLANAR,
+    &machine_cable_robot::SPATIAL,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

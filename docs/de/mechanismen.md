@@ -16,6 +16,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 - [Linearmotor](#linearmotor)
 - [Rundtisch: Wellgetriebe und Schneckengetriebe](#rundtisch-wellgetriebe-und-schneckengetriebe)
 - [Roboter aus URDF-Dateien](#roboter-aus-urdf-dateien)
+- [Parallelkinematiken: Hexapod und Seilroboter](#parallelkinematiken-hexapod-und-seilroboter)
 - [Was von Hand nachgerechnet ist](#was-von-hand-nachgerechnet-ist)
 - [Grenzen](#grenzen)
 
@@ -406,6 +407,92 @@ ein eigener Körper an der Feder der Übersetzung (mit `effects.amplifier_backla
 Werkzeug des D4 an seiner Welle. Siehe die Konfigurationsreferenz (docs/config-reference.md, Abschnitt „Quattro-type
 delta H4“).
 
+## Parallelkinematiken: Hexapod und Seilroboter
+
+Zwei Parallelkinematiken haben eigene Crates, `machine-hexapod` und `machine-cable-robot`, und werden wie jede andere
+Maschine gerechnet und ausgelegt (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, die 3D-Ansicht der App,
+`search`):
+
+| Id | Mechanik | Antriebe | Werkzeuglage | Eigene Prüfungen |
+| --- | --- | --- | --- | --- |
+| `hexapod` | Stewart-Gough-Plattform, 25 kg und bis zu 30 kg darauf, auf sechs elektrischen Zylindern (450 mm eingefahren, 200 mm Hub) | je Bein ein Kugelgewindetrieb 25 x 10 hinter einer Kupplung an einem 1FK2105-4AF | x, y, z (m), rx, ry, rz (rad, ein Drehvektor) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` der Spindel je Bein, unter der Kraft des Beins |
+| `cable-planar` | ein Schlitten von 3 kg und bis zu 2 kg, ein Punkt in einer senkrechten Ebene, an 4 Seilen aus einem Gestell 2 m x 1,6 m | je Seil eine Winde: Trommel 25 mm hinter einem Planetengetriebe 5:1 | x, z (m) | `cable-max-tension`, `cable-min-tension` je Seil |
+| `cable-spatial` | eine Plattform von 4 kg und bis zu 4 kg, sechs Freiheitsgrade, an 8 Seilen aus den Ecken eines Gestells 2 x 1,6 x 1,8 m | wie der ebene, Trommel 30 mm | x, y, z (m), rx, ry, rz (rad) | wie der ebene |
+
+Ihre Maße sind allgemein gehalten, jeder Wert ein `[estimate]` bis auf die von Motor und Antrieb (Katalog, wie oben).
+Jeder Standardzyklus besteht alle seine Prüfungen; die Beruhigungstoleranzen der Seilroboter sind Anforderungen ihrer
+Größe (0,3 mm eben, 1 mm räumlich), nicht die 0,05 mm der Kugelgewindeachse.
+
+### Hexapod
+
+Jedes Bein ist ein Gelenk von `chain::JointMachine`, dessen Koordinate der Auszug q_i des Zylinders ist: Spindel, Mutter
+und Lager, Kupplung, Spiel, die Reibung der Stangenführung und der Vorspannung der Mutter, die Anschläge an den
+Hubenden und der Motor sind die der Kugelgewindeachse oben. Die Mechanik gibt Kinematik und Dynamik der Plattform:
+
+- Inverse Kinematik geschlossen: Bein i reicht von seinem Basisgelenk B_i zum Plattformgelenk p + R a_i, seine Länge
+  L_i = `leg.closed_length_m` + q_i. Die Gelenke sitzen paarweise: Basispaare bei 120 k ± `hexapod.base_half_angle_deg`,
+  Plattformpaare bei 120 k ± (60 − `platform_half_angle_deg`), jedes Bein zum benachbarten Paar.
+- Vorwärtskinematik nach Newton über die Bewegung der Plattform, von der Mitte des Werkzeugquaders aus:
+  xi = J^-1 (q − q(x)), p += v, R = exp(w) R, bis die Beine um weniger als 1e-13 m verfehlen; Beinlängen, die keine
+  Lage erfüllt (keine Konvergenz in 40 Schritten), geben NaN, was jeder Aufrufer ablehnt.
+- Die Zeilen von J sind (u_i, b_i × u_i), u_i die Richtung des Beins und b_i = R a_i. Dynamik über die Bewegung der
+  Plattform: M_xi xi' + c + g = J^T f, also im Beinraum M_q = J^-T M_xi J^-1 und h = J^-T (c + g − M_xi J^-1 a0), a0
+  die Längenbeschleunigung der Beine bei der Bewegung (gegen die Lagrange-Gleichungen von M_q mit Differenzen geprüft:
+  gleich auf 1e-9). Die Masse jedes Beins wird auf seine Enden aufgeteilt: `leg.platform_share` bewegt sich mit dem
+  Plattformgelenk (eine Punktmasse in Masse und Trägheit der Plattform), der Rest ruht an der Basis.
+- Abgelehnt: ein Bein über seinen Hub hinaus (`error-joint-beyond-stop`), ein Bein steiler gegen die Normale der Basis
+  oder der Plattform als `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), eine Lage, deren Jacobi-Matrix
+  eine Konditionszahl über `workspace.max_condition_number` hat, die Drehungen mit dem Plattformradius gewichtet
+  (`error-hexapod-singularity`). Die Arbeitsraumkarte zeigt diese Konditionszahl; das Signal `platform.condition` folgt
+  ihr über den Zyklus.
+- Prüfungen: die Kraft jedes Beins (`joint.<i>.force`) gegen Knicklast und statische Tragzahl seiner Spindel durch ihre
+  Sicherheiten, Drehzahl, d n und Lebensdauer der Spindel; Motoren und Antriebe wie an jeder Maschine.
+
+Unter ihrem Gewicht ist die Plattform, von festen Beinkräften gehalten, instabil (d²/dz² von m g z − Σ f_i L_i < 0),
+eine echte Eigenschaft, die die Lageregler halten; die verlustfreien Konfigurationen der Standardprüfungen laufen daher
+ohne Schwerkraft wie die des Sechsachsers, und die Schwerkraft prüfen die von Hand gerechneten Beinkräfte und die
+Standardkonfiguration.
+
+### Seilroboter
+
+Ein Seil verlässt seine Winde entlang der Schwenkachse einer Umlenkrolle vom Radius r (`frame.exits_m`,
+`frame.winch_directions`, `pulley.radius_m`), umschlingt sie und läuft gerade zu seinem Anlenkpunkt an der Plattform
+(`platform.anchors_m`; beim ebenen treffen sich die Seile in der Mitte des Schlittens). Die Rolle schwenkt in die Ebene
+des Anlenkpunkts; in dieser Ebene ist die Länge der Bogen r beta plus die Tangente l_f = sqrt(m² − r²), und dL/dP = −u,
+u der Einheitsvektor vom Anlenkpunkt zum Ablaufpunkt.
+
+- Statik: Die Strukturmatrix A (n x m) hat die Spalten (u_k, b_k × u_k) in den Freiheitsgraden der Plattform; die Seile
+  halten eine Dyname w, wenn A t = w mit jeder Seilkraft im Band von `cable.min_tension_n` bis zur Nennkraft
+  `cable.breaking_load_n` / `cable.safety_factor`. Seile können nur ziehen, daher verteilt ein kleines QP die Kräfte:
+  die nächsten an `cable.reference_tension_n`, die die Dyname im Band halten. Sitzt kein Seil an einer Grenze, ist das
+  die geschlossene Form t = t_ref + A^+ (w − A t_ref); sitzt eins dort, hält das QP es da und teilt den Rest auf, und
+  anders als die verbesserte geschlossene Methode (die ein Seil nach dem anderen festhält und nie wieder freigibt)
+  ändern sich seine Kräfte stetig mit der Lage. Gelöst wird es mit einem Active-Set-Verfahren am bestraften Problem
+  (das auch sagt, welche Seile an einer Grenze sitzen) und dann genau für die freien Seile.
+- Kraftfähiger Arbeitsraum: Eine Lage, deren Plattformgewicht (mit Nutzlast) keine Seilkräfte im Band halten, wird
+  abgelehnt (`error-cable-wrench-infeasible`), auch als Ziel, Bahn oder Zykluslage. In der Mitte des ebenen Roboters
+  tragen die vier Seile 139,81 N (oben) und 100,19 N (unten); 5 cm unter den oberen Rollen bräuchten die oberen Seile je
+  1284 N.
+- Elastisch (`effects.cable_stretch`, an): Ein Seil der freien Länge l ist gespannt eine Feder von EA / l
+  (`cable.ea_n`), darunter schlaff; seine Steifigkeit ändert sich über den Arbeitsraum. Die Steifigkeit der Plattform an
+  ihren Seilen, elastischer und geometrischer Anteil bei gehaltenen Trommeln, gibt ihre Eigenfrequenzen
+  (`sim-cli modes`, die Resonanz des Input-Shapers): 24,6 Hz in der Mitte des ebenen Roboters. `effects.cable_damping`
+  fügt `cable.specific_damping_n_s` / l hinzu. Starr (aus) behalten die Seile ihre Länge.
+- Jede Winde ist ein `joint::RotaryJoint` in Metern Seil: Motor, Getriebe mit dem Trommelradius als Hebel, die Trägheit
+  der Trommel, Reibung von Lagern und Rolle (`effects.winch_friction`), Anschläge bei leerer und voller Trommel.
+  Elastisch sind Trommel und Läufer eigene Körper hinter der Feder des Getriebes; starr behalten die Seile ihre Länge,
+  und die Trägheit der Winden kommt zu der der Plattform.
+- Die Motorwinkel einer Lage sind die der freien Längen, die die Plattform dort in Ruhe halten, l = L / (1 + t / EA),
+  t die Kräfte der geschlossenen Form (die der Verteilung, wo kein Seil an einer Grenze sitzt), sodass Lagesollwerte und
+  Momentenvorsteuerung (die Kräfte der Verteilung für die Dyname der Plattform, dazu die Trägheit der Winden) dieselbe
+  Vorspannung von den Seilen verlangen. Die Vorwärtskinematik ist Gauß-Newton über diese Längen; die Regelung braucht
+  sie zweimal je Lagereglertakt (der Schleppfehler im Werkzeugraum), daher macht sie zuerst billige Schritte und nimmt
+  die numerische Jacobi-Matrix nur nahe am Rand des Arbeitsraums.
+- Signale je Seil: `cable.<k>.tension`, `cable.<k>.shortfall` (wie weit es unter der kleinsten Kraft liegt),
+  `cable.<k>.length`; `platform.condition`, die Konditionszahl der Strukturmatrix. Prüfungen: `cable-max-tension`
+  (höchste Seilkraft gegen die Nennkraft) und `cable-min-tension` (jedes Unterschreiten fällt durch), Motoren und
+  Antriebe wie an jeder Maschine.
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -456,6 +543,17 @@ Standardprüfungen, ihr Standardzyklus und ihre Kurvenscheibe bestehen alle Urte
 eine Leitwertperiode (2, 0,5 und 1,5 s) und ein Stopp endet innerhalb der Rampe; die Kurvenscheibe des Messers bei einer
 Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet.
 
+Maschinentests (`machine-hexapod`, `machine-cable-robot`): Alle drei bestehen die Standardprüfungen, und ihre
+Standardzyklen bestehen alle Prüfungen. Hexapod: Jedes Bein ist in der Grundstellung (0, 0, 0,48 m) 0,5471158 m lang,
+0,0971158 m ausgefahren, von Hand aus den Gelenkkreisen; vorwärts der inversen gibt drei Lagen auf 1e-12 zurück; die
+Beine halten 62,2 kg in der Grundstellung mit je 115,8772 N, m g / (6 u_z), die Motoren mit 0,184424 N m (f Steigung /
+2 pi); außermittig tragen die Kräfte zusammen weiter das Gewicht. Seilroboter: In der Mitte des ebenen ist jedes Seil
+1,283539 m lang (Bogen und Tangente von Hand), die Kräfte sind 139,808 N und 100,192 N, die Steifigkeit der Seile
+192512 N/m quer und 119500 N/m senkrecht, die tiefste Eigenfrequenz 24,605 Hz, die geometrische Steifigkeit 235 N/m
+mehr; 5 cm unter den oberen Rollen wird die Lage abgelehnt; ein Seil, das die geschlossene Form unter sein Band nimmt,
+wird an der Grenze gehalten und die anderen tragen den Rest (je 8,485 N von Hand); vorwärts der inversen gibt die Lagen
+des räumlichen auf 1e-10 zurück.
+
 ## Grenzen
 
 - Ein Glied biegt sich in einer Eigenform in der Ebene, in der sein Gelenk es dreht; aus dieser Ebene heraus und in
@@ -477,3 +575,11 @@ Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet.
 - Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,
   `geometry.column_incline_deg`) ist eine Parallelkinematik und keine dieser Maschinen; siehe die
   [Modellreferenz](../model-reference.md#linear-delta).
+
+- Noch nicht gebaut: mechanische Kurvenscheiben, elektronische Kurvenscheiben und Profile für die fliegende Säge.
+- Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
+  (an der weichsten Stellung der Mutter); noch keine Eigenfrequenzen (`resonance_hz`).
+- Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
+  des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
+  der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze
+  hält.

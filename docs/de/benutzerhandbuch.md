@@ -12,6 +12,7 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einen Zyklus verkürzen](#einen-zyklus-verkürzen)
 - [Einen Delta-Picker auslegen](#einen-delta-picker-auslegen)
 - [Einen Linear-Delta auslegen](#einen-linear-delta-auslegen)
+- [Einen Hexapod oder einen Seilroboter auslegen](#einen-hexapod-oder-einen-seilroboter-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
 - [Programme: G-Code und Roboterprogramme](#programme-g-code-und-roboterprogramme)
 - [Die Form der Bewegungen wählen](#die-form-der-bewegungen-wählen)
@@ -953,6 +954,60 @@ sagen das (`limit-cam-speed`, mit Beschleunigung und Ruck). Eine eigene Pressenk
 CSV aus Leit- und Folgewert (und Steigungen) in `cam.table_file`. In der App zeigt das Oszilloskop Lage und Kraft des
 Stößels, die Pleuelkraft und die Trägheit an der Kurbel über dem Hub; der Schleppfehler ist der des Folgewerts gegen die
 Kurvenscheibe.
+
+## Einen Hexapod oder einen Seilroboter auslegen
+
+Zwei Parallelkinematiken mit allgemein gehaltenen Maßen und Siemens-Motoren 1FK2105-4AF an S210-Antrieben (jeder andere
+Wert eine Schätzung, mit Grenzen); siehe [Mechanismen](mechanismen.md#parallelkinematiken-hexapod-und-seilroboter) und
+die [Konfigurationsreferenz](../config-reference.md#hexapod).
+
+`hexapod` ist eine Stewart-Gough-Plattform von 25 kg (bis zu 30 kg darauf) auf sechs elektrischen Zylindern, jeder ein
+Kugelgewindetrieb 25 x 10 an einem eigenen Motor. Die Werkzeuglage ist x, y, z (m) und die Lage der Plattform rx, ry, rz
+(rad, ein Drehvektor); der Zyklus verschiebt, kippt und dreht die Plattform und zurück.
+
+```text
+$ sim-cli analyze hexapod
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,...
+1,1.294000,1.022361,0.301841,109.8280,0.0683,...
+3,1.294000,1.138920,0.474881,161.0000,0.0762,...
+$ sim-cli verdicts hexapod
+settling,,0.00003501,0.00005000,ok
+screw-buckling,3,384.2,168353,ok
+...
+```
+
+Alle Prüfungen bestehen. Die Kraft jedes Beins (`joint.<i>.force`) wird gegen Knicklast und statische Tragzahl seiner
+Spindel geprüft; ein Ziel wird abgelehnt, wo ein Bein seinen Hub verließe, an einem Gelenk steiler als 40° stünde oder
+nahe einer Singularität (`workspace.max_condition_number`; die Arbeitsraumkarte zeigt die Konditionszahl). Der
+Drehzahlregler hat 0,4 N m s/rad: mit 0,1 hielt die Reibung der Beine die Plattform in den Verweilzeiten 0,17 mm
+daneben.
+
+`cable-planar` hängt einen Schlitten von 3 kg (bis zu 2 kg darauf) in einer senkrechten Ebene an 4 Seile,
+`cable-spatial` eine Plattform von 4 kg (bis zu 4 kg) mit sechs Freiheitsgraden an 8; jedes Seil läuft über eine
+schwenkbare Umlenkrolle auf eine Winde hinter einem Planetengetriebe 5:1. Die Seilkräfte gibt ein kleines QP, die
+nächsten an der Vorspannung (`cable.reference_tension_n`), die die Plattform im Band von `cable.min_tension_n` bis zur
+Bruchlast durch die Sicherheit tragen:
+
+```text
+$ sim-cli verdicts cable-planar
+settling,,0.0001535,0.0003000,ok
+cable-max-tension,2,187.9,400.0,ok
+cable-min-tension,2,0,0,ok
+...
+$ sim-cli modes cable-planar
+position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
+-0.600000,26.2012,0.00000,31.8526,0.00000
+...
+```
+
+Alle Prüfungen bestehen bei beiden. `cable-min-tension` fällt durch, wenn ein Seil zu irgendeinem Zeitpunkt unter die
+kleinste Kraft fiel (der Wert: um wie viel); mit 60 N Vorspannung wurde das linke untere Seil des ebenen Roboters
+schlaff, während der Schlitten mit 10 m/s² nach rechts oben beschleunigte, was 120 N verhindern. Ein Ziel, an dem keine
+Seilkräfte im Band die Plattform mit Nutzlast halten, wird als außerhalb des kraftfähigen Arbeitsraums abgelehnt. Die
+Seile dehnen sich mit EA / l, daher ändern sich Steifigkeit und Eigenfrequenzen über den Arbeitsraum (`sim-cli modes`):
+24,6 Hz in der Mitte des ebenen Roboters. Die Seile des räumlichen laufen von Ecke zu Ecke und halten wenig Moment:
+schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform schwingt in den
+Verweilzeiten mit bis zu 0,85 mrad (Beruhigung 0,84 mm gegen die 1 mm, die die Konfiguration verlangt).
 
 ## Eine Bahn fahren und den Bahnfehler ablesen
 

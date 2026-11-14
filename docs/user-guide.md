@@ -11,6 +11,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Shorten a cycle](#shorten-a-cycle)
 - [Size a delta picker](#size-a-delta-picker)
 - [Size a linear delta](#size-a-linear-delta)
+- [Size a hexapod or a cable robot](#size-a-hexapod-or-a-cable-robot)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Programs: G-code and robot programs](#programs-g-code-and-robot-programs)
 - [Shape the moves](#shape-the-moves)
@@ -938,6 +939,57 @@ limit of 20, and `run` and the app say so (`limit-cam-speed`, with acceleration 
 into `[[cam.segment]]`, or as a CSV of master and slave (and slopes) into `cam.table_file`. In the app the scope shows the
 ram's position and force, the rod force and the inertia the crank feels over the stroke; the following error is that of
 the slave against the cam.
+
+## Size a hexapod or a cable robot
+
+Two parallel kinematics, generic proportions with Siemens 1FK2105-4AF motors on S210 drives (every other value an
+estimate, bounded); see [mechanisms](mechanisms.md#parallel-kinematics-hexapod-and-cable-robots) and the
+[config reference](config-reference.md#hexapod).
+
+`hexapod` is a Stewart-Gough platform of 25 kg (up to 30 kg on it) on six electric cylinders, each a ball screw 25 x 10
+on its own motor. The tool pose is x, y, z (m) and the platform's orientation rx, ry, rz (rad, a rotation vector); its
+cycle shifts, tilts and turns the platform and back.
+
+```text
+$ sim-cli analyze hexapod
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,...
+1,1.294000,1.022361,0.301841,109.8280,0.0683,...
+3,1.294000,1.138920,0.474881,161.0000,0.0762,...
+$ sim-cli verdicts hexapod
+settling,,0.00003501,0.00005000,ok
+screw-buckling,3,384.2,168353,ok
+...
+```
+
+Every check passes. Each leg's force (`joint.<i>.force`) is judged against its screw's buckling load and static rating;
+a target is refused where a leg would leave its stroke, stand steeper at a joint than 40°, or near a singularity
+(`workspace.max_condition_number`; the workspace map shows the condition number). The velocity loop's gain is 0.4 N m
+s/rad: with 0.1 the legs' friction held the platform 0.17 mm off at the dwells.
+
+`cable-planar` hangs a carriage of 3 kg (up to 2 kg on it) in a vertical plane from 4 cables, `cable-spatial` a platform
+of 4 kg (up to 4 kg) with six degrees of freedom from 8; each cable runs over a swivelling pulley onto a winch behind a
+planetary gearbox 5:1. The tensions come from a small QP, those nearest the pretension (`cable.reference_tension_n`)
+that carry the platform within the band from `cable.min_tension_n` to the breaking load over the safety factor:
+
+```text
+$ sim-cli verdicts cable-planar
+settling,,0.0001535,0.0003000,ok
+cable-max-tension,2,187.9,400.0,ok
+cable-min-tension,2,0,0,ok
+...
+$ sim-cli modes cable-planar
+position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
+-0.600000,26.2012,0.00000,31.8526,0.00000
+...
+```
+
+Every check passes on both. `cable-min-tension` fails when a cable fell below the least tension at any moment (its
+value: by how much); with 60 N of pretension the planar robot's bottom-left cable went slack while the carriage
+accelerated up and right at 10 m/s², which 120 N prevent. A target where no tensions in the band hold the platform with
+its payload is refused as outside the wrench-feasible workspace. The cables stretch with EA / l, so the stiffness and
+the modes change over the workspace (`sim-cli modes`): 24.6 Hz at the planar robot's centre. The spatial robot's cables
+run from corner to corner and hold little moment: turns of 0.05 rad already take some near the band's top, and its
+platform rings at up to 0.85 mrad in the dwells (settling 0.84 mm against the 1 mm the config asks).
 
 ## Run a path and read path error
 

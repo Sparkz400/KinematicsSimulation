@@ -23,6 +23,14 @@ item are in [PROGRESS.md](PROGRESS.md).
   Gates belts; Festo EGC/ELGA and Rexroth CKR single belt axes; motor shafts of Siemens, Beckhoff, SEW and Yaskawa.
   `search --gearboxes` takes a maker or series (`wittenstein-sp`), `search --axes` tries screws, guide sets and linear
   motors on screw, rack and linear motor machines; `catalog::gearboxes_for_motor` and `catalog::axes_for` for the search.
+
+- Machines `hexapod` (crate `machine-hexapod`): a Stewart-Gough platform on six ball-screw cylinders, closed-form inverse
+  and Newton forward kinematics, dynamics through the platform's twist, joint-angle, stroke and singularity limits, each
+  leg's screw judged under the leg's force (buckling, static load, speed, life).
+- Machines `cable-planar` and `cable-spatial` (crate `machine-cable-robot`): cable robots on 4 and 8 winches with pulley
+  kinematics, a QP tension distribution within each cable's band, the wrench-feasible workspace
+  (`error-cable-wrench-infeasible`), elastic cables (EA / l, `effects.cable_stretch`, `cable_damping`,
+  `winch_friction`), natural frequencies on the cables, and the checks `cable-max-tension` and `cable-min-tension`.
 - FMI: inputs `command.cycle`, `command.target.<axis>` with `command.move`, and `command.path` / `command.path_file`
   with `command.run_path`, which start the cycle, a move and a path as `sim-cli run --cycle`, `--move` and `--path`
   do; log categories `logEvents`, `logStatusWarning`, `logStatusError`, `logAll` in the model description, switched by
@@ -183,6 +191,8 @@ item are in [PROGRESS.md](PROGRESS.md).
   friction branch added).
 
 - `sim-netlist` scissor node: the free joint's shaft friction (fields added by the friction merge), so main compiles.
+
+- sim-netlist did not compile at 04e5ecd (a `ShaftFriction` in scissor.rs without the fields the friction work added).
 - A self-locking worm in a machine file holds its load: driven back the motor has to push to lower it, a lowering load
   with no torque brakes to a stop, and in the rigid model its output sticks at rest within what the worm can take
   (before, it lowered the load with no torque and crept).

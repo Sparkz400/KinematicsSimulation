@@ -7,7 +7,7 @@
 ![The T-gantry running its pick-and-place cycle in the app](docs/images/t-gantry-cycle.gif)
 
 A simulator of motion machines in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
-It has eighteen machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, five delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a four-arm delta of the Quattro type whose two-part plate turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file, a SCARA and a parallel SCARA with a five-bar in the horizontal plane ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z and a rack-and-pinion gantry (`machines/*.toml`).
+It has twenty-one machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, five delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a four-arm delta of the Quattro type whose two-part plate turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file, a SCARA and a parallel SCARA with a five-bar in the horizontal plane ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z and a rack-and-pinion gantry (`machines/*.toml`).
 They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a browser page with a 3D view of the machine and a sizing check.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
 **Quick start:** watch a machine run in 3D and try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
@@ -105,6 +105,9 @@ slider-crank	Slider-crank (servo press)
 rotary-knife	Rotary knife (cross cutter)
 flying-saw	Flying saw
 palletiser	Palletiser (URDF, parallelogram)
+hexapod	Hexapod (6 electric cylinders)
+cable-planar	Planar cable robot (4 cables)
+cable-spatial	Spatial cable robot (8 cables)
 ```
 
 A machine file is run like a registered machine: `sim-cli verdicts --machine-file machines/h-bot.toml`, or `sim-app --machine-file machines/h-bot.toml`.
@@ -316,6 +319,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis), [`machine-delta-d3`](crates/machine-delta-d3) | Machines | Transformation, assembly, signals, 3D scene description, configs. The delta: kinematics with its Jacobian and working range, the Codourey/Olsson dynamics, three rotary joints |
 | [`machine-joint-kit`](crates/machine-joint-kit) | Machines | Ball screw, rack and pinion, linear motor, rotary table, and arms from URDF files (a six-axis arm, a SCARA, a palletiser), built from one kit of joints and transmissions |
 | [`machine-crank-cam`](crates/machine-crank-cam) | Machines | Slider-crank (servo press), rotary knife and flying saw, each with an electronic cam (`sim_components::cam`, VDI 2143 laws, CSV cam tables) |
+| [`machine-hexapod`](crates/machine-hexapod), [`machine-cable-robot`](crates/machine-cable-robot) | Machines | Parallel kinematics: a hexapod on six ball-screw cylinders, and cable robots on 4 (planar) and 8 (spatial) winches with a QP tension distribution and the wrench-feasible workspace |
 | [`sim-netlist`](crates/sim-netlist) | Machines | Machines from TOML or JSON machine files ([`machines/`](machines/)), wired together from components like a netlist |
 | [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines, the loader of machine files; cross-machine tests |
 | [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 and 3.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |
