@@ -14,6 +14,8 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      TEST_PROFILE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ci-full' || 'ci' }}
     # Build, about 500 tests and the FMU check; a stuck test is stopped after 30 minutes (nextest profile ci).
     timeout-minutes: 240
     steps:
@@ -50,19 +52,21 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --locked --exclude sim-py
 
+      # A pull request runs the fast tests (profile ci: the default filter of .config/nextest.toml leaves out the 150 that
+      # take over 20 s each); a push to main runs every test (profile ci-full) and then the long sweeps.
       # The PLC tests run against the wall clock: on a runner busy with the simulation tests they miss their times, so
       # they run afterwards, one at a time.
       - name: Test
-        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci -E "not (package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop)))"
+        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ${{ env.TEST_PROFILE }} -E "not (package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop)))"
 
       - name: PLC tests
-        run: cargo nextest run -p sim-opcua --release --locked --profile ci -E "binary(plc) | binary(soak) | binary(interop)" --test-threads 1
+        run: cargo nextest run -p sim-opcua --release --locked --profile ${{ env.TEST_PROFILE }} -E "binary(plc) | binary(soak) | binary(interop)" --test-threads 1
 
-      # What the default filter of .config/nextest.toml leaves out of the step "Test": the long sweeps of the velocity
-      # loops' margins across the bounds and the EXCT-30's worst corner. Each spreads its runs over every core, so one at
-      # a time.
+      # On a push to main: what every profile leaves out, the long sweeps of the velocity loops' margins across the bounds
+      # and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a time.
       - name: Long sweeps
-        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci --ignore-default-filter -E "not default()" --test-threads 1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci --ignore-default-filter -E "(package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)" --test-threads 1
 
       # nextest does not run doctests.
       - name: Doctests

@@ -30,8 +30,7 @@ below are about evidence first and code second.
 ## Before a pull request
 
 ```
-cargo build --workspace --release --exclude sim-py
-cargo nextest run --workspace --release --exclude sim-py
+cargo nextest run --workspace --cargo-profile quick --exclude sim-py
 cargo test --doc --workspace --release --exclude sim-py
 cargo clippy --workspace --release --all-targets --exclude sim-py -- -D warnings
 cargo fmt --all --check
@@ -40,16 +39,27 @@ cargo fmt --all --check
 Code is formatted with rustfmt (`rustfmt.toml`: 120 characters a line); CI refuses unformatted code and any clippy
 warning.
 
-The physics tests integrate millions of steps; run them in release. [cargo-nextest](https://nexte.st) (`cargo install
-cargo-nextest --locked`) runs the tests of all binaries at once, just under 8 minutes for the suite on the 16 threads of
-an 8-core machine; its settings are in `.config/nextest.toml`. It does not run doctests, hence the third line. Its default
-filter leaves out the sweeps of the velocity loops' margins across the bounds (`across_the_bounds::*` in the control
-tests of sim-machines) and the EXCT-30's search for the worst corner of its bounds, which by themselves take some 10
-minutes on those 16 threads; CI runs them, and so does
-`cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1`.
-`cargo test --workspace --release --exclude sim-py` still runs everything, one test binary after the other. One
-test: `cargo nextest run --release -p sim-machines -E 'test(=every_effect_switch_changes_the_traces)'`. sim-py is
-built and tested with maturin (see the CI workflow).
+The physics tests integrate millions of steps, so they run optimised. The build profile `quick` (root `Cargo.toml`) is
+release built incrementally: after a change only what changed is compiled again. [cargo-nextest](https://nexte.st)
+(`cargo install cargo-nextest --locked`) runs the tests of all binaries at once; its settings are in
+`.config/nextest.toml`. It does not run doctests, hence the second line.
+
+Its default profile runs the fast tests: it leaves out every test that takes over 20 s, written into its filter by
+`tools/slow_tests.py` from the timings of a full run. A pull request runs those. A push to main runs all of them (the
+profile `full` locally, `ci-full` in CI) and then the long sweeps: the velocity loops' margins across the bounds
+(`across_the_bounds::*` in the control tests of sim-machines) and the EXCT-30's search for the worst corner of its
+bounds, which no profile runs by itself.
+
+```
+cargo nextest run --workspace --cargo-profile quick --exclude sim-py --profile full
+python tools/slow_tests.py
+cargo nextest run --workspace --cargo-profile quick --exclude sim-py --ignore-default-filter -E "(package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)" --test-threads 1
+```
+
+The first runs every test and writes their times to `target/nextest/full/junit.xml`; the second puts the ones over
+20 s into the default filter again; the third runs the sweeps. One test:
+`cargo nextest run --cargo-profile quick -p sim-machines -E 'test(=every_effect_switch_changes_the_traces)'`. sim-py
+is built and tested with maturin (see the CI workflow).
 
 ## Licence
 
