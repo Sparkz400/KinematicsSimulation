@@ -1757,8 +1757,8 @@ fn saving_after_a_machine_switch_does_not_overwrite_the_other_machines_file() {
 #[test]
 fn switching_to_a_machine_with_fewer_motors_keeps_the_sweep_motor_in_range() {
     let motors = |entry: &'static sim_core::MachineEntry| Model::new(entry, "en").session.motors.len();
-    let many = MACHINES.iter().copied().max_by_key(|m| motors(*m)).unwrap();
-    let few = MACHINES.iter().copied().min_by_key(|m| motors(*m)).unwrap();
+    let many = MACHINES.iter().copied().max_by_key(|m| motors(m)).unwrap();
+    let few = MACHINES.iter().copied().min_by_key(|m| motors(m)).unwrap();
     assert!(motors(many) > motors(few));
     let mut model = Model::new(many, "en");
     model.inputs.sweep_motor = motors(many) - 1;

@@ -547,7 +547,7 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
             let end = centre_at_end(k0, k1, length);
             let heading = (cb[1] - ca[1]).atan2(cb[0] - ca[0]) - (end[1] - 1.0 / k0).atan2(end[0]);
             let from = [ca[0] + heading.sin() / k0, ca[1] - heading.cos() / k0];
-            (length > 0.0 && length < longest(k1 - k0)).then(|| Geo::Clothoid { from, heading, k0, k1, length, plane: None })
+            (length > 0.0 && length < longest(k1 - k0)).then_some(Geo::Clothoid { from, heading, k0, k1, length, plane: None })
         }
         _ => None,
     }
@@ -665,11 +665,10 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
         _ => None,
     };
     for i in 0..n {
-        if let (Some(_), Some((_, moved)), Geo::Arc { radius, .. }) = (fixed[i], circle(&inset, i), &geo[i]) {
-            if moved < 0.5 * radius {
+        if let (Some(_), Some((_, moved)), Geo::Arc { radius, .. }) = (fixed[i], circle(&inset, i), &geo[i])
+            && moved < 0.5 * radius {
                 inset[i] = 0.0;
             }
-        }
     }
     // Curvatures this close are one (two arcs on one circle come out with radii apart by rounding), and pieces this
     // close touch: a curve between them would be built from rounding, and may take any angle of the arcs.
@@ -1704,7 +1703,7 @@ line,0.2,0.0,-0.9").unwrap();
         let (pose, rest) = (vec![0.1, 0.35], [0.0999876, 0.3500458]);
         let up = |by: f64| Piece::Arc { to: vec![0.2 - 0.1 * by.cos(), 0.35 + 0.1 * by.sin()], centre: vec![0.2, 0.35], clockwise: true };
         for (start, first) in [(&rest[..], up(1.3e-3)), (&rest[..], up(0.0)), (&pose[..], up(0.0)), (&top[..], arc(5e-4, 0.1)), (&top[..], arc(9.9e-3, 0.1))] {
-            assert_eq!(deviation(&axes, start, &[first.clone()], 0.0, ARC_SLACK).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
+            assert_eq!(deviation(&axes, start, std::slice::from_ref(&first), 0.0, ARC_SLACK).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
         }
         assert!((lengths(&rest, &[up(0.02)])[0] - 2e-3).abs() < 1e-4);
         for (by, length) in [(1.3e-3, 1.3e-4), (0.0, std::f64::consts::TAU * 0.1)] {

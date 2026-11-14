@@ -283,7 +283,7 @@ fn the_cheap_signals_and_the_lean_analysis_change_no_number() {
         let (mut all, mut cheap) = (Vec::new(), Vec::new());
         for _ in 0..100 {
             sim.run(0.01, |_| {});
-            (all.clear(), cheap.clear());
+            all.clear(); cheap.clear();
             sim.machine.signals(&sim.state, &sim.torque, &mut all);
             sim.machine.loss_powers(&sim.state, &sim.torque, &mut cheap);
             assert_eq!(cheap, losses.iter().map(|&i| all[i]).collect::<Vec<_>>(), "{} {name}", entry.id);

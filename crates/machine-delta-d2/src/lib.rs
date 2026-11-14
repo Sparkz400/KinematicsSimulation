@@ -424,10 +424,7 @@ impl Delta2 {
 
     /// Where the plate is and the Jacobian there, for arm angles; NaN where the legs cannot be assembled.
     fn pose(&self, t: V2) -> (V2, M2) {
-        match self.legs.forward(t).and_then(|p| Some((p, self.legs.jacobian(t, p)?))) {
-            Some(found) => found,
-            None => ([f64::NAN; 2], [[f64::NAN; 2]; 2]),
-        }
+        self.legs.forward(t).and_then(|p| Some((p, self.legs.jacobian(t, p)?))).unwrap_or(([f64::NAN; 2], [[f64::NAN; 2]; 2]))
     }
 
     /// The load's mass matrix M, the velocity term m_nt J^T J' theta', and the generalised gravity Q_g at arm angles t

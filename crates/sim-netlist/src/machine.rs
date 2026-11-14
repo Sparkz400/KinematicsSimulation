@@ -600,10 +600,7 @@ impl ConfigMachine {
             (None, true) => return Err(ConfigError::Missing("machine.frame (effects.frame_compliance)".into())),
             (_, false) => None,
         };
-        let thermal = match own.iter().map(ThermalFeedback::from_config).collect::<Result<Option<Vec<_>>, _>>()? {
-            Some(laws) => Some((laws, guides.iter().map(|g| g.friction.viscous).collect())),
-            None => None,
-        };
+        let thermal = own.iter().map(ThermalFeedback::from_config).collect::<Result<Option<Vec<_>>, _>>()?.map(|laws| (laws, guides.iter().map(|g| g.friction.viscous).collect()));
         let mut jumps = Vec::new();
         // shortcut: the jumps' states are laid out per motor; a motor without a pulley would need a gap there. Give the
         // jump states to the belt motors only if a file needs tooth jump beside a screw.
@@ -950,8 +947,8 @@ impl ConfigMachine {
         let process = self.process_force();
         for i in 0..n {
             force[i] += chain[i] + process[i];
-            out[fa + i] = rates[i];
         }
+        out[fa..fa + n].copy_from_slice(&rates[..n]);
         let mut acc = solve(self.axis_mass(q), force).unwrap_or_else(|| vec![0.0; n]);
         if let Some((axis, aq)) = frame_acc {
             acc[axis] -= aq;
@@ -1294,7 +1291,7 @@ impl ConfigMachine {
     /// further down.
     fn pulley_scene_at(&self, kk: usize) -> [f64; 3] {
         let end = self.axes[0].max;
-        self.pulley_at[kk].unwrap_or([if kk % 2 == 0 { -0.1 } else { end + 0.1 }, -0.05, -0.15 * (kk / 2) as f64])
+        self.pulley_at[kk].unwrap_or([if kk.is_multiple_of(2) { -0.1 } else { end + 0.1 }, -0.05, -0.15 * (kk / 2) as f64])
     }
     /// A screw, rack or magnet track along its axis from 0 to its stroke, carried by what carries the axis (the first
     /// body it moves, without its own travel), with the motor at the 0 end; a rotary as a disc where the motor's pulley

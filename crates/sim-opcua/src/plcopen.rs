@@ -472,7 +472,7 @@ mod tests {
         a.execute(2, true, 0.0, false);
         a.vel = 1e-15;
         a.advance(0.01, 0.0);
-        assert!(a.vel <= 0.0 && a.vel >= -1.0 * 0.01 - 1e-12, "{} m/s after one step", a.vel);
+        assert!(a.vel <= 0.0 && a.vel >= -0.01 - 1e-12, "{} m/s after one step", a.vel);
     }
 
     /// Takeover by another move, MC_Stop in the middle of a move, a block started again and a reversal, one after

@@ -226,17 +226,16 @@ impl Runner {
         let mut travelled = Vec::new();
         for _ in 0..(seconds / self.sim.dt).round() as u64 {
             self.sim.step();
-            if let (true, Some(last), Some(tool)) = (self.recording, self.trail, self.sim.tool_point()) {
-                if (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8 {
+            if let (true, Some(last), Some(tool)) = (self.recording, self.trail, self.sim.tool_point())
+                && (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8 {
                     travelled.push(tool);
                     let point = self.trail_point(tool);
                     self.trail_points.push(point);
                     self.trail = Some(tool);
                 }
-            }
             // The trajectory is through: the path ends with it.
             self.recording &= self.sim.control.busy();
-            if self.sim.step % self.sample_every == 0 {
+            if self.sim.step.is_multiple_of(self.sample_every) {
                 let mut sample = Vec::new();
                 self.sim.sample(&mut sample);
                 events.push(Event::Sample(sample));

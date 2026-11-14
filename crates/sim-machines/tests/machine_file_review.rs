@@ -171,7 +171,7 @@ fn friction_under_a_known_scalar() {
     let fr = base();
     let fx = fr.find("[friction_x]").unwrap();
     let end = fx + fr[fx..].find("\n[").unwrap();
-    text.push_str("\n");
+    text.push('\n');
     text.push_str(&fr[fx..end].replace("[friction_x]", "[frame.mass_kg.f]"));
     // A known value lies on the way to the friction table: refused by name, where it panicked.
     let r = std::panic::catch_unwind(|| load(&text).map(|_| ()));

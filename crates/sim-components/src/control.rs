@@ -593,10 +593,10 @@ impl Controller {
             }
             return;
         }
-        if step % self.n_profile == 0 {
+        if step.is_multiple_of(self.n_profile) {
             self.profile_tick(self.tick + 1, machine);
         }
-        if step % self.n_position == 0 {
+        if step.is_multiple_of(self.n_position) {
             for (k, (drive, pos)) in self.drives.iter_mut().zip(&self.motor_pos).enumerate() {
                 drive.position_loop(&self.motor_params[k], *pos);
             }
@@ -610,7 +610,7 @@ impl Controller {
             }
         }
         for (k, drive) in self.drives.iter_mut().enumerate() {
-            if step % self.n_velocity == 0 {
+            if step.is_multiple_of(self.n_velocity) {
                 drive.velocity_loop(&self.motor_params[k], self.motor_pos[k], self.motor_vel[k]);
             }
             drive.current_control(&self.motor_params[k], self.motor_vel[k]);
@@ -620,7 +620,7 @@ impl Controller {
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
     /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64]) {
-        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.chunks_exact(4)).enumerate() {
+        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<4>().0).enumerate() {
             drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
         }
         if self.params.shared_dc_link {

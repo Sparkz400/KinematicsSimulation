@@ -106,7 +106,7 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
         segments.push((target, payload, via, i));
     }
     let mut check = PlanCheck::default();
-    check_path(machine.as_ref(), &obstacles, &[start.clone()], &mut check);
+    check_path(machine.as_ref(), &obstacles, std::slice::from_ref(&start), &mut check);
     let n = segments.len();
     // Leg k ends at segment k; leg n is the way round from the last segment to the first.
     for k in (0..=n).filter(|_| n > 0) {

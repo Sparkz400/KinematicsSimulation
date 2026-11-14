@@ -13,3 +13,6 @@ crate-type = ["cdylib", "rlib"]
 sim-core.workspace = true
 sim-components.workspace = true
 sim-machines.workspace = true
+
+[lints]
+workspace = true

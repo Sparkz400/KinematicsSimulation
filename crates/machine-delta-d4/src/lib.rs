@@ -546,11 +546,10 @@ impl Machine for Delta4 {
     /// The arms' three gearboxes, then the tool's.
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         self.arms.set_part_temperatures(&rises[..rises.len().min(3)]);
-        if let (Some(law), Some(rise)) = (&self.thermal, rises.get(3)) {
-            if !self.tool.gearbox.is_coupling() {
+        if let (Some(law), Some(rise)) = (&self.thermal, rises.get(3))
+            && !self.tool.gearbox.is_coupling() {
                 self.tool.gearbox.efficiency = law.gearbox_efficiency(*rise);
             }
-        }
     }
 
     /// The arms' modes (the D3's) and the tool's torsion (`tool_mode`), lowest first.

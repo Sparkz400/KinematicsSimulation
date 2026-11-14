@@ -187,6 +187,7 @@ pub struct TraceFit {
     pub simulated: Trace,
 }
 
+#[allow(clippy::large_enum_variant)] // one per finished job, sent once over a channel, never stored in bulk
 enum Report {
     /// With the error bands, where they were asked for, and the number of samples they are of (0: each
     /// bounded value alone at its bounds).
@@ -508,7 +509,7 @@ const TOP_ROWS: usize = 8;
 /// reads as 0.0146 and not 0.015. Narrow, so that the tables fit the panel.
 pub fn short(value: f64) -> String {
     match value.abs() {
-        size if size == 0.0 => "0.000".into(),
+        0.0 => "0.000".into(),
         size if (0.01..1e5).contains(&size) => {
             let exponent = size.log10().floor() as i32;
             format!("{value:.*}", (3 - exponent).clamp(0, 3).max(2 - exponent) as usize)

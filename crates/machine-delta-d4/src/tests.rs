@@ -92,8 +92,8 @@ fn the_tool_turns_with_the_motor_through_the_cardan_pair_and_the_shaft_between_u
     }
 }
 
-/// The tool's motor torque for 100 rad/s^2 of the tool's turn, rigid and loss-free: J_c = tool 2e-3 + shaft spin 8e-5
-/// + payload 5e-3 = 7.08e-3 kg m^2, at the motor 7.08e-3 * 100 / 8 = 0.0885 N m, plus the rotor and the gearbox's
+/// The tool's motor torque for 100 rad/s^2 of the tool's turn, rigid and loss-free: J_c = tool 2e-3 + shaft spin 8e-5 +
+/// payload 5e-3 = 7.08e-3 kg m^2, at the motor 7.08e-3 * 100 / 8 = 0.0885 N m, plus the rotor and the gearbox's
 /// input (1.7e-4 + 3.47e-5) * 8 * 100 = 0.16376 N m: 0.25226 N m. Without the payload 0.0260 + 0.16376 = 0.18976 N m.
 /// Given that torque the model turns the tool at 100 rad/s^2, and the arms' torques do not change.
 #[test]

@@ -10,3 +10,6 @@ sim-components.workspace = true
 sim-machines.workspace = true
 # Writes the FMU: its model description and archive come from the same code as its binary.
 sim-fmi = { path = "../sim-fmi" }
+
+[lints]
+workspace = true

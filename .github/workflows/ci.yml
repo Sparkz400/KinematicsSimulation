@@ -81,9 +81,9 @@ jobs:
           python tools/check_fmu.py $cli exct-30.fmu t-gantry --config crates/machine-t-gantry/exct-30.toml
           $cli fmu --machine-file machines/h-bot.toml --fmi 3 --out h-bot.fmu && python tools/check_fmu.py $cli h-bot.fmu machines/h-bot.toml
 
-      # Not "-D warnings" yet: the code base has 34 clippy warnings (13 November 2026). Make it fail once they are gone.
+      # Every warning fails; the lints allowed on purpose are in the root Cargo.toml ([workspace.lints.clippy]).
       - name: Clippy
-        run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py
+        run: cargo clippy --workspace --release --all-targets --locked --exclude sim-py -- -D warnings
 
   # Advisories, licences, duplicate versions and sources of the dependency tree, against deny.toml.
   deny:

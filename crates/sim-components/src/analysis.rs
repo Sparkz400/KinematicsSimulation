@@ -473,7 +473,7 @@ impl Tally {
     /// Adds the step the simulation has just made.
     fn step(&mut self, sim: &Sim) {
         sim.machine.motor_state(&sim.state, &mut self.pos, &mut self.speed);
-        let sampled = self.steps % self.every == 0;
+        let sampled = self.steps.is_multiple_of(self.every);
         if sampled {
             self.sample_now(sim);
             for &i in &self.tensions {
@@ -1697,7 +1697,7 @@ pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(St
     }
     // Per verdict the worst it was in any run: at a corner, or with one parameter at a bound or none (so that the worst
     // is never better than `verdict_bands` reports).
-    let alone_at = |run: usize| -> Vec<Option<bool>> { (0..n).map(|i| (run > 0 && (run - 1) / 2 == i).then_some(run % 2 == 0)).collect() };
+    let alone_at = |run: usize| -> Vec<Option<bool>> { (0..n).map(|i| (run > 0 && (run - 1) / 2 == i).then_some(run.is_multiple_of(2))).collect() };
     let worst = ids
         .iter()
         .filter_map(|&id| {

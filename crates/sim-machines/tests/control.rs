@@ -389,7 +389,7 @@ fn every_effect_switch_changes_the_traces() {
             let (mut at, mut sample) = (0, Vec::new());
             for _ in 0..(4.0 / sim.dt).round() as u64 {
                 sim.step();
-                if sim.step % 16 == 0 {
+                if sim.step.is_multiple_of(16) {
                     sim.sample(&mut sample);
                     let rest = &reference[at.min(reference.len())..];
                     if sample.len() > rest.len() || sample.iter().zip(rest).any(|(v, r)| v.to_bits() != *r) {

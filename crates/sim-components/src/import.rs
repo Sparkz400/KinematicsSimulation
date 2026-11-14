@@ -39,7 +39,7 @@ fn bad(key: &'static str, detail: impl Into<String>) -> TraceError {
 /// is written, otherwise UTF-8 (a byte order mark dropped, invalid bytes replaced).
 pub fn decode(bytes: &[u8]) -> String {
     let utf16 = |big: bool| {
-        let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) }).collect();
+        let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) }).collect();
         String::from_utf16_lossy(&units)
     };
     match bytes {
@@ -78,11 +78,10 @@ fn number(field: &str, comma: bool) -> Option<f64> {
 fn name_and_unit(header: &str) -> (String, String) {
     let header = header.trim().trim_matches('"').trim();
     for (open, close) in [('[', ']'), ('(', ')')] {
-        if let (Some(a), Some(b)) = (header.rfind(open), header.rfind(close)) {
-            if a < b && b == header.len() - 1 {
+        if let (Some(a), Some(b)) = (header.rfind(open), header.rfind(close))
+            && a < b && b == header.len() - 1 {
                 return (header[..a].trim().to_string(), header[a + 1..b].trim().to_string());
             }
-        }
     }
     (header.to_string(), String::new())
 }

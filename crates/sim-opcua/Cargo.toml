@@ -13,3 +13,6 @@ tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 async-opcua = { workspace = true, features = ["server", "client"] }
+
+[lints]
+workspace = true

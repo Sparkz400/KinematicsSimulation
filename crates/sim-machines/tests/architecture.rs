@@ -106,7 +106,7 @@ fn no_machine_name_outside_its_crate() {
         // A machine may not name another machine either, but the one it is built on.
         let mut scanned = files.clone();
         let built_on = |other: &String| BUILT_ON.contains(&(other.as_str(), machine.as_str()));
-        for other in names.iter().filter(|n| layer(n) == 2 && *n != machine && !built_on(*n)) {
+        for other in names.iter().filter(|n| layer(n) == 2 && *n != machine && !built_on(n)) {
             text_files(&crates_dir().join(other), &mut scanned);
         }
         let name = machine.trim_start_matches("machine-");

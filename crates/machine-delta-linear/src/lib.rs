@@ -476,10 +476,7 @@ impl LinearDelta {
 
     /// Where the plate is and the Jacobian there, for carriage heights; NaN where the legs cannot be assembled.
     fn pose(&self, h: V3) -> (V3, M3) {
-        match self.legs.forward(h).and_then(|p| Some((p, self.legs.jacobian(h, p)?))) {
-            Some(found) => found,
-            None => ([f64::NAN; 3], [[f64::NAN; 3]; 3]),
-        }
+        self.legs.forward(h).and_then(|p| Some((p, self.legs.jacobian(h, p)?))).unwrap_or(([f64::NAN; 3], [[f64::NAN; 3]; 3]))
     }
 
     /// The load's mass matrix M (carriages and plate), the velocity term m_nt J^T J_x^-1 w and the generalised gravity

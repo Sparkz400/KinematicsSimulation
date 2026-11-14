@@ -62,7 +62,7 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_and_a_tiny_move_is_refused() {
     let tiny = move_trace(entry, &gentle(&truth), &[0.102, 0.1], 1300, &mut Noise(2));
     let refused = fit_move_stiffness(entry, &gentle(&cfg), &tiny, BELT_STIFFNESS_KEY).unwrap_err();
     assert_eq!(refused.key, "fit-move-not-excited", "{refused:?}");
-    assert!(MOVE_STIFFNESS_LIMIT == 0.1);
+    assert_eq!(MOVE_STIFFNESS_LIMIT, 0.1);
     // A config without the key is refused before anything is replayed.
     assert_eq!(fit_move_stiffness(entry, &cfg, &trace, "belt.no_such_key").unwrap_err().key, "fit-move-no-key");
 }

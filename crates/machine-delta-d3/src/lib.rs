@@ -614,10 +614,7 @@ impl Delta {
 
     /// Where the platform is and the Jacobian there, for arm angles; NaN where the legs cannot be assembled.
     fn pose(&self, t: V3) -> (V3, M3) {
-        match self.legs.forward(t).and_then(|p| Some((p, self.legs.jacobian(t, p)?))) {
-            Some(found) => found,
-            None => ([f64::NAN; 3], [[f64::NAN; 3]; 3]),
-        }
+        self.legs.forward(t).and_then(|p| Some((p, self.legs.jacobian(t, p)?))).unwrap_or(([f64::NAN; 3], [[f64::NAN; 3]; 3]))
     }
 
     /// The load's mass matrix M, the velocity term m_nt J^T J' theta' (and the forearms' middles'), and the generalised

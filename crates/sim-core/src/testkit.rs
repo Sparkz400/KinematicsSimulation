@@ -47,6 +47,7 @@ impl Noise {
     }
 
     /// Roughly normal with standard deviation 1: twelve uniform numbers summed.
+    #[allow(clippy::should_implement_trait)] // an endless source, not an iterator: every test calls it by this name
     pub fn next(&mut self) -> f64 {
         (0..12).map(|_| self.uniform()).sum::<f64>() - 6.0
     }

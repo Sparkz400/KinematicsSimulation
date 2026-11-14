@@ -205,6 +205,7 @@ pub struct PanelState {
 }
 
 /// What the user did this frame. Collected while drawing, applied afterwards.
+#[allow(clippy::large_enum_variant)] // a few per frame at most, applied and dropped
 pub enum Action {
     Machine(&'static MachineEntry),
     Language(&'static str),
