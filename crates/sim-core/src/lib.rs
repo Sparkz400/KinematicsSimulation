@@ -11,8 +11,8 @@ pub use config::{Config, ConfigError};
 pub use i18n::Translations;
 pub use integrate::{Rk4, advance};
 pub use machine::{
-    AxisInfo, BASE_AXES, BeltSection, ENERGY_PARTS, FRICTION_SIGNALS, FrameMomentum, FrictionContact, LOSS_PREFIX,
-    Machine, MachineEntry, Mode, MotorInfo, RatingCheck, SignalInfo, TEMPERATURE_PREFIX, THERMAL_KINDS, TORQUE_PARTS,
-    ThermalPart,
+    AxisInfo, BASE_AXES, BeltSection, CamMaster, ENERGY_PARTS, FRICTION_SIGNALS, FrameMomentum, FrictionContact,
+    LOSS_PREFIX, Machine, MachineEntry, Mode, MotorInfo, RatingCheck, SignalInfo, TEMPERATURE_PREFIX, THERMAL_KINDS,
+    TORQUE_PARTS, ThermalPart,
 };
 pub use scene::{Aabb, Arrow, Label, Obstacle, Part, Scene, Shape};

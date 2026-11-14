@@ -1,0 +1,115 @@
+# What every machine of this crate shares (config/common.toml); the machine's own part follows [profile] below.
+format_version = 1
+# Obstacles the machine must not touch, as for every machine (see docs/config-reference.md): a list of
+# { name, centre_m, size_m } boxes, or [[obstacles]] tables. None by default.
+obstacles = []
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
+# the numbers in this file are used as written.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+[effects]
+gravity = true
+payload = true
+# Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the joint times the ratio.
+joint_elasticity = true
+# Friction in the joint: bearings, guides, the screw nut's preload.
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+hard_stops = true
+holding_brake = true
+# The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
+# file). On in the shipped configs.
+process_force = true
+velocity_feedforward = true
+torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
+# config has a recorded characteristic.
+friction_feedforward = false
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = false
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
+
+# With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
+# delta picker's planetary gearboxes.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as these machines have no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+path_tolerance_m = 0.0
+min_clearance_m = 0.0

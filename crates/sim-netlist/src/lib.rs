@@ -32,7 +32,9 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         Some(linkage) if linkage.gearboxes.len() == 3 => {
             sim_components::base::mount(cfg, Box::new(spatial::Delta::from_node(cfg, &net, linkage)?))
         }
-        Some(linkage) => sim_components::base::mount(cfg, Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?)),
+        Some(linkage) => {
+            sim_components::base::mount(cfg, Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?))
+        }
         None => sim_components::base::mount(cfg, Box::new(ConfigMachine::new(cfg, &net)?)),
     }
 }

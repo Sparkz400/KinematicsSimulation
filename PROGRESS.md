@@ -3359,3 +3359,63 @@ Left open:
 - The analysis's settling and path errors add a rotary axis's rad to the straight axes' m (analysis.rs, the arms
   session's tool-space metric): a five-axis head's A sag of 0.33 mrad read as 0.33 mm before its gearbox was made
   stiffer.
+
+## Crank and cam mechanisms, electronic cam (14 November)
+
+What: a new machine crate `machine-crank-cam` with three machines a servo sizing tool (SIZER) has as core cases and the
+simulator lacked, each one motor-driven joint (`chain::JointMachine`) registered in `sim-machines`: `slider-crank` (a
+servo press: crank 50 mm, rod 200 mm, ram 15 kg and die 10 kg, press force up to 3 kN over the last 6 mm, gearbox 20),
+`rotary-knife` (a cross cutter: roll of radius 0.1 m, one blade, 0.5 m formats of a web at 1 m/s, gearbox 10) and
+`flying-saw` (carriage 40 kg and saw 25 kg on a rack, 1.5 m lengths of material at 1 m/s, cut window 0.2 m). And the
+electronic cam they run: `sim_components::cam` (no machine names) with the VDI 2143 laws `linear`, `dwell`, `3-4-5`,
+`4-5-6-7`, `cycloid`, `harmonic`, rest-in-rest and velocity-in-velocity junctions, CSV cam tables (`parse_table`, a cubic
+through the points with given slopes, else the periodic spline), the master's sin² ramp and the slave's v, a, j at the
+master's speed (`Cam::peaks`).
+
+How: the slider-crank's x(θ), x', x'' in closed form; J(θ) = J_crank + m_pin r² + m_x x'² and its speed term in
+`Mechanism::dynamics`, gravity along the inclined guide and on the pin, the press force from `[process]` as −F x'(θ) while
+the ram moves out; signals of ram position, speed, acceleration, process force, rod force, guide load, crank bearing load
+and J(θ), with three rating checks. The knife's cam is built from radius, blades, sync angle and format (two half sync
+zones of slope 1 / R and a law between); the saw's from material speed, mean sync acceleration, window and cut length
+(sync-in over v² / (2a), window, sync-out, return). The cam reaches the controller through a new `Machine::cam` /
+`Machine::cam_at` (sim-core, default none; `JointMachine` forwards `Mechanism`'s): with `cam.run = true` the controller
+runs it as the cycle (`Motion::Cam`): master ramp, slave = cam(master) + offset, one pass per master period at speed, a
+stop ramps down; `check_limits` reports the cam's peaks over the axis limits (`limit-cam-speed`, `-acceleration`,
+`-jerk`). A mechanism's process force goes through a new `Mechanism::process_torque` / `has_process`: in the dynamics
+(rigid and elastic), not in the feedforward, among the rest of the torque breakdown, and its power as `power.process` so
+that the energy budget closes. The shipped configs keep `cam.run = false` and run ordinary segments (pendulum stroke,
+index, carriage move), because the all-machine tests need segment cycles within a modest axis range; the cams run with
+`--set cam.run=true`.
+
+Numbers (`sim-cli analyze <id> --set cam.run=true`): press 2.000 s per stroke at 30 a minute, 1.96 N m peak, utilisation
+0.13, rod force 2.7 kN; knife 0.500 s per cut, peak motor speed 151.8 rad/s (the hand calculation's 15.17 rad/s of roll
+times 10); saw 1.500 s per cut, 4.33 N m peak, utilisation 0.29. All default cycles and all cams pass every verdict
+(settling tolerances: crank 2 mrad, knife 1 mrad, saw 0.5 mm, each with its reason in the config). A 0.35 m knife format
+is reported: 26.56 rad/s asked against 20.
+
+Tests: cam.rs `a_3_4_5_segment_peaks_at_its_hand_worked_speed_acceleration_and_jerk` (1.875 h V / T = 0.375 m/s,
+10/√3 h V² / T² = 2.3094 m/s², 60 h V³ / T³ = 48 m/s³), `every_law_rises_by_one_from_rest_to_rest_with_consistent_rates`
+(4-5-6-7 peak 2.1875, cycloid 2π), `a_law_between_two_runs_keeps_their_slope_and_no_acceleration_at_its_ends`
+(10 + 1.875 × 2), `segments_that_cannot_join_are_refused_by_their_index`, `a_table_imported_from_csv_runs_through_its_points`,
+`the_master_runs_up_and_down_by_its_ramp`; machine-crank-cam `the_slider_crank_kinematics_match_the_hand_worked_formula`
+(60°: x 0.2202562, x' −0.0488454, x'' −0.0187556),
+`the_reflected_inertia_and_torque_at_a_crank_angle_match_the_hand_calculation` (J 0.0869757 kg m², −47.878563 N m),
+`rod_guide_and_bearing_loads_follow_the_rod_angle` (1032.796 N, 258.199 N),
+`the_rotary_knife_speeds_up_between_cuts_for_a_short_format_and_slows_for_a_long_one` (12.758984, 15.173095, 7.756072
+rad/m), `the_flying_saw_synchronises_over_v_squared_over_2a_and_cuts_within_its_window` (0.1 m, 7.5 m/s², 0.8333 m/s),
+`every_default_cycle_and_every_cam_passes_its_verdicts`, `a_cam_cycle_runs_one_master_period_per_pass_and_stops_by_its_ramp`,
+`a_cam_beyond_the_axis_limits_is_reported`, and the standard suite for each.
+
+Left open:
+
+- The cam laws are written in cam.rs (`Law::normalised`); the `profiles` session builds 3-4-5, 4-5-6-7 and sin² in
+  profile.rs. Once both land, `Law::normalised` is the one place to call profile.rs's laws instead.
+- The cam's master is its own virtual axis with the conveyor's speed-and-ramp model; the `[conveyor]` pick cycle
+  (Cartesian pick and place) does not fit as a master. A real web or bar encoder as master (its noise and slip) is not
+  modelled.
+- Mechanical disc cams with a follower (contact force, pressure angle) are not built; nor MC_CamIn / MC_GearIn over
+  OPC UA (the cam runs as the link's `command.cycle`).
+- A master speed changed under a running cam is taken at once (a step in slave speed), not ramped.
+- The crank's and the knife's joint has no stops while the cam turns it on; the axis range stays that of the segment cycle.
+- The press force acts on the way out only (no springback, no stripping force); the knife's and saw's cut only forwards.
+- The cam violations are reported (`run`, the app), not judged as verdicts.

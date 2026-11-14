@@ -729,6 +729,31 @@ sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
 
 Both pass every check. The SCARA picks 100 mm down, carries the part 500 mm across at x = 0.4 m turning it by 1.5 rad, and back: 2.542 s, motor 1 at 5 % of its peak and 288 of its 314 rad/s (the arm swings fastest where the line passes nearest the base), settling 0.04 mm. The arm does the same with its flange pointing down all along (ry = π/2): 3.774 s, motor 2 at 23 % of its peak, settling 4.0 mm of the 5 the config allows: under the 6 kg payload the gears twist and the flange rests 4 mm below where the encoders put it (0.2 mm in the rigid model, `--set effects.joint_elasticity=false`). A path in tool space is written `line,x,y,z,c` (or six numbers on the arm); `--time-optimal` times it as fast as the motors allow through the inverse kinematics: the SCARA's line across takes 1.542 s instead of 1.750 s, motor 1 at 307.5 of its 314.2 rad/s. A target the arm cannot reach is refused with the reason (`The arm cannot reach the target.`), as is one too near a singularity (the SCARA's stretched arm: `workspace.max_condition_number`, 25), and a path through one. The SCARA's elbow is `kinematics.elbow` ("right" or "left"); the arm keeps the branch of `kinematics.home_joints` (shoulder, elbow and wrist as there).
 
+## Size a press, a rotary knife or a flying saw
+
+`machine-crank-cam` has the crank and cam cases of a servo sizing tool ([mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam)).
+Their shipped cycles are ordinary segments; with `cam.run = true` each runs its electronic cam, and a pass is one master
+period at speed:
+
+```text
+$ sim-cli analyze slider-crank --set cam.run=true          # 30 strokes a minute
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation
+1,2.000000,1.955907,0.779359,117.4226,0.1305,0.1694
+$ sim-cli analyze rotary-knife --set cam.run=true          # 0.5 m formats at 1 m/s
+1,0.500000,2.896021,0.480603,151.7762,0.1947,0.1045
+$ sim-cli analyze flying-saw --set cam.run=true            # 1.5 m lengths at 1 m/s
+1,1.500000,4.331545,1.942329,160.1879,0.2893,0.4222
+```
+
+All three pass every verdict. The knife's peak motor speed is the hand calculation's: between cuts on a 0.5 m format the
+roll turns 15.17 rad/s at mid-span (1 / R + 1.875 × (12.76 − 1 / R)), times the gearbox's 10. The press's own checks are
+the rod force (2.7 kN against 20 kN), the ram guide's load across and the crank bearing's load. Change the format, the
+web speed or the strokes and look again: `--set knife.format_length_m=0.35` asks 26.6 rad/s of the roll, beyond its axis
+limit of 20, and `run` and the app say so (`limit-cam-speed`, with acceleration and jerk). A press cam of your own goes
+into `[[cam.segment]]`, or as a CSV of master and slave (and slopes) into `cam.table_file`. In the app the scope shows the
+ram's position and force, the rod force and the inertia the crank feels over the stroke; the following error is that of
+the slave against the cam.
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

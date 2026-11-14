@@ -97,6 +97,16 @@ enum Motion {
     },
     /// A pass of the conveyor cycle (`Controller::pass`), waiting for its start and then run.
     Conveyor,
+    /// The electronic cam of `Machine::cam` (`crate::cam`): the master started from `from` at `start_tick` and runs
+    /// down from `stop` seconds after that; the slaves are the cam at the master plus `offset`. The next pass begins
+    /// where the master reaches `next_pass`.
+    Cam {
+        start_tick: u64,
+        stop: Option<f64>,
+        from: f64,
+        offset: Vec<f64>,
+        next_pass: f64,
+    },
     /// A cubic curve through the points with the given speeds at them (Hermite interpolation; with the speeds of
     /// `c2_speeds`, the cubic spline whose acceleration is continuous).
     Trajectory {
@@ -197,6 +207,9 @@ pub struct Controller {
     /// effects.load_encoder: the step of the load-side scales (`drive.load_encoder_step`, in the tool axes' units, 0
     /// ideal) on which the position loops close; `None` off, on the motor encoders.
     load_encoder: Option<f64>,
+    /// `Machine::cam`: the cycle is the machine's electronic cam, and where its master stands (kept between runs).
+    cam: Option<sim_core::CamMaster>,
+    cam_master: f64,
 }
 
 /// Each motor's moment of inertia in the rigid, loss-free model at a tool pose: the torque it needs for a unit
@@ -278,6 +291,8 @@ impl Controller {
             history: Default::default(),
             inertias: Vec::new(),
             load_encoder: None,
+            cam: None,
+            cam_master: 0.0,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -543,6 +558,7 @@ impl Controller {
             self.motion = Motion::Idle;
         }
         self.conveyor = conveyor;
+        self.cam = machine.cam();
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
@@ -590,7 +606,9 @@ impl Controller {
                 }
             }
             Motion::Dwell { until_tick } => scale(until_tick),
-            Motion::Following { start_tick, .. } | Motion::Trajectory { start_tick, .. } => scale(start_tick),
+            Motion::Following { start_tick, .. }
+            | Motion::Trajectory { start_tick, .. }
+            | Motion::Cam { start_tick, .. } => scale(start_tick),
         }
         if let Some(newest) = self.history.len().checked_sub(1) {
             let old = std::mem::take(&mut self.history);
@@ -636,7 +654,7 @@ impl Controller {
                 if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
                     return Err(CommandError { key: "error-busy" });
                 }
-                if self.segments.is_empty() && self.conveyor.is_none() {
+                if self.segments.is_empty() && self.conveyor.is_none() && self.cam.is_none() {
                     return Err(CommandError { key: "error-no-cycle" });
                 }
                 self.cycle = Some(self.segments.len().saturating_sub(1));
@@ -825,7 +843,11 @@ impl Controller {
         self.cycle.is_some()
             || matches!(
                 self.motion,
-                Motion::Moving { .. } | Motion::Dwell { .. } | Motion::Trajectory { .. } | Motion::Conveyor
+                Motion::Moving { .. }
+                    | Motion::Dwell { .. }
+                    | Motion::Trajectory { .. }
+                    | Motion::Conveyor
+                    | Motion::Cam { .. }
             )
     }
 
@@ -1088,6 +1110,45 @@ impl Controller {
                             self.set_acc.fill(0.0);
                         }
                     }
+                }
+            }
+            Motion::Cam { start_tick, mut stop, from, offset, mut next_pass } => {
+                let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
+                let t = (tick - start_tick) as f64 * dt;
+                if let Some(master) = self.cam {
+                    if self.stopping && stop.is_none() {
+                        stop = Some(t);
+                    }
+                    let run = crate::cam::master_at(master.speed, master.ramp_s, t, stop);
+                    self.cam_master = from + run[0];
+                    // Passes count whole periods of the master from where it is up to speed.
+                    if t >= master.ramp_s && next_pass.is_nan() {
+                        next_pass = self.cam_master + master.period;
+                    } else if self.cam_master >= next_pass && stop.is_none() {
+                        next_pass += master.period;
+                        self.passes += 1;
+                    }
+                    let mut cam = vec![[0.0; 4]; self.set_pos.len()];
+                    machine.cam_at(self.cam_master, &mut cam);
+                    for (i, c) in cam.iter().enumerate() {
+                        let [p, v, a] = crate::cam::slave_motion(*c, run);
+                        (self.set_pos[i], self.set_vel[i], self.set_acc[i]) = (p + offset[i], v, a);
+                    }
+                    if stop.is_some_and(|s| t >= s.max(master.ramp_s) + master.ramp_s) {
+                        // Run down: at rest where the cam has brought the slaves.
+                        self.set_vel.fill(0.0);
+                        self.set_acc.fill(0.0);
+                        (self.cycle, self.stopping) = (None, false);
+                    } else {
+                        self.motion = Motion::Cam { start_tick, stop, from, offset, next_pass };
+                    }
+                } else {
+                    // A config without the cam now: the slaves stop where they are.
+                    // shortcut: a changed master speed or ramp is taken at once, a step in the slaves' speed; ramp
+                    // between the two speeds if a config is ever changed under a running cam on purpose.
+                    self.set_vel.fill(0.0);
+                    self.set_acc.fill(0.0);
+                    (self.cycle, self.stopping) = (None, false);
                 }
             }
             Motion::Dwell { until_tick } => {
@@ -1389,6 +1450,17 @@ impl Controller {
         if self.stopping {
             self.cycle = None;
             self.stopping = false;
+            return;
+        }
+        if self.cam.is_some() {
+            // The cam starts from where its master stands, the slaves from where they stand: the offset keeps them there.
+            let mut cam = vec![[0.0; 4]; self.set_pos.len()];
+            machine.cam_at(self.cam_master, &mut cam);
+            let offset = self.set_pos.iter().zip(&cam).map(|(p, c)| p - c[0]).collect();
+            self.cycle = Some(0);
+            self.passes += 1;
+            self.motion =
+                Motion::Cam { start_tick: u64::MAX, stop: None, from: self.cam_master, offset, next_pass: f64::NAN };
             return;
         }
         if self.conveyor.is_some() {
@@ -1737,6 +1809,28 @@ pub fn check_limits(machine: &dyn Machine, drives: &[&DriveParams]) -> Vec<Limit
         }
     }
     let mut out = Vec::new();
+    // An electronic cam asks of its slaves what it asks at the master's speed, whatever the axis limits say.
+    if let Some(master) = machine.cam() {
+        let n = 4000;
+        let mut peak = vec![[0f64; 3]; axes.len()];
+        let mut cam = vec![[0.0; 4]; axes.len()];
+        for i in 0..=n {
+            machine.cam_at(master.period * i as f64 / n as f64, &mut cam);
+            for (p, c) in peak.iter_mut().zip(&cam) {
+                for k in 0..3 {
+                    p[k] = p[k].max(c[k + 1].abs() * master.speed.powi(k as i32 + 1));
+                }
+            }
+        }
+        for (i, (p, axis)) in peak.iter().zip(axes).enumerate() {
+            let keys = ["limit-cam-speed", "limit-cam-acceleration", "limit-cam-jerk"];
+            for (k, allowed) in [axis.max_vel, axis.max_acc, axis.max_jerk].into_iter().enumerate() {
+                if p[k] > allowed * (1.0 + 1e-9) {
+                    out.push(LimitViolation { key: keys[k], motor: i.min(motors - 1), needed: p[k], allowed });
+                }
+            }
+        }
+    }
     for (k, drive) in drives.iter().enumerate().take(motors) {
         if speed[k] > drive.max_speed {
             out.push(LimitViolation { key: "limit-motor-speed", motor: k, needed: speed[k], allowed: drive.max_speed });

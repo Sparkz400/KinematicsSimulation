@@ -985,9 +985,7 @@ fn the_arm_tube_and_the_elbow_twist_take_part_in_the_bending() {
     let shared = Delta::new(&cfg).unwrap();
     let ([_, _, plain_tip, plain_tip_moment, plain_lateral], [root, root_moment, tip, tip_moment, lateral]) =
         (plain.bend_split(), shared.bend_split());
-    assert!(
-        (root - 0.012).abs() < 1e-12 && (tip - plain_tip - 0.036).abs() < 1e-12
-    );
+    assert!((root - 0.012).abs() < 1e-12 && (tip - plain_tip - 0.036).abs() < 1e-12);
     assert!((root_moment - 0.039_061).abs() < 1e-6, "{}", root_moment);
     assert!((tip_moment - plain_tip_moment - 0.140_939).abs() < 1e-6);
     assert!((shared.arm_inertia() - plain.arm_inertia()).abs() < 1e-12);

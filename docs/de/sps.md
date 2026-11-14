@@ -174,7 +174,7 @@ Grenzen:
 
 - Das gestreamte Profil hat eine Schrittweite von 10 ms. Innerhalb eines Schritts ist die Geschwindigkeit konstant, die Beschleunigung ändert sich also an jedem Schritt. Es gibt keine Ruckbegrenzung und kein Input Shaping der PLCopen-Fahrten.
 - Eine Fahrt, die eine schnelle Fahrt zu einem näheren Ziel abbricht oder umkehrt, bremst mit `Deceleration` und kann überschwingen. Verlässt das Überschwingen den Achsbereich, lehnt der Regler den Sollwert ab und die Achse geht nach ErrorStop (ErrorID 6).
-- Keine gepufferten oder überschliffenen Fahrten (`BufferMode`), kein MC_MoveVelocity, MC_Halt, MC_ReadParameter, kein Getriebe und keine Kurvenscheibe.
+- Keine gepufferten oder überschliffenen Fahrten (`BufferMode`), kein MC_MoveVelocity, MC_Halt, MC_ReadParameter, keine Getriebe- und Kurvenscheibenbausteine (MC_CamIn, MC_GearIn). Eine Maschine mit elektronischer Kurvenscheibe (`machine-crank-cam`, `cam.run = true`) fährt sie als Zyklus: `command.cycle` startet sie, `command.stop` fährt ihren Leitwert herunter.
 - Die Kopplung fügt die Latenz von OPC UA hinzu: Ein Client sieht die Wirkung eines Schreibens nach ein bis zwei Schleifentakten plus seiner eigenen Pollzeit.
 
 ## Echtzeittakt und Jitter

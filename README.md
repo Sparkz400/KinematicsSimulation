@@ -7,7 +7,7 @@
 ![The T-gantry running its pick-and-place cycle in the app](docs/images/t-gantry-cycle.gif)
 
 A simulator of motion machines in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
-It has twelve machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, four delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file and a SCARA ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z, a rack-and-pinion gantry, a scissor lift table, and the planar and spatial deltas as files (`machines/*.toml`).
+It has fifteen machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, four delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file and a SCARA, and, with an electronic cam, a slider-crank servo press, a rotary knife and a flying saw ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z and a rack-and-pinion gantry (`machines/*.toml`).
 They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a browser page with a 3D view of the machine and a sizing check.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
 **Quick start:** watch a machine run in 3D and try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
@@ -99,6 +99,9 @@ linear-motor-axis	Linear motor axis
 rotary-table	Rotary indexing table
 urdf-arm	Six-axis arm (URDF)
 scara	SCARA arm (URDF)
+slider-crank	Slider-crank (servo press)
+rotary-knife	Rotary knife (cross cutter)
+flying-saw	Flying saw
 ```
 
 A machine file is run like a registered machine: `sim-cli verdicts --machine-file machines/h-bot.toml`, or `sim-app --machine-file machines/h-bot.toml`.
@@ -290,7 +293,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/machine-files.md](docs/machine-files.md) | Define a machine in a TOML or JSON file, wired together from components like a netlist, without Rust code; the format, its checks, a worked example |
 | [docs/config-reference.md](docs/config-reference.md) | Every config table and key, with unit, meaning, source and effect switch |
 | [docs/model-reference.md](docs/model-reference.md) | The equations, per component and per machine, with assumptions and known shortcuts |
-| [docs/mechanisms.md](docs/mechanisms.md) | Ball screw, rack and pinion, linear motor, rotary table and arms from URDF files: the machines, their formulas, checks and limits ([German](docs/de/mechanismen.md)) |
+| [docs/mechanisms.md](docs/mechanisms.md) | Ball screw, rack and pinion, linear motor, rotary table, arms from URDF files, slider-crank, rotary knife, flying saw and the electronic cam: the machines, their formulas, checks and limits ([German](docs/de/mechanismen.md)) |
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, and what is not validated |
 | [docs/python.md](docs/python.md) | The Python module `kinematics_sim`: configs, runs, analysis, verdicts, bands and sizing as NumPy arrays and pandas-ready tables; a parameter-sweep notebook |
@@ -309,6 +312,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [`sim-components`](crates/sim-components/src) | Components | Belt, friction, gearbox, rotary joint, drive, controller, profiles, paths (lines, arcs and splines on two and three axes), analysis, catalogue lookup, trace replay and fit. Knows no machine |
 | [`machine-t-gantry`](crates/machine-t-gantry), [`machine-single-axis`](crates/machine-single-axis), [`machine-delta-d3`](crates/machine-delta-d3) | Machines | Transformation, assembly, signals, 3D scene description, configs. The delta: kinematics with its Jacobian and working range, the Codourey/Olsson dynamics, three rotary joints |
 | [`machine-joint-kit`](crates/machine-joint-kit) | Machines | Ball screw, rack and pinion, linear motor, rotary table, and arms from URDF files (a six-axis arm, a SCARA), built from one kit of joints and transmissions |
+| [`machine-crank-cam`](crates/machine-crank-cam) | Machines | Slider-crank (servo press), rotary knife and flying saw, each with an electronic cam (`sim_components::cam`, VDI 2143 laws, CSV cam tables) |
 | [`sim-netlist`](crates/sim-netlist) | Machines | Machines from TOML or JSON machine files ([`machines/`](machines/)), wired together from components like a netlist |
 | [`sim-machines`](crates/sim-machines) | Registration | The one list that names the machines, the loader of machine files; cross-machine tests |
 | [`sim-fmi`](crates/sim-fmi) | Front ends | FMI 2.0 and 3.0 Co-Simulation: the FMU's binary (C functions), its model description and archive. The command line writes the FMU with it |

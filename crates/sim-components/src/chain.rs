@@ -87,6 +87,23 @@ pub trait Mechanism: Send {
         true
     }
 
+    /// Whether the mechanism works on a process (a press force, a cut), which `process_torque` gives: then the machine
+    /// reports the power given to it as `power.process`. None by default.
+    fn has_process(&self) -> bool {
+        false
+    }
+    /// Adds the torques (forces) the process puts on the joints at positions `q` and speeds `qd` to `out`, positive
+    /// turning a joint up. Not conservative and not in `dynamics`: the torque breakdown counts it among the rest, and
+    /// the feedforward leaves it out, as a drive does not know it.
+    fn process_torque(&self, _q: &[f64], _qd: &[f64], _out: &mut [f64]) {}
+
+    /// As `Machine::cam` and `Machine::cam_at`: an electronic cam the mechanism runs as its cycle, its slaves the tool
+    /// axes. None by default.
+    fn cam(&self) -> Option<sim_core::CamMaster> {
+        None
+    }
+    fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+
     /// The mechanism's own signals, after the machine's: their infos, and their values from joint positions, speeds,
     /// accelerations and the force (torque) each transmission passes to its joint.
     fn signal_infos(&self) -> Vec<SignalInfo> {
@@ -280,6 +297,13 @@ impl<M: Mechanism> JointMachine<M> {
         &s[at..at + n]
     }
 
+    /// The process's torques at the joints (`Mechanism::process_torque`).
+    fn process(&self, q: &[f64], qd: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; self.n()];
+        self.mechanism.process_torque(q, qd, &mut out);
+        out
+    }
+
     fn load(&self, q: &[f64], qd: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let n = self.n();
         let (mut mass, mut bias) = (vec![0.0; n * n], vec![0.0; n]);
@@ -300,7 +324,9 @@ impl<M: Mechanism> JointMachine<M> {
                 self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
             })
             .collect();
-        let rest: Vec<f64> = (0..n).map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k]).collect();
+        let process = self.process(q, qd);
+        let rest: Vec<f64> =
+            (0..n).map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k] + process[k]).collect();
         let solve_with = |loss: &[f64]| -> Vec<f64> {
             let mut m = mass.clone();
             for k in 0..n {
@@ -385,6 +411,9 @@ impl<M: Mechanism> JointMachine<M> {
             powers[3 * n] += stop;
             powers[3 * n + 1] += (torque[k] - j.ripple.apply(torque[k], rotor[k])) * rotor_speed[k];
         }
+        if self.mechanism.has_process() {
+            powers.push(-self.process(q, qd).iter().zip(qd).map(|(t, v)| t * v).sum::<f64>());
+        }
         Losses { powers, gear_at_rotor }
     }
 
@@ -457,6 +486,14 @@ impl<M: Mechanism> JointMachine<M> {
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
+        if self.mechanism.has_process() {
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}process"),
+                "group-process",
+                "quantity-power-given-off",
+                "W",
+            ));
+        }
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
         }));
@@ -509,6 +546,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 
     fn rating_checks(&self) -> Vec<RatingCheck> {
         self.mechanism.rating_checks()
+    }
+    fn cam(&self) -> Option<sim_core::CamMaster> {
+        self.mechanism.cam()
+    }
+    fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
+        self.mechanism.cam_at(master, out);
     }
 
     /// NaN where the pose cannot be reached: the controller never asks for one (see `unreachable`).
@@ -579,12 +622,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             return self.flex_rates(s, &acc, out);
         }
         let (mass, bias) = self.load(q, qd);
+        let process = self.process(q, qd);
         let mut rhs = vec![0.0; n];
         for k in 0..n {
             let j = &self.joints[k].drive;
             let (gear, rotor_acc, brake_rate) =
                 j.rotor(torque[k], s[2 * n + k], s[3 * n + k], q[k], qd[k], s[4 * n + k], self.brake_engaged);
-            rhs[k] = gear.output - bias[k] + j.output_torque(q[k], qd[k]);
+            rhs[k] = gear.output - bias[k] + j.output_torque(q[k], qd[k]) + process[k];
             out[2 * n + k] = s[3 * n + k];
             out[3 * n + k] = rotor_acc;
             out[4 * n + k] = brake_rate;
