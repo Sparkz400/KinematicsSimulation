@@ -1861,7 +1861,7 @@ impl Model {
                 short(v.error),
             ]);
         }
-        if let Some((time, error)) = fit.joints.iter().flatten().find_map(|j| j.payload_step) {
+        for (time, error) in fit.joints.iter().flatten().flat_map(|j| j.payload_steps.iter().copied()) {
             fitted.push(vec![tr("ui-trace-payload-step"), String::new(), short(time), short(error)]);
         }
         if let Some(Ok(s)) = &fit.stiffness {
@@ -2529,6 +2529,7 @@ impl Model {
                 "fit-joint-constant",
                 "fit-alike",
                 "fit-payload-step",
+                "fit-axis-payload-step",
                 "fit-link-mass",
                 "fit-link-moment",
                 "fit-combined",

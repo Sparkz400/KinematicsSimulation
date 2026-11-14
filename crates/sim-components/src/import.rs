@@ -115,10 +115,24 @@ fn normal(unit: &str) -> String {
         .replace('°', "deg")
 }
 
+/// The step of a drive's trace in ms: a whole number of the 125 µs base cycle of SINAMICS and of most EtherCAT
+/// drives, from 0.5 ms on. As seconds such a step (0.5 s and more) is no drive trace.
+fn looks_like_ms(step: f64) -> bool {
+    step >= 0.5 && ((step / 0.125) - (step / 0.125).round()).abs() < 1e-6
+}
+
 /// A table with one shared time column: `csv` and `sinamics`. `time` names the time column; without it the
 /// first one whose name has "time" or "zeit" in it, else the first column. `time_unit` overrides the unit
-/// the file gives the time column.
-fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result<Vec<Channel>, TraceError> {
+/// the file gives the time column. The data are the rows of numbers at the end of the file; the line of names
+/// (and maybe of units) right above them is the header, and what is above that is skipped with a note. A time
+/// column without a unit is in seconds, unless its step is one of a drive's cycles in ms (`looks_like_ms`): then it
+/// is read in ms with a note, and `time_unit = "s"` in the mapping keeps seconds.
+fn read_table(
+    text: &str,
+    time: Option<&str>,
+    time_unit: Option<&str>,
+    notes: &mut Vec<(&'static str, String)>,
+) -> Result<Vec<Channel>, TraceError> {
     let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches('\r')).filter(|l| !l.trim().is_empty()).collect();
     let sep = table_separator(&lines);
     let comma = sep != ',';
@@ -126,8 +140,9 @@ fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result
         let f = fields(l, sep);
         f.len() > 1 && f.iter().all(|f| f.trim().is_empty() || number(f, comma).is_some())
     };
-    let first_data = lines.iter().position(|l| numeric(l));
-    let Some(first_data) = first_data.filter(|&i| i > 0) else {
+    // Not the first line of numbers: a metadata line such as `Sample time;0,001` above the header is one too.
+    let first_data = lines.iter().rposition(|l| !numeric(l)).map(|i| i + 1).filter(|&i| i < lines.len());
+    let Some(first_data) = first_data else {
         return Err(bad("error-import-layout", "no header line followed by numbers"));
     };
     let width = fields(lines[first_data], sep).len();
@@ -142,6 +157,9 @@ fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result
         units =
             Some(fields(lines[first_data - 1], sep).iter().map(|u| u.trim().trim_matches('"').to_string()).collect());
         names_at = first_data - 2;
+    }
+    if names_at > 0 {
+        notes.push(("note-import-skipped", format!("{names_at}: {}", lines[..names_at].join(" | "))));
     }
     let mut channels: Vec<Channel> = fields(lines[names_at], sep)
         .into_iter()
@@ -165,7 +183,13 @@ fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result
         Some(name) => find(&channels, name)?,
         None => channels.iter().position(|c| lower(c).contains("time") || lower(c).contains("zeit")).unwrap_or(0),
     };
-    let unit = time_unit.map_or(channels[t].unit.clone(), str::to_string);
+    let mut unit = time_unit.map_or(channels[t].unit.clone(), str::to_string);
+    let mut steps: Vec<f64> = rows.windows(2).map(|w| w[1][t] - w[0][t]).collect();
+    steps.sort_by(f64::total_cmp);
+    if unit.is_empty() && steps.get(steps.len() / 2).is_some_and(|&step| looks_like_ms(step)) {
+        notes.push(("note-import-time-ms", format!("{}: {}", channels[t].names[0], steps[steps.len() / 2])));
+        unit = "ms".into();
+    }
     let scale =
         seconds_per(&unit).ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", channels[t].names[0])))?;
     let times: Vec<f64> = rows.iter().map(|r| r[t] * scale).collect();
@@ -595,6 +619,7 @@ impl Signal {
         if channel.time.len() < 2 {
             return Err(bad("error-trace-short", self.signal.clone()));
         }
+        crate::trace::rising(&channel.time).map_err(|e| bad(e.key, format!("{}: {}", self.signal, e.detail)))?;
         let time = channel.time.iter().map(|t| t + self.time_offset_s).collect();
         Ok((time, raw.iter().map(|v| (v + self.offset) * factor).collect()))
     }
@@ -617,14 +642,21 @@ pub struct Imported {
     pub trace: Trace,
     pub ids: Vec<String>,
     pub torque_setpoints: Vec<Option<Vec<f64>>>,
+    /// What was read other than the file says, as a translation key and its argument: lines skipped above the
+    /// header, a time column without a unit read in ms.
+    pub notes: Vec<(&'static str, String)>,
 }
 
-/// The channels of a file in one of the `FORMATS`.
-pub fn channels(text: &str, mapping: &Mapping) -> Result<Vec<Channel>, TraceError> {
+/// The channels of a file in one of the `FORMATS`, and the notes on how it was read.
+pub fn channels(
+    text: &str,
+    mapping: &Mapping,
+    notes: &mut Vec<(&'static str, String)>,
+) -> Result<Vec<Channel>, TraceError> {
     let channels = match mapping.format.as_str() {
         "twincat" => read_twincat(text)?,
         "codesys" => read_codesys(text)?,
-        _ => read_table(text, mapping.time.as_deref(), mapping.time_unit.as_deref())?,
+        _ => read_table(text, mapping.time.as_deref(), mapping.time_unit.as_deref(), notes)?,
     };
     Ok(channels)
 }
@@ -632,7 +664,8 @@ pub fn channels(text: &str, mapping: &Mapping) -> Result<Vec<Channel>, TraceErro
 /// Reads a file through a mapping: every signal converted to SI units, shifted by its time offset, and all
 /// resampled (linear) onto one grid that spans the time all of them cover, from 0.
 pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
-    let channels = channels(text, mapping)?;
+    let mut notes = Vec::new();
+    let channels = channels(text, mapping, &mut notes)?;
     let mut signals = Vec::new();
     for m in &mapping.motors {
         signals.push(Some(m.setpoint.convert(&channels, Quantity::Angle)?));
@@ -640,11 +673,6 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
         signals.push(m.speed.as_ref().map(|s| s.convert(&channels, Quantity::Speed)).transpose()?);
         signals.push(Some(m.torque.convert(&channels, Quantity::Torque)?));
         signals.push(m.torque_setpoint.as_ref().map(|s| s.convert(&channels, Quantity::Torque)).transpose()?);
-    }
-    for (time, _) in signals.iter().flatten() {
-        if time.windows(2).any(|w| w[1] <= w[0]) {
-            return Err(bad("error-import-time", "times do not rise"));
-        }
     }
     let from = signals.iter().flatten().map(|(t, _)| t[0]).fold(f64::NEG_INFINITY, f64::max);
     let to = signals.iter().flatten().map(|(t, _)| t[t.len() - 1]).fold(f64::INFINITY, f64::min);
@@ -685,7 +713,7 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
     if trace.time.len() < 4 {
         return Err(bad("error-trace-short", String::new()));
     }
-    Ok(Imported { trace, ids: mapping.motors.iter().map(|m| m.id.clone()).collect(), torque_setpoints })
+    Ok(Imported { trace, ids: mapping.motors.iter().map(|m| m.id.clone()).collect(), torque_setpoints, notes })
 }
 
 /// The slope of a signal: central differences, one-sided at the ends.

@@ -159,14 +159,24 @@ only where no value's variance is inflated by more than 100 by the others' (less
 what the others explain); every other one is folded into the values before it, payload and motors first, and the
 advice names each value's share (`fit-combined`: the change shown is its own change plus each factor times the
 folded one's). For a link's mass, swing the joints it hangs on over much of their range, against gravity. On the
-six-axis arm with its gears elastic, a heavier arm's trace did not fit well even without the links' values (see
-PROGRESS): fit with the gears made rigid in the config, or take the values as a hint.
+six-axis arm with its gears elastic (as shipped) the load is put where the gears' twist holds it: each motor's angle
+less the twist its torque holds through the gear's stiffness (a two-mass model per joint), the rotor at its own
+acceleration. The torque and every column of the fit are smoothed alike over ±40 ms, which takes the gears' ringing out.
+With link 2 1.2 and link 3 1.3 times heavier, link 2's value came out + 0.558 ± 0.025 for 0.565 (before 14 November
+−9.4: the rigid model at the motors' angles took the twist for the links' motion). Swing well below the gears'
+resonance (on the arm joint 2 rings at some 9 Hz).
 
 A payload picked or dropped during the trace is found in the torques (no trace has a gripper column): the payload's
 factor is fitted before and after every row in turn, and the row that leaves the least sum of squares is the step,
 where the factors before and after differ by more than six standard errors more than they do on the config's own
 replay (which holds the payload all along). On the delta a pick at 3.5 s came out at 3.503 s ± 0.001 s, the factor 0
-before and 1 after within 0.01. The step has to lie between a tenth and nine tenths of the trace; one step only.
+before and 1 after within 0.01. Several steps are found one after the other, each in a stretch between those found
+so far, up to eight: a pick at 2.5 s and a drop at 5.5 s came out at 2.489 ± 0.019 s and 5.502 ± 0.002 s, × 0.006,
+0.990 and 0.007 ± 0.015. A step has to lie a tenth of the trace away from its ends and from the other steps. On a
+gantry or a single axis (the fit per axis) a step gives each axis a column of its own, the payload's force from the
+step on; the advice (`fit-axis-payload-step`) gives its time and the change of the payload's factor (+1 picked, −1
+dropped), as do the rows `payload_step_s,<axis>` and `payload_factor_change,<axis>`, and the axis's values are those
+before the first step.
 
 ### moves: belt stiffness without a sweep
 
@@ -194,7 +204,11 @@ Copy [datasets/template/map.toml](../datasets/template/map.toml) and keep the bl
 mapping's motors are in the order of the machine's motors where it is replayed or fitted against a config.
 All signals are resampled (linearly) onto one grid, the step of the first motor's position or
 `sample_time_s`, over the time all of them cover. `time_unit` overrides the unit of a `csv` or `sinamics` time column (TwinCAT and CODESYS
-exports state theirs, and the mapping may not). A misspelt key is refused, and so is a unit the importer
+exports state theirs, and the mapping may not). A time column without a unit is in seconds, unless its step is a drive
+cycle in ms (a whole number of 125 µs from 0.5 on): a Startdrive export in ms without a unit then reads in ms, with a
+note on stderr; `time_unit = "s"` keeps seconds. The data are the rows of numbers at the end of the file, the header the
+line (and maybe a line of units) right above them; lines above that, metadata such as `Sample time;0,001`, are skipped
+with a note. Times that do not rise are refused, naming the signal and the row. A misspelt key is refused, and so is a unit the importer
 does not know unless `scale` says how to make N m of it.
 
 Then:
@@ -249,7 +263,8 @@ delta, SCARA or arm the rows are `payload_factor` (1 for the config) and per mot
 motor shaft with the gearbox's losses in them; the advice says the change. On an arm or a SCARA then per link
 `link_mass_factor` (1 for the config) and `link_first_moment_x_kg_m` (`_y_`, `_z_`, near 0 for the config), only
 those the trace tells apart; where the payload was picked or dropped during the trace `payload_factor_before`,
-`payload_factor_after` and `payload_step_s` (its time and standard error) in place of `payload_factor`. Strain wave gears lose a quarter of
+`payload_factor_after` and `payload_step_s` (its time and standard error) in place of `payload_factor`; with several
+steps the factors after them and their rows are of `payload 1`, `payload 2`, ... Strain wave gears lose a quarter of
 what passes them, and more on a heavier payload: that shows as more Coulomb friction on the joint that carries
 it, and cannot be told from it. `--stiffness` adds `stiffness_factor` with its standard error and the RMS of
 the ringing in the trace and of what the fitted replay leaves of it (the noise, where the fit is good).

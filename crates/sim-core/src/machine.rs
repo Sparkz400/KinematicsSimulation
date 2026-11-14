@@ -163,6 +163,19 @@ pub trait Machine: Send {
         let tool_acc: Vec<f64> = (0..n).map(|i| (after[i] - 2.0 * pos[i] + before[i]) / (h * h)).collect();
         self.feedforward_torque_moving(&pos, &vel, &tool_acc, out);
     }
+    /// Where a trace's row has the load of an elastic drive train, per motor in motor radians: the twist of the train
+    /// that the motor `torque` holds, less what the rotor's own acceleration `acc` takes (the motor's angle less where
+    /// the rigid model puts the motor for the load's pose). Zeros by default: the trains are rigid. For fitting a trace
+    /// (`identify::fit_joints`), with `rigid_split_torque`.
+    fn twist(&self, _torque: &[f64], _acc: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+    }
+    /// `rigid_motor_torque` with the load at `angle`, `speed`, `acc` (where the rigid model puts the motors for it) and
+    /// the rotors at their own acceleration `rotor_acc`: what an elastic train (`twist`) needs. By default the rigid
+    /// torques at the load's motion, the rotors turning with it.
+    fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], _rotor_acc: &[f64], out: &mut [f64]) {
+        self.rigid_motor_torque(angle, speed, acc, out);
+    }
     /// The tension of each belt section (N, in the order of `belt_sections`) that the loss-free rigid model of
     /// `feedforward_torque` gives at a tool pose and acceleration: what the belt has to pull on the moved masses (not
     /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the

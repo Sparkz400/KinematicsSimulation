@@ -567,3 +567,61 @@ fn replay_refuses_a_trace_too_short_to_replay() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// 9. A reload refused by a key read late
+
+/// `reconfigure` used to take the new controller (profile cycle, rescaled ticks) and state before checking the keys
+/// it read last (`profile.min_clearance_m`, the conveyor's), so a refused reload left a new controller beside the old
+/// machine. Now a refused reload changes nothing: the sim runs on exactly like a twin that was never reloaded.
+#[test]
+fn a_refused_reload_leaves_the_old_simulation_running() {
+    for entry in MACHINES.iter().copied() {
+        let cfg = entry.config();
+        let (mut sim, mut twin) = (Sim::new(entry, &cfg).unwrap(), Sim::new(entry, &cfg).unwrap());
+        for s in [&mut sim, &mut twin] {
+            s.command(Command::StartCycle).unwrap();
+            s.run(0.3, |_| {});
+        }
+        let cycle = format!("profile.cycle_s = {:?}", 2.0 * cfg.f64("profile.cycle_s").unwrap());
+        let mut refused = vec![(config(entry, &[&cycle, "profile.min_clearance_m = -1.0"]), "profile.min_clearance_m")];
+        // A conveyor switched on without its keys fails in `Controller::apply_config` after the profile cycle.
+        if cfg.get("conveyor").is_err() {
+            let text = config(entry, &[&cycle]).to_text().unwrap() + "\n[conveyor]\nenabled = true\n";
+            refused.push((Config::parse(&text).unwrap(), "conveyor.direction"));
+        }
+        for (bad, key) in refused {
+            let state = sim.state.clone();
+            assert_eq!(sim.reconfigure(entry, &bad).err().map(|e| e.detail().to_string()).as_deref(), Some(key));
+            assert_eq!(sim.state, state, "{}: {key}", entry.id);
+        }
+        sim.run(0.2, |_| {});
+        twin.run(0.2, |_| {});
+        assert_eq!(sample(&sim), sample(&twin), "{}", entry.id);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 10. A bounded value written as an integer
+
+/// The band runs wrote a bounded value as `path = 1.0`, which `Config::set` refuses for a key written as an integer
+/// (`drive.current_delay_cycles = 1`), and the Type error ended the whole band run. The value is now written in the
+/// key's type: one band run at a delay of 1 and of 2 cycles goes through. Bounds on such a key are whole numbers.
+#[test]
+fn a_bounded_value_written_as_an_integer_runs_its_bands() {
+    let entry = MACHINES
+        .iter()
+        .copied()
+        .find(|e| e.config().get("drive.current_delay_cycles").is_ok_and(toml::Value::is_integer))
+        .expect("a machine whose current delay is written as an integer");
+    let bounded = [("drive.current_delay_cycles".to_string(), 1.0, 2.0)];
+    let bands = sim_components::analysis::verdict_bands(entry, &entry.config(), &bounded).unwrap();
+    assert!(!bands.is_empty(), "{}", entry.id);
+    let mut cfg = entry.config();
+    sim_components::analysis::set_bounded(&mut cfg, "drive.current_delay_cycles", 2.0).unwrap();
+    assert_eq!(cfg.get("drive.current_delay_cycles").unwrap(), &toml::Value::Integer(2));
+    let text = "format_version = 1\n[drive]\ncurrent_delay_cycles = 1\n[bounds.drive]\ncurrent_delay_cycles = ";
+    let bounds = |pair: &str| sim_components::analysis::bounds(&Config::parse(&format!("{text}{pair}\n")).unwrap());
+    assert_eq!(bounds("[1.0, 2.0]").unwrap(), vec![("drive.current_delay_cycles".to_string(), 1.0, 2.0)]);
+    assert_eq!(bounds("[1.0, 2.5]"), Err(ConfigError::Invalid("bounds.drive.current_delay_cycles".into())));
+}

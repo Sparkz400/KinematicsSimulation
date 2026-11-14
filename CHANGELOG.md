@@ -9,6 +9,20 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Fixed
 
+- A config reload (`Sim::reconfigure`) refused by a key read late (`profile.min_clearance_m`, `thermal.*`, obstacles,
+  `effects.crash`, the conveyor's) no longer leaves the new controller and state beside the old machine: everything is
+  checked before anything changes (also in `Controller::apply_config`, whose profile-cycle rescale ran before the
+  conveyor was checked).
+- Trace import: a time column without a unit whose step is a drive cycle in ms is read in ms, with a note
+  (`time_unit = "s"` keeps seconds); lines of numbers above the header (metadata such as `Sample time;0,001`) are
+  skipped with a note instead of being taken for data; times that do not rise are refused naming the signal and the
+  row, also in a trace in the simulator's own columns; the friction fit no longer overflows on them.
+- Error bands: a bounded value whose key is written as an integer no longer ends the band run with a Type error; it
+  is written in the key's type (`analysis::set_bounded`), and bounds on such a key have to be whole numbers.
+- The fit in the motors' coordinates on elastic gears: the six-axis arm as shipped fitted a link's factor −9.4 for
+  +0.57; the load is now put where each gear's twist holds it (`Machine::twist`, `Machine::rigid_split_torque`) and the
+  regressor's columns and torque are smoothed alike over ±40 ms.
+
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
@@ -26,6 +40,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 - `heat_color` and `part_color` moved from sim-app to `sim_core::scene`.
 
 ### Added
+
+- Several payload steps per trace (`JointFit::payload_steps`, up to eight), and payload steps on the fit per axis
+  (`AxisFit::payload_steps`, `fit-axis-payload-step`, CLI rows `payload_step_s` and `payload_factor_change`).
+- `Imported::notes`: how an export was read other than it says, printed by `sim-cli` (`note-import-skipped`,
+  `note-import-time-ms`).
 
 - Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
   SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted

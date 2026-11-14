@@ -215,6 +215,18 @@ impl Sim {
         }
         // Not used by a running simulation, but a config it would not start with is refused all the same.
         start_pose(cfg, machine.as_ref())?;
+        // Everything that can refuse the config runs before anything changes: a refused reload leaves the old sim.
+        let limit_violations = check_limits(machine.as_ref(), cfg)?;
+        let mut heated = heated_parts(cfg, machine.as_ref())?;
+        let part_heating = heats(cfg)?;
+        let thermal_feedback = cfg.bool("effects.thermal_feedback")?;
+        let warm_start = warm_start(cfg)?;
+        let (obstacles, crash, min_clearance) = (
+            crate::collision::obstacles(cfg)?,
+            cfg.bool("effects.crash")?,
+            cfg.non_negative("profile.min_clearance_m")?,
+        );
+        // The last fallible step; it changes the controller only once it has checked all it reads.
         self.control.apply_config(cfg, machine.as_ref())?;
         machine.set_payload_attached(self.payload_attached);
         let motors = machine.motors().len();
@@ -229,20 +241,15 @@ impl Sim {
         self.rk = Rk4::new(self.state.len());
         self.rk_joint = Rk4::new(self.state.len() + WINDING_STATES * motors);
         self.motor_buffers = std::array::from_fn(|_| vec![0.0; motors]);
-        self.limit_violations = check_limits(machine.as_ref(), cfg)?;
+        self.limit_violations = limit_violations;
         // A part that is still there keeps its warmth.
-        let mut heated = heated_parts(cfg, machine.as_ref())?;
         for part in &mut heated {
             part.rise = self.heated.iter().find(|old| old.part.id == part.part.id).map_or(0.0, |old| old.rise);
         }
-        (self.heated, self.part_heating) = (heated, heats(cfg)?);
-        self.thermal_feedback = cfg.bool("effects.thermal_feedback")?;
-        self.warm_start = warm_start(cfg)?;
-        (self.obstacles, self.crash, self.min_clearance) = (
-            crate::collision::obstacles(cfg)?,
-            cfg.bool("effects.crash")?,
-            cfg.non_negative("profile.min_clearance_m")?,
-        );
+        (self.heated, self.part_heating) = (heated, part_heating);
+        self.thermal_feedback = thermal_feedback;
+        self.warm_start = warm_start;
+        (self.obstacles, self.crash, self.min_clearance) = (obstacles, crash, min_clearance);
         self.machine = machine;
         self.feed_temperatures_back();
         self.substeps = substeps;

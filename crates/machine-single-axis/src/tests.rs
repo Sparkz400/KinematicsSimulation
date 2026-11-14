@@ -1892,3 +1892,59 @@ fn the_carriage_mode_is_the_hand_calculated_one_at_two_places() {
     let wraps = machine(ENTRY.config(), &["effects.belt_wrap = true"]).belt_wraps(&[0.3]);
     assert!(wraps.len() == 1 && (wraps[0] - std::f64::consts::PI).abs() < 1e-12, "{wraps:?}");
 }
+
+/// The audit of 14 November suspected a phase bias of half a base step (0.5 dt 360 f degrees: 3.6 degrees at 320 Hz,
+/// 11.25 at 1 kHz with dt = 62.5 us) between the torque and the time the speed is correlated at. There is none: the
+/// torque of a step is the sine at the middle of the step, the centre of its hold, and the speed is taken against the
+/// sine at the end of the step, where it is measured. The pure inertia is at -90 degrees to within 0.1 degree up to
+/// 1 kHz. The closed-loop response reads its setpoint at the step's start, the instant the controller samples it: at
+/// 1 Hz, Kv = 50/s, the first-order loop by hand is at -atan(2 pi / 50) = -7.1615 degrees.
+#[test]
+fn the_sweeps_measure_the_phase_at_the_time_the_signal_has() {
+    let mut cfg = ideal_rigid();
+    cfg.set_text("effects.payload = true").unwrap();
+    for p in frequency_sweep(&ENTRY, &cfg, 0, &[320.0, 1000.0], 0.05).unwrap() {
+        assert!((p.phase_deg + 90.0).abs() < 0.1, "{} Hz: phase {}", p.frequency, p.phase_deg);
+    }
+    let mut cfg = ideal_rigid();
+    cfg.set_text("drive.velocity_kp_nm_s_rad = 0.08").unwrap();
+    let p = closed_loop_response(&ENTRY, &cfg, 0, &[1.0], 0.0005).unwrap()[0];
+    let by_hand = -(std::f64::consts::TAU / 50.0).atan().to_degrees();
+    assert!((p.phase_deg - by_hand).abs() < 0.1, "phase {} at 1 Hz, by hand {by_hand}", p.phase_deg);
+}
+
+/// A payload picked during the trace, on the fit per axis (`fit_rigid`): the axis runs to 0.9 m and back twice with the
+/// gripper empty, then picks the config's 2 kg payload at rest at 0.1 m (2.6 s in) and runs twice more. Noise as stage
+/// 1's test. By hand: one step, in the rest before the third move (any row of the rest fits alike, so its time is known
+/// to about the rest's length); the payload factor's change +1 within three standard errors, its band below 0.05; and
+/// the mass, which is that before the step, 2 kg below the config's (whose replay holds the payload all along).
+/// Measured (14 November): the step at 2.273 ± 0.109 s, + 1.022 ± 0.017, the mass − 2.037 ± 0.024 kg.
+#[test]
+fn a_payload_picked_during_the_trace_is_found_on_the_axis() {
+    let cfg = ENTRY.config();
+    assert!(cfg.bool("effects.payload").unwrap() && cfg.f64("mass.payload_kg").unwrap() == 2.0);
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let mut trace = Trace::default();
+    for (i, target) in [0.9, 0.1, 0.9, 0.1].into_iter().enumerate() {
+        sim.control.payload_attached = i >= 2;
+        sim.command(sim_components::Command::MoveTo(vec![target])).unwrap();
+        for _ in 0..1300 {
+            trace.record(&sim);
+            sim.run(1e-3, |_| {});
+        }
+    }
+    let mut noise = Noise(1);
+    let m = &mut trace.motors[0];
+    for row in 0..m.torque.len() {
+        m.torque[row] += 0.005 * noise.next();
+        m.speed[row] += 0.1 * noise.next();
+        m.angle[row] += 1e-5 * noise.next();
+    }
+    let fit = fit_rigid(&ENTRY, &cfg, &trace).unwrap()[0].clone().unwrap();
+    let [(time, time_error, change, error)] = fit.payload_steps[..] else { panic!("{:?}", fit.payload_steps) };
+    assert!((2.2..=2.7).contains(&time) && time_error <= 0.3, "step at {time} ± {time_error}");
+    assert!((change - 1.0).abs() < 3.0 * error && error < 0.05, "change {change} ± {error}");
+    let lighter = fit.fitted[0] - fit.config[0];
+    assert!((lighter + 2.0).abs() < 3.0 * fit.error[0], "mass {lighter} ± {}", fit.error[0]);
+    assert!(fit.advice("x").iter().any(|(key, _)| *key == "fit-axis-payload-step"));
+}
