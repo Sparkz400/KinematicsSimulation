@@ -435,27 +435,38 @@ fn verdicts(py: Python<'_>, config: &PyConfig, bands: bool, samples: Option<usiz
 
 /// Every motor of the catalogue on the cycle of the config, each with the drive the catalogue pairs with it, the
 /// passing ones first, cheapest first, as `sim-cli search` gives them: a dict of columns, one row per candidate.
-/// `series` keeps article numbers starting with it, `supply` is "230v", "400v" or "s120", `gearboxes` names a gearbox
-/// series to try as well, and `axes=True` tries every axis of the catalogue too.
+/// `series` keeps article numbers starting with it, `supply` is one of the catalogue's supplies ("230v", "400v", "s120",
+/// "s210new-400v", "beckhoff-400v", ...), `vendor` keeps that maker's supplies ("all": every maker's; all of them where
+/// `supply` is left out), `gearboxes` names a gearbox series to try as well, and `axes=True` tries every axis of the
+/// catalogue too. The candidates of several supplies are ranked together; `vendor` and `supply` say whose each is.
 #[pyfunction]
-#[pyo3(signature = (config, *, supply="400v", series="", gearboxes=None, axes=false))]
+#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false))]
 fn sizing(
     py: Python<'_>,
     config: &PyConfig,
-    supply: &str,
+    supply: Option<&str>,
+    vendor: Option<&str>,
     series: &str,
     gearboxes: Option<&str>,
     axes: bool,
 ) -> PyResult<Py<PyDict>> {
+    use sim_components::catalog::{SUPPLIES, search_supplies, vendor_of};
     let (entry, cfg) = (config.entry, config.cfg.clone());
-    let found = py.detach(|| {
-        let wanted = |article: &str| article.starts_with(series);
-        if axes {
-            sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes)
-        } else {
-            sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)
-        }
-    });
+    let supplies: Vec<&str> = match (supply, vendor) {
+        (None, Some(_)) => SUPPLIES.to_vec(),
+        (supply, _) => vec![supply.unwrap_or("400v")],
+    };
+    let maker = vendor.filter(|v| *v != "all");
+    let supplies: Vec<&str> = supplies.into_iter().filter(|s| maker.is_none_or(|v| vendor_of(s) == v)).collect();
+    if supplies.is_empty() || !supplies.iter().all(|s| SUPPLIES.contains(s)) {
+        return Err(PyValueError::new_err(format!("no supply of the catalogue: {supply:?}, vendor {vendor:?}")));
+    }
+    let found = py
+        .detach(|| {
+            let wanted = |article: &str| article.starts_with(series);
+            search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, None)
+        })
+        .map_err(|e| config_error(entry, e))?;
     let out = PyDict::new(py);
     let numbers =
         |f: &dyn Fn(&sim_components::catalog::Candidate) -> f64| PyArray1::from_vec(py, found.iter().map(f).collect());
@@ -463,6 +474,11 @@ fn sizing(
     out.set_item("motor", found.iter().map(|c| c.article).collect::<Vec<_>>())?;
     out.set_item("gearbox", found.iter().map(|c| c.gearbox.clone()).collect::<Vec<_>>())?;
     out.set_item("drive", found.iter().map(|c| c.drive).collect::<Vec<_>>())?;
+    out.set_item(
+        "vendor",
+        found.iter().map(|c| if c.supply.is_empty() { "" } else { vendor_of(c.supply) }).collect::<Vec<_>>(),
+    )?;
+    out.set_item("supply", found.iter().map(|c| c.supply).collect::<Vec<_>>())?;
     out.set_item("mass_kg", numbers(&|c| c.mass))?;
     out.set_item("cost_kg", numbers(&|c| c.cost))?;
     out.set_item("passes", PyArray1::from_vec(py, found.iter().map(|c| c.passes()).collect()))?;

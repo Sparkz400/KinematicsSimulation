@@ -201,17 +201,17 @@ The motor brings the 540 V DC link of its supply. The config's braking threshold
 $ cargo run -q --release -p sim-cli -- search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
 Search time on 16: 0.6 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,5.70,ok,settling,0.5312,3.2878,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.85,5.70,ok,settling,0.5325,3.2958,41.53
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
 ...
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,siemens,400v,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
 ...
-,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
-,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,siemens,400v,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
-,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,siemens,400v,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
 
 No passing motor comes near a limit: the tightest check is the dwell for the lightest motors (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which the motor hardly changes; `winding_rise_k` and `peak_torque_nm` tell the motors apart. `--supply s120` searches the S120 motors with their Motor Modules, `--gearboxes NRK` adds gearboxes on a machine that has one, and `--axes` tries every motor on every axis of the catalogue of the machine's kind as well (Festo EXCT and Bahr ELZI for this one: 338 candidates in 7.8 s on 16 cores; the Bahr ELZI 40 comes out lighter than the EXCT-30). A drive, a belt or an axis can be named like a motor (`--drive`, `--belt AT5-25`, `--axis ELZI-40`).

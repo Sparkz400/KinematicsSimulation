@@ -1,0 +1,58 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "cmp-catalog"
+notes = '''
+Source: SEW-EURODRIVE, catalogue "Synchronous Servomotors CMP40 - CMP112 High Dynamics", 27799468/EN, edition 11/2023,
+chapter 4.5 "Design for system voltage 400 V", the "Technical data" table of each size (4.5.1 CMP40 to 4.5.6 CMP100).
+Extracted by catalog/tools/extract_sew.py; the numbers are SEW's, the layout is ours.
+One row per motor and speed class at 400 V system voltage: part_number is the type designation up to the size letter
+  (S, M, L) followed by "/" and the speed class nC in min-1, e.g. "CMP50S/3000". Brake, encoder and connection options
+  are not part of it. CMP112 (in the same catalogue) and the 230 V design (chapter 4.6) are not taken: CMP112 is outside
+  this table's scope and no drive of drives_movic.csv runs at 230 V.
+rated_speed: the speed class; the catalogue (3.1.4 "Rated speeds") calls the speed classes the rated speeds.
+max_speed: the mechanically permitted speed of the motor without brake (catalogue 3.11 "Maximum motor speeds"); with
+  brake it is lower (CMP40/50: 7200, CMP63: 7200, CMP71: 6000, CMP80: 5500, CMP100: 5000 min-1).
+static: M0 and I0. max: dynamic limit torque Mpk and maximum motor current Imax. Currents RMS. Values without
+  forced cooling fan (the catalogue's M0_VR/I0_VR with fan are not taken).
+voltage_constant: "Internal voltage at 1000 min-1 Vp0 cold", taken as line to line RMS (the catalogue does not say;
+  M0/I0 is 4 ... 13 % below sqrt(3) times it in every row, while a phase or peak value would be off by sqrt(3)
+  or sqrt(2)), divided by 1000*pi/30 to V s/rad.
+line_resistance_20c / line_inductance: the catalogue prints R1 and L1 "(phase)", between connection phase and star point
+  (key in 23061715, 3.5.5); multiplied by 2 for terminal to terminal. R1 at 20 degC.
+pole_pairs: "Number of poles" / 2. mass_with_brake / rotor_inertia_with_brake: mbmot and Jbmot of the brakemotor
+  (BK.. brake on CMP40 - CMP63, BP.. on CMP71 - CMP100).
+rated_torque, rated_current, rated_power, torque_constant, thermal_time_constant: empty, the catalogue prints none of
+  them (the CMP data are standstill and peak values; no torque constant is derived here).
+paired_drive: from SEW product manual "Application Inverter MOVIDRIVE system", 23061715/EN, edition 03/2017, chapter
+  3.5.6 "Motor-inverter assignments CMP.. motors, PWM 4 kHz": the smallest MDX90A of that table that it gives a peak
+  torque Mpk for at the motor's speed class. The column of each row's first value is read from the column position in
+  the pdftotext -table layout; each pick was checked against M0/I0 times the inverter's Imax. That table has no
+  assignment for CMP40 - CMP63 at 6000 min-1 nor CMP71 - CMP100 at 4500 and 6000 min-1: paired_drive empty there.
+  The table pairs with MOVIDRIVE system only; SEW publishes no CMP assignment for the MOVIDRIVE modular axis modules
+  (its product manual 31984061/EN, 5.5.3, refers to the website for Mpk of motor/inverter combinations).
+Decimal comma kept as a decimal point: the CMP50S standstill torque is printed "1,3".
+'''
+
+[[sources]]
+id = "cmp-catalog"
+document = "SEW-EURODRIVE, catalogue Synchronous Servomotors CMP40 - CMP112 High Dynamics, 27799468/EN"
+date = "2023-11"
+locator = "chapter 4.5 \"Design for system voltage 400 V\", tables \"Technical data\" of 4.5.1 to 4.5.6 (pages 84 to 123); 3.1.4 \"Rated speeds\" and 3.11 \"Maximum motor speeds\""
+method = "script:tools/extract_sew.py"
+url = "https://download.sew-eurodrive.com/download/pdf/27799468.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "movidrive-system-2017"
+document = "SEW-EURODRIVE, product manual Application Inverter MOVIDRIVE system, 23061715/EN"
+date = "2017-03"
+locator = "chapter 3.5.6 \"Motor-inverter assignments CMP.. motors, PWM 4 kHz\" (pages 98 to 101)"
+method = "script:tools/extract_sew.py"
+url = "https://download.sew-eurodrive.com/download/pdf/23061715.pdf"
+retrieved = "2026-11-14"
+
+[[provenance]]
+rows = ["*"]
+fields = ["paired_drive"]
+source = "movidrive-system-2017"

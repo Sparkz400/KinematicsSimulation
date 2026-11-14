@@ -1,0 +1,13 @@
+part_number,vendor,series,supply,line_voltage_v,axes,rated_output_current_a,max_output_current_a,max_current_duration_s,dc_link_voltage_v,dc_link_capacitance_f,braking_resistor_internal_ohm,braking_resistor_continuous_w,braking_resistor_peak_w,min_braking_resistance_ohm,braking_threshold_v,dc_link_overvoltage_v,source
+AX8108,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,400,1,8,20,5,,0.000135,,,,,,,
+AX8108,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,480,1,8,18,5,,0.000135,,,,,,,
+AX8118,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,400,1,18,40,5,,0.000405,,,,,,,
+AX8118,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,480,1,18,36,5,,0.000405,,,,,,,
+AX8128,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,400,1,28,50,5,,0.00066,,,,,,,
+AX8128,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,480,1,28,50,5,,0.00066,,,,,,,
+AX8206,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,400,2,6,20,5,,0.000135,,,,,,,
+AX8206,beckhoff,AX8000,3 x 200 / 480 V AC via an AX86xx power supply module,480,2,6,18,5,,0.000135,,,,,,,
+AX8525,beckhoff,AX8000,3 x 200 / 480 V AC,400,1,25,50,5,,0.00152,,200,68000,10,,,
+AX8525,beckhoff,AX8000,3 x 200 / 480 V AC,480,1,25,50,5,,0.00152,,200,68000,10,,,
+AX8540,beckhoff,AX8000,3 x 200 / 480 V AC,400,1,40,80,5,,0.00152,,200,68000,10,,,
+AX8540,beckhoff,AX8000,3 x 200 / 480 V AC,480,1,40,80,5,,0.00152,,200,68000,10,,,

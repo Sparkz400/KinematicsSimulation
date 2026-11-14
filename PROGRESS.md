@@ -2543,3 +2543,84 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## Other makers' drives and motors in the catalogue (14 November)
+
+What: the catalogue had Siemens drives and motors only, so "which drive works best" could only compare Siemens with
+Siemens. It now has eight more makers, each from the maker's own public documents, with the document, edition and page
+or table of every value in the table's metadata and no estimates: Beckhoff (AM8000/AM8500, 300 rows at 400 and 480 V;
+AX8000, AX5000), B&R (8LSA..-3, 109; ACOPOS P3, 34), Kollmorgen (AKM 162 and AKM2G 134 at 240 and 400 V; AKD, 14),
+Lenze (MCS 54, m850 15; i950, 18), Mitsubishi (HK-KT/HK-ST 57 at 200 and 400 V; MR-J5, 44), Rexroth (MS2N 155; ctrlX
+DRIVE, 59), SEW (CMP 57; MOVIDRIVE system and modular, 29), Yaskawa (SGM7J/SGM7A 37; SGD7S, 25). The tables keep schema
+1, with optional columns added: `vendor`, `line_voltage_v` (part of the key: a motor rated at two voltages has two rows),
+`line_resistance_20c_ohm` and `line_inductance_h` (terminal to terminal), and the drives' DC link voltage, peak
+duration, internal braking resistor, minimum resistor, switch-on and trip voltage. The SINAMICS S210 (New) converters
+6SL5310, in the CSV but never paired, are now paired as D 32 lists them (supplies `s210new-230v`, `s210new-400v`).
+
+How: a supply `<vendor>-<volts>v` names a maker's rows at that line voltage (`catalog::SUPPLIES`, `vendor_of`).
+`motor_data` reads them generically: standstill torque over current as Kt, the winding at half its terminal value per
+phase, the bus at 1.35 times the line; where a maker prints no standstill values the rated ones stand for them and
+the other way round (shortcut, in `catalog.rs`). `paired_drive` takes the maker's own pairing from the row, else the
+smallest of the maker's drives at that voltage that carries the motor's stall current, single-axis first (Beckhoff,
+Kollmorgen AKM and Rexroth publish none). `apply_drive` reads a maker's drive: currents, base load at 0.85 of the rated
+[estimate], DC link capacitance and braking data where printed; a Mitsubishi amplifier, with no printed peak current,
+takes the paired motor's [estimate]. `search_supplies` runs the search at several supplies and ranks them together;
+`Candidate::supply` says whose a candidate is. `sim-cli search --vendor NAME|all` (and the columns `vendor`, `supply`),
+Python `sizing(vendor=..., supply=...)`; the app's supply list takes the new supplies. The datasheets were read by one
+agent per maker with `pdftotext`; their scripts are `catalog/tools/extract_{beckhoff,br,kollmorgen,lenze,rexroth,sew}.py`,
+the rest typed in from the named tables. Checks (`checks.py`): Kt against M0/I0 and against sqrt(3) Ke, overload,
+rated power against torque times speed, brake inertia and mass, L/R, thermal time constant, paired drive exists and
+carries the printed rated current; drives: peak above rated, DC link and chopper between the line's peak and the trip.
+The printed values that fail them are listed in `VENDOR_MISPRINTS` and docs/catalogue.md (Beckhoff AM802x Kt, seven
+Beckhoff fan-cooled rated powers, the Kollmorgen AKM64Q Ke).
+
+Search across makers on `crates/machine-t-gantry/exct-30.toml` (`sim-cli search t-gantry --config ... --vendor all`,
+1659 candidates, 938 ruled out by the catalogue screen, 120 s on 16 threads); passing per maker: Siemens 197,
+Beckhoff 162, Kollmorgen 141, Rexroth 45, B&R 51, SEW 40, Lenze 29, Yaskawa 23, Mitsubishi 19. Top rows and the
+lightest passing one of each other maker:
+
+| Motor | Drive | Supply | Mass kg | Tightest check | Utilisation | Winding rise K |
+| --- | --- | --- | --- | --- | --- | --- |
+| HK-KT634W | MR-J5-100G4 | mitsubishi-400v | 1.50 | drive-current | 0.534 | 34.5 |
+| HK-KT63W | MR-J5-70G | mitsubishi-200v | 1.50 | settling | 0.522 | 34.8 |
+| SGM7A-06A | SGD7S-5R5A | yaskawa-200v | 1.60 | settling | 0.759 | 32.2 |
+| AKM24C | AKD-x00307 | kollmorgen-400v | 1.66 | settling | 0.743 | 74.0 |
+| AM8023-0E | AX8108 | beckhoff-480v | 1.70 | motor-thermal | 0.998 | 99.8 |
+| CMP50S/3000 | MDX90A-0020-5E3-4-S00 | sew-400v | 2.40 | motor-thermal | 0.866 | 86.6 |
+| MS2N04-B0BNN | XCS2-W0005H | rexroth-400v | 2.70 | dc-link-energy | 0.915 | 42.9 |
+| 1FK2104-5AF | 6SL3210-5HE10-8UF0 | 400v | 2.85 | settling | 0.531 | 20.4 |
+| 8LSAA3.ee030 | 8EI2X2HWS10.XXXX-1 | br-400v | 2.90 | settling | 0.522 | 27.0 |
+| m850-S80/S5500 | i950-C2.2/400-3 | lenze-400v | 3.20 | gearbox-radial-load | 0.502 | 39.3 |
+
+The ranking is by weight, the stand-in for price, and it is not a fair verdict across makers yet: the lightest are
+Mitsubishi's and Yaskawa's, which print neither winding resistance nor inductance nor thermal time constant, so they run
+with the EXCT-30's estimates for those, and their rated values stand in for standstill ones.
+
+Test: `catalog/tools/tests/test_catalog.py` (`test_another_makers_motor_that_does_not_fit_its_own_numbers_fails_the_checks`:
+a made-up motor that fits, Kt 1.25 = 2 / 1.6, Ke 0.7217 = 1.25 / sqrt(3), 565 W = 1.8 N m x 314.16 rad/s, L/R 4 ms,
+and one wrong value at a time caught); the catalogue validates. Rust, `crates/sim-machines/tests/catalog_vendors.rs`:
+the 6SL5310 pairing as D 32 lists it and the 6SL5310-1BE10-4DF0's 1.2 A / 4.2 A / base 1.02 A; every supply has
+motors and every maker's (vendor, voltage) a supply; the B&R 8LSA23.ee060 by name against its row by hand (Kt 0.2/0.27,
+winding 3 x 159/2 = 238.5 ohm and 3 x 0.165/2 = 0.2475 H, current Kp 0.2475 / (0.010/40) = 990 V/A, bus 1.35 x 400 =
+540 V) with its paired ACOPOS P3 (2.2 A, 6 A, 470 uF, 100 W / 7 kW); the stall-current pairing of the AM8041-0D
+(1.65 A: not the 1.5 A AX5101, the 3 A AX5103 before the two-axis AX5203) and the AKD-x00307's regen data (760 V,
+840 V, 22.1 kW); a Mitsubishi amplifier taking its motor's 9.1 A peak; the search across makers ranking four makers'
+motors together. The golden files `catalog_golden.txt` and `catalog_snapshot.txt` were rewritten (UPDATE_GOLDEN,
+UPDATE_CATALOG_SNAPSHOT): only lines added, every Siemens line as before; they are now 3 MB and 5 MB and the golden test
+takes about 3 minutes in release.
+
+Left open:
+
+- Pairing tables of Beckhoff, Kollmorgen AKM and Rexroth (behind logins and configurators); the rule by stall
+  current stands in.
+- Not extracted: SEW CM3C (SEW's catalogue links answer 403), Kollmorgen AKD2G, B&R 8LSA..-4 and 8LSC/O/P, Lenze 230 V
+  windings and the i950 at 480 V, Yaskawa SGM7G/SGM7P, Mitsubishi HK-MT/HK-RT, Beckhoff AM801x (rated at 230 V only).
+- Not printed by the makers and so the config's (S210 estimates) in a search: DC link capacitance of most drives,
+  switch-on and trip voltages of most, the axis modules' braking (it is in the supply modules of modular systems, not
+  in the tables), base load currents; winding data and thermal time constants of Yaskawa and Mitsubishi.
+- A maker's single-phase supply is modelled as three-phase (bus 1.35 times the line).
+- The app's search has no vendor filter (it takes the supplies one at a time); `fitting_gearboxes` still decides by
+  character positions of a Siemens article number.
+- The golden test's run time grew with the catalogue (every motor at every supply); it could take the Siemens supplies
+  only.
+

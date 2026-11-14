@@ -76,6 +76,35 @@ class Catalogue(unittest.TestCase):
                     same = a == b or (a and b and math.isclose(float(a), float(b), rel_tol=1e-12))
                     self.assertTrue(same, f"{table} {column}: {a} became {b}")
 
+    def test_another_makers_motor_that_does_not_fit_its_own_numbers_fails_the_checks(self):
+        from cataloglib import checks
+        # A made-up motor that fits: Kt = 2 N m / 1.6 A = 1.25, Ke = 1.25 / sqrt(3) = 0.7217 V s/rad line to line,
+        # rated 1.8 N m x 314.16 rad/s = 565 W, L / R = 0.02 H / 5 ohm = 4 ms.
+        motor = {"part_number": "X1", "vendor": "maker", "series": "X", "line_voltage_v": "400", "static_torque_nm": "2",
+                 "stall_current_a": "1.6", "rated_torque_nm": "1.8", "rated_current_a": "1.5", "rated_speed_rad_s": "314.16",
+                 "rated_power_w": "565", "max_torque_nm": "8", "max_current_a": "7", "max_speed_rad_s": "600",
+                 "torque_constant_nm_a": "1.25", "voltage_constant_v_s_rad": "0.7217", "line_resistance_20c_ohm": "5",
+                 "line_inductance_h": "0.02", "pole_pairs": "4", "rotor_inertia_kgm2": "1e-4",
+                 "rotor_inertia_with_brake_kgm2": "1.2e-4", "mass_kg": "2", "mass_with_brake_kg": "2.4",
+                 "thermal_time_constant_s": "1200", "paired_drive": "D1", "source": ""}
+        drive = {"part_number": "D1", "vendor": "maker", "series": "D", "supply": "3 AC 400 V", "line_voltage_v": "400",
+                 "axes": "1", "rated_output_current_a": "2", "max_output_current_a": "6", "max_current_duration_s": "2",
+                 "dc_link_voltage_v": "565", "dc_link_capacitance_f": "", "braking_resistor_internal_ohm": "",
+                 "braking_resistor_continuous_w": "", "braking_resistor_peak_w": "", "min_braking_resistance_ohm": "",
+                 "braking_threshold_v": "780", "dc_link_overvoltage_v": "850", "source": ""}
+
+        def found(**changes):
+            tables = {"maker/motors_x.csv": [dict(motor, **changes)], "maker/drives_d.csv": [drive]}
+            return checks.vendor_motors_are_plausible_and_their_drives_exist(tables) + checks.vendor_drives_are_plausible(tables)
+
+        self.assertEqual(found(), [])
+        # Ke printed per phase or as a peak: sqrt(3) x 0.7217 x sqrt(2) = 1.77, 41 % off Kt.
+        self.assertTrue(any("voltage_constant" in e for e in found(voltage_constant_v_s_rad="1.0206")))
+        self.assertTrue(any("rated_power_w" in e for e in found(rated_power_w="5650")))
+        self.assertTrue(any("not in a maker drive table" in e for e in found(paired_drive="D2")))
+        self.assertTrue(any("needs 3.5 A" in e for e in found(rated_current_a="3.5", stall_current_a="", torque_constant_nm_a="")))
+        self.assertTrue(any("L / R" in e for e in found(line_inductance_h="2")))
+
     def test_a_column_without_a_map_is_refused(self):
         with self.assertRaises(SystemExit):
             legacy.convert_rows([{"article": "1FK2", "colour": "blue"}], [("article", "part_number", "same")], "test")

@@ -19,7 +19,7 @@ macro_rules! tables {
 }
 
 /// The tables the simulator reads, by their path in the catalogue, with the compiled-in copy.
-const TABLES: [(&str, &str); 20] = tables![
+const TABLES: &[(&str, &str)] = &tables![
     "siemens/motors_s210.csv",
     "siemens/motors_1fk2_s120.csv",
     "siemens/motors_1ft2_s120.csv",
@@ -39,6 +39,25 @@ const TABLES: [(&str, &str); 20] = tables![
     "festo/belt_axes.csv",
     "festo/belt_axis_torque_formula.csv",
     "bahr/belt_axes.csv",
+    "beckhoff/motors_am8000.csv",
+    "beckhoff/drives_ax8000.csv",
+    "beckhoff/drives_ax5000.csv",
+    "br/motors_8ls.csv",
+    "br/drives_acopos_p3.csv",
+    "kollmorgen/motors_akm.csv",
+    "kollmorgen/motors_akm2g.csv",
+    "kollmorgen/drives_akd.csv",
+    "lenze/motors_mcs.csv",
+    "lenze/motors_m850.csv",
+    "lenze/drives_i950.csv",
+    "mitsubishi/motors_j5.csv",
+    "mitsubishi/drives_j5.csv",
+    "rexroth/motors_ms2n.csv",
+    "rexroth/drives_ctrlx.csv",
+    "sew/motors_cmp.csv",
+    "sew/drives_movic.csv",
+    "yaskawa/motors_sigma7.csv",
+    "yaskawa/drives_sigma7.csv",
     "catalog.toml",
 ];
 
@@ -81,7 +100,7 @@ pub fn use_directory(dir: &std::path::Path) -> Result<(), ConfigError> {
         other => return Err(ConfigError::Part("error-catalog-version", format!("{other:?}, {}", dir.display()))),
     }
     let mut loaded = HashMap::new();
-    for (name, _) in TABLES {
+    for &(name, _) in TABLES {
         // Read once and kept for the life of the process, as the compiled-in tables are.
         loaded.insert(name, &*Box::leak(read(name)?.into_boxed_str()));
     }
@@ -90,7 +109,75 @@ pub fn use_directory(dir: &std::path::Path) -> Result<(), ConfigError> {
 
 /// The supplies a motor can be named for: the S210 data at 230 V or 400 V, or the motor on a SINAMICS S120
 /// (400 V line). "s120" takes the 1FK7 and 1FT7 of `motors_s120.csv` and the 1FK2 and 1FT2 of their S120 manuals.
-pub const SUPPLIES: [&str; 3] = ["230v", "400v", "s120"];
+/// "s210new-230v" and "s210new-400v" are the same 1FK2 and 1FT2 data with the "SINAMICS S210 (New)" converters
+/// (6SL5310) the D 32 pairs them with. The others are another maker's motors and drives at a line voltage,
+/// "<vendor>-<volts>v" (`vendor_of`): the rows of `<vendor>/motors_*.csv` and `<vendor>/drives_*.csv` with that
+/// `vendor` and `line_voltage_v`. `every_supply_has_motors_and_every_vendor_table_a_supply` keeps this list and the
+/// tables together.
+pub const SUPPLIES: &[&str] = &[
+    "230v",
+    "400v",
+    "s120",
+    "s210new-230v",
+    "s210new-400v",
+    "beckhoff-400v",
+    "beckhoff-480v",
+    "br-400v",
+    "kollmorgen-240v",
+    "kollmorgen-400v",
+    "lenze-400v",
+    "mitsubishi-200v",
+    "mitsubishi-400v",
+    "rexroth-400v",
+    "sew-400v",
+    "yaskawa-200v",
+    "yaskawa-400v",
+];
+
+/// The maker of a supply's motors and drives (`SUPPLIES`): "siemens" for the Siemens ones, else the part before "-".
+pub fn vendor_of(supply: &str) -> &str {
+    vendor_supply(supply).map_or("siemens", |(vendor, _)| vendor)
+}
+
+/// Another maker's supply, "<vendor>-<volts>v": the vendor and the line voltage in V.
+fn vendor_supply(supply: &str) -> Option<(&str, f64)> {
+    let (vendor, line) = supply.split_once('-')?;
+    if vendor == "s210new" {
+        return None;
+    }
+    Some((vendor, line.strip_suffix('v')?.parse().ok()?))
+}
+
+/// A supply of the S210 data: the voltage of its rated columns ("230v", "400v") and whether the converters are the
+/// new 6SL5310 ones.
+fn s210_supply(supply: &str) -> Option<(&'static str, bool)> {
+    match supply {
+        "230v" => Some(("230v", false)),
+        "400v" => Some(("400v", false)),
+        "s210new-230v" => Some(("230v", true)),
+        "s210new-400v" => Some(("400v", true)),
+        _ => None,
+    }
+}
+
+/// The text of every other maker's tables of a kind ("motors_" or "drives_"): `<vendor>/<kind>*.csv`.
+fn vendor_tables(kind: &str) -> Vec<&'static str> {
+    TABLES
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.split_once('/').is_some_and(|(maker, file)| maker != "siemens" && file.starts_with(kind)))
+        .map(table)
+        .collect()
+}
+
+/// The rows of another maker's tables of a kind (`vendor_tables`) for a vendor and line voltage.
+fn vendor_rows(kind: &str, vendor: &str, line: f64) -> Vec<Row> {
+    vendor_tables(kind)
+        .into_iter()
+        .flat_map(rows)
+        .filter(|r| r.get("vendor") == Some(&vendor) && number(r, "line_voltage_v") == Some(line))
+        .collect()
+}
 
 type Row = HashMap<&'static str, &'static str>;
 
@@ -164,7 +251,14 @@ pub fn motor_articles_for(supply: &str) -> Vec<&'static str> {
             );
             out
         }
-        _ => motor_articles(),
+        _ => match vendor_supply(supply) {
+            Some((vendor, line)) => vendor_rows("motors_", vendor, line)
+                .iter()
+                .filter(|r| number(r, "rotor_inertia_kgm2").is_some())
+                .map(|r| r["part_number"])
+                .collect(),
+            None => motor_articles(),
+        },
     }
 }
 
@@ -188,6 +282,34 @@ struct MotorData {
 
 fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
     let missing = || unknown("motor", &format!("{article}, {supply}"));
+    if let Some((vendor, line)) = vendor_supply(supply) {
+        let m = vendor_rows("motors_", vendor, line)
+            .into_iter()
+            .find(|r| r["part_number"] == article)
+            .ok_or_else(|| unknown("motor", article))?;
+        let get = |column: &str| number(&m, column).ok_or_else(missing);
+        // shortcut: a maker that prints no standstill values (Yaskawa, Mitsubishi) has its rated ones stand for them,
+        // one that prints no rated torque or current (SEW CMP; Kollmorgen and Beckhoff at 480 V no rated current) its
+        // standstill ones, which overstate what the motor carries at speed by a few per cent; upgrade with rated data.
+        let either = |first: &str, second: &str| number(&m, first).map_or_else(|| get(second), Ok);
+        return Ok(MotorData {
+            rotor_kgm2: get("rotor_inertia_kgm2")?,
+            static_torque: either("static_torque_nm", "rated_torque_nm")?,
+            stall_current: either("stall_current_a", "rated_current_a")?,
+            max_torque: get("max_torque_nm")?,
+            max_current: get("max_current_a")?,
+            rated_current: either("rated_current_a", "stall_current_a")?,
+            rated_torque: either("rated_torque_nm", "static_torque_nm")?,
+            rated_speed: get("rated_speed_rad_s")?,
+            thermal_seconds: number(&m, "thermal_time_constant_s"),
+            // Terminal to terminal in the tables; one phase of the star is half of it.
+            winding: number(&m, "line_resistance_20c_ohm")
+                .zip(number(&m, "line_inductance_h"))
+                .map(|(r, l)| (r / 2.0, l / 2.0)),
+            pole_pairs: number(&m, "pole_pairs"),
+            mass: get("mass_kg")?,
+        });
+    }
     if supply == "s120" {
         if let Some(m) = rows(table("siemens/motors_s120.csv")).into_iter().find(|r| r["part_number"] == article) {
             let sheet = rows(table("siemens/motors_s120_electrical.csv"))
@@ -236,7 +358,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         .find(|r| r["part_number"] == article)
         .ok_or_else(|| unknown("motor", article))?;
     let get = |column: &str| number(&motor, column).ok_or_else(missing);
-    let rated = |quantity: &str, unit: &str| get(&format!("rated_{quantity}_{supply}_{unit}"));
+    let voltage = s210_supply(supply).ok_or_else(missing)?.0;
+    let rated = |quantity: &str, unit: &str| get(&format!("rated_{quantity}_{voltage}_{unit}"));
     let manual = motor_manuals().into_iter().flat_map(|text| rows(text)).find(|r| r["part_number"] == article);
     Ok(MotorData {
         rotor_kgm2: get("rotor_inertia_kgm2")?,
@@ -259,14 +382,15 @@ pub fn motor_mass(article: &str, supply: &str) -> Option<f64> {
     motor_data(article, supply).ok().map(|m| m.mass)
 }
 
-/// Puts a motor of the catalogue into a config, for the supply "230v", "400v" or "s120" (`SUPPLIES`): rotor
+/// Puts a motor of the catalogue into a config, for a supply of `SUPPLIES` ("230v", "400v", "s120", ...): rotor
 /// inertia, torque constant and saturation, rated current, thermal time constant, and the drive's torque and speed
 /// limits. The peak torque stays within what the machine's pulley allows, where the config rates that.
 ///
 /// The bus voltage becomes the DC link voltage of that supply, because the catalogue's rated speed and
 /// torque hold on it: 540 V on a 400 V three-phase line (1.35 times the line voltage, the figure the
 /// Siemens line module data in `catalog/siemens/line_modules_s120.csv` is given for; also for "s120", whose motor
-/// data hold for a DC link of 510 to 720 V) and 325 V on a 230 V line (its peak, 230 V times the square root of 2).
+/// data hold for a DC link of 510 to 720 V) and 325 V on a 230 V line (its peak, 230 V times the square root of 2);
+/// another maker's, 1.35 times its line voltage.
 /// A config written for another bus would otherwise run the motor against a back-EMF it was never meant to meet.
 /// The braking threshold and the trip level of the config's DC link are scaled with the bus voltage: left as they
 /// were, those of a config written for a lower bus would lie below the new one.
@@ -313,7 +437,12 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     set(cfg, "drive.peak_torque_nm", m.max_torque.min(allowed))?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
-    let bus = if supply == "230v" { 325.0 } else { 540.0 };
+    // shortcut: another maker's line is taken as three-phase (1.35 times it); a single-phase one would have its peak.
+    let bus = match vendor_supply(supply) {
+        Some((_, line)) => 1.35 * line,
+        None if s210_supply(supply).is_some_and(|(voltage, _)| voltage == "230v") => 325.0,
+        None => 540.0,
+    };
     let scale = bus / cfg.positive("drive.bus_voltage_v")?;
     for rating in ["ratings.braking_threshold_v", "ratings.dc_link_overvoltage_v"] {
         if let Ok(voltage) = cfg.f64(rating) {
@@ -330,21 +459,49 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 /// D 21.4 names. The 1FK2 and 1FT2 on S120 have no pairing in their manuals: theirs is the smallest Single Motor
 /// Module whose rated current carries the motor's stall current, the rule D 21.4 pairs the 1FK7 and 1FT7 by
 /// (`siemens_s120_motors_are_plausible_and_their_motor_modules_exist` checks it); of two such, the one with the
-/// higher maximum current. "" where there is none.
+/// higher maximum current. For "s210new-..." the 6SL5310 converter the D 32 lists beside the motor.
+///
+/// Another maker's motor (`vendor_of`): the drive its row names in `paired_drive`, the maker's own pairing, where
+/// the maker's drive table has it at that line voltage; else by the same rule as the 1FK2 on S120, the smallest drive of
+/// the maker at that line voltage whose rated current carries the motor's stall current, a single-axis one before a
+/// multi-axis one. "" where there is none.
 pub fn paired_drive(article: &str, supply: &str) -> &'static str {
-    match supply {
-        "230v" | "400v" => {
+    if let Some((vendor, line)) = vendor_supply(supply) {
+        let drives = vendor_rows("drives_", vendor, line);
+        let named = vendor_rows("motors_", vendor, line).into_iter().find(|r| r["part_number"] == article);
+        if let Some(own) = named.and_then(|m| drives.iter().find(|d| d["part_number"] == m["paired_drive"])) {
+            return own["part_number"];
+        }
+        let stall = motor_data(article, supply).map_or(f64::INFINITY, |m| m.stall_current);
+        let key = |d: &Row| {
+            (
+                d["axes"] != "1",
+                number(d, "rated_output_current_a").unwrap_or(f64::INFINITY),
+                -number(d, "max_output_current_a").unwrap_or(0.0),
+            )
+        };
+        return drives
+            .iter()
+            .filter(|d| number(d, "rated_output_current_a").is_some_and(|i| i >= stall))
+            .min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal))
+            .map_or("", |d| d["part_number"]);
+    }
+    match s210_supply(supply) {
+        Some((voltage, new)) => {
             let Some(motor) = rows(table("siemens/motors_s210.csv")).into_iter().find(|r| r["part_number"] == article)
             else {
                 return "";
             };
-            let columns: &[&str] = if supply == "400v" {
-                &["paired_drive_400v_3ac"]
-            } else {
-                &["paired_drive_230v_1ac", "paired_drive_230v_3ac"]
-            };
-            columns.iter().map(|c| motor[c]).find(|a| !a.is_empty()).unwrap_or("")
+            let columns: &[&str] = if voltage == "400v" { &["400v_3ac"] } else { &["230v_1ac", "230v_3ac"] };
+            let series = if new { "paired_drive_new_" } else { "paired_drive_" };
+            columns.iter().map(|c| motor[format!("{series}{c}").as_str()]).find(|a| !a.is_empty()).unwrap_or("")
         }
+        None => paired_s120(article, supply),
+    }
+}
+
+fn paired_s120(article: &str, supply: &str) -> &'static str {
+    match supply {
         "s120" => {
             let modules = rows(table("siemens/motor_modules_s120.csv"));
             if let Some(motor) =
@@ -412,61 +569,77 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
             Ok(())
         }
     };
-    let (rated, max, base) =
-        if let Some(c) = rows(table("siemens/converters_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
-            braking_module(cfg, false)?;
-            if let Some(b) = rows(table("siemens/braking_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
-                let trip = number(&b, "dc_link_overvoltage_v").ok_or_else(|| unknown("drive", article))?;
-                let line = if b["line"] == "1ac" { 240.0 } else { 480.0 };
-                set_if_present(cfg, "ratings.dc_link_overvoltage_v", trip)?;
-                if cfg.f64("ratings.braking_threshold_v").is_ok_and(|threshold| threshold >= trip) {
-                    set(cfg, "ratings.braking_threshold_v", (1.1 * line * std::f64::consts::SQRT_2 + trip) / 2.0)?;
-                }
-                if !(b["line"] == "3ac" && supply == "230v") {
-                    let (continuous, peak) = number(&b, "continuous_braking_power_w")
-                        .zip(number(&b, "peak_braking_power_w"))
-                        .ok_or_else(|| unknown("drive", article))?;
-                    set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
-                    set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
-                }
+    let vendor_drive = || {
+        let all: Vec<Row> = vendor_tables("drives_").into_iter().flat_map(rows).collect();
+        let line = vendor_supply(supply).map(|(_, line)| line);
+        // The row at the supply's line voltage, else the drive's first.
+        let of = all.iter().filter(|r| r["part_number"] == article);
+        of.clone().find(|r| number(r, "line_voltage_v") == line).or(of.clone().next()).cloned()
+    };
+    let (rated, max, base) = if let Some(d) = vendor_drive() {
+        braking_module(cfg, false)?;
+        apply_vendor_dc_link(cfg, &d)?;
+        // shortcut: the makers publish no base load current; the S210's share of the rated current stands in [estimate].
+        let rated = number(&d, "rated_output_current_a");
+        // Mitsubishi prints no peak current of its amplifiers; it pairs them for the motor's peak, which the motor put
+        // into the config before the drive brings [estimate].
+        let max = number(&d, "max_output_current_a").or_else(|| cfg.f64("motor.max_current_a").ok());
+        (rated, max, rated.map(|r| S210_BASE_LOAD_SHARE * r))
+    } else if let Some(c) = rows(table("siemens/converters_s210.csv")).into_iter().find(|r| r["part_number"] == article)
+    {
+        braking_module(cfg, false)?;
+        if let Some(b) = rows(table("siemens/braking_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
+            let trip = number(&b, "dc_link_overvoltage_v").ok_or_else(|| unknown("drive", article))?;
+            let line = if b["line"] == "1ac" { 240.0 } else { 480.0 };
+            set_if_present(cfg, "ratings.dc_link_overvoltage_v", trip)?;
+            if cfg.f64("ratings.braking_threshold_v").is_ok_and(|threshold| threshold >= trip) {
+                set(cfg, "ratings.braking_threshold_v", (1.1 * line * std::f64::consts::SQRT_2 + trip) / 2.0)?;
             }
-            // Siemens publishes no base load current for the S210 (`S210_BASE_LOAD_SHARE`).
-            let rated = number(&c, "rated_output_current_a");
-            (rated, number(&c, "max_output_current_a"), rated.map(|r| S210_BASE_LOAD_SHARE * r))
-        } else {
-            let m = rows(table("siemens/motor_modules_s120.csv"))
-                .into_iter()
-                .find(|r| r["part_number"] == article)
-                .ok_or_else(|| unknown("drive", article))?;
-            if let Some(capacitance) = number(&m, "dc_link_capacitance_f").map(|f| in_unit(f, 1e6)) {
-                set_if_present(
-                    cfg,
-                    "ratings.dc_link_capacitance_uf",
-                    if m["axes"] == "2" { capacitance / 2.0 } else { capacitance },
-                )?;
+            if !(b["line"] == "3ac" && supply == "230v") {
+                let (continuous, peak) = number(&b, "continuous_braking_power_w")
+                    .zip(number(&b, "peak_braking_power_w"))
+                    .ok_or_else(|| unknown("drive", article))?;
+                set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
+                set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
             }
-            let module = rows(table("siemens/braking_s120.csv"))
-                .into_iter()
-                .find(|r| r["kind"] == "braking_module")
-                .ok_or_else(|| unknown("drive", article))?;
-            let (continuous, peak, threshold) = (
-                number(&module, "continuous_power_w"),
-                number(&module, "peak_power_w"),
-                number(&module, "activation_threshold_v"),
-            );
-            let ((continuous, peak), threshold) =
-                continuous.zip(peak).zip(threshold).ok_or_else(|| unknown("drive", article))?;
-            set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
-            set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
-            set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
-            set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
-            braking_module(cfg, true)?;
-            (
-                number(&m, "rated_output_current_a"),
-                number(&m, "max_output_current_a"),
-                number(&m, "base_load_output_current_a"),
-            )
-        };
+        }
+        // Siemens publishes no base load current for the S210 (`S210_BASE_LOAD_SHARE`).
+        let rated = number(&c, "rated_output_current_a");
+        (rated, number(&c, "max_output_current_a"), rated.map(|r| S210_BASE_LOAD_SHARE * r))
+    } else {
+        let m = rows(table("siemens/motor_modules_s120.csv"))
+            .into_iter()
+            .find(|r| r["part_number"] == article)
+            .ok_or_else(|| unknown("drive", article))?;
+        if let Some(capacitance) = number(&m, "dc_link_capacitance_f").map(|f| in_unit(f, 1e6)) {
+            set_if_present(
+                cfg,
+                "ratings.dc_link_capacitance_uf",
+                if m["axes"] == "2" { capacitance / 2.0 } else { capacitance },
+            )?;
+        }
+        let module = rows(table("siemens/braking_s120.csv"))
+            .into_iter()
+            .find(|r| r["kind"] == "braking_module")
+            .ok_or_else(|| unknown("drive", article))?;
+        let (continuous, peak, threshold) = (
+            number(&module, "continuous_power_w"),
+            number(&module, "peak_power_w"),
+            number(&module, "activation_threshold_v"),
+        );
+        let ((continuous, peak), threshold) =
+            continuous.zip(peak).zip(threshold).ok_or_else(|| unknown("drive", article))?;
+        set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
+        set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
+        set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
+        set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
+        braking_module(cfg, true)?;
+        (
+            number(&m, "rated_output_current_a"),
+            number(&m, "max_output_current_a"),
+            number(&m, "base_load_output_current_a"),
+        )
+    };
     if let Some(capacitance) = rows(table("siemens/dc_link_measured.csv"))
         .into_iter()
         .find(|r| r["part_number"] == article)
@@ -479,6 +652,37 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     set_if_present(cfg, "ratings.drive_rated_current_a", rated)?;
     set_if_present(cfg, "ratings.drive_base_load_current_a", base)?;
     set_if_present(cfg, "ratings.drive_max_current_a", max)
+}
+
+/// The DC link of another maker's drive (`<vendor>/drives_*.csv`), each value only where the row gives it and the config
+/// has the rating: capacitance, the internal braking resistor's continuous and peak power, the chopper's switch-on
+/// voltage and the trip level. A row with the resistor's ohms and the switch-on voltage but no peak power gets the
+/// power the resistor takes at that voltage, U² / R. Where the trip level is given and the config's switch-on voltage
+/// lies at or above it, the switch-on voltage is taken halfway between the line's peak + 10 % and the trip, as for the
+/// S210.
+fn apply_vendor_dc_link(cfg: &mut Config, d: &Row) -> Result<(), ConfigError> {
+    if let Some(capacitance) = number(d, "dc_link_capacitance_f").map(|f| in_unit(f, 1e6)) {
+        set_if_present(cfg, "ratings.dc_link_capacitance_uf", capacitance)?;
+    }
+    let threshold = number(d, "braking_threshold_v");
+    let peak = number(d, "braking_resistor_peak_w")
+        .or_else(|| threshold.zip(number(d, "braking_resistor_internal_ohm")).map(|(u, r)| u * u / r));
+    for (rating, value) in [
+        ("braking_resistor_continuous_w", number(d, "braking_resistor_continuous_w")),
+        ("braking_resistor_peak_w", peak),
+        ("dc_link_overvoltage_v", number(d, "dc_link_overvoltage_v")),
+        ("braking_threshold_v", threshold),
+    ] {
+        if let Some(value) = value {
+            set_if_present(cfg, &format!("ratings.{rating}"), value)?;
+        }
+    }
+    if let (None, Some(trip), Some(line)) = (threshold, number(d, "dc_link_overvoltage_v"), number(d, "line_voltage_v"))
+        && cfg.f64("ratings.braking_threshold_v").is_ok_and(|own| own >= trip)
+    {
+        set(cfg, "ratings.braking_threshold_v", (1.1 * line * std::f64::consts::SQRT_2 + trip) / 2.0)?;
+    }
+    Ok(())
 }
 
 /// A gearbox by name, its catalogue row: size, motor frame size and ratio, e.g. "NRK070-04-5".
@@ -1030,6 +1234,8 @@ pub struct Candidate {
     pub gearbox: String,
     /// The drive the catalogue pairs with the motor (`paired_drive`); "" where there is none, and the config's stayed.
     pub drive: &'static str,
+    /// The supply the motor was tried at (`SUPPLIES`, which says the maker: `vendor_of`); "" for a refused axis.
+    pub supply: &'static str,
     /// The axis of the catalogue the motor was tried on; "" for the config's own.
     pub axis: String,
     /// Motor and gearbox of one drive axis, kg.
@@ -1278,6 +1484,7 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
         article: job.article,
         gearbox: job.gearbox.clone(),
         drive,
+        supply: SUPPLIES.iter().copied().find(|s| *s == supply).unwrap_or(""),
         axis: job.axis.clone(),
         mass,
         cost: motors * mass + job.axis_weight,
@@ -1345,6 +1552,7 @@ pub fn search_axes(
                 article: "",
                 gearbox: String::new(),
                 drive: "",
+                supply: "",
                 axis: name,
                 mass: f64::NAN,
                 cost: f64::NAN,
@@ -1360,6 +1568,34 @@ pub fn search_axes(
         jobs.extend(motor_jobs(&with_axis, supply, wanted, gearboxes, &name, axis_weight(cfg, &axis)));
     }
     run_jobs(entry, supply, jobs, refused)
+}
+
+/// The search at several supplies (`SUPPLIES`; `vendor_of` tells a supply's maker), ranked together (`rank`): with `motor`
+/// a machine's one motor of that id (`search_motor`), else with `axes` every axis (`search_axes`), else the config's
+/// (`search_motors`). Each candidate says its supply, and with it its maker (`vendor_of`). An axis refused before any
+/// motor was tried is listed once.
+pub fn search_supplies(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supplies: &[&str],
+    wanted: &dyn Fn(&str) -> bool,
+    gearboxes: Option<&str>,
+    axes: bool,
+    motor: Option<&str>,
+) -> Result<Vec<Candidate>, ConfigError> {
+    let mut all = Vec::new();
+    for supply in supplies {
+        let found = match motor {
+            Some(id) => search_motor(entry, cfg, supply, wanted, gearboxes, id)?,
+            None if axes => search_axes(entry, cfg, supply, wanted, gearboxes),
+            None => search_motors(entry, cfg, supply, wanted, gearboxes),
+        };
+        let refused_before = |c: &Candidate| c.article.is_empty() && all.iter().any(|a: &Candidate| a.axis == c.axis);
+        let new: Vec<Candidate> = found.into_iter().filter(|c| !refused_before(c)).collect();
+        all.extend(new);
+    }
+    rank(&mut all);
+    Ok(all)
 }
 
 /// `search_motors` for one motor of a machine with several (a machine file's `machine.motor` of id `motor`): each

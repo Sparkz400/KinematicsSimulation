@@ -1,0 +1,38 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "ax5000-sm"
+notes = '''
+Source: Beckhoff, system manual "AX5000 Servo Drives", version 3.2.3, 2023-09-29, section 6.2 "General technical
+data". Typed in from the tables; the numbers are Beckhoff's, the layout is ours.
+One row per drive at 400 V, from the "3-phase connection" tables. The document gives one rated current for the
+  whole 3 x 100 ... 480 V range (AX51xx up to 40 A, AX52xx), so there are no 480 V rows. For the AX5160 to AX5193 it
+  says the rated current must be reduced by 10 % at 480 V; that is a rule, not a printed value, and is not applied.
+  The 1-phase connection (1 x 100 ... 240 V) of the AX5101 to AX5106 and AX52xx is not taken.
+part_number: the type without the order suffix.
+axes: 2 for the AX52xx two-channel drives; their currents are per channel ("Nominal output current / channel",
+  "Max. peak output current / channel"). A channel may be set up to 3, 6, 9 A rated, the drive 3, 6, 12 A in all.
+Currents RMS at 8 kHz. max_output_current: "Peak output current", Irms for max. 7 s (AX51xx up to 40 A and AX52xx;
+  AX5112: 7 s above 1.5 Hz rotating field frequency, 1 s below) or max. 3 s with a preload of at most 70 % of the
+  rated current (AX5160 to AX5193).
+braking_resistor_continuous / _peak: "Max. continuous braking power (internal braking resistor)" and "Braking power
+  (internal braking resistor)". The peak value is printed once across columns: 14 kW across the AX5101 to AX5106
+  (the 1-phase table has the same 14 kW for exactly these three) and across the AX52xx, 26 kW for each of AX5118,
+  AX5125, AX5140; whether the 14 kW also holds for the AX5112 cannot be read from the table, so its peak is empty.
+  The AX5160 to AX5193 have no internal braking resistor (external resistors must be used); min_braking_resistance
+  is the "Min. braking resistor (external braking resistor)" of every drive.
+dc_link_capacitance: 235 uF printed once across the AX5101 to AX5106 and across the AX5201 and AX5203, 900 uF
+  across the AX5160 and AX5172.
+Empty because the document does not give them: the nominal DC link voltage, the resistance of the internal braking
+  resistors, the chopper's switch-on voltage and the overvoltage trip level. The document gives a maximum DC link
+  voltage of 875 V DC; it does not say whether that is the trip level, so it is not taken.
+'''
+
+[[sources]]
+id = "ax5000-sm"
+document = "Beckhoff, AX5000 Servo Drives, system manual (hardware 2), version 3.2.3"
+date = "2023-09"
+locator = "section 6.2.2 Electrical data AX5101 - AX5140 (page 32), 6.2.3 AX52xx (pages 33 to 34), 6.2.4 AX5160 - AX5193 (pages 34 to 35), 3-phase connection tables"
+method = "manual: typed in from the tables \"Electrical data\" of section 6.2"
+url = "https://download.beckhoff.com/download/document/motion/ax5000_system_manual_hw2_en.pdf"
+retrieved = "2026-11-14"

@@ -538,6 +538,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         article: "",
         gearbox: String::new(),
         drive: "",
+        supply: "",
         axis: String::new(),
         mass: 1.0,
         cost: 1.0,

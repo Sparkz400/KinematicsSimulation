@@ -1,0 +1,35 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "i950-pp"
+notes = '''
+Source: Lenze, project planning manual "i950 cabinet servo inverter 0.37 kW ... 250 kW" (Gen B), version 3.0,
+08/2026, chapter 7.4 "3-phase mains connection 400 V". Extracted by catalog/tools/extract_lenze.py; the numbers are
+Lenze's, the layout is ours.
+One row per inverter (single axis) at 400 V: 7.4.1 "Rated data" (pages 125 to 129) and "Brake chopper" (pages 130
+  and 131). The 480 V chapter (3 AC 432 ... 528 V: lower peak currents, chopper at 780 V) and the 230 V inverters
+  (i950-C.../230-2 and /230-3) are not taken: the motor tables are at 400 V.
+part_number: the product name as printed (e.g. i950-C2.2/400-3), which the MCS and m850 selection tables use; the
+  order codes (I95AE...) are not in this table.
+rated_output_current: at 4 kHz switching frequency, the frequency of the motors' selection tables (2 kHz gives the
+  same; 8 kHz and 16 kHz less for some sizes).
+max_output_current / max_current_duration: "Overcurrent cycle 15 s": max. output current (printed for 8 kHz) for the
+  overload time T1 = 3 s, then 12 s recovery time at the printed recovery current. The "Overcurrent cycle 180 s"
+  (60 s at a lower current) is not taken.
+min_braking_resistance / braking_threshold: "Min. brake resistance" and "Switch-on threshold" of the brake chopper
+  at 400 V (725 V). The PDF merges equal cells over neighbouring columns; the per-size values were checked against
+  the chopper's rated current (725 V / R) and the brake resistor assignment table (page 134).
+The i950-C130/400-3 has a rated output current of 209 A, less than the i950-C110/400-3 (212 A), as printed.
+The Gen A manual (version 17.0, 01/2026, sizes up to i950-C110/400-3) gives the same currents and chopper data.
+Empty because the document does not give them: the nominal DC link voltage, the DC link capacitance, the overvoltage
+  trip level and an internal braking resistor (the document lists only external brake resistors).
+'''
+
+[[sources]]
+id = "i950-pp"
+document = "Lenze, Project planning manual, Inverters: i950 cabinet servo inverter 0.37 kW ... 250 kW (Gen B), version 3.0"
+date = "2026-08"
+locator = "chapter 7.4 \"3-phase mains connection 400 V\": 7.4.1 Rated data (pages 125 to 129), Brake chopper (pages 130 and 131), brake resistor assignment (page 134)"
+method = "script:tools/extract_lenze.py"
+url = "https://docfinderreloadedstg.blob.core.windows.net/docfinderreloadedprod/Projektierung_Servoumrichter%20i950%20cabinet_EN_Gen_B.pdf"
+retrieved = "2026-11-14"

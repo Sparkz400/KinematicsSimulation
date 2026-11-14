@@ -52,7 +52,7 @@ pd.DataFrame(ks.sizing(cfg, series="1FK2"))             # every catalogue motor 
 | `run(cfg, cycle=, move_to=, path=, trajectory=, time_optimal=, time=2.0, every=16, disable_at=)` | `{signal id: array}` over `time` seconds, sampled every `every` base steps | `sim-cli run` |
 | `analyze(cfg, path=, trajectory=, time_optimal=, points=False)` | the load per motor over one pass of the cycle, or over a path; `points=True` adds the operating points per motor as an (n, 2) array of speed (rad/s) and torque (N m) | `sim-cli analyze` |
 | `verdicts(cfg, bands=False, samples=None, seed=1)` | the checks; with `bands` their lowest and highest value over the `[bounds]` and whether the worst case passes; with `samples` N runs drawn between the bounds and the share that passed | `sim-cli verdicts [--bands] [--samples N --seed S]` |
-| `sizing(cfg, supply="400v", series="", gearboxes=None, axes=False)` | every catalogue motor on the config's cycle, passing and cheapest first | `sim-cli search` |
+| `sizing(cfg, supply=None, vendor=None, series="", gearboxes=None, axes=False)` | every catalogue motor on the config's cycle, passing and cheapest first; `supply` one of the catalogue's (`"400v"` when left out), `vendor` a maker's supplies or `"all"` makers', with the columns `vendor` and `supply` | `sim-cli search` |
 
 `path` and `trajectory` take the text of a path file or a trajectory file (formats: `sim_components::path`), not a file
 name: `ks.analyze(cfg, path=open("pick.path").read())`. A refused config, command or path raises `ValueError` with the

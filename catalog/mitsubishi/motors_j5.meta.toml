@@ -1,0 +1,54 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "l03179"
+notes = '''
+Mitsubishi Electric MELSERVO-J5 rotary servo motors HK-KT (low inertia, small capacity) and HK-ST (medium inertia, medium
+capacity), one row per motor and servo amplifier voltage class: line_voltage_v 200 = "Specifications when connected with a
+200 V servo amplifier", 400 = "... with a 400 V servo amplifier". The 200 V rows are the 200 V motors (HK-KT_W, HK-ST_W), the
+400 V rows the 400 V motors (HK-KT_4_W, HK-ST_4_W) and the HK-KT053W/13W/1M3W, which the catalogue lists for both classes.
+Not here: the 400 V motors run on 200 V amplifiers (the catalogue's "HK-KT_4_W / HK-ST_4_W ... connected with a 200 V servo
+amplifier" tables, lower speeds), HK-MT/HK-RT and the geared, functional-safety (WS) and special-shaft versions.
+part_number: the model as printed in the specification table (HK-KT13W, HK-ST3534W); the brake (B), oil seal (J) and shaft
+options of the full order code are cut off.
+Values: the unbracketed ("standard torque") values of the specification tables. Bracketed values, which hold when the motor
+runs on a larger servo amplifier ("torque increased"), are left out, except for HK-ST903W (200 V) and HK-ST9034W (400 V):
+their maximum torque and maximum current are printed in brackets only (100 N m / 144 A and 100 N m / 72 A), because the only
+combination listed is the torque-increased one with MR-J5-12KG / -12KG4; those bracketed values are in the rows.
+Currents RMS. max_torque/max_current: "Maximum torque"/"Maximum current"; max_speed: "Maximum speed".
+The tables merge cells over neighbouring motors; a merged value holds from the motor it is printed under up to the next value
+(checked against rated output = rated torque x rated speed for every row). HK-KT63UW and HK-KT7M3UW share one inertia and mass
+cell (2.11/2.45 x 10^-4 kg m2, 2.3/2.9 kg).
+rotor_inertia_kgm2/_with_brake: "Moment of inertia J" without/with electromagnetic brake. mass_kg/_with_brake: "Mass".
+static_torque_nm / stall_current_a: empty, the catalogue prints no standstill values (the simulator falls back to the rated values).
+Not in the catalogue, and so empty: torque and voltage constant, winding resistance and inductance, pole pairs, thermal time constant.
+paired_drive: the smallest servo amplifier marked "Standard torque" for the motor in Mitsubishi's combination table
+(source web_combo, the same table as catalogue p. 1-2, whose symbols do not survive text extraction); given as the
+network type MR-J5-_G(4); MR-J5-_A(4) and _B(4) of the same capacity are the same combination. HK-ST903W/9034W: MR-J5-12KG/-12KG4,
+the only (torque-increased) combination. Several motors list two or three standard amplifiers (e.g. HK-KT43W: 40G and 60G).
+Kept as printed, nothing looked like a misprint; the self-checks (rated power within 12 %, paired drive current >= 0.85 x rated
+current, brake inertia and mass) pass for every row.
+'''
+
+[[sources]]
+id = "l03179"
+document = "Mitsubishi Electric, AC Servo System MELSERVO-J5 catalogue, L(NA)03179ENG-L"
+date = "2026-01"
+locator = "Rotary Servo Motors: HK-KT_W specifications pp. 4-9 to 4-11, HK-KT_W/HK-KT_4_W at 400 V pp. 4-13 to 4-15, HK-ST_W specifications pp. 4-47 to 4-49, HK-ST_4_W at 400 V pp. 4-53 to 4-55"
+method = "manual: read from the specification tables (pdftotext -table) with a scratch script that assigns merged cells, then reviewed against the printed text"
+url = "https://www.mitsubishielectric.com/fa/document/catalog/servo/l03179eng/l03179engl.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "web_combo"
+document = "Mitsubishi Electric, MELSERVO-J5 Series Rotary Servo Motor Combinations (web page), Combinations with 1-Axis Servo Amplifiers"
+date = "2026-11-14"
+locator = "Section Combinations with 1-Axis Servo Amplifiers, HK-KT and HK-ST tables, 200 V and 400 V (circle = standard torque); the page has no edition date, the date is the day it was read"
+method = "manual: read from the HTML table (circle/double circle symbols) with a scratch script"
+url = "https://www.mitsubishielectric.com/fa/products/drv/servo/pmerit/mr_j5/motor/amplist.html"
+retrieved = "2026-11-14"
+
+[[provenance]]
+rows = ["*"]
+fields = ["paired_drive"]
+source = "web_combo"

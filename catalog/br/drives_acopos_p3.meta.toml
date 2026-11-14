@@ -1,0 +1,32 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "maacpp3"
+notes = '''
+Source: B&R, ACOPOS P3 user's manual V1.40 (May 2025), MAACPP3-ENG, the technical data tables of the
+8EI servo drives for mains input voltage 3x 200 to 480 VAC (sections 2.2.6.2, 2.2.7.2, 2.2.8.2, 2.2.9.2,
+2.2.10.2 and 2.2.11.2). Extracted by catalog/tools/extract_br.py; the numbers are B&R's, the layout is ours.
+One row per module: the 1-, 2- and 3-axis modules (8EI...HWS10, HWD10, HWT10) and their SafeMOTION variants
+(...S0), which the manual gives the same data. The 1x 110-230 VAC / 3x 200-230 VAC modules (8EI...M...) are not here.
+part_number as printed, with B&R's ".XXXX" for the configured options (plug-in modules, internal braking resistor).
+Currents RMS per axis, at 560 VDC DC bus voltage, 5 kHz switching frequency, 40 degC, below 500 m: the conditions the
+manual names for its continuous values. dc_link_voltage_v is that 560 VDC. line_voltage_v: 400, the mains
+voltage the manual rates the continuous power at.
+dc_link_capacitance: of the module (all axes). max_output_current: "Peak current per motor connection"; the
+manual gives no time for it, so max_current_duration_s is empty.
+braking_resistor_peak_w / _continuous_w: the "int." values of "Peak power int./ext." and "Continuous power
+int./ext.": the internal braking resistor is an option chosen in the order code. The 8EI024/034/044HWS and
+8EI017/022HWD modules have no internal braking resistor (the manual's values there are for an external one), so
+these columns are empty for them. min_braking_resistance: "Minimum braking resistance (ext.)".
+Not in the manual and so empty: the internal braking resistor's resistance, the braking chopper's switch-on
+voltage, the DC bus overvoltage trip level, the peak current duration.
+'''
+
+[[sources]]
+id = "maacpp3"
+document = "B&R Industrial Automation, ACOPOS P3 user's manual V1.40, MAACPP3-ENG"
+date = "2025-05"
+locator = "chapter 2.2, technical data tables 19, 22, 25, 31, 34, 37, 43, 46, 52, 55, 61, 67 (pages 31 to 134)"
+method = "script:tools/extract_br.py"
+url = "https://www.br-automation.com/en/downloads/?tx_brcdn_downloadlist%5Baction%5D=download&tx_brcdn_downloadlist%5Bcontroller%5D=Download&tx_brcdn_downloadlist%5Bid%5D=DWL%40DWL10000410897%4008&tx_brcdn_downloadlist%5Blang%5D=EN&cHash=47a46267de3b165e93a3040e23eacf9c"
+retrieved = "2026-11-14"

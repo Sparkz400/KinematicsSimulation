@@ -269,19 +269,19 @@ Naming the axis of `exct-30.toml` gives its own numbers back (the test `an_axis_
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
 Search time on 16: 0.6 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
-,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4466,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5157,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,5.70,ok,settling,0.5312,3.2878,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.85,5.70,ok,settling,0.5325,3.2958,41.53
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,siemens,400v,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
+,1FK2204-6AF,,6SL3210-5HE11-0UF0,siemens,400v,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4466,12.07
+,1FK2205-2AF,,6SL3210-5HE11-0UF0,siemens,400v,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5157,14.67
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,siemens,400v,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
 ...
-,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
-,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,siemens,400v,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
-,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,siemens,400v,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
 ```
 
 On the EXCT-30 no passing motor comes near a limit. The tightest check is the dwell for the lightest motors (0.53 of the tolerance), the drive current for the 1FK2204-5AF, and for the others the belt's pull on a pulley shaft (1000 N of 2000 N), which hardly depends on the motor: compare them by `winding_rise_k` and `peak_torque_nm`. The pulley shaft bearings last about 325000 h, against 20000 h required.
@@ -292,8 +292,9 @@ The search runs every motor of the catalogue that is offered at the supply on th
 
 | Option | Effect |
 | --- | --- |
-| `--series PREFIX` | Only article numbers that start this way, e.g. `1FK2`, `1FT2105` or `1FK7` |
-| `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). Default `400v` |
+| `--series PREFIX` | Only article numbers that start this way, e.g. `1FK2`, `1FT2105`, `1FK7`, `AM804` or `AKM2G` |
+| `--vendor NAME` | The supplies of that maker, all of them unless `--supply` names one: `siemens`, `beckhoff`, `br`, `kollmorgen`, `lenze`, `mitsubishi`, `rexroth`, `sew`, `yaskawa`, or `all` for every supply of every maker. The candidates of all of them are ranked together; the columns `vendor` and `supply` say whose each is. E.g. `--vendor beckhoff --series AM804` |
+| `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). `s210new-230v`, `s210new-400v`: the S210 motors with the new 6SL5310 converters D 32 lists beside them. `<vendor>-<volts>v` (e.g. `beckhoff-400v`, `kollmorgen-240v`): another maker's motors at that line voltage, each with the drive the maker pairs it with, or where the maker publishes no pairing the smallest of its drives that carries the motor's stall current ([the catalogue](catalogue.md#other-makers)). Default `400v` |
 | `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's. Only on a machine whose config has a ratio above 1, and only for 1FK2 and 1FT2 motors (the gearboxes are made for them) |
 | `--axes` | Also try every axis of the catalogue of the machine's kind (below) |
 | `--motor-id ID` | Size one motor of a machine with several, a machine file's motor `ID`: each candidate becomes `[parts.ID]`, the other motors stay as the file has them, that motor's own velocity gain is retuned, `--gearboxes` fits its own ratio, and `cost_kg` is that one motor's weight (see [machine files](machine-files.md#motors-that-differ)). Not with `--axes` |
@@ -303,6 +304,7 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `axis` | The axis of the catalogue the motor was tried on; empty for the config's own |
 | `motor`, `gearbox` | The candidate. `gearbox` is empty where the config's own gearbox stayed |
 | `drive` | The drive the catalogue pairs with the motor; the cycle is judged against its currents (`drive-current`, `drive-peak-current`) |
+| `vendor`, `supply` | The maker and the supply the motor was tried at (`siemens` for `230v`, `400v`, `s120`, `s210new-*`) |
 | `mass_kg` | Mass of the motor without brake and of its gearbox (Siemens' configuration manual 01/2023, see [the catalogue](catalogue.md)) |
 | `cost_kg` | The stand-in for the price: installed weight, see above |
 | `result` | `ok` if every verdict passes |
@@ -321,10 +323,10 @@ With gearboxes, on the single axis:
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 12 / 35 candidates
 Search time on 16: 0.5 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
-,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4567,0.6007,2.50
-,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
+,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,settling,0.4567,0.6007,2.50
+,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,settling,0.4637,0.5294,1.91
 ...
 ```
 
@@ -334,9 +336,9 @@ The S120 motors on the EXCT-30:
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
 Search time on 16: 1.1 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
-,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,siemens,s120,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,siemens,s120,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
 ...
 ```
 
@@ -346,16 +348,16 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 124 / 338 candidates
 Search time on 16: 7.8 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9056,3.9951,25.02
-ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9200,3.9968,51.69
-ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,settling,0.6389,3.8853,26.94
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,24.75,ok,settling,0.9056,3.9951,25.02
+ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.85,24.75,ok,settling,0.9200,3.9968,51.69
+ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,24.85,ok,settling,0.6389,3.8853,26.94
 ...
-EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5314,3.2863,20.38
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,46.80,ok,settling,0.5314,3.2863,20.38
 ...
-EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7410,5.0097,52.68
+EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,56.93,ok,settling,0.7410,5.0097,52.68
 ...
-EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,46.90,FAIL,motor-thermal,1.6713,3.4264,167.13
+EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,46.90,FAIL,motor-thermal,1.6713,3.4264,167.13
 ...
 ELZI-30,,,,NaN,NaN,FAIL,axis-speed,NaN,NaN,NaN
 EXCT-15,,,,NaN,NaN,FAIL,axis-stroke,NaN,NaN,NaN
@@ -1442,7 +1444,7 @@ The window has the 3D view in the middle, a control panel on the left and the sc
 | Effect views | Opens when a cycle has been analysed; its own button "Analyse and judge the cycle" does the same as the Analysis part's. "Where each motor's torque goes": per motor a plot over the scopes' time window of the four parts of its torque (inertia, gravity, friction, belt and the rest) and, dashed, the torque itself, which they add up to; it shares the scopes' time axis and cursor. "Torque parts over the analysed cycle": per part and motor the peak and the RMS, as `sim-cli analyze --breakdown` writes them. "Energy budget of the analysed cycle": the supply, every loss and store that is not exactly zero, and what is not accounted for, in J and in percent of the supply, as `--budget` writes it, and below it the same as a flow diagram: from the supply (and any store that gave energy back) on the left to what the electrical side lost (copper, braking resistor, mains) and the shaft work in the middle, and from the shaft work on to what the machine lost or stored (guides, shafts, gearboxes, dampers, kinetic and potential energy) on the right, each band as wide as its energy; a bar too thin for its name has it in its tooltip. "Friction per guide": per guide the friction force of steady sliding over the speed (solid) and its Coulomb, viscous and stiction parts (dashed) at the guide load of the moment, the point where the guide is now, and a table of the speed, the three parts, the force and the load factor now. "Temperatures": the rise of each winding and, with gearbox and guide heating on, of each gearbox and guide over the scopes' window, the table of now, where each settles on the analysed cycle, its rated rise and the share of the rating where it settles, and the colour scale of the 3D view. "Belt sections": tension (pretension dashed) and stretch per section, the table of both now, and the belt's colour scale. "Effect on and off": an effect, a quantity and "Compare"; both runs overlaid, off dashed, and per line the peak and RMS of the difference. Above each plot, its lines' names in their colours. See [See where torque and energy go](#see-where-torque-and-energy-go) |
 | Analysis: Sensitivity | The eight parameters with `[bounds]` that the cycle depends on most |
 | Analysis: Optimise the cycle | The optimiser; with "error bands" ticked, its result has to pass in the bands too (the rows below the settings say how fast it got on the config as written and what that fails there). Below the table the front of energy per cycle against cycle time, the result marked. "Apply these settings to the running machine" puts its result into the config |
-| Motor search | Supply (230v, 400v or s120), how the article numbers start (empty: every motor of the catalogue) and optionally a gearbox series such as `NRK` or `NRK070`; ticked, "Every axis of the catalogue" tries each motor on every catalogue axis of the machine's kind as well (`--axes`). "Search" runs every such motor on the cycle and lists them, passing ones first, cheapest first (installed mass stands in for the price), with gearbox, axis, the mass of motor and gearbox, the installed mass, and the check nearest to its limit or the reason a motor or an axis was not run. "Use" in a row names that motor, its supply, its gearbox, its drive and its axis in `[parts]` of the running config. The same as `sim-cli search` |
+| Motor search | Supply (230v, 400v, s120, s210new-230v/-400v or another maker's, e.g. beckhoff-400v), how the article numbers start (empty: every motor of the catalogue) and optionally a gearbox series such as `NRK` or `NRK070`; ticked, "Every axis of the catalogue" tries each motor on every catalogue axis of the machine's kind as well (`--axes`). "Search" runs every such motor on the cycle and lists them, passing ones first, cheapest first (installed mass stands in for the price), with gearbox, axis, the mass of motor and gearbox, the installed mass, and the check nearest to its limit or the reason a motor or an axis was not run. "Use" in a row names that motor, its supply, its gearbox, its drive and its axis in `[parts]` of the running config. The same as `sim-cli search` |
 | Path | A file name, typed in. "Lines, arcs and splines" is a path file, planned within the axis limits or, ticked, "As fast as the motors allow"; "Poses at times" is a trajectory file. "Plan, run and analyse" plans the path from where the machine's setpoint stands (its first pose is the live setpoint: the simulation of its own stands its tool one rest sag off it, so that its setpoint is there), analyses it on a simulation of its own (duration, deviation by transition curves, path error, distance behind the setpoint, loads, checks), draws the planned path as a plot in the panel and as a line in the 3D view, and has the machine in the 3D view run it. The same as `sim-cli analyze --path` or `--trajectory`. Below the tables, the path's operating points over the torque-speed curves, as for the cycle (`--points` with `--path`). On the delta, the workspace map: a horizontal slice at the height the slider sets, from the travel range to half its width beyond each side, each point coloured by the condition number of the Jacobian (1 dark, the rated `ratings.max_condition_number` light, red beyond it); faint where the arms reach but the machine does not go (outside the working envelope, beyond a joint's stop, above `workspace.max_condition_number`), empty out of reach; the frame is the travel range, and the pointer shows the condition number under it |
 | Trace, Mapping | A file name, typed in, and for a vendor's export its mapping file (as `--map` takes it; empty for a trace in the simulator's columns). "Replay and fit" replays the drive trace and shows per motor how far the simulation is from it (torque and following error, RMS and peak), per axis the fitted mass, friction and constant force next to the config's (on the delta, the SCARA and the arm the payload's factor and per motor added inertia, friction and constant torque), with what to change in the config; ticked, "Belt stiffness from the moves" adds the factor on the belts' stiffness (`fit --stiffness`, some twenty replays more); and per motor what the trace says by itself: inertia, friction, the loops' lags, each with its standard error and 95 % interval, and how well each model reproduces the trace. The same as `sim-cli replay`, `fit --trace` and `identify --trace`. The config's start pose has to be where the trace starts. Below, "Trace against replay": motor torque, motor speed and following error at the motor over the time, the trace solid and the simulation dashed, one colour per motor. "Export CSV" there writes them to `replay-overlay.csv` in the working directory, the same file as `sim-cli replay --out` |
 | Frequency response of the mechanics | From, to, frequencies and torque amplitude as `sim-cli sweep` takes them (5 to 500 Hz, 120, and 1.5 N m or 40 % of the drive's peak torque where that is less, at the start). "Measure every motor" measures the open-loop response from each motor's torque to its speed, as `sim-cli sweep --motor N` does for one: gain in dB and phase over the frequency, one line per motor, and per motor the dip where the load swings on the belt (resonance and damping ratio of the dip lowest in frequency; empty where the range does not hold a dip with both its flanks). The defaults show it on every motor of the default machines. Before, they did not: the amplitude was 0.05 N m, at which stiction holds the motors, not the range. Switching machine or opening a config sets the amplitude to that config's default unless another one was typed |
@@ -1454,7 +1456,7 @@ The right panel scrolls as a whole, and each of its parts (Scopes, Config file, 
 
 The buttons of these parts run in the background on simulations of their own, with the config as it is at that moment; a spinner stands in for the button meanwhile. The running machine is not disturbed. A result is not redone when a parameter changes afterwards. It is marked "computed for an earlier configuration" instead, and nothing of it is applied to the changed config: "Apply these settings", "Use" and the run of a planned path answer with a message then (take the change back, or compute again). Naming a motor with "Use" does not outdate the search it came from, so another row can be tried after it; naming an axis of the axis search does, as the search ran on the config's own axis otherwise.
 
-A file that is missing or cannot be read, a line of it that cannot be read, a supply other than 230v, 400v and s120 and a search that finds no motor, or no gearbox of the series that fits one, are answered under Messages. So is a path that the machine cannot run because it has moved since the plan was made, or is busy.
+A file that is missing or cannot be read, a line of it that cannot be read, a supply the catalogue does not have and a search that finds no motor, or no gearbox of the series that fits one, are answered under Messages. So is a path that the machine cannot run because it has moved since the plan was made, or is busy.
 
 A drive that trips on DC link overvoltage is reported under Messages, once per trip, for the running machine and for an analysed cycle or path. "Enable drives" brings the drives back.
 

@@ -1,0 +1,26 @@
+part_number,vendor,series,supply,line_voltage_v,axes,rated_output_current_a,max_output_current_a,max_current_duration_s,dc_link_voltage_v,dc_link_capacitance_f,braking_resistor_internal_ohm,braking_resistor_continuous_w,braking_resistor_peak_w,min_braking_resistance_ohm,braking_threshold_v,dc_link_overvoltage_v,source
+SGD7S-R70A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,0.66,2.1,,,,,,,40,,,cat200
+SGD7S-R90A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,0.91,3.2,,,,,,,40,,,cat200
+SGD7S-1R6A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,1.6,5.9,,,,,,,40,,,cat200
+SGD7S-2R8A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,2.8,9.3,,,,,,,40,,,cat200
+SGD7S-3R8A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,3.8,11,,,,40,40,,40,,,cat200
+SGD7S-5R5A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,5.5,16.9,,,,40,40,,40,,,cat200
+SGD7S-7R6A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,7.6,17,,,,40,40,,40,,,cat200
+SGD7S-120A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,11.6,28,,,,20,60,,20,,,cat200
+SGD7S-180A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,18.5,42,,,,12,60,,12,,,cat200
+SGD7S-200A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,19.6,56,,,,12,60,,12,,,cat200
+SGD7S-330A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,32.9,84.0,,,,8,180,,8,,,cat200
+SGD7S-470A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,46.9,110,,,,,,,5.8,,,cat200
+SGD7S-550A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,54.7,130,,,,,,,2.9,,,cat200
+SGD7S-590A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,58.6,140,,,,,,,2.9,,,cat200
+SGD7S-780A,yaskawa,SGD7S,3 AC 200 ... 240 V,200,1,78.0,170,,,,,,,2.9,,,cat200
+SGD7S-1R9D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,1.9,5.5,,,,75,70,,75,,,cat400
+SGD7S-3R5D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,3.5,8.5,,,,75,70,,75,,,cat400
+SGD7S-5R4D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,5.4,14,,,,75,140,,75,,,cat400
+SGD7S-8R4D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,8.4,21,,,,43,140,,43,,,cat400
+SGD7S-120D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,11.9,28,,,,43,140,,43,,,cat400
+SGD7S-170D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,16,42,,,,27,180,,27,,,cat400
+SGD7S-210D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,20.8,55,,,,,,,,,,cat400
+SGD7S-260D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,25.7,65,,,,,,,,,,cat400
+SGD7S-280D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,28.1,70,,,,,,,,,,cat400
+SGD7S-370D,yaskawa,SGD7S,3 AC 380 ... 480 V,400,1,37.2,85,,,,,,,,,,cat400

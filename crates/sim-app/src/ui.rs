@@ -1612,7 +1612,7 @@ fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
     let found = model.search_table();
     ui.horizontal_wrapped(|ui| {
         ComboBox::from_label(tr("ui-search-supply")).selected_text(&inputs.supply).width(60.0).show_ui(ui, |ui| {
-            for supply in SUPPLIES {
+            for &supply in SUPPLIES {
                 ui.selectable_value(&mut inputs.supply, supply.to_string(), supply);
             }
         });

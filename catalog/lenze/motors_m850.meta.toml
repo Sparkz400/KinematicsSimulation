@@ -1,0 +1,41 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "m850-pp"
+notes = '''
+Source: Lenze, project planning "Servo motors: m850 synchronous servo motor", version 7.0, 08/2024, chapter
+"Technical data". Extracted by catalog/tools/extract_lenze.py; the numbers are Lenze's, the layout is ours.
+One row per motor: the tables "Rated data, Inverter mains connection 400 V, Self-ventilated motors" (pages 33 to
+  35); the document has no other voltage.
+part_number: the type as printed, size and length/speed code (e.g. m850-S120/M3960); brake, feedback and
+  connection options are not in it.
+Conditions (page 28): rounded values, ambient 40 degC, up to 1000 m, S1 duty, inverter switching frequency at least
+  4 kHz, motor on a steel plate of the size the document names.
+Currents RMS. static: M0/I0 at standstill; max: Mmax/Imax; max_speed: nmax.
+torque_constant: "Kt0 150 degC". voltage_constant: "KELL 150 degC" in V/(1000 rpm), the line to line value at
+  150 degC, divided by 1000*pi/30 to V s/rad; the document does not say RMS or peak, the check Kt = sqrt(3)*Ke holds
+  within 20 % for every row with RMS.
+line_resistance_20c: "Stator terminal resistance RUV 20 degC" (terminal U to V); the 150 degC value is not taken.
+line_inductance: "Stator inductance L" as printed; the document does not say whether it is the phase or the
+  terminal to terminal value.
+rotor_inertia: "Moment of inertia J" without brake. rotor_inertia_with_brake: "Brake motor JMB" of the holding
+  brake (page 67, permanent magnet brakes, m850-S40 to S80; page 68, spring-applied brakes, m850-S120 to S190).
+mass: "Weight" of the rated data, the basic weight without brake (page 57). mass_with_brake: basic weight plus the
+  holding brake's "Additional weights" (page 57): S40 0.085, S60 0.2, S80 0.4, S120 2.0, S140 3.0, S190 6.70 kg.
+paired_drive: the selection table "i950 cabinet servo inverter", 3x 400 V and 4 kHz (pages 37 and 38), lists for
+  each motor several i950 with the achievable M0, Mrated and Mmax. Taken: the smallest i950 whose Mmax entry
+  reaches the motor's Mmax of the rated data. pdftotext puts that table's rows out of order, so the pairings are
+  typed into the script from the page. The table has no m850-S40, S60 and S80: their paired_drive is empty.
+Kept as printed although it does not fit: JMB of the m850-S40 and S60 is larger than J plus the brake's own J
+  (m850-S40/S9000: 0.055 kg cm2, J 0.03 + 0.0143).
+Not in the document, so empty: pole pairs and the thermal time constant.
+'''
+
+[[sources]]
+id = "m850-pp"
+document = "Lenze, Project planning, Servo motors: m850 synchronous servo motor, version 7.0"
+date = "2024-08"
+locator = "Technical data: Rated data, Inverter mains connection 400 V, Self-ventilated motors (pages 33 to 35); Selection tables, i950 cabinet servo inverter at 3x 400 V (pages 37 and 38); Weights, Additional weights (page 57); Product extensions, Brakes (pages 67 and 68)"
+method = "script:tools/extract_lenze.py"
+url = "https://docfinderreloadedstg.blob.core.windows.net/docfinderreloadedprod/Projektierung_Servo-Synchronmotoren%20m850_EN.pdf"
+retrieved = "2026-11-14"

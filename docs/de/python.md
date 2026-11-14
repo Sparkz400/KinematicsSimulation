@@ -51,7 +51,7 @@ pd.DataFrame(ks.sizing(cfg, series="1FK2"))             # jeder Katalogmotor auf
 | `run(cfg, cycle=, move_to=, path=, trajectory=, time_optimal=, time=2.0, every=16, disable_at=)` | `{Signal-ID: Array}` über `time` Sekunden, alle `every` Grundschritte abgetastet | `sim-cli run` |
 | `analyze(cfg, path=, trajectory=, time_optimal=, points=False)` | die Last je Motor über einen Durchlauf des Zyklus oder über eine Bahn; `points=True` fügt je Motor die Arbeitspunkte als (n, 2)-Array aus Drehzahl (rad/s) und Moment (N m) hinzu | `sim-cli analyze` |
 | `verdicts(cfg, bands=False, samples=None, seed=1)` | die Prüfungen; mit `bands` ihr kleinster und größter Wert über die `[bounds]` und ob der ungünstigste Fall besteht; mit `samples` N Läufe zwischen den Grenzen und der Anteil, der bestand | `sim-cli verdicts [--bands] [--samples N --seed S]` |
-| `sizing(cfg, supply="400v", series="", gearboxes=None, axes=False)` | jeder Katalogmotor auf dem Zyklus der Konfiguration, bestandene und billigste zuerst | `sim-cli search` |
+| `sizing(cfg, supply=None, vendor=None, series="", gearboxes=None, axes=False)` | jeder Katalogmotor auf dem Zyklus der Konfiguration, bestandene und billigste zuerst; `supply` eine Netzspannung des Katalogs (ohne Angabe `"400v"`), `vendor` die eines Herstellers oder `"all"` aller, mit den Spalten `vendor` und `supply` | `sim-cli search` |
 
 `path` und `trajectory` nehmen den Text einer Bahn- oder Trajektoriendatei (Formate: `sim_components::path`), keinen
 Dateinamen: `ks.analyze(cfg, path=open("pick.path").read())`. Eine abgelehnte Konfiguration, ein abgelehnter Befehl oder

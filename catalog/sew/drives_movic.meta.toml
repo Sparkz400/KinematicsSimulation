@@ -1,0 +1,67 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "movidrive-system"
+notes = '''
+SEW-EURODRIVE MOVI-C inverters at 3 AC 400 V line voltage, typed in from two product manuals; currents RMS, per axis.
+MOVIDRIVE modular (source movidrive-modular): the axis modules MDA90A (single axis, sizes 1 - 6) and MDD90A (double axis,
+  types 0020/0040 of size 1 and 0020/0040/0080 of size 2 with card slot; MDD91A has the same data). Part number:
+  the type designation as printed in the manual's nameplate examples, "MDA90A-0020-503-X-S00", with the type number of
+  each column of 4.9.1 - 4.9.3. They take the DC link of an MDP.. power supply module (nominal DC 560 V at 400 V
+  line): supply "DC 560 V link". rated_output_current: nominal output current IN at 4 kHz PWM.
+  max_output_current: the overload capacity "250% IN: max. 1 s at fPWM = 4 kHz", so 2.5 * IN, duration 1 s.
+  Braking chopper, braking resistor and DC link capacitance sit in the supply modules (MDP90A, MDP92A) and the
+  capacitor modules, not in the axis modules; the manual gives the axis modules no DC link capacitance, so those
+  columns are empty.
+MOVIDRIVE system (default source): the single-axis inverters MDX90A, sizes 1 - 5 (types 0020 - 0750), from 4.4.1 and
+  4.4.2 "Technical data of the MDX9.A.. basic device 3 x AC 380 - 500 V". Part number: "MDX90A-<type>-5E3-4-S00" for
+  types 0020 - 0160 (EMC filter C2, "E") and "MDX90A-<type>-503-4-S00" for 0240 - 0750 (basic interference
+  suppression, "0"), as in the type list of the 2017 product manual (23061715/EN, 1.3); the 2025 manual's tables
+  name the family "MDX9.A-....-5.3-4..". MOVIDRIVE technology (-T00) has the same power section.
+  max_output_current: "200% IN: max. 3 s at fPWM = 4 kHz", so 2 * IN, duration 3 s.
+  min_braking_resistance: RBR_min of the brake chopper. The table prints one value per size where the cells are
+  merged; the column of each value was read from the pdftotext -table layout: 90 ohm size 1, 42 size 2, 24 size 3,
+  13 size 4 (0240, 0320), 9 for 0460, 5.4 for 0620 and 0750.
+  No internal braking resistor; the brake chopper's continuous power (the manual prints it equal to the apparent output
+  power) and its peak (200 % of it) are not taken: they are chopper ratings, not those of a resistor.
+  Sizes 6 - 8 (0910 - 5880) are left out: their overload capacity differs by type (150 % for 30 s from 3000 up) and
+  the merged cells of their RBR_min row cannot be told apart.
+dc_link_voltage: nominal DC link voltage, DC 560 V at 400 V line, for both families.
+Empty for both: braking_threshold (chopper switch-on voltage) and dc_link_overvoltage (trip level) are not in the
+  manuals; they print only a "maximum DC link voltage" of DC 980 V, which is not stated as a trip level, so it is not
+  taken. dc_link_capacitance of the MDX90A is not printed.
+The 2017 MOVIDRIVE system manual (23061715/EN) lists the MDX90A-0095 as "MDX90A-0950-5E3-4-S00" and the 0460 with 45 A
+  in its type list (1.3); its technical data and the 2025 manual print 0095 / 9.5 A and 46 A, which are used here.
+'''
+
+[[sources]]
+id = "movidrive-system"
+document = "SEW-EURODRIVE, product manual Application Inverter MOVIDRIVE system, 31986765/EN"
+date = "2025-03"
+locator = "chapter 4.4 \"Technical data of the MDX9.A.. basic device 3 x AC 380 - 500 V\", 4.4.1 sizes 1 - 2 and 4.4.2 sizes 3 - 5 (pages 43 to 46), tables Output and Brake chopper"
+method = "manual: typed in from the Output and Brake chopper tables of 4.4.1 and 4.4.2"
+url = "https://download.sew-eurodrive.com/download/pdf/31986765.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "movidrive-modular"
+document = "SEW-EURODRIVE, product manual Application Inverter MOVIDRIVE modular, 31984061/EN"
+date = "2025-03"
+locator = "chapter 4.9 \"Axis modules MDA90A.. and MDD9.A..\": 4.9.1 and 4.9.2 performance data MDA90A, 4.9.3 MDD9.A performance data (pages 70 to 73)"
+method = "manual: typed in from the DC link connection and Output tables of 4.9.1 to 4.9.3"
+url = "https://download.sew-eurodrive.com/download/pdf/31984061.pdf"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "movidrive-system-2017"
+document = "SEW-EURODRIVE, product manual Application Inverter MOVIDRIVE system, 23061715/EN"
+date = "2017-03"
+locator = "chapter 1.3 \"Product overview MOVIDRIVE system\", type list (pages 12 and 13)"
+method = "manual: typed in from the type list of 1.3"
+url = "https://download.sew-eurodrive.com/download/pdf/23061715.pdf"
+retrieved = "2026-11-14"
+
+[[provenance]]
+rows = ["MDX90A-0020-5E3-4-S00|400", "MDX90A-0025-5E3-4-S00|400", "MDX90A-0032-5E3-4-S00|400", "MDX90A-0040-5E3-4-S00|400", "MDX90A-0055-5E3-4-S00|400", "MDX90A-0070-5E3-4-S00|400", "MDX90A-0095-5E3-4-S00|400", "MDX90A-0125-5E3-4-S00|400", "MDX90A-0160-5E3-4-S00|400", "MDX90A-0240-503-4-S00|400", "MDX90A-0320-503-4-S00|400", "MDX90A-0460-503-4-S00|400", "MDX90A-0620-503-4-S00|400", "MDX90A-0750-503-4-S00|400"]
+fields = ["part_number"]
+source = "movidrive-system-2017"

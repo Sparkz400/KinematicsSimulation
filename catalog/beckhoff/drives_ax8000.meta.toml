@@ -1,0 +1,36 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "ax8000-om"
+notes = '''
+Source: Beckhoff, operating instructions "AX8000 Multi-axis servo system", version 2.4.0, 2026-10-23, chapter 4
+"Technical data". Typed in from the tables; the numbers are Beckhoff's, the layout is ours.
+One row per axis module and mains voltage (400 V and 480 V AC: the document gives the output currents for each).
+  AX8108, AX8118, AX8128: single-axis modules; AX8206: dual-axis module; AX8525, AX8540: combined power supply
+  and axis modules (one axis). part_number: the type without the order suffix (-0000, -0xx0).
+Currents RMS at 8 kHz switching frequency (the tables give 8/16 kHz pairs; the 16 kHz values are lower).
+  max_output_current: "Peak output current Irms for maximum 5 seconds", so max_current_duration 5 s.
+AX8206: currents per channel: rated 6 A ("Per channel: 6"), peak 20 A at 400 V and 18 A at 480 V for channel A
+  and B (channel A up to firmware 1.02: 14 A); a channel may take up to 8 A rated, the module 12 A rated and
+  28 A peak in all.
+supply: the axis modules sit on the DC link (0 ... 848 V DC) of an AX86xx power supply module; AX8620 and AX8640
+  take 3 x 200 / 480 V AC (AX8620 also 1 x 100 / 240 V AC). The power supply modules are not in this table; they
+  carry the DC link capacitance of the supply (AX8620 405 uF, AX8640 625 uF) and the braking chopper with its
+  internal resistor (AX8620: 75 W continuous, 21.8 kW peak, external resistor at least 33 ohm; AX8640: 125 W,
+  43.6 kW, at least 18 ohm). The axis modules AX81x8 and AX8206 have no braking resistor: their braking columns
+  are empty.
+dc_link_capacitance: the module's own "Capacitance". AX8525 and AX8540 share one table: 1520 uF, internal braking
+  resistor 200 W continuous and 68 kW peak, external resistor at least 10 ohm.
+Empty because the document does not give them: the nominal DC link voltage, the resistance of the internal braking
+  resistors, the chopper's switch-on voltage and the overvoltage trip level. The document gives a maximum DC link
+  voltage of 848 V DC for every module; it does not say whether that is the trip level, so it is not taken.
+'''
+
+[[sources]]
+id = "ax8000-om"
+document = "Beckhoff, AX8000 Multi-axis servo system, operating instructions, version 2.4.0, order no. TDmlAX-8000-0000-0201"
+date = "2026-10"
+locator = "chapter 4 \"Technical data\": 4.3.1 1-channel axis modules (pages 49 to 51), 4.3.2 2-channel axis module AX8206 (pages 52 to 53), 4.4 combined modules AX8525, AX8540 (pages 54 to 55)"
+method = "manual: typed in from the tables \"Electrical data\" of sections 4.3 and 4.4"
+url = "https://download.beckhoff.com/download/document/motion/ax8000_ba_en.pdf"
+retrieved = "2026-11-14"

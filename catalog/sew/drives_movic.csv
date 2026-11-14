@@ -1,0 +1,30 @@
+part_number,vendor,series,supply,line_voltage_v,axes,rated_output_current_a,max_output_current_a,max_current_duration_s,dc_link_voltage_v,dc_link_capacitance_f,braking_resistor_internal_ohm,braking_resistor_continuous_w,braking_resistor_peak_w,min_braking_resistance_ohm,braking_threshold_v,dc_link_overvoltage_v,source
+MDA90A-0020-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,2,5,1,560,,,,,,,,movidrive-modular
+MDA90A-0040-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,4,10,1,560,,,,,,,,movidrive-modular
+MDA90A-0080-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,8,20,1,560,,,,,,,,movidrive-modular
+MDA90A-0120-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,12,30,1,560,,,,,,,,movidrive-modular
+MDA90A-0160-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,16,40,1,560,,,,,,,,movidrive-modular
+MDA90A-0240-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,24,60,1,560,,,,,,,,movidrive-modular
+MDA90A-0320-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,32,80,1,560,,,,,,,,movidrive-modular
+MDA90A-0480-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,48,120,1,560,,,,,,,,movidrive-modular
+MDA90A-0640-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,64,160,1,560,,,,,,,,movidrive-modular
+MDA90A-1000-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,100,250,1,560,,,,,,,,movidrive-modular
+MDA90A-1400-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,140,350,1,560,,,,,,,,movidrive-modular
+MDA90A-1800-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,1,180,450,1,560,,,,,,,,movidrive-modular
+MDD90A-0020-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,2,2,5,1,560,,,,,,,,movidrive-modular
+MDD90A-0040-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,2,4,10,1,560,,,,,,,,movidrive-modular
+MDD90A-0080-503-X-S00,sew,MOVIDRIVE modular,DC 560 V link,400,2,8,20,1,560,,,,,,,,movidrive-modular
+MDX90A-0020-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,2,4,3,560,,,,,90,,,
+MDX90A-0025-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,2.5,5,3,560,,,,,90,,,
+MDX90A-0032-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,3.2,6.4,3,560,,,,,90,,,
+MDX90A-0040-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,4,8,3,560,,,,,90,,,
+MDX90A-0055-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,5.5,11,3,560,,,,,42,,,
+MDX90A-0070-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,7,14,3,560,,,,,42,,,
+MDX90A-0095-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,9.5,19,3,560,,,,,42,,,
+MDX90A-0125-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,12.5,25,3,560,,,,,24,,,
+MDX90A-0160-5E3-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,16,32,3,560,,,,,24,,,
+MDX90A-0240-503-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,24,48,3,560,,,,,13,,,
+MDX90A-0320-503-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,32,64,3,560,,,,,13,,,
+MDX90A-0460-503-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,46,92,3,560,,,,,9,,,
+MDX90A-0620-503-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,62,124,3,560,,,,,5.4,,,
+MDX90A-0750-503-4-S00,sew,MOVIDRIVE system,3 AC 380 - 500 V,400,1,75,150,3,560,,,,,5.4,,,
