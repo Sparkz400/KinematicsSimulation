@@ -3829,7 +3829,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
         .collect();
     // The turn is fixed by the phase at the first point, taken in (-270, 90] (a loop with up to three integrators, or
     // a lead, there). Not at the first crossover: one rising out of an anti-resonance has a phase lead above 0 (the
-    // parallel SCARA's arm 2, +8 degrees at 18 Hz) and turned every phase after it by -360 degrees.
+    // arm 2 of a five-bar laid flat, +8 degrees at 18 Hz) and turned every phase after it by -360 degrees.
     let shift = phase.first().map_or(0.0, |p| -360.0 * ((p - 90.0) / 360.0).ceil());
     phase.iter_mut().for_each(|p| *p += shift);
     for &(i, share) in &crossovers {
@@ -4401,7 +4401,7 @@ mod tests {
         );
     }
 
-    /// The parallel SCARA's arm 2 as measured: the main crossover just below the first point, then an anti-resonance
+    /// A flat five-bar's arm 2 as measured: the main crossover just below the first point, then an anti-resonance
     /// (zeros at 14 Hz) and a resonance (poles at 40 Hz), both damped 0.05, and 1 ms of dead time: L = (2 pi 9.7 / s)
     /// (1 + 0.1 s/wz + s^2/wz^2) / (1 + 0.1 s/wp + s^2/wp^2) e^(-s 1 ms). Its first crossover, rising out of the
     /// notch at 22.5 Hz, has a phase of +71.4 degrees (a margin of 251.4); the one that counts, at 94.3 Hz, -121.9
