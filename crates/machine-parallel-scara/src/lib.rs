@@ -911,6 +911,32 @@ impl Machine for ParallelScara {
         }
     }
 
+    /// As `Machine::adopt_state`, the same tool pose and speed with the gears as at rest there; but from an elastic
+    /// model to an elastic one each arm's gearbox keeps the twist it had at its motor: laid flat, nothing holds an arm
+    /// to one side of its play, and rebuilt at rest one driven on a flank was put back in the middle of it (the tool
+    /// lost 0.121 mm taking the play up anew after a 1 % change of the ratio during a move).
+    fn adopt_state(&self, old: &dyn Machine, old_state: &[f64]) -> Vec<f64> {
+        let (m, n) = (self.axes.len(), self.motors.len());
+        let (mut pos, mut vel, mut before, mut after) = (vec![0.0; m], vec![0.0; m], vec![0.0; n], vec![0.0; n]);
+        old.tool_state(old_state, &mut pos, &mut vel);
+        old.inverse(&pos, &mut before);
+        self.inverse(&pos, &mut after);
+        if old_state.len() == self.state_len() && before == after {
+            return old_state.to_vec();
+        }
+        let mut state = Vec::new();
+        self.equilibrium(&pos, &mut state, &mut vec![0.0; n]);
+        self.set_tool_velocity(&mut state, &vel);
+        if self.elastic && old_state.len() == self.state_len() {
+            let (mut rotor, mut speed) = (vec![0.0; n], vec![0.0; n]);
+            old.motor_state(old_state, &mut rotor, &mut speed);
+            for k in 0..2 {
+                state[4 + k] = after[k] + rotor[k] - before[k];
+            }
+        }
+        state
+    }
+
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
         for (e, x) in self.extras.iter().enumerate() {
             let (state, at) = (self.extra_state(s, e), self.planar_len() + 3 * e);
