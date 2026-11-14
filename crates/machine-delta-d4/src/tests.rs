@@ -306,9 +306,11 @@ fn the_tool_motors_own_tables_are_read() {
 
 /// The tool motor's values are the catalogue's written out: naming the same parts for motor 4
 /// (`catalog::with_motor_part`: 1FK2104-4AF at 400 V, NRB060-04-8, 6SL3210-5HE10-4UF0) over the shared ones gives the
-/// same numbers, the backlash apart (an estimate: 1 arcmin against the catalogue's 10). The velocity gain it retunes,
-/// 0.25 * sqrt(0.48974 * 0.21397) = 0.08093, is the one [drive.4] explains it left (34.6 degrees, 5.4 dB); the shipped
-/// 0.05 lies below it.
+/// same numbers, the backlash apart (an estimate: 1 arcmin against the catalogue's 10). The velocity gain it retunes is
+/// 0.25 times the square root of the torque per tool acceleration over the ratio, (7.08e-3 / 8 + 4.38e-5 * 8) / 8 =
+/// 1.54425e-4 against the shared motor's (7.08e-3 / 20 + 2.106e-4 * 20) / 20 = 2.283e-4, 0.676413, times the rotors'
+/// inertia, 4.38e-5 / 2.106e-4 = 0.207977: 0.25 * sqrt(0.676413 * 0.207977) = 0.093768, the one [drive.4] explains it
+/// left (27.5 degrees, 4.1 dB); the shipped 0.05 lies below it.
 #[test]
 fn the_tool_motors_values_are_the_catalogues() {
     let shared = ENTRY.config();
@@ -354,7 +356,7 @@ fn the_tool_motors_values_are_the_catalogues() {
         close(mine.f64(path).unwrap(), catalogue.f64(path).unwrap(), 1e-6, path);
     }
     let gain = "drive.velocity_kp_nm_s_rad";
-    close(catalogue.f64(gain).unwrap(), 0.08093, 1e-3, "retuned velocity gain");
+    close(catalogue.f64(gain).unwrap(), 0.093768, 1e-5, "retuned velocity gain");
     assert!(mine.f64(gain).unwrap() < catalogue.f64(gain).unwrap());
 }
 

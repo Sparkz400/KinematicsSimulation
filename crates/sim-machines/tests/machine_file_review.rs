@@ -11,10 +11,14 @@ fn hbot() -> String {
         .unwrap()
         .replace("\r\n", "\n")
 }
+/// The H-bot's tables without its bridge's yaw: `[gantry]` and its bounds are values of the `[[machine.gantry]]` node
+/// the review's netlists do not have, and a file refuses a table no node reads.
 fn base() -> String {
     let t = hbot();
-    let at = t.find("[machine]\n").unwrap();
-    t[..at].to_string()
+    let t = &t[..t.find("[machine]\n").unwrap()];
+    let (head, rest) = t.split_at(t.find("[gantry]\n").unwrap());
+    let rest = &rest[rest.find("\n\n").unwrap() + 2..];
+    format!("{head}{rest}").lines().filter(|l| !l.starts_with("gantry.")).map(|l| format!("{l}\n")).collect()
 }
 fn known() -> Vec<Config> {
     MACHINES.iter().map(|m| m.config()).collect()

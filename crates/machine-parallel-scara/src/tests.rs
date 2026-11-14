@@ -113,9 +113,10 @@ fn centre_by_hand(d: &ParallelScara, y: f64) -> f64 {
 /// along the forearms, l_1 u_1 + l_2 u_2 = (m a, 0): l_2 = -l_1 = m a / (2 A), at the arms D l_i (the Jacobian's
 /// transpose). m_nt = 1.0 + 2 (1/3) 0.6 + 2.95 + 1.0 + 2.43 + 5 = 12.780 kg (plate, forearms' share, Z unit, carriage,
 /// C unit, payload), I_b = 0.064 + 0.4^2 (0.4 + 0.6667 * 0.6) = 0.192003 kg m^2: arm 1 takes I_b t_1'' - D m a / (2 A) =
-/// -4.7765 - 25.6859 = -30.462 N m, at its motor over 20 plus the rotor's (1.7 + 0.406) 1e-4 * 20 t_1'': -1.6279 N m;
-/// arm 2 the opposite. No gravity in the plane. The Z motor holds its 0.18729 N m (see below), the C motor nothing. The
-/// rigid model given that torque accelerates the plate at 10 m/s^2 along x and not along y.
+/// -4.7765 - 25.6859 = -30.462 N m, at its motor over 20 plus the rotor's and the gearbox's (the SP100's 0.70 kg cm^2)
+/// (1.7 + 0.70) 1e-4 * 20 t_1'': -1.6425 N m; arm 2 the opposite. No gravity in the plane. The Z motor holds its
+/// 0.18729 N m (see below), the C motor nothing. The rigid model given that torque accelerates the plate at 10 m/s^2
+/// along x and not along y.
 #[test]
 fn an_acceleration_along_x_at_the_centre_takes_the_hand_calculated_torque() {
     let d = scara(&[
@@ -135,12 +136,12 @@ fn an_acceleration_along_x_at_the_centre_takes_the_hand_calculated_torque() {
     close(d.arm_inertia(), 0.064 + 0.16 * (0.4 + 0.6667 * 0.6), 1e-12, "I_b");
     let acc = -big_a * a / dd;
     let at_arm = d.arm_inertia() * acc - dd * m * a / (2.0 * big_a);
-    let at_motor = at_arm / 20.0 + (1.7e-4 + 4.06e-5) * 20.0 * acc;
+    let at_motor = at_arm / 20.0 + (1.7e-4 + 7.0e-5) * 20.0 * acc;
     println!(
         "A = {big_a:.6}, B = {big_b:.6}, D = {dd:.6}, t1'' = {acc:.4}, {at_arm:.4} N m at arm 1, {at_motor:.5} N m"
     );
     assert!((t.to_degrees() - 1.42898).abs() < 1e-4 && (dd - 0.200935).abs() < 1e-6, "{t} {dd}");
-    assert!((at_arm + 30.462).abs() < 1e-3 && (at_motor + 1.6279).abs() < 1e-4, "{at_arm} {at_motor}");
+    assert!((at_arm + 30.462).abs() < 1e-3 && (at_motor + 1.6425).abs() < 1e-4, "{at_arm} {at_motor}");
     let pose = [0.0, y, 0.1, 0.0];
     let mut torque = [0.0; 4];
     d.feedforward_torque(&pose, &[a, 0.0, 0.0, 0.0], &mut torque);

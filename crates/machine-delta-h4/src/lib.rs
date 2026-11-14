@@ -66,8 +66,15 @@ pub static ENTRY: MachineEntry = MachineEntry {
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 5] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 7] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(H4::new(cfg)?))
@@ -336,7 +343,9 @@ impl Legs {
             if !(d >= 0.0) {
                 return None;
             }
-            *t = 2.0 * ((-b - d.sqrt()) / (c - a)).atan();
+            // tan(t/2) = (-b - sqrt d) / (c - a) = (a + c) / (sqrt d - b): the second where the first's terms cancel
+            // (b < 0, the plate below the arms; near a = c it lost 2e-11 rad).
+            *t = 2.0 * if b < 0.0 { (a + c) / (d.sqrt() - b) } else { (-b - d.sqrt()) / (c - a) }.atan();
         }
         Some(out)
     }
@@ -1319,6 +1328,15 @@ impl Machine for H4 {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        if self.elastic {
+            for k in 0..4 {
+                self.joints[k].gearbox.commit(s[8 + k], s[k]);
+            }
+        }
     }
 
     /// The gearboxes, in the order of `thermal_parts`.

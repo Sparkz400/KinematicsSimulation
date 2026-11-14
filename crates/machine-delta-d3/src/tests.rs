@@ -299,6 +299,7 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
     let d = delta(&[
         "effects.joint_friction = false",
         "effects.motor_friction = false",
+        "effects.gearbox_drag = false",
         "effects.torque_ripple = false",
         "effects.gearbox_efficiency = false",
         "effects.joint_elasticity = false",
