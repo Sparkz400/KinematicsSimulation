@@ -504,11 +504,15 @@ pub struct FrictionView {
 const TOP_ROWS: usize = 8;
 
 /// A number at a readable length, whatever its size: four digits and at most three decimals, so 12.5 reads
-/// as 12.50 and 1912.141 as 1912, and 0.0000312 as 3.12e-5. Narrow, so that the tables fit the panel.
+/// as 12.50 and 1912.141 as 1912, and 0.0000312 as 3.12e-5; at least three digits, as the exponent has, so 0.0146
+/// reads as 0.0146 and not 0.015. Narrow, so that the tables fit the panel.
 pub fn short(value: f64) -> String {
     match value.abs() {
         size if size == 0.0 => "0.000".into(),
-        size if (0.01..1e5).contains(&size) => format!("{value:.*}", (3 - size.log10().floor() as i32).clamp(0, 3) as usize),
+        size if (0.01..1e5).contains(&size) => {
+            let exponent = size.log10().floor() as i32;
+            format!("{value:.*}", (3 - exponent).clamp(0, 3).max(2 - exponent) as usize)
+        }
         _ => format!("{value:.2e}"),
     }
 }
@@ -1097,7 +1101,7 @@ impl Model {
                 let response = closed_loop_response(entry, &config, axis, &log_spaced(1.0, 200.0, 40), 0.0005)?;
                 let sim = Sim::new(entry, &config)?;
                 // At the configured start pose, where the tool stands: the plan at rest is the motors' pose by the
-                // rigid kinematics, off it by the belt's stretch (46 um in Z on the T-gantry).
+                // rigid kinematics, off it by the belt's stretch (46 um in Z on the shipped gantry's belts).
                 let modes = modes_along(sim.machine.as_ref(), &config.f64s("start.pose")?, axis, MODE_POINTS);
                 Ok(Tuning { axis, step, bandwidth: bandwidth(&response), response, modes })
             };

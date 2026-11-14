@@ -523,7 +523,7 @@ impl Machine for Delta4 {
         let i = self.tool.ratio();
         out[3] = self.tool_inertia() * acc[3] / i + self.tool.rotor_inertia * i * acc[3];
     }
-    /// The arms' with the speed (the D3's: the telescope's friction included), the turn's as without it.
+    /// The arms' with the speed (the D3's, loss-free: without the telescope's friction), the turn's as without it.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
         self.arms.feedforward_torque_moving(&pos[..3], &vel[..3], &acc[..3], &mut out[..3]);
         let i = self.tool.ratio();

@@ -241,14 +241,14 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
         // Nor does backlash or a gearbox's loss act where the config has none (the screw's and the linear motor's couplings;
         // the screw's own loss is under the same switch), motor friction where the motor has none (the linear motor: no
         // bearings of its own), gravity along a horizontal slide (the screw, rack and linear motor axes) or on the table
-        // about its vertical axis, or part heating and its feedback where there is no gearbox to warm and no belt (a
-        // coupling of ratio 1).
+        // about its vertical axis, or part heating and its feedback where no part warms but the motors (a coupling of
+        // ratio 1; the linear delta's belt axes, whose guides' heat is not modelled), as sim-machines' control test has it.
         let machine = (entry.build)(&base).unwrap();
         let tight = base.f64("gearbox.backlash_rad").is_ok_and(|b| b == 0.0);
         let lossless = base.f64("gearbox.efficiency").is_ok_and(|e| e == 1.0) && base.get("screw").is_err() && base.get("rack").is_err();
         let level = base.f64("slide.incline_deg").is_ok_and(|i| i == 0.0) || base.get("table").is_ok();
         let frictionless = ["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"].iter().all(|k| base.f64(k).is_ok_and(|f| f == 0.0));
-        let cold = machine.thermal_parts().is_empty() && machine.belt_sections().is_empty();
+        let cold = machine.thermal_parts().is_empty();
         let effects: Vec<String> = effects
             .into_iter()
             .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !(tight && e == "effects.gearbox_backlash") && !(lossless && e == "effects.gearbox_efficiency") && !(frictionless && e == "effects.motor_friction") && !(level && e == "effects.gravity") && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback")))
@@ -1254,7 +1254,12 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         wait_for_jobs(&mut model);
         assert_eq!(model.messages.last().map(|m| m.0), Some("ui-analysis-stale"), "{:?}", model.messages);
         let fast = number(&row(&model.path_tables()[0], "Duration [s]")[0]);
-        assert!(fast < slow && model.outdated(Analysis::Path), "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits", entry.id);
+        // Sooner where the motors bind before the belts: where the axis limits take a belt section below the tension the
+        // time-optimal plan keeps, that plan is slower (the linear delta; cli.rs checks that it keeps the belts above it).
+        let cfg = entry.config();
+        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY) + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+        let belts_bind = load.belt_tension.is_some_and(|(slackest, _)| slackest < floor);
+        assert!((fast < slow || belts_bind) && model.outdated(Analysis::Path), "{}: {fast} s as fast as the motors allow, {slow} s within the axis limits", entry.id);
         simulate(&mut model, 0.5);
         assert!((latest(&model, &position) - home[0]).abs() < 1e-3, "{}: the machine ran a path planned for another config", entry.id);
         model.set_param(key, toml::Value::Float(payload));
@@ -1301,7 +1306,11 @@ fn a_path_is_planned_run_and_analysed_in_the_app() {
         let arc_end = [corner[0] + 0.05 * dx, corner[1] + 0.05 * dz];
         let turn = if dx * dz > 0.0 { "ccw" } else { "cw" };
         let rounded = temp_file(entry, "rounded.csv");
-        let pieces = format!("line,{}\narc,{},{},{turn}\nline,{}\n", text(&corner), text(&arc_end), text(&[corner[0], arc_end[1]]), text(&[arc_end[0], arc_end[1] + 0.1 * dz]));
+        // First onto the start pose, so that the line after it is the arc's tangent: the plan starts at the setpoint at
+        // rest, which the planar delta's sagging arms hold some tenths of a millimetre above its start pose, and from there
+        // the line to the corner would meet the arc more than 1 mrad off its tangent, a corner, where the path stops with
+        // transition curves or without (as in cli.rs).
+        let pieces = format!("line,{}\nline,{}\narc,{},{},{turn}\nline,{}\n", text(&home), text(&corner), text(&arc_end), text(&[corner[0], arc_end[1]]), text(&[arc_end[0], arc_end[1] + 0.1 * dz]));
         std::fs::write(&rounded, &pieces).unwrap();
         let planned = |tolerance: f64| -> (f64, f64) {
             let mut model = Model::new(entry, "en");

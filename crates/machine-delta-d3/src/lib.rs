@@ -327,7 +327,7 @@ pub fn lowest_mode(root: f64, distal: &M3, k_gear: Option<f64>, k_bend: Option<f
 
 /// A force on the platform against its motion along the line from a fixed point to a point on the platform: the
 /// sliding friction of a telescopic shaft hung from `pivot` and joined to the platform at `offset` from its centre (the
-/// D4's fourth axis, `machine-delta-d4`). The D3 itself has none.
+/// fourth axis of a four-axis delta built on this crate). The D3 itself has none.
 #[derive(Debug, Clone)]
 pub struct PlatformDrag {
     pub pivot: [f64; 3],
@@ -540,7 +540,8 @@ impl Delta {
     }
 
     /// Puts a force on the platform against its motion (`PlatformDrag`), or takes it off. It enters the dynamics as a
-    /// generalised force J^T F at the elbows (in `load_at`'s velocity term) and the feedforward with the speed.
+    /// generalised force J^T F at the elbows (in `load_at`'s velocity term); the feedforward, the rigid loss-free model,
+    /// leaves it out as it leaves out the joints' friction.
     pub fn set_platform_drag(&mut self, drag: Option<PlatformDrag>) {
         self.drag = drag;
     }
@@ -1005,10 +1006,15 @@ impl Machine for Delta {
         let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 3]);
         let arm_acc = mul(&inv, std::array::from_fn(|i| pa[i] - bend[i]));
         let (mass, velocity, gravity) = self.load(t, w);
+        // The rigid model is loss-free: a platform drag is friction, which `load` puts in the velocity term for the
+        // dynamics, and is taken out again here. What stays is quadratic in the speed, as the time-optimal planner reads
+        // it: a sliding friction of 5 N read as d v^2 from its value at speed 1 grew ninefold at speed 3, and held the
+        // tool's turn on a path to 15 rad/s where its motor allows 39.
+        let drag = self.drag_torque(t, w);
         let at_arm = mul(&mass, arm_acc);
         for k in 0..3 {
             let joint = &self.joints[k];
-            out[k] = (at_arm[k] + velocity[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
+            out[k] = (at_arm[k] + velocity[k] + drag[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
         }
     }
 

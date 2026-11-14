@@ -972,13 +972,15 @@ fn near_range(machine: &dyn Machine, target: &[f64], slack: f64) -> bool {
 }
 
 /// A target that a move or a setpoint cannot go to, with the reason: outside an axis range, or where the machine says
-/// it cannot reach (out of reach, outside its envelope, beyond a joint's stop), in its own words.
+/// it cannot reach (out of reach, outside its envelope, beyond a joint's stop), in its own words. Up to `ROUNDING`
+/// beyond is rounding: a pose read back through the kinematics at an end of a stroke lies that far out (the planar
+/// delta's tool at rest at x = 0.4 m reads 0.40000000000000013), and a move back there was refused.
 fn refuse_target(machine: &dyn Machine, target: &[f64]) -> std::result::Result<(), CommandError> {
     let axes = machine.axes();
-    if target.len() != axes.len() || !target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min && *t <= a.max) {
+    if target.len() != axes.len() || !target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - ROUNDING && *t <= a.max + ROUNDING) {
         return Err(CommandError { key: "error-target-out-of-range" });
     }
-    machine.unreachable(target, 0.0).map_or(Ok(()), |key| Err(CommandError { key }))
+    machine.unreachable(target, ROUNDING).map_or(Ok(()), |key| Err(CommandError { key }))
 }
 
 /// An axis limit that asks more of a motor than the drive allows; `key` is a translation key.

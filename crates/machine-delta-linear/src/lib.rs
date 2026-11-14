@@ -286,7 +286,7 @@ pub struct LinearDelta {
 }
 
 // Elastic state: [h 1..3, pulley angle 1..3, rotor angle 1..3, h' 1..3, pulley speed 1..3, rotor speed 1..3,
-// friction 1..3, brake 1..3, slack]; slack: seconds a belt section has spent without tension, as on the single axis.
+// friction 1..3, brake 1..3, slack]; slack: seconds a belt section has spent without tension, as on the other belt machines.
 const N_ELASTIC: usize = 25;
 // Rigid state: [h 1..3, h' 1..3, friction 1..3, brake 1..3].
 const N_RIGID: usize = 12;

@@ -44,13 +44,19 @@ fn layer(name: &str) -> u32 {
     }
 }
 
+/// The one machine built on another, (machine, base): the four-axis delta is the three-arm delta with a fourth axis
+/// behind it and takes the base's arms, kinematics and dynamics as they are, so that a fix to the arms reaches both.
+/// The base names nothing of the machine built on it; every other machine stays apart from every other.
+const BUILT_ON: &[(&str, &str)] = &[("machine-delta-d4", "machine-delta-d3")];
+
 #[test]
 fn dependencies_point_downwards() {
     let names = crate_names();
     for name in &names {
         for (dep, _) in deps(&manifest(name)) {
             if names.contains(&dep) {
-                assert!(layer(&dep) < layer(name), "{name} must not depend on {dep}");
+                let built_on = BUILT_ON.contains(&(name.as_str(), dep.as_str()));
+                assert!(layer(&dep) < layer(name) || built_on, "{name} must not depend on {dep}");
             } else if layer(name) < 3 {
                 // Core, components and machines are plain Rust: no graphics, interface or network libraries.
                 assert_eq!(dep, "toml", "{name} must not depend on {dep}");
@@ -97,9 +103,10 @@ fn no_machine_name_outside_its_crate() {
     }
     // `sim-netlist` is no machine of its own to be named, but is scanned like the machines for the others' names.
     for machine in names.iter().filter(|n| n.starts_with("machine-")) {
-        // A machine may not name another machine either.
+        // A machine may not name another machine either, but the one it is built on.
         let mut scanned = files.clone();
-        for other in names.iter().filter(|n| layer(n) == 2 && *n != machine) {
+        let built_on = |other: &String| BUILT_ON.contains(&(other.as_str(), machine.as_str()));
+        for other in names.iter().filter(|n| layer(n) == 2 && *n != machine && !built_on(*n)) {
             text_files(&crates_dir().join(other), &mut scanned);
         }
         let name = machine.trim_start_matches("machine-");

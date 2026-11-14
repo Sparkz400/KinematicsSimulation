@@ -478,7 +478,8 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // The same path the simulator would plan, and the path error the analysis gives for it.
         let pieces = sim_components::path::parse(&text).unwrap();
         let planned = sim.plan_path(&pieces, false).unwrap();
-        let path_error = sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap().path_error_peak;
+        let analysed = sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap();
+        let path_error = analysed.path_error_peak;
         let slow = run_path(&plc, &text, false, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}: an accepted path leaves a refusal", entry.id);
         assert_eq!(plc.read(&["command.path".to_string()]).await[0], Variant::from(text.as_str()), "the path reads back what was written");
@@ -513,16 +514,36 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         }
         plc.write(vec![("command.run_path".into(), Variant::Boolean(true))]).await;
         assert_eq!(refusal(&plc, "error-busy").await, Variant::from("error-busy"), "{}", entry.id);
-        move_done(&plc).await;
+        // Then until the way back is over. It was seen busy above, so not `move_done`, which waits to see it busy first:
+        // the linear delta's way back takes 0.5 s, and on a loaded machine it was over before the refusal was read back.
+        let start = std::time::Instant::now();
+        while plc.busy().await {
+            assert!(start.elapsed() < Duration::from_secs(10), "{}: still on the way back", entry.id);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Time-optimal: the same path from the same pose finishes sooner, as in the command-line tool.
         let fast_plan = sim.plan_path(&pieces, true).unwrap().last().unwrap().0;
         let fast = run_path(&plc, &text, true, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
-        // The plans: sooner by 5 % at least (the delta's 0.32 s, whose axis limits are near what its motors can do, is
-        // the closest). The run keeps to its plan as the slow one does.
-        assert!(fast_plan < 0.95 * slow_plan, "{}: planned {fast_plan} s time-optimal, {slow_plan} s within the axis limits", entry.id);
+        // The plans, where the motors bind before the belts: where the axis limits take a belt section below the tension
+        // the time-optimal plan keeps, that plan is slower (the linear delta; the command-line tool's test runs this path
+        // too and checks that it keeps the belts above it). Else sooner by 5 % at least, or by half of what the axes' jerk
+        // limits leave where that is less than 10 %. The time-optimal plan keeps the jerk limits (the motors take the place
+        // of the speed and acceleration limits alone), so it is no quicker than the plan with the jerk limits alone. On the
+        // planar delta's two short lines, from rest to rest at the corner, that is 4 (d / 2 j)^(1/3) per line by hand, with
+        // the axes' 2500 m/s^3 along each (d 0.206 and 0.233 m, j 3381 and 2911 m/s^3): 0.125 + 0.137 = 0.262 s, 6.8 % below
+        // the 0.281 s within the axis limits, of which 5 % would ask three quarters. The run keeps to its plan as the slow
+        // one does.
+        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY) + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+        if analysed.belt_tension.is_none_or(|(slackest, _)| slackest >= floor) {
+            let lifted: Vec<_> = axes.iter().map(|a| sim_core::AxisInfo { max_vel: 1e3 * a.max_vel, max_acc: 1e3 * a.max_acc, ..a.clone() }).collect();
+            let path_tolerance = cfg.f64("profile.path_tolerance_m").unwrap();
+            let jerk_plan = sim_components::path::plan(&lifted, &planned[0].1, &pieces, cfg.f64("profile.cycle_s").unwrap(), path_tolerance, sim.machine.setpoint_slack()).unwrap().last().unwrap().0;
+            let sooner = (0.05 * slow_plan).min(0.5 * (slow_plan - jerk_plan));
+            assert!(fast_plan < slow_plan - sooner, "{}: planned {fast_plan} s time-optimal, {slow_plan} s within the axis limits, {jerk_plan} s with the jerk limits alone", entry.id);
+        }
         assert!((fast.busy - fast_plan).abs() <= fast.largest_step + 1e-3, "{}: busy for {} s time-optimal, planned {fast_plan} s, polled up to {} s apart", entry.id, fast.busy, fast.largest_step);
     }
 }
