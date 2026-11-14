@@ -8,9 +8,9 @@
 
 A simulator of motion machines in which torque, speed and following error come out of a physical model: belt sections as springs, LuGre guide friction, a gearbox with backlash, a motor winding and a cascaded servo drive.
 It has twelve machines: a two-motor T-gantry (X and Z on one belt), a single belt axis, four delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95), and from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file and a SCARA ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z and a rack-and-pinion gantry (`machines/*.toml`).
-They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a sizing check in the browser.
+They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a browser page with a 3D view of the machine and a sizing check.
 It is written in Rust; vendor data for motors, gearboxes, drives and belt axes is in [`catalog/`](catalog/).
-**Quick start:** try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
+**Quick start:** watch a machine run in 3D and try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
 Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](docs/de/benutzerhandbuch.md).
 
 ![The delta picker in the app: motion panel, 3D view, cycle analysis and scopes](docs/images/delta-d3-app.png)
@@ -294,7 +294,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, and what is not validated |
 | [docs/python.md](docs/python.md) | The Python module `kinematics_sim`: configs, runs, analysis, verdicts, bands and sizing as NumPy arrays and pandas-ready tables; a parameter-sweep notebook |
-| [docs/web.md](docs/web.md) | The sizing check in the browser: the simulator built for WebAssembly and a static page |
+| [docs/web.md](docs/web.md) | The simulator in the browser: built for WebAssembly, a static page with a 3D view and the sizing check |
 | [docs/fmi.md](docs/fmi.md) | FMU export (FMI 2.0 and 3.0): variables, FMU state, directional derivatives, validation, import into Simulink, OpenModelica and Dymola |
 | [docs/plc.md](docs/plc.md) | PLC virtual commissioning: PLCopen-style blocks per axis over OPC UA, real-time pacing and jitter, TwinCAT and CODESYS examples, soak test |
 | [docs/fieldbus-emulation.md](docs/fieldbus-emulation.md) | Design note: emulating an EtherCAT or PROFINET drive for a real PLC |

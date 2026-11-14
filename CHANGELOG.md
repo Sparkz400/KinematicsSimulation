@@ -22,6 +22,9 @@ item are in [PROGRESS.md](PROGRESS.md).
 - docs/plc.md: node ids with their OPC UA and IEC 61131-3 types (checked by a test), security, and a step-by-step run of
   the new `sim_cycle.st` programs for TwinCAT 3 and CODESYS against `sim-opcua` on the same PC.
 
+- The browser page shows the selected machine in 3D running its cycle (WebGL2, orbit camera, legend with tool position and cycle time), beside the sizing check; the wasm module exports the scene per frame as a flat float array (`frame`, `frame_len`, request 3).
+- `heat_color` and `part_color` moved from sim-app to `sim_core::scene`.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

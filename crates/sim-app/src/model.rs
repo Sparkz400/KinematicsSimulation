@@ -474,29 +474,8 @@ const VIEW_KEYS: [&str; 30] = [
     "ui-effects-off",
 ];
 
-/// The colour of the heat scale at a temperature rise of `heat` times the rated one: cold blue, yellow at half, red at
-/// the rated rise, and magenta beyond it.
-pub fn heat_color(heat: f32) -> [f32; 3] {
-    const SCALE: [[f32; 3]; 3] = [[0.15, 0.3, 0.75], [0.95, 0.8, 0.1], [0.95, 0.1, 0.05]];
-    if heat > 1.0 {
-        return [0.9, 0.2, 0.9];
-    }
-    let at = 2.0 * heat.max(0.0);
-    let (i, f) = if at < 1.0 { (0, at) } else { (1, at - 1.0) };
-    std::array::from_fn(|c| SCALE[i][c] + (SCALE[i + 1][c] - SCALE[i][c]) * f)
-}
-
-/// The colour the 3D view draws a part in: where its warmth is computed (`Part::heat`) the heat scale in its place;
-/// otherwise its own colour, shifted towards red by belt tension above pretension (`highlight` up to 1, at twice the
-/// pretension) and towards blue below it (-1 at no tension).
-pub fn part_color(color: [f32; 3], highlight: f32, heat: Option<f32>) -> [f32; 3] {
-    if let Some(heat) = heat {
-        return heat_color(heat);
-    }
-    let h = highlight.clamp(-1.0, 1.0);
-    let (toward, amount) = if h >= 0.0 { ([1.0, 0.1, 0.1], h) } else { ([0.1, 0.3, 1.0], -h) };
-    std::array::from_fn(|c| color[c] + (toward[c] - color[c]) * amount)
-}
+/// The part colours live in the core, so that the browser's 3D view (sim-wasm) colours as this one does.
+pub use sim_core::scene::{heat_color, part_color};
 
 /// The temperatures in the effect view: one line per winding and, with effects.part_heating or thermal_feedback, per
 /// heated part, over the scopes' window, and the table of where each is now, where it settles on the analysed cycle and
