@@ -33,8 +33,12 @@ below are about evidence first and code second.
 cargo build --workspace --release --exclude sim-py
 cargo nextest run --workspace --release --exclude sim-py
 cargo test --doc --workspace --release --exclude sim-py
-cargo clippy --workspace --release --all-targets --exclude sim-py
+cargo clippy --workspace --release --all-targets --exclude sim-py -- -D warnings
+cargo fmt --all --check
 ```
+
+Code is formatted with rustfmt (`rustfmt.toml`: 120 characters a line); CI refuses unformatted code and any clippy
+warning.
 
 The physics tests integrate millions of steps; run them in release. [cargo-nextest](https://nexte.st) (`cargo install
 cargo-nextest --locked`) runs the tests of all binaries at once, just under 8 minutes for the suite on the 16 threads of

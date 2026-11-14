@@ -1,0 +1,6 @@
+# Commits that only reformat code; git blame skips them with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub reads this file by itself.)
+
+# rustfmt over the whole workspace, at 120 characters a line
+bc77724a37a9242c3a5e897b510972925c083530
