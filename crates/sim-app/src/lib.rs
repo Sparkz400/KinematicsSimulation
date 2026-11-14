@@ -2,6 +2,7 @@
 //! `main.rs` and `ui.rs` draw it with Bevy and egui.
 
 pub mod model;
+pub mod runs;
 pub mod session;
 pub mod video;
 

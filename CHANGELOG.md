@@ -188,6 +188,28 @@ item are in [PROGRESS.md](PROGRESS.md).
   +0.57; the load is now put where each gear's twist holds it (`Machine::twist`, `Machine::rigid_split_torque`) and the
   regressor's columns and torque are smoothed alike over ±40 ms.
 
+
+- App: a run store (up to eight runs: analysed cycles and paths with their checks, a trace and its replay, the scopes'
+  or the ghost's window, the cycle of any config or machine file with `--set`-style changes), overlaid per quantity
+  with a difference trace against a reference and a table of key figures side by side; runs of different machines
+  are aligned by motor and quantity.
+- App: a light theme, one unit choice (rpm, mm) for the plots, and saving a scope, run, overlay, operating-point, path
+  or effect-view plot as SVG or PNG by a right click; a fixed colour scale and a tolerance for the travelled path.
+
+### Changed
+
+- App: long lines are drawn with the lowest and highest sample of each stretch, so a peak one sample wide shows (the
+  sizing report's plots too); the machine-derived views, the workspace map, the scopes' statistics and the trace
+  overlay are worked out once per change instead of every frame; the history is one ring buffer and Freeze keeps the
+  window only; the CSV exports run in the background to a file the dialog asks for.
+
+### Fixed
+
+- App: the travelled path's error colour measured from the plan's newest setpoint, which moves once per 1 ms profile
+  cycle, and read up to speed times cycle too high (1.09 mm against a path error of 0.76 mm); it is now the distance
+  from the path the plan drew, as the path error. The path and the ghost follow the scrubbed timeline; one colour per
+  motor in every plot; trace and sweep files with a byte order mark are read; ticks on small plots; legends no longer
+  cover the traces; the user guide's layout and `--set`.
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs

@@ -9,23 +9,53 @@ use bevy_egui::egui::{
     Frame, Grid, Label, Layout, Margin, Rect, RichText, ScrollArea, Sense, Slider, Stroke, TextEdit, TextStyle,
     TextWrapMode, Ui, vec2,
 };
-use egui_plot::{GridMark, HLine, Legend, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
+use egui_plot::{AxisHints, GridInput, GridMark, HLine, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
 use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color, short};
+use sim_app::runs::{owner_slot, plot_line};
 use sim_components::Command;
 use sim_components::analysis::{AT_LEAST, Verdict, utilisation};
 use sim_core::scene::MOTOR_PART;
 use sim_core::{MachineEntry, Scene};
 use sim_machines::{LANGUAGES, MACHINES};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use toml::Value;
 
 // The palette. Each colour stands for one thing, the same in the panels as in the 3D view: amber what is planned,
-// cyan what is measured or travelled, red what is over its limit. Green only marks a check that passes.
-pub const GRAPHITE: Color32 = Color32::from_rgb(36, 40, 45);
-pub const MACHINED: Color32 = Color32::from_rgb(59, 65, 72);
-pub const INSET: Color32 = Color32::from_rgb(28, 31, 35);
-pub const CHALK: Color32 = Color32::from_rgb(214, 218, 223);
-pub const DIM: Color32 = Color32::from_rgb(141, 148, 156);
+// cyan what is measured or travelled, red what is over its limit. Green only marks a check that passes. The neutral
+// colours (panels, fields, text) follow the theme the top bar picks, dark or light; the meaning colours stay.
+static LIGHT: AtomicBool = AtomicBool::new(false);
+
+/// The neutral colour of the theme in use: `dark`, or `light` in the light theme.
+fn neutral(dark: [u8; 3], light: [u8; 3]) -> Color32 {
+    let [r, g, b] = if LIGHT.load(Ordering::Relaxed) { light } else { dark };
+    Color32::from_rgb(r, g, b)
+}
+
+/// The panels' fill.
+pub fn graphite() -> Color32 {
+    neutral([36, 40, 45], [242, 243, 245])
+}
+/// Buttons and frames.
+pub fn machined() -> Color32 {
+    neutral([59, 65, 72], [212, 216, 221])
+}
+/// Fields and plots.
+pub fn inset() -> Color32 {
+    neutral([28, 31, 35], [255, 255, 255])
+}
+/// Text.
+pub fn chalk() -> Color32 {
+    neutral([214, 218, 223], [28, 32, 36])
+}
+/// Text that matters less.
+pub fn dim() -> Color32 {
+    neutral([141, 148, 156], [92, 99, 107])
+}
+/// A frame floating over the 3D view.
+fn floating() -> Color32 {
+    graphite().gamma_multiply(215.0 / 255.0)
+}
 pub const PLAN: Color32 = Color32::from_rgb(227, 179, 65);
 pub const ACTUAL: Color32 = Color32::from_rgb(76, 201, 217);
 pub const LIMIT: Color32 = Color32::from_rgb(242, 124, 112);
@@ -48,7 +78,8 @@ const PALETTE: [Color32; 6] = [
 
 /// The look of every panel: the palette above, Atkinson Hyperlegible Next (made so that 1, l and I and 0 and O
 /// cannot be mixed up, which matters in tables of article numbers and values) and a calm spacing.
-pub fn apply_theme(ctx: &egui::Context) {
+pub fn apply_theme(ctx: &egui::Context, light: bool) {
+    LIGHT.store(light, Ordering::Relaxed);
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("atkinson".into(), Arc::new(FontData::from_static(sim_app::FONT)));
     // One family for everything, numbers in fields and tables too.
@@ -70,21 +101,23 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.button_padding = vec2(8.0, 3.0);
     style.spacing.indent = 14.0;
     let v = &mut style.visuals;
-    *v = egui::Visuals::dark();
+    *v = if light { egui::Visuals::light() } else { egui::Visuals::dark() };
     (v.panel_fill, v.window_fill, v.extreme_bg_color, v.faint_bg_color) =
-        (GRAPHITE, GRAPHITE, INSET, Color32::from_rgb(42, 46, 52));
+        (graphite(), graphite(), inset(), neutral([42, 46, 52], [234, 236, 239]));
     (v.hyperlink_color, v.warn_fg_color, v.error_fg_color) = (PLAN, PLAN, LIMIT);
     v.selection.bg_fill = Color32::from_rgba_unmultiplied(76, 201, 217, 70);
     v.selection.stroke = Stroke::new(1.0, ACTUAL);
-    v.window_stroke = Stroke::new(1.0, MACHINED);
+    v.window_stroke = Stroke::new(1.0, machined());
     let w = &mut v.widgets;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, MACHINED);
-    w.noninteractive.fg_stroke = Stroke::new(1.0, CHALK);
-    (w.inactive.bg_fill, w.inactive.weak_bg_fill) = (MACHINED, MACHINED);
-    w.inactive.fg_stroke = Stroke::new(1.0, CHALK);
-    (w.hovered.bg_fill, w.hovered.weak_bg_fill) = (Color32::from_rgb(74, 81, 90), Color32::from_rgb(74, 81, 90));
-    w.hovered.bg_stroke = Stroke::new(1.0, DIM);
-    (w.active.bg_fill, w.active.weak_bg_fill) = (Color32::from_rgb(52, 92, 100), Color32::from_rgb(52, 92, 100));
+    w.noninteractive.bg_stroke = Stroke::new(1.0, machined());
+    w.noninteractive.fg_stroke = Stroke::new(1.0, chalk());
+    (w.inactive.bg_fill, w.inactive.weak_bg_fill) = (machined(), machined());
+    w.inactive.fg_stroke = Stroke::new(1.0, chalk());
+    let hovered = neutral([74, 81, 90], [196, 201, 207]);
+    (w.hovered.bg_fill, w.hovered.weak_bg_fill) = (hovered, hovered);
+    w.hovered.bg_stroke = Stroke::new(1.0, dim());
+    let active = neutral([52, 92, 100], [170, 214, 222]);
+    (w.active.bg_fill, w.active.weak_bg_fill) = (active, active);
     w.active.bg_stroke = Stroke::new(1.0, ACTUAL);
     for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
         state.corner_radius = CornerRadius::same(3);
@@ -112,6 +145,11 @@ pub struct Overlays {
     pub tube: bool,
     /// A small picture from in front of the tool, in the view's corner.
     pub tool_view: bool,
+    /// The top of the travelled path's colour scale, fixed by the user in SI units (m/s or m); `None`: the highest
+    /// value along the path.
+    pub scale: Option<f64>,
+    /// The error the path may have, in m: points further off the plan are drawn red, and the scale marks it.
+    pub tolerance: Option<f64>,
 }
 
 /// What the travelled path is coloured by: cyan as everything travelled, or by a value along it (`trail_color`).
@@ -130,6 +168,12 @@ pub fn trail_color(f: f32) -> [f32; 3] {
     let at = f.clamp(0.0, 1.0) * (STOPS.len() - 1) as f32;
     let (i, t) = ((at as usize).min(STOPS.len() - 2), at - (at as usize).min(STOPS.len() - 2) as f32);
     [0, 1, 2].map(|c| STOPS[i][c] + (STOPS[i + 1][c] - STOPS[i][c]) * t)
+}
+
+/// The ends of the travelled path's colour scale: from the lowest value along it to the highest, or from 0 to the
+/// top the user fixed (`Overlays::scale`).
+pub fn trail_scale(overlays: Overlays, range: (f64, f64)) -> (f64, f64) {
+    overlays.scale.map_or(range, |top| (0.0, top))
 }
 
 /// What the view's controls show besides the overlays, which the window works out.
@@ -193,6 +237,8 @@ pub enum ToolTab {
     Trace,
     Sweep,
     Tuning,
+    /// The runs kept for comparing, and their key figures side by side.
+    Runs,
 }
 
 /// What the window keeps for the panels between frames.
@@ -204,6 +250,10 @@ pub struct PanelState {
     pub check: Option<&'static str>,
     /// The part clicked in the 3D view: its id and how many parts of that id come before it in the scene.
     pub part: Option<(&'static str, usize)>,
+    /// The bottom panel shows the kept runs (`Model::run_plots`) in place of the live scopes.
+    pub runs_view: bool,
+    /// The light theme in place of the dark one.
+    pub light: bool,
 }
 
 /// What the user did this frame. Collected while drawing, applied afterwards.
@@ -235,6 +285,19 @@ pub enum Action {
     Window(f64),
     Freeze(bool),
     Export,
+    /// A plot goes to a file a dialog asks for: as a PNG picture of `Rect` on the screen (`true`) or as SVG.
+    SavePlot(bool, sim_components::report::Plot, Rect),
+    /// The units speeds and lengths are shown in.
+    Units(sim_app::runs::Units),
+    /// The scopes' window, or the ghost run's, is kept as a run.
+    KeepLive,
+    KeepGhost,
+    /// The cycle of the config with `Inputs::run_set` and `run_file` is recorded as a run.
+    RecordRun,
+    /// A kept run is shown or hidden, made the reference, or forgotten.
+    RunShown(usize, bool),
+    RunReference(usize),
+    RemoveRun(usize),
     /// The overlay of the replayed trace goes to a CSV file.
     ExportOverlay,
     /// The sizing report goes to a file the system's dialog asks for.
@@ -317,7 +380,7 @@ fn margin_color(used: f64, passes: bool) -> Color32 {
 fn gauge_bar(ui: &mut Ui, width: f32, used: f64, passes: bool) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 5.0), Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, 2.0, INSET);
+    painter.rect_filled(rect, 2.0, inset());
     let filled = Rect::from_min_size(rect.min, vec2(rect.width() * used.clamp(0.0, 1.0) as f32, rect.height()));
     painter.rect_filled(filled, 2.0, margin_color(used, passes));
 }
@@ -390,6 +453,18 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         if ui.add(Slider::new(&mut speed, 0.01..=2.0).logarithmic(true).text(tr("ui-speed"))).changed() {
             actions.push(Action::Speed(speed));
         }
+        ui.separator();
+        // One choice of units for every plot and table; and the theme.
+        let mut units = model.units;
+        ui.checkbox(&mut units.rpm, tr("ui-units-rpm")).on_hover_text(tr("ui-units-rpm-hint"));
+        ui.checkbox(&mut units.mm, tr("ui-units-mm")).on_hover_text(tr("ui-units-mm-hint"));
+        if units != model.units {
+            actions.push(Action::Units(units));
+        }
+        let mut light = panels.light;
+        if ui.checkbox(&mut light, tr("ui-theme-light")).changed() {
+            actions.push(Action::Panels(PanelState { light, ..panels }));
+        }
         if recording {
             ui.separator();
             ui.label(RichText::new(tr("ui-recording")).color(LIMIT).strong());
@@ -399,7 +474,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         }
         if let Some(name) = std::path::Path::new(&model.inputs.config_file).file_name() {
             ui.separator();
-            ui.label(RichText::new(name.to_string_lossy()).color(DIM)).on_hover_text(&model.inputs.config_file);
+            ui.label(RichText::new(name.to_string_lossy()).color(dim())).on_hover_text(&model.inputs.config_file);
         }
         ui.separator();
 
@@ -412,7 +487,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                 actions.push(Action::RunAnalysis(Analysis::Cycle));
                 actions.push(Action::Panels(PanelState { tools: ToolTab::Cycle, ..panels }));
             }
-            ui.label(RichText::new(tr("ui-verdicts-none")).color(DIM));
+            ui.label(RichText::new(tr("ui-verdicts-none")).color(dim()));
             return;
         }
         let failed = checks.iter().filter(|c| !c.2).count();
@@ -443,7 +518,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
             let frame = Frame::new()
                 .inner_margin(Margin::symmetric(6, 3))
                 .corner_radius(3)
-                .fill(if picked { Color32::from_rgb(48, 53, 60) } else { Color32::TRANSPARENT })
+                .fill(if picked { neutral([48, 53, 60], [226, 229, 233]) } else { Color32::TRANSPARENT })
                 .stroke(if picked { Stroke::new(1.0, ACTUAL) } else { Stroke::NONE });
             let response = frame
                 .show(ui, |ui| {
@@ -451,7 +526,9 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 3.0;
                         ui.horizontal(|ui| {
-                            ui.add(Label::new(RichText::new(&name).small().color(CHALK)).truncate().selectable(false));
+                            ui.add(
+                                Label::new(RichText::new(&name).small().color(chalk())).truncate().selectable(false),
+                            );
                         });
                         ui.horizontal(|ui| {
                             gauge_bar(ui, 112.0, used, passes);
@@ -475,105 +552,141 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
 /// coloured by.
 pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewInfo, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
-    Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(36, 40, 45, 215))
-        .corner_radius(4)
-        .inner_margin(Margin::same(8))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (key, yaw, pitch) in [
-                    ("ui-view-front", 0.0, 0.0),
-                    ("ui-view-side", 90.0, 0.0),
-                    ("ui-view-top", 0.0, 89.0),
-                    ("ui-view-iso", 30.0, 20.0),
-                ] {
-                    if ui.button(tr(key)).clicked() {
-                        actions.push(Action::View(yaw, pitch));
-                    }
+    Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for (key, yaw, pitch) in [
+                ("ui-view-front", 0.0, 0.0),
+                ("ui-view-side", 90.0, 0.0),
+                ("ui-view-top", 0.0, 89.0),
+                ("ui-view-iso", 30.0, 20.0),
+            ] {
+                if ui.button(tr(key)).clicked() {
+                    actions.push(Action::View(yaw, pitch));
                 }
-                // A button like the presets beside it, shown pressed while recording.
-                if ui
-                    .add(egui::Button::new(tr("ui-view-record")).selected(view.recording))
-                    .on_hover_text(tr("ui-view-record-hint"))
-                    .clicked()
-                {
-                    actions.push(Action::Record(!view.recording));
-                }
-            });
-            ui.horizontal(|ui| {
-                let mut shown = overlays;
-                ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));
-                ui.checkbox(&mut shown.forces, tr("ui-view-forces")).on_hover_text(tr("ui-view-forces-hint"));
-                ui.checkbox(&mut shown.planned, tr("ui-view-planned")).on_hover_text(tr("ui-view-planned-hint"));
-                ui.checkbox(&mut shown.load, tr("ui-view-load")).on_hover_text(tr("ui-view-load-hint"));
-                if shown != overlays {
-                    actions.push(Action::Overlays(shown));
-                }
-            });
-            ui.horizontal(|ui| {
-                let mut shown = overlays;
-                let mode = ui.add_enabled(view.has_mode, Checkbox::new(&mut shown.mode, tr("ui-view-mode")));
-                mode.on_hover_text(tr("ui-view-mode-hint")).on_disabled_hover_text(tr("ui-view-mode-none"));
-                ui.checkbox(&mut shown.tool_view, tr("ui-view-tool")).on_hover_text(tr("ui-view-tool-hint"));
-                if shown != overlays {
-                    actions.push(Action::Overlays(shown));
-                }
-                let (mut on, effect) = view.compare;
-                if ui.checkbox(&mut on, tr("ui-view-compare")).on_hover_text(tr("ui-view-compare-hint")).changed() {
-                    actions.push(Action::Compare(on, effect.to_string()));
-                }
-                let name = |path: &str| tr(&format!("effect-{}", path.strip_prefix("effects.").unwrap_or(path)));
-                ComboBox::from_id_salt("view-compare").selected_text(name(effect)).width(150.0).show_ui(ui, |ui| {
-                    for (path, key, _) in model.effects() {
-                        if ui.selectable_label(path == effect, tr(&key)).clicked() && path != effect {
-                            actions.push(Action::Compare(on, path));
-                        }
-                    }
-                });
-            });
-            ui.horizontal(|ui| {
-                let mut shown = overlays;
-                ui.label(tr("ui-view-trail"));
-                for (color, key) in [
-                    (TrailColor::Plain, "ui-view-trail-plain"),
-                    (TrailColor::Speed, "ui-view-trail-speed"),
-                    (TrailColor::FollowingError, "ui-view-trail-error"),
-                ] {
-                    ui.radio_value(&mut shown.trail, color, tr(key));
-                }
-                ui.checkbox(&mut shown.tube, tr("ui-view-tube")).on_hover_text(tr("ui-view-tube-hint"));
-                if shown != overlays {
-                    actions.push(Action::Overlays(shown));
-                }
-            });
-            // The scale the path is coloured by, between the lowest and highest value along it.
-            if let Some((low, high)) = view.range.filter(|_| overlays.trail != TrailColor::Plain) {
-                let (factor, unit) =
-                    if overlays.trail == TrailColor::Speed { (1.0, tr("unit-m-per-s")) } else { (1e3, tr("unit-mm")) };
-                scale_bar(
-                    ui,
-                    &format!("{:.3} {unit}", low * factor),
-                    &format!("{:.3} {unit}", high * factor),
-                    trail_color,
-                );
             }
-            if overlays.load {
-                ui.horizontal(|ui| match model.cycle_report {
-                    Some(_) => {
-                        for (color, key) in [(PASS, "ui-load-room"), (PLAN, "ui-load-close"), (LIMIT, "ui-load-over")] {
-                            ui.label(RichText::new(format!("■ {}", tr(key))).color(color));
-                        }
-                    }
-                    None => drop(ui.label(RichText::new(tr("ui-verdicts-none")).small().color(DIM))),
-                });
-            }
-            let mut factor = model.exaggeration;
-            ui.spacing_mut().slider_width = 120.0;
-            let slider = Slider::new(&mut factor, 1.0..=10_000.0).logarithmic(true).text(tr("ui-view-exaggeration"));
-            if ui.add(slider).on_hover_text(tr("ui-view-exaggeration-hint")).changed() {
-                actions.push(Action::Exaggeration(factor));
+            // A button like the presets beside it, shown pressed while recording.
+            if ui
+                .add(egui::Button::new(tr("ui-view-record")).selected(view.recording))
+                .on_hover_text(tr("ui-view-record-hint"))
+                .clicked()
+            {
+                actions.push(Action::Record(!view.recording));
             }
         });
+        ui.horizontal(|ui| {
+            let mut shown = overlays;
+            ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));
+            ui.checkbox(&mut shown.forces, tr("ui-view-forces")).on_hover_text(tr("ui-view-forces-hint"));
+            ui.checkbox(&mut shown.planned, tr("ui-view-planned")).on_hover_text(tr("ui-view-planned-hint"));
+            ui.checkbox(&mut shown.load, tr("ui-view-load")).on_hover_text(tr("ui-view-load-hint"));
+            if shown != overlays {
+                actions.push(Action::Overlays(shown));
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut shown = overlays;
+            let mode = ui.add_enabled(view.has_mode, Checkbox::new(&mut shown.mode, tr("ui-view-mode")));
+            mode.on_hover_text(tr("ui-view-mode-hint")).on_disabled_hover_text(tr("ui-view-mode-none"));
+            ui.checkbox(&mut shown.tool_view, tr("ui-view-tool")).on_hover_text(tr("ui-view-tool-hint"));
+            if shown != overlays {
+                actions.push(Action::Overlays(shown));
+            }
+            let (mut on, effect) = view.compare;
+            if ui.checkbox(&mut on, tr("ui-view-compare")).on_hover_text(tr("ui-view-compare-hint")).changed() {
+                actions.push(Action::Compare(on, effect.to_string()));
+            }
+            let name = |path: &str| tr(&format!("effect-{}", path.strip_prefix("effects.").unwrap_or(path)));
+            ComboBox::from_id_salt("view-compare").selected_text(name(effect)).width(150.0).show_ui(ui, |ui| {
+                for (path, key, _) in model.effects() {
+                    if ui.selectable_label(path == effect, tr(&key)).clicked() && path != effect {
+                        actions.push(Action::Compare(on, path));
+                    }
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            let mut shown = overlays;
+            ui.label(tr("ui-view-trail"));
+            for (color, key) in [
+                (TrailColor::Plain, "ui-view-trail-plain"),
+                (TrailColor::Speed, "ui-view-trail-speed"),
+                (TrailColor::FollowingError, "ui-view-trail-error"),
+            ] {
+                ui.radio_value(&mut shown.trail, color, tr(key));
+            }
+            ui.checkbox(&mut shown.tube, tr("ui-view-tube")).on_hover_text(tr("ui-view-tube-hint"));
+            if shown != overlays {
+                actions.push(Action::Overlays(shown));
+            }
+        });
+        // The scale the path is coloured by, between the lowest and highest value along it or from 0 to a top the
+        // user fixes, so that two runs read alike; along the error, the tolerance in red.
+        if let Some((low, high)) = view.range.filter(|_| overlays.trail != TrailColor::Plain) {
+            let (factor, unit) =
+                if overlays.trail == TrailColor::Speed { (1.0, tr("unit-m-per-s")) } else { (1e3, tr("unit-mm")) };
+            let (low, high) = trail_scale(overlays, (low, high));
+            scale_bar(ui, &format!("{:.3} {unit}", low * factor), &format!("{:.3} {unit}", high * factor), trail_color);
+            ui.horizontal(|ui| {
+                let mut shown = overlays;
+                let mut fixed = shown.scale.is_some();
+                if ui
+                    .checkbox(&mut fixed, tr("ui-view-trail-fixed"))
+                    .on_hover_text(tr("ui-view-trail-fixed-hint"))
+                    .changed()
+                {
+                    shown.scale = fixed.then_some(high);
+                }
+                if let Some(top) = &mut shown.scale {
+                    let mut value = *top * factor;
+                    if ui
+                        .add(DragValue::new(&mut value).speed(0.01 * high * factor).suffix(format!(" {unit}")))
+                        .changed()
+                    {
+                        *top = (value / factor).max(1e-9);
+                    }
+                }
+                if overlays.trail == TrailColor::FollowingError {
+                    let mut tolerance = shown.tolerance.is_some();
+                    if ui
+                        .checkbox(&mut tolerance, tr("ui-view-trail-tolerance"))
+                        .on_hover_text(tr("ui-view-trail-tolerance-hint"))
+                        .changed()
+                    {
+                        shown.tolerance = tolerance.then_some(high / 2.0);
+                    }
+                    if let Some(limit) = &mut shown.tolerance {
+                        let mut value = *limit * 1e3;
+                        if ui
+                            .add(DragValue::new(&mut value).speed(0.001).suffix(format!(" {}", tr("unit-mm"))))
+                            .changed()
+                        {
+                            *limit = (value / 1e3).max(0.0);
+                        }
+                        ui.colored_label(LIMIT, format!("■ {}", tr("ui-view-trail-over")));
+                    }
+                }
+                if shown != overlays {
+                    actions.push(Action::Overlays(shown));
+                }
+            });
+        }
+        if overlays.load {
+            ui.horizontal(|ui| match model.cycle_report {
+                Some(_) => {
+                    for (color, key) in [(PASS, "ui-load-room"), (PLAN, "ui-load-close"), (LIMIT, "ui-load-over")] {
+                        ui.label(RichText::new(format!("■ {}", tr(key))).color(color));
+                    }
+                }
+                None => drop(ui.label(RichText::new(tr("ui-verdicts-none")).small().color(dim()))),
+            });
+        }
+        let mut factor = model.exaggeration;
+        ui.spacing_mut().slider_width = 120.0;
+        let slider = Slider::new(&mut factor, 1.0..=10_000.0).logarithmic(true).text(tr("ui-view-exaggeration"));
+        if ui.add(slider).on_hover_text(tr("ui-view-exaggeration-hint")).changed() {
+            actions.push(Action::Exaggeration(factor));
+        }
+    });
 }
 
 /// A row of tabs: the one shown filled, the others plain.
@@ -716,7 +829,7 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
 fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelState, actions: &mut Vec<Action>) {
     let Some((_, verdicts, _)) = &model.cycle_report else { return };
     let tr = |key: &str| model.tr.tr(key).to_string();
-    Frame::new().fill(INSET).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
+    Frame::new().fill(inset()).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.heading(tr(&format!("check-{check}")));
@@ -728,7 +841,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
         });
         Grid::new("picked-check").num_columns(4).spacing(vec2(14.0, 6.0)).show(ui, |ui| {
             for key in ["ui-verdict-motor", "ui-verdict-value", "ui-verdict-limit", "ui-verdict-used"] {
-                ui.label(RichText::new(tr(key)).small().color(DIM));
+                ui.label(RichText::new(tr(key)).small().color(dim()));
             }
             ui.end_row();
             for v in verdicts.iter().filter(|v| v.check == check) {
@@ -746,7 +859,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
         } else {
             "ui-verdict-at-most"
         };
-        ui.label(RichText::new(tr(direction)).small().color(DIM));
+        ui.label(RichText::new(tr(direction)).small().color(dim()));
     });
     ui.add_space(6.0);
 }
@@ -787,7 +900,7 @@ fn inspector(
     actions: &mut Vec<Action>,
 ) {
     let tr = |key: &str| model.tr.tr(key).to_string();
-    Frame::new().fill(INSET).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
+    Frame::new().fill(inset()).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.heading(tr(&format!("part-{id}")));
@@ -809,18 +922,18 @@ fn inspector(
             }
         }
         let Some((_, verdicts, _)) = &model.cycle_report else {
-            ui.label(RichText::new(tr("ui-verdicts-none")).small().color(DIM));
+            ui.label(RichText::new(tr("ui-verdicts-none")).small().color(dim()));
             return;
         };
         let mine: Vec<_> = verdicts.iter().filter(|v| concerns(v, id, nth)).collect();
         if mine.is_empty() {
-            ui.label(RichText::new(tr("ui-inspect-no-checks")).small().color(DIM));
+            ui.label(RichText::new(tr("ui-inspect-no-checks")).small().color(dim()));
             return;
         }
         // Long check names wrap, so that the panel keeps its width.
         Grid::new("inspector").num_columns(4).max_col_width(170.0).spacing(vec2(14.0, 6.0)).show(ui, |ui| {
             for key in ["ui-inspect-check", "ui-verdict-value", "ui-verdict-limit", "ui-verdict-used"] {
-                ui.label(RichText::new(tr(key)).small().color(DIM));
+                ui.label(RichText::new(tr(key)).small().color(dim()));
             }
             ui.end_row();
             for v in mine {
@@ -843,70 +956,58 @@ pub fn timeline(
     actions: &mut Vec<Action>,
 ) {
     let tr = |key: &str| model.tr.tr(key).to_string();
-    Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(36, 40, 45, 215))
-        .corner_radius(4)
-        .inner_margin(Margin::symmetric(8, 5))
-        .show(ui, |ui| {
-            ui.set_width(width);
-            ui.horizontal(|ui| {
-                let live = timeline.time.is_none();
+    Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::symmetric(8, 5)).show(ui, |ui| {
+        ui.set_width(width);
+        ui.horizontal(|ui| {
+            let live = timeline.time.is_none();
+            if ui.selectable_label(live, tr("ui-timeline-live")).on_hover_text(tr("ui-timeline-live-hint")).clicked()
+                && !live
+            {
+                actions.push(Action::Timeline(Timeline { time: None, playing: false, ..timeline }));
+            }
+            if ui.button("|◀").on_hover_text(tr("ui-timeline-step-hint")).clicked() {
+                actions.push(Action::Step(false));
+            }
+            if ui.button(if timeline.playing { "❚❚" } else { "▶" }).on_hover_text(tr("ui-timeline-play-hint")).clicked()
+            {
+                actions.push(Action::Timeline(timeline.toggled(span)));
+            }
+            if ui.button("▶|").on_hover_text(tr("ui-timeline-step-hint")).clicked() {
+                actions.push(Action::Step(true));
+            }
+            let mut time = timeline.time.unwrap_or(span.1);
+            ui.spacing_mut().slider_width = (ui.available_width() - 250.0).max(60.0);
+            let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
+            if slider.changed() {
+                actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
+            }
+            // The first contact with an obstacle as a red mark on the slider, where it lies in the recorded span.
+            if let Some(contact) = model.scene.first_contact.filter(|t| *t >= span.0 && *t <= span.1 && span.1 > span.0)
+            {
+                let rect = slider.rect;
+                let x = rect.left() + (rect.width() * ((contact - span.0) / (span.1 - span.0)) as f32);
+                let mark = egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(3.0, rect.height()));
+                ui.painter().rect_filled(mark, 1.0, LIMIT);
+                ui.interact(mark.expand(2.0), ui.id().with("contact-mark"), egui::Sense::hover())
+                    .on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
+            }
+            // The time shown, and how far back from the newest scene: the scopes' right edge.
+            ui.label(RichText::new(format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s")).color(if live {
+                chalk()
+            } else {
+                ACTUAL
+            }));
+            for speed in [0.1, 0.25, 1.0] {
                 if ui
-                    .selectable_label(live, tr("ui-timeline-live"))
-                    .on_hover_text(tr("ui-timeline-live-hint"))
-                    .clicked()
-                    && !live
-                {
-                    actions.push(Action::Timeline(Timeline { time: None, playing: false, ..timeline }));
-                }
-                if ui.button("|◀").on_hover_text(tr("ui-timeline-step-hint")).clicked() {
-                    actions.push(Action::Step(false));
-                }
-                if ui
-                    .button(if timeline.playing { "❚❚" } else { "▶" })
-                    .on_hover_text(tr("ui-timeline-play-hint"))
+                    .selectable_label(timeline.speed == speed, format!("{speed}×"))
+                    .on_hover_text(tr("ui-timeline-speed-hint"))
                     .clicked()
                 {
-                    actions.push(Action::Timeline(timeline.toggled(span)));
+                    actions.push(Action::Timeline(Timeline { speed, ..timeline }));
                 }
-                if ui.button("▶|").on_hover_text(tr("ui-timeline-step-hint")).clicked() {
-                    actions.push(Action::Step(true));
-                }
-                let mut time = timeline.time.unwrap_or(span.1);
-                ui.spacing_mut().slider_width = (ui.available_width() - 250.0).max(60.0);
-                let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
-                if slider.changed() {
-                    actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
-                }
-                // The first contact with an obstacle as a red mark on the slider, where it lies in the recorded span.
-                if let Some(contact) =
-                    model.scene.first_contact.filter(|t| *t >= span.0 && *t <= span.1 && span.1 > span.0)
-                {
-                    let rect = slider.rect;
-                    let x = rect.left() + (rect.width() * ((contact - span.0) / (span.1 - span.0)) as f32);
-                    let mark =
-                        egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(3.0, rect.height()));
-                    ui.painter().rect_filled(mark, 1.0, LIMIT);
-                    ui.interact(mark.expand(2.0), ui.id().with("contact-mark"), egui::Sense::hover())
-                        .on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
-                }
-                // The time shown, and how far back from the newest scene: the scopes' right edge.
-                ui.label(RichText::new(format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s")).color(if live {
-                    CHALK
-                } else {
-                    ACTUAL
-                }));
-                for speed in [0.1, 0.25, 1.0] {
-                    if ui
-                        .selectable_label(timeline.speed == speed, format!("{speed}×"))
-                        .on_hover_text(tr("ui-timeline-speed-hint"))
-                        .clicked()
-                    {
-                        actions.push(Action::Timeline(Timeline { speed, ..timeline }));
-                    }
-                }
-            });
+            }
         });
+    });
 }
 
 /// The tools on the right, one tab per computation, each with its run button and its results. A result arrives in
@@ -919,6 +1020,7 @@ pub fn tools(
     panels: PanelState,
     actions: &mut Vec<Action>,
     scroll: Option<f32>,
+    ghost: bool,
 ) {
     let all = [
         (ToolTab::Cycle, "ui-analysis"),
@@ -928,6 +1030,7 @@ pub fn tools(
         (ToolTab::Trace, "ui-trace"),
         (ToolTab::Sweep, "ui-sweep-tab"),
         (ToolTab::Tuning, "ui-tuning"),
+        (ToolTab::Runs, "ui-runs"),
     ];
     if let Some(tab) = tabs(ui, model, panels.tools, &all) {
         actions.push(Action::Panels(PanelState { tools: tab, ..panels }));
@@ -953,6 +1056,7 @@ pub fn tools(
             ToolTab::Trace => trace(ui, model, &mut inputs, actions),
             ToolTab::Sweep => sweep(ui, model, &mut inputs, actions),
             ToolTab::Tuning => tuning(ui, model, actions),
+            ToolTab::Runs => runs(ui, model, &mut inputs, ghost, actions),
         }
         if inputs != model.inputs {
             actions.push(Action::Inputs(inputs));
@@ -964,25 +1068,92 @@ fn number(value: f64) -> String {
     format!("{value:.4}")
 }
 
-/// The scopes, under the view: one plot per quantity with actual values solid and their setpoints dashed, one
-/// colour per axis or motor, a shared time axis and cursor, readable units, and what each trace did in the window.
-/// Side by side as the panel's width allows. All of it is built from the signal list.
-/// The time the timeline shows is a line in every scope, and a click in a scope scrubs the timeline to there.
-pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<Action>) {
-    let tr = |key: &str| model.tr.tr(key).to_string();
-    let signals = &model.session.signals;
-    // Owners in order of first appearance; their place decides the colour.
-    let mut owners: Vec<&str> = Vec::new();
-    for s in signals {
-        if !owners.contains(&s.owner_key.as_str()) {
-            owners.push(&s.owner_key);
-        }
-    }
-    let color = |signal: usize| {
-        PALETTE[owners.iter().position(|o| *o == signals[signal].owner_key).unwrap_or(0) % PALETTE.len()]
-    };
+/// The colour of a signal's owner, the same in every plot (`runs::owner_slot`): motor 2 has one colour in the
+/// scopes, the torque-speed plot, the sweep and the run comparison.
+fn owner_color(model: &Model, owner_key: &str) -> Color32 {
+    let session = &model.session;
+    PALETTE[owner_slot(owner_key, &session.signals, &session.axes, &session.motors) % PALETTE.len()]
+}
 
+/// The fewest pixels between two grid lines (egui_plot's default), from which `ticks` tells a value's size on screen.
+const GRID_PIXELS: f32 = 8.0;
+/// The fewest pixels between two labelled ticks: a line of the plots' text and a little room.
+const TICK_PIXELS: f32 = 20.0;
+
+/// Labelled ticks on a value axis at 1, 2 or 5 times a power of ten, the smallest such step at least `TICK_PIXELS`
+/// apart, between two and five on a scope: egui_plot's own steps of powers of ten, labelled only from 20 pixels
+/// apart, left a plot 150 pixels high (some 100 of them for the values) often with 0 alone.
+fn ticks(input: GridInput) -> Vec<GridMark> {
+    let (low, high) = input.bounds;
+    // At most some twenty: a plot not laid out yet has no size to go by.
+    let raw = (TICK_PIXELS as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
+    if !(raw.is_finite() && raw > 0.0) {
+        return Vec::new();
+    }
+    let power = 10f64.powf(raw.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0].into_iter().map(|f| f * power).find(|s| *s >= raw).unwrap_or(10.0 * power);
+    let (first, last) = ((low / step).ceil() as i64, (high / step).floor() as i64);
+    (first..=last).map(|i| GridMark { value: i as f64 * step, step_size: step }).collect()
+}
+
+/// A tick's value with the decimals its step needs: 0.5 with one. egui_plot rounds the step's logarithm, which
+/// printed the tick at 0.5 as "0".
+fn tick_label(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
+    let decimals = (-mark.step_size.log10().floor()).max(0.0) as usize;
+    format!("{:.*}", decimals, if mark.value.abs() < mark.step_size * 1e-6 { 0.0 } else { mark.value })
+}
+
+/// A plot as every panel draws it: with the ticks of `ticks`.
+fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
+    // Labels at full strength from `TICK_PIXELS` apart; egui_plot fades them in from 20 to 30.
+    let axis = AxisHints::new_y().label_spacing(TICK_PIXELS - 4.0..=TICK_PIXELS).formatter(tick_label);
+    Plot::new(id).grid_spacing(GRID_PIXELS..=300.0).y_grid_spacer(ticks).custom_y_axes(vec![axis])
+}
+
+/// A right click on a plot offers to save it: as SVG, drawn as the sizing report draws its plots, or as PNG, a picture
+/// of the plot as the window shows it. `series` (name, points, drawn as dots) is only worked out when one is picked.
+fn save_menu(
+    response: &egui::Response,
+    model: &Model,
+    title: &str,
+    x_label: &str,
+    series: impl FnOnce() -> Vec<(String, Vec<[f64; 2]>, bool)>,
+    actions: &mut Vec<Action>,
+) {
+    let mut series = Some(series);
+    response.context_menu(|ui| {
+        for (png, key) in [(false, "ui-plot-save-svg"), (true, "ui-plot-save-png")] {
+            if ui.button(model.tr.tr(key)).clicked()
+                && let Some(series) = series.take()
+            {
+                let plot = sim_components::report::Plot {
+                    title: title.to_string(),
+                    x_label: x_label.to_string(),
+                    y_label: title.to_string(),
+                    series: series(),
+                };
+                actions.push(Action::SavePlot(png, plot, response.rect));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The bottom panel's bar: the scopes' menu, window, freeze and export, and the switch between the live scopes and the
+/// kept runs.
+fn scope_bar(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
     ui.horizontal(|ui| {
+        for (runs, key) in [(false, "ui-scopes-live"), (true, "ui-scopes-runs")] {
+            if ui.selectable_label(panels.runs_view == runs, tr(key)).clicked() && panels.runs_view != runs {
+                actions.push(Action::Panels(PanelState { runs_view: runs, ..panels }));
+            }
+        }
+        ui.separator();
+        if panels.runs_view {
+            ui.label(RichText::new(tr("ui-runs-hint")).color(dim()));
+            return;
+        }
         ui.menu_button(tr("ui-scopes"), |ui| {
             for (i, scope) in model.scopes.iter().enumerate() {
                 let mut visible = scope.visible;
@@ -1003,13 +1174,32 @@ pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<
         if ui.button(tr("ui-export")).clicked() {
             actions.push(Action::Export);
         }
+        if model.exporting() {
+            ui.spinner();
+        }
+        if ui.button(tr("ui-runs-keep-live")).on_hover_text(tr("ui-runs-keep-live-hint")).clicked() {
+            actions.push(Action::KeepLive);
+        }
         if model.scopes.iter().any(|s| s.lines.iter().any(|l| l.reference)) {
-            ui.label(RichText::new(tr("ui-dashed")).color(DIM));
+            ui.label(RichText::new(tr("ui-dashed")).color(dim()));
         }
     });
-    let rows: Vec<&Vec<f64>> = model.visible_rows().collect();
-    // At most about three thousand points per line, however long the window is.
-    let stride = (rows.len() / 3000).max(1);
+}
+
+/// The scopes, under the view: one plot per quantity with actual values solid and their setpoints dashed, one
+/// colour per axis or motor, a shared time axis and cursor, readable units, and what each trace did in the window.
+/// Side by side as the panel's width allows. All of it is built from the signal list. The kept runs take their place
+/// where the bar switches to them (`runs_view`).
+/// The time the timeline shows is a line in every scope, and a click in a scope scrubs the timeline to there.
+pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, panels: PanelState, actions: &mut Vec<Action>) {
+    scope_bar(ui, model, panels, actions);
+    if panels.runs_view {
+        return runs_view(ui, model, actions);
+    }
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let signals = &model.session.signals;
+    let color = |signal: usize| owner_color(model, &signals[signal].owner_key);
+    let rows: Vec<&[f64]> = model.visible_rows().collect();
     let shown: Vec<_> = model.scopes.iter().filter(|s| s.visible).collect();
     let per_row = ((ui.available_width() / 420.0).floor() as usize).clamp(1, 4);
     ScrollArea::vertical().id_salt("scopes").show(ui, |ui| {
@@ -1018,22 +1208,30 @@ pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<
                 for (scope, ui) in chunk.iter().zip(columns.iter_mut()) {
                     let stats: Vec<_> = scope.lines.iter().map(|l| model.stats(l.signal)).collect();
                     let peak = stats.iter().flatten().fold(0f64, |p, s| p.max(s.min.abs()).max(s.max.abs()));
-                    let (scale, prefix) = display_scale(peak, &scope.unit);
-                    let unit = format!("{prefix}{}", scope.unit);
-                    ui.label(RichText::new(format!("{} [{unit}]", tr(&scope.quantity_key))).strong());
-                    let plot = Plot::new((&scope.quantity_key, &scope.unit))
+                    // The unit picked in the top bar (rpm, mm), else the SI unit with a prefix that reads well.
+                    let (scale, unit) = model.units.of(&scope.unit).unwrap_or_else(|| {
+                        let (scale, prefix) = display_scale(peak, &scope.unit);
+                        (scale, format!("{prefix}{}", scope.unit))
+                    });
+                    let title = format!("{} [{unit}]", tr(&scope.quantity_key));
+                    ui.label(RichText::new(&title).strong());
+                    let lines: Vec<(usize, Vec<[f64; 2]>)> = scope
+                        .lines
+                        .iter()
+                        .map(|line| {
+                            (line.signal, plot_line(rows.len(), |n| [rows[n][0], rows[n][line.signal] * scale]))
+                        })
+                        .collect();
+                    // No legend over the traces: the lines below name each in its colour.
+                    let drawn = plot((&scope.quantity_key, &scope.unit))
                         .height(150.0)
-                        .legend(Legend::default())
                         .link_axis("scopes", [true, false])
                         .link_cursor("scopes", [true, false])
                         .x_axis_label(tr("ui-time"))
                         .show(ui, |plot| {
-                            for line in &scope.lines {
-                                let points: Vec<[f64; 2]> =
-                                    rows.iter().step_by(stride).map(|row| [row[0], row[line.signal] * scale]).collect();
-                                let info = &signals[line.signal];
-                                // A setpoint carries the name of its actual value: one legend entry switches both.
-                                let drawn = Line::new(tr(&info.owner_key), points).color(color(line.signal));
+                            for (line, (signal, points)) in scope.lines.iter().zip(&lines) {
+                                let drawn =
+                                    Line::new(tr(&signals[*signal].owner_key), points.clone()).color(color(*signal));
                                 plot.line(if line.reference {
                                     drawn.style(LineStyle::dashed_dense()).width(1.2)
                                 } else {
@@ -1042,15 +1240,26 @@ pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<
                             }
                             // Unnamed, so that it stays out of the legend.
                             if let Some(time) = timeline.time {
-                                plot.vline(VLine::new("", time).color(CHALK).width(1.5));
+                                plot.vline(VLine::new("", time).color(chalk()).width(1.5));
                             }
                             plot.pointer_coordinate()
                         });
-                    if plot.response.clicked()
-                        && let Some(at) = plot.inner
+                    if drawn.response.clicked()
+                        && let Some(at) = drawn.inner
                     {
                         actions.push(Action::Timeline(Timeline { time: Some(at.x), playing: false, ..timeline }));
                     }
+                    save_menu(
+                        &drawn.response,
+                        model,
+                        &title,
+                        &tr("ui-time"),
+                        || {
+                            let named = |signal: usize| tr(&signals[signal].owner_key);
+                            lines.iter().map(|(signal, points)| (named(*signal), points.clone(), false)).collect()
+                        },
+                        actions,
+                    );
                     // What each actual trace did in the window.
                     for (line, stats) in scope.lines.iter().zip(&stats).filter(|(l, _)| !l.reference) {
                         let Some(s) = stats else { continue };
@@ -1063,10 +1272,10 @@ pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<
                                 ("ui-stat-rms", s.rms),
                             ];
                             for (key, value) in values {
-                                ui.label(RichText::new(tr(key)).small().color(DIM));
+                                ui.label(RichText::new(tr(key)).small().color(dim()));
                                 ui.label(RichText::new(number(value * scale)).small());
                             }
-                            ui.label(RichText::new(&unit).small().color(DIM));
+                            ui.label(RichText::new(&unit).small().color(dim()));
                         });
                     }
                 }
@@ -1074,6 +1283,132 @@ pub fn scopes(ui: &mut Ui, model: &Model, timeline: Timeline, actions: &mut Vec<
             ui.add_space(4.0);
         }
     });
+}
+
+/// How a kept run's lines are drawn, by its place in the store: the motors keep their colours, the runs differ in
+/// the line.
+fn run_style(run: usize) -> (LineStyle, f32) {
+    match run % 4 {
+        0 => (LineStyle::Solid, 1.8),
+        1 => (LineStyle::dashed_dense(), 1.5),
+        2 => (LineStyle::dotted_dense(), 1.8),
+        _ => (LineStyle::dashed_loose(), 1.2),
+    }
+}
+
+/// The kept runs in the bottom panel: per quantity every shown run's lines (each motor in its colour, each run in its
+/// line style), and under it each run less the reference on the same time. All plots share the time axis and cursor.
+fn runs_view(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let plots = model.run_plots();
+    if plots.is_empty() {
+        ui.label(RichText::new(tr("ui-runs-none")).color(dim()));
+        return;
+    }
+    let per_row = ((ui.available_width() / 420.0).floor() as usize).clamp(1, 4);
+    ScrollArea::vertical().id_salt("run-scopes").show(ui, |ui| {
+        for chunk in plots.chunks(per_row) {
+            ui.columns(per_row, |columns| {
+                for (found, ui) in chunk.iter().zip(columns.iter_mut()) {
+                    for (lines, title, height) in [
+                        (&found.lines, found.title.clone(), 150.0),
+                        (&found.differences, format!("{} · {}", found.title, tr("ui-runs-difference")), 100.0),
+                    ] {
+                        if lines.is_empty() {
+                            continue;
+                        }
+                        ui.label(RichText::new(&title).strong());
+                        let drawn = plot(("runs", &title))
+                            .height(height)
+                            .link_axis("runs", [true, false])
+                            .link_cursor("runs", [true, false])
+                            .x_axis_label(tr("ui-time"))
+                            .show(ui, |plot| {
+                                for line in lines {
+                                    let (style, width) = run_style(line.run);
+                                    let color = PALETTE[line.motor % PALETTE.len()];
+                                    plot.line(
+                                        Line::new(&line.name, line.points.clone())
+                                            .color(color)
+                                            .style(style)
+                                            .width(width),
+                                    );
+                                }
+                            });
+                        save_menu(
+                            &drawn.response,
+                            model,
+                            &title,
+                            &tr("ui-time"),
+                            || lines.iter().map(|l| (l.name.clone(), l.points.clone(), false)).collect(),
+                            actions,
+                        );
+                    }
+                }
+            });
+            ui.add_space(4.0);
+        }
+    });
+}
+
+/// The runs tab: keep the live window or the ghost's, record the cycle of another config or machine, and the kept runs
+/// with their key figures side by side.
+fn runs(ui: &mut Ui, model: &Model, inputs: &mut Inputs, ghost: bool, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.label(RichText::new(tr("ui-runs-intro")).color(dim()));
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tr("ui-runs-keep-live")).on_hover_text(tr("ui-runs-keep-live-hint")).clicked() {
+            actions.push(Action::KeepLive);
+        }
+        let keep_ghost = ui.add_enabled(ghost, egui::Button::new(tr("ui-runs-keep-ghost")));
+        if keep_ghost.on_disabled_hover_text(tr("ui-runs-keep-ghost-none")).clicked() {
+            actions.push(Action::KeepGhost);
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tr("ui-runs-set")).on_hover_text(tr("ui-runs-set-hint"));
+        ui.add(TextEdit::singleline(&mut inputs.run_set).desired_width(260.0));
+        ui.label(tr("ui-runs-file")).on_hover_text(tr("ui-runs-file-hint"));
+        ui.add(TextEdit::singleline(&mut inputs.run_file).desired_width(200.0));
+        if ui.button(tr("ui-runs-record")).clicked() {
+            actions.push(Action::RecordRun);
+        }
+        if model.recording_runs() {
+            ui.spinner();
+        }
+    });
+    if model.runs.is_empty() {
+        ui.label(RichText::new(tr("ui-runs-none")).color(dim()));
+        return;
+    }
+    ui.separator();
+    // A row per run: shown, reference, its line, forget, and its label in the room left.
+    for (i, run) in model.runs.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let mut shown = model.runs.shown(i);
+            if ui.checkbox(&mut shown, "").on_hover_text(tr("ui-runs-shown")).changed() {
+                actions.push(Action::RunShown(i, shown));
+            }
+            if ui.radio(model.runs.reference() == i, "").on_hover_text(tr("ui-run-reference")).clicked() {
+                actions.push(Action::RunReference(i));
+            }
+            let (style, _) = run_style(i);
+            let line = match style {
+                LineStyle::Solid => "——",
+                LineStyle::Dotted { .. } => "· · ·",
+                _ => "- - -",
+            };
+            ui.label(RichText::new(line).color(dim()));
+            if ui.small_button("×").on_hover_text(tr("ui-runs-remove")).clicked() {
+                actions.push(Action::RemoveRun(i));
+            }
+            ui.add(Label::new(&run.label).wrap());
+        });
+    }
+    if let Some(rows) = model.runs_table() {
+        ui.strong(tr("ui-runs-figures"));
+        table(ui, "runs-figures", &rows, None);
+    }
 }
 
 /// A table of the model, drawn as it is: the header weak, numbers and words as they
@@ -1149,7 +1484,7 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
         heading(ui, model, "ui-analysis-worst-corners", Analysis::Cycle);
         table(ui, "ui-analysis-worst-corners", &rows, None);
     }
-    points(ui, model);
+    points(ui, model, actions);
     if let Some(rows) = &ranking {
         heading(ui, model, "ui-analysis-sensitivity", Analysis::Sensitivity);
         table(ui, "ui-analysis-sensitivity", rows, None);
@@ -1170,7 +1505,7 @@ fn optimised_front(ui: &mut Ui, model: &Model) {
     let Some((points, result)) = model.optimised_front() else { return };
     let tr = |key: &str| model.tr.tr(key).to_string();
     ui.label(tr("ui-optimised-front"));
-    Plot::new("optimised-front")
+    plot("optimised-front")
         .height(160.0)
         .x_axis_label(tr("ui-analysis-cycle-time"))
         .y_axis_label(tr("ui-optimised-energy"))
@@ -1178,6 +1513,14 @@ fn optimised_front(ui: &mut Ui, model: &Model) {
             plot.points(Points::new(tr("ui-optimised-front"), points).color(PALETTE[0]).radius(3.0));
             plot.vline(VLine::new(tr("ui-optimised-result"), result).color(PALETTE[1]));
         });
+}
+
+/// Each motor's name in its colour, as a key over a plot of one line per motor: a legend in the plot covered the traces.
+fn motor_keys(ui: &mut Ui, model: &Model) {
+    let name = |m: &sim_core::MotorInfo| model.tr.tr(m.key).to_string();
+    let keys: Vec<_> =
+        model.session.motors.iter().enumerate().map(|(k, m)| (name(m), PALETTE[k % PALETTE.len()], false)).collect();
+    key_row(ui, &keys);
 }
 
 /// What the lines of the plot below are, each in its colour, dashed ones marked so: in place of a legend in the plot,
@@ -1238,15 +1581,15 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
             )
             .collect();
         key_row(ui, &keys);
-        Plot::new(("breakdown", &title))
+        let drawn = plot(("breakdown", &title))
             .height(150.0)
             .link_axis("scopes", [true, false])
             .link_cursor("scopes", [true, false])
             .x_axis_label(tr("ui-time"))
             .show(ui, |plot| {
-                for (i, (label, points)) in parts.into_iter().enumerate() {
+                for (i, (label, points)) in parts.iter().enumerate() {
                     // The torque itself, which the parts add up to, dashed.
-                    let line = Line::new(label, points);
+                    let line = Line::new(label, points.clone());
                     plot.line(if i == TOTAL {
                         line.color(Color32::GRAY).style(LineStyle::dashed_dense()).width(1.5)
                     } else {
@@ -1254,6 +1597,7 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
                     });
                 }
             });
+        save_menu(&drawn.response, model, &title, &tr("ui-time"), || series(&parts), actions);
     }
     for (rows, key) in
         [(model.breakdown_table(), "ui-effects-breakdown-cycle"), (model.budget_table(), "ui-effects-budget")]
@@ -1282,7 +1626,7 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
         keys.push((tr("ui-effects-now"), PALETTE[0], false));
         key_row(ui, &keys);
         // Powers of five on the speed axis: with powers of ten a speed limit of 0.8 m/s has no labelled tick but 0.
-        Plot::new(("friction", &view.title))
+        plot(("friction", &view.title))
             .height(180.0)
             .x_grid_spacer(log_grid_spacer(5))
             .x_axis_label(tr("ui-effects-speed"))
@@ -1299,8 +1643,8 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
             });
         table(ui, &format!("friction-{}", view.title), &view.table, None);
     }
-    thermal(ui, model);
-    belt(ui, model);
+    thermal(ui, model, actions);
+    belt(ui, model, actions);
     compare(ui, model, inputs, actions);
 }
 
@@ -1393,7 +1737,7 @@ fn sankey(ui: &mut Ui, model: &Model) {
             // left of the middle and right bars, at their middle, and right of the left ones at their foot, below the
             // middle column's names.
             if bottom - top >= 11.0 {
-                let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(11.0), CHALK);
+                let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(11.0), chalk());
                 job.wrap = egui::text::TextWrapping::truncate_at_width(xs[1] - xs[0] - bar - 6.0);
                 let galley = painter.layout_job(job);
                 let size = galley.size();
@@ -1401,7 +1745,7 @@ fn sankey(ui: &mut Ui, model: &Model) {
                     0 => egui::pos2(xs[c] + bar + 3.0, bottom - 8.0 - size.y / 2.0),
                     _ => egui::pos2(xs[c] - 3.0 - size.x, (top + bottom - size.y) / 2.0),
                 };
-                painter.galley(at, galley, CHALK);
+                painter.galley(at, galley, chalk());
             }
         }
     }
@@ -1409,7 +1753,7 @@ fn sankey(ui: &mut Ui, model: &Model) {
 
 /// The temperatures of windings, gearboxes and guides over the scopes' window, the table of where they are and settle,
 /// and the scale the 3D view colours them by.
-fn thermal(ui: &mut Ui, model: &Model) {
+fn thermal(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let view = model.thermal_view();
     ui.separator();
@@ -1426,17 +1770,18 @@ fn thermal(ui: &mut Ui, model: &Model) {
             .map(|((label, _), color)| (label.clone(), *color, false))
             .collect::<Vec<_>>(),
     );
-    Plot::new("thermal")
+    let drawn = plot("thermal")
         .height(150.0)
         .link_axis("scopes", [true, false])
         .link_cursor("scopes", [true, false])
         .x_axis_label(tr("ui-time"))
         .y_axis_label(tr("ui-effects-rise"))
         .show(ui, |plot| {
-            for ((label, points), color) in view.lines.into_iter().zip(PALETTE.iter().cycle()) {
-                plot.line(Line::new(label, points).color(*color).width(1.8));
+            for ((label, points), color) in view.lines.iter().zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(label, points.clone()).color(*color).width(1.8));
             }
         });
+    save_menu(&drawn.response, model, &tr("ui-effects-rise"), &tr("ui-time"), || series(&view.lines), actions);
     table(ui, "thermal", &view.table, None);
     ui.horizontal(|ui| {
         scale_bar(ui, &tr("ui-effects-cold"), &tr("ui-effects-rated"), heat_color);
@@ -1447,7 +1792,7 @@ fn thermal(ui: &mut Ui, model: &Model) {
 
 /// Tension and stretch of each belt section over the scopes' window, against pretension and rating, the table of the
 /// newest sample, and the scale the 3D view colours the belt by.
-fn belt(ui: &mut Ui, model: &Model) {
+fn belt(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let Some(view) = model.belt_view() else { return };
     ui.separator();
@@ -1465,14 +1810,14 @@ fn belt(ui: &mut Ui, model: &Model) {
     keys.push((tr("ui-effects-pretension"), Color32::GRAY, true));
     ui.label(&view.titles[0]);
     key_row(ui, &keys);
-    Plot::new("belt-tension")
+    let drawn = plot("belt-tension")
         .height(150.0)
         .link_axis("scopes", [true, false])
         .link_cursor("scopes", [true, false])
         .x_axis_label(tr("ui-time"))
         .show(ui, |plot| {
-            for ((label, points), color) in view.tension.into_iter().zip(PALETTE.iter().cycle()) {
-                plot.line(Line::new(label, points).color(*color).width(1.8));
+            for ((label, points), color) in view.tension.iter().zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(label, points.clone()).color(*color).width(1.8));
             }
             plot.hline(
                 HLine::new(tr("ui-effects-pretension"), view.pretension)
@@ -1480,17 +1825,19 @@ fn belt(ui: &mut Ui, model: &Model) {
                     .style(LineStyle::dashed_dense()),
             );
         });
+    save_menu(&drawn.response, model, &view.titles[0], &tr("ui-time"), || series(&view.tension), actions);
     ui.label(&view.titles[1]);
-    Plot::new("belt-stretch")
+    let drawn = plot("belt-stretch")
         .height(130.0)
         .link_axis("scopes", [true, false])
         .link_cursor("scopes", [true, false])
         .x_axis_label(tr("ui-time"))
         .show(ui, |plot| {
-            for ((label, points), color) in view.stretch.into_iter().zip(PALETTE.iter().cycle()) {
-                plot.line(Line::new(label, points).color(*color).width(1.8));
+            for ((label, points), color) in view.stretch.iter().zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(label, points.clone()).color(*color).width(1.8));
             }
         });
+    save_menu(&drawn.response, model, &view.titles[1], &tr("ui-time"), || series(&view.stretch), actions);
     table(ui, "belt", &view.table, None);
     // The 3D view's belt colour: from no tension through pretension (the belt's own colour) to twice the pretension.
     scale_bar(ui, &view.scale[0], &view.scale[1], |f| part_color(sim_core::scene::BELT_COLOR, 2.0 * f - 1.0, None));
@@ -1550,12 +1897,24 @@ fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
         .collect();
     keys.push((tr("ui-effects-off"), Color32::GRAY, true));
     key_row(ui, &keys);
-    Plot::new("compare").height(170.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
-        for ((label, on, off), color) in view.lines.into_iter().zip(PALETTE.iter().cycle()) {
-            plot.line(Line::new(label.clone(), on).color(*color).width(1.8));
-            plot.line(Line::new(label, off).color(*color).style(LineStyle::dashed_dense()).width(1.2));
+    let drawn = plot("compare").height(170.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
+        for ((label, on, off), color) in view.lines.iter().zip(PALETTE.iter().cycle()) {
+            plot.line(Line::new(label, on.clone()).color(*color).width(1.8));
+            plot.line(Line::new(label, off.clone()).color(*color).style(LineStyle::dashed_dense()).width(1.2));
         }
     });
+    save_menu(
+        &drawn.response,
+        model,
+        &view.title,
+        &tr("ui-time"),
+        || {
+            let off = |label: &str| format!("{label} · {}", tr("ui-effects-off"));
+            let lines = view.lines.iter();
+            lines.flat_map(|(l, on, o)| [(l.clone(), on.clone(), false), (off(l), o.clone(), false)]).collect()
+        },
+        actions,
+    );
     table(ui, "compare", &view.table, None);
 }
 
@@ -1656,16 +2015,19 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
     });
     if let Some((across, up, points)) = model.path_plot() {
         heading(ui, model, "ui-path-planned", Analysis::Path);
-        let plot = Plot::new("path-planned").height(200.0).x_axis_label(across).y_axis_label(up);
+        let plot = plot("path-planned").height(200.0).x_axis_label(&across).y_axis_label(up);
         // Two axes of the machine are drawn to the same scale, so that a circle is one.
         let plot = if model.session.axes.len() > 1 { plot.data_aspect(1.0) } else { plot };
-        plot.show(ui, |plot| plot.line(Line::new(tr("ui-path-planned"), points).color(PALETTE[1]).width(1.8)));
+        let drawn = plot
+            .show(ui, |plot| plot.line(Line::new(tr("ui-path-planned"), points.clone()).color(PALETTE[1]).width(1.8)));
+        let series = || vec![(tr("ui-path-planned"), points.clone(), false)];
+        save_menu(&drawn.response, model, &tr("ui-path-planned"), &across, series, actions);
     }
     for (rows, key) in tables.iter().zip(["ui-path-result", "ui-analysis-motors", "ui-analysis-verdicts"]) {
         heading(ui, model, key, Analysis::Path);
         table(ui, &format!("path-{key}"), rows, None);
     }
-    torque_speed(ui, model, Analysis::Path);
+    torque_speed(ui, model, Analysis::Path, actions);
     workspace(ui, model, inputs);
 }
 
@@ -1697,7 +2059,7 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
     let side = ui.available_width().min(360.0);
     let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, INSET);
+    painter.rect_filled(rect, 0.0, inset());
     let n = slice.n;
     // Node (i, j) at the middle of its cell; y upwards, as in the plots.
     let cell = side / n as f32;
@@ -1727,9 +2089,9 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
         );
     }
     let travel = Rect::from_two_pos(place(axes[0].min, axes[1].min), place(axes[0].max, axes[1].max));
-    painter.rect_stroke(travel, 0.0, Stroke::new(1.0, CHALK), egui::StrokeKind::Middle);
+    painter.rect_stroke(travel, 0.0, Stroke::new(1.0, chalk()), egui::StrokeKind::Middle);
     let label = |pos: egui::Pos2, align: egui::Align2, text: String| {
-        painter.text(pos, align, text, FontId::proportional(11.0), DIM)
+        painter.text(pos, align, text, FontId::proportional(11.0), dim())
     };
     let unit = |i: usize| format!("{} [{}]", tr(axes[i].key), axes[i].unit);
     label(
@@ -1795,60 +2157,100 @@ fn trace(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
             }
         });
     }
+    if !overlay.is_empty() {
+        motor_keys(ui, model);
+    }
     for (key, motors) in overlay {
-        ui.strong(tr(key));
-        let plot = Plot::new(key)
-            .height(150.0)
-            .legend(Legend::default())
-            .link_axis("overlay", [true, false])
-            .link_cursor("overlay", [true, false]);
-        plot.x_axis_label(tr("ui-time")).show(ui, |plot| {
-            for ((motor, [measured, simulated]), color) in
-                model.session.motors.iter().zip(motors).zip(PALETTE.iter().cycle())
-            {
-                // Both carry the motor's name: one legend entry switches both.
-                plot.line(Line::new(tr(motor.key), measured).color(*color).width(1.8));
-                plot.line(
-                    Line::new(tr(motor.key), simulated).color(*color).style(LineStyle::dashed_dense()).width(1.2),
-                );
+        // The speed in the unit chosen; drawn with the peaks kept: a trace may have a sample per 125 us for minutes.
+        let (title, factor) = match *key {
+            "ui-overlay-speed" if model.units.rpm => {
+                (tr("ui-overlay-speed-rpm"), model.units.scale(sim_app::runs::Quantity::Speed.unit()).0)
+            }
+            _ => (tr(key), 1.0),
+        };
+        let line = |points: &Vec<[f64; 2]>| plot_line(points.len(), |n| [points[n][0], points[n][1] * factor]);
+        let lines: Vec<_> =
+            model.session.motors.iter().zip(motors).map(|(m, [a, b])| (tr(m.key), line(a), line(b))).collect();
+        ui.strong(&title);
+        let plot = plot(key).height(150.0).link_axis("overlay", [true, false]).link_cursor("overlay", [true, false]);
+        let drawn = plot.x_axis_label(tr("ui-time")).show(ui, |plot| {
+            for ((name, measured, simulated), color) in lines.iter().zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(name, measured.clone()).color(*color).width(1.8));
+                plot.line(Line::new(name, simulated.clone()).color(*color).style(LineStyle::dashed_dense()).width(1.2));
             }
         });
+        save_menu(
+            &drawn.response,
+            model,
+            &title,
+            &tr("ui-time"),
+            || {
+                let measured =
+                    lines.iter().map(|(n, m, _)| (format!("{n} · {}", tr("ui-run-measured")), m.clone(), false));
+                let replayed =
+                    lines.iter().map(|(n, _, s)| (format!("{n} · {}", tr("ui-run-replayed")), s.clone(), false));
+                measured.chain(replayed).collect()
+            },
+            actions,
+        );
     }
 }
 
 /// The operating points of the analysed cycle (`Analysis::Cycle`) or of the path that was run (`Analysis::Path`)
 /// over the motors' torque-speed curves, peak dashed and S1 dotted; each motor's points in its colour, hidden by a
 /// click on its name in the legend.
-fn torque_speed(ui: &mut Ui, model: &Model, kind: Analysis) {
+fn torque_speed(ui: &mut Ui, model: &Model, kind: Analysis, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let Some((points, [high, low, s1_high, s1_low])) = model.points_plot(kind) else { return };
     heading(ui, model, "ui-points", kind);
-    Plot::new(("ui-points", kind as u8))
+    motor_keys(ui, model);
+    key_row(ui, &[(tr("ui-points-curve"), Color32::GRAY, true), (tr("ui-points-s1"), chalk(), true)]);
+    let drawn = plot(("ui-points", kind as u8))
         .height(220.0)
-        .legend(Legend::default())
-        .x_axis_label(tr("ui-points-speed"))
+        .x_axis_label(model.speed_label())
         .y_axis_label(tr("ui-points-torque"))
         .show(ui, |plot| {
-            for ((motor, points), color) in model.session.motors.iter().zip(points).zip(PALETTE.iter().cycle()) {
-                plot.points(Points::new(tr(motor.key), points).color(*color).radius(1.0));
+            for ((motor, points), color) in model.session.motors.iter().zip(&points).zip(PALETTE.iter().cycle()) {
+                plot.points(Points::new(tr(motor.key), points.clone()).color(*color).radius(1.0));
             }
-            for line in [high, low] {
+            for line in [&high, &low] {
                 plot.line(
-                    Line::new(tr("ui-points-curve"), line)
+                    Line::new(tr("ui-points-curve"), line.clone())
                         .color(Color32::GRAY)
                         .style(LineStyle::dashed_dense())
                         .width(1.5),
                 );
             }
-            for line in [s1_high, s1_low] {
-                plot.line(Line::new(tr("ui-points-s1"), line).color(CHALK).style(LineStyle::dotted_dense()).width(1.5));
+            for line in [&s1_high, &s1_low] {
+                plot.line(
+                    Line::new(tr("ui-points-s1"), line.clone())
+                        .color(chalk())
+                        .style(LineStyle::dotted_dense())
+                        .width(1.5),
+                );
             }
         });
+    let series = || {
+        let motors = model.session.motors.iter().zip(&points).map(|(m, p)| (tr(m.key), p.clone(), true));
+        let curves = [
+            (&high, "ui-points-curve"),
+            (&low, "ui-points-curve"),
+            (&s1_high, "ui-points-s1"),
+            (&s1_low, "ui-points-s1"),
+        ];
+        motors.chain(curves.map(|(line, key)| (tr(key), line.clone(), false))).collect()
+    };
+    save_menu(&drawn.response, model, &tr("ui-points-torque"), &model.speed_label(), series, actions);
+}
+
+/// The lines of a plot as the report's SVG takes them: name, points, drawn as a line.
+fn series(lines: &[(String, Vec<[f64; 2]>)]) -> Vec<(String, Vec<[f64; 2]>, bool)> {
+    lines.iter().map(|(name, points)| (name.clone(), points.clone(), false)).collect()
 }
 
 /// The operating points of the analysed cycle over the motors' torque-speed curves, and as a table.
-fn points(ui: &mut Ui, model: &Model) {
-    torque_speed(ui, model, Analysis::Cycle);
+fn points(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    torque_speed(ui, model, Analysis::Cycle, actions);
     // Thousands of rows: only those in sight are made. Row 0 is the header.
     let Some((count, _)) = model.points_table(0..0) else { return };
     let height = ui.text_style_height(&bevy_egui::egui::TextStyle::Body) + ui.spacing().item_spacing.y;
@@ -1907,29 +2309,19 @@ fn sweep(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Acti
     });
     if let (Some(sweeps), Some(rows)) = (&model.sweeps, &found) {
         heading(ui, model, "ui-sweep-gain", Analysis::Sweep);
-        Plot::new("sweep-gain")
-            .height(160.0)
-            .legend(Legend::default())
-            .link_axis("sweep", [true, false])
-            .x_axis_formatter(hertz)
-            .show(ui, |plot| {
-                for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
-                    let line: Vec<[f64; 2]> =
-                        points.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
-                    plot.line(Line::new(tr(motor.key), line).color(*color).width(1.8));
-                }
-            });
+        motor_keys(ui, model);
+        plot("sweep-gain").height(160.0).link_axis("sweep", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
+                let line: Vec<[f64; 2]> = points.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
+                plot.line(Line::new(tr(motor.key), line).color(*color).width(1.8));
+            }
+        });
         ui.strong(format!("{} [°], {} [{}]", tr("ui-tuning-phase"), tr("ui-tuning-frequency"), tr("unit-hz")));
-        Plot::new("sweep-phase")
-            .height(120.0)
-            .legend(Legend::default())
-            .link_axis("sweep", [true, false])
-            .x_axis_formatter(hertz)
-            .show(ui, |plot| {
-                for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
-                    plot.line(Line::new(tr(motor.key), phase_line(points)).color(*color).width(1.8));
-                }
-            });
+        plot("sweep-phase").height(120.0).link_axis("sweep", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            for ((motor, points), color) in model.session.motors.iter().zip(sweeps).zip(PALETTE.iter().cycle()) {
+                plot.line(Line::new(tr(motor.key), phase_line(points)).color(*color).width(1.8));
+            }
+        });
         heading(ui, model, "ui-sweep-found", Analysis::Sweep);
         table(ui, "ui-sweep-found", rows, None);
     }
@@ -1991,7 +2383,7 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 ui.monospace(format!("{value:.1} {unit}"));
             }
         });
-        Plot::new("tuning-step").height(150.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
+        plot("tuning-step").height(150.0).x_axis_label(tr("ui-time")).show(ui, |plot| {
             let size = result.step.size * scale;
             let end = result.step.trace.last().map_or(0.0, |p| p.0);
             plot.line(
@@ -2003,21 +2395,18 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             plot.line(Line::new(tr("quantity-position"), points).color(PALETTE[1]).width(1.8));
         });
         ui.strong(format!("{} · {} [{}]", tr(axis.key), tr("ui-tuning-gain"), tr("unit-db")));
-        Plot::new("tuning-gain").height(130.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(
-            ui,
-            |plot| {
-                let limit = [result.response.first(), result.response.last()]
-                    .map(|p| [p.map_or(0.0, |p| p.frequency.log10()), -3.0]);
-                plot.line(
-                    Line::new(format!("-3 {}", tr("unit-db")), limit.to_vec())
-                        .style(LineStyle::dashed_dense())
-                        .color(Color32::GRAY),
-                );
-                let points: Vec<[f64; 2]> =
-                    result.response.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
-                plot.line(Line::new(tr("ui-tuning-gain"), points).color(PALETTE[0]).width(1.8));
-            },
-        );
+        plot("tuning-gain").height(130.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(ui, |plot| {
+            let limit = [result.response.first(), result.response.last()]
+                .map(|p| [p.map_or(0.0, |p| p.frequency.log10()), -3.0]);
+            plot.line(
+                Line::new(format!("-3 {}", tr("unit-db")), limit.to_vec())
+                    .style(LineStyle::dashed_dense())
+                    .color(Color32::GRAY),
+            );
+            let points: Vec<[f64; 2]> =
+                result.response.iter().map(|p| [p.frequency.log10(), 20.0 * p.gain.log10()]).collect();
+            plot.line(Line::new(tr("ui-tuning-gain"), points).color(PALETTE[0]).width(1.8));
+        });
         ui.strong(format!(
             "{} · {} [°], {} [{}]",
             tr(axis.key),
@@ -2025,7 +2414,7 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             tr("ui-tuning-frequency"),
             tr("unit-hz")
         ));
-        Plot::new("tuning-phase").height(110.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(
+        plot("tuning-phase").height(110.0).link_axis("tuning", [true, false]).x_axis_formatter(hertz).show(
             ui,
             |plot| {
                 plot.line(Line::new(tr("ui-tuning-phase"), phase_line(&result.response)).color(PALETTE[2]).width(1.8));
@@ -2043,7 +2432,12 @@ fn modes_plot(ui: &mut Ui, model: &Model, result: &sim_app::model::Tuning) {
     let count = result.modes.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let Some(axis) = model.session.axes.get(result.axis).filter(|_| count > 0) else { return };
     ui.strong(format!("{} [{}] · {} [{}]", tr("ui-tuning-modes"), tr("unit-hz"), tr(axis.key), axis.unit));
-    Plot::new("tuning-modes").height(150.0).legend(Legend::default()).show(ui, |plot| {
+    let mut keys: Vec<_> = (0..count)
+        .map(|i| (format!("{} {}", tr("ui-tuning-mode"), i + 1), PALETTE[i % PALETTE.len()], false))
+        .collect();
+    keys.push((tr("ui-tuning-shaper"), Color32::GRAY, true));
+    key_row(ui, &keys);
+    plot("tuning-modes").height(150.0).show(ui, |plot| {
         for (key, i) in [("ui-tuning-shaper", 1), ("ui-tuning-shaper2", 2)] {
             let path = if i == 1 { "profile.shaper_frequency_hz" } else { "profile.shaper2_frequency_hz" };
             if let Some(hz) = model.config.f64(path).ok().filter(|hz| *hz > 0.0) {
