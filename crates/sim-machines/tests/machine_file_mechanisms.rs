@@ -354,6 +354,34 @@ fn a_rotary_axis_turns_in_rad_with_its_strain_wave_gear() {
     );
 }
 
+/// The rotary table's bearing friction by hand: 2 N m Coulomb and 0.5 N m s/rad viscous at the axis, turning at
+/// 1 rad/s, take 2 + 0.5 * 1 = 2.5 N m; through the gear of ratio 100 that is 2.5 / 100 = 0.025 N m at the motor (the
+/// rotor at 100 rad/s, far above the motor's smoothing of 0.5 rad/s: tanh(200) = 1). The motor's own friction, the
+/// gear's efficiency and the ripple are off, so the torque breakdown's friction part is the bearing's alone; with
+/// effects.guide_friction off it is nothing.
+#[test]
+fn a_rotary_axis_has_the_hand_calculated_bearing_friction() {
+    let netlist = TABLE_NETLIST.replace(
+        "strain_wave = \"strain_wave\"",
+        "strain_wave = \"strain_wave\", friction_coulomb_nm = 2.0, friction_viscous_nm_s_rad = 0.5",
+    );
+    let friction = |on: bool| {
+        let mut cfg = kit_as_file("rotary-table", &netlist);
+        for off in ["belt_stretch", "motor_friction", "gearbox_efficiency", "torque_ripple"] {
+            cfg.set_text(&format!("effects.{off} = false")).unwrap();
+        }
+        cfg.set_text(&format!("effects.guide_friction = {on}")).unwrap();
+        let machine = sim_netlist::build(&cfg).unwrap();
+        let (mut state, mut torque) = (Vec::new(), [0.0]);
+        machine.equilibrium(&[1.0], &mut state, &mut torque);
+        machine.set_tool_velocity(&mut state, &[1.0]);
+        signal(machine.as_ref(), &state, &torque, "motor.1.torque_friction")
+    };
+    let (on, off) = (friction(true), friction(false));
+    assert!(close(on, 0.025, 1e-12), "{on} N m");
+    assert!(off.abs() < 1e-15, "{off} N m");
+}
+
 /// Both shipped files pass the standard suite of every machine (round trip, static hold, determinism, energy
 /// conservation without losses, the loss budget with them), without losses, elastic and rigid. Their X and Y lie flat:
 /// backlash off, as for the portal they come from (machine_files.rs says why).

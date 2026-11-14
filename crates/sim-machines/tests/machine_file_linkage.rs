@@ -424,6 +424,13 @@ fn a_broken_linkage_is_refused_with_its_key_and_line() {
             "machine.body[plate] (a file with a linkage has axes, motors, gearboxes and the linkage only)".into()
         )
     );
+    // A belt effect switched on: a linkage has no belt, and the effect would be ignored without a word.
+    let (e, line) = refused("[effects]\n", "[effects]\nbelt_wrap = true\n");
+    assert_eq!(e, ConfigError::Invalid("effects.belt_wrap (a linkage has no belt: switch it off)".into()));
+    assert_eq!(line, Some(line_with("[effects]") + 1));
+    // A spatial linkage's value on the planar one.
+    let (e, _) = refused("height_edge_m = \"", "radius_m = 0.4\nheight_edge_m = \"");
+    assert_eq!(e, ConfigError::Invalid("machine.linkage[delta].radius_m (not for a linkage of two arms)".into()));
     // A misspelt field of the node.
     let (e, _) = refused("upper_arm_kg = \"", "upper_arm_kgs = \"");
     assert_eq!(e, ConfigError::Unknown("machine.linkage[delta].upper_arm_kgs".into()));

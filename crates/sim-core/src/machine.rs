@@ -217,8 +217,8 @@ pub trait Machine: Send {
         self.resonance_hz(tool_pose).map(|hz| Mode { hz, damping: 0.0 }).into_iter().collect()
     }
     /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
-    /// of the pulleys and idlers, in the order of `motors`. Empty where the machine gives no belt geometry or the
-    /// effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.
+    /// of the pulleys and idlers, in the order of `motors`; NaN for a motor that drives no belt. Empty where the machine
+    /// gives no belt geometry or the effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.
     fn belt_wraps(&self, _tool_pose: &[f64]) -> Vec<f64> {
         Vec::new()
     }

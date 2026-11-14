@@ -166,9 +166,8 @@ fn values_config(own: &Config, cfg: &Config, layout: &str, table: &str) -> Resul
 }
 
 /// Per motor its worm stage while effects.gearbox_efficiency counts it. Its gearbox then keeps only what a screw or rack
-/// behind it loses (`extra_efficiency`, 1 for none): `worm::factors` gives the worm's share.
-/// shortcut: a worm's efficiencies do not follow its temperature (effects.thermal_feedback); add a law for worm gears if
-/// a cycle warms one far.
+/// behind it loses (`extra_efficiency`, 1 for none): `worm::factors` gives the worm's share. With
+/// effects.thermal_feedback its efficiencies follow its temperature (`set_part_temperatures`, `worm::warmed`).
 fn worm_stages(
     cfg: &Config,
     net: &Netlist,
@@ -188,17 +187,12 @@ fn worm_stages(
         .collect())
 }
 
-/// With effects.belt_wrap: per motor the wheels next to its pulley along the belt, the one before it in the route of
-/// the section that ends at it and the one after it in the route of the section that starts at it (`belt_wraps`).
-/// Refused where a motor drives no pulley, a pulley does not end one route and start another, or it or a wheel next to
-/// it has no place (`at_m`).
+/// With effects.belt_wrap: per motor that drives a pulley the wheels next to it along the belt, the one before it in the
+/// route of the section that ends at it and the one after it in the route of the section that starts at it
+/// (`belt_wraps`); a motor with a screw, rack, linear motor or rotary has no wrap. Refused where a pulley does not end
+/// one route and start another, or it or a wheel next to it has no place (`at_m`).
 fn wrap_neighbours(net: &Netlist, direct: &[Option<Direct>]) -> Result<Vec<(usize, Waypoint, Waypoint)>, ConfigError> {
     let refuse = |why: String| ConfigError::Invalid(format!("effects.belt_wrap ({why})"));
-    // shortcut: the wraps are reported per motor, in the motors' order; give them per pulley if a file needs the wrap
-    // beside a screw.
-    if direct.iter().any(Option::is_some) {
-        return Err(refuse("not with a screw, rack, linear motor or rotary yet".into()));
-    }
     let (placed, name) = (
         |w: Waypoint| match w {
             Waypoint::Pulley(kk) => net.motors[kk].at.is_some(),
@@ -212,7 +206,7 @@ fn wrap_neighbours(net: &Netlist, direct: &[Option<Direct>]) -> Result<Vec<(usiz
         },
     );
     let mut out = Vec::new();
-    for (kk, d) in net.motors.iter().enumerate() {
+    for (kk, d) in net.motors.iter().enumerate().filter(|(kk, _)| direct[*kk].is_none()) {
         let me = Waypoint::Pulley(kk);
         let ends: Vec<&Vec<Waypoint>> =
             net.sections.iter().map(|s| &s.route).filter(|r| r.last() == Some(&me)).collect();
@@ -327,8 +321,10 @@ pub struct ConfigMachine {
     /// The netlist has a leaning body, and with effects.tool_flex in the elastic model it leans (`machine.lean`).
     lean_node: Option<LeanNode>,
     lean: Option<LeanNode>,
-    /// Per motor: its worm stage while effects.gearbox_efficiency counts it (`worm::factors`).
+    /// Per motor: its worm stage while effects.gearbox_efficiency counts it (`worm::factors`), at its temperature; and
+    /// as configured, at the reference temperature.
     worms: Vec<Option<WormNode>>,
+    worms_configured: Vec<Option<WormNode>>,
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -580,7 +576,14 @@ impl ConfigMachine {
                     }
                     (DirectKind::Linear { attraction: motor.attraction, forcer: joint.rotor_inertia }, None)
                 }
-                Transmission::Rotary { strain_wave, .. } => {
+                Transmission::Rotary { strain_wave, bearing: [coulomb, viscous], .. } => {
+                    // The table's bearing drags at the axis: at the rotor, i times as fast, as c / i + v w / i^2.
+                    // shortcut: the bearing's friction acts at the rotor, before the gearbox's spring and efficiency, as
+                    // a screw's preload does; give the elastic model a friction at the output if a soft gear matters.
+                    if guide_friction {
+                        joint.shaft.coulomb += coulomb / ratio;
+                        joint.shaft.viscous += viscous / (ratio * ratio);
+                    }
                     let read = |t: &String| {
                         StrainWave::from_config(&values_config(own, cfg, "strain_wave", t)?)
                             .map_err(|e| renamed(e, "strain_wave", t))
@@ -864,6 +867,7 @@ impl ConfigMachine {
             ),
             lean_node: net.lean,
             lean,
+            worms_configured: worms.clone(),
             worms,
         })
     }
@@ -1363,15 +1367,39 @@ impl ConfigMachine {
         solved
     }
 
-    /// `rigid_solve` with a self-locking worm (`worm::factors`), whose rotor takes no share of the load while it is
-    /// driven back: the outputs o are solved for beside the accelerations, so that a rotor factor of 0 stays solvable.
-    /// With `fixed` the mass matrix less the rotors and `base` the axes' forces, the axes take fixed acc - K^T o = base,
-    /// and each rotor puts into its gearbox what its motor's torque (`drive`) leaves after its own acceleration,
-    /// into = i (drive - J i K acc), of which the output gets o = into * output factor / rotor factor:
-    /// rotor factor o + i^2 J K acc = output factor i drive.
+    /// `rigid_solve` with a self-locking worm (`worm::factors`), whose rotor takes no share of the load at rest and
+    /// pushes against it while it is driven back: the outputs o are solved for beside the accelerations, so that a
+    /// rotor factor of 0 stays solvable. With `fixed` the mass matrix less the rotors and `base` the axes' forces, the
+    /// axes take fixed acc - K^T o = base, and each rotor puts into its gearbox what its motor's torque (`drive`) leaves
+    /// after its own acceleration, into = i (drive - J i K acc), of which the output gets o = into * output factor /
+    /// rotor factor: rotor factor o + i^2 J K acc = output factor i drive.
+    ///
+    /// A locking worm driven back (its output's power o w below 0, the rotor factor below 0) takes a drag
+    /// D = o - into = (1 - rotor factor) o_rest instead, o_rest the torque its output holds at rest against the axes'
+    /// forces (K^T o_rest = -base): o + i^2 J K acc = i drive + D. Its output standing still sticks (K acc = 0) while
+    /// the drag that takes, o - i drive, lies between what the worm gives raising the load, -(1 / eta - 1) o_rest, and
+    /// lowering it, (1 - eta_back) o_rest; beyond, it breaks loose with the drag at that bound.
     fn rigid_locking(&self, fixed: &[Vec<f64>], base: &[f64], drive: &[f64], v: &[f64], mut solved: Rigid) -> Rigid {
         let (n, m) = (self.n(), self.m());
-        let mut factors = vec![(1.0, 1.0); m];
+        let kt: Vec<Vec<f64>> = (0..n).map(|i| (0..m).map(|kk| self.k[kk][i]).collect()).collect();
+        let holds = lstsq(&kt, &base.iter().map(|f| -f).collect::<Vec<_>>()).unwrap_or_else(|| vec![0.0; m]);
+        let locking: Vec<Option<WormNode>> =
+            self.worms.iter().map(|w| w.filter(|w| w.back_efficiency <= 0.0)).collect();
+        // Per motor: (output factor, rotor factor), or the drag a locking worm takes, or (None) it sticks.
+        #[derive(Clone, Copy)]
+        enum Row {
+            Factors(f64, f64),
+            Drag(f64),
+            Stuck,
+        }
+        let speed = |kk: usize| self.pulley_angle(kk, v);
+        let mut rows: Vec<Row> = (0..m)
+            .map(|kk| match locking[kk] {
+                Some(_) if speed(kk) == 0.0 => Row::Stuck,
+                Some(w) => Row::Factors(1.0, crate::worm::factors(&w, holds[kk] * speed(kk)).1),
+                None => Row::Factors(1.0, 1.0),
+            })
+            .collect();
         for _ in 0..3 {
             let mut a = vec![vec![0.0; n + m]; n + m];
             let mut b = base.to_vec();
@@ -1381,13 +1409,25 @@ impl ConfigMachine {
                     a[i][n + kk] = -self.k[kk][i];
                 }
             }
-            for (kk, (output, rotor)) in factors.iter().enumerate() {
+            for (kk, row) in rows.iter().enumerate() {
                 let inertia = self.ratio[kk] * self.ratio[kk] * self.j_rotor[kk];
+                let into = self.ratio[kk] * drive[kk];
+                let row = match *row {
+                    Row::Factors(_, rotor) if locking[kk].is_some() && rotor <= 0.0 => {
+                        Row::Drag((1.0 - rotor) * holds[kk])
+                    }
+                    other => other,
+                };
+                let (at_acc, at_o, rhs) = match row {
+                    Row::Factors(output, rotor) => (output * inertia, rotor, output * into),
+                    Row::Drag(drag) => (inertia, 1.0, into + drag),
+                    Row::Stuck => (1.0, 0.0, 0.0),
+                };
                 for l in 0..n {
-                    a[n + kk][l] = output * inertia * self.k[kk][l];
+                    a[n + kk][l] = at_acc * self.k[kk][l];
                 }
-                a[n + kk][n + kk] = *rotor;
-                b.push(output * self.ratio[kk] * drive[kk]);
+                a[n + kk][n + kk] = at_o;
+                b.push(rhs);
             }
             let x = solve(a, b).unwrap_or_else(|| vec![0.0; n + m]);
             solved.acc = x[..n].to_vec();
@@ -1396,7 +1436,31 @@ impl ConfigMachine {
                     * (drive[kk] - self.j_rotor[kk] * self.ratio[kk] * self.pulley_angle(kk, &solved.acc));
                 solved.out[kk] = x[n + kk];
             }
-            factors = (0..m).map(|kk| self.rigid_factors(kk, solved.into[kk], self.pulley_angle(kk, v))).collect();
+            for kk in 0..m {
+                rows[kk] = match (rows[kk], locking[kk]) {
+                    (Row::Stuck | Row::Drag(_), Some(worm)) if speed(kk) == 0.0 => {
+                        // Stuck, or broken loose this step: the bounds of the drag at rest.
+                        let ends =
+                            [-(1.0 / worm.efficiency - 1.0) * holds[kk], (1.0 - worm.back_efficiency) * holds[kk]];
+                        let (low, high) = (ends[0].min(ends[1]), ends[0].max(ends[1]));
+                        let drag = solved.out[kk] - solved.into[kk];
+                        match rows[kk] {
+                            Row::Stuck if (low..=high).contains(&drag) => Row::Stuck,
+                            Row::Stuck => Row::Drag(drag.clamp(low, high)),
+                            kept => kept,
+                        }
+                    }
+                    // By the output's power: o w is below 0 while the load drives back, whatever the rotor does.
+                    (_, Some(_)) => {
+                        let (output, rotor) = self.rigid_factors(kk, solved.out[kk], speed(kk));
+                        Row::Factors(output, rotor)
+                    }
+                    (_, None) => {
+                        let (output, rotor) = self.rigid_factors(kk, solved.into[kk], speed(kk));
+                        Row::Factors(output, rotor)
+                    }
+                };
+            }
         }
         solved
     }
@@ -2057,8 +2121,12 @@ impl Machine for ConfigMachine {
     }
 
     /// With effects.belt_wrap: per motor the wrap at its pulley (`geometry::wrap`), from where the 3D view puts it and
-    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (x, z).
+    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (x, z); NaN
+    /// for a motor that drives no belt (a screw, rack, linear motor or rotary).
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
+        if self.wraps.is_empty() {
+            return Vec::new();
+        }
         let wheel = |w: Waypoint| {
             let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
             let (at, radius) = match w {
@@ -2071,10 +2139,11 @@ impl Machine for ConfigMachine {
             };
             Wheel { centre: [at[0], at[2]], radius }
         };
-        self.wraps
-            .iter()
-            .map(|&(kk, before, after)| wrap(wheel(before), wheel(Waypoint::Pulley(kk)), wheel(after)))
-            .collect()
+        let mut out = vec![f64::NAN; self.m()];
+        for &(kk, before, after) in &self.wraps {
+            out[kk] = wrap(wheel(before), wheel(Waypoint::Pulley(kk)), wheel(after));
+        }
+        out
     }
 
     fn set_payload_attached(&mut self, attached: bool) {
@@ -2115,9 +2184,13 @@ impl Machine for ConfigMachine {
         for (kk, (gear, law)) in self.gears.iter_mut().zip(laws).enumerate() {
             if !self.coupled[kk] {
                 let rise = *next.next().unwrap_or(&0.0);
-                // A worm stage's efficiencies are its own (`worm_stages`).
-                if self.worms[kk].is_none() {
-                    gear.efficiency = law.gearbox_efficiency(rise) * self.extra_efficiency[kk];
+                // A worm stage's efficiencies are its own (`worm_stages`), its loss following the oil as the gearbox's.
+                match &self.worms_configured[kk] {
+                    Some(worm) => {
+                        let s = law.gearbox_viscous_share;
+                        self.worms[kk] = Some(crate::worm::warmed(worm, 1.0 - s + s * law.viscosity_factor(rise)));
+                    }
+                    None => gear.efficiency = law.gearbox_efficiency(rise) * self.extra_efficiency[kk],
                 }
             }
         }

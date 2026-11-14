@@ -343,6 +343,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2.",
             ),
             field(
+                "friction_coulomb_nm",
+                Kind::Number,
+                false,
+                "Its bearing's Coulomb friction at the axis, N m, while effects.guide_friction is on. Default 0.",
+            ),
+            field(
+                "friction_viscous_nm_s_rad",
+                Kind::Number,
+                false,
+                "Its bearing's viscous friction at the axis, N m s/rad, while effects.guide_friction is on. Default 0.",
+            ),
+            field(
                 "strain_wave",
                 Kind::Table,
                 false,
@@ -494,10 +506,22 @@ pub struct AxisNode {
 /// path of its values' table).
 pub enum Transmission {
     Belt,
-    Screw { values: String },
-    Rack { values: String },
-    LinearMotor { values: String },
-    Rotary { inertia: f64, payload: f64, strain_wave: Option<String> },
+    Screw {
+        values: String,
+    },
+    Rack {
+        values: String,
+    },
+    LinearMotor {
+        values: String,
+    },
+    /// `bearing`: the bearing's Coulomb (N m) and viscous (N m s/rad) friction at the axis.
+    Rotary {
+        inertia: f64,
+        payload: f64,
+        strain_wave: Option<String>,
+        bearing: [f64; 2],
+    },
 }
 
 pub struct MotorNode {
@@ -935,21 +959,23 @@ impl Netlist {
                                 let node = &rotaries[i];
                                 let inertia =
                                     number(cfg, node.required("inertia_kgm2")?, &node.at("inertia_kgm2"), &mut refs)?;
-                                let payload = node
-                                    .get("payload_inertia_kgm2")
-                                    .map(|v| number(cfg, v, &node.at("payload_inertia_kgm2"), &mut refs))
-                                    .transpose()?
-                                    .unwrap_or(0.0);
-                                if inertia <= 0.0 || payload < 0.0 {
-                                    return Err(ConfigError::Invalid(node.at(if inertia <= 0.0 {
-                                        "inertia_kgm2"
-                                    } else {
-                                        "payload_inertia_kgm2"
-                                    })));
+                                let mut optional = |name: &str| -> Result<f64> {
+                                    let v = node
+                                        .get(name)
+                                        .map(|v| number(cfg, v, &node.at(name), &mut refs))
+                                        .transpose()?
+                                        .unwrap_or(0.0);
+                                    if v < 0.0 { Err(ConfigError::Invalid(node.at(name))) } else { Ok(v) }
+                                };
+                                let payload = optional("payload_inertia_kgm2")?;
+                                let bearing =
+                                    [optional("friction_coulomb_nm")?, optional("friction_viscous_nm_s_rad")?];
+                                if inertia <= 0.0 {
+                                    return Err(ConfigError::Invalid(node.at("inertia_kgm2")));
                                 }
                                 let strain_wave =
                                     node.get("strain_wave").map(|_| table_path(node, "strain_wave")).transpose()?;
-                                (node, Transmission::Rotary { inertia, payload, strain_wave })
+                                (node, Transmission::Rotary { inertia, payload, strain_wave, bearing })
                             }
                         }
                     }
@@ -1091,8 +1117,7 @@ impl Netlist {
             if guide_nodes.iter().any(|g| g.axis == axis) {
                 return Err(ConfigError::Invalid(node.at("axis")));
             }
-            // shortcut: a rotary axis has no bearing friction of its own (only its motor's and gearbox's); give the
-            // rotary node a friction table if a table's bearing drag matters.
+            // A rotary axis's bearing friction is its rotary node's (friction_coulomb_nm, friction_viscous_nm_s_rad).
             if axis_nodes[axis].rotary {
                 return Err(ConfigError::Invalid(format!("{} (a rotary axis has no guide)", node.at("axis"))));
             }
