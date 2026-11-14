@@ -253,6 +253,8 @@ pub enum Action {
     SaveConfig(bool),
     /// The typed part names go into the config.
     ApplyParts,
+    /// The parameter panel's typed "path = value" goes into the config.
+    SetValue,
     CloseAnalysis,
     Clear(Analysis),
     ClearMessages,
@@ -653,6 +655,24 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
             }
         }
         SetupTab::Parameters => {
+            // Any key of the config by its dotted path, as `sim-cli --set` takes it; Enter or the button applies it.
+            let mut inputs = model.inputs.clone();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr("ui-set-value"));
+                let field = ui.add(TextEdit::singleline(&mut inputs.assignment).desired_width(220.0));
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button(tr("ui-set-value-apply")).clicked() || entered {
+                    actions.push(Action::SetValue);
+                }
+            });
+            if inputs != model.inputs {
+                actions.push(Action::Inputs(inputs));
+            }
+            // What the last edit was answered with, here where it was typed.
+            if let Some((key, detail)) = model.messages.last() {
+                ui.colored_label(NOTE, model.tr.tr_arg(key, detail));
+            }
+            ui.separator();
             for group in model.param_groups() {
                 ui.collapsing(tr(&group.key), |ui| {
                     for (path, key, value) in group.params {

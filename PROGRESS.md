@@ -2220,3 +2220,38 @@ Left open:
 - No signals for the d current, the housing and the image (scopes, CSV, PLC): adding signals changes every signal list
   the FMI and OPC UA tests count.
 - Switching the three on in the shipped configs, and the example outputs and test numbers that would change with it.
+
+## The app's --set, and paths from the live setpoint (14 November)
+
+- `sim-app --set path=value`, repeatable, as `sim-cli --set`: any config value by its dotted path, the value in TOML.
+  `Model::set_at_start` applies them in turn to the config (after `--machine-file`) and restarts the model with it; the
+  first refusal (`error-config-missing` for a key the config does not have, `error-config-type`, `error-config-parse`,
+  or the simulation's own, e.g. `error-config-invalid`) is printed in the app's language and the start ends with
+  code 2, nothing applied. The config text stays the file's, so "Save" writes only the changed values in place.
+  As on the command line, a value of a part the config names in `[parts]` is overwritten by the catalogue's when
+  the simulation resolves the parts (`Sim::new` does that with every config, so `sim-cli --set` behaves the same).
+- The parameter panel has a field "Set a value: key = value" (DE "Wert setzen: Schlüssel = Wert") with a button
+  "Set"/"Setzen" and Enter: `Model::set_value` sets the key and sends the config to the simulation; a refusal is
+  shown right below the field (the newest message), and a value the simulation refuses is rolled back as any edit.
+  Screenshot hook: `SIM_APP_SET="key = value"` opens the panel with that typed and applied.
+- Path plan offset: the app plans with `start.pose` set to the live setpoint, but its planning model puts the tool
+  there and the setpoint one rest sag off (0.26 mm on the planar delta). The path job now moves the planning
+  model's tool by what is left between its setpoint and the live one and builds it again, until they agree to
+  1e-10 (a fixed point: the sag barely changes over a sag's distance; at most 8 rounds). The first pose of the plan
+  is the live setpoint on every machine.
+
+Tests (`crates/sim-app/tests/app.rs`; not run here, the coordinator runs the suites):
+`values_set_at_start_change_the_config_and_the_run`: the single axis upright (`geometry.incline_deg = 90.0`),
+frictions, gearbox loss, ripple and tooth meshing off, all by `--set`: the motor holds (4 + 2) kg * 9.80665 * 0.02 m
+/ 5 = 0.235360 N m, and with `mass.payload_kg = 7.0` 5 kg * 9.80665 * 0.02 / 5 = 0.196133 N m more (`sim-cli run`
+with the same `--set`s: 0.235361 and 0.43129 N m at 0.3 s); an unknown key or a wrong type is refused with nothing
+applied. `the_panel_field_sets_any_key_and_refuses_as_the_command_line_does`: a key is set; `mass.nope_kg` gives
+"Configuration value is missing: mass.nope_kg" (the CLI's message), in German its German one; a string for a number,
+a line without `=`, and a negative carriage mass (refused by the simulation, rolled back) each their message.
+`a_planned_path_starts_at_the_live_setpoint`: on every machine the plan's first pose is the live setpoint within 1 um.
+Screenshots of the parameter panel with `--set mass.payload_kg=3.0` and `SIM_APP_SET` in EN and DE were looked at.
+
+Left open:
+
+- A setpoint within a rest sag of a stroke's end can push the planning model's tool out of range; the plan then keeps
+  the last tool pose that started, up to one sag off (`// shortcut:` in the path job).

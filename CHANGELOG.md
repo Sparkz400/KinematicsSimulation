@@ -82,6 +82,15 @@ item are in [PROGRESS.md](PROGRESS.md).
   `winding_time_constant_s`.
 - `sim-cli analyze`: columns `housing_rise_k` and `drive_overload`; the app's motor table has both.
 
+### Added
+
+- `sim-app --set path=value` (repeatable) and a "Set a value: key = value" field in the app's parameter panel: any
+  config key by its dotted path, refused as `sim-cli --set` refuses it (unknown key, wrong type, out of range).
+
+### Fixed
+
+- A path planned in the app starts at the live setpoint; on the planar delta it started 0.26 mm off it, one rest sag.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.
