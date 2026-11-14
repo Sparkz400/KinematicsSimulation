@@ -124,6 +124,8 @@ Both machine crates give their geometry: the T-gantry its carriage idlers (`idle
 
 Assumptions: the wheels stand where the scene draws them; the belt's sag and the teeth's give do not change the wrap.
 
+A machine file works the wrap out for any layout (`geometry::wrap` in [`sim-netlist`](../crates/sim-netlist/src/geometry.rs)): each wheel has a radius signed by the way the belt runs round it (+ anticlockwise, − clockwise, 0 a clamp), the straight run from wheel a to wheel b leaves in the direction t = cos α e + sin α e⊥ with e the unit vector between the centres, D their distance and sin α = −(ρ_b − ρ_a) / D, and the wrap is how far t turns round the pulley, in its sense, from 0 to 2π. For the crates' layouts that is the φ above ([machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis)).
+
 ## Sideways vibration of the belt spans
 
 Source: `span_frequency`, `span_detuning`, `drive_excitations` in [`mech.rs`](../crates/sim-components/src/mech.rs); each machine's `span_signals`; `effects.belt_span_vibration`, off by default. Signals and a check only: nothing acts back on the motion.
@@ -538,6 +540,8 @@ f_z,flex = −½ · u² · dk/dz,     dk/dz = 2 · k² · h / k_tilt
 ```
 
 The axis is softer the further it hangs below the carriage. The spring gets stiffer as the Z axis rises, which pushes back on Z (the last line; it keeps the energy balance exact). **The X position the simulator reports is the tool tip over the floor: x + q + tip · u**, and its speed likewise. The workpiece stands on the floor, not on the frame, so the frame's sway is part of path error, tracking error and the settling verdict. q and tip · u are also signals of their own. The process force acts at the tool tip: the share `tip` of it bends the Z axis, the rest pushes the carriage.
+
+A machine file's `machine.lean` node is the same for any body leaning along a horizontal axis, its lean w beside the axes with the body's mass coupling it to its axis, [[M, m e_a], [m e_a^T, m]] · [a; ẅ] = [F; tip · F_p,a − k w − c ẇ] ([machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis)); the T-gantry's file gives this crate's numbers to 1e-9.
 
 Assumptions: the Z axis is a rigid body on a compliant guide; it does not bend. Only its lean in X is a degree of freedom, not in Y and not in rotation as a state of its own. The payload sits at the centre of mass used for h.
 

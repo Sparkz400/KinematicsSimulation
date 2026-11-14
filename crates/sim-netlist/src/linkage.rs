@@ -165,8 +165,10 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            clockwise: false,
             transmission: Transmission::Belt,
             axis: None,
+            worm: None,
         });
     }
     if motors.len() != 2 || motor_nodes[0].id == motor_nodes[1].id {
@@ -181,6 +183,7 @@ pub(crate) fn read(
         idlers: Vec::new(),
         frame: None,
         spans: Vec::new(),
+        lean: None,
         refs,
         values: Vec::new(),
         linkage: Some(LinkageNode { id: id_of(node), gearboxes: arms.map(|i| id_of(&gearboxes[i])), values }),

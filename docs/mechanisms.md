@@ -124,7 +124,8 @@ The table turns about a vertical axis: M = table plus work inertia, no gravity t
 - `"worm"`: `transmission::WormGear` gives the efficiency from lead angle gamma, flank friction mu and normal pressure
   angle alpha_n: tan gamma / tan(gamma + rho'), rho' = atan(mu / cos alpha_n). Its back efficiency, tan(gamma - rho') /
   tan gamma, is computed (zero or below: the gear locks itself) but not yet used by the dynamics, see the limits.
-  The worm's efficiency is kept apart from the configured gearbox's, as a converter's is.
+  The worm's efficiency is kept apart from the configured gearbox's, as a converter's is. A machine file's `worm` node
+  is this drive with a back efficiency of its own, which locks itself at 0 or less ([machine files](machine-files.md#worm-gears)).
 - `"planetary"`: the `[gearbox]` as it is.
 
 ## Arms from URDF files

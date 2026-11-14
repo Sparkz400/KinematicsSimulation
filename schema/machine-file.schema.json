@@ -354,7 +354,7 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one).",
+                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z).",
                 "items": {
                   "type": "number"
                 },
@@ -365,6 +365,10 @@
               "body": {
                 "description": "A body it rides on, for the 3D view: at_m is then from that body. Id of a machine.body node.",
                 "type": "string"
+              },
+              "clockwise": {
+                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "type": "boolean"
               },
               "friction_nm": {
                 "description": "Bearing friction torque, N m.",
@@ -442,6 +446,117 @@
               "radius_m",
               "inertia_kgm2",
               "friction_nm"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "lean": {
+          "description": "A body leaning on its carriage along a horizontal axis (effects.tool_flex, elastic model only): its centre of mass moves sideways by u against the guide, which gives way sideways and in tilt, and the tool tip below it moves with it. At most one.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "description": "The horizontal axis it leans along. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "body": {
+                "description": "The body that leans; it moves with axis. Id of a machine.body node.",
+                "type": "string"
+              },
+              "com_drop_m": {
+                "description": "Its centre of mass below the guide with lever_axis at 0, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "damping_n_s_m": {
+                "description": "The damping of the lean at the centre of mass, N s/m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "lateral_stiffness_n_m": {
+                "description": "The guide's stiffness sideways, N/m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "lever_axis": {
+                "description": "An axis whose travel raises both towards the guide (shortens the lever). Id of a machine.axis node.",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "tilt_stiffness_nm_rad": {
+                "description": "The guide's stiffness in tilt, N m/rad.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "tool_drop_m": {
+                "description": "The tool tip below the guide with lever_axis at 0, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "body",
+              "axis",
+              "com_drop_m",
+              "tool_drop_m",
+              "lateral_stiffness_n_m",
+              "tilt_stiffness_nm_rad",
+              "damping_n_s_m"
             ],
             "type": "object"
           },
@@ -823,13 +938,17 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis.",
+                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z), which the wrap is worked out from.",
                 "items": {
                   "type": "number"
                 },
                 "maxItems": 3,
                 "minItems": 3,
                 "type": "array"
+              },
+              "clockwise": {
+                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "type": "boolean"
               },
               "gearbox": {
                 "description": "The gearbox that turns it. Id of a machine.gearbox node.",
@@ -1189,6 +1308,80 @@
         "version": {
           "const": 1,
           "description": "Version of the [machine] part."
+        },
+        "worm": {
+          "description": "A worm gear: the gearbox it names is a worm stage of this ratio, which loses by its forward efficiency while the motor drives and by its back efficiency while the load drives it back; with a back efficiency of 0 or less it locks itself. The efficiencies count with effects.gearbox_efficiency on.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "back_efficiency": {
+                "description": "Driven back by the wheel, at most 1; 0 or less locks itself.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "efficiency": {
+                "description": "Driven by the worm, above 0 and at most 1.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "gearbox": {
+                "description": "The gearbox that is the worm stage; one worm per gearbox. Id of a machine.gearbox node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "ratio": {
+                "description": "Its ratio (wheel teeth per worm start), in place of the gearbox's.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "gearbox",
+              "ratio",
+              "efficiency",
+              "back_efficiency"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "required": [

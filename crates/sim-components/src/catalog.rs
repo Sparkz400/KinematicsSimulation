@@ -1173,6 +1173,8 @@ struct Job {
     gearbox: String,
     axis: String,
     axis_weight: f64,
+    /// The id of the one motor the candidate is for (`search_motor`); "" for all of them.
+    motor: String,
 }
 
 /// The jobs of one config: every motor `wanted` takes at the supply, each with every fitting gearbox of the series
@@ -1198,6 +1200,7 @@ fn motor_jobs(
             gearbox,
             axis: axis.to_string(),
             axis_weight,
+            motor: String::new(),
         }));
     }
     out
@@ -1262,8 +1265,13 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
         parts.drive = drive;
     }
     // Not offered at this supply, or a part the config cannot take.
-    let with_parts = with_named(entry, &job.cfg, &parts).ok()?;
-    let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().len()) as f64;
+    let (with_parts, motors) = if job.motor.is_empty() {
+        let with_parts = with_named(entry, &job.cfg, &parts).ok()?;
+        let motors = (entry.build)(&with_parts).map_or(1, |m| m.motors().len()) as f64;
+        (with_parts, motors)
+    } else {
+        (with_motor_part(entry, &job.cfg, &job.motor, job.article, supply, &job.gearbox, drive).ok()?, 1.0)
+    };
     let gearbox_mass = if parts.gearbox.is_empty() { 0.0 } else { gearbox_mass(parts.gearbox).unwrap_or(f64::NAN) };
     let mass = motor_mass(job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
     let mut candidate = Candidate {
@@ -1352,4 +1360,102 @@ pub fn search_axes(
         jobs.extend(motor_jobs(&with_axis, supply, wanted, gearboxes, &name, axis_weight(cfg, &axis)));
     }
     run_jobs(entry, supply, jobs, refused)
+}
+
+/// `search_motors` for one motor of a machine with several (a machine file's `machine.motor` of id `motor`): each
+/// candidate becomes that motor's own parts, `[parts.<motor>]` (`with_motor_part`), and the other motors stay as the
+/// config has them. With `gearboxes` the motor's own gearbox ratio picks the fitting ones. The cost is that one motor's
+/// and gearbox's weight; the axis is the config's.
+pub fn search_motor(
+    entry: &MachineEntry,
+    cfg: &Config,
+    supply: &str,
+    wanted: &dyn Fn(&str) -> bool,
+    gearboxes: Option<&str>,
+    motor: &str,
+) -> Result<Vec<Candidate>, ConfigError> {
+    if !(entry.build)(cfg)?.motors().iter().any(|m| m.id == motor) {
+        return Err(ConfigError::Invalid(format!("machine.motor[{motor}] (no motor of the machine has this id)")));
+    }
+    let ratio = parts_applied(&motor_config(cfg, motor)?)?.f64("gearbox.ratio").unwrap_or(1.0);
+    let mut jobs = Vec::new();
+    for article in motor_articles_for(supply).into_iter().filter(|a| wanted(a)) {
+        let names = match gearboxes {
+            Some(series) if ratio > 1.0 => fitting_gearboxes(article, series, ratio),
+            _ => vec![String::new()],
+        };
+        jobs.extend(names.into_iter().map(|gearbox| Job {
+            cfg: cfg.clone(),
+            article,
+            gearbox,
+            axis: String::new(),
+            axis_weight: 0.0,
+            motor: motor.to_string(),
+        }));
+    }
+    Ok(run_jobs(entry, supply, jobs, Vec::new()))
+}
+
+/// The config with the catalogue motor `article` at `supply`, its drive `drive` and the gearbox `gearbox` ("" each: the
+/// motor's own) as motor `motor`'s own parts, `[parts.<motor>]` (`motor_config` puts them in), and that motor's velocity
+/// gain `drive.<motor>.velocity_kp_nm_s_rad` retuned for them as `with_named` retunes the shared one: by the square root
+/// of the ratio of the inertia that motor turns (`inertia_seen`, its column alone) times that of its rotor's.
+pub fn with_motor_part(
+    entry: &MachineEntry,
+    cfg: &Config,
+    motor: &str,
+    article: &str,
+    supply: &str,
+    gearbox: &str,
+    drive: &str,
+) -> Result<Config, ConfigError> {
+    let parse = |text: &str| text.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()));
+    // Sets `<table>.<motor>.<key>`, making the motor's table where the config has none.
+    let own = |cfg: &Config, table: &str, pairs: &[(&str, toml::Value)]| -> Result<Config, ConfigError> {
+        let mut all = parse(&cfg.to_text()?)?;
+        let shared = all.entry(table).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let shared = shared.as_table_mut().ok_or_else(|| ConfigError::Type(table.into()))?;
+        let mine = shared.entry(motor).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let mine = mine.as_table_mut().ok_or_else(|| ConfigError::Type(format!("{table}.{motor}")))?;
+        for (key, value) in pairs {
+            mine.insert(key.to_string(), value.clone());
+        }
+        Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)
+    };
+    let text = |t: &str| toml::Value::String(t.into());
+    let mut parts = vec![("motor", text(article)), ("motor_supply", text(supply))];
+    parts.extend(
+        [("drive", drive), ("gearbox", gearbox)].into_iter().filter(|(_, t)| !t.is_empty()).map(|(k, t)| (k, text(t))),
+    );
+    let out = own(cfg, "parts", &parts)?;
+    let index =
+        (entry.build)(cfg)?.motors().iter().position(|m| m.id == motor).ok_or_else(|| {
+            ConfigError::Invalid(format!("machine.motor[{motor}] (no motor of the machine has this id)"))
+        })?;
+    let rotor = |cfg: &Config| -> Result<(f64, f64), ConfigError> {
+        let mine = motor_config(cfg, motor)?;
+        Ok((
+            mine.positive("motor.rotor_inertia_kgm2")? + mine.non_negative("gearbox.inertia_at_input_kgm2")?,
+            mine.f64("gearbox.ratio").unwrap_or(1.0),
+        ))
+    };
+    // The torque motor `index` needs per unit of each axis's acceleration at the middle of the travel, over its ratio.
+    let seen = |cfg: &Config| -> Result<f64, ConfigError> {
+        let machine = (entry.build)(cfg)?;
+        let pose = sim_core::testkit::mid_pose(machine.as_ref());
+        let (axes, motors) = (machine.axes().len(), machine.motors().len());
+        let (mut holding, mut moving) = (vec![0.0; motors], vec![0.0; motors]);
+        machine.feedforward_torque(&pose, &vec![0.0; axes], &mut holding);
+        let mut sum = 0.0;
+        for axis in 0..axes {
+            let mut acc = vec![0.0; axes];
+            acc[axis] = 1.0;
+            machine.feedforward_torque(&pose, &acc, &mut moving);
+            sum += (moving[index] - holding[index]).abs();
+        }
+        Ok(sum / rotor(cfg)?.1)
+    };
+    let ratio = seen(&out)? / seen(cfg)? * rotor(&out)?.0 / rotor(cfg)?.0;
+    let gain = motor_config(cfg, motor)?.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
+    own(&out, "drive", &[("velocity_kp_nm_s_rad", toml::Value::Float(gain))])
 }

@@ -296,6 +296,7 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). Default `400v` |
 | `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's. Only on a machine whose config has a ratio above 1, and only for 1FK2 and 1FT2 motors (the gearboxes are made for them) |
 | `--axes` | Also try every axis of the catalogue of the machine's kind (below) |
+| `--motor-id ID` | Size one motor of a machine with several, a machine file's motor `ID`: each candidate becomes `[parts.ID]`, the other motors stay as the file has them, that motor's own velocity gain is retuned, `--gearboxes` fits its own ratio, and `cost_kg` is that one motor's weight (see [machine files](machine-files.md#motors-that-differ)). Not with `--axes` |
 
 | Column | Meaning |
 | --- | --- |

@@ -5,9 +5,11 @@
 //! `from_text` checks a file's text into a `MachineEntry` that every front end takes like a registered machine;
 //! `sim_machines::load_file` reads the file (TOML, or JSON converted).
 
+pub mod geometry;
 pub mod linkage;
 pub mod machine;
 pub mod netlist;
+pub mod worm;
 
 pub use machine::ConfigMachine;
 pub use netlist::{Netlist, VERSION, json_schema};
