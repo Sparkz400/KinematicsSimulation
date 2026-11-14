@@ -8,14 +8,18 @@
   :root { --bg: #fff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d9d9de; --ok: #1a7f37; --fail: #c62828; --accent: #2457c5; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #ececf0; --muted: #a0a0a8; --line: #36363c; --ok: #4cc26a; --fail: #ff6b6b; --accent: #7ea2ff; } }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
-  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
   h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 20px 0 6px; }
   p.lead { color: var(--muted); margin: 0 0 16px; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
-  select, button, textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
-  button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
+  select, button, textarea, input { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  input[type=number] { width: 6em; } input[type=radio], input[type=checkbox] { padding: 0; }
+  button, label.button { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  label.button input { display: none; }
   button:disabled { opacity: .5; cursor: default; }
   textarea { width: 100%; box-sizing: border-box; min-height: 240px; font-family: ui-monospace, monospace; font-size: 13px; }
+  textarea#path { min-height: 90px; }
   details { margin: 8px 0 16px; }
   table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
@@ -24,101 +28,318 @@
   #status { color: var(--muted); } #error { color: var(--fail); white-space: pre-wrap; }
   .scroll { overflow-x: auto; }
   .view { position: relative; margin: 8px 0 16px; }
-  canvas { display: block; width: 100%; height: min(60vh, 520px); border: 1px solid var(--line); border-radius: 6px; touch-action: none; cursor: grab; }
+  canvas#view { display: block; width: 100%; height: min(60vh, 520px); border: 1px solid var(--line); border-radius: 6px; touch-action: none; cursor: grab; }
+  canvas.plot[hidden] { display: none; }
+  canvas.plot { display: block; width: 100%; height: 190px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; }
   #legend { position: absolute; left: 8px; top: 8px; padding: 4px 8px; border-radius: 6px; background: var(--bg); opacity: .85; font: 13px/1.4 ui-monospace, monospace; pointer-events: none; white-space: pre; }
+  #scale { position: absolute; right: 8px; bottom: 8px; width: 160px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, rgb(38,77,191), rgb(242,204,26), rgb(242,26,13)); }
   .muted { color: var(--muted); }
+  .keys span { display: inline-block; margin-right: 12px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Machine simulator</h1>
-  <p class="lead">The kinematics simulator, compiled to WebAssembly, runs the machine's cycle in this browser: in 3D as it
-    moves, and as a sizing check against the motor, drive and part ratings. Nothing is sent anywhere.</p>
+  <h1 data-t="web-title">Machine simulator</h1>
+  <p class="lead" data-t="web-lead">The kinematics simulator, compiled to WebAssembly, runs the machine in this browser.</p>
   <div class="row">
-    <label for="machine">Machine</label> <select id="machine"></select>
-    <label for="lang">Language</label> <select id="lang"><option value="en">English</option><option value="de">Deutsch</option></select>
-    <button id="run" disabled>Run sizing check</button> <span id="status">Loading…</span>
+    <label for="machine" data-t="web-machine">Machine</label> <select id="machine"></select>
+    <label for="lang" data-t="web-language">Language</label> <select id="lang"><option value="en">English</option><option value="de">Deutsch</option></select>
+    <label class="button"><span data-t="web-open-file">Open machine file…</span><input type="file" id="file" accept=".toml,text/plain"></label>
+    <span id="status">Loading…</span>
   </div>
   <div class="row">
-    <button id="play" disabled>Pause</button> <button id="restart" disabled>Restart</button>
-    <span id="viewnote" class="muted">Drag to turn, wheel to zoom.</span>
+    <span data-t="web-motion">Motion</span>
+    <label><input type="radio" name="mode" value="cycle" checked> <span data-t="web-mode-cycle">the config's cycle</span></label>
+    <label><input type="radio" name="mode" value="path"> <span data-t="web-mode-path">a path</span></label>
+    <label id="optimal-box" hidden><input type="checkbox" id="optimal"> <span data-t="web-time-optimal">time-optimal</span></label>
   </div>
-  <div class="view"><canvas id="view" aria-label="The machine in 3D, running its cycle"></canvas><div id="legend"></div></div>
+  <div id="path-box" hidden>
+    <p class="muted" data-t="web-path-help"></p>
+    <textarea id="path" spellcheck="false" aria-label="Path">line,0.3,-0.2
+arc,0.5,-0.2,0.4,-0.2,cw
+line,0.5,-0.4</textarea>
+  </div>
+  <div class="row">
+    <button id="play" disabled data-t="web-pause">Pause</button> <button id="restart" disabled data-t="web-restart">Restart</button>
+    <span id="viewnote" class="muted" data-t="web-view-help">Drag to turn, wheel to zoom.</span>
+  </div>
+  <div class="view"><canvas id="view" aria-label="The machine in 3D"></canvas><div id="legend"></div><div id="scale" title=""></div></div>
+  <div class="row">
+    <label for="trailscale" data-t="web-trail-scale">Trail red at following error [mm]</label> <input type="number" id="trailscale" value="2" min="0.0001" step="any">
+    <button id="cleartrail" data-t="web-clear-trail">Clear trail</button>
+    <label for="window" data-t="web-window">Plot window [s]</label> <input type="number" id="window" value="5" min="0.1" max="60" step="any">
+  </div>
+  <p class="muted" data-t="web-plots"></p>
+  <div class="keys" id="keys"></div>
+  <canvas class="plot" id="plot-torque"></canvas>
+  <canvas class="plot" id="plot-speed"></canvas>
+  <canvas class="plot" id="plot-error"></canvas>
   <details>
-    <summary>Config (TOML; edit motor, masses, cycle, ratings…)</summary>
+    <summary data-t="web-config">Config (TOML)</summary>
     <textarea id="config" spellcheck="false" aria-label="Config"></textarea>
+    <div class="row"><button id="useeditor" data-t="web-use-editor">Use the editor as a machine file</button></div>
   </details>
+  <div class="row"><button id="run" disabled data-t="web-run">Run sizing check</button> <span id="runstatus" class="muted"></span></div>
   <div id="error" role="alert"></div>
   <div id="result" class="scroll"></div>
+  <h2 data-t="web-sweep">Frequency response</h2>
+  <div class="row"><select id="sweepmotor"></select> <button id="sweep" disabled data-t="web-sweep-run">Run sweep</button> <span id="sweepstatus" class="muted"></span></div>
+  <canvas class="plot" id="plot-gain" hidden></canvas><canvas class="plot" id="plot-phase" hidden></canvas>
+  <h2 data-t="web-fit">Fit to a trace</h2>
+  <p class="muted" data-t="web-fit-help"></p>
+  <div class="row"><label class="button"><span data-t="web-fit-open">Open trace…</span><input type="file" id="trace" accept=".csv,text/plain"></label> <span id="fitstatus" class="muted"></span></div>
+  <div id="fitresult" class="scroll"></div>
 </main>
-<script>
+
+<!-- The module runs in Web Workers, so that the page stays responsive: one steps the 3D view, one runs the sizing
+     check, the sweep and the fit. Each has its own module and so its own machine files. -->
+<script type="text/plain" id="worker-src">
 "use strict";
 let wasm;
-const $ = (id) => document.getElementById(id);
-
-// One request to the module: text in, JSON out (see crates/sim-wasm/src/lib.rs).
-function call(kind, text) {
+const answer = () => new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, wasm.out_ptr(), wasm.out_len()));
+function request(kind, text) {
   const bytes = new TextEncoder().encode(text);
   const ptr = wasm.alloc(bytes.length);
   new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
-  const code = wasm.call(kind, ptr, bytes.length);
-  const out = new Uint8Array(wasm.memory.buffer, wasm.out_ptr(), wasm.out_len());
-  const json = JSON.parse(new TextDecoder().decode(out));
-  if (code !== 0) throw new Error(json.error);
-  return json;
+  return [wasm.call(kind, ptr, bytes.length), answer()];
+}
+onmessage = async ({ data }) => {
+  if (data.url) {
+    try { wasm = (await WebAssembly.instantiateStreaming(fetch(data.url), {})).instance.exports; postMessage({ id: data.id, json: "true" }); }
+    catch (e) { postMessage({ id: data.id, error: "Could not load sim_wasm.wasm: " + e.message }); }
+    return;
+  }
+  if (data.frame !== undefined) {
+    // Steps batched per message; the frame goes back as a transferred copy, the module's memory stays here.
+    const ptr = wasm.frame(data.frame);
+    if (!ptr) { postMessage({ id: data.id, error: JSON.parse(answer()).error }); return; }
+    const frame = new Float32Array(wasm.memory.buffer, ptr, wasm.frame_len()).slice();
+    postMessage({ id: data.id, frame }, [frame.buffer]);
+    return;
+  }
+  const [code, json] = request(data.kind, data.text);
+  postMessage(code === 0 ? { id: data.id, json } : { id: data.id, error: JSON.parse(json).error });
+};
+</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const HEAD = 8, RECORD = 20, OBSTACLE_MESH = 2, SAMPLE_HEAD = 5, MOTOR_SIGNALS = 5;
+let T = {}; // the page's texts in the chosen language (request 7)
+const tr = (key, arg) => (T[key] ?? key).replace("{ $arg }", arg ?? "");
+
+// ---- Workers: one request at a time each, answered in order.
+function worker() {
+  const w = new Worker(URL.createObjectURL(new Blob([$("worker-src").textContent], { type: "text/javascript" })));
+  const waiting = new Map();
+  let next = 0;
+  w.onmessage = ({ data }) => {
+    const [resolve, reject] = waiting.get(data.id);
+    waiting.delete(data.id);
+    if (data.error !== undefined) reject(new Error(data.error));
+    else resolve(data.frame ?? JSON.parse(data.json));
+  };
+  const send = (message, transfer) => new Promise((resolve, reject) => {
+    const id = next++;
+    waiting.set(id, [resolve, reject]);
+    w.postMessage({ ...message, id }, transfer ?? []);
+  });
+  return { call: (kind, text) => send({ kind, text }), frame: (seconds) => send({ frame: seconds }), load: (url) => send({ url }) };
+}
+const viewer = worker(), analyst = worker();
+
+const fmt = (v) => v === null || v === undefined ? "–" : Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(3) : v.toFixed(3);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const lang = () => $("lang").value;
+const pathMode = () => document.querySelector("input[name=mode]:checked").value === "path";
+// Line 1 machine, line 2 language and options, then the config, and the path after a line "---" (lib.rs).
+function body(extra) {
+  const options = pathMode() ? " path" + ($("optimal").checked ? " time-optimal" : "") : "";
+  return `${$("machine").value}\n${lang()}${options}${extra ?? ""}\n${$("config").value}` + (pathMode() ? `\n---\n${$("path").value}` : "");
 }
 
-const fmt = (v) => v === null ? "–" : Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(3) : v.toFixed(3);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+async function loadTexts() {
+  const keys = ["quantity-torque", "quantity-torque-command", "quantity-speed", "quantity-speed-command", "quantity-following-error"];
+  T = await analyst.call(7, `${lang()}\n${keys.join("\n")}`);
+  document.documentElement.lang = lang();
+  document.title = tr("web-title");
+  for (const el of document.querySelectorAll("[data-t]")) el.textContent = tr(el.dataset.t);
+  $("play").textContent = tr(view.playing ? "web-pause" : "web-play");
+}
 
-function loadMachines() {
-  const current = $("machine").value;
-  $("machine").innerHTML = call(0, $("lang").value).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("");
+async function loadMachines(select) {
+  const current = select ?? $("machine").value;
+  const list = await analyst.call(0, lang());
+  const group = (file, label) => `<optgroup label="${esc(label)}">` + list.filter((m) => m.file === file)
+    .map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("") + "</optgroup>";
+  $("machine").innerHTML = group(false, tr("web-group-machines")) + group(true, tr("web-group-files"));
   if (current) $("machine").value = current;
 }
 
-function loadConfig() {
-  $("config").value = call(1, $("machine").value).config;
-  $("result").innerHTML = "";
+async function loadConfig() {
+  $("config").value = (await analyst.call(1, $("machine").value)).config;
+  $("result").innerHTML = $("fitresult").innerHTML = "";
 }
 
-function run() {
+// A machine file (TOML) read by both workers; it then is a machine of the list.
+async function useFile(name, text) {
   $("error").textContent = "";
-  $("status").textContent = "Simulating…";
-  $("run").disabled = true;
-  // Let the page paint the status before the module blocks the thread for the cycle.
-  setTimeout(() => {
-    const started = performance.now();
-    try {
-      const r = call(2, `${$("machine").value}\n${$("lang").value}\n${$("config").value}`);
-      const failed = r.verdicts.filter((v) => !v.ok).length;
-      let html = `<p><b class="${failed ? "fail" : "ok"}">${failed ? failed + " check(s) FAIL" : "Every check passes"}</b> · cycle ${fmt(r.cycle_s)} s${r.tripped ? " · <b class=fail>a drive tripped</b>" : ""}</p>`;
-      if (r.warnings.length) html += `<ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`;
-      html += "<table><thead><tr><th>Check</th><th>Motor</th><th>Value</th><th>Limit</th><th>Result</th></tr></thead><tbody>";
-      for (const v of r.verdicts) html += `<tr><td>${esc(v.label)}</td><td>${esc(v.motor ?? "")}</td><td class=n>${fmt(v.value)}</td><td class=n>${fmt(v.limit)}</td><td class="${v.ok ? "ok" : "fail"}">${v.ok ? "ok" : "FAIL"}</td></tr>`;
-      html += "</tbody></table><table><thead><tr><th>Motor</th><th>Peak torque [N m]</th><th>RMS torque [N m]</th><th>Peak speed [rad/s]</th><th>Curve used</th><th>Thermal</th><th>Winding rise [K]</th></tr></thead><tbody>";
-      for (const m of r.motors) html += `<tr><td>${esc(m.name)}</td><td class=n>${fmt(m.peak_torque_nm)}</td><td class=n>${fmt(m.rms_torque_nm)}</td><td class=n>${fmt(m.peak_speed_rad_s)}</td><td class=n>${fmt(m.utilisation)}</td><td class=n>${fmt(m.thermal_utilisation)}</td><td class=n>${fmt(m.winding_rise_k)}</td></tr>`;
-      $("result").innerHTML = html + "</tbody></table>";
-      $("status").textContent = `Done in ${((performance.now() - started) / 1000).toFixed(1)} s`;
-    } catch (e) {
-      $("error").textContent = e.message;
-      $("status").textContent = "";
-    }
-    $("run").disabled = false;
-  }, 20);
+  try {
+    const [loaded] = await Promise.all([analyst.call(4, `${name}\n${lang()}\n${text}`), viewer.call(4, `${name}\n${lang()}\n${text}`)]);
+    await loadMachines(loaded.id);
+    $("config").value = loaded.config;
+    $("status").textContent = tr("web-file-read", loaded.name);
+    startView();
+  } catch (e) { $("error").textContent = e.message; }
 }
 
-// ---- The 3D view: the module steps the machine; each frame it hands back a head and one record per part
-// (crates/sim-wasm/src/lib.rs, HEAD and RECORD): mesh, 4 × 4 matrix (column by column), colour. Scene axes: z up.
-const HEAD = 6, RECORD = 20;
-const view = { gl: null, meshes: [], fit: null, yaw: -0.9, pitch: 0.45, zoom: 1, playing: true, last: 0 };
+// ---- Plots: a canvas plotter with no library. Each pixel column of a time plot holds the lowest and highest value of
+// the samples it spans (the module's samples already hold the lowest and highest over 1 ms), so peaks stay visible.
+const COLOURS = ["#2457c5", "#d9480f", "#2b8a3e", "#ae3ec9", "#e67700", "#0b7285", "#c2255c", "#5c940d"];
+function niceTicks(lo, hi, n) {
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  return out;
+}
+// opts: x [lo, hi], log ("x", "xy" or ""), xlabel, ylabel, series: [{ colour, dash, cols: [lo[], hi[]] | pts: [[x, y]], dots }].
+function plot(canvas, opts) {
+  const dpr = devicePixelRatio, W = Math.round(canvas.clientWidth * dpr), H = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const g = canvas.getContext("2d"), style = getComputedStyle(document.body);
+  g.clearRect(0, 0, W, H);
+  g.font = `${11 * dpr}px system-ui, sans-serif`;
+  const L = 58 * dpr, R = 8 * dpr, Tp = 8 * dpr, B = 30 * dpr, pw = W - L - R, ph = H - Tp - B;
+  const lx = opts.log?.includes("x"), ly = opts.log?.includes("y");
+  const fx = (v) => lx ? Math.log10(v) : v, fy = (v) => ly ? Math.log10(v) : v;
+  let [ylo, yhi] = [Infinity, -Infinity];
+  const seen = (v) => { if (Number.isFinite(v) && (!ly || v > 0)) { ylo = Math.min(ylo, fy(v)); yhi = Math.max(yhi, fy(v)); } };
+  for (const s of opts.series) {
+    if (s.cols) for (let i = 0; i < s.cols[0].length; i++) { seen(s.cols[0][i]); seen(s.cols[1][i]); }
+    else for (const p of s.pts) seen(p[1]);
+  }
+  if (!(ylo <= yhi)) [ylo, yhi] = [-1, 1];
+  if (yhi - ylo < 1e-12 * Math.max(1, Math.abs(yhi))) { ylo -= 0.5 * Math.max(Math.abs(ylo), 1e-9); yhi += 0.5 * Math.max(Math.abs(yhi), 1e-9); }
+  const pad = (yhi - ylo) * 0.05; ylo -= pad; yhi += pad;
+  const [xlo, xhi] = opts.x.map(fx);
+  const X = (v) => L + (fx(v) - xlo) / (xhi - xlo) * pw, Y = (v) => Tp + (yhi - fy(v)) / (yhi - ylo) * ph;
+  g.strokeStyle = style.getPropertyValue("--line"); g.fillStyle = style.getPropertyValue("--muted"); g.lineWidth = dpr;
+  g.textAlign = "right"; g.textBaseline = "middle";
+  const label = (v) => (Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-3 && v !== 0)) ? v.toExponential(1) : +v.toPrecision(4) + "";
+  for (const t of niceTicks(ylo, yhi, 4)) { const y = Tp + (yhi - t) / (yhi - ylo) * ph; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(label(ly ? 10 ** t : t), L - 4 * dpr, y); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (const t of lx ? niceTicks(xlo, xhi, 6).filter(Number.isInteger) : niceTicks(xlo, xhi, 6)) { const x = L + (t - xlo) / (xhi - xlo) * pw; g.beginPath(); g.moveTo(x, Tp); g.lineTo(x, Tp + ph); g.stroke(); g.fillText(label(lx ? 10 ** t : t), x, Tp + ph + 3 * dpr); }
+  g.fillText(opts.xlabel, L + pw / 2, Tp + ph + 15 * dpr);
+  g.save(); g.translate(11 * dpr, Tp + ph / 2); g.rotate(-Math.PI / 2); g.fillText(opts.ylabel, 0, -8 * dpr); g.restore();
+  g.save(); g.beginPath(); g.rect(L, Tp, pw, ph); g.clip();
+  for (const s of opts.series) {
+    g.strokeStyle = g.fillStyle = s.colour; g.lineWidth = 1.5 * dpr; g.setLineDash(s.dash ? [6 * dpr, 4 * dpr] : []);
+    g.beginPath();
+    if (s.cols) {
+      // One column a pixel: down to its lowest, up to its highest value; joined to the next.
+      let on = false;
+      for (let i = 0; i < s.cols[0].length; i++) {
+        const lo = s.cols[0][i], hi = s.cols[1][i];
+        if (!Number.isFinite(lo)) { on = false; continue; }
+        const x = L + (i + 0.5) / dpr;
+        if (on) g.lineTo(x, Y(lo)); else g.moveTo(x, Y(lo));
+        g.lineTo(x, Y(hi)); on = true;
+      }
+      g.stroke();
+    } else if (s.dots) {
+      for (const [x, y] of s.pts) g.rect(X(x) - dpr, Y(y) - dpr, 2 * dpr, 2 * dpr);
+      g.globalAlpha = 0.5; g.fill(); g.globalAlpha = 1;
+    } else {
+      s.pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)));
+      g.stroke();
+    }
+  }
+  g.restore();
+}
+
+// ---- The 3D view's samples, kept for the plot window, and its trail.
+const store = { data: null, size: 0, count: 0, start: 0, cap: 0 };
+function resetStore(sample) {
+  store.size = sample; store.cap = 60000; store.data = new Float32Array(sample * store.cap); store.count = store.start = 0;
+  trail.points = []; trail.dirty = true;
+}
+function storeSamples(frame, from, n) {
+  for (let i = 0; i < n; i++) {
+    const s = frame.subarray(from + i * store.size, from + (i + 1) * store.size);
+    store.data.set(s, ((store.start + store.count) % store.cap) * store.size);
+    if (store.count < store.cap) store.count++; else store.start = (store.start + 1) % store.cap;
+    if (Number.isFinite(s[1])) trail.add(s[1], s[2], s[3], s[4]);
+  }
+}
+// Per pixel column of a time plot: the lowest and highest of one signal (`at`: its float in a sample, lowest; +1 highest).
+function columns(t0, t1, width, at) {
+  const lo = new Float32Array(width).fill(NaN), hi = new Float32Array(width).fill(NaN);
+  for (let i = 0; i < store.count; i++) {
+    const o = ((store.start + i) % store.cap) * store.size, t = store.data[o];
+    if (t < t0) continue;
+    const c = Math.floor((t - t0) / (t1 - t0) * width);
+    if (c >= width) continue;
+    const a = store.data[o + at], b = store.data[o + at + 1];
+    if (!(lo[c] <= a)) lo[c] = a;
+    if (!(hi[c] >= b)) hi[c] = b;
+  }
+  return [lo, hi];
+}
+function drawTimePlots() {
+  if (!view.fit || !store.count) return;
+  const last = store.data[((store.start + store.count - 1) % store.cap) * store.size];
+  const span = Math.min(60, Math.max(0.1, +$("window").value || 5)), t0 = Math.max(0, last - span), t1 = Math.max(t0 + span, last);
+  const plots = [["plot-torque", 0, 1, "web-torque-axis"], ["plot-speed", 2, 3, "web-speed-axis"], ["plot-error", 4, null, "web-error-axis"]];
+  for (const [id, actual, set, ylabel] of plots) {
+    const canvas = $(id), width = Math.max(1, Math.round((canvas.clientWidth - 66) * devicePixelRatio));
+    const series = [];
+    view.fit.motors.forEach((_, k) => {
+      const base = SAMPLE_HEAD + 2 * MOTOR_SIGNALS * k, colour = COLOURS[k % COLOURS.length];
+      if (set !== null) series.push({ colour, dash: true, cols: columns(t0, t1, width, base + 2 * set) });
+      series.push({ colour, cols: columns(t0, t1, width, base + 2 * actual) });
+    });
+    plot(canvas, { x: [t0, t1], xlabel: tr("web-time-axis"), ylabel: tr(ylabel), series });
+  }
+}
+function showKeys() {
+  $("keys").innerHTML = (view.fit?.motors ?? []).map((m, k) => `<span style="color:${COLOURS[k % COLOURS.length]}">■ ${esc(m.name)}</span>`).join("") +
+    `<span class="muted">— ${esc(tr("quantity-torque"))} / ${esc(tr("quantity-speed"))}; - - ${esc(tr("quantity-torque-command"))} / ${esc(tr("quantity-speed-command"))}</span>`;
+  $("sweepmotor").innerHTML = (view.fit?.motors ?? []).map((m, k) => `<option value="${k}">${esc(m.name)}</option>`).join("");
+}
+
+// The trail's colour: following error over the scale set on the page, blue at none, yellow at half, red at the
+// scale, magenta beyond it (as the app's heat scale, scene::heat_color).
+function trailColour(gap, scale) {
+  const h = gap / scale;
+  if (!Number.isFinite(h)) return [0.6, 0.6, 0.6];
+  if (h > 1) return [0.9, 0.2, 0.9];
+  const S = [[0.15, 0.3, 0.75], [0.95, 0.8, 0.1], [0.95, 0.1, 0.05]], at = 2 * Math.max(0, h), i = at < 1 ? 0 : 1, f = at - i;
+  return S[i].map((c, j) => c + (S[i + 1][j] - c) * f);
+}
+const trail = {
+  points: [], dirty: true,
+  add(x, y, z, gap) {
+    if (this.points.length >= 4 * 40000) this.points.splice(0, 4 * 20000);
+    this.points.push(x, y, z, gap); this.dirty = true;
+  },
+};
+
+// ---- The 3D view: the viewer worker steps the machine; each frame holds a head, one record per part and per
+// obstacle (mesh, 4 × 4 matrix column by column, colour), then the samples since the last frame. Scene axes: z up.
+const view = { gl: null, meshes: [], fit: null, frame: null, yaw: -0.9, pitch: 0.45, zoom: 1, playing: true, last: 0, owed: 0, pending: false, run: 0, plotted: 0 };
 
 const VS = `#version 300 es
 in vec3 p; in vec3 n; uniform mat4 vp, model; out vec3 wn;
 void main() { wn = normalize(transpose(inverse(mat3(model))) * n); gl_Position = vp * model * vec4(p, 1.0); }`;
 const FS = `#version 300 es
-precision mediump float; in vec3 wn; uniform vec3 color, light; out vec4 o;
-void main() { float d = abs(dot(normalize(wn), light)); o = vec4(color * (0.35 + 0.65 * d), 1.0); }`;
+precision mediump float; in vec3 wn; uniform vec3 color, light; uniform float alpha; out vec4 o;
+void main() { float d = abs(dot(normalize(wn), light)); o = vec4(color * (0.35 + 0.65 * d), alpha); }`;
+const LINE_VS = `#version 300 es
+in vec3 p; in vec3 c; uniform mat4 vp; out vec3 vc;
+void main() { vc = c; gl_Position = vp * vec4(p, 1.0); }`;
+const LINE_FS = `#version 300 es
+precision mediump float; in vec3 vc; out vec4 o;
+void main() { o = vec4(vc, 1.0); }`;
 
 // Unit cube (side 1) and cylinder (diameter and length 1, axis y), centred on the origin: [positions, normals].
 function cube() {
@@ -144,30 +365,47 @@ function cylinder(k = 32) {
   return [p, n];
 }
 
-function setupView() {
-  const gl = $("view").getContext("webgl2");
-  if (!gl) { $("viewnote").textContent = "This browser has no WebGL2: the 3D view is off."; return; }
+function program(gl, vs, fs) {
   const shader = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
   const prog = gl.createProgram();
-  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
-  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { $("viewnote").textContent = "3D view: " + gl.getProgramInfoLog(prog); return; }
-  gl.useProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("3D view: " + gl.getProgramInfoLog(prog));
+  return prog;
+}
+
+function setupView() {
+  const gl = $("view").getContext("webgl2");
+  if (!gl) { $("viewnote").textContent = tr("web-no-webgl"); $("viewnote").dataset.t = "web-no-webgl"; return; }
+  try { view.prog = program(gl, VS, FS); view.line = program(gl, LINE_VS, LINE_FS); }
+  catch (e) { $("viewnote").textContent = e.message; return; }
   for (const [p, n] of [cube(), cylinder()]) {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     for (const [name, data] of [["p", p], ["n", n]]) {
       gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-      const at = gl.getAttribLocation(prog, name);
+      const at = gl.getAttribLocation(view.prog, name);
       gl.enableVertexAttribArray(at);
       gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 0, 0);
     }
     view.meshes.push([vao, p.length / 3]);
   }
-  view.u = Object.fromEntries(["vp", "model", "color", "light"].map((k) => [k, gl.getUniformLocation(prog, k)]));
+  view.meshes.push(view.meshes[0]); // OBSTACLE_MESH: the cube, drawn see-through
+  view.u = Object.fromEntries(["vp", "model", "color", "light", "alpha"].map((k) => [k, gl.getUniformLocation(view.prog, k)]));
+  view.trailVao = gl.createVertexArray();
+  gl.bindVertexArray(view.trailVao);
+  view.trailBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, view.trailBuffer);
+  for (const [name, offset] of [["p", 0], ["c", 12]]) {
+    const at = gl.getAttribLocation(view.line, name);
+    gl.enableVertexAttribArray(at);
+    gl.vertexAttribPointer(at, 3, gl.FLOAT, false, 24, offset);
+  }
+  view.lineVp = gl.getUniformLocation(view.line, "vp");
   gl.enable(gl.DEPTH_TEST);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   view.gl = gl;
   const c = $("view");
   c.addEventListener("pointerdown", (e) => { c.setPointerCapture(e.pointerId); view.drag = [e.clientX, e.clientY]; });
@@ -179,20 +417,41 @@ function setupView() {
     view.drag = [e.clientX, e.clientY];
   });
   c.addEventListener("wheel", (e) => { e.preventDefault(); view.zoom = Math.max(0.05, Math.min(20, view.zoom * Math.exp(e.deltaY * 0.001))); }, { passive: false });
-  $("play").addEventListener("click", () => { view.playing = !view.playing; $("play").textContent = view.playing ? "Pause" : "Play"; });
+  $("play").addEventListener("click", () => { view.playing = !view.playing; $("play").textContent = tr(view.playing ? "web-pause" : "web-play"); });
   $("restart").addEventListener("click", startView);
   $("play").disabled = $("restart").disabled = false;
   requestAnimationFrame(drawView);
 }
 
-// The machine of the selection, with the config in the editor, at its start pose; the camera fitted to it.
-function startView() {
-  if (!view.gl) return;
+// The machine of the selection, with the config in the editor and the cycle or the path, at its start pose; the
+// camera fitted to it, plots and trail cleared.
+async function startView() {
+  const run = ++view.run;
+  view.fit = null; view.frame = null;
   $("error").textContent = "";
   try {
-    view.fit = call(3, `${$("machine").value}\n${$("lang").value}\n${$("config").value}`);
-    view.zoom = 1;
-  } catch (e) { view.fit = null; $("error").textContent = e.message; }
+    const fit = await viewer.call(3, body());
+    if (run !== view.run) return;
+    view.fit = fit; view.zoom = 1; view.owed = 0;
+    resetStore(fit.sample);
+    showKeys();
+    $("sweep").disabled = false;
+  } catch (e) { if (run === view.run) $("error").textContent = e.message; }
+}
+
+// Asks the worker for the simulated time owed since the last frame, one request at a time. A machine too slow for
+// real time falls behind (at most 0.25 s of simulated time a request) rather than pile up work.
+function requestFrame() {
+  if (view.pending || !view.fit) return;
+  const run = view.run, owed = Math.min(view.owed, 0.25);
+  view.owed = 0; view.pending = true;
+  viewer.frame(owed).then((frame) => {
+    view.pending = false;
+    if (run !== view.run) return;
+    view.frame = frame;
+    const n = frame[5] + frame[6];
+    storeSamples(frame, HEAD + RECORD * n, frame[7]);
+  }, (e) => { view.pending = false; $("error").textContent = e.message; });
 }
 
 // Column-major 4 × 4 matrices, as WebGL takes them.
@@ -218,56 +477,173 @@ const mm = (v) => Number.isNaN(v) ? "–" : (v * 1000).toFixed(1);
 function drawView(now) {
   requestAnimationFrame(drawView);
   const gl = view.gl, c = $("view");
-  // A machine too slow for real time falls behind (at most 50 ms of simulated time per frame) rather than pile up work.
-  const owed = view.playing && view.fit ? Math.min((now - view.last) / 1000, 0.05) : 0;
+  if (view.playing && view.fit) view.owed += Math.min((now - view.last) / 1000, 0.25);
   view.last = now;
+  if (view.playing) requestFrame();
+  if (now - view.plotted > 100) { view.plotted = now; drawTimePlots(); }
   const w = Math.round(c.clientWidth * devicePixelRatio), h = Math.round(c.clientHeight * devicePixelRatio);
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   gl.viewport(0, 0, w, h);
   const bg = getComputedStyle(document.body).backgroundColor.match(/\d+/g).map((v) => v / 255);
   gl.clearColor(bg[0], bg[1], bg[2], 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  if (!view.fit) return;
-  const ptr = wasm.frame(owed);
-  const f = new Float32Array(wasm.memory.buffer, ptr, wasm.frame_len());
+  const f = view.frame;
+  if (!view.fit || !f) return;
   const { centre, radius } = view.fit, fov = 0.8;
   const dist = Math.max(radius, 1e-3) / Math.sin(fov / 2) * view.zoom;
   const eye = [Math.cos(view.pitch) * Math.cos(view.yaw), Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch)].map((v, i) => centre[i] + dist * v);
-  gl.uniformMatrix4fv(view.u.vp, false, mul(perspective(fov, w / h, dist / 100, dist * 10), lookAt(eye, centre, [0, 0, 1])));
+  const vp = mul(perspective(fov, w / h, dist / 100, dist * 10), lookAt(eye, centre, [0, 0, 1]));
+  gl.useProgram(view.prog);
+  gl.uniformMatrix4fv(view.u.vp, false, vp);
   gl.uniform3fv(view.u.light, unit(sub(eye, centre).map((v, i) => v + [0, 0, dist][i])));
-  const draw = (mesh, model, color) => {
+  const draw = (mesh, model, color, alpha) => {
     gl.bindVertexArray(view.meshes[mesh][0]);
     gl.uniformMatrix4fv(view.u.model, false, model);
     gl.uniform3fv(view.u.color, color);
+    gl.uniform1f(view.u.alpha, alpha);
     gl.drawArrays(gl.TRIANGLES, 0, view.meshes[mesh][1]);
   };
+  const records = f[5] + f[6];
   for (let i = 0; i < f[5]; i++) {
     const r = HEAD + RECORD * i;
-    draw(f[r], f.subarray(r + 1, r + 17), f.subarray(r + 17, r + 20));
+    draw(f[r], f.subarray(r + 1, r + 17), f.subarray(r + 17, r + 20), 1);
   }
   const tool = [f[2], f[3], f[4]];
   if (!Number.isNaN(tool[0])) {
     const s = radius * 0.03;
-    draw(0, new Float32Array([s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ...tool, 1]), [0.95, 0.35, 0.1]);
+    draw(0, new Float32Array([s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ...tool, 1]), [0.95, 0.35, 0.1], 1);
   }
-  $("legend").textContent = `t ${f[0].toFixed(2)} s · cycle ${Number.isNaN(f[1]) ? "–" : f[1].toFixed(3) + " s"}\n` +
-    `tool x ${mm(tool[0])} y ${mm(tool[1])} z ${mm(tool[2])} mm`;
+  // The trail: one vertex per sample (1 ms), coloured by the tool's distance from the plan.
+  const points = trail.points;
+  if (points.length >= 8) {
+    if (trail.dirty) {
+      const data = new Float32Array(points.length / 4 * 6), scale = Math.max(1e-7, +$("trailscale").value || 2) * 1e-3;
+      for (let i = 0, j = 0; i < points.length; i += 4, j += 6) {
+        data[j] = points[i]; data[j + 1] = points[i + 1]; data[j + 2] = points[i + 2];
+        data.set(trailColour(points[i + 3], scale), j + 3);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, view.trailBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+      trail.dirty = false;
+    }
+    gl.useProgram(view.line);
+    gl.uniformMatrix4fv(view.lineVp, false, vp);
+    gl.bindVertexArray(view.trailVao);
+    gl.drawArrays(gl.LINE_STRIP, 0, points.length / 4);
+    gl.useProgram(view.prog);
+  }
+  // Obstacles last, see-through, without writing depth: grey, red while a part touches one.
+  gl.enable(gl.BLEND); gl.depthMask(false);
+  for (let i = f[5]; i < records; i++) {
+    const r = HEAD + RECORD * i;
+    draw(OBSTACLE_MESH, f.subarray(r + 1, r + 17), f.subarray(r + 17, r + 20), 0.3);
+  }
+  gl.disable(gl.BLEND); gl.depthMask(true);
+  $("legend").textContent = `t ${f[0].toFixed(2)} s · ${tr("web-cycle")} ${Number.isNaN(f[1]) ? "–" : f[1].toFixed(3) + " s"}\n` +
+    `${tr("web-tool")} x ${mm(tool[0])} y ${mm(tool[1])} z ${mm(tool[2])} mm`;
 }
 
-WebAssembly.instantiateStreaming(fetch("sim_wasm.wasm"), {})
-  .then(({ instance }) => {
-    wasm = instance.exports;
-    loadMachines();
-    loadConfig();
+// ---- Sizing check, sweep and fit, in the analyst worker.
+const MOTOR_COLUMNS = ["peak_torque_nm", "rms_torque_nm", "peak_speed_rad_s", "utilisation", "thermal_utilisation", "rms_current_a", "peak_current_a",
+  "winding_rise_k", "housing_rise_k", "drive_overload", "energy_in_j", "energy_regenerated_j", "peak_regenerated_power_w", "largest_regeneration_j",
+  "cubic_mean_torque_nm", "braking_resistor_energy_j", "braking_resistor_mean_power_w", "dc_link_peak_voltage_v", "mains_energy_j",
+  "pulley_bearing_life_h", "gearbox_life_h", "belt_tooth_utilisation", "gearbox_gearing_life_h", "motor_bearing_life_h"];
+const MACHINE_COLUMNS = ["belt_tension_min_n", "belt_tension_max_n", "path_error_peak_m", "path_error_rms_m", "tracking_error_peak_m", "dwell_error_peak_m",
+  "belt_slack_time_s", "radial_load_peak_n", "guide_load_peak_n", "guide_life_km", "guide_life_h", "warm_start_change_k"];
+let lastSizing = null;
+async function run() {
+  $("error").textContent = "";
+  $("runstatus").textContent = tr("web-simulating");
+  $("run").disabled = true;
+  const started = performance.now();
+  try {
+    lastSizing = await analyst.call(2, body());
+    showSizing();
+    $("runstatus").textContent = tr("web-done", ((performance.now() - started) / 1000).toFixed(1));
+  } catch (e) {
+    $("error").textContent = e.message;
+    $("runstatus").textContent = "";
+  }
+  $("run").disabled = false;
+}
+function showSizing() {
+  const r = lastSizing;
+  if (!r) return;
+  const failed = r.verdicts.filter((v) => !v.ok).length;
+  let html = `<p><b class="${failed ? "fail" : "ok"}">${failed ? esc(tr("web-checks-fail", failed)) : esc(tr("web-all-pass"))}</b> · ${esc(tr("web-cycle"))} ${fmt(r.cycle_s)} s${r.tripped ? ` · <b class=fail>${esc(tr("web-tripped"))}</b>` : ""}</p>`;
+  if (r.warnings.length) html += `<ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`;
+  html += `<table><thead><tr>${["web-check", "web-motor", "web-value", "web-limit", "web-result"].map((k) => `<th>${esc(tr(k))}</th>`).join("")}</tr></thead><tbody>`;
+  for (const v of r.verdicts) html += `<tr><td>${esc(v.label)}</td><td>${esc(v.motor ?? "")}</td><td class=n>${fmt(v.value)}</td><td class=n>${fmt(v.limit)}</td><td class="${v.ok ? "ok" : "fail"}">${esc(tr(v.ok ? "web-ok" : "web-fail"))}</td></tr>`;
+  html += `</tbody></table><h2>${esc(tr("web-load"))}</h2><table><thead><tr><th></th>${r.motors.map((m) => `<th>${esc(m.name)}</th>`).join("")}</tr></thead><tbody>`;
+  for (const c of MOTOR_COLUMNS) html += `<tr><td>${esc(tr("web-col-" + c))}</td>${r.motors.map((m) => `<td class=n>${fmt(m[c])}</td>`).join("")}</tr>`;
+  html += `</tbody></table><h2>${esc(tr("web-machine-wide"))}</h2><table><tbody>`;
+  for (const c of MACHINE_COLUMNS) html += `<tr><td>${esc(tr("web-col-" + c))}</td><td class=n>${fmt(r[c])}</td></tr>`;
+  html += `</tbody></table><h2>${esc(tr("web-points"))}</h2><p class="muted">${esc(tr("web-points-legend"))}</p>`;
+  html += r.motors.map((m, k) => `<p>${esc(m.name)}</p><canvas class="plot" id="points-${k}" style="height:260px"></canvas>`).join("");
+  $("result").innerHTML = html;
+  r.motors.forEach((m, k) => {
+    const colour = COLOURS[k % COLOURS.length], speeds = m.curve.map((p) => p[0]);
+    plot($(`points-${k}`), {
+      x: [Math.min(...speeds), Math.max(...speeds)], xlabel: tr("web-speed-axis"), ylabel: tr("web-torque-axis"),
+      series: [{ colour: "#888", pts: m.curve }, { colour: "#888", dash: true, pts: m.s1 }, { colour, dots: true, pts: m.points }],
+    });
+  });
+}
+
+async function sweep() {
+  $("error").textContent = "";
+  $("sweep").disabled = true;
+  $("sweepstatus").textContent = tr("web-simulating");
+  const started = performance.now();
+  try {
+    // 40 frequencies instead of the command line's 120: each is a run of its own.
+    const r = await analyst.call(5, `${$("machine").value}\n${lang()} motor=${$("sweepmotor").value || 0} count=40\n${$("config").value}`);
+    const f = r.points.map((p) => p[0]), x = [Math.min(...f), Math.max(...f)];
+    for (const id of ["plot-gain", "plot-phase"]) $(id).hidden = false;
+    plot($("plot-gain"), { x, log: "xy", xlabel: tr("web-frequency"), ylabel: tr("web-gain"), series: [{ colour: COLOURS[0], pts: r.points.map((p) => [p[0], p[1]]) }] });
+    plot($("plot-phase"), { x, log: "x", xlabel: tr("web-frequency"), ylabel: tr("web-phase"), series: [{ colour: COLOURS[1], pts: r.points.map((p) => [p[0], p[2]]) }] });
+    $("sweepstatus").textContent = tr("web-done", ((performance.now() - started) / 1000).toFixed(1));
+  } catch (e) { $("error").textContent = e.message; $("sweepstatus").textContent = ""; }
+  $("sweep").disabled = false;
+}
+
+async function fitTrace(file) {
+  $("error").textContent = "";
+  $("fitstatus").textContent = tr("web-simulating");
+  try {
+    const r = await analyst.call(6, `${$("machine").value}\n${lang()}\n${$("config").value}\n---\n${await file.text()}`);
+    let html = `<table><thead><tr>${["web-quantity", "web-of", "web-config-value", "web-fitted", "web-standard-error"].map((k) => `<th>${esc(tr(k))}</th>`).join("")}</tr></thead><tbody>`;
+    for (const [q, of, config, fitted, error] of r.rows) html += `<tr><td>${esc(q)}</td><td>${esc(of)}</td><td class=n>${fmt(config)}</td><td class=n>${fmt(fitted)}</td><td class=n>${fmt(error)}</td></tr>`;
+    $("fitresult").innerHTML = html + `</tbody></table><ul>${r.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`;
+    $("fitstatus").textContent = file.name;
+  } catch (e) { $("error").textContent = e.message; $("fitstatus").textContent = ""; }
+}
+
+// ---- Start: both workers load the module; the texts in the browser's language.
+(async () => {
+  try {
+    const url = new URL("sim_wasm.wasm", location.href).href;
+    await Promise.all([viewer.load(url), analyst.load(url)]);
+    if (navigator.language?.startsWith("de")) $("lang").value = "de";
+    await loadTexts();
+    await loadMachines();
+    await loadConfig();
     $("run").disabled = false;
     $("status").textContent = "";
-    $("machine").addEventListener("change", () => { loadConfig(); startView(); });
-    $("lang").addEventListener("change", loadMachines);
+    $("machine").addEventListener("change", async () => { await loadConfig(); startView(); });
+    $("lang").addEventListener("change", async () => { await loadTexts(); await loadMachines(); showKeys(); showSizing(); startView(); });
     $("run").addEventListener("click", run);
+    $("sweep").addEventListener("click", sweep);
+    $("file").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await useFile(f.name, await f.text()); e.target.value = ""; });
+    $("useeditor").addEventListener("click", () => useFile("pasted.toml", $("config").value));
+    $("trace").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await fitTrace(f); e.target.value = ""; });
+    for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", () => { $("path-box").hidden = $("optimal-box").hidden = !pathMode(); });
+    $("trailscale").addEventListener("input", () => { trail.dirty = true; });
+    $("cleartrail").addEventListener("click", () => { trail.points = []; trail.dirty = true; });
     setupView();
     startView();
-  })
-  .catch((e) => { $("status").textContent = ""; $("error").textContent = "Could not load sim_wasm.wasm: " + e.message; });
+  } catch (e) { $("status").textContent = ""; $("error").textContent = e.message; }
+})();
 </script>
 </body>
 </html>

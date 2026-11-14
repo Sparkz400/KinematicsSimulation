@@ -293,6 +293,16 @@ item are in [PROGRESS.md](PROGRESS.md).
   from the path the plan drew, as the path error. The path and the ghost follow the scrubbed timeline; one colour per
   motor in every plot; trace and sweep files with a byte order mark are read; ticks on small plots; legends no longer
   cover the traces; the user guide's layout and `--set`.
+
+- Browser page: machine files (the shipped `machines/*.toml`, and a TOML file opened or pasted), path runs within the
+  axis limits or time-optimal, obstacles and a trail coloured by following error on a set scale in the 3D view, time
+  plots of torque, speed and following error per motor with setpoints dashed and min/max decimation, operating points
+  over the torque-speed curve, a frequency sweep, a mass and friction fit to a trace, every `sim-cli analyze` column in
+  the sizing check, and German texts with a language switch. The module runs in Web Workers.
+
+### Fixed
+
+- Browser module: `frame(seconds)` with an infinite or huge time hung the page; it is refused with an error.
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs

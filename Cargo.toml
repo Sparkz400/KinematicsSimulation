@@ -43,6 +43,13 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+# The browser module (crates/sim-wasm): one codegen unit and link-time optimisation make it some 5 % faster and 10 %
+# smaller than the release build (14 November 2026); `cargo build -p sim-wasm --profile wasm`.
+[profile.wasm]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 # Lints every crate takes (each crate's Cargo.toml has `[lints] workspace = true`). Allowed on purpose:
 # - neg_cmp_op_on_partial_ord: `!(a < b)` is how the physics code lets a NaN through to the check that refuses it.
 # - needless_range_loop: index loops over several arrays of the same length (motors, axes, sections) read as the

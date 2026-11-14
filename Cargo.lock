@@ -6184,6 +6184,7 @@ dependencies = [
  "sim-components",
  "sim-core",
  "sim-machines",
+ "sim-netlist",
 ]
 
 [[package]]

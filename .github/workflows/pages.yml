@@ -31,10 +31,10 @@ jobs:
       # The same build as the job "wasm" in ci.yml.
       - name: Build for wasm32
         run: |
-          cargo build -p sim-wasm --release --locked --target wasm32-unknown-unknown
+          cargo build -p sim-wasm --profile wasm --locked --target wasm32-unknown-unknown
           mkdir -p site
           cp crates/sim-wasm/web/index.html site/
-          cp target/wasm32-unknown-unknown/release/sim_wasm.wasm site/
+          cp target/wasm32-unknown-unknown/wasm/sim_wasm.wasm site/
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site
