@@ -133,8 +133,8 @@ fn the_delta_fit_finds_a_heavier_payload_and_more_joint_friction() {
 }
 
 /// The SCARA (joints 1, 2 and 4 behind strain wave gears of ratio 100, 80 and 50, the quill on a screw): 4 kg of
-/// payload instead of 3, twice the joints' Coulomb and viscous friction (0.5 to 1 N m, 0.2 to 0.4 N m s/rad), the
-/// quill's guide unchanged. Its tool pose is its joints, linear, but the inertia joint 1 turns changes with the elbow,
+/// payload instead of 3 (its inertia with it), twice the joints' Coulomb and viscous friction (0.5 to 1 N m, 0.2 to
+/// 0.4 N m s/rad), the quill's guide unchanged. Its tool pose is its joints, linear, but the inertia joint 1 turns changes with the elbow,
 /// so the per-axis fit refuses it.
 ///
 /// Without the gearboxes' losses, which on these gears (efficiency 0.75) take a quarter of what passes and grow with
@@ -151,6 +151,10 @@ fn the_scara_fit_finds_a_heavier_payload_and_more_joint_friction() {
     cfg.set_text("effects.gearbox_efficiency = false").unwrap();
     let mut truth = cfg.clone();
     scale(&mut truth, &["arm.payload_kg"], 4.0 / 3.0);
+    // Its inertia with it, as the payload's factor takes it: with the mass alone motor 4's added inertia came out
+    // −4.4e-7 ± 1.5e-7 kg m², a third of the payload's 0.00375 kg m² over 50² (−5.0e-7).
+    let inertia: Vec<f64> = cfg.f64s("arm.payload_inertia_kgm2").unwrap().iter().map(|i| i * 4.0 / 3.0).collect();
+    truth.set_text(&format!("arm.payload_inertia_kgm2 = {inertia:?}")).unwrap();
     scale(&mut truth, &["joint.friction_coulomb_nm", "joint.friction_viscous_nm_s_rad"], 2.0);
     // About the start pose [0, 0.5, 0.05, 0]; the elbow stays bent, between 0.15 and 0.85 rad.
     let trace =

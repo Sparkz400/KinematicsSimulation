@@ -331,6 +331,35 @@ fn smoothing(time: &[f64]) -> (usize, f64) {
     (h, (h * h) as f64 * (h * h) as f64 / squares)
 }
 
+/// The triangle (h − |j|) / h² about row i of a series, |j| < h: its weights sum to 1.
+fn triangle(at: &dyn Fn(usize) -> f64, h: usize, i: usize) -> f64 {
+    (1..h).map(|j| (h - j) as f64 * (at(i - j) + at(i + j))).sum::<f64>() / (h * h) as f64 + at(i) / h as f64
+}
+
+fn top_speed(speed: &[f64]) -> f64 {
+    speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()))
+}
+
+/// A motor's speed at row i smoothed by the triangle of half-width `h`, where that is above 5 % of its `top` speed and
+/// the speed keeps its sign across the window (sign q̇ smoothed over a reversal is no longer ±1); `None` elsewhere.
+fn steady(speed: &[f64], top: f64, h: usize, i: usize) -> Option<f64> {
+    let v = triangle(&|r| speed[r], h, i);
+    (v.abs() > 0.05 * top && speed[i + 1 - h..i + h].iter().all(|s| s.signum() == v.signum())).then_some(v)
+}
+
+/// Whether `fit_joints` can fit the trace: every motor turns each way for at least ten windows' worth of rows that it
+/// takes (`steady`), else its Coulomb friction cannot be told from a constant torque.
+pub fn turns_both_ways(trace: &Trace) -> bool {
+    let (h, rows) = (smoothing(&trace.time).0, trace.time.len());
+    trace.motors.iter().all(|m| {
+        let (mut ways, top) = ([0usize; 2], top_speed(&m.speed));
+        for v in (h + 1..rows.saturating_sub(h + 1)).filter_map(|i| steady(&m.speed, top, h, i)) {
+            ways[usize::from(v > 0.0)] += 1;
+        }
+        ways[0].min(ways[1]) >= 10 * (2 * h + 1)
+    })
+}
+
 /// The stacked regressor of the motor torques on the machine's rigid model, τ − τ_rigid = Y θ, in the motors' own
 /// coordinates: per motor k a row
 ///
@@ -354,11 +383,11 @@ fn smoothing(time: &[f64]) -> (usize, f64) {
 fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<Sample>> {
     let (rows, n, links) = (trace.time.len(), trace.motors.len(), machine.links().len());
     let p = 1 + 4 * n + 4 * links;
-    if rows < 2 * h + 5 {
+    if rows < 2 * h + 5 || !turns_both_ways(trace) {
         return None;
     }
     let t = &trace.time;
-    let top: Vec<f64> = trace.motors.iter().map(|m| m.speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()))).collect();
+    let top: Vec<f64> = trace.motors.iter().map(|m| top_speed(&m.speed)).collect();
     // Per motor, row by row as measured: the columns, the torque the rigid model leaves over and the rigid torque.
     let mut raw = vec![vec![0.0; rows * p]; n];
     let (mut left, mut stacked) = (vec![vec![0.0; rows]; n], vec![vec![0.0; rows]; n]);
@@ -418,19 +447,13 @@ fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<S
             machine.set_link_change(l, 1.0, [0.0; 3]);
         }
     }
-    // The triangle (h − |j|) / h² about row i, |j| < h: its weights sum to 1.
-    let smooth = |at: &dyn Fn(usize) -> f64, i: usize| {
-        (1..h).map(|j| (h - j) as f64 * (at(i - j) + at(i + j))).sum::<f64>() / (h * h) as f64 + at(i) / h as f64
-    };
+    let smooth = |at: &dyn Fn(usize) -> f64, i: usize| triangle(at, h, i);
     let mut samples: Vec<Sample> = Vec::new();
-    let mut ways = vec![[0usize; 2]; n];
     // The stacked rigid torque's and each link column's change's sum of squares, for the columns of no effect.
     let (mut rigid, mut link_change) = (0.0, vec![0.0; 4 * links]);
     for i in h + 1..rows - h - 1 {
         for k in 0..n {
-            let speed = &trace.motors[k].speed;
-            let v = smooth(&|r| speed[r], i);
-            if v.abs() <= 0.05 * top[k] || speed[i + 1 - h..i + h].iter().any(|s| s.signum() != v.signum()) {
+            if steady(&trace.motors[k].speed, top[k], h, i).is_none() {
                 continue;
             }
             let x: Vec<f64> = (0..p).map(|c| smooth(&|r| raw[k][r * p + c], i)).collect();
@@ -439,12 +462,8 @@ fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<S
                 *change += (x[1 + 4 * n + c] * size).powi(2);
             }
             rigid += smooth(&|r| stacked[k][r], i).powi(2);
-            ways[k][usize::from(v > 0.0)] += 1;
             samples.push((i, x, smooth(&|r| left[k][r], i)));
         }
-    }
-    if ways.iter().any(|both| both[0].min(both[1]) < 10 * (2 * h + 1)) {
-        return None;
     }
     for (c, change) in link_change.iter().enumerate() {
         if change.sqrt() <= 1e-9 * rigid.sqrt() {
