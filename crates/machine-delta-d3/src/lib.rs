@@ -64,8 +64,15 @@ const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off. The stops stay, without their
 /// damping: the suite's pulses would otherwise send the arms round beyond where the legs can be assembled.
-pub const LOSSY_EFFECTS: [&str; 5] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 7] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta::new(cfg)?))
@@ -699,7 +706,7 @@ impl Delta {
                         let (t, gravity, ..) = self.rest_at(p, m);
                         let twist: V3 = std::array::from_fn(|k| {
                             let held = -gravity[k] - self.joints[k].output_torque(t[k], 0.0);
-                            if self.elastic { held / self.joints[k].gearbox.stiffness } else { 0.0 }
+                            if self.elastic { self.joints[k].gearbox.spring_twist_signed(held) } else { 0.0 }
                         });
                         for signs in 0..8 {
                             // No backlash in the rigid joint model.
@@ -1413,13 +1420,14 @@ impl Machine for Delta {
         }
         for (joint, rise) in self.joints.iter_mut().zip(rises) {
             joint.gearbox.efficiency = law.gearbox_efficiency(*rise);
+            joint.shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
 
-    /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`): 2.30 mm with the catalogue's 9
-    /// arcmin backlash (the simulation at rest puts the motors' pose up to 2.09 mm off the tool's at the rim's lower edge,
-    /// between two arms, 0.75 mm at the centre, 0.64 mm at pick and place; its arms rest at one side of their backlash,
-    /// the bound takes either). Until 13 November 2026 a fixed 1.5 mm, which 9 arcmin outgrew.
+    /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`): 0.73 mm with the SP+ 100 and its
+    /// typical 2.25 arcmin (the simulation at rest puts the motors' pose up to 0.66 mm off the tool's at the rim's lower
+    /// edge between two arms); 2.30 mm with the NRB080's 9 arcmin before 14 November 2026, and until 13 November a
+    /// fixed 1.5 mm, which 9 arcmin outgrew. Its arms rest at one side of their backlash; the bound takes either.
     fn setpoint_slack(&self) -> f64 {
         self.rest_slack
     }

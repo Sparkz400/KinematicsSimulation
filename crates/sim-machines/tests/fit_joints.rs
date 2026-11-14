@@ -96,9 +96,10 @@ fn payload_is(fit: &JointFit, expected: f64) {
 /// winding): a trace of an exciting trajectory of a machine with 4 kg of payload instead of 3 and twice the joints'
 /// Coulomb and viscous friction (0.3 to 0.6 N m, 0.05 to 0.1 N m s/rad), with noise, fitted against the config.
 ///
-/// By hand, at the motor, behind the gearbox of ratio 20 and efficiency 0.96 that the friction torque passes on its way
-/// from the motor: payload × 4 / 3; Coulomb friction + 0.3 / 20 / 0.96 = 0.0156 N m; viscous + 0.05 / 20² / 0.96 =
-/// 1.30e-4 N m s/rad; no added inertia and no constant torque. Measured (13 November): × 1.329 ± 0.014; Coulomb + 0.021,
+/// By hand, at the motor, behind the gearbox of ratio 20 and efficiency η that the friction torque passes on its way
+/// from the motor: payload × 4 / 3; Coulomb friction + 0.3 / 20 / η; viscous + 0.05 / 20² / η; no added inertia and no
+/// constant torque. η was the NRB080's 0.96 (0.0156 N m and 1.30e-4 N m s/rad); since 14 November 2026 it is the SP+
+/// 100's teeth's, 1 with its no-load torque on (`Gearbox::configured_efficiency`): 0.015 N m and 1.25e-4 N m s/rad. Measured (13 November): × 1.329 ± 0.014; Coulomb + 0.021,
 /// 0.019, 0.020 ± 0.003 (the heavier payload loads the joints' friction a little too); viscous + 0.6e-4 to 1.0e-4 ±
 /// 0.9e-4 to 1.3e-4. Nothing the trace cannot tell apart.
 #[test]
@@ -118,9 +119,10 @@ fn the_delta_fit_finds_a_heavier_payload_and_more_joint_friction() {
     let trace = noisy_trace(entry, &truth, &[(0.2, 0.6), (0.2, 0.9), (0.06, 1.1)], 8.0, 0.01, &mut Noise(1), None);
     let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
     payload_is(&fit, 4.0 / 3.0);
+    let eta = sim_components::mech::Gearbox::configured_efficiency(&cfg).unwrap();
     for motor in ["1", "2", "3"] {
-        change_is(&fit, "coulomb_friction_nm", motor, 0.3 / 20.0 / 0.96);
-        change_is(&fit, "viscous_friction_nm_s_rad", motor, 0.05 / 400.0 / 0.96);
+        change_is(&fit, "coulomb_friction_nm", motor, 0.3 / 20.0 / eta);
+        change_is(&fit, "viscous_friction_nm_s_rad", motor, 0.05 / 400.0 / eta);
         change_is(&fit, "added_inertia_kg_m2", motor, 0.0);
         change_is(&fit, "constant_torque_nm", motor, 0.0);
     }

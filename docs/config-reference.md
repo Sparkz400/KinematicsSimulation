@@ -7,8 +7,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | T | [`crates/machine-t-gantry/default.toml`](../crates/machine-t-gantry/default.toml) | T-gantry, made-up mid-size machine. Placeholder values |
 | E | [`crates/machine-t-gantry/exct-30.toml`](../crates/machine-t-gantry/exct-30.toml) | T-gantry: Festo EXCT-30 with Siemens 1FK2205-4AF. Each value marked `[catalogue]` or `[estimate]` in the file |
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
-| D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
-| D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
+| D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FT2105-4AF (the 1FK2105-4AF Autonox names, as a 1FT2 for the SP100 precision gearbox). Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
+| D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FT2105-4AF and the SP100 gearbox. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
 | C | [`crates/machine-delta-d3/conveyor.toml`](../crates/machine-delta-d3/conveyor.toml) | The D3's default with a [`[conveyor]`](#conveyor) table: it picks from a belt conveyor instead of running the Adept cycle |
 | D4 | [`crates/machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml) | Four-axis delta picker D4: the D3 with a turning tool on a telescopic shaft, sized after the ABB IRB 360 with its fourth axis. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d4) |
 
@@ -92,6 +92,10 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `motor_friction` | T E S | on | Coulomb and viscous friction on the motor shafts |
 | `gearbox_backlash` | T S on, E off | | Backlash as a dead zone. Off in E: direct drive |
 | `gearbox_efficiency` | T S on, E off | | Torque loss in the direction of power flow. Off in E: direct drive |
+| `gearbox_drag` | T E S D | off; on in the delta pickers D2 and D3 (and the planar delta file) | The gearbox's no-load running torque at its input over speed and temperature (`gearbox.no_load_*`, Palmgren's (ν n)^(2/3)); `gearbox.efficiency` then holds at `gearbox.efficiency_torque_nm`, and the efficiency falls at part load, slow and cold (see the [model reference](model-reference.md#gearbox)). Never on a coupling (ratio 1) |
+| `motor_stiction` | T E S D | off; on in D2 and D3 | The motor shaft breaks away at `motor.friction_breakaway_nm` and falls to its Coulomb level along a Stribeck curve. Needs `motor_friction` |
+| `gearbox_lost_motion` | T E S D | off; on in D2 and D3 | The flanks take the load over `gearbox.lost_motion_band_rad` beyond the backlash, the stiffness rising from 0, and a hysteresis `gearbox.hysteresis_rad` (0 in D2 and D3: see the model reference's assumptions) |
+| `gearbox_stiffness_curve` | T E S D | off | A strain wave gear's three-segment stiffness, K1 (`stiffness_nm_rad`) to T1, K2 to T2, K3 beyond (`gearbox.stiffness_*`), as Harmonic Drive gives it |
 | `torque_ripple` | T E S | on | Torque ripple (proportional to torque) and cogging (independent of it) |
 | `tooth_meshing` | T E S | on | A small periodic force at the tooth-pass frequency |
 | `frame_compliance` | T E | on | One spring-mass mode of the frame in X |
@@ -205,6 +209,8 @@ Festo gives the friction of the EXCT only as a graph of torque over speed, so al
 | `friction_coulomb_nm` | T E S | N m | Coulomb friction on the motor shaft | estimate | `motor_friction` |
 | `friction_viscous_nm_s_rad` | T E S | N m s/rad | Viscous friction on the motor shaft | estimate | `motor_friction` |
 | `friction_smoothing_rad_s` | T E S | rad/s | Speed over which the Coulomb step is smoothed. On the T-gantry it also smooths the idlers' bearing friction | choice | `motor_friction` |
+| `friction_breakaway_nm` | T E S D | N m | The shaft's breakaway torque at rest (seals and bearings). 1.5 times `friction_coulomb_nm` in every shipped config; a value below the Coulomb level counts as that level | estimate, bounds the Coulomb level to twice it | `motor_stiction` |
+| `friction_stribeck_rad_s` | T E S D | rad/s | Speed over which the level falls from breakaway to Coulomb, exp(−(ω / ω_st)²). 2 | estimate, bounds 0.5 to 10 | `motor_stiction` |
 | `ripple_fraction` | T E S | fraction | Torque ripple as a fraction of the torque | estimate | `torque_ripple` |
 | `ripple_order` | T E S | 1/rev | Ripple periods per motor revolution | datasheet (poles and slots) | `torque_ripple` |
 | `cogging_nm` | T E S | N m | Cogging torque amplitude | estimate | `torque_ripple` |
@@ -236,6 +242,13 @@ Between motor shaft and pulley. Stiffness, damping and backlash are given at the
 | `stiffness_nm_rad` | T E S | N m/rad | Torsional stiffness | datasheet (estimate in E) | `belt_stretch` |
 | `damping_nm_s_rad` | T E S | N m s/rad | Torsional damping | estimate | `belt_stretch` |
 | `inertia_at_input_kgm2` | T E S | kg m² | The gearbox's own inertia at its input. It turns with the rotor and is added to `motor.rotor_inertia_kgm2` in the model. 0 in all three configs; a gearbox by name sets the catalogue value | datasheet | always |
+| `efficiency_torque_nm` | T E S D | N m | The output torque at which `efficiency` holds: the rated torque, where makers give "efficiency at full load" (T S: 40, the NRB060's; D2 D3: 259, the SP+ 100's T2N; the joint kit's strain wave gears their rated torque). With the drag, the teeth's efficiency is what is left of `efficiency` there | datasheet | `gearbox_drag` |
+| `no_load_torque_nm` | T E S D | N m | No-load running torque at the input at `no_load_speed_rpm` and 20 °C. T S: 0.125 (Neugart PLE060 one stage, the NRB060: 0.10 to 0.15); D2 D3: 0.93 (WITTENSTEIN SP+ 100 MF two stages, i = 20, T012); D4: 0.2 (PLE080 two stages); the arm 0.5 and SCARA 0.2 (read off Harmonic Drive's chart, sizes 32 and 25 at 2000 r/min); 0 on a coupling | datasheet, bounds the maker's range or ±20 to 25 % | `gearbox_drag` |
+| `no_load_speed_rpm` | T E S D | r/min | Input speed at which `no_load_torque_nm` holds. 3000 (2000 for the strain wave gears) | catalogue convention | `gearbox_drag` |
+| `lost_motion_band_rad` | T E S D | rad | Twist beyond the backlash over which the flanks' stiffness rises from 0 to `stiffness_nm_rad`. 1.454e-4 (half an arcmin) for the planetary gearboxes, 0 for strain wave gears and couplings | estimate, bounds 0 to 1 arcmin | `gearbox_lost_motion` |
+| `hysteresis_rad` | T E S D | rad | Width of the hysteresis loop at zero torque, 2 T_h / K1. 2.909e-4 (1 arcmin) for the strain wave gears (Harmonic Drive's hysteresis loss); 1.454e-4 for the belt machines' planetary gearboxes; 0 in D2 and D3, where the rate-based model locks the flanks in a frequency response | datasheet (strain wave), estimate, bounds 0 to 1 arcmin | `gearbox_lost_motion` |
+| `stiffness_t1_nm`, `stiffness_t2_nm` | T E S D | N m | The knees T1 and T2 of the three-segment stiffness. Harmonic Drive's Table 43, ratio 80 and up: 29 and 108 (size 32), 14 and 48 (size 25). A planetary gearbox: both at its rated torque | datasheet | `gearbox_stiffness_curve` |
+| `stiffness_k2_nm_rad`, `stiffness_k3_nm_rad` | T E S D | N m/rad | K2 between the knees, K3 beyond. 1.1e5 and 1.2e5 (size 32), 5.0e4 and 5.7e4 (size 25). A planetary gearbox: both `stiffness_nm_rad` | datasheet | `gearbox_stiffness_curve` |
 
 ## `[pulley]`
 
@@ -355,7 +368,8 @@ With `effects.thermal_feedback` (see the [model reference](model-reference.md#te
 | `ambient_c` | T E S | °C | Temperature of the air around the machine. 20 | estimate | 10 to 40 |
 | `reference_c` | T E S | °C | Temperature at which the config's friction, gearbox efficiency and EA hold. 20, as gearbox makers quote their no-load torque at 20 °C | catalogue convention | none |
 | `viscosity_slope_k` | T E S | K | B of the lubricant's viscosity, exp(B (1/T − 1/T_ref)). 4000: a mineral oil ISO VG 68 (68 and 8.7 mm²/s at 40 and 100 °C); VG 32 gives 3470, VG 220 4730 | estimate | 3470 to 4730 |
-| `gearbox_viscous_loss_share` | T E S | – | Share of a gearbox's loss (1 − η) that is churning and bearing drag and follows the viscosity; the rest, tooth friction, stays. 0.5. No maker publishes it. In E only for a gearbox put in | estimate | 0.25 to 0.75 |
+| `gearbox_viscous_loss_share` | T E S | – | Share of a gearbox's loss (1 − η) that is churning and bearing drag and follows the viscosity; the rest, tooth friction, stays. 0.5. No maker publishes it. In E only for a gearbox put in. Taken as 0 with `effects.gearbox_drag`, whose no-load torque is that share | estimate | 0.25 to 0.75 |
+| `seal_viscosity_exponent` | T E S D | – | m of the motor shaft's seal friction (`motor.friction_coulomb_nm`, `friction_breakaway_nm`) over the gearbox's lubricant, (ν / ν_ref)^m at the gearbox's temperature. 0.33 | estimate | 0 to 0.5 |
 | `belt_stiffness_coefficient_1_k` | T E S | 1/K | How much of its EA the belt loses per kelvin above the reference: the polyurethane softens, the steel cords (about 2.5e-4 per K) carry the load. 3e-4. The belt is taken at ambient | estimate | 0 to 1e-3 |
 
 ## `[axis.x]` and `[axis.z]`

@@ -49,11 +49,13 @@ pub static ENTRY: MachineEntry = MachineEntry {
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 8] = [
+pub const LOSSY_EFFECTS: [&str; 10] = [
     "belt_damping",
     "guide_friction",
     "load_dependent_friction",
     "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
     "gearbox_efficiency",
     "torque_ripple",
     "temperature",

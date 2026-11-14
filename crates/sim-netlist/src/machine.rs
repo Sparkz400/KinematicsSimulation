@@ -531,7 +531,7 @@ impl ConfigMachine {
             };
             let own = &own[kk];
             let stroke = net.axes[axis].stroke;
-            let free = ShaftFriction { coulomb: 0.0, viscous: 0.0, smoothing: 1.0 };
+            let free = ShaftFriction::NONE;
             let mut joint = RotaryJoint::with(own, free, HardStop { stiffness: 0.0, damping: 0.0 }, (0.0, stroke))?;
             let ratio = joint.ratio();
             let (kind, lever) = match &d.transmission {
@@ -2115,6 +2115,7 @@ impl Machine for ConfigMachine {
         for (kk, (gear, law)) in self.gears.iter_mut().zip(laws).enumerate() {
             if !self.coupled[kk] {
                 let rise = *next.next().unwrap_or(&0.0);
+                self.shafts[kk].set_oil(law.viscosity_factor(rise));
                 // A worm stage's efficiencies are its own (`worm_stages`).
                 if self.worms[kk].is_none() {
                     gear.efficiency = law.gearbox_efficiency(rise) * self.extra_efficiency[kk];

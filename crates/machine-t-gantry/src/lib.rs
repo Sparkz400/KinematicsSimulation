@@ -49,11 +49,13 @@ const G: f64 = 9.80665;
 pub const EXCT_30_CONFIG: &str = include_str!("../exct-30.toml");
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 10] = [
+pub const LOSSY_EFFECTS: [&str; 12] = [
     "belt_damping",
     "guide_friction",
     "load_dependent_friction",
     "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
     "gearbox_efficiency",
     "torque_ripple",
     "tooth_meshing",
@@ -1152,6 +1154,11 @@ impl Machine for TGantry {
         let gearboxes = if self.gearbox.is_coupling() { 0 } else { 2 };
         for k in 0..gearboxes {
             self.gears[k].efficiency = law.gearbox_efficiency(rises[k]);
+        }
+        // shortcut: both motors share one shaft friction, so its seals and drag follow the gearboxes' mean rise; give
+        // each motor its own `ShaftFriction` if the two gearboxes warm far apart.
+        if gearboxes == 2 {
+            self.shaft.set_oil(law.viscosity_factor(0.5 * (rises[0] + rises[1])));
         }
         self.friction_x.viscous = viscous[0] * law.viscosity_factor(rises[gearboxes]);
         self.friction_z.viscous = viscous[1] * law.viscosity_factor(rises[gearboxes + 1]);

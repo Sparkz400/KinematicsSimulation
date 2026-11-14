@@ -131,7 +131,8 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
 
 /// A vertical acceleration of 10 m/s^2 at the centre: the arms turn together, t'' = a / (3 dz/dt per arm) =
 /// -24.98 rad/s^2. At the arm I_b t'' + m_nt a dz/dt = 0.1493 (-24.98) + 4.7 * 10 (-0.13343) = -3.730 - 6.271 =
-/// -10.00 N m, at the motor over 20 plus the rotor's own (1.7 + 0.406) 1e-4 * 20 * t'' = -0.1052: -0.6053 N m. The
+/// -10.00 N m, at the motor over 20 plus the rotor's own (1.7 + 0.406) 1e-4 * 20 * t'' = -0.1052: -0.6053 N m (the
+/// NRB080's 0.406 kg cm2 at the gearbox's input, set here as the config had it until 14 November 2026). The
 /// feedforward says so, and the rigid model given that torque accelerates the platform at 10 m/s^2 with no sideways part.
 #[test]
 fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque() {
@@ -142,6 +143,7 @@ fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torqu
         "effects.gearbox_efficiency = false",
         "effects.joint_elasticity = false",
         "effects.forearm_inertia = false",
+        "gearbox.inertia_at_input_kgm2 = 4.06e-5",
     ]);
     let z = -0.775;
     let (_, dz) = centre_by_hand(&d, z);
@@ -326,8 +328,9 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
 /// The setpoint at rest is where the motors stand; the platform's weight twists the gearboxes and sits them at a side
 /// of their backlash, so the tool is off it. `setpoint_slack` (`rest_sag`: twist and half the backlash either way at
 /// every arm, over the range) covers what the simulation shows after 0.5 s at rest at five poses, the rim's lower edge
-/// between two arms among them (2.09 mm there with the catalogue's 9 arcmin, the most found over the rim in steps of
-/// 30 degrees), and is not far above it; without backlash and with stiff gearboxes it is the default 0.1 mm.
+/// between two arms among them (0.66 mm there with the SP+ 100 and its typical 2.25 arcmin, against a slack of 0.73 mm;
+/// 2.09 mm with the NRB080's 9 arcmin before 14 November 2026, the most found over the rim in steps of 30 degrees), and
+/// is not far above it; without backlash and with stiff gearboxes it is the default 0.1 mm.
 #[test]
 fn the_setpoint_slack_covers_the_sag_at_rest() {
     let slack = delta(&[]).setpoint_slack();
@@ -422,15 +425,15 @@ const LEVEL: f64 = -0.774_596_669_241_483;
 /// p'_z = -L_a t'), so every rod translates and counts with all its mass, in either model: t'' = -a / L_a = -25 rad/s^2
 /// and per arm, at the arm, (I_arm + L_a^2 m_elbow) t'' - L_a m_fb a - (L_a / 3)(m_platform + m_payload) a
 /// = -0.096 * 25 - 0.4 * 0.5 * 10 - 0.13333 * 4.2 * 10 = -2.4 - 2.0 - 5.6 = -10.0 N m; at the motor over 20 plus
-/// the rotor's (1.7e-4 + 4.06e-5) * 20 * (-25): -0.6053 N m. The model given that torque accelerates the platform at
-/// 10 m/s^2 straight up.
+/// the rotor's (1.7e-4 + 4.06e-5) * 20 * (-25): -0.6053 N m (the NRB080's input inertia, set here). The model given
+/// that torque accelerates the platform at 10 m/s^2 straight up.
 #[test]
 fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_torque_with_rods() {
     let by_hand: f64 = (-(0.048 + 0.16 * 0.3) * 25.0 - 0.4 * 0.5 * 10.0 - 0.4 / 3.0 * 4.2 * 10.0) / 20.0
         + (1.7e-4 + 4.06e-5) * 20.0 * -25.0;
     assert!((by_hand + 0.6053).abs() < 1e-4, "{by_hand}");
     for rods in [true, false] {
-        let d = loss_free(rods, &[]);
+        let d = loss_free(rods, &["gearbox.inertia_at_input_kgm2 = 4.06e-5"]);
         let p = [0.0, 0.0, LEVEL];
         let t = d.legs.inverse(p).unwrap();
         assert!(t.iter().all(|a| a.abs() < 1e-7), "{t:?}");
@@ -458,7 +461,8 @@ fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_to
 /// elbows' speeds squared 0.16 * 4.7265 = 0.75624 m^2/s^2. A slender rod has (m/6)(|c'|^2 + c'.p' + |p'|^2), here
 /// c'.p' = 0: (0.5 / 6)(3 + 0.75624) = 0.31302 J for the three pairs; lumped, (0.5 / 2)(2/3 * 0.75624 + 1/3 * 3)
 /// = 0.37604 J (0.6667 for 2/3). The rest is the same in both: arms (I_arm + L_a^2 m_elbow + i^2 J_rotor) sum t'^2 / 2
-/// = (0.096 + 0.08424) * 4.7265 / 2 = 0.42596 J, the platform with its payload 4.2 / 2 = 2.1 J.
+/// = (0.096 + 0.08424) * 4.7265 / 2 = 0.42596 J (J_rotor with the NRB080's input inertia, set here), the platform
+/// with its payload 4.2 / 2 = 2.1 J.
 #[test]
 fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
     let sum_t2 = 1.5 * (0.55 / (0.4 * -LEVEL)).powi(2);
@@ -469,7 +473,7 @@ fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
     println!("rods {rods:.5} J, lumped {lumped:.5} J, the rest {common:.5} J");
     assert!((rods - 0.31302).abs() < 1e-4 && (lumped - 0.37604).abs() < 2e-4 && (common - 2.52596).abs() < 1e-4);
     for (on, by_hand) in [(true, rods), (false, lumped)] {
-        let d = loss_free(on, &["effects.gravity = false"]);
+        let d = loss_free(on, &["effects.gravity = false", "gearbox.inertia_at_input_kgm2 = 4.06e-5"]);
         let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
         d.equilibrium(&[0.0, 0.0, LEVEL], &mut state, &mut hold);
         d.set_tool_velocity(&mut state, &[1.0, 0.0, 0.0]);
@@ -549,7 +553,8 @@ fn a_free_loss_free_motion_keeps_its_energy() {
 /// = 0.10134 + 0.99438 = 1.09572 kg m^2 beyond the arm's tube; up and down (all arms together, p'_z = -L_a t' / 3 each)
 /// M_v = 0.10134 + m_nt L_a^2 / 3 = 0.35200. The heavier sideways mode is the lowest:
 /// bending alone (rigid gearboxes): w^2 = k_b / M_s = 65000 / 1.09572, 38.76 Hz (vertical: 68.39 Hz);
-/// gearboxes alone (rigid arms): w^2 = k_g / (I_arm + M_s) = 35752.6 / 1.14372, 28.14 Hz;
+/// gearboxes alone (rigid arms): w^2 = k_g / (I_arm + M_s) = 35752.6 / 1.14372, 28.14 Hz (the NRB080's k_g, which the
+/// config had until 14 November 2026, set here so that the hand calculation stays);
 /// both, the tube I_arm = 0.048 between the two springs: the lower root of
 /// I_arm M_s w^4 - (k_g M_s + k_b M_s + k_b I_arm) w^2 + k_g k_b = 0.
 /// The mode's shape moves the platform sideways by 1 m, not up or down.
@@ -574,6 +579,7 @@ fn the_lowest_mode_is_the_hand_calculated_one() {
             "effects.forearm_inertia = false",
             &format!("effects.joint_elasticity = {elastic}"),
             &format!("effects.link_elasticity = {bending}"),
+            "gearbox.stiffness_nm_rad = 35752.6",
         ]);
         let found = d.resonance_hz(&[0.0, 0.0, LEVEL]).unwrap();
         println!("{what}: {found:.4} Hz, by hand {:.4} Hz", hz(w2));
@@ -867,7 +873,8 @@ fn a_path_in_a_tilted_plane_gets_its_transition_curves() {
 /// 14 November it is a limit of the plan too, and binds here (0.8 times 192 N m at the output against the motors' 0.8
 /// times 15 N m times the ratio 20). With it, each gearbox's output torque, the ratio times the motor's torque less what
 /// turns rotor and gearbox input (2.106e-4 kg m^2 times the motor's angular acceleration), stays within 0.8 * 192 N m
-/// (0.1 %), and the line takes longer.
+/// (0.1 %), and the line takes longer. 192 N m and 2.106e-4 kg m^2 are the NRB080's, which the config had until 14
+/// November 2026, set in the test.
 #[test]
 fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
     let mut cfg = ENTRY.config();
@@ -923,8 +930,12 @@ fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
     assert!(quickest > 1.1 * slowest, "{quickest} m/s, the slowest place of the line allows {slowest} m/s");
     assert!(duration < 0.4290 - 0.01, "{duration} s, with one limit per piece 0.4290 s");
     assert!((0..3).all(|k| (last[k] - to[k]).abs() < 1e-9), "ends at {last:?}");
-    // With the gearboxes' rating as shipped.
-    let rated = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    // With the NRB080's rating of 192 N m and its input inertia, which the config had until 14 November 2026, set here:
+    // the plan holds the output torque to 0.8 M2max where that binds.
+    let mut nrb080 = ENTRY.config();
+    nrb080.set_text("ratings.gearbox_max_torque_nm = 192.0").unwrap();
+    nrb080.set_text("gearbox.inertia_at_input_kgm2 = 4.06e-5").unwrap();
+    let rated = Sim::new(&ENTRY, &nrb080).unwrap();
     let points = rated
         .plan_path(
             &sim_components::path::parse(

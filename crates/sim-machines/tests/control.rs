@@ -466,6 +466,16 @@ fn every_effect_switch_changes_the_traces() {
             "effects.gearbox_efficiency" => ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"]
                 .iter()
                 .all(|k| base.f64(k).map_or(true, |v| v == 1.0)),
+            // A coupling has no no-load torque; a breakaway at the Coulomb level breaks away at nothing more; a gearbox
+            // without a lost-motion band or hysteresis has none to lose; a planetary gearbox's "curve" is one straight line.
+            "effects.gearbox_drag" => zero(&["gearbox.no_load_torque_nm"]) || base.f64("gearbox.ratio").unwrap() == 1.0,
+            "effects.motor_stiction" => {
+                base.f64("motor.friction_breakaway_nm").unwrap() <= base.f64("motor.friction_coulomb_nm").unwrap()
+            }
+            "effects.gearbox_lost_motion" => zero(&["gearbox.lost_motion_band_rad", "gearbox.hysteresis_rad"]),
+            "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
+                .iter()
+                .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             _ => false,

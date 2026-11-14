@@ -591,59 +591,58 @@ The tool is the platform's centre, x, y and z in metres, z up from the plane of 
 
 ```text
 $ sim-cli analyze delta-d3
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.008 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.009 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
-1,0.720000,7.642678,2.575830,120.0682,0.5101,0.5600,,,2.4400,24.83,...
-2,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
-3,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
+1,0.720000,7.118146,2.512099,118.3922,0.4748,0.5461,,,2.3767,23.44,...
+2,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
+3,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
 ```
 
 The cycle lies along x, so arm 1 (pointing along +x) works hardest, and arms 2 and 3 alike. Its 0.720 s are the S-curves by hand (traverse d/v + v/a + a/j = 0.1817 s, a 25 mm lift 4 (d / 2j)^(1/3) = 0.0684 s, 0.7069 s with the dwells) on the controller's 1 ms profile cycle (`the_adept_cycle_takes_the_hand_calculated_time`). The makers' figures for the same cycle are shorter (ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg): they round the corners instead of stopping, and run faster than the 3 m/s and 50 m/s² this config allows each axis. `sim-cli optimise delta-d3` rounds the corners through via points (splines on three axes) and raises the limits as far as every check allows.
 
 ```text
 $ sim-cli verdicts delta-d3
-motor-peak,1,0.5101,1.000,ok
-motor-thermal,1,24.83,100.0,ok
-drive-current,1,2.440,5.000,ok
-gearbox-continuous,1,66.79,120.0,ok
-gearbox-peak,1,133.9,192.0,ok
-gearbox-life,1,671269,20000,ok
-gearbox-gearing-life,1,11579,20000,FAIL
+motor-peak,1,0.4748,1.000,ok
+motor-thermal,1,23.44,100.0,ok
+drive-current,1,2.377,5.000,ok
+gearbox-continuous,1,62.91,347.0,ok
+gearbox-peak,1,126.3,278.0,ok
+gearbox-life,1,16719950,20000,ok
 ...
-settling,,0.0006760,0.0005000,FAIL
+settling,,0.0002984,0.0005000,ok
 singularity,,2.072,5.000,ok
-thermal-warm-start,,0.007974,0.1000,ok
+thermal-warm-start,,0.009331,0.1000,ok
 ```
 
-With `--bands` every check but `settling` and `gearbox-gearing-life` passes at both bounds of every estimate (peak gearbox torque 125 to 143 N m); `settling` fails at all of them (0.623 to 0.735 mm), the gearing's life lies between 5100 and 36300 h. What to read from them:
+Every check passes, with `--bands` too, at both bounds of every estimate (peak gearbox torque 117 to 135 N m, settling 0.25 to 0.34 mm); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.54 mm). What to read from them:
 
-- **Gearbox.** The arm's gearbox carries up to 134 N m of its 192 N m; the cubic mean, 67 N m, is what its 120 N m rating is for. Its planet bearings last 671000 h. The peaks above 120 N m wear the gearing: by Miner's sum on Siemens' two torque figures it lasts about 11600 h of the 20000 h required on arm 1 (arms 2 and 3 stay below 120 N m). That figure is an estimate (see the [model reference](model-reference.md#analysis-quantities)); check the gearbox size with Siemens.
-- **Settling fails: a sizing finding.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it: 0.64 mm at pick and place at rest with the NRB080's catalogue backlash of 9 arcmin, 0.68 mm in the dwell (with the motion before it); up to 2.09 mm at the rim's lower edge. That offset is the same every pass, which repeatability does not see, but it is beyond the class's accuracy: this delta needs a gearbox with less backlash. With 3 arcmin (`--set gearbox.backlash_rad=8.727e-4`, a robot-grade gearbox, not in the catalogue) it passes: 0.29 mm at rest at pick and place, 0.33 mm in the dwell, 0.30 to 0.38 mm over the bounds. The backlash does not make the loops ring: at rest the tool stands still to 2e-8 m with either.
+- **Gearbox.** The arm's gearbox, Siemens' SP100 precision planetary (the SP+ 100 of WITTENSTEIN alpha), carries up to 126 N m of its 278 N m; the cubic mean, 63 N m, is what its 347 N m rating is for, and below it the gearing takes no damage. Its planet bearings last 16.7 million h. Its no-load torque (0.93 N m at the motor at 3000 r/min and 20 °C), the motor's breakaway and the flanks' lost motion are on (`effects.gearbox_drag`, `motor_stiction`, `gearbox_lost_motion`, see the [model reference](model-reference.md#gearbox)). Until 14 November 2026 the config had the economy NRB080 (192 N m maximum, 120 N m rated): its peaks above 120 N m wore its gearing to about 11600 h of the 20000 h required.
+- **Settling: a sizing finding, settled by the gearbox.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it, the same every pass, which repeatability does not see. With the economy NRB080's 9 arcmin the cycle failed: 0.64 mm at pick and place at rest, 0.68 mm in the dwell, up to 2.09 mm at the rim's lower edge; every economy gearbox of this size and ratio (NRB, NRK, NLC) has 7 to 9 arcmin. So the config takes the precision SP100 with the reduced-backlash option: at most 3 arcmin (a typical 2.25 taken, bounds 1.5 to 3) and three times as stiff (31 N m/arcmin). Siemens fits it to 1FT2 motors only, so the motor is the 1FT2105-4AF, whose torque, current and inertia in D 32 are the 1FK2105-4AF's Autonox names. 0.30 mm in the dwell, up to 0.66 mm at the rim's lower edge at rest.
 - **Singularity**: the highest condition number of the Jacobian in the cycle, against `ratings.max_condition_number` (5). Near a singularity a little motor angle moves the platform a lot and the motor torques for a force grow without bound; the working range has up to 3.6, the cycle 2.07.
 - **No belt, pulley or guide checks**: the delta has none.
 
 To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
 
-The forearms are rigid rods with their mass and rotational inertia, their spin about their own axes included (`effects.forearm_inertia`; off, the lumped model of Codourey and Olsson, which puts 2.7 % more RMS torque on motor 1 in this cycle: 2.645 against 2.576 N m, peak 7.791 against 7.643 N m; the spin alone changes the peak by 1e-6 N m). With `effects.link_elasticity` (off by default; its stiffnesses are estimates) the upper arms bend, in the plane they turn in and out of it, and the platform rings after a move: the cycle's tracking error grows from 4.0 to 5.3 mm and the dwell error from 0.68 to 0.73 mm. The lowest mode with the motors held (the gearboxes' springs, with the switch the arms' bending too) is what `effects.shaper_follows_pose` sets the input shaper to: at the centre with the arms level the platform's sideways mode, 28 Hz on the gearboxes alone, 23 Hz with bending arms (the forearms lumped). The forearm rods and the upper arms are collision bodies: a forearm or an arm that runs into an obstacle is a crash.
+The forearms are rigid rods with their mass and rotational inertia, their spin about their own axes included (`effects.forearm_inertia`; off, the lumped model of Codourey and Olsson, which put 2.7 % more RMS torque on motor 1 in this cycle with the NRB080: 2.645 against 2.576 N m, peak 7.791 against 7.643 N m; the spin alone changes the peak by 1e-6 N m). With `effects.link_elasticity` (off by default; its stiffnesses are estimates) the upper arms bend, in the plane they turn in and out of it, and the platform rings after a move: the cycle's tracking error grew from 4.0 to 5.3 mm and the dwell error from 0.68 to 0.73 mm (with the NRB080). The lowest mode with the motors held (the gearboxes' springs, with the switch the arms' bending too) is what `effects.shaper_follows_pose` sets the input shaper to: at the centre with the arms level the platform's sideways mode, 49 Hz on the SP100s alone, 30 Hz with bending arms (the forearms lumped; 28 and 23 Hz with the NRB080's third of the stiffness). The forearm rods and the upper arms are collision bodies: a forearm or an arm that runs into an obstacle is a crash.
 
 What the delta does not have: elastic rods and ball joints, the arms' bending out of the plane they turn in, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, a transition curve where two arcs meet in different planes, and a friction view for its joints (their losses are in the energy budget). Trace replay and fit take it since 13 November, the fit in its motors' coordinates (see [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
 
 ### The planar delta D2
 
-`delta-d2` is a two-arm delta in the vertical x-z plane: two rotary arms, each with a pair of forearms down to a plate that keeps its orientation, sized like the Codian Robotics D2-800-S020 (working range 800 mm wide and 477 mm high, 5 kg payload, up to 210 picks a minute). Codian names no motors; the config uses the D3's 1FK2105-4AF on S210 converters behind ratio 20, and marks every value `[catalogue]` or `[estimate]` ([the config](../crates/machine-delta-d2/default.toml)). The tool pose is (x, z); paths are written `line,x,z` and `arc,x,z,cx,cz,cw` as on the gantries. The cycle is the D3's Adept cycle in the plane, 100 mm below the top of the range: 0.720 s.
+`delta-d2` is a two-arm delta in the vertical x-z plane: two rotary arms, each with a pair of forearms down to a plate that keeps its orientation, sized like the Codian Robotics D2-800-S020 (working range 800 mm wide and 477 mm high, 5 kg payload, up to 210 picks a minute). Codian names no motors; the config uses the D3's 1FT2105-4AF on S210 converters behind its SP100 gearbox of ratio 20, and marks every value `[catalogue]` or `[estimate]` ([the config](../crates/machine-delta-d2/default.toml)). The tool pose is (x, z); paths are written `line,x,z` and `arc,x,z,cx,cz,cw` as on the gantries. The cycle is the D3's Adept cycle in the plane, 100 mm below the top of the range: 0.720 s.
 
 ```text
 $ sim-cli verdicts delta-d2
-motor-peak,1,0.5880,1.000,ok
-gearbox-continuous,1,69.95,120.0,ok
-gearbox-peak,1,154.3,192.0,ok
+motor-peak,1,0.5555,1.000,ok
+gearbox-continuous,1,67.58,347.0,ok
+gearbox-peak,1,147.9,278.0,ok
 ...
-settling,,0.0003475,0.0005000,ok
-singularity,,1.136,5.000,ok
-thermal-warm-start,,0.03448,0.1000,ok
+settling,,0.0003769,0.0005000,ok
+singularity,,1.135,5.000,ok
+thermal-warm-start,,0.02977,0.1000,ok
 ```
 
-Every check passes, with `--bands` too (settling 0.31 to 0.41 mm, gearbox peak up to 163 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails gearbox peak (202 N m) and settling (0.60 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its 192 N m. The settling passes because the gearbox's backlash is an estimate of 1 arcmin, a reduced-backlash precision planetary: with the 9 arcmin of the catalogue's NRB080-05-20 (`--set gearbox.backlash_rad=2.618e-3`) it fails, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
+Every check passes, with `--bands` too (settling 0.33 to 0.42 mm, gearbox peak up to 155 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.74 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its rating: the lines planned within the axis limits take it to 233 N m of the SP100's 278 N m (the NRB080 the config had until 14 November 2026 was taken to 247 N m of its 192 N m). Its backlash, the SP100's typical 2.25 arcmin with reduced backlash, was an estimate of 1 arcmin before: with the NRB080's 9 arcmin the cycle failed settling, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
 
 ## Size a linear delta
 
@@ -702,7 +701,7 @@ singularity,,2.072,5.000,ok
 thermal-warm-start,,0.02011,0.1000,ok
 ```
 
-Every check passes. Motor 1 carries a little more than on the D3 (peak 0.563 against 0.510 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor works at 5 % of its peak: the 1FK2105 is far larger than the turn needs, but a machine has one motor type here. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) settling fails, 1.22 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` settling fails: it reaches 0.53 mm at a bound of the estimates. A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
+Every check passes. Motor 1 carries a little more than on the D3 with the same NRB080 gearbox the D4 keeps (peak 0.563 against 0.510 of its limit; the D3 has the SP100 since 14 November 2026): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor works at 5 % of its peak: the 1FK2105 is far larger than the turn needs, but a machine has one motor type here. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) settling fails, 1.22 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` settling fails: it reaches 0.53 mm at a bound of the estimates. A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
 
 ### SCARA and six-axis arm in tool space
 

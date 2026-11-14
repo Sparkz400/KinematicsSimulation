@@ -1753,7 +1753,7 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 12] = [
+const PATH_EFFECTS: [(&str, &[&str]); 19] = [
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),
@@ -1766,6 +1766,14 @@ const PATH_EFFECTS: [(&str, &[&str]); 12] = [
     ("belt.tooth_jump_factor", &["belt_tooth_jump"]),
     ("ratings.line_module_efficiency", &["regenerative_supply"]),
     ("ratings.dc_link_discharge_", &[]),
+    ("motor.friction_breakaway_nm", &["motor_stiction"]),
+    ("motor.friction_stribeck_rad_s", &["motor_stiction"]),
+    ("gearbox.no_load_", &["gearbox_drag"]),
+    ("gearbox.lost_motion_band_rad", &["gearbox_lost_motion"]),
+    ("gearbox.hysteresis_rad", &["gearbox_lost_motion"]),
+    // The knees and the upper stiffnesses; not stiffness_nm_rad, which every model uses.
+    ("gearbox.stiffness_t", &["gearbox_stiffness_curve"]),
+    ("gearbox.stiffness_k", &["gearbox_stiffness_curve"]),
 ];
 
 /// Whether `path` is a value only an effect uses (`PATH_EFFECTS`), and that effect is off in `cfg`, or a value no cycle

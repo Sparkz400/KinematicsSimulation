@@ -28,11 +28,13 @@ pub static ENTRY: MachineEntry = MachineEntry {
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 10] = [
+pub const LOSSY_EFFECTS: [&str; 12] = [
     "belt_damping",
     "guide_friction",
     "load_dependent_friction",
     "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
     "gearbox_efficiency",
     "torque_ripple",
     "tooth_meshing",
@@ -665,6 +667,7 @@ impl Machine for SingleAxis {
         let (gearbox, guide) = if self.gearbox.is_coupling() { (None, rises[0]) } else { (Some(rises[0]), rises[1]) };
         if let Some(rise) = gearbox {
             self.gearbox.efficiency = law.gearbox_efficiency(rise);
+            self.shaft.set_oil(law.viscosity_factor(rise));
         }
         self.friction.viscous = viscous * law.viscosity_factor(guide);
     }

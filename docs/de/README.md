@@ -10,7 +10,7 @@ Das Programm ist in Rust geschrieben. Herstellerdaten zu Motoren, Getrieben, Ant
 
 ![Der Delta-Picker in der App: Bewegung, 3D-Ansicht, Zyklusanalyse und Oszilloskope](../images/delta-d3-app.png)
 
-*Der Delta-Picker (`delta-d3`) in der App. Seine mitgelieferte Konfiguration besteht eine Prüfung nicht, das Einschwingen an der Greifposition (0,68 mm gegen 0,5 mm); die obere Leiste zeigt das an.*
+*Der Delta-Picker (`delta-d3`) in der App. Seine mitgelieferte Konfiguration besteht jede Prüfung: Mit dem Präzisions-Planetengetriebe SP100 von Siemens (spielreduziert) schwingt das Werkzeug an der Greifposition auf 0,30 mm ein, erlaubt sind 0,5 mm. Das Bild stammt von vor dem 14. November 2026, als das Economy-Getriebe der Konfiguration (9 Winkelminuten) diese Prüfung mit 0,68 mm nicht bestand, wie die obere Leiste zeigt.*
 
 Diese Seite ist die deutsche Einstiegsseite. Die vollständige Projektbeschreibung ist das englische [README](../../README.md).
 

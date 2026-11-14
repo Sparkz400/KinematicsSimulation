@@ -16,6 +16,7 @@ tables = [
     "siemens/gearbox_nlc.csv",
     "siemens/gearbox_nrb.csv",
     "siemens/gearbox_nrk.csv",
+    "siemens/gearbox_sp.csv",
     "siemens/line_modules_s120.csv",
     "siemens/motor_bearings_1fk2.csv",
     "siemens/motor_modules_s120.csv",

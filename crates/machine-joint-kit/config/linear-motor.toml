@@ -41,6 +41,17 @@ backlash_rad = 0.0
 stiffness_nm_rad = 2.0e8
 damping_nm_s_rad = 500.0
 inertia_at_input_kgm2 = 0.0
+# A coupling (ratio 1): it has no no-load torque (effects.gearbox_drag leaves a coupling out), no lost motion and one
+# stiffness; these keys are there for a gearbox put in.
+efficiency_torque_nm = 1.0
+no_load_torque_nm = 0.0
+no_load_speed_rpm = 3000.0
+lost_motion_band_rad = 0.0
+hysteresis_rad = 0.0
+stiffness_t1_nm = 1.0
+stiffness_t2_nm = 1.0
+stiffness_k2_nm_rad = 200000000.0
+stiffness_k3_nm_rad = 200000000.0
 
 [motor]
 # The forcer's mass, kg.
@@ -48,6 +59,10 @@ rotor_inertia_kgm2 = 3.0
 friction_coulomb_nm = 0.0
 friction_viscous_nm_s_rad = 0.0
 friction_smoothing_rad_s = 0.002
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.0
+friction_stribeck_rad_s = 2.0
 ripple_fraction = 0.02
 # Six per electrical period of two pole pitches: 6 * 2 pi / 0.048 m.
 ripple_order = 785.4

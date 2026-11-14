@@ -53,6 +53,7 @@ impl RotaryJoint {
             coulomb: if on { cfg.non_negative("joint.friction_coulomb_nm")? } else { 0.0 },
             viscous: if on { cfg.non_negative("joint.friction_viscous_nm_s_rad")? } else { 0.0 },
             smoothing: cfg.positive("joint.friction_smoothing_rad_s")?,
+            ..ShaftFriction::NONE
         };
         Self::with(cfg, friction, Self::stops(cfg, stiffness, damping)?, (min, max))
     }
@@ -67,6 +68,7 @@ impl RotaryJoint {
             coulomb: if on { cfg.non_negative("slide.friction_coulomb_n")? } else { 0.0 },
             viscous: if on { cfg.non_negative("slide.friction_viscous_n_s_m")? } else { 0.0 },
             smoothing: cfg.positive("slide.friction_smoothing_m_s")?,
+            ..ShaftFriction::NONE
         };
         let stops =
             Self::stops(cfg, cfg.positive("slide.stop_stiffness_n_m")?, cfg.non_negative("slide.stop_damping_n_s_m")?)?;
@@ -171,9 +173,9 @@ mod tests {
     use super::*;
 
     fn joint_text() -> String {
-        "format_version = 1\n[effects]\njoint_friction = true\nhard_stops = true\nmotor_friction = true\ntorque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = true\nthermal_feedback = false\nholding_brake = true\n\
-            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.1\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\nripple_fraction = 0.0\nripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
-            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 1e4\ndamping_nm_s_rad = 0.0\ninertia_at_input_kgm2 = 1e-4\n\
+        "format_version = 1\n[effects]\njoint_friction = true\nhard_stops = true\nmotor_friction = true\ntorque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = true\ngearbox_drag = false\nmotor_stiction = false\ngearbox_lost_motion = false\ngearbox_stiffness_curve = false\nthermal_feedback = false\nholding_brake = true\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.1\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.1\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\nripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 1e4\ndamping_nm_s_rad = 0.0\ninertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\nlost_motion_band_rad = 0.0\nhysteresis_rad = 0.0\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\nstiffness_k2_nm_rad = 1e4\nstiffness_k3_nm_rad = 1e4\n\
             [joint]\nfriction_coulomb_nm = 2.0\nfriction_viscous_nm_s_rad = 0.5\nfriction_smoothing_rad_s = 1e-3\nmin_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n".to_string()
     }
 

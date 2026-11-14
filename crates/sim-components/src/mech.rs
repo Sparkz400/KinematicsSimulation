@@ -33,6 +33,11 @@ const KELVIN: f64 = 273.15;
 ///   stay as they are.
 /// - Gearbox: a share s of its loss (1 - eta_ref) is churning and bearing drag, which follows the viscosity; the
 ///   rest, tooth friction, does not: 1 - eta = (1 - eta_ref) (1 - s + s nu / nu_ref).
+/// - Gearbox with effects.gearbox_drag: its churning and bearing drag is the no-load running torque (`GearDrag`),
+///   which follows the viscosity by its own law; the efficiency then is the teeth's alone, and s is taken as 0.
+/// - Shaft seals: the motor shaft's Coulomb and breakaway levels (`ShaftFriction`) follow (nu / nu_ref)^m, m
+///   `seal_viscosity_exponent`: a lip seal runs on a lubricant film whose shear grows with the viscosity, less than in
+///   proportion.
 /// - Belt: polyurethane loses modulus as it warms, but the steel cords carry EA: EA (1 - alpha (T - T_ref)), alpha a
 ///   few 1e-4 per K (steel's own modulus falls by about 2.5e-4 per K). The belt is taken at ambient: it has no loss
 ///   of its own in the model, and a stiffness that changed while running would change its stored energy.
@@ -48,6 +53,8 @@ pub struct ThermalFeedback {
     pub belt_coefficient: f64,
     /// The gearbox's efficiency at the reference temperature (1 with effects.gearbox_efficiency off).
     pub efficiency: f64,
+    /// m of the seals' law.
+    pub seal_exponent: f64,
 }
 
 impl ThermalFeedback {
@@ -68,9 +75,10 @@ impl ThermalFeedback {
             ambient: celsius("ambient_c")?,
             reference: celsius("reference_c")?,
             viscosity_slope: cfg.non_negative("thermal_feedback.viscosity_slope_k")?,
-            gearbox_viscous_share: share,
+            gearbox_viscous_share: if cfg.bool("effects.gearbox_drag")? { 0.0 } else { share },
             belt_coefficient: cfg.f64("thermal_feedback.belt_stiffness_coefficient_1_k")?,
             efficiency: Gearbox::configured_efficiency(cfg)?,
+            seal_exponent: cfg.non_negative("thermal_feedback.seal_viscosity_exponent")?,
         }))
     }
 
@@ -606,28 +614,139 @@ const BRISTLE_RATE_MAX: f64 = 1.0e5;
 // ---------------------------------------------------------------------------------------------
 // Motor shaft
 
-/// Motor and bearing friction: Coulomb plus viscous on the shaft. The Coulomb step is smoothed
-/// with tanh so a shaft at rest sees no chattering torque.
+/// The exponent of the no-load running torque on viscosity times speed: Palmgren's law for the drag of rolling bearings
+/// running in oil, M0 ~ (nu n)^(2/3) (SKF's rolling bearing catalogue, the drag term f0 (nu n)^(2/3) dm^3), which the
+/// planet bearings and the churning of a gearbox follow.
+pub const DRAG_EXPONENT: f64 = 2.0 / 3.0;
+
+/// A gearbox's no-load running torque at its input (gearbox makers' T0 or T012): what it takes to turn the gearbox
+/// with nothing on its output, from the churning of its lubricant, its bearings and its seals. Makers quote it at a
+/// reference input speed and 20 °C (Neugart: average idle torque; B&R's 8G planetary gearboxes: "at 20 °C and
+/// 3000 rpm"). It scales with speed and the lubricant's viscosity by Palmgren's law:
+/// T0(n, nu) = T0_ref (nu / nu_ref * |n| / n_ref)^(2/3). Zero with effects.gearbox_drag off and on a coupling.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GearDrag {
+    /// T0_ref, N m at the input.
+    pub torque: f64,
+    /// n_ref, rad/s at the input.
+    pub speed: f64,
+}
+
+impl GearDrag {
+    pub const NONE: Self = Self { torque: 0.0, speed: 1.0 };
+
+    pub fn from_config(cfg: &Config) -> Result<Self> {
+        let (torque, rpm) =
+            (cfg.non_negative("gearbox.no_load_torque_nm")?, cfg.positive("gearbox.no_load_speed_rpm")?);
+        let on = cfg.bool("effects.gearbox_drag")? && cfg.positive("gearbox.ratio")? != 1.0;
+        Ok(if on { Self { torque, speed: rpm * std::f64::consts::TAU / 60.0 } } else { Self::NONE })
+    }
+
+    /// The drag opposing a positive input `speed` (rad/s) with the lubricant at `oil` = nu / nu_ref.
+    pub fn torque(&self, speed: f64, oil: f64) -> f64 {
+        if self.torque == 0.0 {
+            return 0.0;
+        }
+        (self.torque * (oil * speed.abs() / self.speed).powf(DRAG_EXPONENT)).copysign(speed)
+    }
+
+    /// The efficiency of a gearbox of `ratio` whose teeth pass `tooth` of the power, with this drag at the input: the
+    /// share of the input power that reaches the output, T2 / (i T1) with T1 = T2 / (i tooth) + T0(n, nu). It falls at
+    /// part load, at speed and in the cold, as makers' efficiency charts do. 0 with no output torque.
+    pub fn efficiency(&self, tooth: f64, ratio: f64, output_torque: f64, input_speed: f64, oil: f64) -> f64 {
+        let t2 = output_torque.abs();
+        if t2 == 0.0 {
+            return 0.0;
+        }
+        t2 / (ratio * (t2 / (ratio * tooth) + self.torque(input_speed.abs(), oil)))
+    }
+
+    /// The teeth's efficiency of a gearbox whose catalogue efficiency `full` holds at the output torque `at` with this
+    /// drag at its reference speed: the inverse of `efficiency`, 1 / (1 / full - i T0_ref / at), at most 1 (a drag that
+    /// takes all the loss leaves the teeth without one).
+    pub fn tooth_efficiency(&self, full: f64, ratio: f64, at: f64) -> f64 {
+        // Without a drag the efficiency as given, to the bit (1 / (1 / full) may differ from it in the last place).
+        if self.torque == 0.0 {
+            return full;
+        }
+        let inverse = 1.0 / full - ratio * self.torque / at;
+        if inverse <= 1.0 { 1.0 } else { 1.0 / inverse }
+    }
+}
+
+/// Motor and bearing friction on the shaft, with what the gearbox's input adds to it: a Coulomb level that breaks away
+/// from a higher stiction level along a Stribeck curve (effects.motor_stiction), viscous friction, and the gearbox's
+/// no-load running torque (`GearDrag`). The Coulomb step is smoothed with tanh so a shaft at rest sees no chattering
+/// torque.
+///
+/// The Coulomb and stiction levels are those of the seals and bearings: on a geared motor the shaft's seal is the
+/// gearbox's input seal and runs in its lubricant, so with effects.thermal_feedback both follow the gearbox's
+/// lubricant (`oil`, nu / nu_ref) to the power `seal_exponent`, as the drag follows it by its own law.
 #[derive(Debug, Clone)]
 pub struct ShaftFriction {
     pub coulomb: f64,
     pub viscous: f64,
     pub smoothing: f64,
+    /// The breakaway level at rest; one below `coulomb` counts as `coulomb` (so with effects.motor_stiction off).
+    pub stiction: f64,
+    /// The speed over which the level falls from stiction to Coulomb, rad/s.
+    pub stribeck: f64,
+    pub drag: GearDrag,
+    /// nu / nu_ref of the gearbox's lubricant (1 at the reference temperature; `ThermalFeedback` sets it).
+    pub oil: f64,
+    /// The exponent of the seals' levels on `oil` (0 without effects.thermal_feedback).
+    pub seal_exponent: f64,
 }
 
 impl ShaftFriction {
+    /// No friction: a bearing friction of a joint or slide (`coulomb`, `viscous`, `smoothing`) has none of the rest.
+    pub const NONE: Self = Self {
+        coulomb: 0.0,
+        viscous: 0.0,
+        smoothing: 1.0,
+        stiction: 0.0,
+        stribeck: 1.0,
+        drag: GearDrag::NONE,
+        oil: 1.0,
+        seal_exponent: 0.0,
+    };
+
     pub fn from_config(cfg: &Config) -> Result<Self> {
         let on = cfg.bool("effects.motor_friction")?;
+        let coulomb = if on { cfg.non_negative("motor.friction_coulomb_nm")? } else { 0.0 };
+        let breakaway = cfg.non_negative("motor.friction_breakaway_nm")?;
+        let feedback = ThermalFeedback::from_config(cfg)?;
         Ok(Self {
-            coulomb: if on { cfg.non_negative("motor.friction_coulomb_nm")? } else { 0.0 },
+            coulomb,
             viscous: if on { cfg.non_negative("motor.friction_viscous_nm_s_rad")? } else { 0.0 },
             smoothing: cfg.positive("motor.friction_smoothing_rad_s")?,
+            // A breakaway level below the Coulomb level counts as that level, as for the guides (`Lugre`).
+            stiction: if on && cfg.bool("effects.motor_stiction")? { breakaway.max(coulomb) } else { coulomb },
+            stribeck: cfg.positive("motor.friction_stribeck_rad_s")?,
+            drag: GearDrag::from_config(cfg)?,
+            // With the feedback, at ambient; the machine follows the gearbox's temperature (`set_oil`).
+            oil: feedback.as_ref().map_or(1.0, |t| t.viscosity_factor(0.0)),
+            seal_exponent: feedback.map_or(0.0, |t| t.seal_exponent),
         })
+    }
+
+    /// With effects.thermal_feedback: the gearbox's lubricant at nu / nu_ref = `oil` (`ThermalFeedback::viscosity_factor`
+    /// of the gearbox's rise).
+    pub fn set_oil(&mut self, oil: f64) {
+        self.oil = oil;
+    }
+
+    /// The sliding level at `speed`: Fc + (Fs - Fc) exp(-(w / ws)^2), times the seals' temperature factor.
+    pub fn level(&self, speed: f64) -> f64 {
+        let stribeck = (self.stiction.max(self.coulomb) - self.coulomb) * (-(speed / self.stribeck).powi(2)).exp();
+        self.oil.powf(self.seal_exponent) * (self.coulomb + stribeck)
     }
 
     /// Torque opposing a positive speed.
     pub fn torque(&self, speed: f64) -> f64 {
-        self.coulomb * (speed / self.smoothing).tanh() + self.viscous * speed
+        // shortcut: the gearbox's drag is counted with the motor's friction (its loss and heat in the motor's share),
+        // as every machine has this one call on its rotor; split it out where the gearbox's heat matters.
+        self.level(speed) * (speed / self.smoothing).tanh() + self.viscous * speed + self.drag.torque(speed, self.oil)
     }
 }
 
@@ -695,13 +814,33 @@ impl ToothMesh {
 
 /// Gearbox between motor shaft and pulley: ratio, torsional stiffness, backlash as a dead zone,
 /// efficiency. Stiffness, damping and backlash are given at the output side.
+///
+/// The torsional characteristic, as makers measure it with the input locked (e the twist beyond half the backlash):
+///
+/// - Lost motion (effects.gearbox_lost_motion): the flanks do not take the load at once. Over a band b beyond the
+///   backlash the stiffness rises from 0 to K1, T = K1 e^2 / (2 b); beyond it T = K1 (e - b/2). And a hysteresis: the
+///   twist under load lags the torque by a friction torque T_h in the flanks and bearings, which opposes the twist's
+///   rate, so that loading and unloading run on two curves apart by 2 T_h / K1 in angle (Harmonic Drive: "hysteresis
+///   loss", the loop's width at zero torque). Both 0 with the effect off.
+/// - Three-segment stiffness (effects.gearbox_stiffness_curve): K1 up to T1, K2 from T1 to T2, K3 beyond, as
+///   Harmonic Drive gives it for its strain wave gears; the twist at T is T / K1 below T1, T1 / K1 + (T - T1) / K2
+///   below T2, T1 / K1 + (T2 - T1) / K2 + (T - T2) / K3 above. Off: K1 throughout.
 #[derive(Debug, Clone)]
 pub struct Gearbox {
     pub ratio: f64,
+    /// K1, N m/rad.
     pub stiffness: f64,
     pub damping: f64,
     pub half_backlash: f64,
     pub efficiency: f64,
+    /// b, rad.
+    pub band: f64,
+    /// T_h, N m.
+    pub hysteresis: f64,
+    /// [T1, T2], N m; infinite with the curve off.
+    pub knees: [f64; 2],
+    /// [K2, K3], N m/rad.
+    pub upper: [f64; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -715,13 +854,28 @@ pub struct GearTorque {
 /// Below this power the efficiency fades out, so a gearbox at rest has no torque step.
 const EFFICIENCY_FADE_W: f64 = 0.5;
 
+/// The twist rate over which the hysteresis torque changes sign, rad/s.
+/// shortcut: a rate-dependent friction, not a hysteresis state: a twist that stands still holds no hysteresis torque,
+/// so the gearbox at rest settles on the middle curve; give the flanks a friction state (as `Lugre`) if a gearbox's
+/// rest position within its loop matters.
+pub const HYSTERESIS_RATE: f64 = 1e-3;
+
 impl Gearbox {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         // A negative backlash would turn the dead zone inside out (and `clamp` panics on that).
         let backlash = cfg.non_negative("gearbox.backlash_rad")?;
+        let stiffness = cfg.positive("gearbox.stiffness_nm_rad")?;
+        let lost = cfg.bool("effects.gearbox_lost_motion")?;
+        let (band, width) =
+            (cfg.non_negative("gearbox.lost_motion_band_rad")?, cfg.non_negative("gearbox.hysteresis_rad")?);
+        let knees = [cfg.positive("gearbox.stiffness_t1_nm")?, cfg.positive("gearbox.stiffness_t2_nm")?];
+        let upper = [cfg.positive("gearbox.stiffness_k2_nm_rad")?, cfg.positive("gearbox.stiffness_k3_nm_rad")?];
+        if knees[1] < knees[0] {
+            return Err(ConfigError::Invalid("gearbox.stiffness_t2_nm".into()));
+        }
         Ok(Self {
             ratio: cfg.positive("gearbox.ratio")?,
-            stiffness: cfg.positive("gearbox.stiffness_nm_rad")?,
+            stiffness,
             damping: cfg.non_negative("gearbox.damping_nm_s_rad")?,
             half_backlash: if cfg.bool("effects.gearbox_backlash")? { 0.5 * backlash } else { 0.0 },
             // With the feedback, at ambient; the machine follows the gearbox's temperature (`ThermalFeedback`).
@@ -729,16 +883,25 @@ impl Gearbox {
                 Some(t) => t.gearbox_efficiency(0.0),
                 None => Self::configured_efficiency(cfg)?,
             },
+            band: if lost { band } else { 0.0 },
+            hysteresis: if lost { 0.5 * stiffness * width } else { 0.0 },
+            knees: if cfg.bool("effects.gearbox_stiffness_curve")? { knees } else { [f64::INFINITY; 2] },
+            upper,
         })
     }
 
-    /// The efficiency as configured: 1 with effects.gearbox_efficiency off.
+    /// The efficiency as configured: 1 with effects.gearbox_efficiency off. With effects.gearbox_drag the teeth's
+    /// alone (`GearDrag::tooth_efficiency`): `gearbox.efficiency` holds at `gearbox.efficiency_torque_nm` with the drag.
     pub fn configured_efficiency(cfg: &Config) -> Result<f64> {
         let efficiency = cfg.positive("gearbox.efficiency")?;
         if efficiency > 1.0 {
             return Err(ConfigError::Invalid("gearbox.efficiency".into()));
         }
-        Ok(if cfg.bool("effects.gearbox_efficiency")? { efficiency } else { 1.0 })
+        let at = cfg.positive("gearbox.efficiency_torque_nm")?;
+        if !cfg.bool("effects.gearbox_efficiency")? {
+            return Ok(1.0);
+        }
+        Ok(GearDrag::from_config(cfg)?.tooth_efficiency(efficiency, cfg.positive("gearbox.ratio")?, at))
     }
 
     /// A ratio of 1 is a direct drive: the table describes the coupling between motor and pulley, there is no
@@ -747,9 +910,55 @@ impl Gearbox {
         self.ratio == 1.0
     }
 
-    /// Twist beyond the dead zone.
-    fn engaged_twist(&self, twist: f64) -> f64 {
-        twist - twist.clamp(-self.half_backlash, self.half_backlash)
+    /// The flanks can separate: a backlash or a lost-motion band.
+    fn has_play(&self) -> bool {
+        self.half_backlash > 0.0 || self.band > 0.0
+    }
+
+    /// The spring's (torque, energy) at a twist `e` >= 0 beyond the dead zone: the lost-motion band, then the three
+    /// segments in x = e - b/2.
+    pub fn spring(&self, e: f64) -> (f64, f64) {
+        let (k1, b) = (self.stiffness, self.band);
+        if e < b {
+            return (k1 * e * e / (2.0 * b), k1 * e * e * e / (6.0 * b));
+        }
+        // At the band's end the energy is k1 b^2 / 6; the line k1 x from x = b/2 on adds k1 (x^2 - b^2/4) / 2.
+        let (x, base) = (e - 0.5 * b, k1 * b * b / 24.0);
+        let ([t1, t2], [k2, k3]) = (self.knees, self.upper);
+        let x1 = t1 / k1;
+        if x <= x1 {
+            return (k1 * x, base + 0.5 * k1 * x * x);
+        }
+        let (x2, e1) = (x1 + (t2 - t1) / k2, base + 0.5 * t1 * x1);
+        if x <= x2 {
+            let t = t1 + k2 * (x - x1);
+            return (t, e1 + 0.5 * (t1 + t) * (x - x1));
+        }
+        let t = t2 + k3 * (x - x2);
+        (t, e1 + 0.5 * (t1 + t2) * (x2 - x1) + 0.5 * (t2 + t) * (x - x2))
+    }
+
+    /// The twist beyond the dead zone that the spring needs for `torque` >= 0: the inverse of `spring`.
+    pub fn spring_twist(&self, torque: f64) -> f64 {
+        let (k1, b) = (self.stiffness, self.band);
+        if torque < 0.5 * k1 * b {
+            return (2.0 * b * torque / k1).sqrt();
+        }
+        let ([t1, t2], [k2, k3]) = (self.knees, self.upper);
+        let x = if torque <= t1 {
+            torque / k1
+        } else if torque <= t2 {
+            t1 / k1 + (torque - t1) / k2
+        } else {
+            t1 / k1 + (t2 - t1) / k2 + (torque - t2) / k3
+        };
+        x + 0.5 * b
+    }
+
+    /// The twist at the output, rotor over ratio less output, and how far it is beyond the dead zone (>= 0).
+    fn beyond(&self, rotor_angle: f64, out_angle: f64) -> (f64, f64) {
+        let twist = rotor_angle / self.ratio - out_angle;
+        (twist, (twist.abs() - self.half_backlash).max(0.0))
     }
 
     /// Factor on a torque at the output: efficiency when driving, 1/efficiency when driven back.
@@ -758,16 +967,23 @@ impl Gearbox {
     }
 
     pub fn torque(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> GearTorque {
-        let twist = self.engaged_twist(rotor_angle / self.ratio - out_angle);
-        if twist == 0.0 {
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        if e == 0.0 {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
-        let torque = self.stiffness * twist + self.damping * (rotor_speed / self.ratio - out_speed);
+        let rate = rotor_speed / self.ratio - out_speed;
+        let torque =
+            self.spring(e).0.copysign(twist) + self.damping * rate + self.hysteresis * (rate / HYSTERESIS_RATE).tanh();
         // Tooth flanks can push but not pull: while they separate fast, the damping must not reverse the torque.
-        if self.half_backlash > 0.0 && torque * twist < 0.0 {
+        if self.has_play() && torque * twist < 0.0 {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
         GearTorque { output: torque * self.loss_factor(torque, out_speed), rotor: torque / self.ratio }
+    }
+
+    /// The twist beyond the backlash that transmits `output_torque` at rest, with its sign: the spring's alone.
+    pub fn spring_twist_signed(&self, output_torque: f64) -> f64 {
+        if output_torque == 0.0 { 0.0 } else { self.spring_twist(output_torque.abs()).copysign(output_torque) }
     }
 
     /// Twist at rest that transmits `output_torque`, on the matching side of the backlash.
@@ -775,20 +991,21 @@ impl Gearbox {
         if output_torque == 0.0 {
             0.0
         } else {
-            output_torque / self.stiffness + self.half_backlash.copysign(output_torque)
+            (self.spring_twist(output_torque.abs()) + self.half_backlash).copysign(output_torque)
         }
     }
 
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
-        0.5 * self.stiffness * self.engaged_twist(rotor_angle / self.ratio - out_angle).powi(2)
+        self.spring(self.beyond(rotor_angle, out_angle).1).1
     }
 
     /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what the spring
-    /// stores. The efficiency loss and the damping.
+    /// stores. The efficiency loss, the damping and the hysteresis.
     pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
         let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
-        let twist = self.engaged_twist(rotor_angle / self.ratio - out_angle);
-        t.rotor * rotor_speed - t.output * out_speed - self.stiffness * twist * (rotor_speed / self.ratio - out_speed)
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        let spring = if e == 0.0 { 0.0 } else { self.spring(e).0.copysign(twist) };
+        t.rotor * rotor_speed - t.output * out_speed - spring * (rotor_speed / self.ratio - out_speed)
     }
 }
 
@@ -1047,7 +1264,7 @@ preload_n = 200.0
 
     #[test]
     fn shaft_friction_is_coulomb_plus_viscous_away_from_rest() {
-        let f = ShaftFriction { coulomb: 0.02, viscous: 1e-4, smoothing: 0.5 };
+        let f = ShaftFriction { coulomb: 0.02, viscous: 1e-4, smoothing: 0.5, ..ShaftFriction::NONE };
         assert!((f.torque(100.0) - (0.02 + 0.01)).abs() < 1e-12);
         assert!((f.torque(-100.0) + (0.02 + 0.01)).abs() < 1e-12);
         assert_eq!(f.torque(0.0), 0.0);
@@ -1070,7 +1287,17 @@ preload_n = 200.0
     }
 
     fn gearbox() -> Gearbox {
-        Gearbox { ratio: 5.0, stiffness: 1e4, damping: 0.0, half_backlash: 4e-4, efficiency: 1.0 }
+        Gearbox {
+            ratio: 5.0,
+            stiffness: 1e4,
+            damping: 0.0,
+            half_backlash: 4e-4,
+            efficiency: 1.0,
+            band: 0.0,
+            hysteresis: 0.0,
+            knees: [f64::INFINITY; 2],
+            upper: [1e4; 2],
+        }
     }
 
     #[test]
@@ -1107,6 +1334,7 @@ preload_n = 200.0
             gearbox_viscous_share: 0.5,
             belt_coefficient: 3e-4,
             efficiency: 0.95,
+            seal_exponent: 0.33,
         }
     }
 
@@ -1222,6 +1450,152 @@ preload_n = 200.0
         out.clear();
         drive_excitations(0.005, 1.0, &Ripple { ripple: 0.0, cogging: 0.0, ..ripple }, 250.0, &mut out);
         assert_eq!(out.len(), 1);
+    }
+
+    /// The SP+ 100's no-load running torque, 0.93 N m at 3000 r/min and 20 degC, by Palmgren's law
+    /// T0 = T0_ref (nu / nu_ref * n / n_ref)^(2/3) with the configs' oil (B = 4000 K, reference 20 degC), by hand:
+    /// 1500 r/min warm: 0.93 * 0.5^(2/3) = 0.585863 N m. 40 degC: nu / nu_ref = exp(4000 (1/313.15 - 1/293.15)) =
+    /// 0.418340, so 0.93 * 0.418340^(2/3) = 0.520199 N m at 3000 r/min. 0 degC: 2.715774, so 1.810278 N m at 3000 and
+    /// 0.93 * (2.715774 * 0.5)^(2/3) = 1.140404 N m at 1500 r/min. It opposes the speed, and is 0 at rest.
+    #[test]
+    fn the_no_load_torque_follows_speed_and_temperature_by_palmgrens_law() {
+        let drag = GearDrag { torque: 0.93, speed: 3000.0 * std::f64::consts::TAU / 60.0 };
+        let oil = ThermalFeedback { efficiency: 0.94, ..feedback() };
+        let (warm, cold) =
+            (oil.viscosity_factor(20.0), ThermalFeedback { ambient: 273.15, ..oil }.viscosity_factor(0.0));
+        let rpm = |n: f64| n * std::f64::consts::TAU / 60.0;
+        for (speed, oil, expected) in [
+            (rpm(3000.0), 1.0, 0.93),
+            (rpm(1500.0), 1.0, 0.585863),
+            (rpm(3000.0), warm, 0.520199),
+            (rpm(3000.0), cold, 1.810278),
+            (rpm(1500.0), cold, 1.140404),
+            (-rpm(1500.0), 1.0, -0.585863),
+        ] {
+            let t = drag.torque(speed, oil);
+            assert!((t - expected).abs() < 1e-6, "{speed} rad/s, oil {oil}: {t} N m against {expected}");
+        }
+        assert_eq!(drag.torque(0.0, 1.0), 0.0);
+        assert_eq!(GearDrag::NONE.torque(100.0, 1.0), 0.0);
+    }
+
+    /// The efficiency map of a planetary gearbox of ratio 5 (the NRB060: 95 % at its rated 40 N m, 0.125 N m no-load
+    /// torque at 3000 r/min), by hand. The teeth: 1 / (1 / 0.95 - 5 * 0.125 / 40) = 0.964314. Then
+    /// eta = T2 / (5 (T2 / (5 * 0.964314) + T0)): 0.95 at 40 N m and 3000 r/min (the catalogue's point); at part load
+    /// 10 N m 0.909499; slower, 1500 r/min (T0 0.078745), 0.929041; at 40 N m cold (0 degC, T0 0.243317) 0.936837 and
+    /// warm (40 degC) 0.956255. The SP+ 100's drag takes all its loss: its teeth come out at 1 (1 / 0.94 - 20 * 0.93 /
+    /// 259 = 0.992 is below 1), and at T2N cold from the start it passes 259 / (259 + 20 * 0.93) = 0.932997.
+    #[test]
+    fn the_efficiency_map_falls_at_part_load_slow_speed_and_in_the_cold_as_calculated() {
+        let rpm = |n: f64| n * std::f64::consts::TAU / 60.0;
+        let drag = GearDrag { torque: 0.125, speed: rpm(3000.0) };
+        let tooth = drag.tooth_efficiency(0.95, 5.0, 40.0);
+        assert!((tooth - 0.964314).abs() < 1e-6, "{tooth}");
+        let (warm, cold) = (
+            feedback().viscosity_factor(20.0),
+            ThermalFeedback { ambient: 273.15, ..feedback() }.viscosity_factor(0.0),
+        );
+        for (torque, speed, oil, expected) in [
+            (40.0, 3000.0, 1.0, 0.95),
+            (10.0, 3000.0, 1.0, 0.909499),
+            (10.0, 1500.0, 1.0, 0.929041),
+            (40.0, 3000.0, cold, 0.936837),
+            (40.0, 3000.0, warm, 0.956255),
+        ] {
+            let eta = drag.efficiency(tooth, 5.0, torque, rpm(speed), oil);
+            assert!((eta - expected).abs() < 1e-6, "{torque} N m, {speed} r/min, oil {oil}: {eta}");
+        }
+        let sp = GearDrag { torque: 0.93, speed: rpm(3000.0) };
+        assert_eq!(sp.tooth_efficiency(0.94, 20.0, 259.0), 1.0);
+        assert!((sp.efficiency(1.0, 20.0, 259.0, rpm(3000.0), 1.0) - 0.932997).abs() < 1e-6);
+        assert_eq!(GearDrag::NONE.tooth_efficiency(0.94, 20.0, 259.0), 0.94);
+    }
+
+    /// The shaft's breakaway, by hand: Coulomb 0.05 N m, breakaway 0.075 N m, Stribeck speed 2 rad/s, smoothing
+    /// 0.5 rad/s. At rest the level is the breakaway, 0.075 N m; at 0.5 rad/s (0.05 + 0.025 exp(-0.0625)) tanh(1) =
+    /// 0.055966 N m; at 20 rad/s the Coulomb level, 0.05 N m. The seals at 0 degC with m = 0.33: 2.715774^0.33 =
+    /// 1.390544 times as much. A breakaway given below the Coulomb level counts as that level, and so does any with
+    /// effects.motor_stiction off.
+    #[test]
+    fn the_shaft_breaks_away_at_its_stiction_level_and_slides_at_its_coulomb_level() {
+        let f = ShaftFriction { coulomb: 0.05, smoothing: 0.5, stiction: 0.075, stribeck: 2.0, ..ShaftFriction::NONE };
+        assert!((f.level(0.0) - 0.075).abs() < 1e-12);
+        assert!((f.torque(0.5) - 0.055966).abs() < 1e-6, "{}", f.torque(0.5));
+        assert!((f.torque(-20.0) + 0.05).abs() < 1e-12);
+        let mut cold = f.clone();
+        cold.seal_exponent = 0.33;
+        cold.set_oil(2.715774);
+        assert!((cold.level(0.0) / f.level(0.0) - 1.390544).abs() < 1e-6);
+        let text = |stiction: bool, breakaway: f64| {
+            format!(
+                "format_version = 1\n[effects]\nmotor_friction = true\nmotor_stiction = {stiction}\ngearbox_drag = false\nthermal_feedback = false\n\
+                 [motor]\nfriction_coulomb_nm = 0.05\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 0.5\nfriction_breakaway_nm = {breakaway:?}\nfriction_stribeck_rad_s = 2.0\n\
+                 [gearbox]\nratio = 20.0\nno_load_torque_nm = 0.93\nno_load_speed_rpm = 3000.0\n"
+            )
+        };
+        let level = |stiction, breakaway| {
+            ShaftFriction::from_config(&Config::parse(&text(stiction, breakaway)).unwrap()).unwrap().level(0.0)
+        };
+        for (stiction, breakaway, expected) in [(true, 0.075, 0.075), (true, 0.03, 0.05), (false, 0.075, 0.05)] {
+            assert!((level(stiction, breakaway) - expected).abs() < 1e-15, "{stiction} {breakaway}");
+        }
+    }
+
+    /// Harmonic Drive's size 32 strain wave gear, ratio 80 and up (Table 43): K1 6.7e4 N m/rad to T1 29 N m, K2 1.1e5 to
+    /// T2 108 N m, K3 1.2e5 beyond. The twist by hand: 29 / 6.7e4 = 4.328358e-4 rad at T1 (the table's 4.4e-4), that
+    /// plus 79 / 1.1e5 = 1.151018e-3 rad at T2 (11.6e-4), that plus 29 / 1.2e5 = 1.392684e-3 rad at its rated 137 N m.
+    /// The spring gives the torque back, and its energy rises by the torque times the twist.
+    #[test]
+    fn the_three_segment_stiffness_twists_as_harmonic_drive_calculates() {
+        let g = Gearbox {
+            ratio: 120.0,
+            stiffness: 6.7e4,
+            half_backlash: 0.0,
+            knees: [29.0, 108.0],
+            upper: [1.1e5, 1.2e5],
+            ..gearbox()
+        };
+        for (torque, twist) in [(29.0, 4.328358e-4), (108.0, 1.151018e-3), (137.0, 1.392684e-3)] {
+            assert!((g.static_twist(torque) - twist).abs() < 1e-9, "{torque} N m: {}", g.static_twist(torque));
+            assert!((g.static_twist(-torque) + twist).abs() < 1e-9);
+            assert!((g.spring(twist).0 - torque).abs() < 1e-3, "{}", g.spring(twist).0);
+            let h = 1e-8;
+            let slope = (g.spring(twist + h).1 - g.spring(twist - h).1) / (2.0 * h);
+            assert!((slope - torque).abs() < 1e-3, "{slope}");
+        }
+        // Off, the knees are at infinity: K1 throughout.
+        assert!(
+            (Gearbox { stiffness: 6.7e4, half_backlash: 0.0, ..gearbox() }.static_twist(137.0) - 137.0 / 6.7e4).abs()
+                < 1e-15
+        );
+    }
+
+    /// The lost-motion band and the hysteresis, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad:
+    /// 1e-4 rad into the band 1e4 * 1e-8 / 4e-4 = 0.25 N m, at its end 1 N m (= K1 b / 2), 1e-4 rad beyond 2 N m; the
+    /// twist for 2 N m is 4e-4 + 2e-4 / 2 + 2e-4 = 7e-4 rad. A strain wave gear's hysteresis of 2.909e-4 rad (1 arcmin)
+    /// on K1 1e4 is a flanks' friction of 1.4545 N m: loading crosses zero torque at -1.4545e-4 rad, unloading at
+    /// +1.4545e-4 rad, a loop 2.909e-4 rad wide. What the hysteresis takes, 1.4545 N m at 0.5 rad/s of twist rate, is
+    /// a loss of 0.72725 W.
+    #[test]
+    fn the_lost_motion_band_and_the_hysteresis_loop_are_the_calculated_ones() {
+        let g = Gearbox { band: 2e-4, ..gearbox() };
+        let out = |twist: f64| g.torque(5.0 * twist, 0.0, 0.0, 0.0).output;
+        assert!((out(5e-4) - 0.25).abs() < 1e-9 && (out(6e-4) - 1.0).abs() < 1e-9 && (out(7e-4) - 2.0).abs() < 1e-9);
+        assert!((g.static_twist(2.0) - 7e-4).abs() < 1e-15 && (g.static_twist(0.25) - 5e-4).abs() < 1e-15);
+        let h = 1e-9;
+        for twist in [5e-4, 6e-4, 7e-4] {
+            let slope = (g.energy(5.0 * (twist + h), 0.0) - g.energy(5.0 * (twist - h), 0.0)) / (2.0 * h);
+            assert!((slope - out(twist)).abs() < 1e-5, "{twist}: {slope}");
+        }
+        let wave = Gearbox { half_backlash: 0.0, hysteresis: 0.5 * 1e4 * 2.909e-4, ..gearbox() };
+        // Loading: the twist rises (rotor ahead, 1 rad/s at the output); unloading: it falls.
+        let torque = |twist: f64, rate: f64| wave.torque(5.0 * twist, 5.0 * rate, 0.0, 0.0).output;
+        let zero = |rate: f64| -wave.hysteresis * (rate / HYSTERESIS_RATE).tanh() / wave.stiffness;
+        let (up, down) = (zero(1.0), zero(-1.0));
+        assert!((up + 1.4545e-4).abs() < 1e-12 && (down - 1.4545e-4).abs() < 1e-12, "{up} {down}");
+        assert!(torque(up, 1.0).abs() < 1e-9 && torque(down, -1.0).abs() < 1e-9);
+        assert!(((down - up) - 2.909e-4).abs() < 1e-12);
+        assert!((wave.loss_power(5.0 * 1e-4, 5.0 * 0.5, 0.0, 0.0) - 0.72725).abs() < 1e-9);
     }
 
     #[test]

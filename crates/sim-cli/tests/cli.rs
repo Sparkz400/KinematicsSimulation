@@ -529,8 +529,8 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         {
             assert!(rows.iter().any(|r| r[0] == check), "{}: no {check} in {out}", entry.id);
         }
-        // As the library judges the cycle: the belt machines pass every check, the delta's catalogue gearboxes fail
-        // `settling` (a sizing finding), and its first arm the gearing life (an estimate, see `gearbox_gearing_life_h`).
+        // As the library judges the cycle (every shipped config passes since 14 November 2026; before, the D3's
+        // economy gearboxes failed `settling` and its first arm the gearing life).
         let cfg = entry.config();
         let load =
             sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();

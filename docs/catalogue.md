@@ -162,6 +162,21 @@ Columns: `series`, `size`, `motor_frame`, `stages`, `ratio`, `rated_output_torqu
 - Sizes: NRB040 to NRB160, NRK050 to NRK155, NLC060 to NLC120.
 - A gearbox is named in a config as size-frame-ratio, e.g. `NRK070-04-5`.
 
+### `siemens/gearbox_sp.csv`
+
+| | |
+| --- | --- |
+| Source | Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, 04/2025, A5E54515894B AA, chapter 6.5 (SP+ precision planetary gearboxes, made by WITTENSTEIN alpha) |
+| A row is | The SP100 with two stages for motor frames 03, 04 and 05, at each of its nine ratios: 27 rows |
+| Method | Typed in from the rendered tables (6-61, 6-64, 6-66 to 6-68, 6-70 and chapter 6.5.2) and checked against them; no script |
+
+Columns as the other gearbox files, and `backlash_reduced_rad`: the backlash of the reduced-backlash option (order codes M5 to M7), 3 arcmin for two stages against the standard 5; both are maxima.
+
+- Siemens fits the SP+ to 1FT2 motors only ("Coaxial precision gearbox only for 1FT2", chapter 3.1). The frame code is the 1FT2's.
+- As printed, the frames 04 and 05 have a rated torque (347 N m, Table 6-61) above their maximum (278 N m, chapter 6.5.2): the maximum is the geared motor's, 15 N m of a 1FT2105 at ratio 20 and 94 %. WITTENSTEIN's own sheet for the SP+ 100 MF gives T2N 259 N m and T2B 347 N m. Both are kept as Siemens prints them.
+- Not in the file: the other SP+ sizes, one stage, TP+, masses, forces, reference speeds (the delta configs take 59 r/min from Table 6-74 by hand) and the no-load torque (WITTENSTEIN's sheet, in the delta configs).
+- The simulator does not read the file: a gearbox by name and the search take NRB, NRK and NLC (the search pairs by frame code, which would offer an SP+ to a 1FK2). The delta pickers D2 and D3 write its numbers into their configs.
+
 ### `siemens/gearbox_mass.csv`
 
 | | |

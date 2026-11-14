@@ -17,6 +17,12 @@
       "minimum": 0,
       "unit": "rad"
     },
+    "backlash_reduced_rad": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "rad",
+      "description": "Backlash of the maker's reduced-backlash option, a maximum as backlash_rad is."
+    },
     "efficiency_full_load": {
       "type": "number",
       "minimum": 0,

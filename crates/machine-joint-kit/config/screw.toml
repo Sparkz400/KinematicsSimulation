@@ -55,6 +55,17 @@ backlash_rad = 0.0
 stiffness_nm_rad = 9000.0
 damping_nm_s_rad = 0.5
 inertia_at_input_kgm2 = 2.0e-5
+# A coupling (ratio 1): it has no no-load torque (effects.gearbox_drag leaves a coupling out), no lost motion and one
+# stiffness; these keys are there for a gearbox put in.
+efficiency_torque_nm = 1.0
+no_load_torque_nm = 0.0
+no_load_speed_rpm = 3000.0
+lost_motion_band_rad = 0.0
+hysteresis_rad = 0.0
+stiffness_t1_nm = 1.0
+stiffness_t2_nm = 1.0
+stiffness_k2_nm_rad = 9000.0
+stiffness_k3_nm_rad = 9000.0
 
 [motor]
 # [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
@@ -63,6 +74,10 @@ rotor_inertia_kgm2 = 1.7e-4
 friction_coulomb_nm = 0.05
 friction_viscous_nm_s_rad = 2.0e-4
 friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
 ripple_fraction = 0.02
 ripple_order = 24.0
 cogging_nm = 0.02
@@ -201,3 +216,5 @@ ratings.line_module_efficiency = [0.95, 0.99]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]

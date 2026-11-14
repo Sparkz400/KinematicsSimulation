@@ -15,7 +15,7 @@ Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](
 
 ![The delta picker in the app: motion panel, 3D view, cycle analysis and scopes](docs/images/delta-d3-app.png)
 
-*The delta picker (`delta-d3`) in the app. Its shipped config fails one check, the settling at the pick (0.68 mm against 0.5 mm); the top bar says so.*
+*The delta picker (`delta-d3`) in the app. Its shipped config passes every check: with Siemens' SP100 precision planetary gearbox (reduced backlash) the tool settles to 0.30 mm at the pick, against 0.5 mm. The picture is from before 14 November 2026, when the config's economy gearbox (9 arcmin) failed that check with 0.68 mm, as its top bar says.*
 
 ## What it can and cannot tell you
 

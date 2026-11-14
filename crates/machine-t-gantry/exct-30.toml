@@ -51,6 +51,19 @@ motor_friction = true
 # Direct drive: the "gearbox" is the coupling, with ratio 1, no backlash and no loss.
 gearbox_backlash = false
 gearbox_efficiency = false
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
 torque_ripple = true
 tooth_meshing = true
 frame_compliance = true
@@ -224,6 +237,10 @@ rotor_inertia_kgm2 = 5.1e-4
 friction_coulomb_nm = 0.05
 friction_viscous_nm_s_rad = 2.0e-4
 friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
 ripple_fraction = 0.02
 ripple_order = 24.0
 cogging_nm = 0.02
@@ -268,6 +285,17 @@ stiffness_nm_rad = 3.0e3
 damping_nm_s_rad = 0.2
 # The gearbox's own inertia at its input, which turns with the rotor. A gearbox named in [parts] brings it.
 inertia_at_input_kgm2 = 0.0
+# A coupling (ratio 1): it has no no-load torque (effects.gearbox_drag leaves a coupling out), no lost motion and one
+# stiffness; these keys are there for a gearbox put in.
+efficiency_torque_nm = 1.0
+no_load_torque_nm = 0.0
+no_load_speed_rpm = 3000.0
+lost_motion_band_rad = 0.0
+hysteresis_rad = 0.0
+stiffness_t1_nm = 1.0
+stiffness_t2_nm = 1.0
+stiffness_k2_nm_rad = 3000.0
+stiffness_k3_nm_rad = 3000.0
 
 [pulley]
 # [estimate]
@@ -347,6 +375,9 @@ ambient_c = 20.0                          # [estimate]
 reference_c = 20.0                        # [catalogue] the temperature gearbox makers quote their no-load torque at
 viscosity_slope_k = 4000.0                # [estimate] ISO VG 68
 gearbox_viscous_loss_share = 0.5          # [estimate] for a gearbox put in; the EXCT has none
+# With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
+# friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
+seal_viscosity_exponent = 0.33
 belt_stiffness_coefficient_1_k = 3.0e-4   # [estimate]
 
 # Below Festo's limits of 5 m/s and 50 m/s2, which hold "under ideal conditions".
@@ -686,6 +717,9 @@ thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]
+thermal_feedback.seal_viscosity_exponent = [0.0, 0.5]
 
 [start]
 pose = [0.1, 0.2]
