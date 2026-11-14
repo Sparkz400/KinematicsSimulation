@@ -406,7 +406,7 @@ Ein Fehler nennt Datei, Zeile und Schlüssel, in der Sprache der Oberfläche:
 
 ```
 $ sim-cli verdicts --machine-file broken.toml --lang de
-Die Konfiguration enthält einen Wert, den diese Maschine nicht kennt: broken.toml:604: machine.guide[guide_z].side_lod
+Die Konfiguration enthält einen Wert, den diese Maschine nicht kennt: broken.toml:674: machine.guide[guide_z].side_lod
 ```
 
 Ein Knoten wird mit seiner Liste und seiner id genannt, `machine.guide[guide_z]`; bevor seine id gelesen ist, mit

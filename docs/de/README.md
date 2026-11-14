@@ -23,9 +23,16 @@ Für eine Maschine, die in einer Konfigurationsdatei beschrieben ist, liefert es
 - ob dieser Zyklus die Grenzwerte der Bauteile in der Konfiguration einhält (Drehmoment-Drehzahl-Kennlinie, Wicklungstemperatur, Getriebe, Riemenkraft, schlaffes Trum und Zahnbelastung, Zwischenkreis und Bremswiderstand, Führungsbelastung und Radialkraft auf die Welle, Einschwingen an der Greifposition)
 - für die Gelenkmaschinen zusätzlich die eigenen Prüfungen ihres Getriebes: Drehzahl, DN-Wert, Knickung und Lebensdauer eines Kugelgewindetriebs, Vorschubkraft einer Zahnstange, Lebensdauer eines Wellgetriebes
 - wie viele Stunden die Lager der Scheibenwellen, die Planetenlager des Getriebes und die Führungen in diesem Zyklus halten, gegen eine geforderte Lebensdauer (ISO 281, die Getriebeformel von Siemens, die Formel der Führungshersteller; für den Riemen gibt es stattdessen eine zulässige Zahnbelastung, weil kein Riemenhersteller eine Lebensdauer veröffentlicht)
+- wie lange die Verzahnung eines Getriebes hält, wo der Zyklus es über sein Nennmoment bringt, und die Lager eines Motors, wo der Riemen an seiner Welle zieht; die Lebensdauer der Lager der Scheibenwellen mit dem a_ISO der ISO 281 für Schmierung und Verschmutzung
 - wie sich diese Ergebnisse verschieben, wenn ein unsicherer Wert an seiner unteren oder oberen Grenze liegt, oder wenn alle unsicheren Werte zugleich abweichen
 - wie weit die Werkzeugspitze von ihrer Bahn entfernt ist und was Reglerverstärkungen, Überschleifen und Input Shaping daran ändern
+- wie schnell eine Bahn innerhalb dessen gefahren werden kann, was Motoren und Riemen zulassen, Punkt für Punkt entlang der Bahn gelesen (ein zeitoptimaler Plan)
+- die Resonanzen der Maschine über den Hub einer Achse, um die Input Shaper danach einzustellen
 - welcher Katalogmotor mit seinem Antrieb (und Getriebe), auf welcher Katalogachse, der günstigste ist, der besteht; das eingebaute Gewicht steht für den Preis
+- einen kürzeren Zyklus (höhere Grenzwerte, Überschleifen, Input Shaping, niedrigere oder gerundete Hübe), der jede Prüfung weiterhin besteht, wie geschrieben und in den Fehlerbändern
+- die Energie je Zyklus gegen die Zykluszeit: die Einstellungen, die keine andere in beidem und in der Spitzenauslastung der Motoren übertrifft
+- aus einer Antriebsaufzeichnung eines Deltas, des SCARA oder des Sechsachsroboters: die Masse der Nutzlast und je Motor zusätzliche Trägheit, Reibung und konstantes Moment (je Achse bei den übrigen Maschinen)
+- die Steifigkeit des Riemens aus den Bewegungen einer Antriebsaufzeichnung, ohne Frequenzgang-Messung
 
 Die Gleichungen sind gegen Handrechnungen, eine unabhängige Referenz in SciPy und Herstellerformeln geprüft; Einzelheiten stehen in [validation.md](../validation.md). Diese Prüfungen belegen, dass die Gleichungen richtig gelöst und die Katalogdaten richtig gelesen werden. Sie belegen nicht, dass die Parameter eine reale Maschine beschreiben.
 
@@ -33,9 +40,9 @@ Die Gleichungen sind gegen Handrechnungen, eine unabhängige Referenz in SciPy u
 
 Weitere Grenzen, die zählen:
 
-- Die Standardkonfigurationen der beiden Riemenmaschinen sind erfundene Platzhaltermaschinen, keine Produkte. Die Konfiguration des Deltas ist wie ein Produkt ausgelegt (Autonox RL3-1200-3kg, Siemens-Motor und -Getriebe aus dem Katalog), aber Armlängen, Massen und Trägheiten sind Schätzungen: Autonox gibt sie nur nach Registrierung heraus. Die Gelenkmaschinen (Gewindetrieb, Zahnstange, Linearmotor, Rundtisch, Roboter) sind ausgelegte Beispiele, deren Mechanik ein typisches Teil dieser Größe schätzt, nicht den Artikel eines Herstellers; die Roboter werden im Gelenkraum ausgelegt, ohne kartesische Bahnen.
+- Die Standardkonfigurationen der beiden Riemenmaschinen sind erfundene Platzhaltermaschinen, keine Produkte. Die Konfigurationen der Deltas sind wie Produkte ausgelegt (Autonox RL3-1200-3kg, Codian D2-800, Festo EXPT-95; Siemens-Motoren und -Getriebe aus dem Katalog), aber Arm- und Stablängen, Massen und Trägheiten sind Schätzungen: Die Hersteller veröffentlichen sie nicht (Autonox gibt sie nur nach Registrierung heraus). Die Gelenkmaschinen (Gewindetrieb, Zahnstange, Linearmotor, Rundtisch, Roboter) sind ausgelegte Beispiele, deren Mechanik ein typisches Teil dieser Größe schätzt, nicht den Artikel eines Herstellers; die Roboter werden im Gelenkraum ausgelegt, ohne kartesische Bahnen.
 - Der Motor ist eine einzige Ersatzwicklung (R, L, Gegen-EMK), die den Effektivwert des Strangstroms führt und höchstens das sqrt(3/2)-Fache der Zwischenkreisspannung erhält. Es gibt kein Drehstrommodell, keine PWM und keine Feldschwächung.
-- Die Lebensdauern sind die Formeln der Hersteller und nicht mehr: keine Lebensdauerbeiwerte, ein Lager je Scheibenwelle, Tragzahlen, die zum Teil Schätzungen sind (Festo veröffentlicht für die EXCT keine). Sie sind nicht validiert.
+- Die Lebensdauern sind die Formeln der Hersteller und nicht mehr: der Lebensdauerbeiwert a1 der ISO 281 an den Lagern und a_ISO nur an den Lagern der Scheibenwellen (keiner an den Führungen), ein Lager je Scheibenwelle, die Lebensdauer der Verzahnung aus einem Wöhler-Exponenten und einem Knick, die Schätzungen sind (die Schadenssumme von Siemens selbst wurde nicht gelesen), Tragzahlen und Schmierwerte, die zum Teil Schätzungen sind (Festo veröffentlicht für die EXCT keine). Sie sind nicht validiert.
 - Die OPC-UA-Anbindung wurde gegen einen Client geprüft, der mit derselben Bibliothek geschrieben ist, nicht gegen eine SPS.
 - Die FMU wurde mit dem Validator und dem Simulator von fmpy und mit OMSimulator (dem Co-Simulationswerkzeug von OpenModelica) geprüft; in Simulink oder Dymola importiert oder mit `fmusim` der Modelica Association oder dem FMU Compliance Checker geprüft wurde sie nicht ([FMI-Export](fmi.md)).
 - Die Zahlen im Browser stimmen mit denen der Befehlszeile auf vier bis fünf signifikante Stellen überein, nicht Bit für Bit ([Auslegung im Browser](web.md)).
@@ -67,6 +74,9 @@ $ cargo run -q --release -p sim-cli -- list --lang de
 t-gantry	T-Portal
 single-axis	Einzelachse
 delta-d3	Delta-Picker (3 Arme)
+delta-d2	Planarer Delta-Picker (2 Arme)
+delta-linear	Linear-Delta (3 Riemenachsen)
+delta-d4	Delta-Picker (3 Arme und drehendes Werkzeug)
 screw-axis	Kugelgewindeachse
 rack-axis	Zahnstangenachse
 linear-motor-axis	Linearmotorachse

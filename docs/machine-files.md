@@ -389,7 +389,7 @@ An error names the file, the line and the key, in the front end's language:
 
 ```
 $ sim-cli verdicts --machine-file broken.toml
-Configuration has a value this machine does not know: broken.toml:604: machine.guide[guide_z].side_lod
+Configuration has a value this machine does not know: broken.toml:674: machine.guide[guide_z].side_lod
 ```
 
 A node is named by its list and its id, `machine.guide[guide_z]`; before its id is read, by its place in the list,

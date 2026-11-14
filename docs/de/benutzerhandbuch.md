@@ -68,9 +68,10 @@ Der Zyklus ist die Liste der `[[cycle.segment]]` in der Konfiguration: Zielpose,
 
 ```text
 $ sim-cli analyze t-gantry
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h
-a,6.080000,0.559459,0.165360,200.4513,0.1475,0.1302,204.64,334.35,0.3676,1.23,85.025,10.095,28.22,5.865,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196871,0.000,0.000,221.41,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7222e5,6.7359e9,1.9095e-1,,
-b,6.080000,0.460121,0.153385,200.4381,0.1211,0.1208,204.64,334.35,0.3410,1.05,74.368,15.293,35.02,7.082,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175177,5.344,0.879,224.65,0.0000e0,6.4481e2,1.7784e2,4.7379e6,0.000,4.9949e6,4.7127e5,1.0200e10,1.5155e-1,,
+a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,
+b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,
 ```
 
 Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und misst den zweiten. Je Motor entsteht eine Zeile. Spalten, die die ganze Maschine beschreiben und nicht einen Motor, wiederholen sich in jeder Zeile.
@@ -117,18 +118,19 @@ Danach beurteilen Sie den Zyklus:
 
 ```text
 $ sim-cli verdicts t-gantry
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
 motor-peak,a,0.1475,1.000,ok
 motor-thermal,a,1.227,100.0,ok
 drive-current,a,0.3676,3.000,ok
-drive-peak-current,a,1.246,10.90,ok
+drive-peak-current,a,1.248,10.90,ok
 gearbox-continuous,a,0.7955,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
 gearbox-peak,a,2.175,64.00,ok
 pulley-bearing-life,a,472218,20000,ok
-gearbox-life,a,6735891797,20000,ok
-belt-tooth-load,a,0.1910,1.000,ok
-dc-link-energy,a,5.865,6.205,ok
+gearbox-life,a,6736010395,20000,ok
+belt-tooth-load,a,0.1909,1.000,ok
+dc-link-energy,a,5.864,6.205,ok
 dc-link-overvoltage,a,221.4,257.6,ok
 ...
 settling,,0.00004734,0.0001000,ok
@@ -136,7 +138,8 @@ belt-tension,,334.4,1500,ok
 belt-slack,,204.6,0,ok
 gearbox-radial-load,,644.8,1500,ok
 guide-load,,177.8,2000,ok
-guide-life,,4994946,20000,ok
+guide-life,,4994979,20000,ok
+thermal-warm-start,,0.00001281,0.1000,ok
 ```
 
 Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wie in der zweiten Spalte angegeben.
@@ -189,17 +192,17 @@ Grenzen bei dieser Aufgabe:
 ```text
 $ sim-cli verdicts t-gantry --set effects.shared_dc_link=true
 ...
-dc-link-energy,a,6.166,6.205,ok
+dc-link-energy,a,6.165,6.205,ok
 dc-link-overvoltage,a,224.3,257.6,ok
 ...
-dc-link-energy,b,6.166,6.205,ok
+dc-link-energy,b,6.165,6.205,ok
 dc-link-overvoltage,b,224.3,257.6,ok
 ...
 ```
 
-Im Standardzyklus ist die höchste Zwischenkreisspannung 224,65 V mit getrennten Zwischenkreisen (Motor B, an der Einschaltspannung des Bremschoppers) und 224,05 V mit dem gemeinsamen. Der Bremswiderstand wird dann nicht gebraucht; seine beiden Zeilen fehlen.
+Im Standardzyklus ist die höchste Zwischenkreisspannung 224,65 V mit getrennten Zwischenkreisen (Motor B, an der Einschaltspannung des Bremschoppers) und 224,27 V mit dem gemeinsamen. Der Bremswiderstand wird dann nicht gebraucht; seine beiden Zeilen fehlen.
 
-**Ins Netz zurückspeisen.** `effects.regenerative_supply` (standardmäßig aus, braucht `effects.dc_link`) setzt an die Stelle des einfachen Gleichrichters ein rückspeisefähiges Line Module, wie ein Active Line Module an einer SINAMICS S120: Es hält den Zwischenkreis auch von oben auf dem Netzniveau und speist, was die Motoren zurückgeben, ins Netz zurück, bis `ratings.line_module_max_power_w`, wovon `ratings.line_module_efficiency` dort ankommt. Der Bremswiderstand nimmt dann nur, was über die Leistung des Line Modules hinausgeht. `analyze` gibt die zurückgespeiste Energie je Motor aus (letzte Spalte, `mains_energy_j`), die Energiebilanz bekommt die Zeilen `mains` und `line_module` (dessen Verlust), die App zeigt beides, und zwei Prüfungen beurteilen das Line Module: `line-module-continuous` (seine mittlere Leistung, bezogen und zurückgespeist, gegen `line_module_rated_power_w`) und `line-module-peak` (seine höchste Leistung gegen `line_module_max_power_w`). Die mitgelieferten Werte sind das kleinste Active Line Module der S120, 16 kW Bemessungs- und 35 kW Maximalleistung, weit über dem, was diese Maschinen brauchen. Beim Standard-T-Portal gehen von den 25,8 J, die die Motoren je Zyklus zurückgeben, 25,2 J ins Netz; der Bremswiderstand verbrennt nichts, und der Zwischenkreis bleibt bei 155,13 V.
+**Ins Netz zurückspeisen.** `effects.regenerative_supply` (standardmäßig aus, braucht `effects.dc_link`) setzt an die Stelle des einfachen Gleichrichters ein rückspeisefähiges Line Module, wie ein Active Line Module an einer SINAMICS S120: Es hält den Zwischenkreis auch von oben auf dem Netzniveau und speist, was die Motoren zurückgeben, ins Netz zurück, bis `ratings.line_module_max_power_w`, wovon `ratings.line_module_efficiency` dort ankommt. Der Bremswiderstand nimmt dann nur, was über die Leistung des Line Modules hinausgeht. `analyze` gibt die zurückgespeiste Energie je Motor aus (letzte Spalte, `mains_energy_j`), die Energiebilanz bekommt die Zeilen `mains` und `line_module` (dessen Verlust), die App zeigt beides, und zwei Prüfungen beurteilen das Line Module: `line-module-continuous` (seine mittlere Leistung, bezogen und zurückgespeist, gegen `line_module_rated_power_w`) und `line-module-peak` (seine höchste Leistung gegen `line_module_max_power_w`). Die mitgelieferten Werte sind das kleinste Active Line Module der S120, 16 kW Bemessungs- und 35 kW Maximalleistung, weit über dem, was diese Maschinen brauchen. Beim Standard-T-Portal gehen von den 25,4 J, die die Motoren je Zyklus zurückgeben, 24,9 J ins Netz; der Bremswiderstand verbrennt nichts, und der Zwischenkreis bleibt bei 155,13 V.
 
 ## Eine reale Katalogmaschine prüfen
 
@@ -207,9 +210,10 @@ Eine Konfiguration kann eine reale Maschine mit Werten aus dem Katalog beschreib
 
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-a,2.048000,3.659797,1.459735,156.9832,0.2930,0.3173,257.77,554.97,1.1446,6.88,...
-b,2.048000,3.036505,1.391430,156.9736,0.2430,0.3025,257.77,554.97,1.0908,6.24,...
+a,2.048000,3.659599,1.459732,156.9836,0.2930,0.3173,257.77,554.98,1.1446,6.88,...
+b,2.048000,3.036503,1.391427,156.9737,0.2431,0.3025,257.77,554.98,1.0908,6.24,...
 ```
 
 Fünf Werte dieser Konfiguration hat der Konstrukteur so gewählt, dass die Prüfungen auch im ungünstigsten Fall der Fehlerbänder besteht ([unten](#einfluss-unsicherer-parameter-erkennen-und-mit-fehlerbändern-beurteilen)): eine Vorspannung des Riemens von 450 N, einen Ruckgrenzwert in X von 150 m/s³, Input Shaping mit festen 25 Hz und einem zweiten Shaper bei 17,5 Hz und das Überschleifen. Die Gründe stehen in den Kommentaren der Datei.
@@ -218,7 +222,7 @@ Wie die Standardkonfigurationen hat auch diese `effects.dc_link = true`. Die Zei
 
 ```text
 dc-link-energy,a,9.943,9.943,ok
-braking-resistor-continuous,a,8.303,100.0,ok
+braking-resistor-continuous,a,8.284,100.0,ok
 braking-resistor-peak,a,200.5,5700,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ```
@@ -249,7 +253,7 @@ $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --moto
 motor-peak,a,0.3636,1.000,ok
 motor-thermal,a,12.07,100.0,ok
 ...
-settling,,0.00004415,0.0001000,ok
+settling,,0.00004418,0.0001000,ok
 belt-slack,,252.0,0,ok
 ```
 
@@ -264,17 +268,17 @@ Die Achse von `exct-30.toml` mit Namen einzusetzen gibt deren eigene Zahlen zur�
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 13 / 28 candidates
-Search time on 16: 0.3 s
+Search time on 16: 0.6 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5297,3.2886,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5294,3.2977,41.56
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4296,21.55
-,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3446,11.27
-,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4468,12.07
-,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5158,14.67
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6598,6.88
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
+,1FK2204-6AF,,6SL3210-5HE11-0UF0,3.50,7.00,ok,gearbox-radial-load,0.5018,3.4466,12.07
+,1FK2205-2AF,,6SL3210-5HE11-0UF0,3.75,7.50,ok,gearbox-radial-load,0.5007,3.5157,14.67
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6596,6.88
 ...
-,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6796,3.4378,167.96
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
 ,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,limit-motor-torque,NaN,NaN,NaN
 ...
 ,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,FAIL,limit-motor-speed,NaN,NaN,NaN
@@ -315,10 +319,10 @@ Mit Getrieben, an der Einzelachse:
 ```text
 $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
 Ohne Simulation eines Zyklus ausgeschlossen, nach Katalogwerten gegen die Achsgrenzwerte: 12 / 35 Kandidaten
-Dauer der Suche auf 16: 0.3 s
+Dauer der Suche auf 16: 0.5 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7670,3.85
-,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4568,0.6009,2.50
+,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
+,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4567,0.6007,2.50
 ,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
 ...
 ```
@@ -328,10 +332,10 @@ Die Motoren des S120 an der EXCT-30:
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 32 / 61 candidates
-Search time on 16: 0.7 s
+Search time on 16: 1.1 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5060,18.72
-,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5060,54.09
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
 ...
 ```
 
@@ -340,17 +344,17 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
 Ruled out by catalogue numbers against the axis limits, without simulating a cycle: 124 / 338 candidates
-Search time on 16: 4.6 s
+Search time on 16: 7.8 s
 axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9078,3.9932,25.08
-ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9087,3.9946,51.85
-ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,dc-link-energy,0.6367,3.8864,26.96
+ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9056,3.9951,25.02
+ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9200,3.9968,51.69
+ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,settling,0.6389,3.8853,26.94
 ...
-EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5299,3.2869,20.39
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5314,3.2863,20.38
 ...
-EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7292,5.0201,52.65
+EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,thermal-warm-start,0.7744,5.0097,52.68
 ...
-EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,46.90,FAIL,motor-thermal,1.6727,3.4351,167.27
+EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,46.90,FAIL,motor-thermal,1.6713,3.4264,167.13
 ...
 ELZI-30,,,,NaN,NaN,FAIL,axis-speed,NaN,NaN,NaN
 EXCT-15,,,,NaN,NaN,FAIL,axis-stroke,NaN,NaN,NaN
@@ -383,13 +387,13 @@ friction_x.coulomb_n = [12.0, 26.0]
 ```text
 $ sim-cli sensitivity t-gantry --config crates/machine-t-gantry/exct-30.toml --group mass --group friction_x --group belt
 parameter,value,low,high,peak_torque_low,peak_torque_high,rms_torque_low,rms_torque_high,cycle_time_low,cycle_time_high,belt_tension_min_low_n,belt_tension_min_high_n
-friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0435,+0.0869,-0.0172,+0.0469,+0.0000,+0.0000,264.84,242.04
-mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0620,+0.0622,-0.0675,+0.0689,+0.0000,+0.0000,268.68,246.11
-mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0540,+0.0549,-0.0472,+0.0487,+0.0000,+0.0000,272.14,243.18
-mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0342,+0.0343,-0.0279,+0.0283,+0.0000,+0.0000,265.01,250.05
-friction_x.coulomb_n,20.0,12.0,26.0,-0.0188,+0.0142,-0.0096,+0.0078,+0.0000,+0.0000,263.44,253.31
+friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0436,+0.0869,-0.0172,+0.0469,+0.0000,+0.0000,264.84,242.04
+mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0620,+0.0624,-0.0675,+0.0689,+0.0000,+0.0000,268.68,246.11
+mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0541,+0.0548,-0.0472,+0.0487,+0.0000,+0.0000,272.13,243.18
+mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0343,+0.0342,-0.0279,+0.0283,+0.0000,+0.0000,265.01,250.05
+friction_x.coulomb_n,20.0,12.0,26.0,-0.0190,+0.0143,-0.0096,+0.0078,+0.0000,+0.0000,263.44,253.31
 ...
-belt.pretension_n,450.0,350.0,550.0,+0.0001,-0.0001,+0.0000,-0.0000,+0.0000,+0.0000,157.78,357.77
+belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0000,+0.0000,-0.0000,+0.0000,+0.0000,157.77,357.77
 ...
 belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,257.77,257.77
 ```
@@ -414,28 +418,30 @@ Die Massen im Beispiel haben in der Konfiguration keine Grenzen und wurden desha
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result,low,high,worst_case
-motor-peak,a,0.2930,1.000,ok,0.2826,0.3151,ok
+motor-peak,a,0.2930,1.000,ok,0.2826,0.3150,ok
 motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
 drive-current,a,1.145,5.000,ok,1.125,1.198,ok
-drive-peak-current,a,2.874,19.00,ok,2.770,3.091,ok
+drive-peak-current,a,2.876,19.00,ok,2.773,3.093,ok
 pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
-pulley-bearing-life,a,325761,20000,ok,73164,1194834,ok
+pulley-bearing-life,a,325762,20000,ok,73165,1194835,ok
 belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
-dc-link-energy,a,9.943,9.943,ok,4.971,23.24,ok
-braking-resistor-continuous,a,8.303,100.0,ok,4.537,13.16,ok
-braking-resistor-peak,a,200.5,5700,ok,138.7,218.2,ok
+dc-link-energy,a,9.943,9.943,ok,4.971,23.23,ok
+braking-resistor-continuous,a,8.284,100.0,ok,4.520,13.14,ok
+braking-resistor-peak,a,200.5,5700,ok,138.6,218.0,ok
 dc-link-overvoltage,a,770.0,820.0,ok,709.1,790.0,ok
 ...
-settling,,0.00003947,0.0001000,ok,0.00003446,0.00004434,ok
+settling,,0.00003949,0.0001000,ok,0.00003447,0.00004435,ok
 belt-tension,,555.0,2140,ok,455.0,655.0,ok
 belt-slack,,257.8,0,ok,157.8,357.8,ok
 gearbox-radial-load,,1000,2000,ok,800.4,1200,ok
 guide-load,,185.0,2000,ok,177.0,276.7,ok
-guide-life,,3024169,20000,ok,378021,24193350,ok
+guide-life,,3024374,20000,ok,378047,24194992,ok
+thermal-warm-start,,0.00002993,0.1000,ok,0.00002433,0.0001190,ok
 ```
 
-`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 158 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,044 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1200 N an einer Scheibenwelle. Die Lager der Scheibenwellen halten 325800 h wie geschrieben und mindestens 73200 h, bei 20000 h gefordert. Ihre Tragzahl und die Schmierwerte hinter a_ISO sind Schätzungen (Festo veröffentlicht keine; siehe die Kommentare in der Konfiguration). Dieser Lauf hat 135 Zyklen simuliert (67 Werte mit Grenzen), auf allen Prozessorkernen, und dauerte etwa 2,6 s auf dem Rechner, auf dem dieses Handbuch entstand.
+`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 158 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,044 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1200 N an einer Scheibenwelle. Die Lager der Scheibenwellen halten 325800 h wie geschrieben und mindestens 73200 h, bei 20000 h gefordert. Ihre Tragzahl und die Schmierwerte hinter a_ISO sind Schätzungen (Festo veröffentlicht keine; siehe die Kommentare in der Konfiguration). Dieser Lauf hat 129 Zyklen simuliert (64 Werte mit Grenzen), auf allen Prozessorkernen, und dauerte etwa 4,6 s auf dem Rechner, auf dem dieses Handbuch entstand.
 
 Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung wurde ein auf 200 N eingestellter Riemen schlaff, und am weichen Ende der Grenzen für das Gestell stand das Werkzeug beim Verweilen 0,16 mm neben seinem Ziel, bei einer Toleranz von 0,1 mm (die Werkzeugposition enthält das Schwanken des Gestells). Die Vorspannung wurde auf 450 N erhöht, der Ruckgrenzwert in X von 500 auf 150 m/s³ gesenkt, und Input Shaping und das Überschleifen wurden eingeschaltet; später kam für die ungünstigste Ecke (unten) ein zweiter Shaper bei 17,5 Hz hinzu. Der Zyklus dauert jetzt 2,048 s, vorher 2,136 s.
 
@@ -443,28 +449,30 @@ Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung 
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result,low,high,worst_case,pass_share
 motor-peak,a,0.2930,1.000,ok,0.2799,0.3440,ok,1.000
 motor-thermal,a,6.882,100.0,ok,6.423,8.347,ok,1.000
 drive-current,a,1.145,5.000,ok,1.107,1.257,ok,1.000
-drive-peak-current,a,2.874,19.00,ok,2.745,3.373,ok,1.000
+drive-peak-current,a,2.876,19.00,ok,2.747,3.380,ok,1.000
 pulley-torque,a,3.126,12.50,ok,2.953,3.717,ok,1.000
-pulley-bearing-life,a,325761,20000,ok,33442,4107765,ok,1.000
+pulley-bearing-life,a,325762,20000,ok,33442,4107774,ok,1.000
 belt-tooth-load,a,0.3529,1.000,ok,0.2875,0.5661,ok,1.000
-dc-link-energy,a,9.943,9.943,ok,4.781,28.61,ok,1.000
-braking-resistor-continuous,a,8.303,100.0,ok,0.03500,13.45,ok,1.000
-braking-resistor-peak,a,200.5,5700,ok,6.773,231.6,ok,1.000
-dc-link-overvoltage,a,770.0,820.0,ok,675.3,789.5,ok,1.000
+dc-link-energy,a,9.943,9.943,ok,4.781,28.60,ok,1.000
+braking-resistor-continuous,a,8.284,100.0,ok,0.02972,13.42,ok,1.000
+braking-resistor-peak,a,200.5,5700,ok,6.115,231.4,ok,1.000
+dc-link-overvoltage,a,770.0,820.0,ok,675.2,789.5,ok,1.000
 ...
-settling,,0.00003947,0.0001000,ok,0.00002565,0.00004994,ok,1.000
+settling,,0.00003949,0.0001000,ok,0.00002566,0.00005005,ok,1.000
 belt-tension,,555.0,2140,ok,446.3,665.0,ok,1.000
 belt-slack,,257.8,0,ok,139.6,358.1,ok,1.000
 gearbox-radial-load,,1000,2000,ok,797.3,1209,ok,1.000
 guide-load,,185.0,2000,ok,173.0,308.2,ok,1.000
-guide-life,,3024169,20000,ok,187894,23943944,ok,1.000
+guide-life,,3024374,20000,ok,187858,23944959,ok,1.000
+thermal-warm-start,,0.00002993,0.1000,ok,0.00001024,0.001698,ok,1.000
 ```
 
-Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (140 N statt 158 N im schlaffsten Trum, 0,050 mm statt 0,044 mm neben dem Ziel beim Verweilen, 1209 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen. Die Lager der Scheibenwellen halten mindestens 33400 h. Das dauerte etwa 4 s.
+Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (140 N statt 158 N im schlaffsten Trum, 0,050 mm statt 0,044 mm neben dem Ziel beim Verweilen, 1209 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen. Die Lager der Scheibenwellen halten mindestens 33400 h. Das dauerte etwa 7 s.
 
 `--samples` ohne `--bands`, 0 Stichproben, eine gebrochene Zahl und `--seed` ohne `--samples` werden abgelehnt (Code 2). Die Läufe beider Arten nutzen alle Prozessorkerne.
 
@@ -472,7 +480,7 @@ Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts 
 
 ```text
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --worst
-Cycles simulated in the search for the worst corners: 2656
+Cycles simulated in the search for the worst corners: 2553
 check,motor,worst,limit,worst_case,at_high_bound,at_low_bound
 motor-peak,a,0.4109,1.000,ok,...
 ...
@@ -480,17 +488,18 @@ pulley-bearing-life,a,10042,20000,FAIL,...
 ...
 dc-link-energy,a,35.66,36.57,ok,...
 ...
-settling,,0.00009484,0.0001000,ok,...
+settling,,0.00009437,0.0001000,ok,...
 belt-tension,,687.7,2140,ok,...
-belt-slack,,86.89,0,ok,...
+belt-slack,,86.90,0,ok,...
 gearbox-radial-load,,1231,1500,ok,...
-guide-load,,354.9,1000,ok,...
-guide-life,,115600,20000,ok,...
+guide-load,,356.5,1000,ok,...
+guide-life,,115606,20000,ok,...
+thermal-warm-start,,0.01726,0.1000,ok,...
 ```
 
-Sie beginnt mit den Läufen mit einem Wert allein: Jede Prüfung bekommt die Ecke, an der jeder Wert mit Grenzen an der Grenze steht, die diese Prüfung allein ungünstiger machte. Dann wird bis zu dreimal jeder Wert, der die Prüfung bewegt hat, einzeln an seine andere Grenze gesetzt, und was sie ungünstiger macht, bleibt (alle solchen Wechsel zusammen oder der beste allein, je nachdem, was ungünstiger ist). Die letzten zwei Spalten nennen die Werte an ihrer oberen und an ihrer unteren Grenze, getrennt durch `;`. „Ungünstiger“ wird nach dem Abstand zur Grenze beurteilt, weil manche Grenzwerte selbst Grenzen haben: in dieser Konfiguration Kapazität und Schaltschwelle des Zwischenkreises; die Spalte `limit` zeigt daher den Grenzwert an dieser Ecke. `dc-link-energy` wird stattdessen nach der Energie beurteilt: Die Prüfung fällt nur durch, wo der Bremswiderstand gebraucht wird und keinen Grenzwert hat, und mit Widerstand füllt sich der Zwischenkreis an jeder Ecke mit kräftigem Bremsen bis zu seinem Platz, sodass ihr Abstand nichts aussagt (hier 35,66 J von 36,57 J Platz, die Kapazität an ihrer oberen Grenze; 9,94 J, wie konfiguriert). Die Läufe mit einem Wert allein und die Konfiguration, wie sie ist, zählen ebenfalls, sodass das Ungünstigste nie günstiger ist als die Bänder; ist einer von ihnen der ungünstigste, stehen die Werte, die er lässt, wie sie konfiguriert sind, in keiner der beiden Spalten. Die Suche brauchte hier 2656 Zyklen.
+Sie beginnt mit den Läufen mit einem Wert allein: Jede Prüfung bekommt die Ecke, an der jeder Wert mit Grenzen an der Grenze steht, die diese Prüfung allein ungünstiger machte. Dann wird bis zu dreimal jeder Wert, der die Prüfung bewegt hat, einzeln an seine andere Grenze gesetzt, und was sie ungünstiger macht, bleibt (alle solchen Wechsel zusammen oder der beste allein, je nachdem, was ungünstiger ist). Die letzten zwei Spalten nennen die Werte an ihrer oberen und an ihrer unteren Grenze, getrennt durch `;`. „Ungünstiger“ wird nach dem Abstand zur Grenze beurteilt, weil manche Grenzwerte selbst Grenzen haben: in dieser Konfiguration Kapazität und Schaltschwelle des Zwischenkreises; die Spalte `limit` zeigt daher den Grenzwert an dieser Ecke. `dc-link-energy` wird stattdessen nach der Energie beurteilt: Die Prüfung fällt nur durch, wo der Bremswiderstand gebraucht wird und keinen Grenzwert hat, und mit Widerstand füllt sich der Zwischenkreis an jeder Ecke mit kräftigem Bremsen bis zu seinem Platz, sodass ihr Abstand nichts aussagt (hier 35,66 J von 36,57 J Platz, die Kapazität an ihrer oberen Grenze; 9,94 J, wie konfiguriert). Die Läufe mit einem Wert allein und die Konfiguration, wie sie ist, zählen ebenfalls, sodass das Ungünstigste nie günstiger ist als die Bänder; ist einer von ihnen der ungünstigste, stehen die Werte, die er lässt, wie sie konfiguriert sind, in keiner der beiden Spalten. Die Suche brauchte hier 2553 Zyklen.
 
-An der EXCT-30 fand sie, was keine der beiden anderen Arten fand: Mit dem 25-Hz-Shaper allein und allen Werten zugleich an ihrer ungünstigsten Grenze stand das Werkzeug beim Verweilen 0,115 mm neben seinem Ziel, bei 0,1 mm zulässig (0,043 mm mit einem Wert allein, 0,053 mm in 200 Stichproben). Ein zweiter Shaper bei 17,5 Hz, der Spitze im Frequenzgang des Werkzeugs, bringt es auf 0,095 mm (der Kommentar zu `profile.shaper2_frequency_hz` in der Datei nennt, was sonst versucht wurde). Der Riemen behält im schlaffsten Trum 87 N, und die Wellen tragen 1231 N von 1500 N an der unteren Grenze ihres Grenzwerts. Die Lager der Scheibenwellen fallen an ihrer ungünstigsten Ecke durch, mit allen Werten zugleich gegen sie: 10000 h von 20000 h. Ihre Tragzahl und Schmierwerte sind Schätzungen; nach diesen Lagern ist also bei Festo zu fragen, das heißt nicht, dass die Achse verschleißt.
+An der EXCT-30 fand sie, was keine der beiden anderen Arten fand: Mit dem 25-Hz-Shaper allein und allen Werten zugleich an ihrer ungünstigsten Grenze stand das Werkzeug beim Verweilen 0,115 mm neben seinem Ziel, bei 0,1 mm zulässig (0,043 mm mit einem Wert allein, 0,053 mm in 200 Stichproben). Ein zweiter Shaper bei 17,5 Hz, der Spitze im Frequenzgang des Werkzeugs, bringt es auf 0,094 mm (der Kommentar zu `profile.shaper2_frequency_hz` in der Datei nennt, was sonst versucht wurde). Der Riemen behält im schlaffsten Trum 87 N, und die Wellen tragen 1231 N von 1500 N an der unteren Grenze ihres Grenzwerts. Die Lager der Scheibenwellen fallen an ihrer ungünstigsten Ecke durch, mit allen Werten zugleich gegen sie: 10000 h von 20000 h. Ihre Tragzahl und Schmierwerte sind Schätzungen; nach diesen Lagern ist also bei Festo zu fragen, das heißt nicht, dass die Achse verschleißt.
 
 `--worst` ohne `--bands` oder mit `--samples` oder `--seed` wird abgelehnt (Code 2). Die App hat es als „ungünstigste Ecke“ neben den Fehlerbändern.
 
@@ -508,11 +517,12 @@ Grenzen bei dieser Aufgabe:
 $ sim-cli optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
 cycle_s,2.0480,1.5900
-dwell_error_peak_m,3.947e-5,5.303e-5
+dwell_error_peak_m,3.949e-5,5.295e-5
 bands_fastest_cycle_s,,1.4920
-bands_fastest_fails,,belt-slack pulley-bearing-life settling
+bands_fastest_fails,,belt-slack settling
 bands_steps_back,,1
-bands_excused,,pulley-bearing-life
+bands_excused,,
+Cycles simulated: search + error bands 40 + 387
 axis.x.max_acceleration_m_s2,25.0,53.99999999999999
 axis.x.max_jerk_m_s3,150.0,225.0
 axis.x.max_velocity_m_s,2.5,3.0
@@ -526,11 +536,11 @@ Der Optimierer probiert das Überschleifen und höhere Grenzwerte für Geschwind
 
 **In den Fehlerbändern.** Das Ergebnis muss jede Prüfung auch in den Fehlerbändern der `[bounds]` der Konfiguration bestehen (ein Wert nach dem anderen, wie `verdicts --bands`), nicht nur mit der Konfiguration, wie sie dasteht. Die Suche selbst bewertet die Konfiguration, wie sie dasteht; danach wird ihre schnellste Einstellung in den Bändern bewertet, und wo sie dort scheitert, werden die Schritte der Suche zurückgegangen, die schnellsten zuerst, bis einer besteht (2n + 1 Zyklen je bewertetem Schritt, n die Zahl der begrenzten Werte). Eine Prüfung, an der schon der Zyklus wie konfiguriert in seinen Bändern scheitert, lässt sich nicht halten und wird deshalb nicht bewertet: Sie steht in `bands_excused`. Die Zeilen `bands_*` nennen, wie schnell die Suche mit der Konfiguration, wie sie dasteht, wurde (`bands_fastest_cycle_s`), woran das in den Bändern scheitert und wie viele Schritte das Ergebnis zurückliegt; die Fehlerausgabe nennt, wie viele Zyklen Suche und Bänder gekostet haben.
 
-In der Konfiguration der EXCT-30 sind das Überschleifen und der Shaper schon eingeschaltet. Der Optimierer erhöht hier deshalb die Grenzwerte und schaltet den Shaper ab (beide Shaper). Mit der Konfiguration, wie sie dasteht, ergibt das 1,49 s, aber mit den Werten an ihren Grenzen wird der Riemen schlaff und das Werkzeug steht beim Verweilen 0,29 mm neben seinem Ziel. Einen Schritt zurück, ohne den Ruck des letzten Schritts, besteht es: 2,05 s auf 1,59 s, das Werkzeug beim Verweilen 0,053 mm neben dem Ziel statt 0,039 mm. Die mitgelieferte Konfiguration scheitert in ihren Bändern schon an `pulley-bearing-life` (17 349 h an der unteren Grenze gegen 20 000 h). Die Bänder haben 363 Zyklen gekostet (drei Einstellungen zu je 121, 60 begrenzte Werte), etwa 30 s auf 16 Threads; die Suche 40. Das Standard-T-Portal geht von 6,08 s auf 5,36 s (5,34 s nach der Konfiguration, wie sie dasteht, was in den Bändern an `settling` scheitert), mit 141 Zyklen für die Bänder.
+In der Konfiguration der EXCT-30 sind das Überschleifen und der Shaper schon eingeschaltet. Der Optimierer erhöht hier deshalb die Grenzwerte und schaltet den Shaper ab (beide Shaper). Mit der Konfiguration, wie sie dasteht, ergibt das 1,49 s, aber mit den Werten an ihren Grenzen wird der Riemen schlaff und das Werkzeug steht beim Verweilen 0,29 mm neben seinem Ziel. Einen Schritt zurück, ohne den Ruck des letzten Schritts, besteht es: 2,05 s auf 1,59 s, das Werkzeug beim Verweilen 0,053 mm neben dem Ziel statt 0,039 mm. Die mitgelieferte Konfiguration besteht in ihren Bändern jede Prüfung, also wird nichts ausgenommen (`bands_excused` ist leer). Die Bänder haben 387 Zyklen gekostet (drei Einstellungen zu je 129, 64 begrenzte Werte), die Suche 40; der ganze Lauf dauerte etwa 20 s auf 16 Threads. Das Standard-T-Portal geht von 6,08 s auf 5,36 s (5,34 s nach der Konfiguration, wie sie dasteht, was in den Bändern an `settling` scheitert), mit 159 Zyklen für die Bänder.
 
 `--nominal` bewertet nur die Konfiguration, wie sie dasteht, wie bisher: an der EXCT-30 1,49 s. `--runs N` begrenzt die Zahl der Zyklen der Suche (Standard 40); die Bänder kommen hinzu.
 
-**Energie gegen Zykluszeit.** `--pareto DATEI` schreibt die Einstellungen, die keine andere zugleich in Zykluszeit, Energie je Zyklus aus dem Netz und Spitzenauslastung der Motoren übertrifft, die schnellste zuerst, als CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (die Faktoren auf die Grenzwerte der Achsen, wie konfiguriert). Sie stammen aus den Einstellungen, die die Suche ohnehin gefahren hat und die jede Prüfung bestehen, und aus sechs langsameren ab dem Ergebnis (Beschleunigung und Ruck sowie alle drei Grenzwerte mal 0,8, 0,6 und 0,4). Die Energie ist, was die Antriebe aufgenommen haben, weniger was sie zurückgespeist haben, plus was der Bremswiderstand verheizt hat; ohne Widerstand (ohne simulierten Zwischenkreis) zählt Bremsenergie als zurückgespeist. An der EXCT-30 reicht die Front von 1,49 s bei 268 J und einer Spitzenauslastung von 0,52 bis 3,65 s bei 109 J und 0,17; das Ergebnis mit 1,59 s braucht 253 J. Eine langsamere Beschleunigung spart die Bewegungsenergie, die ein Halt im Widerstand verheizt, ½ m v², wo die Bewegung ihre Höchstgeschwindigkeit nicht erreicht (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). Die App zeichnet die Front unter die Tabelle des Optimierers.
+**Energie gegen Zykluszeit.** `--pareto DATEI` schreibt die Einstellungen, die keine andere zugleich in Zykluszeit, Energie je Zyklus aus dem Netz und Spitzenauslastung der Motoren übertrifft, die schnellste zuerst, als CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (die Faktoren auf die Grenzwerte der Achsen, wie konfiguriert). Sie stammen aus den Einstellungen, die die Suche ohnehin gefahren hat und die jede Prüfung bestehen, und aus sechs langsameren ab dem Ergebnis (Beschleunigung und Ruck sowie alle drei Grenzwerte mal 0,8, 0,6 und 0,4). Die Energie ist, was die Antriebe aufgenommen haben, weniger was sie zurückgespeist haben, plus was der Bremswiderstand verheizt hat; ohne Widerstand (ohne simulierten Zwischenkreis) zählt Bremsenergie als zurückgespeist. An der EXCT-30 reicht die Front von 1,49 s bei 269 J und einer Spitzenauslastung von 0,52 bis 2,94 s bei 118 J und 0,22; das Ergebnis mit 1,59 s braucht 254 J. Eine langsamere Beschleunigung spart die Bewegungsenergie, die ein Halt im Widerstand verheizt, ½ m v², wo die Bewegung ihre Höchstgeschwindigkeit nicht erreicht (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). Die App zeichnet die Front unter die Tabelle des Optimierers.
 
 **Hubhöhen und gerundete Hübe.** Auch die Geometrie des Zyklus ist eine Variable. Ein Heben, Verfahren und Senken (gerade nach oben von der Aufnahme, auf dieser Höhe verfahren, gerade nach unten zur Ablage; das Standard-T-Portal hat zwei) wird zuerst so niedrig probiert, wie `profile.min_clearance_m` es zulässt: so weit über der höheren von Aufnahme und Ablage, etwa die Höhe eines Hindernisses dazwischen. Die mitgelieferten T-Portal-Konfigurationen setzen den Wert auf ihre Hübe, dort ändert sich also nichts. Mit einem Hindernis von 0,1 m:
 
@@ -564,7 +574,7 @@ Grenzen bei dieser Aufgabe:
 - Hubhöhen und Zwischenpunkte des Zyklus werden nicht variiert.
 - Der Zyklus muss in der vorliegenden Konfiguration bereits jede Prüfung bestehen, sonst wird der Befehl abgelehnt.
 - Ein Kandidat, dessen Achsgrenzwerte die Motorgrenzen überschreiten (die Warnung aus [Für alle Befehle gleich](#für-alle-befehle-gleich)), wird nicht angenommen.
-- Beurteilt wird gegen die Konfiguration mit Nennwerten. Lassen Sie `verdicts --bands` über das Ergebnis laufen. Das Ergebnis oben nimmt die Reserven zurück, die die Konfiguration für ihren ungünstigsten Fall bekommen hat: Mit diesen Einstellungen fallen bei `--bands` die Prüfungen `settling` (0,35 mm) und `belt-slack` (0 N) durch.
+- Die Fehlerbänder werden einen Wert nach dem anderen beurteilt, nicht die Stichproben und nicht die ungünstigste Ecke. Lassen Sie `verdicts --bands --worst` über das Ergebnis laufen. Das Ergebnis oben nimmt die Reserven zurück, die die Konfiguration für ihren ungünstigsten Fall bekommen hat: An der ungünstigsten Ecke fallen die Prüfungen `settling` (0,71 mm) und `belt-slack` (0 N) durch, und `pulley-bearing-life` wie bei der mitgelieferten Konfiguration.
 
 **Überschleifen von Hand:** `--set effects.corner_blending=true`, mit `profile.blend_time_s` als längster Vorlaufzeit. Das nächste Segment beginnt, während das laufende noch bremst. Das gilt nur dort, wo die Maschine nicht anhalten muss: keine Verweilzeit, keine Greiferaktion, keine Achse mit Richtungsumkehr, und nur auf den Rampen. Bei Zyklen der Form Heben, Verfahren, Senken bleibt jede Achse innerhalb ihrer Grenzwerte; bei anderen Zyklusformen wird die Summe zweier Segmente auf einer Achse nicht gegen die Grenzwerte geprüft.
 
@@ -576,38 +586,40 @@ Das Werkzeug ist die Mitte der Plattform, x, y und z in Metern, z nach oben ab d
 
 ```text
 $ sim-cli analyze delta-d3
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.008 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
-1,0.720000,7.786455,2.644848,120.1085,0.5195,0.5750,,,2.5071,26.35,...
-2,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
-3,0.720000,3.989155,1.614957,64.8811,0.2677,0.3511,,,1.5088,8.96,...
+1,0.720000,7.642678,2.575830,120.0682,0.5101,0.5600,,,2.4400,24.83,...
+2,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
+3,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
 ```
 
 Der Zyklus liegt entlang x, also arbeitet Arm 1 (in +x) am meisten, Arm 2 und 3 gleich. Seine 0,720 s sind die S-Kurven von Hand (Querfahrt d/v + v/a + a/j = 0,1817 s, ein Hub von 25 mm 4 (d / 2j)^(1/3) = 0,0684 s, mit den Verweilzeiten 0,7069 s) im 1-ms-Takt des Profilgenerators (`the_adept_cycle_takes_the_hand_calculated_time`). Die Herstellerangaben für denselben Zyklus sind kürzer (ABB IRB 360-3/1130: 0,40 s bei 1 kg, 0,52 s bei 3 kg): Sie verschleifen die Ecken statt anzuhalten und fahren schneller als die 3 m/s und 50 m/s², die diese Konfiguration je Achse erlaubt. `sim-cli optimise delta-d3` verschleift die Ecken über Stützpunkte (Splines auf drei Achsen) und hebt die Grenzwerte, soweit jede Prüfung es zulässt.
 
 ```text
 $ sim-cli verdicts delta-d3
-motor-peak,1,0.5195,1.000,ok
-motor-thermal,1,26.35,100.0,ok
-drive-current,1,2.507,5.000,ok
-gearbox-continuous,1,68.68,120.0,ok
-gearbox-peak,1,136.6,192.0,ok
-gearbox-life,1,613609,20000,ok
-gearbox-gearing-life,1,8981,20000,FAIL
+motor-peak,1,0.5101,1.000,ok
+motor-thermal,1,24.83,100.0,ok
+drive-current,1,2.440,5.000,ok
+gearbox-continuous,1,66.79,120.0,ok
+gearbox-peak,1,133.9,192.0,ok
+gearbox-life,1,671269,20000,ok
+gearbox-gearing-life,1,11579,20000,FAIL
 ...
-settling,,0.0006767,0.0005000,FAIL
+settling,,0.0006760,0.0005000,FAIL
 singularity,,2.072,5.000,ok
+thermal-warm-start,,0.007974,0.1000,ok
 ```
 
-Mit `--bands` besteht jede Prüfung außer `settling` und `gearbox-gearing-life` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 127 bis 146 N m); `settling` scheitert an allen (0,624 bis 0,736 mm), die Lebensdauer der Verzahnung liegt zwischen 4100 und 24100 h. Was sie sagen:
+Mit `--bands` besteht jede Prüfung außer `settling` und `gearbox-gearing-life` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 125 bis 143 N m); `settling` scheitert an allen (0,623 bis 0,735 mm), die Lebensdauer der Verzahnung liegt zwischen 5100 und 36300 h. Was sie sagen:
 
-- **Getriebe.** Das Getriebe des Arms trägt bis zu 137 N m seiner 192 N m; das kubische Mittel, 69 N m, ist das, wofür sein Nennmoment von 120 N m gilt. Seine Planetenlager halten 614000 h. Die Spitzen über 120 N m nutzen die Verzahnung ab: Nach der Summe von Miner mit den zwei Momentangaben von Siemens hält sie an Arm 1 etwa 9000 h der geforderten 20000 h (Arm 2 und 3 bleiben unter 120 N m). Der Wert ist eine Schätzung (siehe [Modellreferenz](../model-reference.md#analysis-quantities)); prüfen Sie die Getriebegröße mit Siemens.
+- **Getriebe.** Das Getriebe des Arms trägt bis zu 134 N m seiner 192 N m; das kubische Mittel, 67 N m, ist das, wofür sein Nennmoment von 120 N m gilt. Seine Planetenlager halten 671000 h. Die Spitzen über 120 N m nutzen die Verzahnung ab: Nach der Summe von Miner mit den zwei Momentangaben von Siemens hält sie an Arm 1 etwa 11600 h der geforderten 20000 h (Arm 2 und 3 bleiben unter 120 N m). Der Wert ist eine Schätzung (siehe [Modellreferenz](../model-reference.md#analysis-quantities)); prüfen Sie die Getriebegröße mit Siemens.
 - **Einschwingen scheitert: ein Befund der Auslegung.** Es wird gegen 0,5 mm geprüft, eine Schätzung der Positioniergenauigkeit der Klasse (Festo EXPT: ±0,5 mm), nicht gegen die 0,1 mm Wiederholgenauigkeit der Hersteller. Verdrehung und Spiel der Getriebe unter dem Gewicht der Plattform lassen das Werkzeug neben der Stelle, an die die Geber der Motoren es setzen: 0,64 mm beim Aufnehmen und Ablegen in Ruhe mit dem Katalogspiel des NRB080 von 9 Winkelminuten, 0,68 mm beim Verweilen (mit der Bewegung davor), bis zu 2,09 mm am unteren Rand des Arbeitsraums. Dieser Versatz ist in jedem Durchlauf gleich, die Wiederholgenauigkeit sieht ihn nicht, aber er liegt über der Genauigkeit der Klasse: Dieser Delta braucht ein Getriebe mit weniger Spiel. Mit 3 Winkelminuten (`--set gearbox.backlash_rad=8.727e-4`, ein Robotergetriebe, nicht im Katalog) besteht er: 0,29 mm in Ruhe beim Aufnehmen und Ablegen, 0,33 mm beim Verweilen, 0,30 bis 0,38 mm über die Grenzen. Das Spiel lässt die Regelkreise nicht schwingen: In Ruhe steht das Werkzeug mit beiden auf 2e-8 m still.
 - **Singularität**: die höchste Konditionszahl der Jacobi-Matrix im Zyklus gegen `ratings.max_condition_number` (5). Nahe einer Singularität bewegt ein kleiner Motorwinkel die Plattform weit, und die Motormomente für eine Kraft wachsen unbegrenzt; im Arbeitsraum sind es bis zu 3,6, im Zyklus 2,07.
 - **Keine Prüfungen für Riemen, Riemenscheibe oder Führung**: Der Delta hat keine.
 
 Für eine andere Nutzlast `mass.payload_kg` ändern (und `ratings`, wo sich Teile ändern); einen anderen Motor oder ein anderes Getriebe benennt man wie bei den anderen Maschinen (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Bahnen auf drei Achsen schreibt man `line,x,y,z`, `spline,x,y,z` und `arc,x,y,z,cx,cy,cz,cw`. Übergangsbögen (`profile.path_tolerance_m`) liegen dort in der Ebene des Kreisbogens, auf den sie treffen; eine Gerade muss auf 1 nm in dieser Ebene liegen (die Zahlen mit allen Stellen schreiben).
 
-Die Unterarme sind starre Stäbe mit ihrer Masse und Drehträgheit (`effects.forearm_inertia`; aus: das verteilte Modell von Codourey und Olsson, das Motor 1 in diesem Zyklus 2,6 % mehr Effektivmoment gibt: 2,645 gegen 2,575 N m, Spitze 7,786 gegen 7,640 N m). Mit `effects.link_elasticity` (ab Werk aus; die Steifigkeit ist geschätzt) biegen sich die Oberarme, und die Plattform schwingt nach einer Bewegung nach: der Folgefehler im Zyklus wächst von 4,0 auf 5,3 mm, der Fehler in der Verweilzeit von 0,68 auf 0,73 mm. Auf die niedrigste Eigenform bei gehaltenen Motoren (die Federn der Getriebe, mit dem Schalter auch die Biegung der Arme) stellt `effects.shaper_follows_pose` den Input Shaper ein: in der Mitte bei waagrechten Armen die seitliche Schwingung der Plattform, 28 Hz mit den Getrieben allein, 23 Hz mit biegsamen Armen (Unterarme verteilt). Die Unterarmstäbe sind Kollisionskörper: ein Unterarm, der in ein Hindernis fährt, ist ein Crash.
+Die Unterarme sind starre Stäbe mit ihrer Masse und Drehträgheit (`effects.forearm_inertia`; aus: das verteilte Modell von Codourey und Olsson, das Motor 1 in diesem Zyklus 2,7 % mehr Effektivmoment gibt: 2,645 gegen 2,576 N m, Spitze 7,791 gegen 7,643 N m). Mit `effects.link_elasticity` (ab Werk aus; die Steifigkeit ist geschätzt) biegen sich die Oberarme, und die Plattform schwingt nach einer Bewegung nach: der Folgefehler im Zyklus wächst von 4,0 auf 5,3 mm, der Fehler in der Verweilzeit von 0,68 auf 0,73 mm. Auf die niedrigste Eigenform bei gehaltenen Motoren (die Federn der Getriebe, mit dem Schalter auch die Biegung der Arme) stellt `effects.shaper_follows_pose` den Input Shaper ein: in der Mitte bei waagrechten Armen die seitliche Schwingung der Plattform, 28 Hz mit den Getrieben allein, 23 Hz mit biegsamen Armen (Unterarme verteilt). Die Unterarmstäbe sind Kollisionskörper: ein Unterarm, der in ein Hindernis fährt, ist ein Crash.
 
 Was der Delta nicht hat: elastische Stäbe und Kugelgelenke, die Biegung der Arme aus ihrer Drehebene, die Kegelgrenzen der Kugelgelenke (Anschläge und Arbeitsraum stehen dafür), eine vierte Achse, einen Übergangsbogen, wo zwei Kreisbögen in verschiedenen Ebenen aufeinandertreffen und eine Reibungsansicht für seine Gelenke (ihre Verluste stehen in der Energiebilanz). Nachfahren und Anpassen einer Aufzeichnung nehmen ihn seit dem 13. November, die Anpassung in den Koordinaten seiner Motoren (siehe die Anpassung, Stufe 1, unten). Von festen Motormomenten gehalten ist er im oberen Teil seines Arbeitsraums in der senkrechten Bewegung instabil; die Lageregler der Antriebe halten ihn (siehe die Modellreferenz).
 
@@ -617,15 +629,16 @@ Was der Delta nicht hat: elastische Stäbe und Kugelgelenke, die Biegung der Arm
 
 ```text
 $ sim-cli verdicts delta-d2
-motor-peak,1,0.6272,1.000,ok
-gearbox-continuous,1,71.55,120.0,ok
-gearbox-peak,1,164.5,192.0,ok
+motor-peak,1,0.5880,1.000,ok
+gearbox-continuous,1,69.95,120.0,ok
+gearbox-peak,1,154.3,192.0,ok
 ...
-settling,,0.0003476,0.0005000,ok
+settling,,0.0003475,0.0005000,ok
 singularity,,1.136,5.000,ok
+thermal-warm-start,,0.03448,0.1000,ok
 ```
 
-Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,31 bis 0,41 mm, Getriebespitze bis 163 N m); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt die Getriebespitze (201 N m) und das Einschwingen (0,61 mm) scheitern. Zwei Arme tragen 5 kg, wo beim D3 drei Arme 3 kg tragen, also arbeitet das Getriebe näher an seinen 192 N m. Das Einschwingen besteht, weil das Getriebespiel eine Schätzung von 1 Winkelminute ist, ein spielreduziertes Präzisions-Planetengetriebe: Mit den 9 Winkelminuten des NRB080-05-20 aus dem Katalog (`--set gearbox.backlash_rad=2.618e-3`) scheitert es mit 0,85 mm, aus demselben Grund wie beim D3: Beide Arme halten die Platte immer oben und liegen an einer Seite ihres Spiels an. Das Modell hält die Platte waagerecht, wie es die Parallelogramme der echten Maschine tun.
+Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,31 bis 0,41 mm, Getriebespitze bis 163 N m); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt die Getriebespitze (202 N m) und das Einschwingen (0,60 mm) scheitern. Zwei Arme tragen 5 kg, wo beim D3 drei Arme 3 kg tragen, also arbeitet das Getriebe näher an seinen 192 N m. Das Einschwingen besteht, weil das Getriebespiel eine Schätzung von 1 Winkelminute ist, ein spielreduziertes Präzisions-Planetengetriebe: Mit den 9 Winkelminuten des NRB080-05-20 aus dem Katalog (`--set gearbox.backlash_rad=2.618e-3`) scheitert es mit 0,85 mm, aus demselben Grund wie beim D3: Beide Arme halten die Platte immer oben und liegen an einer Seite ihres Spiels an. Das Modell hält die Platte waagerecht, wie es die Parallelogramme der echten Maschine tun.
 
 ## Einen Linear-Delta auslegen
 
@@ -635,26 +648,28 @@ Das Werkzeug ist die Mitte der Platte, x, y und z in Metern, z nach oben ab dem 
 
 ```text
 $ sim-cli analyze delta-linear
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.030 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-1,0.720000,4.773111,2.024602,106.1491,0.4423,0.6749,143.45,527.75,1.6420,35.31,...
-2,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
-3,0.720000,3.924502,1.366896,58.7251,0.3636,0.4556,143.45,527.75,1.1044,14.85,...
+1,0.720000,4.775703,2.025348,106.1601,0.4429,0.6751,143.23,527.74,1.6426,35.34,...
+2,0.720000,3.925325,1.367014,58.7263,0.3640,0.4557,143.23,527.74,1.1045,14.86,...
+3,0.720000,3.925325,1.367014,58.7263,0.3640,0.4557,143.23,527.74,1.1045,14.86,...
 ```
 
 Der Zyklus liegt entlang x, auf Säule 1 zu und von ihr weg, also arbeitet Säule 1 am meisten. Seine 0,720 s sind die des D3: derselbe Zyklus, dieselben Achsgrenzen. Festo gibt für den EXPT-95 bis zu 150 solcher Zyklen je Minute bei leichter Last an (je 0,4 s), mit verrundeten Ecken und bis zu 7 m/s und 110 m/s²; `sim-cli optimise delta-linear` verrundet die Ecken und hebt die Grenzen, so weit alle Prüfungen es zulassen.
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4423,1.000,ok
-motor-thermal,1,35.31,100.0,ok
-drive-current,1,1.642,3.000,ok
-pulley-torque,1,3.979,10.00,ok
+motor-peak,1,0.4429,1.000,ok
+motor-thermal,1,35.34,100.0,ok
+drive-current,1,1.643,3.000,ok
+pulley-torque,1,3.980,10.00,ok
 ...
-settling,,0.00007184,0.0005000,ok
-belt-tension,,527.8,1000,ok
-belt-slack,,143.5,0,ok
+settling,,0.00007375,0.0005000,ok
+belt-tension,,527.7,1000,ok
+belt-slack,,143.2,0,ok
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,783.1,1500,ok
+gearbox-radial-load,,783.0,1500,ok
+thermal-warm-start,,0.02976,0.1000,ok
 ```
 
 Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Was man daraus liest:
@@ -664,7 +679,7 @@ Jede Prüfung besteht, mit `--bands` auch an beiden Grenzen jeder Schätzung. Wa
 - **Singularität.** Die Konditionszahl ist schon in der Mitte 3,15: ein Meter Schlittenweg bewegt die Platte seitlich weiter als nach oben. Der Arbeitsraum hat bis zu 3,98, am unteren Rand gegenüber einer Säule.
 - **Keine Prüfungen für Getriebe, Riemenscheibenlager, Führungen oder Zahnbelastung**: die Achsen haben kein Getriebe, und für Lager, Führungen und Riemenzähne stehen keine Kennwerte in der Konfiguration (die der EGC-80 sind nicht im Katalog).
 
-Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse, die Erwärmung der Führungen, Trace-Wiedergabe und Fit (eine nichtlineare Transformation, wie beim D3). Siehe die [Modellreferenz](../model-reference.md#linear-delta).
+Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches Gestell, elastische Stäbe und Gelenke, eine vierte Achse und die Erwärmung der Führungen. Trace-Wiedergabe und Fit nehmen ihn, den Fit in den Koordinaten seiner Motoren wie beim D3. Siehe die [Modellreferenz](../model-reference.md#linear-delta).
 
 ### Der Vierachs-Delta D4
 
@@ -672,16 +687,17 @@ Was der Linear-Delta nicht hat: die Drehträgheit der Stäbe selbst, elastisches
 
 ```text
 $ sim-cli verdicts delta-d4
-motor-peak,1,0.5630,1.000,ok
-gearbox-peak,1,149.0,192.0,ok
+motor-peak,1,0.5631,1.000,ok
+gearbox-peak,1,149.1,192.0,ok
 motor-peak,4,0.05336,1.000,ok
 ...
-settling,,0.0003879,0.0005000,ok
+settling,,0.0004035,0.0005000,ok
 tool-gearbox-peak,4,2.262,29.00,ok
 singularity,,2.072,5.000,ok
+thermal-warm-start,,0.02011,0.1000,ok
 ```
 
-Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,21 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` erreicht das Einschwingen 0,52 mm am oberen Ende aller Schätzungen zugleich. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
+Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,22 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` scheitert das Einschwingen: Es erreicht 0,53 mm an einer Grenze der Schätzungen. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
 
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
@@ -711,11 +727,12 @@ Ein Spline kann über seine Stützpunkte hinausschwingen: Zwischen ihnen baucht 
 
 ```text
 $ sim-cli analyze t-gantry --path corner.path
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.050 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.128000,0.547780,...,1.579e-4,5.575e-5,1.679e-4,0.000e0,...
+a,2.128000,0.557940,...,1.821e-4,7.442e-5,1.821e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path corner.path --time-optimal
-a,1.695000,0.636875,...,1.908e-4,6.864e-5,1.908e-4,0.000e0,...
+a,1.695000,0.646623,...,2.435e-4,9.641e-5,2.435e-4,0.000e0,...
 ```
 
 Bei einer Bahn ist `cycle_s` die geplante Dauer plus 0,3 s Ruhe am Ende, damit das Einschwingen des Werkzeugs mitzählt.
@@ -745,8 +762,9 @@ So lesen Sie das Ergebnis:
 ```text
 $ sim-cli analyze t-gantry --path corner.path --set profile.path_tolerance_m=0.0001 --lang de
 Die geplante Bahn liegt bis zu 0.1000 mm neben den vorgegebenen Geraden und Kreisbögen (Übergangsbögen und Kreisbögen, die neben ihrem angegebenen Ende enden).
+Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf 0.056 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,...
-a,1.890000,0.547780,...,1.120e-4,...
+a,1.890000,0.558121,...,1.466e-4,...
 ```
 
 1,89 s statt 2,13 s, und jede Achse bleibt innerhalb ihrer Grenzwerte für Geschwindigkeit, Beschleunigung und Ruck. Die Regeln:
@@ -772,14 +790,15 @@ line,0.55,0.05
 
 ```text
 $ sim-cli analyze t-gantry --path curve.path
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.038 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.101000,0.547145,...,1.646e-4,5.616e-5,1.679e-4,0.000e0,...
+a,2.101000,0.558226,...,1.866e-4,7.199e-5,1.866e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path curve.path --time-optimal
-a,1.681000,0.585290,...,2.008e-4,7.640e-5,2.008e-4,0.000e0,...
+a,1.680000,0.593053,...,2.365e-4,9.838e-5,2.365e-4,0.000e0,...
 ```
 
-2,101 s innerhalb der Achsgrenzwerte und 1,681 s so schnell, wie die Motoren es erlauben, beide mit 0,3 s Ruhe. Die Kurve verlässt die erste Gerade waagerecht und kommt auf der letzten senkrecht nach unten an. Dabei hat sie die Krümmung, die ihre Stützpunkte verlangen, und bremst an beiden Übergängen ab wie in einen Kreisbogen. Mit `--set profile.path_tolerance_m=0.0001` werden die Enden des Splines ausgeglichen: Nahe jedem Übergang wird der Spline so gebogen, dass seine Krümmung dort die der Geraden ist (0), über eine Länge l = sqrt(Abweichung / (0,01728 dk)) für einen Krümmungssprung dk, höchstens den halben Abschnitt und nur so lang, wie die Geschwindigkeit es braucht. Die Stützpunkte bleiben, wo sie sind; der Spline weicht um höchstens die zulässige Abweichung ab. Hier: 1,985 s innerhalb der Achsgrenzwerte und 1,528 s so schnell, wie die Motoren es erlauben. Der ausgeglichene Teil ändert seine Krümmung etwa neunmal so schnell wie eine Klothoide gleicher Länge und wird deshalb langsamer durchfahren als ein Übergangsbogen zwischen Gerade und Kreisbogen (siehe die [Modellreferenz](../model-reference.md#transition-curves-profilepath_tolerance_m)).
+2,101 s innerhalb der Achsgrenzwerte und 1,680 s so schnell, wie die Motoren es erlauben, beide mit 0,3 s Ruhe. Die Kurve verlässt die erste Gerade waagerecht und kommt auf der letzten senkrecht nach unten an. Dabei hat sie die Krümmung, die ihre Stützpunkte verlangen, und bremst an beiden Übergängen ab wie in einen Kreisbogen. Mit `--set profile.path_tolerance_m=0.0001` werden die Enden des Splines ausgeglichen: Nahe jedem Übergang wird der Spline so gebogen, dass seine Krümmung dort die der Geraden ist (0), über eine Länge l = sqrt(Abweichung / (0,01728 dk)) für einen Krümmungssprung dk, höchstens den halben Abschnitt und nur so lang, wie die Geschwindigkeit es braucht. Die Stützpunkte bleiben, wo sie sind; der Spline weicht um höchstens die zulässige Abweichung ab. Hier: 1,985 s innerhalb der Achsgrenzwerte und 1,530 s so schnell, wie die Motoren es erlauben. Der ausgeglichene Teil ändert seine Krümmung etwa neunmal so schnell wie eine Klothoide gleicher Länge und wird deshalb langsamer durchfahren als ein Übergangsbogen zwischen Gerade und Kreisbogen (siehe die [Modellreferenz](../model-reference.md#transition-curves-profilepath_tolerance_m)).
 
 Andere Wege, eine Bahn vorzugeben:
 
@@ -790,7 +809,7 @@ Grenzen bei dieser Aufgabe:
 
 - Ohne zulässige Abweichung ist eine verrundete Ecke mit dem Standardplaner langsam: 0,07 m/s in einen Kreisbogen mit 0,1 m Radius bei 100 m/s³.
 - Splines: Ohne zulässige Abweichung springt die Krümmung, wo einer an eine Gerade oder einen Kreisbogen anschließt; die Bahn durchfährt diesen Übergang deshalb langsam, wie von einer Geraden in einen Kreisbogen. Mit einer zulässigen Abweichung wird der ausgeglichene Übergang zügig durchfahren, aber langsamer, als eine Klothoide bei gleicher Abweichung erlaubte. Ein Abschnitt hat einen Grenzwert, nach seiner engsten Stelle; ein Abschnitt mit einer engen Biegung ist also auf ganzer Länge langsam.
-- Übergangsbögen zwischen Geraden und Kreisbögen: keiner, wo zwei Kreisbögen in verschiedenen Ebenen in ihrer Richtung aufeinandertreffen (drei Achsen); dort fährt die Bahn langsam. Ein Stück, das zu kurz für seine Übergangsbögen ist, halbiert die Übergangsbögen der ganzen Bahn, nicht nur seine eigenen. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,499 s, ohne 1,729 s).
+- Übergangsbögen zwischen Geraden und Kreisbögen: keiner, wo zwei Kreisbögen in verschiedenen Ebenen in ihrer Richtung aufeinandertreffen (drei Achsen); dort fährt die Bahn langsam. Ein Stück, das zu kurz für seine Übergangsbögen ist, halbiert die Übergangsbögen der ganzen Bahn, nicht nur seine eigenen. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,397 s, ohne 1,695 s).
 - Der zeitoptimale Plan kennt die Zuggrenzen des Riemens (`ratings.belt_max_tension_n`, `belt_min_tension_n`): Er zieht von beiden `profile.tension_margin_n` ab (31 N am voreingestellten T-Portal, die Führungsreibung, die der Riemen zieht) und hält die Zugkraft jedes Abschnitts im starren Modell innerhalb von `profile.tension_reserve` (0,5) des verbleibenden Spielraums, weil die Riemenschwingung noch einmal so viel aufschlagen kann wie die Zugänderung des starren Modells (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Die Momentgrenzen von Getriebe und Riemenscheibe, die Führungen und den Zwischenkreis kennt er nicht. Lassen Sie `analyze` oder `verdicts` darüber laufen.
 - Der zeitoptimale Plan liest die Grenzen der Motoren Punkt für Punkt (alle 2 mm) und nimmt jede dort, wo sie gilt, ist aber nicht der schnellste mögliche: Ein Bahnstück fährt mit einer Geschwindigkeit durch, und auf einer Kurve bekommen die Rampen 0,4 des Ruckgrenzwerts (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Die Auslegung dauert einige Millisekunden (1 bis 21 ms an den mitgelieferten Maschinen). Im vollständigen Modell überschreiten die Motoren die Bemessungsdrehzahl um das, was die Regelkreise hinzufügen (0,1 % im Beispiel).
 - Eine Maschine, die am Ende eines Hubs steht, hat ihren Sollwert einige hundertstel Millimeter dahinter: Der Sollwert liegt dort, wo die Motoren stehen, unter Riemendehnung und Getriebeverdrehung. Eine Bahn von dort beginnt so weit außerhalb des Verfahrbereichs und wird gefahren. Nur nahe ihrem Anfang darf eine Bahn den Bereich verlassen: Eine Pose, die innerhalb des Spielraums der Maschine vom Anfang liegt (0,1 mm bei den Portalen, 2,3 mm beim Delta), darf so weit außerhalb liegen; jede andere Pose muss im Bereich liegen (auf einer Achse, deren Anfang jenseits eines Endes liegt, nicht weiter jenseits als der Anfang; Rundung um 1e-9 m ausgenommen). Andere Posen werden abgelehnt (`Die Bahn verlässt den Verfahrbereich. ...` bei einer Bahn aus Stücken, `Die zeitlich vorgegebene Bahn braucht mindestens zwei Punkte im Verfahrbereich, mit steigenden Zeiten ab 0.` bei Posen mit Zeiten).
@@ -928,9 +947,9 @@ Stellen Sie die Frequenz auf die Resonanz des Werkzeugs ein. Am T-Portal ändert
 ```text
 $ sim-cli modes t-gantry --axis-index 1 --points 3
 position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
-0.000000,21.0375,0.03737,106.9110,0.05326
-0.250000,47.7769,0.02417,208.0698,0.02559
-0.500000,27.5889,0.02248,86.9525,0.06739
+0.000000,21.0375,0.03737,106.9100,0.05326
+0.250000,47.7767,0.02417,208.0696,0.02559
+0.500000,27.5888,0.02248,86.9524,0.06739
 ```
 
 Die Z-Achse ist dort am steifsten, wo ihr Schwerpunkt am Schlitten hängt (hier bei z = 0,3 m), und beide Eigenformen steigen dort an.
@@ -939,11 +958,12 @@ Was es am Zyklus der EXCT-30 bewirkt. In der Konfiguration ist der Shaper einges
 
 ```text
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml --set effects.input_shaping=false
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,...,path_error_peak_m,...,dwell_error_peak_m
-a,1.852000,...,6.167e-4,...,5.825e-5
+a,1.852000,...,6.168e-4,...,5.827e-5
 
 $ sim-cli analyze t-gantry --config crates/machine-t-gantry/exct-30.toml
-a,2.048000,...,5.378e-4,...,3.947e-5
+a,2.048000,...,5.378e-4,...,3.949e-5
 ```
 
 Mit den Shapern steht das Werkzeug beim Verweilen 0,039 mm neben seinem Ziel statt 0,058 mm, und der Zyklus dauert 2,048 s statt 1,852 s.
@@ -959,7 +979,7 @@ Grenzen bei dieser Aufgabe:
 - Der Sprung ist 1 mm groß. Bei eingeschalteter Reibung zeigt er auch die Haftreibung.
 - Der Shaper behandelt höchstens zwei Resonanzen (`profile.shaper2_frequency_hz`, oben). Die Eigenschwingung des Gestells und die Steifigkeit der Regelkreise stecken nicht in der Frequenz, die die Maschine meldet.
 - Der Sollwert jeder Bewegung endet eine Schwingungsperiode später. Wo der Zyklus verweilt oder der Greifer arbeitet, warten beide auf den geformten Sollwert. Der Zyklus oben ist deshalb 82 ms länger: zwei Verweilzeiten, je 41 ms. Segmente ohne Verweilzeit und ohne Greiferaktion laufen nach Plan weiter.
-- Der größte Teil des Bahnfehlers an der EXCT-30 entsteht, weil das Gestell unter den Beschleunigungskräften nachgibt (0,62 mm Spitze ohne den Shaper, 0,57 mm mit ihm). Dagegen richtet ein Shaper, der auf die Resonanz des Werkzeugs eingestellt ist, wenig aus.
+- Der größte Teil des Bahnfehlers an der EXCT-30 entsteht, weil das Gestell unter den Beschleunigungskräften nachgibt (0,62 mm Spitze ohne den Shaper, 0,54 mm mit ihm). Dagegen richtet ein Shaper, der auf die Resonanz des Werkzeugs eingestellt ist, wenig aus.
 - Es wurde mit keinem realen Antrieb verglichen. Antriebshersteller dokumentieren ihre internen Filter nicht, und die Totzeiten hier sind ganze Takte. Der Feldbus kann Jitter haben (oben), die Regelkreise im Antrieb selbst haben keinen.
 - Die Reserven werden mit einem Zehntel des Nennmoments gemessen. Nahe dem Stillstand dämpft die Coulomb-Reibung des Motors (über 0,5 rad/s geglättet) den Kreis bei dieser Amplitude, die Reserven sind mit Reibung also größer; für Konstantfahrt gelten die ohne Reibung.
 - Eine Verstärkung, die bei den Nennwerten in Ordnung ist, kann instabil sein, wenn Rotorträgheit, Riemensteifigkeit oder Induktivität abweichen. Das trat an der Konfiguration der EXCT-30 auf; deren Drehzahlverstärkung wurde deshalb von 1,4 auf 0,6 gesenkt (und später für die Reserven oben auf 0,45). Lassen Sie nach der Reglereinstellung `sensitivity` laufen.
@@ -984,7 +1004,7 @@ Grenzen bei dieser Aufgabe:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.266321e-2,6.778671e-2,6.425452e-4,3.661569e-3
+m,2.262867e-2,6.527515e-2,6.255957e-4,4.218134e-3
 ```
 
 Die „gemessene“ Maschine ist hier der Simulator mit einem Schlitten, der 1,5 kg schwerer ist als in der Konfiguration. Die Tabelle nennt je Motor den Effektivwert und die Spitze der Differenz zwischen gemessenem und simuliertem Drehmoment und Schleppfehler. `--out` schreibt beides nebeneinander, eine Zeile je Zeile der Aufzeichnung:
@@ -998,17 +1018,17 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.549761e0,8.067588e0,1.618e-2
-viscous_friction_n_s_m,x,2.681992e1,2.621072e1,2.192e-1
-coulomb_friction_n,x,2.131795e1,2.196390e1,1.953e-1
-constant_force_n,x,-2.163662e-4,2.050984e-3,6.293e-2
+moved_mass_kg,x,6.549800e0,8.067588e0,1.618e-2
+viscous_friction_n_s_m,x,2.681385e1,2.621072e1,2.192e-1
+coulomb_friction_n,x,2.132336e1,2.196390e1,1.953e-1
+constant_force_n,x,-7.757048e-4,2.050984e-3,6.293e-2
 Bewegte Masse, Achse x: +1.518 kg ± 0.016. Um diesen Betrag sind die mit der Achse bewegten Massen zu ändern. Lastmasse und die Trägheit von Rotor und Scheibe kann die Aufzeichnung nicht trennen.
-Viskose Reibung, Achse x: × 0.977 ± 0.008. Die viskose Reibung der Führung der Achse und der Motorwellen ist mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
+Viskose Reibung, Achse x: × 0.978 ± 0.008. Die viskose Reibung der Führung der Achse und der Motorwellen ist mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
 Coulomb-Reibung, Achse x: × 1.030 ± 0.009. Coulomb- und Haftreibung der Führung der Achse und der Motorwellen sind mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
-Konstante Kraft, Achse x: +0.002 N ± 0.063. So viel mehr braucht die gemessene Achse als die Konfiguration: ein Gewicht, eine Neigung oder ein Kabelzug, die der Konfiguration fehlen.
+Konstante Kraft, Achse x: +0.003 N ± 0.063. So viel mehr braucht die gemessene Achse als die Konfiguration: ein Gewicht, eine Neigung oder ein Kabelzug, die der Konfiguration fehlen.
 ```
 
-Je Achse wird nach der Methode der kleinsten Quadrate angepasst: Kraft = Masse × Beschleunigung + viskose Reibung × Geschwindigkeit + Coulomb-Reibung × Vorzeichen(Geschwindigkeit) + Konstante. Dieselbe Schätzung läuft über die Aufzeichnung (`fitted`) und über die Simulation derselben Sollwerte mit der Konfiguration (`config`). Die Differenz der beiden ist das, worum die Konfiguration danebenliegt: hier +1,514 kg bei wahren 1,5 kg. Die Hinweiszeilen gehen auf die Fehlerausgabe. Es wird keine Konfiguration geändert.
+Je Achse wird nach der Methode der kleinsten Quadrate angepasst: Kraft = Masse × Beschleunigung + viskose Reibung × Geschwindigkeit + Coulomb-Reibung × Vorzeichen(Geschwindigkeit) + Konstante. Dieselbe Schätzung läuft über die Aufzeichnung (`fitted`) und über die Simulation derselben Sollwerte mit der Konfiguration (`config`). Die Differenz der beiden ist das, worum die Konfiguration danebenliegt: hier +1,518 kg bei wahren 1,5 kg. Die Hinweiszeilen gehen auf die Fehlerausgabe. Es wird keine Konfiguration geändert.
 
 **Anpassung, Stufe 1 in den Koordinaten der Motoren: Delta, SCARA, Arm.** Wo die Motoren nicht im Verhältnis zu den Achsen drehen (die Arme des Delta) oder sich die Trägheit, die ein Motor dreht, mit der Stellung ändert (der Ellbogen eines SCARA oder Arms; `trace::per_axis_fit` entscheidet), regressiert `fit --trace` die Motormomente auf das eigene Starrkörpermodell der Maschine in Regressorform, τ = Y(q, q̇, q̈) θ: je Motor k τ_k − τ_k,starr = (θ_Nutzlast − 1) × (Anteil der Nutzlast an τ_k,starr) + ΔJ_k q̈_k + b_k q̇_k + c_k sign(q̇_k) + τ0_k, die starren Momente aus `Machine::rigid_motor_torque` bei den Winkeln, Drehzahlen und Beschleunigungen der Aufzeichnung (die Beschleunigung aus dem Winkel, den ein Geber viel genauer misst als die Drehzahl, die er ableitet). Eine Aufzeichnung, die jede Achse mit mehreren Frequenzen schwingt (hier eine Datei von Posen zu Zeiten: der Delta 0,2 m quer bei 0,6 und 0,9 Hz, 0,06 m auf und ab bei 1,1 Hz, 8 s), eines Delta mit 4 kg Nutzlast statt der 3 der Konfiguration und doppelter Gelenkreibung:
 
@@ -1016,17 +1036,17 @@ Je Achse wird nach der Methode der kleinsten Quadrate angepasst: Kraft = Masse �
 $ sim-cli run delta-d3 --trajectory swing.csv --time 8 --out swing-trace.csv --set mass.payload_kg=4 --set joint.friction_coulomb_nm=0.6 --set joint.friction_viscous_nm_s_rad=0.1
 $ sim-cli fit delta-d3 --trace swing-trace.csv
 quantity,of,config,fitted,standard_error
-payload_factor,payload,9.901409e-1,1.316522e0,1.386e-2
-added_inertia_kg_m2,1,3.620213e-7,6.758257e-6,1.287e-5
-viscous_friction_nm_s_rad,1,2.699452e-4,3.362585e-4,1.273e-4
-coulomb_friction_nm,1,9.444131e-2,1.151706e-1,2.714e-3
-constant_torque_nm,1,-6.212870e-3,-9.119716e-3,4.562e-3
+payload_factor,payload,9.901197e-1,1.318199e0,1.356e-2
+added_inertia_kg_m2,1,3.957651e-7,5.519854e-6,1.260e-5
+viscous_friction_nm_s_rad,1,2.581219e-4,3.313259e-4,1.247e-4
+coulomb_friction_nm,1,9.511667e-2,1.156876e-1,2.657e-3
+constant_torque_nm,1,-6.177851e-3,-8.611906e-3,4.467e-3
 ...
-Nutzlast: × 1.330 ± 0.014. Die Masse der Nutzlast ist mit diesem Faktor zu multiplizieren.
+Nutzlast: × 1.331 ± 0.014. Die Masse der Nutzlast ist mit diesem Faktor zu multiplizieren.
 ...
 ```
 
-Der Faktor der Nutzlast ist 1,316 / 0,990 = 1,330 bei wahren 4 / 3; die Coulomb-Reibung der Gelenke, von 0,3 auf 0,6 N m am Gelenk verdoppelt, ist am Motor hinter dem Getriebe von 20 +0,015 N m (0,3 / 20 / 0,96) und ergibt sich zu 0,019 bis 0,021 ± 0,003: Die schwerere Nutzlast belastet die Gelenke etwas mehr. Paare von Werten, deren Schätzungen mit mehr als 0,95 korrelieren, nennt die Fehlerausgabe (`Von dieser Aufzeichnung nicht getrennt: ...`): Bekannt ist nur ihre Summe. Ein Faktor auf den Rest des Starrkörpermodells (Arme, Plattform) wird nicht angepasst: Beim Delta war er eins mit den zusätzlichen Trägheiten und konstanten Momenten der Motoren. Ein Rotor und die Trägheit seines Arms um das Gelenk sind eine zusätzliche Trägheit. Bei Wellgetrieben (denen des SCARA, Wirkungsgrad 0,75) wachsen die Verluste mit dem Moment einer schwereren Nutzlast und zeigen sich als Coulomb-Reibung an dem Gelenk, das sie trägt.
+Der Faktor der Nutzlast ist 1,318 / 0,990 = 1,331 bei wahren 4 / 3; die Coulomb-Reibung der Gelenke, von 0,3 auf 0,6 N m am Gelenk verdoppelt, ist am Motor hinter dem Getriebe von 20 +0,015 N m (0,3 / 20 / 0,96) und ergibt sich zu 0,019 bis 0,021 ± 0,003: Die schwerere Nutzlast belastet die Gelenke etwas mehr. Paare von Werten, deren Schätzungen mit mehr als 0,95 korrelieren, nennt die Fehlerausgabe (`Von dieser Aufzeichnung nicht getrennt: ...`): Bekannt ist nur ihre Summe. Ein Faktor auf den Rest des Starrkörpermodells (Arme, Plattform) wird nicht angepasst: Beim Delta war er eins mit den zusätzlichen Trägheiten und konstanten Momenten der Motoren. Ein Rotor und die Trägheit seines Arms um das Gelenk sind eine zusätzliche Trägheit. Bei Wellgetrieben (denen des SCARA, Wirkungsgrad 0,75) wachsen die Verluste mit dem Moment einer schwereren Nutzlast und zeigen sich als Coulomb-Reibung an dem Gelenk, das sie trägt.
 
 **Anpassung, Stufe 2: Riemensteifigkeit aus einem Frequenzgang.**
 
@@ -1121,11 +1141,11 @@ Sechs Ansichten nehmen jeweils einen Effekt für sich heraus, statt ihn im Momen
 $ cargo run -q --release -p sim-cli -- analyze t-gantry --breakdown breakdown.csv
 $ cat breakdown.csv
 motor,part,peak_torque_nm,rms_torque_nm
-a,inertia,2.955173e-1,6.164674e-2
+a,inertia,2.955808e-1,6.164693e-2
 a,gravity,1.372931e-1,1.193030e-1
-a,friction,1.403381e-1,8.273484e-2
-a,rest,6.341280e-2,1.184636e-2
-a,torque,5.596234e-1,1.653596e-1
+a,friction,1.403399e-1,8.273541e-2
+a,rest,6.346283e-2,1.184697e-2
+a,torque,5.595012e-1,1.653591e-1
 b,...
 ```
 
@@ -1142,27 +1162,27 @@ In jedem Augenblick ergeben die vier Anteile zusammen das Motormoment. Ihre Spit
 $ cargo run -q --release -p sim-cli -- analyze t-gantry --budget budget.csv
 $ cat budget.csv
 item,energy_j,share
-supply,1.393495e2,1.000000
-copper.a,3.287117e0,0.023589
-copper.b,2.827614e0,0.020292
-resistor,5.343855e0,0.038349
+supply,1.393748e2,1.000000
+copper.a,3.302749e0,0.023697
+copper.b,2.839158e0,0.020371
+resistor,5.342595e0,0.038333
 discharge,0.000000e0,0.000000
-power.guide_x,5.101324e1,0.366081
-power.guide_z,1.911054e1,0.137141
+power.guide_x,5.101324e1,0.366015
+power.guide_z,1.911054e1,0.137116
 ...
-power.shaft_a,2.454226e1,0.176120
-power.shaft_b,2.454228e1,0.176120
-power.gearbox_a,4.378065e0,0.031418
-power.gearbox_b,4.305584e0,0.030898
-power.belt,2.860734e-3,0.000021
+power.shaft_a,2.454226e1,0.176088
+power.shaft_b,2.454228e1,0.176088
+power.gearbox_a,4.378016e0,0.031412
+power.gearbox_b,4.305561e0,0.030892
+power.belt,2.861317e-3,0.000021
 ...
-windings,4.348351e-7,0.000000
-capacitors,3.313464e-5,0.000000
-energy.kinetic,2.731025e-8,0.000000
-energy.potential,-1.018865e-7,-0.000000
-energy.elastic,-2.145527e-7,-0.000000
-payload,-2.304748e-4,-0.000002
-unaccounted,-8.388325e-4,-0.000006
+windings,5.249505e-7,0.000000
+capacitors,-4.519116e-4,-0.000003
+energy.kinetic,3.709163e-8,0.000000
+energy.potential,-6.817267e-8,-0.000000
+energy.elastic,-2.175817e-7,-0.000000
+payload,-2.304591e-4,-0.000002
+unaccounted,-8.666425e-4,-0.000006
 ```
 
 | Zeile | Bedeutung |
@@ -1197,12 +1217,12 @@ Die Momentanteile, Verlustleistungen und Energieanteile sind ebenfalls Signale: 
 $ cargo run -q --release -p sim-cli -- compare t-gantry --effect guide_friction --signal motor.a.torque --signal motor.b.torque --out compare.csv --differences diff.csv
 $ head -3 compare.csv
 time[s],motor.a.torque.on[N m],motor.a.torque.off[N m],motor.b.torque.on[N m],motor.b.torque.off[N m]
-0.0000,5.644133914e-2,1.035313264e-1,-1.450023784e-1,-1.152924340e-1
-0.0010,5.731815816e-2,1.039299274e-1,-1.441924234e-1,-1.149019169e-1
+0.0000,5.644070522e-2,1.035051415e-1,-1.449650751e-1,-1.152884059e-1
+0.0010,5.731809256e-2,1.039281616e-1,-1.441915809e-1,-1.148902590e-1
 $ cat diff.csv
 signal,unit,peak_difference,rms_difference
-motor.a.torque,N m,9.628014e-2,4.599526e-2
-motor.b.torque,N m,9.224554e-2,4.627908e-2
+motor.a.torque,N m,9.626565e-2,4.599827e-2
+motor.b.torque,N m,9.226389e-2,4.627935e-2
 ```
 
 Ohne `--signal` wird jedes Signal geschrieben. In der App wählt der Teil „Effekt ein und aus“ der Effekt-Ansichten den Effekt und eine Größe der Oszilloskope (Moment, Drehzahl, Schleppfehler, ...), lässt den Vergleich im Hintergrund mit der Konfiguration laufen, wie sie ist, und legt beide Läufe übereinander: ein durchgezogen, aus gestrichelt in derselben Farbe, eine Farbe je Achse oder Motor, mit einer Tabelle der Differenz. Ein Effekt, der den Zeitablauf des Zyklus ändert (Eckenverschleifen, Input Shaping), wird nur über die Zeit verglichen, die beide Durchläufe haben.
