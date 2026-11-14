@@ -2012,3 +2012,68 @@ fn a_payload_picked_during_the_trace_is_found_on_the_axis() {
     assert!((lighter + 2.0).abs() < 3.0 * fit.error[0], "mass {lighter} ± {}", fit.error[0]);
     assert!(fit.advice("x").iter().any(|(key, _)| *key == "fit-axis-payload-step"));
 }
+
+/// The axis on a soft base (effects.base_compliance), along x only and undamped: 100 kg on 2.5e6 N/m. After a move
+/// the axis settles, but the base rings on at f = sqrt(k / M) / 2 pi = sqrt(25000) / 2 pi = 25.165 Hz, and the tool
+/// with it: it crosses its mean every half period, pi sqrt(100 / 2.5e6) = 19.869 ms.
+#[test]
+fn a_move_on_a_soft_base_leaves_the_tool_ringing_at_the_base_s_natural_frequency() {
+    let mut cfg = ENTRY.config();
+    for edit in ["effects.base_compliance = true", "base.damping_ratio_x = 0.0"] {
+        cfg.set_text(edit).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(sim_components::Command::MoveTo(vec![0.5])).unwrap();
+    sim.run(1.5, |_| {});
+    let (x, base) = (sim.signal_index("axis.x.position").unwrap(), sim.signal_index("base.x").unwrap());
+    let mut trace = Vec::new();
+    let mut sample = Vec::new();
+    sim.run(1.0, |s| {
+        s.sample(&mut sample);
+        trace.push((s.time(), sample[x], sample[base]));
+    });
+    let peak = trace.iter().map(|(.., b)| b.abs()).fold(0.0, f64::max);
+    assert!(peak > 1e-6, "the base hardly moved: {peak} m");
+    let mean = trace.iter().map(|(_, p, _)| p).sum::<f64>() / trace.len() as f64;
+    let crossings: Vec<f64> = trace
+        .windows(2)
+        .filter(|w| (w[0].1 - mean).signum() != (w[1].1 - mean).signum())
+        .map(|w| w[0].0 + (w[1].0 - w[0].0) * (w[0].1 - mean) / (w[0].1 - w[1].1))
+        .collect();
+    let half = (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64;
+    assert!((half / 0.019_869_18 - 1.0).abs() < 0.005, "half period {half} s from {} crossings", crossings.len());
+}
+
+/// A force held at rest moves the base, and the tool on it, by force over stiffness: the rigid axis on a base of
+/// 2.5e6 N/m along x holds a process force of 50 N while it dwells; its motor's stator takes the 50 N, the base gives
+/// way 50 / 2.5e6 = 20 um once its sway has died down (damping ratio 0.3 at 25 Hz: 2 s take it down by
+/// exp(-0.3 x 157 x 2), nothing), and the tool, which the motor holds on the base, moves with it.
+#[test]
+fn a_held_force_moves_the_base_and_the_tool_by_force_over_stiffness() {
+    let mut cfg = ENTRY.config();
+    for edit in [
+        "effects.base_compliance = true",
+        "base.damping_ratio_x = 0.3",
+        "effects.belt_stretch = false",
+        "effects.process_force = true",
+        "process.force_x_n = 50.0",
+    ] {
+        cfg.set_text(edit).unwrap();
+    }
+    let mut m = (ENTRY.build)(&cfg).unwrap();
+    let (mut state, mut torque, mut held) = (Vec::new(), [0.0], [0.0]);
+    m.equilibrium(&[0.3], &mut state, &mut torque);
+    let at = m.signal_infos().iter().position(|s| s.id == "base.x").unwrap();
+    m.set_dwelling(true);
+    m.equilibrium(&[0.3], &mut Vec::new(), &mut held);
+    let mut rk = Rk4::new(state.len());
+    for _ in 0..20_000 {
+        advance(m.as_ref(), &mut rk, &mut state, &held, 1e-4, 1);
+    }
+    let mut values = Vec::new();
+    m.signals(&state, &held, &mut values);
+    assert!((values[at] - 2.0e-5).abs() < 1e-9, "the base gave way {} m", values[at]);
+    let (mut pos, mut vel) = ([0.0], [0.0]);
+    m.tool_state(&state, &mut pos, &mut vel);
+    assert!((pos[0] - 0.3 - 2.0e-5).abs() < 1e-8, "the tool moved {} m", pos[0] - 0.3);
+}

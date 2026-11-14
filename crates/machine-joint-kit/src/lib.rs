@@ -33,7 +33,7 @@ macro_rules! entry {
                 include_str!(concat!("../config/", $file))
             ),
             i18n: I18N,
-            build: $build,
+            build: |cfg| sim_components::base::mount(cfg, ($build)(cfg)?),
             suite_configs: || suite_configs(&$name),
         };
     };

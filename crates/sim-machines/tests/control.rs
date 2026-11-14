@@ -486,6 +486,8 @@ fn every_effect_switch_changes_the_traces() {
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
+            // The links' bending on a machine without links (the joint kit's slides and table).
+            "effects.link_bending" => base.get("link_bending").is_err(),
             _ => false,
         };
         let effects: Vec<String> = effects

@@ -199,6 +199,22 @@ gearbox (`effects.shaft_torsion`), its weight share loads the arms (`effects.sha
 friction pulls on the platform along the shaft (`effects.telescope_friction`). See the
 [model reference](model-reference.md#delta-picker-d4).
 
+## Bending links and the base under the machine
+
+With `effects.link_bending` (off as shipped) every link of an arm with a section in `[link_bending]` (a round tube per
+joint: outer diameter, wall, Young's modulus) bends as a cantilever from its joint to the next in its first
+Euler-Bernoulli mode, in the plane its joint turns it in: modal mass a quarter of its URDF mass plus everything beyond
+it, stiffness 1.875104^4 / 4 E I / L^3, driven by what the bodies beyond need from its tip (their m (a - g), its moment
+through the tip's slope) and its own weight and inertia spread along it. The tool rings with it in tool space; the
+joints do not feel it (one-way). A 60 x 4 mm steel tube of 0.8 m and 4.5 kg alone rings at the Euler-Bernoulli 88.96 Hz
+and sags under its weight by 49.2 um, 1.3 % above the exact q L^4 / (8 E I).
+
+With `effects.base_compliance` (every machine and machine file, off as shipped) the machine stands on a base of up to
+six spring-mass directions (`[base]`): it takes the rate of change of the momentum of everything that moves on it,
+rotors included (`Machine::frame_momentum`; the slides, table and arms give theirs through `Mechanism::frame_momentum`),
+and the tool moves with it. The arm on its pedestal tilts, the table's stand twists, a slide's bed sways along it. See
+the [model reference](model-reference.md#compliant-base).
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -228,6 +244,8 @@ worm.
 - Every joint of an arm has the same motor, drive and gearbox (only the ratio differs per joint), as the drive reads
   one `[motor]` and `[drive]` per machine; no gearbox life for arms whose joints have different ratios.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
+- A link bends in one mode in the plane its joint turns it in; out of that plane and in torsion it is rigid, and the
+  bending and the base do not act back on the joints (one-way).
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
 - Not built yet: mechanical cams, electronic cams and flying saw profiles.

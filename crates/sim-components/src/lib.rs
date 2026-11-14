@@ -9,6 +9,8 @@ pub static I18N: &[(&str, &str)] = &[
 ];
 
 pub mod analysis;
+pub mod base;
+pub mod beam;
 pub mod catalog;
 pub mod chain;
 pub mod collision;

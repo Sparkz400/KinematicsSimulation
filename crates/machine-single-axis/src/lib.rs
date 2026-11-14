@@ -44,7 +44,7 @@ pub const LOSSY_EFFECTS: [&str; 12] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(SingleAxis::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(SingleAxis::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -508,6 +508,27 @@ impl SingleAxis {
 }
 
 impl Machine for SingleAxis {
+    /// In the axis's frame: x along it, z across it (gravity has g sin(incline) along -x and g cos(incline) along -z).
+    /// The carriage, its payload and the chain's moving run along x, the pulley and the rotor turning about y,
+    /// positive as x grows.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let (x, v, pulley, rotor) = if self.elastic {
+            (s[0], s[3], s[4], s[5])
+        } else {
+            (s[0], s[1], s[1] / self.r, s[1] * self.gearbox.ratio / self.r)
+        };
+        let chain = self.chain.mass(x).0;
+        let chain_moment = self.chain.mass_per_m * (self.chain.length0 * x + 0.25 * x * x);
+        Some(sim_core::FrameMomentum {
+            linear: [(self.m() + chain) * v, 0.0, 0.0],
+            angular: [0.0, self.j_pulley * pulley + self.j_rotor * rotor, 0.0],
+            mass: self.m() + chain,
+            first_moment: [self.m() * x + chain_moment, 0.0, 0.0],
+            gravity: [-self.g_along, 0.0, -self.g_normal],
+            external: [if self.dwelling { self.process } else { 0.0 }, 0.0, 0.0],
+            external_at: [x, 0.0, 0.0],
+        })
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

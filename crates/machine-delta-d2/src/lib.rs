@@ -59,7 +59,7 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(Delta2::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(Delta2::new(cfg)?))
 }
 
 /// The default config with every loss switched off.

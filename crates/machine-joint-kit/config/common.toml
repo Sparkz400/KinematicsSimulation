@@ -20,6 +20,13 @@ axis = ""
 
 # One switch per effect.
 [effects]
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
+# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
+# sections are [estimate]s.
+link_bending = false
 gravity = true
 payload = true
 # Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the

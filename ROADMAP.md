@@ -26,9 +26,10 @@ What is not built yet, from the "Left open" lists at the end of each section of 
 - Life estimates: no belt life (no maker publishes a method); the gearbox's gearing by Palmgren-Miner on Siemens'
   two torque figures, not Siemens' own damage method.
 - The drive: one maximum current, no overload over time (i2t).
-- Delta D3: the arm tube's own share of the bending modes and the elbow block's twist as an arm bends out of its
-  plane. Linear delta: vertical columns only; no guide, pulley-bearing or belt-tooth ratings (its axes are
-  not in the catalogue).
+- The compliant base (effects.base_compliance) and the arms' link bending act one-way: the motors' torque and
+  following error do not see them; a link bends in one plane only.
+- Linear delta: vertical columns only; no guide, pulley-bearing or belt-tooth ratings (its axes are not in the
+  catalogue).
 - Fit: one added inertia per motor, not a mass factor per link of a URDF arm; a payload picked or dropped during a
   trace is not followed.
 - Optimiser: the robust check uses the error bands one bound at a time, not the worst corner of all of them; one lift

@@ -26,12 +26,14 @@ use toml::{Table, Value};
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let net = Netlist::parse(cfg)?;
     if let Some(scissor) = &net.scissor {
-        return Ok(Box::new(scissor::ScissorMachine::from_node(cfg, &net, scissor)?));
+        return sim_components::base::mount(cfg, Box::new(scissor::ScissorMachine::from_node(cfg, &net, scissor)?));
     }
     match &net.linkage {
-        Some(linkage) if linkage.gearboxes.len() == 3 => Ok(Box::new(spatial::Delta::from_node(cfg, &net, linkage)?)),
-        Some(linkage) => Ok(Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?)),
-        None => Ok(Box::new(ConfigMachine::new(cfg, &net)?)),
+        Some(linkage) if linkage.gearboxes.len() == 3 => {
+            sim_components::base::mount(cfg, Box::new(spatial::Delta::from_node(cfg, &net, linkage)?))
+        }
+        Some(linkage) => sim_components::base::mount(cfg, Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?)),
+        None => sim_components::base::mount(cfg, Box::new(ConfigMachine::new(cfg, &net)?)),
     }
 }
 

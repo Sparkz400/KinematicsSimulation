@@ -35,6 +35,15 @@ axis = ""
 # One switch per effect. With belt_stretch off the machine falls back to the rigid reference model,
 # in which belt damping, slack, backlash, gear stiffness and the frame mode have no meaning.
 [effects]
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+# The Z axis bends as a cantilever from the carriage, in series with its guide's give (its stiffness EI in
+# [tool_flex]; with tool_flex off it only bends). Off as shipped: the stiffness is an [estimate].
+z_axis_bending = false
+# The X beam sags under the carriage and the Z axis, as a simple span between the posts ([beam]), and lowers the tool
+# by m g a^2 b^2 / (3 EI L); quasi-static. Off as shipped: the beam's stiffness is an [estimate].
+beam_sag = false
 gravity = true
 payload = true
 belt_stretch = true
@@ -305,6 +314,18 @@ damping_n_s_m = 190.0
 lateral_stiffness_n_m = 2.0e7
 tilt_stiffness_nm_rad = 1.2e4
 damping_n_s_m = 80.0
+# With effects.z_axis_bending [estimate]: the Z axis's bending stiffness E I, an aluminium profile of about 60 x 40 mm
+# (I = 2e-7 m^4, E = 70 GPa); its centre of mass h below the carriage gives way h^3 / (3 E I) more.
+z_axis_bending_stiffness_nm2 = 1.4e4
+
+# With effects.beam_sag: the X beam as a simple span between the posts, which sags under the carriage and the Z
+# axis by m g a^2 b^2 / (3 E I L) (L^3 / (48 E I) per newton in the middle).
+[beam]
+# The posts at the motors, geometry.span_min_m beyond each end of the stroke: 1.0 + 2 x 0.15 m.
+span_m = 1.3
+carriage_at_zero_m = 0.15
+# [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
+bending_stiffness_nm2 = 8.4e4
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -624,6 +645,31 @@ cycle_timing = "axis_limits"
 # The same clearance is kept from every obstacle (check "collision", and a time-optimal path that comes nearer is refused).
 min_clearance_m = 0.3
 
+# With effects.base_compliance [estimate]: the stand the gantry stands on, about 150 kg with the machine, swaying
+# at 20 Hz along x and y (k = 150 (2 pi 20)^2 = 2.4e6 N/m) and 50 Hz up and down (1.5e7 N/m); typical for a
+# gantry on a welded stand, not measured. In series with the portal's own sway (effects.frame_compliance).
+[base]
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 150.0
+inertia_x_kgm2 = 40.0
+inertia_y_kgm2 = 40.0
+inertia_z_kgm2 = 40.0
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 2.4e6
+stiffness_y_n_m = 2.4e6
+stiffness_z_n_m = 1.5e7
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 0.0
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+
 # Low and high bound of the values that are estimates, in the tables and units they have above.
 # `sim-cli verdicts --bands` runs the cycle with each at its low and at its high bound, one at a time,
 # and `sim-cli sensitivity` uses the bounds in place of its flat percentage.
@@ -632,6 +678,13 @@ min_clearance_m = 0.3
 # without runs while they change nothing: [thermal] and the line module's efficiency with their effects off, and
 # the DC link's discharge, which acts only while the drives are disabled.
 [bounds]
+base.mass_kg = [90.0, 240.0]
+base.stiffness_x_n_m = [9.6e5, 6.0e6]
+base.damping_ratio_x = [0.01, 0.05]
+base.stiffness_y_n_m = [9.6e5, 6.0e6]
+base.damping_ratio_y = [0.01, 0.05]
+base.stiffness_z_n_m = [6.0e6, 3.75e7]
+base.damping_ratio_z = [0.01, 0.05]
 motor.pole_pairs = [3.0, 5.0]
 motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
 ratings.drive_chip_share = [0.0, 0.5]
@@ -667,6 +720,8 @@ frame.damping_n_s_m = [95.0, 380.0]
 tool_flex.lateral_stiffness_n_m = [1.0e7, 4.0e7]
 tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
 tool_flex.damping_n_s_m = [40.0, 160.0]
+tool_flex.z_axis_bending_stiffness_nm2 = [0.7e4, 2.8e4]
+beam.bending_stiffness_nm2 = [4.2e4, 1.7e5]
 thermal.gearbox_resistance_k_w = [0.8, 3.0]
 thermal.gearbox_time_constant_s = [600.0, 2400.0]
 thermal.guide_resistance_k_w = [0.25, 1.0]

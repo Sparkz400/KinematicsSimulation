@@ -47,3 +47,5 @@ param-bending_stiffness_nm_rad = Biegesteifigkeit, als Drehung des Ellbogens um 
 param-bending_damping_nm_s_rad = Biegedämpfung, als Drehung des Ellbogens um die Schulter
 param-lateral_stiffness_n_m = Quersteifigkeit am Ellbogen, aus der Ebene des Arms
 param-lateral_damping_n_s_m = Querdämpfung am Ellbogen, aus der Ebene des Arms
+effect-arm_tube_inertia = Anteil des Armrohrs an den Biegeformen und Verdrehung des Ellbogenblocks (mit biegenden Armen)
+param-elbow_twist_inertia_kgm2 = Drehträgheit des Ellbogenblocks [kg m²]

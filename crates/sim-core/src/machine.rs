@@ -115,7 +115,60 @@ pub struct Mode {
     pub damping: f64,
 }
 
+/// What everything that moves on a machine's base does to it, for effects.base_compliance (`Machine::frame_momentum`).
+/// In the frame of the tool pose's x, y and z (m; an axis the machine lacks stands at 0), about its origin. A part whose
+/// mass does not change may leave out what of it does not move (its mass at a joint, the frame's own): the base takes
+/// the load against that at rest at the start pose, so a constant cancels.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FrameMomentum {
+    /// The sum of m v of the moving parts, N s.
+    pub linear: [f64; 3],
+    /// The sum of r x m v + I w about the origin, N m s, turning rotors, pulleys and links included.
+    pub angular: [f64; 3],
+    /// The moving mass and its first moment, the sum of m r: kg and kg m.
+    pub mass: f64,
+    pub first_moment: [f64; 3],
+    /// Gravity in this frame, m/s^2; zero with effects.gravity off.
+    pub gravity: [f64; 3],
+    /// A force from outside on the moving parts (a process force from a workpiece on the floor), N, and where it
+    /// acts, m.
+    pub external: [f64; 3],
+    pub external_at: [f64; 3],
+}
+
+/// The tool axes a base's motion moves (`Machine::base_shift`): those with these ids, by translation [x, y, z] and by
+/// tilt about [x, y, z].
+pub const BASE_AXES: [[&str; 3]; 2] = [["x", "y", "z"], ["rx", "ry", "rz"]];
+
 pub trait Machine: Send {
+    /// For effects.base_compliance: the momentum, mass and outside force of everything that moves on the base at state
+    /// `state` (see `FrameMomentum`). The base takes the rate of change of the momentum back, and the weight and the
+    /// outside force. `None` where the machine cannot tell; then it cannot stand on a compliant base.
+    fn frame_momentum(&self, _state: &[f64]) -> Option<FrameMomentum> {
+        None
+    }
+    /// For effects.base_compliance: how far the tool pose moves at `tool_pose` when the base moves by `shift`
+    /// (translation [x, y, z] in m and a small tilt [x, y, z] in rad about `pivot`, in the frame of `FrameMomentum`),
+    /// written into `out` (as long as the axes). By default the axes x, y, z take the move of the tool point at the
+    /// pose's x, y, z, u + theta x (r - pivot), and a rotary axis with an id of `BASE_AXES[1]`, or `c` (about z), the
+    /// tilt; a machine whose tool axes are its joints moves nothing.
+    fn base_shift(&self, tool_pose: &[f64], pivot: [f64; 3], shift: &[f64; 6], out: &mut [f64]) {
+        let axes = self.axes();
+        let find = |ids: [&str; 3], k: usize| axes.iter().position(|a| a.id == ids[k]);
+        let r: [f64; 3] = std::array::from_fn(|k| find(BASE_AXES[0], k).map_or(0.0, |i| tool_pose[i]) - pivot[k]);
+        let t = [shift[3], shift[4], shift[5]];
+        let moved = [t[1] * r[2] - t[2] * r[1], t[2] * r[0] - t[0] * r[2], t[0] * r[1] - t[1] * r[0]];
+        out.iter_mut().for_each(|o| *o = 0.0);
+        for k in 0..3 {
+            if let Some(i) = find(BASE_AXES[0], k) {
+                out[i] = shift[k] + moved[k];
+            }
+            if let Some(i) = find(BASE_AXES[1], k).or(if k == 2 { find(["", "", "c"], 2) } else { None }) {
+                out[i] = t[k];
+            }
+        }
+    }
+
     /// The ratings of the machine's own parts (ball screw, rack, strain wave gear, ...) that its cycle is judged
     /// against. Empty where it has none beyond the common ones.
     fn rating_checks(&self) -> Vec<RatingCheck> {

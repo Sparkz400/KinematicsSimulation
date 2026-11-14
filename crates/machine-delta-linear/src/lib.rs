@@ -63,7 +63,7 @@ pub const LOSSY_EFFECTS: [&str; 10] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(LinearDelta::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(LinearDelta::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -809,6 +809,26 @@ impl LinearDelta {
 }
 
 impl Machine for LinearDelta {
+    /// The plate (with the payload and the rods' share) at the tool, the carriages (with theirs) on their columns at
+    /// the column radius, and each column's pulley and rotor at its top spinning about the horizontal across the column,
+    /// positive as the carriage rises. What does not move is left out (see `FrameMomentum`).
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (h, v) = self.heights(s);
+        let (p, j) = self.pose(h);
+        add_point(&mut f, self.m_nt(), p, mul(&j, v));
+        let rotor_speed = self.rotors(s).1;
+        for i in 0..3 {
+            let (c, sin) = self.legs.azimuth[i];
+            add_point(&mut f, self.m_c, [self.column_radius * c, self.column_radius * sin, h[i]], [0.0, 0.0, v[i]]);
+            let pulley = if self.elastic { s[12 + i] } else { v[i] / self.r };
+            let across = [-sin, c, 0.0];
+            add_spin(&mut f, across, self.j_pulley, pulley);
+            add_spin(&mut f, across, self.j_rotor, rotor_speed[i]);
+        }
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

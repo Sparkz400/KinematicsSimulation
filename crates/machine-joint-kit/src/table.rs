@@ -50,6 +50,13 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 }
 
 impl Mechanism for Table {
+    /// The table, fixture and workpiece turning about z, and the motor beneath it.
+    // shortcut: a worm's motor lies across the table's axis; its rotor's spin is taken about z as the others', which
+    // only the base's tilt (not its twist) would tell apart.
+    fn frame_momentum(&self, _q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let turning = self.inertia + if self.attached { self.payload } else { 0.0 };
+        Some(sim_core::FrameMomentum { angular: [0.0, 0.0, turning * qd[0] + rotor_spin[0]], ..Default::default() })
+    }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         mass[0] = self.inertia + if self.attached { self.payload } else { 0.0 };
         bias[0] = 0.0;

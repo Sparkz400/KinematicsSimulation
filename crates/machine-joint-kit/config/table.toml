@@ -224,8 +224,36 @@ target = [0.0]
 dwell_s = 0.2
 payload = true
 
+# With effects.base_compliance [estimate]: the stand under the table twists about z at 30 Hz with 20 kg m^2 on it
+# (k = 20 (2 pi 30)^2 = 7.1e5 N m/rad); typical, not measured.
+[base]
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 100.0
+inertia_x_kgm2 = 10.0
+inertia_y_kgm2 = 10.0
+inertia_z_kgm2 = 20.0
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 7.1e5
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+base.mass_kg = [60.0, 160.0]
+base.tilt_stiffness_z_nm_rad = [2.84e5, 1.775e6]
+base.inertia_z_kgm2 = [12.0, 32.0]
+base.damping_ratio_rz = [0.01, 0.05]
 motor.pole_pairs = [3.0, 5.0]
 motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
 ratings.drive_chip_share = [0.0, 0.5]

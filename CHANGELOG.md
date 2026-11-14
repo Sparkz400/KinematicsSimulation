@@ -75,6 +75,17 @@ item are in [PROGRESS.md](PROGRESS.md).
   whenever `effects.dc_link` is on. An S120 Motor Module by name switches `effects.shared_dc_link` on, an S210 off.
 - The d current's setpoint and u_d use the winding's warm resistance.
 
+- A compliant base under every machine and machine file (`effects.base_compliance`, `[base]`, off): up to six
+  spring-mass directions taking the rate of change of the momentum of everything that moves on it
+  (`Machine::frame_momentum`, written for every machine), the tool moving with it (`Machine::base_shift`); signals
+  `base.<dof>`, its modes in `modes`. Typical frame stiffnesses as estimates in `[bounds]`.
+- The URDF arms' links bend, one Euler-Bernoulli cantilever mode each (`effects.link_bending`, `[link_bending]`, off;
+  `sim_components::beam`, `chain::Mechanism::flex_modes`); signals `link.<n>.bend`.
+- T-gantry: the Z axis's bending (`effects.z_axis_bending`) and the X beam's sag under the carriage
+  (`effects.beam_sag`, `[beam]`), both off.
+- D3 and D4: the arm tube's own share of the bending modes and the elbow block's twist (`effects.arm_tube_inertia`,
+  with `link_elasticity`; off).
+
 ### Fixed
 
 - A drive enabled without the DC link simulated drew its winding's first L i^2 / 2 from nowhere; it is booked on the

@@ -1827,7 +1827,7 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 24] = [
+const PATH_EFFECTS: [(&str, &[&str]); 29] = [
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),
@@ -1853,6 +1853,11 @@ const PATH_EFFECTS: [(&str, &[&str]); 24] = [
     // The knees and the upper stiffnesses; not stiffness_nm_rad, which every model uses.
     ("gearbox.stiffness_t", &["gearbox_stiffness_curve"]),
     ("gearbox.stiffness_k", &["gearbox_stiffness_curve"]),
+    ("base.", &["base_compliance"]),
+    ("link_bending.", &["link_bending"]),
+    ("beam.", &["beam_sag"]),
+    ("tool_flex.z_axis_bending_stiffness_nm2", &["z_axis_bending"]),
+    ("mass.elbow_twist_inertia_kgm2", &["arm_tube_inertia"]),
 ];
 
 /// Whether `path` is a value only an effect uses (`PATH_EFFECTS`), and that effect is off in `cfg`, or a value no cycle

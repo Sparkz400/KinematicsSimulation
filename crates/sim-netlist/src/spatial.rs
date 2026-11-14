@@ -437,7 +437,9 @@ pub struct Delta {
     tip_moment: f64,
     m_rod_middle: f64,
     /// The mass at each elbow (elbow block and the forearms' share), which moves with an arm's bend out of its plane.
-    m_elbow: f64,
+    /// What moves with an arm's bend out of its plane, at the elbow: the elbow block and the forearms' share, with
+    /// effects.arm_tube_inertia the tube's own share and the elbow block's twist too.
+    m_lateral: f64,
     /// The spin inertia of a forearm pair, both rods about their own axes (effects.forearm_inertia, else 0), kg m^2.
     rod_spin: f64,
     /// effects.link_elasticity: the upper arms' bending.
@@ -554,20 +556,42 @@ impl Delta {
         } else {
             (f64::INFINITY, f64::INFINITY)
         };
+        // effects.arm_tube_inertia (with the bending arms): the tube bends in its first cantilever mode
+        // (`beam`), so a quarter of its mass moves with the elbow's bend, m L^2 / 4 of its inertia about the shoulder
+        // and 0.3915 m L of its first moment (what its weight drives the bend with) go from the root to the elbow; out
+        // of its plane a quarter of its mass moves with the elbow, and the elbow block turns with the tube's tip slope,
+        // 1.3765 / L per metre: its twist inertia (the block's, and the forearms' share at the rods' ends, half the
+        // spacing off its middle) counts J (1.3765 / L)^2 there. A config without the switch reads it as off.
+        let rod_spacing = n.non_negative("geometry.forearm_spacing_m")?;
+        let (mut root_inertia, mut root_moment, mut tip_inertia, mut tip_moment, mut m_lateral) =
+            (i_arm, m_arm * cg, la * la * elbow, la * elbow, elbow);
+        let tube = cfg.get("effects.arm_tube_inertia").is_ok() && cfg.bool("effects.arm_tube_inertia")?;
+        if tube && cfg.bool("effects.link_elasticity")? {
+            use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE};
+            let (inertia, moment) = (0.25 * m_arm * la * la, CANTILEVER_PARTICIPATION * m_arm * la);
+            if inertia >= root_inertia || moment > root_moment {
+                return Err(n.invalid("mass.upper_arm_inertia_kgm2"));
+            }
+            (root_inertia, root_moment, tip_inertia, tip_moment) =
+                (root_inertia - inertia, root_moment - moment, tip_inertia + inertia, tip_moment + moment);
+            let twist =
+                n.non_negative("mass.elbow_twist_inertia_kgm2")? + share * m_fb * rod_spacing * rod_spacing / 4.0;
+            m_lateral += 0.25 * m_arm + twist * (CANTILEVER_TIP_SLOPE / la).powi(2);
+        }
         let mut delta = Self {
             legs: Legs::new(base_radius - platform_radius, la, lb),
             drag: None,
             base_radius,
             platform_radius,
-            rod_spacing: n.non_negative("geometry.forearm_spacing_m")?,
+            rod_spacing,
             elastic: cfg.bool("effects.joint_elasticity")?,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
-            root_inertia: i_arm,
-            root_moment: m_arm * cg,
-            tip_inertia: la * la * elbow,
-            tip_moment: la * elbow,
+            root_inertia,
+            root_moment,
+            tip_inertia,
+            tip_moment,
             m_rod_middle: middle * m_fb,
-            m_elbow: elbow,
+            m_lateral,
             rod_spin: if rods { 2.0 * spin } else { 0.0 },
             bending: cfg.bool("effects.link_elasticity")?.then_some(bending),
             m_platform: n.positive("mass.platform_kg")? + 3.0 * (1.0 - share - middle) * m_fb,
@@ -681,6 +705,13 @@ impl Delta {
     /// m_LG: the arm's gravity torque is g m_LG cos(theta).
     pub fn arm_moment(&self) -> f64 {
         self.root_moment + self.tip_moment
+    }
+
+    /// The arm split for its bend (effects.link_elasticity): inertia and first moment at the root and at the elbow,
+    /// and the mass that moves with the elbow out of the arm's plane, as [root_inertia, root_moment, tip_inertia,
+    /// tip_moment, m_lateral].
+    pub fn bend_split(&self) -> [f64; 5] {
+        [self.root_inertia, self.root_moment, self.tip_inertia, self.tip_moment, self.m_lateral]
     }
 
     /// Arm angles and speeds of a state: at the joints, the gearboxes' output side.
@@ -811,7 +842,7 @@ impl Delta {
             let ae = d2.map(|v| v * w[i] * w[i]);
             if N == 6 {
                 // Along its axis the elbow mass has no acceleration at none of the coordinates', and no weight.
-                load.0[3 + i][3 + i] += self.m_elbow;
+                load.0[3 + i][3 + i] += self.m_lateral;
             }
             if self.m_rod_middle > 0.0 {
                 let jm = std::array::from_fn(|r| std::array::from_fn(|c| 0.5 * (jp[r][c] + je[r][c])));
@@ -1177,6 +1208,43 @@ impl Delta {
 }
 
 impl Machine for Delta {
+    /// The platform (with the payload and the forearms' share), each arm's tube turning with its joint and what sits at
+    /// its elbow turning with the elbow (the bend added), the elbow's move out of the arm's plane, the forearms' middles,
+    /// and the rotors spinning about the joints' axes. The joints are where they are, at the base radius; the platform's
+    /// centre is the tool. What does not move is left out (see `FrameMomentum`).
+    // shortcut: the forearms' spin about their own axes is left out (effects.forearm_inertia; a few per cent of the
+    // reaction torque about z); add it if the base's twist under the D3 has to be exact.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin, add_turning};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let ((t, w), (e, ew), (y, yv)) = (self.arms(s), self.elbows(s), self.lateral(s));
+        let (p, pv) = self.platform(s);
+        add_point(&mut f, self.m_nt(), p, pv);
+        let rotor_speed = self.rotors(s).1;
+        for i in 0..3 {
+            let joint = self.legs.to_base(i, [self.base_radius, 0.0, 0.0]);
+            let turn = |angle: f64| {
+                let (sin, cos) = angle.sin_cos();
+                (self.legs.to_base(i, [cos, 0.0, -sin]), self.legs.to_base(i, [-sin, 0.0, -cos]))
+            };
+            let (dir, ddir) = turn(t[i]);
+            add_turning(&mut f, joint, dir, ddir, w[i], self.root_inertia, self.root_moment);
+            let (tip, dtip) = turn(e[i]);
+            add_turning(&mut f, joint, tip, dtip, ew[i], self.tip_inertia, self.tip_moment);
+            // The elbow's move out of the plane; its turn is in the tip's share already.
+            let (tangent, la) = (self.legs.tangent(i), self.legs.la);
+            let in_plane: [f64; 3] = std::array::from_fn(|k| joint[k] + la * tip[k]);
+            let elbow: [f64; 3] = std::array::from_fn(|k| in_plane[k] + y[i] * tangent[k]);
+            add_point(&mut f, self.m_lateral, elbow, tangent.map(|v| v * yv[i]));
+            add_point(&mut f, -self.m_lateral, in_plane, [0.0; 3]);
+            let elbow_speed: [f64; 3] = std::array::from_fn(|k| la * ew[i] * dtip[k] + yv[i] * tangent[k]);
+            let at_platform = self.legs.to_base(i, [self.platform_radius, 0.0, 0.0]);
+            let middle: [f64; 3] = std::array::from_fn(|k| 0.5 * (elbow[k] + p[k] + at_platform[k]));
+            add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_speed[k] + pv[k])));
+            add_spin(&mut f, tangent, self.joints[i].rotor_inertia, rotor_speed[i]);
+        }
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

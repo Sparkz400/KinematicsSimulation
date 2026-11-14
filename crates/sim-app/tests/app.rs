@@ -286,6 +286,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle() {
                     && !(frictionless && e == "effects.motor_friction")
                     && !(level && e == "effects.gravity")
                     && !(cold && (e == "effects.part_heating" || e == "effects.thermal_feedback"))
+                    && !(e == "effects.link_bending" && base.get("link_bending").is_err())
             })
             .collect();
         // A switch that acts only in a setting the base has not is switched from that setting, in both runs: the belt's

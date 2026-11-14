@@ -3199,3 +3199,101 @@ Left open:
 - `optimise`'s limit factors still write `path = {:?}` (a float) into axis limits: an axis limit written as an integer
   would refuse it (the optimiser's area).
 - The audit's sweep phase bias does not exist (see the table); nothing changed there but a test.
+
+## Structure: compliant base, link bending, gantry Z bending and beam sag (14 November)
+
+What: the structure's give that decides the tool's error and its settling, beyond the T-gantry's one frame mode.
+
+- **A compliant base under any machine** (`effects.base_compliance`, `sim_components::base`): `base::mount` wraps every
+  machine's build (the six machine crates, the joint kit's entries, both kinds of machine file) in `Based`, a rigid body
+  on springs in up to six directions (x, y, z, tilts about x, y, z through `base.pivot_m`), each direction with a
+  stiffness above 0 a state and its rate after the machine's. The base takes F = -dp/dt + m g + F_ext and
+  T = -dL/dt + c x g + r_ext x F_ext of everything that moves on it, less the same at rest at the start pose (where it
+  was set up); dp/dt along the machine's own state rates by central differences over +-1 us. The machine provides one
+  thing, `Machine::frame_momentum` (momentum, angular momentum, mass, first moment, gravity, outside force; constant
+  parts may be left out): written for the single axis, the T-gantry (with its own frame and lean), D2, D3 (tube, elbow
+  with bend and lateral move, rod middles, rotors), D4 (plus the tool's turn), the linear delta, the machine files'
+  belt machines and linkage, and through `Mechanism::frame_momentum` for the slides, the table and the URDF arms
+  (`Chain::momentum`, `Chain::body_states`: the Newton-Euler bodies and their velocities). The tool pose moves by the
+  base's move at the tool (`Machine::base_shift`: u + theta x (r - P) on the axes x, y, z, theta on rx, ry, rz and c);
+  the motors' angles do not. `modes`, `resonance_hz` and `mode_shape` take the base's modes in; signals `base.<dof>`.
+  Helpers `base::add_point`, `add_turning`, `add_spin`. One-way coupling (shortcut in `base.rs`): the machine does not
+  feel the base's acceleration. The T-gantry's and the machine files' `frame_compliance` stays as it was, the portal's
+  own sway along one axis coupled both ways, in series with the base; the docs say so.
+- `[base]` in every config and machine file (24 files), off, with typical estimates in `[bounds]`: a picker frame of
+  300 kg at 15/15/40 Hz (the deltas, `planar-delta.toml`), a gantry stand of 150 kg at 20/20/50 Hz (T-gantry, EXCT-30,
+  the gantry files), a machine bed of 100 kg at 25 Hz along the axis (single axis, slides), the table's stand twisting
+  at 30 Hz, the arm's pedestal tilting at 25 Hz (SCARA 30 Hz) and twisting at 40 Hz.
+- **Link bending of the URDF arms** (`effects.link_bending`, `[link_bending]`: tube outer diameter and wall per joint,
+  Young's modulus, damping ratio; cast aluminium estimates): each link one Euler-Bernoulli cantilever mode in the plane
+  its joint turns it in, modal mass m / 4 plus everything beyond, stiffness 1.875104^4 / 4 E I / L^3, driven by what the
+  bodies beyond need from its tip (force, and moment through the slope 1.3765 / L) and 0.3915 of its own m (a - g); the
+  flange moves with the tip and turns with its slope in tool space. Generic in the joint machine
+  (`chain::Mechanism::flex_modes`, `flex_loads`, `flex_shift`, `FlexMode`; states after the joint machine's, signals
+  `link.<n>.bend`, `modes` lists them). New `sim_components::beam`: tube section, cantilever mode, span compliance.
+- **D3** (ROADMAP): `effects.arm_tube_inertia` (with `link_elasticity`) puts the tube's own share into the bending modes
+  (m L^2 / 4 and 0.3915 m L from the root to the elbow; a quarter of its mass on the elbow's move out of the plane) and
+  the elbow block's twist as the arm bends out of its plane (`mass.elbow_twist_inertia_kgm2` and the forearms' share at
+  the rods' ends, times (1.3765 / L)^2). In the D3, its conveyor config and the D4.
+- **T-gantry**: `effects.z_axis_bending` (the Z axis a cantilever from the carriage, h^3 / (3 E I) in series with the
+  guide's give, `tool_flex.z_axis_bending_stiffness_nm2`) and `effects.beam_sag` (`[beam]`: the X beam a simple span,
+  m g a^2 b^2 / (3 E I L) under the carriage lowers the tool; quasi-static). Both off.
+
+Test (hand calculations in the tests' comments):
+- `base`: a 50 N force held at rest on a 8e5 N/m base deflects base and tool by 62.5 um; a 4 kg slider pushed and stopped
+  leaves a 200 kg, 8e5 N/m base ringing with the half period pi sqrt(M / k) = 49.67 ms (to 1 us); its mode 10.07 Hz.
+- single axis: undamped 100 kg on 2.5e6 N/m, after a move the tool crosses its mean every 19.869 ms (25.165 Hz, within
+  0.5 %); the rigid axis holding a 50 N process force moves base and tool by 50 / 2.5e6 = 20 um.
+- `beam`: a 60 x 4 mm steel tube, 0.8 m, 4.5 kg rings at 1.875104^2 / 2 pi sqrt(E I / (m L^3)) = 88.96 Hz; the mode's
+  constants from its shape by quadrature (0.25, 0.3915, 1.3765); a central 500 N sags a 1.2 m span of E I 4e5 by
+  F L^3 / (48 E I) = 45 um, a quarter point by 9/16 of that.
+- joint kit: the same tube as a one-link URDF arm rings at 88.958 Hz and sags under its weight by 49.16 um (1.3 % above
+  the exact q L^4 / (8 E I) = 48.51 um).
+- T-gantry: the beam's sag with the carriage in the middle, 107.873 N x 1.3^3 / (48 x 8.4e4) = 58.78 um, at the stroke's
+  end 9.79 um, the tool at its pose; the Z axis alone 3 E I / h^3 = 1.5556e6 N/m with the tool moving 3 times as far,
+  with the guide 1.22058e5 N/m, dk/dz against central differences.
+- D3: the tube's and the twist's shares (0.036 kg m^2, 0.140939 kg m, lateral 0.383 + 0.225 + 0.0054 kg), the arm turned
+  whole unchanged.
+- Standard suite: every machine's momentum is the rate of its first moment within 1e-6
+  (`testkit::frame_momentum_moves_its_first_moment`).
+
+Settling with the typical frame stiffness (`sim-cli analyze`, base off -> on; the tracking error peak, and the dwell
+error peak that the settling verdict judges):
+
+| Machine | Tracking peak, m | Dwell peak, m |
+| --- | --- | --- |
+| D2 | 2.200e-3 -> 2.410e-3 | 3.475e-4 -> 3.400e-4 |
+| D3 | 4.017e-3 -> 4.180e-3 | 6.760e-4 -> 6.674e-4 |
+| D4 | 5.517e-3 -> 5.552e-3 | 4.035e-4 -> 3.841e-4 |
+| Linear delta | 5.514e-4 -> 5.568e-4 | 7.375e-5 -> 9.009e-5 |
+| T-gantry | 1.706e-4 -> 2.408e-4 | 4.734e-5 -> 4.921e-5 |
+| SCARA (tool space) | 1.518e-3 -> 1.603e-3 | 3.678e-5 -> 5.494e-5 |
+| Six-axis arm (tool space) | 9.596e-3 -> 9.768e-3 | 4.000e-3 -> 4.074e-3 |
+| Rotary table | 2.589e-3 -> 2.758e-3 rad | 3.615e-5 -> 4.168e-5 rad |
+
+The deltas' own settling dominates their dwell error; the base's 0.1 mm sway shifts it in phase (slightly less at the
+D2's, D3's and D4's dwells, 22 % more at the linear delta's). The other switches: the T-gantry's beam sag 4.73e-5 ->
+6.92e-5 dwell (the sag differs from the start pose's at the targets: a geometric error a real machine maps out), its Z
+bending 1.706e-4 -> 1.707e-4 tracking (the guide's tilt dominates); the arm's link bending 4.000e-3 -> 4.154e-3 dwell
+(the SCARA's 1.518e-3 -> 1.542e-3 tracking); the D3's tube share with bending arms 7.313e-4 -> 7.527e-4 dwell.
+
+Outside my area, small and local: `analysis.rs` (`PATH_EFFECTS`: five prefixes), `sim-core` (`FrameMomentum`,
+`BASE_AXES`, two trait methods with defaults, one standard-suite check), `chain.rs` and `rigid.rs` (additions),
+`arm.rs`, `slide.rs`, `table.rs` (the momentum and the bending only), the tests flipping every effect in
+`sim-machines/tests/control.rs` and `sim-app/tests/app.rs` (`link_bending` idle where there are no links), the configs
+and the i18n files.
+
+Left open:
+
+- One-way coupling of the base and of the links' bending: the motors' following error and torque do not see them; feed
+  the base's acceleration to the machines as a pseudo-gravity (and the bending into the arms' dynamics) to get it.
+- The base's energy is not in the energy budget; no `power.base`.
+- Rotors' and idlers' spin left out where their axes are unknown (the machine files' pulleys, the T-gantry's idlers,
+  the D3's forearm spin); the table's worm motor taken about z.
+- A joint-space arm's tool pose does not move with the base or the bending (its tool is the joints); its signals do.
+- One bending mode per link, in one plane; the bodies beyond a link move with its tip, their turning inertia left out.
+- The T-gantry's beam sag is quasi-static and takes the weight only (not the Z axis's acceleration); the Z axis's
+  bending is lumped at its centre of mass in the lean's state.
+- The D3's elbow twist distorts the parallelogram; to first order the platform does not move, so its tilt is not
+  followed.
+- The base, link and beam stiffnesses are estimates; a frame's measured mode (an impact test) would replace them.

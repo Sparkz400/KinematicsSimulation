@@ -1892,3 +1892,42 @@ fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k
     assert!(jumps(false), "with the configured teeth the teeth climb out above 6 times the slack side");
     assert!(!jumps(true), "with the wrap they hold up to 7.54 times");
 }
+
+/// The X beam as a simple span (effects.beam_sag): with the carriage in its middle (x = 0.5 m, 0.15 + 0.5 = 0.65 m from
+/// the left post of the 1.3 m span) carriage, Z axis and payload, (4 + 5 + 2) 9.80665 = 107.873 N, sag it by
+/// F L^3 / (48 E I) = 107.873 x 1.3^3 / (48 x 8.4e4) = 58.78 um. At rest with the tool at a pose the Z axis stands that
+/// much higher on its belt, and the tool is where it was asked to be.
+#[test]
+fn the_beam_sags_under_a_central_carriage_by_f_l3_over_48_ei() {
+    let m = machine(ENTRY.config(), &["effects.beam_sag = true"]);
+    let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+    m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
+    let sag = 107.873_15 * 1.3f64.powi(3) / (48.0 * 8.4e4);
+    assert!((sag - 58.779e-6).abs() < 1e-9);
+    assert!((state[Z] - 0.25 - sag).abs() < 1e-12, "the Z axis stands {} higher", state[Z] - 0.25);
+    let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
+    m.tool_state(&state, &mut pos, &mut vel);
+    assert!((pos[1] - 0.25).abs() < 1e-12 && (pos[0] - 0.5).abs() < 1e-12, "{pos:?}");
+    // At the end of the stroke, 0.15 m from the post: a^2 b^2 / (3 E I L) = 0.0225 x 1.3225 / (3 x 8.4e4 x 1.3) per
+    // newton, 107.873 times that: 9.79 um.
+    m.equilibrium(&[0.0, 0.25], &mut state, &mut torque);
+    assert!((state[Z] - 0.25 - 107.873_15 * 0.0225 * 1.3225 / (3.0 * 8.4e4 * 1.3)).abs() < 1e-12);
+}
+
+/// The Z axis bends as a cantilever from the carriage (effects.z_axis_bending, E I = 1.4e4 N m^2). Alone (no guide
+/// give): its centre of mass, h = 0.3 m below the carriage at z = 0, gives way 3 E I / h^3 = 4.2e4 / 0.027 =
+/// 1.5556e6 N/m, and the tool, 0.7 m below, moves (3 h_t - h) / (2 h) = (2.1 - 0.3) / 0.6 = 3 times as far. With the
+/// guide's give in series: 1 / (1 / 2e7 + 0.3^2 / 1.2e4 + 0.3^3 / 4.2e4) = 1.22058e5 N/m.
+#[test]
+fn the_z_axis_bends_as_a_cantilever_from_the_carriage() {
+    let alone = machine(ENTRY.config(), &["effects.tool_flex = false", "effects.z_axis_bending = true"]);
+    let (k, _, tip) = alone.flex_at(0.0);
+    assert!((k - 1.555_556e6).abs() < 1.0, "{k}");
+    assert!((tip - 3.0).abs() < 1e-12, "{tip}");
+    let both = machine(ENTRY.config(), &["effects.z_axis_bending = true"]);
+    assert!((both.flex_at(0.0).0 - 1.220_575e5).abs() < 0.1, "{}", both.flex_at(0.0).0);
+    // dk/dz against central differences: the spring stiffens as the Z axis rises.
+    let (h, dk) = (1e-6, both.flex_at(0.1).1);
+    let numeric = (both.flex_at(0.1 + h).0 - both.flex_at(0.1 - h).0) / (2.0 * h);
+    assert!((dk - numeric).abs() < 1e-6 * numeric.abs(), "{dk} against {numeric}");
+}

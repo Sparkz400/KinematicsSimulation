@@ -43,3 +43,10 @@ belt-span-5 = Riementrum, Umlenkrolle unten an Z bis untere rechte Schlittenroll
 belt-span-6 = Riementrum, untere rechte Schlittenrolle bis Motor B
 belt-span-7 = Riementrum, Motor B bis Schlittenrolle
 belt-span-8 = Riementrum, Schlittenrolle bis rechte Klemmung
+effect-z_axis_bending = Z-Achse biegt sich als Kragarm vom Schlitten
+effect-beam_sag = X-Balken hängt unter dem Schlitten durch (quasistatisch)
+group-beam = X-Balken
+param-span_m = Stützweite zwischen den Stützen [m]
+param-carriage_at_zero_m = Schlitten von der linken Stütze bei x = 0 [m]
+param-bending_stiffness_nm2 = Biegesteifigkeit E I [N m²]
+param-z_axis_bending_stiffness_nm2 = Biegesteifigkeit E I der Z-Achse [N m²]

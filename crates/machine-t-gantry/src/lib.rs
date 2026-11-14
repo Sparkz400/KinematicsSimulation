@@ -65,7 +65,7 @@ pub const LOSSY_EFFECTS: [&str; 12] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(TGantry::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(TGantry::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -144,6 +144,8 @@ pub struct TGantry {
     wrap_idler: Option<f64>,
     frame: Option<Frame>,
     flex: Option<ToolFlex>,
+    /// With effects.beam_sag: the X beam sagging under the carriage.
+    beam: Option<Beam>,
     /// Idler inertia as mass on [X, Z]: with m = J / r^2 per idler and the belt speeds of the module
     /// comment, 1/2 m (2 vz^2 + (2 vx + vz)^2 + (2 vx - vz)^2 + (2 vx)^2) = 1/2 (12 m) vx^2 + 1/2 (4 m) vz^2.
     m_idlers: [f64; 2],
@@ -171,11 +173,27 @@ struct Frame {
 
 /// The Z axis leaning against the carriage: its centre of mass moves sideways by u against a spring.
 /// The guide gives way sideways (lateral) and in tilt; a force at the distance h from the carriage
-/// tilts with the arm h, so the compliance at the centre of mass is 1 / lateral + h^2 / tilt.
+/// tilts with the arm h, so the compliance at the centre of mass is 1 / lateral + h^2 / tilt. With
+/// effects.z_axis_bending the Z axis bends too, a cantilever from the carriage of bending stiffness EI: h^3 / (3 EI)
+/// more at its centre of mass, and a force there moves the tool, at h_t, by h^2 (3 h_t - h) / (6 EI). With
+/// effects.tool_flex off the guide is rigid (infinite stiffnesses) and the Z axis only bends.
 struct ToolFlex {
     lateral: f64,
     tilt: f64,
     damping: f64,
+    ei: f64,
+}
+
+/// The X beam between the posts (effects.beam_sag): a simple span of `span` m and bending stiffness `ei` N m^2, the
+/// carriage `start` m from the left post at x = 0. The carriage and the Z axis with what it carries, m g, sag it under
+/// the carriage at a by m g a^2 b^2 / (3 EI L) (`beam::span_compliance`), which lowers the tool.
+// shortcut: quasi-static: the beam's own vertical mode with the carriage on it (about 100 Hz on the default gantry)
+// lies well above the Z axis's on its belt, and the Z axis's acceleration does not add to the load; make it a state if
+// a Z move's settling has to show it.
+struct Beam {
+    span: f64,
+    start: f64,
+    ei: f64,
 }
 
 // Elastic state: positions [x, z, a, b, pa, pb, q, u], their rates, the friction states [sx, sz], the
@@ -225,11 +243,24 @@ impl TGantry {
         } else {
             None
         };
-        let flex = if cfg.bool("effects.tool_flex")? {
+        let (lean, bend) = (cfg.bool("effects.tool_flex")?, cfg.bool("effects.z_axis_bending")?);
+        let flex = if lean || bend {
+            let stiff =
+                |on: bool, key: &str| Ok::<f64, ConfigError>(if on { cfg.positive(key)? } else { f64::INFINITY });
             Some(ToolFlex {
-                lateral: cfg.positive("tool_flex.lateral_stiffness_n_m")?,
-                tilt: cfg.positive("tool_flex.tilt_stiffness_nm_rad")?,
+                lateral: stiff(lean, "tool_flex.lateral_stiffness_n_m")?,
+                tilt: stiff(lean, "tool_flex.tilt_stiffness_nm_rad")?,
                 damping: cfg.non_negative("tool_flex.damping_n_s_m")?,
+                ei: stiff(bend, "tool_flex.z_axis_bending_stiffness_nm2")?,
+            })
+        } else {
+            None
+        };
+        let beam = if cfg.bool("effects.beam_sag")? {
+            Some(Beam {
+                span: cfg.positive("beam.span_m")?,
+                start: cfg.non_negative("beam.carriage_at_zero_m")?,
+                ei: cfg.positive("beam.bending_stiffness_nm2")?,
             })
         } else {
             None
@@ -294,6 +325,7 @@ impl TGantry {
             wrap_idler: if cfg.bool("effects.belt_wrap")? { Some(idler_radius) } else { None },
             frame,
             flex,
+            beam,
             payload_attached: true,
             axes: [
                 axis("x", "axis-x", cfg.positive("geometry.stroke_x_m")?)?,
@@ -342,9 +374,22 @@ impl TGantry {
     fn flex_at(&self, z: f64) -> (f64, f64, f64) {
         let Some(f) = &self.flex else { return (0.0, 0.0, 0.0) };
         let (h, h_tool) = (self.z_com_drop - z, self.z_tool_drop - z);
-        let k = 1.0 / (1.0 / f.lateral + h * h / f.tilt);
-        // The force k u shifts the guide by k u / lateral and tilts it by k u h / tilt.
-        (k, 2.0 * k * k * h / f.tilt, k * (1.0 / f.lateral + h * h_tool / f.tilt))
+        let b = h.max(0.0);
+        let k = 1.0 / (1.0 / f.lateral + h * h / f.tilt + b.powi(3) / (3.0 * f.ei));
+        // The force k u shifts the guide by k u / lateral and tilts it by k u h / tilt, and bends the Z axis.
+        (
+            k,
+            k * k * (2.0 * h / f.tilt + b * b / f.ei),
+            k * (1.0 / f.lateral + h * h_tool / f.tilt + b * b * (3.0 * h_tool - b) / (6.0 * f.ei)),
+        )
+    }
+
+    /// With effects.beam_sag: how far the beam sags under the carriage at x, and its rate of change with x.
+    fn sag(&self, x: f64) -> (f64, f64) {
+        let Some(beam) = &self.beam else { return (0.0, 0.0) };
+        let weight = (self.m_carriage + self.m_z()) * self.g;
+        let at = |x: f64| weight * sim_components::beam::span_compliance(beam.ei, beam.span, beam.start + x);
+        (at(x), (at(x + 1e-6) - at(x - 1e-6)) / 2e-6)
     }
 
     /// The Z axis and what hangs from it, as `scene` draws them before the frame sways, and their lean: with
@@ -913,6 +958,48 @@ impl TGantry {
 }
 
 impl Machine for TGantry {
+    /// In the tool's frame (x along the beam, z up, the carriage at the height z_com_drop): the carriage with the
+    /// chain's moving run at x + q, the Z axis's centre of mass at x + q + u and z, the portal's own frame mass with
+    /// effects.frame_compliance at its sway q, and the pulleys and rotors turning about y, positive as x grows.
+    // shortcut: the idlers' spin and the frame's own first moment are left out (a few per cent of the reaction
+    // torque); add them if a base's tilt under the gantry has to be exact.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let cross = |r: [f64; 3], p: [f64; 3]| {
+            [r[1] * p[2] - r[2] * p[1], r[2] * p[0] - r[0] * p[2], r[0] * p[1] - r[1] * p[0]]
+        };
+        let (r, ratio) = (self.r, self.gearbox.ratio);
+        let (x, z, vx, vz, q, vq, u, vu, spin) = if self.elastic {
+            let spin = self.j_pulley * (s[V + A] + s[V + A + 1]) + self.j_rotor * (s[V + PA] + s[V + PA + 1]);
+            (s[X], s[Z], s[V + X], s[V + Z], s[Q], s[V + Q], s[U], s[V + U], spin)
+        } else {
+            let pulleys = 2.0 * s[2] / r;
+            (s[0], s[1], s[2], s[3], 0.0, 0.0, 0.0, 0.0, (self.j_pulley + ratio * self.j_rotor) * pulleys)
+        };
+        let chain = self.chain.mass(x).0;
+        let chain_moment = self.chain.mass_per_m * (self.chain.length0 * x + 0.25 * x * x);
+        let (m_carriage, m_z) = (self.m_carriage + chain, self.m_z());
+        let frame = self.frame.as_ref().map_or(0.0, |f| f.mass);
+        let carriage = ([x + q, 0.0, self.z_com_drop], [m_carriage * (vx + vq), 0.0, 0.0]);
+        let z_axis = ([x + q + u, 0.0, z], [m_z * (vx + vq + vu), 0.0, m_z * vz]);
+        let (lc, lz) = (cross(carriage.0, carriage.1), cross(z_axis.0, z_axis.1));
+        let process = self.process_force();
+        let mut tool = [0.0; 2];
+        self.tool_state(s, &mut tool, &mut [0.0; 2]);
+        Some(sim_core::FrameMomentum {
+            linear: [carriage.1[0] + z_axis.1[0] + frame * vq, 0.0, z_axis.1[2]],
+            angular: [0.0, lc[1] + lz[1] + spin, 0.0],
+            mass: m_carriage + m_z,
+            // The chain's moving run as on the one-axis machine: mu (L0 x + x^2 / 4), whose rate is its mass times vx.
+            first_moment: [
+                self.m_carriage * (x + q) + chain * q + chain_moment + m_z * (x + q + u) + frame * q,
+                0.0,
+                m_carriage * self.z_com_drop + m_z * z,
+            ],
+            gravity: [0.0, 0.0, -self.g],
+            external: [process[0], 0.0, process[1]],
+            external_at: [tool[0], 0.0, tool[1]],
+        })
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }
@@ -961,7 +1048,8 @@ impl Machine for TGantry {
         let m: [f64; 3] = std::array::from_fn(|i| self.belt.section(geo[i], mat[i], 0.0, 0.0).material);
         *state = vec![0.0; self.state_len()];
         state[X] = x;
-        state[Z] = z;
+        // The beam's sag lowers the tool under the Z axis's place on its belt.
+        state[Z] = z + self.sag(x).0;
         for (k, (theta, belt_torque)) in
             [(a, self.r_mat * (m[0] - m[1])), (b, self.r_mat * (m[1] - m[2]))].into_iter().enumerate()
         {
@@ -991,6 +1079,9 @@ impl Machine for TGantry {
             let tip = self.flex_at(s[Z]).2;
             pos[0] += tip * s[U] + s[Q];
             vel[0] += tip * s[V + U] + s[V + Q];
+            let (sag, slope) = self.sag(s[X]);
+            pos[1] -= sag;
+            vel[1] -= slope * s[V + X];
         }
     }
     fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {

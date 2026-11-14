@@ -68,7 +68,7 @@ pub const LOSSY_EFFECTS: [&str; 8] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(Delta4::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(Delta4::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -503,6 +503,13 @@ const INNER_WIDTH: f64 = 0.016;
 const PIECES: usize = 6;
 
 impl Machine for Delta4 {
+    /// The D3's, plus the tool's turn (tool, gripper, payload and the shaft's spin) and its rotor about z.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let mut f = self.arms.frame_momentum(&s[..self.n3])?;
+        sim_components::base::add_spin(&mut f, [0.0, 0.0, 1.0], self.tool_inertia(), self.turn(s).1);
+        sim_components::base::add_spin(&mut f, [0.0, 0.0, 1.0], self.tool.rotor_inertia, self.rotor(s).1);
+        Some(f)
+    }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         self.tool_gearbox_max
             .map(|limit| RatingCheck {

@@ -561,3 +561,78 @@ fn the_tool_space_cycles_pass_their_verdicts() {
         }
     }
 }
+
+/// One steel tube of 60 x 4 mm, 0.8 m long and 4.5 kg, on a joint about y, lying along x: as a link that bends
+/// (effects.link_bending) it is a cantilever from its joint, with nothing at its tip.
+fn one_bending_link() -> Box<dyn Machine> {
+    let path = std::env::temp_dir().join("joint-kit-test-one-link.urdf");
+    std::fs::write(
+        &path,
+        r#"<?xml version="1.0"?>
+<robot name="one-link">
+  <link name="base_link"/>
+  <link name="tube">
+    <inertial>
+      <origin xyz="0.4 0 0" rpy="0 0 0"/>
+      <mass value="4.5"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.24" iyz="0" izz="0.24"/>
+    </inertial>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="tube"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.0" upper="3.0" effort="0" velocity="0"/>
+  </joint>
+  <link name="tool0"/>
+  <joint name="flange" type="fixed">
+    <parent link="tube"/>
+    <child link="tool0"/>
+    <origin xyz="0.8 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>"#,
+    )
+    .unwrap();
+    let mut cfg = URDF_ARM.config();
+    for edit in [
+        format!("arm.urdf_file = {:?}", path.to_str().unwrap()),
+        "arm.gear_ratios = [120.0]".into(),
+        "effects.payload = false".into(),
+        "effects.link_bending = true".into(),
+        "link_bending.outer_diameter_m = [0.06]".into(),
+        "link_bending.wall_m = [0.004]".into(),
+        "link_bending.youngs_modulus_pa = 2.1e11".into(),
+        "link_bending.damping_ratio = 0.0".into(),
+    ] {
+        cfg.set_text(&edit).unwrap();
+    }
+    (URDF_ARM.build)(&cfg).unwrap()
+}
+
+/// The tube's bending mode is the Euler-Bernoulli cantilever's: E I = 2.1e11 x pi / 64 (0.06^4 - 0.052^4) =
+/// 58225.5 N m^2, f = 1.875104^2 / (2 pi) sqrt(E I / (m L^3)) = 0.559597 sqrt(58225.5 / (4.5 x 0.512)) = 88.958 Hz.
+#[test]
+fn a_link_bends_at_the_euler_bernoulli_frequency_of_a_cantilever() {
+    let m = one_bending_link();
+    let modes = m.modes(&[0.0]);
+    let euler_bernoulli =
+        1.875_104_068_711_961f64.powi(2) / std::f64::consts::TAU * (58_225.524f64 / (4.5 * 0.512)).sqrt();
+    assert!((euler_bernoulli - 88.958).abs() < 1e-3);
+    assert!(modes.iter().any(|mode| (mode.hz / euler_bernoulli - 1.0).abs() < 1e-6), "{modes:?}");
+}
+
+/// Under its own weight, lying level, the tube sags in its mode by 0.3915 m g / (3.0906 E I / L^3) =
+/// 0.391496 x 44.130 / (3.0906 x 58225.5 / 0.512) = 49.16 um: within 1.5 % of the exact q L^4 / (8 E I) =
+/// 44.130 x 0.512 / (8 x 58225.5) = 48.51 um of a beam loaded along its length. Downwards: the signal is positive.
+#[test]
+fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
+    let m = one_bending_link();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0]);
+    m.equilibrium(&[0.0], &mut state, &mut torque);
+    let mut values = Vec::new();
+    m.signals(&state, &torque, &mut values);
+    let bend = values[m.signal_infos().iter().position(|s| s.id == "link.1.bend").unwrap()];
+    assert!((bend - 49.156e-6).abs() < 0.01e-6, "{bend}");
+    assert!((bend / 48.506e-6 - 1.0).abs() < 0.015);
+}

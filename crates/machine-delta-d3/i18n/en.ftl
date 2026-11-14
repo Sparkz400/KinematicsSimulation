@@ -47,3 +47,5 @@ param-bending_stiffness_nm_rad = Bending stiffness, as a turn of the elbow about
 param-bending_damping_nm_s_rad = Bending damping, as a turn of the elbow about the shoulder
 param-lateral_stiffness_n_m = Lateral stiffness at the elbow, out of the arm's plane
 param-lateral_damping_n_s_m = Lateral damping at the elbow, out of the arm's plane
+effect-arm_tube_inertia = The arm tube's share of the bending modes and the elbow block's twist (with bending arms)
+param-elbow_twist_inertia_kgm2 = Elbow block's twist inertia [kg m²]
