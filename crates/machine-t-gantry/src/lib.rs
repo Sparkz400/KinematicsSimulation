@@ -126,7 +126,7 @@ pub struct TGantry {
     mat0: [f64; 3],
     friction_x: Lugre,
     friction_z: Lugre,
-    shaft: ShaftFriction,
+    shaft: [ShaftFriction; 2],
     ripple: Ripple,
     mesh: ToothMesh,
     gearbox: Gearbox,
@@ -303,7 +303,7 @@ impl TGantry {
             stops: HardStop::from_config(cfg)?,
             brake,
             brake_engaged: false,
-            shaft,
+            shaft: [shaft.clone(), shaft],
             ripple: Ripple::from_config(cfg)?,
             mesh: ToothMesh::from_config(cfg)?,
             gearbox: Gearbox::from_config(cfg)?,
@@ -608,7 +608,7 @@ impl TGantry {
                 jump.rates(&s[at..], belt_torque[k] / r, r * out[V + A + k], &mut out[at..]);
             }
             out[V + PA + k] =
-                (self.ripple.apply(torque[k], phi) - gear.rotor - self.shaft.torque(w_phi) - brake) / self.j_rotor;
+                (self.ripple.apply(torque[k], phi) - gear.rotor - self.shaft[k].torque(w_phi) - brake) / self.j_rotor;
             out[BRAKE + k] = brake_rate;
         }
         out[S] = dsx;
@@ -632,7 +632,7 @@ impl TGantry {
         let brake: [f64; 2] =
             std::array::from_fn(|k| self.brake.torque(self.brake_engaged, vel[k], s[RIGID_BRAKE + k]).0);
         let drive: [f64; 2] = std::array::from_fn(|k| {
-            ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft.torque(vel[k]) - brake[k]) / r
+            ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft[k].torque(vel[k]) - brake[k]) / r
         });
         let mesh: [f64; 2] = std::array::from_fn(|k| self.mesh.force(r * pos[k] / ratio));
         let rotor = ratio * ratio * self.j_rotor / (r * r);
@@ -766,9 +766,9 @@ impl TGantry {
             (process_x * vx + process_z * vz, [0.0; 3])
         };
         // The gearboxes' drag acts on the rotors but is the gearboxes' loss.
-        let gear_drag: [f64; 2] = std::array::from_fn(|k| self.shaft.drag_power(speed[k]));
+        let gear_drag: [f64; 2] = std::array::from_fn(|k| self.shaft[k].drag_power(speed[k]));
         let shaft: [f64; 2] =
-            std::array::from_fn(|k| (self.shaft.torque(speed[k]) + brake[k]) * speed[k] - gear_drag[k]);
+            std::array::from_fn(|k| (self.shaft[k].torque(speed[k]) + brake[k]) * speed[k] - gear_drag[k]);
         let ripple: f64 = (0..2).map(|k| (torque[k] - self.ripple.apply(torque[k], angle[k])) * speed[k]).sum();
         let stops = self.stops.loss_power(s[X], vx, self.axes[0].max) + self.stops.loss_power(z, vz, self.axes[1].max);
         let [belt, frame, flex] = damping;
@@ -835,7 +835,7 @@ impl TGantry {
             let parts = [
                 kr * (inertia[0] + sign * inertia[1]),
                 sign * kr * self.m_z() * self.g,
-                self.shaft.torque(speed[k]) + brake[k] + gear_loss[k] + kr * (friction[0] + sign * friction[1]),
+                self.shaft[k].torque(speed[k]) + brake[k] + gear_loss[k] + kr * (friction[0] + sign * friction[1]),
             ];
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
@@ -1252,13 +1252,10 @@ impl Machine for TGantry {
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some((law, viscous)) = &self.thermal else { return };
         let gearboxes = if self.gearbox.is_coupling() { 0 } else { 2 };
+        // Each motor's seal and drag follow its own gearbox's oil, as a machine file's do.
         for k in 0..gearboxes {
             self.gears[k].efficiency = law.gearbox_efficiency(rises[k]);
-        }
-        // shortcut: both motors share one shaft friction, so its seals and drag follow the gearboxes' mean rise; give
-        // each motor its own `ShaftFriction` if the two gearboxes warm far apart.
-        if gearboxes == 2 {
-            self.shaft.set_oil(law.viscosity_factor(0.5 * (rises[0] + rises[1])));
+            self.shaft[k].set_oil(law.viscosity_factor(rises[k]));
         }
         self.friction_x.viscous = viscous[0] * law.viscosity_factor(rises[gearboxes]);
         self.friction_z.viscous = viscous[1] * law.viscosity_factor(rises[gearboxes + 1]);

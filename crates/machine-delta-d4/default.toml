@@ -528,7 +528,7 @@ braking_module = false
 # (L over a 0.25 ms time constant).
 # The speed and position loops tuned with `sim-cli margins delta-d4 --bands` and `verdicts`. Retuned from the shared
 # 0.25 as `catalog::with_motor_part` retunes a gain (the square root of the ratio of the torque per tool acceleration
-# times that of the rotors' inertia, 0.25 * sqrt(0.48974 * 0.21397) = 0.081) it would keep 34.6 degrees and 5.4 dB,
+# times that of the rotors' inertia, 0.25 * sqrt(0.676413 * 0.207977) = 0.0938) it would keep 27.5 degrees and 4.1 dB,
 # below the 35 and 6 every loop is tuned for: 0.05 keeps at least 37.7 degrees and 9.4 dB over the bounds (the payload's
 # inertia at its high bound the worst). A shorter integral time and a
 # higher position gain than the arms' hold the tool against its bearing's and motor's friction: it settles at 0.37 mm

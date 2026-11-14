@@ -98,7 +98,7 @@ mod tests {
         for (p, c) in [(a, one.centre), (b, two.centre)] {
             close((p[0] - c[0]).hypot(p[1] - c[1]), 0.1);
         }
-        close((b[0] - a[0]) * 0.2 - (b[1] - a[1]) * 0.979_795_9, 0.0);
+        close((b[0] - a[0]) * 0.2 - (b[1] - a[1]) * 0.96f64.sqrt(), 0.0);
         let round = arc(one, [0.0, -0.1], [0.0, 0.1], 4);
         near(round[0], [0.0, -0.1]);
         near(round[2], [0.1, 0.0]);

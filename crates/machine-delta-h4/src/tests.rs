@@ -121,8 +121,8 @@ fn the_tool_turns_by_the_gear_ratio_over_the_pinion_radius_times_the_half_slide(
 /// dz/dt = L_a (e sin t - z cos t) / (z + L_a sin t), a quarter of it per arm: -0.12203 m/rad. On the plate
 /// m = 2 (0.7 + 2 (1/3) 0.7) + 1.0 + 6.0 = 9.3332 kg (the two parts with their forearms' third, carriage, payload);
 /// m_LG = 1.4 * 0.25 + 0.5 (0.35 + 0.6667 * 0.7) = 0.75835 kg m. Each gearbox holds -g m_LG cos t + m g dz/dt
-/// = -7.4305 - 11.1693 = -18.600 N m (negative: the arm is held up), the motor that over 20: -0.9300 N m. The same in
-/// the rigid model and without the amplifier's spring.
+/// = -7.43356 - 11.16956 = -18.60312 N m (negative: the arm is held up), the motor that over 20: -0.930156 N m. The
+/// same in the rigid model and without the amplifier's spring.
 #[test]
 fn the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_arms_own() {
     let z = -0.85;
@@ -132,7 +132,7 @@ fn the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_ar
     close(dz, -0.12203, 1e-4, "dz/dt per arm");
     let (m, m_lg) = (2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0, 1.4 * 0.25 + 0.5 * (0.35 + 0.6667 * 0.7));
     let by_hand = -G * m_lg * t.cos() + m * G * dz;
-    assert!((by_hand + 18.600).abs() < 0.001, "{by_hand} N m");
+    assert!((by_hand + 18.603_12).abs() < 1e-5, "{by_hand} N m");
     for model in [
         ["effects.joint_elasticity = true", "effects.amplifier_compliance = true"],
         ["effects.joint_elasticity = false", "effects.amplifier_compliance = false"],
@@ -158,6 +158,7 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
     let d = h4(&[
         "effects.joint_friction = false",
         "effects.motor_friction = false",
+        "effects.gearbox_drag = false",
         "effects.torque_ripple = false",
         "effects.gearbox_efficiency = false",
         "effects.joint_elasticity = false",

@@ -25,12 +25,13 @@ fn disc_cam_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&DISC_CAM);
 }
 
-/// The press of the shipped config without gravity, its process force 1 kN wherever the table reaches (0 to 50 mm).
+/// The press of the shipped config without gravity, its process force 1 kN over the whole stroke (0 to 2 r = 100 mm from
+/// the ram's end: at -90 degrees it is l + r - sqrt(l^2 - r^2) = 56.4 mm out).
 fn press() -> SliderCrank {
     let mut cfg = SLIDER_CRANK.config();
     cfg.set_text("effects.gravity = false").unwrap();
     let mut crank = SliderCrank::from_config(&cfg).unwrap();
-    crank.process = Some(Table { at: vec![0.0, 0.05], value: vec![1000.0, 1000.0] });
+    crank.process = Some(Table { at: vec![0.0, 0.1], value: vec![1000.0, 1000.0] });
     crank
 }
 
