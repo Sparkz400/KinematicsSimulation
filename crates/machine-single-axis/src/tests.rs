@@ -2098,3 +2098,131 @@ fn a_held_force_moves_the_base_and_the_tool_by_force_over_stiffness() {
     m.tool_state(&state, &mut pos, &mut vel);
     assert!((pos[0] - 0.3 - 2.0e-5).abs() < 1e-8, "the tool moved {} m", pos[0] - 0.3);
 }
+
+/// Drive modes from outside (`DriveMode`): torque and speed setpoints of an outside controller on the rigid axis.
+mod outside_control {
+    use super::*;
+    use sim_components::{Command, DriveMode};
+
+    /// `ideal_rigid` with what would take torque between the winding and the shaft switched off: the motor's torque
+    /// constant is 0.45 N m/A at every current, and no iron loss.
+    fn config(edit: &[&str]) -> Config {
+        let mut cfg = ideal_rigid();
+        for e in ["effects.torque_saturation = false", "effects.iron_loss = false"].iter().chain(edit) {
+            cfg.set_text(e).unwrap();
+        }
+        cfg
+    }
+
+    fn motor_speed(sim: &Sim) -> f64 {
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        speed[0]
+    }
+
+    fn run(sim: &mut Sim, seconds: f64) {
+        for _ in 0..(seconds / sim.dt).round() as usize {
+            sim.step();
+        }
+    }
+
+    /// Carriage 4 kg, pulley 1e-4 kg m^2, rotor 0.3e-4 kg m^2 through ratio 5, radius 0.02 m. At the motor:
+    /// J = 4 (0.02/5)^2 + 1e-4 / 25 + 0.3e-4 = 6.4e-5 + 4e-6 + 3e-5 = 9.8e-5 kg m^2.
+    const INERTIA: f64 = 4.0 * 0.004 * 0.004 + 1.0e-4 / 25.0 + 0.3e-4;
+
+    /// 0.5 N m in torque mode: the motor accelerates at 0.5 / 9.8e-5 = 5102 rad/s^2, the carriage at that times
+    /// 0.02 / 5 = 20.4 m/s^2, and the current is 0.5 / 0.45 = 1.111 A. Measured between 4 and 12 ms, after the torque
+    /// delay and the current loop have settled (the speed then 20 to 60 rad/s, far below the voltage limit).
+    #[test]
+    fn a_constant_torque_accelerates_the_load_by_the_hand_calculated_rate() {
+        let mut sim = Sim::new(&ENTRY, &config(&[])).unwrap();
+        sim.set_drive_mode(0, DriveMode::Torque(0.5)).unwrap();
+        run(&mut sim, 0.004);
+        let (w1, t1) = (motor_speed(&sim), sim.time());
+        run(&mut sim, 0.008);
+        let (w2, t2) = (motor_speed(&sim), sim.time());
+        let acc = (w2 - w1) / (t2 - t1);
+        let by_hand = 0.5 / INERTIA;
+        assert!((acc - by_hand).abs() < 1e-3 * by_hand, "{acc} rad/s^2, by hand {by_hand}");
+        let (mut pos, mut vel) = ([0.0], [0.0]);
+        sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+        assert!((vel[0] - w2 * 0.02 / 5.0).abs() < 1e-9, "the rigid carriage at {} m/s", vel[0]);
+        let d = &sim.control.drives[0];
+        assert!((d.torque_command - 0.5).abs() < 1e-12, "{} N m commanded", d.torque_command);
+        assert!((d.current - 0.5 / 0.45).abs() < 1e-3 * 0.5 / 0.45, "{} A", d.current);
+    }
+
+    /// 10 N m asked for: the torque limit `drive.peak_torque_nm` = 3.8 N m holds it, so the current is 3.8 / 0.45 =
+    /// 8.44 A (below the motor's 9.5 A and the drive's 10.9 A). Without the voltage limit: with it, the 155 V DC link
+    /// cannot drive 8.44 A through 4 ohm and 0.01 H against the back-EMF of the speed this torque reaches within the
+    /// current's rise, and the current falls short of the setpoint (that limit has tests of its own in `drive`).
+    #[test]
+    fn a_torque_above_the_limit_is_clamped_to_the_limit() {
+        let mut sim = Sim::new(&ENTRY, &config(&["effects.voltage_limit = false"])).unwrap();
+        sim.set_drive_mode(0, DriveMode::Torque(10.0)).unwrap();
+        run(&mut sim, 0.003);
+        let d = &sim.control.drives[0];
+        assert!((d.torque_command - 3.8).abs() < 1e-12, "{} N m commanded", d.torque_command);
+        assert!(d.at_limit);
+        assert!((d.current - 3.8 / 0.45).abs() < 2e-3 * 3.8 / 0.45, "{} A", d.current);
+    }
+
+    /// 50 rad/s in velocity mode with the motor's own friction alone: it settles at 50 rad/s against
+    /// 0.02 tanh(50 / 0.5) + 1e-4 50 = 0.025 N m (Coulomb plus viscous, `[motor]`).
+    #[test]
+    fn a_constant_speed_setpoint_settles_at_that_speed_against_friction() {
+        let mut sim = Sim::new(&ENTRY, &config(&["effects.motor_friction = true"])).unwrap();
+        sim.set_drive_mode(0, DriveMode::Velocity(50.0)).unwrap();
+        run(&mut sim, 0.5);
+        let by_hand = 0.02 * (50.0f64 / 0.5).tanh() + 1e-4 * 50.0;
+        let d = &sim.control.drives[0];
+        assert!((motor_speed(&sim) - 50.0).abs() < 1e-6, "{} rad/s", motor_speed(&sim));
+        assert!((d.torque - by_hand).abs() < 1e-6, "{} N m, by hand {by_hand}", d.torque);
+        assert_eq!(d.following_error, 0.0, "the position setpoint tracks the motor");
+    }
+
+    /// Switching mode makes no jump in the torque the drive's loops ask for: at standstill on the inclined axis
+    /// (holding 6 g 0.02 / 5 = 0.235 N m from position to velocity mode) and at 50 rad/s from velocity back to position
+    /// mode, where without the bumpless transfer the PI's proportional part alone would jump by 0.025 N m s/rad times
+    /// the 50 rad/s it then lacks, 1.25 N m.
+    #[test]
+    fn switching_mode_at_standstill_and_at_speed_does_not_jump_the_torque() {
+        let mut sim = Sim::new(&ENTRY, &config(&["geometry.incline_deg = 90.0", "effects.payload = true"])).unwrap();
+        run(&mut sim, 0.05);
+        let before = sim.control.drives[0].torque_demand;
+        assert!((before - 6.0 * G * 0.02 / 5.0).abs() < 1e-3, "{before} N m holding");
+        sim.set_drive_mode(0, DriveMode::Velocity(0.0)).unwrap();
+        sim.step();
+        let after = sim.control.drives[0].torque_demand;
+        assert!((after - before).abs() < 1e-6, "{before} N m before, {after} N m after");
+
+        sim.set_drive_mode(0, DriveMode::Velocity(50.0)).unwrap();
+        run(&mut sim, 0.3);
+        assert!((motor_speed(&sim) - 50.0).abs() < 1e-3);
+        let before = sim.control.drives[0].torque_demand;
+        sim.set_drive_mode(0, DriveMode::Position).unwrap();
+        sim.step();
+        let after = sim.control.drives[0].torque_demand;
+        assert!((after - before).abs() < 1e-3, "{before} N m before, {after} N m after");
+        // The plan stands where the motor stood at the switch: the position loop brings it back there and holds.
+        let (mut at, mut speed) = ([0.0], [0.0]);
+        sim.machine.motor_state(&sim.state, &mut at, &mut speed);
+        let held = sim.control.drives[0].position_setpoint;
+        run(&mut sim, 1.0);
+        sim.machine.motor_state(&sim.state, &mut at, &mut speed);
+        assert!((at[0] - held).abs() < 1e-3 && speed[0].abs() < 1e-3, "at {} rad, {} rad/s", at[0], speed[0]);
+    }
+
+    /// Out of position mode the plan commands are refused, and into it only while no move runs.
+    #[test]
+    fn plan_commands_wait_for_position_mode() {
+        let mut sim = Sim::new(&ENTRY, &config(&[])).unwrap();
+        sim.command(Command::MoveTo(vec![0.6])).unwrap();
+        assert_eq!(sim.set_drive_mode(0, DriveMode::Torque(0.0)).unwrap_err().key, "error-busy");
+        run(&mut sim, 2.0);
+        sim.set_drive_mode(0, DriveMode::Torque(0.0)).unwrap();
+        assert_eq!(sim.command(Command::MoveTo(vec![0.5])).unwrap_err().key, "error-outside-mode");
+        sim.set_drive_mode(0, DriveMode::Position).unwrap();
+        sim.command(Command::MoveTo(vec![0.5])).unwrap();
+    }
+}

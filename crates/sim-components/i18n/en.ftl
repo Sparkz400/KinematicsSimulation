@@ -184,6 +184,7 @@ quantity-slack-time = Time without tension (teeth can jump)
 error-setpoint-too-far = The setpoint is further away than the axis may travel in one setpoint interval.
 error-disabled = The drives are disabled.
 error-fault = The drives have tripped and are stopping; enable them to acknowledge.
+error-outside-mode = A drive is in velocity or torque mode; put it back in position mode first.
 monitor-following-error = following error beyond its window
 monitor-standstill = following error at standstill beyond its window
 monitor-blocked = motor blocked at its torque limit

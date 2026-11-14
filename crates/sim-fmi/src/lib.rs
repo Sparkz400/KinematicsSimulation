@@ -26,6 +26,9 @@
 //! | `command.path_file`         | String  | input       | a path file, used instead of `command.path`           |
 //! | `command.trajectory_file`   | String  | input       | poses at times, run instead of a path where not empty |
 //! | `command.run_path`          | Boolean | input       | turning true plans the path from here and runs it     |
+//! | `command.mode.<motor>`      | String  | input       | the drive's mode: "position", "velocity" or "torque"  |
+//! | `command.torque.<motor>`    | Real    | input       | torque setpoint in torque mode, N m at the motor      |
+//! | `command.velocity.<motor>`  | Real    | input       | speed setpoint in velocity mode, rad/s at the motor   |
 //! | `time_optimal`              | Boolean | parameter   | paths timed as fast as the motors allow               |
 //! | `machine`                   | String  | parameter   | the machine of the registry                           |
 //! | `config_file`               | String  | parameter   | a config file to use instead of the one in the FMU    |
@@ -41,6 +44,10 @@
 //! The triggers (`command.cycle`, `command.move`, `command.run_path`) act at the communication point where they have
 //! changed since the last one; a setpoint input, once set, takes the axes over whenever it differs from the setpoint
 //! the controller follows, so an importer drives the machine either by setpoints or by cycle, moves and paths.
+//! A motor whose `command.mode.<motor>` is "velocity" or "torque" takes `command.velocity.<motor>` or
+//! `command.torque.<motor>` as it stands at each communication point, held over the step, in place of the controller's
+//! plan (`sim_components::DriveMode`): the importer's own controller closes the loop. The mode changes at the
+//! communication point where the input differs from the drive's.
 
 pub mod api;
 pub mod api3;
@@ -91,6 +98,11 @@ pub enum Kind {
     ConfigFile,
     /// The switch `effects.<name>`.
     Effect(String),
+    /// The operating mode of the motor at this place ("position", "velocity", "torque"), and its torque and speed
+    /// setpoints from outside (`sim_components::DriveMode`).
+    DriveMode(usize),
+    Torque(usize),
+    Velocity(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,15 +128,23 @@ impl Variable {
             | Kind::PathText
             | Kind::PathFile
             | Kind::TrajectoryFile
-            | Kind::RunPath => "input",
+            | Kind::RunPath
+            | Kind::DriveMode(_)
+            | Kind::Torque(_)
+            | Kind::Velocity(_) => "input",
             Kind::Machine | Kind::ConfigFile | Kind::TimeOptimal | Kind::Effect(_) => "parameter",
         }
     }
     pub fn type_name(&self) -> &'static str {
         match self.kind {
-            Kind::Signal(_) | Kind::Setpoint(_) | Kind::Target(_) => "Real",
+            Kind::Signal(_) | Kind::Setpoint(_) | Kind::Target(_) | Kind::Torque(_) | Kind::Velocity(_) => "Real",
             Kind::Enable | Kind::Cycle | Kind::Move | Kind::RunPath | Kind::TimeOptimal | Kind::Effect(_) => "Boolean",
-            Kind::Machine | Kind::ConfigFile | Kind::PathText | Kind::PathFile | Kind::TrajectoryFile => "String",
+            Kind::Machine
+            | Kind::ConfigFile
+            | Kind::PathText
+            | Kind::PathFile
+            | Kind::TrajectoryFile
+            | Kind::DriveMode(_) => "String",
         }
     }
 }
@@ -250,6 +270,23 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
     out.push(text("command.path_file", Kind::PathFile, "fmi-path-file", ""));
     out.push(text("command.trajectory_file", Kind::TrajectoryFile, "fmi-trajectory-file", ""));
     out.push(flag("command.run_path", Kind::RunPath, "fmi-run-path", false));
+    for (k, motor) in sim.machine.motors().iter().enumerate() {
+        let owner = tr.tr(motor.key);
+        let mut mode = text(&format!("command.mode.{}", motor.id), Kind::DriveMode(k), "fmi-drive-mode", "position");
+        mode.description = format!("{owner} · {}", mode.description);
+        out.push(mode);
+        for (name, kind, key, unit) in
+            [("torque", Kind::Torque(k), "fmi-torque", "N m"), ("velocity", Kind::Velocity(k), "fmi-velocity", "rad/s")]
+        {
+            out.push(Variable {
+                name: format!("command.{name}.{}", motor.id),
+                kind,
+                description: format!("{owner} · {}", tr.tr(key)),
+                unit: unit.into(),
+                start: Some("0.0".into()),
+            });
+        }
+    }
     out.push(flag("time_optimal", Kind::TimeOptimal, "fmi-time-optimal", false));
     out.push(text("machine", Kind::Machine, "fmi-machine", machine));
     out.push(text("config_file", Kind::ConfigFile, "fmi-config-file", ""));
