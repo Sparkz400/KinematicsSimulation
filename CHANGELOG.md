@@ -25,6 +25,12 @@ item are in [PROGRESS.md](PROGRESS.md).
   replaying every step since initialisation; a serialized state still replays (format `sim-fmi state 2`).
 - Python: `Config(machine_file=...)`, `sweep`, `optimise`, `fit` and `identify`, as the command line has them.
 - CI: clippy of sim-py in the job "python", and the CAD mass tests (`tools/cad/test_cadmass.py`) with cadquery-ocp.
+- Python: `step`, `bode`, `tuning`, `margins`, `modes`, `sensitivity`, `replay`, `compare`, `report`, `check_dataset`
+  and `fmu`, `verdicts(bands=True, worst=True)` and `sizing(motor_id=...)` (with the column `winding_rise_k`), as the
+  command line has them; every command of `sim-cli` is now a function.
+- FMI: the parameter `time_optimal` (paths timed as `--time-optimal` does) and the input `command.trajectory_file`
+  (poses at times, as `--trajectory`); `command.path_file` is read by its extension as `--path` reads it (G-code, KRL,
+  RAPID, robot moves as CSV). `tools/check_fmu.py` checks a time-optimal path against `sim-cli run --path --time-optimal`.
 
 ### Changed
 
@@ -33,6 +39,13 @@ item are in [PROGRESS.md](PROGRESS.md).
   monitoring trips them. The budget's `crash` row is the work of the pushes, integrated with the motion. The contact
   record has the largest force and the impact energy.
 - The conveyor's slats are drawn square across the belt however it runs.
+
+- FMI: a serialized FMU state carries the simulation's snapshot as bytes (format `sim-fmi state 3`: the FMU's version,
+  then `postcard` 1.1.3 over serde 1.0.229 derives on the snapshot's types in sim-core and sim-components) and is set
+  at once, however long the simulation ran; it no longer replays every step. States of format 2 or of another version
+  are refused with a message naming it.
+- Python: `fit` and `identify` return what they found with the fits that found nothing in `errors`, where they raised
+  at the first; `sizing` takes the config's own `parts.motor_supply` where `supply` is left out, as `search` does.
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
 
@@ -141,6 +154,8 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Fixed
 
+- `sim-netlist` compiles again: the scissor's free joint is `ShaftFriction::NONE` (the literal missed the fields the
+  friction branch added).
 - A self-locking worm in a machine file holds its load: driven back the motor has to push to lower it, a lowering load
   with no torque brakes to a stop, and in the rigid model its output sticks at rest within what the worm can take
   (before, it lowered the load with no torque and crept).

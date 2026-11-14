@@ -37,7 +37,7 @@ pub fn run_standard_suite(entry: &MachineEntry) {
 
 /// Repeatable measurement noise from a linear congruential generator: for tests, and for the drives'
 /// sensor noise, which has to be the same in every run.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Noise(pub u64);
 
 impl Noise {

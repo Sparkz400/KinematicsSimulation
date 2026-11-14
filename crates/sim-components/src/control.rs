@@ -38,7 +38,7 @@ pub struct CommandError {
     pub key: &'static str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Segment {
     target: Vec<f64>,
     dwell_ticks: u64,
@@ -55,7 +55,7 @@ struct Segment {
 /// period in profile cycles as configured (0: none, the shaper of a single impulse), the mode of the machine it
 /// follows with `effects.shaper_follows_pose` (0 the lowest resonance, `Machine::resonance_hz`; k the k-th of
 /// `Machine::modes`) with half the damped period in profile cycles times the frequency, and the axes it acts on.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct ShaperMode {
     impulses: Vec<(f64, f64)>,
     half: f64,
@@ -77,7 +77,7 @@ pub fn via_pieces(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
     pieces
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum Motion {
     Idle,
     /// `tail` is the previous move still finishing while this one has already started (corner
@@ -117,7 +117,7 @@ enum Motion {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Controller {
     params: DriveParams,
     /// Each motor's drive: `params` with that motor's own values (`catalog::motor_config`).

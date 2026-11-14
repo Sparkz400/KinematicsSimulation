@@ -81,7 +81,7 @@ pub const TEMPERATURE_PREFIX: &str = "temperature.";
 /// A part that warms with one of the machine's loss powers, `power.<id>`, with effects.part_heating: of which kind
 /// (`THERMAL_KINDS`), who it belongs to as a translation key, and which part of the scene shows it: the
 /// `scene_index`-th part with the id `scene_part`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ThermalPart {
     pub id: &'static str,
     pub kind: &'static str,
@@ -143,7 +143,7 @@ pub const BASE_AXES: [[&str; 3]; 2] = [["x", "y", "z"], ["rx", "ry", "rz"]];
 /// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
 /// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
 /// and back (a sin^2 ramp, `sim_components::cam::master_at`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CamMaster {
     pub speed: f64,
     pub period: f64,

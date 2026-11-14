@@ -53,6 +53,10 @@ struct PyConfig {
     /// What runs: `base` with its parts from the catalogue, then `sets` on top, as `sim-cli` builds a config from
     /// `--config`, the part options and `--set`, whatever order they are given in.
     cfg: sim_core::Config,
+    /// The text the config was read from (the machine's default where none was given) and where it came from (none:
+    /// the default), for the report's sources of the values.
+    text: String,
+    source: Option<String>,
 }
 
 impl PyConfig {
@@ -109,20 +113,24 @@ impl PyConfig {
             })?,
             _ => return Err(PyValueError::new_err("give machine or machine_file, one of them")),
         };
-        let text = match (text, path) {
+        let (text, source) = match (text, path) {
             (Some(_), Some(_)) => return Err(PyValueError::new_err("give text or path, not both")),
-            (Some(text), None) => Some(text.to_string()),
-            (None, Some(path)) => Some(
-                std::fs::read_to_string(&path)
-                    .map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))?,
+            (Some(text), None) => (Some(text.to_string()), Some("text".to_string())),
+            (None, Some(path)) => (
+                Some(
+                    std::fs::read_to_string(&path)
+                        .map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))?,
+                ),
+                Some(path.display().to_string()),
             ),
-            (None, None) => None,
+            (None, None) => (None, None),
         };
-        let cfg = match text {
-            Some(text) => load_config(entry, &text).map_err(|e| config_error(entry, e))?,
+        let cfg = match &text {
+            Some(text) => load_config(entry, text).map_err(|e| config_error(entry, e))?,
             None => entry.config(),
         };
-        let mut out = Self { entry, base: cfg.clone(), sets: Vec::new(), cfg };
+        let text = text.unwrap_or_else(|| entry.default_config.to_string());
+        let mut out = Self { entry, base: cfg.clone(), sets: Vec::new(), cfg, text, source };
         out.rebuild()?;
         Ok(out)
     }
@@ -443,17 +451,52 @@ fn analyze(
 /// The cycle judged against the motor data and the `[ratings]` of the config, as `sim-cli verdicts` judges it: a dict
 /// of columns, one row per check and motor. `bands=True` adds "low", "high" and "worst_ok" over the parameters with
 /// `[bounds]`, one at a time at their bounds, or with `samples=N` N runs with all of them drawn between their bounds
-/// at once (seed `seed`), which also adds "pass_share".
+/// at once (seed `seed`), which also adds "pass_share". `bands=True, worst=True` searches per check for the worst corner
+/// of the bounds instead, as `sim-cli verdicts --bands --worst`: columns "check", "motor", "worst", "limit", "worst_ok",
+/// "at_high_bound" and "at_low_bound" (per row the parameters at that bound there), and "runs", the cycles simulated.
 #[pyfunction]
-#[pyo3(signature = (config, *, bands=false, samples=None, seed=1))]
-fn verdicts(py: Python<'_>, config: &PyConfig, bands: bool, samples: Option<usize>, seed: u64) -> PyResult<Py<PyDict>> {
+#[pyo3(signature = (config, *, bands=false, samples=None, seed=1, worst=false))]
+fn verdicts(
+    py: Python<'_>,
+    config: &PyConfig,
+    bands: bool,
+    samples: Option<usize>,
+    seed: u64,
+    worst: bool,
+) -> PyResult<Py<PyDict>> {
     if samples.is_some() && !bands {
         return Err(PyValueError::new_err("samples needs bands=True"));
     }
     if samples == Some(0) {
         return Err(PyValueError::new_err("samples must be at least 1"));
     }
+    if worst && (!bands || samples.is_some()) {
+        return Err(PyValueError::new_err("worst needs bands=True and no samples"));
+    }
     let (entry, cfg) = (config.entry, config.cfg.clone());
+    if worst {
+        let (motors, bounded, (found, runs)) = py
+            .detach(|| -> Result<_, ConfigError> {
+                let motors: Vec<&'static str> = (entry.build)(&cfg)?.motors().iter().map(|m| m.id).collect();
+                let bounded = bounds(&cfg)?;
+                let found = sim_components::analysis::verdict_worst(entry, &cfg, &bounded)?;
+                Ok((motors, bounded, found))
+            })
+            .map_err(|e| config_error(entry, e))?;
+        let at = |w: &sim_components::analysis::Worst, high: bool| -> Vec<String> {
+            bounded.iter().zip(&w.high).filter(|(_, h)| **h == Some(high)).map(|(b, _)| b.0.clone()).collect()
+        };
+        let out = PyDict::new(py);
+        out.set_item("check", found.iter().map(|w| w.verdict.check).collect::<Vec<_>>())?;
+        out.set_item("motor", found.iter().map(|w| w.verdict.motor.map(|k| motors[k])).collect::<Vec<_>>())?;
+        out.set_item("worst", PyArray1::from_vec(py, found.iter().map(|w| w.verdict.value).collect()))?;
+        out.set_item("limit", PyArray1::from_vec(py, found.iter().map(|w| w.verdict.limit).collect()))?;
+        out.set_item("worst_ok", PyArray1::from_vec(py, found.iter().map(|w| w.verdict.ok).collect()))?;
+        out.set_item("at_high_bound", found.iter().map(|w| at(w, true)).collect::<Vec<_>>())?;
+        out.set_item("at_low_bound", found.iter().map(|w| at(w, false)).collect::<Vec<_>>())?;
+        out.set_item("runs", runs)?;
+        return Ok(out.unbind());
+    }
     let (motors, found) = py
         .detach(|| -> Result<_, ConfigError> {
             let motors: Vec<&'static str> = (entry.build)(&cfg)?.motors().iter().map(|m| m.id).collect();
@@ -486,10 +529,13 @@ fn verdicts(py: Python<'_>, config: &PyConfig, bands: bool, samples: Option<usiz
 /// passing ones first, cheapest first, as `sim-cli search` gives them: a dict of columns, one row per candidate.
 /// `series` keeps article numbers starting with it, `supply` is one of the catalogue's supplies ("230v", "400v", "s120",
 /// "s210new-400v", "beckhoff-400v", ...), `vendor` keeps that maker's supplies ("all": every maker's; all of them where
-/// `supply` is left out), `gearboxes` names a gearbox series to try as well, and `axes=True` tries every axis of the
-/// catalogue too. The candidates of several supplies are ranked together; `vendor` and `supply` say whose each is.
+/// `supply` is left out; without either the config's own `parts.motor_supply`, else "400v"), `gearboxes` names a gearbox
+/// series to try as well, and `axes=True` tries every axis of the catalogue too. `motor_id` sizes one motor of a machine
+/// with several (a machine file's): each candidate becomes that motor's own `[parts.ID]`, and the cost, the tightest
+/// check, the peak torque and the winding rise are that motor's alone; not with `axes`. The candidates of several
+/// supplies are ranked together; `vendor` and `supply` say whose each is.
 #[pyfunction]
-#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false))]
+#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false, motor_id=None))]
 fn sizing(
     py: Python<'_>,
     config: &PyConfig,
@@ -498,12 +544,17 @@ fn sizing(
     series: &str,
     gearboxes: Option<&str>,
     axes: bool,
+    motor_id: Option<&str>,
 ) -> PyResult<Py<PyDict>> {
-    use sim_components::catalog::{SUPPLIES, search_supplies, vendor_of};
+    use sim_components::catalog::{Parts, SUPPLIES, search_supplies, vendor_of};
+    if motor_id.is_some() && axes {
+        return Err(PyValueError::new_err("give motor_id or axes=True, not both"));
+    }
     let (entry, cfg) = (config.entry, config.cfg.clone());
+    let own = Parts::of(&cfg).map(|p| p.supply.to_string()).unwrap_or_default();
     let supplies: Vec<&str> = match (supply, vendor) {
         (None, Some(_)) => SUPPLIES.to_vec(),
-        (supply, _) => vec![supply.unwrap_or("400v")],
+        (supply, _) => vec![supply.or(Some(own.as_str()).filter(|s| !s.is_empty())).unwrap_or("400v")],
     };
     let maker = vendor.filter(|v| *v != "all");
     let supplies: Vec<&str> = supplies.into_iter().filter(|s| maker.is_none_or(|v| vendor_of(s) == v)).collect();
@@ -513,7 +564,7 @@ fn sizing(
     let found = py
         .detach(|| {
             let wanted = |article: &str| article.starts_with(series);
-            search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, None)
+            search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, motor_id)
         })
         .map_err(|e| config_error(entry, e))?;
     let out = PyDict::new(py);
@@ -533,10 +584,14 @@ fn sizing(
     out.set_item("passes", PyArray1::from_vec(py, found.iter().map(|c| c.passes()).collect()))?;
     out.set_item("tightest_check", found.iter().map(|c| c.tightest().map_or(c.refused, |t| t.0)).collect::<Vec<_>>())?;
     out.set_item("tightest_utilisation", numbers(&|c| c.tightest().map_or(f64::NAN, |t| t.1)))?;
-    let peak = |c: &sim_components::catalog::Candidate| {
-        c.result.as_ref().map_or(f64::NAN, |(load, _)| load.motors.iter().map(|m| m.peak_torque).fold(0.0, f64::max))
+    // Of the searched motor alone with `motor_id` (the others are the config's, alike for every candidate).
+    let most = |c: &sim_components::catalog::Candidate, f: fn(&sim_components::analysis::MotorLoad) -> f64| {
+        c.result.as_ref().map_or(f64::NAN, |(load, _)| {
+            load.motors.iter().filter(|m| c.motor.is_empty() || m.id == c.motor).map(f).fold(0.0, f64::max)
+        })
     };
-    out.set_item("peak_torque_nm", numbers(&peak))?;
+    out.set_item("peak_torque_nm", numbers(&|c| most(c, |m| m.peak_torque)))?;
+    out.set_item("winding_rise_k", numbers(&|c| most(c, |m| m.winding_rise)))?;
     Ok(out.unbind())
 }
 
@@ -709,8 +764,11 @@ impl<const N: usize> Rows<N> {
 }
 
 /// What a measurement says the config should be, as `sim-cli fit` says it: columns "quantity", "of", "config",
-/// "fitted", "standard_error" (NaN where the command line leaves a cell empty) and "advice", what to change in the
-/// config. `trace_file` (through `map_file` for a vendor export) gives the rigid values per axis, or per motor and link
+/// "fitted", "standard_error" (NaN where the command line leaves a cell empty), "advice", what to change in the
+/// config, and "errors": the fits that found nothing (no resonance in the sweep, a stiffness the moves do not tell),
+/// after which the command line goes on with the others and fails at the end. Their rows are missing; an empty list:
+/// every fit asked for is there. What keeps any fit from starting (a config refused, a trace unreadable) raises
+/// ValueError. `trace_file` (through `map_file` for a vendor export) gives the rigid values per axis, or per motor and link
 /// where the motors do not turn in proportion to the axes; `stiffness=True` also the factor on the stiffness at
 /// `stiffness_key` (the belts' by default) from the trace's moves; `sweep_file` (a frequency response as `sweep` writes
 /// it as CSV, taken on motor `sweep_motor` with `amplitude` N m) the load's resonance on the belt.
@@ -735,7 +793,7 @@ fn fit(
         return Err(PyValueError::new_err("stiffness needs trace_file"));
     }
     let (entry, cfg) = (config.entry, config.cfg.clone());
-    let (rows, advice) = py
+    let (rows, advice, errors) = py
         .detach(|| -> Result<_, String> {
             let tr = texts(entry);
             let refused = |e: ConfigError| tr.tr_arg(e.key(), e.detail()).to_string();
@@ -781,14 +839,20 @@ fn fit(
                     }
                 }
             }
+            // A fit that finds nothing is an error beside what the others found, as the command line goes on after it.
+            let mut errors = Vec::new();
             if let (true, Some(measured)) = (stiffness, &measured) {
                 let key = stiffness_key.as_deref().unwrap_or(BELT_STIFFNESS_KEY);
-                let fit = fit_move_stiffness(entry, &cfg, measured, key).map_err(traced)?;
-                rows.push("stiffness_factor", key, [1.0, fit.factor, fit.error]);
-                rows.push("ringing_rms_nm", key, [f64::NAN, fit.ringing, f64::NAN]);
-                rows.push("ringing_left_rms_nm", key, [f64::NAN, fit.residual, f64::NAN]);
-                let (key, detail) = fit.advice();
-                advice.push(tr.tr_arg(key, &detail).to_string());
+                match fit_move_stiffness(entry, &cfg, measured, key) {
+                    Ok(fit) => {
+                        rows.push("stiffness_factor", key, [1.0, fit.factor, fit.error]);
+                        rows.push("ringing_rms_nm", key, [f64::NAN, fit.ringing, f64::NAN]);
+                        rows.push("ringing_left_rms_nm", key, [f64::NAN, fit.residual, f64::NAN]);
+                        let (key, detail) = fit.advice();
+                        advice.push(tr.tr_arg(key, &detail).to_string());
+                    }
+                    Err(e) => errors.push(traced(e)),
+                }
             }
             if let Some(path) = &sweep_file {
                 let measured = parse_sweep(&read_text(path)?).map_err(traced)?;
@@ -797,20 +861,23 @@ fn fit(
                     Some(a) => a,
                     None => default_sweep_amplitude(entry, &cfg).map_err(refused)?,
                 };
-                let fit = fit_sweep(entry, &cfg, sweep_motor, &measured, amplitude)
-                    .map_err(refused)?
-                    .ok_or_else(|| tr.tr("fit-no-resonance").to_string())?;
-                let (config, fitted) = (fit.config, fit.fitted);
-                rows.push("resonance_hz", id, [config.frequency, fitted.frequency, fitted.frequency_error]);
-                rows.push("resonance_damping", id, [config.damping, fitted.damping, f64::NAN]);
-                let (key, detail) = fit.advice();
-                advice.push(tr.tr_arg(key, &detail).to_string());
+                match fit_sweep(entry, &cfg, sweep_motor, &measured, amplitude).map_err(refused)? {
+                    Some(fit) => {
+                        let (config, fitted) = (fit.config, fit.fitted);
+                        rows.push("resonance_hz", id, [config.frequency, fitted.frequency, fitted.frequency_error]);
+                        rows.push("resonance_damping", id, [config.damping, fitted.damping, f64::NAN]);
+                        let (key, detail) = fit.advice();
+                        advice.push(tr.tr_arg(key, &detail).to_string());
+                    }
+                    None => errors.push(tr.tr("fit-no-resonance").to_string()),
+                }
             }
-            Ok((rows, advice))
+            Ok((rows, advice, errors))
         })
         .map_err(PyValueError::new_err)?;
     let out = rows.into_dict(py, ["config", "fitted", "standard_error"])?;
     out.set_item("advice", advice)?;
+    out.set_item("errors", errors)?;
     Ok(out.unbind())
 }
 
@@ -820,7 +887,8 @@ fn fit(
 /// `map_file` the trace is in the simulator's columns of `config`'s machine. `motor` picks the motor; `from_hz` and
 /// `to_hz` also fit the two-mass model to the frequency response from the trace, `sweep_file` to a measured one;
 /// `step_from` (and `step_to`) fits the ringing of the speed after a torque step, and with `motor_inertia` (kg m²) the
-/// two-mass model from it.
+/// two-mass model from it. "errors" lists the fits that found nothing (no response, no two-mass model, no ringing),
+/// whose rows are missing, as `fit` has it.
 #[pyfunction]
 #[pyo3(signature = (*, trace_file=None, map_file=None, config=None, motor=0, from_hz=None, to_hz=None, step_from=None, step_to=None, motor_inertia=None, sweep_file=None))]
 #[allow(clippy::too_many_arguments)]
@@ -849,10 +917,10 @@ fn identify(
         return Err(PyValueError::new_err("give from_hz and to_hz together, 0 < from_hz < to_hz"));
     }
     let entry = config.as_ref().map_or(MACHINES[0], |c| c.entry);
-    let (rows, notes, overlay) = py
+    let (rows, notes, overlay, errors) = py
         .detach(|| -> Result<_, String> {
             let tr = texts(entry);
-            let (mut rows, mut notes) = (Rows::<4>::new(), Vec::new());
+            let (mut rows, mut notes, mut errors) = (Rows::<4>::new(), Vec::new(), Vec::new());
             let estimate = |rows: &mut Rows<4>, name: &str, of: &str, e: Estimate| {
                 let (low, high) = e.interval();
                 rows.push(name, of, [e.value, e.error, low, high]);
@@ -914,42 +982,419 @@ fn identify(
                     }
                 }
                 if let (Some(from), Some(to)) = (from_hz, to_hz) {
-                    let response = frequency_response(t, &m.torque, &m.speed, &log_spaced(from, to, SWEEP_POINTS))
-                        .ok_or_else(|| tr.tr("error-identify-response").to_string())?;
-                    let coherence = response.iter().map(|(_, c)| *c).fold(1.0, f64::min);
-                    rows.push("response_lowest_coherence", id, [coherence, f64::NAN, f64::NAN, f64::NAN]);
-                    let points: Vec<_> = response.into_iter().map(|(p, _)| p).collect();
-                    let model = two_mass(&points).ok_or_else(|| tr.tr("error-identify-two-mass").to_string())?;
-                    two_mass_rows(&mut rows, id, &model);
+                    match frequency_response(t, &m.torque, &m.speed, &log_spaced(from, to, SWEEP_POINTS)) {
+                        Some(response) => {
+                            let coherence = response.iter().map(|(_, c)| *c).fold(1.0, f64::min);
+                            rows.push("response_lowest_coherence", id, [coherence, f64::NAN, f64::NAN, f64::NAN]);
+                            let points: Vec<_> = response.into_iter().map(|(p, _)| p).collect();
+                            match two_mass(&points) {
+                                Some(model) => two_mass_rows(&mut rows, id, &model),
+                                None => errors.push(tr.tr("error-identify-two-mass").to_string()),
+                            }
+                        }
+                        None => errors.push(tr.tr("error-identify-response").to_string()),
+                    }
                 }
                 if let Some(from) = step_from {
-                    let r = ringing(t, &m.speed, from, step_to.unwrap_or(t[t.len() - 1]))
-                        .ok_or_else(|| tr.tr("error-identify-ringing").to_string())?;
-                    estimate(&mut rows, "ringing_frequency_hz", id, r.frequency);
-                    estimate(&mut rows, "ringing_damping_ratio", id, r.damping_ratio);
-                    rows.push("ringing_fit_percent", id, [r.quality.fit_percent, f64::NAN, f64::NAN, f64::NAN]);
-                    if let (Some(inertia), Some(total)) = (motor_inertia, found.friction.as_ref().map(|f| f.inertia)) {
-                        let model = two_mass_from_ringing(&r, total, Estimate { value: inertia, error: 0.0 });
-                        two_mass_rows(&mut rows, id, &model);
+                    match ringing(t, &m.speed, from, step_to.unwrap_or(t[t.len() - 1])) {
+                        Some(r) => {
+                            estimate(&mut rows, "ringing_frequency_hz", id, r.frequency);
+                            estimate(&mut rows, "ringing_damping_ratio", id, r.damping_ratio);
+                            rows.push("ringing_fit_percent", id, [r.quality.fit_percent, f64::NAN, f64::NAN, f64::NAN]);
+                            if let (Some(inertia), Some(total)) =
+                                (motor_inertia, found.friction.as_ref().map(|f| f.inertia))
+                            {
+                                let model = two_mass_from_ringing(&r, total, Estimate { value: inertia, error: 0.0 });
+                                two_mass_rows(&mut rows, id, &model);
+                            }
+                        }
+                        None => errors.push(tr.tr("error-identify-ringing").to_string()),
                     }
                 }
             }
             if let Some(path) = &sweep_file {
                 let points = parse_sweep(&read_text(path)?).map_err(|e| tr.tr_arg(e.key, &e.detail).to_string())?;
-                let model = two_mass(&points).ok_or_else(|| tr.tr("error-identify-two-mass").to_string())?;
-                two_mass_rows(&mut rows, "sweep", &model);
+                match two_mass(&points) {
+                    Some(model) => two_mass_rows(&mut rows, "sweep", &model),
+                    None => errors.push(tr.tr("error-identify-two-mass").to_string()),
+                }
             }
-            Ok((rows, notes, overlay))
+            Ok((rows, notes, overlay, errors))
         })
         .map_err(PyValueError::new_err)?;
     let out = rows.into_dict(py, ["value", "standard_error", "ci95_low", "ci95_high"])?;
     out.set_item("notes", notes)?;
+    out.set_item("errors", errors)?;
     let signals = PyDict::new(py);
     for (name, values) in overlay {
         signals.set_item(name, PyArray1::from_vec(py, values))?;
     }
     out.set_item("overlay", signals)?;
     Ok(out.unbind())
+}
+
+/// The machine of the config, built: refused as ValueError.
+fn built(config: &PyConfig) -> PyResult<Box<dyn sim_core::Machine>> {
+    (config.entry.build)(&config.cfg).map_err(|e| config_error(config.entry, e))
+}
+
+/// `axis_index` checked against the machine's axes, as `sim-cli --axis-index` checks it.
+fn axis(config: &PyConfig, axis_index: usize) -> PyResult<usize> {
+    let count = built(config)?.axes().len();
+    if axis_index < count {
+        Ok(axis_index)
+    } else {
+        Err(PyValueError::new_err(format!("axis_index {axis_index}: the machine has {count} axes")))
+    }
+}
+
+fn column<'py>(py: Python<'py>, values: impl Iterator<Item = f64>) -> Bound<'py, PyArray1<f64>> {
+    PyArray1::from_vec(py, values.collect())
+}
+
+/// The answer of axis `axis_index` to a step of `size` (m or rad) of its position setpoint, over `time` seconds, as
+/// `sim-cli step` gives it: columns "time_s", "setpoint", "response" (the tool position relative to where it was),
+/// with "rise_time_s", "overshoot" and "settling_time_s" as numbers.
+#[pyfunction]
+#[pyo3(signature = (config, *, axis_index=0, size=0.001, time=0.5))]
+fn step(py: Python<'_>, config: &PyConfig, axis_index: usize, size: f64, time: f64) -> PyResult<Py<PyDict>> {
+    if !(size.is_finite() && size != 0.0 && time.is_finite() && time > 0.0) {
+        return Err(PyValueError::new_err("size must be finite and not 0, time finite and above 0"));
+    }
+    let (entry, cfg, i) = (config.entry, config.cfg.clone(), axis(config, axis_index)?);
+    let r = py
+        .detach(|| sim_components::analysis::step_response(entry, &cfg, i, size, time))
+        .map_err(|e| config_error(entry, e))?;
+    let out = PyDict::new(py);
+    out.set_item("time_s", column(py, r.trace.iter().map(|p| p.0)))?;
+    out.set_item("setpoint", column(py, r.trace.iter().map(|_| r.size)))?;
+    out.set_item("response", column(py, r.trace.iter().map(|p| p.1)))?;
+    out.set_item("rise_time_s", r.rise_time)?;
+    out.set_item("overshoot", r.overshoot)?;
+    out.set_item("settling_time_s", r.settling_time)?;
+    Ok(out.unbind())
+}
+
+/// The closed-loop frequency response of the position loop of axis `axis_index`, as `sim-cli bode` gives it: columns
+/// "frequency_hz", "gain", "gain_db", "phase_deg" at `count` frequencies from `from_hz` to `to_hz`, spaced
+/// logarithmically, with a setpoint amplitude of `amplitude` (m or rad).
+#[pyfunction]
+#[pyo3(signature = (config, *, axis_index=0, from_hz=1.0, to_hz=200.0, count=40, amplitude=0.0005))]
+fn bode(
+    py: Python<'_>,
+    config: &PyConfig,
+    axis_index: usize,
+    from_hz: f64,
+    to_hz: f64,
+    count: usize,
+    amplitude: f64,
+) -> PyResult<Py<PyDict>> {
+    if !(from_hz > 0.0 && to_hz > from_hz && to_hz.is_finite()) || count < 2 || !amplitude.is_finite() {
+        return Err(PyValueError::new_err("from_hz must be above 0 and below to_hz, count at least 2"));
+    }
+    let (entry, cfg, i) = (config.entry, config.cfg.clone(), axis(config, axis_index)?);
+    let points = py
+        .detach(|| {
+            sim_components::analysis::closed_loop_response(
+                entry,
+                &cfg,
+                i,
+                &log_spaced(from_hz, to_hz, count),
+                amplitude,
+            )
+        })
+        .map_err(|e| config_error(entry, e))?;
+    let out = PyDict::new(py);
+    out.set_item("frequency_hz", column(py, points.iter().map(|p| p.frequency)))?;
+    out.set_item("gain", column(py, points.iter().map(|p| p.gain)))?;
+    out.set_item("gain_db", column(py, points.iter().map(|p| 20.0 * p.gain.log10())))?;
+    out.set_item("phase_deg", column(py, points.iter().map(|p| p.phase_deg)))?;
+    Ok(out.unbind())
+}
+
+/// One row per axis with what its step response (a step of `size`) and its closed-loop frequency response (setpoint
+/// amplitude `amplitude`) say, as `sim-cli tuning` gives it: columns "axis", "rise_time_s", "overshoot",
+/// "settling_time_s", "bandwidth_hz" (NaN where the response stays above -3 dB up to 200 Hz).
+#[pyfunction]
+#[pyo3(signature = (config, *, size=0.001, amplitude=0.0005))]
+fn tuning(py: Python<'_>, config: &PyConfig, size: f64, amplitude: f64) -> PyResult<Py<PyDict>> {
+    use sim_components::analysis::{bandwidth, closed_loop_response, step_response};
+    if !(size.is_finite() && size != 0.0 && amplitude.is_finite()) {
+        return Err(PyValueError::new_err("size must be finite and not 0, amplitude finite"));
+    }
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let axes: Vec<&'static str> = built(config)?.axes().iter().map(|a| a.id).collect();
+    let rows = py
+        .detach(|| -> Result<Vec<[f64; 4]>, ConfigError> {
+            // As the command line: a batch of frequencies per processor, lowest first, up to the batch with the
+            // first point below -3 dB.
+            let batch = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let mut rows = Vec::new();
+            for i in 0..axes.len() {
+                let step = step_response(entry, &cfg, i, size, 0.5)?;
+                let mut response = Vec::new();
+                for frequencies in log_spaced(1.0, 200.0, 30).chunks(batch) {
+                    response.extend(closed_loop_response(entry, &cfg, i, frequencies, amplitude)?);
+                    if bandwidth(&response).is_some() {
+                        break;
+                    }
+                }
+                let band = bandwidth(&response).unwrap_or(f64::NAN);
+                rows.push([step.rise_time, step.overshoot, step.settling_time, band]);
+            }
+            Ok(rows)
+        })
+        .map_err(|e| config_error(entry, e))?;
+    let out = PyDict::new(py);
+    out.set_item("axis", axes)?;
+    for (k, name) in ["rise_time_s", "overshoot", "settling_time_s", "bandwidth_hz"].iter().enumerate() {
+        out.set_item(*name, column(py, rows.iter().map(|r| r[k])))?;
+    }
+    Ok(out.unbind())
+}
+
+/// Per motor the stability margins of its velocity loop, as `sim-cli margins` gives them: columns "run" ("nominal",
+/// and with `bands=True` each value of `[bounds]` at its low and its high bound), "motor", "crossover_hz",
+/// "phase_margin_deg", "gain_margin_db", "peak_sensitivity", "peak_frequency_hz" and "ok" (false: the loop is unstable
+/// or its measurement not valid).
+#[pyfunction]
+#[pyo3(signature = (config, *, bands=false))]
+fn margins(py: Python<'_>, config: &PyConfig, bands: bool) -> PyResult<Py<PyDict>> {
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let motors: Vec<&'static str> = built(config)?.motors().iter().map(|m| m.id).collect();
+    let runs = py
+        .detach(|| {
+            let bounded = if bands { bounds(&cfg)? } else { Vec::new() };
+            sim_components::analysis::velocity_loop_margins(entry, &cfg, &bounded)
+        })
+        .map_err(|e| config_error(entry, e))?;
+    let rows: Vec<(&str, &str, &sim_components::analysis::LoopMargins)> = runs
+        .iter()
+        .flat_map(|(run, margins)| motors.iter().zip(margins).map(move |(motor, m)| (run.as_str(), *motor, m)))
+        .collect();
+    let out = PyDict::new(py);
+    out.set_item("run", rows.iter().map(|r| r.0).collect::<Vec<_>>())?;
+    out.set_item("motor", rows.iter().map(|r| r.1).collect::<Vec<_>>())?;
+    out.set_item("crossover_hz", column(py, rows.iter().map(|r| r.2.crossover_hz)))?;
+    out.set_item("phase_margin_deg", column(py, rows.iter().map(|r| r.2.phase_margin_deg)))?;
+    out.set_item("gain_margin_db", column(py, rows.iter().map(|r| r.2.gain_margin_db)))?;
+    out.set_item("peak_sensitivity", column(py, rows.iter().map(|r| r.2.peak_sensitivity)))?;
+    out.set_item("peak_frequency_hz", column(py, rows.iter().map(|r| r.2.peak_frequency_hz)))?;
+    out.set_item("ok", PyArray1::from_vec(py, rows.iter().map(|r| r.2.stable()).collect()))?;
+    Ok(out.unbind())
+}
+
+/// The modes the machine reports over the stroke of axis `axis_index` at `points` places, the other axes at the start
+/// pose, as `sim-cli modes` gives them: "position", then per mode, lowest first, "mode<i>_hz" and "mode<i>_damping"
+/// (NaN where a place does not have it).
+#[pyfunction]
+#[pyo3(signature = (config, *, axis_index=0, points=21))]
+fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) -> PyResult<Py<PyDict>> {
+    if points < 2 {
+        return Err(PyValueError::new_err("points must be at least 2"));
+    }
+    let (entry, cfg, i) = (config.entry, config.cfg.clone(), axis(config, axis_index)?);
+    let rows = py
+        .detach(|| -> Result<_, ConfigError> {
+            let sim = Sim::new(entry, &cfg)?;
+            Ok(sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, i, points))
+        })
+        .map_err(|e| config_error(entry, e))?;
+    let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
+    let out = PyDict::new(py);
+    out.set_item("position", column(py, rows.iter().map(|r| r.0)))?;
+    for k in 0..count {
+        let at = |f: fn(&sim_core::Mode) -> f64| column(py, rows.iter().map(move |r| r.1.get(k).map_or(f64::NAN, f)));
+        out.set_item(format!("mode{}_hz", k + 1), at(|m| m.hz))?;
+        out.set_item(format!("mode{}_damping", k + 1), at(|m| m.damping))?;
+    }
+    Ok(out.unbind())
+}
+
+/// The cycle with each parameter at its low and at its high bound of the config, or `delta` lower and higher where it
+/// has none, one at a time, strongest first, as `sim-cli sensitivity` gives it: columns "parameter", "value", "low",
+/// "high", the relative changes "peak_torque_low", "peak_torque_high", "rms_torque_low", "rms_torque_high",
+/// "cycle_time_low", "cycle_time_high", and "belt_tension_min_low_n", "belt_tension_min_high_n". `groups` limits it to
+/// those config tables; without it every table of machine and motor data is varied.
+#[pyfunction]
+#[pyo3(signature = (config, *, delta=0.2, groups=None))]
+fn sensitivity(py: Python<'_>, config: &PyConfig, delta: f64, groups: Option<Vec<String>>) -> PyResult<Py<PyDict>> {
+    if !(delta.is_finite() && delta > 0.0) {
+        return Err(PyValueError::new_err("delta must be finite and above 0"));
+    }
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let groups = groups.unwrap_or_default();
+    // As the command line: timing, switches, limits, gains and the cycle are choices, not uncertain machine data.
+    let fixed = ["sim", "effects", "drive", "profile", "start", "axis", "temperature"];
+    let paths: Vec<String> = cfg
+        .leaves()
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| path.contains('.'))
+        .filter(|path| {
+            let group = path.split('.').next().unwrap_or("");
+            if groups.is_empty() { !fixed.contains(&group) } else { groups.iter().any(|g| g == group) }
+        })
+        .collect();
+    let (nominal, mut rows) = py
+        .detach(|| sim_components::analysis::sensitivity(entry, &cfg, &paths, delta))
+        .map_err(|e| config_error(entry, e))?;
+    rows.sort_by(|a, b| b.strength(&nominal).total_cmp(&a.strength(&nominal)));
+    let changes: Vec<[f64; 6]> = rows.iter().map(|r| r.changes(&nominal)).collect();
+    let slack = |load: &CycleLoad| load.belt_tension.map_or(0.0, |t| t.0);
+    let out = PyDict::new(py);
+    out.set_item("parameter", rows.iter().map(|r| r.path.clone()).collect::<Vec<_>>())?;
+    out.set_item("value", column(py, rows.iter().map(|r| r.value)))?;
+    out.set_item("low", column(py, rows.iter().map(|r| r.bounds.0)))?;
+    out.set_item("high", column(py, rows.iter().map(|r| r.bounds.1)))?;
+    let names = ["peak_torque_low", "peak_torque_high", "rms_torque_low", "rms_torque_high", "cycle_time_low"];
+    for (k, name) in names.iter().chain(&["cycle_time_high"]).enumerate() {
+        out.set_item(*name, column(py, changes.iter().map(|c| c[k])))?;
+    }
+    out.set_item("belt_tension_min_low_n", column(py, rows.iter().map(|r| slack(&r.low))))?;
+    out.set_item("belt_tension_min_high_n", column(py, rows.iter().map(|r| slack(&r.high))))?;
+    Ok(out.unbind())
+}
+
+/// The position setpoints of a drive trace run through the simulator, as `sim-cli replay` runs them: per motor how far
+/// simulated torque and following error are from the measured ones (columns "motor", "torque_rms_nm",
+/// "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"), and "overlay": measured and simulated
+/// torque, speed and following error side by side ({"time": ..., "motor.<id>.<quantity>_measured": ..., ...}).
+/// `map_file` maps a vendor export, as for `fit`.
+#[pyfunction]
+#[pyo3(signature = (config, *, trace_file, map_file=None))]
+fn replay(py: Python<'_>, config: &PyConfig, trace_file: PathBuf, map_file: Option<PathBuf>) -> PyResult<Py<PyDict>> {
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let (ids, measured, simulated) = py
+        .detach(|| -> Result<_, String> {
+            let tr = texts(entry);
+            let machine = (entry.build)(&cfg).map_err(|e| tr.tr_arg(e.key(), e.detail()).to_string())?;
+            let measured = load_trace(&tr, &trace_file, map_file.as_deref(), machine.motors())?.trace;
+            let simulated = sim_components::trace::replay(entry, &cfg, &measured)
+                .map_err(|e| tr.tr_arg(e.key, &e.detail).to_string())?;
+            let ids: Vec<&'static str> = machine.motors().iter().map(|m| m.id).collect();
+            Ok((ids, measured, simulated))
+        })
+        .map_err(PyValueError::new_err)?;
+    let found = sim_components::trace::differences(&measured, &simulated);
+    let out = PyDict::new(py);
+    out.set_item("motor", ids.clone())?;
+    let names = ["torque_rms_nm", "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"];
+    for (k, name) in names.iter().enumerate() {
+        out.set_item(*name, column(py, found.iter().map(|d| d[k])))?;
+    }
+    let overlay = PyDict::new(py);
+    overlay.set_item("time", PyArray1::from_vec(py, measured.time.clone()))?;
+    for ((id, m), s) in ids.iter().zip(&measured.motors).zip(&simulated.motors) {
+        let (m_error, s_error) = (m.following_error(), s.following_error());
+        for (name, a, b) in
+            [("torque", &m.torque, &s.torque), ("speed", &m.speed, &s.speed), ("following_error", &m_error, &s_error)]
+        {
+            overlay.set_item(format!("motor.{id}.{name}_measured"), PyArray1::from_vec(py, a.clone()))?;
+            overlay.set_item(format!("motor.{id}.{name}_simulated"), PyArray1::from_vec(py, b.clone()))?;
+        }
+    }
+    out.set_item("overlay", overlay)?;
+    Ok(out.unbind())
+}
+
+/// The cycle run with `effects.<effect>` on and with it off, as `sim-cli compare` runs it: "time" and per signal
+/// "<id>.on" and "<id>.off", once per millisecond of the measured pass (every signal, or those `signals` names), and
+/// "differences": columns "signal", "unit", "peak_difference", "rms_difference" of on less off.
+#[pyfunction]
+#[pyo3(signature = (config, *, effect, signals=None))]
+fn compare(py: Python<'_>, config: &PyConfig, effect: &str, signals: Option<Vec<String>>) -> PyResult<Py<PyDict>> {
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let found = py
+        .detach(|| sim_components::analysis::compare_effect(entry, &cfg, effect))
+        .map_err(|e| config_error(entry, e))?;
+    // Every signal but the time, which is the first column anyway.
+    let chosen: Vec<usize> = match signals {
+        None => (1..found.signals.len()).collect(),
+        Some(ids) => ids
+            .iter()
+            .map(|id| found.signals.iter().position(|s| &s.id == id).ok_or_else(|| PyKeyError::new_err(id.clone())))
+            .collect::<PyResult<_>>()?,
+    };
+    let out = PyDict::new(py);
+    out.set_item("time", column(py, found.on.iter().map(|row| row[0])))?;
+    for &i in &chosen {
+        out.set_item(format!("{}.on", found.signals[i].id), column(py, found.on.iter().map(|row| row[i])))?;
+        out.set_item(format!("{}.off", found.signals[i].id), column(py, found.off.iter().map(|row| row[i])))?;
+    }
+    let differences = PyDict::new(py);
+    let apart: Vec<(f64, f64)> = chosen.iter().map(|&i| found.difference(i)).collect();
+    differences.set_item("signal", chosen.iter().map(|&i| found.signals[i].id.clone()).collect::<Vec<_>>())?;
+    differences.set_item("unit", chosen.iter().map(|&i| found.signals[i].unit.clone()).collect::<Vec<_>>())?;
+    differences.set_item("peak_difference", column(py, apart.iter().map(|d| d.0)))?;
+    differences.set_item("rms_difference", column(py, apart.iter().map(|d| d.1)))?;
+    out.set_item("differences", differences)?;
+    Ok(out.unbind())
+}
+
+/// The sizing report a customer signs, written to `path` as `sim-cli report` writes it: PDF for a path ending in .pdf,
+/// HTML otherwise, in `lang`; `bands=True` adds the error bands. True where every check passed.
+#[pyfunction]
+#[pyo3(signature = (config, path, *, bands=false, lang="en"))]
+fn report(py: Python<'_>, config: &PyConfig, path: PathBuf, bands: bool, lang: &str) -> PyResult<bool> {
+    if !LANGUAGES.contains(&lang) {
+        return Err(PyValueError::new_err(format!("unknown language: {lang}")));
+    }
+    let (entry, config) = (config.entry, config.clone());
+    let lang = lang.to_string();
+    py.detach(|| -> Result<bool, String> {
+        let tr = translations(&lang, entry);
+        let source = config.source.clone().unwrap_or_else(|| tr.tr("report-default-config").to_string());
+        let report = sim_components::report::make(entry, &config.text, &source, &config.base, &config.cfg, bands, &tr)
+            .map_err(|e| tr.tr_arg(e.key(), e.detail()).to_string())?;
+        let pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+        let bytes = if pdf { report.pdf() } else { report.html(&lang).into_bytes() };
+        std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(report.passed)
+    })
+    .map_err(PyValueError::new_err)
+}
+
+/// What keeps the dataset folder `path` from being published (datasets/README.md), as `sim-cli check-dataset` lists it:
+/// one text per problem, none for a folder that is ready.
+#[pyfunction]
+fn check_dataset(py: Python<'_>, path: PathBuf) -> Vec<String> {
+    py.detach(|| sim_components::dataset::check(&path))
+}
+
+/// The machine with its config as an FMI 2.0 (`fmi=2`) or 3.0 (`fmi=3`) Co-Simulation FMU written to `path`, as
+/// `sim-cli fmu` writes it, with the descriptions in `lang`. `binaries` are the sim-fmi libraries it carries (a .dll,
+/// .so or .dylib each, one per platform), which Python has none of beside it: build them with
+/// `cargo build -p sim-fmi --release`.
+#[pyfunction]
+#[pyo3(signature = (config, path, *, binaries, fmi=2, lang="en"))]
+fn fmu(config: &PyConfig, path: PathBuf, binaries: Vec<PathBuf>, fmi: u8, lang: &str) -> PyResult<()> {
+    if fmi != 2 && fmi != 3 {
+        return Err(PyValueError::new_err(format!("fmi {fmi}: 2 or 3")));
+    }
+    if !LANGUAGES.contains(&lang) {
+        return Err(PyValueError::new_err(format!("unknown language: {lang}")));
+    }
+    if binaries.is_empty() {
+        return Err(PyValueError::new_err("give the sim-fmi binaries the FMU carries"));
+    }
+    let entry = config.entry;
+    let text = config.cfg.to_text().map_err(|e| config_error(entry, e))?;
+    let model = sim_fmi::Model::with_fmi(entry, &text, lang, fmi).map_err(|e| config_error(entry, e))?;
+    let mut files = model.files();
+    for binary in &binaries {
+        let name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let bytes = std::fs::read(binary).map_err(|e| PyValueError::new_err(format!("{}: {e}", binary.display())))?;
+        let inside = if fmi == 3 { sim_fmi::binary_path3(name, &bytes) } else { sim_fmi::binary_path(name) };
+        let inside =
+            inside.ok_or_else(|| PyValueError::new_err(format!("not a sim-fmi binary: {}", binary.display())))?;
+        // Two binaries for one platform would be two entries of one name in the archive.
+        if files.iter().any(|(p, _)| *p == inside) {
+            return Err(PyValueError::new_err(format!("two binaries for {inside}")));
+        }
+        files.push((inside, bytes));
+    }
+    std::fs::write(&path, sim_fmi::zip(&files)).map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))
 }
 
 #[pymodule]
@@ -965,6 +1410,17 @@ fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(optimise, m)?)?;
     m.add_function(wrap_pyfunction!(fit, m)?)?;
     m.add_function(wrap_pyfunction!(identify, m)?)?;
+    m.add_function(wrap_pyfunction!(step, m)?)?;
+    m.add_function(wrap_pyfunction!(bode, m)?)?;
+    m.add_function(wrap_pyfunction!(tuning, m)?)?;
+    m.add_function(wrap_pyfunction!(margins, m)?)?;
+    m.add_function(wrap_pyfunction!(modes, m)?)?;
+    m.add_function(wrap_pyfunction!(sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(replay, m)?)?;
+    m.add_function(wrap_pyfunction!(compare, m)?)?;
+    m.add_function(wrap_pyfunction!(report, m)?)?;
+    m.add_function(wrap_pyfunction!(check_dataset, m)?)?;
+    m.add_function(wrap_pyfunction!(fmu, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -281,7 +281,6 @@ impl Legs {
         self.rod_force(h, p, [-m * acc[0], -m * acc[1], -m * (acc[2] + g)])
     }
 
-
     /// The rods' pull that takes the force `force` on the plate: `rod_pull` for any force, such as the plate's weight
     /// and what accelerating it takes, m (g - a).
     pub fn rod_force(&self, h: V3, p: V3, force: V3) -> Option<V3> {

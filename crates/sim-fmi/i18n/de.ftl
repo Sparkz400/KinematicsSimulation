@@ -31,3 +31,6 @@ fmi-log-command = Befehl gegeben bei { $arg }
 fmi-log-state = FMU-Zustand gesetzt: { $arg }
 fmi-error-category = Keine solche Log-Kategorie: { $arg }
 fmi-error-path = Die Bahn kann nicht gefahren werden: { $arg }
+fmi-trajectory-file = Trajektoriendatei (Posen zu Zeiten, wie sim-cli run --trajectory sie liest), die command.run_path statt einer Bahn fährt (leer: die Bahn)
+fmi-time-optimal = Bahnen so schnell, wie die Motoren erlauben (sim-cli --time-optimal), statt innerhalb der Achsgrenzen
+fmi-error-fmu-state-version = Dieser FMU-Zustand wurde von einer anderen Version der FMU gespeichert; ein Zustand lässt sich nur von der Version setzen, die ihn gespeichert hat: { $arg }

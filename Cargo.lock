@@ -6099,6 +6099,7 @@ dependencies = [
 name = "sim-components"
 version = "1.0.0-rc.1"
 dependencies = [
+ "serde",
  "sim-core",
  "toml",
 ]
@@ -6107,6 +6108,7 @@ dependencies = [
 name = "sim-core"
 version = "1.0.0-rc.1"
 dependencies = [
+ "serde",
  "toml",
 ]
 
@@ -6114,6 +6116,7 @@ dependencies = [
 name = "sim-fmi"
 version = "1.0.0-rc.1"
 dependencies = [
+ "postcard",
  "sim-components",
  "sim-core",
  "sim-machines",
@@ -6169,6 +6172,7 @@ dependencies = [
  "pyo3",
  "sim-components",
  "sim-core",
+ "sim-fmi",
  "sim-machines",
  "toml",
 ]

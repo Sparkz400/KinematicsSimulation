@@ -26,7 +26,7 @@ use sim_core::{AxisInfo, Config, ConfigError};
 type Result<T> = std::result::Result<T, ConfigError>;
 
 /// The conveyor of `[conveyor]` and how far it has got: the parts picked and missed so far.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Conveyor {
     /// Unit vector along the belt in tool coordinates, and the belt's speed, m/s, which it reaches `ramp` seconds after
     /// the start at a constant acceleration.
@@ -59,7 +59,7 @@ pub struct Conveyor {
 
 /// One move of a pass, from `start` seconds after the pass began, for `duration`: the move `mv` plus the belt term from
 /// `va` to `vb` (see the module).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Phase {
     start: f64,
     duration: f64,
@@ -72,7 +72,7 @@ struct Phase {
 
 /// The belt's own motion along `direction` from the absolute times `from` (one per axis, as the part is planned for),
 /// at `speed` after a ramp of `ramp` seconds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Track {
     direction: Vec<f64>,
     from: Vec<f64>,
@@ -118,7 +118,7 @@ impl Phase {
 }
 
 /// One pick and place, from rest to rest, beginning at the absolute time `start`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Pass {
     pub start: f64,
     phases: Vec<Phase>,

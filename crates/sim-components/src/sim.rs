@@ -9,8 +9,10 @@ use sim_core::{
 /// A part of the machine that warms with its loss power (`Machine::thermal_parts`, effects.part_heating): one thermal
 /// mass with a thermal resistance R to its surroundings, so that its temperature rise follows
 /// tau d(rise)/dt = R P - rise and settles at R P under a steady loss P.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HeatedPart {
+    /// The machine's, not written: a simulation built from the same config has it (`Sim::restore`).
+    #[serde(skip)]
     pub part: ThermalPart,
     /// Where its loss power is among the machine's loss powers (`Machine::loss_powers`).
     loss: usize,
@@ -162,7 +164,7 @@ pub struct Sim {
 /// effects.crash, from then on: the largest force of the obstacles on the machine (N) and the impact energy, the most
 /// work their pushes had taken out of the machine at any time (J; at the deepest point of a blocked impact, the
 /// kinetic energy the impact took).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Contact {
     pub time: f64,
     pub pose: Vec<f64>,
@@ -176,7 +178,7 @@ pub struct Contact {
 /// with its drives (loops, filters, windings, thermal and overload images), the parts' warmth and the obstacle record.
 /// `Sim::restore` takes it back into a simulation built from the same machine and config; what the machine itself keeps
 /// between steps (payload, brakes, dwelling, the parts' temperatures) is set again from it.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
     control: Controller,
     state: Vec<f64>,
@@ -412,7 +414,10 @@ impl Sim {
         self.state.clone_from(&s.state);
         self.torque.clone_from(&s.torque);
         (self.step, self.payload_energy, self.crash_energy) = (s.step, s.payload_energy, s.crash_energy);
-        self.heated.clone_from(&s.heated);
+        // Each part as this machine has it, warmed as the snapshot's (a deserialized one carries no part).
+        for (mine, theirs) in self.heated.iter_mut().zip(&s.heated) {
+            *mine = HeatedPart { part: std::mem::take(&mut mine.part), ..theirs.clone() };
+        }
         self.obstacles.clone_from(&s.obstacles);
         (self.clearance, self.least_clearance, self.crashed) = (s.clearance, s.least_clearance, s.crashed);
         self.contact.clone_from(&s.contact);

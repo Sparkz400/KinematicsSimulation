@@ -11,7 +11,7 @@ use sim_core::{Config, ConfigError};
 type Result<T> = std::result::Result<T, ConfigError>;
 
 /// How a drive stops when the drives trip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Reaction {
     /// OFF1: the speed setpoint ramps down on the ramp-function generator's ramp (p1121), the speed controller
     /// following it; at standstill the pulses go off.
@@ -49,7 +49,7 @@ impl Reaction {
 }
 
 /// The monitor that tripped the drives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Monitor {
     FollowingError,
     Standstill,
@@ -71,7 +71,7 @@ impl Monitor {
 
 /// One drive's fault reaction and monitoring, from `[drive]` (and its motor's `[drive.<id>]`). Angles and speeds at the
 /// motor, rad and rad/s (m and m/s for a linear motor).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub reaction: Reaction,
     /// The ramps' decelerations, rad/s^2: the rated speed over `drive.off1_ramp_s` and `off3_ramp_s`, as p1121 and
@@ -138,7 +138,7 @@ impl Settings {
 
 /// One drive's monitoring as it runs: how long its setpoint has stood still and how long it has been held at its
 /// torque limit at low speed.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Watch {
     still: f64,
     blocked: f64,
@@ -168,7 +168,7 @@ impl Watch {
 /// The first trip since the drives were last enabled: which monitor of which drive, when (s), and the tool pose then;
 /// how far each tool axis has gone since (the stopping distance, in the axis' unit, final once `stopped`); and when
 /// the machine stood (s): every drive off and every motor below its pulse-off speed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fault {
     pub monitor: Monitor,
     pub drive: usize,

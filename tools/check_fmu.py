@@ -14,6 +14,8 @@ MACHINE is a registered machine's id, or a machine file (.toml or .json) that `s
    the outputs by the first setpoint input is zero, as is the finite difference by hand.
 4. A move through the inputs command.target.* and command.move gives the outputs of `sim-cli run --move`; with the
    log category logEvents switched on it is one message of that category, and with all switched off nothing is logged.
+5. The same target as a path file through command.path_file and command.run_path, with the parameter time_optimal,
+   gives the outputs of `sim-cli run --path FILE --time-optimal`.
 Exits 1 on any failure.
 """
 import argparse, os, shutil, subprocess, sys, tempfile
@@ -200,6 +202,41 @@ else:
           f"{'one logEvents message' if one_event else f'UNEXPECTED {messages}'}, "
           f"{'none with logging off' if quiet else 'MESSAGES WITH LOGGING OFF'}")
     failed |= move_worst > REL_TOL or not one_event or not quiet
+
+# 5. The same target as a path file through command.path_file and command.run_path, with the parameter time_optimal:
+#    the outputs of `sim-cli run --path FILE --time-optimal`.
+if moved is not None:
+    with tempfile.TemporaryDirectory() as d:
+        path_file, out = os.path.join(d, "line.path"), os.path.join(d, "path.csv")
+        with open(path_file, "w") as f:
+            f.write("line," + ",".join(repr(x) for x in target) + "\n")
+        cmd = [os.path.abspath(a.cli), "run", *machine, *(["--config", a.config] if a.config else []), "--path",
+               path_file, "--time-optimal", "--time", str(a.stop), "--every", "1", "--out", out]
+        subprocess.run(cmd, check=True, capture_output=True)
+        planned = np.genfromtxt(out, delimiter=",", names=True, deletechars="")
+        by_name = {v.name: v.valueReference for v in md.modelVariables}
+        cls = FMU3Slave if v3 else FMU2Slave
+        s = cls(guid=md.guid, unzipDirectory=unzipped, modelIdentifier=md.coSimulation.modelIdentifier, instanceName="path")
+        s.instantiate()
+        s.setBoolean([by_name["time_optimal"], by_name["command.run_path"]], [True, True])
+        s.setString([by_name["command.path_file"]], [path_file])
+        if v3:
+            s.enterInitializationMode(startTime=0.0)
+        else:
+            s.setupExperiment(startTime=0.0)
+            s.enterInitializationMode()
+        s.exitInitializationMode()
+        rows = []
+        for k in range(steps):
+            s.doStep(k * step, step)
+            rows.append(get(s, out_refs))
+        s.terminate(); s.freeInstance()
+    pcols = {n.split("[")[0]: n for n in planned.dtype.names}
+    prows = np.searchsorted(planned[pcols["time"]], times - 1e-9)
+    path_worst = max(np.max(np.abs(np.array([r[i] for r in rows]) - planned[pcols[name]][prows]))
+                     / max(np.max(np.abs(planned[pcols[name]][prows])), 1e-12) for i, name in enumerate(outputs))
+    print(f"time-optimal path input: worst {path_worst:.1e} against sim-cli run --path --time-optimal")
+    failed |= path_worst > REL_TOL
 shutil.rmtree(unzipped, ignore_errors=True)
 
 print(f"{a.machine} {a.config or ''} (FMI {md.fmiVersion}): {len(problems)} validator problems, {len(outputs)} outputs, "

@@ -363,7 +363,7 @@ fn a_saved_fmu_state_restores_the_simulation_bit_for_bit() {
         bytes.resize(size, 0);
         assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size), fmi2OK);
         assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size - 1), fmi2Error);
-        assert!(bytes.starts_with(b"sim-fmi state 2\0"));
+        assert!(bytes.starts_with(b"sim-fmi state 3\0"));
         assert_eq!(fmi2FreeFMUstate(c, &mut state), fmi2OK);
         assert!(state.is_null());
         fmi2FreeInstance(c);
@@ -515,8 +515,8 @@ fn a_state_that_cannot_be_set_leaves_the_instance_as_it_was() {
 }
 
 /// On every machine with its cycle started through `command.cycle`: a state taken on the way, set after the
-/// simulation ran on, gives bit for bit the steps it gave the first time, from its snapshot; serialized (without the
-/// snapshot) and set on a new instance, from replaying its steps, the same again.
+/// simulation ran on, gives bit for bit the steps it gave the first time, from its snapshot; serialized with the
+/// snapshot as bytes and set on a new instance (no steps to replay: a serialized state has none), the same again.
 #[test]
 fn a_restored_snapshot_continues_as_the_simulation_did_on_every_machine() {
     for entry in MACHINES.iter().copied().chain(machine_files()) {
@@ -555,7 +555,12 @@ fn a_restored_snapshot_continues_as_the_simulation_did_on_every_machine() {
             assert_eq!(fmi2SetFMUstate(other, restored), fmi2OK);
             assert_eq!(fmi2FreeFMUstate(other, &mut restored), fmi2OK);
         }
-        assert_eq!((15..30).map(|k| step(other, k)).collect::<Vec<_>>(), after, "{}: replayed", entry.id);
+        assert_eq!(
+            (15..30).map(|k| step(other, k)).collect::<Vec<_>>(),
+            after,
+            "{}: from the serialized snapshot",
+            entry.id
+        );
         unsafe { fmi2FreeInstance(other) };
     }
 }
@@ -644,6 +649,62 @@ fn the_move_and_path_inputs_move_the_machine() {
             set_text(c, vr(&model, &Kind::PathText), "this is not a path");
             set_bool(c, vr(&model, &Kind::RunPath), true);
             unsafe { assert_eq!(fmi2DoStep(c, (k + 1) as f64 * interval, interval, 1), fmi2Warning) };
+        }
+        unsafe { fmi2FreeInstance(c) };
+    }
+}
+
+/// With the parameter `time_optimal`, `command.path_file` and `command.run_path` run a path as `sim-cli run --path FILE
+/// --time-optimal` does (`Sim::plan_path` timed at the motor limits, then `Command::Trajectory`), bit for bit; and
+/// `command.trajectory_file` runs its poses at times as `sim-cli run --trajectory FILE` does (`parse_trajectory`, then
+/// `Command::Trajectory`): the planned poses written with every digit give the same run again.
+#[test]
+fn a_time_optimal_path_and_a_trajectory_file_run_as_with_the_cli() {
+    let entry = MACHINES[0];
+    let (model, resources) = unpack(entry, "optimal");
+    let cfg = load_config(entry, &model.config_text).unwrap();
+    let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
+    let signals = signal_refs(&model);
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let axis = sim.machine.axes()[0].clone();
+    let mut target = sim.control.set_pos.clone();
+    target[0] += if target[0] < 0.5 * (axis.min + axis.max) { 0.05 } else { -0.05 } * (axis.max - axis.min);
+    let line = format!("line,{}\n", target.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>().join(","));
+    let pieces = sim_components::path::parse(&line).unwrap();
+    let optimal = sim.plan_path(&pieces, true).unwrap();
+    assert_ne!(optimal, sim.plan_path(&pieces, false).unwrap(), "timed at the motor limits, not at the axis limits");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let (path_file, trajectory_file) =
+        (dir.join(format!("fmi-optimal-{}.path", entry.id)), dir.join(format!("fmi-optimal-{}.csv", entry.id)));
+    std::fs::write(&path_file, &line).unwrap();
+    let poses: String = optimal
+        .iter()
+        .map(|(t, pose)| format!("{t:?},{}\n", pose.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>().join(",")))
+        .collect();
+    std::fs::write(&trajectory_file, format!("time,pose\n{poses}")).unwrap();
+    // The plain simulation, as the command line runs it, sampled at every communication point.
+    let steps = (interval / sim.dt).round() as u64;
+    sim.command(Command::Trajectory(optimal.clone())).unwrap();
+    let mut expected = Vec::new();
+    for _ in 0..(optimal.last().unwrap().0 / interval).ceil() as usize + 20 {
+        (0..steps).for_each(|_| sim.step());
+        let mut sample = Vec::new();
+        sim.sample(&mut sample);
+        expected.push(sample);
+    }
+    for by_trajectory in [false, true] {
+        let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
+        if by_trajectory {
+            set_text(c, vr(&model, &Kind::TrajectoryFile), trajectory_file.to_str().unwrap());
+        } else {
+            set_bool(c, vr(&model, &Kind::TimeOptimal), true);
+            set_text(c, vr(&model, &Kind::PathFile), path_file.to_str().unwrap());
+        }
+        set_bool(c, vr(&model, &Kind::RunPath), true);
+        start(c);
+        for (k, row) in expected.iter().enumerate() {
+            unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "step {k}") };
+            assert_eq!(&get_reals(c, &signals), row, "trajectory file {by_trajectory}, step {k}");
         }
         unsafe { fmi2FreeInstance(c) };
     }

@@ -35,7 +35,7 @@ use crate::drive::DriveParams;
 use sim_core::{AxisInfo, Machine};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Piece {
     /// Straight to this point.
     Line(Vec<f64>),
@@ -519,7 +519,7 @@ fn geometry(
 /// How far a planned path may leave the pieces as given: `path` for the transition curves where pieces meet in their
 /// direction (`profile.path_tolerance_m`), `corner` for rounding the corners between lines (`round_corners`,
 /// `profile.corner_tolerance_m`). A tolerance alone is a path tolerance, with corners stopped at.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tolerance {
     pub path: f64,
     pub corner: f64,
@@ -1628,7 +1628,7 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 
 /// What a time-optimal plan keeps within beside each motor's torque-speed curve, its rated speed and the axes' jerk
 /// limits (see `plan_time_optimal`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlanLimits {
     /// The share of each torque limit the plan may use (`profile.torque_reserve`): of the motor's torque-speed curve, of
     /// the torque of the drive's maximum current, and of the gearbox's and the pulley's torque rating.

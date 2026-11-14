@@ -19,7 +19,7 @@ use std::f64::consts::TAU;
 
 type Result<T> = std::result::Result<T, ConfigError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DriveParams {
     pub kv: f64,
     pub kp: f64,
@@ -123,7 +123,7 @@ pub struct DriveParams {
 
 /// What the drive does with the setpoints between and beside the gains, as a SINAMICS S120/S210 in DSC is set up.
 /// The default is the drive before 14 November 2026: setpoint held, rigid model, no friction, no balancing.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Precontrol {
     /// effects.fine_interpolation: between profile cycles the position loop's setpoint runs on from the last
     /// setpoints as pos + v t + a t^2 / 2, as the speed feedforward runs on as v + a t (its derivative), the drive's
@@ -161,7 +161,7 @@ impl Precontrol {
 /// effects.braking_resistor_heating: the braking resistor as one heat capacity, rise' = (rated_rise P / P_continuous -
 /// rise) / tau: at its continuous power it settles at its rated rise, and a peak of its peak power for the duty cycle the
 /// catalogue gives (`braking_s120.csv`) warms it within the time constant.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResistorHeating {
     pub continuous_power: f64,
     pub time_constant: f64,
@@ -184,7 +184,7 @@ impl ResistorHeating {
 ///   torque = kt i_q + pole pairs (L_d - L_q) i_d i_q.
 /// Above base speed the drive sets a negative d current, the least that brings the voltage within the circle
 /// (`DriveParams::d_current_for`); i_q^2 + i_d^2 is the RMS phase current squared.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FieldWeakening {
     pub pole_pairs: f64,
     /// d-axis inductance as the winding has it (three times the phase value); the q axis's is `DriveParams::inductance`.
@@ -198,7 +198,7 @@ pub struct FieldWeakening {
 /// the image is back at 1. The trip level follows from the time the drive gives its maximum current from the rated load:
 /// trip = r^2 - (r^2 - 1) ((1 - w) exp(-t_max / tau) + w exp(-t_max / tau_c)) for r = I_max / I_rated. With w = 0 the
 /// one node of 14 November 2026.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Overload {
     pub rated_current: f64,
     pub base_current: f64,
@@ -279,7 +279,7 @@ impl Overload {
 /// The resistances add up to the one-node model's, rated rise over rated loss, so the settled rises stay; the winding
 /// has the share `winding_share` of it (to the housing) and the time constant `winding_time_constant` against the
 /// housing. The heat capacities add up to the one-node model's too (thermal time constant over the resistance).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ThermalNodes {
     pub winding_share: f64,
     pub winding_time_constant: f64,
@@ -738,7 +738,7 @@ fn notch_coefficients(frequency: f64, bandwidth: f64, cycle: f64) -> [f64; 5] {
 }
 
 /// The loops and filters of one drive.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Drive {
     pub pos_set: f64,
     /// Speed setpoint at the last profile cycle, and its rate until the next one.

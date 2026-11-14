@@ -101,7 +101,7 @@ impl Default for Scene {
 
 /// A box with its edges along the scene's axes: an obstacle, or a part of the machine that can hit one
 /// (`Machine::collision_bodies`). Metres, in scene coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Aabb {
     pub centre: [f64; 3],
     pub size: [f64; 3],
@@ -187,7 +187,7 @@ impl Capsule {
 /// An obstacle of the config (`[[obstacles]]`), and whether a part of the machine touches it now. With effects.crash
 /// it pushes back on a part that goes into it with `stiffness` (N/m) times the depth and `damping` (N s/m) times the
 /// speed into it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Obstacle {
     pub name: String,
     pub aabb: Aabb,

@@ -7,11 +7,13 @@
 //! derivatives. The rest (input derivatives, asynchronous steps, status queries) return `fmi2Error`; the model
 //! description says so. A panic inside the simulation returns `fmi2Fatal` instead of taking the importing tool down.
 //!
-//! An FMU state is what the importer set, the inputs each communication step applied, and a snapshot of the simulation
-//! (`Sim::snapshot`). Setting it builds a fresh simulation from the parameters and restores the snapshot into it, which
-//! takes as long as building the machine; a state from `fmi2DeSerializeFMUstate` has no snapshot and replays the
-//! steps from the start instead. Either gives bit for bit the simulation that was saved (tested). A state that cannot
-//! be set (its config file gone, say) leaves the instance as it was.
+//! An FMU state is what the importer set, the triggers as the last step saw them, and a snapshot of the simulation
+//! (`Sim::snapshot`) with its outputs. Setting it builds a fresh simulation from the parameters and restores the snapshot
+//! into it, which takes as long as building the machine, however long the simulation ran. Serialized, the snapshot is
+//! written as bytes (`postcard`, behind a header with the format and the FMU's version), so a state from
+//! `fmi2DeSerializeFMUstate` is set as fast. Either gives bit for bit the simulation that was saved (tested). A state of
+//! another format or version of the FMU is refused by name; one that cannot be set (its config file gone, say) leaves
+//! the instance as it was.
 //!
 //! Log categories (`LOG_CATEGORIES`): `logEvents` (the commands the trigger inputs gave, states set) is on when the
 //! instance was made with logging on; `logStatusWarning` and `logStatusError` are on from the start; `SetDebugLogging`
@@ -88,8 +90,7 @@ pub(crate) enum Logger {
     Fmi3(Option<fmi3LogMessageCallback>),
 }
 
-/// What one communication step gave the simulation, to replay it.
-#[derive(Debug, Clone, PartialEq)]
+/// What one communication step gives the simulation.
 struct Applied {
     steps: u32,
     enable: bool,
@@ -105,8 +106,8 @@ const EVENTS: usize = 0;
 const WARNINGS: usize = 1;
 const ERRORS: usize = 2;
 
-/// An FMU state: what the importer set, the triggers as the last step saw them, every communication step since
-/// initialisation, and in memory the simulation with its outputs (none once serialized).
+/// An FMU state: what the importer set, the triggers as the last step saw them, and in step mode the simulation's
+/// snapshot with its outputs.
 #[derive(Clone)]
 pub struct FmuState {
     guid: String,
@@ -114,7 +115,6 @@ pub struct FmuState {
     start_time: f64,
     set: Vec<Option<Value>>,
     latched: [bool; 3],
-    log: Vec<Applied>,
     snapshot: Option<(Snapshot, Vec<f64>)>,
 }
 
@@ -133,8 +133,6 @@ pub struct Instance {
     sample: Vec<f64>,
     /// What `fmi2GetString` handed out, valid until its next call.
     strings: Vec<CString>,
-    /// Every communication step since initialisation, for the FMU state.
-    log: Vec<Applied>,
     /// The triggers `command.cycle`, `command.move`, `command.run_path` as the last communication step saw them.
     latched: [bool; 3],
     /// Per log category (`EVENTS`, `WARNINGS`, `ERRORS`): whether its messages go to the logger.
@@ -478,7 +476,6 @@ impl Instance {
     pub(crate) fn reset(&mut self) -> Result<fmi2Status, Fail> {
         (self.mode, self.start_time, self.sim) = (Mode::Instantiated, 0.0, None);
         self.set.iter_mut().for_each(|v| *v = None);
-        self.log.clear();
         self.latched = [false; 3];
         Ok(fmi2OK)
     }
@@ -543,7 +540,6 @@ impl Instance {
         }
         self.latched = on;
         let refused = apply(self.sim.as_mut().expect("checked above"), &applied);
-        self.log.push(applied);
         warnings.extend(refused.iter().map(|key| self.tr.tr_arg("fmi-refused", self.tr.tr(key))));
         for warning in &warnings {
             self.note(WARNINGS, fmi2Warning, warning);
@@ -552,17 +548,27 @@ impl Instance {
         Ok(if warnings.is_empty() { fmi2OK } else { fmi2Warning })
     }
 
-    /// The path of `command.path_file` (where it is not empty) or of `command.path`, planned from where the machine
-    /// stands within the axis limits, as `sim-cli run --path` plans it.
+    /// The poses of `command.trajectory_file` where it is not empty, else the path or program of `command.path_file`
+    /// (where it is not empty) or of `command.path`, planned from where the machine stands as `sim-cli run --path` plans
+    /// it: within the axis limits, or with `time_optimal` as fast as the motors allow.
     fn planned_path(&self, sim: &Sim) -> Result<Vec<(f64, Vec<f64>)>, Fail> {
+        let read = |file: &str| std::fs::read_to_string(file).map_err(|e| ("fmi-error-path", format!("{file}: {e}")));
+        let trajectory = self.text_value(self.find(&Kind::TrajectoryFile));
+        if !trajectory.is_empty() {
+            return sim_components::path::parse_trajectory(&read(&trajectory)?)
+                .map_err(|line| ("fmi-error-path", format!("{trajectory}: {line}")));
+        }
         let file = self.text_value(self.find(&Kind::PathFile));
-        let text = if file.is_empty() {
-            self.text_value(self.find(&Kind::PathText))
-        } else {
-            std::fs::read_to_string(&file).map_err(|e| ("fmi-error-path", format!("{file}: {e}")))?
-        };
-        let pieces = sim_components::path::parse(&text).map_err(|line| ("fmi-error-path", line))?;
-        sim.plan_path(&pieces, false).map_err(|e| ("fmi-error-path", self.tr.tr(e.key).to_string()))
+        let text = if file.is_empty() { self.text_value(self.find(&Kind::PathText)) } else { read(&file)? };
+        let time_optimal = self.bool_value(self.find(&Kind::TimeOptimal));
+        let runs = sim_components::program::read(&file, &text, sim.machine.axes(), sim.control.planned_pos())
+            .map_err(|e| ("fmi-error-path", format!("{file}:{}: {}", e.line, self.tr.tr_arg(e.key, &e.detail))))?;
+        // A program with feeds is planned run by run; one run at the axes' limits as a path file is.
+        match runs.as_slice() {
+            [run] if run.feed.is_none() => sim.plan_path(&run.pieces, time_optimal),
+            _ => sim.plan_program(&runs, time_optimal),
+        }
+        .map_err(|e| ("fmi-error-path", self.tr.tr(e.key).to_string()))
     }
 
     pub(crate) fn get_state(&self) -> FmuState {
@@ -573,42 +579,28 @@ impl Instance {
             start_time: self.start_time,
             set: self.set.clone(),
             latched: self.latched,
-            log: self.log.clone(),
             snapshot: self.sim.as_ref().filter(|_| stepping).map(|sim| (sim.snapshot(), self.sample.clone())),
         }
     }
 
     /// Sets a state: in step mode the simulation is built from the state's parameters and its snapshot restored into
-    /// it, or without one (a deserialized state) its steps replayed. Everything is built before anything is changed,
-    /// so a state that cannot be set leaves the instance as it was.
+    /// it. Everything is built before anything is changed, so a state that cannot be set leaves the instance as it was.
     pub(crate) fn set_state(&mut self, state: &FmuState) -> Result<fmi2Status, Fail> {
+        let refused = || ("fmi-error-fmu-state", state.guid.clone());
         if state.guid != self.model.guid || state.set.len() != self.set.len() {
-            return Err(("fmi-error-fmu-state", state.guid.clone()));
+            return Err(refused());
         }
-        let (sim, sample, how) = if matches!(state.mode, Mode::Stepping | Mode::Terminated) {
+        let (sim, sample) = if matches!(state.mode, Mode::Stepping | Mode::Terminated) {
+            let (snapshot, sample) = state.snapshot.as_ref().ok_or_else(refused)?;
             let mut sim = self.build_sim(&state.set)?;
-            match &state.snapshot {
-                Some((snapshot, sample)) => {
-                    sim.restore(snapshot).map_err(|_| ("fmi-error-fmu-state", state.guid.clone()))?;
-                    (Some(sim), sample.clone(), "snapshot")
-                }
-                None => {
-                    // shortcut: a deserialized state replays every step since initialisation, as long as simulating up
-                    // to it took, and its log grows with each step; serialize the snapshot once `Controller` and the
-                    // drives can be written to bytes.
-                    for applied in &state.log {
-                        apply(&mut sim, applied);
-                    }
-                    let sample = sample_of(&sim, state.start_time);
-                    (Some(sim), sample, "replay")
-                }
-            }
+            sim.restore(snapshot).map_err(|_| refused())?;
+            (Some(sim), sample.clone())
         } else {
-            (None, Vec::new(), "")
+            (None, Vec::new())
         };
         (self.mode, self.start_time, self.set, self.sim) = (state.mode, state.start_time, state.set.clone(), sim);
-        (self.sample, self.latched, self.log) = (sample, state.latched, state.log.clone());
-        self.note(EVENTS, fmi2OK, &self.tr.tr_arg("fmi-log-state", &format!("{:?} {how} {:?}", self.mode, self.now())));
+        (self.sample, self.latched) = (sample, state.latched);
+        self.note(EVENTS, fmi2OK, &self.tr.tr_arg("fmi-log-state", &format!("{:?} {:?}", self.mode, self.now())));
         Ok(fmi2OK)
     }
 
@@ -631,20 +623,19 @@ impl Instance {
     }
 }
 
-const STATE_MAGIC: &[u8] = b"sim-fmi state 2\0";
+/// The serialized state's format; a state of another one (format 2 replayed its steps) is refused by name.
+const STATE_MAGIC: &[u8] = b"sim-fmi state 3\0";
 
 impl FmuState {
-    /// The state as bytes, without the snapshot: little-endian numbers, lengths as u64, texts as UTF-8.
+    /// The state as bytes: the format, the FMU's version, then little-endian numbers, lengths as u64, texts as UTF-8,
+    /// and the snapshot as `postcard` writes it (its layout is the version's, hence the version in front).
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = STATE_MAGIC.to_vec();
         let text = |out: &mut Vec<u8>, t: &str| {
             out.extend((t.len() as u64).to_le_bytes());
             out.extend(t.as_bytes());
         };
-        let numbers = |out: &mut Vec<u8>, v: &[f64]| {
-            out.extend((v.len() as u64).to_le_bytes());
-            v.iter().for_each(|x| out.extend(x.to_le_bytes()));
-        };
+        text(&mut out, env!("CARGO_PKG_VERSION"));
         text(&mut out, &self.guid);
         out.push(self.mode as u8);
         out.extend(self.start_time.to_le_bytes());
@@ -664,48 +655,41 @@ impl FmuState {
                 }
             }
         }
-        out.extend((self.log.len() as u64).to_le_bytes());
-        for applied in &self.log {
-            out.extend(applied.steps.to_le_bytes());
-            out.push(applied.enable as u8);
-            out.extend((applied.commands.len() as u64).to_le_bytes());
-            for command in &applied.commands {
-                match command {
-                    Command::StartCycle => out.push(0),
-                    Command::Stop => out.push(1),
-                    Command::MoveTo(target) => {
-                        out.push(2);
-                        numbers(&mut out, target);
-                    }
-                    Command::Trajectory(points) => {
-                        out.push(3);
-                        out.extend((points.len() as u64).to_le_bytes());
-                        for (time, pose) in points {
-                            out.extend(time.to_le_bytes());
-                            numbers(&mut out, pose);
-                        }
-                    }
-                    // `do_step` gives no other command; one would not read back.
-                    _ => out.push(u8::MAX),
-                }
-            }
-            out.extend((applied.setpoints.len() as u64).to_le_bytes());
-            for s in &applied.setpoints {
-                match s {
-                    None => out.push(0),
-                    Some(v) => {
-                        out.push(1);
-                        out.extend(v.to_le_bytes());
-                    }
-                }
+        match &self.snapshot {
+            None => out.push(0),
+            Some((snapshot, sample)) => {
+                out.push(1);
+                out.extend((sample.len() as u64).to_le_bytes());
+                sample.iter().for_each(|x| out.extend(x.to_le_bytes()));
+                // Numbers, vectors and enums written to a vector: nothing that can fail.
+                let bytes = postcard::to_allocvec(snapshot).expect("a snapshot is plain data");
+                out.extend((bytes.len() as u64).to_le_bytes());
+                out.extend(bytes);
             }
         }
         out
     }
 
-    /// The state from `to_bytes`; none for anything else, a truncated or extended state among it.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut read = Reader(bytes.strip_prefix(STATE_MAGIC)?);
+    /// The state from `to_bytes`. A state of another format or version is refused as such
+    /// (`fmi-error-fmu-state-version`), anything else that does not read back whole (cut off, extended) as damaged.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, Fail> {
+        let damaged = || ("fmi-error-fmu-state", format!("{} bytes", bytes.len()));
+        let Some(rest) = bytes.strip_prefix(STATE_MAGIC) else {
+            if !bytes.starts_with(b"sim-fmi state ") {
+                return Err(damaged());
+            }
+            let format = bytes.iter().take(STATE_MAGIC.len()).take_while(|b| **b != 0).map(|b| *b as char);
+            return Err(("fmi-error-fmu-state-version", format.collect()));
+        };
+        let mut read = Reader(rest);
+        let version = read.text().ok_or_else(damaged)?;
+        if version != env!("CARGO_PKG_VERSION") {
+            return Err(("fmi-error-fmu-state-version", version));
+        }
+        Self::read(&mut read).filter(|_| read.0.is_empty()).ok_or_else(damaged)
+    }
+
+    fn read(read: &mut Reader) -> Option<Self> {
         let guid = read.text()?;
         let mode = match read.u8()? {
             0 => Mode::Instantiated,
@@ -726,36 +710,16 @@ impl FmuState {
                 _ => return None,
             });
         }
-        let mut log = Vec::new();
-        for _ in 0..read.u64()? {
-            let (steps, enable) = (u32::from_le_bytes(read.take(4)?.try_into().ok()?), read.u8()? != 0);
-            let mut commands = Vec::new();
-            for _ in 0..read.u64()? {
-                commands.push(match read.u8()? {
-                    0 => Command::StartCycle,
-                    1 => Command::Stop,
-                    2 => Command::MoveTo(read.numbers()?),
-                    3 => {
-                        let mut points = Vec::new();
-                        for _ in 0..read.u64()? {
-                            points.push((read.f64()?, read.numbers()?));
-                        }
-                        Command::Trajectory(points)
-                    }
-                    _ => return None,
-                });
+        let snapshot = match read.u8()? {
+            0 => None,
+            1 => {
+                let sample = read.numbers()?;
+                let n = usize::try_from(read.u64()?).ok()?;
+                Some((postcard::from_bytes(read.take(n)?).ok()?, sample))
             }
-            let mut setpoints = Vec::new();
-            for _ in 0..read.u64()? {
-                setpoints.push(match read.u8()? {
-                    0 => None,
-                    1 => Some(read.f64()?),
-                    _ => return None,
-                });
-            }
-            log.push(Applied { steps, enable, commands, setpoints });
-        }
-        read.0.is_empty().then_some(Self { guid, mode, start_time, set, latched, log, snapshot: None })
+            _ => return None,
+        };
+        Some(Self { guid, mode, start_time, set, latched, snapshot })
     }
 }
 
@@ -858,7 +822,6 @@ pub(crate) fn instantiate(
             sim: None,
             sample: Vec::new(),
             strings: Vec::new(),
-            log: Vec::new(),
             latched: [false; 3],
             logging: [logging_on, true, true],
         })
@@ -977,9 +940,10 @@ pub(crate) unsafe fn state_deserialize(
 ) -> fmi2Status {
     unsafe {
         with(c, |i| {
-            let state = FmuState::from_bytes(slice(bytes, size)?)
-                .filter(|s| s.guid == i.model.guid && s.set.len() == i.model.variables.len());
-            let state = state.ok_or(("fmi-error-fmu-state", format!("{size} bytes")))?;
+            let state = FmuState::from_bytes(slice(bytes, size)?)?;
+            if state.guid != i.model.guid || state.set.len() != i.model.variables.len() {
+                return Err(("fmi-error-fmu-state", state.guid));
+            }
             let slot = slot.as_mut().ok_or(("fmi-error-fmu-state", "null".to_string()))?;
             match (*slot as *mut FmuState).as_mut() {
                 Some(old) => *old = state,
@@ -1280,7 +1244,7 @@ pub unsafe extern "C" fn fmi2DoStep(
     unsafe { with(c, |i| i.do_step(currentCommunicationPoint, communicationStepSize)) }
 }
 
-/// A copy of the instance's state: what was set and every step so far.
+/// A copy of the instance's state: what was set and the simulation's snapshot.
 ///
 /// # Safety
 /// See `with`; `state` points to null or to a state from this library, which is then overwritten.
@@ -1289,7 +1253,7 @@ pub unsafe extern "C" fn fmi2GetFMUstate(c: fmi2Component, state: *mut fmi2FMUst
     unsafe { state_get(c, state) }
 }
 
-/// Restores a state by replaying its steps from a fresh simulation: as long as simulating up to it took.
+/// Restores a state: a fresh simulation from its parameters, its snapshot restored into it.
 ///
 /// # Safety
 /// See `with`; `state` is a state from this library.
@@ -1386,4 +1350,40 @@ unsupported! {
     fmi2GetIntegerStatus(kind: c_int, value: *mut fmi2Integer);
     fmi2GetBooleanStatus(kind: c_int, value: *mut fmi2Boolean);
     fmi2GetStringStatus(kind: c_int, value: *mut fmi2String);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A state of format 2 (which replayed its steps) or of another version of the FMU is refused as such, by its
+    /// format or version, not as damaged; a whole state of this version reads back, and one byte more is damage.
+    #[test]
+    fn a_state_of_another_format_or_version_is_refused_by_name() {
+        let old = [b"sim-fmi state 2\0".as_slice(), &[0; 40]].concat();
+        assert_eq!(FmuState::from_bytes(&old).err(), Some(("fmi-error-fmu-state-version", "sim-fmi state 2".into())));
+        let mut other = STATE_MAGIC.to_vec();
+        other.extend(5u64.to_le_bytes());
+        other.extend(b"0.9.0");
+        assert_eq!(FmuState::from_bytes(&other).err(), Some(("fmi-error-fmu-state-version", "0.9.0".into())));
+        assert_eq!(FmuState::from_bytes(b"no state at all").err().map(|e| e.0), Some("fmi-error-fmu-state"));
+        let set = vec![None, Some(Value::Real(1.5)), Some(Value::Bool(true)), Some(Value::Text("Bahn ä".into()))];
+        let state = FmuState {
+            guid: "{guid}".into(),
+            mode: Mode::Initialising,
+            start_time: 0.25,
+            set: set.clone(),
+            latched: [true, false, true],
+            snapshot: None,
+        };
+        let bytes = state.to_bytes();
+        let back = FmuState::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            (back.guid.as_str(), back.mode, back.start_time, back.set, back.latched),
+            ("{guid}", Mode::Initialising, 0.25, set, [true, false, true])
+        );
+        assert!(back.snapshot.is_none());
+        let longer = [bytes.as_slice(), &[0]].concat();
+        assert_eq!(FmuState::from_bytes(&longer).err().map(|e| e.0), Some("fmi-error-fmu-state"));
+    }
 }

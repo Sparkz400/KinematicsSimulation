@@ -143,8 +143,8 @@ jobs:
       # pyo3 needs the interpreter set up above, which the job "test" does not have when it runs clippy.
       - name: Clippy of sim-py
         run: cargo clippy -p sim-py --release --all-targets --locked -- -D warnings
-      - name: Build sim-cli (the tests compare against it)
-        run: cargo build -p sim-cli --release --locked
+      - name: Build sim-cli and the FMU binary (the tests compare against them)
+        run: cargo build -p sim-cli -p sim-fmi --release --locked
       - name: Wheel and tests
         shell: bash
         run: |
