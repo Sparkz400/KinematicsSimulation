@@ -1,0 +1,54 @@
+schema_version = 1
+class = "linear_motor"
+key = ["part_number"]
+default_source = "1fn3-cm"
+notes = '''
+Source: Siemens, Configuration Manual "Linear motors SIMOTICS L-1FN3" for SINAMICS S120, edition 06/2023,
+A5E50685682B AB: the 98 data sheets of chapter 7.2 (electrical, thermal and mass data) and Tables 3-14, 3-16 and
+3-18 (lengths). Extracted by catalog/tools/extract_siemens_1fn3.py; the numbers are Siemens', the layout is ours.
+One row per primary section (coil unit). part_number: the article number as the data sheet heads it, e.g.
+  "1FN3100-2WC00-0xAx": the manual itself writes the last but one and the last digit as x (they select options,
+  e.g. -0BA3, and do not change the data). The digit after the dash is the length (1 to 5 coil groups).
+series: "1FN3 peak load" (letter W after the length digit) or "1FN3 continuous load" (letter N), the manual's two
+  1FN3 versions (Tables 3-13 to 3-18). Both are water-cooled motors; cooling is "water" for every row: all data
+  are for water cooling with the recommended minimum volume flow and 35 degC flow temperature (chapter 7, general
+  conditions); the manual gives no data without water cooling.
+General conditions of every data sheet: DC link voltage UDC 600 V (converter output voltage 425 V), winding at
+  rated temperature TN 120 degC, RMS values. line_voltage_v holds UDC = 600, the DC link voltage the speeds are
+  for (not a line voltage).
+continuous_force_n: rated force FN (S1). continuous_current_a: rated current IN. peak_force_n / peak_current_a:
+  FMAX / IMAX. max_speed_m_s: vMAX,FN, the highest speed with rated force; max_speed_at_peak_force_m_s: vMAX,FMAX;
+  both printed in m/min, divided by 60.
+force_constant_n_a: kF,20 (at 20 degC). back_emf_constant_v_s_m: kE, phase to neutral point (chapter 7.1.1:
+  "mutually induced voltage between the phase and the neutral point").
+motor_constant_n_sqrt_w: kM,20, at 20 degC (printed "N/W0.5", in four data sheets "N/(W)0.5").
+phase_resistance_20c_ohm: RSTR,20, the resistance of one phase (Strang) at 20 degC, as printed (the manual
+  translates it "line resistance", but its PV = 3 RSTR I^2 makes it the per-phase value). phase_inductance_h: LSTR
+  (phase inductance) in mH / 1000.
+pole_pitch_m: 2 x the pole width tauM. The manual defines tauM as the distance between the centres of a north and
+  the next south pole (15 mm for 1FN3050 to 1FN3150, 23 mm for 1FN3300 to 1FN3900); the schema's pole pitch is
+  north to north, so 30 mm and 46 mm.
+coil_mass_kg: mP, primary section without precision cooler. attraction_force_n: FA. thermal_time_constant_s: tTH.
+continuous_power_loss_w: PV,N, the power loss at the rated point at 120 degC, kW * 1000.
+magnet_track_unit_length_m: lS, the length of one secondary section (Tables 3-14/3-16/3-18: 120 mm or 184 mm).
+magnet_track_mass_kg_m: computed, mS / lS: the mass of one secondary section without screws, cover and heatsink
+  profiles (data sheet; the tables print the same) divided by its length, 6 significant digits.
+coil_length_m: lP, primary section length without the connection cover (Tables 3-14/3-16/3-18).
+paired_drive: empty; the manual has no motor-to-Motor-Module assignment.
+Misprints, kept out as noted:
+  1FN3450-2NB80-0xAx: its data sheet prints the unit "W" for every power (rated power loss 1.39, PEL,MAX 13.7,
+    ...) where all other data sheets print kW; Table 3-17 gives PV,N = 1.39 kW. Read as kW (1390 W here).
+  Table 3-15 gives FN = 3910 N for 1FN3600-3WB50-0xAx; its data sheet and Table 3-13 give 3920 N (taken).
+Not taken: static force F0* and stall current I0*, PEL,MAX, the masses with precision cooler or heatsink profiles,
+  cooling circuit data, the magnetically active length lP,AKT, the 1FN3 secondary section article numbers and the
+  characteristic curves.
+'''
+
+[[sources]]
+id = "1fn3-cm"
+document = "Siemens, SINAMICS S120 Linear motors SIMOTICS L-1FN3, Configuration Manual, A5E50685682B AB"
+date = "2023-06"
+locator = "chapter 7.2 \"Data sheets and characteristics\" (98 data sheets, pages 190 to 482); Tables 3-13 to 3-18 (pages 58 to 67)"
+method = "script:tools/extract_siemens_1fn3.py"
+url = "https://cache.industry.siemens.com/dl/files/768/109475768/att_1151738/v1/1FN3_config_man_0623_en-US.pdf"
+retrieved = "2026-11-14"

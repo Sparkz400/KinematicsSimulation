@@ -1,0 +1,23 @@
+part_number,series,size,carriage_type,rail_width_m,height_m,carriage_length_m,dynamic_load_rating_n,dynamic_load_rating_distance_m,static_load_rating_n,static_moment_x_nm,static_moment_y_nm,static_moment_z_nm,carriage_mass_kg,rail_mass_kg_m,seal_drag_n
+HGH15CA,HG,15,HGH-CA: square; tap hole; assembly height high; heavy load,0.015,0.028,0.0614,14700,50000,23470,120,140,140,0.18,1.45,4.7
+HGH20CA,HG,20,HGH-CA: square; tap hole; assembly height high; heavy load,0.02,0.03,0.0775,27100,50000,36680,270,280,280,0.3,2.21,5.5
+HGH25CA,HG,25,HGH-CA: square; tap hole; assembly height high; heavy load,0.023,0.04,0.084,34900,50000,52820,420,490,490,0.51,3.21,6.28
+HGH30CA,HG,30,HGH-CA: square; tap hole; assembly height high; heavy load,0.028,0.045,0.0974,48500,50000,71870,660,700,700,0.88,4.47,7.06
+HGH35CA,HG,35,HGH-CA: square; tap hole; assembly height high; heavy load,0.034,0.055,0.1124,64600,50000,93880,1160,1090,1090,1.45,6.3,9.82
+HGH45CA,HG,45,HGH-CA: square; tap hole; assembly height high; heavy load,0.045,0.07,0.1394,103800,50000,146710,1980,2350,2350,2.73,10.41,7.66
+HGW15CC,HG,15,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.015,0.024,0.0614,14700,50000,23470,120,140,140,0.17,1.45,4.7
+HGW20CC,HG,20,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.02,0.03,0.0775,27100,50000,36680,270,280,280,0.4,2.21,5.5
+HGW25CC,HG,25,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.023,0.036,0.084,34900,50000,52820,420,490,490,0.59,3.21,6.28
+HGW30CC,HG,30,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.028,0.042,0.0974,48500,50000,71870,660,700,700,1.09,4.47,7.06
+HGW35CC,HG,35,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.034,0.048,0.1124,64600,50000,93880,1160,1090,1090,1.56,6.3,9.82
+HGW45CC,HG,45,HGW-CC: flange; combination (tap and drilled hole); assembly height low; heavy load,0.045,0.06,0.1394,103800,50000,146710,1980,2350,2350,2.79,10.41,7.66
+EGH15CA,EG,15,EGH-CA: square; tap hole; low profile; heavy load,0.015,0.024,0.0568,7830,50000,16190,130,100,100,0.15,1.25,2.94
+EGH20CA,EG,20,EGH-CA: square; tap hole; low profile; heavy load,0.02,0.028,0.0691,10310,50000,21130,220,160,160,0.24,2.08,3.92
+EGH25CA,EG,25,EGH-CA: square; tap hole; low profile; heavy load,0.023,0.033,0.0826,16270,50000,32400,380,320,320,0.41,2.67,3.92
+EGH30CA,EG,30,EGH-CA: square; tap hole; low profile; heavy load,0.028,0.042,0.0981,23700,50000,47460,680,550,550,0.76,4.35,4.9
+EGH35CA,EG,35,EGH-CA: square; tap hole; low profile; heavy load,0.034,0.048,0.108,33350,50000,64840,980,690,690,1.1,6.14,3.92
+EGW15CA,EG,15,EGW-CA: flange; tap hole; low profile; heavy load,0.015,0.024,0.0568,7830,50000,16190,130,100,100,0.21,1.25,2.94
+EGW20CA,EG,20,EGW-CA: flange; tap hole; low profile; heavy load,0.02,0.028,0.0691,10310,50000,21130,220,160,160,0.32,2.08,3.92
+EGW25CA,EG,25,EGW-CA: flange; tap hole; low profile; heavy load,0.023,0.033,0.0826,16270,50000,32400,380,320,320,0.59,2.67,3.92
+EGW30CA,EG,30,EGW-CA: flange; tap hole; low profile; heavy load,0.028,0.042,0.0981,23700,50000,47460,680,550,550,1.04,4.35,4.9
+EGW35CA,EG,35,EGW-CA: flange; tap hole; low profile; heavy load,0.034,0.048,0.108,33350,50000,64840,980,690,690,1.45,6.14,3.92

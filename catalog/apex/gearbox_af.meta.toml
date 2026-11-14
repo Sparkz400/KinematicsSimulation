@@ -1,0 +1,48 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "af-afr"
+notes = '''
+Source: Apex Dynamics, catalogue "High precision high speed planetary gearbox AF / AFR Series",
+APEX-2025-02-AF/AFR SERIES-1.0-TWN, printed pages 2 to 6. Extracted by catalog/tools/extract_apex.py; the numbers
+are Apex's, the layout is ours.
+AF is one of Apex's precision lines ("high precision", three backlash classes). It stands in for the AB / ABR series:
+  the AB / ABR catalogue (APEX-2022-11) on apexdyna.com has no text layer for its tables (glyphs drawn as outlines),
+  nor has the AD catalogue; the AF catalogue's tables are text. Only the inline AF is here; the right-angle AFR is
+  left out.
+Sizes AF042, AF060, AF075, AF100, AF140, AF180, AF220 (one and two stages) and AF060A, AF075A, AF100A, AF140A (two
+  stages only; the table prints no 1-stage values for them). Ratios 3 to 10 (one stage) and 12, 15, 16, 20, 25, 28,
+  30, 32, 35, 40, 45, 50, 60, 70, 80, 90, 100 (two stages), as the ordering code lists them.
+motor_frame: the standard input clamping hub bore C3 in mm, the first value of row C3 in the dimension tables of
+  page 5 (1-stage) and page 6 (2-stage); clamping_hub_diameter_m is the same bore in m. One row per size and ratio.
+  The optional bores (e.g. AF042 "11 / 12", AF075 2-stage "14 / 15.875 / 16", with the restrictions of the
+  footnotes, e.g. "AF042M1 ratio 5,10 offers C3 12 option") are left out.
+rated_output_torque: Nominal Output Torque T2N, per size and ratio.
+emergency_stop_output_torque: T2NOT, printed as "3 times of Nominal Output Torque"; computed here as 3 x T2N.
+max_output_torque: Max. acceleration torque T2B, printed as "T2B = 60% of T2NOT" (footnote 2); computed as 1.8 x T2N.
+rated_input_speed: Nominal Input Speed n1N; max_input_speed: Max. Input Speed n1B; r/min to rad/s.
+backlash: Standard Backlash P2 per stage, a maximum; backlash_reduced: Reduced Backlash P1 per stage, a maximum;
+  arcmin to rad. The Micro Backlash P0 class (1 arcmin one stage, 3 arcmin two stages, not for all sizes) is left
+  out: the schema has no column for a third class.
+torsional_stiffness: Torsional Rigidity in Nm/arcmin, one value per size for both stages; to N m/rad.
+max_radial_force / max_axial_force: F2rB / F2aB, applied to the output shaft center at 100 r/min (footnote 3).
+max_tilting_moment: M2K, one value per size.
+efficiency_full_load: Efficiency printed as a minimum, 97 % one stage, 94 % two stages; no load point given.
+mass: Weight in kg per size and stage.
+inertia_at_input: Mass Moments of Inertia J1 in kg cm2 per size and ratio (page 4); the catalogue does not say for
+  which bore; to kg m2.
+no_load_torque: not printed in the AF catalogue; not given.
+Not extracted: noise, Z2 of the tilting moment formula, dimensions, the AFR series.
+Kept as printed, possibly misprints: AF180 has F2aB 19,500 N above its F2rB 18,000 N (the only size with axial above
+  radial; the AFR table prints the same). The AFR specifications table of the same catalogue prints other axial loads for the same output
+  sizes: 5,800 N for size 100 (AF: 5,820 N) and 16,300 N for size 220 (AF: 25,000 N); the AF table's values are here.
+'''
+
+[[sources]]
+id = "af-afr"
+document = "Apex Dynamics, High precision high speed planetary gearbox AF / AFR Series, APEX-2025-02-AF/AFR SERIES-1.0-TWN"
+date = "2025-02"
+locator = "printed pages 2 (ordering code), 3 (Specifications / AF Series), 4 (Gearbox Inertia), 5 and 6 (Dimensions, row C3)"
+method = "script:tools/extract_apex.py"
+url = "https://www.apexdyna.com/uploadimages/catalog/15/Gearbox-AF-AFR-Series-tw-20260729-EV1.pdf"
+retrieved = "2026-11-14"

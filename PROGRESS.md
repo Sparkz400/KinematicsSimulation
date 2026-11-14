@@ -4016,3 +4016,59 @@ Left open:
   optimiser in the page (they would need many runs in one thread).
 - wasm-opt is not used: binaryen is not among CI's tools, and the module already runs ten times real time.
 - The planned path is not drawn in the view (the trail shows the travelled one); the trail keeps its last 40,000 points.
+
+## Catalogue mechanics (14 November)
+
+Other makers' gearboxes, ball screws, profile rail guides, linear motors, belts and belt axes in the catalogue, all
+from the makers' public documents (sources per table in its metadata, docs/catalogue.md "Mechanics"), and the search
+on them. Branch `claude/catalog-mech-ce66d7`.
+
+| What | How | Test |
+| --- | --- | --- |
+| Gearboxes | WITTENSTEIN SP+ MF (304) and TP+ MF (351) per ratio and clamping hub; Neugart PLE, PLN, PLFE (247; the 05.2026 edition prints T2D/n1D, and stiffness, inertia and most masses only as ranges: the conservative ends as `[estimate]`); Apex PEII (economy, 368) and AF (precision, 243); Harmonic Drive CSF, CSG, SHG (161, stiffness curve and hysteresis); Siemens SP100 now read, with its mass (Table 6-72) | `catalog.py validate` with `checks_mech.py` (one check per maker, each tried with values broken on purpose) |
+| Which gearbox fits | `catalog::gearboxes_for_motor(article, series)` (all ratios) and `fitting_gearboxes` (half to twice a ratio): Siemens' by frame, the SP+ on the 1FT2 only; other makers' by the motor's shaft (`<maker>/motor_shafts.csv`: Siemens 71, Beckhoff 10, SEW 7, Yaskawa 22 prefixes) against the clamping hub, the smallest hub that takes it. `--gearboxes` takes `wittenstein`, `wittenstein-sp`, `neugart-ple`, ... or a size prefix as before | `siemens_offers_its_sp_gearbox_on_the_1ft2_only` (1FK2105: none of `siemens-sp`; 1FT2105: SP100-05-20) |
+| A gearbox by name | Also sets `efficiency_torque_nm` (the rated torque), the no-load torque and speed, the stiffness curve (K1 to K3, T1, T2, hysteresis of a strain wave gear; a planetary's straight) where row and config have them; `-r` for the reduced backlash; efficiency kept where the maker prints charts only | `the_reduced_backlash_option_and_the_sp_mass_come_from_the_table` (3 and 5 arcmin, 7.3 kg, CSF32 K3 above K1) |
+| Ball screws | HIWIN FDW, FDC (Super S) and FSH ground screws (203) and the mounting factors; an axis by name puts lead, diameters, Ca, C0a, K, d n into every screw table; the search rules out by critical speed, d n and C0a first | `a_catalogue_screws_allowed_speed_agrees_with_the_makers_critical_speed_formula`: 25-5B2-FDW, root 22.324 mm, 1 m fixed-supported: 3.926602^2 x 0.022324 / 4 x sqrt(2.06e11 / 7850) = 440.8 rad/s = 4209.4 r/min, HIWIN 18.6719 x 22.324 / 1000^2 x 1e7 = 4168.3 r/min (1 % apart), 0.8 of it allowed; `a_screw_too_fast_for_the_axis_is_refused_before_any_motor_is_tried` (9600 r/min on a 5 mm lead) |
+| Guides | HIWIN HGH/HGW/EGH/EGW 15 to 45 (22); a guide set `HGH25CAx4` sets the guide ratings (4 C for 50 km, 4 C0 / 2) | `a_guide_sets_life_is_the_cube_of_its_carriages_rating_over_the_load`: 4 x 34900 = 139600 N, (139600 / 20000)^3 x 50 = 17003.6 km |
+| Linear motors | Siemens 1FN3 (98, S120) and Beckhoff AL8000 (30); a motor by name in N for N m (printed kF, coil mass, attraction and pole pitch); the linear motor axis's search tries them in place of rotary motors, the magnet track in the cost | `a_linear_motors_force_follows_its_current_and_force_constant`: 1FN3050-2WC00, s = 1 - 550 / (73.6 x 8.15) = 0.08309, F(8.15 A) = 550 N, F(2.72 A) = 73.6 x 2.72 x (1 - 0.08309 x 0.11139) = 198.34 N |
+| Belts, belt axes | Gates Synchro-Power steel cord (46 + tooth load), Megadyne min pulley teeth and thickness; Festo EGC-TB-KF (5), ELGA-TB (7), Rexroth CKR (11) as single axes by name and in the axis search | the checks; golden snapshots |
+
+Search results (release, 16 threads):
+
+- D3 with WITTENSTEIN SP+, 1FT21..: `search delta-d3 --series 1FT21 --gearboxes wittenstein-sp`, 725 candidates in 27 s, 280
+  pass; top: 1FT2104-5AF with SP+100MF-19-35 (32.4 kg for the three arms, tightest dc-link-energy 0.95).
+- EXCT-30 geared (`--set gearbox.ratio=3`, the EXCT itself is direct) with Neugart PLE, 1FK21..: 105 in 6 s, 35 pass;
+  top: 1FK2103-2AH with PLE060-14-3 (4.16 kg, drive-current 0.66).
+- Screw axis `--axes`, 1FK21..: 1028 candidates in 51 s (128 screws ruled out before simulating), 261 pass; top:
+  25-15K5-FDC with 1FK2104-5AF (6.70 kg, settling 0.97).
+- Linear motor axis `--axes --supply s120`: 784 in 36 s, 140 pass; top: 1FN3050-2WC00 on EGH15CAx4 (10.57 kg,
+  settling 0.82). `--supply beckhoff-400v`: 240, 106 pass; top AL8024-0G with AX5106.
+- Screw portal machine file `--axes --series 1FK2103-4`: 1104 candidates in about 11 min, 306 pass (screw and guide on Z).
+
+The golden files `catalog_golden.txt` and `catalog_snapshot.txt` were written anew (`UPDATE_GOLDEN=1`,
+`UPDATE_CATALOG_SNAPSHOT=1`): the other makers' gearboxes now fit motors with a shaft row, and a gearbox by name sets
+its efficiency torque and straight stiffness curve.
+
+Outside the area, kept small: `sim-components/src/catalog.rs` (the table list, gearbox and axis lookups delegated to the
+new `catalog/mechanics.rs`, the linear motor branch of `motor_data`/`apply_motor`, `articles_for`, `search_axes` over
+the mechanical axes, the generalised single belt axes), `sim-cli/src/main.rs` (doc comment of `search`),
+`catalog/schema/v1/servo_motor.schema.json` (`$defs.shaft`), `catalog/tools/cataloglib/legacy.py` (Megadyne's script now
+writes SI), `catalog/tools/cataloglib/checks.py` (runs `checks_mech.py`), docs/user-guide.md and benutzerhandbuch.md
+(one paragraph each), and `crates/sim-netlist/src/scissor.rs` (one line, `ShaftFriction::NONE`, as main has it: the
+base did not compile). No test suite was run here; only the new `catalog_mech` tests and the two golden writers.
+
+Left open:
+
+- WITTENSTEIN XP+ (ranges only), Apex AB/AD/AE (no text layer), Neugart per-ratio stiffness and inertia (Tec Data
+  Finder only), Harmonic Drive efficiency and no-load torque (charts), ContiTech and BRECO belts, THK and Rexroth guides,
+  Rexroth MKR, motor shafts of Kollmorgen, Lenze, Rexroth, Mitsubishi, B&R; Autonox publishes no axis data.
+- Gates belts are in the catalogue but not read by the simulator (a belt by name is Megadyne's).
+- A guide set is four carriages; its mass and seal drag do not change the config's carriage and guide friction; the
+  screw's nut drag, mass and efficiency per model are not printed. Rack machines get guides only where the config rates
+  them (the joint kit's rack axis does not).
+- A gearbox's fit by shaft assumes the maker's adapter plate for the flange; shaft length is not checked. A motor
+  without a shaft row gets no other maker's gearbox.
+- Linear motors in machine files (only `[linear_motor]` of the joint kit is told apart); the 1FN3 run at s120's 540 V
+  bus although their data are for 600 V.
+- The arm and SCARA configs' Harmonic Drive values differ from the 08/2026 tables in places (hysteresis at ratio 50,
+  grease input speeds, CSF32 inertia, CSF25 max torque 172 N m): for the `arms` session (see the shared notes).

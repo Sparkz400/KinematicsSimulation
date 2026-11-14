@@ -268,6 +268,8 @@ fn obstacles_are_drawn() {
         name: "fixture".into(),
         aabb: sim_core::Aabb { centre: [0.5, 0.2, 0.06], size: [0.1, 0.1, 0.1] },
         contact: false,
+        stiffness: 1.0e7,
+        damping: 1.0e3,
     };
     let mut out = Vec::new();
     sim_wasm::record_obstacle(&obstacle, &mut out);

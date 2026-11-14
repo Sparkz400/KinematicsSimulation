@@ -1,0 +1,51 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "p-series"
+notes = '''
+Source: Apex Dynamics, catalogue "Planetary Gearbox New Generation P-Series" (PEII / PGII / PAII / PSII / PNII / PD /
+PL / PFII), APEX-2025-06-PII/PIIR/PIIS SERIES-TWN, printed pages 02 to 04 and the glossary (page 43). Extracted by
+catalog/tools/extract_apex.py; the numbers are Apex's, the layout is ours.
+PEII is Apex's economy line: the catalogue calls the PII series "an economic high precision planetary gearbox". Only
+  the inline PEII is here (input clamping hub, keyed output shaft S2); the right-angle PEIIR and the shaft-input
+  PEIIS are left out. Sizes PEII050, PEII070, PEII090, PEII120, PEII155; ratios 3, 4, 5, 7, 10 (one stage) and 12,
+  15, 16, 20, 25, 30, 35, 40, 50, 70, 100 (two stages), as the performance table and the ordering code list them.
+motor_frame: the input clamping hub bore in mm, as printed in the column "(A) (C3)" of the PEII Gearbox Inertia table
+  (page 04); one row per bore the table gives a value for at that size and stage ("-" = not offered).
+  clamping_hub_diameter_m is the same bore in m. The motor adapter (dimensions C1 to C10) is motor specific.
+rated_output_torque: Nominal Output Torque T2N, per size and ratio.
+emergency_stop_output_torque: T2NOT, printed as "3 times T2N" for all sizes and ratios; computed here as 3 x T2N.
+  Glossary: the maximum permitted output torque, at most 1000 times in the service life.
+max_output_torque: Max. Acceleration Torque T2B, printed as "T2B = 60% of T2NOT"; computed here as 1.8 x T2N.
+  Glossary: transmitted briefly, up to 1000 cycles/h in cyclic operation S5.
+rated_input_speed: Nominal Input Speed n1N (S1, housing at most 90 degC, 25 degC ambient). max_input_speed: Max.
+  Input Speed n1B (S5, absolute limit). r/min converted to rad/s.
+no_load_torque: No Load Running Torque of the "PE II" rows, per stage (1-stage 3~10, 2-stage 12~100), measured at
+  ratio 10 (1-stage) or 100 (2-stage) and taken here for every ratio of the stage. no_load_torque_speed is left
+  empty: the catalogue's two statements of the measuring speed disagree. Footnote (4) of page 03 says "no loading at
+  3,000 RPM or at the respective Nominal Input Speed by bigger model size" (bigger sizes have n1N below 3000 r/min);
+  the glossary says 3000 r/min, or n1N where n1N is over 3000 r/min. Both: no load; glossary: 25 degC.
+backlash: Backlash of the "PE II" rows per stage, a maximum, measured at 2 % of T2N; arcmin to rad. PEII has no
+  reduced-backlash option (the "PE IIR" rows are the right-angle gearbox), so backlash_reduced is not given.
+torsional_stiffness: Torsional Rigidity in Nm/arcmin, one value per size for all ratios; to N m/rad.
+max_radial_force / max_axial_force: F2rB / F2aB, applied to the output shaft center at 100 r/min (footnote 3).
+max_tilting_moment: M2K, one value per size.
+efficiency_full_load: Efficiency of the "PE II" rows, printed as a minimum (97 % one stage, 94 % two stages); the
+  catalogue names no load point (glossary: "the transmission efficiency of the gears ... (without friction)").
+inertia_at_input: Moment of Inertia J1 in kg cm2 per bore and stage (not per ratio), from the PEII Gearbox Inertia
+  table; to kg m2.
+Not extracted (no schema column, or not printed): mass (the P-Series catalogue prints none), running noise, the max.
+  bending moment at the input flange Mb, the position load factor and speed curves for radial loads (page 05),
+  dimensions, the other series of the catalogue.
+Kept as printed: the PEII155 1-stage column has no value for bore 19 although its 2-stage column has one, so there
+  is no 1-stage row with that bore. No misprints found in the extracted rows.
+'''
+
+[[sources]]
+id = "p-series"
+document = "Apex Dynamics, Planetary Gearbox New Generation P-Series, APEX-2025-06-PII/PIIR/PIIS SERIES-TWN"
+date = "2025-06"
+locator = "printed pages 02 (ordering code), 03 (PEII / PEIIR Gearbox Performance), 04 (PEII Gearbox Inertia), 43 (glossary)"
+method = "script:tools/extract_apex.py"
+url = "https://www.apexdyna.com/uploadimages/catalog/11/Gearbox-PII-PIIR-Series%20(1)-tw-20260729-EV1.pdf"
+retrieved = "2026-11-14"

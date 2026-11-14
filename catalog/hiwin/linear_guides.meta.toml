@@ -1,0 +1,37 @@
+schema_version = 1
+class = "linear_guide"
+key = ["part_number"]
+default_source = "hiwin-guideway"
+notes = '''
+Source: HIWIN Technologies, "Linear Guideway Technical Information", FORM G99TE24-2410 (2024), dimension tables
+2-1-13 (1) HGH-CA (page 39) and (5) HGW-CC (page 43), 2-2-13 (1) EGH-CA (page 58) and (2) EGW-CA (page 59), seal
+resistance Tables 2-1-21 (page 36) and 2-2-17 (page 55). Extracted by catalog/tools/extract_hiwin_guides.py; the
+numbers are HIWIN's, the layout is ours.
+One row per carriage model: HG series (heavy load ball type, four rows, 45 degree contact) sizes 15, 20, 25, 30, 35,
+  45 with the HGH-CA and HGW-CC blocks; EG series (low profile ball type) sizes 15 to 35 with EGH-CA and EGW-CA.
+  Left out: HG55 and HG65, the HA (super heavy load, long) and EG SA (medium load, short) blocks, HGL, HGW-CA/CB,
+  EGW-CB, and every other series.
+part_number: HIWIN's model number as printed (series, block type, size, load type and mounting), e.g. HGW25CC; the
+  full order code adds preload, accuracy, rail length and options. series: HG or EG. size: the rail size.
+carriage_type: Table 2-1 (page 20): block shape (square / flange), mounting holes, assembly height, load type.
+rail_width: WR; height: H, the assembly height from the bottom of the rail to the top of the block; carriage_length:
+  L, the block length including the end seals; all mm as printed.
+dynamic_load_rating: C in kN, the basic dynamic load rating for a nominal life of 50 km (section 1, page 4: "50km of
+  operation for a ball type linear guideway"); dynamic_load_rating_distance_m = 50000 on every row.
+static_load_rating: C0 in kN. static_moment_x/y/z: the static rated moments MR (roll), MP (pitch), MY (yaw) in kN m.
+carriage_mass: block weight in kg; rail_mass: rail weight in kg/m.
+seal_drag: TWICE the printed "maximum value of resistance per end seal" in N (a block has an end seal at each end),
+  so the most the two standard end seals of one block give. Kept as printed: HG45 3.83 N per seal is below HG35
+  4.91 N; EG35 1.96 N is below EG30 2.45 N.
+friction_force and preload_class: not given per model (friction only as a coefficient, page 9); empty. The dynamic
+  moments are not printed; empty.
+'''
+
+[[sources]]
+id = "hiwin-guideway"
+document = "HIWIN Technologies, Linear Guideway Technical Information, FORM G99TE24-2410"
+date = "2024-10"
+locator = "page 4 (definition of C); Table 2-1 page 20; Tables 2-1-21 page 36 and 2-2-17 page 55; dimension tables 2-1-13 (1) page 39, (5) page 43, 2-2-13 (1) page 58, (2) page 59"
+method = "script:tools/extract_hiwin_guides.py"
+url = "https://hiwin.com/wp-content/uploads/2026/08/HIWIN-Linear-Guideway-Catalog-1.pdf"
+retrieved = "2026-11-14"

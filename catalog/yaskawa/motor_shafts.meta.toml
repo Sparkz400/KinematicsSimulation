@@ -1,0 +1,32 @@
+schema_version = 1
+class = "servo_motor"
+table = "shaft"
+key = ["part_number_prefix"]
+default_source = "siep36"
+notes = '''
+Shaft end and mounting flange of the Yaskawa Sigma-7 200 V servomotors SGM7J and SGM7A in yaskawa/motors_sigma7.csv:
+what a gearbox's clamping hub (bore) and adapter plate must take. A row holds for every motor whose part_number starts
+with part_number_prefix (the longest matching prefix wins); a prefix is a model up to the voltage code A (200 V), e.g.
+SGM7J-04A.
+Columns (the manual's letters, mm as printed, here in m):
+  shaft_diameter_m: S (straight shaft without key; the keyed and two-flat versions have the same S);
+  shaft_length_m: LR (flange face to shaft end; for SGM7A-15 and up the manual also gives Q, the usable length,
+    5 to 8 mm shorter, which is not here);
+  centering_diameter_m: LB;
+  flange_square_m: LC;
+  bolt_circle_diameter_m: LA.
+The dimensions are the same with and without holding brake, oil seal and batteryless encoder (only the lengths L, LL
+change). Section 4.3.1 (SGM7J) and 5.3.1 (SGM7A), servomotors without gears.
+Left out: the 400 V models (SGM7J-..D, SGM7A-..D in motors_sigma7.csv); their dimensions are in the Sigma-7 400 V
+catalogue (source cat400 of motors_sigma7), not read here; no prefix covers them.
+No misprints found.
+'''
+
+[[sources]]
+id = "siep36"
+document = "Yaskawa, Sigma-7-Series AC Servo Drive Rotary Servomotor Product Manual, SIEP S800001 36J"
+date = "2025-08"
+locator = "4.3.1 Servomotors without Gears, SGM7J (pp. 4-11 to 4-13, PDF pages 67 to 69); 5.3.1 Servomotors without Gears, SGM7A (pp. 5-16 to 5-21, PDF pages 94 to 99); columns S, LR, LB, LC, LA"
+method = "manual: typed in from the dimension tables (the tables' tolerances and bracketed brake values interleave in the text layer; read from the rendered page), checked once more"
+url = "https://www.yaskawa.eu.com/_downloads/download_d5516"
+retrieved = "2026-11-14"

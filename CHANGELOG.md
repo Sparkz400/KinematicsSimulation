@@ -17,6 +17,12 @@ item are in [PROGRESS.md](PROGRESS.md).
 - Capsules as collision bodies (`Machine::collision_capsules`, `sim_core::Capsule`) with an exact segment-to-box
   clearance; the D3's rods and arms and the D4's telescope are capsules.
 - Obstacles take a contact `stiffness_n_m` and `damping_n_s_m`.
+
+- Catalogue: gearboxes of WITTENSTEIN (SP+, TP+), Neugart (PLE, PLN, PLFE), Apex (PEII, AF) and Harmonic Drive (CSF,
+  CSG, SHG); HIWIN ball screws (FDW, FDC, FSH) and guides (HG, EG); Siemens 1FN3 and Beckhoff AL8000 linear motors;
+  Gates belts; Festo EGC/ELGA and Rexroth CKR single belt axes; motor shafts of Siemens, Beckhoff, SEW and Yaskawa.
+  `search --gearboxes` takes a maker or series (`wittenstein-sp`), `search --axes` tries screws, guide sets and linear
+  motors on screw, rack and linear motor machines; `catalog::gearboxes_for_motor` and `catalog::axes_for` for the search.
 - FMI: inputs `command.cycle`, `command.target.<axis>` with `command.move`, and `command.path` / `command.path_file`
   with `command.run_path`, which start the cycle, a move and a path as `sim-cli run --cycle`, `--move` and `--path`
   do; log categories `logEvents`, `logStatusWarning`, `logStatusError`, `logAll` in the model description, switched by
@@ -57,6 +63,10 @@ item are in [PROGRESS.md](PROGRESS.md).
   are refused with a message naming it.
 - Python: `fit` and `identify` return what they found with the fits that found nothing in `errors`, where they raised
   at the first; `sizing` takes the config's own `parts.motor_supply` where `supply` is left out, as `search` does.
+
+- A gearbox by name also sets its efficiency torque, no-load torque and stiffness curve where the config has the keys;
+  `-r` after the name takes the reduced backlash. Siemens' SP100 is read, on 1FT2 motors only.
+- A linear motor machine's search tries linear motors in place of rotary ones.
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
 

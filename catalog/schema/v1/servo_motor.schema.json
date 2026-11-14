@@ -304,6 +304,51 @@
       },
       "description": "An encoder a motor series can be ordered with: positions per revolution, and the revolutions it counts absolutely (0 for a singleturn encoder)."
     },
+    "shaft": {
+      "type": "object",
+      "required": [
+        "part_number_prefix"
+      ],
+      "additionalProperties": false,
+      "description": "Shaft end and flange of the motors whose part number starts with part_number_prefix (the longest prefix that matches holds): what a gearbox's clamping hub and adapter plate must take.",
+      "properties": {
+        "part_number_prefix": {
+          "type": "string"
+        },
+        "series": {
+          "type": "string"
+        },
+        "shaft_diameter_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "m"
+        },
+        "shaft_length_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "m"
+        },
+        "centering_diameter_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "m"
+        },
+        "flange_square_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "m"
+        },
+        "bolt_circle_diameter_m": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "m"
+        },
+        "source": {
+          "type": "string",
+          "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+        }
+      }
+    },
     "dynamic_braking": {
       "type": "object",
       "required": [

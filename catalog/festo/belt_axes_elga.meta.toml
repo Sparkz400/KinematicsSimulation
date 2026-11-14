@@ -1,0 +1,45 @@
+schema_version = 1
+class = "belt_axis"
+key = ["series", "size"]
+default_source = "elga_tb_2026"
+notes = '''
+Festo toothed belt axes ELGA-TB-KF (recirculating ball bearing guide) and ELGA-TB-G (plain-bearing guide), single
+axes with a cover strip: one row per series and size, the standard slide. Source: Festo catalogue "Toothed belt axes
+ELGA-TB", 2026/02: ELGA-TB-KF pages 13 to 16, ELGA-TB-G pages 83 and 84 ("Datasheet").
+Extracted by tools/extract_festo_egc.py; the numbers are the catalogue's, the layout is ours.
+kind: axis (a single axis, as the Bahr axes in bahr/belt_axes.csv).
+stroke_x_min_m, stroke_x_max_m: "Working stroke" [mm].
+feed_force_peak_n: "Max. feed force Fx" [N]; the catalogue gives no continuous value.
+max_no_load_torque_nm: "Max. no-load torque" [Nm], at 0.2 m/s.
+max_pulley_torque_nm: "Max. driving torque" [Nm].
+max_speed_m_s, max_acceleration_m_s2, repeatability_m: "Max. speed" [m/s], "Max. acceleration" [m/s2],
+  "Repetition accuracy" [mm] (+- value); one value printed across all sizes. ELGA-TB-G: at higher speeds the wear on
+  the guide increases.
+fy/fz/mx/my/mz_dynamic: ELGA-TB-KF "Max. permissible forces and torques for a service life of 5000 km", at the centre
+  of the guide (the slide surface is "Dimension x" 37/50/70/86 mm above it, not extracted); ELGA-TB-G "Permissible
+  forces and torques", at the slide surface, for at most 0.5 m/s and a pause longer than 5 s. Both "must not be
+  exceeded during dynamic operation". No static values are printed.
+mass_at_zero_stroke_kg: "Basic weight with 0 mm stroke" [kg], including slide. mass_per_stroke_kg_m: "Additional
+  weight per 1000 mm stroke" [kg]. moved_mass_x_kg: "Moving mass" [kg] (ELGA-TB-KF: ELGA-..., not -ZL/ZR).
+  Kept as printed with trailing zeros (0.90, 4.70, 1.90).
+belt_pitch_m, pulley_effective_diameter_m, feed_per_rev_m: table "Toothed belt", "Pitch", "Effective diameter" [mm],
+  "Feed constant" [mm/rev]. belt_elongation: "Elongation" [%] of the standard belt (ELGA-...), "At max. feed force";
+  belt_elongation_force_n is therefore the max. feed force (the -PU2 belt's elongation is not a row).
+pulley_teeth: not printed; the feed constant over the pitch, both printed (a whole number for every size; it agrees
+  with pi x effective diameter / pitch).
+belt_material: of the standard belt (ELGA-...); the option -PU2 is polyurethane with steel cord and nylon cover.
+Not printed and empty: belt profile name, belt width (this catalogue gives none), continuous feed force, static
+  loads, fx loads, max_length_one_piece.
+Not extracted: ELGA-TB-KF-F1, ELGA-TB-RF and ELGA-TB-RF-F1 (same catalogue; not in this task), the slide variants
+  ZL/ZR, mass moments of inertia (no schema column), displacement encoder, graphs, dimensions, order codes.
+No misprints found.
+'''
+
+[[sources]]
+id = "elga_tb_2026"
+document = "Festo, catalogue \"Toothed belt axes ELGA-TB\", English"
+date = "2026-02"
+locator = "ELGA-TB-KF: pages 13 (general technical data, weight, toothed belt) and 16 (load values); ELGA-TB-G: pages 83 and 84"
+method = "script:tools/extract_festo_egc.py"
+url = "https://ftp.festo.com/Public/PNEUMATIC/SOFTWARE_SERVICE/Documentation/2026/EN/ELGA-TB_EN.PDF"
+retrieved = "2026-11-14"

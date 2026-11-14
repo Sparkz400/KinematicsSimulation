@@ -1,0 +1,6 @@
+series,size,kind,belt_material,belt_pitch_m,belt_width_m,pulley_effective_diameter_m,feed_per_rev_m,pulley_teeth,max_no_load_torque_nm,max_pulley_torque_nm,feed_force_peak_n,max_speed_m_s,max_acceleration_m_s2,repeatability_m,fy_dynamic_n,fz_dynamic_n,mx_dynamic_nm,my_dynamic_nm,mz_dynamic_nm,mass_at_zero_stroke_kg,mass_per_stroke_kg_m,moved_mass_x_kg,stroke_x_min_m,stroke_x_max_m
+EGC-TB-KF,50,axis,polychloroprene or NBR with glass cord and nylon coating,0.002,0.01,0.01846,0.058,29,0.072,0.46,50,3,50,0.00008,650,650,3.5,10,10,0.62,1.9,0.13,0.05,1.9
+EGC-TB-KF,70,axis,polychloroprene or NBR with glass cord and nylon coating,0.003,0.015,0.02483,0.078,26,0.18,1.24,100,5,50,0.00008,1850,1850,16,51,51,1.85,4.4,0.37,0.05,5
+EGC-TB-KF,80,axis,polychloroprene or NBR with glass cord and nylon coating,0.003,0.0193,0.02865,0.09,30,0.4,5,350,5,50,0.00008,3050,3050,36,97,97,3,6.2,0.62,0.05,8.5
+EGC-TB-KF,120,axis,polychloroprene or NBR with glass cord and nylon coating,0.005,0.0303,0.03979,0.125,25,1.4,16,800,5,50,0.00008,6890,6890,144,380,380,10.5,15,2.18,0.05,8.5
+EGC-TB-KF,185,axis,polychloroprene or NBR with glass cord and nylon coating,0.008,0.0505,0.07385,0.232,29,4.05,93,2500,5,50,0.0001,15200,15200,529,1157,1157,32.6,30,6.5,0.05,8.5

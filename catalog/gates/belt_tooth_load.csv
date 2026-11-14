@@ -1,0 +1,7 @@
+profile,speed_rad_s,specific_tooth_load_n_m
+T5,0.0,2083
+T10,0.0,4742
+AT5,0.0,4000
+AT10,0.0,8600
+HTD5,0.0,3750
+HTD8,0.0,7750

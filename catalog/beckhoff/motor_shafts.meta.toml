@@ -1,0 +1,31 @@
+schema_version = 1
+class = "servo_motor"
+table = "shaft"
+key = ["part_number_prefix"]
+default_source = "am8000-om"
+notes = '''
+Shaft end and mounting flange of the Beckhoff AM8000/AM8500 servomotors in beckhoff/motors_am8000.csv: what a
+gearbox's clamping hub (bore) and adapter plate must take. A row holds for every motor whose part_number starts with
+part_number_prefix (the longest matching prefix wins); a prefix is a flange size of a series, e.g. AM804 for
+AM8041 to AM8044. The dimensional drawings give one shaft and flange per flange size, the same for the versions
+with and without brake, with fan cover [+], with R-winding and with OCT feedback.
+Columns (mm as printed, here in m):
+  shaft_diameter_m: the "Ø .. k6" of the shaft end;
+  shaft_length_m: the shaft end's length from the flange face (the leftmost dimension, e.g. 40 for AM804x);
+  centering_diameter_m: the "Ø .. j6" spigot;
+  flange_square_m: the "□" edge length of the flange;
+  bolt_circle_diameter_m: the "Ø" of the circle through the 4 mounting holes.
+Left out: AM801x (not in motors_am8000.csv). The AM8x5x-xxxx-9000 version (flange compatible with AM3x5x: 110 j6,
+□108, bolt circle 130; section 4.7.2) is chosen by an option of the full article number that the motor table does
+not carry; the standard flange is in the table.
+No misprints found.
+'''
+
+[[sources]]
+id = "am8000-om"
+document = "Beckhoff, AM8000 and AM8500 Synchronous Servomotors, operating instructions, version 4.9.1"
+date = "2023-09"
+locator = "chapter 4 \"Technical data\", dimensional drawings 4.4.1 (page 35), 4.5.1 (39), 4.6.1 (43), 4.7.1 (47), 4.7.5 (53), 4.8.1 (58), 4.8.2 (59), 4.8.5 (63), 4.9.1 (69), 4.9.2 (70), 4.9.7 (76)"
+method = "manual: typed in from the dimensional drawings (the dimensions are labels in the drawing, not in the text layer; read from the rendered page), checked once more"
+url = "https://download.beckhoff.com/download/document/motion/am8000_am8500_ba_en.pdf"
+retrieved = "2026-11-14"

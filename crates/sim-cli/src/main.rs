@@ -790,10 +790,13 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// motors and Motor Modules), by default the config's own `parts.motor_supply`, else 400v; or any other of
 /// `catalog::SUPPLIES` (another maker's at a line voltage, or the S210 with the new 6SL5310 converters). `--vendor NAME`
 /// keeps the supplies of that maker (`vendor_of`; "all" every maker), all of them where `--supply` names none; the
-/// candidates of several supplies are ranked together, each with its supply. `--gearboxes SERIES` (e.g. NRK) also tries
-/// each motor with the fitting gearboxes of that series, on a machine that has a gearbox; a motor none fits with the
-/// config's own gearbox. `--axes` tries every motor on every axis of the catalogue of the
-/// machine's kind as well, the axis's weight in the cost. `--motor-id ID` sizes one motor of a machine with several (a
+/// candidates of several supplies are ranked together, each with its supply. `--gearboxes SERIES` also tries each motor
+/// with the fitting gearboxes of that series, on a machine that has a gearbox; a motor none fits with the config's own
+/// gearbox. SERIES is a maker (`wittenstein`), a maker's series (`wittenstein-sp`, `neugart-ple`, `siemens-nrk`), "" for
+/// all, or a prefix of the size (`NRK`, as before); see `catalog::gearboxes_for_motor`. `--axes` tries every motor on
+/// every axis of the catalogue of the machine's kind as well, the axis's weight in the cost: belt axes, and for a screw,
+/// rack or linear motor machine the ball screws and guide sets (`catalog::mech_axes`; a linear motor machine's motors
+/// are the supply's linear motors). `--motor-id ID` sizes one motor of a machine with several (a
 /// machine file's): each candidate becomes that motor's own `[parts.ID]`, the other motors stay as the config has them,
 /// and the cost, the tightest check, the peak torque and the winding rise are that motor's alone (`catalog::search_motor`);
 /// not with `--axes`. Says on the error stream how many candidates could not be simulated (the reason is in the table),

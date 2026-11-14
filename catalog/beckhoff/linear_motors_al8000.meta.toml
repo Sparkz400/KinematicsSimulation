@@ -1,0 +1,45 @@
+schema_version = 1
+class = "linear_motor"
+key = ["part_number"]
+default_source = "al8000-om"
+notes = '''
+Source: Beckhoff, operating instructions "AL8000" (linear servomotors), version 1.10.2, 2026-06-10, chapter 4
+"Technical data" (tables "Performance data" of 4.3 AL802x, 4.5 AL804x (two pages), 4.7 AL806x-0 and 4.8 AL806x-1)
+and chapter 7.1 (coil unit dimensions A to D). Extracted by catalog/tools/extract_beckhoff_al8000.py; the numbers are
+Beckhoff's, the layout is ours.
+One row per coil unit and winding, 30 rows. part_number: the type key AL80tuv-wxyz cut after the winding letter x,
+  as the tables head their columns (e.g. "AL8021-0E" for "AL80" over "21-0E"); feedback y and connection z
+  (cable with ferrules or connector) do not change the data. w is the cooling: 0 convection, 1 water; cooling
+  says "convection" or "water" accordingly. The magnetic plates (AL852x, AL854x, AL856x) are not rows.
+All data at 40 degC ambient and 60 K winding overtemperature, tolerance +/- 10 % (section 4.1); the tables are for
+  a coil mounted on a metal surface at least as large as the motor at 20 degC surface temperature.
+continuous_force_n / continuous_current_a: Fc / Ic, S1 near standstill. peak_force_n / peak_current_a: Fmax / Imax
+  (RMS; Fmax for at most 3 s).
+max_speed_m_s: vmax, "Maximum velocity of the linear motor"; the document does not say at which force.
+  max_speed_at_peak_force_m_s: not printed, empty. AL8043-0G prints "7.0", kept.
+line_voltage_v: 400, from the type key ("t: Series, 0 = 400 V AC", section 3.1.2); the tables give no voltage.
+force_constant_n_a: Kf. back_emf_constant_v_s_m: "Counter EMF ph-ph [V/m/s]", phase to phase as printed (RMS by
+  section 4.1's convention; Kf is about sqrt(3) times it).
+phase_resistance_20c_ohm / phase_inductance_h: "Winding resistance ph-ph" / "Winding inductance ph-ph" (mH) halved,
+  the printed terminal-to-terminal values / 2 for the per-phase column. The document does not say the resistance
+  temperature; the column name's 20 degC is not confirmed.
+motor_constant_n_sqrt_w: the square root of the printed "Motor constant [N²/W]" (Beckhoff prints km squared; it
+  equals Fc^2 / PL, so it is at the operating temperature, not 20 degC), 4 significant digits.
+continuous_power_loss_w: PL. attraction_force_n: Fa (without current; up to 10 % more at Imax).
+pole_pitch_m: "Pole pair distance [mm]" (north to north). coil_mass_kg: "Weight Coil unit". magnet_track_mass_kg_m:
+  "Weight Magnetic plate [kg/m]". coil_length_m: housing length D of chapter 7.1.
+paired_drive: the first AX8000 entry of "Recommended servo drive assignment" as printed (AL802x and the first AL804x
+  page print "AX8108/AX8206" once across all columns). Second-line alternatives (e.g. AX8206 under AL8045-0G) and
+  the AX5000 assignment are left out.
+Not in the document's text, so empty: thermal time constant (it gives a thermal resistance in K/W instead, not in
+  the schema), magnet plate segment length (only in the drawings).
+'''
+
+[[sources]]
+id = "al8000-om"
+document = "Beckhoff, AL8000 linear servomotors, operating instructions, version 1.10.2"
+date = "2026-06-10"
+locator = "chapter 4, sections 4.3, 4.5, 4.7, 4.8, tables \"Performance data\" (pages 29, 37, 38, 46, 50); chapter 7.1 housing lengths D (pages 63 to 64); section 3.1.2 type key"
+method = "script:tools/extract_beckhoff_al8000.py"
+url = "https://download.beckhoff.com/download/document/motion/al8000_ba_en.pdf"
+retrieved = "2026-11-14"

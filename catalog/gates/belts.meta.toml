@@ -1,0 +1,46 @@
+schema_version = 1
+class = "belt"
+key = ["profile", "width_m"]
+default_source = "gates-tpu"
+notes = '''
+Source: Gates, "Thermoplastic Polyurethane Belt Program, Product and Technical Information", catalog no. 20166,
+edition 2025 (supersedes 20166 (2014)), part "Synchro-Power LINEAR", one page per profile (T5 p. 11, T10 p. 13,
+AT5 p. 16, AT10 p. 18, HTD5 p. 22, HTD8 p. 23). Extracted by catalog/tools/extract_gates.py; the numbers are Gates',
+the layout is ours.
+Open-ended polyurethane timing belts (roll stock / open ended) with the standard steel cord "Steel (SL)", standard
+TPU R1 (92 Shore A). One row per profile and standard width the page lists. Profiles as printed: HTD5 and HTD8 are
+the HTD 5M and 8M profiles (ISO 13050).
+Left out: the Aramid (K), Steel HF (HF), Steel basic (BSL, HTD5) and Stainless (NIRO) cords; the HB (high back)
+  variants of T10 and AT10; T5-AS, T10AS, T20, ATL5, ATL10, AT20, ATL20, HTDL8, HTD14, HTDL14, HPL, STD, GPP, SST,
+  the imperial pitches and the WR, V, sleeve and flex belts.
+mass_kg_m: "Belt weight" Steel (SL), printed in kg/m to two decimals only (0,02 kg/m for T5 10 mm).
+max_pull_n: "Allowable belt force / open ended" Steel (SL), the allowable tight side force F1all of an open-ended
+  belt (the catalogue's "allowable belt force / endless welded", about half of it, is not taken).
+breaking_strength_n: "Breaking force / average value" Steel (SL).
+elongation_at_max_pull: not printed (empty); the strain at max_pull follows from max_pull_n / (stiffness x width).
+stiffness_ea_per_width_n_m: "Specific belt stiffness" Steel (SL), printed in N for each standard width: the force
+  for 100 % strain of the whole belt width (Csp, used as Delta x = F x L / Csp on page 128), i.e. EA of that width.
+  Divided here by the width in m and rounded to 1 N/m: 77.778 N at 10 mm gives 7777800 N/m.
+min_pulley_teeth, min_pulley_diameter_m: the first "Z MIN" / "D MIN" row of "Min pulley tooth count and diameter",
+  steel column: the drive without a back-bending idler (the picture shows two pulleys). The second row (pulley teeth
+  and idler diameter with back bending) is not taken; the schema has no column for it. The note "dmin = 50mm for
+  low temperature applications" is not taken.
+thickness_m: "Standard thickness" (for T10 and AT10 the row of the standard belt, not the HB variant).
+Numbers are printed with "." for thousands and "," as decimal mark.
+Kept as printed although they do not fit (the check trips on them otherwise and skips exactly these):
+  HTD8 25 mm: breaking force 17.100 N, 4.57 times its allowable belt force 3.741 N; every other HTD8 width is 4.06
+    times (4.06 x 3741 = 15190 N). 17.100 N is the AT10 25 mm value.
+  HTD8 100 mm: breaking force 58.400 N, 3.47 times its allowable belt force 16.835 N (4.06 x 16835 = 68350 N; the
+    AT10 100 mm value is 68.400 N).
+Not misprints but uneven: the specific stiffness per mm of width is lower for the narrow widths (fewer cords per
+  mm), e.g. T10 16.4 kN/mm at 12 mm against 20.0 kN/mm at 150 mm.
+'''
+
+[[sources]]
+id = "gates-tpu"
+document = "Gates, Thermoplastic Polyurethane Belt Program, Product and Technical Information, catalog no. 20166"
+date = "2025"
+locator = "Synchro-Power LINEAR, pages 11 (T5), 13 (T10), 16 (AT5), 18 (AT10), 22 (HTD5), 23 (HTD8): Min pulley tooth count and diameter, Technical data"
+method = "script:tools/extract_gates.py"
+url = "https://www.gates.com/content/dam/documents-library/catalogs/thermoplastic-polyurethane-belt-catalogue-en.pdf"
+retrieved = "2026-11-14"

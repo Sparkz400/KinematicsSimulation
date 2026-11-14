@@ -1,0 +1,43 @@
+schema_version = 1
+class = "belt_axis"
+key = ["series", "size"]
+default_source = "egc_tb_2026"
+notes = '''
+Festo toothed belt axis EGC-TB-KF (recirculating ball bearing guide), a single axis: one row per size, the standard
+slide (variants GK/GP). Source: Festo catalogue "Toothed belt axes EGC-TB-KF", 2026/06, pages 11 to 15 ("Datasheet").
+Extracted by tools/extract_festo_egc.py; the numbers are the catalogue's, the layout is ours.
+kind: axis (a single axis, as the Bahr axes in bahr/belt_axes.csv).
+stroke_x_min_m, stroke_x_max_m: "Working stroke" of EGC-...-GK/-GP (sizes 120 and 185: 5000 mm with ATEX, not used).
+feed_force_peak_n: "Max. feed force Fx" [N]; the catalogue gives no continuous value.
+max_no_load_torque_nm: "Max. no-load torque" [Nm], at 0.2 m/s, variant GK or GV, chloroprene belt.
+max_pulley_torque_nm: "Max. driving torque" [Nm].
+max_speed_m_s, max_acceleration_m_s2, repeatability_m: "Max. speed" [m/s], "Max. acceleration" [m/s2],
+  "Repetition accuracy" [mm] (+- value). Printed as merged cells: speed 3 for size 50 and 5 for 70 to 185;
+  acceleration 50 for all; repeatability 0.08 mm for 50 to 120 and 0.1 mm for 185. Each value is read as holding
+  from the column it starts in up to the next printed value.
+fy/fz/mx/my/mz_dynamic: "Max. permissible forces and torques at reference service life" (5000 km), at the slide
+  surface; "must not be exceeded during dynamic operation". My and Mz are printed once as "Mymax./Mzmax." for
+  GK/GP; both columns hold that value. No static values are printed.
+mass_at_zero_stroke_kg: "Basic weight with 0 mm stroke" [g], including slide, GK/GP. mass_per_stroke_kg_m: "Additional
+  weight per 10 mm stroke" [g]. moved_mass_x_kg: "Moving mass" [g], GK/GP.
+belt_pitch_m, belt_width_m, pulley_effective_diameter_m, feed_per_rev_m: table "Toothed belt", "Pitch", "Width",
+  "Effective diameter" [mm], "Feed constant" [mm/rev].
+pulley_teeth: not printed; the feed constant over the pitch, both printed (a whole number for every size; it agrees
+  with pi x effective diameter / pitch).
+belt_material: of the standard belt (EGC-...); the option -PU2 is polyurethane with steel cord and nylon cover.
+Not printed and empty: belt profile name, belt elongation, continuous feed force, static loads, fx loads,
+  max_length_one_piece (only the working stroke is given).
+Not extracted: the long slide GV/GQ (size 70 to 185: other basic weight, moving mass and My/Mz), additional slide,
+  clamping unit, mass moments of inertia (JO, JH, JL, JW, JF; the schema has no column), ATEX data, displacement
+  encoder, graphs (acceleration over payload, support spacing, service life), dimensions, order codes.
+No misprints found.
+'''
+
+[[sources]]
+id = "egc_tb_2026"
+document = "Festo, catalogue \"Toothed belt axes EGC-TB-KF, with recirculating ball bearing guide\", English"
+date = "2026-06"
+locator = "pages 11-12 (general technical data, weight, toothed belt), page 15 (characteristic load values)"
+method = "script:tools/extract_festo_egc.py"
+url = "https://ftp.festo.com/Public/PNEUMATIC/SOFTWARE_SERVICE/Documentation/2026/EN/EGC-TB_EN.PDF"
+retrieved = "2026-11-14"

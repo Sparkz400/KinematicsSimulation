@@ -911,3 +911,8 @@ CHECKS = [
     vendor_motors_are_plausible_and_their_drives_exist,
     vendor_drives_are_plausible,
 ]
+
+# The mechanics tables of 14 November 2026 have their checks in checks_mech.py.
+from .checks_mech import MECH_CHECKS  # noqa: E402
+
+CHECKS += MECH_CHECKS
