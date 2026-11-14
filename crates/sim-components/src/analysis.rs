@@ -2401,22 +2401,29 @@ pub fn default_sweep_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64
 
 /// Mechanical frequency response without control: a sine torque on one motor on top of the holding
 /// torques, measured at that motor's speed once the response has settled. Belt resonances show as
-/// peaks, the load swinging against the held motor as a dip.
+/// peaks, the load swinging against the held motor as a dip. Each frequency starts from the same rest, on a machine
+/// of its own, so they share the processors.
 pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<SweepPoint>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let machine = (entry.build)(cfg)?;
     let (dt, substeps) = (cfg.positive("sim.dt_s")?, cfg.positive("sim.substeps")? as u32);
-    let motors = machine.motors().len();
-    if motor >= motors {
-        return Err(ConfigError::Invalid("motor".into()));
-    }
+    // The machine at rest at its start pose under the holding torques.
+    let at_rest = || -> Result<_, ConfigError> {
+        let machine = (entry.build)(cfg)?;
+        let motors = machine.motors().len();
+        if motor >= motors {
+            return Err(ConfigError::Invalid("motor".into()));
+        }
+        let (mut start, mut hold) = (Vec::new(), vec![0.0; motors]);
+        machine.equilibrium(&crate::sim::start_pose(cfg, machine.as_ref())?, &mut start, &mut hold);
+        Ok((machine, start, hold))
+    };
+    at_rest()?;
     check_frequencies(frequencies)?;
-    let (mut start, mut hold) = (Vec::new(), vec![0.0; motors]);
-    machine.equilibrium(&crate::sim::start_pose(cfg, machine.as_ref())?, &mut start, &mut hold);
-    let mut rk = Rk4::new(start.len());
-    let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
-    let mut out = Vec::new();
-    for &frequency in frequencies {
+    on_all_cores(frequencies.len(), |i| {
+        let (frequency, (machine, start, hold)) = (frequencies[i], at_rest()?);
+        let motors = hold.len();
+        let mut rk = Rk4::new(start.len());
+        let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
         let omega = std::f64::consts::TAU * frequency;
         // Whole periods: at least 0.3 s to settle, then at least 0.2 s to measure.
         let period = 1.0 / frequency;
@@ -2437,9 +2444,10 @@ pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequen
             }
         }
         let (a, b) = (2.0 * in_phase / measure_steps as f64, 2.0 * quadrature / measure_steps as f64);
-        out.push(SweepPoint { frequency, gain: a.hypot(b) / amplitude, phase_deg: b.atan2(a).to_degrees() });
-    }
-    Ok(out)
+        Ok(SweepPoint { frequency, gain: a.hypot(b) / amplitude, phase_deg: b.atan2(a).to_degrees() })
+    })
+    .into_iter()
+    .collect()
 }
 
 /// A response is measured over whole periods: at 0 Hz that never ends, and below it means nothing.
@@ -2520,11 +2528,12 @@ pub fn step_response(entry: &MachineEntry, cfg: &Config, axis: usize, size: f64,
 }
 
 /// Closed-loop frequency response of the position loop of one axis: a sine on the position
-/// setpoint, measured at the tool. Gain is tool amplitude over setpoint amplitude.
+/// setpoint, measured at the tool. Gain is tool amplitude over setpoint amplitude. Each frequency is measured on a
+/// simulation of its own, so they share the processors.
 pub fn closed_loop_response(entry: &MachineEntry, cfg: &Config, axis: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<SweepPoint>, ConfigError> {
     check_frequencies(frequencies)?;
-    let mut out = Vec::new();
-    for &frequency in frequencies {
+    on_all_cores(frequencies.len(), |i| {
+        let frequency = frequencies[i];
         let (mut sim, start) = settled(entry, cfg, axis)?;
         let (omega, t0, dt) = (std::f64::consts::TAU * frequency, sim.time(), sim.dt);
         // Whole periods: at least 0.3 s to settle, then at least 0.3 s to measure.
@@ -2542,9 +2551,10 @@ pub fn closed_loop_response(entry: &MachineEntry, cfg: &Config, axis: usize, fre
             }
         }
         let (a, b) = (2.0 * in_phase / measure_steps as f64, 2.0 * quadrature / measure_steps as f64);
-        out.push(SweepPoint { frequency, gain: a.hypot(b) / amplitude, phase_deg: b.atan2(a).to_degrees() });
-    }
-    Ok(out)
+        Ok(SweepPoint { frequency, gain: a.hypot(b) / amplitude, phase_deg: b.atan2(a).to_degrees() })
+    })
+    .into_iter()
+    .collect()
 }
 
 /// The -3 dB bandwidth of a closed-loop response: where the gain first falls below 1 / sqrt(2),
@@ -2745,27 +2755,17 @@ pub fn velocity_loop_margins(entry: &MachineEntry, cfg: &Config, bounds: &[(Stri
             runs.push((format!("{path}={value:?}"), changed));
         }
     }
-    let jobs: Vec<(usize, usize)> = (0..runs.len()).flat_map(|r| (0..motors).map(move |k| (r, k))).collect();
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let work = || {
-        let mut done = Vec::new();
-        while let Some(&(run, motor)) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-            done.push((run, motor, velocity_loop_response(entry, &runs[run].1, motor, &frequencies, amplitude).map(|p| loop_margins(&p))));
-        }
-        done
-    };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len());
-    let found: Vec<_> = if threads <= 1 {
-        work()
-    } else {
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-            workers.into_iter().flat_map(|w| w.join().expect("a loop measurement panicked")).collect()
-        })
-    };
-    let mut out: Vec<(String, Vec<LoopMargins>)> = runs.iter().map(|(name, _)| (name.clone(), vec![loop_margins(&[]); motors])).collect();
-    for (run, motor, margins) in found {
-        out[run].1[motor] = margins?;
+    // Every frequency of every motor of every run is measured on a simulation of its own: they share the processors.
+    let per_run = motors * frequencies.len();
+    let points = on_all_cores(runs.len() * per_run, |job| {
+        let (run, motor, point) = (job / per_run, job % per_run / frequencies.len(), job % frequencies.len());
+        velocity_loop_response(entry, &runs[run].1, motor, &frequencies[point..=point], amplitude).map(|p| p[0])
+    });
+    let mut points = points.into_iter();
+    let mut out = Vec::new();
+    for (name, _) in &runs {
+        let margins = (0..motors).map(|_| points.by_ref().take(frequencies.len()).collect::<Result<Vec<_>, _>>().map(|p| loop_margins(&p))).collect::<Result<Vec<_>, _>>()?;
+        out.push((name.clone(), margins));
     }
     Ok(out)
 }

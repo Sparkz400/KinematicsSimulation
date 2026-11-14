@@ -11,6 +11,17 @@ fn model_switch(cfg: &Config) -> &'static str {
     ["effects.belt_stretch", "effects.joint_elasticity"].into_iter().find(|key| cfg.bool(key).is_ok()).expect("a machine with an elastic and a rigid model")
 }
 
+/// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
+/// panicked"): the tests that went through the machines one after the other took up to a minute alone.
+fn on_every_machine(check: impl Fn(&'static MachineEntry) + Sync) {
+    let check = &check;
+    std::thread::scope(|scope| {
+        for entry in MACHINES.iter().copied() {
+            std::thread::Builder::new().name(entry.id.into()).spawn_scoped(scope, move || check(entry)).unwrap();
+        }
+    });
+}
+
 fn config(entry: &MachineEntry, edit: &[&str]) -> Config {
     let mut cfg = entry.config();
     for e in edit {
@@ -179,7 +190,7 @@ fn a_move_arrives_and_comes_to_rest() {
 
 #[test]
 fn the_cycle_visits_every_segment_and_switches_the_payload() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let cfg = entry.config();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let segments = cfg.array("cycle.segment").unwrap().len();
@@ -211,7 +222,7 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         sim.command(Command::Stop).unwrap();
         sim.run(3.0, |_| {});
         assert!(!sim.control.busy(), "{}: the cycle did not stop", entry.id);
-    }
+    });
 }
 
 #[test]
@@ -332,7 +343,7 @@ fn loop_cycles_must_be_whole_multiples_of_the_base_step() {
 /// One switch per effect, and each one does something: flipping it changes the traces of the cycle.
 #[test]
 fn every_effect_switch_changes_the_traces() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         // Low pretension, so that accelerating takes a belt section to zero tension and the slack
         // switch matters; a weak drive and a low bus voltage (100 V at the winding), so that the torque and
         // voltage limits matter; a via point, so that corner blending matters.
@@ -443,7 +454,7 @@ fn every_effect_switch_changes_the_traces() {
             flipped.set_text(&format!("{effect} = {}", !from.bool(&effect).unwrap())).unwrap();
             assert!(differs(&flipped, reference), "{}: flipping {effect} changed nothing", entry.id);
         }
-    }
+    });
 }
 
 /// What one pass of the cycle looks like on the setpoint side.
@@ -506,7 +517,7 @@ fn cycle_pass(entry: &MachineEntry, cfg: &Config) -> CyclePass {
 /// the axes stop less often, and the places where it dwells are still reached exactly.
 #[test]
 fn corner_blending_shortens_the_cycle_and_still_reaches_every_dwell() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let stopping = with_via_point(entry);
         let mut blending = stopping.clone();
         blending.set_text("effects.corner_blending = true").unwrap();
@@ -519,7 +530,7 @@ fn corner_blending_shortens_the_cycle_and_still_reaches_every_dwell() {
         greedy.set_text("profile.blend_time_s = 10.0").unwrap();
         let greedy = cycle_pass(entry, &greedy);
         assert!(greedy.dwell_miss < 1e-12 && greedy.duration <= on.duration + 1e-9, "{}", entry.id);
-    }
+    });
 }
 
 /// On the machines' own cycles the blended setpoints stay within every axis limit.
@@ -544,7 +555,7 @@ fn blended_default_cycles_stay_within_the_axis_limits() {
 /// converted too.
 #[test]
 fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         for (shaping, cycle) in [(false, 2.0e-3), (false, 0.5e-3), (true, 2.0e-3), (true, 0.5e-3)] {
             let cfg = config(entry, &[&format!("effects.input_shaping = {shaping}")]);
             let (mut sim, mut plain) = (Sim::new(entry, &cfg).unwrap(), Sim::new(entry, &cfg).unwrap());
@@ -578,7 +589,7 @@ fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
             sim.run(3.0, |_| {});
             assert!(sim.control.cycle_segment().is_some() && (sim.control.cycle_segment() != segment || sim.control.cycle_passes() > 1), "{}", entry.id);
         }
-    }
+    });
 }
 
 /// With input shaping the setpoint arrives one period of the shaper after the plan. The dwell (and with it
@@ -589,7 +600,7 @@ fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
 /// the longer one reached back into the lift and took the setpoint 0.1 mm off the target.
 #[test]
 fn with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         for follows in [false, true] {
             let cfg = config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
@@ -609,7 +620,7 @@ fn with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived() {
             }
             assert!(dwells >= 4 && switches >= 3, "{}: {dwells} dwells, {switches} gripper actions", entry.id);
         }
-    }
+    });
 }
 
 /// A cycle of a single segment is analysed like any other: go there once, then dwell there every pass, so
@@ -705,19 +716,29 @@ fn a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine() {
     }
 }
 
-/// The shipped configs' velocity loops keep their stability margins over the whole range of their `[bounds]` (each
-/// value at its low and at its high bound), with friction as configured and with motor and guide friction off (in a
-/// cruise friction adds no damping to the loop). All three were tuned for at least 35 degrees and 6 dB (measured at
-/// least 37.8 degrees and 7.3 dB on the default configs, 38.6 degrees and 8.3 dB on the EXCT-30 at 0.45 N m s/rad). Every
-/// measurement has to be valid and the loop stable (`LoopMargins::stable`).
-#[test]
-fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
-    use sim_components::analysis::{bounds, velocity_loop_margins};
-    let mut configs: Vec<(String, Config, &MachineEntry, f64, f64)> = MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e, 35.0, 6.0)).collect();
+/// The configs whose velocity loops are checked: every registered machine's default config, and the EXCT-30.
+fn shipped_configs() -> Vec<(String, Config, &'static MachineEntry)> {
+    let mut configs: Vec<(String, Config, &'static MachineEntry)> = MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e)).collect();
     let exct = &machine_t_gantry::ENTRY;
-    configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct, 35.0, 6.0));
-    let passes = configs.iter().flat_map(|(name, cfg, entry, phase, gain)| {
-        [true, false].map(|friction| {
+    configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct));
+    configs
+}
+
+/// The shipped configs named keep their velocity loops' stability margins, with friction as configured and with motor
+/// and guide friction off (in a cruise friction adds no damping to the loop): as configured, and with `across` also over
+/// the whole range of their `[bounds]` (each value at its low and at its high bound). All were tuned for at least 35
+/// degrees and 6 dB (measured at least 37.8 degrees and 7.3 dB on the default configs, 38.6 degrees and 8.3 dB on the
+/// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`).
+fn loops_keep_their_margins(names: &[&str], across: bool) {
+    use sim_components::analysis::{bounds, velocity_loop_margins};
+    let configs: Vec<_> = shipped_configs().into_iter().filter(|(name, ..)| names.contains(&name.as_str())).collect();
+    assert_eq!(configs.len(), names.len(), "{names:?}");
+    let (phase, gain) = (35.0, 6.0);
+    let passes = configs.iter().flat_map(|(name, cfg, entry)| {
+        // As configured, friction on, a registered machine's loops are judged to the same 35 degrees and 6 dB by sim-cli's
+        // `step_bode_and_tuning_write_csv_for_every_machine` (its `margins`): not again here, but across the bounds.
+        let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
+        frictions.iter().map(move |&friction| {
             // Motor friction, and the guides' or the joints' (whichever the machine has).
             let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
             let cfg = config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
@@ -725,16 +746,16 @@ fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
-            let mut bounded = bounds(&cfg).unwrap();
+            let mut bounded = if across { bounds(&cfg).unwrap() } else { Vec::new() };
             bounded.retain(|(path, ..)| !skip || !["friction_", "motor.friction_", "joint.friction_"].iter().any(|start| path.starts_with(start)));
-            (name, friction, cfg, *entry, bounded, *phase, *gain)
+            (name, friction, cfg, *entry, bounded)
         })
     });
     // All passes at once: each spreads its runs over every core, and one waiting for its last run leaves the cores to
     // the others instead of idle (the 24 passes, one after the other, ended 24 times on one run).
     std::thread::scope(|scope| {
-        let workers: Vec<_> = passes.map(|(name, friction, cfg, entry, bounded, phase, gain)| scope.spawn(move || (name, friction, phase, gain, velocity_loop_margins(entry, &cfg, &bounded).unwrap()))).collect();
-        for (name, friction, phase, gain, runs) in workers.into_iter().map(|w| w.join().unwrap()) {
+        let workers: Vec<_> = passes.map(|(name, friction, cfg, entry, bounded)| scope.spawn(move || (name, friction, velocity_loop_margins(entry, &cfg, &bounded).unwrap()))).collect();
+        for (name, friction, runs) in workers.into_iter().map(|w| w.join().unwrap()) {
             for (run, margins) in runs {
                 for (k, m) in margins.iter().enumerate() {
                     assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");
@@ -742,6 +763,53 @@ fn the_shipped_velocity_loops_keep_their_margins_across_the_bounds() {
             }
         }
     });
+}
+
+/// Every shipped config keeps its velocity loops' margins as configured, without friction and, the EXCT-30, with it
+/// (`loops_keep_their_margins`); over the bounds in `across_the_bounds`.
+#[test]
+fn the_shipped_velocity_loops_keep_their_margins() {
+    let configs = shipped_configs();
+    loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), false);
+}
+
+/// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a test per config: in all
+/// 8600 s of processor time in a full run, 10 minutes alone on the 16 threads of the 8-core development machine. The
+/// default filter of `.config/nextest.toml` leaves them out; CI runs them one at a time after the other tests.
+mod across_the_bounds {
+    macro_rules! swept {
+        ($($test:ident: $name:literal),* $(,)?) => {
+            /// The configs swept here, in the order of `shipped_configs`.
+            pub const SWEPT: &[&str] = &[$($name),*];
+            $(
+                #[test]
+                fn $test() {
+                    super::loops_keep_their_margins(&[$name], true);
+                }
+            )*
+        };
+    }
+    swept!(
+        t_gantry: "t-gantry",
+        single_axis: "single-axis",
+        delta_d3: "delta-d3",
+        delta_d2: "delta-d2",
+        delta_linear: "delta-linear",
+        delta_d4: "delta-d4",
+        screw_axis: "screw-axis",
+        rack_axis: "rack-axis",
+        linear_motor_axis: "linear-motor-axis",
+        rotary_table: "rotary-table",
+        urdf_arm: "urdf-arm",
+        scara: "scara",
+        exct_30: "EXCT-30",
+    );
+}
+
+/// A machine registered later gets its sweep across the bounds too: `across_the_bounds` names every shipped config.
+#[test]
+fn every_shipped_config_is_swept_across_its_bounds() {
+    assert_eq!(shipped_configs().iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), across_the_bounds::SWEPT);
 }
 
 fn config_of(cfg: &Config, edit: &[&str]) -> Config {

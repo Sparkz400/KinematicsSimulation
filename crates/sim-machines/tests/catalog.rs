@@ -414,39 +414,47 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
 /// 51000 h in the 60 samples. At the worst corner of the bounds they do not (see the test below): that is a finding
 /// about the estimates (Festo publishes neither the bearings nor their lubrication), held here so that it shows when
 /// they change.
+///
+/// The bands one at a time are those the worst-corner search below starts with, and judged there.
 #[test]
 fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() {
-    use sim_components::analysis::{Band, analyse_cycle, bounds, verdict_bands, verdict_bands_sampled};
+    use sim_components::analysis::{analyse_cycle, bounds, verdict_bands_sampled};
     let cfg = sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap();
     let bounded = bounds(&cfg).unwrap();
     assert!(bounded.len() >= 60 && bounded.contains(&("belt.pretension_n".to_string(), 350.0, 550.0)));
-    let band = |bands: &[Band], check: &str| bands.iter().find(|b| b.verdict.check == check).unwrap().clone();
-    for (mode, bands) in [("one at a time", verdict_bands(&machine_t_gantry::ENTRY, &cfg, &bounded).unwrap()), ("sampled", verdict_bands_sampled(&machine_t_gantry::ENTRY, &cfg, &bounded, 60, 1).unwrap())] {
-        let failed: Vec<&Band> = bands.iter().filter(|b| !b.ok || b.share < 1.0).collect();
-        assert!(failed.is_empty(), "{mode}: {failed:?}");
-        let bearing = band(&bands, "pulley-bearing-life");
-        assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
-        let (slack, settling, radial) = (band(&bands, "belt-slack"), band(&bands, "settling"), band(&bands, "gearbox-radial-load"));
-        assert!(slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0, "{mode}: slackest {} N, settling {} m, radial {} N", slack.low, settling.high, radial.high);
-        // The highest belt tension is judged too, against the estimate of 2140 N (a 5 mm pitch belt as stiff as Festo's), and passes in the worst case.
-        let tension = band(&bands, "belt-tension");
-        assert!(tension.verdict.limit == 2140.0 && tension.ok && tension.share == 1.0, "{mode}: {tension:?}");
-        println!("{mode}: slackest {:.1} N, settling {:.2e} m, radial load {:.0} N, tightest {:.0} N", slack.low, settling.high, radial.high, tension.high);
-    }
+    exct_30_passes_with_margin("sampled", &verdict_bands_sampled(&machine_t_gantry::ENTRY, &cfg, &bounded, 60, 1).unwrap());
     let cycle = analyse_cycle(&mut sim_components::Sim::new(&machine_t_gantry::ENTRY, &cfg).unwrap()).unwrap().duration;
     assert!((cycle - 2.048).abs() < 0.01, "cycle {cycle} s");
+}
+
+/// The EXCT-30's checks pass with margin in the worst case of the bands of `mode` (the test above).
+fn exct_30_passes_with_margin(mode: &str, bands: &[sim_components::analysis::Band]) {
+    let band = |check: &str| bands.iter().find(|b| b.verdict.check == check).unwrap().clone();
+    let failed: Vec<_> = bands.iter().filter(|b| !b.ok || b.share < 1.0).collect();
+    assert!(failed.is_empty(), "{mode}: {failed:?}");
+    let bearing = band("pulley-bearing-life");
+    assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
+    let (slack, settling, radial) = (band("belt-slack"), band("settling"), band("gearbox-radial-load"));
+    assert!(slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0, "{mode}: slackest {} N, settling {} m, radial {} N", slack.low, settling.high, radial.high);
+    // The highest belt tension is judged too, against the estimate of 2140 N (a 5 mm pitch belt as stiff as Festo's), and passes in the worst case.
+    let tension = band("belt-tension");
+    assert!(tension.verdict.limit == 2140.0 && tension.ok && tension.share == 1.0, "{mode}: {tension:?}");
+    println!("{mode}: slackest {:.1} N, settling {:.2e} m, radial load {:.0} N, tightest {:.0} N", slack.low, settling.high, radial.high, tension.high);
 }
 
 /// The EXCT-30 passes `settling` at the worst corner of its bounds that `verdict_worst` finds, with the second input
 /// shaper at 17.5 Hz (with the 25 Hz shaper alone it was 0.115 mm against 0.1 mm), and so does every other check but
 /// the pulley shaft bearings' life: about 10000 h there, with the pretension, the bearings' load rating and fatigue load
 /// limit, the lubricant's viscosity and the cleanliness at their bad bounds (see the test above). About 2400 cycles,
-/// 50 s on all cores of this machine.
+/// each with the warm start's passes (it judges the thermal checks too): 85 s on all 16 threads of this machine.
 #[test]
 fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
-    use sim_components::analysis::{bounds, verdict_bands, verdict_worst};
+    use sim_components::analysis::{bounds, verdict_worst_and_bands};
     let cfg = sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap();
-    let (worst, runs) = verdict_worst(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap();
+    // The bands from the runs the search starts with, which are those of `verdict_bands`: 2 n + 1 cycles fewer, here and
+    // in the test above, whose judgement of them is made here.
+    let (worst, bands, runs) = verdict_worst_and_bands(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap();
+    exct_30_passes_with_margin("one at a time", &bands);
     let failed: Vec<_> = worst.iter().filter(|w| !w.verdict.ok && w.verdict.check != "pulley-bearing-life").map(|w| &w.verdict).collect();
     assert!(failed.is_empty(), "{failed:?}");
     let settling = worst.iter().find(|w| w.verdict.check == "settling").unwrap();
@@ -455,7 +463,7 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
     // The worst is never better than the bands of one value at a time: "dc-link-energy" was reported at 4.47 J (its
     // margin is 0 at every corner where the resistor takes over, and the corner with the least room came out) against
     // bands up to 33 J.
-    for band in verdict_bands(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap() {
+    for band in bands {
         let id = (band.verdict.check, band.verdict.motor);
         let w = &worst.iter().find(|w| (w.verdict.check, w.verdict.motor) == id).unwrap().verdict;
         let below = sim_components::analysis::AT_LEAST.contains(&id.0);

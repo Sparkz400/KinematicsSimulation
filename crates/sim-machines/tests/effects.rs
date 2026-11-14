@@ -47,7 +47,12 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
 /// Every config of `configs` on every machine, each cycle analysed on a thread of its own with `edits` on top:
 /// (name, its load).
 fn analysed(edits: &[&str]) -> Vec<(String, CycleLoad)> {
-    let runs: Vec<(String, Config, &MachineEntry)> = MACHINES.iter().flat_map(|entry| configs(entry).into_iter().map(move |(name, cfg)| (format!("{} {name}", entry.id), with(&cfg, edits), *entry))).collect();
+    analysed_where(edits, |_| true)
+}
+
+/// `analysed`, of the configs whose name `which` takes.
+fn analysed_where(edits: &[&str], which: impl Fn(&str) -> bool) -> Vec<(String, CycleLoad)> {
+    let runs: Vec<(String, Config, &MachineEntry)> = MACHINES.iter().flat_map(|entry| configs(entry).into_iter().map(move |(name, cfg)| (format!("{} {name}", entry.id), with(&cfg, edits), *entry))).filter(|(name, ..)| which(name)).collect();
     std::thread::scope(|scope| {
         let workers: Vec<_> = runs.iter().map(|(name, cfg, entry)| scope.spawn(move || (name.clone(), analyse_cycle(&mut Sim::new(entry, cfg).unwrap()).unwrap()))).collect();
         workers.into_iter().map(|w| w.join().unwrap()).collect()
@@ -106,7 +111,9 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
 /// two line module checks judge the mean and the highest power through it.
 #[test]
 fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
-    for (name, load) in analysed(&["effects.regenerative_supply = true"]).into_iter().filter(|(name, _)| !name.contains("no DC link")) {
+    // From cold: the line module's share is judged here, nothing thermal; the budget of a warm start closes in
+    // `the_energy_budget_closes_on_every_machine_and_config`, and the warm start would run each cycle once more.
+    for (name, load) in analysed(&["effects.regenerative_supply = true", "effects.thermal_warm_start = false"]).into_iter().filter(|(name, _)| !name.contains("no DC link")) {
         let budget = load.budget.as_ref().unwrap();
         let row = |id: &str| budget.rows.iter().find(|r| r.id == id).unwrap().energy;
         let (mains, line, resistor) = (row("mains"), row("line_module"), row("resistor"));
@@ -145,10 +152,15 @@ fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
 /// 8, 16 and 32 sub-steps; the run at 8 alone is off.
 #[test]
 fn the_supply_converges_with_the_integration_step_on_every_config() {
-    let (coarse, fine, finer) = (analysed(&["sim.substeps = 4"]), analysed(&["sim.substeps = 8"]), analysed(&["sim.substeps = 16"]));
+    // From cold: the warm start would run each cycle once more and change nothing the step does. At 16 sub-steps only
+    // the config compared there: run on every config, they took more than those at 4 and 8 together.
+    let (cold, chaotic) = ("effects.thermal_warm_start = false", "single-axis loss-free 3");
+    let (coarse, fine) = (analysed(&["sim.substeps = 4", cold]), analysed(&["sim.substeps = 8", cold]));
+    let finer = analysed_where(&["sim.substeps = 16", cold], |name| name == chaotic);
+    assert_eq!(finer.len(), 1);
     let mut saturated = Vec::new();
-    for (((name, a), (_, b)), (_, c)) in coarse.iter().zip(&fine).zip(&finer) {
-        let b = if name == "single-axis loss-free 3" { c } else { b };
+    for ((name, a), (_, b)) in coarse.iter().zip(&fine) {
+        let b = if name == chaotic { &finer[0].1 } else { b };
         let (sa, sb) = (a.budget.as_ref().unwrap().supply, b.budget.as_ref().unwrap().supply);
         let utilisation = a.motors.iter().chain(&b.motors).map(|m| m.utilisation).fold(0.0, f64::max);
         println!("{name}: supply {sa:.4} J at 4 sub-steps, {sb:.4} J at 8 or 16 ({:+.3} %), utilisation {utilisation:.3}", 100.0 * (sb / sa - 1.0));
@@ -230,7 +242,9 @@ fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
         let judged = verdicts(&cfg, &off).unwrap();
         assert!(off.part_rises.is_empty() && !judged.iter().any(|v| v.check.ends_with("-thermal") && v.check != "motor-thermal"), "{} {name}", entry.id);
 
-        let cfg = with(&cfg, &["effects.part_heating = true"]);
+        // From cold too: what is judged here, a settled rise as the mean loss times the resistance, holds whatever rises a
+        // pass started at, and the warm start would run each cycle once or twice more.
+        let cfg = cold(&with(&cfg, &["effects.part_heating = true"]));
         let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
         let budget = load.budget.as_ref().unwrap();
         assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
