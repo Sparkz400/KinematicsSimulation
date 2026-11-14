@@ -7,6 +7,7 @@
 //! - `rotary-table`: an indexing table behind a strain wave or worm gear (`table`).
 //! - `urdf-arm`: a serial six-axis arm whose bodies come from a URDF file (`arm`).
 //! - `scara`: a SCARA arm from a URDF file, its vertical joint on a ball screw (`arm`).
+//! - `palletiser`: a four-axis palletiser from a URDF file, a parallelogram keeping its flange level (`arm`).
 //!
 //! Each has its own default config in `config/`: `config/common.toml` with what all share, then the machine's file.
 
@@ -45,11 +46,16 @@ entry!(LINEAR_MOTOR, "linear-motor-axis", "linear-motor.toml", |cfg| slide::buil
 entry!(ROTARY_TABLE, "rotary-table", "table.toml", table::build);
 entry!(URDF_ARM, "urdf-arm", "arm.toml", arm::build);
 entry!(SCARA, "scara", "scara.toml", arm::build);
+entry!(PALLETISER, "palletiser", "palletiser.toml", arm::build);
 
 /// The full configs of the SCARA and the six-axis arm in tool space (`kinematics.tool_space = true`), with a cycle of
 /// straight lines of the tool: for `--config`.
 pub const SCARA_TOOL_CONFIG: &str = include_str!("../config/scara-tool.toml");
 pub const ARM_TOOL_CONFIG: &str = include_str!("../config/arm-tool.toml");
+/// The five-axis and the seven-axis (redundant) example arms in tool space (`urdf/five-axis.urdf`,
+/// `urdf/seven-axis.urdf`), for `--config` with the `urdf-arm` machine.
+pub const ARM5_TOOL_CONFIG: &str = include_str!("../config/arm5-tool.toml");
+pub const ARM7_TOOL_CONFIG: &str = include_str!("../config/arm7-tool.toml");
 
 const G: f64 = 9.80665;
 
@@ -71,6 +77,16 @@ pub fn lossless_config(entry: &MachineEntry) -> Config {
         cfg.set_text(&format!("effects.{effect} = false")).unwrap();
     }
     cfg.set_text("gearbox.damping_nm_s_rad = 0.0").unwrap();
+    // And a joint's own gearbox's (`[gearbox.<k>]`, catalog::motor_config).
+    let own: Vec<String> = cfg
+        .get("gearbox")
+        .ok()
+        .and_then(|g| g.as_table())
+        .map(|t| t.iter().filter(|(_, v)| v.get("damping_nm_s_rad").is_some()).map(|(k, _)| k.clone()).collect())
+        .unwrap_or_default();
+    for id in own {
+        cfg.set_text(&format!("gearbox.{id}.damping_nm_s_rad = 0.0")).unwrap();
+    }
     let stops = if cfg.get("slide.stop_damping_n_s_m").is_ok() {
         "slide.stop_damping_n_s_m"
     } else {
@@ -96,7 +112,7 @@ fn suite_configs(entry: &MachineEntry) -> Vec<Config> {
             cfg.set_text(&format!("effects.payload = {payload}")).unwrap();
             cfg.set_text(&format!("effects.part_heating = {}", elastic && payload)).unwrap();
             cfg.set_text(&format!("effects.thermal_feedback = {}", elastic && payload)).unwrap();
-            if entry.id == "urdf-arm" {
+            if entry.id == "urdf-arm" || entry.id == "palletiser" {
                 cfg.set_text("effects.gravity = false").unwrap();
             }
             cfg

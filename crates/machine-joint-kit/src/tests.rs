@@ -26,6 +26,10 @@ fn urdf_arm_passes_the_standard_suite() {
 fn scara_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&SCARA);
 }
+#[test]
+fn palletiser_passes_the_standard_suite() {
+    sim_core::testkit::run_standard_suite(&PALLETISER);
+}
 
 /// Runs a machine's default cycle and judges it.
 fn judged(entry: &MachineEntry, cfg: &Config) -> (CycleLoad, Vec<Verdict>) {
@@ -38,7 +42,7 @@ fn judged(entry: &MachineEntry, cfg: &Config) -> (CycleLoad, Vec<Verdict>) {
 /// Each machine's default config passes every verdict of its own cycle: the defaults are a sized example.
 #[test]
 fn every_default_cycle_passes_its_verdicts() {
-    for entry in [&SCREW, &RACK, &LINEAR_MOTOR, &ROTARY_TABLE, &URDF_ARM, &SCARA] {
+    for entry in [&SCREW, &RACK, &LINEAR_MOTOR, &ROTARY_TABLE, &URDF_ARM, &SCARA, &PALLETISER] {
         let (load, verdicts) = judged(entry, &entry.config());
         assert!(!load.tripped, "{}", entry.id);
         for v in verdicts {
@@ -323,7 +327,11 @@ fn the_jacobian_mass_matrix_is_newton_eulers() {
         let chain = arm::chain(&entry.config()).unwrap();
         let n = chain.len();
         let q: Vec<f64> = (0..n).map(|k| 0.3 - 0.17 * k as f64).collect();
-        let extra = Some((3.0, [0.05, 0.01, -0.02]));
+        let extra = Some(sim_components::rigid::Inertial {
+            mass: 3.0,
+            com: [0.05, 0.01, -0.02],
+            inertia: [[0.02, 0.001, 0.0], [0.001, 0.03, 0.002], [0.0, 0.002, 0.015]],
+        });
         let mut fast = vec![0.0; n * n];
         chain.mass_matrix(&q, extra, &mut fast);
         let (mut unit, mut tau) = (vec![0.0; n], vec![0.0; n]);
@@ -360,8 +368,8 @@ fn the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling
         let (default, mut tool) = (entry.config(), tool_config(entry, text));
         assert!(tool.bool("kinematics.tool_space").unwrap());
         tool.set_text("kinematics.tool_space = false").unwrap();
-        // The arm's settling tolerance is in m in tool space, in rad in joints.
-        for key in ["start.pose", "cycle", "ratings.settling_tolerance_m"] {
+        // The settling tolerance in rad is the joints' in joint space, the orientation's in tool space.
+        for key in ["start.pose", "cycle", "ratings.settling_tolerance_rad"] {
             tool.set(key, default.get(key).unwrap().clone()).unwrap();
         }
         assert_eq!(tool.to_text().unwrap(), default.to_text().unwrap(), "{}", entry.id);
@@ -549,7 +557,8 @@ fn the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a
 }
 
 /// The tool-space configs' cycles of straight lines pass every verdict, as the defaults' do: the SCARA's in 2.542 s
-/// (settling 0.04 mm), the arm's in 3.774 s (settling 4.0 mm of its 5: the gears' twist under the payload).
+/// (settling 0.04 mm), the arm's in 3.858 s (settling 2.4 mm of its 5 mm and 3.2 mrad of its 5 mrad: the gears' twist
+/// under the payload).
 #[test]
 fn the_tool_space_cycles_pass_their_verdicts() {
     for (entry, text) in [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG)] {
@@ -635,4 +644,304 @@ fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     let bend = values[m.signal_infos().iter().position(|s| s.id == "link.1.bend").unwrap()];
     assert!((bend - 49.156e-6).abs() < 0.01e-6, "{bend}");
     assert!((bend / 48.506e-6 - 1.0).abs() < 0.015);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The arms' dynamics, tool space and palletiser (14 November).
+
+/// Two links turning about vertical axes (no gravity torque), point masses: 2 kg at 1 m on link 1, 1.5 kg at 0.5 m on
+/// link 2, whose joint is at the end of link 1.
+const TWO_LINKS: &str = r#"<robot name="two"><link name="b"/>
+    <link name="l1"><inertial><origin xyz="1 0 0"/><mass value="2"/><inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/></inertial></link>
+    <link name="l2"><inertial><origin xyz="0.5 0 0"/><mass value="1.5"/><inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/></inertial></link>
+    <joint name="a" type="revolute"><parent link="b"/><child link="l1"/><axis xyz="0 0 1"/><limit lower="-3" upper="3"/></joint>
+    <joint name="c" type="revolute"><parent link="l1"/><child link="l2"/><origin xyz="1 0 0"/><axis xyz="0 0 1"/><limit lower="-3" upper="3"/></joint></robot>"#;
+
+/// The Coriolis and centripetal torques of a two-link arm in joint space, which the feedforward left out before. By
+/// hand (Craig, the planar two-link arm), h = m2 l1 lc2 sin q2 = 1.5 * 1 * 0.5 * sin(pi/2) = 0.75 kg m^2; at
+/// q' = (1, 2) rad/s and no acceleration tau1 = -h (2 q1' q2' + q2'^2) = -0.75 * (4 + 4) = -6 N m and
+/// tau2 = h q1'^2 = 0.75 N m; through gears of ratio 1 the motors give those. Without the speed `feedforward_torque` is
+/// zero there.
+#[test]
+fn the_joint_space_feedforward_has_the_coriolis_torques_of_a_two_link_arm() {
+    let path = std::env::temp_dir().join("joint-kit-test-two-links.urdf");
+    std::fs::write(&path, TWO_LINKS).unwrap();
+    let mut cfg = rigid(&URDF_ARM);
+    for edit in [
+        format!("arm.urdf_file = {:?}", path.to_str().unwrap()),
+        "arm.gear_ratios = [1.0, 1.0]".into(),
+        "effects.payload = false".into(),
+    ] {
+        cfg.set_text(&edit).unwrap();
+    }
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let q = [0.0, std::f64::consts::FRAC_PI_2];
+    let mut torque = [0.0; 2];
+    m.feedforward_torque_moving(&q, &[1.0, 2.0], &[0.0; 2], &mut torque);
+    near(torque[0], -6.0, 1e-12, "tau1");
+    near(torque[1], 0.75, 1e-12, "tau2");
+    m.feedforward_torque(&q, &[0.0; 2], &mut torque);
+    assert!(torque.iter().all(|t| t.abs() < 1e-12), "{torque:?}");
+}
+
+/// Each joint of the shipped arms has its own motor and drive: the six-axis arm's wrist (joints 4 to 6) a 1FK2104-5AF
+/// on a 6SL3210-5HE10-8UF0 ([catalogue] 7.5 N m maximum, rotor 0.56 kg cm^2, 2.3 A rated), joints 1 to 3 the shared
+/// 1FK2105-4AF (15 N m); the SCARA's quill and flange (joints 3 and 4) the 1FK2104-5AF too. The per-joint gear life
+/// rating is the wrist's 40 N m.
+#[test]
+fn the_arms_have_their_own_motor_per_joint() {
+    let sim = Sim::new(&URDF_ARM, &URDF_ARM.config()).unwrap();
+    for (k, peak) in [(0, 15.0), (2, 15.0), (3, 7.5), (5, 7.5)] {
+        assert_eq!(sim.control.drive_params_of(k).peak_torque, peak, "motor {}", k + 1);
+    }
+    let wrist = sim_components::catalog::motor_config(&URDF_ARM.config(), "5").unwrap();
+    assert_eq!(wrist.f64("motor.rotor_inertia_kgm2").unwrap(), 5.6e-5);
+    assert_eq!(wrist.f64("ratings.drive_rated_current_a").unwrap(), 2.3);
+    assert_eq!(wrist.f64("strain_wave.rated_torque_nm").unwrap(), 40.0);
+    let sim = Sim::new(&SCARA, &SCARA.config()).unwrap();
+    assert_eq!(sim.control.drive_params_of(1).peak_torque, 15.0);
+    assert_eq!(sim.control.drive_params_of(2).peak_torque, 7.5);
+    assert_eq!(sim.control.drive_params_of(3).peak_torque, 7.5);
+}
+
+/// The palletiser's parallelogram keeps its flange level: over a grid of the motors' joints (each joint's range and the
+/// turret and flange turned), the flange's z axis points straight down to rounding, and the URDF's wrist joint is
+/// minus the forearm's angle against the base (joint 2 + joint 3 + joint 4 = 0, by the coupling's rows).
+#[test]
+fn the_palletiser_keeps_its_flange_level_over_its_range() {
+    let cfg = PALLETISER.config();
+    let chain = arm::chain(&cfg).unwrap();
+    assert_eq!(chain.len(), 5);
+    let mut cfg_joints = cfg.clone();
+    cfg_joints.set_text("kinematics.tool_space = false").unwrap();
+    let m = (PALLETISER.build)(&cfg_joints).unwrap();
+    assert_eq!(m.axes().len(), 4);
+    let (a2, a3) = (&m.axes()[1], &m.axes()[2]);
+    let mut seen = 0;
+    for i in 0..=6 {
+        for j in 0..=6 {
+            let p2 = a2.min + (a2.max - a2.min) * i as f64 / 6.0;
+            let p3 = a3.min + (a3.max - a3.min) * j as f64 / 6.0;
+            let full = [0.7, p2, p3 - p2, -p3, -1.1];
+            let (rot, _) = chain.tip(&full);
+            let down = [rot[0][2], rot[1][2], rot[2][2]];
+            assert!(down[0].abs() < 1e-12 && down[1].abs() < 1e-12 && (down[2] + 1.0).abs() < 1e-12, "{down:?}");
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 49);
+    // In tool space the flange's turn rz is the turret's and the flange's together, as nothing else turns it.
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let mut motors = [0.0; 4];
+    m.inverse(&[1.4, 0.3, 1.0, 0.5], &mut motors);
+    let (turret, flange) = (motors[0] / 160.0, motors[3] / 50.0);
+    near(turret + flange, 0.5, 1e-9, "rz");
+    near(turret, 0.3f64.atan2(1.4), 1e-9, "turret towards the flange");
+}
+
+/// The palletiser's carton swinging on the flange (effects.payload_swing), at rest with the arm still, the flange level
+/// and the carton hanging 0.2 m below it. By hand: turned by 0.1 rad about the swing's first axis (across the carton's
+/// 0.6 m side, the flange's y) its weight rises by m g l (1 - cos 0.1) = 20 * 9.80665 * 0.2 * 0.0049958 = 0.19597 J and
+/// the bellows' spring holds 120 * 0.1^2 / 2 = 0.6 J; swinging at 1 rad/s about it, it has (m l^2 + I) / 2 =
+/// (20 * 0.2^2 + 0.75) / 2 = 0.775 J (I = 20 (0.6^2 + 0.3^2) / 12 = 0.75 kg m^2 about the flange's y).
+#[test]
+fn the_palletisers_swinging_carton_has_the_hand_calculated_energies() {
+    let mut cfg = PALLETISER.config();
+    cfg.set_text("effects.payload_swing = true").unwrap();
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    m.equilibrium(&[1.4, 0.0, 1.0, 0.0], &mut state, &mut torque);
+    let at = state.len() - 4;
+    let rest = m.energy(&state);
+    let mut swung = state.clone();
+    swung[at] = 0.1;
+    let by_hand = 20.0 * 9.80665 * 0.2 * (1.0 - 0.1f64.cos()) + 0.5 * 120.0 * 0.01;
+    near(m.energy(&swung) - rest, by_hand, 1e-9, "turned");
+    assert!((by_hand - 0.79597).abs() < 1e-5);
+    let mut swinging = state.clone();
+    swinging[at + 2] = 1.0;
+    near(m.energy(&swinging) - rest, 0.775, 1e-9, "swinging");
+    // At rest it stays at rest, and the swing has its signal.
+    let mut d = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut d);
+    assert!(d[at + 2].abs() < 1e-9 && d[at + 3].abs() < 1e-9, "{:?}", &d[at..]);
+    assert!(m.signal_infos().iter().any(|s| s.id == "swing.1.angle"));
+}
+
+/// Warm-started from the last solution along a line, the generic inverse gives the joints a walk from the home gives,
+/// to 1e-9 rad (the same branch, settled to the same point), on the six-axis arm's line of the tool across its
+/// workspace, its orientation turning.
+#[test]
+fn the_warm_started_inverse_stays_on_the_home_branch() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = || tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let warm = pose();
+    let (mut a, mut b) = ([0.0; 6], [0.0; 6]);
+    for k in 0..=40 {
+        let s = k as f64 / 40.0;
+        let tool = [0.9, -0.3 + 0.6 * s, 0.7 - 0.1 * s, 0.2 * s, std::f64::consts::FRAC_PI_2 - 0.3 * s, -0.2 * s];
+        assert!(warm.inverse(&fk, &tool, &mut a));
+        assert!(pose().inverse(&fk, &tool, &mut b));
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-9), "at {s}: {a:?} against {b:?}");
+    }
+}
+
+/// Generic damped least squares on the seven-joint URDF (config/arm7-tool.toml): a pose 0.2 m off the home's, turned
+/// by 0.3 rad, is reached to 1e-9, and the redundant joint is spent on staying near the home: the joints' offset from
+/// the home has no part along the Jacobian's null space (the direction n with J n = 0, here by the null space projector
+/// of J's 6 x 7 rows), so no move that keeps the pose brings them nearer the home.
+#[test]
+fn the_seven_joint_arm_reaches_a_pose_nearest_its_home_posture() {
+    let cfg = tool_config(&URDF_ARM, ARM7_TOOL_CONFIG);
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    assert_eq!((m.axes().len(), m.motors().len()), (6, 7));
+    let chain = arm::chain(&cfg).unwrap();
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let pose = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let mut at_home = [0.0; 6];
+    pose.forward(&fk, &home, &mut at_home);
+    let target =
+        [at_home[0] - 0.1, at_home[1] + 0.15, at_home[2] - 0.08, at_home[3] + 0.3, at_home[4], at_home[5] - 0.1];
+    let mut q = [0.0; 7];
+    assert!(pose.inverse(&fk, &target, &mut q));
+    let mut back = [0.0; 6];
+    pose.forward(&fk, &q, &mut back);
+    assert!(back.iter().zip(&target).all(|(a, b)| (a - b).abs() < 1e-9), "{back:?} against {target:?}");
+    // The null space: J (6 x 7, of the tool's axes, by central differences), n = (I - J^T (J J^T)^-1 J) e for the e of
+    // the joint the null space is largest along.
+    let jac: Vec<f64> = {
+        let mut j = vec![0.0; 42];
+        for c in 0..7 {
+            let (mut up, mut down) = (q, q);
+            up[c] += 1e-6;
+            down[c] -= 1e-6;
+            let (mut a, mut b) = ([0.0; 6], [0.0; 6]);
+            pose.forward(&fk, &up, &mut a);
+            pose.forward(&fk, &down, &mut b);
+            for r in 0..6 {
+                j[r * 7 + c] = (a[r] - b[r]) / 2e-6;
+            }
+        }
+        j
+    };
+    let jjt: Vec<f64> = (0..36).map(|rc| (0..7).map(|k| jac[rc / 6 * 7 + k] * jac[rc % 6 * 7 + k]).sum()).collect();
+    let null = |e: usize| -> Vec<f64> {
+        let je: Vec<f64> = (0..6).map(|r| jac[r * 7 + e]).collect();
+        let y = sim_components::chain::solve(&jjt, &je).unwrap();
+        (0..7).map(|k| if k == e { 1.0 } else { 0.0 } - (0..6).map(|r| jac[r * 7 + k] * y[r]).sum::<f64>()).collect()
+    };
+    let n = (0..7)
+        .map(null)
+        .max_by(|a, b| a.iter().map(|v| v * v).sum::<f64>().total_cmp(&b.iter().map(|v| v * v).sum()))
+        .unwrap();
+    let size = n.iter().map(|v| v * v).sum::<f64>().sqrt();
+    assert!(size > 0.1, "a null space of {size}");
+    let along: f64 = (0..7).map(|k| n[k] / size * (q[k] - home[k])).sum();
+    let off: f64 = (0..7).map(|k| (q[k] - home[k]).powi(2)).sum::<f64>().sqrt();
+    assert!(off > 0.05 && along.abs() < 1e-6 * off.max(1.0), "{along} rad of {off} along the null space");
+}
+
+/// A URDF whose flange points down at zero joints (the five-axis example) works around pointing down: the orientation
+/// is the turn from the flange's at zero, 0 there, not half a turn from the base frame as the rotation vector of the
+/// orientation itself would have it (refused before). Its tool's five axes round-trip within 1e-9 over a grid of the
+/// working range around the home.
+#[test]
+fn a_flange_pointing_down_at_zero_is_at_no_turn() {
+    let cfg = tool_config(&URDF_ARM, ARM5_TOOL_CONFIG);
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    assert_eq!(m.axes().iter().map(|a| a.id).collect::<Vec<_>>(), ["x", "y", "z", "rx", "ry"]);
+    let (mut motors, mut back, mut tried) = ([0.0; 5], [0.0; 5], 0);
+    for k in 0..27 {
+        let f = |i: usize| ((k / 3usize.pow(i as u32)) % 3) as f64 - 1.0;
+        let pose = [0.9 + 0.1 * f(0), 0.2 * f(1), 0.7 + 0.1 * f(2), 0.2 * f(0) * f(1), 0.2 * f(2)];
+        assert_eq!(m.unreachable(&pose, 0.0), None, "{pose:?}");
+        m.inverse(&pose, &mut motors);
+        m.forward(&motors, &mut back);
+        assert!(pose.iter().zip(&back).all(|(a, b)| (a - b).abs() < 1e-9), "{pose:?}: {back:?}");
+        tried += 1;
+    }
+    assert_eq!(tried, 27);
+}
+
+/// A line of the six-axis arm's tool from pointing down to a turn of 0.3 rad about the vertical after it: the two
+/// rotation vectors, (0, pi/2, 0) and that of Rz(0.3) Ry(pi/2), are not parallel, and halfway along the planned
+/// orientation is their slerp midpoint (`rigid`'s hand calculation of a slerp: one fixed axis, half the angle), not the
+/// straight line's midpoint between the rotation vectors, which is off it by more than a milliradian. The place moves
+/// straight.
+#[test]
+fn a_tool_line_turns_its_orientation_by_slerp() {
+    use sim_components::rigid::{exp, log, matmul, slerp};
+    let mut cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+    let from = sim.control.planned_pos().to_vec();
+    let a = [from[3], from[4], from[5]];
+    let b = log(&matmul(&exp([0.0, 0.0, 0.3]), &exp(a)));
+    let text = format!("line, {}, {}, {}, {}, {}, {}", from[0] + 0.1, from[1] + 0.2, from[2], b[0], b[1], b[2]);
+    let points = sim.plan_path(&sim_components::path::parse(&text).unwrap(), false).unwrap();
+    let halfway =
+        points.iter().min_by(|p, q| (p.1[1] - from[1] - 0.1).abs().total_cmp(&(q.1[1] - from[1] - 0.1).abs())).unwrap();
+    let share = (halfway.1[1] - from[1]) / 0.2;
+    assert!((share - 0.5).abs() < 0.02, "{share}");
+    let want = slerp(a, b, share);
+    for i in 0..3 {
+        assert!((halfway.1[3 + i] - want[i]).abs() < 1e-6, "{:?} against the slerp {want:?}", halfway.1);
+    }
+    let linear: Vec<f64> = (0..3).map(|i| a[i] + share * (b[i] - a[i])).collect();
+    let apart: f64 = (0..3).map(|i| (want[i] - linear[i]).powi(2)).sum::<f64>().sqrt();
+    assert!(apart > 1e-3, "the slerp is {apart} rad from the straight line: the test tells them apart");
+    assert!((halfway.1[0] - from[0] - 0.1 * share).abs() < 1e-6, "{:?}", halfway.1);
+    assert!((halfway.1[2] - from[2]).abs() < 1e-6);
+}
+
+/// The time-optimal plan's points are bounded (`path::PLAN_POINTS_MOST`, ten million): where the motors allow a crawl
+/// only (a pose near a singularity, where their speed limit through J^-1 goes to zero: a line onto the stretched SCARA
+/// arm once asked for some 64 GB of points), the plan is refused, not allocated. Here the crawl by a motor of 0.001
+/// rad/s at most (`drive.max_speed_rad_s`, which the plan keeps within): 0.1 m along y at about 0.6 m reach turns joint
+/// 1 by some 0.17 rad, times its ratio 100, at 0.001 rad/s 1.7e4 s, 1.7e7 points of 1 ms. Beyond the tighter bound of
+/// 1000 s (`path::PLAN_LONGEST`) too, which refuses it as a crawl near a singularity.
+#[test]
+fn a_time_optimal_plan_of_a_crawl_is_refused_beyond_its_bound_of_points() {
+    let mut cfg = tool_config(&SCARA, SCARA_TOOL_CONFIG);
+    cfg.set_text("drive.max_speed_rad_s = 0.001").unwrap();
+    let sim = Sim::new(&SCARA, &cfg).unwrap();
+    let start = sim.control.planned_pos().to_vec();
+    let text = format!("line, {}, {}, {}, {}", start[0], start[1] + 0.1, start[2], start[3]);
+    let limits = sim_components::path::PlanLimits::new(0.8, [f64::NEG_INFINITY, f64::INFINITY, 1.0]);
+    let planned = sim_components::path::plan_time_optimal(
+        sim.machine.as_ref(),
+        &sim.control.motor_drives(sim.machine.as_ref()),
+        &limits,
+        &start,
+        &sim_components::path::parse(&text).unwrap(),
+        1e-3,
+        0.0,
+        1e-4,
+    );
+    assert_eq!(planned.err().map(|e| e.key), Some("error-path-singular"));
+}
+
+/// The swinging payload's two joints keep the loss-free machine's energy, rigid and elastic: the arm's dynamics with
+/// them (Newton-Euler over the chain with the swing's bodies, taken to the motors' joints) are those of its energy.
+/// Without gravity, as the standard suite runs the arms (held by constant torques after the pulse, an arm falls away
+/// from its pose under gravity and trades far more energy than the pulse put in); the swing's spring holds the carton.
+#[test]
+fn the_swinging_payload_conserves_energy() {
+    for elastic in [false, true] {
+        let mut cfg = lossless_config(&PALLETISER);
+        for edit in [
+            "effects.payload_swing = true".to_string(),
+            "effects.gravity = false".into(),
+            "arm.payload_swing_damping_nm_s_rad = 0.0".into(),
+            format!("effects.joint_elasticity = {elastic}"),
+        ] {
+            cfg.set_text(&edit).unwrap();
+        }
+        let m = (PALLETISER.build)(&cfg).unwrap();
+        sim_core::testkit::energy_conservation(m.as_ref());
+    }
 }

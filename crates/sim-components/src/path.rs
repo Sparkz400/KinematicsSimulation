@@ -25,6 +25,10 @@
 //! machine with x and z. What three axes do not have: a full turn or a half turn (start, end and centre on one line
 //! leave the plane open, and such an arc is refused). Transition curves on three axes are laid in the plane of the arc
 //! they meet (`blend3`); where two arcs in different planes meet, the path passes as given.
+//!
+//! Where the axes are x, y, z and an orientation as a rotation vector rx, ry, rz (an arm in tool space), a line moves
+//! the place straight and turns the orientation by slerp (`Geo::Slerp`): about one fixed axis at a steady rate, not
+//! along the straight line between the two rotation vectors, which is not the same turn where they are not parallel.
 
 use crate::control::CommandError;
 use crate::drive::DriveParams;
@@ -92,6 +96,14 @@ enum Geo {
     Line {
         from: Vec<f64>,
         dir: Vec<f64>,
+        length: f64,
+    },
+    /// A line of a tool whose axes are x, y, z and a rotation vector rx, ry, rz: the place on the straight line from
+    /// `from` to `to`, the orientation by slerp between theirs, both at the share s / `length` of the way; `length` the
+    /// straight distance between the two poses, as a `Line` has it.
+    Slerp {
+        from: Vec<f64>,
+        to: Vec<f64>,
         length: f64,
     },
     /// `turn` is 1 counter-clockwise and -1 clockwise.
@@ -287,6 +299,7 @@ impl Geo {
     fn length(&self) -> f64 {
         match self {
             Geo::Line { length, .. }
+            | Geo::Slerp { length, .. }
             | Geo::Arc { length, .. }
             | Geo::Arc3 { length, .. }
             | Geo::Clothoid { length, .. }
@@ -301,6 +314,20 @@ impl Geo {
         match self {
             Geo::Line { from, dir, .. } => {
                 [from.iter().zip(dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; dir.len()]]
+            }
+            Geo::Slerp { from, to, length } => {
+                let pose = |s: f64| -> Vec<f64> {
+                    let share = s / length;
+                    let turned = crate::rigid::slerp([from[3], from[4], from[5]], [to[3], to[4], to[5]], share);
+                    (0..6).map(|i| if i < 3 { from[i] + share * (to[i] - from[i]) } else { turned[i - 3] }).collect()
+                };
+                // The orientation's rates by central differences over 1e-4 of the piece (the slerp goes on smoothly past
+                // its ends): truncation ~1e-8 of them, rounding ~1e-16 / 1e-8 of the rotation vector.
+                let h = 1e-4 * length;
+                let (ahead, here, behind) = (pose(s + h), pose(s), pose(s - h));
+                let first = (0..6).map(|i| (ahead[i] - behind[i]) / (2.0 * h)).collect();
+                let second = (0..6).map(|i| (ahead[i] - 2.0 * here[i] + behind[i]) / (h * h)).collect();
+                [here, first, second]
             }
             Geo::Arc { centre, radius, from_angle, turn, .. } => {
                 let (sin, cos) = (from_angle + turn * s / radius).sin_cos();
@@ -463,7 +490,17 @@ fn geometry(
 ) -> Result<(Vec<Geo>, f64), CommandError> {
     let Tolerance { path: tolerance, corner } = tolerance.into();
     let (geo, off) = given(start, pieces, slack)?;
-    let (geo, rounded) = round_corners(geo, corner);
+    let (mut geo, rounded) = round_corners(geo, corner);
+    // An orientation as a rotation vector turns by slerp along a line (what is left of it after its corners are
+    // rounded: the rounding curves pass the rotation vector as any other axis, within the corner tolerance).
+    if axes.len() == 6 && axes[3..].iter().map(|a| a.id).eq(["rx", "ry", "rz"]) {
+        for g in &mut geo {
+            if let Geo::Line { from, dir, length } = g {
+                let to = from.iter().zip(dir.iter()).map(|(f, d)| f + *length * d).collect();
+                *g = Geo::Slerp { from: from.clone(), to, length: *length };
+            }
+        }
+    }
     if tolerance <= 0.0 {
         return Ok((geo, off + rounded));
     }
@@ -1055,7 +1092,7 @@ fn blend_with(
             circle(&inset, i).map(|(centre, radius)| Side::Circle { centre, curvature: turn / radius })
         }
         Geo::Line { from, dir, .. } => Some(Side::Line { point: [from[0], from[1]], dir: [dir[0], dir[1]] }),
-        Geo::Clothoid { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Carried { .. } => None,
+        Geo::Clothoid { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Slerp { .. } | Geo::Carried { .. } => None,
     };
     let mut curves: Vec<Option<Geo>> = vec![None];
     for j in 1..n {
@@ -1090,6 +1127,8 @@ fn blend_with(
                 let length = from.iter().zip(&to).zip(dir).map(|((f, t), d)| (t - f) * d).sum::<f64>();
                 Geo::Line { from, dir: dir.clone(), length }
             }
+            // On two axes only: a slerp is a line of six.
+            Geo::Slerp { .. } => piece.clone(),
             Geo::Arc { radius, from_angle, turn, length, .. } => {
                 let (centre, moved) = circle(&inset, i)?;
                 if moved <= 0.0 {
@@ -1437,6 +1476,12 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
     let any = || tightest(&|row| row.iter().map(|w| w * w).sum::<f64>().sqrt());
     match geo {
         Geo::Line { dir, .. } => tightest(&|row| row.iter().zip(dir).map(|(w, d)| w * d).sum::<f64>().abs()),
+        // shortcut: as the straight line between the two poses; the slerp's orientation rates differ from the chord's by
+        // the turn's curvature in rotation-vector coordinates (a few percent for a quarter turn about a tilted axis).
+        // Take the most of `at`'s first derivative along it where a cycle runs its rotation axes at their limits.
+        Geo::Slerp { from, to, length } => tightest(&|row| {
+            row.iter().zip(from.iter().zip(to)).map(|(w, (f, t))| w * (t - f) / length).sum::<f64>().abs()
+        }),
         Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, 0.0, any()),
         // A transition curve counts as an arc of its tightest radius.
         Geo::Clothoid { k0, k1, length, .. } => curved(1.0 / k0.abs().max(k1.abs()), (k1 - k0).abs() / length, any()),
@@ -1969,6 +2014,9 @@ const LEVELS: usize = 32;
 /// The most steps of a run along a piece (`follow`): one that takes longer is held back by a ceiling near zero and
 /// refused. 2^18 steps are 65 s at a profile cycle of 1 ms.
 const RUN_STEPS: usize = 1 << 18;
+/// The most points a time-optimal plan may have: ten million, 2.8 hours at a planning cycle of 1 ms (160 MB of
+/// six-axis poses).
+const PLAN_POINTS_MOST: f64 = 1e7;
 
 /// What bounds the speed v and the acceleration a along the path at one place of a piece (p', p'', p''': the pose's
 /// derivatives by the distance along the path).
@@ -2148,7 +2196,7 @@ fn piece_limits(
     let (axes, motors, length) = (machine.axes(), machine.motors().len(), geo.length());
     // The tightest curvature, so that on a tight curve the places are no more than `PLACE_TURN` of its turning apart.
     let tightest = match geo {
-        Geo::Line { .. } => 0.0,
+        Geo::Line { .. } | Geo::Slerp { .. } => 0.0,
         Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => 1.0 / radius,
         Geo::Clothoid { k0, k1, .. } => k0.abs().max(k1.abs()),
         Geo::Spline { tightest, .. } => *tightest,
@@ -2177,7 +2225,7 @@ fn piece_limits(
         .iter()
         .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs()))
         .fold(f64::INFINITY, f64::min);
-    let jerk = if matches!(geo, Geo::Line { .. }) { 1.0 } else { 0.4 } * along;
+    let jerk = if matches!(geo, Geo::Line { .. } | Geo::Slerp { .. }) { 1.0 } else { 0.4 } * along;
     // What each motor gives at a standstill, either way: the bounds of its row, and what holds the tool.
     let torque: Vec<f64> = curves.iter().map(|c| c.motoring[0].min(c.braking[0])).collect();
     let zero = vec![0.0; axes.len()];
@@ -2558,8 +2606,10 @@ fn timed_by_motors(
 
     let duration = |i: usize| knots[i][knots[i].len() - 1][0];
     let total: f64 = (0..n).map(duration).sum();
-    // A crawl near a singularity would ask for a pose per cycle without bound.
-    if !(total <= PLAN_LONGEST) {
+    // A crawl near a singularity, or where the motors' limits slow the path to one, would ask for a pose per cycle
+    // without bound and fill the memory: refused beyond `PLAN_LONGEST`, and beyond `PLAN_POINTS_MOST` poses where a
+    // cycle below 0.1 ms makes that the tighter bound.
+    if !(total <= PLAN_LONGEST && total / cycle <= PLAN_POINTS_MOST) {
         return Err(CommandError { key: "error-path-singular" });
     }
     let mut points = Vec::new();
@@ -3218,7 +3268,9 @@ line,0.1,0.35";
             .map(|g| match g {
                 Geo::Arc { radius, turn, length, .. } => turn * length / radius,
                 Geo::Clothoid { k0, k1, length, .. } => 0.5 * (k0 + k1) * length,
-                Geo::Line { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Carried { .. } => 0.0,
+                Geo::Line { .. } | Geo::Slerp { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Carried { .. } => {
+                    0.0
+                }
             })
             .sum();
         assert!((turned + a + b).abs() < 1e-9, "the planned path turns by {turned} rad, the given one by {}", -a - b);
@@ -3425,7 +3477,7 @@ line,0.1,0.35";
         let turned = |g: &Geo| match g {
             Geo::Arc { radius, turn, length, .. } => turn * length / radius,
             Geo::Clothoid { k0, k1, length, .. } => 0.5 * (k0 + k1) * length,
-            Geo::Line { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Carried { .. } => 0.0,
+            Geo::Line { .. } | Geo::Slerp { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } | Geo::Carried { .. } => 0.0,
         };
         (geo.iter().map(Geo::length).sum(), geo.iter().map(turned).sum())
     }

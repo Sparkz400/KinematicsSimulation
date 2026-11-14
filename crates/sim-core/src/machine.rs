@@ -202,9 +202,11 @@ pub trait Machine: Send {
     fn motor_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]);
     /// Motor torques from the rigid model for a tool pose and acceleration, including gravity.
     fn feedforward_torque(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut [f64]);
-    /// `feedforward_torque` with the tool's speed too, for what the speed asks of the motors in a kinematics that is
-    /// not linear (the centripetal and Coriolis part of the torque). The controller uses this one; the default leaves
-    /// the speed out, which is exact where the motor angles are a linear function of the tool pose.
+    /// `feedforward_torque` with the tool's speed too, for what the speed asks of the motors (the centripetal and
+    /// Coriolis part of the torque): from a kinematics that is not linear, and from a mass matrix that changes with the
+    /// pose (an arm in joint space, whose motor angles are linear in its joints, has them too). The controller uses
+    /// this one; the default leaves the speed out, which is exact only where the motor angles are linear in the tool
+    /// pose and the inertia the motors see does not change with it (a gantry, a single axis).
     fn feedforward_torque_moving(&self, tool_pos: &[f64], _tool_vel: &[f64], tool_acc: &[f64], out: &mut [f64]) {
         self.feedforward_torque(tool_pos, tool_acc, out);
     }

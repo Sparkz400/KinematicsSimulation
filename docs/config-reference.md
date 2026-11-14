@@ -83,6 +83,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | --- | --- | --- | --- |
 | `gravity` | T E S | on | Gravity on the Z axis and payload (T-gantry) or along an inclined axis (single axis) |
 | `payload` | T E S | on | The payload mass, attached and released by the cycle. Off: no payload at all |
+| `payload_swing` | arms | off | The payload hangs on a pivot at the flange and swings (`arm.payload_swing_*`): two joints no motor drives, their damper's loss `power.payload_swing`, their angles `swing.1.angle`, `swing.2.angle` |
 | `belt_stretch` | T E S | on | The elastic model: belt sections as springs, pulleys and motor shafts as separate states. **Off selects the rigid reference model**, in which belt damping, slack, tooth stiffness, backlash, gear stiffness, the frame mode, the leaning Z axis and the holding brakes have no effect |
 | `belt_damping` | T E S | on | Damping on the stretch rate of each belt section |
 | `belt_slack` | T E S | on | Belt tension cannot go below zero |
@@ -369,11 +370,11 @@ With `effects.process_force`: a force on the tool tip (single axis: on the carri
 
 ## A motor's own tables
 
-In a machine file, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]` and `[parts.<id>]` give the motor
+In a machine file and on the arms, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]`, `[strain_wave.<id>]`, `[joint.<id>]` and `[parts.<id>]` give the motor
 `<id>` its own values over the shared tables, key by key; each key has to be one the shared table has, with its meaning,
 unit and mark there. `[parts.<id>]` takes `motor`, `motor_supply`, `gearbox` and `drive` (not `belt` or `axis`, which
 are the machine's). See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
-has them for its Z motor; no other config has any.
+has them for its Z motor, the arms' configs for their wrists (`[motor.4]` to `[motor.6]` on the six-axis arm, joints 3 and 4 on the SCARA) and the palletiser for each of its joints. A config of a registered machine may give a motor its own tables though the default config has none for it (a seventh joint).
 
 ## A machine file's screws, racks, linear motors and strain wave gears
 
@@ -492,7 +493,8 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | --- | --- | --- | --- | --- | --- |
 | `belt_max_tension_n` | T E S | N | Allowable belt tension. E: 2140 N. Festo publishes no allowable belt tension for the EXCT. It states the 5 mm pitch, the steel cords, the 30 mm width and the stretch of the belt: 0.045 % at 300 N, which is 667 kN per unit strain. Megadyne's Megalinear handbook lists for 5 mm pitch steel-cord polyurethane belts, at 4 mm/m stretch: T5 840 N at 25 mm and 1060 N at 32 mm (about 250 kN per unit strain at 30 mm), AT5 1805 N at 25 mm and 2275 N at 32 mm (about 535 kN). Festo's belt is somewhat stiffer than AT5 with standard steel cords and far stiffer than T5, so the limit is the AT5 figure between the two widths: 2140 N at 30 mm. The figures were read from the handbook itself (average values for open-ended belts, a quarter of the breaking strength); that Festo's belt has cords of that class is concluded from the stretch, not stated by Festo. The teeth give way before the cords do: that is judged by `pulley_max_torque_nm`. | `belt-tension` | placeholder (T S), estimate (E) |
 | `belt_min_tension_n` | T E S | N | Lowest tension allowed. Below it the teeth can jump | `belt-slack` | choice (0) |
-| `settling_tolerance_m` | T E S | m | How far the tool may be from its target in the second half of a dwell | `settling` | choice |
+| `settling_tolerance_m` | T E S | m | How far the tool's place (its axes in m) may be from its target in the second half of a dwell | `settling` | choice |
+| `settling_tolerance_rad` | arms, table, D4 | rad | How far the tool's turn (its axes in rad: an arm's joints or orientation, the SCARA's and the D4's c, the table) may be from its target then, apart from the place: metres and radians are not added. Any config may add it | `settling-angle` | arm 3 mrad in joints, 5 mrad in tool space; SCARA 1 mrad (2 in tool space); table 0.2 mrad; palletiser and D4 5 mrad; estimates |
 | `pulley_max_torque_nm` | E | N m | Allowable torque at the pulley. Also caps the peak torque of a motor by name, and the time-optimal plan keeps `profile.torque_reserve` of it at the gearbox output | `pulley-torque` | datasheet (Festo: 12.5 N m) |
 | `gearbox_rated_torque_nm` | T S | N m | Gearbox rated (continuous) torque at the output. A gearbox by name sets it | `gearbox-continuous` | datasheet (as Siemens NRB060, ratio 5) |
 | `gearbox_max_torque_nm` | T S | N m | Gearbox maximum torque at the output. A gearbox by name sets it. The time-optimal plan keeps `profile.torque_reserve` of it at the output (where the machine reports `gearbox.<motor>.output_torque`) | `gearbox-peak` | datasheet (as Siemens NRB060, ratio 5) |
@@ -766,26 +768,37 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 
 The fourth motor is the arms' 1FK2105-4AF with the same drive settings (the drive reads one `[motor]` and `[drive]` per machine); the common gearbox checks of motor 4 are judged against the arms' `[ratings]`, the tool's gearbox by `tool-gearbox-peak`.
 
-## Arms in tool space (SCARA, six-axis arm)
+## Arms (six-axis arm, SCARA, palletiser)
 
-The configs of `scara` ([`config/scara.toml`](../crates/machine-joint-kit/config/scara.toml)) and `urdf-arm`
-([`config/arm.toml`](../crates/machine-joint-kit/config/arm.toml)) have these keys; shipped with tool space off, so the
-axes are the joints as before. [`config/scara-tool.toml`](../crates/machine-joint-kit/config/scara-tool.toml) and
+The configs of `urdf-arm` ([`config/arm.toml`](../crates/machine-joint-kit/config/arm.toml)), `scara`
+([`config/scara.toml`](../crates/machine-joint-kit/config/scara.toml)) and `palletiser`
+([`config/palletiser.toml`](../crates/machine-joint-kit/config/palletiser.toml)) have these keys. The arm and the SCARA
+are shipped with tool space off, so the axes are the joints as before; the palletiser with it on.
+[`config/scara-tool.toml`](../crates/machine-joint-kit/config/scara-tool.toml) and
 [`config/arm-tool.toml`](../crates/machine-joint-kit/config/arm-tool.toml) are the same configs with it on, a start pose
-and a cycle of straight lines in tool space (and the arm's settling tolerance 5 mm instead of 3 mrad). See
-[mechanisms](mechanisms.md#tool-space).
+and a cycle of straight lines in tool space (and their settling tolerances for the place and the turn of the tool);
+[`config/arm5-tool.toml`](../crates/machine-joint-kit/config/arm5-tool.toml) and
+[`config/arm7-tool.toml`](../crates/machine-joint-kit/config/arm7-tool.toml) the five-axis and the seven-axis example arm
+in tool space. See [mechanisms](mechanisms.md#tool-space).
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
-| `kinematics.tool_space` | – | On: the axes are the flange's pose (SCARA x, y, z, c; six joints x, y, z, rx, ry, rz), `start.pose` and the cycle's targets too; off: the joints | off, choice |
+| `arm.payload_inertia_kgm2` | kg m² | The payload's inertia about its centre in the URDF's tip frame: xx, yy, zz, xy, xz, yz. With `effects.payload` | arm 0.03125, 0.01625, 0.025 (a 6 kg box of 0.1 x 0.2 x 0.15 m); SCARA 0.004375, 0.004375, 0.00375 (3 kg, 0.1 m across and high); palletiser 0.41667, 0.75, 0.86667 (a 20 kg carton of 0.6 x 0.4 x 0.3 m); estimates |
+| `arm.joint_coupling` | – | The URDF's joints as sums of the motors' joints, one row per URDF joint, one factor per motor (a parallelogram); `[]` one motor per URDF joint | `[]`; palletiser rows (1,0,0,0), (0,1,0,0), (0,−1,1,0), (0,0,−1,0), (0,0,0,1): its geometry, choice |
+| `arm.payload_swing_stiffness_nm_rad`, `arm.payload_swing_damping_nm_s_rad` | N m/rad, N m s/rad | With `effects.payload_swing`: the spring and damper per axis of the payload's pivot at the flange | arm and SCARA 20, 0.5 (bounds 10 to 40, 0.2 to 1); palletiser 120, 3 (60 to 240, 1 to 6, its carton at 2.2 Hz); estimates |
+| `kinematics.tool_space` | – | On: the axes are the flange's pose (`kinematics.tool_axes`), `start.pose` and the cycle's targets too; off: the motors' joints | arm, SCARA off; palletiser on; choice |
+| `kinematics.tool_axes` | – | Of "x", "y", "z", "rx", "ry", "rz" in that order: the tool's axes, as many as motors or one fewer (redundant). ["x", "y", "z", "rz"] on a SCARA chain is its closed form with the axis c | arm all six; SCARA x, y, z, rz; palletiser x, y, z, rz; five-axis x, y, z, rx, ry; choice |
 | `kinematics.elbow` | – | SCARA only: "right" (joint 2 counter-clockwise from the stretched arm) or "left" | "right", choice |
-| `kinematics.home_joints` | rad | Six joints only: the joint pose whose branch the inverse keeps; it follows the line from its flange pose to each target | 0, 0.4, 0.2, 0, 0.97, 0 (flange 0.99 m out, 0.83 m up, pointing down), choice |
-| `workspace.tool_min`, `tool_max` | m, rad | In tool space: each axis's range, x, y, z in m, the turn(s) in rad; poses in it out of reach or beyond a joint's stop are refused | SCARA 0.15 to 0.6, −0.45 to 0.45, 0 to 0.2, −3 to 3; arm 0.5 to 1.2, −0.6 to 0.6, 0.3 to 1.1, −3.1 to 3.1 each turn; choice |
-| `workspace.max_condition_number` | – | In tool space: a target whose Jacobian has a higher condition number is refused (`error-arm-singularity`); SCARA: of d(x, y)/d(joints 1, 2); arm: the 6 x 6 geometric Jacobian, its turn rows times the flange's distance from joint 2 at the home | SCARA 25 (11° of elbow), arm 30 (5.0 at the home), estimates (design rules) |
-| `axis.x`, `axis.y`, `axis.z`: `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` | m/s, m/s², m/s³ | In tool space: the flange's limits along each axis | SCARA 1, 5, 200 (z 0.8, 8, 400); arm 1, 4, 80; estimates |
-| `axis.c` (SCARA), `axis.rx`, `axis.ry`, `axis.rz` (arm): `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | In tool space: the turn's limits | SCARA 4, 30, 1000; arm 2, 8, 150; estimates |
+| `kinematics.home_joints` | rad | Numerical inverse only: the joint pose whose branch the inverse keeps, which the solver starts from where the last solution does not get there, and which a redundant arm stays nearest | arm 0, 0.4, 0.2, 0, 0.97, 0 (flange 0.99 m out, 0.83 m up, pointing down); palletiser 0, 0.2, 0.3, 0; choice |
+| `workspace.tool_min`, `tool_max` | m, rad | In tool space: each axis's range, x, y, z in m, the turns in rad (from the flange's orientation at zero joints); poses in it out of reach or beyond a joint's stop are refused | SCARA 0.15 to 0.6, −0.45 to 0.45, 0 to 0.2, −3 to 3; arm 0.5 to 1.2, −0.6 to 0.6, 0.3 to 1.1, then −0.6 to 0.6, 0.97 to 2.17, −0.6 to 0.6 (pointing down ±0.6 rad); palletiser 1 to 1.8, −0.7 to 0.7, 0.6 to 1.6, −1.7 to 1.7; choice |
+| `workspace.max_condition_number` | – | In tool space: a target whose Jacobian has a higher condition number is refused (`error-arm-singularity`); SCARA: of d(x, y)/d(joints 1, 2); others: of the tool's axes, the turns times the flange's distance from joint 2 at the home; also the warm-started inverse's guard | SCARA 25 (11° of elbow), arm 30, palletiser 30, estimates (design rules) |
+| `axis.x`, `axis.y`, `axis.z`: `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` | m/s, m/s², m/s³ | In tool space: the flange's limits along each axis | SCARA 1, 5, 200 (z 0.8, 8, 400); arm 0.9, 4, 80; palletiser 1.2, 4, 40; estimates |
+| `axis.c` (SCARA), `axis.rx`, `axis.ry`, `axis.rz`: `max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | In tool space: the turn's limits | SCARA 4, 30, 1000; arm 1.5, 8, 150 (2 rad/s with every axis at its limit asked 373 rad/s of a motor); palletiser rz 2.5, 10, 100; estimates |
+| `axis.j7` | rad/s, ... | Read only where the URDF has a seventh joint | 3, 20, 400, estimate |
+| `[motor.<k>]`, `[drive.<k>]`, `[gearbox.<k>]`, `[strain_wave.<k>]`, `[ratings.<k>]`, `[parts.<k>]` | – | A joint's own motor, drive, gear and ratings over the shared tables, k = 1, 2, ... (see [a motor's own tables](#a-motors-own-tables)) | arm: joints 4 to 6 the 1FK2104-5AF on a 6SL3210-5HE10-8UF0 (catalogue), a size-20 strain wave gear (25000 N m/rad, 40 N m rated, 49 and 76 N m ratings; estimates); SCARA: joints 3 and 4 the 1FK2104-5AF; palletiser: joints 1 to 3 the 1FK2106-4AF on a 6SL3210-5HE15-0UF0, the flange the 1FK2104-5AF |
 
-These are choices and design rules, not properties of a part, so they have no `[bounds]`.
+These are choices and design rules, not properties of a part, so they have no `[bounds]` (the swing's spring and damper
+have theirs).
 
 `effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
 arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its

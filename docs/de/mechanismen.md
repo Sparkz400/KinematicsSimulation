@@ -29,6 +29,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 | `rotary-table` | Tisch mit 3 kg m^2 plus Werkstück | Wellgetriebe i = 100 (oder Schnecke, oder Planetengetriebe) | c (rad) | `strain-wave-life` |
 | `urdf-arm` | Sechsachsroboter, `urdf/six-axis.urdf` | Wellgetriebe i = 120 und 80 | sechs Gelenkwinkel (rad), oder x, y, z, rx, ry, rz im Werkzeugraum | `strain-wave-life` je Gelenk |
 | `scara` | SCARA-Roboter, `urdf/scara.urdf` | Wellgetriebe; die Pinole auf einem Kugelgewindetrieb | Gelenke (rad, m, rad), oder x, y, z, c im Werkzeugraum | `strain-wave-life`, die Prüfungen der Spindel an Gelenk 3 |
+| `palletiser` | Vierachs-Palettierer, `urdf/palletiser.urdf`, ein Parallelogramm hält den Flansch waagerecht | Getriebe i = 160, das Wellgetriebe des Flanschs 50 | x, y, z, rz (ausgeliefert im Werkzeugraum), oder die vier Motorgelenke | `strain-wave-life` je Gelenk |
 
 Jede bekommt außerdem die Prüfungen, die jede Maschine bekommt: Spitzen- und Effektivmoment des Motors (`motor-peak`,
 `motor-thermal`), Antriebsströme, Spitzen- und kubisch gemitteltes Moment, Antriebsdrehzahl und Lebensdauer des
@@ -140,22 +141,67 @@ Getriebe:
 `rigid::Chain` liest eine URDF-Datei (Links mit ihren Trägheitsangaben, Gelenke der Typen revolute, continuous, prismatic
 und fixed; feste Gelenke werden mit dem Körper davor vereinigt; kein xacro, keine Verzweigungen) und rechnet die Dynamik
 mit dem rekursiven Newton-Euler-Verfahren (Luh, Walker und Paul 1980): die Gelenkmomente zu gegebenen Beschleunigungen,
-die Massenmatrix Spalte für Spalte, Schwere- und Geschwindigkeitsterme. Die Last ist eine Punktmasse bei
-`arm.payload_offset_m` vom Spitzenrahmen der URDF.
+die Massenmatrix, Schwere- und Geschwindigkeitsterme. Die Last ist ein starrer Körper am letzten Glied: ihre Masse
+`arm.payload_kg`, ihr Schwerpunkt `arm.payload_offset_m` vom Spitzenrahmen der URDF und ihre Trägheit um den
+Schwerpunkt `arm.payload_inertia_kgm2` (xx, yy, zz, xy, xz, yz im Spitzenrahmen), mit dem Satz von Steiner in den letzten
+Körper eingerechnet (`Inertial::merged`).
 
-Konfiguration `[arm]`: `urdf_file` ist ein Pfad oder `builtin:six-axis` / `builtin:scara` für die Beispiele in
-`crates/machine-joint-kit/urdf/`. `gear_ratios` hat einen Eintrag je Gelenk; die Grenzen jedes Gelenks stehen in `[axis.j1]`,
-`[axis.j2]`, ... (`max_velocity_rad_s`, für ein Schiebegelenk `max_velocity_m_s`, und so weiter). Die Grenzen der URDF sind die Anschläge der Gelenke; ein Gelenk vom Typ continuous nimmt `min_angle_deg` und
-`max_angle_deg` aus `[joint]`. Ein Schiebegelenk läuft auf der `[screw]`, mit seinem Motor gekuppelt (seine Übersetzung muss
-1 sein; Steifigkeit und Dämpfung des `[gearbox]` stehen für die Kupplung, sein Wirkungsgrad und seine Trägheit zählen
-nicht), mit der Reibung aus `[slide]` (die Pinole des SCARA). Eine fehlende Grenze der URDF ist 0; ein leerer Bereich
-wird abgelehnt. `ratings.gearbox_reference_speed_rpm` wird abgelehnt, wo die Übersetzungen der Gelenke verschieden sind, da
-die Getriebelebensdauer die Drehzahl jedes Motors über `gearbox.ratio` nimmt. Mit einer Tabelle `[strain_wave]` bekommt das Getriebe jedes Drehgelenks die Lebensdauerprüfung.
+Konfiguration `[arm]`: `urdf_file` ist ein Pfad oder `builtin:six-axis`, `builtin:scara`, `builtin:five-axis`,
+`builtin:seven-axis` oder `builtin:palletiser` für die Beispiele in `crates/machine-joint-kit/urdf/`. `gear_ratios` hat
+einen Eintrag je Motor; die Grenzen jedes Motorgelenks stehen in `[axis.j1]`, `[axis.j2]`, ... (`max_velocity_rad_s`,
+für ein Schiebegelenk `max_velocity_m_s`, und so weiter). Die Grenzen der URDF sind die Anschläge der Gelenke; ein
+Gelenk vom Typ continuous nimmt `min_angle_deg` und `max_angle_deg` aus `[joint]`. Ein Schiebegelenk läuft auf der
+`[screw]`, mit seinem Motor gekuppelt (seine Übersetzung muss 1 sein; Steifigkeit und Dämpfung des `[gearbox]` stehen
+für die Kupplung, sein Wirkungsgrad und seine Trägheit zählen nicht), mit der Reibung aus `[slide]` (die Pinole des
+SCARA). Eine fehlende Grenze der URDF ist 0; ein leerer Bereich wird abgelehnt. Mit einer Tabelle `[strain_wave]` bekommt
+das Getriebe jedes Drehgelenks die Lebensdauerprüfung.
+
+Jedes Gelenk hat seinen eigenen Motor, Antrieb und sein eigenes Getriebe, wo die Konfiguration es sagt: `[motor.<k>]`,
+`[drive.<k>]`, `[gearbox.<k>]`, `[strain_wave.<k>]`, `[joint.<k>]`, `[ratings.<k>]` und `[parts.<k>]` über den gemeinsamen Tabellen,
+k = 1, 2, ... (`catalog::motor_config`, wie bei den Maschinendateien). Die ausgelieferten Arme sind so ausgelegt: Die
+Hand des Sechsachsroboters (Gelenke 4 bis 6) hat den 1FK2104-5AF des Katalogs an einem S210 6SL3210-5HE10-8UF0 hinter
+einem Wellgetriebe der Baugröße 20, seine Gelenke 1 bis 3 den 1FK2105-4AF hinter Baugröße 32; Pinole und Flansch des
+SCARA den 1FK2104-5AF. `ratings.gearbox_reference_speed_rpm` wird abgelehnt, wo die Übersetzung eines Motors von seinem
+eigenen `gearbox.ratio` abweicht, über das die Getriebelebensdauer die Drehzahl des Motors nimmt.
 
 Die Werkzeuglage sind die Gelenkstellungen: Zyklen werden in Gelenken angegeben, und die Auslegung beurteilt Motoren,
-Getriebe und Spindeln entlang dieser. Die Einschwingtoleranz ist dann in rad (`ratings.settling_tolerance_m` behält
-seinen Namen); sie enthält die Verdrehung der Getriebe unter dem Gewicht des Arms, die die Geber der Motoren nicht sehen
-(2,6 mrad an Gelenk 2 des Sechsachsbeispiels, ausgestreckt).
+Getriebe und Spindeln entlang dieser. Ihr Verweilen beurteilt `ratings.settling_tolerance_rad` für die Gelenke in rad und
+`settling_tolerance_m` für die in m (die Pinole des SCARA); es enthält die Verdrehung der Getriebe unter dem Gewicht des
+Arms, die die Geber der Motoren nicht sehen (2,6 mrad an Gelenk 2 des Sechsachsbeispiels, ausgestreckt). Die
+Vorsteuerung nimmt die Geschwindigkeitsterme auch im Gelenkraum: die Coriolis- und Zentripetalmomente der mit der
+Stellung veränderlichen M(q) (zwei Glieder eines ebenen Arms bei q2 = 90 Grad und q' = (1, 2) rad/s verlangen -6 und
+0,75 N m, die die Vorsteuerung bisher wegließ; auf den ausgelieferten Zyklen, die ihre Gelenke mit bis zu 2 rad/s drehen,
+ändern sich Spitzen- und Effektivmoment der Motoren um weniger als 0,3 %).
+
+### Gekoppelte Gelenke: ein Parallelogramm
+
+URDF kennt keine geschlossenen Ketten. Ein Parallelogramm, das Gelenke koppelt, wie das eines Palettierers, das seinen
+Flansch waagerecht hält, ist `arm.joint_coupling`: eine Zeile je URDF-Gelenk, die URDF-Gelenke als Summen der
+Motorgelenke, q_urdf = C q. Die Maschine hat einen Motor je Spalte; die Dynamik ist die der Kette, auf die Motorgelenke
+gebracht, M = C^T M_urdf C und h = C^T h_urdf (C ist fest und gibt keinen eigenen Term; die Kräfte der Kopplung leisten
+keine Arbeit). Ein Motorgelenk, das allein in einer Zeile mit dem Faktor c steht, nimmt die Grenzen dieses URDF-Gelenks
+geteilt durch c. `[]` ist ein Motor je URDF-Gelenk.
+shortcut: Die Stangen des Parallelogramms stecken in den Gliedern, mit denen sie sich bewegen, nicht in eigenen Körpern.
+
+Der Palettierer (`palletiser`, `urdf/palletiser.urdf`, etwa 20 kg Nutzlast, 1,6 m Reichweite) hat fünf URDF-Gelenke und
+vier Motoren: den Drehturm, den Oberarm, den Winkel des Unterarms gegen die Basis (ein Parallelogramm von der Basis aus
+treibt ihn: Gelenk 3 = Motor 3 - Motor 2) und die Drehung des Flanschs; das Handgelenk dreht den Winkel des Unterarms
+zurück (Gelenk 4 = - Motor 3), so bleibt der Flansch überall waagerecht. Seine Gelenke 1 bis 3 haben den 1FK2106-4AF des
+Katalogs an Antrieben 6SL3210-5HE15-0UF0 hinter Getrieben von 600 N m Nennmoment (eine Schätzung), der Flansch einen
+1FK2104-5AF. Ausgeliefert im Werkzeugraum: x, y, z und die Drehung rz des Flanschs. Die App zeichnet ihn wie die Arme.
+
+### Eine pendelnde Last
+
+Mit `effects.payload_swing` (in jeder ausgelieferten Konfiguration aus) hängt die Last an einem Gelenk am Flansch, um zwei
+Achsen quer zur Linie vom Flansch zu ihrem Schwerpunkt (`arm.payload_offset_m`, die Pendellänge), gehalten von
+`arm.payload_swing_stiffness_nm_rad` und gedämpft von `arm.payload_swing_damping_nm_s_rad` je Achse: ein Karton in einem
+weichen Vakuumgreifer oder ein Sack in einer Schlinge. Die beiden Pendelgelenke treibt kein Motor
+(`chain::Mechanism::passive_joints`): Ihre Winkel und Geschwindigkeiten folgen den anderen Zuständen der Gelenkmaschine,
+ihre Dynamik ist die der Kette mit den Körpern des Pendels, die Leistung des Dämpfers der Verlust
+`power.payload_swing` und die Winkel die Signale `swing.1.angle`, `swing.2.angle`. Vorsteuerung und Ruhelagen sehen die
+Last fest am Flansch. Der Karton des Palettierers pendelt mit 2,2 Hz (sqrt(k / (m l^2) + g / l) / 2 pi mit 120 N m/rad,
+20 kg, 0,2 m).
+shortcut: Ohne Last tragen die Pendelgelenke eine eigene Einheitsträgheit, getrennt vom Arm.
 
 ### Werkzeugraum
 
@@ -163,40 +209,56 @@ Mit `kinematics.tool_space = true` sind die Achsen der Maschine die Lage des Fla
 Kommandozeile und die App bewegen das Werkzeug wie beim Delta: Eine Gerade einer Bahn ist eine Gerade des Werkzeugs. Die
 Gelenkmaschine rechnet die Lage über `inverse` des Mechanismus in die Gelenke und über `forward` zurück, die
 Geschwindigkeit des Werkzeugs über die Jacobi-Matrix von `forward` (zentrale Differenzen) in die der Gelenke. Die
-Vorsteuerung nimmt dann die Geschwindigkeitsterme hinzu: die Gelenkbeschleunigungen J^-1 (a - J' q'), J' q' als zweite
-Differenz von `forward` entlang q', und die Zentripetal- und Coriolismomente des Newton-Euler-Modells (im Gelenkraum
-lässt sie sie weg, wie bisher). Ziele werden abgelehnt außerhalb der Reichweite (`error-arm-out-of-reach`), jenseits
-eines Gelenkanschlags (`error-joint-beyond-stop`) oder wo die Konditionszahl der Jacobi-Matrix über
-`workspace.max_condition_number` liegt (`error-arm-singularity`); eine Bahn durch eine solche Lage mit
-`error-path-range`, wie beim Delta. Die Arbeitsraumkarte und `ratings.max_condition_number` nehmen dieselbe Zahl.
+Vorsteuerung nimmt die Geschwindigkeitsterme hinzu: die Gelenkbeschleunigungen J^-1 (a - J' q'), J' q' als zweite
+Differenz von `forward` entlang q', und die Zentripetal- und Coriolismomente des Newton-Euler-Modells. Ziele werden
+abgelehnt außerhalb der Reichweite (`error-arm-out-of-reach`), jenseits eines Gelenkanschlags
+(`error-joint-beyond-stop`) oder wo die Konditionszahl der Jacobi-Matrix über `workspace.max_condition_number` liegt
+(`error-arm-singularity`); eine Bahn durch eine solche Lage mit `error-path-range`, wie beim Delta. Die
+Arbeitsraumkarte und `ratings.max_condition_number` nehmen dieselbe Zahl. Der zeitoptimale Planer lehnt einen Plan von
+mehr als zehn Millionen Punkten ab (`error-path-torque`): Wo die Motoren nur ein Kriechen zulassen, füllte er den
+Speicher.
 
-- SCARA (vier Gelenke: zwei Arme um senkrechte Achsen, eine senkrechte Pinole, ein drehender Flansch): Die Achsen sind
-  x, y, z des Flanschs (m) und seine Drehung c um die Senkrechte (rad: Gelenke 1 + 2 + 4 plus die Drehung bei null), in
-  geschlossener Form. Längen und Richtungen der Arme bei null, der Ort von Gelenk 1, die Richtung der Pinole und die
-  Drehung des Flanschs kommen aus der URDF bei null und werden an drei Stellungen gegen die Kette geprüft (eine URDF, die
-  kein SCARA ist, wird abgelehnt). Gelenk 2 nach dem Kosinussatz, cos(beta) = (r^2 - L1^2 - L2^2) / (2 L1 L2), mit
-  `kinematics.elbow` "right" (beta > 0: Gelenk 2 vom gestreckten Arm aus gegen den Uhrzeigersinn, der Ellbogen von oben
-  gesehen rechts der Linie von der Basis zum Werkzeug) oder "left"; Gelenk 1 = atan2(y, x) - atan2(L2 sin beta, L1 +
-  L2 cos beta). Die Konditionszahl ist die von d(x, y)/d(q1, q2): unendlich beim gestreckten und beim gefalteten Arm
-  (25 bei 11 Grad Ellbogen, die Grenze des Beispiels).
-- Sechs Gelenke: x, y, z des Flanschs (m) und seine Orientierung als Drehvektor rx, ry, rz (rad: Achse mal Winkel,
-  gegen das Basissystem), numerisch. Die Gelenke werden von `kinematics.home_joints` aus entlang der Geraden von der
-  Flanschlage der Grundstellung zum Ziel verfolgt, die Orientierung per Slerp, in Schritten von höchstens 20 mm und
-  0,05 rad, jeder mit gedämpften kleinsten Quadraten auf der geometrischen Jacobi-Matrix (dq = J^T (J J^T + lambda^2
-  I)^-1 e, lambda 1 mm, die Drehzeilen mal dem Abstand des Flanschs von Gelenk 2 in der Grundstellung), auf 1 um
-  eingeschwungen, der letzte auf 1e-13 m. So bleibt die Lösung auf dem Zweig der Grundstellung (Schulter, Ellbogen,
-  Handgelenk; bei einem Arm, dessen Zweige durch Singularitäten getrennt sind, wie bei den üblichen, hängt sie nicht vom
-  Weg dorthin ab), und ein Schritt, der nicht einschwingt (außer Reichweite oder eine Singularität, die der Zweig nicht
-  passieren kann), lehnt die Lage ab. Ein Flansch, der bis auf 0,01 rad eine halbe Drehung gegen das Basissystem
-  gedreht ist, wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt der Drehvektor. Die Konditionszahl ist
-  die der geometrischen 6 x 6-Jacobi-Matrix mit den Drehzeilen skaliert wie oben.
+- SCARA (vier Gelenke: zwei Arme um senkrechte Achsen, eine senkrechte Pinole, ein drehender Flansch,
+  `kinematics.tool_axes = ["x", "y", "z", "rz"]`): Die Achsen sind x, y, z des Flanschs (m) und seine Drehung c um die
+  Senkrechte (rad: Gelenke 1 + 2 + 4 plus die Drehung bei null), in geschlossener Form. Längen und Richtungen der Arme
+  bei null, der Ort von Gelenk 1, die Richtung der Pinole und die Drehung des Flanschs kommen aus der URDF bei null und
+  werden an drei Stellungen gegen die Kette geprüft. Gelenk 2 nach dem Kosinussatz, cos(beta) = (r^2 - L1^2 - L2^2) /
+  (2 L1 L2), mit `kinematics.elbow` "right" (beta > 0: Gelenk 2 vom gestreckten Arm aus gegen den Uhrzeigersinn, der
+  Ellbogen von oben gesehen rechts der Linie von der Basis zum Werkzeug) oder "left"; Gelenk 1 = atan2(y, x) - atan2(L2
+  sin beta, L1 + L2 cos beta). Die Konditionszahl ist die von d(x, y)/d(q1, q2): unendlich beim gestreckten und beim
+  gefalteten Arm (25 bei 11 Grad Ellbogen, die Grenze des Beispiels).
+- Jede andere Kette von 4 bis 7 Gelenken: Die Achsen sind die von x, y, z (m) und rx, ry, rz (rad), die
+  `kinematics.tool_axes` nennt, so viele wie Motoren oder einer weniger (ein redundanter Arm). Die Orientierung ist der
+  Drehvektor (Achse mal Winkel, im Basissystem) der Drehung gegen die Orientierung des Flanschs bei Gelenken null: Eine
+  URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Eine
+  Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
+  der Drehvektor. Die Gelenke mit gedämpften kleinsten Quadraten auf der Jacobi-Matrix der Werkzeugachsen (zentrale
+  Differenzen; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, die Drehungen mal dem Abstand des Flanschs von Gelenk 2
+  in `kinematics.home_joints`), entlang der Geraden von der letzten Lösung zum Ziel in Schritten von höchstens 20 mm
+  und 0,05 rad, jeder auf 1 um eingeschwungen, der letzte auf 1e-13 m. Ein Weg von der letzten Lösung, der einen
+  Schritt jenseits von `workspace.max_condition_number` beendet, kann den Zweig gewechselt haben und wird von der
+  Grundstellung aus neu gegangen, ebenso einer, der nicht ankommt; so bleibt die Lösung auf dem Zweig der Grundstellung
+  (Schulter, Ellbogen, Handgelenk). Von der letzten Lösung aus braucht eine Inverse entlang eines Zyklus beim
+  Sechsachsroboter im Release 7,7 us, von der Grundstellung aus 74 us. Ein redundanter Arm (sieben Gelenke, sechs Achsen)
+  nutzt sein überzähliges Gelenk, um der Grundstellung am nächsten zu bleiben: Jede Iteration bewegt sich auch im
+  Nullraum von J, um (I - J^T (J J^T)^-1 J)(home - q), bis dieser Schritt unter 1e-11 rad liegt; seine
+  Gelenkgeschwindigkeiten und -beschleunigungen sind die der Inversen selbst, durch zentrale Differenzen entlang der
+  Geschwindigkeit und Beschleunigung des Werkzeugs. Die Konditionszahl ist die der gewichteten Jacobi-Matrix (beim
+  redundanten Arm die ihrer Transponierten).
 
-Die Planer interpolieren jede Achse linear: Eine Gerade hält die Orientierung, wo beide Enden dieselbe haben, und dreht
-sie per Slerp, wo die beiden Drehvektoren parallel sind (bei nach unten zeigendem Flansch ist eine Drehung um die
-Senkrechte das nicht: Dort liegt die Drehung nahe am Slerp, ist es aber nicht). `config/scara-tool.toml` und
-`config/arm-tool.toml` sind die Standardkonfigurationen mit eingeschaltetem Werkzeugraum, einer Startlage und einem
-Zyklus aus Geraden (die Einschwingtoleranz des Arms 5 mm: Unter der Nutzlast ruht sein Flansch 4,0 mm unter der Lage
-der Geber).
+Eine Gerade einer Bahn in x, y, z, rx, ry, rz bewegt den Ort gerade und dreht die Orientierung per Slerp (`path`, die
+sphärische Interpolation der Quaternionen, Shoemake 1985): um eine feste Achse mit gleichmäßiger Rate, auch zwischen
+Drehvektoren, die nicht parallel sind, wo die Gerade zwischen ihnen eine andere Drehung ist (eine Vierteldrehung um x zu
+einer um y: auf halbem Weg 70,5 Grad um ihre Winkelhalbierende, die Gerade 63,6 Grad). Geraden mit weniger
+Orientierungsachsen (c des SCARA, rz des Palettierers, rx, ry des Fünfachsroboters) fahren jede Achse gerade.
+
+`config/scara-tool.toml` und `config/arm-tool.toml` sind die Standardkonfigurationen mit eingeschaltetem Werkzeugraum,
+einer Startlage und einem Zyklus aus Geraden (die Einschwingtoleranzen des Arms 5 mm und 5 mrad: Unter der Nutzlast ruht
+sein Flansch 2,4 mm neben der Lage der Geber und um 3,2 mrad gedreht). `config/arm5-tool.toml` und `config/arm7-tool.toml` sind das
+Fünfachsbeispiel (`urdf/five-axis.urdf`: der Sechsachsroboter ohne die Drehung des Flanschs, bei null nach unten zeigend;
+Achsen x, y, z, rx, ry, wohin das Werkzeug zeigt) und das Siebenachsbeispiel (`urdf/seven-axis.urdf`: ein Drehgelenk im
+Oberarm; Achsen x, y, z, rx, ry, rz), jedes mit einem Zyklus aus Geraden, für `--config` mit der Maschine `urdf-arm`.
+Ihre Proportionen sind allgemein, jeder Wert eine Schätzung.
 
 ## Teleskopwelle mit zwei Kardangelenken (delta-d4)
 
@@ -321,7 +383,17 @@ Im Werkzeugraum: Die geschlossene Form des SCARA gibt bei (0,325, 0,275) den Ell
 seine Grundstellung gestreut, das Handgelenk auf der Seite der Grundstellung); jede geplante Lage einer Geraden liegt auf
 1 um auf ihr und die Orientierung des Arms auf 1e-6 rad; die Gelenkgeschwindigkeiten sind J^-1 v von Hand
 (1,538462 rad/s); eine Gerade in den gestreckten SCARA-Arm wird abgelehnt; der zeitoptimale Plan hält die Motoren
-entlang einer Geraden unter ihrer Nenndrehzahl; beide Werkzeugzyklen bestehen ihre Prüfungen.
+entlang einer Geraden unter ihrer Nenndrehzahl; beide Werkzeugzyklen bestehen ihre Prüfungen. Die Arme vom 14. November:
+Die Vorsteuerung im Gelenkraum hat die Coriolis- und Zentripetalmomente eines Zweigelenkarms von Hand (-6 und 0,75 N m bei
+q2 = 90 Grad, q' = (1, 2) rad/s); die eigene Trägheit einer Last zählt um das letzte Gelenk (1,2 N m gegen 1,15 der
+Punktmasse bei 1 rad/s^2); der Slerp-Mittelpunkt zweier Vierteldrehungen ist 70,53 Grad um ihre Winkelhalbierende, und
+eine geplante Gerade des Werkzeugs des Arms geht durch ihn; die warm gestartete Inverse gibt die Gelenke eines Wegs von
+der Grundstellung (1e-9 rad); der Siebenachsroboter erreicht eine Lage auf 1e-9, der Abstand seiner Gelenke von der
+Grundstellung ohne Anteil im Nullraum der Jacobi-Matrix; ein bei null nach unten zeigender Flansch steht bei keiner
+Drehung; der Flansch des Palettierers bleibt über die Bereiche seiner Gelenke waagerecht, und sein pendelnder Karton hat
+m g l (1 - cos 0,1) + k 0,1^2 / 2 = 0,79597 J um 0,1 rad gedreht und (m l^2 + I) / 2 = 0,775 J bei 1 rad/s, und hält
+verlustfrei die Energie; jedes Gelenk der Arme hat seinen eigenen Katalogmotor; ein zeitoptimaler Plan eines Kriechens
+wird jenseits von zehn Millionen Punkten abgelehnt.
 Eine 1,6 m lange Spindel fällt bei `screw-speed` durch, und eine geforderte Lebensdauer über der der Spindel bei
 `screw-life`. Mit Verlusten: Getriebemoment und Vorschubkraft der Zahnstange sind die Kraft an der Last durch 0,97, die
 Lebensdauer der Spindel schrumpft bei 99 % Zuverlässigkeit um a1, und die Temperaturrückführung behält den Wirkungsgrad

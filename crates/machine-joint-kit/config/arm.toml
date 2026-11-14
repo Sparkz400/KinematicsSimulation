@@ -18,6 +18,17 @@ gear_ratios = [120.0, 120.0, 120.0, 80.0, 80.0, 80.0]
 payload_kg = 6.0
 # From the URDF's flange frame.
 payload_offset_m = [0.05, 0.0, 0.0]
+# About its centre in the flange frame: xx, yy, zz, xy, xz, yz. [estimate] a 6 kg box of 0.1 m along the flange's x
+# (the tool's axis), 0.2 m along y and 0.15 m along z: m (0.2^2 + 0.15^2) / 12 = 0.03125, m (0.1^2 + 0.15^2) / 12 =
+# 0.01625, m (0.1^2 + 0.2^2) / 12 = 0.025.
+payload_inertia_kgm2 = [0.03125, 0.01625, 0.025, 0.0, 0.0, 0.0]
+# The URDF's joints as sums of the motors' joints, one row per URDF joint (a parallelogram: see config/palletiser.toml);
+# [] for one motor per joint.
+joint_coupling = []
+# With effects.payload_swing: the payload hangs on a pivot at the flange, its centre payload_offset_m from it, about two
+# axes across that line, with this spring and damper per axis. [estimate] a carton in a soft gripper.
+payload_swing_stiffness_nm_rad = 20.0
+payload_swing_damping_nm_s_rad = 0.5
 
 # Off (as shipped): the axes are the joints, [axis.j1] to [axis.j6]. On: the axes are the flange's x, y, z (m) and its
 # orientation rx, ry, rz (rad: the rotation from the base frame as axis times angle), [axis.x] to [axis.rz], each piece
@@ -27,44 +38,49 @@ payload_offset_m = [0.05, 0.0, 0.0]
 [kinematics]
 tool_space = false
 home_joints = [0.0, 0.4, 0.2, 0.0, 0.97, 0.0]
+# The tool's axes in tool space, of x, y, z, rx, ry, rz: as many as joints (one fewer on a redundant arm).
+tool_axes = ["x", "y", "z", "rx", "ry", "rz"]
 
-# In tool space: the range of x, y, z (m) and rx, ry, rz (rad); poses in it out of reach, beyond a joint's stop or with
-# the flange turned near half a turn from the base frame (where the rotation vector jumps) are refused, and those where
-# the condition number of the Jacobian (its turn rows times the flange's distance from joint 2 at the home, 0.86 m) is
-# above max_condition_number: near the stretched arm or the wrist's axes 4 and 6 in line (5.0 at the home). [estimate]
+# In tool space: the range of x, y, z (m) and rx, ry, rz (rad, the turn from the flange's orientation at zero joints,
+# which on this URDF is the base frame's), here around the flange pointing down (ry = pi/2) by up to 0.6 rad each way;
+# poses in it out of reach, beyond a joint's stop or with the flange turned near half a turn from its orientation at
+# zero joints (where the rotation vector jumps) are refused, and those where the condition number of the Jacobian (its
+# turn rows times the flange's distance from joint 2 at the home, 0.86 m) is above max_condition_number: near the
+# stretched arm or the wrist's axes 4 and 6 in line. [estimate]
 [workspace]
-tool_min = [0.5, -0.6, 0.3, -3.1, -3.1, -3.1]
-tool_max = [1.2, 0.6, 1.1, 3.1, 3.1, 3.1]
+tool_min = [0.5, -0.6, 0.3, -0.6, 0.97, -0.6]
+tool_max = [1.2, 0.6, 1.1, 0.6, 2.17, 0.6]
 max_condition_number = 30.0
 
-# The tool's limits in tool space. [estimate] below what the joints' limits allow near the home.
+# The tool's limits in tool space. [estimate] below what the motors' rated 314 rad/s allows with every axis at its
+# limit at once at the middle of the ranges (0.9 m/s and 1.5 rad/s: 1 m/s and 2 rad/s asked 373 rad/s of motor 2).
 [axis.x]
-max_velocity_m_s = 1.0
+max_velocity_m_s = 0.9
 max_acceleration_m_s2 = 4.0
 max_jerk_m_s3 = 80.0
 
 [axis.y]
-max_velocity_m_s = 1.0
+max_velocity_m_s = 0.9
 max_acceleration_m_s2 = 4.0
 max_jerk_m_s3 = 80.0
 
 [axis.z]
-max_velocity_m_s = 1.0
+max_velocity_m_s = 0.9
 max_acceleration_m_s2 = 4.0
 max_jerk_m_s3 = 80.0
 
 [axis.rx]
-max_velocity_rad_s = 2.0
+max_velocity_rad_s = 1.5
 max_acceleration_rad_s2 = 8.0
 max_jerk_rad_s3 = 150.0
 
 [axis.ry]
-max_velocity_rad_s = 2.0
+max_velocity_rad_s = 1.5
 max_acceleration_rad_s2 = 8.0
 max_jerk_rad_s3 = 150.0
 
 [axis.rz]
-max_velocity_rad_s = 2.0
+max_velocity_rad_s = 1.5
 max_acceleration_rad_s2 = 8.0
 max_jerk_rad_s3 = 150.0
 
@@ -96,6 +112,12 @@ max_acceleration_rad_s2 = 15.0
 max_jerk_rad_s3 = 300.0
 
 [axis.j6]
+max_velocity_rad_s = 3.0
+max_acceleration_rad_s2 = 20.0
+max_jerk_rad_s3 = 400.0
+
+# Read only where the URDF has a seventh joint (config/arm7-tool.toml).
+[axis.j7]
 max_velocity_rad_s = 3.0
 max_acceleration_rad_s2 = 20.0
 max_jerk_rad_s3 = 400.0
@@ -242,10 +264,81 @@ noise_seed = 1
 # Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
 braking_module = false
 
+# The wrist's joints 4 to 6 have smaller motors and gears than the arm's 1 to 3, as a real arm has (their own tables over
+# the shared ones above, catalog::motor_config). [catalogue] 1FK2104-5AF, 2.4 N m static, 7.5 N m maximum, rotor 0.56
+# kg cm2, on an S210 6SL3210-5HE10-8UF0 (2.3 A rated, 7.6 A maximum): the catalogue's motor and drive. [estimate] a
+# strain wave gear of size 20, its brake and the velocity gain scaled by the inertia at the motor (0.15 x 0.97 / 3.1
+# kg cm2 with the gear's input).
+[parts.4]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[parts.5]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[parts.6]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[motor.4]
+brake_torque_nm = 3.2
+
+[motor.5]
+brake_torque_nm = 3.2
+
+[motor.6]
+brake_torque_nm = 3.2
+
+[drive.4]
+velocity_kp_nm_s_rad = 0.05
+
+[drive.5]
+velocity_kp_nm_s_rad = 0.05
+
+[drive.6]
+velocity_kp_nm_s_rad = 0.05
+
+[gearbox.4]
+stiffness_nm_rad = 25000.0
+inertia_at_input_kgm2 = 4.1e-5
+
+[gearbox.5]
+stiffness_nm_rad = 25000.0
+inertia_at_input_kgm2 = 4.1e-5
+
+[gearbox.6]
+stiffness_nm_rad = 25000.0
+inertia_at_input_kgm2 = 4.1e-5
+
+[strain_wave.4]
+rated_torque_nm = 40.0
+
+[strain_wave.5]
+rated_torque_nm = 40.0
+
+[strain_wave.6]
+rated_torque_nm = 40.0
+
+[ratings.4]
+gearbox_rated_torque_nm = 49.0
+gearbox_max_torque_nm = 76.0
+
+[ratings.5]
+gearbox_rated_torque_nm = 49.0
+gearbox_max_torque_nm = 76.0
+
+[ratings.6]
+gearbox_rated_torque_nm = 49.0
+gearbox_max_torque_nm = 76.0
+
 [ratings]
-# In joint units here (rad). The gears' twist under the arm's weight, which the motors' encoders do not see, is part of
-# it: 177 N m at joint 2 reaching out, over 67000 N m/rad, 2.6 mrad. [estimate] 3 mrad.
-settling_tolerance_m = 0.003
+# How far the tool may be off its target in the second half of a dwell: its place (m) and its turn (rad) apart. Here in
+# joints, all in rad: settling_tolerance_rad judges them (the axes in m, none here, settling_tolerance_m: it is the
+# flange's place in tool space, see config/arm-tool.toml). The gears' twist under the arm's weight, which the motors'
+# encoders do not see, is part of it: 177 N m at joint 2 reaching out, over 67000 N m/rad, 2.6 mrad. [estimate] 3 mrad.
+settling_tolerance_m = 0.005
+settling_tolerance_rad = 0.003
 # [estimate] size 32: limit for the average torque, repeated peak torque.
 gearbox_rated_torque_nm = 216.0
 gearbox_max_torque_nm = 333.0
@@ -384,3 +477,5 @@ thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 gearbox.no_load_torque_nm = [0.4, 0.6]
+arm.payload_swing_stiffness_nm_rad = [10.0, 40.0]
+arm.payload_swing_damping_nm_s_rad = [0.2, 1.0]

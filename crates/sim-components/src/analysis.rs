@@ -168,13 +168,20 @@ pub struct CycleLoad {
     /// The mean |speed| of the axis of that guide over the cycle, m/s: the distance it runs per hour.
     pub guide_speed: Option<f64>,
     /// How far the tool was from the path its setpoint drew: the most and the RMS. And the most it was
-    /// from where the setpoint was at the same moment, which also counts lagging behind along the path.
+    /// from where the setpoint was at the same moment, which also counts lagging behind along the path. Of the
+    /// axes in m alone (its place); the axes in rad (its turn, an arm's orientation, a turning table) have their own
+    /// figures below, in rad, so that metres and radians are never added.
     pub path_error_peak: f64,
     pub path_error_rms: f64,
     pub tracking_error_peak: f64,
     /// The most the tool was from its target in the second half of a dwell: by then it should have settled,
-    /// because that is when the gripper acts.
+    /// because that is when the gripper acts. Of the axes in m.
     pub dwell_error_peak: f64,
+    /// The same four of the axes in rad, rad: 0 on a machine without one.
+    pub path_angle_error_peak: f64,
+    pub path_angle_error_rms: f64,
+    pub tracking_angle_error_peak: f64,
+    pub dwell_angle_error_peak: f64,
     /// A drive tripped on DC link overvoltage and took all drives off: the run ended there, and the figures
     /// are those up to the trip.
     pub tripped: bool,
@@ -435,22 +442,26 @@ struct Tally {
     braking_peak: f64,
     /// The setpoints of the last half second: the piece of the path the tool can be near.
     path: std::collections::VecDeque<Vec<f64>>,
-    path_error: (f64, f64, u64),
-    tracking_error: f64,
-    dwell_error: f64,
+    /// Of the axes in m and of those in rad (`groups`): peak, sum of squares and count; tracking; dwell.
+    path_error: [(f64, f64, u64); 2],
+    tracking_error: [f64; 2],
+    dwell_error: [f64; 2],
+    /// The tool's axes in m and those in rad, by index.
+    groups: [Vec<usize>; 2],
     /// With `[conveyor]`: the most the tool was from the gripped part along the belt, and the parts missed before.
     pick_tracking: f64,
     missed_before: u64,
 }
 
-/// Distance from `p` to the piece of line between `a` and `b`.
-fn distance_to_piece(p: &[f64], a: &[f64], b: &[f64]) -> f64 {
+/// Distance from `p` to the piece of line between `a` and `b`, in the axes `axes` alone.
+fn distance_to_piece(p: &[f64], a: &[f64], b: &[f64], axes: &[usize]) -> f64 {
     // Without closures behind references: the path error asks this 500 times per millisecond.
     let (ab, ap) = (|i: usize| b[i] - a[i], |i: usize| p[i] - a[i]);
-    let length = (0..p.len()).map(|i| ab(i) * ab(i)).sum::<f64>();
+    let length = axes.iter().map(|&i| ab(i) * ab(i)).sum::<f64>();
     let along =
-        if length > 0.0 { ((0..p.len()).map(|i| ap(i) * ab(i)).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
-    (0..p.len()).map(|i| (ap(i) - along * ab(i)).powi(2)).sum::<f64>().sqrt()
+        if length > 0.0 { (axes.iter().map(|&i| ap(i) * ab(i)).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
+    // (+ 0: an empty sum is -0.)
+    axes.iter().map(|&i| (ap(i) - along * ab(i)).powi(2)).sum::<f64>().sqrt() + 0.0
 }
 
 impl Tally {
@@ -594,9 +605,18 @@ impl Tally {
             braking: vec![0.0; motors],
             braking_peak: 0.0,
             path: std::collections::VecDeque::new(),
-            path_error: (0.0, 0.0, 0),
-            tracking_error: 0.0,
-            dwell_error: 0.0,
+            path_error: [(0.0, 0.0, 0); 2],
+            tracking_error: [0.0; 2],
+            dwell_error: [0.0; 2],
+            groups: [false, true].map(|turn| {
+                sim.machine
+                    .axes()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| (a.unit == "rad") == turn)
+                    .map(|(i, _)| i)
+                    .collect()
+            }),
             pick_tracking: 0.0,
             missed_before: sim.control.conveyor().map_or(0, |(c, _)| c.missed),
         }
@@ -682,21 +702,27 @@ impl Tally {
             let now = self.path.back().unwrap();
             // The nearest piece, newest first. A piece is at least as far as the tool is beyond its extent along any one
             // axis; one that is further than the nearest so far by more than a picometre (far above rounding) cannot be
-            // the nearest, and is skipped. The smallest distance is the same as over all pieces.
-            let mut off_path = distance_to_piece(&tool, now, now);
-            for (b, a) in self.path.iter().rev().zip(self.path.iter().rev().skip(1)) {
-                let beyond =
-                    (0..axes).map(|i| (tool[i] - a[i]).abs() - (b[i] - a[i]).abs()).fold(f64::NEG_INFINITY, f64::max);
-                if !(beyond > off_path + 1e-12) {
-                    off_path = off_path.min(distance_to_piece(&tool, a, b));
+            // the nearest, and is skipped. The smallest distance is the same as over all pieces. The place (axes in m)
+            // and the turn (axes in rad) each by itself: each its own nearest piece.
+            let dwelling = sim.control.dwell_progress().is_some_and(|done| done >= 0.5);
+            for (g, group) in self.groups.iter().enumerate() {
+                let mut off_path = distance_to_piece(&tool, now, now, group);
+                for (b, a) in self.path.iter().rev().zip(self.path.iter().rev().skip(1)) {
+                    let beyond = group
+                        .iter()
+                        .map(|&i| (tool[i] - a[i]).abs() - (b[i] - a[i]).abs())
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    if !(beyond > off_path + 1e-12) {
+                        off_path = off_path.min(distance_to_piece(&tool, a, b, group));
+                    }
                 }
-            }
-            self.path_error =
-                (self.path_error.0.max(off_path), self.path_error.1 + off_path * off_path, self.path_error.2 + 1);
-            self.tracking_error = self.tracking_error.max(distance_to_piece(&tool, now, now));
-            if sim.control.dwell_progress().is_some_and(|done| done >= 0.5) {
-                let target = sim.control.planned_pos();
-                self.dwell_error = self.dwell_error.max(distance_to_piece(&tool, target, target));
+                let (peak, squares, count) = self.path_error[g];
+                self.path_error[g] = (peak.max(off_path), squares + off_path * off_path, count + 1);
+                self.tracking_error[g] = self.tracking_error[g].max(distance_to_piece(&tool, now, now, group));
+                if dwelling {
+                    let target = sim.control.planned_pos();
+                    self.dwell_error[g] = self.dwell_error[g].max(distance_to_piece(&tool, target, target, group));
+                }
             }
         }
         if self.views && (self.parts.iter().any(Option::is_some) || !self.losses.is_empty()) {
@@ -871,7 +897,7 @@ impl Tally {
             .zip(&self.heat)
             .map(|(h, heat)| (h.part.clone(), h.resistance * heat / duration))
             .collect();
-        let samples = self.path_error.2.max(1) as f64;
+        let samples = self.path_error[0].2.max(1) as f64;
         // The guide that the life estimate is about: the one with the highest equivalent load.
         let guide =
             (0..self.guide_loads.len()).max_by(|&a, &b| self.guide_loads[a].1.total_cmp(&self.guide_loads[b].1));
@@ -888,10 +914,14 @@ impl Tally {
             condition_peak: self.condition.map(|_| self.condition_peak),
             guide_load,
             guide_speed,
-            path_error_peak: self.path_error.0,
-            path_error_rms: (self.path_error.1 / self.path_error.2.max(1) as f64).sqrt(),
-            tracking_error_peak: self.tracking_error,
-            dwell_error_peak: self.dwell_error,
+            path_error_peak: self.path_error[0].0,
+            path_error_rms: (self.path_error[0].1 / samples).sqrt(),
+            tracking_error_peak: self.tracking_error[0],
+            dwell_error_peak: self.dwell_error[0],
+            path_angle_error_peak: self.path_error[1].0,
+            path_angle_error_rms: (self.path_error[1].1 / samples).sqrt(),
+            tracking_angle_error_peak: self.tracking_error[1],
+            dwell_angle_error_peak: self.dwell_error[1],
             tripped: sim.control.drives.iter().any(|d| d.tripped),
             motors: self.loads,
             budget,
@@ -1151,7 +1181,8 @@ pub struct Verdict {
 
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
 /// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
-pub const RATINGS_BEYOND_DEFAULT: [&str; 19] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 20] = [
+    "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
     "conveyor",
@@ -1399,6 +1430,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     }
     if let Some(limit) = rating("settling_tolerance_m") {
         out.push(at_most("settling", None, load.dwell_error_peak, limit));
+    }
+    // The turn's (an arm's orientation, a turning tool or table), on its own: no metres and radians added.
+    if let Some(limit) = rating("settling_tolerance_rad") {
+        out.push(at_most("settling-angle", None, load.dwell_angle_error_peak, limit));
     }
     if let Some((slackest, tightest)) = load.belt_tension {
         if let Some(limit) = rating("belt_max_tension_n") {
@@ -3006,7 +3041,7 @@ pub fn optimise_cycle_with(
                     (best, best_load, improved) = (setting, load, true);
                     break 'candidates;
                 }
-                if !failed.is_empty() && failed.iter().all(|check| *check == "settling") {
+                if !failed.is_empty() && failed.iter().all(|check| *check == "settling" || *check == "settling-angle") {
                     if !setting.shaping {
                         tries.push_back(Setting { shaping: true, follows: false, ..setting.clone() });
                         if resonance.is_some() {
@@ -3888,6 +3923,10 @@ mod tests {
             path_error_rms: 0.0,
             tracking_error_peak: 0.0,
             dwell_error_peak: 0.0,
+            path_angle_error_peak: 0.0,
+            path_angle_error_rms: 0.0,
+            tracking_angle_error_peak: 0.0,
+            dwell_angle_error_peak: 0.0,
             tripped: false,
             motors: vec![m.clone()],
             budget: None,

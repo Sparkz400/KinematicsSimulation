@@ -167,8 +167,42 @@ fn timing(cfg: &Config) -> Result<(f64, u32), ConfigError> {
 /// check (`analysis::bounds`), and a rating that the default config leaves out may be there.
 pub fn load_config(entry: &MachineEntry, text: &str) -> Result<Config, ConfigError> {
     let cfg = Config::parse(text)?;
-    cfg.check_keys(&entry.config(), &crate::analysis::RATINGS_BEYOND_DEFAULT)?;
+    cfg.check_keys(&schema(entry, &cfg)?, &crate::analysis::RATINGS_BEYOND_DEFAULT)?;
     Ok(cfg)
+}
+
+/// The keys a config for `entry` may have: its default config's, and a motor's own table (`[motor.<id>]` and the rest
+/// of `catalog::PER_MOTOR_TABLES`) for any motor `cfg` gives one, with the shared table's keys, though the default has
+/// none for that motor (a seven-joint URDF on the arm whose default has six).
+/// shortcut: any id passes here, a motor's that the machine does not have too (it is then not read); check the ids
+/// against the built machine's motors where a misspelt one has to be refused.
+pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError> {
+    let mut text = entry.default_config.to_string();
+    let default = entry.config();
+    for table in crate::catalog::PER_MOTOR_TABLES {
+        let (Some(shared), Some(own)) =
+            (default.get(table).ok().and_then(|v| v.as_table()), cfg.get(table).ok().and_then(|v| v.as_table()))
+        else {
+            continue;
+        };
+        for (id, value) in own {
+            if !value.is_table() || shared.contains_key(id) {
+                continue;
+            }
+            text.push_str(&format!(
+                "
+[{table}.{id}]
+"
+            ));
+            for (key, value) in shared.iter().filter(|(_, v)| !v.is_table()) {
+                text.push_str(&format!(
+                    "{key} = {value}
+"
+                ));
+            }
+        }
+    }
+    Config::parse(&text)
 }
 
 /// The configured start pose: one finite position per axis, within its range. A machine set up beyond its

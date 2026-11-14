@@ -3494,3 +3494,117 @@ Left open:
 - Runs are aligned from their starts; an offset to line up two runs that start their motion at different times, and
   a contour error of a run (beside the tool's position error) are for the views to come.
 - The light theme was checked in a screenshot only; the 3D view keeps its dark studio.
+
+## Arms: dynamics, tool space, palletiser and the tool's error metric (14 November)
+
+What: the audit's eight findings on the arms of `machine-joint-kit` and their dynamics.
+
+1. Coriolis in joint space. `JointMachine::feedforward_torque_moving` fell back to `feedforward_torque` (no speed terms)
+   where the tool is the joints, and the time-optimal planner reads the same function. Now every machine goes through
+   `JointMachine::joint_motion` (the joints' q, q', q'' for the tool's pose, speed and acceleration) and
+   `rigid_motor_torque` with the speeds. `Machine::feedforward_torque_moving`'s doc no longer calls the default exact
+   wherever the motor angles are linear in the tool pose (an arm in joints is, and its M(q) still changes). Measured
+   against main (same configs, the per-joint parts and the payload inertia taken out, `sim-cli analyze`):
+
+   | Machine, motor | peak torque before, after (N m) | RMS before, after (N m) |
+   | --- | --- | --- |
+   | urdf-arm 1 | 1.341113, 1.340669 | 0.632422, 0.632415 |
+   | urdf-arm 2 | 1.892189, 1.889866 | 1.106026, 1.106060 |
+   | urdf-arm 3 | 0.928308, 0.930700 | 0.549859, 0.549929 |
+   | scara 1 | 1.017614, 1.017989 | 0.489686, 0.489679 |
+   | scara 2 | 0.238892, 0.238702 | 0.124051, 0.124054 |
+
+   Tracking error: the arm 4.155 mrad before (all joints in rad), 4.205 mrad after; the SCARA 1.703e-3 (m and rad
+   added) before, 1.703 mrad of the joints and 0.046 mm of the quill after. The cycles turn their joints at up to 2
+   rad/s, where the velocity terms are small against the gear twist the encoders do not see; they matter at speed (a
+   planar two-link arm at 1 and 2 rad/s: -6 and 0.75 N m).
+2. Payload inertia: `rigid::Chain`'s `extra` is a whole `Inertial` (mass, centre, inertia about it), merged into the last
+   body by `Inertial::merged`; `arm.payload_inertia_kgm2` (xx, yy, zz, xy, xz, yz in the tip frame) in every arm config.
+   `effects.payload_swing` (off as shipped): the payload on a pivot at the flange, two swing joints across the line to
+   its centre with `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`. The joint machine has passive joints
+   for it (`Mechanism::passive_joints`): their states after all others, the mass matrix and bias of all joints, the
+   driven joints' feedforward and rest poses with the payload held at zero swing, the damper's loss
+   `power.payload_swing`, signals `swing.<k>.angle`, the scene draws the carton where it swings.
+3. Tool space: orientations by slerp along a line (`Geo::Slerp` in `path`, `rigid::slerp` by quaternions; on the six
+   rotation-vector axes x, y, z, rx, ry, rz). The orientation is the rotation vector of the turn from the flange's
+   orientation at zero joints, so a URDF whose flange points down at zero is at 0 there (the five-axis example and the
+   palletiser are such URDFs); half a turn from that is still refused. The numerical inverse starts from the last
+   solution (7.7 us per call along a line of the six-axis arm's tool in release, against 74 us from the home), walks
+   again from the home where a walk of more than one step ends beyond `workspace.max_condition_number` or does not get
+   there. The time-optimal plan is bounded at ten million points (`PLAN_POINTS_MOST`, `error-path-torque`).
+4. Generic damped least squares for chains of 4 to 7 joints (`tool::Pose`), the tool's axes from
+   `kinematics.tool_axes` (of x, y, z, rx, ry, rz, as many as motors or one fewer), a redundant arm moving within the
+   Jacobian's null space towards `kinematics.home_joints`; the joint machine allows fewer axes than joints (its
+   Jacobian m x n; a redundant arm's joint speeds and accelerations by central differences of the inverse itself).
+   `urdf/five-axis.urdf` (flange pointing down at zero; axes x, y, z, rx, ry) and `urdf/seven-axis.urdf` (a roll joint
+   in the upper arm) with `config/arm5-tool.toml` and `config/arm7-tool.toml`, both passing every verdict.
+5. Each joint's own motor, drive, gearbox, strain wave gear, joint friction and ratings through `catalog::motor_config`
+   (`strain_wave` and `joint` joined `PER_MOTOR_TABLES`; the palletiser's light flange has 1 N m of the arms' 4, with
+   which, from 6 N m on, it stuck in the loop sweep across the bounds). The six-axis arm's wrist (joints 4 to 6): 1FK2104-5AF on 6SL3210-5HE10-8UF0 behind a
+   size-20 strain wave gear; the SCARA's quill and flange: 1FK2104-5AF; both default cycles pass every verdict. A config
+   of a registered machine may give a motor its own tables though its default has none for it (`sim::schema`, used by
+   `load_config` and sim-py).
+6. Palletiser `palletiser` (`urdf/palletiser.urdf`, `config/palletiser.toml`): five URDF joints, four motors,
+   `arm.joint_coupling` C with q_urdf = C q (joint 3 = motor 3 - motor 2, joint 4 = - motor 3): the flange stays level;
+   M = C^T M_urdf C, h = C^T h_urdf. Catalogue motors 1FK2106-4AF (joints 1 to 3), 1FK2104-5AF (flange); shipped in
+   tool space (x, y, z, rz); registered in sim-machines, so the app and the browser draw it.
+7. The tool's error metric: `analysis::distance_to_piece` takes the axes in m and those in rad apart; `CycleLoad` has
+   `path_angle_error_peak`, `_rms`, `tracking_angle_error_peak` and `dwell_angle_error_peak` (rad) beside the place's;
+   `settling` judges the place, `settling-angle` the turn against `ratings.settling_tolerance_rad` (arm 3 mrad in
+   joints and 5 in tool space, SCARA 1 and 2, table 0.2, palletiser and D4 5). The D4's path error is 1.531 mm with its
+   90° turns and without them (the turn's 3.3 mrad apart); before, 3.53 mm and 1.53 mm. CLI columns
+   `path_angle_error_peak_rad`, `path_angle_error_rms_rad`, `tracking_angle_error_peak_rad`,
+   `dwell_angle_error_peak_rad` after `dwell_error_peak_m`; `sim-cli optimise` prints `dwell_angle_error_peak_rad`; the
+   app's analysis table has the three in mrad where the tool turns. The shaper retries of the optimiser take
+   `settling-angle` as they take `settling`.
+8. `config/arm-tool.toml` warned "Motor joint 5: 370.5 > 314.2" (and joints 2 and 4) at startup: `check_limits` puts
+   every axis at its limit at once at the middle of the ranges, and the ranges' middle had the flange pointing along x
+   with every turn at 2 rad/s. The orientation range is now around pointing down (±0.6 rad), the turns 1.5 rad/s and
+   the travels 0.9 m/s: no warning (same in `arm.toml`, which the tool config has to equal but for its tool keys).
+
+How: `rigid` (payload `Inertial`, `log`, `exp`, quaternions, `slerp`, `transpose` public), `chain` (passive joints,
+`joint_motion`, m x n Jacobian), `tool` (`Pose`), `arm` (coupling, swing, per-joint configs), `path` (`Geo::Slerp`,
+point bound), `analysis` (split metric), `sim` (`schema`), `catalog` (`strain_wave` per motor), the joint kit's
+`lossless_config` (a joint's own gearbox damping zeroed too: the palletiser's flange gear kept its damper in the
+"loss-free" suite before).
+
+Tests (hand calculations in their comments): `rigid`: a payload's inertia about the last joint (0.43 + 2 0.6^2 + 0.05 =
+1.2 N m against the point mass's 1.15), the slerp midpoint of quarter turns about x and y (2 acos(2 / sqrt 6) = 70.53
+degrees about the bisector). `machine-joint-kit`: the two-link arm's Coriolis torques (-0.75 (4 + 4) = -6, 0.75 N m),
+each arm's own motors (7.5 and 15 N m peaks, rotor 5.6e-5, 2.3 A, 40 N m gear), the palletiser's level flange over a 7 x
+7 grid of its joints and its turret angle atan2(0.3, 1.4) in tool space, the swinging carton's energies (0.79597 and
+0.775 J), the swing conserving energy rigid and elastic, the warm-started inverse equal to the home walk to 1e-9 along a
+turning line, the seven-joint arm's pose to 1e-9 with its offset from the home free of the null space (along it below
+1e-6 of the offset), the five-axis arm's grid around pointing down round-tripping to 1e-9, a planned line's
+orientation at the slerp midpoint (1e-6, the straight line off it by more than 1 mrad), a time-optimal crawl refused at
+1.7e7 points (planned at 1.7e6), the palletiser's standard suite and its cycle's verdicts. `machine-delta-d4`: the
+place's path, tracking and dwell errors equal with and without the turns (1e-3), the turn's apart. Run once by name in
+release before the commit (not the suites), all pass; the base commit's sim-cli built aside for the comparisons.
+
+Outside my area (small, local): `sim-core/src/machine.rs` (one doc), `sim-components/src/path.rs` (`Geo::Slerp`, the
+point bound; told to the planner session in the notes), `analysis.rs` (metric, `RATINGS_BEYOND_DEFAULT`, the shaper
+retry), `catalog.rs` (`PER_MOTOR_TABLES`), `sim.rs` (`schema`), `sim-cli` (columns), `sim-app` (rows, `CHECKS`), `sim-py`
+(the schema), `sim-machines` (registration, the swept list, two test literals), the D4's `default.toml`
+(`settling_tolerance_rad`), `sim-cli/tests/cli.rs` (settling of a machine without axes in m).
+
+Left open:
+
+- The time-optimal planner's speed bound along a slerp line takes the chord's direction (`limits`), not the slerp's own
+  rates (a few percent off on a quarter turn about a tilted axis).
+- The warm-started inverse checks a walk of one step for no singularity it passes; a redundant arm's joint motion costs
+  five inverses per feedforward (the seven-axis cycle simulates in about a minute).
+- The palletiser's parallelogram bars have no bodies of their own; the coupled joint's range (elbow against upper arm)
+  is the URDF joint's only where a motor stands alone in its row.
+- Without the payload the swing's joints carry a unit inertia of their own; the swing starts hanging at zero, true
+  where the offset points down at rest (the palletiser), not for an arm whose flange is tilted.
+- Any motor id passes the schema for its own tables (a misspelt id is not read but not refused).
+- The five-axis tool's rx, ry are components of the rotation vector, not a pointing direction's angles: well-conditioned
+  around pointing down, not near a quarter turn from it.
+- The joints' own estimates (`[gearbox.<k>]` stiffness, `[strain_wave.<k>]`, `[joint.4]` of the palletiser) and the
+  payload's inertia tensor have no `[bounds]`: the bands vary the shared tables' values only.
+- The palletiser's 3D view was not looked at in the app; it is drawn by the arms' generic scene (bars between the
+  joints, motors, flange, payload), as the arms are.
+- The palletiser's gear stiffness band is 160000 to 230000 N m/rad: from about 240000 on, friction off, the turret's
+  velocity loop reads a phase margin of -294 degrees (66 degrees once the phase is unwrapped right) with any gain or
+  gear damping, across its undamped two-mass resonance near 9 Hz: the loop measurement's unwrapping, for the loops'
+  owners to look at.

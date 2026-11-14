@@ -35,4 +35,4 @@ pub mod trace;
 pub mod transmission;
 
 pub use control::{Command, CommandError, Controller, LimitViolation, check_limits};
-pub use sim::{Contact, Sim, Snapshot, load_config};
+pub use sim::{Contact, Sim, Snapshot, load_config, schema};

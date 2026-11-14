@@ -33,6 +33,9 @@ base_compliance = false
 link_bending = false
 gravity = true
 payload = true
+# The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read
+# by the arms only.
+payload_swing = false
 # Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
 # machine is the rigid reference model, in which the motor turns with the joint times the ratio.
 joint_elasticity = true
@@ -192,6 +195,15 @@ urdf_file = "builtin:scara"
 gear_ratios = [100.0, 80.0, 1.0, 50.0]
 payload_kg = 3.0
 payload_offset_m = [0.0, 0.0, 0.0]
+# About its centre in the flange frame: xx, yy, zz, xy, xz, yz. [estimate] a 3 kg cylinder of 0.1 m diameter and 0.1 m
+# height about the flange's axis: m r^2 / 2 = 0.00375 about z, m (3 r^2 + h^2) / 12 = 0.004375 across.
+payload_inertia_kgm2 = [0.004375, 0.004375, 0.00375, 0.0, 0.0, 0.0]
+# The URDF's joints as sums of the motors' joints (see config/palletiser.toml); [] for one motor per joint.
+joint_coupling = []
+# With effects.payload_swing: the payload on a pivot payload_offset_m below the flange (it needs a length there), with
+# this spring and damper per axis. [estimate]
+payload_swing_stiffness_nm_rad = 20.0
+payload_swing_damping_nm_s_rad = 0.5
 
 # Off (as shipped): the axes are the joints, [axis.j1] to [axis.j4]. On: the axes are the flange's x, y, z (m) and its
 # turn c about the vertical (rad, joints 1 + 2 + 4), [axis.x] to [axis.c], each piece of a path a straight line of the
@@ -200,6 +212,8 @@ payload_offset_m = [0.0, 0.0, 0.0]
 [kinematics]
 tool_space = true
 elbow = "right"
+# The tool's axes in tool space: x, y, z and the turn about the vertical (rz, here c), in closed form on a SCARA.
+tool_axes = ["x", "y", "z", "rz"]
 
 # In tool space: the range of x, y, z (m) and c (rad); poses in it out of the arm's reach (600 mm, 50 mm inside) or
 # beyond a joint's stop are refused. Targets where the condition number of the arm's Jacobian in the plane
@@ -425,8 +439,45 @@ noise_seed = 1
 # Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
 braking_module = false
 
+# The quill's and the flange's joints 3 and 4 have smaller motors than the arms' 1 and 2, as a real SCARA has (their own
+# tables over the shared ones above, catalog::motor_config). [catalogue] 1FK2104-5AF, 2.4 N m static, 7.5 N m maximum,
+# rotor 0.56 kg cm2, on an S210 6SL3210-5HE10-8UF0 (2.3 A rated, 7.6 A maximum). [estimate] the brake, the flange's
+# strain wave gear of size 14 and the velocity gains scaled by the inertia at the motor.
+[parts.3]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[parts.4]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[motor.3]
+brake_torque_nm = 3.2
+
+[motor.4]
+brake_torque_nm = 3.2
+
+[drive.3]
+velocity_kp_nm_s_rad = 0.04
+
+[drive.4]
+velocity_kp_nm_s_rad = 0.04
+
+[gearbox.4]
+stiffness_nm_rad = 7000.0
+inertia_at_input_kgm2 = 3.3e-6
+
+[strain_wave.4]
+rated_torque_nm = 7.8
+
+[ratings.4]
+gearbox_rated_torque_nm = 11.0
+gearbox_max_torque_nm = 23.0
+
 [ratings]
+# The flange's place (m) and its turn c (rad) apart. [estimate] 0.5 mm, and 2 mrad of the turn.
 settling_tolerance_m = 0.0005
+settling_tolerance_rad = 0.002
 gearbox_rated_torque_nm = 108.0
 gearbox_max_torque_nm = 172.0
 gearbox_max_input_speed_rpm = 7500.0
@@ -586,3 +637,5 @@ motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 gearbox.no_load_torque_nm = [0.16, 0.24]
 thermal_feedback.seal_viscosity_exponent = [0.0, 0.5]
+arm.payload_swing_stiffness_nm_rad = [10.0, 40.0]
+arm.payload_swing_damping_nm_s_rad = [0.2, 1.0]
