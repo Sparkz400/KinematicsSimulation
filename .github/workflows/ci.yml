@@ -59,8 +59,9 @@ jobs:
         run: cargo nextest run -p sim-opcua --release --locked --profile ci -E "binary(plc) | binary(soak)" --test-threads 1
 
       # What the default filter of .config/nextest.toml leaves out of the step "Test": the long sweeps of the velocity
-      # loops' margins across the bounds. Each spreads its loop measurements over every core, so one at a time.
-      - name: Margin sweeps
+      # loops' margins across the bounds and the EXCT-30's worst corner. Each spreads its runs over every core, so one at
+      # a time.
+      - name: Long sweeps
         run: cargo nextest run --workspace --release --locked --exclude sim-py --profile ci --ignore-default-filter -E "not default()" --test-threads 1
 
       # nextest does not run doctests.

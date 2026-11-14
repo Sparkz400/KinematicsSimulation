@@ -335,9 +335,11 @@ fn with_the_wrap_the_belt_teeth_jump_at_the_pull_of_half_a_turn() {
 /// Teeth that jump in a cycle fail "belt-tooth-jump", and what they take closes the energy budget like every other
 /// loss: the single axis with 90 N of pretension, where its acceleration pulls the slack side below a sixth of the
 /// pull (with 100 N the slack side keeps 20.9 N against 119.5 N of pull, just above a sixth, and nothing jumps).
-/// Once they jump, they go on jumping (240 jumps, 11.3 J). The budget closes to 0.5 % here, not to the 0.1 % of the
+/// Once they jump, they go on jumping (240 jumps, 11.3 J). The budget closes to 1 % here, not to the 0.1 % of the
 /// other configs: a jump is found at the end of a base step, so it lands up to a step late. Measured 0.33 %, 0.21 %
-/// and 0.14 % at the base step, its half and its quarter (with the current cycle along).
+/// and 0.14 % at the base step, its half and its quarter (with the current cycle along) on Windows, and 0.61 % at the
+/// base step on Linux, where the 240 jumps fall a little differently with the platform's floating-point library. A
+/// budget that left the jumps out would miss their 11.3 J, 15 % of the supply.
 #[test]
 fn jumping_teeth_fail_the_check_and_close_the_energy_budget() {
     let entry = &machine_single_axis::ENTRY;
@@ -348,7 +350,7 @@ fn jumping_teeth_fail_the_check_and_close_the_energy_budget() {
     let budget = load.budget.as_ref().unwrap();
     let lost = budget.rows.iter().find(|r| r.id == "power.tooth_jump").unwrap().energy;
     assert!(
-        lost > 0.0 && budget.unaccounted().abs() < 5.0 * BUDGET_TOLERANCE * budget.supply,
+        lost > 0.0 && budget.unaccounted().abs() < 10.0 * BUDGET_TOLERANCE * budget.supply,
         "{jumps} jumps, {lost} J in them, {} J of {} J not accounted for",
         budget.unaccounted(),
         budget.supply

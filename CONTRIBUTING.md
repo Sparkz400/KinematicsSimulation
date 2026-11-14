@@ -44,7 +44,8 @@ The physics tests integrate millions of steps; run them in release. [cargo-nexte
 cargo-nextest --locked`) runs the tests of all binaries at once, just under 8 minutes for the suite on the 16 threads of
 an 8-core machine; its settings are in `.config/nextest.toml`. It does not run doctests, hence the third line. Its default
 filter leaves out the sweeps of the velocity loops' margins across the bounds (`across_the_bounds::*` in the control
-tests of sim-machines), which by themselves take some 10 minutes on those 16 threads; CI runs them, and so does
+tests of sim-machines) and the EXCT-30's search for the worst corner of its bounds, which by themselves take some 10
+minutes on those 16 threads; CI runs them, and so does
 `cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1`.
 `cargo test --workspace --release --exclude sim-py` still runs everything, one test binary after the other. One
 test: `cargo nextest run --release -p sim-machines -E 'test(=every_effect_switch_changes_the_traces)'`. sim-py is

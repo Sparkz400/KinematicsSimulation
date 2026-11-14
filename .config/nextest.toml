@@ -15,7 +15,9 @@ retries = 0
 # together, and 10 minutes alone on the 16 threads of the 8-core development machine. The margins of each config as
 # configured are in the run (`the_shipped_velocity_loops_keep_their_margins`). CI runs the sweeps in a step of their own; here
 # cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1
-default-filter = "not (package(sim-machines) & binary(control) & test(/^across_the_bounds::/))"
+# Also the EXCT-30's worst corner of its bounds (2400 cycles, 1230 s of processor time): on a 4-core CI runner beside
+# every other test it ran past 30 minutes.
+default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
 
 # Tests that run against the wall clock: the OPC UA server and the app's simulation thread. They share the
 # machine with every other test; few of them at a time, so that a busy machine does not make them miss their times.
