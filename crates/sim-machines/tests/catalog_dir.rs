@@ -21,8 +21,11 @@ fn a_catalogue_directory_replaces_the_compiled_in_one_and_another_schema_version
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog");
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("catalog-dir-test");
     let _ = std::fs::remove_dir_all(&dir);
-    for sub in ["siemens", "megadyne", "festo", "bahr"] {
-        copy(&source.join(sub), &dir.join(sub));
+    // Every maker's folder (the tables), but not catalog.toml yet, nor the tools.
+    for entry in std::fs::read_dir(&source).unwrap().flatten() {
+        if entry.path().is_dir() && entry.file_name() != "tools" {
+            copy(&entry.path(), &dir.join(entry.file_name()));
+        }
     }
     assert_eq!(motor_mass("1FK2205-4AF", "400v"), Some(5.2));
 
