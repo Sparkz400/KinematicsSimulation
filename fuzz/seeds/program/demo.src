@@ -1,0 +1,6 @@
+DEF demo()
+  PTP {X -1000, Y 0, Z 500, A 0, B 90, C 0} ; start
+  $VEL.CP = 0.2
+  LIN {X 100, A 90}
+  CIRC {X 0, Y 1000}, {X 1000, Y 0}
+END

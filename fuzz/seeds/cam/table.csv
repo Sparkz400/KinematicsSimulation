@@ -1,0 +1,7 @@
+# master_deg, slave_mm, slope
+master,slave
+0,0
+90,10
+180,25
+270,10
+360,0

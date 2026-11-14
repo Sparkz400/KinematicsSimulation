@@ -200,14 +200,15 @@ impl Cam {
             m0 += s.master;
             s0 += s.slave;
         }
-        Ok(Self { pieces, period: m0, advance: s0 })
+        Self { pieces, period: m0, advance: s0 }.finite()
     }
 
     /// The cam through a table of points (master, slave, slope over the master where given), the master rising; the
     /// last point closes the period (the master's span of the table is the period, the slave's its advance). Where a
     /// row has no slope, the slopes are those of the periodic cubic spline through the points (the slave's acceleration
     /// is then continuous), else a cubic runs between each two points with their slopes. An error names the row (from
-    /// 0) that is wrong: fewer than three points, a master that does not rise, or slopes on some rows only.
+    /// 0) that is wrong: fewer than three points, a master that does not rise, slopes on some rows only, or
+    /// values so large or so close that the slopes overflow.
     pub fn from_table(rows: &[(f64, f64, Option<f64>)]) -> Result<Self, usize> {
         let n = rows.len();
         if n < 3 {
@@ -253,7 +254,20 @@ impl Cam {
                 k1: slopes[i + 1],
             })
             .collect();
-        Ok(Self { pieces, period, advance })
+        Self { pieces, period, advance }.finite()
+    }
+
+    /// The cam, or the first piece (from 0) whose slave position or rates at its ends are no finite numbers: points or
+    /// segments so large or so close that their slopes overflow.
+    fn finite(self) -> Result<Self, usize> {
+        let ends = |p: &Piece| match *p {
+            Piece::Law { m0, dm: h, .. } | Piece::Cubic { m0, h, .. } => [p.at(m0), p.at(m0 + h)],
+        };
+        match self.pieces.iter().position(|p| !ends(p).iter().flatten().all(|v| v.is_finite())) {
+            Some(i) => Err(i),
+            None if self.period.is_finite() && self.advance.is_finite() => Ok(self),
+            None => Err(0),
+        }
     }
 
     /// The cam of `<prefix>.table_file` (a CSV file of master, slave and an optional slope, see `parse_table`) where
@@ -317,13 +331,17 @@ impl Cam {
 
 /// Rows of a cam table in CSV: master, slave and optionally the slope of the slave over the master, comma separated. A
 /// line that does not start with a number (a header, a comment beginning with `#`, an empty line) is skipped. An error
-/// gives the number of the line (from 1) that has a number first and then something that is not one, or too many fields.
+/// gives the number of the line (from 1) that has a number first and then something that is not one (or is NaN or
+/// infinite), or too many fields.
 pub fn parse_table(text: &str) -> Result<Vec<(f64, f64, Option<f64>)>, usize> {
     let mut rows = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let mut fields = line.split(',').map(|f| f.trim().parse::<f64>());
         let Some(Ok(master)) = fields.next() else { continue };
         let rest: Vec<f64> = fields.collect::<Result<_, _>>().map_err(|_| i + 1)?;
+        if !master.is_finite() || rest.iter().any(|v| !v.is_finite()) {
+            return Err(i + 1);
+        }
         match rest[..] {
             [slave] => rows.push((master, slave, None)),
             [slave, slope] => rows.push((master, slave, Some(slope))),

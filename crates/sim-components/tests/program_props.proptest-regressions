@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b1a2aa11920b75a005ccb0246ec0f6cb5c085eb7ce7aa2ae8366c6a005b635d6 # shrinks to (_, text) = ("poses.csv", "time_s,x_m,y_m\n1e999,0.0,0.0\n0.001,0.0001,0.0\n0.002,0.0004,0.00001\n0.003,0.0009,0.00004")
+cc 4f61f2024086012d63898e02043a10e1ab1aff8d6b0194603526aec1b01503cb # shrinks to (_, text) = ("slopes.csv", "0,1e308,0\n0.5,1,2\n1,2,0")
+cc 0de01e4c01144d694b28dc82724955accd1cfe9a39b2ed9616eaae6f7523fce2 # shrinks to (name, text) = ("part.nc", "¡\n%\nO1000 (a part)\nN10 G21 G17 G90 G54\nN20 G0 X10 Y10\nN30 F600\nN40 G1 X50 Y10 ; along\nN50 G2 X60 Y20 I0 J10\nN60 G3 X50 Y30 R10\nN70 G2 X40 Y20 R-10\nN80 G91 G1 X-10 Y-10\nN90 G90 G18 G2 X30 Z0 I-5 K0\nN100 G20 G1 X1 Y1\nM30")
+cc 73795c4eec0e48fabf77b6487d978c3f44af6d719f48892da06acb5899ec4f78 # shrinks to text = "¡", name = "p.nc"
+cc 1b35a378ba256d6cd0f6c3044ec5acea0b70b4645c01a884cc64c4bff03d265d # shrinks to (name, text) = ("demo.src", "DEF demo()\n  PTP {X -1000, Y 0, Z 500, A 0, B 90, C 0} ; start\n  $VEL.CP = 0.2\n  LIN {X 1e999, A 90}\n  CIRC {X 0, Y 1000}, {X 1000, Y 0}\nEND")

@@ -85,7 +85,11 @@ pub fn parse_trajectory(text: &str) -> Result<Vec<(f64, Vec<f64>)>, String> {
     for line in text.lines() {
         let mut fields = line.split(',').map(|f| f.trim().parse::<f64>());
         let Some(Ok(time)) = fields.next() else { continue };
-        points.push((time, fields.collect::<Result<_, _>>().map_err(|_| line.to_string())?));
+        let pose: Vec<f64> = fields.collect::<Result<_, _>>().map_err(|_| line.to_string())?;
+        if !time.is_finite() || pose.iter().any(|v| !v.is_finite()) {
+            return Err(line.to_string());
+        }
+        points.push((time, pose));
     }
     Ok(points)
 }

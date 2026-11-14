@@ -165,8 +165,9 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
         let mut words: Vec<(char, f64, &str)> = Vec::new();
         let mut rest = clean.as_str();
         while let Some(letter) = rest.chars().next() {
-            let end = rest[1..].find(|c: char| c.is_ascii_alphabetic()).map_or(rest.len(), |i| i + 1);
-            let (word, number) = (&rest[..end], &rest[1..end]);
+            let after = letter.len_utf8();
+            let end = rest[after..].find(|c: char| c.is_ascii_alphabetic()).map_or(rest.len(), |i| i + after);
+            let (word, number) = (&rest[..end], &rest[after..end]);
             match number.parse::<f64>() {
                 Ok(v) if letter.is_ascii_alphabetic() && v.is_finite() => words.push((letter, v, word)),
                 _ => return fail(line, "program-error-word", word),
@@ -392,7 +393,9 @@ pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             let mut components = Vec::new();
             for part in inner.split(',').map(str::trim).filter(|p| !p.is_empty()) {
                 let (name, value) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
-                let Ok(v) = value.trim().parse::<f64>() else { return fail(line, "program-error-word", part) };
+                let Some(v) = value.trim().parse::<f64>().ok().filter(|v| v.is_finite()) else {
+                    return fail(line, "program-error-word", part);
+                };
                 components.push((name.to_string(), v));
             }
             aggregates.push(components);
