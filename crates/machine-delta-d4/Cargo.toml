@@ -9,5 +9,8 @@ sim-core.workspace = true
 sim-components.workspace = true
 machine-delta-d3 = { path = "../machine-delta-d3" }
 
+[dev-dependencies]
+toml.workspace = true
+
 [lints]
 workspace = true

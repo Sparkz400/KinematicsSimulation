@@ -9,8 +9,10 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | S | [`crates/machine-single-axis/default.toml`](../crates/machine-single-axis/default.toml) | Single belt axis. Placeholder values |
 | D | [`crates/machine-delta-d3/default.toml`](../crates/machine-delta-d3/default.toml) | Delta picker D3, sized like the Autonox RL3-1200-3kg with Siemens 1FT2105-4AF (the 1FK2105-4AF Autonox names, as a 1FT2 for the SP100 precision gearbox). Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d3) |
 | D2 | [`crates/machine-delta-d2/default.toml`](../crates/machine-delta-d2/default.toml) | Planar delta picker D2, sized like the Codian D2-800-S020 with Siemens 1FT2105-4AF and the SP100 gearbox. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d2) |
+| Parallel SCARA | [`crates/machine-parallel-scara/default.toml`](../crates/machine-parallel-scara/default.toml) | Parallel SCARA: the D2's five-bar in the horizontal plane with a Z stroke on a ball screw and a tool turn at the plate. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#parallel-scara) |
 | C | [`crates/machine-delta-d3/conveyor.toml`](../crates/machine-delta-d3/conveyor.toml) | The D3's default with a [`[conveyor]`](#conveyor) table: it picks from a belt conveyor instead of running the Adept cycle. So do the conveyor examples beside the T-gantry's, the D2's, the D4's and the linear delta's defaults (`crates/machine-t-gantry/conveyor.toml`, `crates/machine-delta-d2/conveyor.toml`, `crates/machine-delta-d4/conveyor.toml`, `crates/machine-delta-linear/conveyor.toml`) |
 | D4 | [`crates/machine-delta-d4/default.toml`](../crates/machine-delta-d4/default.toml) | Four-axis delta picker D4: the D3 with a turning tool on a telescopic shaft, sized after the ABB IRB 360 with its fourth axis. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#delta-picker-d4) |
+| H4 | [`crates/machine-delta-h4/default.toml`](../crates/machine-delta-h4/default.toml) | Quattro-type four-arm delta H4: four arms at 90°, a plate in two parts that slide against each other and turn the tool through a rack, a pinion and a gear stage; sized near the Omron Quattro s650H class (1300 mm across, 6 kg) with Siemens 1FK2105-6AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#quattro-type-delta-h4) |
 
 | L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
 
@@ -584,7 +586,8 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | S | 29 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
 | D | 32 | The geometry and the masses (not the payload), the rods' spin inertia, the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency, the gearing's Wöhler exponent, the upper arms' bending stiffnesses and dampings (in and out of their planes) | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
 | D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
-| D4 | 50 | As D, with the arms' backlash, and the estimates of `[tool_gearbox]` (backlash, damping), `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
+| D4 | 50 | As D, with the arms' backlash, and the estimates of `[gearbox.4]` (backlash, damping), `[motor.4]` (winding, friction), `[ratings.4]`, `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
+| H4 | 43 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms have no bending (no `[upper_arm]`) |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Keys with bounds in one config only:
@@ -697,11 +700,46 @@ The D2's config ([`machine-delta-d2/default.toml`](../crates/machine-delta-d2/de
 
 The motor, drive, ratings, axis limits (3 m/s, 50 m/s², 2500 m/s³ along x and z) and loop gains are the D3's.
 
+## Parallel SCARA
+
+The parallel SCARA's config ([`machine-parallel-scara/default.toml`](../crates/machine-parallel-scara/default.toml)) has
+the D2's tables and keys with the D2's values, laid in the horizontal x-y plane, with these differences. The tool pose,
+`start.pose` and the cycle's targets are (x, y, z, c) with both extra axes on, (x, y, z) or (x, y, c) with one, (x, y)
+with none: switching an axis off needs the cycle's targets and `start.pose` changed with it.
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `geometry.forearm_spacing_m` | m | The rods of a pair apart along z (the joints' axis); for the 3D view only | 0.1 |
+| `workspace.near_y_m` | m | The range's near edge, y in front of the shoulder axes; the upper end of the y axis range. In place of the D2's `top_z_m` | −0.4, estimate |
+| `workspace.depth_edge_m`, `depth_centre_m` | m | The range's depth at the edges and at the centre; the far edge is an arc through both. In place of the D2's `height_edge_m`, `height_centre_m` | 0.25 estimate, 0.477 catalogue (the D2's) |
+| `mass.upper_arm_inertia_kgm2` | kg m² | The arm's tube about its joint; the D2's `upper_arm_kg` and `upper_arm_cg_m` are not needed (its weight is out of the plane) | 0.064, estimate |
+| `z_axis.enabled` | | The Z stroke at the plate: axis z, motor 3 | true |
+| `z_axis.unit_kg` | kg | What the plate carries for it: housing, screw, Z motor with brake | 2.95, estimate (the motor's 1.55 kg catalogue) |
+| `z_axis.carriage_kg` | kg | What the screw lifts: quill, flange, gripper (the payload is added while held) | 1.0, estimate |
+| `slide.*` | | The Z carriage's stroke (0.2 m), friction and stops, as for the screw axis | estimates, the SCARA's quill |
+| `screw.*` | | The Z stroke's ball screw (16 x 20, fixed-free, 0.3 m), as for the screw axis; its checks `screw-*` | estimates, the SCARA's |
+| `tool_turn.enabled` | | The tool's turn about z: axis c, motor 4 | true |
+| `tool_turn.unit_kg` | kg | What the plate carries for it: C motor with brake and its gearbox | 2.43, catalogue (1FK2103-2AH 1.55 kg, NRB060-03-8 0.88 kg) |
+| `tool_turn.inertia_kgm2`, `payload_inertia_kgm2` | kg m² | Quill, flange and gripper about the tool's axis; the payload's, while held | 2e-3, 8.33e-3 (5 kg, 100 x 100 mm), estimates |
+| `tool_turn.friction_coulomb_nm`, `friction_viscous_nm_s_rad`, `friction_smoothing_rad_s` | | The quill's spline and bearings (effects.joint_friction) | 0.02, 1e-4, 0.01, estimates |
+| `axis.y.*` | | The plate's limits along y | 3 m/s, 30 m/s², 2500 m/s³ |
+| `axis.x.max_acceleration_m_s2`, `axis.y.max_acceleration_m_s2` | m/s² | 30, not the D2's 50: the plate carries 12.8 kg against the D2's 6.4 kg; at 50 the arms' gearboxes see 235 N m of their 192 N m | estimate |
+| `axis.z.*` | | The stroke's limits | 0.9 m/s (2700 r/min on the 20 mm lead), 15 m/s², 1000 m/s³, estimates |
+| `axis.c.*` | | The turn's range and limits: no stops, the range is the controller's | ±360°, 30 rad/s, 600 rad/s², 30000 rad/s³, the D4's |
+| `[motor.3]`, `[motor.4]` | | The Z and C motors over `[motor]` | 1FK2103-2AH at 400 V (catalogue), resistance and inductance estimates as the D4's tool motor |
+| `[gearbox.3]` | | The Z motor's coupling: ratio 1, nothing warms | estimates |
+| `[gearbox.4]` | | The turn's gearbox | NRB060-03-8, ratio 8 (catalogue) |
+| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.0443 (Z), 0.1 with 10 ms (C) |
+| `drive.velocity_kp_nm_s_rad`, `velocity_tn_s` | | The arms' velocity loop | 0.33, 80 ms: the D2's 0.25 and 30 ms leave arm 2 at 31° phase margin with the heavier plate |
+| `[ratings.3]`, `[ratings.4]` | | The S210 6SL3210-5HE10-4UF0's currents and braking resistor; the turn's gearbox | catalogue |
+
+Without `effects.gravity` the Z motor holds nothing either.
+
 ## Linear delta
 
-The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml)) has the tables every machine has as T and S have them: `[sim]`, `[parts]`, `[motor]`, `[gearbox]` (here a coupling of ratio 1), `[pulley]`, `[hard_stop]`, `[temperature]`, `[thermal_feedback]`, `[drive]`, `[ratings]` (without guide, pulley-bearing, gearbox and tooth-load ratings), `[profile]`, `[bounds]`, `[start]`, `[[cycle.segment]]`, the belt's `[belt]` keys the [belt sections](model-reference.md#belt-sections) read (no tooth meshing or tooth jump), and the effects of the drives and the controller. It has no frame, idler, cable chain, process force or `[thermal]`: no part but the motors warms, so `effects.part_heating` and `thermal_feedback` change nothing. Its own keys:
+The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml)) has the tables every machine has as T and S have them: `[sim]`, `[parts]`, `[motor]`, `[gearbox]` (here a coupling of ratio 1), `[pulley]`, `[hard_stop]`, `[temperature]`, `[thermal]`, `[thermal_feedback]`, `[drive]`, `[ratings]` (with the guide, pulley-bearing and tooth-load ratings of the EGC-80; no gearbox ratings), `[profile]`, `[bounds]`, `[start]`, `[[cycle.segment]]`, the belt's `[belt]` keys the [belt sections](model-reference.md#belt-sections) read (no tooth meshing or tooth jump), and the effects of the drives and the controller. It has no frame, idler, cable chain or process force. Its own keys:
 
-`[effects]`: `belt_stretch` (off: the rigid reference model), `belt_damping`, `belt_slack`, `belt_mass`, `belt_tooth_stiffness`, `belt_material_damping`, `guide_friction`, `load_dependent_friction` (the guides' levels follow their load across the rail, the rods' pull at rest), `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `temperature`, `hard_stops` (the carriages' stroke ends), `holding_brake`, as on the single axis; the shipped values as there, `belt_tooth_stiffness`, `belt_material_damping` and `temperature` off.
+`[effects]`: `belt_stretch` (off: the rigid reference model), `belt_damping`, `belt_slack`, `belt_mass`, `belt_tooth_stiffness`, `belt_material_damping`, `guide_friction`, `load_dependent_friction` (the guides' levels follow their load across the rail at rest: the rods' pull and, on an inclined column, the carriage's weight across it), `part_heating` (the three guides warm with their loss, and the gearboxes where a config has some; off as shipped), `thermal_feedback` (each guide's viscous friction and each gearbox's efficiency follow its temperature; off as shipped), `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `temperature`, `hard_stops` (the carriages' stroke ends), `holding_brake`, as on the single axis; the shipped values as there, `belt_tooth_stiffness`, `belt_material_damping` and `temperature` off.
 
 `[geometry]` (estimates, bounded but the stroke and the stop)
 
@@ -711,7 +749,8 @@ The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machi
 | `plate_radius_m` | m | Centre of the plate to a rod pair's centre, r. The equations use e = R − r | 0.07 |
 | `rod_m` | m | Rod length, carriage joint to plate joint (the parallelogram's centre line), L | 1.1 |
 | `rod_spacing_m` | m | Distance of the two rods of a pair; for the 3D view only | 0.08 |
-| `carriage_top_m` | m | Height of the carriages' joints at their upper stop | 0.0 |
+| `column_incline_deg` | ° | The columns' lean from the vertical, positive with their tops towards the axis, negative away from it; below 60° either way. The carriage's place (`carriage_top_m`, `stroke_m`) is then its travel along the column, its joint standing at that times cos α; `column_radius_m` is measured at z = 0. Not an estimate: a choice of design, no bound | 0 (upright; Festo gives no angle for the EXPT) |
+| `carriage_top_m` | m | The carriages' upper stop: their joints' travel along the column from z = 0 (upright: the joints' height) | 0.0 |
 | `stroke_m` | m | The carriages' stroke below it | 0.7 |
 | `pulley_radius_m` | m | Drive pulley radius (EGC-80-TB: 90 mm per revolution) | 0.014324 |
 | `span_min_m` | m | Shortest free belt span between a carriage and either pulley | 0.1 |
@@ -722,7 +761,7 @@ The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machi
 | --- | --- | --- | --- |
 | `radius_m` | m | Radius of the working cylinder; also the x and y axis ranges ±radius | 0.475, catalogue (Festo EXPT-95: Ø950) |
 | `top_z_m`, `bottom_z_m` | m | Its top and bottom, the z axis range | −1.12, −1.22: 100 mm, catalogue (EXPT nominal height); where it hangs an estimate |
-| `max_rod_angle_deg` | ° | A target where a rod stands steeper from the vertical is refused (`error-delta-linear-rod-angle`) | 60, estimate (the range needs up to 57.2) |
+| `max_rod_angle_deg` | ° | A target where a rod stands at a larger angle to its column (upright: from the vertical) is refused (`error-delta-linear-rod-angle`) | 60, estimate (the range needs up to 57.2) |
 | `max_condition_number` | – | A target whose Jacobian has a higher condition number is refused (`error-delta-singularity`) | 10, estimate (the range has up to 3.98) |
 
 `[mass]` (estimates but the payload, bounded)
@@ -737,7 +776,24 @@ The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machi
 
 `[friction]`: each carriage's guide, the keys of the single axis's `[friction_x]`, its values.
 
-L's values of the shared tables: motor 1FK2205-2AF at 400 V with brake (catalogue: rotor 4.0 kg cm², 1.241379 N m/A, 10.8 N m peak, 3.0 N m rated at 3000 r/min, 9.5 A and 2.5 A; R, L, thermal time constant and brake torque estimates; the High Dynamic 1FK2104-5AF, 0.65 kg cm², left the velocity loop ringing near 450 Hz against about 6 kg cm² of load), a coupling of ratio 1 (3000 N m/rad, estimate as the EXCT-30's), converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A; its internal braking resistor 50 W, 3 kW, 820 V), belt EA 6e5 N and 300 N pretension (estimates as the EXCT-30's), `settling_tolerance_m` 0.5 mm (catalogue: EXPT positioning accuracy), `belt_max_tension_n` 1000, `pulley_max_torque_nm` 10 and `shaft_max_radial_load_n` 1500 (estimates for the EGC-80), `ratings.max_condition_number` 5, the velocity loop 0.25 N m s/rad, 0.02 s with 0.2 ms filters (tuned with `sim-cli margins delta-linear --bands`). Its cycle is the D3's Adept cycle 25/305/25 mm at the top of the range; `start.pose` above the place position.
+`[thermal]` (with effects.part_heating): `guide_resistance_k_w` 0.5 K/W, `guide_time_constant_s` 2400 s, `guide_max_rise_k` 40 K, estimates as the single axis's guide (the heat goes into the rail and the column's EGC-80 profile, about 0.35 m² at 10 W/(m² K), fin efficiency 0.6; about 5 kJ/K), bounded 0.25 to 1 K/W and 1200 to 4800 s; `gearbox_resistance_k_w` 1.5, `gearbox_time_constant_s` 1200, `gearbox_max_rise_k` 50 as the delta picker's, read only where a config has a gearbox (ratio not 1), so not bounded.
+
+`[ratings]` of the EGC-80-TB-KF (Festo, "Toothed belt axes EGC-TB-KF", 2024/01):
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `pulley_max_torque_nm` | N m | The axis's driving torque (`pulley-torque`) | 5, catalogue (max. driving torque, page 12; the max. feed force 350 N is the same at the 28.65 mm pulley). Was 10, an estimate |
+| `guide_max_load_n` | N | Each guide's highest load across the column (`guide-load`, per carriage) | 3050, catalogue (Fy max = Fz max for 5000 km, page 16) |
+| `guide_dynamic_load_rating_n` | N | C of the guide life L10 = (C / P)³ 50 km (`guide-life`, per carriage, at the carriage's speed) | 14157, from the same figure: 3050 (5000 / 50)^(1/3); Festo's 100 km figure (11236 N, page 17) gives 14156 |
+| `pulley_bearing_load_rating_n` | N | C of the bearing that takes the belt's pull on the drive shaft (`pulley-bearing-life`) | 5000, estimate (Festo publishes neither bearing nor radial load; a 6002 of the pulley's size has about 5.9 kN), bounded 3000 to 10000 |
+| `belt_tooth_load_rpm`, `belt_tooth_load_n_cm` | r/min, N/cm | The belt's specific tooth load (`belt-tooth-load`) | [0, 3333], [15.1, 15.1], estimate: what gives Festo's 350 N with 12 teeth in mesh on the 19.3 mm belt, 350 / (1.93 · 12), up to the axis's 5 m/s |
+| `belt_width_mm` | mm | Belt width | 19.3, catalogue (page 13) |
+| `belt_service_factor` | – | Factor on the effective pull | 1.0, estimate (Festo's 350 N is already the limit), bounded 1.0 to 1.4 |
+| `belt_teeth_in_mesh` | – | Teeth in mesh on the drive pulley (the method counts at most 12) | 15, half the 30-tooth pulley (90 mm / 3 mm pitch) |
+
+The guide's moments (Mx, My, Mz) are not judged.
+
+L's values of the shared tables: motor 1FK2205-2AF at 400 V with brake (catalogue: rotor 4.0 kg cm², 1.241379 N m/A, 10.8 N m peak, 3.0 N m rated at 3000 r/min, 9.5 A and 2.5 A; R, L, thermal time constant and brake torque estimates; the High Dynamic 1FK2104-5AF, 0.65 kg cm², left the velocity loop ringing near 450 Hz against about 6 kg cm² of load), a coupling of ratio 1 (3000 N m/rad, estimate as the EXCT-30's), converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A; its internal braking resistor 50 W, 3 kW, 820 V), belt EA 6e5 N and 300 N pretension (estimates as the EXCT-30's), `settling_tolerance_m` 0.5 mm (catalogue: EXPT positioning accuracy), `belt_max_tension_n` 1000, `pulley_max_torque_nm` 5 (catalogue, EGC-80) and `shaft_max_radial_load_n` 1500 (estimate), `ratings.max_condition_number` 5, the velocity loop 0.25 N m s/rad, 0.02 s with 0.2 ms filters (tuned with `sim-cli margins delta-linear --bands`). Its cycle is the D3's Adept cycle 25/305/25 mm at the top of the range; `start.pose` above the place position.
 
 ## Delta picker D4
 
@@ -750,9 +806,19 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `effects.telescope_friction` | – | The telescope's sliding friction along the shaft, a force on the platform that the arms take | on |
 | `axis.c.min_angle_deg`, `max_angle_deg` | ° | The controller's range of the tool's turn (the machine has no stops) | −360, 360, choice |
 | `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 600, 30000, estimates (ABB publishes none; 30 rad/s is the motor's 240 rad/s behind ratio 8) |
-| `tool_gearbox.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox, as `[gearbox]` | 8, 0.95, 8594.4, 3.47e-5, catalogue (Siemens NRB060-05-8) |
-| `tool_gearbox.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
-| `tool_gearbox.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
+| `motor.4.rotor_inertia_kgm2`, `torque_constant_nm_a`, `rated_current_a`, `thermal_time_constant_s`, `max_current_a`, `torque_constant_at_max_current_nm_a` | | The tool turn's motor over `[motor]` | 3.5e-5, 1.0672269, 1.19, 1980, 4.2, 0.8928571, catalogue (Siemens 1FK2104-4AF at 400 V) |
+| `motor.4.resistance_ohm`, `inductance_h` | Ω, H | Its winding | 6, 0.03, estimates (L/R 5 ms as the arms'), the resistance bounded 4 to 9 |
+| `motor.4.friction_coulomb_nm`, `friction_viscous_nm_s_rad` | N m, N m s/rad | Its bearings' friction (`effects.motor_friction`) | 0.02, 8e-5, estimates (1.5 % of the static torque), bounded 0.01 to 0.04 and 4e-5 to 1.6e-4 |
+| `motor.4.brake_torque_nm` | N m | Its brake | 2, estimate |
+| `gearbox.4.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox over `[gearbox]` | 8, 0.97, 8250.592, 8.8e-6, catalogue (Siemens NRB060-04-8) |
+| `gearbox.4.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
+| `gearbox.4.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
+| `drive.4.peak_torque_nm`, `rated_torque_nm`, `rated_speed_rad_s`, `no_load_speed_rad_s` | | Its drive over `[drive]` | 3.75, 1.27, 314.159, 619.7016, catalogue (1FK2104-4AF; no-load speed √(3/2) · 540 V / kt) |
+| `drive.4.velocity_kp_nm_s_rad`, `velocity_tn_s`, `kv_1_s`, `current_kp_v_a` | | Its loops | 0.05, 0.02, 80, 120: tuned with `sim-cli margins delta-d4 --bands` (at least 37.7°, 9.4 dB; the 0.081 `catalog::with_motor_part` retunes to keeps 34.6°, 5.4 dB), the shorter integral time and higher position gain for `settling`; the current loop's L over 0.25 ms as the shared |
+| `ratings.4.gearbox_rated_torque_nm`, `gearbox_max_torque_nm` | N m | The tool gearbox's limits, judged by the common `gearbox-*` checks of motor 4 | 18, 29, catalogue (NRB060-04-8) |
+| `ratings.4.gearbox_reference_speed_rpm` | r/min | Its planet bearings' reference speed (`gearbox-life`) | 110, estimate (NRB060 ratio 5's 175 r/min scaled to ratio 8) |
+| `ratings.4.drive_rated_current_a`, `drive_max_current_a`, `braking_resistor_continuous_w`, `braking_resistor_peak_w` | A, W | Its S210 converter | 1.2, 4.2, 50, 1200, catalogue (6SL3210-5HE10-4UF0) |
+| `ratings.4.drive_base_load_current_a` | A | Its base load current (`effects.drive_overload`) | 1.02, estimate (0.85 of rated), bounded 0.95 to 1.08 |
 | `tool.inertia_kgm2` | kg m² | Flange and gripper about the tool's axis | 2e-3, estimate, bounded 1e-3 to 4e-3 |
 | `tool.payload_inertia_kgm2` | kg m² | The payload about the tool's axis (with `effects.payload`) | 5e-3, estimate (3 kg, 100 × 100 mm), bounded 2.5e-3 to 1e-2 |
 | `tool.friction_coulomb_nm`, `friction_viscous_nm_s_rad`, `friction_smoothing_rad_s` | | The tool bearing's friction (`effects.joint_friction`) | 0.02, 1e-4, 0.01, estimates; the first two bounded |
@@ -764,9 +830,44 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `shaft.spin_inertia_kgm2` | kg m² | Tube, shaft and joints about the shaft's axis, at the tool | 8e-5, estimate, bounded |
 | `shaft.torsional_stiffness_nm_rad`, `torsional_damping_nm_s_rad` | N m/rad, N m s/rad | The shaft's twist (`effects.shaft_torsion`) | 500, 0.075, estimates, bounded 250 to 1000 and 0.03 to 0.2 |
 | `shaft.slide_friction_n`, `slide_friction_viscous_n_s_m`, `slide_friction_smoothing_m_s` | N, N s/m, m/s | The telescope's sliding friction (`effects.telescope_friction`) | 5, 2, 0.005, estimates; the first two bounded |
-| `ratings.tool_gearbox_max_torque_nm` | N m | The highest torque the tool's gearbox may pass (`tool-gearbox-peak`) | 29, catalogue (NRB060-05-8) |
 
-The fourth motor is the arms' 1FK2105-4AF with the same drive settings (the drive reads one `[motor]` and `[drive]` per machine); the common gearbox checks of motor 4 are judged against the arms' `[ratings]`, the tool's gearbox by `tool-gearbox-peak`.
+The fourth motor has tables of its own, `[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]`, over the shared ones as in a machine file (`catalog::motor_config`): its joint, its drive and its verdicts read them, and `sim-cli search delta-d4 --motor-id 4` sizes it alone. A key left out is the shared one. The arms share `[motor]` and `[gearbox]` (the D3's arms read them): `[motor.1]` to `[motor.3]`, `[gearbox.1]` to `[gearbox.3]` and `[parts.1]` to `[parts.3]` are refused; their `[drive.<id>]` and `[ratings.<id>]` are taken. Until 14 November the fourth motor was the arms' 1FK2105-4AF with their drive, judged against their gearbox's ratings, and `[tool_gearbox]` with `ratings.tool_gearbox_max_torque_nm` (check `tool-gearbox-peak`) stood for its gearbox; a config with those keys now fails as having unknown keys: rename `[tool_gearbox]` to `[gearbox.4]` and the rating to `ratings.4.gearbox_max_torque_nm`.
+
+## Quattro-type delta H4
+
+The H4's config ([`machine-delta-h4/default.toml`](../crates/machine-delta-h4/default.toml)) follows the D3's section by
+section: `[geometry]` (with `plate_radius_m` for the D3's `platform_radius_m`), `[workspace]`, `[mass]`, `[joint]`,
+`[motor]`, `[gearbox]`, `[thermal]`, `[thermal_feedback]`, `[axis.x]` to `[axis.z]`, `[drive]`, `[ratings]`,
+`[profile]`, `[bounds]`, `[start]` and the Adept cycle, with its own values: four arms of 500 mm, forearms of 1100 mm,
+working range 1300 mm across, 250 mm high at the edge and 450 mm at the centre (top 750 mm below the shoulders), 6 kg
+payload; motor 1FK2105-6AF at 400 V (catalogue: rotor 2.7 kg cm², 1.19403 N m/A, 24 N m peak, 6.6 N m rated, 5.6 A
+rated, 24 A maximum), gearbox NRB120-05-20 (catalogue: ratio 20, 96 %, 75630 N m/rad, 1.57 kg cm², 260 N m rated,
+416 N m maximum; backlash 3 arcmin, an estimate for a reduced-backlash planetary, bounded 2 to 4 arcmin), converter
+6SL3210-5HE12-0UF0 (7 A, 24 A; its internal braking resistor 100 W, 6 kW), the velocity loop 0.5 N m s/rad, 0.03 s
+with 0.1 ms filters (tuned with `sim-cli margins delta-h4 --bands`: at least 46.4°, 8.88 dB). It has no `[upper_arm]` and no
+`effects.link_elasticity`: the upper arms do not bend. The tool pose, `start.pose` and the cycle's targets are
+(x, y, z, c), c in rad. These keys are its own:
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `effects.amplifier_compliance` | – | The tool turns on the amplifier's spring (rack, pinion and gear stage twist), a body of its own; off, it turns with the slide times the ratio | on |
+| `effects.amplifier_backlash` | – | With `amplifier_compliance`: the amplifier's play at the tool, a dead band in its spring | on |
+| `geometry.plate_radius_m` | m | From a plate part's centre to each of its two forearm pairs (both parts alike) | 0.07, estimate, bounded 0.06 to 0.08 |
+| `mass.plate_part_kg` | kg | Each of the two plate parts, without the forearms' share | 0.7, estimate, bounded 0.5 to 1.0 |
+| `mass.carriage_kg` | kg | The carriage between the parts at the tool's point: pinion, gear stage, flange | 1.0, estimate, bounded 0.7 to 1.4 |
+| `plate.pinion_radius_m` | m | Pitch radius of the pinion between the two racks; the tool turns by `gear_ratio` h / `pinion_radius_m` | 0.04, estimate, bounded 0.038 to 0.042 |
+| `plate.gear_ratio` | – | The gear stage between the pinion and the tool | 1.2, estimate, bounded 1.1 to 1.3 (30 rad/m with the pinion: ±180° are h = ±104.7 mm) |
+| `plate.amplifier_stiffness_nm_rad`, `amplifier_damping_nm_s_rad` | N m/rad, N m s/rad | The amplifier's twist at the tool (`effects.amplifier_compliance`): the tool and payload ring at 76.5 Hz on it, 159 Hz without the payload | 3000, 0.25 (2 % of critical), estimates, bounded 1500 to 6000 and 0.1 to 0.5 |
+| `plate.amplifier_backlash_rad` | rad | The amplifier's play at the tool (`effects.amplifier_backlash`) | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin |
+| `tool.inertia_kgm2` | kg m² | Flange, gripper and the gear stage, about the tool's axis | 3e-3, estimate, bounded 1.5e-3 to 6e-3 |
+| `tool.payload_inertia_kgm2` | kg m² | The payload about the tool's axis (with `effects.payload`) | 1e-2, estimate (6 kg, 100 × 100 mm), bounded 5e-3 to 2e-2 |
+| `axis.c.min_angle_deg`, `max_angle_deg` | ° | The tool's turn: the controller's range, and so the plate's slide | −180, 180, estimate |
+| `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 300, 15000, estimates |
+
+The ratio kappa = `gear_ratio` / `pinion_radius_m` is a trade: the tool's inertia counts in the slide times kappa², and
+the arms' twist and backlash count in the turn times kappa. At 60 rad/m (pinion 25 mm, stage 1.5, the first choice) the
+slide weighed 47 kg and the drives' loops, tuned for the rotors, let a turn of 1.5 rad overshoot by 0.27 rad and ring at
+6 Hz, growing; at 30 rad/m it settles in about 0.3 s.
 
 ## Arms (six-axis arm, SCARA, palletiser)
 

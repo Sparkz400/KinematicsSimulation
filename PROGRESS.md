@@ -3608,3 +3608,191 @@ Left open:
   velocity loop reads a phase margin of -294 degrees (66 degrees once the phase is unwrapped right) with any gain or
   gear damping, across its undamped two-mass resonance near 9 Hz: the loop measurement's unwrapping, for the loops'
   owners to look at.
+
+## D4 per-motor tables (14 November)
+
+What: the D4's tool turn has its own motor, gearbox, drive and ratings: `[motor.4]`, `[gearbox.4]`, `[drive.4]`,
+`[ratings.4]` over the shared tables, as a machine file's motors have them. Before, the drive read one `[motor]` and
+`[drive]` for the whole machine (the tool turned by the arms' 1FK2105-4AF at 5 % of its peak), and the tool's gearbox
+was `[tool_gearbox]` beside the shared one, so the common gearbox checks of motor 4 judged the arms' NRB080 and ratio
+and only the D4's own `tool-gearbox-peak` the tool's. The shipped D4 now turns the tool with a 1FK2104-4AF on an
+NRB060-04-8 and an S210 6SL3210-5HE10-4UF0 (catalogue numbers written out).
+
+How: the tool's `RotaryJoint` is built from `catalog::motor_config(cfg, "4")`, which the controller's drives and the
+verdicts already read per motor; `[tool_gearbox]` became `[gearbox.4]` and `ratings.tool_gearbox_max_torque_nm` (check
+`tool-gearbox-peak`, removed) became `ratings.4.gearbox_max_torque_nm`, judged by the common `gearbox-*` checks of
+motor 4. The arms stay the D3's, which read the shared `[motor]` and `[gearbox]`: `[motor.1..3]`, `[gearbox.1..3]` and
+`[parts.1..3]` are refused (their drive and ratings tables are taken). `sim-cli search delta-d4 --motor-id 4` now sizes
+the turn alone. Tuning: the gain `catalog::with_motor_part` retunes to (0.081) keeps 34.6 degrees and 5.4 dB; drive 4
+runs 0.05 N m s/rad with 20 ms and Kv 80 1/s, at least 37.7 degrees and 9.4 dB over every bound, friction on and off
+(the payload inertia's high bound the worst), and the tool settles at 0.37 mm (0.43 mm at worst with `--bands`, which
+failed at 0.53 mm before). The motor's friction is scaled to its size (0.02 N m, an estimate): the arms' 0.05 N m left
+the tool 1.3 mrad off. The 1FK2103-2AH has the torque and passes the cycle, but tuned to settle the tool its loop kept
+24 degrees at the payload inertia's high bound. Verdicts: all pass; motor 4 at 0.11 of its peak, its gearbox at 2.2 of
+29 N m.
+
+Test (crates/machine-delta-d4/src/tests.rs): `the_tool_motors_own_tables_are_read` (rotor 3.5e-5 + 8.8e-6 kg m^2,
+ratio 8 at 97 %, drive 4's 3.75 N m against the arms' 15, the gearbox limit 29 N m for motor 4 and 192 for motor 1);
+`the_tool_motors_values_are_the_catalogues` (the written-out values equal what `with_motor_part` puts in for the three
+articles, to 1e-6; its retuned gain 0.25 sqrt(0.48974 * 0.21397) = 0.08093 above the shipped 0.05);
+`an_arms_own_motor_table_is_refused`; the tool torque (7.08e-3 * 100 / 8 + 4.38e-5 * 8 * 100 = 0.12354 N m), torsion
+mode (1 / (1/8250.592 + 1/500) = 471.43 N m/rad: 41.069 Hz, 75.770 Hz without payload) and default-cycle tests updated.
+
+Left open:
+
+- The three arms share one motor and gearbox (the D3's arms read the shared tables).
+- `check_limits` takes the shared `[drive]` for every motor (limits session).
+- The tool's drive DC link capacitance is the shared estimate (none published for the S210 6SL3210-5HE10-4UF0).
+
+## Inclined tripod and linear-delta leftovers (14 November)
+
+The linear delta (`machine-delta-linear`) gets inclined columns, a guide load over the motion, its axes' ratings from
+Festo's EGC-80 datasheet, and warming guides.
+
+- **Inclined columns.** `geometry.column_incline_deg` leans the columns by alpha, positive with their tops towards the
+  axis. Each column has a direction d_i = (-sin alpha cos phi_i, -sin alpha sin phi_i, cos alpha); the carriage's
+  coordinate h_i is its travel along it from z = 0, its joint c_i = e (cos phi_i, sin phi_i, 0) + h_i d_i. Inverse
+  h_i = q_i . d_i + sqrt(L^2 - rho_i^2) with rho_i the plate's distance from the joint line; forward by trilateration as
+  before; J_q = diag(u_i . d_i), w_i = -|p' - d_i h_i'|^2; Q_g,i = -g m_c cos alpha - m_nt g J_zi and the potential
+  g (m_nt z + m_c cos alpha sum h_i). The rod angle limit is taken against the column. The scene draws each loop upright
+  and shears it onto its column, (x, y, z) to (x, y, 0) + z d; the column is a strip. Upright (0, shipped) every formula
+  reduces to the vertical one to the bit: `sim-cli analyze delta-linear` gives the same numbers as before to the last
+  printed digit.
+- **Guide load over the motion.** `carriage.<k>.guide_load` is |f - (f . d) d| with f = lambda_k u_k - m_c g e_z and
+  lambda from the plate's m_nt p'' = -m_nt g e_z - J_x^T lambda, p'' = J h'' + J_x^-1 w from the carriages' acceleration
+  in the state; before, the pull at rest. The friction's load scale stays on the load at rest (the moving one would make
+  the friction depend on the acceleration it changes). On the default cycle the highest load is 116.1 N on column 1
+  (3.4 N at rest at the centre).
+- **Ratings** from Festo's "Toothed belt axes EGC-TB-KF" (2024/01): `guide_max_load_n` 3050 N (Fy max for 5000 km,
+  page 16), `guide_dynamic_load_rating_n` 14157 N (from the same figure for 50 km; the 100 km figure gives 14156 N),
+  `pulley_max_torque_nm` 5 N m (max. driving torque, page 12; was an estimate of 10), the belt's width 19.3 mm and the
+  pulley's 30 teeth (page 13). Estimates with bounds where Festo publishes nothing: the pulley shaft's bearing C 5000 N
+  (3000 to 10000), the belt's tooth load 15.1 N/cm, which gives Festo's 350 N of feed force with 12 teeth in mesh, and a
+  service factor of 1 (1 to 1.4). The guide checks are the machine's own (`rating_checks`: `guide-load` per carriage
+  against `guide_max_load_n`; `guide-life` from the damage rate `carriage.<k>.guide_damage_rate` = 3600 |h'| (P / C)^3 /
+  50 km per hour): the generic ones follow a tool axis. Pulley bearing and belt teeth are judged by the generic checks.
+- **Part heating.** The three guides warm with `power.guide_<k>` (`thermal_parts`, kind "guide", shown on the carriage),
+  the gearboxes with `power.gearbox_<k>` where a config has one (not the shipped couplings); `[thermal]` with the single
+  axis's guide values (0.5 K/W, 2400 s, 40 K; bounded). With thermal_feedback each guide's viscous friction and each
+  gearbox's efficiency follow its own temperature (one `Lugre` and one `Gearbox` per column now).
+- **sim-cli**, default config: every verdict passes; pulley-torque 3.978 of 5 N m, pulley-bearing-life 23536 h (columns
+  2, 3: 38518 h), belt-tooth-load 0.794, guide-load 116.1 N of 3050 N, guide-life 4.7e8 h. With `--bands` the
+  pulley-bearing-life fails at its C's low bound (5084 h) and belt-tooth-load at the service factor's high bound (1.11).
+  With `effects.part_heating` the guides settle at 9.08 K (guide-thermal, 40 K allowed), 7.58 K with thermal_feedback.
+  Inclined: -20 degrees all pass (guide 31.8 N, condition 3.72, pulley torque 4.61 N m, belt teeth 0.92); +10 all pass
+  (guide 148.6 N); +20 refuses the cycle's corner (-0.1525, 0, -1.13), column 1's rod 60 degrees from its column, and
+  with `workspace.max_rod_angle_deg=65` passes but for column 1's pulley bearing (16202 h; guide 166.5 N).
+
+Tests (`crates/machine-delta-linear/src/tests.rs`): `the_inclined_tripod_at_0_degrees_is_the_vertical_linear_delta`
+(carriage travel and motor angles equal to the vertical formula z + sqrt(L^2 - rho^2) to the bit, the holding torques
+0.31606 N m and 32.784, 19.257, 14.154 N, the inertia torque 0.63355 N m, the guide load at rest 3.40732 N);
+`an_inclined_column_holds_its_carriage_partly_on_the_belt_and_partly_on_the_guide` (20 degrees at the centre by hand in
+the column's plane: travel -0.215717 m, rod pull 7.857140 N/m, belt 19.326730 N, of it the weight's cos share
+13.592474 N, guide 11.413880 N; in the rigid and the elastic model; at rest off the centre neither moves; the Jacobian
+against central differences); `the_guide_load_over_the_motion_adds_the_rods_inertial_pull` (10 m/s^2 up at the centre:
+3.47449 N more, 6.88181 N; the rating checks); `the_guides_warm_with_their_loss` (each guide's rise against its own
+first-order lag of 2 K/W times F v from the friction signals over a 0.6 m move; with the feedback 30 K warm the viscous
+friction 2.81749 N at 0.5 m/s). The test suites were not run here (the coordinating session runs them); `cargo check
+--tests` and `clippy -D warnings` pass and the numbers above are from `sim-cli`.
+
+Left open:
+
+- The guides' moments Mx, My, Mz (the rods' joints standing off the slide are not configured) and Festo's load
+  comparison factor over all five.
+- The friction's load scale uses the guide load at rest, not the moving one.
+- Belts and pulleys do not warm (no such kind of thermal part).
+- The pulley shaft's bearing and the belt's tooth load are estimates: Festo publishes neither; the tooth load repeats
+  Festo's one feed force.
+- No tilted config is shipped: Festo gives no column angle for the EXPT, and the default range and cycle, sized for
+  upright columns, refuse an inward lean of 20 degrees at the default 60 degree rod limit.
+
+## Horizontal parallel SCARA (14 November)
+
+What: a new machine, `parallel-scara` (crate `machine-parallel-scara`): the planar delta D2's five-bar laid flat in
+the horizontal x-y plane, as Mitsubishi's RP series, with an optional Z stroke on a ball screw (`[z_axis]`, motor 3) and
+an optional tool turn about z (`[tool_turn]`, motor 4) at the plate, each with its own `[motor.<id>]`, `[gearbox.<id>]`,
+`[drive.<id>]`, `[ratings.<id>]`; 2, 3 or 4 axes as the switches say. The D2 itself is unchanged.
+
+How: the D2's five-bar kinematics and dynamics copied into the crate (a machine may not depend on another), with the
+plate's coordinates x, y and no gravity in the plane (it acts on the joints' bearings), the arms elastic or rigid as
+on the D2. The stroke is `RotaryJoint::linear_from_config` with the ball screw's `Converter` behind a coupling (as the
+screw axis), the turn `RotaryJoint::with` behind its gearbox (as the D4's tool); both rigid, from their motor's own
+config (`catalog::motor_config`). Everything at the plate (Z unit 2.95 kg, carriage 1.0 kg, C unit 2.43 kg, payload
+5 kg) adds to the plate's mass in the plane. The Z stroke reports `joint.z.force` and the ball screw's signals and
+checks; the turn reports `gearbox.4.output_torque` and its gearbox warms. Scene: the arms in the plane z = 0, the Z
+and C motors on the plate, the quill down to the flange, a bar turned with the tool; collision bodies plate, quill,
+flange, payload. Tuning: the axes at 30 m/s² (50 overloaded the arms' gearboxes with the 12.8 kg plate, 235 of 192 N m),
+the arms' velocity loop 0.33 with 80 ms (the D2's 0.25 with 30 ms: 31° phase margin), the turn's 0.1 with 10 ms (with
+0.0443 and 30 ms the motor's friction left the turn 1.4 mrad off after each traverse: settling 0.75 mm). Verdicts:
+all pass, cycle 0.906 s, settling 0.19 mm, arms' gearbox peak 145 N m of 192, Z motor at 0.45 of its peak; margins at
+least 39.8° and 6.2 dB over every bound, friction on and off.
+
+Test (crates/machine-parallel-scara/src/tests.rs): the standard suite; the five-bar's round trip and Jacobian over the
+range; (x, y, z, c) round trips with the stroke's 2 pi / 20 mm = 314.159 rad/m and the turn's ratio 8; the axes switched
+by the config (2, 3 axes, the plate lighter by 2.95 + 1.0 and 2.43 kg); 10 m/s² along x at the centre: t'' = -A a / D =
+-24.877 rad/s², arm torque I_b t'' - D m a / (2 A) = -30.462 N m, -1.6279 N m at the motor, against `feedforward_torque`
+and the rigid model; no holding torque on the arms, the Z motor holding (1 + 5) kg g 0.02 m / 2 pi = 0.187293 N m
+(0.031216 without the payload), rigid and elastic, and the torque breakdown's gravity parts; scene and collision bodies
+(flange at 0.075 - 0.2 - 0.1 = -0.225 m); the range's refusals; the default cycle passes its verdicts.
+
+Left open:
+
+- The stroke and the turn are rigid: the screw's and the turn gearbox's twist and backlash are not modelled (the
+  carriage on its screw is a mode near 570 Hz, which undamped loss-free configs would make the velocity loop drive).
+- A real RP-type parallel SCARA turns its tool through a ball screw spline, coupling stroke and turn; here they are
+  independent. The turn's reaction torque goes into the frame, not through the parallelograms.
+- `check_limits` takes the shared `[drive]`'s rated speed and peak torque for every motor, also for motors 3 and 4 with
+  their own `[drive.<id>]`: the Z stroke is held to 0.9 m/s by it.
+- The size is the D2's laid flat; the RP series are smaller (A6 to A4 ranges), so the motors are not an RP's.
+
+## Quattro-type four-arm delta (14 November)
+
+What: a new machine `delta-h4` (crate `machine-delta-h4`, registered after `delta-d4`): four rotary arms at 90 degrees,
+each with a parallelogram of forearms, down to a travelling plate in two parts (arms 1 and 2 carry part A, arms 3 and 4
+part B), the parts sliding against each other along (1, -1, 0) / sqrt 2 and turning the tool through a pinion between
+two racks and a gear stage, c = kappa h, kappa = gear_ratio / pinion_radius = 1.2 / 0.04 = 30 rad/m. Tool x, y, z, c;
+four motors (1FK2105-6AF, NRB120-05-20, S210 6SL3210-5HE12-0UF0 written out as catalogue values), geometry and masses
+estimates near the Quattro s650H class (1300 mm, 6 kg payload) with bounds.
+
+How: the D3's kinematics per leg at the forearm's end p -+ h d (closed-form inverse; forward by Newton on the four
+constraints from the D3's trilateration at h = 0), the 4 x 4 Jacobian J_x^-1 J_q in (x, y, z, h) and its velocity term;
+the D3's lumped or rod forearms (middles and spin), the two parts, carriage and payload as points with their Jacobians,
+and the tool's turn as I_t kappa^2 J_h^T J_h; feedforward with the speed terms; the elastic joints (`RotaryJoint`,
+gearbox twist, backlash, efficiency, friction, stops, brake) as the D3's; part heating of the four gearboxes; energy
+parts and loss powers (`power.amplifier` beside the D3's); the arms' modes k / mu over the mass matrix's eigenvalues and
+the tool's on the amplifier; condition number in (x, y, z, h); scene and collision bodies (base, motors, gearboxes, upper
+arms, eight rods, both plate parts, carriage, payload, the tool's bar). New effects: `effects.amplifier_compliance` (the
+tool a body of its own on the amplifier's spring) and `effects.amplifier_backlash` (a dead band in it), both on.
+The suite's loss-free configs lie 200 mm lower, where the plate held by constant torques is stable in its vertical mode
+(-4.3 N m/rad 975 mm down, +5.7 N m/rad 1175 mm down).
+
+Test (crates/machine-delta-h4/src/tests.rs): `the_kinematics_round_trip_at_any_turn_and_the_jacobian_is_the_derivative_of_the_forward_kinematics`
+(1e-12 over the range at five turns, J to 1e-7 against central differences);
+`the_tool_turns_by_the_gear_ratio_over_the_pinion_radius_times_the_half_slide` (h = 10 mm at the centre 850 mm down:
+arms 1 and 3 at -1.0391 degrees, 2 and 4 at -2.3438 by halving the leg's equation; c = 1.2 * 0.010 / 0.04 = 0.3 rad);
+`the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_arms_own` (-g m_LG cos t + m g dz/dt
+= -7.4305 - 11.1693 = -18.600 N m per gearbox, -0.9300 N m per motor; dz/dt = L_a (e sin t - z cos t) / (4 (z + L_a sin t))
+= -0.12203 m/rad); `the_feedforward_with_the_speed_gives_the_asked_acceleration` (to 1e-9, the turn 1e-7);
+`a_free_loss_free_motion_keeps_its_energy` (RK4 0.1 s to 1e-7, rods, elastic, amplifier spring, spin inertia);
+`the_vertical_mode_under_constant_torques_is_unstable_high_up`; `the_amplifier_mode_is_the_hand_calculated_one`
+(sqrt(3000 / 0.013) / 2 pi = 76.46 Hz, 159.15 Hz without payload); `targets_outside_the_working_range_are_refused_with_their_reason`.
+`sim-cli analyze delta-h4`: 0.720 s, motor 1 peak 13.8 N m (0.576), RMS 4.92 N m, 48 K; verdicts all pass but settling
+(4.72 mm, see below); singularity 2.03; energy budgets of the default and the four loss-free configs close (largest
+unaccounted 1e-6 of the supply). `sim-cli margins delta-h4`: 223 Hz crossover, 53.9 degrees, 9.67 dB; with `--bands`
+at least 50.7 degrees and 9.35 dB, with motor and joint friction off 46.4 degrees and 8.88 dB (velocity loop 0.5 N m s/rad,
+0.03 s).
+
+Left open:
+
+- `settling` fails, 4.72 mm (the turn's 4.7 mrad counted as mm): the tool's turn is 30 times the slide, so the arms'
+  gearbox twist and backlash and the ringing of the slide after a traverse show in it. 9 arcmin (catalogue): 9.9 mm;
+  1 arcmin with a 12 Hz input shaper: 0.70 mm. A finding about the type, not tuned away.
+- kappa = 60 rad/m (pinion 25 mm, stage 1.5, the first choice) made the slide 47 kg heavy with the payload, and the
+  drives' loops (tuned for the rotors' 223 Hz crossover) let a turn ring at 6 Hz, growing. 30 rad/m is the shipped
+  compromise; a c axis of +-180 degrees then needs a slide of 209 mm.
+- No bending upper arms (the D3's `effects.link_elasticity` is not here) and no friction or efficiency of the rack,
+  pinion and gear stage.
+- The setpoint slack counts the turn in rad as the settling check does; its value is not measured against a run at
+  rest as the D3's is.
+- The shipped config's geometry was checked for reach and condition number by a script after the crate's equations, not
+  against a Quattro: Omron publishes none of it.

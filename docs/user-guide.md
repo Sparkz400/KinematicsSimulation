@@ -662,7 +662,7 @@ Every check passes, with `--bands` too (settling 0.33 to 0.42 mm, gearbox peak u
 
 `delta-linear` is a linear delta: three vertical toothed-belt axes on the columns of a frame, each carriage with a pair of rods down to a plate that stays level. It is sized like the Festo EXPT-95 tripod: working range 950 mm across and 100 mm high, EGC-80 belt axes driven without gearbox, 1 kg rated load at its highest dynamics, here with three Siemens 1FK2205-2AF motors on S210 converters. Festo publishes neither rod length nor column layout nor moving masses; [the config](../crates/machine-delta-linear/default.toml) marks every value `[catalogue]` or `[estimate]` and bounds the estimates. Its cycle is the D3's Adept cycle 25/305/25 mm, at the top of the range.
 
-The tool is the plate's centre, x, y and z in metres, z up from the carriages' upper stop (the plate works at −1.12 to −1.22 m). A target is refused with its reason where it lies outside the cylinder, out of the rods' reach, where a rod would stand steeper than 60° from the vertical, where a carriage would leave its stroke, or too near a singularity.
+The tool is the plate's centre, x, y and z in metres, z up from the carriages' upper stop (the plate works at −1.12 to −1.22 m). A target is refused with its reason where it lies outside the cylinder, out of the rods' reach, where a rod would stand at more than 60° to its column (upright: from the vertical), where a carriage would leave its stroke, or too near a singularity.
 
 ```text
 $ sim-cli analyze delta-linear
@@ -677,45 +677,125 @@ The cycle lies along x, towards column 1 and away from it, so column 1 works har
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4429,1.000,ok
+motor-peak,1,0.4424,1.000,ok
 motor-thermal,1,35.34,100.0,ok
 drive-current,1,1.643,3.000,ok
-pulley-torque,1,3.980,10.00,ok
+pulley-torque,1,3.978,5.000,ok
+pulley-bearing-life,1,23536,20000,ok
+belt-tooth-load,1,0.7941,1.000,ok
 ...
-settling,,0.00007375,0.0005000,ok
-belt-tension,,527.7,1000,ok
-belt-slack,,143.2,0,ok
+settling,,0.00007418,0.0005000,ok
+belt-tension,,527.5,1000,ok
+belt-slack,,144.7,0,ok
+guide-load,1,116.1,3050,ok
+guide-life,1,468944829,20000,ok
+...
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,783.0,1500,ok
-thermal-warm-start,,0.02976,0.1000,ok
+gearbox-radial-load,,782.8,1500,ok
+thermal-warm-start,,0.02983,0.1000,ok
 ```
 
-Every check passes, with `--bands` at both bounds of every estimate too. What to read from them:
+Every check passes. With `--bands` two fail at a bound of an estimate: the pulley bearing's life (5084 h on column 1 with C at its low bound of 3000 N; Festo publishes no bearing for the EGC's drive shaft) and the belt's teeth (1.11 with a service factor of 1.4 on Festo's 350 N). What to read from them:
 
 - **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.8 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 38° of phase margin over the bounds, and an integral time of 0.012 s (0.01 s left 34°), short so that the integrator pushes the carriages through their guides' friction soon after a move.
 - **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 143 to 528 N in its two sections, against the pretension of 300 N.
 - **Singularity.** The condition number is 3.15 already at the centre: a metre of carriage moves the plate further sideways than up. The range has up to 3.98, at its bottom rim opposite a column.
-- **No gearbox, pulley-bearing, guide or tooth-load checks**: the axes have no gearbox, and their pulley bearings, guides and belt teeth have no ratings in the config (the EGC-80's are not in the catalogue).
+- **Guides, pulley bearings, belt teeth.** The EGC-80's guide carries at most 116 N across column 1 (3050 N allowed for Festo's 5000 km): it holds the plate's weight at rest (3.4 N at the centre) and, through the rods, what accelerating the plate sideways at 50 m/s² takes. Its life is far beyond the 20000 h. The pulley shaft's bearing carries both belt sections' pull, up to 783 N, and lasts 23536 h on column 1 with an estimated C of 5000 N. The belt's teeth are at 0.79 of what gives Festo's 350 N of feed force, as the pulley torque is at 3.978 of 5 N m: Festo gives one figure for both. No gearbox checks: the axes have none.
 
-What the linear delta does not have: the rods' own rotational inertia, elastic frame, rods and joints, a fourth axis and the guides' heat. Trace replay and fit take it, the fit in its motors' coordinates as on the D3. See the [model reference](model-reference.md#linear-delta).
+**Inclined columns.** `geometry.column_incline_deg` leans the columns, positive with their tops towards the axis; the carriages then travel along them (their stroke and upper stop count along the column), the belt holds the carriage's weight times the cosine and the guide the rest. The shipped machine stands upright. The default range and cycle suit an outward lean and small inward ones; at +20° the cycle's corner (−0.1525, 0, −1.13) is refused, column 1's rod standing 60° from its column:
+
+```text
+$ sim-cli verdicts delta-linear --set geometry.column_incline_deg=-20
+pulley-torque,1,4.611,5.000,ok
+belt-tooth-load,1,0.9204,1.000,ok
+guide-load,1,31.84,3050,ok
+singularity,,3.716,5.000,ok
+settling,,0.0001107,0.0005000,ok
+...
+```
+
+Leaning out, the columns run nearly along the rods: the guides carry less (32 N against 116 N upright), the condition number rises (3.72 against 3.28) and so do the motors' torques. Leaning in by 10° every check passes (guide 149 N); by 20° with `workspace.max_rod_angle_deg=65` too, but the pulley bearing of column 1 (16202 h against 20000 h; the guide carries 167 N).
+
+What the linear delta does not have: the rods' own rotational inertia, elastic frame, rods and joints, a fourth axis, the guides' moments, and warming belts and pulleys (its guides warm with `effects.part_heating`: 9.1 K on the cycle). Trace replay and fit take it, the fit in its motors' coordinates as on the D3. See the [model reference](model-reference.md#linear-delta).
+
+### The parallel SCARA
+
+`parallel-scara` is the D2's five-bar laid flat, as Mitsubishi's RP series: the two arms turn about vertical axes and
+the plate moves in the horizontal x-y plane; at the plate a Z stroke on a ball screw (motor 3, a 1FK2103-2AH behind a
+coupling, 20 mm lead, 200 mm stroke) and a turn of the tool about z (motor 4, a 1FK2103-2AH behind an NRB060-03-8 of
+ratio 8). Gravity is out of the plane: the arms' motors hold nothing at rest, the Z motor holds the carriage and the
+payload. The tool pose is (x, y, z, c); paths are written `line,x,y,z,c`. The cycle is the Adept cycle laid flat: down
+25 mm on the stroke, up, across 305 mm with the tool turned by 90°, down, up and back, the pick 20 mm above the place,
+so every axis moves on each traverse: 0.906 s.
+
+    $ sim-cli verdicts parallel-scara
+    motor-peak,1,0.5381,1.000,ok
+    gearbox-peak,1,144.8,192.0,ok
+    motor-peak,3,0.4530,1.000,ok
+    ...
+    settling,,0.0001873,0.0005000,ok
+    screw-speed,3,1535,5160,ok
+    singularity,,1.135,5.000,ok
+
+Every check passes, with `--bands` too. The plate carries 12.8 kg (the two units, the carriage and the payload) against
+the D2's 6.4 kg, so the axes accelerate at 30 m/s² instead of 50: at 50 the arms' gearboxes would see 235 N m of their
+192 N m. Switch an axis off with `--set z_axis.enabled=false` or `--set tool_turn.enabled=false`, and give the cycle
+targets and `start.pose` with as many values, e.g.
+
+    $ sim-cli verdicts parallel-scara --set tool_turn.enabled=false --set 'start.pose=[0.1525,-0.5,0.075]' \
+        --set 'cycle.segment=[{target=[0.1525,-0.5,0.05],dwell_s=0.035,payload=false}, ...]'
 
 ### The four-axis delta D4
 
-`delta-d4` is the D3 with a fourth axis that turns the tool about the vertical, as ABB's IRB 360 with its fourth axis: a fourth 1FK2105-4AF in the centre of the base, behind a planetary gearbox of ratio 8 (Siemens NRB060-05-8), drives a telescopic shaft with a cardan joint at each end down to the tool's shaft in the platform. The tool pose is (x, y, z, c), c in rad; `start.pose` and the cycle's targets have four values. Its cycle is the D3's Adept cycle with the tool turned by 90° on each traverse (+90° to the pick, back to 0° to the place): still 0.720 s, the turn fits into the traverse. The two cardan joints are bent alike (both shafts vertical), so the tool turns exactly with the motor; only the shaft between them turns unevenly (`shaft.speed`). The shaft's weight share and the telescope's friction load the arms ([the config](../crates/machine-delta-d4/default.toml), [model reference](model-reference.md#delta-picker-d4)).
+`delta-d4` is the D3 with a fourth axis that turns the tool about the vertical, as ABB's IRB 360 with its fourth axis: a fourth, smaller motor in the centre of the base (a 1FK2104-4AF on its own S210 converter), behind a planetary gearbox of ratio 8 (Siemens NRB060-04-8), drives a telescopic shaft with a cardan joint at each end down to the tool's shaft in the platform. The tool pose is (x, y, z, c), c in rad; `start.pose` and the cycle's targets have four values. Its cycle is the D3's Adept cycle with the tool turned by 90° on each traverse (+90° to the pick, back to 0° to the place): still 0.720 s, the turn fits into the traverse. The two cardan joints are bent alike (both shafts vertical), so the tool turns exactly with the motor; only the shaft between them turns unevenly (`shaft.speed`). The shaft's weight share and the telescope's friction load the arms ([the config](../crates/machine-delta-d4/default.toml), [model reference](model-reference.md#delta-picker-d4)).
 
 ```text
 $ sim-cli verdicts delta-d4
-motor-peak,1,0.5631,1.000,ok
-gearbox-peak,1,149.1,192.0,ok
-motor-peak,4,0.05336,1.000,ok
+motor-peak,1,0.5630,1.000,ok
+gearbox-peak,1,149.0,192.0,ok
 ...
-settling,,0.0004035,0.0005000,ok
-tool-gearbox-peak,4,2.262,29.00,ok
+motor-peak,4,0.1103,1.000,ok
+gearbox-peak,4,2.222,29.00,ok
+...
+settling,,0.0003707,0.0005000,ok
 singularity,,2.072,5.000,ok
 thermal-warm-start,,0.02011,0.1000,ok
 ```
 
-Every check passes. Motor 1 carries a little more than on the D3 with the same NRB080 gearbox the D4 keeps (peak 0.563 against 0.510 of its limit; the D3 has the SP100 since 14 November 2026): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor works at 5 % of its peak: the 1FK2105 is far larger than the turn needs, but a machine has one motor type here. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) settling fails, 1.22 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` settling fails: it reaches 0.53 mm at a bound of the estimates. A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
+Every check passes. Motor 1 carries a little more than on the D3 with the same NRB080 gearbox the D4 keeps (peak 0.563 against 0.510 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor has its own motor, gearbox, drive and ratings (`[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` over the shared tables): a 1FK2104-4AF at 11 % of its peak, its gearbox judged by the common `gearbox-*` checks against its own 18 and 29 N m. The still smaller 1FK2103-2AH has the torque and passes the cycle, but its rotor is too light for the speed loop behind the soft shaft: tuned to settle the tool, its loop kept 24° of phase margin at the payload inertia's high bound. `sim-cli search delta-d4 --motor-id 4` sizes it alone. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set gearbox.4.backlash_rad=2.909e-3`) settling fails, 1.39 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` every check passes too (settling at most 0.43 mm). A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
+
+### The Quattro-type delta H4
+
+`delta-h4` is a four-arm delta of the Quattro / H4 type, sized near the Omron Quattro s650H class: working range 1300 mm
+across, 250 mm high at the edge and 450 mm at the centre, 6 kg payload, four Siemens 1FK2105-6AF on S210 converters
+behind planetary gearboxes of ratio 20 (NRB120-05-20). Omron publishes no geometry, masses or drives; every such value is
+an `[estimate]` with bounds ([the config](../crates/machine-delta-h4/default.toml)). There is no fourth motor for the
+tool: the plate is in two parts, arms 1 and 2 carrying one and arms 3 and 4 the other, and the parts slide against each
+other; a pinion between a rack on each part and a gear stage turn the tool by 30 rad per metre of half slide
+([mechanisms](mechanisms.md#two-part-plate-with-a-rack-and-pinion-amplifier-delta-h4)). The tool pose is (x, y, z, c),
+c in rad; the cycle is the D3's Adept cycle with the tool turned by 90° on each traverse, at 100 mm below the top of the
+range: 0.720 s. The signal `plate.slide` is the parts' slide against each other (2 h), `plate.amplifier_twist` the
+amplifier's twist at the tool.
+
+```text
+$ sim-cli verdicts delta-h4
+motor-peak,1,0.5755,1.000,ok
+motor-thermal,1,48.15,100.0,ok
+gearbox-peak,1,242.5,416.0,ok
+...
+settling,,0.004724,0.0005000,FAIL
+singularity,,2.028,5.000,ok
+thermal-warm-start,,0.01730,0.1000,ok
+```
+
+Every check passes but `settling`, a finding of the type: the tool's turn is 30 times the plate's slide, so the arms'
+gearbox twist and backlash, which the motors' encoders do not see, and the ringing of the slide after the traverse turn
+the tool by 4.7 mrad in the dwell (counted as 4.7 mm, as every turning axis's error in rad). With the catalogue's
+9 arcmin backlash it is 9.9 mm; with 1 arcmin and an input shaper at 12 Hz
+(`--set gearbox.backlash_rad=2.909e-4 --set effects.input_shaping=true --set profile.shaper_frequency_hz=12 --set profile.shaper_damping=0.1`)
+still 0.70 mm. Motor 1 (along +x, the cycle's direction) works hardest: 0.58 of its peak, 48 K winding rise; motors 2
+and 4 carry 0.26. `sim-cli modes delta-h4` lists the arms' four modes (30.5 Hz twice at the centre, 46.8 and 51.9 Hz;
+20 Hz at the rim) and the tool's turn on the amplifier (76.5 Hz with the payload).
 
 ### SCARA and six-axis arm in tool space
 

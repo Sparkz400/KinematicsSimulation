@@ -3,8 +3,9 @@
 # with a cardan joint at each end down to the tool's shaft in the platform, as ABB's IRB 360 with its fourth axis. The
 # arms, motors and working range are the D3's (the Autonox DELTA RL3-1200-3kg, A_00035-02, 3 kg payload); the fourth
 # axis is sized after the ABB IRB 360 datasheet (ROB0082EN, 2022: 1130 and 1600 mm range, 3 or 4 axes, 1 to 8 kg,
-# axis 4 angular repeatability 0.4 degrees; older ABB brochures: axis 4 turns without limit). The fourth motor is the
-# arms' 1FK2105-4AF (every motor of a machine has the same motor and drive settings here).
+# axis 4 angular repeatability 0.4 degrees; older ABB brochures: axis 4 turns without limit). The fourth motor is a
+# smaller one with its own drive and gearbox ([motor.4], [gearbox.4], [drive.4], [ratings.4] over the shared tables,
+# as on every machine): a 1FK2104-4AF on an NRB060-04-8 and an S210 6SL3210-5HE10-4UF0.
 # Every value says where it comes from:
 #   [catalogue]  read from a maker's document: the Autonox Finder product page and connecting dimensions of the
 #                RL3-1200-3kg, Siemens catalogue D 32 and the planetary gearbox manual (catalog/siemens/*.csv).
@@ -311,6 +312,34 @@ stiffness_t2_nm = 120.0
 stiffness_k2_nm_rad = 35752.6
 stiffness_k3_nm_rad = 35752.6
 
+# The tool turn's motor, motor 4: its own values over [motor] (the arms share [motor]; the keys left out are the
+# shared ones, estimates as there). [catalogue] 1FK2104-4AF at 400 V (catalog/siemens/motors_s210.csv, D 32): rotor
+# 0.35 kg cm2, static torque 1.27 N m at 1.19 A, 3.75 N m at the maximum current 4.2 A, rated 1.19 A at 3000 r/min;
+# thermal time constant 33 min (1FK2 configuration manual, motors_1fk2_s120.csv). The turn needs at most about 0.8 N m
+# of it: 0.55 N m for the tool, gripper, shaft and payload (7.08e-3 kg m2) at 600 rad/s2 behind ratio 8 and 97 %, and
+# the rotor's and gearbox's 4.38e-5 kg m2 at 4800 rad/s2, 0.21 N m. The smaller 1FK2103-2AH (0.64 N m, rotor 0.093 kg
+# cm2) has the torque and passes the cycle, but its rotor is too light for the speed loop against the tool behind the
+# soft shaft: tuned to settle the tool (0.02 N m s/rad, 15 ms), its loop kept 24 degrees of phase margin at the
+# payload inertia's high bound, below the 35 every loop is tuned for (14 November 2026).
+[motor.4]
+rotor_inertia_kgm2 = 3.5e-5
+torque_constant_nm_a = 1.0672269
+rated_current_a = 1.19
+thermal_time_constant_s = 1980.0
+max_current_a = 4.2
+torque_constant_at_max_current_nm_a = 0.8928571
+# [estimate] Siemens publishes no winding resistance for the 1FK2: three times the arms' motor's, a winding of about the
+# same torque constant with a quarter of the copper; its inductance three times too, so the electrical time constant
+# L / R stays the arms' 5 ms (the current loop's gain drive.4.current_kp_v_a goes with L).
+resistance_ohm = 6.0
+inductance_h = 0.03
+# [estimate] the D 32 gives no brake torque: 2 N m, about half its maximum torque, as the arms' 8 N m of their 15.
+brake_torque_nm = 2.0
+# [estimate] the bearings' and seal's friction scaled with the motor, about 1.5 % of the static torque as the arms'
+# 0.05 N m of 5 N m is 1 %.
+friction_coulomb_nm = 0.02
+friction_viscous_nm_s_rad = 8.0e-5
+
 # With effects.part_heating: each gearbox warms with its loss (power.gearbox_*). [estimate] as for the other machines'
 # planetary gearboxes of this size.
 [thermal]
@@ -359,19 +388,20 @@ max_velocity_rad_s = 30.0
 max_acceleration_rad_s2 = 600.0
 max_jerk_rad_s3 = 30000.0
 
-# The tool's gearbox, on the fourth motor. [catalogue] Siemens NRB060-05-8 (catalog/siemens/gearbox_nrb.csv): ratio 8,
-# 95 %, 8594 N m/rad, 0.347 kg cm2 at the input; 18 N m rated, 29 N m maximum ([ratings]). Its backlash [estimate]
-# 1 arcmin, a reduced-backlash precision planetary (catalogue: 10 arcmin), bounded 0.5 to 2 arcmin: nothing turns the
-# tool at rest, so it rests where its bearing's friction leaves it in the backlash, and settling counts the turn's
-# error in rad with the position's in m (1 mrad as 1 mm); 3 arcmin fail settling at the bounds' worst (0.58 mm).
-[tool_gearbox]
+# The tool's gearbox, on motor 4: its own [gearbox] (every key, none shared with the arms'). [catalogue] Siemens
+# NRB060-04-8 for the 1FK2104 (catalog/siemens/gearbox_nrb.csv): ratio 8, 97 %, 8251 N m/rad, 0.088 kg cm2 at the
+# input; 18 N m rated, 29 N m maximum ([ratings.4]). Its backlash [estimate] 1 arcmin, a reduced-backlash precision
+# planetary (catalogue: 10 arcmin), bounded 0.5 to 2 arcmin: nothing turns the tool at rest, so it rests where its
+# bearing's friction leaves it in the backlash, and settling counts the turn's error in rad with the position's in m
+# (1 mrad as 1 mm); 3 arcmin fail settling at the bounds' worst (0.58 mm, with the NRB060-05-8 before).
+[gearbox.4]
 ratio = 8.0
-efficiency = 0.95
+efficiency = 0.97
 backlash_rad = 2.909e-4
-stiffness_nm_rad = 8594.4
+stiffness_nm_rad = 8250.592
 # [estimate] as the arms' gearboxes; with effects.shaft_torsion the shaft's damping takes its place.
 damping_nm_s_rad = 5.0
-inertia_at_input_kgm2 = 3.47e-5
+inertia_at_input_kgm2 = 8.8e-6
 
 # The tool on the platform: flange, gripper and the tool's shaft in its bearing.
 [tool]
@@ -470,6 +500,27 @@ noise_seed = 1
 # resistor of its own (an S210). A drive by name sets it.
 braking_module = false
 
+# Motor 4's drive: its own values over [drive], the cycle times, filters, noise and DC link the shared ones.
+# [catalogue] the 1FK2104-4AF at 400 V (D 32): 3.75 N m maximum, 1.27 N m rated at 3000 r/min; no-load speed
+# sqrt(3/2) * 540 V / 1.0672269 N m/A. The current loop's gain for the winding's 30 mH, as the shared one for its 10 mH
+# (L over a 0.25 ms time constant).
+# The speed and position loops tuned with `sim-cli margins delta-d4 --bands` and `verdicts`. Retuned from the shared
+# 0.25 as `catalog::with_motor_part` retunes a gain (the square root of the ratio of the torque per tool acceleration
+# times that of the rotors' inertia, 0.25 * sqrt(0.48974 * 0.21397) = 0.081) it would keep 34.6 degrees and 5.4 dB,
+# below the 35 and 6 every loop is tuned for: 0.05 keeps at least 37.7 degrees and 9.4 dB over the bounds (the payload's
+# inertia at its high bound the worst). A shorter integral time and a
+# higher position gain than the arms' hold the tool against its bearing's and motor's friction: it settles at 0.37 mm
+# (with the arms' 0.03 s and 50 1/s, 0.64 mm).
+[drive.4]
+peak_torque_nm = 3.75
+rated_torque_nm = 1.27
+rated_speed_rad_s = 314.159
+no_load_speed_rad_s = 619.7016
+velocity_kp_nm_s_rad = 0.05
+velocity_tn_s = 0.02
+kv_1_s = 80.0
+current_kp_v_a = 120.0
+
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
 # How far the tool may be from its target in the second half of a dwell, when the gripper acts: its place (x, y, z, m)
@@ -498,10 +549,6 @@ braking_resistor_time_constant_s = 60.0
 braking_resistor_rated_rise_k = 200.0
 dc_link_overvoltage_v = 820.0
 dc_link_discharge_time_constant_s = 130.0
-# [catalogue] NRB060-05-8: 29 N m maximum, the highest torque the tool's gearbox may pass ("tool-gearbox-peak"). The
-# gearbox checks of every motor (gearbox-continuous, -peak, -life) take the arms' gearbox and ratio, the fourth motor's
-# too: read them for motors 1 to 3.
-tool_gearbox_max_torque_nm = 29.0
 # [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
 line_module_rated_power_w = 16000.0
 line_module_max_power_w = 35000.0
@@ -530,6 +577,21 @@ drive_max_current_time_s = 0.25
 # The highest condition number of the Jacobian the cycle may reach ("singularity"). [estimate] a design rule: the
 # working range has up to 3.6, the Adept cycle about 2.
 max_condition_number = 5.0
+
+# Motor 4's own ratings over [ratings]: its gearbox's and its drive's; the rest the shared ones.
+# [catalogue] NRB060-04-8: 18 N m rated, 29 N m maximum. The S210 6SL3210-5HE10-4UF0, which D 32 pairs with the
+# 1FK2104-4AF at 400 V: 1.2 A rated, 4.2 A maximum; its internal braking resistor 50 W, 1.2 kW (braking_s210.csv).
+# [estimate] the planet bearings' reference speed, the NRB060 ratio 5 figure (175 r/min) scaled with ratio 8's slower
+# planets; the base load current 0.85 of the rated, as for the arms' drives.
+[ratings.4]
+gearbox_rated_torque_nm = 18.0
+gearbox_max_torque_nm = 29.0
+gearbox_reference_speed_rpm = 110.0
+drive_rated_current_a = 1.2
+drive_max_current_a = 4.2
+drive_base_load_current_a = 1.02
+braking_resistor_continuous_w = 50.0
+braking_resistor_peak_w = 1200.0
 
 [profile]
 cycle_s = 1.0e-3
@@ -654,8 +716,12 @@ thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 gearbox.backlash_rad = [5.818e-4, 1.1636e-3]
-tool_gearbox.backlash_rad = [1.454e-4, 5.818e-4]
-tool_gearbox.damping_nm_s_rad = [2.0, 10.0]
+gearbox.4.backlash_rad = [1.454e-4, 5.818e-4]
+gearbox.4.damping_nm_s_rad = [2.0, 10.0]
+motor.4.friction_coulomb_nm = [0.01, 0.04]
+motor.4.friction_viscous_nm_s_rad = [4.0e-5, 1.6e-4]
+motor.4.resistance_ohm = [4.0, 9.0]
+ratings.4.drive_base_load_current_a = [0.95, 1.08]
 tool.inertia_kgm2 = [1.0e-3, 4.0e-3]
 tool.payload_inertia_kgm2 = [2.5e-3, 1.0e-2]
 tool.friction_coulomb_nm = [0.01, 0.05]

@@ -439,6 +439,40 @@ item are in [PROGRESS.md](PROGRESS.md).
   identifier type, session timeout, security mode and policy, user identity token, TF6100's PKI folder); CODESYS
   names aligned with the PLCopen specification v1.02.
 
+### Added
+
+- A Quattro-type four-arm delta, `delta-h4`: four arms at 90 degrees, a plate in two parts that slide against each
+  other and turn the tool through a pinion between two racks and a gear stage (x, y, z, c; four motors). The tool's
+  turn on the amplifier's spring and its backlash are effects of their own (`effects.amplifier_compliance`,
+  `effects.amplifier_backlash`). Sized near the Omron Quattro s650H class with Siemens 1FK2105-6AF and NRB120-05-20;
+  its cycle fails `settling` (the turn amplifies the arms' twist and backlash 30 times), a finding.
+- Machine `parallel-scara` (crate `machine-parallel-scara`): a five-bar in the horizontal plane (the D2's, laid flat,
+  as Mitsubishi's RP series) with an optional Z stroke on a ball screw and an optional tool turn at the plate, each with
+  its own motor, gearbox, drive and ratings tables; the arms' motors carry no weight, the Z motor holds the carriage.
+- Linear delta: inclined columns (`geometry.column_incline_deg`, positive with the tops towards the axis), a tripod as
+  Festo's EXPT; kinematics, dynamics (the carriage's weight m g cos alpha on the belt, the rest on the guide), scene.
+  Upright it is the vertical machine to the bit.
+- Linear delta: guide, pulley-bearing and belt-tooth ratings of the EGC-80 from Festo's datasheet (guide 3050 N for
+  5000 km, C 14157 N; estimates with bounds for the bearing and the teeth); per-carriage `guide-load` and `guide-life`
+  verdicts.
+- Linear delta: the guides (and gearboxes, where configured) warm with their loss (effects.part_heating, `[thermal]`), and
+  with thermal_feedback each guide's friction and gearbox's efficiency follow its temperature.
+
+### Changed
+
+- D4: the tool turn's motor has its own tables, `[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` (a 1FK2104-4AF on
+  an NRB060-04-8 and its own S210); `[tool_gearbox]` is now `[gearbox.4]` and `ratings.tool_gearbox_max_torque_nm` (check
+  `tool-gearbox-peak`) is `ratings.4.gearbox_max_torque_nm`, judged by the common gearbox checks. Tables of an arm's own
+  motor or gearbox are refused (the arms share the D3's).
+
+### Fixed
+
+- D4: the common gearbox checks of motor 4 judged the arms' gearbox and ratio, and its drive had the arms' motor; and
+  `sim-cli search delta-d4 --motor-id 4` changed the tool's drive but not its joint.
+- Linear delta: the guide load was the rods' pull at rest; it now follows the motion (the rods' pull from the plate's
+  acceleration), so the verdicts judge the cycle's highest load (116 N on the default cycle, 3.4 N at rest).
+- Linear delta: `ratings.pulley_max_torque_nm` is Festo's 5 N m for the EGC-80, not an estimate of 10.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

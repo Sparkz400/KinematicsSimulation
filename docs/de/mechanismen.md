@@ -30,6 +30,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 | `urdf-arm` | Sechsachsroboter, `urdf/six-axis.urdf` | Wellgetriebe i = 120 und 80 | sechs Gelenkwinkel (rad), oder x, y, z, rx, ry, rz im Werkzeugraum | `strain-wave-life` je Gelenk |
 | `scara` | SCARA-Roboter, `urdf/scara.urdf` | Wellgetriebe; die Pinole auf einem Kugelgewindetrieb | Gelenke (rad, m, rad), oder x, y, z, c im Werkzeugraum | `strain-wave-life`, die Prüfungen der Spindel an Gelenk 3 |
 | `palletiser` | Vierachs-Palettierer, `urdf/palletiser.urdf`, ein Parallelogramm hält den Flansch waagerecht | Getriebe i = 160, das Wellgetriebe des Flanschs 50 | x, y, z, rz (ausgeliefert im Werkzeugraum), oder die vier Motorgelenke | `strain-wave-life` je Gelenk |
+| `parallel-scara` | Fünfgelenk mit Parallelogramm-Unterarmen in der waagerechten Ebene (eigenes Crate, keine Gelenkmaschine); Z-Hub und Werkzeugdrehung an der Platte | Planetengetriebe i = 20 an den Armen; der Z-Hub über einen Kugelgewindetrieb 16 x 20 hinter einer Kupplung; die Drehung über ein Planetengetriebe i = 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` am Z-Hub |
 
 Jede bekommt außerdem die Prüfungen, die jede Maschine bekommt: Spitzen- und Effektivmoment des Motors (`motor-peak`,
 `motor-thermal`), Antriebsströme, Spitzen- und kubisch gemitteltes Moment, Antriebsdrehzahl und Lebensdauer des
@@ -363,6 +364,48 @@ sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
 Moment und Schleppfehler kommen wie bei jeder Maschine aus dem Antriebsmodell; die Formeln der Kurvenscheiben und
 Mechanismen sind in `cam.rs` und den Tests von `machine-crank-cam` von Hand nachgerechnet (unten).
 
+## Fünfgelenk in der waagerechten Ebene (parallel-scara)
+
+Der Parallel-SCARA `parallel-scara` (eigenes Crate, keine Gelenkmaschine) ist ein liegendes Fünfgelenk: zwei Arme
+drehen um senkrechte Achsen bei x = ±R, jeder trägt ein Unterarmpaar (ein Parallelogramm, die Platte behält ihre
+Ausrichtung) zur Platte, wie bei Mitsubishis RP-Baureihe. Kinematik und Dynamik sind die des planaren Deltas D2, flach
+gelegt (in das Crate kopiert: eine Maschine darf das Crate einer anderen nicht benutzen); die Koordinaten der Platte
+sind x und y. Die Schwerkraft wirkt entlang -z, aus der Ebene heraus, auf die Gelenklager: die Motoren der Arme tragen
+kein Gewicht, sie beschleunigen nur die Platte und was sie trägt, und halten im Stillstand nichts. An der Platte lassen
+sich zwei Achsen zuschalten: ein Z-Hub (`[z_axis]`, Motor 3), eine Pinole auf einem Kugelgewindetrieb hinter einer
+Kupplung, die Schlitten und Nutzlast gegen die Schwerkraft hält (m g Steigung / 2 pi, 0,187 N m für 6 kg bei 20 mm
+Steigung), und eine Drehung des Werkzeugs um z (`[tool_turn]`, Motor 4) hinter einem eigenen Getriebe. Jede hat eigene
+Tabellen für Motor, Getriebe, Antrieb und Grenzwerte (`[motor.3]`, `[gearbox.4]`, ...). Alles an der Platte (die
+Einheiten mit ihren Motoren, der Schlitten, die Nutzlast) zählt zur Masse der Platte in der Ebene; Hub und Drehung
+stehen senkrecht zur Ebene und koppeln sonst nicht mit ihr. Die Werkzeugpose ist (x, y), (x, y, z), (x, y, c) oder
+(x, y, z, c), wie die beiden Schalter es sagen. Hub und Drehung sind starre Gelenke: Verdrehung und Spiel von Spindel
+und Drehgetriebe sind nicht modelliert. Siehe die [Modellreferenz](../model-reference.md).
+
+## Zweiteilige Plattform mit Zahnstangen-Übersetzung (delta-h4)
+
+Der Vierarm-Delta `delta-h4` (ein eigenes Crate, keine Gelenkmaschine) ist von der Bauart Quattro / H4 (Pierrots H4,
+der Adept/Omron Quattro): vier Arme auf der Basis im Abstand von 90 Grad, jeder mit einem Parallelogramm aus Unterarmen,
+hinab zu einer bewegten Plattform aus zwei Teilen. Die Arme 1 und 2 tragen Teil A, die Arme 3 und 4 Teil B: zwei
+benachbarte Arme, deren Ellbogenachsen rechtwinklig zueinander stehen, sodass sich kein Teil drehen kann (ein
+Parallelogramm lässt seinem Plattformende eine Drehung, um die Achse seines Ellbogens; die Achsen zweier gegenüber
+liegender Arme sind parallel und ließen ein Teil um sie drehen). Die Teile verschieben sich gegeneinander entlang der
+Waagerechten d = (1, -1, 0) / sqrt 2, jedes um die halbe Verschiebung h vom Werkzeugpunkt in die andere Richtung; entlang
+der Linie zwischen ihnen, d = (1, 1, 0) / sqrt 2, bewegte die Verschiebung die vier Unterarmenden wie das Absenken der
+Plattform in der Mitte, und die Jacobi-Matrix wäre dort singulär. Ein Ritzel zwischen je einer Zahnstange an jedem Teil
+rollt um h / r_p (seine Mitte, auf einem Schlitten zwischen den Teilen geführt, bleibt im Werkzeugpunkt), und eine
+Zahnradstufe mit Übersetzung i_p dreht das Werkzeug: c = kappa h, kappa = i_p / r_p (ausgeliefert 30 rad/m: ±180 Grad
+sind h = ±104,7 mm).
+
+Die Kinematik ist je Bein die des D3 am Unterarmende p -+ h d (geschlossene Rückwärtsrechnung; vorwärts nach Newton auf
+den vier Bedingungen, ausgehend von der Trilateration des D3), die Dynamik die des D3 nach dem Prinzip der virtuellen
+Arbeit mit der Jacobi-Matrix jedes Körpers: die beiden Teile, Schlitten und Nutzlast in p und die Drehung des Werkzeugs
+I_t c'^2 / 2 = I_t kappa^2 h'^2 / 2. Dieser letzte Term prägt die Maschine: Das Trägheitsmoment des Werkzeugs zählt in
+der Verschiebung mal kappa zum Quadrat (die 0,013 kg m^2 von Werkzeug und Nutzlast als 11,7 kg), und Verdrehung und
+Spiel der Armgetriebe zählen in der Drehung des Werkzeugs mal kappa. Mit `effects.amplifier_compliance` ist das Werkzeug
+ein eigener Körper an der Feder der Übersetzung (mit `effects.amplifier_backlash` mit einer Totzone darin), wie das
+Werkzeug des D4 an seiner Welle. Siehe die Konfigurationsreferenz (docs/config-reference.md, Abschnitt „Quattro-type
+delta H4“).
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -431,3 +474,6 @@ Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet.
   Rampenmodell des Bands); kein MC_CamIn über OPC UA; eine geänderte Leitgeschwindigkeit gilt sofort, ohne Rampe;
   das Gelenk von Kurbel und Messer hat keine Anschläge, solange die Kurvenscheibe es weiterdreht; die Presskraft wirkt
   nur beim Ausfahren (keine Rückfederung), die Schnittkraft von Messer und Säge nur vorwärts.
+- Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,
+  `geometry.column_incline_deg`) ist eine Parallelkinematik und keine dieser Maschinen; siehe die
+  [Modellreferenz](../model-reference.md#linear-delta).

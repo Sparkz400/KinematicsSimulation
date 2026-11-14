@@ -38,11 +38,12 @@
 //! with it: one spring 1 / (1/k_gear + 1/k_shaft) between the gearbox and the tool, with the shaft's damping.
 
 use machine_delta_d3::{Delta, PlatformDrag};
+use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_core::{
-    AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, RatingCheck,
-    Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+    AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape,
+    SignalInfo, TORQUE_PARTS, ThermalPart,
 };
 
 pub static ENTRY: MachineEntry = MachineEntry {
@@ -82,7 +83,7 @@ pub fn lossless_config() -> Config {
         "joint.stop_damping_nm_s_rad",
         "upper_arm.bending_damping_nm_s_rad",
         "upper_arm.lateral_damping_n_s_m",
-        "tool_gearbox.damping_nm_s_rad",
+        "gearbox.4.damping_nm_s_rad",
         "shaft.torsional_damping_nm_s_rad",
     ] {
         cfg.set_text(&format!("{damping} = 0.0")).unwrap();
@@ -205,8 +206,6 @@ pub struct Delta4 {
     shaft: Shaft,
     /// The telescope's friction as the D3 has it, for its loss power; `None` with effects.telescope_friction off.
     drag: Option<PlatformDrag>,
-    /// The highest torque the tool's gearbox may pass, N m (`rating_checks`).
-    tool_gearbox_max: Option<f64>,
     thermal: Option<ThermalFeedback>,
     axes: [AxisInfo; 4],
     motors: [MotorInfo; 4],
@@ -243,6 +242,16 @@ impl Delta4 {
             let platform = cfg.positive("mass.platform_kg")? + share * cfg.non_negative("shaft.mass_kg")?;
             inner.set_text(&format!("mass.platform_kg = {platform:?}"))?;
         }
+        // The arms are the D3's, which reads the shared [motor] and [gearbox]: an arm's own table there would size its
+        // drive and verdicts but not the arm it turns, so it is refused.
+        // shortcut: the three arms share one motor and gearbox; tables per arm if an arm ever needs another.
+        for id in ["1", "2", "3"] {
+            for table in ["parts", "motor", "gearbox"] {
+                if cfg.get(&format!("{table}.{id}")).is_ok_and(|v| v.is_table()) {
+                    return Err(ConfigError::Invalid(format!("{table}.{id} (the three arms share [{table}])")));
+                }
+            }
+        }
         let mut arms = Delta::new(&inner)?;
         let drag = if cfg.bool("effects.telescope_friction")? {
             let friction = ShaftFriction {
@@ -256,16 +265,9 @@ impl Delta4 {
             None
         };
         arms.set_platform_drag(drag.clone());
-        // The tool's joint: the motor of [motor] behind the gearbox of [tool_gearbox] (read as a [gearbox]).
-        // shortcut: the tool's gearbox takes the arms' no-load torque, lost motion and stiffness curve from [gearbox]
-        // (effects.gearbox_drag, gearbox_lost_motion and gearbox_stiffness_curve are off in the shipped config); give
-        // [tool_gearbox] those keys when they are switched on here.
-        let mut tcfg = cfg.clone();
-        for key in
-            ["ratio", "efficiency", "backlash_rad", "stiffness_nm_rad", "damping_nm_s_rad", "inertia_at_input_kgm2"]
-        {
-            tcfg.set_text(&format!("gearbox.{key} = {:?}", cfg.f64(&format!("tool_gearbox.{key}"))?))?;
-        }
+        // The tool's joint: motor 4's own motor and gearbox, `[motor.4]` and `[gearbox.4]` over the shared tables
+        // (`catalog::motor_config`), as its drive and its verdicts read them.
+        let tcfg = motor_config(cfg, "4")?;
         let bearing = cfg.bool("effects.joint_friction")?;
         let friction = ShaftFriction {
             coulomb: if bearing { cfg.non_negative("tool.friction_coulomb_nm")? } else { 0.0 },
@@ -322,11 +324,6 @@ impl Delta4 {
             brake_engaged: false,
             shaft,
             drag,
-            tool_gearbox_max: cfg
-                .get("ratings.tool_gearbox_max_torque_nm")
-                .is_ok()
-                .then(|| cfg.positive("ratings.tool_gearbox_max_torque_nm"))
-                .transpose()?,
             thermal: ThermalFeedback::from_config(&tcfg)?,
             tool,
             axes: axes.try_into().map_err(|_| ConfigError::Invalid("axis".into()))?,
@@ -509,18 +506,6 @@ impl Machine for Delta4 {
         sim_components::base::add_spin(&mut f, [0.0, 0.0, 1.0], self.tool_inertia(), self.turn(s).1);
         sim_components::base::add_spin(&mut f, [0.0, 0.0, 1.0], self.tool.rotor_inertia, self.rotor(s).1);
         Some(f)
-    }
-    fn rating_checks(&self) -> Vec<RatingCheck> {
-        self.tool_gearbox_max
-            .map(|limit| RatingCheck {
-                check: "tool-gearbox-peak",
-                signal: "gearbox.4.output_torque".into(),
-                motor: Some(3),
-                limit,
-                life: false,
-            })
-            .into_iter()
-            .collect()
     }
 
     fn axes(&self) -> &[AxisInfo] {

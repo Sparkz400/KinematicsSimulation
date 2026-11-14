@@ -28,8 +28,7 @@ What is not built yet, from the "Left open" lists at the end of each section of 
 - The drive: one maximum current, no overload over time (i2t).
 - The compliant base (effects.base_compliance) and the arms' link bending act one-way: the motors' torque and
   following error do not see them; a link bends in one plane only.
-- Linear delta: vertical columns only; no guide, pulley-bearing or belt-tooth ratings (its axes are not in the
-  catalogue).
+- Linear delta: the guides' moments (Mx, My, Mz), and warming belts and pulleys.
 - Fit: one added inertia per motor, not a mass factor per link of a URDF arm; a payload picked or dropped during a
   trace is not followed.
 - Optimiser: the robust check uses the error bands one bound at a time, not the worst corner of all of them; one lift

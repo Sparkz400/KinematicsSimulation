@@ -4360,6 +4360,15 @@ dependencies = [
  "machine-delta-d3",
  "sim-components",
  "sim-core",
+ "toml",
+]
+
+[[package]]
+name = "machine-delta-h4"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
 ]
 
 [[package]]
@@ -4372,6 +4381,14 @@ dependencies = [
 
 [[package]]
 name = "machine-joint-kit"
+version = "1.0.0-rc.1"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
+name = "machine-parallel-scara"
 version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
@@ -6110,8 +6127,10 @@ dependencies = [
  "machine-delta-d2",
  "machine-delta-d3",
  "machine-delta-d4",
+ "machine-delta-h4",
  "machine-delta-linear",
  "machine-joint-kit",
+ "machine-parallel-scara",
  "machine-single-axis",
  "machine-t-gantry",
  "serde_json",
