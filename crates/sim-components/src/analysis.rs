@@ -203,6 +203,29 @@ pub struct CycleLoad {
     pub conveyor: Option<ConveyorLoad>,
 }
 
+/// With an electronic cam (`Machine::cam`): per slave axis what its cam asks at the master's steady speed against the
+/// axis limits, as rating checks "cam-speed", "cam-acceleration" and "cam-jerk" (signal: the axis's id); the motor is
+/// the axis's, where there are as many motors as axes. A cam that asks more than its slave may do fails them.
+fn cam_checks(machine: &dyn sim_core::Machine) -> Vec<(RatingCheck, f64)> {
+    let (axes, motors) = (machine.axes(), machine.motors().len());
+    let checks = ["cam-speed", "cam-acceleration", "cam-jerk"];
+    crate::control::cam_peaks(machine)
+        .into_iter()
+        .zip(axes)
+        .enumerate()
+        .flat_map(|(i, (peak, axis))| {
+            let limits = [axis.max_vel, axis.max_acc, axis.max_jerk];
+            (0..3).map(move |k| {
+                let motor = (axes.len() == motors).then_some(i);
+                (
+                    RatingCheck { check: checks[k], signal: axis.id.to_string(), motor, limit: limits[k], life: false },
+                    peak[k],
+                )
+            })
+        })
+        .collect()
+}
+
 /// One pick from the conveyor (`[conveyor]`), the measured pass of the cycle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConveyorLoad {
@@ -902,6 +925,7 @@ impl Tally {
                     let value = if c.life { samples / sum } else { peak };
                     (c, value)
                 })
+                .chain(cam_checks(sim.machine.as_ref()))
                 .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
             contact: sim.contact.clone(),

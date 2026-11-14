@@ -54,7 +54,7 @@ funktioniert alles andere mit einer Maschinendatei so, wie es ist: die Parameter
 kann einen solchen Wert über seinen Pfad nennen (`radius_m = "geometry.pulley_radius_m"`); dann ändert eine Änderung
 des Werts die Maschine. Eine Zahl selbst bleibt fest.
 
-In `machines/` liegen zehn Dateien:
+In `machines/` liegen vierzehn Dateien:
 
 | Datei | was sie ist |
 | ----- | ----------- |
@@ -68,6 +68,10 @@ In `machines/` liegen zehn Dateien:
 | `machines/planar-delta.toml` | der ebene Delta aus `crates/machine-delta-d2` als Koppelgetriebe mit zwei Armen ([unten](#koppelgetriebe-der-ebene-und-der-räumliche-delta)) |
 | `machines/delta-d3.toml` | der räumliche Delta aus `crates/machine-delta-d3` als Koppelgetriebe mit drei Armen |
 | `machines/scissor-lift.toml` | ein zweistufiger Scherenhubtisch an einem Kugelgewindetrieb ([unten](#ein-scherenhubtisch)) |
+| `machines/dual-gantry.toml` | ein Portal mit zwei Antrieben: eine gierende Brücke auf zwei Zahnstangen, ihre Antriebe einfach, als Master/Slave oder kreuzgekoppelt im Gleichlauf |
+| `machines/portal-c.toml` | das Spindelportal mit einer C-Achse, die einen Greifer dreht, dessen Spitze der Werkzeugmittelpunkt ist |
+| `machines/five-axis.toml` | das Spindelportal mit einem Gabelkopf (C und A), die Werkzeugspitze der Werkzeugmittelpunkt |
+| `machines/five-axis-table.toml` | das Spindelportal über einem Schwenkrundtisch (A und C tragen das Werkstück, Tisch/Tisch), die Spitze auf dem Werkstück der Werkzeugmittelpunkt |
 
 Am schnellsten kommt man zu einer neuen Maschine, indem man die ähnlichste kopiert und `[machine]` ändert.
 
@@ -299,8 +303,10 @@ Motorsignale und von `--motor N`.
 | | `sections` | | je Riemenabschnitt, der an den Enden der Brücke zieht: seine Länge je rad Gieren, m |
 | | `tolerance_m` | | der Gleichlauffehler (Breite mal Gierwinkel), den die Prüfung `gantry-sync` zulässt, m |
 | `tcp` | `axes` | Pflicht | der Werkzeugmittelpunkt: die drei Linearachsen entlang x (die erste der Datei), y (waagrecht) und z (senkrecht); höchstens einer |
-| | `rotaries` | Pflicht | die Drehachsen, die das Werkzeug tragen, die äußerste zuerst |
-| | `tool_m` | Pflicht | die Werkzeugspitze von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m |
+| | `rotaries` | | die Drehachsen, die das Werkzeug tragen (ein Kopf), die äußerste zuerst; `rotaries` oder `table` oder beide |
+| | `table` | | die Drehachsen, die das Werkstück tragen (ein Rund- oder Schwenktisch), die äußerste zuerst: x, y und z des Werkzeugs sind die der Spitze auf dem Werkstück |
+| | `table_pivot_m` | | mit `table`: wo sich die Achsen des Tischs treffen, in den Koordinaten der Linearachsen, `[x, y, z]`, m; ohne Angabe `[0, 0, 0]` |
+| | `tool_m` | Pflicht | die Werkzeugspitze von dort, wo sich die Achsen des Kopfs treffen (ohne Kopf vom Punkt der Linearachsen), `[x, y, z]` bei Winkel 0, m |
 
 Es gibt so viele Motoren wie Achsen und einen mehr für jeden Antrieb eines Portals über den ersten hinaus. Eine Datei nennt jede Liste, die sie verwendet; `axis` und `motor` immer,
 `gearbox`, `pulley` und `section`, wo Riemen getrieben werden, `body`, wo eine Achse einen bewegt; die anderen dürfen
@@ -652,14 +658,26 @@ tolerance_m = "gantry.sync_tolerance_m"
 ```
 
 - **Zwei Antriebe.** Zwei Zahnstangen auf der Achse des Portals, eine an jedem Ende: die Datei hat einen Motor mehr
-  als Achsen, und die beiden legen x und psi zusammen fest. Jeder Antrieb folgt dem Sollwert der Achse an seinem
-  eigenen Geber (Sollwertkopplung), so halten die beiden Lageregler die Brücke rechtwinklig, und ihre Momente teilen die
+  als Achsen, und die beiden legen x und psi zusammen fest. Wie ausgeliefert (`gantry.sync = "plain"`) folgt jeder
+  Antrieb dem Sollwert der Achse an seinem eigenen Geber (Sollwertkopplung), so halten die beiden Lageregler die Brücke rechtwinklig, und ihre Momente teilen die
   Last nach dem Hebelgesetz: F2 - F1 = 2 m e a / B für einen Wagen m bei e, mit a beschleunigt. Mit dem Effekt aus
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
   von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 16 µm von 100, und das Ende, nahe dem der Wagen
   anfängt, trägt mehr (`rack-feed-force` 109 gegen 95 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
   155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
+- **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
+  der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert
+  weniger seinem Schleppfehler, so kommt der Nachlauf des Slaves auf den des Masters: bei stetiger Geschwindigkeit v,
+  ohne Geschwindigkeitsvorsteuerung und mit gleichen Reglern laufen die Enden um v / Kv auseinander, den Schleppfehler
+  des Masters (2 mm bei 0,1 m/s und Kv 50 1/s), wo die einfache Kopplung sie zusammenhält. Mit Vorsteuerung laufen
+  beide wenig nach, und das Verfahren ändert, wie eine Störung am Master den Slave erreicht. `"cross_coupled"`: der
+  Gleichlauffehler e (Istlage des Slaves weniger der des Masters, in den Einheiten des Slaves) geht mit der Verstärkung
+  k auf beide Drehzahlsollwerte, der des Slaves verliert k e, der des Masters gewinnt k e; ungleiche Regler laufen dann
+  bei stetiger Geschwindigkeit um e0 / (1 + k (1 / Kv1 + 1 / Kv2)) statt e0 = v (1 / Kv2 - 1 / Kv1) auseinander, also
+  halbiert k = Kv1 Kv2 / (Kv1 + Kv2) das Gieren (16,7 1/s bei Kv 50 und 25). Tests:
+  `the_master_slave_sync_error_is_the_master_s_following_error`, `the_cross_coupled_gain_halves_the_yaw_of_unequal_loops`
+  (sim-machines `machine_file_gantries.rs`).
 - **Ein Antrieb.** Die eine Zahnstange des Zahnstangenportals treibt seine Brücke an einem Ende
   (`drives = { mx = -0.5 }`): das ferne Ende hält nur die Feder der Anbindung, und es bleibt zurück, solange die Brücke
   beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,20 mm.
@@ -684,8 +702,9 @@ des Werkzeugs zu denen der Spitze: drei Linearachsen entlang x (die erste der Da
 Werkzeug tragen, und `tool_m`, die Spitze von dort, wo sich ihre Achsen treffen. Die Achsen stehen bei der Spitze
 weniger `tool_m`, von den Drehachsen gedreht: eine Bahn führt die Spitze gerade, während die Drehachsen drehen und die
 Linearachsen das ausgleichen, und die Vorsteuerung hat den Anteil der Geschwindigkeit (`feedforward_torque_moving`).
-Die Bereiche des Werkzeugs sind die Hübe, um |`tool_m`| erweitert, und eine Stellung, die die Linearachsen nicht
-erreichen, wird abgelehnt (`error-tcp-joint-range`). Die 3D-Ansicht zeichnet das Werkzeug von den Drehachsen bis zur
+Die Bereiche des Werkzeugs sind, wo seine Spitze bei jedem Winkel des Kopfs sein kann (die Hübe, um `tool_m`, von den
+Drehachsen gedreht, verschoben, beim kleinsten), und eine Stellung jenseits der Hübe der Linearachsen wird abgelehnt
+(`error-tcp-joint-range`). Die 3D-Ansicht zeichnet das Werkzeug von den Drehachsen bis zur
 Spitze und die Bahn des Werkzeugs an der Spitze.
 
 ```toml
@@ -702,6 +721,32 @@ auf einer Geraden. `machines/five-axis.toml` ist das Spindelportal mit einem Gab
 um x, die Spitze 0,2 m unter ihrem Schnittpunkt: sein Zyklus neigt A und schwenkt C um eine halbe Drehung um die
 stehende Spitze, X und Y fahren dabei einen Kreis, und das Gewicht der Spindel liegt auf A. Beide bestehen jedes Urteil
 ihres Zyklus. Getriebe und Trägheiten ihrer Drehachsen und die Massen der Köpfe sind Schätzwerte.
+
+**Ein Rundtisch, der das Werkstück trägt** (`table`, `table_pivot_m`). x, y und z des Werkzeugs sind dann die Lage der
+Spitze auf dem Werkstück, wie es bei den Winkeln 0 des Tischs liegt; ein Punkt w davon liegt im Raum bei
+p + R_Tisch (w - p), p dort, wo sich die Achsen des Tischs treffen, R_Tisch die Drehung seiner Drehachsen (die äußerste
+zuletzt). Die Linearachsen stehen also bei q = p + R_Tisch (w - p) - R_Kopf `tool_m`: eine Bahn auf dem Werkstück wird
+gefahren, während der Tisch es dreht, die Linearachsen gleichen den Tisch aus, und die Drehachsen des Kopfs (`rotaries`)
+dürfen das Werkzeug daneben neigen (Kopf/Tisch). Die Bereiche des Werkzeugs sind der Kasten um p, so breit wie der
+kleinste Abstand von p zu einem Ende der Hübe von X und Y, das Werkstück, das der Tisch unter dem Werkzeug drehen kann;
+eine Stellung jenseits der Hübe der Linearachsen wird abgelehnt (`error-tcp-joint-range`).
+`machines/five-axis-table.toml` ist das Spindelportal über einer Schwenkbrücke: A um x trägt C, den Tisch, um seine
+eigene Achse, die sich bei (0,5, 0,25, -0,2) m treffen, das Werkzeug hängt 0,2 m unter dem Z-Schlitten. Sein Zyklus
+neigt den Tisch, während die Spitze auf einem Punkt des Werkstücks bleibt, dreht den Tisch eine halbe Drehung unter der
+stehenden Spitze (X und Y auf einem Kreis um die Achse von C) und fährt die Spitze mit allen fünf Achsen über das
+Werkstück. Schwenkbrücke und Tisch fahren auf A und C (`offset_m`), also hebt das Neigen von A ihr Gewicht auf den Motor
+von A. Test `a_table_table_tcp_keeps_the_tool_on_a_line_while_the_table_turns`: die Spitze auf einer Geraden des
+Werkstücks, während C bei A 0,3 rad um 2 rad dreht, jeder Motor gegen seinen von Hand gerechneten Winkel; eine
+Kopf/Tisch-Variante (A im Kopf, C im Tisch) in `a_head_table_tcp_turns_the_tool_in_the_head_and_the_workpiece_on_the_table`.
+
+```toml
+[[machine.tcp]]            # machines/five-axis-table.toml
+id = "tool_tip"
+axes = ["x", "y", "z"]
+table = ["a", "c"]         # A um x trägt C, den Tisch
+table_pivot_m = [0.5, 0.25, -0.2]
+tool_m = [0.0, 0.0, -0.2]  # ohne Kopf: vom Punkt der Linearachsen
+```
 
 ## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
 

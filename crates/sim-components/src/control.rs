@@ -6,7 +6,7 @@ use crate::drive::{Drive, DriveParams, quantise, shared_dc_link};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
 use crate::shaper;
-use sim_core::{Config, ConfigError, Machine};
+use sim_core::{CamMaster, Config, ConfigError, Machine};
 
 type Result<T> = std::result::Result<T, ConfigError>;
 
@@ -97,15 +97,19 @@ enum Motion {
     },
     /// A pass of the conveyor cycle (`Controller::pass`), waiting for its start and then run.
     Conveyor,
-    /// The electronic cam of `Machine::cam` (`crate::cam`): the master started from `from` at `start_tick` and runs
-    /// down from `stop` seconds after that; the slaves are the cam at the master plus `offset`. The next pass begins
-    /// where the master reaches `next_pass`.
+    /// The electronic cam of `Machine::cam` (`crate::cam`): the master started from `from` at `start_tick`, its speed
+    /// ramped from `from_speed` to `speed` over `ramp` seconds (`cam::master_change`), and runs down from `stop` seconds
+    /// after that; the slaves are the cam at the master plus `offset`. The next pass begins where the master reaches
+    /// `next_pass`. A config with another master speed or ramp starts a new ramp from where the master is.
     Cam {
         start_tick: u64,
         stop: Option<f64>,
         from: f64,
         offset: Vec<f64>,
         next_pass: f64,
+        from_speed: f64,
+        speed: f64,
+        ramp: f64,
     },
     /// A cubic curve through the points with the given speeds at them (Hermite interpolation; with the speeds of
     /// `c2_speeds`, the cubic spline whose acceleration is continuous).
@@ -210,6 +214,46 @@ pub struct Controller {
     /// `Machine::cam`: the cycle is the machine's electronic cam, and where its master stands (kept between runs).
     cam: Option<sim_core::CamMaster>,
     cam_master: f64,
+    /// A dual-drive gantry's synchronisation (`gantry.sync`, `Machine::gantry_motors`); `None` for the plain scheme,
+    /// in which each drive follows its own setpoint.
+    gantry_sync: Option<GantrySync>,
+}
+
+/// How the two drives of a dual-drive gantry are kept in step, beyond each following the common setpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GantrySync {
+    pub master: usize,
+    pub slave: usize,
+    /// The slave motor's angle per unit of the master's (both drive the same axis).
+    pub ratio: f64,
+    /// `None`: master/slave, the slave's position loop follows the master's actual position (its setpoint less the
+    /// master's following error). `Some(k)`: cross-coupled, the synchronisation error (the slave's actual position
+    /// less the master's, in the slave's units) is fed back to both speed commands with the gain k, 1/s: the slave's
+    /// takes k e, the master's gets k e / ratio.
+    pub cross_gain: Option<f64>,
+}
+
+/// The gantry's synchronisation from `gantry.sync` ("plain", "master_slave" or "cross_coupled") and, cross-coupled,
+/// `gantry.sync_gain_1_s`; read only where the machine has a dual-drive gantry. The ratio of the two motors is that of
+/// their setpoints at the start pose.
+fn gantry_sync(cfg: &Config, machine: &dyn Machine) -> Result<Option<GantrySync>> {
+    let Some([master, slave]) = machine.gantry_motors() else { return Ok(None) };
+    let cross_gain = match text(cfg, "gantry.sync")? {
+        "plain" => return Ok(None),
+        "master_slave" => None,
+        "cross_coupled" => Some(cfg.non_negative("gantry.sync_gain_1_s")?),
+        _ => return Err(ConfigError::Invalid("gantry.sync".into())),
+    };
+    let pose = cfg.f64s("start.pose")?;
+    let (mut a, mut b) = (vec![0.0; machine.motors().len()], vec![0.0; machine.motors().len()]);
+    let h = 1e-4;
+    machine.inverse(&pose.iter().map(|p| p + h).collect::<Vec<_>>(), &mut a);
+    machine.inverse(&pose.iter().map(|p| p - h).collect::<Vec<_>>(), &mut b);
+    let ratio = (a[slave] - b[slave]) / (a[master] - b[master]);
+    if !ratio.is_finite() || ratio == 0.0 {
+        return Err(ConfigError::Invalid("gantry.sync".into()));
+    }
+    Ok(Some(GantrySync { master, slave, ratio, cross_gain }))
 }
 
 /// Each motor's moment of inertia in the rigid, loss-free model at a tool pose: the torque it needs for a unit
@@ -293,6 +337,7 @@ impl Controller {
             load_encoder: None,
             cam: None,
             cam_master: 0.0,
+            gantry_sync: None,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -384,6 +429,7 @@ impl Controller {
         };
         let shaper = shaper_modes(cfg, machine, profile_cycle)?;
         let law = motion_law(cfg, machine)?;
+        let sync = gantry_sync(cfg, machine)?;
         let spline_c2 = match text(cfg, "profile.trajectory_spline")? {
             "c2" => true,
             "hermite" => false,
@@ -558,7 +604,20 @@ impl Controller {
             self.motion = Motion::Idle;
         }
         self.conveyor = conveyor;
+        // A cam under way with another master speed or ramp: a ramp from the master's speed now to the new one, from
+        // where it stands (a run-down under way goes on as it was).
+        if let (Some(new), Motion::Cam { start_tick, stop: None, from, from_speed, speed, ramp, .. }) =
+            (machine.cam(), &mut self.motion)
+            && (new.speed != *speed || new.ramp_s != *ramp)
+            && *start_tick != u64::MAX
+        {
+            let t = self.tick.saturating_sub(*start_tick) as f64 * self.profile_cycle;
+            let now = crate::cam::master_change(*from_speed, *speed, *ramp, t, None);
+            (*start_tick, *from, *from_speed) = (self.tick, *from + now[0], now[1]);
+            (*speed, *ramp) = (new.speed, new.ramp_s);
+        }
         self.cam = machine.cam();
+        self.gantry_sync = sync;
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
@@ -871,6 +930,11 @@ impl Controller {
         self.passes
     }
 
+    /// Where an electronic cam's master stands (`Machine::cam`), in its units; kept between runs.
+    pub fn cam_master(&self) -> f64 {
+        self.cam_master
+    }
+
     /// The torque the drives can give at a motor speed: (lowest, highest).
     pub fn torque_curve(&self, speed: f64) -> (f64, f64) {
         self.params.torque_curve(speed)
@@ -979,9 +1043,32 @@ impl Controller {
                 motors
             });
             let cycle = self.n_position as f64 * self.profile_cycle / self.n_profile as f64;
+            let measured = |k: usize, drive: &Drive| load.as_ref().map_or(drive.encoder(), |l| l[k]);
+            // A gantry's master first: master/slave, the slave measures itself against the master's actual position.
+            let sync = self.gantry_sync;
+            let mut lead = 0.0;
+            if let Some(g) = sync {
+                let drive = &mut self.drives[g.master];
+                drive.position_loop(&self.motor_params[g.master], measured(g.master, drive), cycle);
+                if g.cross_gain.is_none() {
+                    lead = g.ratio * drive.following_error;
+                }
+            }
             for (k, drive) in self.drives.iter_mut().enumerate() {
-                let measured = load.as_ref().map_or(drive.encoder(), |l| l[k]);
-                drive.position_loop(&self.motor_params[k], measured, cycle);
+                if sync.is_some_and(|g| g.master == k) {
+                    continue;
+                }
+                let behind = if sync.is_some_and(|g| g.slave == k) { lead } else { 0.0 };
+                drive.position_loop(&self.motor_params[k], measured(k, drive) + behind, cycle);
+            }
+            if let Some(GantrySync { master, slave, ratio, cross_gain: Some(gain) }) = sync {
+                // The slave's actual less the master's, in the slave's units, from the following errors (their
+                // setpoints stand in the ratio): ratio e_master - e_slave.
+                let error = ratio * self.drives[master].following_error - self.drives[slave].following_error;
+                for (k, by) in [(slave, -gain * error), (master, gain * error / ratio)] {
+                    self.drives[k].position_part += by;
+                    self.drives[k].speed_command += by;
+                }
             }
             // Following error per motor, transformed back to the tool axes for display.
             let (set, actual): (Vec<f64>, Vec<f64>) =
@@ -1112,17 +1199,17 @@ impl Controller {
                     }
                 }
             }
-            Motion::Cam { start_tick, mut stop, from, offset, mut next_pass } => {
+            Motion::Cam { start_tick, mut stop, from, offset, mut next_pass, from_speed, speed, ramp } => {
                 let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
                 let t = (tick - start_tick) as f64 * dt;
                 if let Some(master) = self.cam {
                     if self.stopping && stop.is_none() {
                         stop = Some(t);
                     }
-                    let run = crate::cam::master_at(master.speed, master.ramp_s, t, stop);
+                    let run = crate::cam::master_change(from_speed, speed, ramp, t, stop);
                     self.cam_master = from + run[0];
                     // Passes count whole periods of the master from where it is up to speed.
-                    if t >= master.ramp_s && next_pass.is_nan() {
+                    if t >= ramp && next_pass.is_nan() {
                         next_pass = self.cam_master + master.period;
                     } else if self.cam_master >= next_pass && stop.is_none() {
                         next_pass += master.period;
@@ -1134,18 +1221,19 @@ impl Controller {
                         let [p, v, a] = crate::cam::slave_motion(*c, run);
                         (self.set_pos[i], self.set_vel[i], self.set_acc[i]) = (p + offset[i], v, a);
                     }
-                    if stop.is_some_and(|s| t >= s.max(master.ramp_s) + master.ramp_s) {
+                    if stop.is_some_and(|s| t >= s.max(ramp) + ramp) {
                         // Run down: at rest where the cam has brought the slaves.
                         self.set_vel.fill(0.0);
                         self.set_acc.fill(0.0);
                         (self.cycle, self.stopping) = (None, false);
                     } else {
-                        self.motion = Motion::Cam { start_tick, stop, from, offset, next_pass };
+                        self.motion =
+                            Motion::Cam { start_tick, stop, from, offset, next_pass, from_speed, speed, ramp };
                     }
                 } else {
                     // A config without the cam now: the slaves stop where they are.
-                    // shortcut: a changed master speed or ramp is taken at once, a step in the slaves' speed; ramp
-                    // between the two speeds if a config is ever changed under a running cam on purpose.
+                    // shortcut: a step in the slaves' speed; ramp the master down first if a config ever takes a
+                    // running cam away on purpose.
                     self.set_vel.fill(0.0);
                     self.set_acc.fill(0.0);
                     (self.cycle, self.stopping) = (None, false);
@@ -1452,15 +1540,23 @@ impl Controller {
             self.stopping = false;
             return;
         }
-        if self.cam.is_some() {
+        if let Some(CamMaster { speed, ramp_s: ramp, .. }) = self.cam {
             // The cam starts from where its master stands, the slaves from where they stand: the offset keeps them there.
             let mut cam = vec![[0.0; 4]; self.set_pos.len()];
             machine.cam_at(self.cam_master, &mut cam);
             let offset = self.set_pos.iter().zip(&cam).map(|(p, c)| p - c[0]).collect();
             self.cycle = Some(0);
             self.passes += 1;
-            self.motion =
-                Motion::Cam { start_tick: u64::MAX, stop: None, from: self.cam_master, offset, next_pass: f64::NAN };
+            self.motion = Motion::Cam {
+                start_tick: u64::MAX,
+                stop: None,
+                from: self.cam_master,
+                offset,
+                next_pass: f64::NAN,
+                from_speed: 0.0,
+                speed,
+                ramp,
+            };
             return;
         }
         if self.conveyor.is_some() {
@@ -1768,6 +1864,26 @@ fn refuse_target(machine: &dyn Machine, target: &[f64]) -> std::result::Result<(
     machine.unreachable(target, ROUNDING).map_or(Ok(()), |key| Err(CommandError { key }))
 }
 
+/// With `Machine::cam`: per tool axis (a slave) the highest speed, acceleration and jerk the cam asks of it at the
+/// master's steady speed (the cam's first three rates over the master times v, v^2 and v^3) over a period, at 4000 points; empty
+/// without a cam. `check_limits` reports them against the axis limits, the verdicts judge them (`analysis`).
+pub fn cam_peaks(machine: &dyn Machine) -> Vec<[f64; 3]> {
+    let Some(master) = machine.cam() else { return Vec::new() };
+    let axes = machine.axes().len();
+    let n = 4000;
+    let mut peak = vec![[0f64; 3]; axes];
+    let mut cam = vec![[0.0; 4]; axes];
+    for i in 0..=n {
+        machine.cam_at(master.period * i as f64 / n as f64, &mut cam);
+        for (p, c) in peak.iter_mut().zip(&cam) {
+            for k in 0..3 {
+                p[k] = p[k].max(c[k + 1].abs() * master.speed.powi(k as i32 + 1));
+            }
+        }
+    }
+    peak
+}
+
 /// An axis limit that asks more of a motor than the drive allows; `key` is a translation key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LimitViolation {
@@ -1810,24 +1926,11 @@ pub fn check_limits(machine: &dyn Machine, drives: &[&DriveParams]) -> Vec<Limit
     }
     let mut out = Vec::new();
     // An electronic cam asks of its slaves what it asks at the master's speed, whatever the axis limits say.
-    if let Some(master) = machine.cam() {
-        let n = 4000;
-        let mut peak = vec![[0f64; 3]; axes.len()];
-        let mut cam = vec![[0.0; 4]; axes.len()];
-        for i in 0..=n {
-            machine.cam_at(master.period * i as f64 / n as f64, &mut cam);
-            for (p, c) in peak.iter_mut().zip(&cam) {
-                for k in 0..3 {
-                    p[k] = p[k].max(c[k + 1].abs() * master.speed.powi(k as i32 + 1));
-                }
-            }
-        }
-        for (i, (p, axis)) in peak.iter().zip(axes).enumerate() {
-            let keys = ["limit-cam-speed", "limit-cam-acceleration", "limit-cam-jerk"];
-            for (k, allowed) in [axis.max_vel, axis.max_acc, axis.max_jerk].into_iter().enumerate() {
-                if p[k] > allowed * (1.0 + 1e-9) {
-                    out.push(LimitViolation { key: keys[k], motor: i.min(motors - 1), needed: p[k], allowed });
-                }
+    for (i, (p, axis)) in cam_peaks(machine).iter().zip(axes).enumerate() {
+        let keys = ["limit-cam-speed", "limit-cam-acceleration", "limit-cam-jerk"];
+        for (k, allowed) in [axis.max_vel, axis.max_acc, axis.max_jerk].into_iter().enumerate() {
+            if p[k] > allowed * (1.0 + 1e-9) {
+                out.push(LimitViolation { key: keys[k], motor: i.min(motors - 1), needed: p[k], allowed });
             }
         }
     }

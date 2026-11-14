@@ -100,10 +100,12 @@ Every variable is a scalar (ValueRank −1) in the namespace `urn:kinematics-sim
 | `axis.*.ActualPosition`, `axis.*.ActualVelocity` | Double | LREAL | read |
 | `axis.*.Enable`, `axis.*.Execute` | Boolean | BOOL | read, write |
 | `axis.*.Position`, `axis.*.Distance`, `axis.*.Velocity`, `axis.*.Acceleration`, `axis.*.Deceleration`, `axis.*.Jerk` | Double | LREAL | read, write |
+| `axis.*.RatioNumerator`, `axis.*.RatioDenominator`, `axis.*.MasterOffset`, `axis.*.SlaveOffset`, `axis.*.MasterScaling`, `axis.*.SlaveScaling`, `axis.*.StartMode`, `axis.*.CamTableID` | Double | LREAL | read, write |
+| `axis.*.Master`, `axis.*.Table` | String | STRING | read, write |
 | `axis.*.ErrorID` | UInt16 | UINT | read |
 | `axis.*.StateID` | Int32 | DINT | read |
 | `axis.*.State` | String | STRING | read |
-| `axis.*.Status`, `axis.*.Valid`, `axis.*.Error`, `axis.*.Done`, `axis.*.Busy`, `axis.*.Active`, `axis.*.CommandAborted`, `axis.*.IsHomed` | Boolean | BOOL | read |
+| `axis.*.Status`, `axis.*.Valid`, `axis.*.Error`, `axis.*.Done`, `axis.*.InGear`, `axis.*.InSync`, `axis.*.Busy`, `axis.*.Active`, `axis.*.CommandAborted`, `axis.*.IsHomed` | Boolean | BOOL | read |
 
 What the PLC clients need:
 
@@ -133,10 +135,24 @@ Every axis of the machine has a folder `axis.<axis id>` with one set of handshak
 | `axis.<id>.Stop.Execute` | Boolean | write | MC_Stop |
 | `axis.<id>.Stop.Deceleration` | Double | write | Braking deceleration, m/s² |
 | `axis.<id>.Reset.Execute` | Boolean | write | MC_Reset |
-| `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | read | Outputs of Home, MoveAbsolute, MoveRelative, Stop and Reset. `Active` reads the same as `Busy` |
+| `axis.<id>.GearIn.Execute` | Boolean | write | MC_GearIn: this axis the slave |
+| `axis.<id>.GearIn.Master` | String | write | The master's axis id |
+| `axis.<id>.GearIn.RatioNumerator`, `.RatioDenominator` | Double | write | The gear ratio, slave over master travel (1 and 1 at the start) |
+| `axis.<id>.GearIn.Acceleration`, `.Deceleration`, `.Jerk` | Double | write | How the slave's speed comes to the ratio times the master's; Deceleration also brakes the slave where the master is lost |
+| `axis.<id>.GearIn.InGear` | Boolean | read | The slave runs at the ratio times the master's speed and follows its travel times the ratio (in place of `Done`) |
+| `axis.<id>.GearOut.Execute` | Boolean | write | MC_GearOut |
+| `axis.<id>.CamIn.Execute` | Boolean | write | MC_CamIn: this axis the slave |
+| `axis.<id>.CamIn.Master` | String | write | The master's axis id; empty for the machine's virtual cam master (with CamTableID 1) |
+| `axis.<id>.CamIn.Table` | String | write | The client's cam table (CamTableID 0): lines `master span, slave rise, law` (`dwell`, `linear`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`), or points `master, slave[, slope]` through which a cubic runs |
+| `axis.<id>.CamIn.MasterOffset`, `.SlaveOffset`, `.MasterScaling`, `.SlaveScaling` | Double | write | Absolute: the slave at SlaveOffset + SlaveScaling × table(MasterScaling × master + MasterOffset); 0, 0, 1, 1 at the start |
+| `axis.<id>.CamIn.StartMode` | Double | write | 1 relative (at the start): the table begins where master and slave stand, at MasterOffset in it, SlaveOffset unused; 0 absolute: the slave has to stand where the table puts it (no ramp-in) |
+| `axis.<id>.CamIn.CamTableID` | Double | write | 0 the client's table, 1 the machine's own electronic cam for this axis |
+| `axis.<id>.CamIn.InSync` | Boolean | read | The slave follows the table (in place of `Done`) |
+| `axis.<id>.CamOut.Execute` | Boolean | write | MC_CamOut |
+| `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | read | Outputs of every block (`InGear` and `InSync` in place of `Done`). `Active` reads the same as `Busy` |
 | `axis.<id>.<FB>.ErrorID` | UInt16 | read | Why the block failed, 0 without error |
-| `axis.<id>.State` | String | read | `Disabled`, `Standstill`, `ErrorStop`, `Stopping`, `Homing` or `DiscreteMotion` |
-| `axis.<id>.StateID` | Int32 | read | The state as a number: 1 Disabled, 2 Standstill, 3 ErrorStop, 4 Stopping, 5 Homing, 6 DiscreteMotion (TwinCAT's `MC_AxisStates`) |
+| `axis.<id>.State` | String | read | `Disabled`, `Standstill`, `ErrorStop`, `Stopping`, `Homing`, `DiscreteMotion`, `ContinuousMotion` or `SynchronizedMotion` |
+| `axis.<id>.StateID` | Int32 | read | The state as a number: 1 Disabled, 2 Standstill, 3 ErrorStop, 4 Stopping, 5 Homing, 6 DiscreteMotion, 7 ContinuousMotion, 8 SynchronizedMotion (TwinCAT's `MC_AxisStates`) |
 | `axis.<id>.ActualPosition`, `.ActualVelocity` | Double | read | Position and velocity of the simulated axis (`signal.axis.<id>.position`, `.velocity`) |
 | `axis.<id>.IsHomed` | Boolean | read | MC_Home has finished once |
 | `axis.<id>.Error`, `.ErrorID` | Boolean, UInt16 | read | The axis error. Not 0 means ErrorStop |
@@ -144,13 +160,15 @@ Every axis of the machine has a folder `axis.<axis id>` with one set of handshak
 | ErrorID | Meaning |
 | --- | --- |
 | 1 | The axis is not powered (Disabled) |
-| 2 | Not allowed in this state: any block but Reset in ErrorStop, a move in Stopping or Homing, Home in DiscreteMotion |
+| 2 | Not allowed in this state: any block but Reset in ErrorStop, a move in Stopping or Homing, Home while the axis moves, GearOut or CamOut while the axis is not geared or cammed |
 | 3 | A parameter is not a positive finite number |
 | 4 | The target lies outside the axis range |
 | 5 | A move, path or the cycle of the link's other commands is under way |
 | 6 | The controller refused a streamed setpoint (axis error) |
 | 7 | The drives were switched off while the axis was powered: `command.disable` or a DC-link trip (axis error) |
 | 8 | The drives went off because the machine ran into an obstacle (`effects.crash`, axis error) |
+| 9 | GearIn or CamIn: no axis of that `Master` id, the slave itself, a master that is itself a slave, or an empty `Master` without the machine's own cam; while coupled: the master went into ErrorStop or Disabled |
+| 10 | CamIn: the client's table cannot be read, or the machine has no cam of its own (CamTableID 1) |
 
 How the blocks behave:
 
@@ -164,6 +182,10 @@ How the blocks behave:
 - An axis error holds through `Power.Enable` false, as in PLCopen's state diagram: the axis stays in ErrorStop, and `Power.Error` and `Power.ErrorID` show the error. MC_Reset clears the axis error and leaves ErrorStop for Standstill (or Disabled when `Power.Enable` is false). After an ErrorID 7 or 8 it switches the drives on again; after a crash the axis can then be moved out of the obstacle, and a move further into it trips the drives again.
 - MC_Power: the controller has one enable for all drives. The drives go on when an axis is powered, and off when the last axis is switched off. An axis whose `Power.Enable` is false is Disabled and refuses blocks, but its motor still holds position while another axis keeps the drives on. Switching an axis off aborts its motion.
 - Parameters above the axis limits are cut to the limits. The profile is a trapezoid: velocity, acceleration and deceleration are kept, `Jerk` is accepted and not used.
+- MC_GearIn and MC_CamIn (PLCopen Part 1) sit in the slave's folder and name the master by its axis id. The slave follows the master's setpoint (MasterValueSource set value) in the same setpoint interval: the master moves first. MC_GearIn brings the slave's speed to the ratio times the master's with its `Acceleration` (its `Deceleration` where the slave has to slow down), then reports `InGear` and holds the slave on the master's travel times the ratio. MC_CamIn holds the slave on its table at the master's position from its start and reports `InSync` at once. Both stay `Busy` and `Active` while the slave is coupled, in `SynchronizedMotion`; a master may not itself be a slave.
+- MC_GearOut and MC_CamOut end the coupling and report `Done`: the coupling block goes not busy (not `CommandAborted`), and the slave goes on at the speed it had, in `ContinuousMotion`, until another block (MC_Stop, a move) takes it over. A move or MC_Stop on the slave also ends the coupling: the coupling block reports `CommandAborted`.
+- A master that goes into ErrorStop or Disabled while a slave is coupled ends the coupling with ErrorID 9: the slave brakes with the coupling's deceleration (GearIn's `Deceleration`, the axis limit for CamIn), owned by no block. A GearIn or CamIn started again while busy whose new inputs are refused gives up its coupling the same way (the rule above).
+- CamTableID 1 takes the machine's own electronic cam for this axis (the crank and cam machines, `Machine::cam`): its table over one master period, sampled at 1440 points with their slopes. With an empty `CamIn.Master` the master is the machine's virtual one, run up from rest to the cam's master speed by its ramp (`cam.ramp_s`); this is how a single-axis cam machine runs its cam over PLCopen.
 - Do not mix the PLCopen blocks with `command.setpoint.*`, `command.move`, `command.cycle` or `command.run_path` on the same machine at the same time. Blocks started while those run fail with ErrorID 5; a stream started while blocks run makes the controller refuse one of the two.
 
 ### How it works, and its limits
@@ -174,7 +196,7 @@ Limits:
 
 - The streamed profile has a step of 10 ms. Within a step the velocity is constant, so acceleration changes at each step. There is no jerk limitation and no input shaping of the PLCopen moves.
 - A move that aborts a fast move towards a nearer target, or reverses, brakes with `Deceleration` and can overshoot. If the overshoot leaves the axis range, the controller refuses the setpoint and the axis goes to ErrorStop (ErrorID 6).
-- No buffered or blended moves (`BufferMode`), no MC_MoveVelocity, MC_Halt, MC_ReadParameter, gearing or camming blocks (MC_CamIn, MC_GearIn). A machine with an electronic cam (`machine-crank-cam`, `cam.run = true`) runs it as its cycle: `command.cycle` starts it, `command.stop` runs its master down.
+- No buffered or blended moves (`BufferMode`), no MC_MoveVelocity, MC_Halt, MC_ReadParameter. Of synchronised motion MC_GearIn, MC_GearOut, MC_CamIn and MC_CamOut, without MC_GearInPos, MC_Phasing, `EndOfProfile`, the master's actual value as its source and a ramp-in for an absolute cam start; the master of a slave is never itself a slave. A machine with an electronic cam (`machine-crank-cam`, `cam.run = true`) runs it as its cycle: `command.cycle` starts it, `command.stop` runs its master down.
 - The link adds the latency of OPC UA: a client sees the effect of a write after one to two loop cycles plus its own polling time.
 
 ## Real-time pacing and jitter
@@ -236,6 +258,8 @@ Treat the files as a starting point to compile and test on a real PLC. Every acc
 
 `sim_cycle.st` in each folder adds `PRG_SimCycle`, a program for a 10 ms task that does what a PLC program does against the machine: connect with Basic256Sha256 SignAndEncrypt (or None) and, if set, user name and password; find the namespace index; switch the drives on with MC_Power; run MC_MoveAbsolute; write a path (`command.path`) and run it (`command.run_path`) until `status.busy` falls; switch off and disconnect. Meanwhile `SIM_CyclicRead` reads the axis position (`signal.axis.<id>.position`) and following error (`signal.axis.<id>.following_error`) every cycle through node handles that are got once, and the program keeps the largest following error. It uses the blocks of `sim_plcopen.st`. The path is written for the T-gantry (axes x and z, start pose x 0.1 m, z 0.35 m); change it and the target for another machine.
 
+`sim_sync.st` in each folder adds synchronised motion: `SIM_MC_GearIn`, `SIM_MC_GearOut`, `SIM_MC_CamIn` and `SIM_MC_CamOut` with PLCopen inputs and outputs, over `SIM_SyncHandshake`, which writes the block's numbers and texts (`Master`, `Table`), raises `Execute` and then polls `Busy`, `InGear` or `InSync`, `CommandAborted`, `Error` and `ErrorID` for as long as the block stays busy: a coupling block, unlike a move, is busy while the slave is coupled. `PRG_SimSyncDemo` runs the master `x` slowly over its stroke, gears `y` in at 2:1, gears it out after a second in gear, cams it in on a 3-4-5 table of 20 mm over 0.1 m of `x` and back, cams it out and stops it. It uses the blocks of `sim_plcopen.st` (and, for CODESYS, `SIM_WriteString` of `sim_cycle.st`); like those it was not compiled.
+
 ## Run the examples against sim-opcua on the same PC
 
 Both need the PLC runtime on this computer; nothing of it ships with this project. The steps were written from the vendors' documentation and could not be tried here.
@@ -252,7 +276,7 @@ It listens on `opc.tcp://127.0.0.1:4840/`, the URL in `PRG_SimCycle`, and prints
 
 1. In TwinCAT XAE (Visual Studio), make a new TwinCAT XAE project and add a PLC project (Standard PLC Project).
 2. Under References add `Tc3_PLCopen_OpcUa`. TF6100 needs a licence; a 7-day trial licence can be activated under System > License.
-3. Add the code: TwinCAT does not import `.st` files directly. For each `FUNCTION_BLOCK` and `PROGRAM` in `twincat/sim_plcopen.st` and `twincat/sim_cycle.st` add a POU of that name and paste the declaration (from the header to `END_VAR`) into its upper part and the body into the lower part. Put `E_SimKind` into a DUT.
+3. Add the code: TwinCAT does not import `.st` files directly. For each `FUNCTION_BLOCK` and `PROGRAM` in `twincat/sim_plcopen.st`, `twincat/sim_cycle.st` and `twincat/sim_sync.st` add a POU of that name and paste the declaration (from the header to `END_VAR`) into its upper part and the body into the lower part. Put `E_SimKind` into a DUT.
 4. Call `PRG_SimCycle` from the PLC task and set the task's cycle to 10 ms.
 5. Activate the configuration, set the target to run mode (the local runtime needs a free core or Hyper-V settings as Beckhoff describes), log in and start.
 6. TF6100 makes its own client certificate on its first start, in its PKI folder: `%TcInstallDir%\3.1\Target\OpcUa\Client\PKI` for client 2.x, `%ProgramData%\Beckhoff\TF6100-OPC-UA\TcOpcUaClient\PKI` for 1.x. On the first secured connection it puts the server's certificate into its `rejected` folder: move it to `trusted` there and connect again.
@@ -262,7 +286,7 @@ It listens on `opc.tcp://127.0.0.1:4840/`, the URL in `PRG_SimCycle`, and prints
 
 1. Install CODESYS Development System V3.5 with CODESYS Control Win (SoftPLC), start the SoftPLC from its tray icon.
 2. Make a Standard project for the device "CODESYS Control Win V3 x64" and add, in the Library Manager, a library that provides the PLCopen OPC UA client blocks (`UA_Connect`, `UA_NodeGetHandle`, ...). CODESYS's own "OPC UA Client" library is object-oriented and does not, as far as its public help shows: then the files have to be ported to its Client, Read and Write blocks.
-3. Add a POU for each block of `codesys/sim_plcopen.st` and `codesys/sim_cycle.st` and paste the declaration and the body; `E_SimKind` into a DUT.
+3. Add a POU for each block of `codesys/sim_plcopen.st`, `codesys/sim_cycle.st` and `codesys/sim_sync.st` and paste the declaration and the body; `E_SimKind` into a DUT.
 4. In the task configuration make a cyclic task of 10 ms that calls `PRG_SimCycle`.
 5. For the secured connection create the client's certificate in View > Security Screen, Devices tab, for the device. On the first attempt the server's certificate (`pki/own/cert.der`) lands under "Certificates in Quarantine" there: drag it to "Trusted Certificates". Or set `xSecure := FALSE` for a first test on the endpoint without security.
 6. Log in, download, start. Watch `iStep` go to 100, `fbPosition.lrValue` and `lrLargestError`.

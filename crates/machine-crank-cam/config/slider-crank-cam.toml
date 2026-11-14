@@ -1,0 +1,497 @@
+# The slider-crank (servo press) running its electronic cam as its cycle: the shipped config (config/common.toml, then
+# config/slider-crank.toml) with cam.run = true and nothing else changed (a test keeps it so). Load it as a whole config:
+#   sim-cli verdicts slider-crank --config crates/machine-crank-cam/config/slider-crank-cam.toml
+# What every machine of this crate shares (config/common.toml); the machine's own part follows [profile] below.
+format_version = 1
+# Obstacles the machine must not touch, as for every machine (see docs/config-reference.md): a list of
+# { name, centre_m, size_m } boxes, or [[obstacles]] tables. None by default.
+obstacles = []
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
+# the numbers in this file are used as written.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
+[effects]
+gravity = true
+payload = true
+# Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the joint times the ratio.
+joint_elasticity = true
+# Friction in the joint: bearings, guides, the screw nut's preload.
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+hard_stops = true
+holding_brake = true
+# The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
+# file). On in the shipped configs.
+process_force = true
+velocity_feedforward = true
+torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
+# config has a recorded characteristic.
+friction_feedforward = false
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = true
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
+
+# With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
+# delta picker's planetary gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+braking_resistor_heating = true
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
+# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
+# sections are [estimate]s.
+link_bending = false
+magnet_temperature = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as these machines have no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+# With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
+# friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
+seal_viscosity_exponent = 0.33
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+path_tolerance_m = 0.0
+min_clearance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
+deceleration_ratio = 1.0
+# The shape of moves (see docs/config-reference.md): "s-curve" (seven segments), "sin2" (Bestehorn), "poly345" or
+# "poly4567" (VDI 2143); a [[cycle.segment]] may name its own with shape = "...". Braking within deceleration_ratio of
+# the acceleration limits (1: as fast as speeding up). vertical_axis: the axis that lifts against gravity ("z", "-z"
+# where up is its minus direction, "" for none), which has up_acceleration_ratio of its acceleration limit upwards.
+shape = "s-curve"
+shaper_axes = []
+shaper_ei_tolerance = 0.05
+shaper_modes = []
+# With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
+# shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
+# { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
+shaper_type = "zvd"
+# The curve a trajectory runs through its poses: "c2" (a cubic spline, the acceleration continuous) or "hermite" (the
+# slopes of the neighbours, as before 14 November 2026).
+trajectory_spline = "c2"
+up_acceleration_ratio = 1.0
+vertical_axis = ""
+
+# Slider-crank: a servo press. A crank of 50 mm (100 mm stroke) on a rod of 200 mm drives a ram of 15 kg with a die of
+# 10 kg below it, behind a planetary gearbox of ratio 20; the press force rises to 3 kN over the last 6 mm before the
+# bottom dead centre. The shipped cycle swings the crank from the top dead centre to the bottom and back (pendulum mode);
+# with cam.run = true it turns on at 30 strokes a minute by the servo-press cam of [[cam.segment]] (fast approach, slow
+# through the forming zone, fast return).
+#   [catalogue]  read from a maker's document (Siemens D 32).
+#   [estimate]   ours: a small press's mechanics as the press makers' catalogues size them, not one maker's article.
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# [estimate]
+[crank]
+radius_m = 0.05
+# The crank disc and shaft about its axis.
+inertia_kgm2 = 0.02
+# "constant": one turn per stroke at constant speed (as a mechanical press's flywheel drive); "cam": the cam of [cam].
+motion = "cam"
+# The master's speed with cam.run: strokes (master periods) per minute.
+strokes_per_min = 30.0
+
+# [estimate]
+[rod]
+length_m = 0.2
+mass_kg = 3.0
+# The share of the rod's mass at the crank pin; the rest moves with the slider.
+crank_end_share = 0.5
+
+# [estimate] the ram on its gibs; incline from the crank towards the slider, -90 for a ram below the crank.
+[slider]
+mass_kg = 15.0
+incline_deg = -90.0
+
+# The die on the ram (effects.payload). [estimate]
+[mass]
+payload_kg = 10.0
+
+# With effects.process_force: the press force over the ram's distance from the bottom dead centre. [estimate] a
+# blanking or coining force of 3 kN that builds up over 6 mm, a shape as a force-stroke curve of a press shows it.
+[process]
+distance_m = [0.0, 0.001, 0.004, 0.006]
+force_n = [3000.0, 3000.0, 1500.0, 0.0]
+# The force fades in from rest to this ram speed, so that it ends where the ram turns rather than in a step.
+smoothing_m_s = 0.001
+
+# The bearings and the stops. [estimate]
+[joint]
+friction_coulomb_nm = 1.0
+friction_viscous_nm_s_rad = 0.2
+friction_smoothing_rad_s = 0.01
+# The stops leave the pendulum cycle from the top dead centre (180) to the bottom (360) room.
+min_angle_deg = 150.0
+max_angle_deg = 380.0
+stop_stiffness_nm_rad = 1000000.0
+stop_damping_nm_s_rad = 100.0
+
+# A planetary gearbox of ratio 20. [estimate] stiffness, damping and inertia as the delta picker's NRB080.
+[gearbox]
+ratio = 20.0
+efficiency = 0.97
+backlash_rad = 0.0
+stiffness_nm_rad = 35752.6
+damping_nm_s_rad = 5.0
+inertia_at_input_kgm2 = 4.06e-5
+# The torque at which `efficiency` holds: [estimate] the rated torque of the joint kit's planetary gearbox, whose
+# stiffness and inertia this one has.
+efficiency_torque_nm = 120.0
+# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC (thermal_feedback
+# .reference_c). [catalogue] Neugart PLE080, one stage: 0.20 to 0.35 N m, the middle.
+no_load_torque_nm = 0.275
+no_load_speed_rpm = 3000.0
+# With effects.gearbox_lost_motion [estimate]: the band beyond the backlash over which the flanks' stiffness rises from
+# 0 to stiffness_nm_rad, and the hysteresis loop's width at zero torque. The makers publish neither: half an arcmin each.
+lost_motion_band_rad = 1.454e-4
+hysteresis_rad = 1.454e-4
+# With effects.gearbox_stiffness_curve: knees T1, T2 and stiffnesses K2, K3 of a strain wave gear. A planetary gearbox
+# has one stiffness: the knees at the rated torque and K2 = K3 = stiffness_nm_rad, a straight line.
+stiffness_t1_nm = 120.0
+stiffness_t2_nm = 120.0
+stiffness_k2_nm_rad = 35752.6
+stiffness_k3_nm_rad = 35752.6
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level, and the speed over
+# which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.01
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min; 15 N m at the maximum current of 18 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
+# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
+stall_current_a = 4.35
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+magnet_temperature_coefficient_1_k = -0.0012
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# [estimate]
+brake_torque_nm = 8.0
+
+# [estimate] 8 rad/s is 1530 r/min of the motor.
+[axis.crank]
+max_velocity_rad_s = 8.0
+max_acceleration_rad_s2 = 80.0
+max_jerk_rad_s3 = 2000.0
+
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# [estimate] scaled from the delta picker's 0.25 by the inertia at the motor.
+velocity_kp_nm_s_rad = 0.15
+# Tn 0.01 s, not 0.03 (14 November): the integrator takes up the friction at the end of a move three times as fast,
+# and the dwell error falls from 1.06 to 0.13 mrad; `sim-cli margins slider-crank --bands` still finds at least 71.9
+# degrees and 13.4 dB.
+velocity_tn_s = 0.01
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
+# moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
+# speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
+torque_feedforward_model = "rigid"
+# With effects.friction_feedforward: the friction characteristic, torque over speed at rising speeds, linear between
+# the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
+friction_feedforward_speed_rad_s = [10.0]
+friction_feedforward_torque_nm = [0.0]
+# The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
+# it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
+precontrol_balance_s = 0.0
+# With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
+load_encoder_step = 1.0e-6
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
+braking_module = false
+
+[ratings]
+# [estimate] in rad of the crank: 15 um at the crank pin, nearly nothing of the ram's height at the dead centres. The
+# cycle settles to 0.13 mrad (2 mrad before the velocity loop's Tn was shortened).
+settling_tolerance_m = 0.0003
+# [estimate] a planetary gearbox as the delta picker's NRB080: its limit for the average torque, its repeated peak torque
+# and its input speed.
+gearbox_rated_torque_nm = 120.0
+gearbox_max_torque_nm = 192.0
+gearbox_max_input_speed_rpm = 6000.0
+# [estimate] the speed at which the gearbox's life is rated, and the slope of the tooth root's S-N line (k = 8.7, ISO
+# 6336-3, as the joint kit's planetary gearbox).
+gearbox_reference_speed_rpm = 400.0
+gearbox_gearing_wohler_exponent = 8.7
+# The DC link of the S210 converter. [estimate] as for the delta picker.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] S210 converter 6SL3210-5HE11-5UF0: 5 A rated, 19 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 4.25
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+# [estimate] what the rod, the ram's gibs and the crank's bearing carry.
+rod_max_force_n = 20000.0
+slider_guide_max_load_n = 5000.0
+crank_bearing_max_load_n = 20000.0
+
+# The electronic cam (sim_components::cam). run: the controller runs it as the cycle instead of [[cycle.segment]]; the
+# master comes up to speed in ramp_s. table_file: a CSV of master, slave (and slopes) instead of the segments; "" none.
+[cam]
+run = true
+ramp_s = 0.5
+table_file = ""
+
+# A servo-press cam over one turn of a virtual master (rad) from the top dead centre: fast approach at 1.868 times the
+# master's speed, slow (0.4) through +-0.4 rad about the bottom dead centre, fast return. The slave's rises add up to
+# 2 pi, so each stroke ends where the next begins. The changes of speed are 4-5-6-7 laws: a 3-4-5 into the slow zone
+# asks 67.4 rad/rad^3 of jerk at its ends (6 dv / dm^2 + 60 c / dm^3 with dv = 1.468, dm = 0.5, c = -0.067), at 30
+# strokes a minute (pi rad/s of master) 2090 rad/s3, more than axis.crank allows; the 4-5-6-7 has none of its own there.
+[[cam.segment]]
+master = 1.2
+slave = 2.2415927
+law = "linear"
+
+[[cam.segment]]
+master = 0.5
+slave = 0.5
+law = "4-5-6-7"
+
+[[cam.segment]]
+master = 2.0
+slave = 0.8
+law = "linear"
+
+[[cam.segment]]
+master = 2.5831853
+slave = 2.7415927
+law = "4-5-6-7"
+
+# From the top dead centre down to the bottom and back.
+[start]
+pose = [3.1415927]
+
+[[cycle.segment]]
+target = [6.2831853]
+dwell_s = 0.1
+payload = true
+
+[[cycle.segment]]
+target = [3.1415927]
+dwell_s = 0.2
+payload = true
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.008, 0.012]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+gearbox.stiffness_nm_rad = [25000.0, 45000.0]
+gearbox.damping_nm_s_rad = [2.0, 10.0]
+gearbox.inertia_at_input_kgm2 = [3.0e-5, 5.0e-5]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+motor.inductance_h = [0.008, 0.012]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+crank.inertia_kgm2 = [0.015, 0.025]
+rod.mass_kg = [2.5, 3.5]
+slider.mass_kg = [13.0, 17.0]
+mass.payload_kg = [8.0, 12.0]
+joint.friction_coulomb_nm = [0.5, 2.0]
+joint.friction_viscous_nm_s_rad = [0.1, 0.4]
+gearbox.efficiency = [0.95, 0.98]
+gearbox.no_load_torque_nm = [0.20, 0.35]
+gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
+gearbox.hysteresis_rad = [0.0, 2.909e-4]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]

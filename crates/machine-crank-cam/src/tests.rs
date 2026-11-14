@@ -6,7 +6,7 @@ use sim_components::analysis::{CycleLoad, Verdict};
 use sim_components::cam::Law;
 use sim_components::{Command, Sim};
 
-const ENTRIES: [&MachineEntry; 3] = [&SLIDER_CRANK, &ROTARY_KNIFE, &FLYING_SAW];
+const ENTRIES: [&MachineEntry; 4] = [&SLIDER_CRANK, &ROTARY_KNIFE, &FLYING_SAW, &DISC_CAM];
 
 #[test]
 fn slider_crank_passes_the_standard_suite() {
@@ -19,6 +19,10 @@ fn rotary_knife_passes_the_standard_suite() {
 #[test]
 fn flying_saw_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&FLYING_SAW);
+}
+#[test]
+fn disc_cam_passes_the_standard_suite() {
+    sim_core::testkit::run_standard_suite(&DISC_CAM);
 }
 
 /// The press of the shipped config without gravity, its process force 1 kN wherever the table reaches (0 to 50 mm).
@@ -147,11 +151,27 @@ fn with_cam(entry: &MachineEntry) -> Config {
     cfg
 }
 
-/// Each machine's default config and its cam pass every verdict: the defaults are a sized example.
+/// The cam-running example beside the machine's config (`config/<id>-cam.toml`), loaded as a front end loads a file.
+fn cam_example(entry: &MachineEntry) -> Config {
+    let path = format!("{}/config/{}-cam.toml", env!("CARGO_MANIFEST_DIR"), entry.id);
+    sim_components::load_config(entry, &std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// Each cam-running example is the shipped config with `cam.run = true` and nothing else changed, so it keeps the keys
+/// the shipped one gains; it passes every verdict (`every_default_cycle_and_every_cam_passes_its_verdicts`).
+#[test]
+fn every_cam_example_is_the_shipped_config_running_its_cam() {
+    for entry in ENTRIES {
+        assert_eq!(cam_example(entry), with_cam(entry), "{}", entry.id);
+    }
+}
+
+/// Each machine's default config and its cam example (`config/<id>-cam.toml`) pass every verdict, the cam's limits
+/// ("cam-speed", "cam-acceleration", "cam-jerk") among them: the defaults are a sized example.
 #[test]
 fn every_default_cycle_and_every_cam_passes_its_verdicts() {
     for entry in ENTRIES {
-        for cfg in [entry.config(), with_cam(entry)] {
+        for cfg in [entry.config(), cam_example(entry)] {
             let (load, verdicts) = judged(entry, &cfg);
             assert!(!load.tripped, "{}", entry.id);
             for v in verdicts {
@@ -184,8 +204,9 @@ fn a_cam_cycle_runs_one_master_period_per_pass_and_stops_by_its_ramp() {
             sim.step();
             assert!(sim.time() < stopped + 1.0, "{}", entry.id);
         }
-        // The ramp of 0.5 s, and a profile cycle.
-        assert!(sim.time() - stopped < 0.5 + 2e-3, "{}: {}", entry.id, sim.time() - stopped);
+        // The ramp of 0.5 s, the profile cycle that picks the stop up and the one that ends the cycle (to rounding: the
+        // knife ends at 0.502 s, 8032 base steps).
+        assert!(sim.time() - stopped < 0.5 + 2e-3 + 1e-9, "{}: {}", entry.id, sim.time() - stopped);
         assert!(sim.control.set_vel.iter().all(|v| *v == 0.0) && sim.control.cycle_segment().is_none());
     }
 }
@@ -199,4 +220,87 @@ fn a_cam_beyond_the_axis_limits_is_reported() {
     let sim = Sim::new(&ROTARY_KNIFE, &cfg).unwrap();
     let speed = sim.limit_violations.iter().find(|v| v.key == "limit-cam-speed").expect("a speed violation");
     assert!((speed.needed - 15.173095).abs() < 1e-3 && speed.allowed == 10.0, "{speed:?}");
+}
+
+/// A new web speed while the knife's cam runs: the master ramps from 1 m/s to 0.8 m/s over the cam's 0.5 s ramp by the
+/// sin^2 ramp, (1 + 0.8) / 2 = 0.9 m/s at mid-ramp, 0.8 m/s at its end, having gone (1 + 0.8) / 2 * 0.5 = 0.45 m; and
+/// at no profile cycle a step in its speed (the ramp's highest acceleration is 0.2 pi / (2 * 0.5) = 0.628 m/s2, 0.6 mm/s
+/// per millisecond).
+#[test]
+fn a_new_master_speed_under_a_running_cam_ramps_to_it() {
+    let mut sim = Sim::new(&ROTARY_KNIFE, &with_cam(&ROTARY_KNIFE)).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    sim.run(1.5, |_| {});
+    let cycle = with_cam(&ROTARY_KNIFE).f64("profile.cycle_s").unwrap();
+    let speed = |sim: &mut Sim| {
+        let before = sim.control.cam_master();
+        let steps = (cycle / sim.dt).round() as usize;
+        (0..steps).for_each(|_| sim.step());
+        (sim.control.cam_master() - before) / cycle
+    };
+    assert!((speed(&mut sim) - 1.0).abs() < 1e-9);
+    let mut slower = with_cam(&ROTARY_KNIFE);
+    slower.set_text("web.speed_m_s = 0.8").unwrap();
+    sim.reconfigure(&ROTARY_KNIFE, &slower).unwrap();
+    let from = sim.control.cam_master();
+    let (mut last, mut speeds) = (1.0, Vec::new());
+    for _ in 0..(0.5 / cycle).round() as usize {
+        let v = speed(&mut sim);
+        assert!((v - last).abs() < 0.628 * cycle * 1.01, "a step in the master's speed: {last} to {v}");
+        (last, speeds) = (v, [speeds, vec![v]].concat());
+    }
+    // Each speed is the mean over its cycle: the one that ends at mid-ramp is half a cycle short of it.
+    let mid = speeds[speeds.len() / 2 - 1];
+    assert!((mid - 0.9).abs() < 0.628 * cycle, "{mid}");
+    assert!((last - 0.8).abs() < 1e-5 && (speed(&mut sim) - 0.8).abs() < 1e-9, "{last}");
+    assert!((sim.control.cam_master() - cycle * 0.8 - from - 0.45).abs() < 1e-9);
+}
+
+/// The cam's limits are verdicts too: the knife's 3-4-5 at 1 m/s of web asks 15.17 rad/s of the roll (by hand in
+/// `the_rotary_knife_speeds_up_between_cuts_for_a_short_format_and_slows_for_a_long_one`); with the axis's speed limit at
+/// 10 rad/s "cam-speed" fails with 15.17 against 10, the acceleration and jerk pass. As shipped (20 rad/s) it passes.
+#[test]
+fn a_cam_beyond_the_axis_limits_fails_its_verdict() {
+    let judge = |limit: f64| {
+        let mut cfg = with_cam(&ROTARY_KNIFE);
+        cfg.set_text(&format!("axis.knife.max_velocity_rad_s = {limit}")).unwrap();
+        let mut sim = Sim::new(&ROTARY_KNIFE, &cfg).unwrap();
+        let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
+        sim_components::analysis::verdicts(&cfg, &load).unwrap()
+    };
+    let slow = judge(10.0);
+    let speed = slow.iter().find(|v| v.check == "cam-speed").expect("a cam-speed verdict");
+    assert!(!speed.ok && (speed.value - 15.173095).abs() < 1e-3 && speed.limit == 10.0, "{speed:?}");
+    assert_eq!(speed.motor, Some(0));
+    assert!(slow.iter().filter(|v| v.check.starts_with("cam-")).count() == 3);
+    assert!(slow.iter().filter(|v| v.check == "cam-acceleration" || v.check == "cam-jerk").all(|v| v.ok));
+    let shipped = ROTARY_KNIFE.config().f64("axis.knife.max_velocity_rad_s").unwrap();
+    assert!(judge(shipped).iter().filter(|v| v.check.starts_with("cam-")).all(|v| v.ok), "{shipped}");
+}
+
+/// The shipped disc cam at mid-rise by hand: base circle 60 mm, roller 15 mm, offset 10 mm: s0 = sqrt(0.075^2 - 0.01^2)
+/// = 0.0743303 m. A 3-4-5 rise of h = 30 mm over beta = 120 degrees is at theta = 60 degrees halfway up, s = 15 mm, at
+/// its steepest, s' = 1.875 h / beta = 0.0268574 m/rad, and without acceleration (s'' = 0). The pressure angle:
+/// tan(phi) = (0.0268574 - 0.01) / (0.0743303 + 0.015) = 0.188709, phi = 0.186515 rad = 10.687 degrees. At a steady
+/// 2 pi rad/s the follower (2 kg and the 1 kg tool) is pushed down by the spring's 100 + 2000 * 0.015 = 130 N and its
+/// weight 29.42 N, 159.420 N: the contact force 159.420 / cos(phi) = 162.234 N, the guide's load across
+/// 159.420 * 0.188709 = 30.084 N, and the disc's torque 159.420 * s' = 4.28161 N m (no speed term where s'' = 0).
+#[test]
+fn the_disc_cam_s_pressure_angle_and_contact_force_at_mid_rise_match_the_hand_calculation() {
+    let disc = DiscCam::from_config(&DISC_CAM.config()).unwrap();
+    assert!((disc.s0() - 0.0743303).abs() < 1e-7, "{}", disc.s0());
+    let theta = std::f64::consts::PI / 3.0;
+    let [s, s1, s2, _] = disc.lift.at(theta);
+    // (The segments' spans are given to 8 digits: halfway up is 3e-11 rad from pi / 3.)
+    assert!((s - 0.015).abs() < 1e-9 && (s1 - 0.0268574).abs() < 1e-7 && s2.abs() < 1e-6, "{s} {s1} {s2}");
+    let phi = disc.pressure_angle(theta);
+    assert!((phi - 0.186515).abs() < 1e-6 && (phi.to_degrees() - 10.687).abs() < 1e-3, "{phi}");
+    let [contact, guide] = disc.loads(theta, std::f64::consts::TAU, 0.0);
+    assert!((contact - 162.234).abs() < 1e-3 && (guide - 30.084).abs() < 1e-3, "{contact} {guide}");
+    let (mut mass, mut bias) = ([0.0], [0.0]);
+    disc.dynamics(&[theta], &[std::f64::consts::TAU], &mut mass, &mut bias);
+    assert!((bias[0] - 4.28161).abs() < 1e-5, "{bias:?}");
+    assert!((mass[0] - (0.0101 + 3.0 * s1 * s1)).abs() < 1e-12);
+    // On the base circle the follower stands: no pressure angle but what the offset leaves, atan(-e / s0).
+    assert!((disc.pressure_angle(5.5) + (0.01f64 / 0.0743303).atan()).abs() < 1e-6);
 }

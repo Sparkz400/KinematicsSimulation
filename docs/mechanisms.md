@@ -226,6 +226,7 @@ into a stroke, and two axes that work on a moving web or bar through an electron
 | `slider-crank` | servo press: crank 50 mm, rod 200 mm, ram 15 kg and die 10 kg below it, press force up to 3 kN | planetary gearbox of ratio 20 | crank angle (rad), 0 at the bottom dead centre | `rod-force`, `slider-guide-load`, `crank-bearing-load` |
 | `rotary-knife` | cross cutter: knife roll of 100 mm radius, one blade, cuts a web at 1 m/s into 0.5 m formats | planetary gearbox of ratio 10 | roll angle (rad), 0 with a blade at the cut | |
 | `flying-saw` | carriage 40 kg with a saw of 25 kg, material at 1 m/s cut into 1.5 m lengths in a window of 0.2 m | helical pinion on a rack behind a planetary gearbox of ratio 5 | x (m) | `rack-feed-force` |
+| `disc-cam` | disc cam: base circle 60 mm, a roller follower of 2 kg (and a 1 kg tool) lifted 30 mm against its return spring, 60 turns a minute | planetary gearbox of ratio 10 | disc angle (rad) | `disc-contact-force`, `disc-pressure-angle` |
 
 **Slider-crank.** The slider's distance from the crank's centre is x(θ) = r cos θ + √(l² − r² sin² θ), its speed ratio
 x'(θ) = −r sin θ − r² sin θ cos θ / w with w = √(l² − r² sin² θ), and x''(θ) = −r cos θ − r² cos 2θ / w −
@@ -254,6 +255,23 @@ the cut window W for W / v seconds; it leaves the material over another v² / (2
 by a motion law in the rest of the cut length, L − 2v² / a − W of material. A cut length that leaves no room is refused
 (`saw.cut_length_m`). The cut pushes on the carriage along the material over the way into the window (`[cut]`).
 
+**Disc cam.** A mechanical cam: the servo turns the disc, and the disc lifts a roller follower on a straight slide,
+held on it by a return spring (F0 + k s, `follower.spring_preload_n`, `spring_n_m`) and its weight. The follower's lift
+s(θ) is the disc's lift law, segments of the laws of VDI 2143 over one turn (`[[disc.segment]]`, a 3-4-5 rise of 30 mm
+over 120°, a dwell, the return, a dwell). The follower's axis is off the disc's centre by e (`follower.offset_m`), its
+roller of radius r_r rolls on the disc of base circle r_b: the roller's centre is s0 + s above the centre,
+s0 = √((r_b + r_r)² − e²), and the pressure angle, between the follower's axis and the common normal at the contact, is
+tan φ = (s' − e) / (s0 + s), s' = ds/dθ (a positive offset lowers it on the rise). The contact force along the normal is
+N = (m s̈ + F0 + k s + m g) / cos φ with s̈ = s''(θ) θ'² + s'(θ) θ''; the guide takes N sin φ across. The disc feels
+J(θ) = J_disc + m s'², the speed term m s' s'' θ'², and the spring's and the weight's torque (F0 + k s + m g) s' (their
+potential F0 s + k s² / 2 + m g s): the torque swings with the lift law, driving the disc back on the return. Signals:
+the follower's lift, speed and acceleration, the contact force, the pressure angle, the guide's load and J(θ); judged
+against `ratings.disc_max_contact_force_n` and `disc_max_pressure_angle_deg`. With `cam.run` the disc turns on at
+`disc.turns_per_min`, its master virtual. The roller stays on the disc: where N would fall below zero the follower would
+lift off, which the signal shows and the model does not part (a spring sized that short). The middle of the disc's
+range lies on the first half of the rise, where s'' > 0 and spring and weight hold the disc where it is held against
+them; past the rise's middle they turn it away.
+
 **Electronic cam.** `sim_components::cam` holds a cam as the slave's position over a master's, periodic, the slave rising
 by its advance per master period (a crank or knife one turn, the saw 0). Segments take the motion laws of VDI 2143:
 `linear` (a synchronous run), `dwell`, `3-4-5` and `4-5-6-7` (the 5th and 7th order polynomials), `cycloid` and
@@ -263,17 +281,23 @@ slave and an optional slope) runs a cubic through its points: with the slopes gi
 the periodic cubic spline (the slave's acceleration continuous). With `cam.run = true` the controller runs the cam as the
 cycle instead of `[[cycle.segment]]`: the master comes up to speed by a sin² ramp in `cam.ramp_s`, the slave's speed is
 s'(m) m' and its acceleration s''(m) m'² + s'(m) m''; a pass is one master period at speed, so `analyze` and `verdicts`
-measure the steady state; a stop runs the master down over the same ramp. A cam that asks more slave speed, acceleration or
-jerk at the master's speed than the axis limits allow is reported as `limit-cam-speed`, `-acceleration`, `-jerk` (with the
-motor limits). The slider-crank runs either at constant speed (`crank.motion = "constant"`, one turn per stroke, as a
+measure the steady state; a stop runs the master down over the same ramp, and a new master speed under a running cam
+(another `web.speed_m_s` applied while it runs) ramps from the speed the master has to the new one over `cam.ramp_s`,
+from where it stands: travel v0 t + (v1 − v0) U(t), U the ramp of unit height (`cam::master_change`). A cam that asks
+more slave speed, acceleration or jerk at the master's speed than the axis limits allow is reported when the config is
+applied as `limit-cam-speed`, `-acceleration`, `-jerk` (with the motor limits), and judged as the cycle's verdicts
+`cam-speed`, `cam-acceleration`, `cam-jerk`, per slave axis, against the axis limits. The slider-crank runs either at constant speed (`crank.motion = "constant"`, one turn per stroke, as a
 mechanical press's flywheel) or by the servo-press cam of `[[cam.segment]]` (fast approach, slow through the forming
 zone, fast return) at `crank.strokes_per_min`.
 
 The shipped configs keep `cam.run = false`: the cycle swings the crank from the top dead centre down to the bottom and
 back (a servo press in pendulum mode), indexes the knife by half a turn and back, moves the saw's carriage over its
-stroke. Run the cams with `--set cam.run=true` (app: the cam group's switch):
+stroke, turns the disc half a turn and back. Beside each lies `config/<id>-cam.toml`, the same config with
+`cam.run = true`, which passes every verdict (the cam's limits among them); or run the cams with `--set cam.run=true`
+(app: the cam group's switch):
 
 ```text
+sim-cli verdicts slider-crank --config crates/machine-crank-cam/config/slider-crank-cam.toml
 sim-cli verdicts slider-crank --set cam.run=true
 sim-cli analyze rotary-knife --set cam.run=true --set knife.format_length_m=0.4
 sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
@@ -281,6 +305,14 @@ sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
 
 The torque and following error come out of the drive model as on every machine; the cams' and the mechanisms' formulas are
 checked by hand in `cam.rs` and `machine-crank-cam`'s tests (below).
+
+The press's cam changes speed by 4-5-6-7 laws: a 3-4-5 into the slow zone asks 6 Δv / Δm² + 60 c / Δm³ = 67.4 rad/rad³
+of jerk at its ends (Δv 1.468, Δm 0.5 rad, c −0.067 rad), at π rad/s of master 2090 rad/s³, more than the crank's
+2000; the 4-5-6-7 has no jerk of its own there. The four machines' speed loops have Tn 0.01 s (the knife's Kp 0.25):
+the integrator takes up the friction at the end of a move three times as fast as with 0.03 s, and the dwell errors fall
+to 0.13 mrad (crank), 0.16 mrad (knife), 0.14 mm (saw) and 0.23 mrad (disc), with at least 35.8° and 8 dB of margin in
+every run across the bounds (`sim-cli margins <id> --bands`); the settling tolerances are 0.3 mrad, 0.3 mrad, 0.25 mm and
+0.5 mrad.
 
 ## What is checked by hand
 
@@ -315,7 +347,12 @@ x'' = −0.0187556 m/rad²; J = 0.0869757 kg m², and turning back at 2 rad/s, s
 on a 0.5 m format turns 12.758984 rad/m between cuts on average and 15.173095 at mid-span, 7.756072 on 0.8 m. The saw (1 m/s,
 5 m/s²) synchronises over 0.1 m at 7.5 m/s² peak, runs 0.2 m with the material and returns at 0.8333 m/s. Each machine passes
 the standard suite, its default cycle and its cam pass all verdicts, a cam pass lasts one master period (2, 0.5 and
-1.5 s) and a stop ends it within the ramp; the knife's cam at a 10 rad/s limit is reported at 15.17 rad/s.
+1.5 s) and a stop ends it within the ramp; the knife's cam at a 10 rad/s limit is reported at 15.17 rad/s and fails its
+verdict `cam-speed` there. A new web speed under the knife's running cam ramps the master from 1 to 0.8 m/s: 0.9 m/s at
+mid-ramp, 0.8 m/s after 0.5 s, 0.45 m on the way, no step in speed. The disc cam at 60° (mid-rise of a 3-4-5 of 30 mm
+over 120°, r_b 60 mm, r_r 15 mm, e 10 mm): s0 = 0.0743303 m, s' = 0.0268574 m/rad, tan φ = 0.188709, φ = 10.687°; at
+2π rad/s spring and weight push with 159.420 N, the contact force is 162.234 N, the guide's load 30.084 N and the disc's
+torque 4.28161 N m.
 
 ## Limits
 
@@ -327,8 +364,8 @@ the standard suite, its default cycle and its cam pass all verdicts, a cam pass 
   bending and the base do not act back on the joints (one-way).
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
-- Not built yet: mechanical (disc) cams with a follower and their contact force; a cam's master cannot yet be the
-  conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's speed-and-ramp model); no MC_CamIn over
-  OPC UA; a changed master speed is taken at once, not ramped; the crank's and the knife's joint has no stops while
-  the cam turns it on; the press force acts only on the way out (no springback) and the knife's and saw's cut force
+- A cam's master cannot yet be the conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's
+  speed-and-ramp model); a new master speed starts its ramp from the master's speed without its acceleration (a step in
+  acceleration where it comes during a ramp); the crank's, the knife's and the disc's joint has no stops while the cam
+  turns it on; the disc cam's follower is a translating one (no swinging lever) and never lifts off the disc; the press force acts only on the way out (no springback) and the knife's and saw's cut force
   only forwards.

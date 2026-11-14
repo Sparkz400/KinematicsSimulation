@@ -9,6 +9,18 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Dual-drive gantries in machine files keep their drives in step as master/slave or cross-coupled (`gantry.sync`,
+  `gantry.sync_gain_1_s`), beside each drive following the common setpoint.
+- Tool centre points over a rotary or tilting table (`machine.tcp` `table`, `table_pivot_m`): table/table and
+  head/table five-axis machines; `machines/five-axis-table.toml`.
+- A mechanical disc cam with a roller follower (`disc-cam`): lift law, pressure angle, contact force, checks
+  `disc-contact-force` and `disc-pressure-angle`.
+- Electronic cams: a new master speed under a running cam ramps to it; the cam's speed, acceleration and jerk are
+  verdicts (`cam-speed`, `cam-acceleration`, `cam-jerk`); `config/<id>-cam.toml` beside each crank-cam machine runs its
+  cam.
+- PLCopen over OPC UA: MC_GearIn, MC_GearOut, MC_CamIn and MC_CamOut (states ContinuousMotion and SynchronizedMotion),
+  with the client's cam table or the machine's own cam; ST examples `sim_sync.st`.
+
 - FMI: inputs `command.cycle`, `command.target.<axis>` with `command.move`, and `command.path` / `command.path_file`
   with `command.run_path`, which start the cycle, a move and a path as `sim-cli run --cycle`, `--move` and `--path`
   do; log categories `logEvents`, `logStatusWarning`, `logStatusError`, `logAll` in the model description, switched by
@@ -19,6 +31,11 @@ item are in [PROGRESS.md](PROGRESS.md).
 - CI: clippy of sim-py in the job "python", and the CAD mass tests (`tools/cad/test_cadmass.py`) with cadquery-ocp.
 
 ### Changed
+
+- The tool's ranges of a machine file's tool centre point are where the tip can be at every angle of the head (were
+  the strokes widened by the tool's length, most of which a head cannot reach).
+- The crank-cam machines' speed loops have Tn 0.01 s (the knife Kp 0.25), and tighter settling tolerances (0.3 mrad,
+  0.3 mrad, 0.25 mm); the press's cam changes speed by 4-5-6-7 laws, within its jerk limit.
 
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
@@ -87,6 +104,9 @@ item are in [PROGRESS.md](PROGRESS.md).
   with `link_elasticity`; off).
 
 ### Fixed
+
+- A yawing gantry's frame momentum read past the tool axes, so the standard suite of the gantry machine files panicked.
+- The crank-cam configs lacked keys other changes had added (gearbox drag and lost motion, motor stiction, ...).
 
 - A drive enabled without the DC link simulated drew its winding's first L i^2 / 2 from nowhere; it is booked on the
   supply now.

@@ -2,8 +2,9 @@
 # each with its own motor, planetary gearbox ([gearbox.mx1], [gearbox.mx2]) and pinion; Y runs along the bridge on a
 # belt, as the rack gantry's (machines/rack-gantry.toml). The bridge yaws (effects.gantry_yaw, the [machine.gantry]
 # node, values in [gantry]): its two ends run apart by its width times the yaw angle, which the two drives and the
-# joints of the bridge on its carriages hold. Each drive follows the common X setpoint on its own encoder; how far the
-# ends run apart is the synchronisation error (signal gantry.bridge_yaw.sync_error, check gantry-sync against
+# joints of the bridge on its carriages hold. Each drive follows the common X setpoint on its own encoder, or the
+# drives are kept in step as master/slave or cross-coupled (gantry.sync); how far the ends run apart is the
+# synchronisation error (signal gantry.bridge_yaw.sync_error, check gantry-sync against
 # gantry.sync_tolerance_m). The Y carriage weighs on the end it is nearer: each motor's torque shares the load by the
 # lever rule. The motors are catalogue motors (Siemens 1FK2103-4AH on an S210 at 400 V); the pinion and rack are the
 # joint kit's rack axis's placeholders; the bridge's yaw inertia and stiffness are estimates with [bounds]. Nothing
@@ -328,6 +329,12 @@ inertia_kgm2 = 2.64
 stiffness_nm_rad = 2.0e5
 damping_nm_s_rad = 50.0
 sync_tolerance_m = 1.0e-4
+# How the two drives keep in step: "plain", each follows the common setpoint; "master_slave", mx2's position loop
+# follows mx1's actual position (its following error comes on top of mx1's); "cross_coupled", the synchronisation
+# error is fed back to both speed commands with sync_gain_1_s (1/s, read only then). Half the yaw that unequal loops
+# leave at a steady speed takes Kv1 Kv2 / (Kv1 + Kv2) (docs/machine-files.md).
+sync = "plain"
+sync_gain_1_s = 25.0
 
 [pulley]
 inertia_kgm2 = 1.0e-4

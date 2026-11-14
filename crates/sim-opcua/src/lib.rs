@@ -39,13 +39,15 @@
 //! | `axis.<id>.Power.Enable`                 | Boolean | write  | MC_Power: true powers the axis                    |
 //! | `axis.<id>.Power.Status`, `.Valid`       | Boolean | read   | drives on; on and without error                   |
 //! | `axis.<id>.Power.Error`, `.ErrorID`      | Boolean, UInt16 | read | the axis error (ErrorStop), also unpowered |
-//! | `axis.<id>.<FB>.Execute`                 | Boolean | write  | rising edge starts FB = Home, MoveAbsolute, MoveRelative, Stop, Reset |
+//! | `axis.<id>.<FB>.Execute`                 | Boolean | write  | rising edge starts FB = Home, MoveAbsolute, MoveRelative, Stop, Reset, GearIn, GearOut, CamIn, CamOut |
+//! | `axis.<id>.GearIn.Master`, `.CamIn.Master`, `.CamIn.Table` | String | write | the master's axis id; the client's cam table |
+//! | `axis.<id>.GearIn.RatioNumerator`, ..., `.CamIn.CamTableID` | Double | write | inputs of GearIn and CamIn, taken on the rising edge |
 //! | `axis.<id>.MoveAbsolute.Position`, `.Velocity`, `.Acceleration`, `.Deceleration`, `.Jerk` | Double | write | inputs, taken on the rising edge |
 //! | `axis.<id>.MoveRelative.Distance`, ...   | Double  | write  | as for MoveAbsolute                               |
 //! | `axis.<id>.Stop.Deceleration`            | Double  | write  | braking deceleration of MC_Stop                   |
-//! | `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | read | outputs     |
+//! | `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | read | outputs (`InGear`, `InSync` for GearIn, CamIn) |
 //! | `axis.<id>.<FB>.ErrorID`                 | UInt16  | read   | why the block failed, 0 without error             |
-//! | `axis.<id>.State`, `.StateID`            | String, Int32 | read | PLCopen state (Disabled 1, Standstill 2, ErrorStop 3, Stopping 4, Homing 5, DiscreteMotion 6) |
+//! | `axis.<id>.State`, `.StateID`            | String, Int32 | read | PLCopen state (Disabled 1, Standstill 2, ErrorStop 3, Stopping 4, Homing 5, DiscreteMotion 6, ContinuousMotion 7, SynchronizedMotion 8) |
 //! | `axis.<id>.ActualPosition`, `.ActualVelocity` | Double | read | from the simulated axis                      |
 //! | `axis.<id>.IsHomed`, `.Error`, `.ErrorID` | Boolean, Boolean, UInt16 | read | homed; the axis error (ErrorStop) |
 //!
@@ -94,6 +96,7 @@ use opcua::types::{
     Variant,
 };
 use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
+use sim_components::cam::Cam;
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
 use std::path::{Path, PathBuf};
@@ -125,6 +128,8 @@ enum Input {
     /// A PLCopen input of an axis: `Power.Enable`, `<FB>.Execute`, or a number such as `MoveAbsolute.Position`.
     AxisFlag(usize, String, bool),
     AxisNumber(usize, String, f64),
+    /// A text input of an axis: a master's axis id or a cam table (`plcopen::TEXTS`).
+    AxisText(usize, String, String),
     ResetPacing,
     /// `Link::run_trajectory`.
     Trajectory(Vec<(f64, Vec<f64>)>),
@@ -446,8 +451,25 @@ pub async fn serve_secured(
     // The PLCopen axes stream one setpoint per setpoint interval, counted in simulation steps.
     let interval = cfg.f64("profile.setpoint_interval_s").map_err(|e| LinkError(e.key(), e.detail().into()))?;
     let stream_steps = ((interval / sim.dt).round() as u64).max(1);
-    let plc: Vec<Axis> =
+    let mut plc: Vec<Axis> =
         sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(info, home)| Axis::new(info, *home)).collect();
+    // The machine's own electronic cam, for MC_CamIn's CamTableID 1: each slave's table through 1440 points of the
+    // master's period with their slopes.
+    if let Some(run) = sim.machine.cam() {
+        let n = 1440;
+        let mut at = vec![[0.0; 4]; plc.len()];
+        let mut rows = vec![Vec::with_capacity(n + 1); plc.len()];
+        for k in 0..=n {
+            let m = run.period * k as f64 / n as f64;
+            sim.machine.cam_at(m, &mut at);
+            for (row, s) in rows.iter_mut().zip(&at) {
+                row.push((m, s[0], Some(s[1])));
+            }
+        }
+        for (axis, row) in plc.iter_mut().zip(&rows) {
+            axis.own_cam = Cam::from_table(row).ok().map(|cam| (cam, run));
+        }
+    }
     let address = listener.local_addr().map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
     let clients = Arc::new(Mutex::new(ClientTiming::default()));
     let timed = {
@@ -655,10 +677,12 @@ pub async fn serve_secured(
                 continue;
             }
             let inputs = inputs.clone();
-            let is_flag = matches!(start, Variant::Boolean(_));
+            let (is_flag, is_text) = (matches!(start, Variant::Boolean(_)), matches!(start, Variant::String(_)));
             manager.inner().simple.add_write_callback(node(format!("axis.{}.{name}", axes[i])), move |value, _| {
                 let input = if is_flag {
                     flag(&value).map(|on| Input::AxisFlag(i, name.clone(), on))
+                } else if is_text {
+                    text(&value).map(|t| Input::AxisText(i, name.clone(), t))
                 } else {
                     number(&value).map(|v| Input::AxisNumber(i, name.clone(), v))
                 };
@@ -709,9 +733,7 @@ impl SimLoop {
     fn stream(&mut self) -> Option<&'static str> {
         let setpoint = self.sim.control.external_setpoint().to_vec();
         let moving: Vec<bool> = self.plc.iter().map(Axis::moving).collect();
-        for (axis, at) in self.plc.iter_mut().zip(&setpoint) {
-            axis.advance(self.interval, *at);
-        }
+        plcopen::advance_all(&mut self.plc, self.interval, &setpoint);
         // Drives that went off in this tick (a trip, a crash) are the axes' error, ErrorID 7 or 8 after the steps, not
         // the refused setpoint.
         if !moving.contains(&true) || !self.sim.control.enabled() {
@@ -793,10 +815,12 @@ async fn simulate(mut s: SimLoop) {
                 Input::AxisFlag(i, name, on) if name == "Power.Enable" => s.plc[i].power(on),
                 Input::AxisFlag(i, name, on) => {
                     if let Some(k) = FBS.iter().position(|fb| name.strip_suffix(".Execute") == Some(*fb)) {
-                        s.plc[i].execute(k, on, s.sim.control.external_setpoint()[i], s.sim.control.busy());
+                        let (setpoint, busy) = (s.sim.control.external_setpoint()[i], s.sim.control.busy());
+                        plcopen::execute_in(&mut s.plc, i, k, on, setpoint, busy);
                     }
                 }
                 Input::AxisNumber(i, name, v) => _ = s.plc[i].set_param(&name, v),
+                Input::AxisText(i, name, t) => _ = s.plc[i].set_text(&name, t),
                 Input::ResetPacing => {
                     let mut pacing = s.pacing.lock().unwrap();
                     *pacing = Pacing { cycle_s: pacing.cycle_s, ..Default::default() };

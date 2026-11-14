@@ -1742,7 +1742,7 @@
           "type": "array"
         },
         "tcp": {
-          "description": "The tool centre point of a tool carried by rotary axes: the tool's coordinates of the three straight axes are where its tip is, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
+          "description": "The tool centre point of a tool carried by rotary axes (a head), of a workpiece on a rotary table, or both (table/table, head/table): the tool's coordinates of the three straight axes are where its tip is on the workpiece, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -1768,10 +1768,26 @@
                 "type": "array"
               },
               "rotaries": {
-                "description": "The rotary axes that carry the tool, outermost first. Ids of machine.axis nodes.",
+                "description": "The rotary axes that carry the tool (a head), outermost first; none for a table/table machine. Ids of machine.axis nodes.",
                 "items": {
                   "type": "string"
                 },
+                "type": "array"
+              },
+              "table": {
+                "description": "The rotary axes that carry the workpiece (a rotary or tilting table), outermost first: the tool's x, y and z are the tip's on the workpiece, which they turn. None for a head alone. Ids of machine.axis nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "table_pivot_m": {
+                "description": "With table: where the table's rotary axes meet, in the straight axes' coordinates (where they stand at 0), m; [0, 0, 0] if left out.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
                 "type": "array"
               },
               "tool_m": {
@@ -1787,7 +1803,6 @@
             "required": [
               "id",
               "axes",
-              "rotaries",
               "tool_m"
             ],
             "type": "object"

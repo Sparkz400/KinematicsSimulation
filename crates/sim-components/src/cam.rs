@@ -337,17 +337,25 @@ pub fn parse_table(text: &str) -> Result<Vec<(f64, f64, Option<f64>)>, usize> {
 /// a sin^2 speed ramp (no jump in acceleration), steady, and from `stop` seconds on down to rest by the mirror ramp.
 /// A stop asked for during the run-up begins once the master is up to speed.
 pub fn master_at(speed: f64, ramp: f64, t: f64, stop: Option<f64>) -> [f64; 3] {
+    master_change(0.0, speed, ramp, t, stop)
+}
+
+/// The master's travel, speed and acceleration `t` seconds after its speed is set from `from` to `speed`: the same sin^2
+/// ramp between the two over `ramp` seconds (`master_at` is the one from rest), travel from (from + speed) ramp / 2 at
+/// its end; then steady, and from `stop` on down to rest from `speed`.
+pub fn master_change(from: f64, speed: f64, ramp: f64, t: f64, stop: Option<f64>) -> [f64; 3] {
     use std::f64::consts::PI;
-    let up = |t: f64| -> [f64; 3] {
+    // The ramp of unit height from rest: travel, speed and acceleration.
+    let unit = |t: f64| -> [f64; 3] {
         if ramp <= 0.0 || t >= ramp {
-            return [speed * (t - ramp / 2.0), speed, 0.0];
+            return [t - ramp / 2.0, 1.0, 0.0];
         }
         let w = PI / ramp;
-        [
-            speed * (t / 2.0 - (w * t).sin() / (2.0 * w)),
-            speed * (w * t / 2.0).sin().powi(2),
-            speed * w / 2.0 * (w * t).sin(),
-        ]
+        [t / 2.0 - (w * t).sin() / (2.0 * w), (w * t / 2.0).sin().powi(2), w / 2.0 * (w * t).sin()]
+    };
+    let up = |t: f64| -> [f64; 3] {
+        let u = unit(t);
+        [from * t + (speed - from) * u[0], from + (speed - from) * u[1], (speed - from) * u[2]]
     };
     let t = t.max(0.0);
     let Some(stop) = stop.map(|s| s.max(ramp)) else { return up(t) };
@@ -360,8 +368,8 @@ pub fn master_at(speed: f64, ramp: f64, t: f64, stop: Option<f64>) -> [f64; 3] {
         return [base, 0.0, 0.0];
     }
     // The run-up turned round: travel ramp / 2 at most, speed falling as cos^2.
-    let r = up(tau);
-    [base + speed * tau - r[0], speed - r[1], -r[2]]
+    let r = unit(tau);
+    [base + speed * (tau - r[0]), speed * (1.0 - r[1]), -speed * r[2]]
 }
 
 /// The slave's position, speed and acceleration from the cam's [s, s', s'', s'''] and the master's [m, m', m''].
@@ -472,6 +480,32 @@ mod tests {
         assert!(with.advance.abs() < 1e-12 && (with.period - std::f64::consts::TAU).abs() < 1e-12);
         assert_eq!(parse_table("0, 1\n1, x\n"), Err(2));
         assert_eq!(Cam::from_table(&[(0.0, 0.0, None), (1.0, 1.0, Some(1.0)), (2.0, 2.0, None)]).unwrap_err(), 0);
+    }
+
+    /// A new master speed while the cam runs, from 2 to 4 m/s over a ramp of 0.5 s: the speed (V0 + V1) / 2 = 3 m/s at
+    /// mid-ramp, with the ramp's highest acceleration (V1 - V0) pi / (2 ramp) = 2 pi m/s2 there; 4 m/s at its end,
+    /// having gone (V0 + V1) ramp / 2 = 1.5 m; at no point a step in speed or acceleration (0 at both ends). 0.25 s later
+    /// it has gone 1.5 + 4 * 0.25 = 2.5 m. Asked to stop at 1 s, it runs down from 4 m/s over 0.5 s: 1 m more.
+    #[test]
+    fn a_new_master_speed_ramps_from_the_old_one() {
+        use std::f64::consts::PI;
+        let (v0, v1, ramp) = (2.0, 4.0, 0.5);
+        assert_eq!(master_change(v0, v1, ramp, 0.0, None), [0.0, 2.0, 0.0]);
+        let mid = master_change(v0, v1, ramp, 0.25, None);
+        assert!((mid[1] - 3.0).abs() < 1e-12 && (mid[2] - (v1 - v0) * PI / (2.0 * ramp)).abs() < 1e-12, "{mid:?}");
+        let end = master_change(v0, v1, ramp, ramp, None);
+        assert!((end[0] - 1.5).abs() < 1e-12 && (end[1] - 4.0).abs() < 1e-12 && end[2].abs() < 1e-12, "{end:?}");
+        assert!((master_change(v0, v1, ramp, 0.75, None)[0] - 2.5).abs() < 1e-12);
+        let stopped = master_change(v0, v1, ramp, 3.0, Some(1.0));
+        assert!((stopped[0] - (1.5 + 4.0 * 0.5 + 1.0)).abs() < 1e-12 && stopped[1].abs() < 1e-12, "{stopped:?}");
+        let h = 1e-6;
+        for t in [0.1, 0.3, 0.49, 0.6, 1.2] {
+            let (a, b) = (master_change(v0, v1, ramp, t - h, Some(1.0)), master_change(v0, v1, ramp, t + h, Some(1.0)));
+            let at = master_change(v0, v1, ramp, t, Some(1.0));
+            assert!(
+                ((b[0] - a[0]) / (2.0 * h) - at[1]).abs() < 1e-6 && ((b[1] - a[1]) / (2.0 * h) - at[2]).abs() < 1e-5
+            );
+        }
     }
 
     /// The master's sin^2 ramp: up to speed in `ramp` seconds having gone ramp V / 2, down again over the same.

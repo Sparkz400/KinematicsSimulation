@@ -176,6 +176,14 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
             merge(&mut all, &nested);
         }
     }
+    // A dual-drive gantry's synchronisation (`gantry.sync`, read by the controller).
+    if net.gantry.as_ref().is_some_and(|g| g.drives.iter().flatten().count() >= 2) {
+        let sync = Table::from_iter([
+            ("sync".to_string(), Value::String("plain".into())),
+            ("sync_gain_1_s".to_string(), Value::Float(0.0)),
+        ]);
+        merge(&mut all, &Table::from_iter([("gantry".to_string(), Value::Table(sync))]));
+    }
     if let Ok(machine) = cfg.get("machine") {
         all.insert("machine".into(), machine.clone());
     }
