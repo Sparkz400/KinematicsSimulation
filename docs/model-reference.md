@@ -181,11 +181,18 @@ with, on the T-gantry, side = m_z · a_x and tilt = 2 · side · (z_com_drop −
 Source: `ShaftFriction`, `Ripple` in [`mech.rs`](../crates/sim-components/src/mech.rs).
 
 ```text
-τ_shaft = T_c · tanh(ω / ω_s) + b · ω                                  friction opposing the speed
+g(ω)    = s_seal · (T_c + (T_s − T_c) · exp(−(ω / ω_st)²))            sliding level, from breakaway to Coulomb
+τ_shaft = g(ω) · tanh(ω / ω_s) + b · ω + T_0(ω, ν)                     friction opposing the speed
 τ_out   = τ · (1 + ρ · sin(n_r · φ)) + T_cog · sin(n_c · φ)           torque at the shaft for a torque τ from the current
 ```
 
-T_c `friction_coulomb_nm`, b `friction_viscous_nm_s_rad`, ω_s `friction_smoothing_rad_s`; ρ `ripple_fraction`, n_r `ripple_order`, T_cog `cogging_nm`, n_c `cogging_order`. The Coulomb step is smoothed with tanh so that a shaft at rest sees no chattering torque; this friction has no stiction. Ripple and cogging are one harmonic each.
+T_c `friction_coulomb_nm`, b `friction_viscous_nm_s_rad`, ω_s `friction_smoothing_rad_s`; ρ `ripple_fraction`, n_r `ripple_order`, T_cog `cogging_nm`, n_c `cogging_order`. The Coulomb step is smoothed with tanh so that a shaft at rest sees no chattering torque. Ripple and cogging are one harmonic each.
+
+- **Breakaway** (`effects.motor_stiction`). The level falls from the breakaway torque T_s `friction_breakaway_nm` at rest to T_c along a Stribeck curve over ω_st `friction_stribeck_rad_s`. A breakaway below T_c counts as T_c, as for the guides; off, T_s = T_c. With the tanh smoothing the shaft holds up to T_s near rest as a steep viscous slope, not as a stuck state: a drive that pushes below T_s creeps at a fraction of ω_s.
+- **The gearbox's no-load torque** T_0 (`effects.gearbox_drag`, see [gearbox](#gearbox)) acts on the shaft too: the motor turns the gearbox's input.
+- **Seals over temperature** (`effects.thermal_feedback`). On a geared motor the shaft's seal is the gearbox's input seal and runs in its lubricant: s_seal = (ν / ν_ref)^m with m `thermal_feedback.seal_viscosity_exponent` and ν the gearbox's lubricant at its temperature (see [temperature feedback](#temperature-feedback)); 1 without the feedback.
+
+Assumptions: the tanh smoothing stands for the bristles of a friction state (no presliding displacement, no dwell-time growth of the breakaway); the seal exponent is an estimate (0.33, bounds 0 to 0.5): no seal maker's curve of breakaway over temperature was read.
 
 ## Tooth meshing
 
@@ -207,18 +214,41 @@ Between motor shaft (angle φ) and pulley (angle θ). Stiffness, damping and bac
 
 ```text
 twist    = φ / i − θ
-engaged  = twist − clamp(twist, −β/2, +β/2)            twist beyond the dead zone; β = backlash_rad
-τ        = k_g · engaged + c_g · (dφ/dt / i − dθ/dt)   while engaged ≠ 0, else 0
+e        = max(|twist| − β/2, 0)                       twist beyond the dead zone; β = backlash_rad
+ẇ        = dφ/dt / i − dθ/dt                           the twist's rate
+τ        = sign(twist) · f(e) + c_g · ẇ + T_h · tanh(ẇ / 1e-3 rad/s)    while e > 0, else 0
 τ_out    = τ · η^tanh(τ · ω_out / 0.5 W)               on the pulley
 τ_rotor  = τ / i                                       reaction on the motor shaft
 ```
+
+The spring f(e), as gearbox makers measure the torsional characteristic with the input locked:
+
+```text
+f(e) = K1 · e² / (2 b)                                 e < b: the lost-motion band, the flanks come into full contact
+f(e) = F(e − b/2)                                      beyond it
+F(x) = K1 · x                                          x ≤ T1 / K1
+F(x) = T1 + K2 · (x − T1 / K1)                         up to T2
+F(x) = T2 + K3 · (x − T1 / K1 − (T2 − T1) / K2)        beyond
+```
+
+b `lost_motion_band_rad` and T_h = K1 · w / 2 with w `hysteresis_rad` (`effects.gearbox_lost_motion`, else both 0); T1, T2, K2, K3 `stiffness_t1_nm`, `stiffness_t2_nm`, `stiffness_k2_nm_rad`, `stiffness_k3_nm_rad` (`effects.gearbox_stiffness_curve`, else T1 = T2 = ∞: one stiffness K1 = `stiffness_nm_rad`). The twist at a torque T is then Harmonic Drive's T / K1, T1 / K1 + (T − T1) / K2 or T1 / K1 + (T2 − T1) / K2 + (T − T2) / K3 (plus b/2 past the band). T_h is a friction in the flanks and bearings: loading and unloading run on curves apart by 2 T_h / K1 = w in angle, Harmonic Drive's "hysteresis loss" (1 arcmin for sizes 25 and 32 at ratio 50 and up). The spring's energy is the integral of f, so the energy balance holds with all of it.
+
+No-load running torque (`GearDrag`, `effects.gearbox_drag`), at the input, added to the motor shaft's friction:
+
+```text
+T_0(ω, ν)    = T_0,ref · (ν / ν_ref · |ω| / ω_ref)^(2/3) · sign(ω)
+η_teeth      = 1 / (1 / η − i · T_0,ref / T_η)                at most 1
+η(T2, ω, ν)  = T2 / (i · (T2 / (i · η_teeth) + T_0(ω, ν)))    the gearbox's efficiency map
+```
+
+T_0,ref `no_load_torque_nm` at ω_ref `no_load_speed_rpm` and 20 °C (`thermal_feedback.reference_c`), as makers quote it (Neugart: "average idle torque"; WITTENSTEIN: T012 "at n1 = 3000 rpm and 20 °C gearbox temperature"; Harmonic Drive: charts over speed and temperature). The exponent 2/3 is Palmgren's law for the drag of rolling bearings in oil, M0 ∝ (ν n)^(2/3) (SKF's rolling bearing catalogue), which carries both speed and viscosity. Harmonic Drive's chart of a size 32 gear at 2000 r/min falls from about 50 to 27 N cm from 20 to 40 °C, a factor 0.54; the law with B = 4000 K gives 0.56. With the drag the configured efficiency η (`gearbox.efficiency`) holds at the output torque T_η `efficiency_torque_nm` at ω_ref and 20 °C: the teeth's own efficiency η_teeth is what is left of it. Below T_η, at speed and in the cold the drag takes a larger share, so the efficiency falls, as the makers' charts show (Siemens' gearbox manual: in the partial load range, especially cold, the efficiency is always lower). This one map serves planetary, strain wave and worm gears; its points are tested in `the_efficiency_map_falls_at_part_load_slow_speed_and_in_the_cold_as_calculated`. With the drag on, [temperature feedback](#temperature-feedback) takes the viscous share of the efficiency as 0: the drag is that share.
 
 - **Stiffness and backlash.** Inside the dead zone nothing is transmitted. With `effects.gearbox_backlash` off, β = 0.
 - **Flanks cannot pull.** With backlash on, if the damping term would reverse the torque while the flanks separate (τ · engaged < 0), the torque is zero. With backlash off the connection is a plain spring-damper and can pull, as a coupling does.
 - **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / η. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
 - **At rest** under an output torque the twist is τ / k_g + β/2 on the matching side.
 
-Assumptions: one constant efficiency (the catalogue's full-load value; with `effects.thermal_feedback` it follows the gearbox's temperature, see [temperature feedback](#temperature-feedback)), no speed- or load-dependent loss, no no-load torque, constant stiffness, backlash as a hard dead zone. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+Assumptions: the hysteresis is a friction on the twist's rate, not a state: a twist that stands still holds none of it (the gearbox at rest settles on the middle curve), and at the small amplitudes of a frequency response it locks the flanks like a damper of T_h / (1e-3 rad/s) (half an arcmin on the delta's SP+ 100 took the velocity loop's crossover from 225 to 19 Hz), so it is 0 in the shipped configs; a Dahl-type state per gearbox would fix both. The lost-motion band is in the gearbox's angle; behind a screw or rack its stretch by the converter's spring is left out. The drag's heat is counted with the motor shaft's friction (its loss, and with `part_heating` no warming of the gearbox), not the gearbox's. A worm's tooth efficiency does not fall with sliding speed. The tooth efficiency is at most 1: where the catalogue's no-load torque at its reference speed is more than its whole loss (the SP+ 100: 0.93 N m at 3000 r/min, where 6 % of 259 N m at ratio 20 is 0.78 N m), the gearbox reaches 93.3 % instead of 94 % at T2N and 20 °C. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
 
 ## Hard stops
 
@@ -1395,7 +1425,8 @@ belt:    EA = EA_config · (1 − alpha · (T_ambient − T_ref))               
 
 - **Viscosity.** Andrade's (Arrhenius) law for a lubricant's viscosity. B from a mineral oil's viscosities at 40 and 100 °C (viscosity index about 100): ISO VG 32 (32 and 5.4 mm²/s) gives 3470 K, VG 68 (68 and 8.7) 4000 K, VG 220 (220 and 19.4) 4730 K; 4000 K, bounds 3470 to 4730. 30 K above the reference the oil has 0.2817 of its viscosity, at −10 °C 4.74 times.
 - **Guide.** The viscous coefficient is the lubricant's drag and follows the viscosity; the Coulomb level of a rolling contact and its seals is taken as constant.
-- **Gearbox.** The model has one efficiency and no no-load torque. Makers quote the no-load running torque at 20 °C and it falls as the gearbox warms (churning and bearing drag in thinner oil), while the tooth friction under load does not. So a share s of the loss (1 − η) follows the viscosity, the rest stays: an estimate, s = 0.5, bounds 0.25 to 0.75. 30 K warm, a 95 % gearbox has 96.80 %. No maker publishes the curve; a search found the 20 °C convention and the direction, nothing more.
+- **Gearbox.** Without `effects.gearbox_drag` the model has one efficiency and no no-load torque. Makers quote the no-load running torque at 20 °C and it falls as the gearbox warms (churning and bearing drag in thinner oil), while the tooth friction under load does not. So a share s of the loss (1 − η) follows the viscosity, the rest stays: an estimate, s = 0.5, bounds 0.25 to 0.75. 30 K warm, a 95 % gearbox has 96.80 %. With `effects.gearbox_drag` the churning and bearing drag is the [no-load torque](#gearbox) itself, T_0 ∝ (ν / ν_ref)^(2/3) at the gearbox's temperature, and s is taken as 0: the efficiency is the teeth's. Harmonic Drive's chart of a size 32 gear (20 to 40 °C: 0.54) agrees with this law at B = 4000 K (0.56).
+- **Shaft seals.** The motor shaft's Coulomb and breakaway levels are its seals' and bearings'; on a geared motor the seal is the gearbox's input seal in its lubricant: (ν / ν_ref)^m at the gearbox's temperature, m `seal_viscosity_exponent` (estimate 0.33, bounds 0 to 0.5). At −10 °C (ν 4.74 times) that is 1.67 times the level, at 30 K above the reference 0.66.
 - **Belt.** Polyurethane softens as it warms, but the steel cords carry EA, and steel's modulus falls by about 2.5e-4 per K: alpha = 3e-4 per K (bounds 0 to 1e-3), 0.6 % at 20 K. The belt is taken at ambient: it has no loss of its own in the model, and an EA that changed while running would change the stored energy without a loss to account for it. So the belt's factor acts only when ambient differs from the reference.
 - Without part heating's losses the parts stay at ambient; the windings are not part of this (their resistance already follows their temperature, `effects.winding_heating`).
 

@@ -192,8 +192,15 @@ pub(crate) fn read(
 
 /// Effects that take energy out or put it in, as on the registered planar delta: the standard suite runs with them
 /// off.
-pub const LOSSY_EFFECTS: [&str; 5] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 7] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+];
 
 /// A vector in the x-z plane, (x, z).
 type V2 = [f64; 2];
@@ -470,7 +477,7 @@ impl LinkageMachine {
                     let twist: V2 = std::array::from_fn(|k| {
                         let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k])
                             - self.joints[k].output_torque(t[k], 0.0);
-                        held / self.joints[k].gearbox.stiffness
+                        self.joints[k].gearbox.spring_twist_signed(held)
                     });
                     for signs in 0..4 {
                         let half = |k: usize| {
@@ -859,6 +866,7 @@ impl Machine for LinkageMachine {
         let geared: Vec<usize> = self.geared().collect();
         for (k, rise) in geared.into_iter().zip(rises) {
             self.joints[k].gearbox.efficiency = law.gearbox_efficiency(*rise);
+            self.joints[k].shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
 

@@ -2783,3 +2783,71 @@ Left open:
   in the file; `--set` cannot add it.
 - The shafts' radial load is judged once for the machine (`gearbox-radial-load`), not per motor.
 - The user guide's time-optimal example ("reaches the rated speed on its first line") was not rerun.
+
+## Friction and the gearbox (14 November)
+
+The audit of 14 November found friction and the gearbox the largest share of RMS torque and of load-side following
+error, and the models below catalogue level: no no-load torque, a constant efficiency, the shaft's friction without
+breakaway, backlash as a hard dead zone at the catalogue's maximum and a constant stiffness; the delta D3 failed
+settling with its catalogue gearbox, the D2 passed only on an estimated 1 arcmin and its lines planned within the axis
+limits took its gearbox to 248 of 192 N m. Four switches, all in `mech.rs`, so that every machine has them through
+`ShaftFriction` and `Gearbox`; on in the delta pickers D2 and D3 (and the planar delta file), off elsewhere.
+
+| Item | What was built | Test |
+| --- | --- | --- |
+| Gearbox no-load torque (`effects.gearbox_drag`) | `GearDrag`: T0 = T0_ref (nu / nu_ref * n / n_ref)^(2/3), Palmgren's law for bearings in oil (SKF), at the input with the motor shaft's friction; keys `gearbox.no_load_torque_nm`, `no_load_speed_rpm`. Catalogue values: Neugart PLE060/PLE080 (the NRB060/NRB080) 0.10 to 0.15 and 0.15 to 0.25 N m; WITTENSTEIN SP+ 100 MF, two stages, i = 20, T012 0.93 N m at 3000 r/min and 20 degC; Harmonic Drive sizes 32 and 25 read off its chart (0.5, 0.2 N m at 2000 r/min). The chart's fall from 20 to 40 degC (0.54) is what the law gives with B = 4000 K (0.56). Never on a coupling | `the_no_load_torque_follows_speed_and_temperature_by_palmgrens_law`: 0.93, 0.585863 (1500 r/min), 0.520199 (40 degC), 1.810278 and 1.140404 (0 degC) N m by hand |
+| Efficiency map | `gearbox.efficiency` holds at `gearbox.efficiency_torque_nm` (the rated torque) with the drag: the teeth's efficiency is 1 / (1 / eta - i T0_ref / T_eta), at most 1; eta(T2, n, nu) = T2 / (i (T2 / (i eta_teeth) + T0(n, nu))) falls at part load, at speed and cold, for planetary, strain wave and worm gears alike. With the drag, the thermal feedback's viscous share of the loss is 0 (the drag is that share) | `the_efficiency_map_falls_at_part_load_slow_speed_and_in_the_cold_as_calculated`: NRB060 teeth 0.964314; 0.95 at 40 N m, 0.909499 at 10 N m, 0.929041 at 1500 r/min, 0.936837 at 0 degC, 0.956255 at 40 degC; SP+ 100 teeth 1, 0.932997 at T2N; without drag the efficiency to the bit |
+| Shaft breakaway (`effects.motor_stiction`) | `ShaftFriction`: level Fc + (Fs - Fc) exp(-(w / ws)^2) under the tanh smoothing; keys `motor.friction_breakaway_nm` (1.5 times the Coulomb level, an estimate in every config) and `friction_stribeck_rad_s` (2). A breakaway below the Coulomb level counts as it | `the_shaft_breaks_away_at_its_stiction_level_and_slides_at_its_coulomb_level`: 0.075 N m at rest, 0.055966 at 0.5 rad/s, 0.05 at 20 rad/s; from the config with and without the switch |
+| Friction over temperature | With `effects.thermal_feedback` the drag follows the gearbox's lubricant (nu at its rise), and the shaft's Coulomb and breakaway levels too, (nu / nu_ref)^m, m `thermal_feedback.seal_viscosity_exponent` (0.33, estimate): a geared motor's shaft seal is the gearbox's input seal. `ShaftFriction::set_oil` from every machine's `set_part_temperatures` (D2, D3, D4, single axis, T-gantry, chain, linkage, machine files) | the seal factor 1.390544 at 0 degC in the breakaway test |
+| Lost motion (`effects.gearbox_lost_motion`) | `Gearbox::spring`: over `gearbox.lost_motion_band_rad` beyond the backlash the stiffness rises from 0 (T = K1 e^2 / 2b), then K1 (e - b/2); a hysteresis T_h = K1 w / 2 (`gearbox.hysteresis_rad`, the loop's width at zero torque) as a friction on the twist's rate; energy, loss power and `static_twist` follow. The setpoint slack (`rest_sag` of D2, D3 and the linkage) takes the band through `spring_twist_signed` | `the_lost_motion_band_and_the_hysteresis_loop_are_the_calculated_ones`: 0.25, 1 and 2 N m in and past a 2e-4 rad band, static twist 7e-4 rad, energy's slope; loop 2.909e-4 rad wide, zero torque at -1.4545e-4 and +1.4545e-4 rad, 0.72725 W lost |
+| Typical backlash | The delta configs take 2.25 arcmin, three quarters of the catalogue's maximum 3, with bounds 1.5 to 3 arcmin (the catalogue's figure is a maximum) | the bands below |
+| Three-segment stiffness (`effects.gearbox_stiffness_curve`) | K1 to T1, K2 to T2, K3 beyond (`gearbox.stiffness_t1_nm`, `_t2_nm`, `_k2_nm_rad`, `_k3_nm_rad`), Harmonic Drive's Table 43 in the joint kit's strain wave configs (size 32: 29 / 108 N m, 1.1e5 / 1.2e5 N m/rad; size 25: 14 / 48, 5.0e4 / 5.7e4); behind a screw or rack each segment in series with the converter | `the_three_segment_stiffness_twists_as_harmonic_drive_calculates`: 4.328358e-4, 1.151018e-3, 1.392684e-3 rad at 29, 108, 137 N m (the table's 4.4e-4 and 11.6e-4) |
+| Precision gearbox in the catalogue | `catalog/siemens/gearbox_sp.csv`: Siemens' SP100 (WITTENSTEIN SP+ 100), two stages, frames 03 to 05, typed from the equipment manual 04/2025 chapter 6.5 with standard and reduced backlash (new optional schema column `backlash_reduced_rad`). Siemens fits SP+ to 1FT2 motors only | `catalog.py validate` |
+| D3 and D2 | Gearbox SP100-05-20 with reduced backlash (94 %, 31 N m/arcmin, 0.70 kg cm2, 347 / 278 N m, 59 r/min reference speed, 6500 r/min input), motor 1FT2105-4AF (D 32 gives it the 1FK2105-4AF's torque, current and inertia). D2's velocity gain 0.25 to 0.24: the stiffer gearbox left 34.6 degrees with friction off | `sim-cli verdicts` and `--bands` pass every check; margins below |
+
+Numbers on the shipped configs (`sim-cli analyze`, `verdicts`; arm 1):
+
+| Config | RMS torque before / after (N m) | Settling before / after (mm) | Other |
+| --- | --- | --- | --- |
+| delta-d3 | 2.576 / 2.512 (peak 7.643 / 7.118) | 0.676 FAIL / 0.298 (bands 0.255 to 0.342) | gearbox peak 133.9 of 192 / 126.3 of 278; gearing life 11579 h FAIL / no damage below rated; tracking error peak 4.02 / 1.43 mm |
+| delta-d2 | 2.859 / 2.828 (peak 8.813 / 8.320) | 0.348 (estimated 1 arcmin) / 0.377 (bands 0.329 to 0.425) | gearbox peak 154.3 of 192 / 147.9 of 278; the line within the axis limits of the CLI's path test 247.4 of 192 / 232.8 of 278 N m |
+| single-axis, T-gantry and the other machines | unchanged (0.2007; 0.1654 and 0.1534) | unchanged | the new switches off: bit-identical traces (`analyze` compared byte for byte) |
+
+What each switch does on the D3 (arm 1, from the configuration as shipped, one switch off at a time): the drag 2.512
+against 2.529 N m RMS without it (its teeth then lose 6 %, with it the drag carries the loss), settling 0.298 against
+0.242 mm; the breakaway 0.298 against 0.304 mm; the lost-motion band 0.298 against 0.269 mm; all three off 2.526 N m
+and 0.220 mm. Velocity-loop margins (`margins --bands`): D3 at least 47.4 degrees and 9.8 dB, with motor and joint
+friction and the drag off 35.2 degrees and 8.4 dB (crossover near 260 Hz); D2 at 0.24 at least 47.8 degrees and
+10.0 dB, 35.4 degrees and 8.8 dB. The worst corner of all estimates at once (`verdicts --bands --worst`) fails
+settling on both: D3 0.537 mm, D2 0.744 mm (the D2 failed it before too, 0.60 mm with its estimated 1 arcmin); the
+nominal verdicts and every bound one at a time pass. `optimise delta-d3`, which refused the failing cycle before,
+shortens it from 0.720 to 0.490 s (the app's optimiser test now runs on the D3).
+
+Found on the way: the rate-switched hysteresis acts at the small amplitudes of a frequency response as a damper of
+T_h / (1e-3 rad/s) that locks the flanks: with half an arcmin on the SP+ 100 the D3's crossover fell from 225 to 19 Hz.
+It is 0 in the delta configs. Without a drag, `tooth_efficiency` returned 1 / (1 / eta), not eta, which moved the
+T-gantry's peak torque in the fifth digit with every switch off; fixed and tested (0.94 to the bit).
+
+Touched outside the area (small, local): `analysis.rs` (`PATH_EFFECTS`: the new keys' bounds run only with their
+switch), `catalog.toml` and the gearbox schema, `transmission.rs` (`Converter::apply` carries the new gearbox fields),
+the machines' `set_part_temperatures` and `LOSSY_EFFECTS` (the drag and the lost motion are losses), the D3's, D2's and
+linkage's `rest_sag`, the D4's tool gearbox (a shortcut comment), the test configs of `joint.rs`, the flip test of
+`sim-machines/tests/control.rs` (a coupling has no drag, a planetary's curve is a line), the D2's, D3's and
+`fit_joints` tests that pinned the NRB080's inertia, rating or efficiency (pinned in the test, or read from the
+config), every config file, docs (model and config reference, user guides EN/DE, README EN/DE), i18n EN/DE.
+
+Left open:
+
+- The hysteresis is a friction on the twist's rate, not a state: at rest it holds nothing, in a frequency response it
+  locks the flanks. A Dahl-type state per gearbox (in every machine's state vector) would make the loop right in both.
+- The drag's heat is counted with the motor shaft's friction: its loss is in the motor's share and, with
+  `part_heating`, it does not warm the gearbox. The T-gantry's two motors share one `ShaftFriction`, whose oil follows
+  the mean of the two gearboxes' rises.
+- Below Palmgren's nu n = 2000 the drag is still (nu n)^(2/3), where SKF holds it constant; the seal exponent and the
+  lost-motion band are estimates (no maker's curve read); a worm's tooth efficiency does not fall with sliding speed.
+- The D4's tool gearbox takes the arms' new gearbox keys (its switches are off). The joint kit's arms keep their own
+  K1 estimates (the SCARA's 4e4 against Harmonic Drive's 3.1e4); the curve and drag are off there.
+- Not run here: the test suites (the coordinator's). Checked: `cargo check --workspace --tests`, clippy on the crates
+  touched, `catalog.py validate`, and by `sim-cli` the slack tests' conditions (D2: 0.287 mm at rest against a slack of
+  0.340 mm; D3: 0.660 against 0.727 mm) and that every new switch changes the run where the flip test expects it.
+- `sim-cli search` does not consider the SP+ table (it pairs gearboxes by frame code, and SP+ fits 1FT2 only).

@@ -35,6 +35,25 @@ backlash_rad = 0.0
 stiffness_nm_rad = 67000.0
 damping_nm_s_rad = 30.0
 inertia_at_input_kgm2 = 1.4e-4
+# The torque at which `efficiency` holds: the strain wave gear's rated torque, as Harmonic Drive gives its efficiency
+# ([estimate] as strain_wave.rated_torque_nm).
+efficiency_torque_nm = 137.0
+# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC. [catalogue] read
+# off Harmonic Drive's chart (CSF/CSG engineering data, "No Load Running Torque", housed unit, grease SK-1A/SK-2,
+# ratio 100, size 32, 2000 r/min, 20 degC): about 50 N cm, to about 20 %. The chart's fall from 20 to 40 degC (a
+# factor of about 0.54 for size 32) is what Palmgren's law with thermal_feedback.viscosity_slope_k gives (0.56).
+no_load_torque_nm = 0.5
+no_load_speed_rpm = 2000.0
+# With effects.gearbox_lost_motion: no backlash and no band (the flexspline's teeth are in mesh preloaded);
+# [catalogue] the hysteresis loss, Harmonic Drive's Table 44 (size 32, ratio 50 and up): 2.9e-4 rad (1 arcmin).
+lost_motion_band_rad = 0.0
+hysteresis_rad = 2.909e-4
+# With effects.gearbox_stiffness_curve: [catalogue] Harmonic Drive's Table 43 (ratio 80 and up, size 32): K1 is
+# stiffness_nm_rad up to T1, K2 up to T2, K3 beyond.
+stiffness_t1_nm = 29.0
+stiffness_t2_nm = 108.0
+stiffness_k2_nm_rad = 110000.0
+stiffness_k3_nm_rad = 120000.0
 
 # With gear = "strain-wave": the life by Harmonic Drive's method (transmission::StrainWave). [estimate]
 [strain_wave]
@@ -55,6 +74,10 @@ rotor_inertia_kgm2 = 1.7e-4
 friction_coulomb_nm = 0.05
 friction_viscous_nm_s_rad = 2.0e-4
 friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
+# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
 ripple_fraction = 0.02
 ripple_order = 24.0
 cogging_nm = 0.02
@@ -213,3 +236,6 @@ ratings.line_module_efficiency = [0.95, 0.99]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]
+gearbox.no_load_torque_nm = [0.4, 0.6]

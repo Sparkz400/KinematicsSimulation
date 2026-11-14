@@ -594,65 +594,64 @@ Grenzen bei dieser Aufgabe:
 
 ## Einen Delta-Picker auslegen
 
-`delta-d3` ist ein Drei-Arm-Delta mit Drehantrieben (Clavel), ausgelegt wie der Autonox DELTA RL3-1200-3kg: Arbeitsraum 1200 mm Durchmesser, 200 mm hoch am Rand und 386 mm in der Mitte, 3 kg Nutzlast, drei Siemens 1FK2105-4AF an S210-Umrichtern hinter Planetengetrieben mit der Übersetzung 20. Autonox veröffentlicht Armlängen und Massen nicht; [die Konfiguration](../../crates/machine-delta-d3/default.toml) kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` und gibt den Schätzwerten Grenzen. Ihr Zyklus ist der Adept-Zyklus 25/305/25 mm (25 mm hoch, 305 mm quer, 25 mm ab und zurück), jedes Stück eine eigene Bewegung mit Halt, mit 35 ms für den Greifer beim Aufnehmen und Ablegen.
+`delta-d3` ist ein Drei-Arm-Delta mit Drehantrieben (Clavel), ausgelegt wie der Autonox DELTA RL3-1200-3kg: Arbeitsraum 1200 mm Durchmesser, 200 mm hoch am Rand und 386 mm in der Mitte, 3 kg Nutzlast, drei Siemens 1FT2105-4AF an S210-Umrichtern hinter Präzisions-Planetengetrieben SP100 mit der Übersetzung 20. Autonox veröffentlicht Armlängen und Massen nicht; [die Konfiguration](../../crates/machine-delta-d3/default.toml) kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` und gibt den Schätzwerten Grenzen. Ihr Zyklus ist der Adept-Zyklus 25/305/25 mm (25 mm hoch, 305 mm quer, 25 mm ab und zurück), jedes Stück eine eigene Bewegung mit Halt, mit 35 ms für den Greifer beim Aufnehmen und Ablegen.
 
 Das Werkzeug ist die Mitte der Plattform, x, y und z in Metern, z nach oben ab der Ebene der Schulterachsen (die Plattform arbeitet also bei etwa −0,7 bis −1,1 m). Ein Ziel außerhalb des Arbeitsraums wird mit dem Grund abgelehnt: außerhalb des Zylinders oder unter seinem kugeligen Boden, außer Reichweite der Arme, jenseits eines Armanschlags oder zu nahe an einer Singularität.
 
 ```text
 $ sim-cli analyze delta-d3
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.008 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.009 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
-1,0.720000,7.642678,2.575830,120.0682,0.5101,0.5600,,,2.4400,24.83,...
-2,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
-3,0.720000,3.986994,1.586898,64.8991,0.2677,0.3450,,,1.4824,8.64,...
+1,0.720000,7.118146,2.512099,118.3922,0.4748,0.5461,,,2.3767,23.44,...
+2,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
+3,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
 ```
 
 Der Zyklus liegt entlang x, also arbeitet Arm 1 (in +x) am meisten, Arm 2 und 3 gleich. Seine 0,720 s sind die S-Kurven von Hand (Querfahrt d/v + v/a + a/j = 0,1817 s, ein Hub von 25 mm 4 (d / 2j)^(1/3) = 0,0684 s, mit den Verweilzeiten 0,7069 s) im 1-ms-Takt des Profilgenerators (`the_adept_cycle_takes_the_hand_calculated_time`). Die Herstellerangaben für denselben Zyklus sind kürzer (ABB IRB 360-3/1130: 0,40 s bei 1 kg, 0,52 s bei 3 kg): Sie verschleifen die Ecken statt anzuhalten und fahren schneller als die 3 m/s und 50 m/s², die diese Konfiguration je Achse erlaubt. `sim-cli optimise delta-d3` verschleift die Ecken über Stützpunkte (Splines auf drei Achsen) und hebt die Grenzwerte, soweit jede Prüfung es zulässt.
 
 ```text
 $ sim-cli verdicts delta-d3
-motor-peak,1,0.5101,1.000,ok
-motor-thermal,1,24.83,100.0,ok
-drive-current,1,2.440,5.000,ok
-gearbox-continuous,1,66.79,120.0,ok
-gearbox-peak,1,133.9,192.0,ok
-gearbox-life,1,671269,20000,ok
-gearbox-gearing-life,1,11579,20000,FAIL
+motor-peak,1,0.4748,1.000,ok
+motor-thermal,1,23.44,100.0,ok
+drive-current,1,2.377,5.000,ok
+gearbox-continuous,1,62.91,347.0,ok
+gearbox-peak,1,126.3,278.0,ok
+gearbox-life,1,16719950,20000,ok
 ...
-settling,,0.0006760,0.0005000,FAIL
+settling,,0.0002984,0.0005000,ok
 singularity,,2.072,5.000,ok
-thermal-warm-start,,0.007974,0.1000,ok
+thermal-warm-start,,0.009331,0.1000,ok
 ```
 
-Mit `--bands` besteht jede Prüfung außer `settling` und `gearbox-gearing-life` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 125 bis 143 N m); `settling` scheitert an allen (0,623 bis 0,735 mm), die Lebensdauer der Verzahnung liegt zwischen 5100 und 36300 h. Was sie sagen:
+Jede Prüfung besteht, auch mit `--bands` an beiden Grenzen jedes Schätzwerts (Getriebespitzenmoment 117 bis 135 N m, Einschwingen 0,25 bis 0,34 mm); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt das Einschwingen scheitern (0,54 mm). Was sie sagen:
 
-- **Getriebe.** Das Getriebe des Arms trägt bis zu 134 N m seiner 192 N m; das kubische Mittel, 67 N m, ist das, wofür sein Nennmoment von 120 N m gilt. Seine Planetenlager halten 671000 h. Die Spitzen über 120 N m nutzen die Verzahnung ab: Nach der Summe von Miner mit den zwei Momentangaben von Siemens hält sie an Arm 1 etwa 11600 h der geforderten 20000 h (Arm 2 und 3 bleiben unter 120 N m). Der Wert ist eine Schätzung (siehe [Modellreferenz](../model-reference.md#analysis-quantities)); prüfen Sie die Getriebegröße mit Siemens.
-- **Einschwingen scheitert: ein Befund der Auslegung.** Es wird gegen 0,5 mm geprüft, eine Schätzung der Positioniergenauigkeit der Klasse (Festo EXPT: ±0,5 mm), nicht gegen die 0,1 mm Wiederholgenauigkeit der Hersteller. Verdrehung und Spiel der Getriebe unter dem Gewicht der Plattform lassen das Werkzeug neben der Stelle, an die die Geber der Motoren es setzen: 0,64 mm beim Aufnehmen und Ablegen in Ruhe mit dem Katalogspiel des NRB080 von 9 Winkelminuten, 0,68 mm beim Verweilen (mit der Bewegung davor), bis zu 2,09 mm am unteren Rand des Arbeitsraums. Dieser Versatz ist in jedem Durchlauf gleich, die Wiederholgenauigkeit sieht ihn nicht, aber er liegt über der Genauigkeit der Klasse: Dieser Delta braucht ein Getriebe mit weniger Spiel. Mit 3 Winkelminuten (`--set gearbox.backlash_rad=8.727e-4`, ein Robotergetriebe, nicht im Katalog) besteht er: 0,29 mm in Ruhe beim Aufnehmen und Ablegen, 0,33 mm beim Verweilen, 0,30 bis 0,38 mm über die Grenzen. Das Spiel lässt die Regelkreise nicht schwingen: In Ruhe steht das Werkzeug mit beiden auf 2e-8 m still.
+- **Getriebe.** Das Getriebe des Arms, das Präzisions-Planetengetriebe SP100 von Siemens (das SP+ 100 von WITTENSTEIN alpha), trägt bis zu 126 N m seiner 278 N m; das kubische Mittel, 63 N m, ist das, wofür sein Nennmoment von 347 N m gilt, und darunter nimmt die Verzahnung keinen Schaden. Seine Planetenlager halten 16,7 Millionen h. Sein Leerlaufmoment (0,93 N m am Motor bei 3000 1/min und 20 °C), das Losbrechmoment des Motors und die Lose der Zahnflanken sind an (`effects.gearbox_drag`, `motor_stiction`, `gearbox_lost_motion`, siehe [Modellreferenz](../model-reference.md#gearbox)). Bis zum 14. November 2026 hatte die Konfiguration das Economy-Getriebe NRB080 (192 N m Maximal-, 120 N m Nennmoment): Seine Spitzen über 120 N m nutzten die Verzahnung auf etwa 11600 h der geforderten 20000 h ab.
+- **Einschwingen: ein Befund der Auslegung, mit dem Getriebe gelöst.** Es wird gegen 0,5 mm geprüft, eine Schätzung der Positioniergenauigkeit der Klasse (Festo EXPT: ±0,5 mm), nicht gegen die 0,1 mm Wiederholgenauigkeit der Hersteller. Verdrehung und Spiel der Getriebe unter dem Gewicht der Plattform lassen das Werkzeug neben der Stelle, an die die Geber der Motoren es setzen, in jedem Durchlauf gleich, was die Wiederholgenauigkeit nicht sieht. Mit den 9 Winkelminuten des Economy-Getriebes NRB080 scheiterte der Zyklus: 0,64 mm in Ruhe beim Aufnehmen und Ablegen, 0,68 mm beim Verweilen, bis zu 2,09 mm am unteren Rand des Arbeitsraums; jedes Economy-Getriebe dieser Größe und Übersetzung (NRB, NRK, NLC) hat 7 bis 9 Winkelminuten. Deshalb nimmt die Konfiguration das Präzisionsgetriebe SP100 mit reduziertem Verdrehspiel: höchstens 3 Winkelminuten (typisch 2,25 angesetzt, Grenzen 1,5 bis 3) und dreimal so steif (31 N m/Winkelminute). Siemens baut es nur an 1FT2-Motoren, also ist der Motor der 1FT2105-4AF, dessen Moment, Strom und Trägheit in D 32 die des 1FK2105-4AF sind, den Autonox nennt. 0,30 mm beim Verweilen, bis zu 0,66 mm am unteren Rand in Ruhe.
 - **Singularität**: die höchste Konditionszahl der Jacobi-Matrix im Zyklus gegen `ratings.max_condition_number` (5). Nahe einer Singularität bewegt ein kleiner Motorwinkel die Plattform weit, und die Motormomente für eine Kraft wachsen unbegrenzt; im Arbeitsraum sind es bis zu 3,6, im Zyklus 2,07.
 - **Keine Prüfungen für Riemen, Riemenscheibe oder Führung**: Der Delta hat keine.
 
 Für eine andere Nutzlast `mass.payload_kg` ändern (und `ratings`, wo sich Teile ändern); einen anderen Motor oder ein anderes Getriebe benennt man wie bei den anderen Maschinen (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Bahnen auf drei Achsen schreibt man `line,x,y,z`, `spline,x,y,z` und `arc,x,y,z,cx,cy,cz,cw`. Übergangsbögen (`profile.path_tolerance_m`) liegen dort in der Ebene des Kreisbogens, auf den sie treffen; eine Gerade muss auf 1 nm in dieser Ebene liegen (die Zahlen mit allen Stellen schreiben).
 
-Die Unterarme sind starre Stäbe mit ihrer Masse und Drehträgheit, die Drehung der Stäbe um ihre eigene Achse eingeschlossen (`effects.forearm_inertia`; aus: das verteilte Modell von Codourey und Olsson, das Motor 1 in diesem Zyklus 2,7 % mehr Effektivmoment gibt: 2,645 gegen 2,576 N m, Spitze 7,791 gegen 7,643 N m; die Eigendrehung allein ändert die Spitze um 1e-6 N m). Mit `effects.link_elasticity` (ab Werk aus; die Steifigkeiten sind geschätzt) biegen sich die Oberarme, in der Ebene, in der sie drehen, und quer dazu, und die Plattform schwingt nach einer Bewegung nach: der Folgefehler im Zyklus wächst von 4,0 auf 5,3 mm, der Fehler in der Verweilzeit von 0,68 auf 0,73 mm. Auf die niedrigste Eigenform bei gehaltenen Motoren (die Federn der Getriebe, mit dem Schalter auch die Biegung der Arme) stellt `effects.shaper_follows_pose` den Input Shaper ein: in der Mitte bei waagrechten Armen die seitliche Schwingung der Plattform, 28 Hz mit den Getrieben allein, 23 Hz mit biegsamen Armen (Unterarme verteilt). Die Unterarmstäbe und die Oberarme sind Kollisionskörper: ein Unter- oder Oberarm, der in ein Hindernis fährt, ist ein Crash.
+Die Unterarme sind starre Stäbe mit ihrer Masse und Drehträgheit, die Drehung der Stäbe um ihre eigene Achse eingeschlossen (`effects.forearm_inertia`; aus: das verteilte Modell von Codourey und Olsson, das Motor 1 in diesem Zyklus mit dem NRB080 2,7 % mehr Effektivmoment gab: 2,645 gegen 2,576 N m, Spitze 7,791 gegen 7,643 N m; die Eigendrehung allein ändert die Spitze um 1e-6 N m). Mit `effects.link_elasticity` (ab Werk aus; die Steifigkeiten sind geschätzt) biegen sich die Oberarme, in der Ebene, in der sie drehen, und quer dazu, und die Plattform schwingt nach einer Bewegung nach: der Folgefehler im Zyklus wuchs von 4,0 auf 5,3 mm, der Fehler in der Verweilzeit von 0,68 auf 0,73 mm (mit dem NRB080). Auf die niedrigste Eigenform bei gehaltenen Motoren (die Federn der Getriebe, mit dem Schalter auch die Biegung der Arme) stellt `effects.shaper_follows_pose` den Input Shaper ein: in der Mitte bei waagrechten Armen die seitliche Schwingung der Plattform, 49 Hz mit den SP100 allein, 30 Hz mit biegsamen Armen (Unterarme verteilt; 28 und 23 Hz mit dem NRB080, das ein Drittel so steif ist). Die Unterarmstäbe und die Oberarme sind Kollisionskörper: ein Unter- oder Oberarm, der in ein Hindernis fährt, ist ein Crash.
 
 Was der Delta nicht hat: elastische Stäbe und Kugelgelenke, die Biegung der Arme aus ihrer Drehebene, die Kegelgrenzen der Kugelgelenke (Anschläge und Arbeitsraum stehen dafür), eine vierte Achse, einen Übergangsbogen, wo zwei Kreisbögen in verschiedenen Ebenen aufeinandertreffen und eine Reibungsansicht für seine Gelenke (ihre Verluste stehen in der Energiebilanz). Nachfahren und Anpassen einer Aufzeichnung nehmen ihn seit dem 13. November, die Anpassung in den Koordinaten seiner Motoren (siehe die Anpassung, Stufe 1, unten). Von festen Motormomenten gehalten ist er im oberen Teil seines Arbeitsraums in der senkrechten Bewegung instabil; die Lageregler der Antriebe halten ihn (siehe die Modellreferenz).
 
 ### Der planare Delta D2
 
-`delta-d2` ist ein Zwei-Arm-Delta in der senkrechten x-z-Ebene: zwei Drehantriebe, jeder mit einem Unterarmpaar hinab zu einer Platte, die ihre Lage behält, ausgelegt wie der Codian Robotics D2-800-S020 (Arbeitsraum 800 mm breit und 477 mm hoch, 5 kg Nutzlast, bis zu 210 Picks pro Minute). Codian nennt keine Motoren; die Konfiguration nimmt die 1FK2105-4AF des D3 an S210-Umrichtern hinter Übersetzung 20 und kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` ([die Konfiguration](../../crates/machine-delta-d2/default.toml)). Die Werkzeugpose ist (x, z); Bahnen schreibt man `line,x,z` und `arc,x,z,cx,cz,cw` wie bei den Portalen. Der Zyklus ist der Adept-Zyklus des D3 in der Ebene, 100 mm unter der Oberkante des Arbeitsraums: 0,720 s.
+`delta-d2` ist ein Zwei-Arm-Delta in der senkrechten x-z-Ebene: zwei Drehantriebe, jeder mit einem Unterarmpaar hinab zu einer Platte, die ihre Lage behält, ausgelegt wie der Codian Robotics D2-800-S020 (Arbeitsraum 800 mm breit und 477 mm hoch, 5 kg Nutzlast, bis zu 210 Picks pro Minute). Codian nennt keine Motoren; die Konfiguration nimmt die 1FT2105-4AF des D3 an S210-Umrichtern hinter seinem Getriebe SP100 mit Übersetzung 20 und kennzeichnet jeden Wert mit `[catalogue]` oder `[estimate]` ([die Konfiguration](../../crates/machine-delta-d2/default.toml)). Die Werkzeugpose ist (x, z); Bahnen schreibt man `line,x,z` und `arc,x,z,cx,cz,cw` wie bei den Portalen. Der Zyklus ist der Adept-Zyklus des D3 in der Ebene, 100 mm unter der Oberkante des Arbeitsraums: 0,720 s.
 
 ```text
 $ sim-cli verdicts delta-d2
-motor-peak,1,0.5880,1.000,ok
-gearbox-continuous,1,69.95,120.0,ok
-gearbox-peak,1,154.3,192.0,ok
+motor-peak,1,0.5555,1.000,ok
+gearbox-continuous,1,67.58,347.0,ok
+gearbox-peak,1,147.9,278.0,ok
 ...
-settling,,0.0003475,0.0005000,ok
-singularity,,1.136,5.000,ok
-thermal-warm-start,,0.03448,0.1000,ok
+settling,,0.0003769,0.0005000,ok
+singularity,,1.135,5.000,ok
+thermal-warm-start,,0.02977,0.1000,ok
 ```
 
-Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,31 bis 0,41 mm, Getriebespitze bis 163 N m); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt die Getriebespitze (202 N m) und das Einschwingen (0,60 mm) scheitern. Zwei Arme tragen 5 kg, wo beim D3 drei Arme 3 kg tragen, also arbeitet das Getriebe näher an seinen 192 N m. Das Einschwingen besteht, weil das Getriebespiel eine Schätzung von 1 Winkelminute ist, ein spielreduziertes Präzisions-Planetengetriebe: Mit den 9 Winkelminuten des NRB080-05-20 aus dem Katalog (`--set gearbox.backlash_rad=2.618e-3`) scheitert es mit 0,85 mm, aus demselben Grund wie beim D3: Beide Arme halten die Platte immer oben und liegen an einer Seite ihres Spiels an. Das Modell hält die Platte waagerecht, wie es die Parallelogramme der echten Maschine tun.
+Jede Prüfung besteht, auch mit `--bands` (Einschwingen 0,33 bis 0,42 mm, Getriebespitze bis 155 N m); die Suche nach der ungünstigsten Ecke aller Schätzungen zugleich (`--bands --worst`) lässt das Einschwingen scheitern (0,74 mm). Zwei Arme tragen 5 kg, wo beim D3 drei Arme 3 kg tragen, also arbeitet das Getriebe näher an seiner Grenze: Die innerhalb der Achsgrenzen geplanten Geraden bringen es auf 233 N m der 278 N m des SP100 (das NRB080, das die Konfiguration bis zum 14. November 2026 hatte, auf 247 N m seiner 192 N m). Sein Spiel, das typische 2,25 Winkelminuten des spielreduzierten SP100, war vorher eine Schätzung von 1 Winkelminute: Mit den 9 Winkelminuten des NRB080 scheiterte das Einschwingen mit 0,85 mm, aus demselben Grund wie beim D3: Beide Arme halten die Platte immer oben und liegen an einer Seite ihres Spiels an. Das Modell hält die Platte waagerecht, wie es die Parallelogramme der echten Maschine tun.
 
 ## Einen Linear-Delta auslegen
 
@@ -711,7 +710,7 @@ singularity,,2.072,5.000,ok
 thermal-warm-start,,0.02011,0.1000,ok
 ```
 
-Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,22 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` scheitert das Einschwingen: Es erreicht 0,53 mm an einer Grenze der Schätzungen. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
+Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 mit demselben Getriebe NRB080, das der D4 behält (Spitze 0,563 gegen 0,510 seiner Grenze; der D3 hat seit dem 14. November 2026 das SP100): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,22 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` scheitert das Einschwingen: Es erreicht 0,53 mm an einer Grenze der Schätzungen. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
 
 ### SCARA und Sechsachsroboter im Werkzeugraum
 

@@ -133,7 +133,8 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
 
 /// A vertical acceleration of 10 m/s^2 at the centre, 500 mm down: the arms turn together, t'' = a / (2 dz/dt per arm)
 /// = -24.387 rad/s^2. I_b = 0.064 + 0.16 (0.4 + 2/3 0.6) = 0.1920 kg m^2. At the arm I_b t'' + m_nt a dz/dt = -4.682 -
-/// 13.122 = -17.804 N m, at the motor over 20 plus the rotor's own (1.7 + 0.406) 1e-4 * 20 * t'' = -0.1027: -0.9929 N m.
+/// 13.122 = -17.804 N m, at the motor over 20 plus the rotor's own (1.7 + 0.70) 1e-4 * 20 * t'' = -0.1171: -1.0073 N m
+/// (the SP+ 100's 0.70 kg cm2 at the input; with the NRB080's 0.406 it was -0.9929 N m).
 /// The feedforward says so, and the rigid model given that torque accelerates the plate at 10 m/s^2 with no sideways part.
 #[test]
 fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque() {
@@ -150,7 +151,7 @@ fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torqu
     close(i_b, d.arm_inertia(), 1e-12, "I_b");
     let acc = 10.0 / (2.0 * dz);
     let at_arm = i_b * acc + d.m_nt() * 10.0 * dz;
-    let at_motor = at_arm / 20.0 + (1.7e-4 + 4.06e-5) * 20.0 * acc;
+    let at_motor = at_arm / 20.0 + (1.7e-4 + 7.0e-5) * 20.0 * acc;
     println!("t'' = {acc:.3} rad/s^2, {at_arm:.4} N m at the arm, {at_motor:.4} N m at the motor");
     let (mut moving, mut still) = ([0.0; 2], [0.0; 2]);
     d.feedforward_torque(&[0.0, z], &[0.0, 10.0], &mut moving);
@@ -158,7 +159,7 @@ fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torqu
     for k in 0..2 {
         close(moving[k] - still[k], at_motor, 1e-6, "inertia torque");
     }
-    assert!((at_motor + 0.9929).abs() < 1e-3, "{at_motor}");
+    assert!((at_motor + 1.0073).abs() < 1e-3, "{at_motor}");
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     d.equilibrium(&[0.0, z], &mut state, &mut hold);
     let mut rates = vec![0.0; d.state_len()];
@@ -334,13 +335,15 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
 }
 
 /// The setpoint at rest is where the motors stand; the plate's weight twists the gearboxes and sits them at a side of
-/// their backlash. `setpoint_slack` (`rest_sag`) is 0.420 mm by hand (the same grid, twist and half the 1 arcmin
-/// either way, plus a tenth) and covers what the simulation shows after 0.5 s at rest at six poses, at most 0.368 mm
-/// (at the edge, 650 mm down); without backlash and with stiff gearboxes it is the default 0.1 mm.
+/// their backlash. `setpoint_slack` (`rest_sag`) is 0.340 mm with the SP+ 100 (the same grid: twist, half the
+/// lost-motion band and half the 2.25 arcmin either way, plus a tenth; 0.420 mm by hand with the NRB080's stiffness and
+/// 1 arcmin before 14 November 2026, the new figure is `rest_sag`'s) and covers what the simulation shows after 0.5 s
+/// at rest at six poses, at most 0.287 mm (at 0.3 m, 750 mm down); without backlash and with stiff gearboxes it is the
+/// default 0.1 mm.
 #[test]
 fn the_setpoint_slack_covers_the_sag_at_rest() {
     let slack = delta(&[]).setpoint_slack();
-    assert!((slack - 4.20e-4).abs() < 2e-6, "{slack}");
+    assert!((slack - 3.397e-4).abs() < 2e-6, "{slack}");
     let mut most = 0f64;
     for pose in [[0.4, -0.5], [0.0, -0.877], [0.1525, -0.525], [-0.4, -0.65], [0.3, -0.75], [0.2565, -0.8]] {
         let mut cfg = ENTRY.config();

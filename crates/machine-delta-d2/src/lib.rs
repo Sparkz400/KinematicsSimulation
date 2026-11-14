@@ -47,8 +47,15 @@ const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off. The stops stay, without their
 /// damping.
-pub const LOSSY_EFFECTS: [&str; 5] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 7] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta2::new(cfg)?))
@@ -399,7 +406,7 @@ impl Delta2 {
                     let twist: V2 = std::array::from_fn(|k| {
                         let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k])
                             - self.joints[k].output_torque(t[k], 0.0);
-                        held / self.joints[k].gearbox.stiffness
+                        self.joints[k].gearbox.spring_twist_signed(held)
                     });
                     for signs in 0..4 {
                         let half = |k: usize| if signs >> k & 1 == 1 { 1.0 } else { -1.0 } * self.joints[k].gearbox.half_backlash;
@@ -801,6 +808,7 @@ impl Machine for Delta2 {
         }
         for (joint, rise) in self.joints.iter_mut().zip(rises) {
             joint.gearbox.efficiency = law.gearbox_efficiency(*rise);
+            joint.shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
 

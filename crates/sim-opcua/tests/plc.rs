@@ -628,8 +628,8 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         let end = &planned.last().unwrap().1;
         let reached = plc.numbers(&position).await;
         // The setpoint stands on the path's end; the tool is off it by what gears and belts give way under the load
-        // there (`at_rest_within`; on the delta with its catalogue gearboxes more than the settling tolerance: the
-        // cycle fails `settling` there, a sizing finding).
+        // there (`at_rest_within`; on the delta up to its setpoint slack, which can be more than the settling
+        // tolerance at the range's rim).
         let setpoint = plc
             .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
             .await;

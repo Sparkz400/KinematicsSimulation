@@ -23,6 +23,31 @@ item are in [PROGRESS.md](PROGRESS.md).
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
 
+- Gearbox no-load running torque over speed and temperature (`effects.gearbox_drag`, `gearbox.no_load_torque_nm`,
+  `no_load_speed_rpm`; Palmgren's (nu n)^(2/3)) and with it an efficiency map that falls at part load, at speed and
+  cold (`gearbox.efficiency_torque_nm`); catalogue values from Neugart, WITTENSTEIN and Harmonic Drive.
+- Motor shaft breakaway along a Stribeck curve (`effects.motor_stiction`, `motor.friction_breakaway_nm`,
+  `friction_stribeck_rad_s`); with `effects.thermal_feedback` the shaft's seals follow the gearbox's lubricant
+  (`thermal_feedback.seal_viscosity_exponent`).
+- Gearbox lost motion: a band over which the flanks' stiffness rises and a hysteresis (`effects.gearbox_lost_motion`,
+  `gearbox.lost_motion_band_rad`, `hysteresis_rad`); Harmonic Drive's three-segment stiffness for strain wave gears
+  (`effects.gearbox_stiffness_curve`, `gearbox.stiffness_t1_nm`, `_t2_nm`, `_k2_nm_rad`, `_k3_nm_rad`).
+- `catalog/siemens/gearbox_sp.csv`: Siemens' SP100 precision planetary gearbox (WITTENSTEIN SP+ 100), two stages,
+  with its reduced backlash (schema column `backlash_reduced_rad`).
+
+### Changed
+
+- Delta pickers D3 and D2 (and `machines/planar-delta.toml`): the SP100-05-20 with reduced backlash (typical
+  2.25 arcmin, bounds 1.5 to 3) on the 1FT2105-4AF, with the new friction and gearbox effects on; the D2's velocity
+  gain 0.24.
+
+### Fixed
+
+- The D3 fails no check any more: settling 0.676 mm (FAIL against 0.5 mm) with the NRB080's 9 arcmin is 0.298 mm, and
+  the gearing life no longer fails. The D2 no longer rests on an estimated 1 arcmin, and its lines planned within the
+  axis limits (247 N m) stay within its gearbox's 278 N m.
+- The setpoint slack of the deltas and linkages takes the gearbox's lost-motion band.
+
 ### Fixed
 
 - Drive loops: the position setpoint is interpolated between profile cycles (`effects.fine_interpolation`, as a SINAMICS

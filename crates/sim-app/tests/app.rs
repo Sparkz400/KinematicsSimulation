@@ -758,8 +758,8 @@ fn the_cycle_is_analysed_and_judged_in_the_app() {
                 assert!(shows(&row(motors, label)[k], value.unwrap()), "{}: {label} {value:?} in {motors:?}", entry.id);
             }
         }
-        // One row per check: label, motor, value, limit, result, as the library judges it (the delta's catalogue
-        // gearboxes fail `settling`, a sizing finding; the belt machines pass every check).
+        // One row per check: label, motor, value, limit, result, as the library judges it (every shipped config passes
+        // since 14 November 2026; the D3 failed `settling` with its economy gearbox before).
         assert_eq!(checks.len(), 1 + verdicts.len());
         assert_eq!(checks[0], ["Check", "Motor", "Value", "Limit", "Result"]);
         for (row, v) in checks[1..].iter().zip(&verdicts) {
@@ -888,7 +888,7 @@ fn optimised_in_the_app(entry: &'static MachineEntry) {
     let mut model = Model::new(entry, "en");
     model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
     model.run_analysis(Analysis::Optimise);
-    // The optimiser starts only from a cycle that passes every verdict, which the delta's does not (`settling`).
+    // The optimiser starts only from a cycle that passes every verdict (the D3's did not before 14 November 2026).
     let mut cfg = entry.config();
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();

@@ -26,6 +26,19 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
 torque_ripple = true
 hard_stops = true
 holding_brake = true
@@ -92,6 +105,9 @@ ambient_c = 20.0
 reference_c = 20.0
 viscosity_slope_k = 4000.0
 gearbox_viscous_loss_share = 0.5
+# With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
+# friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
+seal_viscosity_exponent = 0.33
 belt_stiffness_coefficient_1_k = 3.0e-4
 
 [profile]

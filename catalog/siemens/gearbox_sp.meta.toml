@@ -1,0 +1,30 @@
+schema_version = 1
+class = "gearbox"
+key = ["size", "motor_frame", "ratio"]
+default_source = "gearboxes"
+notes = '''
+Source: Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, 04/2025, A5E54515894B AA,
+chapter 6.5 (SP+ precision planetary gearboxes, made by WITTENSTEIN alpha for Siemens' geared motors).
+Typed in from the rendered pages; the numbers are the manual's, the layout is ours. Only the SP100 with two stages is
+here (the size the delta pickers use), for the motor frames 03, 04 and 05 the manual lists (04 and 05 share a column).
+Siemens offers the SP+ (and TP+) with 1FT2 motors only (chapter 3.1, "Coaxial precision gearbox only for 1FT2"); the
+frame code is that of the 1FT2.
+rated: standard lubrication, Table 6-61. As printed, the rated torque of the frame 04/05 column (347 N m) is above
+  its maximum torque (278 N m, chapter 6.5.2): the maximum of the geared motor is the motor's (15 N m of a 1FT2105 at
+  ratio 20 and 94 % is 282 N m). Both are kept as the manual has them.
+max: for at most 30 000 output revolutions (chapter 6.5.2); emergency_off: Table 6-64.
+efficiency: Table 6-66, full load, two stages. torsional_stiffness: chapter 6.5.5, 31 N m/arcmin.
+backlash: standard, Table 6-67 (5 arcmin for two stages); backlash_reduced: the reduced-backlash option (order codes
+  M5 to M7), Table 6-68 (3 arcmin). Both are maxima.
+inertia: Tables 6-70, at the input.
+Not extracted: the other SP+ sizes, one stage, TP+, masses, forces, reference speeds, bending moments.
+'''
+
+[[sources]]
+id = "gearboxes"
+document = "Siemens, Planetary gearboxes for 1FK2 and 1FT2 servomotors, Equipment Manual, A5E54515894B AA"
+date = "2025-04"
+locator = "chapter 6.5, Tables 6-61, 6-64, 6-66 to 6-68, 6-70 and chapter 6.5.2, pages 140 to 148"
+method = "manual: typed in from the rendered tables of chapter 6.5 and checked against them once more"
+url = "https://docs.rs-online.com/f6f5/A700000014746827.pdf"
+retrieved = "2026-11-14"

@@ -618,6 +618,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         let geared = self.joints.iter_mut().filter(|j| !j.drive.coupled);
         for (joint, rise) in geared.zip(rises) {
             joint.drive.gearbox.efficiency = law.gearbox_efficiency(*rise) * joint.drive.extra_efficiency;
+            joint.drive.shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
 

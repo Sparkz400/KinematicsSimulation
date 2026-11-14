@@ -56,8 +56,16 @@ pub static ENTRY: MachineEntry = MachineEntry {
 
 /// Effects that take energy out or put it in; the standard suite runs with them off: the D3's and the telescope's
 /// sliding friction.
-pub const LOSSY_EFFECTS: [&str; 6] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake", "telescope_friction"];
+pub const LOSSY_EFFECTS: [&str; 8] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+    "telescope_friction",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta4::new(cfg)?))
@@ -241,6 +249,7 @@ impl Delta4 {
                 coulomb: cfg.non_negative("shaft.slide_friction_n")?,
                 viscous: cfg.non_negative("shaft.slide_friction_viscous_n_s_m")?,
                 smoothing: cfg.positive("shaft.slide_friction_smoothing_m_s")?,
+                ..ShaftFriction::NONE
             };
             Some(PlatformDrag { pivot: [0.0, 0.0, shaft.upper_z], offset: [0.0, 0.0, shaft.lower_offset], friction })
         } else {
@@ -248,6 +257,9 @@ impl Delta4 {
         };
         arms.set_platform_drag(drag.clone());
         // The tool's joint: the motor of [motor] behind the gearbox of [tool_gearbox] (read as a [gearbox]).
+        // shortcut: the tool's gearbox takes the arms' no-load torque, lost motion and stiffness curve from [gearbox]
+        // (effects.gearbox_drag, gearbox_lost_motion and gearbox_stiffness_curve are off in the shipped config); give
+        // [tool_gearbox] those keys when they are switched on here.
         let mut tcfg = cfg.clone();
         for key in
             ["ratio", "efficiency", "backlash_rad", "stiffness_nm_rad", "damping_nm_s_rad", "inertia_at_input_kgm2"]
@@ -259,6 +271,7 @@ impl Delta4 {
             coulomb: if bearing { cfg.non_negative("tool.friction_coulomb_nm")? } else { 0.0 },
             viscous: if bearing { cfg.non_negative("tool.friction_viscous_nm_s_rad")? } else { 0.0 },
             smoothing: cfg.positive("tool.friction_smoothing_rad_s")?,
+            ..ShaftFriction::NONE
         };
         let (min, max) = (cfg.f64("axis.c.min_angle_deg")?.to_radians(), cfg.f64("axis.c.max_angle_deg")?.to_radians());
         if min >= max {
@@ -592,6 +605,7 @@ impl Machine for Delta4 {
             && !self.tool.gearbox.is_coupling()
         {
             self.tool.gearbox.efficiency = law.gearbox_efficiency(*rise);
+            self.tool.shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
 
