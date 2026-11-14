@@ -28,6 +28,10 @@ substeps = 4
 [parts]
 motor = ""
 motor_supply = "400v"
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 gearbox = ""
 drive = ""
 belt = ""
@@ -91,9 +95,16 @@ drive_current_limit = true
 # Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
 # overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
 # drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
-field_weakening = false
+field_weakening = true
 drive_overload = false
 motor_thermal_nodes = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
+braking_resistor_heating = true
 corner_blending = false
 input_shaping = false
 back_emf = true
@@ -213,6 +224,14 @@ d_inductance_h = 0.02
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
+# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
+# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
+# starts at kt times it.
+stall_current_a = 2.5
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+# [bounds] -0.0013 ... -0.0009
+magnet_temperature_coefficient_1_k = -0.0012
 # [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A. [estimate] the thermal time
 # constant, as the 1FK2105's 37 min scaled down.
 rated_current_a = 2.5
@@ -366,6 +385,11 @@ braking_threshold_v = 770.0
 # 50 W, 3 kW, 820 V.
 braking_resistor_continuous_w = 50.0
 braking_resistor_peak_w = 3000.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 dc_link_overvoltage_v = 820.0
 dc_link_discharge_time_constant_s = 130.0
 # [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
@@ -382,6 +406,11 @@ drive_max_current_a = 10.9
 # (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
 # of the image, and how long the drive gives its maximum current from the rated load.
 drive_base_load_current_a = 2.55
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+# [bounds] share 0 ... 0.5, time constant 0.1 ... 5 s
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
 # The highest condition number of the Jacobian the cycle may reach ("singularity"). [estimate] a design rule.
@@ -428,6 +457,11 @@ min_clearance_m = 0.025
 # Low and high bound of the values that are estimates (see the other machines' configs).
 [bounds]
 motor.pole_pairs = [3.0, 5.0]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]
 motor.d_inductance_h = [0.016, 0.024]
 motor.winding_resistance_share = [0.2, 0.5]
 motor.winding_time_constant_s = [20.0, 120.0]

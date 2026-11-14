@@ -835,6 +835,55 @@ def vendor_drives_are_plausible(tables):
                     errors.append(f"{path} {name}: braking_threshold_v {on} not below dc_link_overvoltage_v {trip}")
             except ValueError as e:
                 errors.append(f"{path} {name}: {e}")
+
+
+def siemens_s210_operating_instructions_agree_with_the_catalogue_and_the_manual(tables):
+    """1FK2 thermal time constants of the S210 operating instructions: every motor is in the S210 catalogue with the same
+    static torque and maximum current, and where the S120 manual has the motor too it gives the same time constant."""
+    if not have(tables, "siemens/motors_s210_oi.csv", "siemens/motors_s210.csv", "siemens/motors_1fk2_s120.csv"):
+        return []
+    oi, errors = tables["siemens/motors_s210_oi.csv"], []
+    catalogue, manual = by_part(tables["siemens/motors_s210.csv"]), by_part(tables["siemens/motors_1fk2_s120.csv"])
+    if len(oi) < 25:
+        errors.append(f"only {len(oi)} rows")
+    for m in oi:
+        name = m["part_number"]
+        try:
+            if not inside(need(m, "thermal_time_constant_s"), 5 * MIN, 120 * MIN):
+                errors.append(f"{name}: thermal_time_constant_s")
+            c = catalogue.get(name)
+            if c is None:
+                errors.append(f"{name}: not in motors_s210.csv")
+                continue
+            for column in ("static_torque_nm", "max_current_a"):
+                if not close(need(m, column), need(c, column), 0.01):
+                    errors.append(f"{name}: {column} {m[column]} against {c[column]} in motors_s210.csv")
+            # Two motors differ between the editions (06/2020: 22 and 22 min, 02/2022 manual: 29 and 21 min); both files
+            # keep what they print and the simulator takes the newer manual's.
+            differ = ("1FK2205-2AF", "1FK2206-2AF")
+            if name in manual and name not in differ and m["thermal_time_constant_s"] != manual[name]["thermal_time_constant_s"]:
+                errors.append(f"{name}: thermal_time_constant_s against motors_1fk2_s120.csv")
+        except ValueError as e:
+            errors.append(f"{name}: {e}")
+    return errors
+
+
+def siemens_s120_dc_link_trip_is_that_of_active_line_modules(tables):
+    """S120 DC link trip: every row is an Active Line Module of line_modules_s120.csv, above the DC link's highest
+    operating voltage (720 V) and the Braking Module's switch-on threshold."""
+    if not have(tables, "siemens/dc_link_trip_s120.csv", "siemens/line_modules_s120.csv", "siemens/braking_s120.csv"):
+        return []
+    modules, errors = by_part(tables["siemens/line_modules_s120.csv"]), []
+    chopper = max((num(r["activation_threshold_v"]) or 0.0) for r in tables["siemens/braking_s120.csv"])
+    for r in tables["siemens/dc_link_trip_s120.csv"]:
+        name = r["part_number"]
+        try:
+            if modules.get(name, {}).get("infeed_type") != "active":
+                errors.append(f"{name}: not an Active Line Module of line_modules_s120.csv")
+            if not need(r, "dc_link_overvoltage_v") > max(720.0, chopper):
+                errors.append(f"{name}: dc_link_overvoltage_v")
+        except ValueError as e:
+            errors.append(f"{name}: {e}")
     return errors
 
 
@@ -848,7 +897,9 @@ CHECKS = [
     siemens_1fk2_data_agrees_between_the_s120_manual_and_the_s210_catalogue,
     siemens_1ft2_data_agrees_between_the_s120_manual_and_the_s210_catalogue,
     siemens_1fk2_dynamic_braking_fits_the_motors,
+    siemens_s210_operating_instructions_agree_with_the_catalogue_and_the_manual,
     siemens_s120_line_modules_are_plausible,
+    siemens_s120_dc_link_trip_is_that_of_active_line_modules,
     siemens_s120_braking_resistors_fit_their_modules,
     siemens_s120_data_sheets_agree_with_the_catalogue,
     bahr_rows_are_unique_and_the_gantries_are_there,

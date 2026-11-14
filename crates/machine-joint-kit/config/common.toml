@@ -9,6 +9,10 @@ obstacles = []
 [parts]
 motor = ""
 motor_supply = "400v"
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 gearbox = ""
 drive = ""
 belt = ""
@@ -65,9 +69,16 @@ drive_current_limit = true
 # Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
 # overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
 # drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
-field_weakening = false
+field_weakening = true
 drive_overload = false
 motor_thermal_nodes = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
+braking_resistor_heating = true
 corner_blending = false
 input_shaping = false
 back_emf = true

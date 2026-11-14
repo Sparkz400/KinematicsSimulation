@@ -531,3 +531,12 @@ program-error-motion = Eine Achse wird vor jeder Bewegungsart (G0, G1, G2, G3) g
 program-error-helix = Ein Kreisbogen verändert eine Achse außerhalb seiner Ebene (eine Helix), die die Bahn nicht kennt: { $arg }
 program-error-arc = Ein Kreisbogen lässt sich nicht auslegen: Anfang und Ende liegen verschieden weit vom Mittelpunkt, sein Radius ist zu klein für seine Enden, oder seine drei Punkte liegen auf einer Geraden. { $arg }
 program-error-named = Eine Bewegung zu einer benannten Position, die das Programm nicht vereinbart, oder eine Bewegung ohne Ziel: { $arg }
+
+# Motor electrical and thermal model (14 November 2026)
+quantity-d-current = d-Strom (Feldschwächung)
+quantity-housing-temperature = Übertemperatur des Gehäuses
+quantity-drive-overload-image = Thermisches Abbild des Antriebs (1 = Bemessungsstrom dauernd)
+quantity-drive-overload-chip = Thermisches Abbild des Antriebs, Knoten der Chips
+quantity-iron-loss = Eisenverluste
+quantity-braking-resistor-temperature = Übertemperatur des Bremswiderstands
+check-motor-s1 = Effektivmoment bei mittlerer Drehzahl gegen die S1-Kennlinie [N m]

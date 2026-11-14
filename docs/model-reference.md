@@ -376,7 +376,7 @@ Tests: `the_drive_current_limit_holds_the_torque_to_the_lower_of_motor_and_drive
 
 ### Drive overload
 
-`effects.drive_overload` (off in the shipped configs; read as off where a config has no switch): SINAMICS drives give their maximum current only for a short time and then fall back to their base load current. The drive keeps a thermal image of its power unit (i²t), stepped exactly every base step with the RMS phase current i (with field weakening the hypotenuse of q and d current):
+`effects.drive_overload` (off in the shipped configs; read as off where a config has no switch): SINAMICS drives give their maximum current only for a short time and then fall back to their base load current. Since 14 November 2026 the image has two nodes, as the SINAMICS power units model a slow heat sink and the fast chips on it: x = x_s + x_c, x_s' = ((1 − w) q − x_s) / τ_drive, x_c' = (w q − x_c) / τ_c, q = (i / I_rated)², w = `ratings.drive_chip_share` and τ_c = `drive_chip_time_constant_s` (`[estimate]`s, 0.3 and 1 s; w = 0 is the one node below). The trip level becomes r² − (r² − 1) ((1 − w) exp(−t_max / τ_drive) + w exp(−t_max / τ_c)); `repeating_peak` repeats each node by itself. Hand calculation: `the_two_node_overload_image_trips_after_the_hand_calculated_time` (3 A module, 9 A for 0.25 s: trip 1.66914, at 6 A from the rated load after 0.8203 s, where one node takes 0.6811 s). The drive keeps a thermal image of its power unit (i²t), stepped exactly every base step with the RMS phase current i (with field weakening the hypotenuse of q and d current):
 
 ```text
 x' = ((i / I_rated)² − x) / τ_drive            x = 1 at the rated current held
@@ -439,7 +439,7 @@ braking  : |τ| ≤ peak_torque
 
 ### Field weakening
 
-`effects.field_weakening` (off in the shipped configs; read as off where a config has no switch): the permanent-magnet synchronous motor in d-q axes. The one winding above is the q axis, scaled as it is (current the RMS phase current, voltage three times the RMS phase voltage, so R, L and U_max are the winding's: three times the data sheet's phase values); the d axis is scaled alike. The flux linkage is ψ = k_e / p, from the torque constant; p = `motor.pole_pairs`, L_q = `motor.inductance_h`, L_d = `motor.d_inductance_h`. With the electrical speed ω_e = p · ω:
+`effects.field_weakening` (on in the shipped configs since 14 November 2026; read as off where a config has no switch): the permanent-magnet synchronous motor in d-q axes. The one winding above is the q axis, scaled as it is (current the RMS phase current, voltage three times the RMS phase voltage, so R, L and U_max are the winding's: three times the data sheet's phase values); the d axis is scaled alike. The flux linkage is ψ = k_e / p, from the torque constant; p = `motor.pole_pairs`, L_q = `motor.inductance_h`, L_d = `motor.d_inductance_h`. With the electrical speed ω_e = p · ω:
 
 ```text
 u_q = R · i_q + L_q · di_q/dt + k_e · ω + ω_e · L_d · i_d
@@ -486,6 +486,27 @@ trip   : U > dc_link_overvoltage_v
 ```
 
 Stepping the energy instead of the voltage is exact for any step size. P is the step's electrical energy E_el over dt (see [winding](#winding)). When a drive trips, all drives go off as with a Disable command, and stay off until Enable. Without the effect the DC link voltage stays at `drive.bus_voltage_v`.
+
+
+### Motor model additions of 14 November 2026
+
+**d-axis dynamics and warm resistance.** With field weakening the d current no longer jumps to its setpoint: it follows it as the tuned current loop does, with the time constant L_d / K_p (the controller's T_n = L / R cancels the winding's own), exactly per base step. The d current's setpoint and u_d take the winding's resistance at its temperature, as the winding integration does. Tests: `the_d_current_follows_its_setpoint_with_the_current_loop_time_constant` (0.25 ms: −3.5557 A of −5.625 A after four cycles), `the_d_current_takes_the_warm_resistance`.
+
+**Voltage limit from R, L and the DC link.** `the_voltage_limit_gives_the_hand_calculated_torque_from_r_l_and_the_dc_link`: the 1FK2205-4AF at 540 V (R = 2 Ω, L = 15.67 mH from Siemens' short-circuit braking table, 4 pole pairs) has 15.614 N m at 600 rad/s and 17.818 N m at 500 rad/s by a hand search over the d current, where the old linear fade gave none and 1.595 N m. The current loop uses the DC link's voltage at each moment; the torque curve the velocity loop and the planner limit by uses the nominal bus.
+
+**Iron loss.** `effects.iron_loss` (on in the shipped configs): Siemens' static data (M_0 at I_0) and rated data (M_N at I_N, n_N) both hold for the rated rise of 100 K, so at the rated speed iron and the other speed-dependent losses take P_Fe,N = R(ϑ_rated) (I_0² − I_N²). Over speed P_Fe = P_Fe,N (n / n_N)^1.5 (hysteresis with the frequency, eddy currents with its square; one exponent for both is a `shortcut`). The copper loss is then referred to the stall current, at which it alone brings the winding to its rated rise. The iron loss heats the one node, or with `motor_thermal_nodes` the housing's; it is not a drag torque on the shaft (`shortcut`). Test: `iron_loss_at_a_speed_is_the_hand_calculated_share_of_the_rated_loss` (R 4 Ω, I_0 3 A, I_N 2.5 A: 15.29 W at the rated speed, 1.911 W at a quarter; settled 100 K at the rated current and speed, and at the stall current at standstill).
+
+**Magnet temperature.** `effects.magnet_temperature` (off): k_t and k_e scale with 1 + α (ϑ − ϑ_rated), α = `motor.magnet_temperature_coefficient_1_k` (−0.0012/K), ϑ the winding's rise (the housing's with `motor_thermal_nodes`). The catalogue's k_t holds at the rated rise; a cold motor has 12 % more. Test: `cold_magnets_give_the_hand_calculated_torque_per_amp`.
+
+**S1 check.** `motor-s1` judges the RMS torque at the mean speed against the S1 curve, the line from k_t I_0 at standstill to the rated torque at the rated speed (Siemens prints the curve as a graph only); `motor-speed` the peak speed against `drive.max_speed_rad_s`. Test: `the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (1FK2205-4AF: 5.3 N m at 157.08 rad/s).
+
+**Braking resistor heating.** `effects.braking_resistor_heating` (with `dc_link`): ϑ' = (ϑ_rated P / P_continuous − ϑ) / τ_R, stepped exactly. Test: `the_braking_resistor_warms_by_the_hand_calculated_rise_in_a_pulse` (100 kW for 1 s on the 1.5 kW resistor, τ_R 60 s, 200 K: 220.38 K, 72.15 K at the end of its 68 s cycle).
+
+**Line module loss when drawing.** With the DC link simulated, the line module (an S210's rectifier alike) draws P / η from the line for P into the DC link; the difference is its loss (`Drive::line_loss`, budget row `line_module`). Test: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (49 W motoring: 50 W drawn, 0.1 J lost in 0.1 s).
+
+**Enable without DC link.** A drive enabled while holding a load draws its winding's L i² / 2 from the supply in its first step (`Drive::enable_energy`); with the DC link simulated it comes out of the link, as before.
+
+Signals per motor: `d_current`, `housing_temperature`, `drive_overload_image`, `drive_overload_chip`, `iron_loss`, `braking_resistor_temperature` (0 where their effect is off).
 
 **Regenerative supply.** `effects.regenerative_supply` (with `effects.dc_link`, off by default): the line module, an Active Line Module as on a SINAMICS S120, holds the DC link at the bus level from above as the rectifier does from below. What the motors feed back goes into the mains up to `ratings.line_module_max_power_w`; of it `line_module_efficiency` arrives there (`Drive::mains_power`) and the rest is the line module's loss (`Drive::line_loss`). Only what is beyond its power charges the capacitors and reaches the chopper. The shipped values are the smallest S120 Active Line Module of the catalogue (16 kW rated, 35 kW maximum) and an efficiency of 0.98 from its 0.28 kW loss at rated power. Hand calculation: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (41 W fed back: 4.018 J into the mains and 0.082 J lost in 0.1 s at 190 V; limited to 20 W, the other 21 W charge 470 µF to 212.217 V); on every config the energy fed back is the efficiency times what the motors regenerated (`the_regenerative_supply_feeds_back_what_the_motors_regenerate`).
 

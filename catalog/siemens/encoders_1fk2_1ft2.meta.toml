@@ -1,0 +1,35 @@
+schema_version = 1
+class = "servo_motor"
+table = "encoder"
+key = ["part_number"]
+default_source = "1ft2-s120"
+notes = '''
+Source: Siemens, 1FT2 Synchronous Motors for SINAMICS S120, Configuration Manual, 02/2022, A5E50645584B AC, Table 4-1
+"The 1FT2 is available with the following encoders", and for the 1FK2 Table 4-1 of the 1FK2 manual (02/2022,
+A5E46927724B AD), which lists the AS22DQC and AM22DQC alone.
+Typed in from the manuals; the numbers are the manuals', the layout is ours.
+One row per encoder. series: the motor series that can be ordered with it. resolution_counts: 4,194,304 = 22 bit and
+67,108,864 = 26 bit per revolution. multiturn_revolutions: 4096 (12 bit) for the multiturn encoders, 0 for singleturn.
+The encoder is the 14th character of the article number (S, M, B, C). The manuals give no weight or inertia per encoder.
+'''
+
+[[sources]]
+id = "1ft2-s120"
+document = "Siemens, 1FT2 Synchronous Motors for SINAMICS S120, Configuration Manual, A5E50645584B AC"
+date = "2022-02"
+locator = "Table 4-1 \"The 1FT2 is available with the following encoders\""
+method = "manual: typed in from the manual"
+url = "https://cache.industry.siemens.com/dl/files/387/109794387/att_1102452/v1/1FT2_S120_config_man_0222_en-US.pdf"
+
+[[sources]]
+id = "1fk2-s120"
+document = "Siemens, 1FK2 Synchronous Motors for SINAMICS S120, Configuration Manual, A5E46927724B AD"
+date = "2022-02"
+locator = "Table 4-1 \"The 1FK2 can be supplied with the following encoders\""
+method = "manual: typed in from the manual"
+url = "https://cache.industry.siemens.com/dl/files/757/109769757/att_1102511/v1/1FK2_S120_config_man_0222_en-US.pdf"
+
+[[provenance]]
+rows = ["AS22DQC", "AM22DQC"]
+fields = ["series"]
+source = "1fk2-s120"

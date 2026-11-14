@@ -531,3 +531,12 @@ program-error-motion = An axis is named before any move (G0, G1, G2, G3): { $arg
 program-error-helix = An arc changes an axis outside its plane (a helix), which the path cannot take: { $arg }
 program-error-arc = An arc cannot be laid out: its start and end are at different distances from its centre, its radius is too small for its ends, or its three points lie on one line. { $arg }
 program-error-named = A move to a named position the program does not declare, or a move without a target: { $arg }
+
+# Motor electrical and thermal model (14 November 2026)
+quantity-d-current = d current (field weakening)
+quantity-housing-temperature = Housing temperature rise
+quantity-drive-overload-image = Drive thermal image (1 = rated current held)
+quantity-drive-overload-chip = Drive thermal image, chips' node
+quantity-iron-loss = Iron loss
+quantity-braking-resistor-temperature = Braking resistor temperature rise
+check-motor-s1 = RMS torque at the mean speed against the S1 curve [N m]

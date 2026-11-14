@@ -21,6 +21,10 @@ macro_rules! tables {
 /// The tables the simulator reads, by their path in the catalogue, with the compiled-in copy.
 const TABLES: &[(&str, &str)] = &tables![
     "siemens/motors_s210.csv",
+    "siemens/motors_s210_oi.csv",
+    "siemens/dynamic_braking_1fk2.csv",
+    "siemens/encoders_1fk2_1ft2.csv",
+    "siemens/dc_link_trip_s120.csv",
     "siemens/motors_1fk2_s120.csv",
     "siemens/motors_1ft2_s120.csv",
     "siemens/motors_s120.csv",
@@ -71,10 +75,6 @@ fn table(name: &str) -> &'static str {
 
 /// Thermal time constants come from the configuration manuals, which cover most of the same motors.
 /// The same files are the 1FK2 and 1FT2 on a SINAMICS S120.
-/// The DC link overvoltage trip of the SINAMICS S120 booksize power units on a 400 V line (S120 Manual for booksize
-/// power units, technical data: 820 V DC); not in the extracted catalogue tables.
-const S120_DC_LINK_TRIP_V: f64 = 820.0;
-
 fn motor_manuals() -> [&'static str; 2] {
     [table("siemens/motors_1fk2_s120.csv"), table("siemens/motors_1ft2_s120.csv")]
 }
@@ -276,6 +276,8 @@ pub fn motor_articles_for(supply: &str) -> Vec<&'static str> {
 /// What a motor brings into a config, from whichever catalogue file has it.
 struct MotorData {
     rotor_kgm2: f64,
+    /// Rotor inertia and weight with the holding brake, where the catalogue gives them.
+    brake: Option<(f64, f64)>,
     static_torque: f64,
     stall_current: f64,
     max_torque: f64,
@@ -308,6 +310,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         let either = |first: &str, second: &str| number(&m, first).map_or_else(|| get(second), Ok);
         return Ok(MotorData {
             rotor_kgm2: get("rotor_inertia_kgm2")?,
+            brake: number(&m, "rotor_inertia_with_brake_kgm2").zip(number(&m, "mass_with_brake_kg")),
             static_torque: either("static_torque_nm", "rated_torque_nm")?,
             stall_current: either("stall_current_a", "rated_current_a")?,
             max_torque: get("max_torque_nm")?,
@@ -334,6 +337,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             let get = |row: &Row, column: &str| number(row, column).ok_or_else(missing);
             return Ok(MotorData {
                 rotor_kgm2: get(&m, "rotor_inertia_kgm2")?,
+                // motors_s120.csv has no brake data.
+                brake: None,
                 static_torque: get(&m, "static_torque_nm")?,
                 stall_current: get(&m, "stall_current_a")?,
                 max_torque: get(&sheet, "max_torque_nm")?,
@@ -356,6 +361,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         let get = |column: &str| number(&m, column).ok_or_else(missing);
         return Ok(MotorData {
             rotor_kgm2: get("rotor_inertia_kgm2")?,
+            brake: number(&m, "rotor_inertia_with_brake_kgm2").zip(number(&m, "mass_with_brake_kg")),
             static_torque: get("static_torque_nm")?,
             stall_current: get("stall_current_a")?,
             max_torque: get("max_torque_nm")?,
@@ -378,8 +384,12 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
     let voltage = s210_supply(supply).ok_or_else(missing)?.0;
     let rated = |quantity: &str, unit: &str| get(&format!("rated_{quantity}_{voltage}_{unit}"));
     let manual = motor_manuals().into_iter().flat_map(|text| rows(text)).find(|r| r["part_number"] == article);
+    // The S210 operating instructions have the 230 V windings the manual lacks; where both have a motor, the newer
+    // manual's value (two differ, see motors_s210_oi.meta.toml).
+    let instructions = || rows(table("siemens/motors_s210_oi.csv")).into_iter().find(|r| r["part_number"] == article);
     Ok(MotorData {
         rotor_kgm2: get("rotor_inertia_kgm2")?,
+        brake: number(&motor, "rotor_inertia_with_brake_kgm2").zip(number(&motor, "mass_with_brake_kg")),
         static_torque: get("static_torque_nm")?,
         stall_current: get("stall_current_a")?,
         max_torque: get("max_torque_nm")?,
@@ -388,7 +398,10 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         rated_torque: rated("torque", "nm")?,
         rated_speed: rated("speed", "rad_s")?,
         max_speed: get("max_speed_rad_s")?,
-        thermal_seconds: manual.as_ref().and_then(|r| number(r, "thermal_time_constant_s")),
+        thermal_seconds: manual
+            .as_ref()
+            .and_then(|r| number(r, "thermal_time_constant_s"))
+            .or_else(|| instructions().and_then(|r| number(&r, "thermal_time_constant_s"))),
         winding: None,
         pole_pairs: None,
         mass: get("mass_kg")?,
@@ -398,6 +411,24 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
 /// Weight of a motor without brake, for the supply its data is taken for (`SUPPLIES`).
 pub fn motor_mass(article: &str, supply: &str) -> Option<f64> {
     motor_data(article, supply).ok().map(|m| m.mass)
+}
+
+/// Weight of a motor with the brake option a config chooses (`parts.motor_brake`, see `apply_motor`); `None` for a
+/// motor the catalogue does not have, or has no brake data of where the brake is chosen.
+pub fn motor_mass_for(cfg: &Config, article: &str, supply: &str) -> Option<f64> {
+    let m = motor_data(article, supply).ok()?;
+    if brake_chosen(cfg).ok()? { m.brake.map(|(_, mass)| mass) } else { Some(m.mass) }
+}
+
+/// `parts.motor_brake`: whether the motor has its holding brake; false where the config does not say.
+fn brake_chosen(cfg: &Config) -> Result<bool, ConfigError> {
+    if cfg.get("parts.motor_brake").is_ok() { cfg.bool("parts.motor_brake") } else { Ok(false) }
+}
+
+/// The motor's highest speed in rad/s from the catalogue (the lower of the mechanical limit and what the converter
+/// allows, where both are given); `None` where the catalogue has none.
+pub fn motor_max_speed(article: &str, supply: &str) -> Option<f64> {
+    motor_data(article, supply).ok().map(|m| m.max_speed)
 }
 
 /// Puts a motor of the catalogue into a config, for a supply of `SUPPLIES` ("230v", "400v", "s120", ...): rotor
@@ -419,6 +450,12 @@ pub fn motor_mass(article: &str, supply: &str) -> Option<f64> {
 /// controller is retuned with them: Kp = L / T for the config's own current loop time constant T (its L over its
 /// Kp), Tn = L / R. For every other motor they stay as the config has them, and so do the current loop's gains.
 /// The velocity gain stays here too; `resolve` and `with_parts` retune it for the new rotor.
+///
+/// Options of the motor, read from `[parts]` where the config has them: `motor_brake = true` takes the inertia and
+/// weight with the holding brake (refused for a motor without brake data), and `motor_encoder` the encoder's counts per
+/// revolution from `encoders_1fk2_1ft2.csv` ("AS22DQC", "AM22DQC"; the 26-bit "AS26DQC", "AM26DQC" for a 1FT2 only).
+/// It sets `drive.max_speed_rad_s` to the catalogue's highest speed (the lower of the mechanical limit and what the
+/// converter allows, where both are given) and `motor.stall_current_a`, where the config has them.
 pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     if !SUPPLIES.contains(&supply) {
         return Err(unknown("motor", &format!("{article}, {supply}")));
@@ -426,7 +463,26 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     let m = motor_data(article, supply)?;
     let kt = m.static_torque / m.stall_current;
     let rated_speed = m.rated_speed;
-    set(cfg, "motor.rotor_inertia_kgm2", m.rotor_kgm2)?;
+    // The holding brake's inertia turns with the rotor (`parts.motor_brake`).
+    let rotor = if brake_chosen(cfg)? {
+        m.brake.map(|(inertia, _)| inertia).ok_or_else(|| unknown("motor", &format!("{article} with brake")))?
+    } else {
+        m.rotor_kgm2
+    };
+    set(cfg, "motor.rotor_inertia_kgm2", rotor)?;
+    // The encoder ordered with the motor (`parts.motor_encoder`, "" for the config's): its counts per revolution.
+    if let Ok(encoder) = cfg.get("parts.motor_encoder").map(|v| v.as_str().unwrap_or("?").to_string())
+        && !encoder.is_empty()
+    {
+        let series = &article[..article.len().min(4)];
+        let row = rows(table("siemens/encoders_1fk2_1ft2.csv"))
+            .into_iter()
+            .find(|r| r["part_number"] == encoder && r["series"].split(' ').any(|s| s == series))
+            .ok_or_else(|| unknown("motor", &format!("{article} with encoder {encoder}")))?;
+        set(cfg, "drive.encoder_counts_per_rev", number(&row, "resolution_counts").unwrap_or(f64::NAN))?;
+    }
+    // effects.iron_loss and the S1 check ("motor-s1") take the stall current: static torque over torque constant.
+    set_if_present(cfg, "motor.stall_current_a", m.stall_current)?;
     set(cfg, "motor.torque_constant_nm_a", kt)?;
     set(cfg, "motor.max_current_a", m.max_current)?;
     // The catalogue's own rated current, up to 18 % above rated torque over the static torque constant.
@@ -449,6 +505,25 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     if let Some(pairs) = m.pole_pairs {
         set_if_present(cfg, "motor.pole_pairs", pairs)?;
+    }
+    // A 1FK2 without a data sheet [estimate]: the inductance from Siemens' armature short-circuit braking table. Shorted,
+    // the winding brakes with R ke^2 w / (R^2 + (p w L)^2), at most ke^2 / (2 p L) where p w L = R: the table's maximum
+    // braking torque gives p L = kt^2 / (2 M_br,max) (the model's ke is its kt). The current controller is retuned as
+    // for a data sheet; the resistance stays the config's.
+    // shortcut: R stays an estimate, and the table's conditions (rated values, no saturation) hold for the peak alone.
+    if m.winding.is_none()
+        && cfg.get("motor.pole_pairs").is_ok()
+        && let Some(peak) = rows(table("siemens/dynamic_braking_1fk2.csv"))
+            .into_iter()
+            .find(|r| r["part_number"] == article)
+            .and_then(|r| number(&r, "max_braking_torque_nm"))
+    {
+        let time_constant = cfg.positive("motor.inductance_h")? / cfg.positive("drive.current_kp_v_a")?;
+        let inductance = kt * kt / (2.0 * cfg.positive("motor.pole_pairs")? * peak);
+        set(cfg, "motor.inductance_h", inductance)?;
+        set(cfg, "drive.current_kp_v_a", inductance / time_constant)?;
+        set(cfg, "drive.current_tn_s", inductance / cfg.positive("motor.resistance_ohm")?)?;
+        set_if_present(cfg, "motor.d_inductance_h", inductance)?;
     }
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
     let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley / ratio);
@@ -571,7 +646,9 @@ fn paired_s120(article: &str, supply: &str) -> &'static str {
 /// Module has no braking resistor of its own: on the S120 the line-up brakes through a Braking Module, so it sets the
 /// braking from the Braking Module row of `braking_s120.csv` (6SL3100-1AE31-0AB1 with its 6SL3100-1BE31-0AA0 resistor:
 /// 1.5 kW continuous, 100 kW peak, switching on at 770 V as `braking_threshold_v`) and `dc_link_overvoltage_v` to the
-/// booksize units' trip at 820 V (S120 manual, not in the catalogue tables). Before 13 November 2026 an S120 drive was
+/// Active Line Modules' trip at 820 V (`dc_link_trip_s120.csv`, from the booksize equipment manual), and switches
+/// `effects.shared_dc_link` on, where the config has it: the axes of a line-up share its DC link (an S210 converter
+/// switches it off, each has its own). Before 13 November 2026 an S120 drive was
 /// judged against the S210 converter's internal resistor the config had (100 W, 5.7 kW on the EXCT-30). And it sets
 /// `drive.braking_module`, so that `verdicts` judges the axes' braking power together against the one module (an S210
 /// clears it); until the eleventh review each axis was judged against the whole module.
@@ -584,6 +661,13 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     let braking_module = |cfg: &mut Config, on: bool| {
         if cfg.get("drive.braking_module").is_ok() {
             cfg.set_text(&format!("drive.braking_module = {on}"))
+        } else {
+            Ok(())
+        }
+    };
+    let shared_dc_link = |cfg: &mut Config, on: bool| {
+        if cfg.get("effects.shared_dc_link").is_ok() {
+            cfg.set_text(&format!("effects.shared_dc_link = {on}"))
         } else {
             Ok(())
         }
@@ -607,6 +691,8 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     } else if let Some(c) = rows(table("siemens/converters_s210.csv")).into_iter().find(|r| r["part_number"] == article)
     {
         braking_module(cfg, false)?;
+        // Every S210 converter has a DC link of its own.
+        shared_dc_link(cfg, false)?;
         if let Some(b) = rows(table("siemens/braking_s210.csv")).into_iter().find(|r| r["part_number"] == article) {
             let trip = number(&b, "dc_link_overvoltage_v").ok_or_else(|| unknown("drive", article))?;
             let line = if b["line"] == "1ac" { 240.0 } else { 480.0 };
@@ -651,8 +737,16 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "ratings.braking_resistor_continuous_w", continuous)?;
         set_if_present(cfg, "ratings.braking_resistor_peak_w", peak)?;
         set_if_present(cfg, "ratings.braking_threshold_v", threshold)?;
-        set_if_present(cfg, "ratings.dc_link_overvoltage_v", S120_DC_LINK_TRIP_V)?;
+        // The DC link's trip is the Active Line Module's (`dc_link_trip_s120.csv`); all of them trip at the same level.
+        let trip = rows(table("siemens/dc_link_trip_s120.csv"))
+            .iter()
+            .filter_map(|r| number(r, "dc_link_overvoltage_v"))
+            .reduce(f64::min)
+            .ok_or_else(|| unknown("drive", article))?;
+        set_if_present(cfg, "ratings.dc_link_overvoltage_v", trip)?;
         braking_module(cfg, true)?;
+        // The axes of an S120 line-up share one DC link: what one brakes, another can draw.
+        shared_dc_link(cfg, true)?;
         (
             number(&m, "rated_output_current_a"),
             number(&m, "max_output_current_a"),
@@ -1522,7 +1616,7 @@ fn try_job(entry: &MachineEntry, supply: &str, job: &Job) -> Option<Candidate> {
         .flatten();
     let gearbox = own_gearbox.as_deref().unwrap_or(parts.gearbox);
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(f64::NAN) };
-    let mass = motor_mass(job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
+    let mass = motor_mass_for(&job.cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
     let mut candidate = Candidate {
         article: job.article,
         gearbox: job.gearbox.clone(),

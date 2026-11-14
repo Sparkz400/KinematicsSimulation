@@ -69,6 +69,12 @@ TABLES = {
       + [(f"converter_{g}{s}", f"paired_drive_{g}{s}", "same") for g in ("", "new_") for s in ("230v_1ac", "230v_3ac", "400v_3ac")]),
     "siemens/motors_1fk2_s120.csv": ("siemens/motors_1fk2_s120.csv", "servo_motor", None, _MOTOR_MANUAL),
     "siemens/motors_1ft2_s120.csv": ("siemens/motors_1ft2_s120.csv", "servo_motor", None, _MOTOR_MANUAL),
+    "siemens/motors_s210_oi.csv": ("siemens/motors_s210_oi.csv", "servo_motor", None, [
+        ("article", "part_number", "same"),
+        ("static_torque_nm", "static_torque_nm", "same"),
+        ("max_current_a", "max_current_a", "same"),
+        ("thermal_time_constant_min", "thermal_time_constant_s", "minute"),
+    ]),
     "siemens/dynamic_braking_1fk2.csv": ("siemens/dynamic_braking_1fk2.csv", "servo_motor", "dynamic_braking", [
         ("article", "part_number", "same"),
         ("optimum_resistance_ohm", "optimum_resistance_ohm", "same"),

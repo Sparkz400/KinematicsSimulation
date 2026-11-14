@@ -298,25 +298,30 @@ impl Controller {
         machine.equilibrium(&self.set_pos, &mut Vec::new(), &mut hold);
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &vec![0.0; motors], &mut ff);
         // A winding that was warm stays warm, and a DC link keeps its charge. The current that holds the load comes
-        // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step.
-        // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
-        // if a budget across an enable ever needs to close there.
-        // So does a housing (effects.motor_thermal_nodes), and a drive's thermal image (effects.drive_overload).
+        // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step. Without the DC
+        // link simulated the drive draws it from the supply in its first step (`Drive::enable_energy`).
+        // So does a housing (effects.motor_thermal_nodes), a drive's thermal image (effects.drive_overload) and a braking
+        // resistor's warmth (effects.braking_resistor_heating).
         let kept: Vec<_> = self
             .drives
             .iter()
-            .map(|d| ((d.temperature_rise, d.housing_rise, d.overload_image, d.overloaded), d.dc_voltage))
+            .map(|d| {
+                let heat = (d.temperature_rise, d.housing_rise, d.overload_image, d.overload_chip, d.overloaded);
+                (heat, d.resistor_rise, d.dc_voltage)
+            })
             .collect();
         self.drives =
             (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
-        for (k, (drive, (heat, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
+        for (k, (drive, (heat, resistor_rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
-            (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overloaded) = heat;
+            (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overload_chip, drive.overloaded) =
+                heat;
+            drive.resistor_rise = resistor_rise;
+            let stored = 0.5 * p.inductance * drive.current * drive.current;
             if p.dc_link {
-                drive.dc_voltage = (voltage * voltage
-                    - p.inductance * drive.current * drive.current / p.dc_capacitance)
-                    .max(0.0)
-                    .sqrt();
+                drive.dc_voltage = (voltage * voltage - 2.0 * stored / p.dc_capacitance).max(0.0).sqrt();
+            } else {
+                drive.enable_energy = stored;
             }
         }
         // Every drive has noise of its own; the multiplier spreads neighbouring seeds over the generator's cycle.

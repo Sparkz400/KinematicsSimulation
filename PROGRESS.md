@@ -3025,3 +3025,62 @@ Left open:
 - The scissor lift's mass leaves out the arms' turning and the feet's sideways motion; one screw on the lowest foot; it
   and a linkage cannot sit beside other mechanisms in one file; the spatial delta's modes take arm 1's gearbox for all.
 - Arms and scissor in the 3D view are drawn plainly (no bearings, no screw thread).
+
+## Motor electrical and thermal model, Siemens motor data (14 November)
+
+What: the audit's motor items. Catalogue: the 1FK2 thermal time constants from the S210 operating instructions 06/2020
+(`motors_s210_oi.csv`, script `extract_siemens_s210_oi.py`, 27 rows; fills the six 230 V windings the S120 manual lacks;
+two motors differ from the 2022 manual and keep both prints), the 1FK2/1FT2 encoders (`encoders_1fk2_1ft2.csv`, a new
+`encoder` table of the servo_motor schema), the S120 DC link trip of 820 V from the booksize equipment manual 12/2004
+(`dc_link_trip_s120.csv`; the constant in catalog.rs is gone), validator checks for both. `apply_motor`: brake option
+(inertia and weight with brake, also in the search's weight), encoder option (22/26 bit), `drive.max_speed_rad_s` from
+the maximum-speed columns, `motor.stall_current_a`, and for a 1FK2 an inductance [estimate] p L = kt^2 / (2 M_br,max)
+from the short-circuit braking table. `apply_drive`: an S120 Motor Module switches `shared_dc_link` on, an S210 off.
+Drive: d current with the current loop's lag L_d / Kp and the warm resistance; iron loss R (I_0^2 - I_N^2) (n / n_N)^1.5
+heating the motor (copper then referred to the stall current); magnet flux over temperature; two-node overload image;
+braking resistor temperature; line module loss when drawing; the hold current's L i^2 / 2 booked on the supply at an
+enable without DC link. Checks `motor-s1` and `motor-speed`; six new motor signals. Field weakening, iron loss and
+resistor heating on in the shipped configs.
+
+How it moved the shipped configs (`sim-cli verdicts`, motor-peak utilisation / settled winding rise, with the new
+effects against `--set effects.field_weakening=false --set effects.iron_loss=false`): unchanged on every registered
+machine's default config and on h-bot, planar-delta, rack-gantry, single-axis, t-gantry machine files (their speeds stay
+below where the voltage limit binds, and their stall current is their rated current, so no iron loss). corexy motor a:
+peak utilisation 0.278 -> 0.130 (the d-q curve has full torque where the fade had started to fall). EXCT-30
+(1FK2205-4AF by name): peak 0.293 / 0.243 unchanged, winding rise 6.88 -> 8.87 K and 6.24 -> 8.46 K (iron loss).
+screw-portal and xyz-portal: unchanged once their per-motor `[motor.mz]` tables got `stall_current_a` beside their own
+rated current. On the 1FK2205-4AF at 540 V the old fade gave 1.6 N m at 500 rad/s where the d-q model gives 17.8 N m,
+and none at 600 rad/s where it gives 15.6 N m: the fade was far on the safe side above the rated speed.
+
+Test (hand calculations): `the_voltage_limit_gives_the_hand_calculated_torque_from_r_l_and_the_dc_link` (15.614 N m at
+600 rad/s), `the_d_current_follows_its_setpoint_with_the_current_loop_time_constant`,
+`the_d_current_takes_the_warm_resistance`, `iron_loss_at_a_speed_is_the_hand_calculated_share_of_the_rated_loss`
+(15.29 W, 1.911 W), `cold_magnets_give_the_hand_calculated_torque_per_amp`,
+`the_two_node_overload_image_trips_after_the_hand_calculated_time` (0.8203 s),
+`the_braking_resistor_warms_by_the_hand_calculated_rise_in_a_pulse` (220.38 K, 72.15 K), line module loss in
+`a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (50 W drawn for 49 W), and in catalog_parts.rs
+`a_motor_by_name_brings_its_brake_encoder_speed_and_winding_estimates` and
+`the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (5.3 N m). R and L read for a named motor against its
+data sheet: the existing `s120_motors_by_name_bring_winding_rated_values_and_their_motor_module` (1FK7060-2AF7).
+`catalog_golden.txt` and `catalog_snapshot.txt` rewritten with UPDATE_GOLDEN / UPDATE_CATALOG_SNAPSHOT.
+
+Left open:
+
+- Per-motor R, L, kE of the 1FK2 and 1FT2: Siemens publishes them in none of the documents it serves (S120
+  configuration manuals 02/2022, S210 operating instructions 06/2020, the data sheet service for S210 and S120 variants
+  of 1FK2104-4AF). The 1FK2 inductance is an estimate from the braking table; R stays the config's estimate; the 1FT2
+  keep the config's L. The derived R from the braking table's optimum resistor and average torques was inconsistent
+  (factors of 5 between the two routes) and is not used.
+- The 28 1FT2 without a thermal time constant need the S210 operating instructions 09/2022 (with 1FT2); Siemens'
+  support site refused the download to a script. Their S1 data otherwise come from D 32.
+- Siemens' published torque-speed curve points and 480 V data: printed only as graphs, not extracted.
+- The torque curve the velocity loop and planner use takes the nominal bus, not the DC link's voltage at the moment
+  (the current loop does use it); the golden-section search runs each velocity cycle with field weakening on.
+- Iron loss has one exponent (1.5) and is not a drag torque on the shaft; a disabled drive loses no iron.
+- The magnets have no node of their own; the drive's back-EMF feedforward assumes the catalogue's flux.
+- Nothing trips on the braking resistor's temperature, and no verdict judges it; the S1 curve is a straight line.
+- The EXCT-30's current loop is retuned for the estimated 15.67 mH (Kp 62.7 V/A, was 40); its [bounds] on
+  motor.inductance_h and d_inductance_h still bound the config's 10 mH, which the named motor overrides.
+- `check_limits` (control.rs, the limits session's) still takes the rated speed as the motor's highest; it could take
+  `drive.max_speed_rad_s`.
+
