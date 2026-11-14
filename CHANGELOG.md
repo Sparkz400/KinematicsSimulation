@@ -237,6 +237,17 @@ item are in [PROGRESS.md](PROGRESS.md).
 - `Imported::notes`: how an export was read other than it says, printed by `sim-cli` (`note-import-skipped`,
   `note-import-time-ms`).
 
+- Machine files: a gantry bridge that yaws (`machine.gantry`, `effects.gantry_yaw`): its yaw as a coordinate of its own,
+  held by drives at its sides, belts that pull its ends and its joints' spring; the carriage's lever on it. Two drives
+  on one axis make a dual-drive gantry (one motor more than axes) whose motors share the bridge by the lever rule;
+  signals `gantry.<id>.yaw`, `.sync_error`, `.moment`, check `gantry-sync`, `ConfigMachine::racking_moment`. The H-bot,
+  CoreXY and rack gantry files have it (off as shipped): the H-bot racks with the head's pull, the CoreXY's belts cancel
+  it. New file `machines/dual-gantry.toml` (two racks, catalogue 1FK2103-4AH motors).
+- Machine files: bodies riding on rotary axes (`offset_m`, rotary axes tilted by `incline_deg`), with their full mass
+  matrix, gravity and centripetal and Coriolis forces; a tool centre point (`machine.tcp`) whose tip the path moves
+  while the rotaries turn and the straight axes make up for them, with the feedforward's speed part. New files
+  `machines/portal-c.toml` (a C axis at the tool) and `machines/five-axis.toml` (a fork head, A and C).
+
 - Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
   SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted
   only where no value's variance is inflated by more than 100; the others are folded in, with their shares named),

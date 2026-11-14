@@ -140,6 +140,9 @@ belt_span_vibration = false
 # load. Off by default, so that earlier results stay as they were
 # (half a turn on both pulleys at every pose here, pi r / p = 12.6 teeth against the 10 configured).
 belt_wrap = false
+# A machine file's gantry bridge yaws (machine.gantry, docs/machine-files.md): read by machine files only; this
+# crate has no such bridge. Off.
+gantry_yaw = false
 torque_saturation = true
 drive_delay = true
 # The DC link voltage rises with what the motors feed back; a chopper and a braking resistor hold it down.

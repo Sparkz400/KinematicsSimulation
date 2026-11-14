@@ -154,6 +154,9 @@ shaper_follows_pose = false
 # Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
 # (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
 crash = false
+# The gantry yaws, the racking the CoreXY's crossed belts cancel ([machine.gantry], values in [gantry]). Off, so that
+# earlier results stay as they were.
+gantry_yaw = false
 
 [geometry]
 pulley_radius_m = 0.02
@@ -278,6 +281,15 @@ stiffness_t1_nm = 40.0
 stiffness_t2_nm = 40.0
 stiffness_k2_nm_rad = 10000.0
 stiffness_k3_nm_rad = 10000.0
+
+# The gantry's yaw with effects.gantry_yaw [estimate]: the distance between the two Y rails, its own inertia about a
+# vertical axis through its centre (4 kg over 0.6 m, m L^2 / 12), the stiffness of its joints on the rails' carriages
+# against yawing, and its damping.
+[gantry]
+width_m = 0.6
+inertia_kgm2 = 0.12
+stiffness_nm_rad = 5000.0
+damping_nm_s_rad = 2.0
 
 [pulley]
 inertia_kgm2 = 1.0e-4
@@ -660,6 +672,9 @@ gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
 gearbox.hysteresis_rad = [0.0, 2.909e-4]
 thermal_feedback.seal_viscosity_exponent = [0.0, 0.5]
 
+gantry.inertia_kgm2 = [0.08, 0.2]
+gantry.stiffness_nm_rad = [2000.0, 20000.0]
+gantry.damping_nm_s_rad = [0.5, 8.0]
 [start]
 pose = [0.25, 0.25]
 
@@ -835,3 +850,20 @@ friction_nm = 0.002
 body = "gantry"
 at_m = [0.58, 0.0, 0.0]
 pos = [1050, 300]
+
+# The gantry's racking (effects.gantry_yaw): its ends, 0.3 m either side of its centre, move along y by 0.3 m times the
+# yaw. Belt A pulls the first end (x below 0) along y in a1 and the other end in a2, belt B the first end in b1 and the
+# other in b2: per rad a1 gets longer by 1 * -0.3 m, a2 by -1 * 0.3 m, b1 by -1 * -0.3 m and b2 by 1 * 0.3 m. Both
+# strands of a belt get shorter or both longer, which its motor cannot take up: the belts hold the yaw (the rigid model
+# has none), and its moment, 0.3 m * (T_a1 + T_a2 - T_b1 - T_b2), is what is left of each belt's tension sum against
+# the other's: near zero where the H-bot's is 0.3 m times the head's pull.
+[[machine.gantry]]
+id = "gantry_yaw"
+axis = "y"
+across = "x"
+width_m = "gantry.width_m"
+inertia_kgm2 = "gantry.inertia_kgm2"
+stiffness_nm_rad = "gantry.stiffness_nm_rad"
+damping_nm_s_rad = "gantry.damping_nm_s_rad"
+sections = { a1 = -0.3, a2 = -0.3, b1 = 0.3, b2 = 0.3 }
+pos = [1050, 150]

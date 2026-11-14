@@ -30,7 +30,7 @@
                 "type": "string"
               },
               "incline_deg": {
-                "description": "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0.",
+                "description": "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0. On a rotary axis the tilt of the axis it turns about, from the vertical (0, a C axis) towards x (90, an A axis).",
                 "oneOf": [
                   {
                     "type": "number"
@@ -95,7 +95,7 @@
             "additionalProperties": false,
             "properties": {
               "axes": {
-                "description": "The axes it moves along: it moves with each of them. Ids of machine.axis nodes.",
+                "description": "The axes it moves along: it moves with each of them. Rotary axes among them carry it round, the first outermost. Ids of machine.axis nodes.",
                 "items": {
                   "type": "string"
                 },
@@ -118,6 +118,15 @@
                     "type": "string"
                   }
                 ]
+              },
+              "offset_m": {
+                "description": "On rotary axes: its centre of mass from the point their axes meet, [x, y, z] at angle 0, m. Default [0, 0, 0].",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
               },
               "payload_kg": {
                 "description": "Payload it carries while effects.payload is on and the payload is attached, kg.",
@@ -220,6 +229,156 @@
               "mass_kg",
               "stiffness_n_m",
               "damping_n_s_m"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "gantry": {
+          "description": "A gantry's bridge that yaws (racks) about a vertical axis while it travels along a horizontal axis (effects.gantry_yaw): its two sides run apart by width times the yaw angle, which its joints and guides hold with a spring. Bodies that move with its axis and along the bridge (across) weigh on the side they are nearer; screws, racks and linear motors at its sides (drives) and belt sections that pull its ends (sections) turn it. Two drives on its axis make a dual-drive gantry, one motor more than axes; each follows the axis's setpoint. Signals gantry.<id>.yaw, .sync_error, .moment; check gantry-sync. At most one.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "across": {
+                "description": "The straight axis along the bridge, whose bodies' lever about the bridge's centre changes with it. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "across_start_m": {
+                "description": "Where across is at 0, from the bridge's first side, m; default with across's stroke in the middle.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "axis": {
+                "description": "The horizontal straight axis the bridge travels along. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "damping_nm_s_rad": {
+                "description": "Damping of the yaw, N m s/rad.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "drives": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Per motor whose screw, rack or linear motor drives axis: where it acts across the bridge, from its centre, m (negative towards the first side). Keys: ids of machine.motor nodes.",
+                "type": "object"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "inertia_kgm2": {
+                "description": "The bridge's own inertia about a vertical axis through its centre, without the bodies that move across, kg m^2.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "sections": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Per belt section that pulls the bridge's ends along axis: how much longer it gets per rad of yaw, m (its pull along axis times the end's place across, from the centre). Keys: ids of machine.section nodes.",
+                "type": "object"
+              },
+              "stiffness_nm_rad": {
+                "description": "What holds the yaw beside the drives and belts: the joints of the bridge on its carriages and their guides, N m/rad.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "tolerance_m": {
+                "description": "The largest synchronisation error (width times yaw) the check gantry-sync allows, m; no check without it.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "width_m": {
+                "description": "Distance between the bridge's two sides (its guides), m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "axis",
+              "width_m",
+              "inertia_kgm2",
+              "stiffness_nm_rad",
+              "damping_nm_s_rad"
             ],
             "type": "object"
           },
@@ -1130,7 +1289,7 @@
             "additionalProperties": false,
             "properties": {
               "axis": {
-                "description": "The axis it turns, which has stroke_rad; no body moves with it. Id of a machine.axis node.",
+                "description": "The axis it turns, which has stroke_rad; bodies that move with it ride round on it (offset_m). Id of a machine.axis node.",
                 "type": "string"
               },
               "friction_coulomb_nm": {
@@ -1577,6 +1736,59 @@
               "id",
               "section",
               "length_m"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tcp": {
+          "description": "The tool centre point of a tool carried by rotary axes: the tool's coordinates of the three straight axes are where its tip is, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axes": {
+                "description": "The three straight axes along x (the first axis of the file), y (horizontal) and z (vertical), in that order. Ids of machine.axis nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "rotaries": {
+                "description": "The rotary axes that carry the tool, outermost first. Ids of machine.axis nodes.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tool_m": {
+                "description": "The tool's tip from the point the rotaries' axes meet, [x, y, z] at angle 0, m.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "axes",
+              "rotaries",
+              "tool_m"
             ],
             "type": "object"
           },

@@ -162,6 +162,8 @@ pub(crate) fn read(
         values: Vec::new(),
         linkage: None,
         scissor: Some(ScissorNode { id: id_of(node), gearbox: id_of(gearbox), values }),
+        gantry: None,
+        tcp: None,
     })
 }
 

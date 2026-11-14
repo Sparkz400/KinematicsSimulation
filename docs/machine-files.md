@@ -232,7 +232,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `key` | | translation key of its name; default `axis-<id>` |
 | | `stroke_m` | | stroke, m; the axis runs from 0 to it. Every axis has it but a rotary one (which has `stroke_rad`) and a linkage's or scissor lift's (whose range the node sets) |
 | | `stroke_rad` | | a rotary axis's range from 0, rad, in place of `stroke_m` |
-| | `incline_deg` | | angle above the horizontal, deg, 90 vertical and rising towards +; default 0 |
+| | `incline_deg` | | angle above the horizontal, deg, 90 vertical and rising towards +; default 0; on a rotary axis the tilt of the axis it turns about from the vertical (0, a C axis) towards x (90, an A axis) |
 | `motor` | `id` | required | a servo motor with its drive; signals `motor.<id>.*` |
 | | `key` | | translation key of its name; default `motor-<id>` |
 | `gearbox` | `motor` | required | the motor that drives it; one gearbox per motor (none for a linear motor); ratio 1 is a coupling |
@@ -245,7 +245,8 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `key` | | translation key of its name; default `belt-section-<id>`; signals `belt.<id>.*` |
 | `body` | `mass_kg` | required | mass, kg |
 | | `payload_kg` | | payload it carries while `effects.payload` is on and the gripper holds it, kg |
-| | `axes` | required | the axes it moves with |
+| | `axes` | required | the axes it moves with; rotary axes among them carry it round, the first outermost |
+| | `offset_m` | | on rotary axes: its centre of mass from where their axes meet, `[x, y, z]` at angle 0, m ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
 | `guide` | `axis` | required | the axis it guides; one guide per axis at most; its loss is `power.<id>` |
 | | `friction` | required | the table of its friction values, laid out as `[friction_x]` |
 | | `carries` | | bodies whose weight across the axis it carries |
@@ -283,8 +284,19 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `com_drop_m`, `tool_drop_m` | required | its centre of mass and the tool tip below the guide with `lever_axis` at 0, m |
 | | `lever_axis` | | an axis whose travel raises both towards the guide |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | required | the guide's stiffness sideways and in tilt, the lean's damping |
+| `gantry` | `axis` | required | a bridge travelling along this horizontal straight axis yaws (`effects.gantry_yaw`); at most one ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
+| | `across` | | the straight axis along the bridge; its bodies' lever about the bridge's centre changes with it |
+| | `width_m`, `inertia_kgm2` | required | the distance between the bridge's two sides, m; its own inertia about a vertical axis through its centre, kg m² |
+| | `stiffness_nm_rad`, `damping_nm_s_rad` | required | what holds the yaw beside drives and belts (its joints and guides), and its damping |
+| | `across_start_m` | | where `across` is at 0 from the first side, m; default its stroke in the middle |
+| | `drives` | | per motor whose screw, rack or linear motor drives `axis`: its place across the bridge from the centre, m; two make a dual-drive gantry |
+| | `sections` | | per belt section that pulls the bridge's ends: its length per rad of yaw, m |
+| | `tolerance_m` | | the synchronisation error (width x yaw) check `gantry-sync` allows, m |
+| `tcp` | `axes` | required | the tool centre point: the three straight axes along x (the file's first), y (horizontal) and z (vertical); at most one |
+| | `rotaries` | required | the rotary axes that carry the tool, outermost first |
+| | `tool_m` | required | the tool's tip from where the rotaries' axes meet, `[x, y, z]` at angle 0, m |
 
-There are as many motors as axes. A file names each list it uses; `axis` and `motor` are always there, `gearbox`,
+There are as many motors as axes, and one more for each drive of a gantry beyond the first. A file names each list it uses; `axis` and `motor` are always there, `gearbox`,
 `pulley` and `section` where belts are driven, `body` where an axis moves one, and the others may be left out.
 An effect that needs nodes the file has not (`frame_compliance` without a `frame`, `belt_span_vibration` without a
 `span`, `tool_flex` without a `lean`) refuses the file with `machine.<list>`; `belt_wrap` without the places it is worked
@@ -361,7 +373,8 @@ and shaft), and a rack's motor turns i x / r.
   forcer's mass as `rotor_inertia_kgm2`); its `[gearbox.<id>]` has ratio 1 and is the forcer's mounting.
 - A rotary turns its axis in rad: the axis has `stroke_rad` for `stroke_m`, its limits are `[axis.<id>]`'s
   `max_velocity_rad_s`, `max_acceleration_rad_s2` and `max_jerk_rad_s3`, and what it moves is the rotary's
-  `inertia_kgm2` (and `payload_inertia_kgm2`). No body moves with it; it has no guide, no incline and no cable chain.
+  `inertia_kgm2` (and `payload_inertia_kgm2`), and the bodies that ride on it ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)).
+  Its `incline_deg` tilts the axis it turns about; it has no guide and no cable chain.
   Its bearing drags with the rotary's `friction_coulomb_nm` + `friction_viscous_nm_s_rad` w at the axis while
   `effects.guide_friction` is on, taken at the rotor as c / i + v w_rotor / i² (in the motor's shaft friction and its
   loss); no shipped file sets it.
@@ -578,6 +591,84 @@ The T-gantry's file has both, off as shipped (the crate has its tool flex on): i
 carriage's height and its carriage idlers r + r_idler above and below, so the belt leaves both pulleys level, half a
 turn at every pose, as in the crate; with either effect on it is its crate to 1e-9.
 
+## A gantry that yaws, and tools on rotary axes
+
+**A yawing bridge** (`machine.gantry`, `effects.gantry_yaw`). A gantry's bridge travels along a horizontal axis and
+yaws a little about the vertical: its two sides, `width_m` apart, run apart by the width times the yaw angle psi (small
+angles). psi is one more coordinate beside the axes. What holds it: the bridge's joints on its carriages and their
+guides, a spring `stiffness_nm_rad` with `damping_nm_s_rad`; screws, racks or linear motors at its sides (`drives`,
+each with its place across the bridge from the centre, so that its output travels x + side psi); and belt sections
+that pull its ends (`sections`, m of length per rad: the section's pull along the axis times the end's place across).
+What it turns: its own `inertia_kgm2`, and the bodies that move with the axis and along the bridge (`across`). Such a
+body sits e = q_across + shift from the centre and moves along the axis by e psi, so its mass couples the axis and the
+yaw (m e) and adds m e² to the yaw's inertia, through the Jacobian of its place (below); the tool on it moves with it.
+Signals `gantry.<id>.yaw` (rad), `.sync_error` (width x yaw, m: how far the sides are apart) and `.moment` (k psi +
+c psi', N m, what the joints carry); loss `power.gantry_<id>`; check `gantry-sync`, the highest |sync error| against
+`tolerance_m`. `ConfigMachine::racking_moment` gives the racking moment at a pose and acceleration in the loss-free
+rigid model: what the belts, the drives and gravity put on the yaw beyond what turns the bodies with the bridge square.
+The effect is off in the H-bot, CoreXY and rack gantry files as shipped, so that their results stay, and on in the
+dual-drive gantry's.
+
+```toml
+[[machine.gantry]]         # machines/dual-gantry.toml
+id = "bridge_yaw"
+axis = "x"
+across = "y"
+width_m = "gantry.width_m"
+inertia_kgm2 = "gantry.inertia_kgm2"
+stiffness_nm_rad = "gantry.stiffness_nm_rad"
+damping_nm_s_rad = "gantry.damping_nm_s_rad"
+drives = { mx1 = -0.6, mx2 = 0.6 }
+tolerance_m = "gantry.sync_tolerance_m"
+```
+
+- **Two drives.** Two racks on the gantry's axis, one at each end: the file has one motor more than axes, and the two
+  set x and psi together. Each drive follows the axis's setpoint on its own encoder (setpoint coupling), so the two
+  position loops keep the bridge square, and their torques share the load by the lever rule: F2 - F1 = 2 m e a / B for
+  a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
+  `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
+  on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 16 um of 100, and the end the carriage starts
+  near carries more (`rack-feed-force` 109 against 95 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
+  155.0 Hz with J raised to 20 kg m² and the carriage in the middle, 149.5 Hz with it at an end (`sim-cli modes`).
+- **One drive.** The rack gantry's one rack drives its bridge at one end (`drives = { mx = -0.5 }`): the joints' spring
+  alone holds the far end, which lags while the bridge accelerates; with the effect on the path error of its cycle
+  grows from 0.07 to 0.20 mm.
+- **H-bot and CoreXY.** Belts pull the bridge's ends. In the H-bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
+  the belt's moment on the bridge is -0.3 m times its pull on the head along the bridge: it racks whenever the head is
+  pushed along the bridge, wherever the head is (-4.2 N m for the 7 kg head at 2 m/s²), and a head off the centre racks
+  it as the bridge accelerates (-m e a). A rigid belt lets the H-bot rack (the head can move along the bridge with the
+  motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.09 to 0.80 mm.
+  In the CoreXY each belt pulls both ends: its moment is the one belt's tension sum against the other's, -0.19 N m for
+  the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.06 mm. A rigid belt holds a CoreXY's yaw:
+  its rigid model has none.
+
+**Bodies on rotary axes, and the tool centre point.** A body may move with rotary axes: `offset_m` is its centre of
+mass from where their axes meet at angle 0, and it rides round on them, the first in its `axes` outermost. A rotary
+axis's `incline_deg` tilts the axis it turns about from the vertical (0, a C axis) towards x (90, an A axis). Such a
+body's place p(q) is the straight axes' travels plus its offset turned by its rotaries; its share of the mass matrix is
+m J^T J (J = dp/dq, by central differences), of gravity -m g J_z, and of the forces its speed asks -m J^T (dJ/dt q'),
+the centripetal and Coriolis forces: Lagrange's equations, so the energy keeps. A `tcp` node makes the tool's
+coordinates those of the tip: three straight axes along x (the file's first), y and z, the `rotaries` that carry the
+tool, and `tool_m`, the tip from where their axes meet. The axes stand at the tip less `tool_m` turned by the rotaries,
+so a path moves the tip straight while the rotaries turn, the straight axes making up for them, and the feedforward has
+the speed's part (`feedforward_torque_moving`). The tool's ranges are the strokes widened by |`tool_m`|, and a pose the
+straight axes cannot reach is refused (`error-tcp-joint-range`). The 3D view draws the tool from the rotaries to the
+tip, and the tool's path at the tip.
+
+```toml
+[[machine.tcp]]            # machines/five-axis.toml
+id = "tool_tip"
+axes = ["x", "y", "z"]
+rotaries = ["c", "a"]      # C about the vertical carries A about x
+tool_m = [0.0, 0.0, -0.2]
+```
+
+`machines/portal-c.toml` is the screw portal with a C axis on its Z slide turning a gripper whose tip is 0.1 m off the
+axis: its cycle carries a part while C turns it a quarter turn, the tip on a straight line. `machines/five-axis.toml` is
+the screw portal with a fork head, C about the vertical and A about x inside it, the tip 0.2 m below where they meet: its
+cycle tilts A and swings C half a turn round the still tip, X and Y running on a circle, and the spindle's weight on A.
+Both pass every verdict on their cycles. Their rotaries' gearboxes, inertias and the heads' masses are estimates.
+
 ## The other examples: a CoreXY and an XYZ portal
 
 `machines/corexy.toml` is a CoreXY table. Its two motors stand at the front corners; each drives a belt clamped to the
@@ -602,8 +693,10 @@ A machine file is checked in full when it is loaded, before anything runs:
 - every node: no field its kind does not have, every required field there, each value of the right type, ids valid
   and unique, every reference to a node that exists, every path to a number that exists;
 - the machine: masses, radii and lengths positive, one gearbox per motor (none for a linear motor) and one pulley,
-  screw, rack or rotary per gearbox, at most one of these per axis, a screw at least as long as its stroke, as many
-  motors as axes, a routing that keeps the belt's length and sets every axis;
+  screw, rack or rotary per gearbox, at most one of these per axis (but two at a gantry's sides), a screw at least as
+  long as its stroke, as many motors as axes and one more per gantry drive beyond the first, a gantry's drives on its
+  axis, a tool centre point's axes along x, y and z, a body's `offset_m` on rotary axes only, a routing that keeps the
+  belt's length and sets every axis;
 - every other key against the keys the registered machines' configs have (so `pretensoin_n` is refused by name), plus
   `[axis.<id>]` for each axis, a friction table for each guide, the value tables of screws, racks, linear motors and
   strain wave gears laid out as the joint kit's, and every key the netlist names by path;
@@ -637,7 +730,8 @@ derivations):
   share a pulley are one belt, and it is closed where each of its pulleys feeds it on one side and takes it out on
   another. A machine may have several belts (one per axis, say); a belt that ends on a drum has no such sum.
 - The mass on axis i is the sum of the bodies that move with it; the axes are taken square to each other, so the
-  bodies' mass matrix is diagonal. Pulleys and rotors (J_pulley + i² J_rotor per motor, the belt's mass shared out on
+  bodies' mass matrix is diagonal, but for the bodies on rotary axes or across a yawing bridge, which add m J^T J, their
+  share of gravity and the forces of their speed ([above](#a-gantry-that-yaws-and-tools-on-rotary-axes)). Pulleys and rotors (J_pulley + i² J_rotor per motor, the belt's mass shared out on
   the pulleys equally) add K^T J K. Gravity pulls axis i with m_i g sin(incline_i).
 - Gearbox (backlash, stiffness, efficiency), motor friction, torque ripple and cogging, tooth meshing, holding brake,
   hard stops at both ends of every stroke, LuGre guide friction with its load scaling: the components of
@@ -663,7 +757,14 @@ derivations):
   ratio i / lever (the joint kit's `RotaryJoint` with the `transmission::Converter` behind it), and its "pulley" is the
   axis itself: K has the row e_i for it, the axis takes the gearbox's output as its force, the belt's equations leave
   the axis to it (at rest and in the rigid tensions), and in the elastic model the pulley's states follow the axis. A
-  rotary axis's mass is its rotary's inertia, with no gravity along it.
+  rotary axis's mass is its rotary's inertia and what rides on it. A drive at a yawing gantry's side has the row
+  e_i + side e_psi.
+- A gantry's yaw (`machine.gantry`, `effects.gantry_yaw`): one more coordinate psi after the axes, with its spring and
+  damper, the belt sections' yaw coefficients in C, the drives' sides in K. Where fewer motors than coordinates set it
+  (one drive, or belts), the motors set the axes and the spring the yaw (`forward` and the feedforward take the axes'
+  rows); where belts cannot keep their length with it (a CoreXY), the rigid model has no yaw.
+- A tool centre point (`machine.tcp`): the tool's pose maps to the axes and back through the rotaries' turn of
+  `tool_m`; speeds and accelerations by differentiating that map.
 - A worm stage (`machine.worm`): its gearbox's output gets t eta^x and its rotor t / i, x = tanh(t w / 0.5 W), with the
   back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and
   -x eta_back t / i driven back, against the motion. In the rigid model, with a self-locking worm, the gearboxes'
@@ -694,7 +795,15 @@ machine; nothing about them is particular to machine files.
   out of its mass), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
   belts, screws or bodies. A linkage's or scissor lift's file cannot carry other mechanisms beside it. The spatial
   delta's modes take its first arm's gearbox for all three.
-- A body cannot ride on a rotary axis (it would move on a circle, not along square axes).
+- A gantry's yaw: one per file, small angles (the sides move by the width times the angle); the drives each follow the
+  common setpoint, so there is no master/slave or cross-coupled synchronisation in the drives (the controller's to add)
+  and the sync error is what two equal position loops leave. A section's yaw coefficients are numbers from its routing,
+  not worked out from its `route`; a body on the bridge that does not move across sits at its centre; idlers and spans
+  do not follow the yaw.
+- A body on rotary axes is a point mass at its centre of mass: its own inertia about that is in the rotary's
+  `inertia_kgm2`. A tool centre point needs three straight axes square to each other (the 3D view's x, y, z) and the
+  rotaries on the tool's side (a head): a rotary table carrying the workpiece is not one yet. The analysis's settling
+  and path errors add a rotary axis's error in rad to the straight axes' in m.
 - `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
   a motor without a pulley has none; the file is refused.
 - A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's

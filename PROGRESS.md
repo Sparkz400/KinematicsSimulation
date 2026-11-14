@@ -3297,3 +3297,65 @@ Left open:
 - The D3's elbow twist distorts the parallelogram; to first order the platform does not move, so its tilt is not
   followed.
 - The base, link and beam stiffnesses are estimates; a frame's measured mode (an impact test) would replace them.
+
+## Gantries: dual drive, racking, bodies on rotary axes, five-axis TCP (14 November)
+
+What: machine files (crates/sim-netlist) get the axis and motor topology of four kinds of machine they could not
+describe. (1) A gantry bridge that yaws, `machine.gantry` with `effects.gantry_yaw`: its yaw psi is one more
+coordinate after the axes, with the bridge's own inertia, a spring and damper for its joints on the carriages, drives at
+its sides (`drives`: a screw, rack or linear motor's K row becomes e_x + side e_psi) and belt sections that pull its
+ends (`sections`: yaw coefficients in C). Bodies that move with the bridge and along it (`across`) sit e from its
+centre and move by e psi, so their mass couples x and psi. Two drives on one axis make a dual-drive gantry: one motor
+more than axes, the netlist allows two transmissions on the gantry's axis, and the motors set x and psi together; each
+follows the common setpoint, so the drives see the lever-rule load share, the yaw and the synchronisation error.
+Signals `gantry.<id>.yaw`, `.sync_error` (width x yaw), `.moment`, loss `power.gantry_<id>`, check `gantry-sync`
+against the node's `tolerance_m`; `ConfigMachine::racking_moment` for the racking moment in the rigid loss-free model.
+Where fewer motors than coordinates set the yaw (one rack, belts) the motors set the axes (`k_inv` from those columns)
+and the spring the yaw; where the belts cannot keep their length with it (CoreXY) the rigid model has none. (2) H-bot
+and CoreXY get the node with their sections' yaw coefficients: the H-bot's belt racks the bridge with -0.3 m times its
+pull on the head along the bridge, the CoreXY's crossed belts leave each belt's tension sum against the other's.
+(3) Bodies ride on rotary axes (`offset_m`; a rotary axis's `incline_deg` tilts its turning axis, 90 for an A axis):
+their place p(q) and its Jacobian by central differences give m J^T J, gravity -m g J_z and the speed's forces
+-m J^T (dJ/dt v), so the equations are Lagrange's and the energy keeps. `machine.tcp` makes the tool pose the tip's:
+the axes stand at the tip less `tool_m` turned by the rotaries (`joints`, `tool_of`), velocities and accelerations by
+differentiating that map, `feedforward_torque_moving` with the speed's part, `unreachable` for a tip the axes cannot
+follow. (4) The rack gantry's one rack at one end of its bridge: the far end lags (effect off as shipped).
+
+New files: `machines/dual-gantry.toml` (3 m X on two racks with 1FK2103-4AH motors on S210, 0.8 m Y belt on a 1.2 m
+bridge, yaw on; all 21 verdicts pass, gantry-sync 16 um of 100, rack-feed-force 109 and 95 N), `machines/portal-c.toml`
+(the screw portal with a C axis turning a gripper 0.1 m off its axis; its cycle carries a part straight while C turns it
+a quarter turn) and `machines/five-axis.toml` (the screw portal with a fork head, C and A, tool 0.2 m; its cycle swings
+C half a turn round the still tip). Both pass every verdict. With the yaw on, the H-bot's path error grows from 0.09 to
+0.80 mm, the rack gantry's from 0.07 to 0.20 mm; the CoreXY's stays 0.06 mm. All new files run in `sim-cli analyze`,
+`verdicts`, `modes` and the app's 3D view (checked by screenshot: the racks at both ends of the bridge, the head with its
+tool, all checks passing).
+
+Tests (crates/sim-machines/tests/machine_file_gantries.rs, by hand): the dual gantry's torques differ by
+2 m e a / (B i/r) = 0.0212207 N m at e = -0.4, 0, 0.4 m (5 kg carriage, a = 2, B = 1.2, i/r = 314.159), their sum the
+same, none left to rack, equal with the effect off; its yaw at sqrt((2e5 + 2 k_end 0.6^2) / 20) / 2 pi = 155.04 Hz with
+k_end = 1 / (r^2 / 35752.6 + 1e-8) = 2.60829e7 N/m (`sim-cli modes` gives 155.0415); the H-bot racks with
+-0.3 * 7 kg * 2 = -4.2 N m along y wherever the head is and -7 * e * 2 = -/+2.1 N m along x at e = +/-0.15, rigid and
+elastic; the CoreXY with 0.3 * (-4 * 0.3 / 1.9) = -0.189474 N m (a twelfth of the H-bot's routing); the C portal's
+motors at 250 (x - 0.1 cos C), 250 (y - 0.1 sin C), (z + 0.15) 2 pi / 0.01, 20 C along the carry, its scene's tool part
+ending at the tip on the line, a tip beyond X refused; the five-axis axes at 0.5 + 0.2 sin A sin C, 0.25 - 0.2 sin A
+cos C, -0.05 + 0.2 cos A, the Y motor's torque swinging C at 2 rad/s round the still tip 5 * 0.12 sin 0.6 * 4 / 250 =
+0.0054197 N m below sliding Y alike, A holding 5 g 0.12 sin A / 50; the standard suite on the three new files and the
+H-bot, CoreXY and rack gantry with the yaw on; refusals (a second rack no gantry names, an offset off the rotaries, a
+gantry drive on another axis, tcp axes out of order). The tests were written and compiled, not run (the coordinator
+runs them); only the schema test ran, with `MACHINE_SCHEMA_WRITE=1`, to regenerate schema/machine-file.schema.json.
+
+Touched outside sim-netlist: crates/sim-components/i18n/{en,de}.ftl (the check, quantities, `axis-a`,
+`error-tcp-joint-range`), crates/sim-app/src/model.rs (`gantry-sync` in CHECKS), crates/machine-t-gantry default.toml
+and exct-30.toml (`effects.gantry_yaw = false`, so the key is known to machine files), linkage.rs (two `None` fields).
+
+Left open:
+
+- The drives each follow the common setpoint: no master/slave or cross-coupled gantry synchronisation loop (the
+  controller's area); the sync error is what two equal position loops leave.
+- One gantry per file, small yaw angles; section yaw coefficients are numbers, not worked out from routes; idlers and
+  spans do not follow the yaw; at rest a load on a spring-held yaw is shared in least squares, not deflected.
+- A body on rotaries is a point mass (its own inertia goes in the rotary's `inertia_kgm2`); a tcp needs x, y, z square
+  axes and the rotaries on the tool side (no table kinematics yet); the 3D view draws a rotary as a vertical disc.
+- The analysis's settling and path errors add a rotary axis's rad to the straight axes' m (analysis.rs, the arms
+  session's tool-space metric): a five-axis head's A sag of 0.33 mrad read as 0.33 mm before its gearbox was made
+  stiffer.
