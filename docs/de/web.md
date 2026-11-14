@@ -22,7 +22,7 @@ statische Dateiserver genügt. Zum Veröffentlichen `index.html` und `sim_wasm.w
 kopieren. Der CI-Job `wasm` baut beides und hebt es als Artefakt `sizing-page` auf.
 
 Kein wasm-bindgen und keine JavaScript-Werkzeuge: Die Seite schreibt eine Anfrage in den Speicher des Moduls und liest
-JSON zurück, `cargo` ist das einzige Bauwerkzeug. Das Modul ist etwa 2,0 MB groß (1.979.671 Byte vor der 3D-Ansicht, 2.001.582 Byte mit
+JSON zurück, `cargo` ist das einzige Bauwerkzeug. Das Modul ist etwa 2,0 MB groß (1.979.671 Byte vor der 3D-Ansicht, 2.001.607 Byte mit
 ihr, 14. November 2026).
 
 ## Was gerechnet wird

@@ -23,7 +23,7 @@ and keeps them as the artifact `sizing-page`; the workflow `pages.yml` builds th
 GitHub Pages.
 
 No wasm-bindgen and no JavaScript toolchain: the page writes a request into the module's memory and reads JSON back, so
-`cargo` is the only build tool. The module is about 2.0 MB (1,979,671 bytes before the 3D view, 2,001,582 bytes with it,
+`cargo` is the only build tool. The module is about 2.0 MB (1,979,671 bytes before the 3D view, 2,001,607 bytes with it,
 14 November 2026).
 
 ## What it computes

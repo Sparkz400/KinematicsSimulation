@@ -1915,7 +1915,7 @@ Rendering is plain WebGL2 in the page (no library: nothing loaded from elsewhere
 two meshes, one light and an orbit camera are about a hundred lines). Drag turns, the wheel zooms, Pause/Play and
 Restart (with the config in the editor); light and dark follow the page's colour scheme; a legend gives time, cycle
 time and tool position, an orange cube marks the tool. Real time, falling behind (at most 50 ms simulated per frame) on
-a machine the browser cannot step that fast. The module grew from 1,979,671 to 2,001,582 bytes.
+a machine the browser cannot step that fast. The module grew from 1,979,671 to 2,001,607 bytes.
 
 Looked at in the desktop app's built-in Chromium pane, served from 127.0.0.1: all twelve machines start without error;
 the T-gantry's view shows a cycle of 6.079 s against the sizing check's 6.080 s; drag, wheel, light and dark work; the
