@@ -15,6 +15,10 @@ belt = ""
 axis = ""
 
 # One switch per effect.
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
 [effects]
 gravity = true
 payload = true
@@ -55,7 +59,7 @@ drive_current_limit = true
 # Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
 # overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
 # drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
-field_weakening = false
+field_weakening = true
 drive_overload = false
 motor_thermal_nodes = false
 corner_blending = false
@@ -83,6 +87,33 @@ crash = false
 
 # With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
 # delta picker's planetary gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+braking_resistor_heating = true
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
+# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
+# sections are [estimate]s.
+link_bending = false
+magnet_temperature = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
 [thermal]
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
@@ -96,6 +127,9 @@ reference_c = 20.0
 viscosity_slope_k = 4000.0
 gearbox_viscous_loss_share = 0.5
 belt_stiffness_coefficient_1_k = 3.0e-4
+# With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
+# friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
+seal_viscosity_exponent = 0.33
 
 [profile]
 cycle_s = 1.0e-3
@@ -113,3 +147,27 @@ tension_reserve = 0.8
 tension_margin_n = 0.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
+deceleration_ratio = 1.0
+# The shape of moves (see docs/config-reference.md): "s-curve" (seven segments), "sin2" (Bestehorn), "poly345" or
+# "poly4567" (VDI 2143); a [[cycle.segment]] may name its own with shape = "...". Braking within deceleration_ratio of
+# the acceleration limits (1: as fast as speeding up). vertical_axis: the axis that lifts against gravity ("z", "-z"
+# where up is its minus direction, "" for none), which has up_acceleration_ratio of its acceleration limit upwards.
+shape = "s-curve"
+shaper_axes = []
+shaper_ei_tolerance = 0.05
+shaper_modes = []
+# With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
+# shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
+# { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
+shaper_type = "zvd"
+# The curve a trajectory runs through its poses: "c2" (a cubic spline, the acceleration continuous) or "hermite" (the
+# slopes of the neighbours, as before 14 November 2026).
+trajectory_spline = "c2"
+up_acceleration_ratio = 1.0
+vertical_axis = ""
