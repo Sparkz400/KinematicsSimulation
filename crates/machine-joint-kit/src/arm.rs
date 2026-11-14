@@ -1,6 +1,9 @@
 //! A serial arm whose bodies, joints, masses and inertias come from a URDF file (`rigid::Chain`), its dynamics by the
 //! recursive Newton-Euler algorithm. The tool pose is the joint positions themselves (rad, m for a prismatic joint):
-//! the cycle is given in joints, and the sizing judges motors, gears and screws along it.
+//! the cycle is given in joints, and the sizing judges motors, gears and screws along it. With
+//! `kinematics.tool_space = true` it is the flange's pose instead (`tool`): x, y, z and c on the SCARA, x, y, z and the
+//! rotation vector rx, ry, rz on a six-joint arm, each axis's limits in `[axis.x]`, ..., its range from
+//! `workspace.tool_min` and `tool_max`; poses near a singularity (`workspace.max_condition_number`) are refused.
 //!
 //! Config `[arm]`: `urdf_file` (a path, or "builtin:six-axis" / "builtin:scara" for the files in `urdf/`),
 //! `gear_ratios` (one per joint, before any screw), `payload_kg` and `payload_offset_m` (from the URDF's tip frame).
@@ -14,13 +17,14 @@
 //! shortcut: every joint has the same motor, drive and gearbox but its ratio, as `drive.rs` reads one `[motor]` and
 //! `[drive]` per machine; give joints their own tables once the drive reads one per motor.
 
+use crate::tool::{Scara, Six, Tool};
 use crate::{axis, gravity, machine, payload, required_life};
 use sim_components::chain::{JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
 use sim_components::rigid::{Chain, V3, mul};
 use sim_components::transmission::{BallScrew, StrainWave};
 use sim_core::{Config, ConfigError, Label, Machine, Part, RatingCheck, Scene, Shape, SignalInfo};
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 const BUILTIN: [(&str, &str); 2] = [
     ("builtin:six-axis", include_str!("../urdf/six-axis.urdf")),
@@ -28,6 +32,10 @@ const BUILTIN: [(&str, &str); 2] = [
 ];
 
 const AXIS_IDS: [&str; 7] = ["j1", "j2", "j3", "j4", "j5", "j6", "j7"];
+/// The tool's axes in tool space: the SCARA's, the six-joint arm's.
+const SCARA_AXES: [(&str, &str); 4] = [("x", "axis-x"), ("y", "axis-y"), ("z", "axis-z"), ("c", "axis-tool-c")];
+const SIX_AXES: [(&str, &str); 6] =
+    [("x", "axis-x"), ("y", "axis-y"), ("z", "axis-z"), ("rx", "axis-rx"), ("ry", "axis-ry"), ("rz", "axis-rz")];
 
 pub struct Arm {
     chain: Chain,
@@ -40,6 +48,9 @@ pub struct Arm {
     screw: Option<BallScrew>,
     strain_wave: Option<StrainWave>,
     required_life: Option<f64>,
+    tool: Tool,
+    /// `workspace.max_condition_number`: tool poses beyond it are refused.
+    max_condition: f64,
 }
 
 /// The chain of `arm.urdf_file`.
@@ -109,8 +120,34 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         }
         let unit = if body.prismatic { "m" } else { "rad" };
         axes.push(axis(cfg, AXIS_IDS[k], JOINT_KEYS[k], unit, joint.range)?);
-        joints.push((joint, lever));
+        joints.push((joint, lever, unit));
     }
+    let tool = if !cfg.bool("kinematics.tool_space")? {
+        Tool::Joints
+    } else {
+        let refuse = || ConfigError::Invalid("kinematics.tool_space".into());
+        let (ids, tool): (&[(&'static str, &'static str)], Tool) = if n == 4 {
+            let elbow = match cfg.get("kinematics.elbow")?.as_str() {
+                Some("right") => 1.0,
+                Some("left") => -1.0,
+                _ => return Err(ConfigError::Invalid("kinematics.elbow".into())),
+            };
+            (&SCARA_AXES, Tool::Scara(Scara::new(&chain, elbow).ok_or_else(refuse)?))
+        } else {
+            let home = cfg.f64s("kinematics.home_joints")?;
+            (&SIX_AXES, Tool::Six(Six::new(&chain, home).ok_or_else(refuse)?))
+        };
+        let (min, max) = (cfg.f64s("workspace.tool_min")?, cfg.f64s("workspace.tool_max")?);
+        if min.len() != n || max.len() != n || min.iter().zip(&max).any(|(a, b)| !(a < b)) {
+            return Err(ConfigError::Invalid("workspace.tool_min".into()));
+        }
+        axes = ids
+            .iter()
+            .enumerate()
+            .map(|(k, (id, key))| axis(cfg, id, key, if k < 3 { "m" } else { "rad" }, (min[k], max[k])))
+            .collect::<Result<_, _>>()?;
+        tool
+    };
     let offset = cfg.f64s("arm.payload_offset_m")?;
     let &[x, y, z] = &offset[..] else { return Err(ConfigError::Invalid("arm.payload_offset_m".into())) };
     let at = sim_components::rigid::add(chain.tip_pos, mul(&chain.tip_rot, [x, y, z]));
@@ -118,10 +155,12 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         payload: (payload(cfg, "arm.payload_kg")?, at),
         g: gravity(cfg)?,
         attached: true,
-        ratios: joints.iter().map(|(j, _)| j.ratio()).collect(),
+        ratios: joints.iter().map(|(j, ..)| j.ratio()).collect(),
         screw,
         strain_wave,
         required_life: required_life(cfg),
+        max_condition: cfg.positive("workspace.max_condition_number")?,
+        tool,
         chain,
     };
     machine(cfg, arm, joints, axes)
@@ -130,6 +169,17 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 impl Arm {
     fn extra(&self) -> Option<(f64, V3)> {
         (self.attached && self.payload.0 > 0.0).then_some(self.payload)
+    }
+
+    /// The joints at a tool pose and their Jacobian's condition number there (`tool::Scara::condition`,
+    /// `tool::Six::condition`); `None` out of reach.
+    fn solved(&self, tool: &[f64]) -> Option<(Vec<f64>, f64)> {
+        let mut q = vec![0.0; self.chain.len()];
+        match &self.tool {
+            Tool::Joints => None,
+            Tool::Scara(s) => s.inverse(tool, &mut q).then(|| (q.clone(), s.condition(&q))),
+            Tool::Six(s) => s.inverse(&self.chain, tool, &mut q).then(|| (q.clone(), s.condition(&self.chain, &q))),
+        }
     }
 }
 
@@ -142,6 +192,48 @@ impl Mechanism for Arm {
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
+    }
+
+    fn forward(&self, q: &[f64], tool: &mut [f64]) {
+        match &self.tool {
+            Tool::Joints => tool.copy_from_slice(q),
+            Tool::Scara(s) => s.forward(q, tool),
+            Tool::Six(_) => Six::forward(&self.chain, q, tool),
+        }
+    }
+    fn inverse(&self, tool: &[f64], q: &mut [f64]) -> bool {
+        match &self.tool {
+            Tool::Joints => {
+                q.copy_from_slice(tool);
+                true
+            }
+            Tool::Scara(s) => s.inverse(tool, q),
+            Tool::Six(s) => s.inverse(&self.chain, tool, q),
+        }
+    }
+    /// In tool space: out of reach, a turn of the flange near half a turn from the base frame's (where its rotation
+    /// vector jumps), or too near a singularity; the joints' stops are the joint machine's to check.
+    fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {
+        if matches!(self.tool, Tool::Joints) {
+            return None;
+        }
+        if matches!(self.tool, Tool::Six(_)) && tool[3..6].iter().map(|v| v * v).sum::<f64>().sqrt() > PI - 0.01 {
+            return Some("error-arm-orientation-half-turn");
+        }
+        match self.solved(tool) {
+            None => Some("error-arm-out-of-reach"),
+            Some((_, c)) if !(c <= self.max_condition) => Some("error-arm-singularity"),
+            Some(_) => None,
+        }
+    }
+    fn condition(&self, tool: &[f64]) -> Option<f64> {
+        match self.tool {
+            Tool::Joints => None,
+            _ => Some(self.solved(tool).map_or(f64::INFINITY, |(_, c)| c)),
+        }
+    }
+    fn tool_is_joints(&self) -> bool {
+        matches!(self.tool, Tool::Joints)
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
@@ -240,6 +332,9 @@ impl Mechanism for Arm {
         });
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
-        Some(self.chain.tip(tool).1)
+        match self.tool {
+            Tool::Joints => Some(self.chain.tip(tool).1),
+            _ => Some([tool[0], tool[1], tool[2]]),
+        }
     }
 }

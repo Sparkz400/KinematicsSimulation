@@ -72,6 +72,15 @@ pub trait Mechanism: Send {
     fn unreachable(&self, _tool: &[f64], _slack: f64) -> Option<&'static str> {
         None
     }
+    /// `Machine::condition` at a tool pose; `None` where the tool is the joints.
+    fn condition(&self, _tool: &[f64]) -> Option<f64> {
+        None
+    }
+    /// Whether the tool pose is the joints themselves (`forward` and `inverse` as by default): then the controller's
+    /// feedforward leaves out the speed terms, as it always has; otherwise it takes them (`feedforward_torque_moving`).
+    fn tool_is_joints(&self) -> bool {
+        true
+    }
 
     /// The mechanism's own signals, after the machine's: their infos, and their values from joint positions, speeds,
     /// accelerations and the force (torque) each transmission passes to its joint.
@@ -104,6 +113,8 @@ pub struct JointSpec {
     pub id: &'static str,
     pub key: &'static str,
     pub gear_lever: Option<f64>,
+    /// The joint's unit: "m" for a travel, "rad" for an angle (the axes may be the tool's, in other units).
+    pub unit: &'static str,
 }
 
 pub struct JointMachine<M: Mechanism> {
@@ -339,7 +350,7 @@ impl<M: Mechanism> JointMachine<M> {
 
     /// The joint's unit and the unit of what drives it: rad and N m, or m and N.
     fn units(&self, k: usize) -> (&'static str, &'static str) {
-        if self.axes[k].unit == "m" { ("m/s", "N") } else { ("rad/s", "N m") }
+        if self.joints[k].unit == "m" { ("m/s", "N") } else { ("rad/s", "N m") }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
@@ -533,6 +544,38 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
     }
 
+    /// Where the tool is not the joints: the joint speeds J^-1 v and accelerations J^-1 (a - J' q') with J' q' the
+    /// second difference of the forward kinematics along q', then `rigid_motor_torque` with the velocity terms. Where it
+    /// is, `feedforward_torque` (no speed terms), as before.
+    fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
+        if self.mechanism.tool_is_joints() {
+            return self.feedforward_torque(pos, acc, out);
+        }
+        let n = self.n();
+        let mut q = vec![0.0; n];
+        if !self.mechanism.inverse(pos, &mut q) {
+            q.fill(f64::NAN);
+        }
+        let jac = self.jacobian(&q);
+        let qd = solve(&jac, &vel[..n]).unwrap_or_else(|| vec![f64::NAN; n]);
+        let speed = qd.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let mut curve = vec![0.0; n];
+        if speed > 0.0 {
+            // A step of 1e-4 rad (m) along q': truncation ~1e-8, rounding ~1e-16 / 1e-8 of the tool's size.
+            let h = 1e-4 / speed;
+            let (mut a, mut b, mut c) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+            let at = |s: f64| -> Vec<f64> { (0..n).map(|k| q[k] + s * qd[k]).collect() };
+            self.mechanism.forward(&at(h), &mut a);
+            self.mechanism.forward(&q, &mut b);
+            self.mechanism.forward(&at(-h), &mut c);
+            curve = (0..n).map(|k| (a[k] - 2.0 * b[k] + c[k]) / (h * h)).collect();
+        }
+        let rhs: Vec<f64> = (0..n).map(|k| acc[k] - curve[k]).collect();
+        let qdd = solve(&jac, &rhs).unwrap_or_else(|| vec![f64::NAN; n]);
+        let motor = |x: &[f64]| -> Vec<f64> { (0..n).map(|k| x[k] * self.joints[k].drive.ratio()).collect() };
+        self.rigid_motor_torque(&motor(&q), &motor(&qd), &motor(&qdd), out);
+    }
+
     /// Exact in joint coordinates, velocity terms included (`feedforward_torque` leaves them out): M q'' + h at the
     /// joint over the ratio, plus the rotor's own J_rotor i q''.
     fn rigid_motor_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], out: &mut [f64]) {
@@ -576,6 +619,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.rest_slack
     }
 
+    fn condition(&self, tool: &[f64]) -> Option<f64> {
+        self.mechanism.condition(tool)
+    }
+
     fn unreachable(&self, tool: &[f64], slack: f64) -> Option<&'static str> {
         if let Some(why) = self.mechanism.unreachable(tool, slack) {
             return Some(why);
@@ -597,7 +644,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
         for (k, motor) in self.motors.iter().enumerate() {
-            let unit = self.axes[k].unit;
+            let unit = self.joints[k].unit;
             out.push(SignalInfo::new(
                 format!("joint.{}.position", self.joints[k].id),
                 self.joints[k].key,
@@ -610,7 +657,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 "quantity-joint-force",
                 self.units(k).1,
             ));
-            if self.joints[k].gear_lever.is_some() || self.axes[k].unit != "m" {
+            if self.joints[k].gear_lever.is_some() || self.joints[k].unit != "m" {
                 out.push(SignalInfo::new(
                     format!("gearbox.{}.output_torque", motor.id),
                     motor.key,
@@ -636,7 +683,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                     let e = self.joints[k].drive.extra_efficiency;
                     out.push(force[k] * lever * if force[k] * qd[k] >= 0.0 { 1.0 / e } else { e });
                 }
-                None if self.axes[k].unit != "m" => out.push(force[k]),
+                None if self.joints[k].unit != "m" => out.push(force[k]),
                 None => {}
             }
         }

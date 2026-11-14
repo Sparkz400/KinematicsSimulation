@@ -699,6 +699,20 @@ thermal-warm-start,,0.02011,0.1000,ok
 
 Jede Prüfung besteht. Motor 1 trägt etwas mehr als beim D3 (Spitze 0,563 gegen 0,510 seiner Grenze): die 0,7 kg der Welle an der Plattform und die Reibung des Teleskops. Der vierte Motor arbeitet bei 5 % seiner Spitze: Der 1FK2105 ist viel größer, als die Drehung braucht, doch eine Maschine hat hier einen Motortyp. Das Getriebespiel ist eine Schätzung von 3 Winkelminuten an den Armen und 1 Winkelminute am Werkzeug (spielreduzierte Präzisions-Planetengetriebe, wie beim D2): Mit den 9 und 10 Winkelminuten des Katalogs (`--set gearbox.backlash_rad=2.618e-3 --set tool_gearbox.backlash_rad=2.909e-3`) scheitert das Einschwingen mit 1,22 mm, 0,6 mm davon das Absacken der Arme und 1 mrad das Werkzeug, das in seinem Spiel ruht: Das Einschwingen zählt den Fehler der Drehung in rad mit dem der Lage in m, wie beim SCARA. Mit `--bands` scheitert das Einschwingen: Es erreicht 0,53 mm an einer Grenze der Schätzungen. Eine Bahn mit Drehung schreibt man `line,x,y,z,c`; Kreisbögen und Splines nehmen drei Achsen und werden beim D4 abgelehnt. `sim-cli modes delta-d4` nennt die Torsion des Werkzeugs (41 Hz mit Nutzlast: die Teleskopwelle verdreht sich) neben den Moden der Arme.
 
+### SCARA und Sechsachsroboter im Werkzeugraum
+
+Standardmäßig sind die Achsen des SCARA und des Arms ihre Gelenke, eine Bewegung ist also eine Gerade der Gelenke und eine Kurve des Werkzeugs. Mit `kinematics.tool_space = true` sind die Achsen die Lage des Flanschs (SCARA: x, y, z in m und die Drehung c in rad; Arm: x, y, z und die Orientierung rx, ry, rz als Drehvektor), und Bewegungen, Bahnen und Zyklen sind Geraden des Werkzeugs, wie beim Delta. Zwei Konfigurationen haben ihn eingeschaltet, mit einem Zyklus aus Geraden:
+
+```bash
+sim-cli verdicts scara --config crates/machine-joint-kit/config/scara-tool.toml
+```
+
+```bash
+sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
+```
+
+Beide bestehen jede Prüfung. Der SCARA greift 100 mm tiefer, trägt das Teil 500 mm quer bei x = 0,4 m und dreht es dabei um 1,5 rad, und zurück: 2,542 s, Motor 1 bei 5 % seiner Spitze und 288 seiner 314 rad/s (der Arm schwenkt am schnellsten, wo die Gerade der Basis am nächsten kommt), Einschwingen 0,04 mm. Der Arm tut dasselbe mit durchweg nach unten zeigendem Flansch (ry = π/2): 3,774 s, Motor 2 bei 23 % seiner Spitze, Einschwingen 4,0 mm der 5, die die Konfiguration erlaubt: Unter den 6 kg Nutzlast verdrehen sich die Getriebe, und der Flansch ruht 4 mm unter der Lage, die die Geber angeben (0,2 mm im starren Modell, `--set effects.joint_elasticity=false`). Eine Bahn im Werkzeugraum schreibt man `line,x,y,z,c` (oder sechs Zahlen beim Arm); `--time-optimal` plant sie so schnell, wie die Motoren es über die Rückwärtskinematik erlauben: Die Gerade des SCARA quer dauert 1,542 s statt 1,750 s, Motor 1 bei 307,5 seiner 314,2 rad/s. Ein Ziel, das der Arm nicht erreicht, wird mit dem Grund abgelehnt (`Der Arm reicht nicht bis zum Ziel.`), ebenso eines zu nahe an einer Singularität (der gestreckte Arm des SCARA: `workspace.max_condition_number`, 25) und eine Bahn hindurch. Den Ellbogen des SCARA wählt `kinematics.elbow` ("right" oder "left"); der Arm hält den Zweig von `kinematics.home_joints` (Schulter, Ellbogen und Handgelenk wie dort).
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).

@@ -352,6 +352,20 @@ The D4's arms are the D3's (checked above); these check what the fourth axis add
 | The tool's torsional mode | 1 / (1/8594.4 + 1/500) = 472.51 N m/rad against 7.08e-3 kg m²: 41.116 Hz (75.857 Hz without the payload), 2.05 % damping; among `modes` | 1e-5 | `the_tools_torsional_mode_is_the_hand_calculated` |
 | The default cycle with a 90° turn | The tool at 90° in the pick to 1.5 mrad; every verdict passes (settling 0.39 mm); with the catalogue's 9 and 10 arcmin backlash settling fails alone (1.21 mm) | – | `the_default_cycle_turns_the_tool_and_passes_its_verdicts` |
 
+## Hand calculations: arms in tool space
+
+The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mechanisms.md#tool-space)), on the configs `config/scara-tool.toml` and `config/arm-tool.toml`. All in `machine-joint-kit`.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The SCARA's closed form at (0.325, 0.275, 0.1, 0.3) | cos β = (0.18125 − 0.325² − 0.275²) / (2 · 0.325 · 0.275) = 0: right elbow β = π/2, joint 1 = 0; left β = −π/2, joint 1 = 2 atan2(0.275, 0.325) = 1.404514; joint 3 = 0.2 − z = 0.1 m, joint 4 = c − q1 − q2; the URDF chain puts the flange there | 1e-12 | `the_scara_closed_form_gives_the_joints_of_a_pose_by_hand` |
+| Forward of inverse | The pose itself, over the SCARA's tool range (the standard suite's grid) and at 40 poses around the arm's home (turns up to 0.3 rad), the arm's wrist on the home's side (joint 5 > 0); both hold still at rest | 1e-9 | `inverse_then_forward_returns_sampled_tool_poses_within_1e_9` |
+| A line of the tool | Every planned pose (within the axis limits and time-optimal) on the SCARA's line x = 0.4, z = 0.15, c = 3 (y + 0.25), and the flange where the inverse's joints put it; the arm's line along y with its orientation (0, π/2, 0) held, read back through the URDF chain | 1 µm, 1e-6 rad | `every_planned_pose_of_a_straight_tool_line_lies_within_1_um_of_it` |
+| The joint speeds at (0.325, 0.275) along y at 0.5 m/s | J = [[−0.275, −0.275], [0.325, 0]]: joint 1 0.5 / 0.325 = 1.538462 rad/s, joint 2 the opposite, joint 4 0; motors × 100, 80; condition number from the eigenvalues of Jᵀ J = [[0.18125, 0.075625], [0.075625, 0.075625]], 2.4691 | 1e-4 rad/s, 1e-9 | `the_joint_speeds_along_a_tool_line_are_the_inverse_jacobian_times_the_tool_speed` |
+| The stretched SCARA arm | At x = 0.598 the elbow acos((0.598² − L1² − L2²) / (2 L1 L2)) = 0.1639 rad, condition above 25: the move refused with `error-arm-singularity`; at 0.59 (0.3669 rad) it goes; at 0.61 `error-arm-out-of-reach`; a line ending at 0.6 refused with `error-path-range`, within the axis limits and time-optimal | – | `a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason` |
+| The time-optimal plan of a line of the tool | No motor faster than its rated 314.159 rad/s (from differences of the planned poses' joints); the fastest above 0.9 of it and faster than within the axis limits, the plan shorter | 0.1 % | `the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line` |
+| The tool-space configs | The defaults but for `kinematics.tool_space`, `start.pose`, the cycle and the arm's settling tolerance; both cycles of straight lines pass every verdict (SCARA 2.542 s, settling 0.04 mm; arm 3.774 s, settling 4.0 of 5 mm) | – | `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`, `the_tool_space_cycles_pass_their_verdicts` |
+
 ## Vendor formulas and vendor documents
 
 | What is compared | Against | Tolerance | Test |

@@ -25,8 +25,8 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 | `rack-axis` | carriage, 3 m | helical pinion on a rack behind a planetary gearbox of ratio 10, backlash-free | x (m) | `rack-feed-force` |
 | `linear-motor-axis` | carriage, 1 m | ironcore linear motor, none | x (m) | `guide-load`, `guide-life` from the attraction |
 | `rotary-table` | table of 3 kg m^2 plus the work | strain wave gear of ratio 100 (or worm, or planetary) | c (rad) | `strain-wave-life` |
-| `urdf-arm` | six-axis arm, `urdf/six-axis.urdf` | strain wave gears of ratio 120 and 80 | six joint angles (rad) | `strain-wave-life` per joint |
-| `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad) | `strain-wave-life`, the screw's checks on joint 3 |
+| `urdf-arm` | six-axis arm, `urdf/six-axis.urdf` | strain wave gears of ratio 120 and 80 | six joint angles (rad), or x, y, z, rx, ry, rz in tool space | `strain-wave-life` per joint |
+| `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad), or x, y, z, c in tool space | `strain-wave-life`, the screw's checks on joint 3 |
 
 Every one of them also gets the checks every machine gets: motor peak and RMS torque (`motor-peak`, `motor-thermal`),
 drive currents, gearbox peak, cubic-mean torque, input speed and life where `[ratings]` gives them, DC link and braking
@@ -148,6 +148,44 @@ them. The settling tolerance is then in rad (`ratings.settling_tolerance_m` keep
 under the arm's weight, which the motors' encoders do not see (2.6 mrad at joint 2 of the six-axis example reaching
 out).
 
+### Tool space
+
+With `kinematics.tool_space = true` the machine's axes are the flange's pose, and every planner, the cycle, the CLI
+and the app move the tool as they move a delta's: a line of a path is a straight line of the tool. The joint machine
+maps the pose to the joints through the mechanism's `inverse` and back through `forward`, the tool's speed to the
+joints' through the Jacobian of `forward` (central differences). The controller's feedforward then takes the speed
+terms: the joints' accelerations J^-1 (a - J' q'), J' q' the second difference of `forward` along q', and the
+centripetal and Coriolis torques of the Newton-Euler model (in joint space it leaves them out, as before). Targets are
+refused out of reach (`error-arm-out-of-reach`), beyond a joint's stop (`error-joint-beyond-stop`) or where the
+Jacobian's condition number is above `workspace.max_condition_number` (`error-arm-singularity`); a path through such a
+pose with `error-path-range`, as on the deltas. The workspace map and `ratings.max_condition_number` take the same
+number.
+
+- SCARA (four joints: two arms about vertical axes, a vertical quill, a turning flange): the axes are x, y, z of the
+  flange (m) and its turn c about the vertical (rad: joints 1 + 2 + 4 plus the turn at zero), in closed form. The arms'
+  lengths and directions at zero, joint 1's place, the quill's direction and the flange's turn come from the URDF at
+  zero and are checked against the chain at three poses (a URDF that is no SCARA is refused). Joint 2 by the cosine law,
+  cos(beta) = (r^2 - L1^2 - L2^2) / (2 L1 L2), with `kinematics.elbow` "right" (beta > 0: joint 2 counter-clockwise
+  from the stretched arm, the elbow to the right of the line from the base to the tool, seen from above) or "left";
+  joint 1 = atan2(y, x) - atan2(L2 sin beta, L1 + L2 cos beta). The condition number is that of d(x, y)/d(q1, q2):
+  infinite at the stretched and the folded arm (25 at 11 degrees of elbow, the example's limit).
+- Six joints: x, y, z of the flange (m) and its orientation as a rotation vector rx, ry, rz (rad: axis times angle,
+  from the base frame), numerically. The joints are followed from `kinematics.home_joints` along the straight line from
+  the home's flange pose to the target, the orientation by slerp, in steps of at most 20 mm and 0.05 rad, each by
+  damped least squares on the geometric Jacobian (dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, the turn rows times
+  the flange's distance from joint 2 at the home), settled to 1 um, the last to 1e-13 m. So the solution stays on the
+  home's branch (shoulder, elbow, wrist; on an arm whose branches are parted by singularities, as the usual ones are,
+  it does not depend on the way there), and a step that does not settle (out of reach, or a singularity the branch
+  cannot pass) refuses the pose. A flange turned within 0.01 rad of half a turn from the base frame is refused
+  (`error-arm-orientation-half-turn`): there the rotation vector jumps. The condition number is that of the 6 x 6
+  geometric Jacobian with its turn rows scaled as above.
+
+The planners interpolate each axis linearly: a line holds the orientation where both ends have the same, and turns it
+by the slerp where the two rotation vectors are parallel (for a flange pointing down, a turn about the vertical is not:
+there the turn is close to the slerp, not it). `config/scara-tool.toml` and `config/arm-tool.toml` are the default
+configs with tool space on, a start pose and a cycle of straight lines (the arm's settling tolerance 5 mm: under the
+payload its flange rests 4.0 mm below the encoders' pose).
+
 ## Telescopic shaft with two cardan joints (delta-d4)
 
 The four-axis delta `delta-d4` (its own crate, built on the D3, not a joint machine) turns its tool through a telescopic
@@ -173,7 +211,12 @@ verdicts. On the rigid, loss-free models: the screw reaches 2400 r/min at 0.8 m/
 acceleration the run reached; the rack's feed force and gearbox torque are m a and m a r; the linear motor's guides carry
 2500 + 13 g = 2627.49 N; the table's gear passes J alpha; the six-axis arm reaching out holds 177.304 N m at joint 2
 (-1.47753 N m at its motor) and 21.3785 N m at joint 3, summed from the URDF's masses by hand; the SCARA's screw holds
-5.5 g = 53.937 N, -0.171686 N m at its motor. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
+5.5 g = 53.937 N, -0.171686 N m at its motor. In tool space: the SCARA's closed form at (0.325, 0.275) gives the elbow
+at ±pi/2 and joint 1 at 0 or 1.404514 rad by hand; forward of inverse returns poses within 1e-9 (the SCARA's whole
+range, the arm's sampled around its home, its wrist on the home's side); every planned pose of a line lies within 1 um
+of it and the arm's orientation within 1e-6 rad; the joint speeds are J^-1 v by hand (1.538462 rad/s); a line into the
+stretched SCARA arm is refused; the time-optimal plan keeps the motors within their rated speed along a line; both tool
+cycles pass their verdicts. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
 screw's fails `screw-life`. With losses: the rack's gearbox torque and feed force are the load's force over 0.97, the
 screw's life shrinks by a1 at 99 % reliability, and the temperature feedback keeps the efficiency of screw, rack and
 worm.

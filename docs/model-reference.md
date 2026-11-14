@@ -792,6 +792,21 @@ arms        the D3's, with m_platform + r_s m_s at the platform, and Jᵀ F, F =
 
 **Paths with a turn**: `line,x,y,z,c` (lines work on any number of axes); arcs and splines are on two and three axes only, so they are refused on the D4. Not modelled: yokes out of phase, the cardan joints' friction and play, the shaft's bending and swing, a different motor for the fourth axis (the drive reads one `[motor]` per machine), the gearbox checks of motor 4 with its own gearbox (`gearbox-*` of every motor take `[gearbox]` and `[ratings]`: read them for motors 1 to 3; `tool-gearbox-peak` judges the tool's).
 
+## Arms in tool space (SCARA, six-axis arm)
+
+Source: [`machine-joint-kit/src/tool.rs`](../crates/machine-joint-kit/src/tool.rs), wired in `arm.rs`; the joint machine's side in [`chain.rs`](../crates/sim-components/src/chain.rs). With `kinematics.tool_space` the axes of `scara` and `urdf-arm` are the flange's pose; the joints' dynamics (Newton-Euler on the URDF chain), drives, losses and signals are unchanged, in joint coordinates. Details, refusals and the branch kept by the six-axis inverse: [mechanisms](mechanisms.md#tool-space).
+
+```text
+SCARA       x = x1 + L1 cos(q1 + φ1) + L2 cos(q1 + q2 + φ2),  y likewise with sin,  z = z0 + s q3,  c = c0 + q1 + q2 + q4
+            cos β = (r² − L1² − L2²) / (2 L1 L2),  β = ±acos (elbow),  q1 = atan2(y, x) − atan2(L2 sin β, L1 + L2 cos β) − φ1,  q2 = β − φ2 + φ1
+six joints  (x, y, z) = p_tip(q),  (rx, ry, rz) = log R_tip(q);  Δq = Jᵀ (J Jᵀ + λ² I)⁻¹ e,  e = (p* − p, ℓ log(R* Rᵀ)),  λ = 1 mm,  ℓ = |p_tip − p_joint2| at the home
+speeds      q̇ = J⁻¹ v,  q̈ = J⁻¹ (a − J̇ q̇),  J̇ q̇ = [f(q + h q̇) − 2 f(q) + f(q − h q̇)] / h²,  h |q̇| = 1e-4,  J = ∂f/∂q by central differences
+feedforward τ = (M q̈ + h(q, q̇)) / i + J_rotor i q̈   per motor (in joint space the speed terms are left out, as before)
+condition   κ = √(λ_max / λ_min) of Jᵀ J (Jacobi rotations): SCARA of ∂(x, y)/∂(q1, q2), six joints of the geometric 6 × 6 with turn rows × ℓ
+```
+
+The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
+
 ## Motion controller
 
 Source: [`control.rs`](../crates/sim-components/src/control.rs).
