@@ -353,20 +353,20 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
     ),
     (
         "linkage",
-        "A planar parallel linkage (crate sim-netlist, linkage.rs): two driven arms in the vertical x-z plane, one at each side of the base, each with a pair of forearms down to a plate that keeps its orientation (a five-bar with parallelograms, the planar delta). The tool is the plate's centre. A file with a linkage has two axes (no stroke: the working range below sets their range), two motors, a gearbox on each and the linkage; nothing else. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
+        "A parallel linkage of driven arms, each with a pair of forearms (a parallelogram) down to a plate that keeps its orientation. Two arms (crate sim-netlist, linkage.rs): in the vertical x-z plane, one at each side of the base (the planar delta); the tool is the plate's centre, x and z. Three arms (spatial.rs): at 0, 120 and 240 degrees round the base (the spatial delta); the tool is x, y and z. A file with a linkage has as many axes as arms (no stroke: the working range below sets their range), one motor per arm, a gearbox on each and the linkage; nothing else, and no belt effect on. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
         &[
             ID,
             field(
                 "arms",
                 Kind::Refs("gearbox"),
                 true,
-                "The gearboxes that turn the arms: the first the arm at +x, the second the one at -x.",
+                "The gearboxes that turn the arms: two (the first the arm at +x, the second the one at -x) or three (at 0, 120 and 240 degrees from +x).",
             ),
             field(
                 "axes",
                 Kind::Refs("axis"),
                 true,
-                "The tool's axes: the first across (x), the second up (z), from the shoulders' axis.",
+                "The tool's axes, as many as the arms: across (x), with three arms y, then up (z), from the shoulders' plane.",
             ),
             field("base_radius_m", Kind::Number, true, "Shoulder axis from the centre, m."),
             field("platform_radius_m", Kind::Number, true, "Forearms' joints on the plate from its centre, m."),
@@ -396,14 +396,40 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 false,
                 "Payload at the plate while effects.payload is on and the payload is attached, kg. Default 0.",
             ),
-            field("half_width_m", Kind::Number, true, "Working range: half its width, m."),
+            field("half_width_m", Kind::Number, false, "Two arms: the working range's half width, m. Required there."),
+            field(
+                "radius_m",
+                Kind::Number,
+                false,
+                "Three arms: the working range's radius (a cylinder about z), m. Required there.",
+            ),
+            field(
+                "forearm_rod_spin_inertia_kgm2",
+                Kind::Number,
+                false,
+                "Three arms, effects.forearm_inertia: each rod's inertia about its own axis, kg m^2. Default 0.",
+            ),
+            field(
+                "bending_stiffness_nm_rad",
+                Kind::Number,
+                false,
+                "Three arms, effects.link_elasticity: an upper arm's bending in the plane it turns in, as a turn of the elbow, N m/rad. Required with three arms.",
+            ),
+            field("bending_damping_nm_s_rad", Kind::Number, false, "Its damping, N m s/rad. Default 0."),
+            field(
+                "lateral_stiffness_n_m",
+                Kind::Number,
+                false,
+                "Three arms, effects.link_elasticity: the elbow's move along its axis, out of the arm's plane, N/m. Required with three arms.",
+            ),
+            field("lateral_damping_n_s_m", Kind::Number, false, "Its damping, N s/m. Default 0."),
             field("top_z_m", Kind::Number, true, "Working range: its top, z, m (below 0: under the shoulders)."),
             field("height_edge_m", Kind::Number, true, "Working range: its height at the edges, m."),
             field(
                 "height_centre_m",
                 Kind::Number,
                 true,
-                "Working range: its height at the centre, m; the bottom is an arc through both edges and the centre.",
+                "Working range: its height at the centre, m; the bottom is an arc (two arms) or a sphere's cap (three) through the edges and the centre.",
             ),
             field(
                 "max_condition_number",
@@ -597,7 +623,8 @@ pub struct Netlist {
     /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
     /// as ("screw", ...), and its path in the file.
     pub values: Vec<(&'static str, String)>,
-    /// The planar linkage of a file that has one (`crate::linkage`); its netlist has no belts, bodies or guides.
+    /// The linkage of a file that has one, planar (`crate::linkage`) or spatial (`crate::spatial`); its netlist has no
+    /// belts, bodies or guides.
     pub linkage: Option<crate::linkage::LinkageNode>,
 }
 

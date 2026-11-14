@@ -44,8 +44,14 @@ fn layer(name: &str) -> u32 {
 
 /// The one machine built on another, (machine, base): the four-axis delta is the three-arm delta with a fourth axis
 /// behind it and takes the base's arms, kinematics and dynamics as they are, so that a fix to the arms reaches both.
-/// The base names nothing of the machine built on it; every other machine stays apart from every other.
-const BUILT_ON: &[(&str, &str)] = &[("machine-delta-d4", "machine-delta-d3")];
+/// The base names nothing of the machine built on it; every other machine stays apart from every other. The two deltas
+/// of crates are the linkages of machine files (`sim-netlist`'s planar and spatial linkage) read from their own tables,
+/// so that crate and file are one implementation.
+const BUILT_ON: &[(&str, &str)] = &[
+    ("machine-delta-d4", "machine-delta-d3"),
+    ("machine-delta-d2", "sim-netlist"),
+    ("machine-delta-d3", "sim-netlist"),
+];
 
 #[test]
 fn dependencies_point_downwards() {

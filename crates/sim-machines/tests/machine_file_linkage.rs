@@ -1,6 +1,8 @@
-//! The linkage node of machine files (crates/sim-netlist/src/linkage.rs): the planar delta written as a netlist in
-//! machines/planar-delta.toml is the crate's machine with every effect the crate has, its cycle gives the crate's
-//! signals and verdicts, it passes the standard suite, and its kinematics and holding torque are the hand's.
+//! The linkage node of machine files (crates/sim-netlist/src/linkage.rs and spatial.rs): the planar delta written as a
+//! netlist in machines/planar-delta.toml and the spatial one in machines/delta-d3.toml are their crates' machines with
+//! every effect the crates have (crate and file build one implementation, read from tables or from the node), their
+//! cycles give the crates' signals and verdicts, the planar one passes the standard suite, and its kinematics and
+//! holding torque are the hand's.
 
 use sim_components::Sim;
 use sim_components::analysis::{analyse_cycle, verdicts};
@@ -19,9 +21,18 @@ fn file() -> &'static MachineEntry {
     load_file(&root().join("machines/planar-delta.toml")).unwrap_or_else(|e| panic!("{e}"))
 }
 
+fn spatial_file() -> &'static MachineEntry {
+    load_file(&root().join("machines/delta-d3.toml")).unwrap_or_else(|e| panic!("{e}"))
+}
+
 /// The crate and the file, each with the same changes.
 fn pair(changes: &[&str]) -> [(&'static MachineEntry, Config); 2] {
-    let (krate, from_file) = (find("delta-d2").unwrap(), file());
+    pair_of("delta-d2", file(), changes)
+}
+
+/// A crate by its id and a file, each with the same changes.
+fn pair_of(krate: &str, from_file: &'static MachineEntry, changes: &[&str]) -> [(&'static MachineEntry, Config); 2] {
+    let krate = find(krate).unwrap();
     let (mut a, mut b) = (krate.config(), from_file.config());
     for change in changes {
         a.set_text(change).unwrap();
@@ -43,7 +54,11 @@ fn assert_close(what: &str, a: &[f64], b: &[f64], tol: f64) {
 
 /// Every effect of the crate's config, each switched from its default (the comparison below runs once per entry).
 fn flipped() -> Vec<String> {
-    let cfg = find("delta-d2").unwrap().config();
+    flipped_of("delta-d2")
+}
+
+fn flipped_of(krate: &str) -> Vec<String> {
+    let cfg = find(krate).unwrap().config();
     let effects = cfg.get("effects").unwrap().as_table().unwrap().clone();
     effects.iter().map(|(name, on)| format!("effects.{name} = {}", !on.as_bool().unwrap())).collect()
 }
@@ -53,7 +68,21 @@ fn flipped() -> Vec<String> {
 /// warmth and what the working range refuses; with the payload held, set down, and the brakes holding, the gearboxes
 /// 10 and 20 K warm.
 fn same_machine(changes: &[&str], what: &str) {
-    let [(ea, ca), (eb, cb)] = pair(changes);
+    let poses = [[0.1525, -0.5], [-0.3, -0.6], [0.05, -0.8]];
+    let refused = [[0.0, -0.5], [0.45, -0.5], [0.3, -0.87], [0.0, -1.5], [0.0, -0.39]];
+    same_machine_of(pair(changes), what, &poses, [[0.4, -0.3], [3.0, -2.0]], &refused);
+}
+
+/// `same_machine` for a pair of N axes: the poses to compare at, a tool velocity and acceleration, and poses to ask
+/// the working range about.
+fn same_machine_of<const N: usize>(
+    pair: [(&'static MachineEntry, Config); 2],
+    what: &str,
+    poses: &[[f64; N]],
+    [vel, acc]: [[f64; N]; 2],
+    refused: &[[f64; N]],
+) {
+    let [(ea, ca), (eb, cb)] = pair;
     let (mut a, mut b) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
     let ids = |m: &dyn Machine| {
         (
@@ -66,46 +95,46 @@ fn same_machine(changes: &[&str], what: &str) {
     };
     assert_eq!(ids(a.as_ref()), ids(b.as_ref()), "{what}");
     for machine in [&mut a, &mut b] {
-        machine.set_part_temperatures(&[10.0, 20.0]);
+        machine.set_part_temperatures(&[10.0, 20.0, 30.0][..N]);
     }
-    for (k, pose) in [[0.1525, -0.5], [-0.3, -0.6], [0.05, -0.8]].into_iter().enumerate() {
+    for (k, &pose) in poses.iter().enumerate() {
         for machine in [&mut a, &mut b] {
             machine.set_payload_attached(k != 1);
             machine.set_brake_engaged(k == 2);
         }
-        let (mut ma, mut mb) = ([0.0; 2], [0.0; 2]);
+        let (mut ma, mut mb) = ([0.0; N], [0.0; N]);
         a.inverse(&pose, &mut ma);
         b.inverse(&pose, &mut mb);
         assert_close(&format!("{what}: inverse"), &ma, &mb, 1e-12);
-        let mut back = [0.0; 2];
+        let mut back = [0.0; N];
         b.forward(&mb, &mut back);
         assert_close(&format!("{what}: forward"), &pose, &back, 1e-12);
 
-        let (mut sa, mut sb, mut ta, mut tb) = (Vec::new(), Vec::new(), [0.0; 2], [0.0; 2]);
+        let (mut sa, mut sb, mut ta, mut tb) = (Vec::new(), Vec::new(), [0.0; N], [0.0; N]);
         a.equilibrium(&pose, &mut sa, &mut ta);
         b.equilibrium(&pose, &mut sb, &mut tb);
         assert_close(&format!("{what}: equilibrium state"), &sa, &sb, 1e-9);
         assert_close(&format!("{what}: holding torque"), &ta, &tb, 1e-9);
-        a.set_tool_velocity(&mut sa, &[0.4, -0.3]);
-        b.set_tool_velocity(&mut sb, &[0.4, -0.3]);
+        a.set_tool_velocity(&mut sa, &vel);
+        b.set_tool_velocity(&mut sb, &vel);
         assert_close(&format!("{what}: moving state"), &sa, &sb, 1e-12);
         for (i, x) in sb.iter_mut().enumerate() {
             *x += 1e-5 * (1.0 + (i % 5) as f64);
         }
         sa.clone_from(&sb);
-        let torque = [ta[0] + 0.7, ta[1] + 0.2];
+        let torque: [f64; N] = std::array::from_fn(|k| ta[k] + [0.7, 0.2, -0.4][k]);
         let (mut da, mut db) = (vec![0.0; sa.len()], vec![0.0; sb.len()]);
         a.derivatives(&sa, &torque, &mut da);
         b.derivatives(&sb, &torque, &mut db);
         assert_close(&format!("{what}: derivatives"), &da, &db, 1e-9);
         assert!(close(a.energy(&sa), b.energy(&sb), 1e-9), "{what}: energy");
 
-        let (mut fa, mut fb) = ([0.0; 2], [0.0; 2]);
-        a.feedforward_torque(&pose, &[3.0, -2.0], &mut fa);
-        b.feedforward_torque(&pose, &[3.0, -2.0], &mut fb);
+        let (mut fa, mut fb) = ([0.0; N], [0.0; N]);
+        a.feedforward_torque(&pose, &acc, &mut fa);
+        b.feedforward_torque(&pose, &acc, &mut fb);
         assert_close(&format!("{what}: feedforward"), &fa, &fb, 1e-9);
-        a.feedforward_torque_moving(&pose, &[0.4, -0.3], &[3.0, -2.0], &mut fa);
-        b.feedforward_torque_moving(&pose, &[0.4, -0.3], &[3.0, -2.0], &mut fb);
+        a.feedforward_torque_moving(&pose, &vel, &acc, &mut fa);
+        b.feedforward_torque_moving(&pose, &vel, &acc, &mut fb);
         assert_close(&format!("{what}: feedforward moving"), &fa, &fb, 1e-9);
 
         let names = |m: &dyn Machine| m.signal_infos().iter().map(|s| s.id.clone()).collect::<Vec<_>>();
@@ -116,8 +145,8 @@ fn same_machine(changes: &[&str], what: &str) {
         assert_close(&format!("{what}: signal values"), &va, &vb, 1e-9);
     }
     // What the working range refuses, and why: inside, outside the band, below the bottom arc, beyond reach.
-    for pose in [[0.0, -0.5], [0.45, -0.5], [0.3, -0.87], [0.0, -1.5], [0.0, -0.39]] {
-        assert_eq!(a.unreachable(&pose, 0.0), b.unreachable(&pose, 0.0), "{what}: {pose:?}");
+    for pose in refused {
+        assert_eq!(a.unreachable(pose, 0.0), b.unreachable(pose, 0.0), "{what}: {pose:?}");
     }
 }
 
@@ -130,6 +159,53 @@ fn the_planar_delta_file_is_its_crate_with_every_effect() {
     for change in flipped() {
         same_machine(&[&change], &change);
     }
+}
+
+/// The spatial delta written as a file (machines/delta-d3.toml) is its crate's machine, with every effect the crate has
+/// switched from its default one at a time: the same numbers to 1e-9 (the same code, read from the node in place of the
+/// crate's tables). The crate's working range is 1.2 m across, its top 0.675 m below the shoulders, 0.2 m high at the
+/// edge and 0.386 m at the centre (its bottom a sphere's cap through z = -1.061 m at the centre): the refused poses lie
+/// above the top, outside the cylinder, below the cap (0.907 m down at 0.55 m out), and far below.
+#[test]
+fn the_spatial_delta_file_is_its_crate_with_every_effect() {
+    let check = |changes: &[&str], what: &str| {
+        let poses = [[0.1, 0.05, -0.8], [-0.3, 0.2, -0.85], [0.0, -0.4, -0.75]];
+        let refused = [[0.0, 0.0, -0.8], [0.0, 0.0, -0.6], [0.65, 0.0, -0.8], [0.55, 0.0, -1.0], [0.0, 0.0, -2.5]];
+        let motion = [[0.4, -0.3, 0.2], [3.0, -2.0, 1.5]];
+        same_machine_of(pair_of("delta-d3", spatial_file(), changes), what, &poses, motion, &refused);
+    };
+    check(&[], "default");
+    for change in flipped_of("delta-d3") {
+        check(&[&change], &change);
+    }
+}
+
+/// The spatial delta's default cycle run in full by the crate and the file: every signal at every 16th step of the
+/// first 0.3 s, and the cycle's analysis and verdicts, to 1e-9.
+#[test]
+fn the_spatial_delta_file_runs_its_crates_cycle() {
+    let [(ea, ca), (eb, cb)] = pair_of("delta-d3", spatial_file(), &[]);
+    let (mut a, mut b) = (Sim::new(ea, &ca).unwrap(), Sim::new(eb, &cb).unwrap());
+    let ids = |s: &Sim| s.signal_infos().iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&a), ids(&b), "signals");
+    for sim in [&mut a, &mut b] {
+        sim.command(Command::StartCycle).unwrap();
+    }
+    let (mut va, mut vb) = (Vec::new(), Vec::new());
+    for step in 0..(0.3 / ca.f64("sim.dt_s").unwrap()) as usize {
+        a.step();
+        b.step();
+        if step % 16 == 0 {
+            a.sample(&mut va);
+            b.sample(&mut vb);
+            assert_close(&format!("step {step}"), &va, &vb, 1e-9);
+            va.clear();
+            vb.clear();
+        }
+    }
+    let ((names, crate_values), (file_names, values)) = (cycle_numbers(ea, &ca), cycle_numbers(eb, &cb));
+    assert_eq!(names, file_names, "the same numbers, limits and verdicts");
+    assert_close("cycle", &crate_values, &values, 1e-9);
 }
 
 /// Every number of a cycle's analysis and verdicts: the motor loads, then each verdict's value.

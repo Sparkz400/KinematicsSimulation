@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod linkage;
 pub mod machine;
 pub mod netlist;
+pub mod spatial;
 pub mod worm;
 
 pub use machine::ConfigMachine;
@@ -24,7 +25,8 @@ use toml::{Table, Value};
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let net = Netlist::parse(cfg)?;
     match &net.linkage {
-        Some(linkage) => Ok(Box::new(linkage::LinkageMachine::new(cfg, &net, linkage)?)),
+        Some(linkage) if linkage.gearboxes.len() == 3 => Ok(Box::new(spatial::Delta::from_node(cfg, &net, linkage)?)),
+        Some(linkage) => Ok(Box::new(linkage::LinkageMachine::from_node(cfg, &net, linkage)?)),
         None => Ok(Box::new(ConfigMachine::new(cfg, &net)?)),
     }
 }

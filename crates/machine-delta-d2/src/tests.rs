@@ -2,6 +2,10 @@
 //! edge, the cycle's time and verdicts.
 
 use super::*;
+use sim_core::Scene;
+use sim_netlist::linkage::{M2, V2, mul, norm};
+
+const G: f64 = 9.80665;
 use sim_components::{Command, Sim};
 
 fn delta(edits: &[&str]) -> Delta2 {
@@ -34,18 +38,18 @@ fn the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_k
                 continue;
             }
             tried += 1;
-            let t = d.legs.inverse(p).unwrap();
-            let back = d.legs.forward(t).unwrap();
+            let t = d.legs().inverse(p).unwrap();
+            let back = d.legs().forward(t).unwrap();
             for a in 0..2 {
                 assert!((back[a] - p[a]).abs() < 1e-12, "{p:?} back as {back:?}");
             }
-            let jac = d.legs.jacobian(t, p).unwrap();
+            let jac = d.legs().jacobian(t, p).unwrap();
             let h = 1e-6;
             for c in 0..2 {
                 let (mut up, mut down) = (t, t);
                 up[c] += h;
                 down[c] -= h;
-                let (pu, pd) = (d.legs.forward(up).unwrap(), d.legs.forward(down).unwrap());
+                let (pu, pd) = (d.legs().forward(up).unwrap(), d.legs().forward(down).unwrap());
                 for r in 0..2 {
                     assert!((jac[r][c] - (pu[r] - pd[r]) / (2.0 * h)).abs() < 1e-7, "{p:?}: J[{r}][{c}]");
                 }
@@ -59,7 +63,7 @@ fn the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_k
 /// L_b^2, and the plate's height per arm angle when both turn together: differentiating that, dz/dt = -L_a cos t +
 /// (e + L_a cos t) L_a sin t / (z + L_a sin t), half of it per arm.
 fn centre_by_hand(d: &Delta2, z: f64) -> (f64, f64) {
-    let (e, la, lb) = (d.legs.e, d.legs.la, d.legs.lb);
+    let (e, la, lb) = (d.legs().e, d.legs().la, d.legs().lb);
     let f = |t: f64| (e + la * t.cos()).powi(2) + (z + la * t.sin()).powi(2) - lb * lb;
     let (mut lo, mut hi) = (-60f64.to_radians(), 90f64.to_radians());
     for _ in 0..100 {
@@ -105,7 +109,7 @@ fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
     let d = delta(&["effects.torque_ripple = false"]);
     let p = [0.4, -0.5];
-    let t = d.legs.inverse(p).unwrap();
+    let t = d.legs().inverse(p).unwrap();
     let m_lg = 1.2 * 0.2 + 0.4 * (0.4 + 0.6667 * 0.6);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     d.equilibrium(&p, &mut state, &mut torque);
@@ -114,7 +118,7 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         let (mut up, mut down) = (t, t);
         up[k] += 1e-6;
         down[k] -= 1e-6;
-        let dz = (d.legs.forward(up).unwrap()[1] - d.legs.forward(down).unwrap()[1]) / 2e-6;
+        let dz = (d.legs().forward(up).unwrap()[1] - d.legs().forward(down).unwrap()[1]) / 2e-6;
         by_hand[k] = -G * m_lg * t[k].cos() + d.m_nt() * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
@@ -319,7 +323,7 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
         d.derivatives(&state, torque, &mut rates);
         let t = [state[0], state[1]];
         let (_, j) = d.pose(t);
-        let bend = d.legs.velocity_term(t, p, [state[2], state[3]], v).unwrap();
+        let bend = d.legs().velocity_term(t, p, [state[2], state[3]], v).unwrap();
         let along = mul(&j, [rates[2], rates[3]]);
         [along[0] + bend[0], along[1] + bend[1]]
     };
