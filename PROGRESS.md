@@ -3084,3 +3084,75 @@ Left open:
 - `check_limits` (control.rs, the limits session's) still takes the rated speed as the motor's highest; it could take
   `drive.max_speed_rad_s`.
 
+
+## Path planner: cycles at the motors' limits, rounded corners, curves on more axes, junctions (14 November)
+
+What: cycles can be timed as fast as the motors allow; corners between lines can be rounded within a tolerance; arcs
+and splines run on more than three axes; the time-optimal plan passes junctions at their own limit and joins the runs
+of a piece on the speed curve; it takes gearbox losses and a reserve on the guides; it refuses singular crawls.
+
+How:
+- `profile.cycle_timing` ("axis_limits" | "time_optimal", control.rs): with "time_optimal" each segment is planned rest
+  to rest by `path::plan_time_optimal` from where the segment before ended (the straight way as a line, via points
+  along their path); a segment that cannot be planned so from the segment before refuses the config; corner blending
+  between segments (`profile.blend_time_s`) does not apply.
+- `profile.corner_tolerance_m` (`round_corners`): a corner between two lines becomes the quartic
+  p(u) = c - d ta + ta u + (tb - ta)(u^3 / 4d^2 - u^4 / 16d^3), G2 at both ends, d so that it deviates by the tolerance
+  (16/3 of it at a right angle, tightest radius sqrt(2) d / 3), at most half of each line. Public planners take
+  `impl Into<path::Tolerance>` (an f64 is a path tolerance, as before).
+- More axes: splines on up to six (`Poly` six wide, curvature by Lagrange's identity beyond three); arcs on three or more
+  with the extra axes carried evenly with the distance (`Geo::Carried`, the piece's length over all axes).
+- Time-optimal timing: junction speed = `junction_speed` and the speed curves at the junction (not the slowest place of
+  either piece), capped where a run into a piece cannot follow its curve, look-ahead as before, fallback to the old rule
+  where a piece then does not fit; `curve_join` times a piece by two runs without a top joined on the curve, taken
+  where quicker than the cruise join. Motor rows of a lossy gearbox: J_in alpha + (tau - J_in alpha) / eta. Guide
+  rows: reserve * rating - rest. Non-finite rows or > 1e6 rad/m: `error-path-singular`; plans over 1000 s likewise.
+- `rigid_guide_loads` for the linear delta (rods' pull with m a), the linear motor axis (attraction and weight) and
+  machine files (weight, press, overhang tilt m a (2 |lever| / spacing (+1))); the controller enables guide rows for any
+  `*.guide_load` signal.
+
+Cycle times (`sim-cli analyze`, s, with dwells; utilisation of the first motor with time-optimal timing):
+
+| Machine | axis_limits | time_optimal | utilisation |
+| --- | --- | --- | --- |
+| t-gantry | 6.080 | 3.786 | 0.170 |
+| single-axis | 2.202 | 1.926 | 0.147 |
+| delta-d3 | 0.720 | 0.675 | 0.678 |
+| delta-d2 | 0.720 | 0.682 | 0.690 |
+| delta-linear | 0.720 | 0.732 | 0.337 |
+| delta-d4 | 0.720 | 0.678 | 0.666 |
+| screw-axis | 1.942 | 1.604 | 0.362 |
+| rack-axis | 1.886 | 1.656 | 0.395 |
+| linear-motor-axis | 1.122 | 0.796 | 0.940 |
+| rotary-table | 1.880 | 1.628 | 0.379 |
+| urdf-arm | 2.306 | 1.864 | 0.168 |
+| scara | 1.402 | 1.276 | 0.110 |
+
+The linear delta is slower time-optimal: its belt tension reserve binds before the axis limits do (the axis-limit plan
+uses 0.44 of the torque). Corner rounding on the T-gantry's square path (line, right angle, line): time-optimal 1.306 s
+stopped, 1.365 s rounded within 20 mm at the shipped 100 m/s^3 (the curve's jerk binds), 0.978 against 0.920 s at
+2000 m/s^3. The example paths of the user guide: corner.path 1.695 s (unchanged), curve.path 1.650 -> 1.648 s.
+
+Tests (hand calculations in their comments): `a_right_angled_corner_is_rounded_within_the_tolerance_at_the_hand_calculated_radius`
+(d = 16 e / 3, radius sqrt(2) d / 3 = 2.514 mm at e = 1 mm), `a_four_axis_arc_keeps_its_fourth_axis_linear_in_the_arc_length`,
+`the_junction_of_two_arcs_is_passed_at_the_hand_calculated_speed` (sqrt(0.5 * 100 * 0.001 / 5) = 0.1 m/s, before 0.05),
+`a_path_without_the_forced_cruise_is_quicker_than_with_it`, `a_time_optimal_cycle_segment_takes_the_hand_calculated_time`
+(0.71404 s), `a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss` (15.158 m/s^2),
+`the_guide_loads_of_the_plan_grow_with_the_plates_upward_acceleration_by_hand`,
+`the_linear_motor_tells_the_time_optimal_plan_its_guide_load`, `commanded_acc_vs_true_acc` (machine file overhang),
+`the_time_optimal_plan_refuses_a_crawl_that_would_take_unbounded_poses`; the T-gantry guide test moved to the reserve
+(2.0789 m/s^2, 1.2619 s).
+
+Left open:
+- Paths (not cycles) in `verdicts`, `search`, `optimise` and `sensitivity`: they still run the cycle only; with
+  `cycle_timing = "time_optimal"` a cycle (with via points for curves) is judged at the motors' limits. Needs a `--path`
+  option on those commands feeding `analyse_trajectory`.
+- Corners next to arcs or splines still stop; rounding is never chosen against the stop by time (it can be slower at
+  low jerk limits). The rounding curve is 27 % tighter than a circular fillet of the same deviation.
+- Extra axes on arcs go evenly with the distance; an arm's orientation as its rotation vector (no quaternion slerp yet,
+  seam in `arc_on`). No transition curves or easing on more than three axes.
+- The junction rule falls back to the old one for the whole path where a piece does not fit; a per-junction repair
+  would keep more of the gain. The singular bound is one fixed 1e6 rad/m.
+- The optimiser's lift search (analysis.rs) plans its via paths without corner rounding.
+- Existing time-optimal tests with fixed durations on machines whose gearbox efficiency is on and whose motors bind
+  may need their numbers updated; only the new tests and the T-gantry guide test were run.

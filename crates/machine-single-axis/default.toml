@@ -572,6 +572,12 @@ tension_margin_n = 35.0
 # For a path of lines and arcs: how far the planned path may leave them, so that transition curves
 # (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
 path_tolerance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
 # For `sim-cli optimise`: how far the tool has to stay beyond the farther of pick and place while it traverses
 # between them (an obstacle there). The optimiser lowers each lift, traverse and lower of the cycle to this and
 # rounds its corners only where the path keeps it. One axis has no lift. The same clearance is kept from every

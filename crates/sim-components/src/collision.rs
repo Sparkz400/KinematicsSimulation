@@ -150,7 +150,13 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
     if let Some(mut conveyor) = crate::conveyor::Conveyor::from_config(cfg, machine.axes().len())? {
         return Ok(Some(check_passes(machine.as_mut(), &obstacles, &mut conveyor, &start)));
     }
-    let (cycle, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
+    let (cycle, tolerance) = (
+        cfg.positive("profile.cycle_s")?,
+        crate::path::Tolerance {
+            path: cfg.non_negative("profile.path_tolerance_m")?,
+            corner: cfg.non_negative("profile.corner_tolerance_m")?,
+        },
+    );
     let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
     let mut segments = Vec::new();
     for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {

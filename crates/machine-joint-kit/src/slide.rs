@@ -128,6 +128,12 @@ impl Mechanism for Slide {
             Drive::Linear(m, forcer) => out.push(m.attraction + (self.moving() + forcer) * self.g * self.incline.cos()),
         }
     }
+    /// The linear motor's guides carry the attraction and the weight across the rail, whatever the acceleration along it.
+    fn rigid_guide_loads(&self, _tool: &[f64], _acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        if let Drive::Linear(m, forcer) = &self.drive {
+            out.push([m.attraction + (self.moving() + forcer) * self.g * self.incline.cos(), 0.0]);
+        }
+    }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         match &self.drive {
             Drive::Screw(s) => s.rating_checks("1", 0, self.required_life),

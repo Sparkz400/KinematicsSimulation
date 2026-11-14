@@ -2160,6 +2160,21 @@ impl Machine for ConfigMachine {
         out.extend(d.iter().map(|d| self.belt.pretension + d));
     }
 
+    /// Each guide's load (`guide_load`, with what a linear motor presses on it) at the axis positions `pos` and
+    /// accelerations `acc`: at rest its weight across the axis and the press, moving the overhang's tilt (and side
+    /// load), m a (2 |lever| / spacing (+ 1)), signed with the acceleration.
+    fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
+        let still = vec![0.0; self.n()];
+        for g in &self.guides {
+            let moving = g.overhang.as_ref().map_or(0.0, |o| {
+                let lever = o.lever - o.lever_axis.map_or(0.0, |a| pos[a]);
+                let side = self.body_mass(&self.bodies[o.body]) * acc[o.axis];
+                side * (2.0 * lever.abs() / o.spacing + if o.side_load { 1.0 } else { 0.0 })
+            });
+            out.push([self.guide_load(g, pos, &still) + self.pressed(g.axis), moving]);
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

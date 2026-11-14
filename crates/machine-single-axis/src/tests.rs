@@ -1400,6 +1400,68 @@ fn a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration() 
     assert!((0.8 * 10.0 / per_acc - 94.118).abs() < 1e-3 && (0.8 * 8.0 / per_acc - 75.294).abs() < 1e-3);
 }
 
+/// A lossy gearbox costs the time-optimal plan its loss: the motor gives what turns its rotor, 0.3e-4 kg m^2 * 250 rad/m =
+/// 0.0075 N m per m/s^2, plus what the gearbox passes on, (0.0245 - 0.0075) / eta per m/s^2 (the output's load through
+/// the ratio, driving it). With eta = 0.9 that is 0.0075 + 0.017 / 0.9 = 0.026389 N m per m/s^2, and the 0.8 * 0.5 N m
+/// the motor may give accelerate the carriage at 15.158 m/s^2 (16.327 without the loss). The line 0.1 -> 0.9 m then takes
+/// 0.8 / v + v / a + a / j = 0.71996 s at the rated speed v = 1.256 m/s and j = 1e5 m/s^3.
+#[test]
+fn a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss() {
+    let mut cfg = ideal_rigid_quick();
+    for e in ["drive.peak_torque_nm = 0.5", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.9"] {
+        cfg.set_text(e).unwrap();
+    }
+    let (v, j, per_acc): (f64, f64, f64) = (314.0 * 0.02 / 5.0, 1e5, 0.0075 + (0.0245 - 0.0075) / 0.9);
+    let a = 0.8 * 0.5 / per_acc;
+    let by_hand = 0.8 / v + v / a + a / j;
+    assert!((per_acc - 0.026389).abs() < 1e-6 && (a - 15.158).abs() < 1e-3 && (by_hand - 0.71996).abs() < 1e-5);
+    let (time, _, rising, falling) = time_optimal_line(&cfg);
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    assert!(
+        (rising - a).abs() < 1e-3 * a && (falling - a).abs() < 1e-3 * a,
+        "{rising} and {falling} m/s^2, by hand {a} m/s^2"
+    );
+}
+
+/// `profile.cycle_timing = "time_optimal"` times each cycle segment as fast as the motor allows, rest to rest: the
+/// first segment, 0.1 -> 0.9 m, as the time-optimal line above, 0.8 / v + v / a + a / j = 0.71404 s with the motor's
+/// 0.8 x 0.5 N m (a = 16.327 m/s^2, v = 1.256 m/s, j = 1e5 m/s^3), where the S-curve within the axis limits (1 m/s,
+/// 10 m/s^2) takes longer. Measured on the planned setpoint, from its first cycle off the start to its arrival.
+#[test]
+fn a_time_optimal_cycle_segment_takes_the_hand_calculated_time() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
+    let (a, v, j): (f64, f64, f64) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, 314.0 * 0.02 / 5.0, 1e5);
+    let by_hand = 0.8 / v + v / a + a / j;
+    assert!((a - 16.327).abs() < 1e-3 && (by_hand - 0.71404).abs() < 1e-5, "{a} m/s^2, {by_hand} s");
+    let segment = |cfg: &Config| {
+        let mut sim = Sim::new(&ENTRY, cfg).unwrap();
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let (mut left, mut arrived) = (None, None);
+        while arrived.is_none() && sim.time() < 3.0 {
+            sim.step();
+            let at = sim.control.planned_pos()[0];
+            if left.is_none() && at > 0.1 + 1e-12 {
+                left = Some(sim.time());
+            }
+            if (at - 0.9).abs() < 1e-12 {
+                arrived = Some(sim.time());
+            }
+        }
+        arrived.unwrap() - left.unwrap()
+    };
+    let within_axis_limits = segment(&cfg);
+    cfg.set_text("profile.cycle_timing = \"time_optimal\"").unwrap();
+    let time = segment(&cfg);
+    // The first cycle off the start and the arrival are each read to a profile cycle (1 ms).
+    assert!((time - by_hand).abs() < 2.5e-3, "{time} s, by hand {by_hand} s");
+    assert!(time < within_axis_limits - 0.1, "{time} s, within the axis limits {within_axis_limits} s");
+    // A timing the controller does not know is refused.
+    cfg.set_text("profile.cycle_timing = \"fastest\"").unwrap();
+    assert!(Sim::new(&ENTRY, &cfg).is_err());
+}
+
 /// A drive on its torque limit fails "motor-peak". With 120 kg of payload, accelerating at 10 m/s^2 takes
 /// (124 kg + 2.125 kg of pulley and rotor) * 10 m/s^2 * 0.02 m / 5 = 5.05 N m, which the 3.8 N m motor does
 /// not have: the drive sits on its limit and the carriage falls behind. The delivered torque never exceeds

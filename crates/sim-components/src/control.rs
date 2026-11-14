@@ -43,7 +43,8 @@ struct Segment {
     dwell_ticks: u64,
     /// Whether the payload is attached once this segment has arrived.
     payload: bool,
-    /// With `via`: the path to the target, planned by `path::plan` where the segment starts (see `via_pieces`).
+    /// With `via`: the path to the target, planned where the segment starts (see `via_pieces`): by `path::plan`, or
+    /// with `profile.cycle_timing = "time_optimal"` by `path::plan_time_optimal`.
     path: Option<Vec<Piece>>,
     /// The motion law of its move: `profile.shape`, or the segment's own `shape`.
     law: MotionLaw,
@@ -123,8 +124,12 @@ pub struct Controller {
     /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
     /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
     plan_limits: path::PlanLimits,
-    /// How far a planned path may leave its lines and arcs for transition curves.
-    path_tolerance: f64,
+    /// How far a planned path may leave its lines and arcs for transition curves (`path`) and to round a corner between
+    /// two lines (`corner`).
+    path_tolerance: path::Tolerance,
+    /// `profile.cycle_timing = "time_optimal"`: every cycle segment is timed as fast as the motors allow
+    /// (`path::plan_time_optimal`), rest to rest, not by the axis limits.
+    cycle_time_optimal: bool,
     segments: Vec<Segment>,
     motion: Motion,
     /// Index of the cycle segment under way, while the cycle runs.
@@ -236,7 +241,8 @@ impl Controller {
             setpoint_ticks: 1,
             blend_time: 0.0,
             plan_limits: path::PlanLimits::new(1.0, [f64::NEG_INFINITY, f64::INFINITY, 1.0]),
-            path_tolerance: 0.0,
+            path_tolerance: path::Tolerance::default(),
+            cycle_time_optimal: false,
             segments: Vec::new(),
             motion: Motion::Idle,
             cycle: None,
@@ -384,20 +390,29 @@ impl Controller {
         if torque_reserve > 1.0 {
             return Err(ConfigError::Invalid("profile.torque_reserve".into()));
         }
-        let path_tolerance = cfg.non_negative("profile.path_tolerance_m")?;
+        let path_tolerance = path::Tolerance {
+            path: cfg.non_negative("profile.path_tolerance_m")?,
+            corner: cfg.non_negative("profile.corner_tolerance_m")?,
+        };
+        let cycle_time_optimal = match cfg.get("profile.cycle_timing")?.as_str() {
+            Some("axis_limits") => false,
+            Some("time_optimal") => true,
+            _ => return Err(ConfigError::Invalid("profile.cycle_timing".into())),
+        };
         let tension_reserve = cfg.positive("profile.tension_reserve")?;
         if tension_reserve > 1.0 {
             return Err(ConfigError::Invalid("profile.tension_reserve".into()));
         }
         let tension_margin = cfg.non_negative("profile.tension_margin_n")?;
         // The ratings the time-optimal plan keeps beside the motors': each gearbox's output torque where the machine
-        // reports it, and the guides' load where it reports theirs (the verdicts judge the same signals).
+        // reports it, and the guides' load where it reports theirs (the verdicts judge the same signals); and what each
+        // gearbox loses, which its motor gives on top.
         let reported = machine.signal_infos();
         let reports = |id: &str| reported.iter().any(|s| s.id == id);
         let gearbox = machine
             .motors()
             .iter()
-            .map(|m| -> Result<Option<[f64; 3]>> {
+            .map(|m| -> Result<Option<[f64; 4]>> {
                 if !reports(&format!("gearbox.{}.output_torque", m.id)) {
                     return Ok(None);
                 }
@@ -408,10 +423,19 @@ impl Controller {
                     .fold(f64::INFINITY, f64::min);
                 let inertia = own.f64("motor.rotor_inertia_kgm2").unwrap_or(0.0)
                     + own.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
-                Ok(rated.is_finite().then_some([own.f64("gearbox.ratio").unwrap_or(1.0), inertia, rated]))
+                let efficiency = match own.get("gearbox.efficiency") {
+                    Ok(_) => crate::mech::Gearbox::configured_efficiency(&own)?,
+                    Err(_) => 1.0,
+                };
+                Ok((rated.is_finite() || efficiency < 1.0).then_some([
+                    own.f64("gearbox.ratio").unwrap_or(1.0),
+                    inertia,
+                    rated,
+                    efficiency,
+                ]))
             })
             .collect::<Result<Vec<_>>>()?;
-        let guides = reported.iter().any(|s| s.id.starts_with("axis.") && s.id.ends_with(".guide_load"));
+        let guides = reported.iter().any(|s| s.id.ends_with(".guide_load"));
         let guide = if guides { cfg.f64("ratings.guide_max_load_n").unwrap_or(f64::INFINITY) } else { f64::INFINITY };
         let mut segments = Vec::new();
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
@@ -460,14 +484,42 @@ impl Controller {
                 law: MotionLaw { shape, ..law.clone() },
             });
         }
-        // A path through via points has to be one the planner times, from where the segment before ends.
+        // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
+        // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
+        let tension = [
+            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
+            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
+            tension_reserve,
+        ];
+        let plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide };
+        // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
+        // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {
             let from = &segments[(i + segments.len() - 1) % segments.len()].target;
-            if let Some(pieces) = &segment.path
-                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK)
-                    .map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose)))
-            {
-                return Err(ConfigError::Invalid(format!("cycle.segment[{i}].via")));
+            let (straight, key) = (vec![Piece::Line(segment.target.clone())], format!("cycle.segment[{i}].via"));
+            let (pieces, key) = match &segment.path {
+                Some(pieces) => (pieces, key),
+                None if cycle_time_optimal && !at_target(from, &segment.target) => {
+                    (&straight, "profile.cycle_timing".to_string())
+                }
+                None => continue,
+            };
+            let planned = if cycle_time_optimal {
+                path::plan_time_optimal(
+                    machine,
+                    &motor_params.iter().collect::<Vec<_>>(),
+                    &plan_limits,
+                    from,
+                    pieces,
+                    profile_cycle,
+                    path_tolerance,
+                    path::ARC_SLACK,
+                )
+            } else {
+                path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK)
+            };
+            if planned.map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose))) {
+                return Err(ConfigError::Invalid(key));
             }
         }
         if profile_cycle != self.profile_cycle {
@@ -496,16 +548,9 @@ impl Controller {
         self.motor_params = motor_params;
         (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
-        self.path_tolerance = path_tolerance;
+        (self.path_tolerance, self.cycle_time_optimal, self.plan_limits) =
+            (path_tolerance, cycle_time_optimal, plan_limits);
         (self.law, self.spline_c2) = (law, spline_c2);
-        // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
-        // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
-        let tension = [
-            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
-            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
-            tension_reserve,
-        ];
-        self.plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide };
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
             (Some(shaper), fieldbus_delay, fieldbus_jitter);
         Ok(())
@@ -721,21 +766,31 @@ impl Controller {
             }
         }
         let points = if time_optimal {
-            path::plan_time_optimal(
-                machine,
-                &self.motor_drives(machine),
-                &self.plan_limits,
-                start,
-                pieces,
-                self.profile_cycle,
-                self.path_tolerance,
-                machine.setpoint_slack(),
-            )
+            self.plan_time_optimal_from(machine, &self.raw_pos, pieces)
         } else {
             within_axis_limits()
         }?;
         reachable(&points)?;
         Ok(points)
+    }
+
+    /// `path::plan_time_optimal` from `from` with this controller's drive, limits, cycle and tolerances.
+    fn plan_time_optimal_from(
+        &self,
+        machine: &dyn Machine,
+        from: &[f64],
+        pieces: &[Piece],
+    ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        path::plan_time_optimal(
+            machine,
+            &self.motor_drives(machine),
+            &self.plan_limits,
+            from,
+            pieces,
+            self.profile_cycle,
+            self.path_tolerance,
+            machine.setpoint_slack(),
+        )
     }
 
     /// How far the path `plan_path` plans for these pieces is from the pieces as given, at most (see
@@ -1355,17 +1410,25 @@ impl Controller {
         self.cycle = Some(next);
         self.passes += (next == 0) as u64;
         // A path through via points, planned from where the plan stands; were it refused from there (the first segment,
-        // from the start pose), the straight move.
-        let planned = self.segments[next].path.as_ref().and_then(|pieces| {
-            path::plan(
-                machine.axes(),
-                &self.set_pos,
-                pieces,
-                self.profile_cycle,
-                self.path_tolerance,
-                machine.setpoint_slack(),
-            )
-            .ok()
+        // from the start pose), the straight move. Timed as fast as the motors allow, the straight way too; refused, as
+        // the axis limits time it.
+        let segment = &self.segments[next];
+        let straight = [Piece::Line(segment.target.clone())];
+        let time_optimal = (self.cycle_time_optimal && !at_target(&self.set_pos, &segment.target))
+            .then(|| self.plan_time_optimal_from(machine, &self.set_pos, segment.path.as_deref().unwrap_or(&straight)))
+            .and_then(|planned| planned.ok());
+        let planned = time_optimal.or_else(|| {
+            self.segments[next].path.as_ref().and_then(|pieces| {
+                path::plan(
+                    machine.axes(),
+                    &self.set_pos,
+                    pieces,
+                    self.profile_cycle,
+                    self.path_tolerance,
+                    machine.setpoint_slack(),
+                )
+                .ok()
+            })
         });
         self.motion = match planned {
             Some(points) if points.iter().all(|(_, pose)| near_start(machine, &self.set_pos, pose)) => {
@@ -1570,6 +1633,11 @@ fn motion_law(cfg: &Config, machine: &dyn Machine) -> Result<MotionLaw> {
         }
     };
     Ok(MotionLaw { shape, deceleration_ratio, vertical })
+}
+
+/// A segment that starts on its target (within 1 nm on every axis) has no way to time: it is a move of no length.
+fn at_target(from: &[f64], target: &[f64]) -> bool {
+    from.iter().zip(target).all(|(f, t)| (f - t).abs() < 1e-9)
 }
 
 pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
