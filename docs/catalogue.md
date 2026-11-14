@@ -6,6 +6,7 @@ The column names and units below are schema 1's. The documents print other units
 
 - [What the simulator uses](#what-the-simulator-uses)
 - [Files](#files)
+- [Other makers](#other-makers)
 - [How the files were extracted and checked](#how-the-files-were-extracted-and-checked)
 - [Misprints and inconsistencies found in the vendor documents](#misprints-and-inconsistencies-found-in-the-vendor-documents)
 - [What is missing, and why](#what-is-missing-and-why)
@@ -25,6 +26,7 @@ These files are read by the simulator itself. They are compiled into `sim-compon
 | `siemens/gearbox_mass.csv` | The gearbox's mass in the search's `mass_kg` and `cost_kg` |
 | `megadyne/belts.csv`, `megadyne/belt_tooth_load.csv` | A belt by name (`[parts] belt`, `--belt`), and the belt of an axis by name |
 | `festo/belt_axes.csv`, `festo/belt_axis_torque_formula.csv`, `bahr/belt_axes.csv` | An axis by name (`[parts] axis`, `--axis`) and the axis search (`search --axes`) |
+| `<vendor>/motors_*.csv`, `<vendor>/drives_*.csv` (Beckhoff, B&R, Kollmorgen, Lenze, Mitsubishi, Rexroth, SEW, Yaskawa) | A motor by name at `<vendor>-<volts>v` (e.g. `beckhoff-400v`), its paired drive, a drive by name, and the search with `--vendor` (see [other makers](#other-makers)) |
 
 `festo/belt_axes.csv` and `festo/belt_axis_torque_formula.csv` are also the source of the `[catalogue]` values in [`exct-30.toml`](../crates/machine-t-gantry/exct-30.toml); two tests hold the two together (`exct_30_config_agrees_with_the_catalogue`, and `an_axis_by_name_gives_the_numbers_of_the_hand_written_exct_30` for the axis by name). The line module and braking files are data for the DC link estimates; the validator checks them, but no command uses them.
 
@@ -35,6 +37,8 @@ These files are read by the simulator itself. They are compiled into `sim-compon
 | `400v` | S210 converter | The column `converter_400v_3ac` of `motors_s210.csv`, as D 32 lists it beside the motor |
 | `230v` | S210 converter | `converter_230v_1ac` where there is one, else `converter_230v_3ac` |
 | `s120`, 1FK7 and 1FT7 | Single Motor Module | The column `motor_module` of `motors_s120.csv`, its placeholders read as a Single Motor Module (`6SL3120-1...`) |
+| `s210new-230v`, `s210new-400v` | S210 (New) converter, 6SL5310 | The columns `paired_drive_new_*` of `motors_s210.csv`, as D 32 lists them beside the motor (until 14 November 2026 the twelve 6SL5310 converters were in `converters_s210.csv` but never paired) |
+| `<vendor>-<volts>v` | That maker's drive at that line voltage | The motor row's `paired_drive`, the maker's own pairing (B&R, Kollmorgen AKM2G, Lenze, Mitsubishi, SEW, Yaskawa); where the maker publishes none (Beckhoff, Kollmorgen AKM, Rexroth, a few rows of the others), the smallest of the maker's drives at that voltage whose rated current carries the motor's stall current, a single-axis one before a multi-axis one |
 | `s120`, 1FK2 and 1FT2 | Single Motor Module | The manuals pair none. The smallest Single Motor Module whose rated current carries the motor's stall current, the rule D 21.4 pairs the 1FK7 and 1FT7 by; of two such, the one with the higher maximum current |
 
 A motor named in `[parts]` does not bring its drive: the drive is named on its own. The search names the paired one.
@@ -283,6 +287,25 @@ Columns: `series`, `size`, `kind` (`axis`, `xy_gantry`, `xz_gantry`), `belt`, `b
 
 No config uses a Bahr axis yet. These sheets publish what Festo does not for the EXCT: permissible loads and moments on the slide and the belt's pull.
 
+## Other makers
+
+Added 14 November 2026, so that the search can say which drive train works best across makers and not only among Siemens'. One table of motors and one or two of drives per maker, all in the same columns (the schema's `servo_motor` and `drive` with the columns `vendor`, `line_voltage_v`, `line_resistance_20c_ohm`, `line_inductance_h`, the drives' DC link and braking columns and a `source` per row). Key: part number and line voltage; a motor rated at two voltages has two rows. Every value is from the document named in the table's metadata, page or table given there; none is an estimate. The extraction scripts are `catalog/tools/extract_<vendor>.py` where there is one; Mitsubishi, Yaskawa and the drive tables of Beckhoff, Kollmorgen and Rexroth were typed in from the tables their metadata names.
+
+| Maker | Files (rows) | Documents | Supplies | Pairing |
+| --- | --- | --- | --- | --- |
+| Beckhoff | `motors_am8000.csv` (300: AM80xx, AM85xx, with and without fan cover, 400 and 480 V), `drives_ax8000.csv` (12), `drives_ax5000.csv` (16) | AM8000/AM8500 operating instructions 4.9.1 (2023-09) ch. 4.4 to 4.9; AX8000 operating instructions 2.4.0 (2026-10) ch. 4.3, 4.4; AX5000 system manual HW2 3.2.3 (2023-09) ch. 6.2 | `beckhoff-400v`, `beckhoff-480v` | None published (Beckhoff's tabular overview needs a login): by stall current |
+| B&R | `motors_8ls.csv` (109: 8LSA..-3), `drives_acopos_p3.csv` (34) | 8LS..-3 user's manual V2.51 MAMOT2-ENG (2020-12) ch. 2.14; ACOPOS P3 user's manual V1.40 MAACPP3-ENG (2025-05) ch. 2.2 | `br-400v` | The manual's ACOPOS P3 per motor (the 1-axis module of that size); four motors print "-" |
+| Kollmorgen | `motors_akm.csv` (162), `motors_akm2g.csv` (134), 240 and 400 V; `drives_akd.csv` (14) | AKM selection guide KM_SG_000077 Rev F (2025); AKM2G selection guide KM_SG_000315 Rev E (2025); AKD installation manual 903-200003-00 AG (2022-05) ch. 7.6, 7.7, 7.13 | `kollmorgen-240v`, `kollmorgen-400v` | AKM2G: the guide's system performance tables, the smallest AKD that reaches the winding's full continuous and peak torque. AKM: none published, by stall current |
+| Lenze | `motors_mcs.csv` (54), `motors_m850.csv` (15), `drives_i950.csv` (18) | MCS and m850 project planning 7.0 (2024-08); i950 cabinet project planning Gen B 3.0 (2026-08) ch. 7.4 | `lenze-400v` | The selection tables: the smallest i950 whose Mmax reaches the motor's |
+| Mitsubishi | `motors_j5.csv` (57: HK-KT, HK-ST, 200 and 400 V), `drives_j5.csv` (44: MR-J5-G and -A) | MELSERVO-J5 catalogue L(NA)03179ENG-L (2026-01); the 1-axis combinations web page (read 2026-11-14) | `mitsubishi-200v`, `mitsubishi-400v` | The smallest amplifier of standard torque on the combinations page |
+| Rexroth | `motors_ms2n.csv` (155: self-cooled, fan and water cooled), `drives_ctrlx.csv` (59: XCS2, XCD2, XMS2, XMD2) | MS2N project planning R911347583 ed. 11 (2026-03) ch. 6; ctrlX DRIVE modular R911386579 ed. 17 (2026-08) ch. 10; ctrlX DRIVE compact R912009455 ed. 07 (2026-07) ch. 10 | `rexroth-400v` | None published (Rexroth points to its online configurator): by stall current |
+| SEW | `motors_cmp.csv` (57: CMP40 to CMP100 per speed class), `drives_movic.csv` (29: MDA90A, MDD90A, MDX90A) | CMP catalogue 27799468/EN (2023-11) ch. 4.5; MOVIDRIVE system manuals 23061715/EN (2017-03, motor-inverter assignment ch. 3.5.6) and 31986765/EN (2025-03); MOVIDRIVE modular 31984061/EN (2025-03) | `sew-400v` | The 2017 MOVIDRIVE system assignment: the smallest MDX90A with an Mpk at the motor's speed class; none for the 6000 r/min classes |
+| Yaskawa | `motors_sigma7.csv` (37: SGM7J, SGM7A, 200 and 400 V), `drives_sigma7.csv` (25: SGD7S) | Rotary servomotor product manual SIEP S800001 36J (2025-08); Sigma-7 200 V and 400 V catalogues (2026-03, 2026-10) | `yaskawa-200v`, `yaskawa-400v` | The manual's and catalogue's combination tables |
+
+How the simulator takes them (`catalog.rs`): the bus voltage is 1.35 times the line voltage (a three-phase bridge; a maker's single-phase supply is not modelled); the torque constant is standstill torque over standstill current; the winding, where the maker prints it terminal to terminal, goes in at half of it per phase, the way the 1FK7's does, and the current loop is retuned for it; the thermal time constant and the pole pairs where printed. A maker that prints no standstill values (Yaskawa, Mitsubishi) has its rated torque and current stand for them; one that prints no rated torque or current (SEW CMP; Kollmorgen, which gives no rated current; Beckhoff at 480 V) has its standstill values stand for those, which overstates the continuous current at speed by a few per cent. A drive by name sets its rated and peak current, its base load current at the S210's 0.85 of the rated [estimate], and from its row the DC link capacitance, the internal braking resistor's continuous and peak power, the chopper's switch-on voltage and the trip level, each where printed; a value a maker does not print stays as the config has it (the EXCT-30's S210 estimates). Mitsubishi prints no peak current of its amplifiers: a Mitsubishi drive takes the peak current of the motor put in before it, which its standard-torque pairing is made to supply [estimate]. Lenze does not say whether its inductance is per phase or terminal to terminal; it is read as terminal to terminal.
+
+What the plausibility checks hold them to (`vendor_motors_are_plausible_and_their_drives_exist` and `vendor_drives_are_plausible` in `checks.py`): the vendor column is the folder's; peak torque and current above 1.2 times the standstill ones; rated torque at most 1.05 times the standstill torque; rated speed at most the maximum; torque constant within 20 % of standstill torque over current (15 % would fail Rexroth's water-cooled MS2N, whose Kt is printed at 20 °C beside M0 and I0 at 100 K); torque constant within 20 % of sqrt(3) times the line-to-line RMS voltage constant (a value off by sqrt(2) or sqrt(3) is a peak or phase value read as RMS line to line); rated power within 12 % of rated torque times rated speed; the brake adds inertia and mass; L / R between 0.1 and 100 ms; thermal time constant between 1 and 200 minutes; the paired drive exists at that voltage and has at least 85 % of the printed rated current (SEW pairs by peak torque, with smaller drives than the stall current, and prints no rated current). Drives: peak at least the rated current; DC link above 1.2 times the line voltage and below the trip level (Rexroth's regulated supply holds 750 V on a 400 V line); chopper above the line's peak and below the trip level. The Python test `test_another_makers_motor_that_does_not_fit_its_own_numbers_fails_the_checks` shows each kind of mistake caught. The Rust tests are in [`catalog_vendors.rs`](../crates/sim-machines/tests/catalog_vendors.rs).
+
 ## Life and tooth load data in the configs
 
 The life estimates and the belt's tooth load take their figures from the configs' `[ratings]`, not from a file in `catalog/`. Where they come from a maker's document, that is listed here. No vendor document or page is in the repository; the numbers were read from the makers' own servers on 12 November 2026.
@@ -344,6 +367,16 @@ The files keep what is printed. Each of these is named in the header of its file
 | Siemens 1FT2 manual 02/2022 | Rated speed 3000 r/min for the 1FT2105-4AH and 1FT2206-4AH, 2000 r/min for the 1FT2208-4AF | The manual's own rated torque and power, and the S210 catalogue, give 4500 and 3000 |
 | Siemens NC 82, 02/2020 | The 55 kW Smart Line Module 6SL3130-6TE25-5AA3 has 138 A for S6 duty and 178 A maximum at 71 kW and 91 kW | That would be a DC link of about 510 V; every other module has power / 600 V in these rows |
 | Siemens NC 82, 02/2020 | Peak power of the braking resistor 6SN1113-1AA00-0DA0 is 25 kW at 17 Ω | U² / R at the 770 V threshold would be 35 kW; for the other three resistors it fits |
+| Beckhoff AM8000 4.9.1 | Torque constant of the AM8022-0D, AM8022-0E, AM8023-0E 22 to 28 % below sqrt(3) × Ke | Their Kt fits M0 / I0; the AM802x family runs about 20 % low. Not checked (`VENDOR_MISPRINTS` in `checks.py`) |
+| Beckhoff AM8000 4.9.1 | Rated power of AM8051-0J-fan, AM8551-0J-fan (480 V), AM8052-0N-fan, AM8552-0N-fan (400 and 480 V), AM8073-0U-fan (480 V) | 14 to 25 % off rated torque × rated speed. Not checked |
+| Kollmorgen AKM guide Rev F | Ke of the AKM64Q at 240 V 0.64 V per 1000 r/min | Its Kt of 0.99 N m/A implies about 60. Not checked |
+| Kollmorgen AKM guide Rev F | Peak torque of the AKM44G 23.3 N m, peak current of the AKM83T 263.9 A | The other windings of the frame are near 20 N m; the AKM82T and AKM84T have 144 and 201 A. Within the checks' bounds, kept |
+| Kollmorgen AKM guide Rev F | The quick-guide table and the frame tables disagree in places (AKM8x masses, AKM52L power, AKM64Q at 400 V) | The rows follow the frame tables; the metadata lists each |
+| B&R 8LS V2.51 | Brake mass 0 kg for the 8LSA5A/5B/5C and 8LSA7x, which list a brake inertia | Kept: their mass with brake is their mass |
+| Lenze MCS 7.0 | Brake motor inertia of the MCS19J 135 kg cm², less than 105 plus the brake's 31.8 | Kept |
+| Lenze i950 Gen B 3.0 | The C130 is rated 209 A, below the smaller C110's 212 A | Kept |
+| Rexroth ctrlX DRIVE ed. 17 | XCS2-W0090: internal braking resistor 11 Ω, below its own minimum external resistance of 11.2 Ω | Kept |
+| SEW MOVIDRIVE system 2017 | The type list prints MDX90A-0950 and 45 A for the 0460 | Its own technical data and the 2025 manual say 0095 and 46 A, which the file has |
 | Siemens data sheet service | Voltage constant of the 1FT7044-1AF7 is 49.0 V per 1000 r/min | Less than half of what its torque constant of 1.79 N m/A implies |
 | Siemens data sheets against D 21.4 | The data sheets give the sixteen 1FT7 High Dynamic motors 6 poles; the catalogue table gives them 5 pole pairs | Two Siemens sources disagree. Both files keep what their source prints |
 | Siemens D 21.4, 2017 | Some motors are still paired with 45 A and 60 A Motor Modules | The Catalog News D 21.4 N replaced those by C types |
@@ -372,6 +405,12 @@ Other notes from the headers that are not misprints: three 1FK2 data sheets (1FK
 | S120 motors: maximum torque, current and speed in D 21.4 | Given as characteristic curves | Taken from the data sheets instead |
 | Bahr: many series | Their tables need special cases: no-load torque with and without cover band, no feed force rows, a second belt width, differently laid out tables. The header of the file lists them | 15 series are in the file |
 | Bahr: second moments of area, dimensions, order codes, the second drive version of ELZ and ELVZ | Not extracted | |
+| Motor–drive pairing of Beckhoff, Kollmorgen AKM and Rexroth | In no public document (Beckhoff's overview needs a login, Rexroth points to a configurator) | Paired by the stall-current rule, as the 1FK2 on S120 |
+| Rated torque, current and power of the SEW CMP; rated current of the Kollmorgen motors; standstill values, winding data and thermal time constants of Yaskawa and Mitsubishi | Not printed | Standstill values stand for rated ones and the other way round (see [other makers](#other-makers)); winding and thermal data stay the config's |
+| SEW CM3C, Kollmorgen AKD2G, B&R 8LSA..-4 and 8LSC/O/P, Lenze 230 V windings and the i950 at 480 V, Yaskawa SGM7G/SGM7P, Mitsubishi HK-MT/RT | CM3C: SEW's catalogue links answer 403; the others not extracted yet | |
+| DC link capacitance of the Lenze i950 and of the Beckhoff, SEW and smaller Rexroth inverters; switch-on and trip voltages of most makers; braking data of the axis modules of modular systems (AX8000, MOVIDRIVE modular, ctrlX XMS/XMD) | Not printed, or in the supply modules, which are not in the tables | The config's values stay (the EXCT-30's S210 estimates) |
+| Peak current of the Mitsubishi amplifiers | Not printed | The paired motor's peak [estimate] |
+| Base load current of every other maker's drive | Not printed | 0.85 of the rated current, the S210's [estimate] |
 | Prices | In no file: Siemens' Industry Mall refuses automated access, and no catalogue read here prints a price | The search uses installed weight as a stand-in (see [above](#what-stands-in-for-the-price)) |
 | Converter and Motor Module weights | Not extracted from D 32 and D 21.4 N | Not counted in the search's `cost_kg` |
 | Guides as parts by name | No guide catalogue file | Guide ratings stay as the config has them |

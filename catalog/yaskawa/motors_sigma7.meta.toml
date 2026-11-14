@@ -1,0 +1,46 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "siep36"
+notes = '''
+Yaskawa Sigma-7 rotary servomotors SGM7J (medium inertia) and SGM7A (low inertia), one row per motor and line voltage.
+200 V class (model code ...A, 3rd digit A = 200 VAC): rows of the Sigma-7 Rotary Servomotor Product Manual SIEP S800001 36J (source siep36).
+400 V class (model code ...D): rows of the Sigma-7 400V Product Catalog of Yaskawa Europe (source cat400).
+part_number: the model up to and including the voltage digit (SGM7J-01A, SGM7A-15D); cut off are the encoder digit, the design
+  revision, the shaft end and the options (brake, oil/dust seal), e.g. SGM7J-01AFA21 -> SGM7J-01A.
+Rated and maximum values: "for operation in combination with a SERVOPACK when the temperature of the armature winding is 100 degC",
+  rated torque the continuous torque at 40 degC surrounding air with the aluminium heat sink of the document's table. Currents RMS.
+  max_torque/max_current: "Instantaneous Maximum". max_speed: "Maximum Motor Speed" (6000 r/min); for SGM7A-25A/-50A/-25D the
+  continuous duty zone ends at 5000 r/min (footnote), the row keeps 6000. SGM7A-70A/-70D: separately cooled with fan (IP22),
+  no holding brake version (brake columns empty).
+rotor_inertia_kgm2: "Motor Moment of Inertia" of the standard (battery-backed absolute) encoder version; _with_brake: with holding brake.
+  Batteryless-encoder versions are slightly heavier and are not in this table.
+mass_kg / mass_with_brake_kg: "Approx. Mass" of the external-dimensions tables (values in parentheses: with holding brake).
+static_torque_nm / stall_current_a: empty, neither document prints standstill values (the simulator falls back to the rated values).
+Not in these documents, and so empty: voltage constant, winding resistance and inductance, pole pairs, thermal time constant.
+paired_drive: the SGD7S SERVOPACK of the documents' combination tables (SIEP S800001 36J 1.4.1 and the "Applicable SERVOPACKs" row of
+  each motor's specification table; 400 V: "Applicable SERVOPACKs" of the catalogue's SGM7J/SGM7A specifications). Where the
+  document lists an A and an F model (F = 100 V input) the 200 V A model is taken; SGD7W/SGD7C two-axis units are left out.
+  The tables merge cells over neighbouring motors; read as: SGM7J-C2A/-02A -> 1R6A, -06A/-08A -> 5R5A; SGM7A-C2A/-02A -> 1R6A,
+  -06A/-08A -> 5R5A, -10A/-15A -> 120A, -25A/-30A -> 200A, -40A/-50A -> 330A; SGM7J-02D/-04D -> 1R9D; SGM7A-02D/-04D -> 1R9D,
+  -08D/-10D -> 3R5D, -25D/-30D -> 120D, -40D/-50D -> 170D. Each agrees with the drive's "Maximum Applicable Motor Capacity".
+Nothing looked like a misprint; the self-checks (rated power, paired drive current, brake inertia and mass) pass for every row.
+'''
+
+[[sources]]
+id = "siep36"
+document = "Yaskawa, Sigma-7-Series AC Servo Drive Rotary Servomotor Product Manual, SIEP S800001 36J"
+date = "2025-08"
+locator = "1.4.1 Combination of Servomotors and SERVOPACKs (p. 1-7); 4.2.1/4.2.2 SGM7J specifications and ratings (pp. 4-3, 4-4); 4.3 external dimensions (masses); 5.2.1/5.2.2/5.2.4 SGM7A specifications and ratings (pp. 5-3, 5-4, 5-7); 5.3 external dimensions (masses)"
+method = "manual: typed in from the ratings and dimension tables (text by pdftotext)"
+url = "https://www.yaskawa.eu.com/_downloads/download_d5516"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "cat400"
+document = "Yaskawa Europe, Sigma-7 400V Product Catalog, YEU_MuC_Sigma7_400V_Cat_EN_v12"
+date = "2026-10"
+locator = "Rotary Servomotors SGM7J: specifications and ratings pp. 20-21, dimensions pp. 26-28; SGM7A: specifications and ratings pp. 34-35, dimensions pp. 42-48"
+method = "manual: typed in from the ratings and dimension tables (text by pdftotext)"
+url = "https://www.yaskawa.eu.com/_downloads/download_d2727"
+retrieved = "2026-11-14"

@@ -1,0 +1,40 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "akm2g-sg"
+notes = '''
+Source: Kollmorgen, AKM2G Servo Motor Selection Guide, KM_SG_000315 Rev E (2025): the "Performance Data" and
+"Motor Parameters" tables of each frame (AKM2G-2x ... AKM2G-7x) and the "System Performance - AKM2G Servo Motors
+driven by AKD2G and AKD Servo Drives" tables. Extracted by catalog/tools/extract_kollmorgen.py; the numbers are
+Kollmorgen's, the layout is ours.
+One row per winding and line voltage: part_number is the model up to the winding letter as the system performance
+tables print it (AKM2G-22D; mount, shaft, connector, brake, feedback and options cut; the asterisk of the N windings,
+a UL 508 footnote, dropped). line_voltage_v 240 is the guide's "240 Vac" block, 400 its "400 Vac" block; no winding
+has 480 V data without 400 V data. AKM2G-21G has rated data only at 120 V and has no row.
+Conditions (the guide's notes): winding temperature rise 100 K at 40 degC ambient, sinusoidal commutation, resolver
+feedback and standard heat sink. Options derate the continuous torque (the guide's derate curves); not applied here.
+static_torque / stall_current: continuous torque and current at 100 K rise. max_*: peak torque and current.
+max_speed: the maximum mechanical speed. rated_current: the guide gives none.
+torque_constant: Kt in N m/A RMS as printed. voltage_constant: Ke as printed in Vrms/krpm (line to line) divided by
+104.72. line_resistance: Rm line to line, measured at 25 degC (the guide's footnote), not 20 degC.
+line_inductance: the guide's "Inductance Q-Axis (line-line)" Lqll; the D-axis inductance is "Contact Factory".
+rotor_inertia includes the resolver; rotor_inertia_with_brake adds the "Optional Brake Inertia (additional)".
+mass is "Weight without brake"; mass_with_brake adds the family's "Brake motor adds ... kg" footnote.
+paired_drive: from the system performance table of the row's voltage, which lists one or more AKD2G/AKD drives per
+  winding with the continuous and peak torque the pair reaches. The rule: the smallest AKD drive listed whose pair
+  reaches the full continuous and peak torque of that winding's rows (within 1 %, the tables round the same torque
+  differently). The AKD part of "AKD2G-SPx-6V03x/AKD-x00306" is taken; rows naming only an AKD2G drive are skipped.
+  Empty for AKM2G-63H (240 V and 400 V) and AKM2G-72R (240 V): the system tables do not list them.
+Kept as printed although it looks like a misprint: the AKM2G-7x Motor Parameters table heads its seventh column "P"
+  where the AKM2G-7x Performance Data table has AKM2G-72R; the columns are read in the performance table's order, so
+  that column is AKM2G-72R (it is the 72's fourth winding, with the highest current).
+'''
+
+[[sources]]
+id = "akm2g-sg"
+document = "Kollmorgen, AKM2G Servo Motor Selection Guide, KM_SG_000315 Rev E (EN)"
+date = "2025"
+locator = "System Performance tables (printed pages 9-15); AKM2G-2x ... AKM2G-7x Series Motor Specifications: the Performance Data and Motor Parameters table of each frame with their notes (printed pages 20-49)"
+method = "script:tools/extract_kollmorgen.py"
+url = "https://www.kollmorgen.com/sites/default/files/2025-04/AKM2G-KM_SG_000315_RevE_EN_0.pdf"
+retrieved = "2026-11-14"

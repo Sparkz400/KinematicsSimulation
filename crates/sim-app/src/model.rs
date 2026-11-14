@@ -155,7 +155,7 @@ pub struct Inputs {
 }
 
 /// The supplies the motor catalogue has data for: the S210 at 230 V and 400 V, and the S120.
-pub const SUPPLIES: [&str; 3] = sim_components::catalog::SUPPLIES;
+pub const SUPPLIES: &[&str] = sim_components::catalog::SUPPLIES;
 
 /// A path as it was planned, run on a simulation of its own and judged.
 pub struct PathRun {

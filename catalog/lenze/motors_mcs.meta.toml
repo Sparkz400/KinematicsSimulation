@@ -1,0 +1,50 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "mcs-pp"
+notes = '''
+Source: Lenze, project planning "Servo motors: MCS synchronous servo motor", version 7.0, 08/2024, chapter "Technical
+data". Extracted by catalog/tools/extract_lenze.py; the numbers are Lenze's, the layout is ours.
+One row per motor winding at 400 V: the tables "Rated data, Inverter mains connection 400 V" (self-ventilated
+  pages 32 to 37, forced ventilated pages 38 to 41). The 230 V windings (pages 42 to 44, type ending in "L") are
+  not taken: the drive table has the i950 at 400 V only.
+part_number: the type as printed without the space and without the trailing "-", which marks the 400 V winding
+  ("MCS 06C60-" -> MCS06C60); size, length letter and rated speed in rpm/100. Brake, feedback, cooling and
+  connection options are not in it.
+Forced ventilated motors (with blower; their own windings, so no part number is shared with a self-ventilated row):
+  MCS12D17, MCS12D35, MCS12H14, MCS12H34, MCS12L17, MCS12L39, MCS14D14, MCS14D30, MCS14H12, MCS14H28, MCS14L14,
+  MCS14L30, MCS14P11, MCS14P26, MCS19F12, MCS19F29, MCS19J12, MCS19J29, MCS19P12, MCS19P29. Their mass includes
+  the blower as printed.
+Conditions (page 27): rounded values, ambient 40 degC, up to 1000 m, S1 duty, inverter switching frequency at least
+  4 kHz, motor on a steel plate (270/330/450 mm square for MCS06/MCS09/MCS12 to 19).
+Currents RMS. static: M0/I0 at standstill; max: Mmax/Imax; max_speed: nmax.
+torque_constant: "Kt0 150 degC". voltage_constant: "KELL 150 degC" in V/(1000 rpm), the line to line value (LL) at
+  150 degC, divided by 1000*pi/30 to V s/rad; the document does not say RMS or peak, the check Kt = sqrt(3)*Ke holds
+  within 20 % for every row with RMS.
+line_resistance_20c: "Stator terminal resistance RUV 20 degC" (terminal U to V). The table also gives RUV at
+  150 degC, not taken.
+line_inductance: "Stator inductance L" as printed; the document does not say whether it is the phase or the
+  terminal to terminal value.
+rotor_inertia: "Moment of inertia J" without brake. rotor_inertia_with_brake: "Brake motor JMB" of pages 132 and
+  133 for the standard brake (motor code P1, standard braking torque); MCS19J and MCS19P are offered only with the
+  increased brake (P2, 95 N m), so theirs.
+mass: "Weight" of the rated data, the basic weight without brake (page 117). mass_with_brake: basic weight plus
+  the "Additional weights" of the permanent magnet holding brake (page 117): MCS06 0.3, MCS09 0.8, MCS12 0.9,
+  MCS14 1.9, MCS19F 3.1 kg (standard brake), MCS19J and MCS19P 4.3 kg (increased brake, their only one).
+paired_drive: the selection tables "i950 cabinet servo inverter", 3x 400 V and 4 kHz (pages 46 to 53), list for
+  each motor several i950 with the achievable M0, Mrated and Mmax. Taken: the smallest i950 whose Mmax entry
+  reaches the motor's Mmax of the rated data.
+Kept as printed although it does not fit: MCS19J brake motor inertia JMB 135 kg cm2, less than J 105 plus the
+  brake's own 31.8 kg cm2. The brake table gives the 95 N m brake 3.9 kg, the additional weights table 4.3 kg;
+  mass_with_brake uses 4.3 kg.
+Not in the document, so empty: pole pairs and the thermal time constant.
+'''
+
+[[sources]]
+id = "mcs-pp"
+document = "Lenze, Project planning, Servo motors: MCS synchronous servo motor, version 7.0 (OBJ_DOKU-0000000268-EN-006)"
+date = "2024-08"
+locator = "Technical data: Rated data, Inverter mains connection 400 V, self-ventilated and forced ventilated motors (pages 32 to 41); Selection tables, i950 cabinet servo inverter at 3x 400 V (pages 46 to 53); Weights, Additional weights (page 117); Product extensions, Permanent magnet brakes (pages 132 and 133)"
+method = "script:tools/extract_lenze.py"
+url = "https://docfinderreloadedstg.blob.core.windows.net/docfinderreloadedprod/Projektierung_Servo-Synchronmotoren%20MCS_EN.pdf"
+retrieved = "2026-11-14"

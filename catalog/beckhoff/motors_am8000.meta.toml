@@ -1,0 +1,51 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "am8000-om"
+notes = '''
+Source: Beckhoff, operating instructions "AM8000 and AM8500 Synchronous Servomotors", version 4.9.1, 2023-09-19,
+chapter 4 "Technical data" (4.4 to 4.9, pages 33 to 77). Extracted by catalog/tools/extract_beckhoff.py; the numbers
+are Beckhoff's, the layout is ours.
+One row per motor, winding and line voltage: 400 V (power supply UN = 400 V) and 480 V (UN = 480 V), the two
+  voltages of the document's rated values that the AX5000 and AX8000 drives take. The 115 V and 230 V rated values
+  are not taken. The AM801x (flange 40 mm) is left out: the document gives it for at most 250 V AC (rated values
+  at 115 V and 230 V only).
+part_number: the type key AM8tuv-wxyz-a000 cut after the winding letter x, with the shaft digit w written as 0
+  (smooth shaft); shaft, feedback, brake and version options do not change these values. "AM8031-0D" stands for
+  every AM8031-wDyz. AM8000 is the standard rotor, AM8500 the one with increased inertia: the document gives both
+  the same electrical data and each its own mechanical data.
+Motors "with fan cover [+]" (sections 4.7.4, 4.8.4, 4.9.6; brake digit A to D of the type key) have tables of their
+  own with partly the same winding letters; their part numbers here end in "-fan" (e.g. AM8064-0T-fan), and
+  their series is "AM8000 with fan cover" / "AM8500 with fan cover".
+All data at 40 degC ambient and 100 K winding overtemperature, except the voltage constant (20 degC), tolerance
+  +/- 10 % (section 4.1), on the reference flange each table names.
+Currents RMS. static: standstill M0, I0rms. max: peak current I0max and peak torque M0max. max_speed: maximum
+  mechanical speed Nmax.
+rated_current: printed only in the 400 V block ("Nominal current In"); empty in the 480 V rows.
+voltage_constant: KErms in mV min, the RMS voltage between two terminals per 1000 min-1 (section 4.1), so line to
+  line RMS; divided by 1000*pi/30 to V s/rad.
+line_resistance_20c / line_inductance: "Winding resistance Ph-Ph R20" and "Winding inductance Ph-Ph, measured at
+  1 kHz" (average over a revolution with two phases energized), terminal to terminal as printed.
+pole_pairs: "Number of poles" / 2. thermal_time_constant: tTH in min * 60.
+rotor_inertia_with_brake and mass_with_brake are empty where the document prints "---" (AM8533: no brake).
+paired_drive: empty. Neither this manual nor the AX5000 system manual (v3.2.3) nor the AX8000 operating instructions
+  (v2.4.0) has a motor-drive assignment table; Beckhoff's tabular product overview needs a myBeckhoff login.
+Kept as printed although they do not fit (the checks of the vendor-table spec trip on them):
+  AM8022-0D, AM8022-0E, AM8023-0E: torque constant 22 to 28 % below sqrt(3) times the voltage constant (the other
+    AM802x windings are 18 to 20 % below; all AM802x torque constants match M0/I0).
+  AM8051-0J-fan and AM8551-0J-fan at 480 V: rated output 3.22 kW, but 5000 min-1 x 5.40 N m is 2.83 kW.
+  AM8052-0N-fan and AM8552-0N-fan: rated output 4.08 kW at 400 V (6000 min-1 x 5.40 N m is 3.39 kW) and 4.24 kW
+    at 480 V (7000 min-1 x 4.50 N m is 3.30 kW).
+  AM8073-0U-fan at 480 V: rated output 4.50 kW, but 3000 min-1 x 17.8 N m is 5.59 kW (its 400 V row prints
+    5.60 kW for the same speed and torque).
+Not in the document, so not here: rated current at 480 V, inertia and mass of the AM8533 with brake.
+'''
+
+[[sources]]
+id = "am8000-om"
+document = "Beckhoff, AM8000 and AM8500 Synchronous Servomotors, operating instructions, version 4.9.1"
+date = "2023-09"
+locator = "chapter 4 \"Technical data\", sections 4.4 to 4.9 (pages 33 to 77), tables \"Electrical data\" and \"Mechanical data\""
+method = "script:tools/extract_beckhoff.py"
+url = "https://download.beckhoff.com/download/document/motion/am8000_am8500_ba_en.pdf"
+retrieved = "2026-11-14"

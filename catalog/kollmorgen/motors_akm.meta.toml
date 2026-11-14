@@ -1,0 +1,47 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "akm-sg"
+notes = '''
+Source: Kollmorgen, AKM Servo Motor Selection Guide, KM_SG_000077 Rev F (2025): the "Performance Data" and
+"Motor Parameters" tables of each frame (AKM1x ... AKM8x). Extracted by catalog/tools/extract_kollmorgen.py;
+the numbers are Kollmorgen's, the layout is ours.
+One row per winding and line voltage: part_number is the order code up to the winding letter (AKM22C from
+AKM22C-ANCNDA-00; flange, shaft, connector, brake, feedback and options cut). line_voltage_v 240 is the guide's
+"240 Vac (320 Vdc)" block, 400 its "400 Vac (560 Vdc)" block; no winding has 480 V data without 400 V data, so
+there are no 480 V rows. Only windings with rated data at 240 V or 400 V have rows; the 75 Vdc and 120 Vac blocks
+are left out (AKM11C, AKM11E, AKM12E, AKM13D, AKM21E, AKM21G, AKM22G and AKM31H have rated data only there).
+Conditions (the guide's notes): winding temperature rise 100 K at 40 degC ambient, sinusoidal commutation, motor
+on the standard heat sink (10x10x1/4 in aluminium plate up to AKM2x, larger above), resolver feedback.
+static_torque / stall_current: continuous torque and current at 100 K rise. max_*: peak torque and current.
+max_speed: the maximum mechanical speed. The rated values are the guide's rated torque/speed/power at that supply.
+rated_current: the guide gives none.
+torque_constant: Kt in N m/A RMS as printed. voltage_constant: Ke as printed in Vrms/krpm (line to line), divided by
+104.72 (1000 r/min in rad/s). line_resistance: Rm line to line as printed; the guide's footnote says it is measured
+at 25 degC, not 20 degC. line_inductance: L line to line.
+rotor_inertia includes the resolver; rotor_inertia_with_brake adds the guide's "Optional Brake Inertia (additional)".
+mass is the "Weight (w/o brake)"; mass_with_brake adds the frame family's "Brake option increases weight by ... kg"
+from the notes of the table. Brake and non-resolver feedback options also reduce the continuous torque (per frame,
+in the guide's notes); those reductions are not applied here.
+paired_drive: empty. The guide states its data were measured with AKD drives but has no motor-drive pairing table.
+The quick-selection table at the front of the guide ("AKM Servo Motor Quick Guide") repeats many values; where it
+differs from the frame tables these rows follow the frame tables. Differences seen (quick guide / frame table):
+  AKM24E 400 V rated torque 1.12 / 0.98 N m, AKM52L 240 V rated power 23.5 / 2.35 kW, AKM44K mass 6.3 / 5.3 kg,
+  AKM62L mass 9.8 / 8.9 kg, AKM82T/AKM83T/AKM84T mass 49/73/97 / 65/85/105 kg, AKM83T peak torque 310 / 299 N m,
+  AKM44G peak torque 20.2 / 23.3 N m, AKM42C peak torque 11.3 / 11.1 N m, AKM53H at 240 V no data / 1500 r/min,
+  AKM64Q at 400 V and 480 V 5000 r/min 10.7 N m and 6000 r/min 7.40 N m / no data (so AKM64Q has no 400 V row);
+  smaller ones are rounding.
+Kept as printed although it looks like a misprint:
+  AKM64Q voltage_constant: Ke printed 0.64 Vrms/krpm (its Kt of 0.99 N m/A implies about 60); fails the Kt-Ke check.
+  AKM44G max_torque 23.3 N m (its sister windings have 19.9 ... 20.5 N m; the quick guide has 20.2).
+  AKM83T max_current 263.9 A (AKM82T 144 A, AKM84T 201 A; 299 N m / 2.17 N m/A is 138 A).
+'''
+
+[[sources]]
+id = "akm-sg"
+document = "Kollmorgen, AKM Servo Motor Selection Guide, KM_SG_000077 Rev F (EN)"
+date = "2025"
+locator = "AKM1x ... AKM8x Series Motor Specifications: the Performance Data and Motor Parameters table of each frame with their notes (printed pages 16-51)"
+method = "script:tools/extract_kollmorgen.py"
+url = "https://www.kollmorgen.com/sites/default/files/2025-04/AKM-KM_SG_000077_RevF_EN_0.pdf"
+retrieved = "2026-11-14"

@@ -83,6 +83,9 @@ item are in [PROGRESS.md](PROGRESS.md).
   the gripper no longer closes up to a shaper period early and the tool no longer trails the part by the shaper's mean
   delay; `check_cycle` checks the passes; `optimise` no longer edits the unused `[[cycle.segment]]`.
 
+
+- The search never paired the twelve SINAMICS S210 (New) converters 6SL5310 that `converters_s210.csv` has: the supplies
+  `s210new-230v` and `s210new-400v` take the S210 motors with the 6SL5310 that D 32 lists beside each.
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for
   want of a start value, which the standard forbids there. Tested in OpenModelica 1.27.1: its OMSimulator 2.1.3 runs
@@ -122,6 +125,16 @@ item are in [PROGRESS.md](PROGRESS.md).
   `sim-cli --path` and the app's path field; runs at one feed planned with the axes capped at the feed.
 - Conveyor examples beside the T-gantry's, D2's, D4's and linear delta's default configs.
 
+
+- The catalogue has the servo motors and drives of eight more makers, from their public datasheets with page and
+  table: Beckhoff AM8000/AM8500 with AX8000 and AX5000, B&R 8LS with ACOPOS P3, Kollmorgen AKM and AKM2G with AKD,
+  Lenze MCS and m850 with i950, Mitsubishi HK-KT/HK-ST with MR-J5, Bosch Rexroth MS2N with ctrlX DRIVE, SEW CMP with
+  MOVIDRIVE, Yaskawa SGM7J/SGM7A with SGD7S (about 1,100 motor rows, 230 drive rows). A motor is named at the supply
+  `<vendor>-<volts>v`; the search pairs it with the maker's drive, and `sim-cli search --vendor NAME|all` and Python
+  `sizing(vendor=...)` search across makers, with the columns `vendor` and `supply`. Schema 1 gains the optional
+  columns `vendor`, `line_voltage_v`, `line_resistance_20c_ohm`, `line_inductance_h` and the drives' DC link and
+  braking columns; the validator checks the new makers' physics (`vendor_motors_are_plausible_and_their_drives_exist`,
+  `vendor_drives_are_plausible`).
 - Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
   SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted
   only where no value's variance is inflated by more than 100; the others are folded in, with their shares named),

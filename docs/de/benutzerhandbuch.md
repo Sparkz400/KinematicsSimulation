@@ -275,21 +275,21 @@ Die Achse von `exct-30.toml` mit Namen einzusetzen gibt deren eigene Zahlen zur�
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 28 candidates
 Search time on 16: 11.9 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-4AF,,6SL3210-5HE10-4UF0,2.05,4.10,ok,drive-current,0.9753,3.2072,95.50
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,5.70,ok,settling,0.5312,3.2878,20.44
-,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,5.70,ok,settling,0.5325,3.2958,41.53
-,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
-,1FK2104-6AF,,6SL3210-5HE11-0UF0,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,,6SL3210-5HE10-4UF0,siemens,400v,2.05,4.10,ok,drive-current,0.9753,3.2072,95.50
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,5.70,ok,settling,0.5312,3.2878,20.44
+,1FK2104-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.85,5.70,ok,settling,0.5325,3.2958,41.53
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,5.80,ok,drive-current,0.5142,3.4285,21.54
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,siemens,400v,3.40,6.80,ok,gearbox-radial-load,0.5018,3.3439,11.27
 ...
-,1FK2208-3AC,,6SL3210-5HE13-5UF0,12.60,25.20,ok,motor-peak,0.5318,6.6454,2.84
+,1FK2208-3AC,,6SL3210-5HE13-5UF0,siemens,400v,12.60,25.20,ok,motor-peak,0.5318,6.6454,2.84
 ...
-,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,5.80,FAIL,motor-thermal,1.6782,3.4287,167.82
 ...
-,1FK2203-2AK,,6SL3210-5HE10-4UF0,1.16,2.32,FAIL,motor-thermal,inf,1.8530,inf
-,1FK2103-2AH,,6SL3210-5HE10-4UF0,1.18,2.36,FAIL,motor-thermal,inf,1.9530,inf
-,1FK2210-4AB,,6SL3210-5HE15-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5939,8.04
-,1FK2210-4AC,,6SL3210-5HE17-0UF0,27.00,54.00,FAIL,belt-slack,inf,12.5580,11.25
+,1FK2203-2AK,,6SL3210-5HE10-4UF0,siemens,400v,1.16,2.32,FAIL,motor-thermal,inf,1.8530,inf
+,1FK2103-2AH,,6SL3210-5HE10-4UF0,siemens,400v,1.18,2.36,FAIL,motor-thermal,inf,1.9530,inf
+,1FK2210-4AB,,6SL3210-5HE15-0UF0,siemens,400v,27.00,54.00,FAIL,belt-slack,inf,12.5939,8.04
+,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-slack,inf,12.5580,11.25
 ```
 
 An der EXCT-30 nutzt der leichteste Motor, der besteht, der 1FK2104-4AF, 0,98 des Bemessungsstroms seines Antriebs und wird eingeschwungen 95,5 K warm; die nächsten kommen in die Nähe keiner Grenze. Ihre knappste Prüfung ist das Verweilen (0,53 der Toleranz), beim 1FK2204-5AF der Strom des Antriebs und bei den übrigen der Zug des Riemens an einer Scheibenwelle (1000 N von 2000 N), der kaum vom Motor abhängt: Vergleichen Sie die Motoren nach `winding_rise_k` und `peak_torque_nm`. Die Lager der Scheibenwellen halten etwa 325000 h, bei 20000 h gefordert. Vor dem 14. November schlossen die gemeinsame Bemessungsdrehzahl und das gemeinsame Maximalmoment den 1FK2104-4AF und den 1FK2208-3AC ohne Simulation aus (13 der 28; siehe unten), obwohl beide jede Prüfung bestehen.
@@ -300,9 +300,10 @@ Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der 
 
 | Option | Wirkung |
 | --- | --- |
-| `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2`, `1FT2105` oder `1FK7` |
-| `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). Standard: das eigene `parts.motor_supply` der Konfiguration, sonst `400v` |
-| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut). Ein Motor, dem kein Getriebe der Baureihe passt, wird mit dem Getriebe der Konfiguration versucht (`gearbox` leer; vorher fiel er wortlos weg) |
+| `--series PREFIX` | Nur Artikelnummern, die so beginnen, z. B. `1FK2`, `1FT2105`, `1FK7`, `AM804` oder `AKM2G` |
+| `--vendor NAME` | Die Netzspannungen dieses Herstellers, alle, wenn `--supply` keine nennt: `siemens`, `beckhoff`, `br`, `kollmorgen`, `lenze`, `mitsubishi`, `rexroth`, `sew`, `yaskawa`, oder `all` für jede Netzspannung jedes Herstellers. Die Kandidaten aller werden zusammen geordnet; die Spalten `vendor` und `supply` sagen, wessen jeder ist. Z. B. `--vendor beckhoff --series AM804` |
+| `--supply 230v`, `400v` oder `s120` | `230v` und `400v`: die Motoren des S210 ([`motors_s210.csv`](../../catalog/siemens/motors_s210.csv)) bei dieser Netzspannung, jeder mit dem S210-Umrichter, den der Katalog D 32 neben ihm nennt (bei 230 V der einphasige, wo es einen gibt). `s120`: die Motoren an einem SINAMICS S120 an 400 V, die 1FK7 und 1FT7 aus [`motors_s120.csv`](../../catalog/siemens/motors_s120.csv) mit Datenblatt und die 1FK2 und 1FT2 aus ihren S120-Handbüchern, jeder mit seinem Single Motor Module (siehe [Bauteile nach Namen](#eine-reale-katalogmaschine-prüfen)). `s210new-230v`, `s210new-400v`: die Motoren des S210 mit den neuen Umrichtern 6SL5310, die D 32 neben ihnen nennt. `<hersteller>-<volt>v` (z. B. `beckhoff-400v`, `kollmorgen-240v`): die Motoren eines anderen Herstellers bei dieser Netzspannung, jeder mit dem Antrieb, den der Hersteller ihm zuordnet, oder, wo er keine Zuordnung veröffentlicht, dem kleinsten seiner Antriebe, der den Stillstandsstrom des Motors trägt ([der Katalog](../catalogue.md#other-makers)). Standard `400v` |
+| `--gearboxes SERIES` | Jeden Motor zusätzlich mit jedem Getriebe dieser Baureihe probieren (`NRB`, `NRK`, `NLC` oder eine Baugröße wie `NRK070`), das an seinen Flansch passt und dessen Übersetzung zwischen der Hälfte und dem Doppelten der Übersetzung der Konfiguration liegt. Nur bei einer Maschine, deren Konfiguration eine Übersetzung über 1 hat, und nur für 1FK2 und 1FT2 (für sie sind die Getriebe gebaut) |
 | `--axes` | Zusätzlich jede Achse des Katalogs probieren, die zur Art der Maschine passt (siehe unten) |
 | `--motor-id ID` | Einen Motor einer Maschine mit mehreren auslegen, den Motor `ID` einer Maschinendatei: jeder Kandidat wird `[parts.ID]`, die anderen Motoren bleiben, wie die Datei sie hat, die eigene Drehzahlverstärkung dieses Motors wird nachgestellt, `--gearboxes` passt zu seiner eigenen Übersetzung, und `cost_kg` ist das Gewicht dieses einen Motors (siehe [Maschinendateien](maschinendateien.md#motoren-die-sich-unterscheiden)). Nicht mit `--axes` |
 
@@ -311,6 +312,7 @@ Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der 
 | `axis` | Die Achse des Katalogs, auf der der Motor probiert wurde; leer für die eigene der Konfiguration |
 | `motor`, `gearbox` | Der Kandidat. `gearbox` ist leer, wo das Getriebe der Konfiguration geblieben ist |
 | `drive` | Der Antrieb, den der Katalog dem Motor zuordnet; der Zyklus wird gegen seine Ströme beurteilt (`drive-current`, `drive-peak-current`) |
+| `vendor`, `supply` | Hersteller und Netzspannung, mit denen der Motor probiert wurde (`siemens` für `230v`, `400v`, `s120`, `s210new-*`) |
 | `mass_kg` | Masse des Motors ohne Bremse und seines Getriebes (Projektierungshandbuch von Siemens 01/2023, siehe [den Katalog](../catalogue.md)) |
 | `cost_kg` | Was für den Preis steht: die eingebaute Masse, siehe oben |
 | `result` | `ok`, wenn jede Prüfung bestanden ist |
@@ -318,6 +320,21 @@ Die Suche fährt den Zyklus der Konfiguration mit jedem Motor des Katalogs, der 
 | `tightest_utilisation` | Wert geteilt durch Grenze dieser Prüfung |
 | `peak_torque_nm` | Höchstes Spitzenmoment aller Motoren der Maschine; mit `--motor-id` das dieses Motors |
 | `winding_rise_k` | Höchste eingeschwungene Übertemperatur der Wicklung über alle Motoren; mit `--motor-id` die dieses Motors |
+
+**Andere Hersteller.** Seit dem 14. November 2026 hat der Katalog neben Siemens die Servomotoren und Antriebe von acht weiteren Herstellern, jeden Wert aus einem öffentlichen Dokument des Herstellers (Seite oder Tabelle in den Metadaten der Tabelle, keine Schätzungen). `--vendor all` probiert sie alle zusammen; die Spalten `vendor` und `supply` sagen, wessen ein Kandidat ist.
+
+| Hersteller | Motoren, Antriebe | Netzspannungen | Zuordnung Motor–Antrieb |
+| --- | --- | --- | --- |
+| Beckhoff | AM8000/AM8500, AX8000 und AX5000 | `beckhoff-400v`, `beckhoff-480v` | Nicht veröffentlicht: der kleinste Antrieb, der den Stillstandsstrom trägt |
+| B&R | 8LSA..-3, ACOPOS P3 | `br-400v` | Aus dem 8LS-Handbuch |
+| Kollmorgen | AKM, AKM2G, AKD | `kollmorgen-240v`, `kollmorgen-400v` | AKM2G aus dem Auswahlhandbuch; AKM nach Stillstandsstrom |
+| Lenze | MCS, m850, i950 | `lenze-400v` | Aus den Auswahltabellen |
+| Mitsubishi | HK-KT, HK-ST, MR-J5 | `mitsubishi-200v`, `mitsubishi-400v` | Kombinationstabelle (Standarddrehmoment) |
+| Rexroth | MS2N, ctrlX DRIVE | `rexroth-400v` | Nicht veröffentlicht: nach Stillstandsstrom |
+| SEW | CMP, MOVIDRIVE system/modular | `sew-400v` | Motor-Umrichter-Zuordnung von MOVIDRIVE system |
+| Yaskawa | SGM7J, SGM7A, SGD7S | `yaskawa-200v`, `yaskawa-400v` | Kombinationstabellen |
+
+Was fehlt und wie der Simulator die Lücken füllt (Bemessungswerte, die SEW und Kollmorgen nicht drucken, Stillstandswerte, die Yaskawa und Mitsubishi nicht drucken, der Spitzenstrom der Mitsubishi-Verstärker, Zwischenkreisdaten), die Quellen und die Plausibilitätsprüfungen stehen im [Katalog](../catalogue.md#other-makers) (englisch).
 
 Jeder Kandidat wird simuliert. Vor dem 14. November waren die Katalogwerte erst ein Sieb: die Motordrehzahl bei den höchsten Achsgeschwindigkeiten gegen die gemeinsame Bemessungsdrehzahl, das Starrkörpermoment bei den höchsten Beschleunigungen gegen das gemeinsame Maximalmoment, jede Achse zugleich an ihren Grenzen. Das schloss Motoren aus, die jede Prüfung bestehen (an der EXCT-30 bei 400 V 32 von 84, an der CoreXY 21); nun urteilen die Prüfungen: `motor-peak` gegen die Drehmoment-Drehzahl-Kennlinie, `motor-speed` gegen die Höchstdrehzahl. Ein Kandidat, der nicht laufen kann (ein Teil, das die Konfiguration nicht aufnimmt, ein abgelehnter Zyklus), steht mit `NaN` und dem Grund da. Der Fehlerkanal nennt, wie viele Kandidaten das waren, mit `--gearboxes` wie viele Motoren kein Getriebe der Baureihe passt (sie werden mit dem Getriebe der Konfiguration versucht, `gearbox` leer), und wie lange die Suche auf wie vielen Kernen gedauert hat.
 
@@ -330,11 +347,11 @@ $ sim-cli search single-axis --series 1FK2104 --gearboxes NRK070
 Nicht simuliert (ein Teil, das die Konfiguration nicht aufnimmt, oder ein Zyklus, der nicht läuft; der Grund steht in der Tabelle): 0 / 35 Kandidaten
 Kein Getriebe der Baureihe passt, daher mit dem Getriebe der Konfiguration versucht (Getriebe leer in der Tabelle): 0 Kandidaten
 Dauer der Suche auf 16: 2.3 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK2104-4AF,NRK070-04-10,6SL3210-5HE10-4UF0,3.45,3.45,ok,motor-speed,0.6633,0.4615,1.31
-,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
-,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4567,0.6007,2.50
-,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,3.45,3.45,ok,settling,0.4637,0.5294,1.91
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK2104-4AF,NRK070-04-10,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,motor-speed,0.6633,0.4615,1.31
+,1FK2104-4AF,NRK070-04-3,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,gearbox-radial-load,0.4188,0.7667,3.85
+,1FK2104-4AF,NRK070-04-4,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,settling,0.4567,0.6007,2.50
+,1FK2104-4AF,NRK070-04-5,6SL3210-5HE10-4UF0,siemens,400v,3.45,3.45,ok,settling,0.4637,0.5294,1.91
 ...
 ```
 
@@ -344,10 +361,10 @@ Die Motoren des S120 an der EXCT-30:
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --supply s120 --series 1FK7
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 61 candidates
 Search time on 16: 16.6 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-,1FK7042-2AC7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5053,16.34
-,1FK7042-2AF7,,6SL3120-1TE13-0AD0,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
-,1FK7042-2AK7,,6SL3120-1TE15-0AD0,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+,1FK7042-2AC7,,6SL3120-1TE13-0AD0,siemens,s120,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5053,16.34
+,1FK7042-2AF7,,6SL3120-1TE13-0AD0,siemens,s120,4.60,9.20,ok,gearbox-radial-load,0.5008,3.5050,18.72
+,1FK7042-2AK7,,6SL3120-1TE15-0AD0,siemens,s120,4.60,9.20,ok,motor-thermal,0.5409,3.5036,54.09
 ...
 ```
 
@@ -357,16 +374,16 @@ axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisat
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --axes
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 2 / 338 candidates
 Search time on 16: 33.3 s
-axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
-ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,24.75,ok,settling,0.9056,3.9951,25.02
-ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,2.85,24.75,ok,settling,0.9200,3.9968,51.69
-ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,2.90,24.85,ok,settling,0.6389,3.8853,26.94
+axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k
+ELZI-40,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,24.75,ok,settling,0.9056,3.9951,25.02
+ELZI-40,1FK2104-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.85,24.75,ok,settling,0.9200,3.9968,51.69
+ELZI-40,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,24.85,ok,settling,0.6389,3.8853,26.94
 ...
-EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,46.80,ok,settling,0.5314,3.2863,20.38
+EXCT-30,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,46.80,ok,settling,0.5314,3.2863,20.38
 ...
-EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,2.85,56.93,ok,settling,0.7410,5.0097,52.68
+EXCT-100,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,56.93,ok,settling,0.7410,5.0097,52.68
 ...
-EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,2.90,46.90,FAIL,motor-thermal,1.6713,3.4264,167.13
+EXCT-30,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,46.90,FAIL,motor-thermal,1.6713,3.4264,167.13
 ...
 ELZI-30,,,,NaN,NaN,FAIL,axis-speed,NaN,NaN,NaN
 EXCT-15,,,,NaN,NaN,FAIL,axis-stroke,NaN,NaN,NaN
@@ -1527,7 +1544,7 @@ Das Fenster zeigt in der Mitte die 3D-Ansicht, links ein Bedienfeld und rechts d
 | Analyse: Betriebspunkte | Nach „Zyklus analysieren und beurteilen“: das Motormoment über der Motordrehzahl einmal je Millisekunde des Zyklus, eine Farbe je Motor, über den Drehmoment-Drehzahl-Kennlinien der Motoren (gestrichelt: das Spitzenmoment in beide Richtungen bis zur Bemessungsdrehzahl, das bis zur Leerlaufdrehzahl auf null fällt; gepunktet: das Bemessungsmoment, S1, in beide Richtungen bis zur Bemessungsdrehzahl), und darunter dieselben Punkte als rollbare Tabelle. Ein Klick auf den Namen eines Motors in der Legende blendet seine Punkte aus. Dasselbe wie `sim-cli analyze --points` |
 | Analyse: Empfindlichkeit | Die acht Parameter mit `[bounds]`, von denen der Zyklus am stärksten abhängt |
 | Analyse: Zyklus optimieren | Der Optimierer; mit angehakten „Fehlerbändern“ muss sein Ergebnis auch in den Bändern bestehen (die Zeilen unter den Einstellungen nennen, wie schnell er nach der Konfiguration, wie sie dasteht, wurde und woran das dort scheitert). Unter der Tabelle die Front der Energie je Zyklus über der Zykluszeit, das Ergebnis markiert. „Diese Einstellungen in die laufende Maschine übernehmen“ setzt sein Ergebnis in die Konfiguration ein |
-| Motorsuche | Netzspannung (230v, 400v oder s120), der Anfang der Artikelnummern (leer: jeder Motor des Katalogs) und wahlweise eine Getriebebaureihe wie `NRK` oder `NRK070`; angekreuzt probiert „Jede Achse des Katalogs“ jeden Motor zusätzlich auf jeder Achse des Katalogs, die zur Art der Maschine passt (`--axes`). „Suchen“ fährt jeden solchen Motor auf dem Zyklus und listet sie auf, bestandene zuerst, günstigste zuerst (die eingebaute Masse steht für den Preis), mit Getriebe, Achse, der Masse von Motor und Getriebe, der eingebauten Masse und der knappsten Prüfung oder dem Grund, aus dem ein Motor oder eine Achse nicht gefahren wurde. „Einsetzen“ in einer Zeile benennt diesen Motor, seine Netzspannung, sein Getriebe, seinen Antrieb und seine Achse in `[parts]` der laufenden Konfiguration. Dasselbe wie `sim-cli search` |
+| Motorsuche | Netzspannung (230v, 400v, s120, s210new-230v/-400v oder die eines anderen Herstellers, z. B. beckhoff-400v), der Anfang der Artikelnummern (leer: jeder Motor des Katalogs) und wahlweise eine Getriebebaureihe wie `NRK` oder `NRK070`; angekreuzt probiert „Jede Achse des Katalogs“ jeden Motor zusätzlich auf jeder Achse des Katalogs, die zur Art der Maschine passt (`--axes`). „Suchen“ fährt jeden solchen Motor auf dem Zyklus und listet sie auf, bestandene zuerst, günstigste zuerst (die eingebaute Masse steht für den Preis), mit Getriebe, Achse, der Masse von Motor und Getriebe, der eingebauten Masse und der knappsten Prüfung oder dem Grund, aus dem ein Motor oder eine Achse nicht gefahren wurde. „Einsetzen“ in einer Zeile benennt diesen Motor, seine Netzspannung, sein Getriebe, seinen Antrieb und seine Achse in `[parts]` der laufenden Konfiguration. Dasselbe wie `sim-cli search` |
 | Bahn | Ein Dateiname, eingetippt. „Geraden, Kreisbögen und Splines“ ist eine Bahndatei, geplant innerhalb der Achsgrenzwerte oder, angekreuzt, „So schnell, wie die Motoren es erlauben“; „Posen mit Zeiten“ ist eine Datei mit einer zeitlich vorgegebenen Bahn. „Planen, fahren und analysieren“ plant die Bahn von dort, wo der Sollwert der Maschine steht (ihre erste Pose ist der laufende Sollwert: Die eigene Simulation stellt ihr Werkzeug um eine Ruhedurchbiegung daneben, so dass ihr Sollwert dort steht), analysiert sie mit einer eigenen Simulation (Dauer, Abweichung durch Übergangsbögen, Bahnfehler, Abstand hinter dem Sollwert, Belastungen, Prüfungen), zeichnet die geplante Bahn als Diagramm im Bedienfeld und als Linie in der 3D-Ansicht und lässt die Maschine in der 3D-Ansicht sie fahren. Dasselbe wie `sim-cli analyze --path` oder `--trajectory`. Unter den Tabellen die Betriebspunkte der Bahn über den Drehmoment-Drehzahl-Kennlinien, wie beim Zyklus (`--points` mit `--path`). Beim Delta die Arbeitsraumkarte: ein waagerechter Schnitt in der Höhe, die der Schieberegler einstellt, vom Verfahrbereich bis eine halbe Breite darüber hinaus nach jeder Seite, jeder Punkt gefärbt nach der Konditionszahl der Jacobi-Matrix (1 dunkel, die zulässige `ratings.max_condition_number` hell, rot darüber); blass, wo die Arme hinreichen, die Maschine aber nicht hinfährt (außerhalb des Arbeitsraums, hinter einem Gelenkanschlag, über `workspace.max_condition_number`), leer außer Reichweite; der Rahmen ist der Verfahrbereich, und der Mauszeiger zeigt die Konditionszahl unter ihm |
 | Aufzeichnung, Zuordnung | Ein Dateiname, eingetippt, und für den Export eines Herstellerwerkzeugs seine Zuordnungsdatei (wie `--map` sie nimmt; leer für eine Aufzeichnung in den Spalten des Simulators). „Nachfahren und anpassen“ fährt die Antriebsaufzeichnung nach und zeigt je Motor, wie weit die Simulation von ihr abweicht (Moment und Schleppfehler, Effektivwert und Spitze), je Achse die angepasste Masse, Reibung und konstante Kraft neben den Werten der Konfiguration (bei Delta, SCARA und Arm den Faktor der Nutzlast und je Motor zusätzliche Trägheit, Reibung und konstantes Moment), mit dem, was in der Konfiguration zu ändern ist; angekreuzt fügt „Riemensteifigkeit aus den Bewegungen“ den Faktor auf die Riemensteifigkeit hinzu (`fit --stiffness`, rund zwanzig Nachläufe mehr); und je Motor, was die Aufzeichnung für sich sagt: Trägheit, Reibung, die Verzögerungen der Regelkreise, jeweils mit Standardfehler und 95-%-Intervall, und wie gut jedes Modell die Aufzeichnung trifft. Dasselbe wie `sim-cli replay`, `fit --trace` und `identify --trace`. Die Startpose der Konfiguration muss dort liegen, wo die Aufzeichnung beginnt. Darunter „Aufzeichnung gegen Simulation“: Motormoment, Motordrehzahl und Schleppfehler am Motor über der Zeit, die Aufzeichnung durchgezogen und die Simulation gestrichelt, eine Farbe je Motor. „CSV exportieren“ dort schreibt sie nach `replay-overlay.csv` im Arbeitsverzeichnis, dieselbe Datei wie `sim-cli replay --out` |
 | Frequenzgang der Mechanik | Von, bis, Frequenzen und Momentamplitude, wie `sim-cli sweep` sie nimmt (anfangs 5 bis 500 Hz, 120, und 1,5 N m oder 40 % des Spitzenmoments des Antriebs, wo das weniger ist). „Jeden Motor messen“ misst den Frequenzgang im offenen Kreis vom Moment jedes Motors zu seiner Drehzahl, wie `sim-cli sweep --motor N` für einen: Betrag in dB und Phase über der Frequenz, eine Linie je Motor, und je Motor den Einbruch, bei dem die Last am Riemen schwingt (Resonanz und Dämpfungsgrad des Einbruchs mit der niedrigsten Frequenz; leer, wo der Bereich keinen Einbruch mit beiden Flanken enthält). Die Voreinstellungen zeigen ihn an jedem Motor der Standardmaschinen. Vorher taten sie das nicht: Die Amplitude war 0,05 N m, bei der die Haftreibung die Motoren hält, nicht der Bereich. Ein Wechsel der Maschine oder das Öffnen einer Konfiguration setzt die Amplitude auf die Voreinstellung dieser Konfiguration, sofern keine andere eingetippt wurde |
@@ -1541,7 +1558,7 @@ Das rechte Bedienfeld rollt als Ganzes, und jeder seiner Teile (Oszilloskope, Ko
 
 Die Schaltflächen dieser Teile rechnen im Hintergrund mit eigenen Simulationen, und zwar mit der Konfiguration, wie sie in diesem Augenblick ist; solange steht ein Wartezeichen an Stelle der Schaltfläche. Die laufende Maschine wird nicht gestört. Ein Ergebnis wird nicht neu berechnet, wenn sich danach ein Parameter ändert. Es wird stattdessen als „für eine frühere Konfiguration berechnet“ gekennzeichnet, und nichts davon wird in die geänderte Konfiguration übernommen: „Diese Einstellungen übernehmen“, „Einsetzen“ und das Fahren einer geplanten Bahn antworten dann mit einer Meldung (die Änderung zurücknehmen oder neu berechnen). Einen Motor mit „Einsetzen“ zu benennen macht die Suche, aus der er stammt, nicht ungültig; danach lässt sich eine andere Zeile versuchen. Eine Achse der Achssuche zu benennen schon, denn sonst lief die Suche auf der eigenen Achse der Konfiguration.
 
-Eine Datei, die fehlt oder nicht lesbar ist, eine nicht lesbare Zeile darin, eine andere Netzspannung als 230v, 400v und s120 und eine Suche, die keinen Motor findet oder kein Getriebe der Baureihe, das an einen passt, werden unter „Meldungen“ beantwortet. Ebenso eine Bahn, die die Maschine nicht fahren kann, weil sie sich seit dem Planen bewegt hat oder in Bewegung ist.
+Eine Datei, die fehlt oder nicht lesbar ist, eine nicht lesbare Zeile darin, eine Netzspannung, die der Katalog nicht hat, und eine Suche, die keinen Motor findet oder kein Getriebe der Baureihe, das an einen passt, werden unter „Meldungen“ beantwortet. Ebenso eine Bahn, die die Maschine nicht fahren kann, weil sie sich seit dem Planen bewegt hat oder in Bewegung ist.
 
 Ein Antrieb, der wegen Überspannung im Zwischenkreis abschaltet, wird unter „Meldungen“ genannt, einmal je Abschaltung, für die laufende Maschine und für einen analysierten Zyklus oder eine analysierte Bahn. „Antriebe freigeben“ bringt die Antriebe zurück.
 

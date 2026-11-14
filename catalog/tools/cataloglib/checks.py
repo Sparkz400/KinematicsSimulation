@@ -723,6 +723,121 @@ def megadyne_belts_are_plausible(tables):
     return errors
 
 
+def _vendor_tables(tables, kind):
+    """Other makers' tables of a kind ("motors_" or "drives_"): path -> rows."""
+    return {p: rows for p, rows in tables.items() if not p.startswith("siemens/") and p.split("/")[-1].startswith(kind)}
+
+
+# Values another maker's document prints that do not fit the others, kept as printed and not checked:
+# (table, part_number, line_voltage_v, check) -> why. The same list is in docs/catalogue.md.
+VENDOR_MISPRINTS = {
+    **{("beckhoff/motors_am8000.csv", m, v, "ke"): "the AM802x print a torque constant 22 to 28 % below sqrt(3) x Ke; Kt fits M0 / I0"
+       for m in ("AM8022-0D", "AM8022-0E", "AM8023-0E") for v in ("400", "480")},
+    **{("beckhoff/motors_am8000.csv", m, v, "rated-power"): "rated power printed 14 to 25 % off rated torque x rated speed"
+       for m, v in (("AM8051-0J-fan", "480"), ("AM8551-0J-fan", "480"), ("AM8052-0N-fan", "400"), ("AM8052-0N-fan", "480"),
+                    ("AM8552-0N-fan", "400"), ("AM8552-0N-fan", "480"), ("AM8073-0U-fan", "480"))},
+    ("kollmorgen/motors_akm.csv", "AKM64Q", "240", "ke"): "Ke printed 0.64 V/krpm; its Kt of 0.99 N m/A implies about 60",
+}
+
+
+def vendor_motors_are_plausible_and_their_drives_exist(tables):
+    """Other makers' motors: overload, torque constant against standstill values and against the voltage constant,
+    rated power = torque x speed, rated within standstill and maximum, brake adds inertia and mass, L / R and the thermal
+    time constant within what servo motors have, and the paired drive exists at that voltage and carries the current."""
+    drives = {}
+    for path, rows in _vendor_tables(tables, "drives_").items():
+        for d in rows:
+            drives[(d["vendor"], d["line_voltage_v"], d["part_number"])] = d
+    errors = []
+    for path, rows in _vendor_tables(tables, "motors_").items():
+        maker = path.split("/")[0]
+        for m in rows:
+            name, line = m["part_number"], m["line_voltage_v"]
+            skip = lambda check: (path, name, line, check) in VENDOR_MISPRINTS  # noqa: E731
+            fail = lambda check, text: None if skip(check) else errors.append(f"{path} {name} {line} V: {text}")  # noqa: E731
+            try:
+                if m["vendor"] != maker:
+                    fail("vendor", f"vendor {m['vendor']} in the folder of {maker}")
+                # A maker that prints no standstill values has its rated ones checked in their place, and the other way
+                # round (as the simulator takes them, `catalog.rs` motor_data).
+                rated_t, rated_i = num(m["rated_torque_nm"]), num(m["rated_current_a"])
+                printed_rated_i, printed_m0 = rated_i, num(m["static_torque_nm"])
+                m0 = num(m["static_torque_nm"]) or rated_t or need(m, "static_torque_nm")
+                i0 = num(m["stall_current_a"]) or rated_i or need(m, "stall_current_a")
+                rated_t, rated_i = rated_t or m0, rated_i or i0
+                if not (need(m, "max_torque_nm") > 1.2 * m0 and need(m, "max_current_a") > 1.2 * i0):
+                    fail("overload", "maximum torque or current not above 1.2 times the standstill values")
+                if not rated_t <= 1.05 * m0:
+                    fail("rated-torque", f"rated torque {rated_t} above standstill {m0}")
+                if not need(m, "rated_speed_rad_s") <= 1.001 * need(m, "max_speed_rad_s"):
+                    fail("rated-speed", "rated speed above maximum speed")
+                kt = num(m["torque_constant_nm_a"])
+                # The torque constant is standstill torque over standstill current, apart from rounding, saturation and
+                # temperature: Rexroth prints Kt at 20 degC beside M0 and I0 at 100 K, 15 to 17 % apart for its
+                # water-cooled MS2N at their high stall currents.
+                if kt is not None and printed_m0 is not None and not close(kt, m0 / i0, 0.2):
+                    fail("kt", f"torque_constant_nm_a {kt} against {m0} / {i0}")
+                ke = num(m["voltage_constant_v_s_rad"])
+                # Line-to-line RMS voltage constant: a sine-wave motor's torque constant is sqrt(3) times it.
+                if kt is not None and ke is not None and not close(kt, math.sqrt(3) * ke, 0.2):
+                    fail("ke", f"torque_constant_nm_a {kt} against sqrt(3) x voltage_constant {ke:.4g}")
+                power = num(m["rated_power_w"])
+                if power is not None and not close(power, rated_t * need(m, "rated_speed_rad_s"), 0.12):
+                    fail("rated-power", f"rated_power_w {power} against torque x speed")
+                for a, b in (("rotor_inertia_with_brake_kgm2", "rotor_inertia_kgm2"), ("mass_with_brake_kg", "mass_kg")):
+                    if m[a] != "" and m[b] != "" and not need(m, a) >= need(m, b):
+                        fail("brake", f"{a} below {b}")
+                r, l = num(m["line_resistance_20c_ohm"]), num(m["line_inductance_h"])
+                # A servo winding's electrical time constant: a fraction of a millisecond to some tens of them.
+                if r and l and not inside(l / r, 1e-4, 0.1):
+                    fail("l-over-r", f"L / R = {l / r:.3g} s")
+                tau = num(m["thermal_time_constant_s"])
+                if tau is not None and not inside(tau, 1 * MIN, 200 * MIN):
+                    fail("thermal", f"thermal_time_constant_s {tau}")
+                paired = m["paired_drive"]
+                if paired:
+                    d = drives.get((m["vendor"], line, paired))
+                    if d is None:
+                        fail("paired", f"paired drive {paired} not in a {m['vendor']} drive table at {line} V")
+                    # Against a printed rated current only: SEW pairs by peak torque, smaller drives than the stall current.
+                    elif printed_rated_i is not None and not need(d, "rated_output_current_a") >= 0.85 * rated_i:
+                        fail("paired", f"{paired} gives {d['rated_output_current_a']} A, the motor needs {rated_i} A")
+            except ValueError as e:
+                errors.append(f"{path} {name} {line} V: {e}")
+    return errors
+
+
+def vendor_drives_are_plausible(tables):
+    """Other makers' drives: peak above rated current, DC link above the line's mean and below the trip level,
+    the chopper switching on above the line's peak and below the trip level."""
+    errors = []
+    for path, rows in _vendor_tables(tables, "drives_").items():
+        maker = path.split("/")[0]
+        for d in rows:
+            name = d["part_number"]
+            try:
+                line = need(d, "line_voltage_v")
+                if d["vendor"] != maker:
+                    errors.append(f"{path} {name}: vendor {d['vendor']}")
+                # Mitsubishi prints no peak current of its amplifiers.
+                if d["max_output_current_a"] != "" and not need(d, "max_output_current_a") >= need(d, "rated_output_current_a"):
+                    errors.append(f"{path} {name}: max_output_current_a below rated_output_current_a")
+                if not need(d, "axes") >= 1:
+                    errors.append(f"{path} {name}: axes")
+                bus, trip, on = num(d["dc_link_voltage_v"]), num(d["dc_link_overvoltage_v"]), num(d["braking_threshold_v"])
+                # Rectified, between the line's mean and its peak + 10 %; a regulated supply (Rexroth's at 750 V on a
+                # 400 V line) lifts it higher, but never to the trip level.
+                if bus is not None and not (inside(bus, 1.2 * line, 2 * line) and (trip is None or bus < trip)):
+                    errors.append(f"{path} {name}: dc_link_voltage_v {bus} at a {line} V line")
+                if on is not None and not on > SQRT_2 * line:
+                    errors.append(f"{path} {name}: braking_threshold_v {on} not above the line's peak")
+                if on is not None and trip is not None and not on < trip:
+                    errors.append(f"{path} {name}: braking_threshold_v {on} not below dc_link_overvoltage_v {trip}")
+            except ValueError as e:
+                errors.append(f"{path} {name}: {e}")
+    return errors
+
+
 CHECKS = [
     festo_exct_values_agree_with_its_own_geometry,
     siemens_s210_motors_are_plausible_and_their_converters_exist,
@@ -742,4 +857,6 @@ CHECKS = [
     bahr_gantries_state_their_moved_masses_and_lengths,
     every_catalogue_gearbox_has_a_mass_and_bigger_ones_weigh_more,
     megadyne_belts_are_plausible,
+    vendor_motors_are_plausible_and_their_drives_exist,
+    vendor_drives_are_plausible,
 ]

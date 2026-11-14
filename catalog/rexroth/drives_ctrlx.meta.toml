@@ -1,0 +1,59 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "ctrlx-modular"
+notes = '''
+Sources: Bosch Rexroth, project planning manuals "ctrlX DRIVE modular Drive Systems" (R911386579, edition 17,
+chapter 10 "Technical data of components") and "ctrlX DRIVE compact Single axis converter XCS2-F/H" (R912009455,
+edition 07, chapter 10). Typed in from the tables; the numbers are Rexroth's, the layout is ours.
+One row per device with motor output: XCS2 single-axis converters, XCD2 double-axis converter, XMS2 single-axis and
+  XMD2 double-axis inverters (modular manual) and the compact XCS2-...H converters for 3 AC 200 ... 480 V (compact
+  manual). The compact XCS2-...F devices (1/3 AC 100 ... 240 V) are not here.
+part_number: the device type up to the current code, e.g. XCS2-W0054 (the manual prints XCS*-W0054: "*" is the
+  generation; generations 1 and 2 have identical performance data, revision history edition 06); the compact
+  devices keep their family letter H (XCS2-W0012H).
+line_voltage_v 400: the nominal 3-phase mains voltage (ULN_nom) of the converters; currents do not depend on the
+  mains voltage in the manuals. supply: the converters' mains voltage range; the XMS2 / XMD2 inverters sit on the DC
+  bus of a supply unit (e.g. XVR, XVE; chapters 10.19, 10.20, not in this table) and have no mains
+  connection.
+Currents RMS at 4 kHz switching frequency: rated = "Continuous output current when fs = 4 kHz" (Iout_cont4),
+  max = "Maximum output current when fs = 4 kHz" (Iout_max4); per axis for XCD2 and XMD2 ("2 x" in the tables).
+  The 8 kHz values are lower, and so is the continuous current near standstill (Iout_cont0Hz_4).
+  max_current_duration: empty, the manuals give no time for the maximum current.
+dc_link_voltage: "Nominal DC bus voltage" UDC_nom (540 V converters, 750 V inverters, as printed).
+dc_link_capacitance: "Capacitance in DC bus" CDC; the small XMS2 / XMD2 inverters print "-" (empty here).
+braking_resistor_*: the integrated braking resistor (XCS2-W0010 ... W0090, XCD2-W2323, compact XCS2-...H). The
+  larger XCS2 converters (C0054, C0070, W0100 ... W0375) have only the braking transistor for an external resistor;
+  min_braking_resistance is that external resistor's minimum. The inverter tables have no braking data: the supply unit
+  brakes the DC bus.
+braking_threshold: only the XCD2-W2323 prints a nominal switch-on threshold (820 V). The XCS2 converters print a
+  setting range "(ULN x sqrt(2) x 1.05 + 15) ... 820 V" (plus a workload-based delay 820 ... 850 V); no single value,
+  so empty. dc_link_overvoltage: "Monitoring value maximum DC bus voltage, switch-off threshold" UDC_limit_max.
+Merged table cells (one value spanning several device columns) are assigned by the value's position on the page
+  (text coordinates of the PDF): XCS2-W0054/-W0070 share CDC 0.78 mF and the 14.2 ohm integrated resistor,
+  XCS2-W0090 has 1.36 mF and 11 ohm; XCS2-W0250/-W0280 share 4.76 mF and -W0330/-W0375 5.44 mF; minimum external
+  braking resistance 4 ohm for XCS2-W0210 ... W0280 and 2.8 ohm for -W0330/-W0375. XMS2-W0210 and -C0210 have
+  2.04 mF; the value 2.72 mF sits centred under the other four columns (W0250 ... W0375, C0250 ... C0375) and is
+  given to all four (a span of only the two middle columns would sit at the same place but leave two cells empty).
+Kept as printed although it looks odd: XCS2-W0090's integrated braking resistor (11 ohm) is below the minimum
+  external resistance it allows (11.2 ohm); the compact XCS2-W0005H/-W0007H/-W0012H have the same 160 ohm resistor
+  but different peak powers (1.43, 2.61, 3.43 kW).
+'''
+
+[[sources]]
+id = "ctrlx-modular"
+document = "Bosch Rexroth, ctrlX DRIVE modular Drive Systems, project planning manual, R911386579, edition 17"
+date = "2026-08"
+locator = "chapter 10 \"Technical data of components\", sections 10.2 to 10.18 (XCS*, XCD*, XMS*, XMD*), tables \"DC bus performance data\", \"Integrated braking resistor data\", \"Minimum requirement on external braking resistor\", \"Inverter performance data\", pages 334 to 382"
+method = "manual: typed in from the tables of chapter 10 (pdftotext -raw text; merged cells by their position on the page)"
+url = "https://www.boschrexroth.com/media/04dcca00-8839-4c35-b00d-3dcbeb4b54b3"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "ctrlx-compact"
+document = "Bosch Rexroth, ctrlX DRIVE compact Single axis converter XCS2-F/H, project planning manual, R912009455, edition 07"
+date = "2026-07"
+locator = "chapter 10 \"Technical data of components\", sections 10.5 to 10.7 (XCS2-W0005H ... W0055H), tables 68 to 83, pages 117 to 126"
+method = "manual: typed in from the tables of chapter 10 (pdftotext -raw and -table text)"
+url = "https://www.boschrexroth.com/media/6080d56e-5c0b-4f6d-b74e-0a78a25dcdc2"
+retrieved = "2026-11-14"

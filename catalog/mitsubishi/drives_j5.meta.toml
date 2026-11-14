@@ -1,0 +1,27 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "l03179"
+notes = '''
+Mitsubishi Electric MELSERVO-J5 1-axis servo amplifiers MR-J5-_G (network: CC-Link IE TSN / EtherCAT) and MR-J5-_A
+(general-purpose interface), 200 V class (MR-J5-10G ... -25KG, -10A ... -25KA) and 400 V class (MR-J5-60G4 ... -25KG4,
+-60A4 ... -25KA4); one row per model. The suffixes -HS, -RJ, -N1 and -LL are cut off (same power ratings). MR-J5-_B
+(SSCNET III/H) has the same ratings and is not repeated here.
+supply: 200 V class: 3-phase 200 ... 240 V AC; MR-J5-10_ ... -100_ also take 1-phase 200 ... 240 V AC and MR-J5-200_ 3-phase or
+1-phase (catalogue). 400 V class: 3-phase 380 ... 480 V AC.
+rated_output_current_a: "Output, Rated current". The catalogue gives no maximum output current of the amplifier (only the
+motors' maximum currents) and no peak duration, so max_output_current_a and max_current_duration_s are empty.
+Not filled although the catalogue has them: the permissible regenerative power of the built-in regenerative resistor. Its row
+merges cells over several amplifiers and the text extraction does not place them unambiguously.
+Not in the catalogue, and so empty: DC link voltage and capacitance, internal braking resistance, minimum external braking
+resistance, chopper threshold, overvoltage trip level.
+'''
+
+[[sources]]
+id = "l03179"
+document = "Mitsubishi Electric, AC Servo System MELSERVO-J5 catalogue, L(NA)03179ENG-L"
+date = "2026-01"
+locator = "Servo Amplifiers: MR-J5-G_ Specifications (200 V) p. 3-10, (400 V) p. 3-12; MR-J5-A_ Specifications (200 V) p. 3-113, (400 V) p. 3-115; row Output, Rated current"
+method = "manual: typed in from the specification tables (text by pdftotext)"
+url = "https://www.mitsubishielectric.com/fa/document/catalog/servo/l03179eng/l03179engl.pdf"
+retrieved = "2026-11-14"

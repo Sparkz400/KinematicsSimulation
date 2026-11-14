@@ -1,0 +1,38 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "mamot2"
+notes = '''
+Source: B&R, 8LS...-3 three-phase synchronous motors, user's manual V2.51 (December 2020), MAMOT2-ENG,
+chapter 2.14 "8LSA - Technical data" (one table per size: 8LSA2, 8LSAA, 8LSA3, 8LSA4, 8LSA5, 8LSA5A/B/C,
+8LSA6, 8LSA7, 8LSA8). Extracted by catalog/tools/extract_br.py; the numbers are B&R's, the layout is ours.
+One row per winding of the self-cooled 8LSA...-3 motors (sizes 2, A, 3 to 8). part_number: the manual's model
+number cut after the nominal speed code nnn, e.g. 8LSA23.ee060ffgg-3 -> 8LSA23.ee060; "ee" (encoder) stays as the
+manual prints it because it comes before the winding; ffgg (motor options) and the motor version -3 are cut.
+The 8LSC (fan-cooled), 8LSO/8LSP and the 8LS...-4 motors (manual MAMOT2.4) are not in this table.
+line_voltage_v: the manual gives one set of ratings, for servo drives on 3x 400 ... 480 VAC.
+Currents RMS (phase current). Stall values at n0 = 50 rpm. torque_constant: at 20 degC winding temperature.
+voltage_constant: line to line RMS at 20 degC, from the printed V per 1000 rpm. line_resistance: the manual's
+R2ph, measured between two motor leads at 20 degC; line_inductance: the manual's L2ph, between two leads. Both are
+taken as printed, no conversion. thermal_time_constant: the manual's ttherm.
+rotor_inertia_with_brake_kgm2 = J + JBr and mass_with_brake_kg = m + "Mass of brake", both as printed for the
+built-in holding brake.
+paired_drive: the manual's "Recommendations - ACOPOS P3 8EIxxxx..." row prints a code like "2X2X" whose last
+character (the supply: H = 3x 200-480 VAC, M = 1x 110-230 VAC) is open. At 400 V only H fits; of the modules
+with that code the 1-axis 8EI...HWS10 is taken (2- and 3-axis modules of the same code have the same current per
+axis). The manual sizes it for 1.1 times the stall current. Empty where the manual prints "-" (8LSA77.ee030,
+8LSA78.ee030, 8LSA84.ee030, 8LSA86.ee020).
+Kept as printed although it looks wrong: "Mass of brake" is 0 kg for the 8LSA5A/5B/5C and all 8LSA7 motors, so
+mass_with_brake_kg equals mass_kg there, although these motors list a holding brake with its own inertia.
+Every column has a value in every row. In the manual but not extracted: the electrical time constant, the brake's
+holding torque, the speed-torque curves and the ACOPOS / ACOPOSmulti recommendations.
+'''
+
+[[sources]]
+id = "mamot2"
+document = "B&R Industrial Automation, 8LS...-3 three-phase synchronous motors, user's manual V2.51, MAMOT2-ENG"
+date = "2020-12"
+locator = "chapter 2.14 8LSA - Technical data, pages 52 to 167 (tables 2.14.1 to 2.14.9)"
+method = "script:tools/extract_br.py"
+url = "https://www.br-automation.com/en/downloads/?tx_brcdn_downloadlist%5Baction%5D=download&tx_brcdn_downloadlist%5Bcontroller%5D=Download&tx_brcdn_downloadlist%5Bid%5D=DWL%40DWL10000490898%4003&tx_brcdn_downloadlist%5Blang%5D=EN&cHash=cec66499a42b60b1ae7cfb57ef53689e"
+retrieved = "2026-11-14"

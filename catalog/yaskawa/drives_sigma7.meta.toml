@@ -1,0 +1,40 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "cat200"
+notes = '''
+Yaskawa Sigma-7 single-axis SERVOPACKs SGD7S, one row per model. 200 V class (SGD7S-...A) at three-phase 200 ... 240 VAC
+(source cat200), 400 V class (SGD7S-...D) at three-phase 380 ... 480 VAC (source cat400).
+part_number: the model up to and including the voltage letter (SGD7S-R70A); the interface and option digits are cut off
+  (the ratings are the same for all interfaces). The 100 V models (...F) and the two-axis SGD7W are not in this table.
+  SGD7S-R70A ... -5R5A and -120A also run on single-phase 200 ... 240 VAC with the same output currents (catalogue table
+  "Single-phase, 200 VAC"); the rows give the three-phase supply.
+rated_output_current_a: "Continuous Output Current", max_output_current_a: "Instantaneous Maximum Output Current" (RMS).
+max_current_duration_s: empty; the catalogues give the overload as a detection-time curve only.
+braking_resistor_internal_ohm / _continuous_w: "Built-in Regenerative Resistor" resistance and capacity; empty for the models
+  without one (200 V: R70A ... 2R8A; 400 V: 210D ... 370D). The 200 V SGD7S-470A ... -780A use an optional external
+  regenerative resistor unit (JUSP-RA04-E / -RA05-E), not an internal resistor: those columns are empty for them.
+min_braking_resistance_ohm: "Minimum Allowable External Resistance". 400 V: the catalogue's row has 8 values for the 10 models
+  (75 75 75 43 43 27 18 14.25) with merged cells for 210D ... 370D that the text does not place unambiguously, so it is empty
+  for SGD7S-210D, -260D, -280D, -370D.
+Not in the catalogues, and so empty: DC link voltage and capacitance, braking chopper threshold, overvoltage trip level,
+  peak braking power.
+'''
+
+[[sources]]
+id = "cat200"
+document = "Yaskawa Europe, Sigma-7 200V Catalog, YEU_MuC_Sigma7_200V_Cat_EN_v9"
+date = "2026-03"
+locator = "SGD7S Analog Voltage / Pulse Train, Ratings and Specifications, tables Three-phase 200 VAC (pp. 302-304)"
+method = "manual: typed in from the ratings tables (text by pdftotext)"
+url = "https://www.yaskawa.eu.com/_downloads/download_d2721"
+retrieved = "2026-11-14"
+
+[[sources]]
+id = "cat400"
+document = "Yaskawa Europe, Sigma-7 400V Product Catalog, YEU_MuC_Sigma7_400V_Cat_EN_v12"
+date = "2026-10"
+locator = "SERVOPACKs SGD7S, Ratings and specifications, table Three-phase 400 VAC (p. 109)"
+method = "manual: typed in from the ratings table (text by pdftotext)"
+url = "https://www.yaskawa.eu.com/_downloads/download_d2727"
+retrieved = "2026-11-14"

@@ -20,10 +20,46 @@
       "minimum": 0,
       "unit": "A"
     },
+    "braking_resistor_continuous_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W",
+      "description": "Continuous power of the internal braking resistor."
+    },
+    "braking_resistor_internal_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm",
+      "description": "Resistance of the drive's internal braking resistor."
+    },
+    "braking_resistor_peak_w": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "W",
+      "description": "Peak power of the internal braking resistor (or of the chopper with it)."
+    },
+    "braking_threshold_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V",
+      "description": "DC link voltage at which the braking chopper switches on."
+    },
     "dc_link_capacitance_f": {
       "type": "number",
       "minimum": 0,
       "unit": "F"
+    },
+    "dc_link_overvoltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V",
+      "description": "DC link voltage at which the drive trips."
+    },
+    "dc_link_voltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V",
+      "description": "Nominal DC link voltage at line_voltage_v."
     },
     "duty_type": {
       "type": "string"
@@ -33,10 +69,28 @@
       "minimum": 0,
       "unit": "A"
     },
+    "line_voltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V",
+      "description": "The nominal line voltage (RMS) the row's rated currents hold at."
+    },
+    "max_current_duration_s": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "s",
+      "description": "How long the drive gives max_output_current_a."
+    },
     "max_output_current_a": {
       "type": "number",
       "minimum": 0,
       "unit": "A"
+    },
+    "min_braking_resistance_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm",
+      "description": "Smallest external braking resistor the chopper allows."
     },
     "part_number": {
       "type": "string",
@@ -90,8 +144,16 @@
     "series": {
       "type": "string"
     },
+    "source": {
+      "type": "string",
+      "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+    },
     "supply": {
       "type": "string"
+    },
+    "vendor": {
+      "type": "string",
+      "description": "The maker, lower case as the simulator names it: beckhoff, kollmorgen, lenze, sew, rexroth, br, yaskawa, mitsubishi."
     }
   },
   "$defs": {

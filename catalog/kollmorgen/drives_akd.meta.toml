@@ -1,0 +1,35 @@
+schema_version = 1
+class = "drive"
+key = ["part_number", "line_voltage_v"]
+default_source = "akd-install"
+notes = '''
+Source: Kollmorgen, AKD, AKD BASIC, AKD PDMM Installation Manual, edition AG (May 2022), part number 903-200003-00,
+chapter 7.6 and 7.7 "Electrical Data" and 7.13.3 and 7.13.4 "Technical data" of the regen circuit.
+Typed in from those tables.
+One row per drive and line voltage. part_number as printed in the manual: AKD-x00306, where x stands for the
+drive variant (B, P, T, M ...) and 003 for the continuous current; the variant does not change these values.
+The AKD-xzzz06 drives (100 ... 240 V) have one row at 240 V; their rated current is the same at 120 V. The
+AKD-xzzz07 drives (240 ... 480 V) have a row at 240 V and one at 400 V because the regen threshold, the overvoltage
+limit and the peak regen power change with the supply; the 400 V row holds for 400 V and 480 V ("400V/480V" in the
+manual). The AKD-x04807 is in the manual and is included.
+rated_output_current: continuous output current at 40 degC surrounding air (+-3 %). max_output_current: peak output
+current for 5 s (+-3 %).
+dc_link_voltage: empty; the manual gives the rated DC bus voltage as a range (140 ... 340 V for -06, 340 ... 680 V
+for -07). dc_link_capacitance: "DC Bus Capacitance" (nominal).
+braking_resistor_internal / continuous / peak: the internal regen resistor, its continuous power and its peak regen
+power for 0.5 s. The AKD-x00306, AKD-x00606 and AKD-x04807 have no internal regen resistor (empty).
+min_braking_resistance: empty; the manual gives one "External regen resistor" value per drive (33 ohm for -00306,
+-00606, -00307, -00607, -01207; 15 ohm for -01206, -02406; 23 ohm for -02407; 10 ohm for -04807) without saying it is
+the minimum.
+braking_threshold: "Switch-on threshold of regen circuit"; dc_link_overvoltage: "Overvoltage limit".
+AKD2G: not in this table; its documents were not read for these values.
+'''
+
+[[sources]]
+id = "akd-install"
+document = "Kollmorgen, AKD AKD BASIC AKD PDMM Installation Manual, edition AG, part number 903-200003-00"
+date = "2022-05"
+locator = "chapter 7.6 Electrical Data AKD-xzzz06 (page 39), 7.7 Electrical Data AKD-xzzz07 (page 40), 7.13.3 and 7.13.4 Technical data for the regen circuit (pages 47-48)"
+method = "manual: typed in from the Electrical Data and regen circuit tables"
+url = "https://www.kollmorgen.com/sites/default/files/public_downloads/903-200003-00%20AKD_Installation_en%20Rev%20AG.pdf"
+retrieved = "2026-11-14"

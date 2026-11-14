@@ -1,0 +1,60 @@
+part_number,vendor,series,supply,line_voltage_v,axes,rated_output_current_a,max_output_current_a,max_current_duration_s,dc_link_voltage_v,dc_link_capacitance_f,braking_resistor_internal_ohm,braking_resistor_continuous_w,braking_resistor_peak_w,min_braking_resistance_ohm,braking_threshold_v,dc_link_overvoltage_v,source
+XCS2-W0010,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,3.3,10,,540,0.0002,75,80,8000.0,68,,900,ctrlx-modular
+XCS2-W0023,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,7.7,23,,540,0.0002,75,80,8000.0,68,,900,ctrlx-modular
+XCS2-W0054,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,27,54,,540,0.00078,14.2,320,31800.0,14.2,,900,ctrlx-modular
+XCS2-W0070,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,35,70,,540,0.00078,14.2,410,41200.0,13,,900,ctrlx-modular
+XCS2-W0090,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,45,90,,540,0.00136,11,530,53000.0,11.2,,900,ctrlx-modular
+XCS2-C0054,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,27,54,,540,0.00078,,,,14.2,,900,ctrlx-modular
+XCS2-C0070,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,35,70,,540,0.00078,,,,13,,900,ctrlx-modular
+XCS2-W0100,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,67,100,,540,0.00204,,,,8.4,,900,ctrlx-modular
+XCS2-W0120,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,71,120,,540,0.00204,,,,8.4,,900,ctrlx-modular
+XCS2-W0150,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,100,150,,540,0.00306,,,,6.7,,900,ctrlx-modular
+XCS2-W0180,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,120,180,,540,0.00306,,,,5.6,,900,ctrlx-modular
+XCS2-W0210,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,140,210,,540,0.00408,,,,4,,900,ctrlx-modular
+XCS2-W0250,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,147,250,,540,0.00476,,,,4,,900,ctrlx-modular
+XCS2-W0280,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,165,280,,540,0.00476,,,,4,,900,ctrlx-modular
+XCS2-W0330,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,194,330,,540,0.00544,,,,2.8,,900,ctrlx-modular
+XCS2-W0375,rexroth,ctrlX DRIVE XCS2,3 AC 200 ... 500 V,400,1,221,375,,540,0.00544,,,,2.8,,900,ctrlx-modular
+XCD2-W2323,rexroth,ctrlX DRIVE XCD2,3 AC 200 ... 500 V,400,2,7.7,23,,540,0.00078,14.2,320,31800.0,14.2,820,900,ctrlx-modular
+XMS2-W0006,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,2,6,,750,,,,,,,900,ctrlx-modular
+XMS2-W0010,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,3.3,10,,750,,,,,,,900,ctrlx-modular
+XMS2-W0016,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,5.3,16,,750,,,,,,,900,ctrlx-modular
+XMS2-W0023,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,7.7,23,,750,,,,,,,900,ctrlx-modular
+XMS2-W0030,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,12,30,,750,,,,,,,900,ctrlx-modular
+XMS2-W0036,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,18,36,,750,,,,,,,900,ctrlx-modular
+XMS2-W0054,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,27,54,,750,,,,,,,900,ctrlx-modular
+XMS2-W0070,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,35,70,,750,,,,,,,900,ctrlx-modular
+XMS2-W0090,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,45,90,,750,,,,,,,900,ctrlx-modular
+XMS2-C0054,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,27,54,,750,,,,,,,900,ctrlx-modular
+XMS2-C0070,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,35,70,,750,,,,,,,900,ctrlx-modular
+XMS2-C0090,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,45,90,,750,,,,,,,900,ctrlx-modular
+XMS2-W0100,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,67,100,,750,,,,,,,900,ctrlx-modular
+XMS2-W0120,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,71,120,,750,,,,,,,900,ctrlx-modular
+XMS2-W0150,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,100,150,,750,,,,,,,900,ctrlx-modular
+XMS2-W0180,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,120,180,,750,,,,,,,900,ctrlx-modular
+XMS2-W0210,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,140,210,,750,0.00204,,,,,,900,ctrlx-modular
+XMS2-W0250,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,147,250,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-W0280,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,165,280,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-W0330,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,194,330,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-W0375,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,221,375,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-C0210,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,140,210,,750,0.00204,,,,,,900,ctrlx-modular
+XMS2-C0250,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,147,250,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-C0280,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,165,280,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-C0330,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,194,330,,750,0.00272,,,,,,900,ctrlx-modular
+XMS2-C0375,rexroth,ctrlX DRIVE XMS2,DC bus from a ctrlX DRIVE supply unit,400,1,221,375,,750,0.00272,,,,,,900,ctrlx-modular
+XMD2-W0606,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,2,6,,750,,,,,,,900,ctrlx-modular
+XMD2-W1010,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,3.3,10,,750,,,,,,,900,ctrlx-modular
+XMD2-W1616,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,5.3,16,,750,,,,,,,900,ctrlx-modular
+XMD2-W2323,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,7.7,23,,750,,,,,,,900,ctrlx-modular
+XMD2-W3030,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,12,30,,750,,,,,,,900,ctrlx-modular
+XMD2-W3636,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,18,36,,750,,,,,,,900,ctrlx-modular
+XMD2-W5454,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,27,54,,750,,,,,,,900,ctrlx-modular
+XMD2-W7070,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,35,70,,750,,,,,,,900,ctrlx-modular
+XMD2-C5454,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,27,54,,750,,,,,,,900,ctrlx-modular
+XMD2-C7070,rexroth,ctrlX DRIVE XMD2,DC bus from a ctrlX DRIVE supply unit,400,2,35,70,,750,,,,,,,900,ctrlx-modular
+XCS2-W0005H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,1.7,5,,540,0.00011,160,40,1430.0,150,,900,ctrlx-compact
+XCS2-W0007H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,2.3,7,,540,0.00011,160,40,2610.0,150,,900,ctrlx-compact
+XCS2-W0012H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,4,12,,540,0.000195,160,40,3430.0,150,,900,ctrlx-compact
+XCS2-W0026H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,8.5,26,,540,0.00034,70,80,6900.0,61.8,,900,ctrlx-compact
+XCS2-W0035H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,11.7,35,,540,0.00034,70,80,9600.0,61.8,,900,ctrlx-compact
+XCS2-W0055H,rexroth,ctrlX DRIVE compact XCS2,3 AC 200 ... 480 V,400,1,18.3,56,,540,0.00075,35,80,17180.0,33,,900,ctrlx-compact

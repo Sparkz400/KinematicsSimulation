@@ -142,7 +142,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst"],
-        Some("search") => &["--series", "--gearboxes", "--axes", "--motor-id"],
+        Some("search") => &["--vendor", "--series", "--gearboxes", "--axes", "--motor-id"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis-index", "--size", "--time"],
@@ -746,9 +746,12 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// `search <machine>`: every motor of the catalogue on the cycle of the config, each with the drive the catalogue
 /// pairs with it, the passing ones first, cheapest first (installed weight stands in for the price). `--series
 /// PREFIX` limits it to article numbers starting that way, `--supply` picks 230v or 400v (S210) or s120 (the S120
-/// motors and Motor Modules), by default the config's own `parts.motor_supply`, else 400v. `--gearboxes SERIES` (e.g.
-/// NRK) also tries each motor with the fitting gearboxes of that series, on a machine that has a gearbox; a motor none
-/// fits with the config's own gearbox. `--axes` tries every motor on every axis of the catalogue of the
+/// motors and Motor Modules), by default the config's own `parts.motor_supply`, else 400v; or any other of
+/// `catalog::SUPPLIES` (another maker's at a line voltage, or the S210 with the new 6SL5310 converters). `--vendor NAME`
+/// keeps the supplies of that maker (`vendor_of`; "all" every maker), all of them where `--supply` names none; the
+/// candidates of several supplies are ranked together, each with its supply. `--gearboxes SERIES` (e.g. NRK) also tries
+/// each motor with the fitting gearboxes of that series, on a machine that has a gearbox; a motor none fits with the
+/// config's own gearbox. `--axes` tries every motor on every axis of the catalogue of the
 /// machine's kind as well, the axis's weight in the cost. `--motor-id ID` sizes one motor of a machine with several (a
 /// machine file's): each candidate becomes that motor's own `[parts.ID]`, the other motors stay as the config has them,
 /// and the cost, the tightest check, the peak torque and the winding rise are that motor's alone (`catalog::search_motor`);
@@ -763,18 +766,24 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let own_supply = Parts::of(&cfg).map(|p| p.supply.to_string()).unwrap_or_default();
     let supply = args.option("--supply").or(Some(own_supply.as_str()).filter(|s| !s.is_empty())).unwrap_or("400v");
     let (gearboxes, wanted) = (args.option("--gearboxes"), |article: &str| article.starts_with(prefix));
-    let started = std::time::Instant::now();
-    let motor = args.option("--motor-id");
-    let found = if let Some(motor) = motor {
-        if args.flag("--axes") {
-            return Err(Failure("cli-usage", String::new()));
-        }
-        sim_components::catalog::search_motor(entry, &cfg, supply, &wanted, gearboxes, motor)?
-    } else if args.flag("--axes") {
-        sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes)
-    } else {
-        sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)
+    use sim_components::catalog::{SUPPLIES, search_supplies, vendor_of};
+    // `--vendor` that maker's supplies ("all": every one), all of them unless `--supply` names one.
+    let vendor = args.option("--vendor").filter(|v| *v != "all");
+    let supplies: Vec<&str> = match (args.option("--supply"), args.option("--vendor")) {
+        (None, Some(_)) => SUPPLIES.to_vec(),
+        _ => vec![supply],
     };
+    let supplies: Vec<&str> = supplies.into_iter().filter(|s| vendor.is_none_or(|v| vendor_of(s) == v)).collect();
+    if supplies.is_empty() || !supplies.iter().all(|s| SUPPLIES.contains(s)) {
+        let given = [args.option("--vendor"), args.option("--supply")].into_iter().flatten().collect::<Vec<_>>();
+        return Err(Failure("cli-error-bad-argument", given.join(" ")));
+    }
+    let (motor, axes) = (args.option("--motor-id"), args.flag("--axes"));
+    if motor.is_some() && axes {
+        return Err(Failure("cli-usage", String::new()));
+    }
+    let started = std::time::Instant::now();
+    let found = search_supplies(entry, &cfg, &supplies, &wanted, gearboxes, axes, motor)?;
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let tried = found.iter().filter(|c| !c.article.is_empty());
     eprintln!(
@@ -792,7 +801,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     eprintln!("{}", tr.tr_arg("cli-search-time", &format!("{threads}: {:.1} s", started.elapsed().as_secs_f64())));
     let mut out = output(args, "--out")?;
-    writeln!(out, "axis,motor,gearbox,drive,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k").map_err(io)?;
     for c in &found {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
         // Of the searched motor alone with --motor-id (the others are the config's, alike for every candidate).
@@ -806,8 +815,15 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let result = if c.passes() { "ok" } else { "FAIL" };
         writeln!(
             out,
-            "{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
-            c.axis, c.article, c.gearbox, c.drive, c.mass, c.cost
+            "{},{},{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
+            c.axis,
+            c.article,
+            c.gearbox,
+            c.drive,
+            if c.supply.is_empty() { "" } else { vendor_of(c.supply) },
+            c.supply,
+            c.mass,
+            c.cost
         )
         .map_err(io)?;
     }

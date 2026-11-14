@@ -66,6 +66,24 @@
       "minimum": 0,
       "unit": "N m"
     },
+    "line_inductance_h": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "H",
+      "description": "Winding inductance terminal to terminal (line to line)."
+    },
+    "line_resistance_20c_ohm": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "ohm",
+      "description": "Winding resistance terminal to terminal (line to line), at 20 degC or the reference temperature the table's notes name."
+    },
+    "line_voltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "V",
+      "description": "The line voltage (RMS) the row's rated values hold at; one row per winding and line voltage where the document gives several."
+    },
     "mechanical_time_constant_s": {
       "type": "number",
       "minimum": 0,
@@ -239,6 +257,14 @@
       "type": "number",
       "minimum": 0,
       "unit": "N m/A"
+    },
+    "source": {
+      "type": "string",
+      "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+    },
+    "vendor": {
+      "type": "string",
+      "description": "The maker, lower case as the simulator names it: beckhoff, kollmorgen, lenze, sew, rexroth, br, yaskawa, mitsubishi."
     },
     "version": {
       "type": "string"

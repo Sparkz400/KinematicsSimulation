@@ -1,0 +1,49 @@
+schema_version = 1
+class = "servo_motor"
+key = ["part_number", "line_voltage_v"]
+default_source = "ms2n-pr11"
+notes = '''
+Source: Bosch Rexroth, project planning manual "MS2N Synchronous Servo Motors", R911347583, edition 11, chapter 6
+"Technical data" (one table per motor, pages 76 to 337). Extracted by catalog/tools/extract_rexroth.py from the
+pdftotext -raw text; the numbers are Rexroth's, the layout is ours.
+One row per motor of frame sizes 03, 04, 05, 06, 07 and 10, every cooling mode the manual has a table for:
+  self-cooling (cooling letter N), forced ventilation (A: fan 230 V, B: fan 115 V; one table holds both, so both
+  rows carry the same values) and water cooling (L). Frame sizes 02 and 13 are not in this table.
+part_number: the type code up to and including the cooling letter, e.g. MS2N07-C0BNA (frame size, frame length,
+  rotor inertia, winding, cooling); cut off: encoder, encoder design, connection, shaft, holding brake, flange,
+  bearing, construction, coating and the other options.
+line_voltage_v 400: the manual's rated data hold for ctrlX DRIVE / IndraDrive at 3 AC 400 V (rated speed from the
+  uncontrolled DC bus at 3 AC 400 V, chapter 5.3); the manual gives one set of rated data per motor.
+Values with a temperature rise of 100 K: static (M0 100K, I0 100K), rated (nN, MN, IN, PN 100K) and max_torque
+  (Mmax 100K, "warm"). The manual also gives M0 60K / I0 60K and Mmax 20 degC ("cold", higher); they are not here.
+Currents RMS (the manual prints Imax(eff) or Imax(rms)). max_speed: the smaller of "Maximum speed (electrical)" and
+  "Maximum speed (mechanical)".
+torque_constant: Km at 20 degC. voltage_constant: KE at 20 degC in V per 1000 1/min, divided by 1000*pi/30. The
+  manual does not say RMS or peak, phase or line; Km = sqrt(3) * KE holds within 2 % for every row, so KE is the
+  line-to-line RMS value and is taken as it is.
+line_resistance_20c / line_inductance: R12 and L12_min, the manual's values between terminals 1 and 2, taken as
+  line-to-line without conversion; the manual gives no definition of R12 and L12_min (the index "_min"
+  suggests a lower bound of the inductance; the manual does not explain it). Resistance at 20 degC.
+thermal_time_constant: "Thermal time constant of motor" Tth_M (min * 60). The manual also gives the winding's
+  Tth_W in s, which is not here.
+rotor_inertia / mass: without holding brake; _with_brake: the column with the motor's holding brake (size 1, 2 or
+  3 per the table's type code).
+paired_drive: empty. Neither the MS2N manual nor the ctrlX DRIVE project planning manuals pair motors with drive
+  devices; Rexroth leaves the selection to its ctrlX configurator (no published table found on boschrexroth.com).
+Printed differently but read the same: MS2N10-D1BNN prints "p 5" without the unit dash; the forced-ventilation table
+  header of MS2N07-D0BHA/-D0BHB prints "_0- N". Some forced-ventilation tables (e.g. MS2N07-E0BHA/-E0BHB) give rated
+  torque and current once per cooling letter (A and B differ slightly); the values are taken per cooling letter.
+The self-check (max torque > static torque; M0/I0 within 15 % of Km; Km within 20 % of sqrt(3)*KE; rated power
+  within 12 % of rated torque * rated speed; rated torque <= static torque; rated speed <= max speed; with brake >=
+  without) passes for every row; nothing is kept as a suspected misprint. M0/I0 is 3 to 15 % below Km (Km at
+  20 degC, M0 and I0 at 100 K).
+'''
+
+[[sources]]
+id = "ms2n-pr11"
+document = "Bosch Rexroth, MS2N Synchronous Servo Motors, project planning manual, R911347583 (DOK-MOTOR*-MS2N*******-PR11-EN-P)"
+date = "2026-03"
+locator = "chapter 6 \"Technical data\", sections 6.2 to 6.7 (MS2N03 to MS2N10), one table per motor, pages 76 to 337; rated-data definition chapter 5.3, page 64"
+method = "script:tools/extract_rexroth.py"
+url = "https://www.boschrexroth.com/media/df1540c6-849e-4d7f-a609-6916c08eb78c"
+retrieved = "2026-11-14"
