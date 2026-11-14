@@ -261,7 +261,7 @@ pub fn views(ui: &mut Ui, model: &Model, tolerance: Option<f64>, actions: &mut V
             ui.label(RichText::new(tr("ui-views-no-drives")).color(dim()));
             return;
         }
-        let rpm = model.units.scale("rad/s").0;
+        let rpm = model.units.scale(sim_app::runs::Quantity::Speed.unit()).0;
         let curves: Vec<TorqueSpeed> = run.torque_speed().iter().map(|c| scaled_speeds(c, rpm)).collect();
         // Every shown run's points over the reference run's charts, motor by motor by their place.
         let mut operating: Vec<Vec<Operating>> = vec![Vec::new(); curves.len()];

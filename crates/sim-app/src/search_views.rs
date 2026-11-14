@@ -162,13 +162,19 @@ pub fn run_search(entry: &MachineEntry, config: &Config, inputs: &Inputs) -> Res
     let (series, gearboxes) = (inputs.series.trim(), Some(inputs.gearboxes.trim()).filter(|g| !g.is_empty()));
     let wanted = |article: &str| article.starts_with(series);
     let options = Options { gearboxes, axes: inputs.axes, motor, drives: s.drives, duties: &duties };
+    let motors: Vec<&str> =
+        at.iter().flat_map(|supply| catalog::motor_articles_for(supply)).filter(|a| wanted(a)).collect();
+    // A gearbox series with nothing for any of them: the search would try each with the config's own gearbox instead
+    // (`catalog::search` since 14 November 2026), which is not what was asked.
+    let fits_none =
+        |series: &&str| motors.iter().all(|article| catalog::gearboxes_for_motor(article, series).is_empty());
+    if let Some(gearboxes) = gearboxes.filter(|g| !motors.is_empty() && fits_none(g)) {
+        return Err(("ui-search-no-gearbox", gearboxes.to_string()));
+    }
     let mut found = catalog::search(entry, config, &at, &wanted, &options).map_err(refused)?;
     if found.iter().all(|c| c.article.is_empty()) {
         // Motors there are, so it is the gearbox series that has nothing for them.
-        let motors = at
-            .iter()
-            .any(|supply| catalog::motor_articles_for(supply).iter().any(|article| article.starts_with(series)));
-        return Err(match gearboxes.filter(|_| motors) {
+        return Err(match gearboxes.filter(|_| !motors.is_empty()) {
             Some(gearboxes) => ("ui-search-no-gearbox", gearboxes.to_string()),
             None => ("ui-search-none", series.to_string()),
         });

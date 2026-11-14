@@ -17,7 +17,17 @@ retries = 0
 # cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1
 # Also the EXCT-30's worst corner of its bounds (2400 cycles, 1230 s of processor time): on a 4-core CI runner beside
 # every other test it ran past 30 minutes.
-default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
+# And the app's optimiser and sensitivity on the four machines slowest to simulate (`SLOW_TO_SIMULATE` in sim-app's
+# tests: cycles of 5 to 11 s each to compute; the palletiser's optimisation 9 minutes alone): with them the app's
+# optimiser and sensitivity tests ran past 15 minutes in a full run.
+default-filter = """
+not (
+    (package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
+    | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+    | test(=the_app_optimises_the_cycle_of_the_machines_slow_to_simulate)
+    | test(=the_app_ranks_the_uncertain_parameters_of_the_machines_slow_to_simulate)
+)
+"""
 
 # Tests that run against the wall clock: the OPC UA server and the app's simulation thread. They share the
 # machine with every other test; few of them at a time, so that a busy machine does not make them miss their times.
@@ -35,8 +45,10 @@ test-group = "real-time"
 filter = """
 package(sim-app) & binary(app) & not (
     test(=the_app_optimises_the_cycle_and_applies_the_settings)
+    | test(=the_app_optimises_the_cycle_of_the_machines_slow_to_simulate)
     | test(=switching_an_effect_changes_the_traces_within_one_cycle)
     | test(=the_app_ranks_the_uncertain_parameters)
+    | test(=the_app_ranks_the_uncertain_parameters_of_the_machines_slow_to_simulate)
     | test(=the_app_shows_and_applies_lower_lifts)
     | test(=the_checks_get_error_bands_in_the_app)
     | test(=the_app_searches_the_worst_corner_of_the_bounds)
