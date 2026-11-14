@@ -634,6 +634,24 @@ shaper_damping = 0.03
 # (0.099 mm), X jerk 100 m/s3 or a velocity gain of 0.4 or 0.5 at that corner (worse or not enough).
 shaper2_frequency_hz = 17.5
 shaper2_damping = 0.03
+# The shape of moves (see docs/config-reference.md): "s-curve" (seven segments), "sin2" (Bestehorn), "poly345" or
+# "poly4567" (VDI 2143); a [[cycle.segment]] may name its own with shape = "...". Braking within deceleration_ratio of
+# the acceleration limits (1: as fast as speeding up). vertical_axis: the axis that lifts against gravity ("z", "-z"
+# where up is its minus direction, "" for none), which has up_acceleration_ratio of its acceleration limit upwards.
+shape = "s-curve"
+deceleration_ratio = 1.0
+vertical_axis = ""
+up_acceleration_ratio = 1.0
+# The curve a trajectory runs through its poses: "c2" (a cubic spline, the acceleration continuous) or "hermite" (the
+# slopes of the neighbours, as before 14 November 2026).
+trajectory_spline = "c2"
+# With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
+# shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
+# { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
+shaper_type = "zvd"
+shaper_ei_tolerance = 0.05
+shaper_axes = []
+shaper_modes = []
 # For a path timed as fast as the motors allow: the share of the torque-speed curve the plan may use (the
 # rest is for friction and elasticity, which the plan leaves out).
 torque_reserve = 0.8

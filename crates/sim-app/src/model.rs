@@ -1435,11 +1435,23 @@ impl Model {
                         let (points, deviation) = if inputs.path_timed {
                             (path::parse_trajectory(&text).map_err(unreadable)?, 0.0)
                         } else {
-                            let pieces = path::parse(&text).map_err(unreadable)?;
-                            (
-                                sim.plan_path(&pieces, inputs.time_optimal).map_err(command)?,
-                                sim.path_deviation(&pieces, inputs.time_optimal).map_err(command)?,
+                            // A path file, or a G-code or robot program (`program::read`, by the file's extension).
+                            let runs = sim_components::program::read(
+                                &inputs.path_file,
+                                &text,
+                                sim.machine.axes(),
+                                sim.control.planned_pos(),
                             )
+                            .map_err(|e| ("ui-file-line", format!("{}:{}: {}", inputs.path_file, e.line, e.detail)))?;
+                            match runs.as_slice() {
+                                [run] if run.feed.is_none() => (
+                                    sim.plan_path(&run.pieces, inputs.time_optimal).map_err(command)?,
+                                    sim.path_deviation(&run.pieces, inputs.time_optimal).map_err(command)?,
+                                ),
+                                // shortcut: a program with feeds shows no deviation from its pieces; tell it per run if
+                                // transition curves on programs matter.
+                                _ => (sim.plan_program(&runs, inputs.time_optimal).map_err(command)?, 0.0),
+                            }
                         };
                         let scene_line = points.iter().filter_map(|(_, pose)| sim.machine.scene_point(pose)).collect();
                         let load = analyse_trajectory(&mut sim, points.clone()).map_err(command)?;

@@ -4,7 +4,8 @@
 use crate::conveyor::{Conveyor, Pass};
 use crate::drive::{Drive, DriveParams, quantise, shared_dc_link};
 use crate::path::{self, Piece};
-use crate::profile::Move;
+use crate::profile::{MotionLaw, Move, Shape};
+use crate::shaper;
 use sim_core::{Config, ConfigError, Machine};
 
 type Result<T> = std::result::Result<T, ConfigError>;
@@ -44,6 +45,20 @@ struct Segment {
     payload: bool,
     /// With `via`: the path to the target, planned by `path::plan` where the segment starts (see `via_pieces`).
     path: Option<Vec<Piece>>,
+    /// The motion law of its move: `profile.shape`, or the segment's own `shape`.
+    law: MotionLaw,
+}
+
+/// One mode an input shaper cancels: its impulses (`shaper::impulses`, times in half damped periods), half its damped
+/// period in profile cycles as configured (0: none, the shaper of a single impulse), the mode of the machine it
+/// follows with `effects.shaper_follows_pose` (0 the lowest resonance, `Machine::resonance_hz`; k the k-th of
+/// `Machine::modes`) with half the damped period in profile cycles times the frequency, and the axes it acts on.
+#[derive(Debug, Clone, PartialEq)]
+struct ShaperMode {
+    impulses: Vec<(f64, f64)>,
+    half: f64,
+    follows: Option<(usize, f64)>,
+    axes: Vec<bool>,
 }
 
 /// The path of a cycle segment through its via points (`via` in `[[cycle.segment]]`): a line to the first, a smooth
@@ -81,7 +96,8 @@ enum Motion {
     },
     /// A pass of the conveyor cycle (`Controller::pass`), waiting for its start and then run.
     Conveyor,
-    /// A cubic curve through the points with the given speeds at them (Hermite interpolation).
+    /// A cubic curve through the points with the given speeds at them (Hermite interpolation; with the speeds of
+    /// `c2_speeds`, the cubic spline whose acceleration is continuous).
     Trajectory {
         points: Vec<(f64, Vec<f64>)>,
         speeds: Vec<Vec<f64>>,
@@ -134,19 +150,22 @@ pub struct Controller {
     raw_pos: Vec<f64>,
     raw_vel: Vec<f64>,
     raw_acc: Vec<f64>,
-    /// Input shaper: (amplitude ratio K of successive steps, half the damped period in profile cycles), and the same
-    /// of a second shaper convolved with it, (0, 0) without one.
-    shaper: Option<(f64, f64, f64, f64)>,
-    /// With the shaper following the pose: half the damped period in profile cycles, times the frequency, of the first
-    /// shaper and of the second.
-    shaper_follows: Option<(f64, f64)>,
-    /// A shaper setting (`shaper`, `shaper_follows`) from a changed config, waiting for the plan to stand
-    /// still: taken under a moving plan it would make the setpoint jump.
-    pending_shaper: Option<(Option<(f64, f64, f64, f64)>, Option<(f64, f64)>)>,
+    /// Input shaper: the modes it cancels, the first and the second (`profile.shaper_frequency_hz`,
+    /// `shaper2_frequency_hz`; half period 0 without one) and those of `profile.shaper_modes`; on each axis the shapers
+    /// of the modes acting on it are convolved. `None` with input shaping off.
+    shaper: Option<Vec<ShaperMode>>,
+    /// A shaper setting from a changed config, waiting for the plan to stand still: taken under a moving plan it would
+    /// make the setpoint jump.
+    pending_shaper: Option<Option<Vec<ShaperMode>>>,
     /// How many cycles of `history` the shaper has needed so far.
     shaper_reach: usize,
-    /// The half periods (first, second) the shaper used in the last cycle, kept while the plan stands still.
-    shaper_held: Option<(f64, f64)>,
+    /// The half periods, one per mode, the shaper used in the last cycle, kept while the plan stands still.
+    shaper_held: Option<Vec<f64>>,
+    /// The motion law of moves (`profile.shape`, `deceleration_ratio`, `vertical_axis`, `up_acceleration_ratio`).
+    law: MotionLaw,
+    /// A trajectory's curve: the C2 cubic spline (`profile.trajectory_spline = "c2"`), or the Hermite cubic with the
+    /// slopes of the neighbours ("hermite", as before 14 November 2026).
+    spline_c2: bool,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
     /// setpoints on their way, oldest first, each with the cycles it takes: per motor position, speed,
     /// acceleration and torque feedforward.
@@ -237,10 +256,11 @@ impl Controller {
             raw_vel: vec![0.0; axes],
             raw_acc: vec![0.0; axes],
             shaper: None,
-            shaper_follows: None,
             pending_shaper: None,
             shaper_reach: 0,
             shaper_held: None,
+            law: MotionLaw::default(),
+            spline_c2: true,
             fieldbus_delay: 0,
             fieldbus: Default::default(),
             fieldbus_jitter: 0,
@@ -255,7 +275,7 @@ impl Controller {
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
-        (c.shaper, c.shaper_follows) = c.pending_shaper.take().unwrap_or_default();
+        c.shaper = c.pending_shaper.take().flatten();
         machine.motor_state(state, &mut c.motor_pos, &mut c.motor_vel);
         c.hold_here(machine);
         Ok(c)
@@ -336,29 +356,13 @@ impl Controller {
         } else {
             None
         };
-        let (mut shaper, mut shaper_follows) = (None, None);
-        let (frequency, damping) =
-            (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
-        if damping >= 1.0 {
-            return Err(ConfigError::Invalid("profile.shaper_damping".into()));
-        }
-        let (frequency2, damping2) =
-            (cfg.non_negative("profile.shaper2_frequency_hz")?, cfg.non_negative("profile.shaper2_damping")?);
-        if damping2 >= 1.0 {
-            return Err(ConfigError::Invalid("profile.shaper2_damping".into()));
-        }
-        // K and half the damped period in profile cycles of a ZVD shaper.
-        let zvd = |frequency: f64, damping: f64| {
-            let root = (1.0 - damping * damping).sqrt();
-            ((-damping * std::f64::consts::PI / root).exp(), 0.5 / (frequency * root) / profile_cycle)
+        let shaper = shaper_modes(cfg, machine, profile_cycle)?;
+        let law = motion_law(cfg, machine)?;
+        let spline_c2 = match text(cfg, "profile.trajectory_spline")? {
+            "c2" => true,
+            "hermite" => false,
+            _ => return Err(ConfigError::Invalid("profile.trajectory_spline".into())),
         };
-        if cfg.bool("effects.input_shaping")? {
-            let per_hz = |damping: f64| 0.5 / (1.0 - damping * damping).sqrt() / profile_cycle;
-            let ((k, half), (k2, half2)) =
-                (zvd(frequency, damping), if frequency2 > 0.0 { zvd(frequency2, damping2) } else { (0.0, 0.0) });
-            shaper = Some((k, half, k2, half2));
-            shaper_follows = cfg.bool("effects.shaper_follows_pose")?.then_some((per_hz(damping), per_hz(damping2)));
-        }
         let fieldbus_delay = cfg.f64("profile.fieldbus_delay_cycles")?;
         if fieldbus_delay < 0.0 || fieldbus_delay.fract() != 0.0 || fieldbus_delay > 1000.0 {
             return Err(ConfigError::Invalid("profile.fieldbus_delay_cycles".into()));
@@ -430,6 +434,13 @@ impl Controller {
                     Some(via_pieces(&points, &target))
                 }
             };
+            let shape = match segment.get("shape") {
+                None => law.shape,
+                Some(name) => name
+                    .as_str()
+                    .and_then(Shape::from_name)
+                    .ok_or_else(|| ConfigError::Invalid(format!("cycle.segment[{i}].shape")))?,
+            };
             segments.push(Segment {
                 target,
                 dwell_ticks: (segment
@@ -441,6 +452,7 @@ impl Controller {
                     .round() as u64,
                 payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
                 path: via,
+                law: MotionLaw { shape, ..law.clone() },
             });
         }
         // A path through via points has to be one the planner times, from where the segment before ends.
@@ -480,6 +492,7 @@ impl Controller {
         (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
         self.path_tolerance = path_tolerance;
+        (self.law, self.spline_c2) = (law, spline_c2);
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
         let tension = [
@@ -489,7 +502,7 @@ impl Controller {
         ];
         self.plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide };
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
-            (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
+            (Some(shaper), fieldbus_delay, fieldbus_jitter);
         Ok(())
     }
 
@@ -499,9 +512,15 @@ impl Controller {
     fn rescale_ticks(&mut self, ratio: f64) {
         let now = self.tick;
         // The shaper in use counts its period in cycles too. (A pending one was worked out for the new cycle.)
-        self.shaper = self.shaper.map(|(k, half, k2, half2)| (k, half * ratio, k2, half2 * ratio));
-        self.shaper_follows = self.shaper_follows.map(|(per_hz, per_hz2)| (per_hz * ratio, per_hz2 * ratio));
-        self.shaper_held = self.shaper_held.map(|(half, half2)| (half * ratio, half2 * ratio));
+        for mode in self.shaper.iter_mut().flatten() {
+            mode.half *= ratio;
+            if let Some((_, per_hz)) = &mut mode.follows {
+                *per_hz *= ratio;
+            }
+        }
+        for half in self.shaper_held.iter_mut().flatten() {
+            *half *= ratio;
+        }
         self.tick = (now as f64 * ratio).round() as u64;
         let new_now = self.tick as f64;
         // A tick of u64::MAX is a motion not yet picked up.
@@ -557,7 +576,7 @@ impl Controller {
                 }
                 // The tick is filled in when the profile generator picks the move up.
                 self.motion = Motion::Moving {
-                    mv: Move::new(&self.raw_pos, &target, machine.axes()),
+                    mv: Move::with_law(&self.raw_pos, &target, machine.axes(), &self.law),
                     start_tick: u64::MAX,
                     tail: None,
                 };
@@ -615,7 +634,7 @@ impl Controller {
                 if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
                     return Err(CommandError { key: "error-trajectory-start" });
                 }
-                self.motion = trajectory(points);
+                self.motion = trajectory(points, self.spline_c2);
             }
         }
         Ok(())
@@ -634,25 +653,59 @@ impl Controller {
         pieces: &[Piece],
         time_optimal: bool,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        self.plan_from(machine, &self.raw_pos, pieces, time_optimal, None)
+    }
+
+    /// The timing for a program (`program::read`) from where the setpoint stands, as the poses `Command::Trajectory`
+    /// runs: each run planned from where the one before ends, at rest between them. A run with a feed is planned within
+    /// the axis limits with every axis's speed capped at the feed; one without as `plan_path` plans it, as fast as the
+    /// motors allow with `time_optimal`. A program without a move is refused (`error-path`).
+    pub fn plan_program(
+        &self,
+        machine: &dyn Machine,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        let mut points = vec![(0.0, self.raw_pos.clone())];
+        for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
+            let (t0, start) = points[points.len() - 1].clone();
+            let planned = self.plan_from(machine, &start, &run.pieces, time_optimal && run.feed.is_none(), run.feed)?;
+            // Each plan starts at its start at 0 s, which the one before has as its end.
+            points.extend(planned.into_iter().skip(1).map(|(t, pose)| (t0 + t, pose)));
+        }
+        if points.len() < 2 {
+            return Err(CommandError { key: "error-path" });
+        }
+        Ok(points)
+    }
+
+    /// `plan_path` from `start`, with every axis's speed capped at `feed` where there is one (then within the axis
+    /// limits, also with `time_optimal`).
+    fn plan_from(
+        &self,
+        machine: &dyn Machine,
+        start: &[f64],
+        pieces: &[Piece],
+        time_optimal: bool,
+        feed: Option<f64>,
+    ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        let time_optimal = time_optimal && feed.is_none();
+        let capped: Vec<sim_core::AxisInfo> = machine
+            .axes()
+            .iter()
+            .map(|a| sim_core::AxisInfo { max_vel: feed.map_or(a.max_vel, |f| a.max_vel.min(f)), ..a.clone() })
+            .collect();
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
         let reachable = |points: &[(f64, Vec<f64>)]| {
-            if points.iter().all(|(_, pose)| near_start(machine, &self.raw_pos, pose)) {
+            if points.iter().all(|(_, pose)| near_start(machine, start, pose)) {
                 Ok(())
             } else {
                 Err(CommandError { key: "error-path-range" })
             }
         };
-        let within_axis_limits = || {
-            path::plan(
-                machine.axes(),
-                &self.raw_pos,
-                pieces,
-                self.profile_cycle,
-                self.path_tolerance,
-                machine.setpoint_slack(),
-            )
-        };
+        let within_axis_limits =
+            || path::plan(&capped, start, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack());
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
             // turn infinitely fast) would time the plan to a standstill there: so the same path is checked first as
@@ -667,7 +720,7 @@ impl Controller {
                 machine,
                 &self.motor_drives(machine),
                 &self.plan_limits,
-                &self.raw_pos,
+                start,
                 pieces,
                 self.profile_cycle,
                 self.path_tolerance,
@@ -936,13 +989,8 @@ impl Controller {
                 let waits = self.cycle.is_some_and(|i| {
                     self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached
                 });
-                // The shaper's oldest copy is a whole period old, read between two stored cycles.
-                let lag = if waits {
-                    self.shaper_halves(machine, &self.set_pos)
-                        .map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil())
-                } else {
-                    0.0
-                };
+                // The shaper's oldest copy is its whole length old, read between two stored cycles.
+                let lag = if waits { self.shaper_span(machine, &self.set_pos).ceil() } else { 0.0 };
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
@@ -960,8 +1008,8 @@ impl Controller {
                 };
             }
             Motion::Conveyor => {
-                // shortcut: the gripper acts on the plan's time, not once a shaped setpoint has arrived as a cycle
-                // segment's does; with input shaping on, the grip begins up to a shaper period early.
+                // The pass was planned for the shaped setpoint (`Conveyor::plan`): its grip begins once the shaped
+                // setpoint is on the part, so the gripper acts on the plan's time.
                 if let Some(pass) = &self.pass {
                     let t = self.clock - pass.start;
                     if t < 0.0 {
@@ -1001,12 +1049,7 @@ impl Controller {
                     if let Some(i) = self.cycle {
                         let waits =
                             self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
-                        let lag = if waits {
-                            self.shaper_halves(machine, &self.set_pos)
-                                .map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil())
-                        } else {
-                            0.0
-                        };
+                        let lag = if waits { self.shaper_span(machine, &self.set_pos).ceil() } else { 0.0 };
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.payload_attached = self.segments[i].payload;
                             Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
@@ -1018,34 +1061,8 @@ impl Controller {
                     // A point a rounding error after `t` counts as at `t`: at a point the cubic that starts there is
                     // taken, not by the rounding of the two times the end of the one before, whose acceleration differs.
                     let i = (points.partition_point(|(time, _)| *time <= t + 1e-6 * dt) - 1).min(last - 1);
-                    let h = points[i + 1].0 - points[i].0;
-                    let s = (t - points[i].0) / h;
-                    // Cubic through both points with the speeds there: position, and its first and second rate.
-                    let basis = [
-                        [
-                            2.0 * s * s * s - 3.0 * s * s + 1.0,
-                            s * s * s - 2.0 * s * s + s,
-                            -2.0 * s * s * s + 3.0 * s * s,
-                            s * s * s - s * s,
-                        ],
-                        [
-                            6.0 * s * s - 6.0 * s,
-                            3.0 * s * s - 4.0 * s + 1.0,
-                            -6.0 * s * s + 6.0 * s,
-                            3.0 * s * s - 2.0 * s,
-                        ],
-                        [12.0 * s - 6.0, 6.0 * s - 4.0, -12.0 * s + 6.0, 6.0 * s - 2.0],
-                    ];
                     for a in 0..self.set_pos.len() {
-                        let at = |b: [f64; 4]| {
-                            b[0] * points[i].1[a]
-                                + b[1] * h * speeds[i][a]
-                                + b[2] * points[i + 1].1[a]
-                                + b[3] * h * speeds[i + 1][a]
-                        };
-                        self.set_pos[a] = at(basis[0]);
-                        self.set_vel[a] = at(basis[1]) / h;
-                        self.set_acc[a] = at(basis[2]) / (h * h);
+                        [self.set_pos[a], self.set_vel[a], self.set_acc[a]] = hermite(&points, &speeds, i, a, t);
                     }
                     self.motion = Motion::Trajectory { points, speeds, start_tick };
                 }
@@ -1077,7 +1094,7 @@ impl Controller {
             && self.history.iter().all(|past| past[0] == self.raw_pos)
             && let Some(next) = self.pending_shaper.take()
         {
-            (self.shaper, self.shaper_follows) = next;
+            self.shaper = next;
             self.shaper_held = None;
         }
         self.raw_pos.clone_from(&self.set_pos);
@@ -1151,38 +1168,92 @@ impl Controller {
     /// first and that of its second mode (`Machine::modes`) for the second; one the machine does not report stays as
     /// configured. `None` with the shaper off.
     pub fn shaper_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<(f64, f64)> {
-        let (_, half, _, half2) = self.shaper?;
-        let Some((per_hz, per_hz2)) = self.shaper_follows else { return Some((half, half2)) };
-        let second = if half2 > 0.0 { machine.modes(pose).get(1).map_or(half2, |mode| per_hz2 / mode.hz) } else { 0.0 };
-        Some((machine.resonance_hz(pose).map_or(half, |resonance| per_hz / resonance), second))
+        let halves = self.mode_halves(machine, pose)?;
+        Some((halves[0], halves[1]))
     }
 
-    /// Input shaping (ZVD): the setpoints become the sum of three copies of the plan, now, half a period
-    /// and a whole period ago, weighted 1 : 2K : K^2. The vibration each copy starts is cancelled by the
-    /// others, also when the resonance is some percent off the frequency the shaper was set to. A second shaper
-    /// is convolved with the first: nine copies, at the sums of the delays with the products of the weights, so
-    /// that the vibration of each of the two resonances is cancelled. Without one its weights are 1 : 0 : 0.
+    /// Half the period in profile cycles of every mode of the shaper with the plan at `pose` (see `shaper_halves`; the
+    /// modes of `profile.shaper_modes` keep theirs).
+    fn mode_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<Vec<f64>> {
+        let modes = self.shaper.as_ref()?;
+        let following = modes.iter().any(|m| m.follows.is_some());
+        let reported = if following { machine.modes(pose) } else { Vec::new() };
+        Some(
+            modes
+                .iter()
+                .map(|m| match m.follows {
+                    Some((0, per_hz)) if m.half > 0.0 => machine.resonance_hz(pose).map_or(m.half, |f| per_hz / f),
+                    Some((k, per_hz)) if m.half > 0.0 => reported.get(k).map_or(m.half, |mode| per_hz / mode.hz),
+                    _ => m.half,
+                })
+                .collect(),
+        )
+    }
+
+    /// Per axis the impulses of the shaper with the modes at the half periods `halves`: the modes acting on the axis
+    /// convolved, times in profile cycles, amplitudes adding up to one.
+    fn trains(&self, halves: &[f64]) -> Vec<Vec<(f64, f64)>> {
+        let modes = self.shaper.as_deref().unwrap_or_default();
+        (0..self.set_pos.len())
+            .map(|axis| {
+                modes.iter().zip(halves).filter(|(m, half)| m.axes[axis] && **half > 0.0).fold(
+                    vec![(0.0, 1.0)],
+                    |train, (m, half)| {
+                        let scaled: Vec<(f64, f64)> = m.impulses.iter().map(|(t, a)| (t * half, *a)).collect();
+                        shaper::convolve(&train, &scaled)
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// How many profile cycles the shaped setpoint arrives after the plan with the plan at `pose`: the longest of the
+    /// axes' shapers. 0 with the shaper off.
+    pub fn shaper_span(&self, machine: &dyn Machine, pose: &[f64]) -> f64 {
+        self.mode_halves(machine, pose)
+            .map_or(0.0, |halves| self.trains(&halves).iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t)))
+    }
+
+    /// With the plan at `pose`: per axis how far the shaped setpoint lags a plan at a constant speed (the mean of the
+    /// shaper's delays, s), and how long after the plan it arrives (`shaper_span`, s). Zeros with the shaper off.
+    pub fn shaper_delays(&self, machine: &dyn Machine, pose: &[f64]) -> (Vec<f64>, f64) {
+        let Some(halves) = self.mode_halves(machine, pose) else { return (vec![0.0; self.set_pos.len()], 0.0) };
+        let dt = self.profile_cycle;
+        let trains = self.trains(&halves);
+        let mean = trains.iter().map(|train| train.iter().map(|(t, a)| t * a).sum::<f64>() * dt).collect();
+        (mean, trains.iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t)) * dt)
+    }
+
+    /// Input shaping: on each axis the setpoints become a weighted sum of copies of the plan at the delays of its
+    /// shaper (`shaper::impulses`): ZVD three copies, now, half a period and a whole period ago, weighted 1 : 2K : K^2;
+    /// ZV, ZVDD, EI and the two-hump EI likewise with their own (`profile.shaper_type`). The vibration each copy starts
+    /// is cancelled by the others, also when the resonance is some percent off the frequency the shaper was set to.
+    /// Every further mode's shaper is convolved with it (the second shaper, `profile.shaper_modes`): copies at the sums
+    /// of the delays with the products of the weights, so that each mode's vibration is cancelled. An axis takes the
+    /// modes that act on it (`profile.shaper_axes`, a mode's `axes`).
     ///
     /// Following the pose, the half period is that of the resonance the machine reports where the plan
-    /// stands, and the second shaper's that of the machine's second mode there. The weights always add up to one, so once the plan has stood still for a whole period the
-    /// setpoint is the plan exactly, whatever the period did on the way. While the plan stands still the period stays
-    /// as it was: a resonance that changes at rest (the gripper takes its payload) would reach back into the move that
-    /// has just arrived and take the setpoint off its target.
+    /// stands, and the second shaper's that of the machine's second mode there. The weights always add up to one, so
+    /// once the plan has stood still for a whole period the setpoint is the plan exactly, whatever the period did on the
+    /// way. While the plan stands still the period stays as it was: a resonance that changes at rest (the gripper takes
+    /// its payload) would reach back into the move that has just arrived and take the setpoint off its target.
     fn shape(&mut self, machine: &dyn Machine) {
         // shortcut: while the period changes, the speed and acceleration setpoints are the delayed plan's,
         // not the exact rates of the shaped position (off by the rate of the delay, a few percent in a Z
         // move); they are feedforward only. Shape the position alone and difference it if that matters.
-        let (Some((k, _, k2, _)), Some(halves)) = (self.shaper, self.shaper_halves(machine, &self.raw_pos)) else {
+        let Some(halves) = self.mode_halves(machine, &self.raw_pos) else {
             self.history.clear();
             self.shaper_reach = 0;
             return;
         };
         let standing = self.history.back().is_some_and(|past| past[0] == self.raw_pos);
-        let (half, half2) = self.shaper_held.filter(|_| standing).unwrap_or(halves);
-        self.shaper_held = Some((half, half2));
+        let halves = self.shaper_held.take().filter(|held| standing && held.len() == halves.len()).unwrap_or(halves);
+        let trains = self.trains(&halves);
+        self.shaper_held = Some(halves);
         self.history.push_back([self.raw_pos.clone(), self.raw_vel.clone(), self.raw_acc.clone()]);
-        // The store keeps the longest period met so far: a period that grows again finds its past.
-        self.shaper_reach = self.shaper_reach.max((2.0 * half + 2.0 * half2).ceil() as usize + 2);
+        // The store keeps the longest span met so far: a period that grows again finds its past.
+        let span = trains.iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t));
+        self.shaper_reach = self.shaper_reach.max(span.ceil() as usize + 2);
         while self.history.len() > self.shaper_reach {
             self.history.pop_front();
         }
@@ -1193,18 +1264,10 @@ impl Controller {
             let at = |n: usize| self.history[newest - n.min(newest)][which][axis];
             at(whole) * (1.0 - part) + at(whole + 1) * part
         };
-        let sum = (1.0 + k) * (1.0 + k) * (1.0 + k2) * (1.0 + k2);
-        let (first, second) = (
-            [(0.0, 1.0), (half, 2.0 * k), (2.0 * half, k * k)],
-            [(0.0, 1.0), (half2, 2.0 * k2), (2.0 * half2, k2 * k2)],
-        );
         let shaped = |which: usize, axis: usize| {
-            first
-                .iter()
-                .flat_map(|a| second.iter().map(move |b| (a.0 + b.0, a.1 * b.1)))
-                .map(|(delay, weight)| weight * ago(which, axis, delay))
-                .sum::<f64>()
-                / sum
+            let train = &trains[axis];
+            train.iter().map(|(delay, weight)| weight * ago(which, axis, *delay)).sum::<f64>()
+                / train.iter().map(|(_, weight)| weight).sum::<f64>()
         };
         let axes = self.set_pos.len();
         let (pos, vel, acc): (Vec<f64>, Vec<f64>, Vec<f64>) = (
@@ -1242,11 +1305,16 @@ impl Controller {
         if self.segments[next_index].path.is_some() {
             return None;
         }
-        let next = Move::new(&segment.target, &self.segments[next_index].target, machine.axes());
+        let next = Move::with_law(
+            &segment.target,
+            &self.segments[next_index].target,
+            machine.axes(),
+            &self.segments[next_index].law,
+        );
         if current.delta().iter().zip(next.delta()).any(|(a, b)| a * b < 0.0) || next.duration() == 0.0 {
             return None;
         }
-        let lead = self.blend_time.min(current.ramp()).min(next.ramp());
+        let lead = self.blend_time.min(current.brake()).min(next.ramp());
         if t < current.duration() - lead {
             return None;
         }
@@ -1262,9 +1330,13 @@ impl Controller {
             self.stopping = false;
             return;
         }
-        if let Some(conveyor) = &mut self.conveyor {
+        if self.conveyor.is_some() {
+            // Planned for the shaped setpoint: the part each axis's mean shaper delay ahead, and its grip and release
+            // longer by the shaper's span (see `Conveyor::plan`).
+            let shaping = self.shaper_delays(machine, &self.set_pos);
             let reachable = |pose: &[f64]| in_range(machine, pose);
-            self.pass = conveyor.plan(machine.axes(), self.clock, &self.set_pos, &reachable);
+            let Some(conveyor) = &mut self.conveyor else { return };
+            self.pass = conveyor.plan(machine.axes(), self.clock, &self.set_pos, &reachable, &shaping);
             if self.pass.is_some() {
                 self.passes += 1;
                 self.motion = Motion::Conveyor;
@@ -1292,10 +1364,15 @@ impl Controller {
         });
         self.motion = match planned {
             Some(points) if points.iter().all(|(_, pose)| near_start(machine, &self.set_pos, pose)) => {
-                trajectory(points)
+                trajectory(points, self.spline_c2)
             }
             _ => Motion::Moving {
-                mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()),
+                mv: Move::with_law(
+                    &self.set_pos,
+                    &self.segments[next].target,
+                    machine.axes(),
+                    &self.segments[next].law,
+                ),
                 start_tick: u64::MAX,
                 tail: None,
             },
@@ -1303,9 +1380,54 @@ impl Controller {
     }
 }
 
-/// A path given as poses at times as the controller runs it: a cubic through them, with the speed at each point the
-/// slope between its neighbours (of the four around it where they are evenly spaced), at rest at both ends.
-fn trajectory(points: Vec<(f64, Vec<f64>)>) -> Motion {
+/// A path given as poses at times as the controller runs it: a cubic through them, at rest at both ends. With `c2`
+/// the cubic spline whose acceleration is continuous at every point (`c2_speeds`); without, the speed at each point is
+/// the slope between its neighbours (of the four around it where they are evenly spaced), and the acceleration steps at
+/// each point.
+fn trajectory(points: Vec<(f64, Vec<f64>)>, c2: bool) -> Motion {
+    let speeds = if c2 { c2_speeds(&points) } else { neighbour_speeds(&points) };
+    Motion::Trajectory { points, speeds, start_tick: u64::MAX }
+}
+
+/// The speeds at the points of the Hermite cubics through them that make one C2 spline, clamped at rest at both ends:
+/// with h the spacing before and h' after point i, the acceleration of the cubic before (6 (p_i-1 - p_i) / h^2 +
+/// (2 m_i-1 + 4 m_i) / h) equals that of the cubic after (6 (p_i+1 - p_i) / h'^2 - (4 m_i + 2 m_i+1) / h'), which is
+/// m_i-1 / h + 2 m_i (1/h + 1/h') + m_i+1 / h' = 3 ((p_i - p_i-1) / h^2 + (p_i+1 - p_i) / h'^2) for every inner point:
+/// a tridiagonal system, diagonally dominant, solved by elimination (Thomas).
+pub(crate) fn c2_speeds(points: &[(f64, Vec<f64>)]) -> Vec<Vec<f64>> {
+    let (n, axes) = (points.len(), points[0].1.len());
+    let mut speeds = vec![vec![0.0; axes]; n];
+    if n < 3 {
+        return speeds;
+    }
+    let h = |i: usize| points[i + 1].0 - points[i].0;
+    for a in 0..axes {
+        let p = |i: usize| points[i].1[a];
+        // Forward elimination over the inner points 1 ..= n - 2: c' and d' of the Thomas algorithm.
+        let (mut c, mut d) = (vec![0.0; n], vec![0.0; n]);
+        for i in 1..n - 1 {
+            let (lower, upper) = (1.0 / h(i - 1), 1.0 / h(i));
+            let diagonal = 2.0 * (lower + upper);
+            let rhs = 3.0 * ((p(i) - p(i - 1)) * lower * lower + (p(i + 1) - p(i)) * upper * upper);
+            // Point 0 is at rest: no lower term for i = 1.
+            let (l, c_prev, d_prev) = if i == 1 { (0.0, 0.0, 0.0) } else { (lower, c[i - 1], d[i - 1]) };
+            let pivot = diagonal - l * c_prev;
+            c[i] = upper / pivot;
+            d[i] = (rhs - l * d_prev) / pivot;
+        }
+        // Back substitution; the last point is at rest.
+        let mut next = 0.0;
+        for i in (1..n - 1).rev() {
+            next = d[i] - c[i] * next;
+            speeds[i][a] = next;
+        }
+    }
+    speeds
+}
+
+/// The speeds as before 14 November 2026 (`profile.trajectory_spline = "hermite"`): at each inner point the slope
+/// between its neighbours, of the five points around it where they are evenly spaced.
+fn neighbour_speeds(points: &[(f64, Vec<f64>)]) -> Vec<Vec<f64>> {
     let axes = points[0].1.len();
     let mut speeds = vec![vec![0.0; axes]; points.len()];
     let n = points.len();
@@ -1326,7 +1448,123 @@ fn trajectory(points: Vec<(f64, Vec<f64>)>) -> Motion {
             };
         }
     }
-    Motion::Trajectory { points, speeds, start_tick: u64::MAX }
+    speeds
+}
+
+/// Position, speed and acceleration of axis `a` at time `t` on the cubic from point i to point i + 1 with the speeds
+/// there (Hermite interpolation).
+pub(crate) fn hermite(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize, a: usize, t: f64) -> [f64; 3] {
+    let h = points[i + 1].0 - points[i].0;
+    let s = (t - points[i].0) / h;
+    let basis = [
+        [
+            2.0 * s * s * s - 3.0 * s * s + 1.0,
+            s * s * s - 2.0 * s * s + s,
+            -2.0 * s * s * s + 3.0 * s * s,
+            s * s * s - s * s,
+        ],
+        [6.0 * s * s - 6.0 * s, 3.0 * s * s - 4.0 * s + 1.0, -6.0 * s * s + 6.0 * s, 3.0 * s * s - 2.0 * s],
+        [12.0 * s - 6.0, 6.0 * s - 4.0, -12.0 * s + 6.0, 6.0 * s - 2.0],
+    ];
+    let at = |b: [f64; 4]| {
+        b[0] * points[i].1[a] + b[1] * h * speeds[i][a] + b[2] * points[i + 1].1[a] + b[3] * h * speeds[i + 1][a]
+    };
+    [at(basis[0]), at(basis[1]) / h, at(basis[2]) / (h * h)]
+}
+
+/// A string of the config.
+fn text<'a>(cfg: &'a Config, path: &str) -> Result<&'a str> {
+    cfg.get(path)?.as_str().ok_or_else(|| ConfigError::Type(path.into()))
+}
+
+/// The axes a list of axis ids names (`profile.shaper_axes`, a mode's `axes`): every axis for an empty list.
+fn named_axes(machine: &dyn Machine, ids: Option<&toml::Value>, path: &str) -> Result<Vec<bool>> {
+    let bad = || ConfigError::Invalid(path.into());
+    let axes = machine.axes();
+    let ids: Vec<&str> = match ids {
+        None => Vec::new(),
+        Some(list) => {
+            list.as_array().ok_or_else(bad)?.iter().map(|v| v.as_str()).collect::<Option<_>>().ok_or_else(bad)?
+        }
+    };
+    if ids.iter().any(|id| !axes.iter().any(|a| a.id == *id)) {
+        return Err(bad());
+    }
+    Ok(axes.iter().map(|a| ids.is_empty() || ids.contains(&a.id)).collect())
+}
+
+/// The input shaper of a config (see `Controller::shape`), `None` with `effects.input_shaping` off: the first mode
+/// (`profile.shaper_frequency_hz`, `shaper_damping`), the second (`shaper2_frequency_hz`, `shaper2_damping`; half period
+/// 0 at 0 Hz), both of `profile.shaper_type` on `profile.shaper_axes`, following the pose with
+/// `effects.shaper_follows_pose`; then each entry of `profile.shaper_modes` (`frequency_hz`, `damping`, and `type` and
+/// `axes` where it has them), fixed. A value out of its range is refused also with shaping off.
+fn shaper_modes(cfg: &Config, machine: &dyn Machine, profile_cycle: f64) -> Result<Option<Vec<ShaperMode>>> {
+    let kind_of = |name: Option<&str>, path: &str| {
+        name.and_then(shaper::Kind::from_name).ok_or_else(|| ConfigError::Invalid(path.into()))
+    };
+    let kind = kind_of(Some(text(cfg, "profile.shaper_type")?), "profile.shaper_type")?;
+    let tolerance = cfg.positive("profile.shaper_ei_tolerance")?;
+    if tolerance >= 1.0 {
+        return Err(ConfigError::Invalid("profile.shaper_ei_tolerance".into()));
+    }
+    let axes = named_axes(machine, Some(cfg.get("profile.shaper_axes")?), "profile.shaper_axes")?;
+    let (frequency, damping) =
+        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
+    if damping >= 1.0 {
+        return Err(ConfigError::Invalid("profile.shaper_damping".into()));
+    }
+    let (frequency2, damping2) =
+        (cfg.non_negative("profile.shaper2_frequency_hz")?, cfg.non_negative("profile.shaper2_damping")?);
+    if damping2 >= 1.0 {
+        return Err(ConfigError::Invalid("profile.shaper2_damping".into()));
+    }
+    let follows = cfg.bool("effects.shaper_follows_pose")?;
+    // Half the damped period in profile cycles, per Hz.
+    let per_hz = |damping: f64| 0.5 / (1.0 - damping * damping).sqrt() / profile_cycle;
+    let mode = |kind, frequency: f64, damping: f64, axes: Vec<bool>, follow: Option<usize>| ShaperMode {
+        impulses: shaper::impulses(kind, damping, tolerance),
+        half: if frequency > 0.0 { per_hz(damping) / frequency } else { 0.0 },
+        follows: follow.filter(|_| follows).map(|k| (k, per_hz(damping))),
+        axes,
+    };
+    let mut modes =
+        vec![mode(kind, frequency, damping, axes.clone(), Some(0)), mode(kind, frequency2, damping2, axes, Some(1))];
+    for (i, entry) in cfg.array("profile.shaper_modes")?.iter().enumerate() {
+        let path = format!("profile.shaper_modes[{i}]");
+        let bad = || ConfigError::Invalid(path.clone());
+        let number = |key: &str| entry.get(key).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)));
+        let frequency = number("frequency_hz").filter(|f| f.is_finite() && *f > 0.0).ok_or_else(bad)?;
+        let damping = number("damping").filter(|d| (0.0..1.0).contains(d)).ok_or_else(bad)?;
+        let kind = match entry.get("type") {
+            None => kind,
+            Some(name) => kind_of(name.as_str(), &path)?,
+        };
+        modes.push(mode(kind, frequency, damping, named_axes(machine, entry.get("axes"), &path)?, None));
+    }
+    Ok(cfg.bool("effects.input_shaping")?.then_some(modes))
+}
+
+/// The motion law of a config's moves (`profile.shape`, `deceleration_ratio`, and `vertical_axis` with
+/// `up_acceleration_ratio`: an axis id, "-" before it where up is its minus direction, "" for none). The ratios are
+/// shares of the axes' limits, above 0 and at most 1.
+fn motion_law(cfg: &Config, machine: &dyn Machine) -> Result<MotionLaw> {
+    let shape =
+        Shape::from_name(text(cfg, "profile.shape")?).ok_or_else(|| ConfigError::Invalid("profile.shape".into()))?;
+    let share = |path: &str| {
+        let v = cfg.positive(path)?;
+        if v <= 1.0 { Ok(v) } else { Err(ConfigError::Invalid(path.into())) }
+    };
+    let (deceleration_ratio, up_ratio) =
+        (share("profile.deceleration_ratio")?, share("profile.up_acceleration_ratio")?);
+    let vertical = match text(cfg, "profile.vertical_axis")? {
+        "" => None,
+        name => {
+            let (up, id) = name.strip_prefix('-').map_or((1.0, name), |id| (-1.0, id));
+            let axis = machine.axes().iter().position(|a| a.id == id);
+            Some((axis.ok_or_else(|| ConfigError::Invalid("profile.vertical_axis".into()))?, up, up_ratio))
+        }
+    };
+    Ok(MotionLaw { shape, deceleration_ratio, vertical })
 }
 
 pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
@@ -1441,4 +1679,44 @@ pub fn check_limits(machine: &dyn Machine, drives: &[&DriveParams]) -> Vec<Limit
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Acceleration of axis 0 just before and just after point i of a curve through `points` with `speeds`.
+    fn around(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize) -> (f64, f64) {
+        (hermite(points, speeds, i - 1, 0, points[i].0)[2], hermite(points, speeds, i, 0, points[i].0)[2])
+    }
+
+    /// The C2 spline through (0 s, 0 m), (1 s, 1 m) and (3 s, 1 m), at rest at both ends. Its one inner speed m solves
+    /// m 2 (1/1 + 1/2) = 3 ((1 - 0) / 1^2 + (1 - 1) / 2^2): m = 1 m/s. The acceleration before the point,
+    /// 6 (0 - 1) / 1 + (2 * 0 + 4 * 1) / 1 = -2 m/s^2, equals that after it, 6 (1 - 1) / 4 - (4 * 1 + 0) / 2 = -2 m/s^2.
+    /// The slope of the neighbours (1 - 0) / 3 = 1/3 m/s gives -4.667 before and -0.667 after: a step of 4 m/s^2.
+    #[test]
+    fn the_c2_import_has_a_continuous_acceleration_at_a_knot() {
+        let points = vec![(0.0, vec![0.0]), (1.0, vec![1.0]), (3.0, vec![1.0])];
+        let c2 = c2_speeds(&points);
+        assert!((c2[1][0] - 1.0).abs() < 1e-12 && c2[0][0] == 0.0 && c2[2][0] == 0.0, "{c2:?}");
+        let (before, after) = around(&points, &c2, 1);
+        assert!((before + 2.0).abs() < 1e-12 && (after + 2.0).abs() < 1e-12, "{before} {after}");
+        let old = neighbour_speeds(&points);
+        let (before, after) = around(&points, &old, 1);
+        assert!((before + 14.0 / 3.0).abs() < 1e-12 && (after + 2.0 / 3.0).abs() < 1e-12, "{before} {after}");
+        // Uneven spacing and two axes: continuous at every inner point, and through every point.
+        let points: Vec<(f64, Vec<f64>)> = [(0.0, 0.0), (0.3, 0.2), (0.5, 0.25), (1.2, -0.1), (1.3, 0.0), (2.0, 0.4)]
+            .iter()
+            .map(|&(t, x)| (t, vec![x, 2.0 * x * x]))
+            .collect();
+        let c2 = c2_speeds(&points);
+        for i in 1..points.len() - 1 {
+            for a in 0..2 {
+                let (before, after) =
+                    (hermite(&points, &c2, i - 1, a, points[i].0)[2], hermite(&points, &c2, i, a, points[i].0)[2]);
+                assert!((before - after).abs() < 1e-9 * (1.0 + before.abs()), "point {i}, axis {a}: {before} {after}");
+                assert!((hermite(&points, &c2, i, a, points[i].0)[0] - points[i].1[a]).abs() < 1e-15);
+            }
+        }
+    }
 }

@@ -2,6 +2,7 @@
 //! `check_cycle`), and in the simulation as it runs (`Sim`). The machine tells which of its parts can hit an obstacle
 //! (`Machine::collision_bodies`); obstacles and parts are boxes along the scene's axes.
 
+use crate::conveyor::Conveyor;
 use sim_core::{Aabb, Config, ConfigError, Machine, MachineEntry, Obstacle};
 
 /// The obstacles of the config: `obstacles`, a list of tables each with a `name`, the box's `centre_m` and `size_m`
@@ -88,20 +89,67 @@ pub fn check_path(machine: &dyn Machine, obstacles: &[Obstacle], poses: &[Vec<f6
     }
 }
 
+/// The passes of a conveyor cycle checked as `check_path` does, before they run: planned as the controller plans them
+/// (`Conveyor::plan`, without input shaping) from `start` at time 0, each from where the one before ends, for two
+/// pitches' worth of parts (all parts of a pitch, twice, so that a pass from the start and one from the place are both
+/// there), the payload as the pass holds it. The path between samples 5 ms apart is taken as a line.
+fn check_passes(
+    machine: &mut dyn Machine,
+    obstacles: &[Obstacle],
+    conveyor: &mut Conveyor,
+    start: &[f64],
+) -> PlanCheck {
+    let mut check = PlanCheck::default();
+    let axes = machine.axes().to_vec();
+    let reachable = |pose: &[f64]| crate::control::in_range(&*machine, pose);
+    let mut passes = Vec::new();
+    let (mut now, mut from) = (0.0, start.to_vec());
+    let none = (vec![0.0; axes.len()], 0.0);
+    while passes.len() < 2 * conveyor.arrivals.len()
+        && let Some(pass) = conveyor.plan(&axes, now, &from, &reachable, &none)
+    {
+        let n = from.len();
+        let (mut pos, mut vel, mut acc) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        pass.at(pass.duration(), &mut pos, &mut vel, &mut acc);
+        (now, from) = (pass.start + pass.duration(), pos);
+        passes.push(pass);
+    }
+    check_path(machine, obstacles, std::slice::from_ref(&start.to_vec()), &mut check);
+    for pass in &passes {
+        let samples = (pass.duration() / 0.005).ceil().max(1.0) as usize;
+        let n = start.len();
+        let (mut pos, mut vel, mut acc) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        let mut last: Option<Vec<f64>> = None;
+        for i in 0..=samples {
+            let t = pass.duration() * i as f64 / samples as f64;
+            pass.at(t, &mut pos, &mut vel, &mut acc);
+            machine.set_payload_attached(pass.holds(t));
+            if let Some(last) = &last {
+                check_path(machine, obstacles, &[last.clone(), pos.clone()], &mut check);
+            }
+            last = Some(pos.clone());
+        }
+    }
+    check
+}
+
 /// The configured cycle checked as `check_path` does, before it runs: from the start pose to the first segment's
 /// target with the payload attached (as the controller starts), then each segment from the target before it with the
 /// payload as that one left it, and round from the last to the first again. A segment with via points takes the path
 /// the planner times through them; the straight moves are taken as lines, which corner blending would cut short (the
-/// simulation itself is checked as it runs). `None` without obstacles, and with `[conveyor]`, whose passes are planned
-/// as the parts come: the simulation's live check judges them.
+/// simulation itself is checked as it runs). `None` without obstacles. With `[conveyor]` the passes are checked
+/// instead (`check_passes`).
 pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanCheck>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let obstacles = obstacles(cfg)?;
-    if obstacles.is_empty() || cfg.get("conveyor").is_ok() && cfg.bool("conveyor.enabled")? {
+    if obstacles.is_empty() {
         return Ok(None);
     }
     let mut machine = (entry.build)(cfg)?;
     let start = crate::sim::start_pose(cfg, machine.as_ref())?;
+    if let Some(mut conveyor) = crate::conveyor::Conveyor::from_config(cfg, machine.axes().len())? {
+        return Ok(Some(check_passes(machine.as_mut(), &obstacles, &mut conveyor, &start)));
+    }
     let (cycle, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
     let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
     let mut segments = Vec::new();

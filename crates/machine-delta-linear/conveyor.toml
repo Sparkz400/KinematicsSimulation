@@ -1,0 +1,474 @@
+# Linear delta picking from a belt conveyor: default.toml with a [conveyor] table at its end, which replaces the Adept
+# cycle by picks from the belt (conveyor.enabled = false runs the Adept cycle again), and the start pose above the place.
+# Everything else, and where each value comes from, is as in default.toml.
+#
+# Linear delta: three vertical toothed-belt axes on the columns of a frame, each carriage with a parallelogram of rods
+# down to a plate that stays level (as the Festo EXPT tripod and the Kossel printers). Sized like the Festo EXPT-95:
+# working range 950 mm across and 100 mm high, EGC-80 toothed-belt axes, servo motors on the axes without gearbox,
+# 1 kg rated load at its highest dynamics.
+# Every value says where it comes from:
+#   [catalogue]  read from a maker's document: Festo's EXPT datasheet (2022/02 edition, EXPT_EN.PDF of the 2024
+#                documentation set; the 2016 US edition for the four-size table), Siemens catalogue D 32 and the S210
+#                operating instructions (catalog/siemens/*.csv).
+#   [estimate]   ours. Festo publishes neither rod length nor column layout nor moving masses; the geometry is chosen to
+#                reach the EXPT-95's working range with vertical columns, rods tilted at most 57.2 degrees and condition
+#                numbers up to 3.98.
+# Units are in the field names. The frame: origin on the column axis at the carriages' upper stop, z up, so the plate
+# works below zero; column 1 stands along +x, columns 2 and 3 at 120 and 240 degrees.
+format_version = 1
+# Obstacles in the work area, boxes along the axes of the 3D view (see docs/config-reference.md), e.g.
+# obstacles = [{ name = "fixture", centre_m = [0.0, 0.0, -1.27], size_m = [0.1, 0.1, 0.1] }]
+# or as [[obstacles]] tables at the end of the file. None by default.
+obstacles = []
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). Named here, they
+# would replace the numbers below when the config is loaded; the numbers below are those parts' own, written out
+# (motor 1FK2205-2AF at 400 V with brake, converter 6SL3210-5HE11-0UF0), so that the config reads as it runs. The EGC-80
+# axis is not in the catalogue. "" names none.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect. With belt_stretch off the machine is the rigid reference model, in which carriage, pulley and
+# rotor move together and belt damping, slack and the coupling's stiffness have no meaning.
+[effects]
+gravity = true
+payload = true
+belt_stretch = true
+belt_damping = true
+belt_slack = true
+belt_mass = true
+belt_tooth_stiffness = false
+belt_material_damping = false
+guide_friction = true
+# The guides' friction levels grow with their load across the rail, the rods' pull on the carriage at rest.
+load_dependent_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+temperature = false
+# Stops at both ends of each carriage's stroke ([hard_stop]).
+hard_stops = true
+holding_brake = true
+velocity_feedforward = true
+torque_feedforward = true
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = false
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+# No part of this machine warms but its motors (see docs/model-reference.md): both change nothing here.
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: a part moving into one stops dead there, drives on or off, and drives that were on go off
+# (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
+crash = false
+
+# The kinematics. e = column_radius_m - plate_radius_m is what the equations use.
+# [estimate] all: rods of 1.1 m reach the far rim of the working range (0.925 m from a column's joint line) at 57 degrees,
+# and the carriages stay within 0.70 m of stroke for 100 mm of height.
+[geometry]
+column_radius_m = 0.52
+plate_radius_m = 0.07
+rod_m = 1.1
+# Distance between the two rods of a pair, for the 3D view only.
+rod_spacing_m = 0.08
+# The carriages' joints at their upper stop, and the stroke below it.
+carriage_top_m = 0.0
+stroke_m = 0.7
+# [estimate] the EGC-80-TB's drive pulley: 90 mm feed per revolution.
+pulley_radius_m = 0.014324
+# Shortest free belt span between a carriage and either pulley.
+span_min_m = 0.1
+
+# The working range: a cylinder, as Festo draws it.
+# [catalogue] EXPT-95: nominal diameter 950 mm, nominal height 100 mm.
+# [estimate] its top 1.12 m below the carriages' upper stop: at the rim next to a column the carriage then stands 20 mm
+# below its stop, at the rim opposite one 75 mm above its lower stop at the bottom.
+[workspace]
+radius_m = 0.475
+top_z_m = -1.12
+bottom_z_m = -1.22
+# [estimate] the ball joints' tilt: targets where a rod stands steeper from the vertical than this are refused.
+max_rod_angle_deg = 60.0
+# Targets where the Jacobian's condition number is above this are refused: near a singularity. Above anything in
+# the working range. The cycle is judged against ratings.max_condition_number.
+# [estimate]
+max_condition_number = 10.0
+
+[mass]
+# [estimate] the EGC-80's slide with the ball studs.
+carriage_kg = 1.3
+# [estimate] a pair of carbon rods with ball cups.
+rod_pair_kg = 0.35
+# The share of a rod pair's mass counted at its carriage (the rest at the plate). [estimate] half: a uniform rod whose
+# ends move alike.
+rod_carriage_share = 0.5
+# [estimate] the front unit without rotary drive (EXPT-...-T0).
+plate_kg = 0.8
+# [catalogue] EXPT: rated load (tool and payload) 1 kg at the highest dynamics, 5 kg at the lowest
+payload_kg = 1.0
+
+# [estimate] the EGC-80's belt, by the EXCT-30's (steel-cord polyurethane, 0.45 mm/m at 300 N).
+[belt]
+stiffness_ea_n = 6.0e5
+pretension_n = 300.0
+damping_n_s_m = 100.0
+mass_kg_m = 0.07
+tooth_mesh_stiffness_n_m = 5.0e6
+damping_time_s = 2.5e-4
+
+# Each carriage's guide. [estimate] as the one-axis machine's ball guide.
+[friction]
+coulomb_n = 15.0
+stiction_n = 20.0
+viscous_n_s_m = 20.0
+stribeck_m_s = 0.01
+bristle_stiffness_n_m = 5.0e5
+bristle_damping_n_s_m = 1500.0
+preload_n = 200.0
+
+[motor]
+# [catalogue] 1FK2205-2AF with brake, D 32: rotor 4.0 kg cm2. A Compact motor: the High Dynamic 1FK2104-5AF, whose
+# 7.5 N m would do, has 0.65 kg cm2 against about 6 kg cm2 of carriage, plate and pulley at the shaft, and its velocity
+# loop rang near 450 Hz above a gain of 0.1 N m s/rad, too low to settle the cycle within 0.5 mm (2.5 mm).
+rotor_inertia_kgm2 = 4.0e-4
+# [estimate]
+friction_coulomb_nm = 0.02
+friction_viscous_nm_s_rad = 1.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.01
+cogging_order = 24.0
+# [catalogue] static torque 3.6 N m over stall current 2.9 A
+torque_constant_nm_a = 1.241379
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 5.0
+inductance_h = 0.020
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.02
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A. [estimate] the thermal time
+# constant, as the 1FK2105's 37 min scaled down.
+rated_current_a = 2.5
+thermal_time_constant_s = 1800.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 9.5
+torque_constant_at_max_current_nm_a = 1.136842
+# With effects.holding_brake. [estimate] the D 32 gives no brake torque.
+brake_torque_nm = 3.0
+
+# No gearbox: each motor drives its pulley through a coupling (ratio 1), as on the EXPT's axes.
+[gearbox]
+ratio = 1.0
+efficiency = 1.0
+backlash_rad = 0.0
+# [estimate] as the EXCT-30's coupling.
+stiffness_nm_rad = 3.0e3
+damping_nm_s_rad = 0.2
+inertia_at_input_kgm2 = 0.0
+
+[pulley]
+# [estimate]
+inertia_kgm2 = 2.0e-5
+
+# With effects.hard_stops: a spring and damper at both ends of a carriage's stroke that act only beyond it.
+[hard_stop]
+stiffness_n_m = 1.0e6
+damping_n_s_m = 5.0e3
+
+# Applied only with effects.temperature on: a cold machine has more friction and a stiffer belt.
+[temperature]
+friction_scale = 1.5
+belt_stiffness_scale = 1.1
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+# The tool's limits along x, y and z. [estimate] 3 m/s and 50 m/s2, as the D3's, below the EXPT's 7 m/s and 110 m/s2
+# (which are for Festo's own CMMT drives and a lighter load); 2500 m/s3 reaches the acceleration in 20 ms.
+[axis.x]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+[axis.y]
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+[axis.z]
+# Below x and y: z turns all three carriages one to one, so 3 m/s on every axis at once would ask the motors for
+# 337.7 rad/s against their rated 314.16 (`check_limits` at the middle of the range); 2.5 m/s asks 302.8. The cycle's
+# 25 mm lifts stay far below either.
+max_velocity_m_s = 2.5
+max_acceleration_m_s2 = 50.0
+max_jerk_m_s3 = 2500.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# Velocity loop gain, tuned with `sim-cli margins delta-linear --bands` for a phase margin of at least 35 degrees and a
+# gain margin of at least 6 dB in every run, also with motor and guide friction off. Found: at least 38.2 degrees and
+# 8.8 dB (friction off), 50.2 degrees and 10.1 dB (on); 58.9 degrees and 10.7 dB as configured. 0.3 left 26 degrees with
+# the belt's damping at its low bound, and Tn 0.01 s 34 degrees at a crossover near 21 Hz. Tn as short as that allows:
+# the integrator pushes the carriages through their guides' friction, and against the bristles' 5e5 N/m (the loop's
+# 0.25 * 50 / r^2 = 61 kN/m at a carriage) it settles with Tn (1 + 5e5 / 61e3) = 0.11 s; with Tn 0.02 s, 0.18 s, the
+# tool still crept 20 um within 0.2 s, 0.3 s after a move, and a sine of 0.5 mm along x passed below 3 Hz.
+velocity_kp_nm_s_rad = 0.25
+velocity_tn_s = 0.012
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
+current_kp_v_a = 80.0
+current_tn_s = 4.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2205-2AF at 400 V: 10.8 N m maximum, 3.0 N m rated at 3000 r/min
+peak_torque_nm = 10.8
+rated_torque_nm = 3.0
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.241379 N m/A
+no_load_speed_rad_s = 532.77
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.2e-3
+torque_filter_s = 0.2e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# Each axis brakes through its converter's own resistor (S210).
+braking_module = false
+
+# What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
+[ratings]
+# [estimate] what the EGC-80's belt takes; Festo gives the axis's feed force, not the belt's tension.
+belt_max_tension_n = 1000.0
+belt_min_tension_n = 0.0
+# [catalogue] EXPT: positioning accuracy +-0.5 mm (calibrated system); the repeatability is +-0.1 mm.
+settling_tolerance_m = 0.0005
+# [estimate] the EGC-80's drive torque and the radial load its pulley shaft takes.
+pulley_max_torque_nm = 10.0
+shaft_max_radial_load_n = 1500.0
+# The DC link of the S210 converter. [estimate] as for the delta picker; the chopper at 770 V.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] the 6SL3210-5HE11-0UF0's internal braking resistor and trip level (catalog/siemens/braking_s210.csv):
+# 50 W, 3 kW, 820 V.
+braking_resistor_continuous_w = 50.0
+braking_resistor_peak_w = 3000.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] S210 converter 6SL3210-5HE11-0UF0, which D 32 pairs with the 1FK2205-2AF at 400 V: 3 A rated, 10.9 A
+# maximum
+drive_rated_current_a = 3.0
+drive_max_current_a = 10.9
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 2.55
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+# The highest condition number of the Jacobian the cycle may reach ("singularity"). [estimate] a design rule.
+max_condition_number = 5.0
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+# The shape of moves (see docs/config-reference.md): "s-curve" (seven segments), "sin2" (Bestehorn), "poly345" or
+# "poly4567" (VDI 2143); a [[cycle.segment]] may name its own with shape = "...". Braking within deceleration_ratio of
+# the acceleration limits (1: as fast as speeding up). vertical_axis: the axis that lifts against gravity ("z", "-z"
+# where up is its minus direction, "" for none), which has up_acceleration_ratio of its acceleration limit upwards.
+shape = "s-curve"
+deceleration_ratio = 1.0
+vertical_axis = ""
+up_acceleration_ratio = 1.0
+# The curve a trajectory runs through its poses: "c2" (a cubic spline, the acceleration continuous) or "hermite" (the
+# slopes of the neighbours, as before 14 November 2026).
+trajectory_spline = "c2"
+# With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
+# shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
+# { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
+shaper_type = "zvd"
+shaper_ei_tolerance = 0.05
+shaper_axes = []
+shaper_modes = []
+torque_reserve = 0.8
+# For a path timed as fast as the motors allow: the share of the room to the belt's tension ratings the plan may use,
+# and what is taken off them first (the guide's 15 N plus 20 N s/m at 3 m/s), as on the one-axis machine.
+tension_reserve = 0.5
+tension_margin_n = 75.0
+# Not used on three axes (see docs/user-guide.md): paths run as given.
+path_tolerance_m = 0.0
+# For `sim-cli optimise`: the cycle's own 25 mm lift, as if something that high stood between pick and place.
+min_clearance_m = 0.025
+
+# Low and high bound of the values that are estimates (see the other machines' configs).
+[bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.016, 0.024]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [2.4, 2.7]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+geometry.column_radius_m = [0.5, 0.54]
+geometry.plate_radius_m = [0.06, 0.08]
+geometry.rod_m = [1.08, 1.12]
+geometry.pulley_radius_m = [0.0140, 0.0146]
+mass.carriage_kg = [1.0, 1.6]
+mass.rod_pair_kg = [0.25, 0.5]
+mass.rod_carriage_share = [0.333, 0.667]
+mass.plate_kg = [0.6, 1.0]
+belt.stiffness_ea_n = [4.5e5, 7.5e5]
+belt.pretension_n = [200.0, 400.0]
+belt.damping_n_s_m = [50.0, 200.0]
+friction.coulomb_n = [10.0, 20.0]
+friction.stiction_n = [15.0, 30.0]
+friction.viscous_n_s_m = [10.0, 40.0]
+motor.friction_coulomb_nm = [0.01, 0.04]
+motor.friction_viscous_nm_s_rad = [0.5e-4, 2.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.005, 0.02]
+motor.resistance_ohm = [3.0, 8.0]
+gearbox.stiffness_nm_rad = [2.0e3, 4.5e3]
+gearbox.damping_nm_s_rad = [0.1, 0.4]
+pulley.inertia_kgm2 = [1.0e-5, 4.0e-5]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
+
+# Where the cycle ends, above its place position, as on every machine (the cycle runs on from there), 10 mm below the
+# working range's top face: on the face, the pose the motors stand at (the belts stretch and the couplings twist a few
+# um under the weight) lay above it, and every move from there was refused as out of range.
+[start]
+pose = [0.0, -0.25, -1.13]
+
+# The Adept cycle 25/305/25 mm, as Festo times the EXPT ("12-inch cycle") and as the D3 runs it: up 25 mm, across
+# 305 mm, down 25 mm, and back. Each leg is a move of its own, stopping at the corners; at the bottom the gripper acts
+# for 35 ms. It lies on y = 0, across the centre, 10 mm below the top of the working range (see [start]): the lifts go
+# 25 mm further into its 100 mm.
+# "payload" is the state of the gripper once the segment has arrived.
+[[cycle.segment]]
+target = [0.1525, 0.0, -1.155]
+dwell_s = 0.035
+payload = false
+
+[[cycle.segment]]
+target = [0.1525, 0.0, -1.13]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -1.13]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -1.155]
+dwell_s = 0.035
+payload = true
+
+[[cycle.segment]]
+target = [-0.1525, 0.0, -1.13]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [0.1525, 0.0, -1.13]
+dwell_s = 0.0
+payload = true
+
+# Picking from a belt conveyor (see docs/config-reference.md): a belt along x at y = 0.2 m, parts on it every 1.0 s
+# (60 a minute), gripped 25 mm below the Adept cycle's top inside a window 0.45 m long across the middle of the working
+# range (whose radius is 0.475 m), and placed at a fixed place on the other side. All of it is a choice of the process,
+# not a property of the machine: nothing to bound. All poses are tool poses (x, y, z), m.
+[conveyor]
+enabled = true
+direction = [1.0, 0.0, 0.0]
+speed_m_s = 0.3
+ramp_s = 0.0
+# The grip pose of a part where it enters the belt, and the belt's length from there.
+origin = [-0.45, 0.2, -1.155]
+length_m = 0.9
+pitch_s = 1.0
+arrivals_s = [0.0]
+window_m = [0.15, 0.6]
+lift = [0.0, 0.0, 0.025]
+grip_s = 0.035
+release_s = 0.035
+place = [0.0, -0.25, -1.155]
+place_direction = [1.0, 0.0, 0.0]
+place_speed_m_s = 0.0
+tracking_tolerance_m = 0.001

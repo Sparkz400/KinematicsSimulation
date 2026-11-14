@@ -2706,7 +2706,9 @@ pub fn optimise_cycle_with(
     let max_runs = options.max_runs;
     let mut probe = Sim::new(entry, cfg)?;
     let clearance = cfg.non_negative("profile.min_clearance_m")?;
-    let mut lifts = lifts(cfg, clearance)?;
+    // A conveyor's cycle picks from the belt (`[conveyor]`): `[[cycle.segment]]` does not run, so its lifts are left.
+    let conveyor = probe.control.conveyor().is_some();
+    let mut lifts = if conveyor { Vec::new() } else { lifts(cfg, clearance)? };
     let (cycle_s, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
     let axis_infos = probe.machine.axes().to_vec();
     let obstacles = probe.obstacles.clone();

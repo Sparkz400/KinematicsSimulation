@@ -12,6 +12,8 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Size a delta picker](#size-a-delta-picker)
 - [Size a linear delta](#size-a-linear-delta)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
+- [Programs: G-code and robot programs](#programs-g-code-and-robot-programs)
+- [Shape the moves](#shape-the-moves)
 - [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)
 - [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)
 - [See where torque and energy go](#see-where-torque-and-energy-go)
@@ -862,6 +864,28 @@ Run: first contact with an obstacle (name: time, speed of the tool, pose) wall: 
 - The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline.
 - The clearance is between boxes: the tool, carriage, Z axis, platform and payload as the 3D view draws them, not their CAD shapes. The delta's forearm rods and upper arms are each ten boxes along the drawn rod or arm, up to a piece's length (95 mm on a rod, 40 mm on an arm) wider than it where it slants.
 
+## Programs: G-code and robot programs
+
+`--path FILE` (and the app's path field) reads a program as well as a path file, by the file's extension. Its moves become the lines and arcs of a path, timed by the same planners.
+
+```text
+$ sim-cli analyze t-gantry --path pocket.nc
+$ sim-cli run delta-d3 --path pick.mod --time-optimal
+```
+
+| Extension | Read as | What is read |
+| --- | --- | --- |
+| `.nc`, `.ngc`, `.gcode`, `.g`, `.cnc`, `.tap` | G-code (DIN 66025 / ISO 6983) | G0 rapid, G1 line, G2/G3 arc (centre I, J, K from the start, or R; R < 0 the longer arc), F feed per minute, G17/G18/G19 plane, G20 inch / G21 mm (default), G90 absolute (default) / G91 incremental; X, Y, Z, A, B, C for the axes of those ids (A, B, C in degrees). Taken without effect: N, O, M, S, T words, G40, G49, G54, G80, G94, comments `( )` and `;`, `%` lines; M2 and M30 end the program |
+| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` in mm and degrees; components left out are kept from the point before; A, B, C, S, T and others move axes of those names where the machine has them and are left out otherwise |
+| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` to robtargets in place (`[[x, y, z], ...]`) or declared (`CONST robtarget p10 := [[...]];`), positions in mm; orientation, speed and zone are left out |
+| any other, with lines `MoveL`, `MoveJ`, `MoveC` | robot moves as CSV | `MoveL,x,y,z`, `MoveJ,x,y,z`, `MoveC,via...,end...`: one value per axis in m (rad) |
+| any other | path file | as above |
+
+- The program starts where the machine stands; an axis a block does not name stays.
+- Each run of G1/G2/G3 moves at one feed is planned within the axis limits with every axis's speed capped at the feed, and the runs follow one another with a stop between. G0, and robot programs, run at the axes' limits, as fast as the motors allow with `--time-optimal`. The feed caps each axis, not the speed along the path: a diagonal can move up to √2 faster than F.
+- A PTP or MoveJ is a straight line in the machine's axes, as a MoveL: the readers suit machines whose axes are positions (gantries, deltas).
+- Anything else is refused with its line: another G code (G4, G41, G81, ...) or letter, a G1 before any F, an axis the machine does not have, an arc that also moves the plane's third axis (a helix), an arc whose start and end are at different distances from its centre, MoveAbsJ, PTP_REL, SPLINE, a named KRL point, an undeclared robtarget.
+
 ## Pick from a moving conveyor
 
 [`crates/machine-delta-d3/conveyor.toml`](../crates/machine-delta-d3/conveyor.toml) is the D3's default with a [`[conveyor]`](config-reference.md#conveyor) table: a belt along x at 0.3 m/s brings a part every second through a window 0.5 m long; the delta meets each part with the belt's speed, moves with it while the gripper closes, lifts it off and places it at a fixed place. The table works the same on the other deltas and the gantries (one value per tool axis).
@@ -882,6 +906,26 @@ Conveyor: picks, tracking error during the grip along the belt, parts missed 63.
 - `pick-tracking` is the most the tool was from the part along the belt while the gripper closed, against `conveyor.tracking_tolerance_m`.
 - `run --cycle` runs the passes as any cycle; its trace shows the payload attached at the end of each grip.
 - In the app, open the file with "Open…" in the config panel and start the cycle: the 3D view draws the belt, its slats running with it, and the parts on it.
+- The T-gantry, the D2, the D4 and the linear delta have a conveyor example next to their default config (`crates/machine-t-gantry/conveyor.toml` and likewise): the deltas pick a part a second from a belt at 0.3 m/s (the D4 turns each by 90 degrees to the place), the T-gantry a part every 5 s from a belt at 0.1 m/s, its pass taking about 3.6 s.
+- With `conveyor.ramp_s` the belt speeds up first; parts are picked during the ramp too, met where they are with their speed then.
+- With input shaping the passes are planned for the shaped setpoint: the part a mean shaper delay ahead and grip and release longer by the shaper, so the gripper closes while the shaped setpoint is on the part.
+
+## Shape the moves
+
+`profile.shape` sets the shape of every move from rest to rest (`MoveTo`, the cycle's segments); a `[[cycle.segment]]` can name its own with `shape = "..."`:
+
+- `"s-curve"` (default): seven segments, the jerk limit used fully.
+- `"sin2"`: the speed rises as sin² over each ramp (Bestehorn); its peak acceleration is (π/2) v / T_ramp, its jerk smooth inside the ramp.
+- `"poly345"` and `"poly4567"`: the polynomial motion laws of VDI 2143, which run the whole move without a cruise; 4-5-6-7 also starts and ends without jerk. Peak speeds 1.875 h / T and 2.1875 h / T for a move of h in T.
+
+```text
+$ sim-cli analyze t-gantry --set 'profile.shape = "sin2"'
+$ sim-cli analyze delta-d3 --set 'profile.shape = "poly4567"' --set profile.deceleration_ratio=0.8
+```
+
+`profile.deceleration_ratio` brakes within a share of the acceleration limits (the S-curve and sin² then brake on a ramp of their own). For an axis that lifts against gravity, `profile.vertical_axis = "z"` (`"-z"` where up is minus) and `profile.up_acceleration_ratio` give it less acceleration upwards than downwards: a move up speeds up gently and brakes hard, a move down the other way round.
+
+Trajectories (`--trajectory`, planned paths, a segment's via points) run a cubic spline through their poses whose acceleration is continuous (`profile.trajectory_spline = "c2"`); `"hermite"` runs the curve as before 14 November 2026, whose acceleration steps at each pose.
 
 ## Tune gains and use input shaping
 
@@ -984,6 +1028,12 @@ A sine torque on one motor on top of the holding torques, measured at that motor
 
 ```text
 --set effects.input_shaping=true --set profile.shaper_frequency_hz=25 --set profile.shaper_damping=0.03
+```
+
+`profile.shaper_type` picks the shaper: `"zv"` (two steps, the shortest, 31 % left at ±20 % off the frequency), `"zvd"` (default, three steps, 10 %), `"zvdd"` (four, 3 %), `"ei"` (three steps, V = `profile.shaper_ei_tolerance` left at the frequency and at most about V over ±20 %) and `"ei2"` (two-hump EI, four steps, a wider band within V). Further resonances go into `profile.shaper_modes`, each convolved with the others, and can act on some axes only; `profile.shaper_axes` limits the first and second shaper the same way:
+
+```text
+--set 'profile.shaper_axes = ["x"]' --set 'profile.shaper_modes = [{ frequency_hz = 42.0, damping = 0.02, type = "ei", axes = ["z"] }]'
 ```
 
 Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The machine reports the lower mode of carriage-on-belt and Z-axis-on-guide (24.6 Hz at z = 0.05 m and 35.6 Hz at z = 0.15 m for the default config at x = 0.9 m). The single axis reports its carriage on the belt (65.8 Hz at x = 0.5 m). A second shaper (`profile.shaper2_frequency_hz` above 0) follows the machine's second mode as well: on the T-gantry carriage and Z axis swinging against each other, 104.2 Hz at z = 0.05 m.
