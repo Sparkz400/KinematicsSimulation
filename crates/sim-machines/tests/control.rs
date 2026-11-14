@@ -735,7 +735,10 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
     assert_eq!(configs.len(), names.len(), "{names:?}");
     let (phase, gain) = (35.0, 6.0);
     let passes = configs.iter().flat_map(|(name, cfg, entry)| {
-        [true, false].map(|friction| {
+        // As configured, friction on, a registered machine's loops are judged to the same 35 degrees and 6 dB by sim-cli's
+        // `step_bode_and_tuning_write_csv_for_every_machine` (its `margins`): not again here, but across the bounds.
+        let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
+        frictions.iter().map(move |&friction| {
             // Motor friction, and the guides' or the joints' (whichever the machine has).
             let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
             let cfg = config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
@@ -762,7 +765,7 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
     });
 }
 
-/// Every shipped config keeps its velocity loops' margins as configured, with friction and without
+/// Every shipped config keeps its velocity loops' margins as configured, without friction and, the EXCT-30, with it
 /// (`loops_keep_their_margins`); over the bounds in `across_the_bounds`.
 #[test]
 fn the_shipped_velocity_loops_keep_their_margins() {

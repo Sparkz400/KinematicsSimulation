@@ -222,7 +222,8 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
-        // The margins of the config as it is: one row per motor, each loop stable with at least 35 degrees and 6 dB.
+        // The margins of the config as it is: one row per motor, each loop stable with at least 35 degrees and 6 dB (the
+        // judgement of the shipped loops with friction; sim-machines' control tests judge them without, and over the bounds).
         let margins = table(&["margins", entry.id]);
         assert_eq!(margins.lines().next().unwrap(), "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result");
         let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
@@ -232,7 +233,7 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
         }
         assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
         // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
-        // the one with a belt axis (`the_shipped_velocity_loops_keep_their_margins` measures every machine's in sim-machines).
+        // the one with a belt axis.
         if entry.id == one_belt_axis().id {
             let found = sim_components::analysis::velocity_loop_margins(entry, &entry.config(), &[]).unwrap();
             for (row, m) in rows.iter().zip(&found[0].1) {

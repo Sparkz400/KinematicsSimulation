@@ -28,10 +28,13 @@ test-group = "real-time"
 
 # Not the app's long analyses: they wait for their jobs as long as these take (`wait_for_jobs`, up to 20 minutes) and
 # judge nothing against the clock. In the group they held one of its four places for up to 5 minutes of an 8-minute run.
+# Nor switching an effect, which runs the simulation step by step on the test's own thread.
 [[profile.default.overrides]]
 filter = """
 package(sim-app) & binary(app) & not (
     test(=the_app_optimises_the_cycle_and_applies_the_settings)
+    | test(=switching_an_effect_changes_the_traces_within_one_cycle)
+    | test(=the_app_ranks_the_uncertain_parameters)
     | test(=the_app_shows_and_applies_lower_lifts)
     | test(=the_checks_get_error_bands_in_the_app)
     | test(=the_app_searches_the_worst_corner_of_the_bounds)
@@ -48,6 +51,10 @@ test-group = "real-time"
 [[profile.default.overrides]]
 filter = """
 test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+| test(=a_path_is_planned_run_and_analysed_in_the_app)
+| test(=switching_an_effect_changes_the_traces_within_one_cycle)
+| test(=the_app_ranks_the_uncertain_parameters)
+| test(=a_path_file_is_planned_run_and_analysed_for_every_machine)
 | test(=the_app_optimises_the_cycle_and_applies_the_settings)
 | test(=every_machine_file_passes_the_standard_suite)
 | test(=a_path_from_an_end_of_a_stroke_is_run)
