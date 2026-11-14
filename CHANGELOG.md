@@ -106,6 +106,15 @@ item are in [PROGRESS.md](PROGRESS.md).
   minute, the verdicts `pick-tracking` and `parts-missed`, the belt and its parts in the 3D view.
 - `crates/machine-delta-d3/conveyor.toml`: the D3 picking from a belt.
 
+### Added
+
+- Machine files: `effects.belt_wrap` from the places of pulleys and idlers (`at_m`, new `clockwise` field) along the
+  sections' routes; `effects.tool_flex` with a `lean` node (a body leaning on its carriage, as the T-gantry's Z axis);
+  `worm` nodes (ratio, forward and back efficiency, self-locking at a back efficiency of 0 or less). The T-gantry file
+  has both effects' geometry and is its crate to 1e-9 with either on.
+- `sim-cli search --motor-id ID`: the catalogue search for one motor of a machine file, the others kept
+  (`catalog::search_motor`, `catalog::with_motor_part`).
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

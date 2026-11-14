@@ -2,7 +2,8 @@
 
 Eine Maschinendatei beschreibt eine Maschine ohne Rust-Code und ohne Neuübersetzen: die Bauteile aus `sim-components`
 wie eine Netzliste verschaltet (Motor, Getriebe, Riemenscheibe, Riemenabschnitte, Wagen, Führungen, und neben den
-Riemen Kugelgewindetriebe, Zahnstangen, Linearmotoren und Rundtische, oder ein ebenes Parallelkoppelgetriebe), dazu Achsen,
+Riemen Kugelgewindetriebe, Zahnstangen, Linearmotoren, Rundtische und Schneckengetriebe, oder ein ebenes
+Parallelkoppelgetriebe), dazu Achsen,
 Grenzwerte, Fehlerbänder, Regelkreise und Zyklus einer Maschinenkonfiguration. Kommandozeile, App und SPS-Anbindung
 laden sie zur Laufzeit aus einem Pfad. Die englische Fassung ist [machine-files.md](../machine-files.md); die
 Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
@@ -14,6 +15,8 @@ Referenzdokumente, auf die verwiesen wird, gibt es nur auf Englisch.
 - [Motoren, die sich unterscheiden](#motoren-die-sich-unterscheiden)
 - [Spindeln, Zahnstangen, Linearmotoren und Rundtische](#spindeln-zahnstangen-linearmotoren-und-rundtische)
 - [Ein Koppelgetriebe: der ebene Delta](#ein-koppelgetriebe-der-ebene-delta)
+- [Schneckengetriebe](#schneckengetriebe)
+- [Die Umschlingung des Riemens und eine sich neigende Achse](#die-umschlingung-des-riemens-und-eine-sich-neigende-achse)
 - [Die anderen Beispiele: ein CoreXY und ein XYZ-Portal](#die-anderen-beispiele-ein-corexy-und-ein-xyz-portal)
 - [Was geprüft wird, und wie Fehler lauten](#was-geprüft-wird-und-wie-fehler-lauten)
 - [Das Modell dahinter](#das-modell-dahinter)
@@ -271,11 +274,20 @@ Motorsignale und von `--motor N`.
 | | `inertia_kgm2` | Pflicht | die Trägheit, die er dreht, kg m² |
 | | `payload_inertia_kgm2` | | die seiner Last, solange `effects.payload` an ist und der Greifer sie hält, kg m² |
 | | `strain_wave` | | die Tabelle der Lebensdauerwerte seines Wellgetriebes, aufgebaut wie `[strain_wave]` |
+| `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben) und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z) |
+| `worm` | `gearbox` | Pflicht | dieses Getriebe ist eine Schneckenstufe ([unten](#schneckengetriebe)); eine Schnecke je Getriebe |
+| | `ratio` | Pflicht | ihre Übersetzung, anstelle der des Getriebes |
+| | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst) |
+| `lean` | `body`, `axis` | Pflicht | ein Körper, der sich an seinem Wagen entlang einer waagrechten Achse neigt, mit der er fährt (`effects.tool_flex`, elastisches Modell); höchstens einer ([unten](#die-umschlingung-des-riemens-und-eine-sich-neigende-achse)) |
+| | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
+| | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
+| | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | Pflicht | Steifigkeit der Führung seitlich und gegen Kippen, die Dämpfung der Neigung |
 
 Es gibt so viele Motoren wie Achsen. Eine Datei nennt jede Liste, die sie verwendet; `axis` und `motor` immer,
 `gearbox`, `pulley` und `section`, wo Riemen getrieben werden, `body`, wo eine Achse einen bewegt; die anderen dürfen
 fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
-`belt_span_vibration` ohne `span`), lehnt die Datei mit `machine.<Liste>` ab.
+`belt_span_vibration` ohne `span`, `tool_flex` ohne `lean`), lehnt die Datei mit `machine.<Liste>` ab; `belt_wrap` ohne
+die Lagen, aus denen er gerechnet wird, wird mit dem abgelehnt, was fehlt.
 
 ## Motoren, die sich unterscheiden
 
@@ -309,8 +321,14 @@ Regler (Strom- und Drehzahlregler, Drehmoment-Drehzahl-Kennlinie, Wicklung, Zwis
 Antriebsstrom, Getriebe, Lager, Riemenzähne, Bremsen) nehmen seine eigenen Werte; die Prüfungen der ganzen Maschine
 behalten die gemeinsamen. Ein in `[parts.<id>]` genanntes Teil setzt die Werte dieses Motors über die Zahlen, wie
 `[parts]` es tut; `belt` und `axis` gehören der Maschine und werden dort abgelehnt. Gemeinsam bleiben: die Taktzeiten
-der Antriebe, der Rauschstartwert, ein gemeinsamer Zwischenkreis und das Bremsmodul. `sim-cli catalog` sucht den
-gemeinsamen Motor; ein Motor mit eigenem `[parts.<id>]` behält sein Teil bei der Suche. Der zeitoptimale Bahnplaner
+der Antriebe, der Rauschstartwert, ein gemeinsamer Zwischenkreis und das Bremsmodul. `sim-cli search` sucht den
+gemeinsamen Motor; ein Motor mit eigenem `[parts.<id>]` behält sein Teil bei der Suche.
+`sim-cli search --machine-file DATEI --motor-id ID` sucht einen Motor allein: jeder Kandidat (mit seinem gepaarten
+Antrieb, und mit `--gearboxes` den passenden Getrieben für die eigene Übersetzung dieses Motors) wird `[parts.<ID>]`,
+die anderen Motoren bleiben, wie die Datei sie hat, die Drehzahlverstärkung `drive.<ID>.velocity_kp_nm_s_rad` dieses
+Motors wird dafür nachgestellt, wie die gemeinsame für ein gemeinsames Teil (nach der Trägheit, die dieser Motor dreht,
+und der seines Läufers), und die Kosten sind das Gewicht dieses einen Motors. Beim XYZ-Portal legt `--motor-id mz` den
+Z-Motor hinter seinem Getriebe mit Übersetzung 10 aus, X und Y behalten ihre. Der zeitoptimale Bahnplaner
 nimmt für jeden Motor die Kennlinie des gemeinsamen `[drive]`.
 
 ## Spindeln, Zahnstangen, Linearmotoren und Rundtische
@@ -424,9 +442,75 @@ Getriebe erwärmen sich unter den Ids der Getriebeknoten.
 
 Eine Datei mit Koppelgetriebe hat zwei Achsen (höchstens mit `key`: ohne Hub, Neigung oder Energiekette), zwei
 Motoren, an jedem ein Getriebe, und das Koppelgetriebe; eine Scheibe, ein Abschnitt, Körper, eine Führung, Umlenkrolle,
-ein Rahmen, Trum, eine Spindel, Zahnstange, ein Linearmotor oder Rundtisch daneben wird abgelehnt, ebenso ein zweites
-Koppelgetriebe. Die Effekte sind die des Crates (`[effects]` wie in seiner Konfiguration); die des Riemens werden nicht
-gelesen.
+ein Rahmen, Trum, eine Spindel, Zahnstange, ein Linearmotor, Rundtisch, eine Schnecke oder Neigung (`lean`) daneben
+wird abgelehnt, ebenso ein zweites Koppelgetriebe. Die Effekte sind die des Crates (`[effects]` wie in seiner
+Konfiguration); die des Riemens werden nicht gelesen.
+
+## Schneckengetriebe
+
+Ein `worm`-Knoten macht ein Getriebe zu einer Schneckenstufe: seine `ratio` ersetzt die des Getriebes, und mit
+`effects.gearbox_efficiency` verliert es nach seinen eigenen Wirkungsgraden; Steifigkeit, Lose und Trägheit des
+Getriebes bleiben:
+
+```toml
+[[machine.worm]]
+id = "worm_c"
+gearbox = "gear_c"         # das Getriebe vor einem Rundtisch etwa
+ratio = 40.0
+efficiency = 0.76          # von der Schnecke angetrieben: tan(gamma) / tan(gamma + rho')
+back_efficiency = 0.5      # vom Rad zurück angetrieben: tan(gamma - rho') / tan(gamma); 0 oder weniger sperrt selbst
+```
+
+Solange der Motor treibt, gibt sie das Moment t ihrer Feder als t eta an den Abtrieb und t / i an den Läufer weiter, wie
+ein Getriebe (`mech::Gearbox`, der Wirkungsgrad über 0,5 W eingeblendet). Von der Last zurück angetrieben gibt sie
+t / eta_back weiter: bei einem Rückwirkungsgrad von 0,5 nimmt der Läufer die halbe Leistung der Last auf. Ein
+Rückwirkungsgrad von 0 oder weniger sperrt sie: zurück angetrieben gibt sie t an den Abtrieb und nichts an den Läufer,
+der Abtrieb steht also, wo der Läufer ihn hält, und die Leistung der Last geht in die Reibung der Schnecke; in Ruhe hält
+sie jede Last ohne Motormoment (ihr Haltemoment ist 0). Mit demselben Wirkungsgrad in beide Richtungen ist sie der
+Rundtisch des Gelenkbaukastens mit `table.gear = "worm"`. Ihre Wirkungsgrade folgen nicht ihrer Temperatur, und unter 0
+zählen sie als 0 (siehe [was Maschinendateien noch nicht können](#was-maschinendateien-noch-nicht-können)).
+
+## Die Umschlingung des Riemens und eine sich neigende Achse
+
+**Die Umschlingung des Riemens** (`effects.belt_wrap`). Mit ihr sind die eingreifenden Zähne an jeder getriebenen
+Scheibe Umschlingung r / p (p die Zahnteilung) anstelle von `ratings.belt_teeth_in_mesh`, im Gesetz des
+Zahnüberspringens und in der Zahnlast des Riemens. Die Umschlingung wird in der Lage aus den Orten der Räder in der
+Ebene des Riemens gerechnet (x und z der 3D-Ansicht): `at_m` der Scheibe und die Räder vor und nach ihr entlang des
+Riemens, der vorletzte Punkt der Route des Abschnitts, der an der Scheibe endet, und der zweite der Route des
+Abschnitts, der dort beginnt (eine Umlenkrolle mit ihrem `at_m`, von ihrem Körper aus, wo sie auf einem mitfährt; ein
+Körper, eine Klemme an ihm, wo die 3D-Ansicht ihn zeichnet; eine andere Scheibe). `clockwise` jedes Rads sagt, in
+welcher Richtung der Riemen um es läuft, den Routen nach; die geraden Trume des Riemens sind die passenden Tangenten,
+und die Umschlingung ist, wie weit der Riemen zwischen ihnen um die Scheibe dreht. Für die Anordnungen der
+mitgelieferten Crates ist das `mech::wrap_angle`, eine halbe Umdrehung weniger die Neigung beider Trume. Abgelehnt wird
+eine Datei, wo ein Motor keine Scheibe treibt, eine Scheibe nicht eine Route beendet und eine andere beginnt, oder sie
+oder ein Rad neben ihr kein `at_m` hat.
+
+**Eine sich neigende Achse** (`effects.tool_flex`, elastisches Modell): ein `lean`-Knoten ist ein Körper, der sich an
+seinem Wagen entlang einer waagrechten Achse neigt, wie die Z-Achse des T-Portals an ihrem X-Wagen. Sein Schwerpunkt
+weicht gegen die Führung um w zur Seite aus; die Führung gibt seitlich und im Kippen nach: mit h = `com_drop_m` weniger
+dem Weg der `lever_axis` ist die Steifigkeit am Schwerpunkt k = 1 / (1 / seitlich + h² / Kippen), und die
+Werkzeugspitze, h_tool darunter, bewegt sich um k (1 / seitlich + h h_tool / Kippen) je Meter w. Der Körper fährt mit
+der Geschwindigkeit seiner Achse plus w' über Grund, seine Masse koppelt also die Achsen und w; die Feder wirkt innen,
+zwischen Wagen und Körper, die Prozesskraft an der Werkzeugspitze, und wenn die Hebelachse fährt, drückt die steifere
+Feder sie mit -w² / 2 dk/dz zurück. Das Werkzeug sitzt an der Spitze (`tool_state`), die Dämpfung der Neigung ist
+`power.tool_flex`, der Weg der Spitze `axis.<Achse>.tool_deflection`, und die Eigenform des Riemens schließt sie ein.
+
+```toml
+[[machine.lean]]           # machines/t-gantry.toml
+id = "z_lean"
+body = "z_axis"
+axis = "x"
+com_drop_m = "geometry.z_com_drop_m"
+tool_drop_m = "geometry.z_tool_drop_m"
+lever_axis = "z"
+lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
+tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
+damping_n_s_m = "tool_flex.damping_n_s_m"
+```
+
+Die Datei des T-Portals hat beides, ausgeliefert aus (das Crate hat seine Neigung an): ihre Scheiben an den Enden von X
+auf Höhe des Wagens und ihre Wagenrollen r + r_Rolle darüber und darunter, sodass der Riemen beide Scheiben waagrecht
+verlässt, eine halbe Umdrehung in jeder Lage, wie im Crate; mit einem der beiden Effekte an ist sie ihr Crate auf 1e-9.
 
 ## Die anderen Beispiele: ein CoreXY und ein XYZ-Portal
 
@@ -524,24 +608,36 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   nimmt den Abtrieb des Getriebes als ihre Kraft, die Gleichungen des Riemens überlassen ihm die Achse (in Ruhe und bei
   den starren Spannungen), und im elastischen Modell folgen die Zustände der Scheibe der Achse. Die Masse einer
   Drehachse ist die Trägheit ihres Rundtischs, ohne Schwerkraft entlang ihr.
+- Eine Schneckenstufe (`machine.worm`): der Abtrieb ihres Getriebes bekommt t eta^x und ihr Läufer t / i,
+  x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0); eine selbsthemmende gibt dem Läufer
+  treibend x t / i und zurück angetrieben nichts. Im starren Modell werden mit einer selbsthemmenden Schnecke die
+  Abtriebe der Getriebe neben den Beschleunigungen gelöst, damit ein Läufer, der nichts aufnimmt, lösbar bleibt
+  (`ConfigMachine::rigid_locking`).
+- Ein sich neigender Körper (`machine.lean`, elastisches Modell): eine Koordinate w mehr neben den Achsen, die Masse des
+  Körpers koppelt sie an seine Achse, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k und tip aus
+  `geometry::flex_at`.
+- Die Umschlingung des Riemens (`effects.belt_wrap`): `geometry::wrap` an jeder Scheibe aus den Tangenten ihrer
+  Nachbarn, in der Lage.
 
 Regler, Antriebe, Zwischenkreis, Wicklungserwärmung, Analysen, Urteile, Sensitivität und Fehlerbänder sind die jeder
 Maschine; an ihnen ist nichts besonders für Maschinendateien.
 
 ## Was Maschinendateien noch nicht können
 
-- `tool_flex`: die Z-Achse des T-Portals, die sich am Wagen neigt. Dafür braucht es, wo Schwerpunkt und Werkzeugspitze
-  dieser Achse unter ihrer Führung liegen und wie sich das mit ihrem Weg ändert, eine Geometrie, die eine Netzliste aus
-  Riemen und Körpern nicht hat; ein Knoten dafür wäre der Sonderfall des T-Portals. Eine Datei, die ihn einschaltet,
-  wird abgelehnt (`effects.tool_flex (not in machine files yet)`), damit ein Ergebnis nie einen verlangten Effekt
-  auslässt.
-- `belt_wrap`: der Umschlingungswinkel des Riemens an jeder Scheibe aus der Lage von Scheiben und Umlenkrollen.
-  Eine Netzliste gibt Trumlängen, nicht die Lage der Scheiben in der Ebene, also behält eine Datei
-  `ratings.belt_teeth_in_mesh`; eine, die ihn einschaltet, wird ebenso abgelehnt.
-- Eine Scherenhubbühne und Schneckengetriebe: die Mechanismen neben Riemen sind Spindeln, Zahnstangen, Linearmotoren
-  und Rundtische, jeder treibt eine Achse gerade, und das eine Koppelgetriebe ist das des ebenen Delta, das sich nicht
-  mit ihnen mischt. Eine Scherenhubbühne ist kein Fall davon: ein Motor treibt eine senkrechte Achse über eine Spindel
-  oder einen Zylinder am Fuß der Schere, z = n L sin phi; dazu bräuchte es eine Spindel, die ein Koppelgetriebe statt
+- `belt_wrap` neben Spindel, Zahnstange, Linearmotor oder Rundtisch: die Umschlingungen werden je Motor gemeldet, und
+  ein solcher Motor dreht keine Scheibe; die Datei wird abgelehnt. Eine Scheibe steht, wo ihr `at_m` sie hinstellt (sie
+  fährt auf keinem Körper mit), und die Lagen der Umschlingung sind die der 3D-Ansicht: die Abschnittslängen werden
+  nicht gegen sie geprüft.
+- `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
+  im Crate).
+- Eine selbsthemmende Schnecke (Rückwirkungsgrad 0 oder weniger) gibt zurück angetrieben nichts an ihren Läufer, der
+  Motor senkt eine Last durch sie also ohne Moment, wo er bei einem Rückwirkungsgrad unter 0 schieben müsste; und ihre
+  Sperre blendet über die 0,5 W des Getriebes ein, statt zu haften, sodass ein Motormoment, das die Last nicht ganz hebt,
+  sie langsam vorwärts kriechen lässt. Die Wirkungsgrade einer Schnecke folgen nicht ihrer Temperatur.
+- Eine Scherenhubbühne: die Mechanismen neben Riemen sind Spindeln, Zahnstangen, Linearmotoren und Rundtische,
+  jeder treibt eine Achse gerade, und das eine Koppelgetriebe ist das des ebenen Delta, das sich nicht mit ihnen
+  mischt. Eine Scherenhubbühne ist kein Fall davon: ein Motor treibt eine senkrechte Achse über eine Spindel oder
+  einen Zylinder am Fuß der Schere, z = n L sin phi; dazu bräuchte es eine Spindel, die ein Koppelgetriebe statt
   einer Achse treibt. Ein Körper kann nicht auf einer
   Drehachse mitfahren (er bewegte sich auf einem Kreis, nicht entlang rechtwinkliger Achsen), und eine Drehachse hat
   keine eigene Lagerreibung (nur die ihres Motors und Getriebes).
@@ -579,8 +675,10 @@ gegen ihre Crates:
 Derselbe Vergleich läuft mit jedem Effekt, den Maschinendateien seit dem 13. November haben, eingeschaltet (Rahmen,
 Umlenkrollen, Energiekette, Prozesskraft, thermische Rückwirkung mit warmen Teilen, Zahnsprung, Trumschwingung),
 elastisch und starr, und mit allen zugleich: die Datei des T-Portals nennt ihre fünf Umlenkrollen, ihren Rahmen und
-acht Trume und gibt die Zahlen des Crates auf 1e-9 (`the_effects_of_a_machine_file_are_its_crates`). Die
-Handrechnungen der Effekte selbst sind die des Crates.
+acht Trume und gibt die Zahlen des Crates auf 1e-9 (`the_effects_of_a_machine_file_are_its_crates`); seit dem
+14. November auch mit der sich neigenden Z-Achse (`machine.lean`) und der Umschlingung des Riemens aus den Lagen
+seiner Scheiben und Rollen, deren Umschlingungen ebenfalls übereinstimmen. Die Handrechnungen der Effekte selbst sind
+die des Crates.
 
 Der H-Bot, der CoreXY und das Portal haben kein Crate, gegen das sie gehalten werden könnten. Alle fünf Dateien bestehen die Standardprüfung, die jede
 Maschine besteht (Hin- und Rückrechnung, statisches Halten, Determinismus, Energieerhaltung ohne Verluste, die
@@ -612,6 +710,12 @@ bitgenau überein, Encoderstriche eingeschlossen); die Datei besteht die Standar
 Konfigurationen des Crates; von Hand die Armwinkel bei (0,1, -0,5) m (-asin 0,2 = -11,537 Grad und 16,474 Grad) und das
 Haltemoment in der Mitte (-18,358 N m an jedem Getriebe); und ein kaputtes Koppelgetriebe wird mit Schlüssel und Zeile
 abgelehnt.
+
+`crates/sim-machines/tests/machine_file_geometry.rs` hält die Umschlingung des Riemens aus den Lagen der Nachbarn einer
+Scheibe von Hand in zwei Lagen (eine versetzte Umlenkrolle und eine Klemme, die nicht waagrecht liegt), das
+Schneckengetriebe gegen den Rundtisch des Gelenkbaukastens mit seiner Schnecke (starr und elastisch, treibend und
+zurück angetrieben), das Halten einer selbsthemmenden Schnecke und die Beschleunigung einer zurück angetriebenen von
+Hand, und die Katalogsuche für den Z-Motor des XYZ-Portals allein.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden
 hat und was behoben ist: eine Maschine mit zwei oder drei getrennten Riemen (ihre Ruhelage war falsch, wo eine Achse
