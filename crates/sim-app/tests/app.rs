@@ -424,25 +424,37 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
         ("effects.iron_loss", &stall),
         ("effects.friction_feedforward", &characteristic),
     ];
+    // The 0.5 s before the switch run once per config, as two runs that must agree; each switch starts both of its runs
+    // from a snapshot of them (`Sim::restore`, bit for bit). Run anew for every switch they took most of the six-axis
+    // arm's 10 minutes and more (15 November 2026).
+    let mut warmed: Vec<(Vec<&String>, sim_components::Snapshot)> = Vec::new();
     for effect in effects {
         let mut base = base.clone();
-        for setting in through.iter().filter(|(e, _)| *e == effect).flat_map(|(_, s)| s.iter()) {
+        let settings: Vec<&String> = through.iter().filter(|(e, _)| *e == effect).flat_map(|(_, s)| s.iter()).collect();
+        for setting in &settings {
             base.set_text(setting).unwrap();
         }
         let mut runners = [Runner::new(entry, &base).unwrap(), Runner::new(entry, &base).unwrap()];
-        let mut events = [Vec::new(), Vec::new()];
-        for (runner, events) in runners.iter_mut().zip(&mut events) {
-            runner.handle(Request::Command(Command::StartCycle), events);
-            runner.advance(0.5, events);
+        if let Some((_, snapshot)) = warmed.iter().find(|(s, _)| *s == settings) {
+            for runner in &mut runners {
+                runner.sim.restore(snapshot).unwrap();
+            }
+        } else {
+            let mut events = [Vec::new(), Vec::new()];
+            for (runner, events) in runners.iter_mut().zip(&mut events) {
+                runner.handle(Request::Command(Command::StartCycle), events);
+                runner.advance(0.5, events);
+            }
+            assert!(
+                samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500,
+                "{}: {effect}: {} and {} samples, the same: {}",
+                entry.id,
+                samples(&events[0]).len(),
+                samples(&events[1]).len(),
+                samples(&events[0]) == samples(&events[1])
+            );
+            warmed.push((settings, runners[0].sim.snapshot()));
         }
-        assert!(
-            samples(&events[0]) == samples(&events[1]) && samples(&events[0]).len() == 500,
-            "{}: {effect}: {} and {} samples, the same: {}",
-            entry.id,
-            samples(&events[0]).len(),
-            samples(&events[1]).len(),
-            samples(&events[0]) == samples(&events[1])
-        );
 
         let mut flipped = base.clone();
         flipped.set_text(&format!("{effect} = {}", !base.bool(&effect).unwrap())).unwrap();
