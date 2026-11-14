@@ -106,7 +106,7 @@ impl Plc {
     /// Waits until the server has carried out what was written before, then until the simulation has run `seconds` on
     /// (`simulated`): two more ticks of its loop (`status.cycles`), as the first may have taken its commands before the
     /// write came. Waits in wall time ended before that on a loaded host, and on the machines the simulator runs no
-    /// faster than real time (the hexapod, the spatial cable robot), whose ticks take 0.1 s of simulated time each and
+    /// faster than real time (the six-legged platform, the platform on cables in space), whose ticks take 0.1 s of simulated time each and
     /// longer than that.
     async fn carried_out(&self, seconds: f64) {
         let ticks = || async {
@@ -478,7 +478,7 @@ async fn run_path_written_before_the_path_runs_the_new_path() {
         // The old path cannot be read: run, it is refused.
         plc.write(vec![("command.path".into(), Variant::from("line,0.5\ncircle,1,2"))]).await;
         plc.carried_out(0.0).await;
-        // To the middle of the travel and on to three quarters of it: the planar cable robot starts in the middle, where
+        // To the middle of the travel and on to three quarters of it: the planar platform on cables starts in the middle, where
         // a line to the middle alone was over before it could be seen running.
         let point = |share: f64| {
             axes.iter().map(|a| format!("{}", a.min + share * (a.max - a.min))).collect::<Vec<_>>().join(",")

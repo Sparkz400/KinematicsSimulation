@@ -23,8 +23,8 @@ fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
 }
 
 /// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, the
-/// rotary table's payload inertia or the cable robots' platform payload (the slides have one; the arms, the table and
-/// the cable robots have none).
+/// rotary table's payload inertia or the payload of a platform hung on cables (the slides have one; the arms, the table
+/// and the platforms have none).
 fn payload_key(cfg: &sim_core::Config) -> &'static str {
     ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2", "platform.payload_kg"]
         .into_iter()
@@ -39,8 +39,8 @@ fn has_gearbox_ratings(cfg: &sim_core::Config) -> bool {
 }
 
 /// The machine whose bands and worst-corner search take the least: of the machines with one motor, the one with the
-/// fewest bounded values. The cable robots have fewer (17 against 19), but their cycle takes ten times as long, and the
-/// search on the planar one ran past the 15 minutes a test may take.
+/// fewest bounded values. The platforms on cables have fewer (17 against 19), but their cycle takes ten times as long, and
+/// the search on the planar one ran past the 15 minutes a test may take.
 fn fewest_bounds() -> &'static sim_core::MachineEntry {
     MACHINES
         .iter()
@@ -362,7 +362,7 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
 /// gentler.
 ///
 /// The machines each on a thread of their own (`on_every_machine`): one after the other, with the ten machines of 14
-/// November (arms, hexapod and cable robots that take seconds per analysis), the test ran past its 15 minutes.
+/// November (arms and platforms that take seconds per analysis), the test ran past its 15 minutes.
 #[test]
 fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
     on_every_machine(|entry| {
@@ -467,7 +467,7 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
 #[test]
 fn sensitivity_writes_one_ranked_row_per_parameter() {
     for entry in MACHINES {
-        // The table that holds the payload: [mass], the rotary table's [table] or a cable robot's [platform]. An arm's
+        // The table that holds the payload: [mass], the rotary table's [table] or a platform's [platform]. An arm's
         // [arm] has one number beside its lists and its URDF (the palletiser's two more of its payload's swing, an effect
         // that is off), and the crank and cam machines' [mass] the payload alone: there the joints' [joint] comes along.
         let cfg = entry.config();
@@ -1371,7 +1371,7 @@ fn compare_writes_the_cycle_with_an_effect_on_and_off() {
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
         let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
-        // The friction the machine has: of its guides, of its arms' joints, or of a cable robot's winches.
+        // The friction the machine has: of its guides, of its arms' joints, or of the winches that pull a platform.
         let effect = ["guide_friction", "joint_friction", "winch_friction"]
             .into_iter()
             .find(|e| entry.config().bool(&format!("effects.{e}")).is_ok())

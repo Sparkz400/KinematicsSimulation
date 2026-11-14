@@ -165,7 +165,7 @@ impl Trace {
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's
     // `profile.trajectory_spline`): the C2 spline, clamped at rest at the end of the run-out below, rang back over
-    // the rows before it, the last ones off by 4 N m of torque on the single axis and 800 N m on the linear motor.
+    // the rows before it, the last ones off by 4 N m of torque on a belt axis and 800 N m on a linear motor.
     let mut cfg = cfg.clone();
     cfg.set_text("profile.trajectory_spline = \"hermite\"")?;
     let mut sim = Sim::new(entry, &cfg)?;
