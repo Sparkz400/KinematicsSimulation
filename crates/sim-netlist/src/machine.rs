@@ -49,7 +49,7 @@
 //! belt (crates/sim-machines/tests/machine_files.rs checks the screw axis against its crate). A rotary axis has no
 //! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
-use crate::geometry::{Wheel, flex_at, wrap};
+use crate::geometry::{Wheel, arc, contacts, flex_at, wrap};
 use crate::netlist::{LeanNode, Netlist, Transmission, Waypoint, WormNode};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
@@ -65,6 +65,8 @@ use sim_core::{
 };
 
 const G: f64 = 9.80665;
+/// Straight pieces the 3D view draws a belt's arc round a wheel with.
+const ARC_PIECES: usize = 8;
 
 /// A `&'static str` for an id or key read from a file, which `AxisInfo` and the other machine descriptions take.
 /// Each distinct text is leaked once, so rebuilding a machine on every config change does not grow memory.
@@ -1889,9 +1891,67 @@ impl ConfigMachine {
             None => at,
         }
     }
-    /// The points the 3D view draws a section's belt through: its `route`, else its pulleys and the body it is clamped
-    /// to (the one that moves with most of the axes its length changes with, and the fewest others).
-    fn route(&self, s: usize, q: &[f64]) -> Vec<[f64; 3]> {
+    /// A waypoint of a belt as a wheel in the belt's plane (x, z), its radius signed by the sense the belt runs round
+    /// it, and where the 3D view puts it at the pose `q`.
+    fn wheel(&self, w: Waypoint, q: &[f64]) -> (Wheel, [f64; 3]) {
+        let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
+        let (at, radius) = match w {
+            Waypoint::Pulley(kk) => (self.pulley_scene_at(kk), self.r[kk] * sense(self.clockwise.0[kk])),
+            Waypoint::Idler(d) => {
+                let idler = &self.idlers[d];
+                (self.idler_scene_at(idler, q), idler.radius * sense(self.clockwise.1[d]))
+            }
+            Waypoint::Body(b) => (self.scene_at(q, &self.bodies[b].axes), 0.0),
+        };
+        (Wheel { centre: [at[0], at[2]], radius }, at)
+    }
+
+    /// The belt of section `s` as the 3D view draws it, a polyline in scene coordinates: its straight runs from tangent
+    /// to tangent between the wheels of its route (`geometry::contacts`), round each wheel inside the route in the
+    /// wheel's sense (`geometry::arc`). Each point keeps the depth (y) of its wheel.
+    fn belt_line(&self, s: usize, q: &[f64]) -> Vec<[f64; 3]> {
+        let route = self.route_waypoints(s);
+        let wheels: Vec<(Wheel, [f64; 3])> = route.iter().map(|&w| self.wheel(w, q)).collect();
+        let at = |p: [f64; 2], y: f64| [p[0], y, p[1]];
+        let mut line = Vec::new();
+        for (i, pair) in wheels.windows(2).enumerate() {
+            let [(a, pa), (b, pb)] = [pair[0], pair[1]];
+            let [leave, meet] = contacts(a, b);
+            if i > 0 {
+                // Round wheel a from where the run before met it.
+                let came = contacts(wheels[i - 1].0, a)[1];
+                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| at(p, pa[1])));
+            } else {
+                line.push(at(leave, pa[1]));
+            }
+            line.push(at(meet, pb[1]));
+        }
+        line
+    }
+
+    /// The wraps round the belt motors' pulleys between the section that ends at each and the one that starts there
+    /// (`wrap_neighbours`' rule), as polylines with the section that ends there; none where a pulley does not end one
+    /// route and start another.
+    fn pulley_wraps(&self, q: &[f64]) -> Vec<(usize, Vec<[f64; 3]>)> {
+        let routes: Vec<Vec<Waypoint>> = (0..self.sections.len()).map(|s| self.route_waypoints(s)).collect();
+        (0..self.m())
+            .filter(|&kk| self.direct[kk].is_none())
+            .filter_map(|kk| {
+                let me = Waypoint::Pulley(kk);
+                let ends: Vec<usize> = (0..routes.len()).filter(|&i| routes[i].last() == Some(&me)).collect();
+                let starts: Vec<usize> = (0..routes.len()).filter(|&i| routes[i].first() == Some(&me)).collect();
+                let (&[section], &[next]) = (&ends[..], &starts[..]) else { return None };
+                let (before, after) = (*routes[section].iter().rev().nth(1)?, *routes[next].get(1)?);
+                let ((wheel, at), from, to) = (self.wheel(me, q), self.wheel(before, q).0, self.wheel(after, q).0);
+                let points = arc(wheel, contacts(from, wheel)[1], contacts(wheel, to)[0], ARC_PIECES);
+                Some((section, points.into_iter().map(|p| [p[0], at[1], p[1]]).collect()))
+            })
+            .collect()
+    }
+
+    /// The waypoints a section's belt runs through: its `route`, else its pulleys and the body it is clamped to (the
+    /// one that moves with most of the axes its length changes with, and the fewest others).
+    fn route_waypoints(&self, s: usize) -> Vec<Waypoint> {
         let sec = &self.sections[s];
         let mut route = sec.route.clone();
         if route.is_empty() {
@@ -1914,13 +1974,6 @@ impl ConfigMachine {
             }
         }
         route
-            .iter()
-            .map(|w| match *w {
-                Waypoint::Pulley(kk) => self.pulley_scene_at(kk),
-                Waypoint::Idler(d) => self.idler_scene_at(&self.idlers[d], q),
-                Waypoint::Body(b) => self.scene_at(q, &self.bodies[b].axes),
-            })
-            .collect()
     }
 }
 
@@ -2149,18 +2202,7 @@ impl Machine for ConfigMachine {
         if self.wraps.is_empty() {
             return Vec::new();
         }
-        let wheel = |w: Waypoint| {
-            let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
-            let (at, radius) = match w {
-                Waypoint::Pulley(kk) => (self.pulley_scene_at(kk), self.r[kk] * sense(self.clockwise.0[kk])),
-                Waypoint::Idler(d) => {
-                    let idler = &self.idlers[d];
-                    (self.idler_scene_at(idler, tool_pose), idler.radius * sense(self.clockwise.1[d]))
-                }
-                Waypoint::Body(b) => (self.scene_at(tool_pose, &self.bodies[b].axes), 0.0),
-            };
-            Wheel { centre: [at[0], at[2]], radius }
-        };
+        let wheel = |w: Waypoint| self.wheel(w, tool_pose).0;
         let mut out = vec![f64::NAN; self.m()];
         for &(kk, before, after) in &self.wraps {
             out[kk] = wrap(wheel(before), wheel(Waypoint::Pulley(kk)), wheel(after));
@@ -2462,9 +2504,8 @@ impl Machine for ConfigMachine {
     }
 
     /// A plain scene: a beam, a box per body, a drive unit per motor at its pulley's `at_m`, the idlers, and the belt
-    /// as straight strips through each section's route, shaded by its tension against the pretension.
-    /// shortcut: the strips run from centre to centre, not tangent around the pulleys; upgrade with pulley wraps if the
-    /// view has to show which side of a pulley a belt runs on.
+    /// round its pulleys and idlers: each section from tangent to tangent through its route (`belt_line`), shaded by its
+    /// tension against the pretension, and the wraps round the motors' pulleys between sections (`pulley_wraps`).
     fn scene(&self, s: &[f64], out: &mut Scene) {
         use std::f64::consts::TAU;
         let (n, m) = (self.n(), self.m());
@@ -2526,14 +2567,18 @@ impl Machine for ConfigMachine {
         }
         let tensions = self.tensions(s);
         let pretension = self.belt.pretension.max(1.0);
+        let strip = |from: [f64; 3], to: [f64; 3]| {
+            Part::new("belt", Shape::Segment { to, width: 0.02 }, from, [0.12, 0.12, 0.13])
+        };
+        let shade = |t: f64| ((t - self.belt.pretension) / pretension).clamp(-1.0, 1.0) as f32;
         for (i, t) in tensions.iter().enumerate() {
-            let shade = ((t - self.belt.pretension) / pretension).clamp(-1.0, 1.0) as f32;
-            for pair in self.route(i, q).windows(2) {
-                out.parts.push(
-                    Part::new("belt", Shape::Segment { to: pair[1], width: 0.02 }, pair[0], [0.12, 0.12, 0.13])
-                        .highlighted(shade),
-                );
+            for pair in self.belt_line(i, q).windows(2) {
+                out.parts.push(strip(pair[0], pair[1]).highlighted(shade(*t)));
             }
+        }
+        // Shaded as the section that comes onto the pulley.
+        for (section, wrap) in self.pulley_wraps(q) {
+            out.parts.extend(wrap.windows(2).map(|pair| strip(pair[0], pair[1]).highlighted(shade(tensions[section]))));
         }
         for (i, axis) in self.axes.iter().enumerate() {
             let moves: Vec<bool> = (0..n).map(|l| l <= i).collect();
