@@ -13,6 +13,8 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einen Delta-Picker auslegen](#einen-delta-picker-auslegen)
 - [Einen Linear-Delta auslegen](#einen-linear-delta-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
+- [Programme: G-Code und Roboterprogramme](#programme-g-code-und-roboterprogramme)
+- [Die Form der Bewegungen wählen](#die-form-der-bewegungen-wählen)
 - [Regler einstellen und Input Shaping nutzen](#regler-einstellen-und-input-shaping-nutzen)
 - [Eine Antriebsaufzeichnung nachfahren und Parameter anpassen](#eine-antriebsaufzeichnung-nachfahren-und-parameter-anpassen)
 - [Sehen, wohin Moment und Energie gehen](#sehen-wohin-moment-und-energie-gehen)
@@ -859,6 +861,28 @@ Lauf: erste Berührung eines Hindernisses (Name: Zeit, Geschwindigkeit des Werkz
 - Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste.
 - Der Abstand gilt zwischen Quadern: Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet, nicht ihre CAD-Formen. Die Unterarmstäbe und Oberarme des Delta-Pickers sind je zehn Quader entlang des gezeichneten Stabs oder Arms, wo er schräg steht bis zu einer Stücklänge (95 mm am Stab, 40 mm am Arm) breiter als er.
 
+## Programme: G-Code und Roboterprogramme
+
+`--path DATEI` (und das Bahnfeld der App) liest außer einer Bahndatei auch ein Programm, nach der Endung der Datei. Seine Bewegungen werden zu den Geraden und Kreisbögen einer Bahn, deren Zeitverlauf dieselben Planer festlegen.
+
+```text
+$ sim-cli analyze t-gantry --path tasche.nc
+$ sim-cli run delta-d3 --path greifen.mod --time-optimal
+```
+
+| Endung | Gelesen als | Was gelesen wird |
+| --- | --- | --- |
+| `.nc`, `.ngc`, `.gcode`, `.g`, `.cnc`, `.tap` | G-Code (DIN 66025 / ISO 6983) | G0 Eilgang, G1 Gerade, G2/G3 Kreisbogen (Mittelpunkt I, J, K vom Anfang aus oder R; R < 0 der längere Bogen), F Vorschub je Minute, G17/G18/G19 Ebene, G20 Zoll / G21 mm (Vorgabe), G90 absolut (Vorgabe) / G91 inkrementell; X, Y, Z, A, B, C für die Achsen mit diesen Kennungen (A, B, C in Grad). Ohne Wirkung angenommen: N-, O-, M-, S-, T-Wörter, G40, G49, G54, G80, G94, Kommentare `( )` und `;`, `%`-Zeilen; M2 und M30 beenden das Programm |
+| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {Hilfspunkt}, {Ende}` in mm und Grad; weggelassene Komponenten bleiben vom Punkt davor; A, B, C, S, T und weitere bewegen Achsen dieses Namens, wo die Maschine sie hat, und entfallen sonst |
+| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` zu Robtargets an Ort und Stelle (`[[x, y, z], ...]`) oder vereinbart (`CONST robtarget p10 := [[...]];`), Positionen in mm; Orientierung, Geschwindigkeit und Zone entfallen |
+| jede andere, mit Zeilen `MoveL`, `MoveJ`, `MoveC` | Roboterbewegungen als CSV | `MoveL,x,y,z`, `MoveJ,x,y,z`, `MoveC,Hilfspunkt...,Ende...`: ein Wert je Achse in m (rad) |
+| jede andere | Bahndatei | wie oben |
+
+- Das Programm beginnt dort, wo die Maschine steht; eine Achse, die ein Satz nicht nennt, bleibt.
+- Jede Folge von G1/G2/G3-Bewegungen mit einem Vorschub wird innerhalb der Achsgrenzwerte geplant, die Geschwindigkeit jeder Achse auf den Vorschub begrenzt, und die Folgen schließen mit einem Halt dazwischen aneinander an. G0 und Roboterprogramme fahren mit den Grenzwerten der Achsen, mit `--time-optimal` so schnell, wie die Motoren es erlauben. Der Vorschub begrenzt jede Achse, nicht die Bahngeschwindigkeit: Eine Diagonale kann bis zu √2 schneller als F fahren.
+- Ein PTP oder MoveJ ist eine Gerade in den Achsen der Maschine wie ein MoveL: Die Leser passen zu Maschinen, deren Achsen Positionen sind (Portale, Deltas).
+- Alles andere wird mit seiner Zeile abgelehnt: ein anderer G-Befehl (G4, G41, G81, ...) oder Buchstabe, ein G1 vor jedem F, eine Achse, die die Maschine nicht hat, ein Kreisbogen, der auch die dritte Achse der Ebene bewegt (eine Helix), ein Kreisbogen, dessen Anfang und Ende verschieden weit vom Mittelpunkt liegen, MoveAbsJ, PTP_REL, SPLINE, ein benannter KRL-Punkt, ein nicht vereinbartes Robtarget.
+
 ## Von einem laufenden Förderband greifen
 
 [`crates/machine-delta-d3/conveyor.toml`](../../crates/machine-delta-d3/conveyor.toml) ist die Standardkonfiguration des D3 mit einer Tabelle [`[conveyor]`](../config-reference.md#conveyor): Ein Band in x-Richtung bringt mit 0,3 m/s jede Sekunde ein Teil durch ein 0,5 m langes Greiffenster; der Delta trifft jedes Teil mit der Geschwindigkeit des Bands, fährt beim Schließen des Greifers mit ihm, hebt es ab und legt es an einem festen Ablageort ab. Die Tabelle wirkt genauso bei den anderen Deltas und den Portalen (ein Wert je Werkzeugachse).
@@ -876,7 +900,27 @@ parts-missed,,0,0,ok
 - `pick-tracking` ist der größte Abstand des Werkzeugs vom Teil längs des Bands, während der Greifer schließt, gegen `conveyor.tracking_tolerance_m`.
 - `run --cycle` fährt die Durchläufe wie jeden Zyklus; die Aufzeichnung zeigt die Nutzlast am Ende jedes Griffs angehängt.
 - In der App die Datei mit „Öffnen…“ im Konfigurationsbereich laden und den Zyklus starten: Die 3D-Ansicht zeichnet das Band, seine mitlaufenden Leisten und die Teile darauf.
+- Das T-Portal, der D2, der D4 und der Linear-Delta haben ein Förderband-Beispiel neben ihrer Standardkonfiguration (`crates/machine-t-gantry/conveyor.toml` und entsprechend): Die Deltas greifen ein Teil je Sekunde von einem Band mit 0,3 m/s (der D4 dreht jedes um 90 Grad zum Ablageort), das T-Portal ein Teil alle 5 s von einem Band mit 0,1 m/s, sein Durchlauf dauert etwa 3,6 s.
+- Mit `conveyor.ramp_s` beschleunigt das Band zuerst; auch während der Rampe wird gegriffen, das Teil dort getroffen, wo es ist, mit seiner Geschwindigkeit dann.
+- Mit Input Shaping werden die Durchläufe für den geformten Sollwert geplant: das Teil eine mittlere Verzögerung des Shapers voraus, Greifen und Ablegen um den Shaper länger, sodass der Greifer schließt, während der geformte Sollwert auf dem Teil ist.
 - Wie jede Bewegung eines Durchlaufs geplant wird und was ein Griff oder ein verpasstes Teil ist, steht in der [Modellreferenz](../model-reference.md#picking-from-a-conveyor) (englisch).
+
+## Die Form der Bewegungen wählen
+
+`profile.shape` legt die Form jeder Bewegung von Stillstand zu Stillstand fest (`MoveTo`, die Abschnitte des Zyklus); ein `[[cycle.segment]]` kann mit `shape = "..."` seine eigene nennen:
+
+- `"s-curve"` (Vorgabe): sieben Abschnitte, der Ruckgrenzwert voll genutzt.
+- `"sin2"`: Die Geschwindigkeit steigt über jeder Rampe wie sin² (Bestehorn); die größte Beschleunigung ist (π/2) v / T_Rampe, der Ruck innerhalb der Rampe glatt.
+- `"poly345"` und `"poly4567"`: die Polynom-Bewegungsgesetze der VDI 2143, die die ganze Bewegung ohne Konstantfahrt durchlaufen; 4-5-6-7 beginnt und endet auch ohne Ruck. Größte Geschwindigkeit 1,875 h / T und 2,1875 h / T für eine Bewegung um h in T.
+
+```text
+$ sim-cli analyze t-gantry --set 'profile.shape = "sin2"'
+$ sim-cli analyze delta-d3 --set 'profile.shape = "poly4567"' --set profile.deceleration_ratio=0.8
+```
+
+`profile.deceleration_ratio` bremst mit einem Anteil der Beschleunigungsgrenzwerte (S-Kurve und sin² bremsen dann auf einer eigenen Rampe). Einer Achse, die gegen die Schwerkraft hebt, geben `profile.vertical_axis = "z"` (`"-z"`, wo oben die Minusrichtung ist) und `profile.up_acceleration_ratio` nach oben weniger Beschleunigung als nach unten: Eine Bewegung nach oben beschleunigt sanft und bremst hart, eine nach unten umgekehrt.
+
+Trajektorien (`--trajectory`, geplante Bahnen, die Stützpunkte eines Abschnitts) laufen auf einem kubischen Spline durch ihre Posen, dessen Beschleunigung stetig ist (`profile.trajectory_spline = "c2"`); `"hermite"` fährt die Kurve wie vor dem 14. November 2026, deren Beschleunigung an jeder Pose springt.
 
 ## Regler einstellen und Input Shaping nutzen
 
@@ -979,6 +1023,12 @@ Ein sinusförmiges Moment an einem Motor, zusätzlich zu den Haltemomenten, geme
 
 ```text
 --set effects.input_shaping=true --set profile.shaper_frequency_hz=25 --set profile.shaper_damping=0.03
+```
+
+`profile.shaper_type` wählt den Shaper: `"zv"` (zwei Stufen, der kürzeste, lässt 20 % neben der Frequenz 31 % übrig), `"zvd"` (Vorgabe, drei Stufen, 10 %), `"zvdd"` (vier, 3 %), `"ei"` (drei Stufen, lässt V = `profile.shaper_ei_tolerance` bei der Frequenz und etwa höchstens V über ±20 %) und `"ei2"` (Zwei-Höcker-EI, vier Stufen, ein breiteres Band innerhalb V). Weitere Resonanzen gehören in `profile.shaper_modes`, jede mit den anderen gefaltet, und können nur auf einige Achsen wirken; `profile.shaper_axes` begrenzt den ersten und zweiten Shaper ebenso:
+
+```text
+--set 'profile.shaper_axes = ["x"]' --set 'profile.shaper_modes = [{ frequency_hz = 42.0, damping = 0.02, type = "ei", axes = ["z"] }]'
 ```
 
 Stellen Sie die Frequenz auf die Resonanz des Werkzeugs ein. Am T-Portal ändert sie sich mit der Z-Höhe. Mit `--set effects.shaper_follows_pose=true` (Input Shaper folgt der Pose) übernimmt der Shaper die Frequenz deshalb von der Maschine an der geplanten Pose. Die Maschine meldet die tiefere der beiden Eigenschwingungen Schlitten am Riemen und Z-Achse an der Führung (24,6 Hz bei z = 0,05 m und 35,6 Hz bei z = 0,15 m für die Standardkonfiguration bei x = 0,9 m). Die Einzelachse meldet ihren Schlitten am Riemen (65,8 Hz bei x = 0,5 m). Ein zweiter Shaper (`profile.shaper2_frequency_hz` über 0) folgt ebenso der zweiten Eigenform der Maschine: am T-Portal Schlitten und Z-Achse gegeneinander, 104,2 Hz bei z = 0,05 m.

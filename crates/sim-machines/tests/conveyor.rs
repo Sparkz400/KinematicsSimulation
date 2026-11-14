@@ -162,3 +162,59 @@ fn an_obstacle_at_the_place_fails_the_collision_check() {
     let collision = verdict(&cfg, &load, "collision");
     assert!(!collision.ok && collision.value < 0.0, "{collision:?}");
 }
+
+/// The plan's check sees the conveyor's passes too (`collision::check_cycle`, which `sim-cli` tells before a run): the
+/// box around the place pose is hit where the tool places, a box well away from the passes is not.
+#[test]
+fn the_planned_check_sees_the_conveyor_passes() {
+    let entry = find("delta-d3").unwrap();
+    let at_place = example(&[
+        r#"obstacles = [{ name = "at the place", centre_m = [0.0, -0.3, -0.8], size_m = [0.04, 0.04, 0.04] }]"#,
+    ]);
+    let check = sim_components::collision::check_cycle(entry, &at_place).unwrap().unwrap();
+    assert!(check.contact.is_some() && check.clearance <= 0.0, "{check:?}");
+    // 0.3 m beside the belt and the place, below the working range's top: clear of every pass.
+    let away =
+        example(&[r#"obstacles = [{ name = "away", centre_m = [0.45, -0.3, -1.0], size_m = [0.04, 0.04, 0.04] }]"#]);
+    let check = sim_components::collision::check_cycle(entry, &away).unwrap().unwrap();
+    assert!(check.contact.is_none() && check.clearance > 0.0, "{check:?}");
+}
+
+/// The optimiser leaves `[[cycle.segment]]` as it is where a conveyor runs the cycle: it changes no lift. On the D2's
+/// conveyor example, whose unused Adept cycle has two lifts the optimiser would lower otherwise (the D3's example fails
+/// `gearbox-gearing-life` as configured, which the optimiser refuses).
+#[test]
+fn the_optimiser_leaves_the_unused_cycle_alone_with_a_conveyor() {
+    let entry = find("delta-d2").unwrap();
+    let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-delta-d2/conveyor.toml");
+    let cfg = load_config(entry, &std::fs::read_to_string(file).unwrap()).unwrap();
+    let found = sim_components::analysis::optimise_cycle(entry, &cfg, 3).unwrap();
+    assert!(
+        found.lifts.is_empty() && found.changes.iter().all(|(path, _, _)| path != "cycle.segment"),
+        "{:?}",
+        found.changes
+    );
+}
+
+/// The conveyor examples beside the D3's, each next to its machine's default config: every one picks a part each pitch
+/// and misses none, within its tracking tolerance. The deltas' belts bring a part every 1.0 s, 60 a minute, and their
+/// passes are shorter, so they wait for each part: a cycle of 1.0 s. The T-gantry's pass takes about 3.6 s; its belt
+/// brings a part every 5.0 s, 12 a minute.
+#[test]
+fn every_conveyor_example_picks_a_part_each_pitch() {
+    for (id, krate, pitch) in [
+        ("t-gantry", "machine-t-gantry", 5.0),
+        ("delta-d2", "machine-delta-d2", 1.0),
+        ("delta-d4", "machine-delta-d4", 1.0),
+        ("delta-linear", "machine-delta-linear", 1.0),
+    ] {
+        let entry = find(id).unwrap();
+        let file = format!("{}/../{krate}/conveyor.toml", env!("CARGO_MANIFEST_DIR"));
+        let cfg = load_config(entry, &std::fs::read_to_string(file).unwrap()).unwrap();
+        let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+        let c = load.conveyor.unwrap();
+        assert!((load.duration - pitch).abs() < 1e-3, "{id}: {}", load.duration);
+        assert!((c.picks_per_minute - 60.0 / pitch).abs() < 0.1 && c.missed == 0, "{id}: {c:?}");
+        assert!(verdict(&cfg, &load, "pick-tracking").ok && verdict(&cfg, &load, "parts-missed").ok, "{id}");
+    }
+}

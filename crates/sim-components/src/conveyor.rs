@@ -10,6 +10,15 @@
 //! `Q = target(0) + T (vb - va) / 2`. The move is planned with each axis's limits less what the belt term takes
 //! (`max(|va|, |vb|)` of the speed, `1.5 |vb - va| / T` of the acceleration, `6 |vb - va| / T^2` of the jerk), and
 //! T is the shortest time in which the move to that Q fits (`intercept`).
+//!
+//! While the belt is still on its ramp the part speeds up: the intercept then meets it where it is at T with its speed
+//! at T (`intercept_moving`), and the grip follows the belt's own motion (`Track`). The acceleration of the setpoint
+//! steps by the belt's (speed / ramp) where the grip begins and ends.
+//!
+//! With input shaping the setpoint is the plan's weighted copies (`Controller::shape`): a plan at the belt's speed
+//! arrives the mean of the shaper's delays behind, and on the part only once the whole shaper has passed. So a pass
+//! plans for the part that far ahead on each axis, and its grip and release are longer by the shaper's span; the grip
+//! as `Pass::holds` and `Conveyor::gripping` count it begins once the shaped setpoint is on the part.
 
 use crate::profile::Move;
 use sim_core::{AxisInfo, Config, ConfigError};
@@ -57,6 +66,29 @@ struct Phase {
     mv: Move,
     va: Vec<f64>,
     vb: Vec<f64>,
+    /// A grip: the tool moves with the belt as it runs, in place of the belt term.
+    track: Option<Track>,
+}
+
+/// The belt's own motion along `direction` from the absolute times `from` (one per axis, as the part is planned for),
+/// at `speed` after a ramp of `ramp` seconds.
+#[derive(Debug, Clone)]
+struct Track {
+    direction: Vec<f64>,
+    from: Vec<f64>,
+    speed: f64,
+    ramp: f64,
+}
+
+/// How far a belt has run `t` seconds after its start, at `speed` after a ramp of `ramp` at a constant acceleration,
+/// and its speed and acceleration then.
+fn belt_motion(speed: f64, ramp: f64, t: f64) -> [f64; 3] {
+    let t = t.max(0.0);
+    if t < ramp {
+        [speed * t * t / (2.0 * ramp), speed * t / ramp, speed / ramp]
+    } else {
+        [speed * (t - ramp / 2.0), speed, 0.0]
+    }
 }
 
 impl Phase {
@@ -64,6 +96,16 @@ impl Phase {
         let tt = self.duration;
         let t = t.clamp(0.0, tt);
         self.mv.at(t, pos, vel, acc);
+        if let Some(track) = &self.track {
+            for i in 0..pos.len() {
+                let (d, from) = (track.direction[i], track.from[i]);
+                let [s, v, a] = belt_motion(track.speed, track.ramp, from + t);
+                pos[i] += d * (s - belt_motion(track.speed, track.ramp, from)[0]);
+                vel[i] += d * v;
+                acc[i] += d * a;
+            }
+            return;
+        }
         let u = if tt > 0.0 { t / tt } else { 1.0 };
         let (g, h, dh) = (u * u * u - u * u * u * u / 2.0, 3.0 * u * u - 2.0 * u * u * u, 6.0 * u - 6.0 * u * u);
         for i in 0..pos.len() {
@@ -175,8 +217,7 @@ impl Conveyor {
 
     /// How far the belt has run since the start at time `t`.
     pub fn belt(&self, t: f64) -> f64 {
-        let t = t.max(0.0);
-        if t < self.ramp { self.speed * t * t / (2.0 * self.ramp) } else { self.speed * (t - self.ramp / 2.0) }
+        belt_motion(self.speed, self.ramp, t)[0]
     }
 
     /// The time at which the belt has run `s`; infinite on a belt that stands.
@@ -213,10 +254,6 @@ impl Conveyor {
         self.origin.iter().zip(&self.direction).map(|(o, d)| o + d * s).collect()
     }
 
-    fn belt_velocity(&self) -> Vec<f64> {
-        self.direction.iter().map(|d| d * self.speed).collect()
-    }
-
     /// The parts on the belt at time `t` that are not in the gripper, with their positions along it: those not yet
     /// planned for, and the one of `pass` until its grip ends. What the scene draws.
     pub fn parts_on_belt(&self, t: f64, pass: Option<&Pass>) -> Vec<(u64, f64)> {
@@ -232,21 +269,25 @@ impl Conveyor {
     /// The next pass from `from` at rest at time `now`: for the first part that can be gripped inside the window, the
     /// parts before it counted as missed. A part the tool would grip before the window waits for it (the pass starts
     /// later); one it would grip beyond the window, or whose pass leaves `reachable`, is missed. `None` where a
-    /// thousand parts in a row are missed: no part can be picked.
+    /// thousand parts in a row are missed: no part can be picked. Also while the belt is on its ramp.
+    ///
+    /// `shaping`, from the input shaper (`Controller::shaper_delays`): per axis how far its setpoint lags a plan at a
+    /// constant speed, s, and how long after the plan it arrives, s; zeros without shaping. The pass is planned for the
+    /// part that far ahead on each axis, so that the shaped setpoint meets it, and grip and release are longer by the
+    /// span, so that the shaped setpoint is on the part for the whole grip.
     pub fn plan(
         &mut self,
         axes: &[AxisInfo],
         now: f64,
         from: &[f64],
         reachable: &dyn Fn(&[f64]) -> bool,
+        shaping: &(Vec<f64>, f64),
     ) -> Option<Pass> {
-        // shortcut: passes start once the belt has its speed, so the belt term of a pass is that of a constant speed;
-        // a pick during the ramp would need the part's acceleration in the intercept.
-        let earliest = now.max(self.ramp);
+        let earliest = now;
         for _ in 0..1000 {
             let k = self.next;
             self.next += 1;
-            let Some(pass) = self.pass_for(axes, k, earliest, from) else {
+            let Some(pass) = self.pass_for(axes, k, earliest, from, shaping) else {
                 self.missed += 1;
                 continue;
             };
@@ -270,8 +311,16 @@ impl Conveyor {
 
     /// The pass for part `k`, starting no earlier than `earliest`, and later where the grip would begin before the
     /// window or before the part has arrived.
-    fn pass_for(&self, axes: &[AxisInfo], k: u64, earliest: f64, from: &[f64]) -> Option<Pass> {
-        let mut pass = self.build(axes, k, earliest, from)?;
+    fn pass_for(
+        &self,
+        axes: &[AxisInfo],
+        k: u64,
+        earliest: f64,
+        from: &[f64],
+        shaping: &(Vec<f64>, f64),
+    ) -> Option<Pass> {
+        let build = |t0: f64| self.build(axes, k, t0, from, shaping);
+        let mut pass = build(earliest)?;
         let grip_at = |p: &Pass| p.start + p.grip.0;
         if self.position(k, grip_at(&pass)) < self.window[0] {
             if self.speed <= 0.0 {
@@ -279,10 +328,10 @@ impl Conveyor {
             }
             // Wait: by the time the part reaches the window's start, a pass started then grips it inside.
             let (mut lo, mut hi) = (earliest, self.belt_time(self.window[0] + self.belt(self.arrival(k))));
-            let mut found = self.build(axes, k, hi, from)?;
+            let mut found = build(hi)?;
             for _ in 0..50 {
                 let mid = 0.5 * (lo + hi);
-                match self.build(axes, k, mid, from) {
+                match build(mid) {
                     Some(p) if self.position(k, grip_at(&p)) >= self.window[0] => (hi, found) = (mid, p),
                     _ => lo = mid,
                 }
@@ -292,59 +341,128 @@ impl Conveyor {
         // On a belt that stands the part is gripped once it is there.
         let early = self.arrival(k) - grip_at(&pass);
         if early > 0.0 {
-            pass = self.build(axes, k, pass.start + early, from)?;
+            pass = build(pass.start + early)?;
         }
         Some(pass)
     }
 
     /// The phases of a pass for part `k` starting at `t0` from `from` at rest: to above the part, down onto it, the
-    /// grip, up, to above the place, down, the release, up, and, onto a moving place, to rest above the place.
-    fn build(&self, axes: &[AxisInfo], k: u64, t0: f64, from: &[f64]) -> Option<Pass> {
+    /// grip, up, to above the place, down, the release, up, and, onto a moving place, to rest above the place. With
+    /// `shaping` (see `plan`) the part is planned for that far ahead on each axis, grip and release are longer by the
+    /// span, and the grip counts from the span on.
+    fn build(&self, axes: &[AxisInfo], k: u64, t0: f64, from: &[f64], shaping: &(Vec<f64>, f64)) -> Option<Pass> {
         let n = from.len();
-        let (zero, belt, placed) = (vec![0.0; n], self.belt_velocity(), self.place_velocity.clone());
+        let (lead, settle) = (&shaping.0, shaping.1);
+        let (zero, placed) = (vec![0.0; n], self.place_velocity.clone());
         let plus = |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x + y).collect() };
         let minus = |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
+        let times = |s: f64| -> Vec<f64> { (0..n).map(|i| t0 + s + lead.get(i).copied().unwrap_or(0.0)).collect() };
+        // The part's pose and velocity `s` seconds into the pass, each axis its lead ahead.
+        let part = |s: f64| -> (Vec<f64>, Vec<f64>) {
+            let at = times(s);
+            let pos = (0..n).map(|i| self.origin[i] + self.direction[i] * self.position(k, at[i])).collect();
+            let vel = (0..n).map(|i| self.direction[i] * belt_motion(self.speed, self.ramp, at[i])[1]).collect();
+            (pos, vel)
+        };
+        let part = &part;
+        // Whether the belt still speeds up `s` seconds into the pass on some axis.
+        let ramping = |s: f64| self.speed > 0.0 && times(s).iter().any(|t| *t < self.ramp);
         let mut phases: Vec<Phase> = Vec::new();
         let mut at = from.to_vec();
         let mut t = 0.0;
-        // A phase from where the last ended to `target` (where it is at the phase's start, moving with `vb`); `dwell`
-        // for a phase of a fixed time that stays with `va`.
-        let mut add = |at: &mut Vec<f64>, t: &mut f64, va: &[f64], target: &[f64], vb: &[f64], dwell: Option<f64>| {
-            let (duration, mv) = match dwell {
-                Some(d) => (d, Move::new(at, at, axes)),
-                None => intercept(axes, at, va, target, vb)?,
+        // A phase from where the last ended, with `va`, to a target that is at `target(T)` with the velocity there after
+        // T seconds; `dwell` for a phase of a fixed time that stays with `va`, or with `track` along the belt.
+        let mut add = |at: &mut Vec<f64>,
+                       t: &mut f64,
+                       va: &[f64],
+                       target: &dyn Fn(f64) -> (Vec<f64>, Vec<f64>),
+                       dwell: Option<(f64, Option<Track>)>|
+         -> Option<Vec<f64>> {
+            let (duration, mv, vb, track) = match dwell {
+                Some((d, track)) => {
+                    // The velocity it ends with: the belt's then along a track, else `va` as it is.
+                    let vb = match &track {
+                        Some(track) => (0..n)
+                            .map(|i| track.direction[i] * belt_motion(track.speed, track.ramp, track.from[i] + d)[1])
+                            .collect(),
+                        None => va.to_vec(),
+                    };
+                    (d, Move::new(at, at, axes), vb, track)
+                }
+                None => {
+                    let (duration, mv, vb) = intercept_moving(axes, at, va, target)?;
+                    (duration, mv, vb, None)
+                }
             };
-            let phase = Phase { start: *t, duration, mv, va: va.to_vec(), vb: vb.to_vec() };
+            let phase = Phase { start: *t, duration, mv, va: va.to_vec(), vb: vb.clone(), track };
             let (mut pos, mut vel, mut acc) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
             phase.at(duration, &mut pos, &mut vel, &mut acc);
             *at = pos;
             *t += duration;
             phases.push(phase);
-            Some(())
+            // The velocity as given, not as the phase sums it up: a rounding off it would take the next phase off the
+            // intercept's closed form for a tool already moving with its target.
+            Some(vb)
         };
-        let above = plus(&self.part_pose(k, t0), &self.lift);
-        add(&mut at, &mut t, &zero, &above, &belt, None)?;
+        // A target at `pose` now moving with `v`.
+        let steady = |pose: Vec<f64>, v: Vec<f64>| {
+            move |tt: f64| -> (Vec<f64>, Vec<f64>) {
+                let p = pose.iter().zip(&v).map(|(p, v)| p + v * tt).collect();
+                (p, v.clone())
+            }
+        };
+        let lift = self.lift.clone();
+        // Onto the part: where it is after T while the belt speeds up, else at its speed (the intercept in closed form,
+        // as `intercept` has it).
+        let now = t;
+        let above = move |tt: f64| {
+            let (p, v) = part(now + tt);
+            (plus(&p, &lift), v)
+        };
+        let va = if ramping(t) {
+            add(&mut at, &mut t, &zero, &above, None)?
+        } else {
+            let (p, v) = above(0.0);
+            add(&mut at, &mut t, &zero, &steady(p, v), None)?
+        };
         // Down from where the tool met the part, as at the place: the part's pose to rounding. Its pose computed anew
         // differs from there by rounding, which a move of no lift made a move of microseconds (the S-curve of a
         // 1e-16 m step takes (1e-16 / 2 j)^(1/3) * 4 = 2 us), shifting the grip by that.
-        let part = minus(&at, &self.lift);
-        add(&mut at, &mut t, &belt, &part, &belt, None)?;
+        let on_part = minus(&at, &self.lift);
+        let va = if ramping(t) {
+            let (base, start) = (on_part.clone(), part(t).0);
+            let now = t;
+            let down = move |tt: f64| {
+                let (p, v) = part(now + tt);
+                (base.iter().zip(&p).zip(&start).map(|((b, p), s)| b + p - s).collect(), v)
+            };
+            add(&mut at, &mut t, &va, &down, None)?
+        } else {
+            add(&mut at, &mut t, &va, &steady(on_part, va.clone()), None)?
+        };
         let grip_start = t;
-        add(&mut at, &mut t, &belt, &[], &belt, Some(self.grip))?;
+        // Along the belt as it runs while it speeds up; after, at its speed as the belt term has it.
+        let track = ramping(t).then(|| Track {
+            direction: self.direction.clone(),
+            from: times(t),
+            speed: self.speed,
+            ramp: self.ramp,
+        });
+        let va = add(&mut at, &mut t, &va, &steady(vec![], vec![]), Some((self.grip + settle, track)))?;
         let grip_end = t;
         let up = plus(&at, &self.lift);
-        add(&mut at, &mut t, &belt, &up, &belt, None)?;
-        add(&mut at, &mut t, &belt, &plus(&self.place, &self.lift), &placed, None)?;
+        let va = add(&mut at, &mut t, &va, &steady(up, va.clone()), None)?;
+        let va = add(&mut at, &mut t, &va, &steady(plus(&self.place, &self.lift), placed.clone()), None)?;
         let down = minus(&at, &self.lift);
-        add(&mut at, &mut t, &placed, &down, &placed, None)?;
-        add(&mut at, &mut t, &placed, &[], &placed, Some(self.release))?;
+        let va = add(&mut at, &mut t, &va, &steady(down, placed.clone()), None)?;
+        let va = add(&mut at, &mut t, &va, &steady(vec![], vec![]), Some((self.release + settle, None)))?;
         let release_end = t;
         let up = plus(&at, &self.lift);
-        add(&mut at, &mut t, &placed, &up, &placed, None)?;
+        let va = add(&mut at, &mut t, &va, &steady(up, placed.clone()), None)?;
         if placed.iter().any(|v| *v != 0.0) {
-            add(&mut at, &mut t, &placed, &plus(&self.place, &self.lift), &zero, None)?;
+            add(&mut at, &mut t, &va, &steady(plus(&self.place, &self.lift), zero.clone()), None)?;
         }
-        Some(Pass { start: t0, phases, grip: (grip_start, grip_end), part: k, release_end })
+        Some(Pass { start: t0, phases, grip: (grip_start + settle, grip_end), part: k, release_end })
     }
 
     /// The part in the gripper's grip at time `t` of `pass` (from the grip's start to its end): its pose.
@@ -359,7 +477,40 @@ impl Conveyor {
 /// on top of (see the module). Searched by bisection on T, since the move's limits depend on T; at once where
 /// `va == vb`. `None` where no T up to 1000 s fits, or the belt term alone breaks an axis's limits.
 pub fn intercept(axes: &[AxisInfo], from: &[f64], va: &[f64], target: &[f64], vb: &[f64]) -> Option<(f64, Move)> {
+    intercept_with(axes, from, va, &|_| (target.to_vec(), vb.to_vec())).map(|(t, mv, _)| (t, mv))
+}
+
+/// `intercept` for a target that is at `target(T)` with the velocity there after T seconds (a part on a belt that still
+/// speeds up): T, the move, and the target's velocity at T. The move goes to Q = target(T) - T (va + vb(T)) / 2.
+pub fn intercept_moving(
+    axes: &[AxisInfo],
+    from: &[f64],
+    va: &[f64],
+    target: &dyn Fn(f64) -> (Vec<f64>, Vec<f64>),
+) -> Option<(f64, Move, Vec<f64>)> {
+    // `intercept_with` goes to X + T (vb - va) / 2; for Q = target(T) - T (va + vb) / 2 that is X = target(T) - T vb.
+    let shifted = |t: f64| {
+        let (pos, vb) = target(t);
+        (pos.iter().zip(&vb).map(|(p, b)| p - t * b).collect(), vb)
+    };
+    if target(0.0).1 == va && target(1.0).1 == va {
+        // Moving with the tool already: the plain intercept.
+        let (pos, vb) = target(0.0);
+        return intercept(axes, from, va, &pos, &vb).map(|(t, mv)| (t, mv, vb));
+    }
+    intercept_with(axes, from, va, &shifted)
+}
+
+/// The search of `intercept`: for T, `target(T)` gives X and vb, and the move goes to Q = X + T (vb - va) / 2 (for a
+/// steady target X is where it is now; with `va == vb`, T is infinite).
+fn intercept_with(
+    axes: &[AxisInfo],
+    from: &[f64],
+    va: &[f64],
+    target: &dyn Fn(f64) -> (Vec<f64>, Vec<f64>),
+) -> Option<(f64, Move, Vec<f64>)> {
     let fits = |t: f64| -> Option<Move> {
+        let (target, vb) = target(t);
         let reduced: Vec<AxisInfo> = axes
             .iter()
             .enumerate()
@@ -383,10 +534,11 @@ pub fn intercept(axes: &[AxisInfo], from: &[f64], va: &[f64], target: &[f64], vb
         let mv = Move::new(from, &q, &reduced);
         (mv.duration() <= t).then_some(mv)
     };
-    if va == vb {
+    let vb = |t: f64| target(t).1;
+    if va == vb(f64::INFINITY) && va == vb(0.0) {
         // The belt term moves at a constant velocity: the move takes its own time, which then is T.
         let mv = fits(f64::INFINITY)?;
-        return Some((mv.duration(), mv));
+        return Some((mv.duration(), mv, va.to_vec()));
     }
     let mut hi = 1e-3;
     while fits(hi).is_none() {
@@ -400,7 +552,7 @@ pub fn intercept(axes: &[AxisInfo], from: &[f64], va: &[f64], target: &[f64], vb
         let mid = 0.5 * (lo + hi);
         if fits(mid).is_some() { hi = mid } else { lo = mid }
     }
-    Some((hi, fits(hi)?))
+    Some((hi, fits(hi)?, vb(hi)))
 }
 
 #[cfg(test)]
@@ -422,6 +574,11 @@ mod tests {
         )
         .unwrap();
         Conveyor::from_config(&cfg, 1).unwrap().unwrap()
+    }
+
+    /// No input shaping.
+    fn none() -> (Vec<f64>, f64) {
+        (vec![0.0], 0.0)
     }
 
     /// The intercept against the closed form of a trapezoidal move (jerk so high that the S-curve is one). The tool at
@@ -450,7 +607,7 @@ mod tests {
     fn the_tool_arrives_on_the_part_with_the_belts_speed_within_its_limits() {
         let ax = [axis(2.0, 20.0, 400.0)];
         let (t, mv) = intercept(&ax, &[0.0], &[0.0], &[0.3], &[0.5]).unwrap();
-        let phase = Phase { start: 0.0, duration: t, mv, va: vec![0.0], vb: vec![0.5] };
+        let phase = Phase { start: 0.0, duration: t, mv, va: vec![0.0], vb: vec![0.5], track: None };
         let (mut p, mut v, mut a) = ([0.0], [0.0], [0.0]);
         for i in 0..=1000 {
             phase.at(t * i as f64 / 1000.0, &mut p, &mut v, &mut a);
@@ -465,7 +622,7 @@ mod tests {
     #[test]
     fn during_the_grip_the_plan_moves_with_the_part() {
         let mut c = conveyor();
-        let pass = c.plan(&[axis(2.0, 20.0, 400.0)], 0.0, &[-0.5], &|_| true).unwrap();
+        let pass = c.plan(&[axis(2.0, 20.0, 400.0)], 0.0, &[-0.5], &|_| true, &none()).unwrap();
         let (mut p, mut v, mut a) = ([0.0], [0.0], [0.0]);
         for i in 0..=10 {
             let t = pass.grip.0 + (pass.grip.1 - pass.grip.0) * i as f64 / 10.0;
@@ -488,7 +645,7 @@ mod tests {
     #[test]
     fn a_part_beyond_the_window_counts_as_missed() {
         let mut c = conveyor();
-        let pass = c.plan(&[axis(2.0, 20.0, 400.0)], 5.0, &[-0.5], &|_| true).unwrap();
+        let pass = c.plan(&[axis(2.0, 20.0, 400.0)], 5.0, &[-0.5], &|_| true, &none()).unwrap();
         assert_eq!((pass.part, c.missed, c.picked), (3, 3, 1));
         let s = c.position(pass.part, pass.start + pass.grip.1);
         assert!((0.5..=1.0).contains(&s), "{s}");
@@ -501,7 +658,71 @@ mod tests {
         let mut c = conveyor();
         // Nothing at or behind -0.4 m is reachable, and the place at -0.5 m lies there: no part can be placed. Every
         // part is missed, and after a thousand in a row the planner gives up.
-        assert!(c.plan(&[axis(2.0, 20.0, 400.0)], 0.0, &[-0.5], &|p: &[f64]| p[0] > -0.4).is_none());
+        assert!(c.plan(&[axis(2.0, 20.0, 400.0)], 0.0, &[-0.5], &|p: &[f64]| p[0] > -0.4, &none()).is_none());
         assert_eq!((c.picked, c.missed), (0, 1000));
+    }
+
+    /// A pick while the belt still speeds up: a ramp of 4 s to 0.5 m/s, so the belt has run 0.5 t^2 / 8 m after t s.
+    /// Part 0 enters at 0 and reaches the window's start, 0.5 m, at t = sqrt 8 = 2.828 s, inside the ramp; the pass
+    /// waits for it there. Through the grip the plan is on the part with its speed then, 0.5 t / 4 m/s (0.354 m/s at the
+    /// grip's start), within the axis's limits on the whole pass.
+    #[test]
+    fn a_pick_during_the_belts_ramp_meets_the_part() {
+        let mut c = conveyor();
+        c.ramp = 4.0;
+        let ax = [axis(2.0, 20.0, 400.0)];
+        let pass = c.plan(&ax, 0.0, &[-0.5], &|_| true, &none()).unwrap();
+        let grip = pass.start + pass.grip.0;
+        assert!((grip - 8f64.sqrt()).abs() < 1e-6 && pass.start + pass.grip.1 < c.ramp, "{grip}");
+        let (mut p, mut v, mut a) = ([0.0], [0.0], [0.0]);
+        for i in 0..=20 {
+            let t = pass.grip.0 + (pass.grip.1 - pass.grip.0) * i as f64 / 20.0;
+            pass.at(t, &mut p, &mut v, &mut a);
+            let now = pass.start + t;
+            assert!((p[0] - c.part_pose(pass.part, now)[0]).abs() < 1e-9, "{} against the part at {now} s", p[0]);
+            // The belt's acceleration, 0.5 / 4 m/s^2, until the grip's end, where the lift begins without it.
+            assert!((v[0] - 0.5 * now / 4.0).abs() < 1e-9 && ((a[0] - 0.125).abs() < 1e-9 || i == 20), "{v:?} {a:?}");
+        }
+        for i in 0..=4000 {
+            pass.at(pass.duration() * i as f64 / 4000.0, &mut p, &mut v, &mut a);
+            assert!(v[0].abs() <= 2.0 + 1e-9 && a[0].abs() <= 20.0 + 1e-9, "{v:?} {a:?}");
+        }
+        assert_eq!((c.picked, c.missed), (1, 0));
+    }
+
+    /// The gripper on the shaped time. A ZVD shaper of a 25 Hz mode puts the setpoint at a quarter, a half and a quarter
+    /// of the plan now, 20 ms and 40 ms ago: at a constant speed it lags by the mean, 20 ms, and it has left the plan
+    /// before only 40 ms on. Planned without it, the shaped tool trails the part through the grip by 0.5 m/s * 20 ms =
+    /// 10 mm. Planned for it (the part 20 ms ahead, grip and release 40 ms longer), the shaped setpoint is on the part
+    /// for the whole grip of 0.1 s, and the gripper holds the part from its end.
+    #[test]
+    fn the_gripper_closes_on_the_shaped_time() {
+        let zvd = [(0.0, 0.25), (0.02, 0.5), (0.04, 0.25)];
+        let shaped = |pass: &Pass, t: f64| {
+            let (mut p, mut v, mut a) = ([0.0], [0.0], [0.0]);
+            zvd.iter()
+                .map(|(delay, w)| {
+                    pass.at(t - delay, &mut p, &mut v, &mut a);
+                    w * p[0]
+                })
+                .sum::<f64>()
+        };
+        let ax = [axis(2.0, 20.0, 400.0)];
+        let mut plain = conveyor();
+        let pass = plain.plan(&ax, 0.0, &[-0.5], &|_| true, &none()).unwrap();
+        let t = pass.grip.1 - 0.01;
+        let behind = plain.part_pose(pass.part, pass.start + t)[0] - shaped(&pass, t);
+        assert!((behind - 0.01).abs() < 1e-9, "{behind}");
+
+        let mut c = conveyor();
+        let pass = c.plan(&ax, 0.0, &[-0.5], &|_| true, &(vec![0.02], 0.04)).unwrap();
+        assert!((pass.grip.1 - pass.grip.0 - 0.1).abs() < 1e-12, "{:?}", pass.grip);
+        for i in 0..=20 {
+            let t = pass.grip.0 + (pass.grip.1 - pass.grip.0) * i as f64 / 20.0;
+            let off = shaped(&pass, t) - c.part_pose(pass.part, pass.start + t)[0];
+            assert!(off.abs() < 1e-9, "{off} at {t} s");
+            assert!(c.gripping(&pass, pass.start + t).is_some() && !pass.holds(t - 1e-9) || i == 20);
+        }
+        assert!(pass.holds(pass.grip.1) && !pass.holds(pass.grip.0));
     }
 }

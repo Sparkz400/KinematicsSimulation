@@ -893,7 +893,7 @@ The setpoint signals and the path error of the analysis are the controller's, be
 | Cycle | Runs the configured segments in order, repeating. On arrival the payload switches to the segment's state and the dwell runs. With input shaping, a segment with a dwell or a gripper action has arrived when the shaped setpoint has |
 | Stop | Finishes the segment under way, then stays. There is no fast stop ramp |
 | Setpoint (PLC) | Linear interpolation from the present setpoint to the new one over `profile.setpoint_interval_s`, counted from the profile cycle in which the setpoint came, so that a stream of one setpoint per interval is followed without a pause. The speed setpoint is that of the interpolation, up to and including the cycle of arrival; the acceleration setpoint is 0. A setpoint further from the last one than the axis travels in one interval at its speed limit is refused |
-| Trajectory | Poses at times. A cubic curve through the points (Hermite), with the speed at each point the slope between its neighbours and rest at both ends. Poses up to 0.1 mm beyond the travel range are taken: the setpoint of a machine at rest is where its motors stand, which at an end of a stroke is some hundredths of a millimetre beyond it. A planned path's poses that rounding puts beyond the range (by less than a nanometre) are set onto its end |
+| Trajectory | Poses at times. A cubic spline through the points with a continuous acceleration (C2, `profile.trajectory_spline = "c2"`), at rest at both ends: the speeds at the points solve m_{i−1}/h + 2 m_i (1/h + 1/h′) + m_{i+1}/h′ = 3 ((p_i − p_{i−1})/h² + (p_{i+1} − p_i)/h′²), h and h′ the spacings before and after point i (a tridiagonal system). With `"hermite"` as before 14 November 2026: the speed at each point the slope between its neighbours (of five where evenly spaced), the acceleration stepping at each point. Poses up to 0.1 mm beyond the travel range are taken: the setpoint of a machine at rest is where its motors stand, which at an end of a stroke is some hundredths of a millimetre beyond it. A planned path's poses that rounding puts beyond the range (by less than a nanometre) are set onto its end |
 | Disable / Enable | Drives off: the motion under way is dropped. Every other command is refused until Enable |
 
 The controller's setpoint starts where the motors stand, a few micrometres from the configured start pose (belt stretch and gear twist under load), so the first step has no jolt.
@@ -915,11 +915,36 @@ t_j = sqrt(v / j),  t_a = 0           otherwise
 
 If the distance is too short to reach the cruise speed, the peak speed is lowered: the constant-acceleration phase is shortened, and for very short moves dropped (t_j = cbrt(d / 2j)).
 
-A move of several axes is one S-curve that runs a straight line from 0 to 1. Its limits are the tightest of all moving axes (limit / |distance|), so all axes start and finish together and none exceeds its own limits.
+A move of several axes is one profile that runs a straight line from 0 to 1. Its limits are the tightest of all moving axes (limit / |distance|), so all axes start and finish together and none exceeds its own limits.
+
+**Shapes** (`profile.shape`, or `shape` of one `[[cycle.segment]]`):
+
+| Shape | Law | Peaks over a move of h in T |
+|---|---|---|
+| `s-curve` | seven segments (above) | the limits |
+| `sin2` | speed v·sin²(π t / (2 T_r)) over each ramp of T_r, cruise between (Bestehorn) | a = (π/2) v / T_r at the ramp's middle, jerk (π²/2) v / T_r² at its ends; T_r = max(π v / (2a), π sqrt(v / (2j))) |
+| `poly345` | s = h (10u³ − 15u⁴ + 6u⁵), u = t / T (VDI 2143), no cruise | v 1.875 h/T, a 5.7735 h/T², jerk 60 h/T³ (at the ends) |
+| `poly4567` | s = h (35u⁴ − 84u⁵ + 70u⁶ − 20u⁷), no cruise | v 2.1875 h/T, a 7.5132 h/T², jerk 52.5 h/T³ (zero at the ends) |
+
+A polynomial law takes the shortest T that keeps all three peaks: T = max(c_v h/v, sqrt(c_a h/a), cbrt(c_j h/j)).
+
+**Braking of its own**: with `profile.deceleration_ratio` below 1 the braking ramp has that share of the acceleration limits; the S-curve and sin² then speed up on one ramp and brake on another, each the shortest within its limit, and the cruise speed is the limit where both ramps fit the distance, else the speed at which they cover it alone (bisection: they cover v (T_up(v) + T_down(v)) / 2). A polynomial law keeps the lower of the two. With the ratio 1 the S-curve is the closed form above.
+
+**Gravity** (`profile.vertical_axis`, `up_acceleration_ratio`): the axis that lifts has that share of its acceleration limit for an acceleration upwards. Speeding up, each axis accelerates towards its target, braking away from it; so a move up speeds up within the reduced limit and brakes (accelerating downwards) within the full one, a move down the other way round.
+
+**Time scaling** (`Profile::stretched`): a profile stretched to k times its shortest duration has the same shape with the limits v/k, a/k², j/k³, for a planner that synchronises moves to one duration.
+
+## Programs: G-code and robot programs
+
+Source: [`program.rs`](../crates/sim-components/src/program.rs). `sim-cli run|analyze --path FILE` and the app's path field read a file by its extension into path pieces (lines and arcs, `path::Piece`) for the path planner below: `.nc`, `.ngc`, `.gcode`, `.g`, `.cnc`, `.tap` as G-code, `.src` as KUKA KRL, `.mod` and `.prg` as ABB RAPID, a file with lines starting `MoveL`, `MoveJ`, `MoveC` as robot moves in CSV, and anything else as a path file. The subsets, and what is refused with its line, are listed in the [user guide](user-guide.md#programs-g-code-and-robot-programs).
+
+- **Arcs**: G2/G3 in the plane of G17 (X, Y), G18 (Z, X) or G19 (Y, Z), clockwise as seen from the plus side of the normal (Z, Y, X). The centre is the start plus I, J, K, or from R: on the chord's perpendicular bisector at sqrt(R² − d²/4) from its middle, to the right of the chord for G2 with R > 0 (the shorter arc), to the left with R < 0. Start and end must lie within 1e-4 of the radius (and 1 µm) of the centre. The direction is turned into the planner's (`cw` seen with the first axis right and the second up on two axes; from +z, -y or +x on three) by the orientation of the plane's axes among the machine's.
+- **MoveC and CIRC**: the circle through start, via and end, its centre s + ((|u|² w − |w|² u) × n) / (2 |n|²) with u = via − s, w = end − s, n = u × w; the direction by n against the planner's viewing side.
+- **Feeds**: each run of moves at one feed (G1/G2/G3 with F, in units per minute) is planned within the axis limits with every axis's speed capped at the feed, and the runs follow one another with a stop between; G0 runs at the axes' limits, as fast as the motors allow with `--time-optimal`. Shortcut: the feed caps each axis, not the speed along the path (a diagonal moves up to sqrt 2 faster); a planner with a speed per piece would take it as it is.
 
 ## Corner blending
 
-`effects.corner_blending`: the next cycle segment starts while the current one still has its braking ahead, and the remaining distance of the old move is added on top of the new one. The lead is the smallest of `profile.blend_time_s` and the ramp times of both moves. It happens only where the machine need not stop: the segment has no dwell and no gripper action, no axis reverses, and no other blend is under way.
+`effects.corner_blending`: the next cycle segment starts while the current one still has its braking ahead, and the remaining distance of the old move is added on top of the new one. The lead is the smallest of `profile.blend_time_s`, the braking time of the current move and the ramp time of the next. It happens only where the machine need not stop: the segment has no dwell and no gripper action, no axis reverses, and no other blend is under way.
 
 Because both moves are on their ramps, the speeds add up to no more than either cruise speed on lift-traverse-lower cycles. For other shapes of cycle the sum of two segments on one axis is not checked against the limits.
 
@@ -1050,7 +1075,19 @@ Assumptions and limits: the rigid model, so no friction and no elasticity (that 
 
 Source: `shape` in [`control.rs`](../crates/sim-components/src/control.rs).
 
-`effects.input_shaping`: a ZVD shaper on the position, velocity and acceleration setpoints of all axes. The shaped setpoint is the sum of three copies of the plan: now, half a damped period ago and a whole period ago. With `profile.shaper2_frequency_hz` above 0 a second ZVD shaper (its damping `shaper2_damping`) is convolved with the first: nine copies, at the sums of the two shapers' delays with the products of their weights. For an undamped mode at f a ZVD shaper at f_s with no damping leaves |H| = cos²(π f / (2 f_s)) of the vibration, two convolved the product of theirs.
+Source: the impulses in [`shaper.rs`](../crates/sim-components/src/shaper.rs).
+
+`effects.input_shaping`: a shaper on the position, velocity and acceleration setpoints. The shaped setpoint is a weighted sum of copies of the plan at multiples of half a damped period (`profile.shaper_type`, ZVD by default: three copies, now, half a period ago and a whole period ago). With `profile.shaper2_frequency_hz` above 0 a second shaper of the same type (its damping `shaper2_damping`) is convolved with the first: copies at the sums of the two shapers' delays with the products of their weights; every entry of `profile.shaper_modes` adds one more. The first and the second act on the axes of `profile.shaper_axes` (all where it is empty), an entry of `shaper_modes` on its own `axes` (all where it has none): each axis convolves the modes that act on it, so axes can have shapers of their own frequency and damping. For an undamped mode at f a ZVD shaper at f_s with no damping leaves |H| = cos²(π f / (2 f_s)) of the vibration, two convolved the product of theirs.
+
+| Type | Undamped weights at 0, T/2, T, 3T/2 | Left at the design frequency, at ±20 % |
+|---|---|---|
+| `zv` | 1 : 1 | 0, cos(0.4 π) = 0.309 |
+| `zvd` | 1 : 2 : 1 | 0, 0.095 |
+| `zvdd` | 1 : 3 : 3 : 1 | 0, 0.030 |
+| `ei` | (1+V)/4 : (1−V)/2 : (1+V)/4 | V, \|0.475 + 0.525 cos(0.8 π)\| = 0.0503 at V = 5 % |
+| `ei2` (two-hump EI) | A : 1/2 − A : 1/2 − A : A, A = (3X² + 2X + 3V²)/(16X), X = (V² (sqrt(1 − V²) + 1))^(1/3) | 0, humps of V either side |
+
+V is `profile.shaper_ei_tolerance`. Damped, weight i is multiplied by K^i (and all divided by their sum): that cancels the decay between the copies. For ZV, ZVD and ZVDD that is the textbook damped shaper, which leaves nothing at the design frequency; an EI shaper of undamped weights a_i then leaves V K^n / Σ a_i K^i there (n its last copy), less than V: 0.0424 for V = 0.05 at ζ = 0.05. The residual vibration of a shaper is checked against Singer and Seering's e^(−ζωt_n) sqrt(C² + S²), C and S the sums of A_i e^(ζωt_i) cos and sin(ω_d t_i). Shortcut: the damped EI shapers are these weighted ones, not Singhose's fitted damped EI, whose insensitivity is a little wider at dampings above 0.1.
 
 ```text
 K       = exp( −ζ · π / sqrt(1 − ζ²) )
@@ -1058,7 +1095,7 @@ T_half  = 1 / ( 2 · f · sqrt(1 − ζ²) )
 shaped(t) = ( plan(t) + 2K · plan(t − T_half) + K² · plan(t − 2 T_half) ) / (1 + K)²
 ```
 
-f `shaper_frequency_hz`, ζ `shaper_damping`. The delays are interpolated between profile cycles. The weights add up to one, so once the plan has stood still for a whole period the setpoint is the plan exactly. Where a cycle segment has a dwell or switches the payload, both wait until the shaped setpoint has arrived, ceil(2 · T_half / cycle) profile cycles after the plan (with a second shaper ceil(2 · (T_half + T_half,2) / cycle)); the process force starts with the dwell. Segments without a dwell and without a gripper action go on with the plan. A plain move (`Move`) is no longer busy when its plan has arrived.
+f `shaper_frequency_hz`, ζ `shaper_damping` (the ZVD; the other types likewise with their weights). The delays are interpolated between profile cycles. The weights add up to one, so once the plan has stood still for a whole shaper the setpoint is the plan exactly. Where a cycle segment has a dwell or switches the payload, both wait until the shaped setpoint has arrived, the ceiling of the longest axis's shaper in profile cycles after the plan (ZVD ceil(2 · T_half / cycle), with a second ZVD ceil(2 · (T_half + T_half,2) / cycle)); the process force starts with the dwell. Segments without a dwell and without a gripper action go on with the plan. A plain move (`Move`) is no longer busy when its plan has arrived.
 
 With `effects.shaper_follows_pose` the half period of the first shaper is that of the resonance the machine reports for the planned pose, and that of a second shaper (`shaper2_frequency_hz` above 0) the machine's second mode there (`Machine::modes`); one the machine does not report stays at its frequency. The T-gantry reports two modes, the single axis one. `sim-cli modes` and the app's tuning panel show them over an axis's stroke. Its resonance also depends on the payload: when the gripper closes at the start of a dwell it drops (on the delta D3 from 41.5 to 27.2 Hz). While the plan stands still the period stays the one it had on arrival, so a setpoint that has arrived stays on the target (the longer period reached back into the lift and took it 0.1 mm off); the next move starts with the new period (on the D3 the standstill, 25 ms of shaper lag and the 35 ms dwell, is longer than its 37 ms).
 
@@ -1066,7 +1103,7 @@ A changed shaper setting in a running simulation (the switch, the frequency, the
 
 When `profile.cycle_s` is changed in a running simulation, the stored plan of the shaper is read off again at the new spacing and every stored cycle count of the motion under way is converted, so the setpoint does not jump. The fieldbus queue keeps its count of cycles.
 
-Limits: two resonances at most; the same shapers on every axis.
+Following the pose applies to the first and the second shaper; the modes of `shaper_modes` keep their frequency. The optimiser (`sim-cli optimise`) switches the first and second shaper as before; it does not choose per-axis frequencies.
 
 ## Analysis quantities
 
@@ -1213,12 +1250,15 @@ Source: [`conveyor.rs`](../crates/sim-components/src/conveyor.rs), the conveyor 
 - **A move of a pass** is a superposition: a jerk-limited straight move (`profile::Move`, as a cycle segment's) from where the phase starts to a point Q, plus a belt term whose velocity blends from the start velocity va to the end velocity vb as va + (vb − va) h(u), h(u) = 3u² − 2u³, u = t / T. The blend has no acceleration at either end, so the phases join without a jump in acceleration; it covers T (va + vb) / 2. A target that is at P now and moves with vb is met at T, with its velocity, where Q = P + T (vb − va) / 2.
 - **The intercept**: the move is planned with each axis's limits less what the belt term takes: max(|va|, |vb|) of the speed, 1.5 |vb − va| / T of the acceleration (the blend's peak, at u = 1/2) and 6 |vb − va| / T² of the jerk (at its ends). Since these and Q depend on T, T is the shortest time in which the move to Q fits into T, found by bisection (60 halvings from a bracket found by doubling); with va = vb at once, the move's own time. For a trapezoidal move with cruise it is the root of a α T² − (α c + a β + v′) T + β c = 0 (α = 1 − v / (2 v′), β = D / v′, c = 1.5 v, v′ = v_max − v), which the test checks. The sum of move and belt term keeps the axis limits; as the reservations hold over the whole move, it may use less than them: a faster belt makes the moves gentler and longer, and so need not raise the RMS torque (the validation has an 11 % fall).
 - **A pass**, from rest above the place (or the start pose): to above the part (va = 0, vb = the belt's velocity), down onto it, the grip (`grip_s`) and up (all with the belt's velocity, the move only along the lift), to above the place (vb = the place's velocity), down, the release (`release_s`), up, and from a moving place to rest above it. The payload is attached at the end of the grip and let go at the end of the release.
-- **Waiting and missing**: the passes start once the belt has its speed. The first part not yet planned for is taken; where the grip would begin before the window, the pass starts later, at the time found by bisection at which it begins at the window's start; on a belt that stands, not before the part has arrived. Where the grip would end beyond the window, or a pose of the pass (every 5 ms) leaves the machine's range, the part is missed and the next is taken. After a thousand misses in a row the cycle ends, and the analysis says that no part can be picked (`error-conveyor-unreachable`).
+- **During the belt's ramp** the part speeds up: the intercept meets it where it is at T, P(T), with its velocity then, vb(T), by Q = P(T) − T (va + vb(T)) / 2 (the same bisection), and the grip follows the belt's own motion S(t). The setpoint's acceleration steps by the belt's, v / t_r, where the grip begins and ends.
+- **With input shaping** the shaped setpoint of a plan at the belt's speed lags it by the mean of the shaper's delays, Σ A_i t_i, and is on the plan only once the whole shaper (its last delay) has passed. So the pass is planned for the part that mean ahead on each axis, and the grip and the release last their time plus the shaper's span; the grip as the gripper and the tracking error count it begins once the shaped setpoint is on the part, and lasts `grip_s`. Planned without this, the tool trailed a part on a belt at v by v Σ A_i t_i through the grip (10 mm for a 25 Hz ZVD at 0.5 m/s).
+- **Waiting and missing**: passes start also while the belt speeds up. The first part not yet planned for is taken; where the grip would begin before the window, the pass starts later, at the time found by bisection at which it begins at the window's start; on a belt that stands, not before the part has arrived. Where the grip would end beyond the window, or a pose of the pass (every 5 ms) leaves the machine's range, the part is missed and the next is taken. After a thousand misses in a row the cycle ends, and the analysis says that no part can be picked (`error-conveyor-unreachable`).
 - **Results** (`CycleLoad::conveyor`): the measured pass is one pick, so the picks a minute are 60 / its time; a machine faster than the parts waits, and its passes come a pitch apart. The tracking error is the most the tool's measured pose, taken along the belt, was from the part's during the grip. The parts missed a minute are those the belt brings beyond the picks a minute, or those missed in the measured pass, whichever is more: one pass cannot see misses that come in bursts. The verdicts are `pick-tracking` (against `conveyor.tracking_tolerance_m`) and `parts-missed` (against 0).
-- **Obstacles**: the passes are planned as the parts come, so `check_cycle` does not check them before the run; the live check (see above) judges the run, and `collision` fails where a pass comes too near.
+- **Obstacles**: `check_cycle` plans the passes for two pitches' worth of parts from the start pose at time 0 (without input shaping) and checks them every 5 ms with the payload as each holds it; the live check (see above) judges the run, and `collision` fails where a pass comes too near.
+- **The optimiser** leaves `[[cycle.segment]]` alone with a conveyor (it does not run): it tries no lifts or via points, only the limits and switches.
 - **The scene** draws the belt as a band under the grip poses (300 mm wide), slats every 100 mm that run with the belt, and each part on it that is not in the gripper as a 50 mm cube.
 
-Shortcuts: a pass starts only once the belt has its speed (a pick during the ramp would need the part's acceleration in the intercept); the gripper acts on the plan's time, not once a shaped setpoint has arrived, so with input shaping the grip begins up to a shaper period early; the reserved limits are conservative (the moves are slower than a planner that shares the limits along the move would make them); the second belt carries no parts in the scene, and its slot is wherever the place pose is when the tool leaves for it.
+Shortcuts: the acceleration step at the grip's ends during the belt's ramp; the shaper's lead is the mean delay at the pose the pass starts from (a shaper that follows the pose may differ at the part); the reserved limits are conservative (the moves are slower than a planner that shares the limits along the move would make them); the second belt carries no parts in the scene, and its slot is wherever the place pose is when the tool leaves for it.
 
 ## Other analyses
 

@@ -275,6 +275,23 @@ impl Sim {
         Ok(points)
     }
 
+    /// The timing for a program (`program::read`) from where the machine stands (`Controller::plan_program`), refused
+    /// as `plan_path` refuses a time-optimal path near an obstacle.
+    pub fn plan_program(
+        &self,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+        let points = self.control.plan_program(self.machine.as_ref(), runs, time_optimal)?;
+        if time_optimal
+            && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
+            && (check.clearance < self.min_clearance || check.contact.is_some())
+        {
+            return Err(CommandError { key: "error-path-collision" });
+        }
+        Ok(points)
+    }
+
     /// The path through `poses` checked against the obstacles before it runs, with the payload as it is now
     /// (`collision::check_path`). `None` without obstacles.
     pub fn check_plan(&self, poses: &[Vec<f64>]) -> Option<crate::collision::PlanCheck> {

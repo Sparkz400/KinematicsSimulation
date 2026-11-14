@@ -288,24 +288,31 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
 }
 
 /// The poses at times to run: those of `--trajectory FILE`, or the lines and arcs of `--path FILE` (format:
-/// see `sim_components::path`) with their timing planned here, within the axis limits or with
-/// `--time-optimal` as fast as the motors allow. Where transition curves or an arc beside its stated end take the planned path off the lines
-/// and arcs of the file (`profile.path_tolerance_m`), the error stream says by how much.
+/// see `sim_components::path`; or a G-code, KRL, RAPID or robot CSV program, see `sim_components::program`) with their
+/// timing planned here, within the axis limits or with `--time-optimal` as fast as the motors allow. Where transition
+/// curves or an arc beside its stated end take the planned path off the lines and arcs of the file
+/// (`profile.path_tolerance_m`), the error stream says by how much (for a program of moves at one feed).
 fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, Vec<f64>)>>, Failure> {
     let unreadable = |file: &str, line: String| Failure("cli-error-bad-argument", format!("{file}: {line}"));
     if let Some(file) = args.option("--trajectory") {
         return sim_components::path::parse_trajectory(&read(file)?).map(Some).map_err(|line| unreadable(file, line));
     }
     let Some(file) = args.option("--path") else { return Ok(None) };
-    let pieces = sim_components::path::parse(&read(file)?).map_err(|line| unreadable(file, line))?;
+    let runs = sim_components::program::read(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos())
+        .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
-    let deviation = sim.path_deviation(&pieces, args.flag("--time-optimal")).map_err(refused)?;
+    // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
+    let pieces = match runs.as_slice() {
+        [run] if run.feed.is_none() => &run.pieces,
+        _ => return sim.plan_program(&runs, args.flag("--time-optimal")).map(Some).map_err(refused),
+    };
+    let deviation = sim.path_deviation(pieces, args.flag("--time-optimal")).map_err(refused)?;
     // Not below what the figure can show: an arc with decimally rounded end coordinates is some 10 nm off.
     let shown = format!("{:.4}", deviation * 1e3);
     if shown != "0.0000" {
         eprintln!("{}", tr.tr_arg("path-deviation", &shown));
     }
-    sim.plan_path(&pieces, args.flag("--time-optimal")).map(Some).map_err(refused)
+    sim.plan_path(pieces, args.flag("--time-optimal")).map(Some).map_err(refused)
 }
 
 fn pose_text(pose: &[f64]) -> String {

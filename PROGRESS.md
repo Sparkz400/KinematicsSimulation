@@ -2543,3 +2543,62 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## Motion profiles, input shapers, program import, conveyor leftovers (14 November)
+
+What: the audit's findings on profiles, shapers, trajectories, program import and the conveyor.
+
+- **Motion laws** (`profile.rs`): beside the S-curve the sin² profile (Bestehorn: speed v sin²(pi t / 2T) over each
+  ramp, peak acceleration (pi/2) v / T) and the polynomial laws 3-4-5 and 4-5-6-7 of VDI 2143 (no cruise; T the
+  shortest that keeps c_v h/T, c_a h/T², c_j h/T³). Braking may have its own limit (`profile.deceleration_ratio`): the
+  S-curve and sin² then speed up and brake on ramps of their own, the cruise speed found by bisection where the ramps
+  alone cover the distance; at ratio 1 the S-curve is the old closed form, so nothing shipped changes. A vertical axis
+  (`profile.vertical_axis`, `up_acceleration_ratio`) has less acceleration upwards: `Move::with_law` takes each axis's
+  limit for the direction it accelerates in while speeding up and while braking. `profile.shape` for every move, `shape`
+  of a `[[cycle.segment]]` for its own. Time scaling: `Profile::stretched` scales the limits by 1/k, 1/k², 1/k³ for the
+  same shape k times as long. Corner blending leads by the current move's braking and the next's speeding up.
+- **Trajectories** run the C2 cubic spline (`profile.trajectory_spline = "c2"`): the speeds at the poses solve the
+  tridiagonal system that makes the acceleration continuous, clamped at rest; the Hermite evaluation is unchanged.
+  `"hermite"` keeps the curve as before (neighbour slopes).
+- **Input shapers** (`shaper.rs`): ZV, ZVD, ZVDD, EI and two-hump EI (`profile.shaper_type`, `shaper_ei_tolerance`),
+  damped by weights K^i, which keep each type's figure at the design frequency; `residual` is Singer and Seering's.
+  Any number of modes (`profile.shaper_modes`, convolved), each on its own axes (`axes`; `profile.shaper_axes` for the
+  first and second): `Controller::shape` convolves per axis the modes acting on it. Waits and the history use the
+  longest axis's span (`shaper_span`); `shaper_halves` keeps its (first, second) for the tests. The optimiser toggles
+  the first and second as before.
+- **Programs** (`program.rs`): G-code (G0-G3, F, G17-G19, G20/G21, G90/G91, I/J/K or R; taken without effect N, O, M,
+  S, T, G40, G49, G54, G80, G94; M2/M30 end; all else refused with its line), robot moves as CSV (MoveL, MoveJ, MoveC),
+  KUKA KRL (PTP, LIN, CIRC) and ABB RAPID (MoveL, MoveJ, MoveC, declared robtargets), read by extension into
+  `path::Piece`s. Arc directions are turned into the planner's viewing convention by the orientation of the plane's
+  axes among the machine's. Runs at one feed are planned with every axis capped at the feed
+  (`Controller::plan_program`, `Sim::plan_program`), stopping between runs. `sim-cli --path` and the app's path field
+  read them.
+- **Conveyor**: passes also during the belt's ramp (`intercept_moving`: the part where it is at T with its speed then;
+  the grip follows the belt's motion). With input shaping a pass is planned for the shaped setpoint: the part each axis's
+  mean shaper delay ahead, grip and release longer by the shaper's span, so the gripper acts while the shaped setpoint
+  is on the part. `check_cycle` checks two pitches' worth of passes; `optimise` leaves `[[cycle.segment]]` alone with a
+  conveyor. Conveyor examples beside the T-gantry's, D2's, D4's and linear delta's defaults: all pass every verdict
+  (checked with `sim-cli verdicts`; the T-gantry's at a 5 s pitch, its pass 3.6 s; at 4 s the grips drift to the
+  window's end and parts are missed).
+
+Tests (hand calculations in the tests): sin² peak (pi/2) 0.8 / 0.15708 = 8 m/s²; 3-4-5 peak speed 1.875 h / T with
+h = 0.3 m, T = 1.125 s; 4-5-6-7 jerk-free ends and 7.5132 h / T²; braking at half the acceleration: ramps 0.18 and
+0.24 s, 1.46 s in all; a vertical axis at half its limit upwards (0.3162 s up and down, ramps swapped); stretched
+profiles; ZV 0.3090 and ZVD 0.0955 at ±20 %, EI 0.05 at its frequency and 0.05027 at ±20 %, two-hump EI humps of
+0.0500; convolved ZV pairs cancel both modes; G-code arc centre (10, 0) mm and lengths 15.708 / 47.124 mm on the
+planned path (I/J and R, G2 and G3), G18 on x-z in inch; refusals by line; MoveC, KRL and RAPID half circles; the C2
+spline's m = 1 m/s and -2 m/s² on both sides of the knot (Hermite: -4.667 and -0.667); a pick during a 4 s ramp at
+sqrt 8 s with the part's speed; the gripper on the shaped time (unshaped plan 10 mm behind, shaped plan on the part
+through the 0.1 s grip); `check_cycle` with a conveyor; the optimiser and the conveyor; every conveyor example.
+
+Left open:
+
+- The feed of a G-code run caps each axis, not the speed along the path; a planner with a speed per piece (path.rs)
+  would take F as it is. Robot programs move at the axes' limits and read positions only (no orientation, speed, zone),
+  so they suit gantries and deltas, not joint-angle arms. No Python binding (sim-py was not part of this work).
+- The optimiser does not choose per-axis shaper frequencies; the modes of `shaper_modes` do not follow the pose.
+- Damped EI shapers are the K^i-weighted undamped ones, not Singhose's fitted damped EI.
+- A pick during the belt's ramp steps the setpoint's acceleration by the belt's at the grip's ends; the shaper's lead is
+  taken at the pose the pass starts from.
+- The C2 spline is the default for every trajectory, planned paths and via points included; the tests that ran planned
+  paths through the Hermite curve were not rerun here (`profile.trajectory_spline = "hermite"` gives the old curve).
