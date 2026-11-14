@@ -411,6 +411,7 @@ impl Controller {
             (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overload_chip, drive.overloaded) =
                 heat;
             drive.resistor_rise = resistor_rise;
+            drive.hold_current(p);
             let stored = 0.5 * p.inductance * drive.current * drive.current;
             if p.dc_link {
                 drive.dc_voltage = (voltage * voltage - 2.0 * stored / p.dc_capacitance).max(0.0).sqrt();

@@ -880,7 +880,7 @@ impl Drive {
     /// A drive at rest at `pos`, already delivering `torque` (so a hanging axis does not sag at start).
     pub fn at_rest(p: &DriveParams, pos: f64, torque: f64, torque_ff: f64) -> Self {
         let encoder = quantise(pos, p.encoder_step);
-        Self {
+        let mut drive = Self {
             pos_set: pos,
             position_setpoint: pos,
             torque_ff,
@@ -890,8 +890,6 @@ impl Drive {
             torque_command: torque,
             torque,
             current: p.current_for(torque),
-            voltage: p.resistance * p.current_for(torque),
-            current_integral: p.resistance * p.current_for(torque),
             temperature_rise: if p.heating { p.start_rise } else { 0.0 },
             // A winding started warm has its housing where that rise settles it.
             housing_rise: match (p.heating, &p.thermal_nodes) {
@@ -905,10 +903,22 @@ impl Drive {
             last_encoder: encoder,
             filtered: torque,
             notch: [torque; 4],
-            voltage_queue: std::iter::repeat_n(p.resistance * p.current_for(torque), p.current_delay).collect(),
+            voltage_queue: std::iter::repeat_n(0.0, p.current_delay).collect(),
             torque_queue: std::iter::repeat_n(torque, p.velocity_delay).collect(),
             ..Self::default()
-        }
+        };
+        drive.hold_current(p);
+        drive
+    }
+
+    /// The current loop holding its current at rest: the voltage R i, with the winding's resistance at its temperature,
+    /// in its integrator, its output and its delay. Before 14 November 2026 the cold resistance, so a winding started
+    /// or enabled warm began with a voltage step of (R(rise) - R) i (found by the closed-loop reference of the single
+    /// axis, `crates/machine-single-axis/reference`).
+    pub fn hold_current(&mut self, p: &DriveParams) {
+        let voltage = self.winding_resistance(p) * self.current;
+        (self.voltage, self.current_integral) = (voltage, voltage);
+        self.voltage_queue.iter_mut().for_each(|v| *v = voltage);
     }
 
     pub fn encoder(&self) -> f64 {
