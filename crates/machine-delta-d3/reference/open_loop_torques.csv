@@ -1,0 +1,3 @@
+# Written by lagrange_reference.py: motor torques of open_loop_move.csv, hold + push * pulse(t).
+hold_1,hold_2,hold_3,push_1,push_2,push_3
+-0.62738816513645,-0.550622655603189,-0.5034537221825518,-0.32120047830944265,0.2499454861250442,0.8938380854723786
