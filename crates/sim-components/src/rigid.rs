@@ -566,6 +566,7 @@ impl Chain {
         // Fixed joints before the first moving one fold into where it sits on the base.
         let (mut pre_rot, mut pre_pos) = (IDENTITY, [0.0; 3]);
         let mut current = root;
+        let mut passed = vec![current.clone()];
         loop {
             let next: Vec<&Joint> = joints.iter().filter(|j| j.parent == current).collect();
             let j = match next[..] {
@@ -587,8 +588,11 @@ impl Chain {
                     }
                 }
                 "revolute" | "continuous" | "prismatic" => {
-                    let norm = dot(j.axis, j.axis).sqrt();
-                    if !(norm > 0.0) {
+                    // Over the largest component first, so that neither a huge nor a tiny axis overflows its square.
+                    let largest = j.axis.iter().fold(0f64, |m, a| m.max(a.abs()));
+                    let axis = j.axis.map(|a| a / largest);
+                    let norm = dot(axis, axis).sqrt();
+                    if !(largest > 0.0) {
                         return Err(bad(&format!("the axis of the joint to {}", j.child)));
                     }
                     let (rot, pos) = if chain.bodies.is_empty() {
@@ -601,7 +605,7 @@ impl Chain {
                         name: j.child.clone(),
                         origin_rot: rot,
                         origin_pos: pos,
-                        axis: scale(j.axis, 1.0 / norm),
+                        axis: scale(axis, 1.0 / norm),
                         prismatic: j.kind == "prismatic",
                         inertial: child,
                         limits,
@@ -610,10 +614,27 @@ impl Chain {
                 }
                 other => return Err(bad(&format!("joint type {other} is not read"))),
             }
+            // Joints that lead back to a link passed would be walked for ever.
+            if passed.contains(&j.child) {
+                return Err(bad(&format!("link {} closes a loop; only a serial chain is read", j.child)));
+            }
             current = j.child.clone();
+            passed.push(current.clone());
         }
         if chain.bodies.is_empty() {
             return Err(bad("no moving joint"));
+        }
+        // Each number of the file is finite, but sums and products of huge ones (a link merged far out) need not be.
+        let finite = |b: &Body| {
+            let i = &b.inertial;
+            let numbers = b.origin_rot.iter().flatten().chain(&b.origin_pos).chain(&b.axis).chain(&i.com);
+            numbers.chain(i.inertia.iter().flatten()).chain([&i.mass]).all(|v| v.is_finite())
+        };
+        if let Some(b) = chain.bodies.iter().find(|b| !finite(b)) {
+            return Err(bad(&format!("the numbers of link {} are too large", b.name)));
+        }
+        if !chain.tip_rot.iter().flatten().chain(&chain.tip_pos).all(|v| v.is_finite()) {
+            return Err(bad("the numbers of the tool are too large"));
         }
         Ok(chain)
     }

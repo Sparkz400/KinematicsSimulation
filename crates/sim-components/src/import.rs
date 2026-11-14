@@ -282,10 +282,12 @@ fn read_codesys(text: &str) -> Result<Vec<Channel>, TraceError> {
         return Err(bad("error-import-layout", "no header line followed by numbers"));
     };
     let header: Vec<&str> = lines[first_data - 1].split_whitespace().collect();
-    let (_, unit) = name_and_unit(header.first().copied().unwrap_or(""));
-    let scale = seconds_per(&unit)
-        .ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", header.first().copied().unwrap_or(""))))?;
-    let mut channels: Vec<Channel> = header[1..]
+    let Some((time_name, names)) = header.split_first() else {
+        return Err(bad("error-import-layout", "no header line followed by numbers"));
+    };
+    let (_, unit) = name_and_unit(time_name);
+    let scale = seconds_per(&unit).ok_or_else(|| bad("error-import-unit", format!("{time_name}: {unit}")))?;
+    let mut channels: Vec<Channel> = names
         .iter()
         .map(|n| Channel { names: vec![n.to_string()], unit: String::new(), time: vec![], values: vec![] })
         .collect();
@@ -620,8 +622,13 @@ impl Signal {
             return Err(bad("error-trace-short", self.signal.clone()));
         }
         crate::trace::rising(&channel.time).map_err(|e| bad(e.key, format!("{}: {}", self.signal, e.detail)))?;
-        let time = channel.time.iter().map(|t| t + self.time_offset_s).collect();
-        Ok((time, raw.iter().map(|v| (v + self.offset) * factor).collect()))
+        let time: Vec<f64> = channel.time.iter().map(|t| t + self.time_offset_s).collect();
+        let values: Vec<f64> = raw.iter().map(|v| (v + self.offset) * factor).collect();
+        // A tiny per_rev or a huge scale, offset or time offset can take a value beyond the numbers.
+        if !time.iter().chain(&values).all(|v| v.is_finite()) {
+            return Err(bad("error-import-map", self.signal.clone()));
+        }
+        Ok((time, values))
     }
 }
 
