@@ -2090,3 +2090,65 @@ Left open:
   catches a difference). Moving the shared model into sim-components would end that, against the rule that the D2
   crate stays as it is.
 - The belt effects are not refused in a linkage file, only not read.
+
+## Delta D3: the rods' spin, the arms' bending out of their planes, the upper arms as collision bodies (14 November)
+
+Three items left open by the D3's forearm-inertia work. Crates `machine-delta-d3` (all of it), `machine-delta-d4`
+(config keys, its lossless config), docs. Run here: the D3's and D4's unit tests (24 and 8, all pass); the other suites
+not (the coordinating session runs them).
+
+What, how, test:
+
+- **The rods' spin** (with `effects.forearm_inertia`, no switch of its own: it is the rest of the same rigid body's
+  inertia tensor, the switch already says "rotational inertia"). The parallelogram keeps a pair's plane through the
+  elbow's axis a (fixed) and the forearm u = p - c, so the rods turn about u as that plane does: with sigma = a . u,
+  n = a . (u' x u), s = -sigma n / (L (L^2 - sigma^2)) = g . q'. By Kane's equations (angular velocity e x e' + s e,
+  angular momentum I s e about the axis) I g g^T in the mass matrix and I (s0' g + s J_u^T (u' x u) / L^3) in the
+  velocity term (`Delta::add_spin`, `rod_spin`). New key `mass.forearm_rod_spin_inertia_kgm2` 1.3e-5 per rod (a
+  carbon tube 20 x 1.5 mm of 0.15 kg, bounds 0.6e-5 to 2.6e-5). Tests: `the_rods_spin_is_the_hand_calculated_one`
+  (leg 1 at (0, 0.1, -0.8) moving 1 m/s square to its forearm, arm 1 still: 0.1 / (0.95 sqrt(0.8925)) =
+  0.111422 rad/s; all three legs against the pair's plane turning by central differences, 1e-6; the spin's kinetic
+  energy with 0.01 kg m^2 a rod, I sum s^2 = 1.363e-4 J, 1e-6); `a_free_loss_free_motion_keeps_its_energy` now also
+  with 0.05 kg m^2 a rod (rigid and elastic with bending: drift 1.4e-14 J of 3.72 J).
+- **Bending out of the plane** (in `effects.link_elasticity`'s model): each elbow moves by y_i along its axis on
+  `upper_arm.lateral_stiffness_n_m` 400000 (3 E I / L_a^3 of the same tube: 407800; bounds 250000 to 620000) with
+  `lateral_damping_n_s_m` 15 (about 2 % of critical, bounds 6 to 30): 6 more states after the in-plane bend. The
+  kinematics take the moved elbows (`Legs::forward_moved`, `inverse_moved`, `jacobians`: J_y = J_x^-1 diag(u_i . a_i),
+  `velocity_term_moved`); the distal dynamics are 6 x 6 (`Delta::load_n::<6>`, every point mass from its Jacobian,
+  solved by `chain::solve`); at rest y = Q_y / k_l; loss in `power.arm_bending`, energy in the elastic energy.
+  `load_at` is `load_n::<3>`, so the rigid path keeps its 3 x 3 sizes.
+- **Modes**: `arm_modes` (pub, in place of `lowest_mode`): the coordinates (roots, elbow angles, moves) with the
+  flexibility per arm and 1/k_l, M = L L^T, the eigenvalues of L^T K^-1 L by Jacobi rotations, rigid connections
+  (mu = 0) left out; `Machine::modes` now gives all of them with their damping ratio v'Cv / (2 w v'Mv); `resonance_hz`
+  and `mode_shape` the lowest (the shape with the moves in their states). Test
+  `the_arms_bending_out_of_their_planes_rings_at_the_hand_calculated_frequency` (arms level at the centre, every
+  forearm square to its axis: lumped sqrt(400000 / 0.63335) / 2 pi = 126.48 Hz three times, damping
+  15 / (2 sqrt(400000 * 0.63335)) = 0.014901; with rods 0.3 + 0.5/6 + (2/3)(0.5)/4 = 0.46667 kg, 147.35 Hz for the
+  three elbows moving the same way round, the other two couple to the sideways modes through the rods' middles and
+  ring 0.24 % higher; 3 / 6 / 9 modes with gearboxes / bending / both). `the_lowest_mode_is_the_hand_calculated_one`
+  unchanged and passing.
+- **Upper arms as collision bodies**: ten boxes along each drawn arm (40 mm wide), after the rods' (`segment_boxes`,
+  shared). Test `an_upper_arm_running_into_an_obstacle_is_a_crash` (a 20 mm box at arm 1's middle at the centre,
+  0.75 m down: 5.9 mm from the arm's boxes at the start pose, the plan finds the contact, `effects.crash` trips the
+  drives at x = 0.123; the rods and platform stay 0.08 m away).
+- **The default cycle** (`sim-cli analyze delta-d3`, before and after): the spin changes motor 1's peak from 7.642678
+  to 7.642679 N m and motors 2, 3 from 3.986994 to 3.986993 N m, RMS unchanged to 1e-6 (2.575830, 1.586898): the cycle
+  runs on y = 0, where leg 1's forearm is square to its axis, and the others spin at a few 0.01 rad/s. With
+  `link_elasticity` the moves out of the planes take motor 1 from 7.836258 / 2.612054 to 7.836320 / 2.612210 N m
+  (peak / RMS), motors 2, 3 from 4.039997 / 1.621916 to 4.038092 / 1.622322 N m, the dwell error from 0.7295 to
+  0.7313 mm, the tracking error 5.307 to 5.309 mm.
+- The D4 takes all of it through the D3's `Delta` (its config has the three keys, its lossless config zeroes the
+  lateral damping); its `modes` now holds the arms' three (shipped config) besides the tool's torsion.
+- Pub API: `Legs::rods` takes the elbow's move y; `Legs::rod_middle` and `lowest_mode` are gone (nothing outside the
+  crate used them); new `Legs::tangent`, `elbows_moved`, `inverse_moved`, `forward_moved`, `jacobians`,
+  `velocity_term_moved`, `Delta::rod_spin`, `arm_modes`.
+
+Left open:
+
+- The arm tube's own share of the bending modes (it stays with the root in the plane and does not move out of it);
+  the elbow block's twist as the arm bends out of its plane (the elbow's axis a stays as it is).
+- `modes` now gives the D3 three modes with the shipped config (it gave one): at the centre the second is the
+  sideways double of the first, which the optimiser takes as the second shaper's frequency where
+  `profile.shaper2_frequency_hz` is 0 (`analysis.rs`, `modes().get(1)`). Not touched (optimiser's area); a second
+  shaper at a double mode does nothing new.
+- Upper-arm boxes are up to a piece's length (40 mm) wider than a slanted arm; no capsules.
