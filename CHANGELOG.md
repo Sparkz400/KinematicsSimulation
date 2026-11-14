@@ -7,6 +7,20 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Delta D3 (and D4): the forearm rods' spin about their own axis as the pair's plane turns, in the mass matrix and
+  the velocity term with `effects.forearm_inertia` (`mass.forearm_rod_spin_inertia_kgm2`); the upper arms' bending
+  out of the plane they turn in, a lateral spring and damper at each elbow with `effects.link_elasticity`
+  (`upper_arm.lateral_stiffness_n_m`, `lateral_damping_n_s_m`), 6 more states; `Machine::modes` with every arm mode
+  and its damping (3, 6 or 9); the upper arms as collision bodies (ten boxes each).
+
+### Changed
+
+- Delta D3: the modes are found by Jacobi rotations of the whole eigenproblem (`arm_modes`, in place of the inverse
+  iteration `lowest_mode`); `Legs::rods` takes the elbow's move out of the arm's plane; `Legs::rod_middle` is gone
+  (`Delta::load_n` builds every point mass from its Jacobian).
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

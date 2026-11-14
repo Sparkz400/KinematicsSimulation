@@ -480,17 +480,26 @@ fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
 
 /// Free and loss-free (no friction, damping, backlash or ripple), held by the constant motor torques of the pose and
 /// started at (1, -0.5, 0.3) m/s, the energy less the motors' work, E - sum tau_k rotor_k, stays what it was: over 0.1 s
-/// of RK4 at 10 us to 1e-7 of the kinetic energy at the start, with the rods, with bending arms, with both, on elastic
-/// and rigid joints. A velocity term or a gravity that does not belong to the mass matrix shows as a drift.
+/// of RK4 at 10 us to 1e-7 of the kinetic energy at the start, with the rods, with bending arms (in and out of their
+/// planes), with both, on elastic and rigid joints, and with the rods' spin inertia made 0.05 kg m^2 (some 4000 times
+/// the config's, so that its share of the energy shows). A velocity term or a gravity that does not belong to the mass
+/// matrix shows as a drift.
 #[test]
 fn a_free_loss_free_motion_keeps_its_energy() {
-    for (rods, bending, elastic) in [(true, false, true), (false, true, true), (true, true, true), (true, true, false)]
-    {
+    for (rods, bending, elastic, spin) in [
+        (true, false, true, 1.3e-5),
+        (false, true, true, 1.3e-5),
+        (true, true, true, 1.3e-5),
+        (true, true, false, 1.3e-5),
+        (true, false, false, 0.05),
+        (true, true, true, 0.05),
+    ] {
         let mut cfg = lossless_config();
         for e in [
             format!("effects.forearm_inertia = {rods}"),
             format!("effects.link_elasticity = {bending}"),
             format!("effects.joint_elasticity = {elastic}"),
+            format!("mass.forearm_rod_spin_inertia_kgm2 = {spin:?}"),
             "effects.gearbox_backlash = false".into(),
         ] {
             cfg.set_text(&e).unwrap();
@@ -526,7 +535,8 @@ fn a_free_loss_free_motion_keeps_its_energy() {
         d.tool_state(&s, &mut at, &mut vel);
         let travel = norm(sub(at, [0.1, -0.05, -0.85]));
         println!(
-            "rods {rods}, bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, {travel:.3} m travelled"
+            "rods {rods} (spin {spin}), bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, \
+             {travel:.3} m travelled"
         );
         assert!(travel > 0.05, "{travel} m");
         assert!(drift < 1e-7 * kinetic, "rods {rods}, bending {bending}, elastic {elastic}: {drift} J");
@@ -588,6 +598,141 @@ fn the_lowest_mode_is_the_hand_calculated_one() {
     assert!((travel[0].abs().max(travel[1].abs()) - 1.0).abs() < 1e-3 && travel[2].abs() < 1e-3, "{travel:?}");
 }
 
+/// The spin of a forearm pair's rods about their own axis, by hand. Leg 1 (along x, its elbow's axis a = (0, 1, 0)), the
+/// platform at (0, 0.1, -0.8) moving at 1 m/s at right angles to the forearm u = p - c_1 in the plane y = 0.1,
+/// p' = (u_z, 0, -u_x) / sqrt(u_x^2 + u_z^2): then u . p' = 0, so arm 1 stands still (theta_1' = 0, c_1' = 0) and
+/// u' = p'. With sigma = a . u = 0.1, u x a = (-u_z, 0, u_x) and n = a . (u' x u) = (u x a) . u' = -sqrt(u_x^2 + u_z^2)
+/// = -sqrt(L^2 - 0.01), the spin s = -sigma n / (L (L^2 - sigma^2)) = 0.1 / (L sqrt(L^2 - 0.01))
+/// = 0.1 / (0.95 * 0.944722) = 0.111422 rad/s, whatever the arm's angle. Every leg's spin also from its pair's plane
+/// turning, by central differences along the motion: the plane's direction across the rod, e2 = a - (a . e) e
+/// normalised (e = u / L), turns at e2' . (e x e2) about the rod. The spin's kinetic energy with I = 0.01 kg m^2 a rod
+/// (the config's 1.3e-5 would give some 1e-7 J): I s^2 / 2 for each of the six rods, I sum s_i^2, the kinetic energy
+/// with that inertia less that without.
+#[test]
+fn the_rods_spin_is_the_hand_calculated_one() {
+    let by_hand = 0.1 / (0.95 * (0.95f64 * 0.95 - 0.01).sqrt());
+    assert!((by_hand - 0.111422).abs() < 1e-6, "{by_hand}");
+    let spin = |inertia: f64| {
+        loss_free(true, &["effects.gravity = false", &format!("mass.forearm_rod_spin_inertia_kgm2 = {inertia:?}")])
+    };
+    let (d, still) = (spin(0.01), spin(0.0));
+    let p = [0.0, 0.1, -0.8];
+    let t = d.legs.inverse(p).unwrap();
+    let u = sub(p, d.legs.elbow(0, t[0])[0]);
+    let pv = [u[2], 0.0, -u[0]].map(|v| v / u[0].hypot(u[2]));
+    let w = mul(&inverse(&d.legs.jacobian(t, p).unwrap()).unwrap(), pv);
+    assert!(w[0].abs() < 1e-12, "{w:?}");
+    close(d.rod_spin(0, t, [0.0; 3], w, [0.0; 3]), by_hand, 1e-9, "leg 1's spin");
+    let plane = |i: usize, t: V3| -> (V3, V3) {
+        let e = sub(d.legs.forward(t).unwrap(), d.legs.elbow(i, t[i])[0]).map(|v| v / 0.95);
+        let a = d.legs.tangent(i);
+        let across = sub(a, e.map(|v| v * dot(a, e)));
+        (e, across.map(|v| v / norm(across)))
+    };
+    let (h, mut sum) = (1e-6, 0.0);
+    for i in 0..3 {
+        let shifted = |sign: f64| plane(i, std::array::from_fn(|k| t[k] + sign * h * w[k])).1;
+        let (e, across) = plane(i, t);
+        let turning = dot(cross(e, across), sub(shifted(1.0), shifted(-1.0))) / (2.0 * h);
+        let spin = d.rod_spin(i, t, [0.0; 3], w, [0.0; 3]);
+        println!("leg {}: spin {spin:.6} rad/s, from the plane {turning:.6} rad/s", i + 1);
+        close(spin, turning, 1e-6, &format!("leg {}'s spin", i + 1));
+        sum += turning * turning;
+    }
+    let kinetic = |d: &Delta| {
+        let (mut s, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&p, &mut s, &mut hold);
+        d.set_tool_velocity(&mut s, &pv);
+        d.energy_parts(&s)[0]
+    };
+    println!("spin energy {:.6e} J, by hand {:.6e} J", kinetic(&d) - kinetic(&still), 0.01 * sum);
+    close(kinetic(&d) - kinetic(&still), 0.01 * sum, 1e-6, "the spin's kinetic energy");
+}
+
+/// The arms' bending out of their planes, by hand: at the centre with the arms horizontal every forearm is at right
+/// angles to its elbow's axis (sigma = 0), so an elbow moving along its axis moves neither the platform nor the arm,
+/// and rings on its own on the tube's lateral stiffness k_l = 400000 N/m with the mass at the elbow: lumped,
+/// m_elbow + s m_fb = 0.3 + 0.6667 * 0.5 = 0.63335 kg, sqrt(400000 / 0.63335) / 2 pi = 126.48 Hz, three times. Damped
+/// c_l / (2 sqrt(k_l m)) = 15 / (2 * 503.33) = 0.014901. With the rods the sixth of the pair's mass at the elbow and
+/// the two thirds at its middle at half the elbow's speed, 0.3 + 0.5 / 6 + (2/3) 0.5 / 4 = 0.46667 kg, 147.35 Hz; but
+/// the middle also moves with the platform, which moves sideways along the elbows' axes, so only the mode with all
+/// three elbows moving the same way round (the axes summing to nought) keeps it; the other two couple to the sideways
+/// modes and ring a little higher (within 0.5 %). All above the in-plane ones (lumped 38.76 Hz sideways twice and
+/// 68.39 Hz vertical, as in `the_lowest_mode_is_the_hand_calculated_one`): 6 modes with the bending alone; 3 with the
+/// gearboxes alone (one per arm), 9 with both.
+#[test]
+fn the_arms_bending_out_of_their_planes_rings_at_the_hand_calculated_frequency() {
+    let hz = |k: f64, m: f64| (k / m).sqrt() / std::f64::consts::TAU;
+    let (lumped, rods) = (0.3 + 0.6667 * 0.5, 0.3 + 0.5 / 6.0 + 2.0 / 3.0 * 0.5 / 4.0);
+    assert!((hz(4e5, lumped) - 126.48).abs() < 0.01 && (hz(4e5, rods) - 147.35).abs() < 0.01);
+    for (on, m) in [(false, lumped), (true, rods)] {
+        let d = delta(&[
+            "effects.joint_elasticity = false",
+            "effects.link_elasticity = true",
+            &format!("effects.forearm_inertia = {on}"),
+        ]);
+        let modes = d.modes(&[0.0, 0.0, LEVEL]);
+        println!("rods {on}: {modes:?}");
+        assert_eq!(modes.len(), 6);
+        close(modes[3].hz, hz(4e5, m), 1e-6, "out of the plane");
+        for mode in &modes[4..] {
+            let by = if on { 0.005 } else { 1e-6 };
+            assert!(mode.hz >= modes[3].hz * (1.0 - 1e-9) && mode.hz <= hz(4e5, m) * (1.0 + by), "{modes:?}");
+        }
+        if !on {
+            assert!((modes[0].hz - 38.76).abs() < 0.01 && (modes[1].hz - 38.76).abs() < 0.01, "{modes:?}");
+            assert!((modes[2].hz - 68.39).abs() < 0.01, "{modes:?}");
+            close(modes[3].damping, 15.0 / (2.0 * (4e5 * lumped).sqrt()), 1e-6, "damping out of the plane");
+        }
+    }
+    for (elastic, bending, count) in [(true, false, 3), (false, true, 6), (true, true, 9)] {
+        let d =
+            delta(&[&format!("effects.joint_elasticity = {elastic}"), &format!("effects.link_elasticity = {bending}")]);
+        assert_eq!(d.modes(&[0.1, -0.05, -0.85]).len(), count, "gearboxes {elastic}, bending {bending}");
+        assert_eq!(d.resonance_hz(&[0.1, -0.05, -0.85]), d.modes(&[0.1, -0.05, -0.85]).first().map(|m| m.hz));
+    }
+}
+
+/// A box in the way of an upper arm and of nothing else: at the centre, 0.75 m down, arm 1's middle (on y = 0, the rods
+/// of its pair 0.05 m to either side) is where the box is put (0.02 m across). At the start pose (0.1525, 0, -0.75) arm
+/// 1 stands at another angle, its boxes some 6 mm from the obstacle; on the traverse to (-0.1525, 0, -0.75) it sweeps
+/// through it. Planned, the check
+/// finds the contact; run with effects.crash the drives trip. The platform's and the rods' boxes, the bodies until 14
+/// November, never touch it.
+#[test]
+fn an_upper_arm_running_into_an_obstacle_is_a_crash() {
+    let d = delta(&[]);
+    let t = d.legs.inverse([0.0, 0.0, -0.75]).unwrap();
+    let (shoulder, end) = d.arm(0, t, [0.0; 3]);
+    let middle: V3 = std::array::from_fn(|i| 0.5 * (shoulder[i] + end[i]));
+    println!("arm 1's middle at the centre: {middle:?}, arm angles {t:?}");
+    let obstacle = format!(
+        "obstacles = [{{ name = \"arm\", centre_m = [{:?}, {:?}, {:?}], size_m = [0.02, 0.02, 0.02] }}]",
+        middle[0], middle[1], middle[2]
+    );
+    let mut cfg = ENTRY.config();
+    cfg.set_text(&obstacle).unwrap();
+    let start = cfg.f64s("start.pose").unwrap();
+    let sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let bodies = sim.machine.collision_bodies(&sim.state);
+    let rods = 2 + 6 * ROD_PIECES;
+    assert_eq!(bodies.len(), rods + 3 * ARM_PIECES);
+    let gap = |bodies: &[sim_core::Aabb]| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
+    println!("at the start {:.4} m, the rods and platform {:.4} m", gap(&bodies), gap(&bodies[..rods]));
+    assert!(gap(&bodies) > 0.004 && gap(&bodies[..rods]) > 0.05, "at the start {} m", gap(&bodies));
+    let planned = sim.check_plan(&[start, vec![-0.1525, 0.0, -0.75]]).unwrap();
+    assert!(planned.clearance < 0.0 && planned.contact.is_some(), "{planned:?}");
+    cfg.set_text("effects.crash = true").unwrap();
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(Command::MoveTo(vec![-0.1525, 0.0, -0.75])).unwrap();
+    sim.run(0.5, |_| {});
+    let contact = sim.contact.as_ref().unwrap();
+    println!("contact at {:?}, {:.3} m/s", contact.pose, contact.speed);
+    assert!(sim.crashed && !sim.control.enabled() && contact.pose[0] > -0.1525 && contact.pose[0] < 0.1525);
+    let bodies = sim.machine.collision_bodies(&sim.state);
+    assert!(gap(&bodies[..rods]) > 0.0, "the rods and the platform {} m from it", gap(&bodies[..rods]));
+}
+
 /// A box in the way of a forearm and of nothing else: at the centre, 0.75 m down, leg 1's rod on the +y side has its
 /// middle where the box is put (0.03 m across). From the start pose (0.1525, 0, -0.75) that middle is some 0.08 m
 /// away in x; on the traverse to (-0.1525, 0, -0.75) the rod sweeps through it. Planned, the check finds the contact;
@@ -598,7 +743,7 @@ fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let d = delta(&[]);
     let p = [0.0, 0.0, -0.75];
     let t = d.legs.inverse(p).unwrap();
-    let [_, (from, to)] = d.legs.rods(0, t[0], p, 0.05, 0.1);
+    let [_, (from, to)] = d.legs.rods(0, t[0], 0.0, p, 0.05, 0.1);
     let middle: V3 = std::array::from_fn(|i| 0.5 * (from[i] + to[i]));
     println!("rod middle at the centre: {middle:?}");
     assert!(middle[1] > 0.0 && middle[2] - 0.015 - (p[2] + 0.015) > 0.3, "{middle:?}");
@@ -611,7 +756,7 @@ fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let start = cfg.f64s("start.pose").unwrap();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
     let bodies = sim.machine.collision_bodies(&sim.state);
-    assert_eq!(bodies.len(), 2 + 6 * ROD_PIECES);
+    assert_eq!(bodies.len(), 2 + 6 * ROD_PIECES + 3 * ARM_PIECES);
     let gap = |bodies: &[sim_core::Aabb]| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
     assert!(gap(&bodies) > 0.0 && gap(&bodies[..2]) > 0.3, "at the start {} m", gap(&bodies));
     let planned = sim.check_plan(&[start, vec![-0.1525, 0.0, -0.75]]).unwrap();

@@ -473,9 +473,9 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | --- | --- | --- | --- |
 | T | 37 | Belt stiffness, pretension, damping, tooth force, tooth jump factor; guide Coulomb, stiction and viscous friction of both axes; motor shaft friction, ripple, cogging; gearbox efficiency, stiffness, damping; frame stiffness and damping; the three `tool_flex` values; the thermal resistances and time constants of `[thermal]`; the four estimates of `[thermal_feedback]`; the DC link's discharge time constant and the line module's efficiency; the belt's teeth in mesh; the bearing lubricant's viscosity and contamination factor; the gearing's Wöhler exponent | Masses, inertias, backlash; values of effects that are off by default, but for `[thermal]`, `[thermal_feedback]` and the tooth jump factor; the shape of the friction curve (Stribeck speed, bristles, preload); the rated rises of `[thermal]`; the reference temperature; the span resonance band (a limit) |
 | S | 29 | As T, without `friction_z`, `frame` and `tool_flex` | As T |
-| D | 29 | The geometry and the masses (not the payload), the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency, the gearing's Wöhler exponent, the upper arms' bending stiffness and damping | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
+| D | 32 | The geometry and the masses (not the payload), the rods' spin inertia, the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency, the gearing's Wöhler exponent, the upper arms' bending stiffnesses and dampings (in and out of their planes) | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
 | D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
-| D4 | 47 | As D, with the arms' backlash, and the estimates of `[tool_gearbox]` (backlash, damping), `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
+| D4 | 50 | As D, with the arms' backlash, and the estimates of `[tool_gearbox]` (backlash, damping), `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Keys with bounds in one config only:
@@ -499,8 +499,8 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `joint_elasticity` | The gearboxes twist (stiffness, damping, backlash): motor and arm are two bodies per joint. Off: the rigid reference model (the switch that `belt_stretch` is on the belt machines) | true |
-| `forearm_inertia` | Each forearm pair a rigid rod with its mass and rotational inertia (m/6 at each end, 2m/3 at its middle: exact for a slender rod). Off: the lumped model, `mass.forearm_elbow_share` at the elbow, the rest at the platform | true |
-| `link_elasticity` | The upper arms bend in the plane they turn in (`[upper_arm]`): the elbow turns against the arm's root on a spring and damper, and the platform rings after a move. Its stiffness is an estimate | false |
+| `forearm_inertia` | Each forearm pair a rigid rod with its mass and rotational inertia (m/6 at each end, 2m/3 at its middle: exact for a slender rod), and the rods' spin about their own axes as the pair's plane turns (`mass.forearm_rod_spin_inertia_kgm2`; one switch, as it is the rest of the same rigid body's inertia). Off: the lumped model, `mass.forearm_elbow_share` at the elbow, the rest at the platform | true |
+| `link_elasticity` | The upper arms bend (`[upper_arm]`): in the plane they turn in, the elbow turns against the arm's root on a spring and damper; out of it, the elbow moves along its axis on the tube's lateral spring and damper. The platform rings after a move. The stiffnesses are estimates | false |
 | `joint_friction` | Friction in the arms' joints at the base, `[joint]` | true |
 | `hard_stops` | The stops at the ends of the arms' angle range, `[joint]` | true |
 | `gravity`, `payload`, `motor_friction`, `gearbox_backlash`, `gearbox_efficiency`, `torque_ripple`, `holding_brake` | As on the other machines | true |
@@ -535,6 +535,7 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | `elbow_kg` | kg | The elbow block with its ball studs, at the arm's end | 0.3 |
 | `forearm_pair_kg` | kg | A pair of forearm rods with their ball cups | 0.5 |
 | `forearm_elbow_share` | share | The share of a pair's mass counted at the elbow, the rest at the platform (0 to 1), with `effects.forearm_inertia` off. 2/3 matches the rod's inertia about its end (Codourey, Olsson) | 0.6667 |
+| `forearm_rod_spin_inertia_kgm2` | kg m² | Each rod's inertia about its own axis, with `effects.forearm_inertia`. A carbon tube 20 × 1.5 mm of 0.15 kg: m (r_o² + r_i²) / 2 = 1.29e-5; bounds 0.6e-5 to 2.6e-5 | 1.3e-5, estimate |
 | `platform_kg` | kg | The platform with its flange | 1.2 |
 | `payload_kg` | kg | Payload, with `effects.payload` | 3.0, catalogue (Autonox rated payload) |
 
@@ -544,6 +545,8 @@ The D3's config ([`machine-delta-d3/default.toml`](../crates/machine-delta-d3/de
 | --- | --- | --- | --- |
 | `bending_stiffness_nm_rad` | N m/rad | The arm's bending as a turn of the elbow about the shoulder: 3 E I / L_a (a cantilever's tip deflection F L³ / (3 E I) over L_a). A carbon tube 50 × 2 mm, E 100 GPa: 65250; bounds 40000 to 100000 | 65000 |
 | `bending_damping_nm_s_rad` | N m s/rad | Its damping, about 2 % of critical at the platform's sideways mode; bounds 2 to 10 | 5.0 |
+| `lateral_stiffness_n_m` | N/m | The arm's bending out of the plane it turns in, as a move of the elbow along its axis: 3 E I / L_a³ (the same round tube): 407800; bounds 250000 to 620000 | 400000 |
+| `lateral_damping_n_s_m` | N s/m | Its damping, about 2 % of critical with the elbow's share of mass (0.47 kg with the rods); bounds 6 to 30 | 15.0 |
 
 `[joint]` (read by the rotary joint component; estimates)
 

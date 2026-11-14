@@ -41,11 +41,13 @@ payload = true
 # stiffness and damping have no meaning.
 joint_elasticity = true
 # Each forearm pair a rigid rod with its mass and rotational inertia (a sixth of its mass at each end, two thirds at its
-# middle: exact for a slender rod). Off: the lumped model of Codourey and Olsson, mass.forearm_elbow_share at the elbow
-# and the rest at the platform, the rods' rotational inertia left out. On in the shipped config.
+# middle: exact for a slender rod), and the rods' spin about their own axes as the pair's plane turns
+# (mass.forearm_rod_spin_inertia_kgm2). Off: the lumped model of Codourey and Olsson, mass.forearm_elbow_share at the
+# elbow and the rest at the platform, the rods' rotational inertia left out. On in the shipped config.
 forearm_inertia = true
-# The upper arms bend (spring and damper, [upper_arm]): the elbow turns against the arm's root, and the platform rings
-# after a move. Off in the shipped config: its stiffness is an estimate.
+# The upper arms bend (springs and dampers, [upper_arm]): in the plane they turn in, the elbow turns against the arm's
+# root; out of it, the elbow moves along its axis. The platform rings after a move. Off in the shipped config: the
+# stiffnesses are estimates.
 link_elasticity = false
 # Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
 joint_friction = true
@@ -129,6 +131,9 @@ forearm_pair_kg = 0.5
 # The share of a forearm pair's mass counted at the elbow (the rest at the platform): 2/3 matches the rod's inertia
 # about its end, m L^2 / 3 (Codourey 1998, Olsson 2009). Only with effects.forearm_inertia off (the lumped model).
 forearm_elbow_share = 0.6667
+# With effects.forearm_inertia: each rod's inertia about its own axis. [estimate] a carbon tube 20 x 1.5 mm of 0.15 kg,
+# m (r_o^2 + r_i^2) / 2 = 0.15 (0.01^2 + 0.0085^2) / 2 = 1.29e-5 kg m^2; the ball cups on the axis add little.
+forearm_rod_spin_inertia_kgm2 = 1.3e-5
 platform_kg = 1.2
 # [catalogue] Autonox: rated payload 3 kg
 payload_kg = 3.0
@@ -140,6 +145,12 @@ payload_kg = 3.0
 [upper_arm]
 bending_stiffness_nm_rad = 65000.0
 bending_damping_nm_s_rad = 5.0
+# Out of the plane the arm turns in, the elbow moves along its axis on the tube's lateral stiffness. [estimate] the
+# same tube (round, so EI is the same both ways): a cantilever's tip, 3 E I / L_a^3 = 3 * 8700 / 0.4^3 = 407800 N/m.
+# The damping about 2 % of critical with the elbow's share of mass (about 0.47 kg with the rods: 2 * 0.02 *
+# sqrt(4e5 * 0.47) = 17 N s/m).
+lateral_stiffness_n_m = 400000.0
+lateral_damping_n_s_m = 15.0
 
 # Each arm's joint at the base.
 [joint]
@@ -358,6 +369,9 @@ mass.forearm_elbow_share = [0.5, 0.667]
 mass.platform_kg = [0.8, 1.6]
 upper_arm.bending_stiffness_nm_rad = [40000.0, 100000.0]
 upper_arm.bending_damping_nm_s_rad = [2.0, 10.0]
+upper_arm.lateral_stiffness_n_m = [250000.0, 620000.0]
+upper_arm.lateral_damping_n_s_m = [6.0, 30.0]
+mass.forearm_rod_spin_inertia_kgm2 = [0.6e-5, 2.6e-5]
 joint.friction_coulomb_nm = [0.1, 0.6]
 joint.friction_viscous_nm_s_rad = [0.02, 0.1]
 motor.friction_coulomb_nm = [0.025, 0.1]

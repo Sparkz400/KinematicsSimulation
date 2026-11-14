@@ -73,6 +73,7 @@ pub fn lossless_config() -> Config {
         "gearbox.damping_nm_s_rad",
         "joint.stop_damping_nm_s_rad",
         "upper_arm.bending_damping_nm_s_rad",
+        "upper_arm.lateral_damping_n_s_m",
         "tool_gearbox.damping_nm_s_rad",
         "shaft.torsional_damping_nm_s_rad",
     ] {
