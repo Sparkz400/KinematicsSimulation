@@ -1027,7 +1027,8 @@ impl Candidate {
     /// pass, because their ratio is no measure of how close the cycle is to failing: with a braking resistor
     /// behind them the capacitors fill to their limit by design, in every cycle that brakes hard enough, and
     /// the resistor's checks say what that costs; and the voltage is never below the bus, so its ratio to
-    /// the trip level starts at 0.6 or so.
+    /// the trip level starts at 0.6 or so. Nor does the warm start's convergence while it passes: it says how
+    /// well the run was measured, not how close a part is to its limit.
     ///
     /// A run whose drives tripped is infinitely far beyond: its figures end at the trip, where the DC link
     /// was just past its limit, and by that ratio it would rank as the nearest to passing.
@@ -1048,6 +1049,7 @@ impl Candidate {
         verdicts
             .iter()
             .filter(|v| (v.limit > 0.0 || !v.ok) && v.check != "belt-slack" && !by_design(v))
+            .filter(|v| !(v.ok && v.check == "thermal-warm-start"))
             .map(|v| (v.check, crate::analysis::utilisation(v)))
             .max_by(|a, b| a.1.total_cmp(&b.1))
     }
