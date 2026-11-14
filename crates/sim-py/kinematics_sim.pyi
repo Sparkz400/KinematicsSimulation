@@ -74,7 +74,15 @@ def analyze(
     """The load per motor over one pass of the cycle (or a path), one row per motor."""
 
 def verdicts(
-    config: Config, *, bands: bool = False, samples: int | None = None, seed: int = 1, worst: bool = False
+    config: Config,
+    *,
+    bands: bool = False,
+    samples: int | None = None,
+    seed: int = 1,
+    worst: bool = False,
+    path: str | None = None,
+    path_file: str | None = None,
+    time_optimal: bool = False,
 ) -> dict[str, Any]:
     """The checks of the cycle, one row per check and motor; with bands their low, high and worst case; with
     bands and worst the worst corner of the bounds per check (worst, worst_ok, at_high_bound, at_low_bound, runs)."""
@@ -91,6 +99,9 @@ def sizing(
     drives: str = "paired",
     rank_by: str = "cost",
     duties: list[tuple[Config, float]] | None = None,
+    path: str | None = None,
+    path_file: str | None = None,
+    time_optimal: bool = False,
 ) -> dict[str, Any]:
     """Every catalogue motor on the config's cycle, passing first, ranked by `rank_by`; the columns of `sim-cli search`."""
 
@@ -106,7 +117,15 @@ def sweep(
     """The frequency response torque to speed of one motor: frequency_hz, gain_rad_s_per_nm, phase_deg."""
 
 def optimise(
-    config: Config, *, runs: int = 40, nominal: bool = False, worst: bool = False, pareto: bool = False
+    config: Config,
+    *,
+    runs: int = 40,
+    nominal: bool = False,
+    worst: bool = False,
+    pareto: bool = False,
+    path: str | None = None,
+    path_file: str | None = None,
+    time_optimal: bool = False,
 ) -> dict[str, Any]:
     """A shorter cycle that passes every verdict: cycle_s (before, after), changes, robust, pareto."""
 

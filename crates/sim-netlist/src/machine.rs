@@ -2722,6 +2722,20 @@ impl Machine for ConfigMachine {
     /// Each guide's load (`guide_load`, with what a linear motor presses on it) at the axis positions `pos` and
     /// accelerations `acc`: at rest its weight across the axis and the press, moving the overhang's tilt (and side
     /// load), m a (2 |lever| / spacing (+ 1)), signed with the acceleration.
+    /// Each guide's Coulomb and viscous friction (`Lugre::steady`) on its axis's coordinate, as torque at the motors by
+    /// the map the rigid forces take (`to_motors`).
+    /// shortcut: at the load the levels were given for (load scale 1) and without the Stribeck rise near a standstill;
+    /// take each guide's rigid load where effects.load_dependent_friction moves the plan's motors far.
+    fn rigid_friction(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        let (_, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
+        let (mut coulomb, mut viscous) = (vec![0.0; self.n()], vec![0.0; self.n()]);
+        for g in &self.guides {
+            let [c, b, _] = g.friction.steady(rate[g.axis], 1.0);
+            (coulomb[g.axis], viscous[g.axis]) = (coulomb[g.axis] + c, viscous[g.axis] + b);
+        }
+        out.extend(self.to_motors(&coulomb).into_iter().zip(self.to_motors(&viscous)).map(|(c, b)| [c, b]));
+    }
+
     fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
         let still = vec![0.0; self.n()];
         for g in &self.guides {

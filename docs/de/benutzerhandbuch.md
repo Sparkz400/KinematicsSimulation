@@ -15,6 +15,7 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einen Hexapod oder einen Seilroboter auslegen](#einen-hexapod-oder-einen-seilroboter-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
 - [Programme: G-Code und Roboterprogramme](#programme-g-code-und-roboterprogramme)
+- [Prüfurteile, Suche und Optimierung auf einer Bahn](#prüfurteile-suche-und-optimierung-auf-einer-bahn)
 - [Die Form der Bewegungen wählen](#die-form-der-bewegungen-wählen)
 - [Regler einstellen und Input Shaping nutzen](#regler-einstellen-und-input-shaping-nutzen)
 - [Eine Antriebsaufzeichnung nachfahren und Parameter anpassen](#eine-antriebsaufzeichnung-nachfahren-und-parameter-anpassen)
@@ -1164,15 +1165,29 @@ $ sim-cli run delta-d3 --path greifen.mod --time-optimal
 | Endung | Gelesen als | Was gelesen wird |
 | --- | --- | --- |
 | `.nc`, `.ngc`, `.gcode`, `.g`, `.cnc`, `.tap` | G-Code (DIN 66025 / ISO 6983) | G0 Eilgang, G1 Gerade, G2/G3 Kreisbogen (Mittelpunkt I, J, K vom Anfang aus oder R; R < 0 der längere Bogen), F Vorschub je Minute, G17/G18/G19 Ebene, G20 Zoll / G21 mm (Vorgabe), G90 absolut (Vorgabe) / G91 inkrementell; X, Y, Z, A, B, C für die Achsen mit diesen Kennungen (A, B, C in Grad). Ohne Wirkung angenommen: N-, O-, M-, S-, T-Wörter, G40, G49, G54, G80, G94, Kommentare `( )` und `;`, `%`-Zeilen; M2 und M30 beenden das Programm |
-| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {Hilfspunkt}, {Ende}` in mm und Grad; weggelassene Komponenten bleiben vom Punkt davor; A, B, C, S, T und weitere bewegen Achsen dieses Namens, wo die Maschine sie hat, und entfallen sonst |
-| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` zu Robtargets an Ort und Stelle (`[[x, y, z], ...]`) oder vereinbart (`CONST robtarget p10 := [[...]];`), Positionen in mm; Orientierung, Geschwindigkeit und Zone entfallen |
+| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {Hilfspunkt}, {Ende}` in mm und Grad; weggelassene Komponenten bleiben vom Punkt davor; A, B, C, S, T und weitere bewegen Achsen dieses Namens, wo die Maschine sie hat, und entfallen sonst. Bei einem Arm im Werkzeugraum (Achsen x, y, z, rx, ry, rz) sind A, B, C die Orientierung (Rz(A) Ry(B) Rx(C)). `$VEL.CP = 0.2` (m/s) ist die Bahngeschwindigkeit der folgenden LIN- und CIRC-Bewegungen; PTP fährt mit den Grenzwerten der Achsen |
+| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` zu Robtargets an Ort und Stelle (`[[x, y, z], [q1, q2, q3, q4], ...]`) oder vereinbart (`CONST robtarget p10 := [[...]];`), Positionen in mm; bei einem Arm im Werkzeugraum ist das Quaternion die Orientierung. Die Geschwindigkeit: `v100` (mm/s), `vmax` (die Grenzwerte der Achsen), an Ort und Stelle `[250, 500, 5000, 1000]` oder vereinbart (`VAR speeddata vfast := [...];`), ihre TCP-Geschwindigkeit; die Zone entfällt |
 | jede andere, mit Zeilen `MoveL`, `MoveJ`, `MoveC` | Roboterbewegungen als CSV | `MoveL,x,y,z`, `MoveJ,x,y,z`, `MoveC,Hilfspunkt...,Ende...`: ein Wert je Achse in m (rad) |
 | jede andere | Bahndatei | wie oben |
 
 - Das Programm beginnt dort, wo die Maschine steht; eine Achse, die ein Satz nicht nennt, bleibt.
-- Jede Folge von G1/G2/G3-Bewegungen mit einem Vorschub wird innerhalb der Achsgrenzwerte geplant, die Geschwindigkeit jeder Achse auf den Vorschub begrenzt, und die Folgen schließen mit einem Halt dazwischen aneinander an. G0 und Roboterprogramme fahren mit den Grenzwerten der Achsen, mit `--time-optimal` so schnell, wie die Motoren es erlauben. Der Vorschub begrenzt jede Achse, nicht die Bahngeschwindigkeit: Eine Diagonale kann bis zu √2 schneller als F fahren.
-- Ein PTP oder MoveJ ist eine Gerade in den Achsen der Maschine wie ein MoveL: Die Leser passen zu Maschinen, deren Achsen Positionen sind (Portale, Deltas).
+- Jede Folge von Bewegungen mit einem Vorschub (G1/G2/G3 mit F, eine RAPID-Bewegung mit ihrer Geschwindigkeit, ein KRL-LIN oder -CIRC mit `$VEL.CP`) wird innerhalb der Achsgrenzwerte geplant, ihre Bahngeschwindigkeit auf den Vorschub begrenzt, und die Folgen schließen mit einem Halt dazwischen aneinander an. F ist die Bahngeschwindigkeit: G1 X100 Y100 F6000 fährt die Diagonale mit 100 mm/s, jede Achse mit 70,7 mm/s (vor dem 14. November begrenzte F jede Achse, und die Diagonale fuhr mit 141 mm/s). G0, `vmax`, PTP und Roboter-CSV fahren mit den Grenzwerten der Achsen, mit `--time-optimal` so schnell, wie die Motoren es erlauben. Die Geschwindigkeit zählt alle Achsen, wie die Länge einer Bahn: Bei einem Arm im Werkzeugraum zählen die Radiant des Drehvektors mit den Metern.
+- Ein PTP oder MoveJ ist eine Gerade in den Achsen der Maschine wie ein MoveL: Die Leser passen zu Maschinen, deren Achsen Positionen sind (Portale, Deltas), und zu Armen im Werkzeugraum.
 - Alles andere wird mit seiner Zeile abgelehnt: ein anderer G-Befehl (G4, G41, G81, ...) oder Buchstabe, ein G1 vor jedem F, eine Achse, die die Maschine nicht hat, ein Kreisbogen, der auch die dritte Achse der Ebene bewegt (eine Helix), ein Kreisbogen, dessen Anfang und Ende verschieden weit vom Mittelpunkt liegen, MoveAbsJ, PTP_REL, SPLINE, ein benannter KRL-Punkt, ein nicht vereinbartes Robtarget.
+
+## Prüfurteile, Suche und Optimierung auf einer Bahn
+
+`verdicts`, `search` und `optimise` beurteilen den konfigurierten Zyklus; mit `--path DATEI` (und `--time-optimal`) beurteilen sie an seiner Stelle eine Bahn oder ein Programm, gelesen wie `run --path` es liest (Bahndatei, G-Code, KRL, RAPID, Roboter-CSV). Die Bahn wird zuerst einmal geplant, sodass eine unlesbare Zeile mit ihrer Nummer genannt wird, bevor etwas läuft. Jeder Lauf plant die Bahn dann neu von dort, wo die Maschine steht, mit der Konfiguration dieses Laufs: die Bänder mit jedem begrenzten Wert, jeder Katalogkandidat mit seinem Motor, Getriebe und Umrichter, jede Einstellung des Optimierers mit ihren Grenzwerten.
+
+```text
+$ sim-cli verdicts t-gantry --path tasche.nc --bands
+$ sim-cli search t-gantry --path ecke.path --time-optimal --series 1FK2
+$ sim-cli optimise t-gantry --path ecke.path --runs 20
+```
+
+- Gemessen wird der Lauf wie bei `analyze --path`: die Bahn und 0,3 s Ruhe. Mit `effects.thermal_warm_start` wird er wiederholt (zurück zum Anfang der Bahn und eine Ruhe zwischen den Durchläufen), bis Wicklungen und Teile einen Durchlauf mit der Erwärmung beginnen, auf die sie sich einstellen, wie bei einem Zyklus.
+- Der Optimierer verkürzt die Zeit der Bahn: die Achsgrenzwerte (alle drei Faktoren), der Input-Shaper und, wo die Konfiguration eine Abweichung erlaubt (die größere von `profile.path_tolerance_m` und `corner_tolerance_m`), die Übergangskurven und die innerhalb dieser Abweichung verrundeten Ecken. Hübe zum Absenken hat eine Bahn nicht; seine Änderungen sind Konfigurationswerte (`profile.*`, `axis.*`, `effects.*`).
+- Intern bekommt die Konfiguration eine optionale Tabelle `[path]` ([Konfigurationsreferenz](../config-reference.md#path)); eine Konfigurationsdatei mit einer solchen Tabelle beurteilt in jedem Befehl und in Python ihre Bahn statt des Zyklus.
 
 ## Von einem laufenden Förderband greifen
 

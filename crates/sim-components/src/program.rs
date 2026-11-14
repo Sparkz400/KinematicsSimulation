@@ -5,8 +5,9 @@
 //! - G0 rapid, G1 line, G2 clockwise and G3 counterclockwise arc (seen from the plus side of the plane's normal),
 //!   centre by I, J, K (from the start, always incremental) or radius R (negative: the longer of the two arcs);
 //! - G17 (XY plane), G18 (ZX), G19 (YZ); G20 inch, G21 mm (the default); G90 absolute (the default), G91 incremental;
-//! - F the feed in units per minute, needed before the first G1, G2 or G3. Each run of moves at one feed is planned on
-//!   its own, its speed capped at the feed on every axis, with a stop between runs; G0 runs at the axes' limits;
+//! - F the feed in units per minute, needed before the first G1, G2 or G3: the speed along the path. Each run of moves
+//!   at one feed is planned on its own, its speed along the path capped at the feed (`path::plan_at`), with a stop
+//!   between runs; G0 runs at the axes' limits;
 //! - X, Y, Z (and A, B, C in degrees) move the axes of the same name (ids x, y, z, a, b, c); the start is where the
 //!   machine stands, an axis a block does not name stays;
 //! - taken and without effect: N, O, M, S, T words, G40, G49, G54, G80, G94; comments in ( ) and after ;; % lines;
@@ -16,22 +17,30 @@
 //!
 //! Robot moves as CSV (any other extension, when a line starts with Move): `MoveL,x,y,z` and `MoveJ,x,y,z` straight to
 //! the pose, `MoveC,via...,end...` on the circle through the via point to the end; one value per axis in the machine's
-//! units (m, rad), as a path file has them.
+//! units (m, rad), as a path file has them; at the axes' limits.
 //!
 //! KRL (`.src`): `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` with mm and degrees, components left out
 //! kept from the point before; A, B, C, S, T, E1... move axes of those names where the machine has them and are left out
-//! otherwise. RAPID (`.mod`, `.prg`): `MoveL`, `MoveJ` and `MoveC` to robtargets given in place (`[[x, y, z], ...]`) or
-//! declared (`CONST robtarget p10 := [[...]];`), positions in mm; the orientation (quaternion), speed and zone are left
-//! out. In both every other line or statement without a move is skipped; other move instructions (PTP_REL, SPLINE,
-//! MoveAbsJ, named KRL points) are refused. A PTP or MoveJ is a straight line in the machine's axes, as a MoveL.
-//! shortcut: robot programs move at the axes' limits, their speeds are left out; and only positions are read, so they
-//! suit machines whose axes are positions (gantries, deltas), not joint-angle arms. Read speeds and orientations once a
-//! machine's axes carry them.
+//! otherwise. Where the machine's axes are x, y, z and a rotation vector rx, ry, rz (an arm in tool space), A, B, C are
+//! the orientation (R = Rz(A) Ry(B) Rx(C), KUKA's) and set rx, ry, rz. `$VEL.CP = v` (m/s) is the speed along the path
+//! of the LIN and CIRC moves after it; a PTP runs at the axes' limits.
+//!
+//! RAPID (`.mod`, `.prg`): `MoveL`, `MoveJ` and `MoveC` to robtargets given in place (`[[x, y, z], [q1, q2, q3, q4],
+//! ...]`) or declared (`CONST robtarget p10 := [[...]];`), positions in mm; where the machine has rx, ry, rz the
+//! orientation quaternion (q1 the scalar part) sets them. The speed: `v100` (the predefined speeddata, mm/s), `vmax`
+//! (the axes' limits), a speeddata given in place (`[150, 500, 5000, 1000]`, its TCP speed in mm/s) or declared (`CONST
+//! speeddata vfast := [...];`); the zone is left out. In both every other line or statement without a move is skipped;
+//! other move instructions (PTP_REL, SPLINE, MoveAbsJ, named KRL points) are refused. A PTP or MoveJ is a straight line
+//! in the machine's axes, as a MoveL, at the move's speed along it.
+//! shortcut: a speed is along the path over all axes, as a path's length is (on an arm in tool space the rotation
+//! vector's radians count with the metres); a robot's TCP speed counts the position alone. Split the speed into the
+//! TCP's and the orientation's (RAPID's v_ori) where reorienting moves have to run at the robot's own speed.
 
 use crate::path::Piece;
 use sim_core::AxisInfo;
 
-/// Moves at one feed: the pieces, and the speed each axis is capped at (m/s, or rad/s), `None` for the axes' limits.
+/// Moves at one feed: the pieces, and the speed along the path they are capped at (axis units per second, over all
+/// axes, as `path::plan_at` takes it), `None` for the axes' limits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     pub feed: Option<f64>,
@@ -304,9 +313,10 @@ pub fn robot_csv(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run
     Ok(runs)
 }
 
-/// The arc from `from` through `via` to `to`.
+/// The arc from `from` through `via` to `to`; on more than three axes on the first three, the others carried along.
 fn circle(line: usize, from: &[f64], via: &[f64], to: &[f64]) -> Result<Piece> {
-    match arc_through(from, via, to) {
+    let n = from.len().min(3);
+    match arc_through(&from[..n], &via[..n], &to[..n]) {
         Some((centre, clockwise)) => Ok(Piece::Arc { to: to.to_vec(), centre, clockwise }),
         None => fail(line, "program-error-arc", format!("{via:?}")),
     }
@@ -324,13 +334,43 @@ fn robot_pose(axes: &[AxisInfo], from: &[f64], components: &[(String, f64)]) -> 
     pose
 }
 
+/// The indices of the axes rx, ry, rz, where the machine's tool has an orientation as a rotation vector.
+fn rotation_axes(axes: &[AxisInfo]) -> Option<[usize; 3]> {
+    let at = |id: &str| axes.iter().position(|a| a.id == id);
+    Some([at("rx")?, at("ry")?, at("rz")?])
+}
+
+/// KUKA's A, B, C (degrees) of a rotation vector: R = Rz(A) Ry(B) Rx(C).
+fn abc_of(r: [f64; 3]) -> [f64; 3] {
+    let m = crate::rigid::exp(r);
+    [m[1][0].atan2(m[0][0]), (-m[2][0]).clamp(-1.0, 1.0).asin(), m[2][1].atan2(m[2][2])].map(f64::to_degrees)
+}
+
+/// The rotation vector of KUKA's A, B, C (degrees).
+fn rotation_of_abc([a, b, c]: [f64; 3]) -> [f64; 3] {
+    crate::rigid::log(&crate::rigid::rpy([c.to_radians(), b.to_radians(), a.to_radians()]))
+}
+
 /// KUKA KRL (see the module).
 pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
     let mut pos = start.to_vec();
     let mut runs = Vec::new();
+    // The orientation as KUKA's A, B, C, where the machine has rx, ry, rz: components left out are kept.
+    let rotation = rotation_axes(axes);
+    let mut abc = rotation.map(|r| abc_of(r.map(|i| start[i])));
+    let mut speed = None;
     for (n, raw) in text.lines().enumerate() {
         let line = n + 1;
         let code = raw.split(';').next().unwrap_or("").trim();
+        if let Some(value) = code.to_ascii_uppercase().strip_prefix("$VEL.CP") {
+            let value = value.trim().strip_prefix('=').map(str::trim).and_then(|v| v.parse::<f64>().ok());
+            speed = Some(value.filter(|v| *v > 0.0 && v.is_finite()).ok_or_else(|| ProgramError {
+                line,
+                key: "program-error-word",
+                detail: code.to_string(),
+            })?);
+            continue;
+        }
         let keyword: String = code.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
         let keyword = keyword.to_ascii_uppercase();
         if !matches!(keyword.as_str(), "PTP" | "LIN" | "CIRC") {
@@ -358,19 +398,35 @@ pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             aggregates.push(components);
             rest = &rest[open + close + 1..];
         }
-        let piece = match (keyword.as_str(), aggregates.as_slice()) {
-            ("PTP" | "LIN", [end]) => Piece::Line(robot_pose(axes, &pos, end)),
+        // A pose with its orientation from A, B, C where the machine has rx, ry, rz (the aux point's is not used).
+        let mut oriented = |from: &[f64], components: &[(String, f64)]| {
+            let mut pose = robot_pose(axes, from, components);
+            if let (Some(rotation), Some(abc)) = (rotation, abc.as_mut()) {
+                for (name, v) in components {
+                    if let Some(k) = ["A", "B", "C"].iter().position(|c| name.eq_ignore_ascii_case(c)) {
+                        abc[k] = *v;
+                    }
+                }
+                for (i, r) in rotation.into_iter().zip(rotation_of_abc(*abc)) {
+                    pose[i] = r;
+                }
+            }
+            pose
+        };
+        let (piece, feed) = match (keyword.as_str(), aggregates.as_slice()) {
+            ("PTP", [end]) => (Piece::Line(oriented(&pos, end)), None),
+            ("LIN", [end]) => (Piece::Line(oriented(&pos, end)), speed),
             ("CIRC", [aux, end]) => {
                 let via = robot_pose(axes, &pos, aux);
-                let to = robot_pose(axes, &via, end);
-                circle(line, &pos, &via, &to)?
+                let to = oriented(&via, end);
+                (circle(line, &pos, &via, &to)?, speed)
             }
             _ => return fail(line, "program-error-named", code),
         };
         pos = match &piece {
             Piece::Line(to) | Piece::Arc { to, .. } | Piece::Spline(to) => to.clone(),
         };
-        push(&mut runs, None, piece);
+        push(&mut runs, feed, piece);
     }
     Ok(runs)
 }
@@ -394,19 +450,57 @@ pub fn rapid(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             current.1.push(' ');
         }
     }
-    // The first [x, y, z] of a robtarget, mm.
+    // The numbers of a bracket of numbers, `[a, b, ...]`.
+    let numbers = |text: &str| -> Option<Vec<f64>> {
+        let inner = text.trim().strip_prefix('[')?;
+        inner.split(']').next()?.split(',').map(|v| v.trim().parse().ok().filter(|v: &f64| v.is_finite())).collect()
+    };
+    // The [x, y, z] of a robtarget (mm), and its orientation [q1, q2, q3, q4] as "q1".."q4" where it has one.
     let position = |target: &str| -> Option<Vec<(String, f64)>> {
-        let inner = target.trim().strip_prefix("[[")?;
-        let numbers: Vec<f64> =
-            inner.split(']').next()?.split(',').map(|v| v.trim().parse().ok()).collect::<Option<_>>()?;
-        (numbers.len() == 3).then(|| ["x", "y", "z"].iter().map(|s| s.to_string()).zip(numbers).collect())
+        let inner = target.trim().strip_prefix('[')?;
+        let place = numbers(inner)?;
+        if place.len() != 3 {
+            return None;
+        }
+        let mut out: Vec<(String, f64)> = ["x", "y", "z"].iter().map(|s| s.to_string()).zip(place).collect();
+        let rest = inner.split_once(']').map_or("", |(_, r)| r).trim_start().trim_start_matches(',');
+        if let Some(q) = numbers(rest).filter(|q| q.len() == 4) {
+            out.extend(["q1", "q2", "q3", "q4"].iter().map(|s| s.to_string()).zip(q));
+        }
+        Some(out)
+    };
+    let rotation = rotation_axes(axes);
+    // A robtarget's pose: its position, and its orientation where the machine has rx, ry, rz.
+    let oriented = |from: &[f64], components: &[(String, f64)]| {
+        let mut pose = robot_pose(axes, from, components);
+        let q: Vec<f64> = components.iter().filter(|(n, _)| n.starts_with('q')).map(|(_, v)| *v).collect();
+        let size = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if let (Some(rotation), true) = (rotation, q.len() == 4 && size > 0.0) {
+            let r = crate::rigid::from_quaternion([q[0], q[1], q[2], q[3]].map(|v| v / size));
+            for (i, r) in rotation.into_iter().zip(r) {
+                pose[i] = r;
+            }
+        }
+        pose
     };
     let mut named: std::collections::HashMap<String, Vec<(String, f64)>> = Default::default();
+    // Declared speeddata: the TCP speed, m/s.
+    let mut speeds: std::collections::HashMap<String, f64> = Default::default();
     let mut pos = start.to_vec();
     let mut runs = Vec::new();
     for (line, statement) in statements {
         let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
         let words: Vec<&str> = statement.split(' ').collect();
+        if let Some(at) = words.iter().position(|w| w.eq_ignore_ascii_case("speeddata")) {
+            let declaration = words[at + 1..].join(" ");
+            if let Some((name, value)) = declaration.split_once(":=") {
+                let Some(v) = numbers(value).and_then(|v| v.first().copied()).filter(|v| *v > 0.0) else {
+                    return fail(line, "program-error-word", statement);
+                };
+                speeds.insert(name.trim().to_string(), v * 1e-3);
+            }
+            continue;
+        }
         if let Some(at) = words.iter().position(|w| w.eq_ignore_ascii_case("robtarget")) {
             let declaration = words[at + 1..].join(" ");
             if let Some((name, value)) = declaration.split_once(":=") {
@@ -441,19 +535,32 @@ pub fn rapid(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 detail: arg.to_string(),
             })
         };
-        let piece = match instruction.to_ascii_lowercase().as_str() {
-            "movel" | "movej" => Piece::Line(robot_pose(axes, &pos, &target(args[0])?)),
+        // The speed along the path (m/s): `vmax` or none given, the axes' limits.
+        let speed = |arg: Option<&&str>| -> Result<Option<f64>> {
+            let Some(arg) = arg.map(|a| a.split('\\').next().unwrap_or(a).trim()) else { return Ok(None) };
+            if arg.eq_ignore_ascii_case("vmax") {
+                return Ok(None);
+            }
+            let predefined = arg.strip_prefix(['v', 'V']).and_then(|n| n.parse::<f64>().ok());
+            let given = numbers(arg).and_then(|v| v.first().copied());
+            match predefined.or(given).map(|mm| mm * 1e-3).or_else(|| speeds.get(arg).copied()) {
+                Some(v) if v > 0.0 && v.is_finite() => Ok(Some(v)),
+                _ => fail(line, "program-error-named", arg),
+            }
+        };
+        let (piece, feed) = match instruction.to_ascii_lowercase().as_str() {
+            "movel" | "movej" => (Piece::Line(oriented(&pos, &target(args[0])?)), speed(args.get(1))?),
             "movec" if args.len() >= 2 => {
                 let via = robot_pose(axes, &pos, &target(args[0])?);
-                let to = robot_pose(axes, &pos, &target(args[1])?);
-                circle(line, &pos, &via, &to)?
+                let to = oriented(&pos, &target(args[1])?);
+                (circle(line, &pos, &via, &to)?, speed(args.get(2))?)
             }
             _ => return fail(line, "program-error-word", instruction.to_string()),
         };
         pos = match &piece {
             Piece::Line(to) | Piece::Arc { to, .. } | Piece::Spline(to) => to.clone(),
         };
-        push(&mut runs, None, piece);
+        push(&mut runs, feed, piece);
     }
     Ok(runs)
 }
@@ -469,7 +576,7 @@ mod tests {
 
     /// Length of a planned path: the sum of its steps.
     fn length(axes: &[AxisInfo], start: &[f64], pieces: &[Piece]) -> f64 {
-        let points = crate::path::plan(axes, start, pieces, 1e-3, 0.0, 0.0).unwrap();
+        let points = crate::path::plan(axes, start, pieces, 1e-3, 0.0, crate::path::ARC_SLACK).unwrap();
         let mut last = start.to_vec();
         let mut total = 0.0;
         for (_, p) in &points {
@@ -571,6 +678,40 @@ mod tests {
         assert_eq!(krl("PTP HOME", &axes, &[0.0; 2]).unwrap_err().key, "program-error-named");
         // The circle is the half turn: pi m long on the planned path.
         assert!((length(&axes, &[-1.0, 0.0], &[half]) - PI).abs() < 1e-4);
+    }
+
+    /// Robot programs carry their speeds and, on an arm in tool space (axes x, y, z, rx, ry, rz), their orientations.
+    /// RAPID: v100 is 100 mm/s, 0.1 m/s; a speeddata declared as [250, 500, 5000, 1000] 0.25 m/s; vmax the axes' limits.
+    /// The quaternion [cos 45°, 0, 0, sin 45°] is a quarter turn about z, the rotation vector (0, 0, pi / 2). KRL:
+    /// `$VEL.CP = 0.2` is 0.2 m/s for the LIN after it, a PTP runs at the axes' limits; A 90 (B 0, C 0) is Rz(90°), the
+    /// same quarter turn; positions in mm.
+    #[test]
+    fn robot_programs_carry_their_speeds_and_orientations() {
+        let axes = ["x", "y", "z", "rx", "ry", "rz"].map(axis);
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let module = format!(
+            "MODULE m\n VAR speeddata vfast := [250, 500, 5000, 1000];\n PROC main()\n  MoveL [[100,0,0],[{half},0,0,{half}],\
+             [0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], v100, z10, tool0;\n  MoveL [[200,0,0],[1,0,0,0],[0,0,0,0],\
+             [9E9,9E9,9E9,9E9,9E9,9E9]], vfast, fine, tool0;\n  MoveJ [[0,0,0],[1,0,0,0],[0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], \
+             vmax, fine, tool0;\n ENDPROC\nENDMODULE"
+        );
+        let runs = rapid(&module, &axes, &[0.0; 6]).unwrap();
+        assert_eq!(runs.iter().map(|r| r.feed).collect::<Vec<_>>(), [Some(0.1), Some(0.25), None]);
+        let Piece::Line(turned) = &runs[0].pieces[0] else { panic!() };
+        assert!(
+            turned.iter().zip([0.1, 0.0, 0.0, 0.0, 0.0, PI / 2.0]).all(|(a, b)| (a - b).abs() < 1e-12),
+            "{turned:?}"
+        );
+        let src = "DEF demo()\n  PTP {X 0, Y 0, Z 0}\n  $VEL.CP = 0.2\n  LIN {X 100, A 90}\nEND";
+        let runs = krl(src, &axes, &[0.0; 6]).unwrap();
+        assert_eq!(runs.iter().map(|r| r.feed).collect::<Vec<_>>(), [None, Some(0.2)]);
+        let Piece::Line(turned) = &runs[1].pieces[0] else { panic!() };
+        assert!(
+            turned.iter().zip([0.1, 0.0, 0.0, 0.0, 0.0, PI / 2.0]).all(|(a, b)| (a - b).abs() < 1e-12),
+            "{turned:?}"
+        );
+        let unknown = rapid("MoveL [[0,0,0],[1,0,0,0]], vslow, fine, tool0;", &axes, &[0.0; 6]).unwrap_err();
+        assert_eq!((unknown.key, unknown.detail.as_str()), ("program-error-named", "vslow"));
     }
 
     /// The extension picks the reader; a path file stays a path file.

@@ -4239,3 +4239,38 @@ Left open:
   master may not itself be a slave.
 - The ST examples are not compiled (no TwinCAT or CODESYS here); the size TF6100's UA_Write takes for a STRING is to be
   checked.
+
+## Paths in verdicts, search and optimise; planning leftovers (14 November)
+
+What: the leftovers the planner, limits and profiles sessions reported. Branch `claude/paths-verdicts-b5d29f`.
+
+| Piece | How | Test (hand calculation) |
+| --- | --- | --- |
+| Paths in `verdicts`, `search`, `optimise` | `--path FILE` (with `--time-optimal`; path file, G-code, KRL, RAPID, robot CSV) on all three, `path=` / `path_file=` / `time_optimal=` in Python's `verdicts`, `sizing`, `optimise`. The config gets an optional `[path]` table (`sim::with_path`: `file`, `program`, `time_optimal`; in `RATINGS_BEYOND_DEFAULT`, so no config file needs it); `Sim` reads it (`Sim::path`, `plan_configured_path`), and `analyse_cycle_with` plans and measures the path in place of the cycle with `analyse_trajectory_with` (the plan and 0.3 s of rest; repeated, thermally settled, under effects.thermal_warm_start). So every band run, every catalogue candidate (`catalog::judge`, `search::robust_ranking`), every optimiser setting and `sensitivity` run the path with their own config. The CLI plans the path once first, so an unreadable line is said with its number before any run | `verdicts_of_a_path_judge_the_run_the_analysis_measures`: the single axis out 0.3 m and back to 0.1 m: `verdict_bands` of the config with the path equal `verdicts` of `analyse_trajectory` of the same plan, check by check; the run is the plan's last time + 0.3 s |
+| Optimiser on a path | With `[path]` there are no lifts; beside limits, blending and shaper the search tries the path and the corner tolerance at the larger of the two as configured (the deviation the config allows) | `the_optimiser_shortens_a_paths_time`: before = plan + 0.3 s, after shorter, changes in `axis.*`, no lifts |
+| Corners next to arcs and splines | `round_corners` rounds every corner between lines, arcs (2D, 3D, carried) and spline spans: `hermite_curve`, the quintic Hermite from d back to d on, with both pieces' direction and curvature vector (G2; between lines it is the old curve), d by `round_corner` (deviation against the replaced parts as broken lines of 64, d scaled by tolerance over deviation to within 2 % below), the pieces cut by `trimmed` (arcs turned on, spline spans by `poly_shift` from the parameter of that distance, `spline_u`) | `a_line_arc_corner_is_rounded_within_the_corner_tolerance`: a line into an arc of 1 m at a right angle, 0.1 mm: d = 16e-4 / 3 = 0.533 mm within 2.5 %, deviation 0.97 to 1 times 0.1 mm, curvature 0 and 1 / m at the curve's ends, no stop |
+| Per-piece fallback of the junctions | `junction_speeds`: where a piece does not fit, only its two junctions fall back to the speeds without the joins and the look-ahead runs again (at most n times, then the whole path as before) | none of its own: no path was found on which a piece does not fit to build one on |
+| Lift corners in the optimiser | A lift may become lines through its two corners at the lift's height with the corners rounded (`cycle.segment[i].corners_m`, `control::lines_through`; the controller, the collision check and the optimiser's clearance check plan it with that corner tolerance), the tolerance 3 / 16 of the height above `lowest`, so the curves start at `lowest`; `LiftChange::corners`, CLI row `corners_m` | `a_lift_with_rounded_corners_keeps_above_the_lowest_height`: lift 0.3 m, lowest 0.25 m: 3 * 0.05 / 16 keeps to 0.25 m, 1.5 times that dips to 0.225 m and is refused |
+| Friction in the plan | `PlanLimits::friction` per motor from its own config (`mech::ShaftFriction`: Coulomb with its tanh, viscous, gearbox drag (w / n0)^(2/3)) comes off the motoring side of `MotorCurve` at each speed; the new `Machine::rigid_friction` (sim-core, default none; machine files: each guide's Coulomb and viscous force through `to_motors`) gives the guides' friction as c + b v per motor and place, taken off `Place::bounds` at its largest up to the speed (over the gearbox efficiency where lossy); a turning motor whose holding torque and friction exceed its room refuses the path (`error-path-torque`). `motor_limits` (transition-curve sizing) takes the shaft friction at the rated speed off | `a_motor_whose_friction_exceeds_its_reserve_is_planned_slower_within_its_peak`: XYZ portal, Z at 0.2 N m: 1.064 s against 0.886 s with motor and guide friction off; at the fastest upward Z speed (249 rad/s) 0.0686 + 0.02 tanh(w / 0.5) + 1e-4 w + 0.02 + 15 * 0.002^2 w <= curve - 0.04; `motor-peak` passes |
+| G-code F along the path | `path::plan_at` (the speed limit of every piece, and the speed transition curves are sized for, no higher than the feed); `Controller::plan_from` uses it instead of capping each axis. Also fixed: a time-optimal run of a program after the first was planned from the setpoint, not from where the run before ended | `a_g_code_diagonal_at_f_runs_at_f_along_the_path`: G1 X250 Y250 F6000 from (100, 100): 0.1 m/s along, X at 0.0707 m/s (was 0.1414 m/s along) |
+| Robot program speeds and orientations | RAPID: `v100` (mm/s), `vmax`, speeddata in place or declared, its TCP speed; KRL: `$VEL.CP` (m/s) for LIN and CIRC, PTP at the axes' limits. On machines with rx, ry, rz: RAPID's quaternion (`rigid::from_quaternion`) and KRL's A, B, C (Rz Ry Rx, `rigid::log`) set the orientation; MoveC and CIRC on more than three axes on the first three | `a_rapid_move_at_v100_runs_at_100_mm_per_second` (XYZ portal, 180.3 mm at 0.1 m/s; vmax faster); `robot_programs_carry_their_speeds_and_orientations`: [cos 45, 0, 0, sin 45] and A 90 give (0, 0, pi / 2); v100 0.1, [250, ...] 0.25, $VEL.CP 0.2 m/s |
+| Docs | user guide (+de): programs table and feeds, new section "Verdicts, search and optimise on a path"; config reference: `[path]`, `corners_m`, `corner_tolerance_m`, `torque_reserve`; model reference: feeds, orientations, corner rounding next to arcs, friction in the plan, the fallback; python (+de); CLI usage (en, de) | -- |
+
+Outside the area, kept small: `sim-core` machine.rs (one default trait method `rigid_friction`), `sim-netlist`
+machine.rs (its implementation, 13 lines), `collision.rs` (`corners_m` in the cycle's check, 8 lines). The three
+`program.rs` tests that planned arcs with a slack of 0 (`given` refuses them; they fail on main too) now pass the
+planner's `ARC_SLACK`. Only the new tests and the `path::` and `program::` unit tests were run.
+
+Left open:
+
+- Plans shift: every time-optimal plan on a machine with motor friction or gearbox drag on is slower than before (the
+  friction now comes off), so tests that compare time-optimal durations with fixed numbers may need new numbers.
+- `rigid_friction` only for machine files; the T-gantry, single axis, deltas and joint kit give none (their guides'
+  friction is not in the plan; their shaft friction and gearbox drag are). Load-dependent guide friction at load
+  scale 1, no Stribeck rise (a `shortcut:`).
+- The per-piece fallback has no test of its own (see above).
+- A program's speed counts all axes; RAPID's v_ori and KRL's $VEL.ORI are not read. Robot CSV has no speed. Python
+  takes a G-code or robot program only as text, with `path_file` for its extension.
+- `record_cycle` (`compare`) still runs the cycle, not a `[path]`.
+- The lift's corner rounding is a candidate of the search; on the shipped configs the lifts are usually lowered to
+  `lowest` first, where it has no room (3 / 16 of 0), so it rarely wins there.

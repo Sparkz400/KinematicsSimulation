@@ -213,7 +213,9 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
                     .ok_or_else(bad)?,
             ),
         };
-        segments.push((target, payload, via, i));
+        // With `corners_m`: lines through the via points, their corners rounded within it (`control::lines_through`).
+        let corner = segment.get("corners_m").and_then(number);
+        segments.push((target, payload, via.map(|v| (v, corner)), i));
     }
     let mut check = PlanCheck::default();
     check_path(machine.as_ref(), &obstacles, std::slice::from_ref(&start), &mut check);
@@ -226,8 +228,12 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
         machine.set_payload_attached(payload);
         let poses = match via {
             None => vec![from, target.clone()],
-            Some(points) => {
-                let pieces = crate::control::via_pieces(points, target);
+            Some((points, corner)) => {
+                let pieces = match corner {
+                    Some(_) => crate::control::lines_through(points, target),
+                    None => crate::control::via_pieces(points, target),
+                };
+                let tolerance = crate::path::Tolerance { corner: corner.unwrap_or(tolerance.corner), ..tolerance };
                 let planned =
                     crate::path::plan(machine.axes(), &from, &pieces, cycle, tolerance, crate::path::ARC_SLACK)
                         .map_err(|_| ConfigError::Invalid(format!("cycle.segment[{i}].via")))?;

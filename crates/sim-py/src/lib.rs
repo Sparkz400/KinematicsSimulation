@@ -448,14 +448,37 @@ fn analyze(
     Ok(out.unbind())
 }
 
+/// The config with `path` (the text of a path file or of robot moves as CSV; with `path_file` a program by that file's
+/// extension, G-code or KRL or RAPID) in place of the cycle, timed as fast as the motors allow with `time_optimal`
+/// (`sim::with_path`), as `sim-cli verdicts`, `search` and `optimise --path FILE` take it. Planned once here, so that a
+/// path that cannot be read or planned is said before any run. The config as it is without `path`.
+fn path_instead(
+    entry: &'static MachineEntry,
+    cfg: sim_core::Config,
+    path: Option<&str>,
+    path_file: Option<&str>,
+    time_optimal: bool,
+) -> PyResult<sim_core::Config> {
+    let Some(text) = path else { return Ok(cfg) };
+    let file = path_file.unwrap_or("path");
+    let cfg = sim_components::sim::with_path(&cfg, file, text, time_optimal).map_err(|e| config_error(entry, e))?;
+    let sim = Sim::new(entry, &cfg).map_err(|e| config_error(entry, e))?;
+    if let Some(Err(e)) = sim.plan_configured_path() {
+        return Err(PyValueError::new_err(format!("path: {}", texts(entry).tr(e.key))));
+    }
+    Ok(cfg)
+}
+
 /// The cycle judged against the motor data and the `[ratings]` of the config, as `sim-cli verdicts` judges it: a dict
 /// of columns, one row per check and motor. `bands=True` adds "low", "high" and "worst_ok" over the parameters with
 /// `[bounds]`, one at a time at their bounds, or with `samples=N` N runs with all of them drawn between their bounds
 /// at once (seed `seed`), which also adds "pass_share". `bands=True, worst=True` searches per check for the worst corner
 /// of the bounds instead, as `sim-cli verdicts --bands --worst`: columns "check", "motor", "worst", "limit", "worst_ok",
 /// "at_high_bound" and "at_low_bound" (per row the parameters at that bound there), and "runs", the cycles simulated.
+/// With `path` (and `path_file`, `time_optimal`, see `path_instead`) the path's run is judged in place of the cycle.
 #[pyfunction]
-#[pyo3(signature = (config, *, bands=false, samples=None, seed=1, worst=false))]
+#[pyo3(signature = (config, *, bands=false, samples=None, seed=1, worst=false, path=None, path_file=None, time_optimal=false))]
+#[allow(clippy::too_many_arguments)]
 fn verdicts(
     py: Python<'_>,
     config: &PyConfig,
@@ -463,6 +486,9 @@ fn verdicts(
     samples: Option<usize>,
     seed: u64,
     worst: bool,
+    path: Option<&str>,
+    path_file: Option<&str>,
+    time_optimal: bool,
 ) -> PyResult<Py<PyDict>> {
     if samples.is_some() && !bands {
         return Err(PyValueError::new_err("samples needs bands=True"));
@@ -473,7 +499,8 @@ fn verdicts(
     if worst && (!bands || samples.is_some()) {
         return Err(PyValueError::new_err("worst needs bands=True and no samples"));
     }
-    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let entry = config.entry;
+    let cfg = path_instead(entry, config.cfg.clone(), path, path_file, time_optimal)?;
     if worst {
         let (motors, bounded, (found, runs)) = py
             .detach(|| -> Result<_, ConfigError> {
@@ -541,9 +568,10 @@ fn verdicts(
 /// weight), the first the config searched on. The columns are those of `sim-cli search`: beside the parts "rank",
 /// "front", "cycle_s", "energy_j", "thermal_utilisation", "drive_current_utilisation", "following_error_m",
 /// "settling_error_m", "inertia_ratio", "failing" and "estimated" (lists), and "u_<check>" per check (NaN where a
-/// candidate has no such check).
+/// candidate has no such check). With `path` (and `path_file`, `time_optimal`, see `path_instead`) each candidate runs the
+/// path in place of the cycle, the duties' configs too.
 #[pyfunction]
-#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false, motor_id=None, drives="paired", rank_by="cost", duties=None))]
+#[pyo3(signature = (config, *, supply=None, vendor=None, series="", gearboxes=None, axes=false, motor_id=None, drives="paired", rank_by="cost", duties=None, path=None, path_file=None, time_optimal=false))]
 #[allow(clippy::too_many_arguments)]
 fn sizing(
     py: Python<'_>,
@@ -557,13 +585,18 @@ fn sizing(
     drives: &str,
     rank_by: &str,
     duties: Option<Vec<(PyRef<'_, PyConfig>, f64)>>,
+    path: Option<&str>,
+    path_file: Option<&str>,
+    time_optimal: bool,
 ) -> PyResult<Py<PyDict>> {
     use sim_components::catalog::{Candidate, Drives, Options, Parts, SUPPLIES, search, vendor_of};
     use sim_components::search::{front, parse_ranking, rank_by as ranked};
     if motor_id.is_some() && axes {
         return Err(PyValueError::new_err("give motor_id or axes=True, not both"));
     }
-    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let entry = config.entry;
+    let instead = |cfg: sim_core::Config| path_instead(entry, cfg, path, path_file, time_optimal);
+    let cfg = instead(config.cfg.clone())?;
     let own = Parts::of(&cfg).map(|p| p.supply.to_string()).unwrap_or_default();
     let supplies: Vec<&str> = match (supply, vendor) {
         (None, Some(_)) => SUPPLIES.to_vec(),
@@ -577,7 +610,7 @@ fn sizing(
     let drives: Drives = drives.parse().map_err(|_| PyValueError::new_err(format!("drives: {drives}")))?;
     let by = parse_ranking(rank_by).ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
     let mix: Vec<(sim_core::Config, f64)> =
-        duties.unwrap_or_default().iter().map(|(c, w)| (c.cfg.clone(), *w)).collect();
+        duties.unwrap_or_default().iter().map(|(c, w)| Ok((instead(c.cfg.clone())?, *w))).collect::<PyResult<_>>()?;
     if mix.iter().any(|(_, w)| !(*w > 0.0 && w.is_finite())) {
         return Err(PyValueError::new_err("duties: weights above 0"));
     }
@@ -684,9 +717,11 @@ fn sweep(
 /// the error bands of `[bounds]` unless `nominal`, at their worst corner with `worst`): "cycle_s" and
 /// "dwell_error_peak_m" as (before, after), "runs", "changes" (columns "setting", "before", "after": the config values
 /// to change, and per changed lift its height and via points), "robust" (what the bands cost, or None) and with
-/// `pareto=True` "pareto", the settings no other beats in cycle time, energy and peak utilisation at once.
+/// `pareto=True` "pareto", the settings no other beats in cycle time, energy and peak utilisation at once. With `path`
+/// (and `path_file`, `time_optimal`, see `path_instead`) the path's time is shortened in place of the cycle's.
 #[pyfunction]
-#[pyo3(signature = (config, *, runs=40, nominal=false, worst=false, pareto=false))]
+#[pyo3(signature = (config, *, runs=40, nominal=false, worst=false, pareto=false, path=None, path_file=None, time_optimal=false))]
+#[allow(clippy::too_many_arguments)]
 fn optimise(
     py: Python<'_>,
     config: &PyConfig,
@@ -694,8 +729,12 @@ fn optimise(
     nominal: bool,
     worst: bool,
     pareto: bool,
+    path: Option<&str>,
+    path_file: Option<&str>,
+    time_optimal: bool,
 ) -> PyResult<Py<PyDict>> {
-    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let entry = config.entry;
+    let cfg = path_instead(entry, config.cfg.clone(), path, path_file, time_optimal)?;
     let options = sim_components::analysis::OptimiseOptions { max_runs: runs, robust: !nominal, pareto, worst };
     let found = py
         .detach(|| sim_components::analysis::optimise_cycle_with(entry, &cfg, &options))

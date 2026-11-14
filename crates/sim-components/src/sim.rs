@@ -139,6 +139,9 @@ pub struct Sim {
     pub crash: bool,
     /// `profile.min_clearance_m`: the least clearance to the obstacles a time-optimal path may keep (`plan_path`).
     pub min_clearance: f64,
+    /// The path the config's `[path]` gives in place of the cycle (`with_path`): what the analysis of the cycle runs
+    /// instead (`analysis::analyse_cycle_with`), and so the verdicts, the search and the optimiser. `None`: the cycle.
+    pub path: Option<PathRun>,
     /// The clearance to the nearest obstacle after the last step, and the least since the start, m; infinite without
     /// obstacles. Checked every base step.
     pub clearance: f64,
@@ -196,6 +199,48 @@ pub struct Snapshot {
     contact_force: f64,
     gaps: Vec<f64>,
     absorbed: f64,
+}
+
+/// A path in place of the cycle (`[path]` of a config, see `with_path`): the text of a path file or a program
+/// (`program::read`), the file name that says which reader takes it, and whether it is timed as fast as the motors allow.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathRun {
+    pub file: String,
+    pub program: String,
+    pub time_optimal: bool,
+}
+
+/// The config with `[path]` set: the analysis of the cycle runs this path (file name and text, as `--path FILE` reads
+/// it) instead, timed within the axis limits or with `time_optimal` as fast as the motors allow. An optional table
+/// (`analysis::RATINGS_BEYOND_DEFAULT`): a config without it runs its cycle.
+pub fn with_path(cfg: &Config, file: &str, program: &str, time_optimal: bool) -> Result<Config, ConfigError> {
+    let mut table: toml::Table =
+        cfg.to_text()?.parse().map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
+    let mut path = toml::Table::new();
+    path.insert("file".into(), file.into());
+    path.insert("program".into(), program.into());
+    path.insert("time_optimal".into(), time_optimal.into());
+    table.insert("path".into(), toml::Value::Table(path));
+    Config::parse(&toml::to_string(&table).map_err(|e| ConfigError::Parse(e.to_string()))?)
+}
+
+/// The config's `[path]` (`with_path`), `None` without it or with no program text.
+fn path_run(cfg: &Config) -> Result<Option<PathRun>, ConfigError> {
+    let text = |key: &str| -> Result<String, ConfigError> {
+        let path = format!("path.{key}");
+        Ok(cfg
+            .get(&path)
+            .ok()
+            .map(|v| v.as_str().map(str::to_string).ok_or(ConfigError::Type(path)))
+            .transpose()?
+            .unwrap_or_default())
+    };
+    let program = text("program")?;
+    if program.trim().is_empty() {
+        return Ok(None);
+    }
+    let time_optimal = cfg.get("path.time_optimal").is_ok() && cfg.bool("path.time_optimal")?;
+    Ok(Some(PathRun { file: text("file")?, program, time_optimal }))
 }
 
 /// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
@@ -306,6 +351,7 @@ impl Sim {
             obstacles: crate::collision::obstacles(cfg)?,
             crash: cfg.bool("effects.crash")?,
             min_clearance: cfg.non_negative("profile.min_clearance_m")?,
+            path: path_run(cfg)?,
             clearance: f64::INFINITY,
             least_clearance: f64::INFINITY,
             contact: None,
@@ -335,6 +381,7 @@ impl Sim {
         let part_heating = heats(cfg)?;
         let thermal_feedback = cfg.bool("effects.thermal_feedback")?;
         let warm_start = warm_start(cfg)?;
+        let path = path_run(cfg)?;
         let (obstacles, crash, min_clearance) = (
             crate::collision::obstacles(cfg)?,
             cfg.bool("effects.crash")?,
@@ -362,7 +409,7 @@ impl Sim {
         }
         (self.heated, self.part_heating) = (heated, part_heating);
         self.thermal_feedback = thermal_feedback;
-        self.warm_start = warm_start;
+        (self.warm_start, self.path) = (warm_start, path);
         (self.obstacles, self.crash, self.min_clearance) = (obstacles, crash, min_clearance);
         self.machine = machine;
         self.feed_temperatures_back();
@@ -434,6 +481,21 @@ impl Sim {
 
     pub fn command(&mut self, command: Command) -> Result<(), CommandError> {
         self.control.command(command, self.machine.as_ref())
+    }
+
+    /// The config's `[path]` (`with_path`) planned from where the machine stands, as `sim-cli run --path` plans a file:
+    /// one run at the axes' limits as a path, a program with feeds run by run (`plan_program`). `None` without one.
+    pub fn plan_configured_path(&self) -> Option<Result<Vec<(f64, Vec<f64>)>, CommandError>> {
+        let run = self.path.as_ref()?;
+        let runs = match crate::program::read(&run.file, &run.program, self.machine.axes(), self.control.planned_pos())
+        {
+            Ok(runs) => runs,
+            Err(e) => return Some(Err(CommandError { key: e.key })),
+        };
+        Some(match runs.as_slice() {
+            [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
+            _ => self.plan_program(&runs, run.time_optimal),
+        })
     }
 
     /// The timing for a path from where the machine stands, to run with `Command::Trajectory`.
