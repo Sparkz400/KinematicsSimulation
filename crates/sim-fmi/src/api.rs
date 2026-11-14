@@ -42,7 +42,8 @@ pub const fmi2Fatal: fmi2Status = 4;
 /// `fmi2Type`: the one this FMU supports.
 pub const fmi2CoSimulation: c_int = 1;
 
-pub type fmi2CallbackLogger = unsafe extern "C" fn(fmi2ComponentEnvironment, fmi2String, fmi2Status, fmi2String, fmi2String, ...);
+pub type fmi2CallbackLogger =
+    unsafe extern "C" fn(fmi2ComponentEnvironment, fmi2String, fmi2Status, fmi2String, fmi2String, ...);
 
 #[repr(C)]
 pub struct fmi2CallbackFunctions {
@@ -127,7 +128,9 @@ fn log(logger: Logger, environment: *mut c_void, name: &CStr, status: fmi2Status
     let message = c_text(message);
     match logger {
         // The message as an argument of "%s": a per cent sign in it is not a format.
-        Logger::Fmi2(Some(logger)) => unsafe { logger(environment, name.as_ptr(), status, category.as_ptr(), c"%s".as_ptr(), message.as_ptr()) },
+        Logger::Fmi2(Some(logger)) => unsafe {
+            logger(environment, name.as_ptr(), status, category.as_ptr(), c"%s".as_ptr(), message.as_ptr())
+        },
         Logger::Fmi3(Some(logger)) => unsafe { logger(environment, status, category.as_ptr(), message.as_ptr()) },
         _ => {}
     }
@@ -225,7 +228,11 @@ impl Instance {
     /// `call` without its prefix, which is the version's.
     pub(crate) fn in_mode(&self, modes: &[Mode], call: &str) -> Result<(), Fail> {
         let prefix = if matches!(self.logger, Logger::Fmi3(_)) { "fmi3" } else { "fmi2" };
-        if modes.contains(&self.mode) { Ok(()) } else { Err(("fmi-error-state", format!("{prefix}{call} ({:?})", self.mode))) }
+        if modes.contains(&self.mode) {
+            Ok(())
+        } else {
+            Err(("fmi-error-state", format!("{prefix}{call} ({:?})", self.mode)))
+        }
     }
 
     pub(crate) fn variable(&self, vr: u32, type_name: &str) -> Result<usize, Fail> {
@@ -262,9 +269,17 @@ impl Instance {
         let find = |kind: Kind| self.model.variables.iter().position(|v| v.kind == kind).unwrap_or(0);
         let machine = self.text_value(find(Kind::Machine));
         // The FMU's own machine, which may come from a machine file; another one by its id among the registered.
-        let entry = if machine == self.model.entry.id { self.model.entry } else { sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))? };
+        let entry = if machine == self.model.entry.id {
+            self.model.entry
+        } else {
+            sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))?
+        };
         let file = self.text_value(find(Kind::ConfigFile));
-        let text = if file.is_empty() { self.model.config_text.clone() } else { std::fs::read_to_string(&file).map_err(|e| ("fmi-error-config", format!("{file}: {e}")))? };
+        let text = if file.is_empty() {
+            self.model.config_text.clone()
+        } else {
+            std::fs::read_to_string(&file).map_err(|e| ("fmi-error-config", format!("{file}: {e}")))?
+        };
         let refused = |e: sim_core::ConfigError| ("fmi-error-config", self.tr.tr_arg(e.key(), e.detail()));
         let mut cfg = load_config(entry, &text).map_err(refused)?;
         for (index, v) in self.model.variables.iter().enumerate() {
@@ -274,11 +289,18 @@ impl Instance {
         }
         let sim = Sim::new(entry, &cfg).map_err(refused)?;
         let signals = sim.signal_infos();
-        let expected: Vec<(&str, &str)> = self.model.variables.iter().filter(|v| matches!(v.kind, Kind::Signal(_))).map(|v| (v.name.as_str(), v.unit.as_str())).collect();
+        let expected: Vec<(&str, &str)> = self
+            .model
+            .variables
+            .iter()
+            .filter(|v| matches!(v.kind, Kind::Signal(_)))
+            .map(|v| (v.name.as_str(), v.unit.as_str()))
+            .collect();
         let found: Vec<(&str, &str)> = signals.iter().map(|s| (s.id.as_str(), s.unit.as_str())).collect();
         let setpoints = self.model.variables.iter().filter(|v| matches!(v.kind, Kind::Setpoint(_))).count();
         if expected != found || setpoints != sim.machine.axes().len() {
-            let differing = expected.iter().zip(&found).find(|(a, b)| a != b).map_or(String::new(), |(a, _)| a.0.into());
+            let differing =
+                expected.iter().zip(&found).find(|(a, b)| a != b).map_or(String::new(), |(a, _)| a.0.into());
             return Err(("fmi-error-variables", differing));
         }
         self.sim = Some(sim);
@@ -333,10 +355,18 @@ impl Instance {
     }
 
     /// `fmi2SetupExperiment`, and the experiment part of `fmi3EnterInitializationMode`.
-    pub(crate) fn setup(&mut self, tolerance: Option<f64>, start_time: f64, stop_time: Option<f64>) -> Result<(), Fail> {
+    pub(crate) fn setup(
+        &mut self,
+        tolerance: Option<f64>,
+        start_time: f64,
+        stop_time: Option<f64>,
+    ) -> Result<(), Fail> {
         self.in_mode(&[Mode::Instantiated], "SetupExperiment")?;
         // A start time that is not a number would pass every later check of the communication point.
-        if !start_time.is_finite() || stop_time.is_some_and(|t| !t.is_finite()) || tolerance.is_some_and(|t| !t.is_finite()) {
+        if !start_time.is_finite()
+            || stop_time.is_some_and(|t| !t.is_finite())
+            || tolerance.is_some_and(|t| !t.is_finite())
+        {
             return Err(("fmi-error-experiment", format!("{start_time:?}, {stop_time:?}, {tolerance:?}")));
         }
         self.start_time = start_time;
@@ -393,7 +423,11 @@ impl Instance {
             return Err(("fmi-error-time", format!("{point:?} / {now:?}")));
         }
         let enable = self.model.variables.iter().position(|v| v.kind == Kind::Enable).unwrap_or(0);
-        let mut applied = Applied { steps: steps as u32, enable: !matches!(self.set[enable], Some(Value::Bool(false))), setpoints: vec![None; sim.machine.axes().len()] };
+        let mut applied = Applied {
+            steps: steps as u32,
+            enable: !matches!(self.set[enable], Some(Value::Bool(false))),
+            setpoints: vec![None; sim.machine.axes().len()],
+        };
         for (index, v) in self.model.variables.iter().enumerate() {
             if let (Kind::Setpoint(i), Some(Value::Real(value))) = (&v.kind, &self.set[index]) {
                 applied.setpoints[*i] = Some(*value);
@@ -402,14 +436,26 @@ impl Instance {
         let refused = apply(sim, &applied);
         self.log.push(applied);
         for key in &refused {
-            log(self.logger, self.environment, &self.name, fmi2Warning, &self.tr.tr_arg("fmi-refused", self.tr.tr(key)));
+            log(
+                self.logger,
+                self.environment,
+                &self.name,
+                fmi2Warning,
+                &self.tr.tr_arg("fmi-refused", self.tr.tr(key)),
+            );
         }
         self.take_sample();
         Ok(if refused.is_empty() { fmi2OK } else { fmi2Warning })
     }
 
     pub(crate) fn get_state(&self) -> FmuState {
-        FmuState { guid: self.model.guid.clone(), mode: self.mode, start_time: self.start_time, set: self.set.clone(), log: self.log.clone() }
+        FmuState {
+            guid: self.model.guid.clone(),
+            mode: self.mode,
+            start_time: self.start_time,
+            set: self.set.clone(),
+            log: self.log.clone(),
+        }
     }
 
     pub(crate) fn set_state(&mut self, state: &FmuState) -> Result<fmi2Status, Fail> {
@@ -437,8 +483,15 @@ impl Instance {
     /// The derivative itself is zero (see the module's documentation).
     pub(crate) fn check_derivative(&self, unknowns: &[u32], knowns: &[u32]) -> Result<(), Fail> {
         self.in_mode(&[Mode::Initialising, Mode::Stepping], "GetDirectionalDerivative")?;
-        let is = |vr: &u32, causality: &str| self.model.variables.get(*vr as usize).is_some_and(|v| v.type_name() == "Real" && v.causality() == causality);
-        if let Some(vr) = unknowns.iter().find(|vr| !is(vr, "output")).or_else(|| knowns.iter().find(|vr| !is(vr, "input"))) {
+        let is = |vr: &u32, causality: &str| {
+            self.model
+                .variables
+                .get(*vr as usize)
+                .is_some_and(|v| v.type_name() == "Real" && v.causality() == causality)
+        };
+        if let Some(vr) =
+            unknowns.iter().find(|vr| !is(vr, "output")).or_else(|| knowns.iter().find(|vr| !is(vr, "input")))
+        {
             return Err(("fmi-error-reference", format!("Real {vr}")));
         }
         Ok(())
@@ -570,7 +623,15 @@ pub(crate) unsafe fn with(c: *mut c_void, f: impl FnOnce(&mut Instance) -> Resul
 /// A new instance of the FMU whose resources are in `resources`, for FMI version `fmi`; null, after a logged
 /// message, when the type is not co-simulation, the resources cannot be read or `token` (GUID or instantiation token)
 /// is not this FMU's.
-pub(crate) fn instantiate(name: &str, logger: Logger, environment: *mut c_void, resources: &Path, token: &str, fmi: u8, co_simulation: bool) -> *mut c_void {
+pub(crate) fn instantiate(
+    name: &str,
+    logger: Logger,
+    environment: *mut c_void,
+    resources: &Path,
+    token: &str,
+    fmi: u8,
+    co_simulation: bool,
+) -> *mut c_void {
     let name = c_text(name);
     let made = catch_unwind(AssertUnwindSafe(|| -> Result<Instance, (Translations, Fail)> {
         // Until the FMU's language is known, its messages are in English.
@@ -579,7 +640,10 @@ pub(crate) fn instantiate(name: &str, logger: Logger, environment: *mut c_void, 
         if !co_simulation {
             return Err((tr, ("fmi-error-type", String::new())));
         }
-        let read = |file: &str| std::fs::read_to_string(resources.join(file)).map_err(|e| ("fmi-error-resources", format!("{}: {e}", resources.join(file).display())));
+        let read = |file: &str| {
+            std::fs::read_to_string(resources.join(file))
+                .map_err(|e| ("fmi-error-resources", format!("{}: {e}", resources.join(file).display())))
+        };
         let (about, config_text) = match (read("model.txt"), read("config.toml")) {
             (Ok(a), Ok(c)) => (a, c),
             (Err(e), _) | (_, Err(e)) => return Err((tr, e)),
@@ -599,7 +663,20 @@ pub(crate) fn instantiate(name: &str, logger: Logger, environment: *mut c_void, 
             return Err((tr, ("fmi-error-guid", token.into())));
         }
         let set = vec![None; model.variables.len()];
-        Ok(Instance { name: name.clone(), logger, environment, tr, model, set, mode: Mode::Instantiated, start_time: 0.0, sim: None, sample: Vec::new(), strings: Vec::new(), log: Vec::new() })
+        Ok(Instance {
+            name: name.clone(),
+            logger,
+            environment,
+            tr,
+            model,
+            set,
+            mode: Mode::Instantiated,
+            start_time: 0.0,
+            sim: None,
+            sample: Vec::new(),
+            strings: Vec::new(),
+            log: Vec::new(),
+        })
     }));
     match made {
         Ok(Ok(instance)) => Box::into_raw(Box::new(instance)) as *mut c_void,
@@ -653,7 +730,11 @@ pub(crate) unsafe fn state_get(c: *mut c_void, slot: *mut *mut c_void) -> fmi2St
 /// # Safety
 /// See `state_get`; `state` is null or a state from this library.
 pub(crate) unsafe fn state_set(c: *mut c_void, state: *mut c_void) -> fmi2Status {
-    unsafe { with(c, |i| i.set_state((state as *const FmuState).as_ref().ok_or(("fmi-error-fmu-state", "null".to_string()))?)) }
+    unsafe {
+        with(c, |i| {
+            i.set_state((state as *const FmuState).as_ref().ok_or(("fmi-error-fmu-state", "null".to_string()))?)
+        })
+    }
 }
 
 /// # Safety
@@ -703,10 +784,16 @@ pub(crate) unsafe fn state_serialize(c: *mut c_void, state: *mut c_void, bytes: 
 
 /// # Safety
 /// See `state_get`; `bytes` points to `size` bytes.
-pub(crate) unsafe fn state_deserialize(c: *mut c_void, bytes: *const u8, size: usize, slot: *mut *mut c_void) -> fmi2Status {
+pub(crate) unsafe fn state_deserialize(
+    c: *mut c_void,
+    bytes: *const u8,
+    size: usize,
+    slot: *mut *mut c_void,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
-            let state = FmuState::from_bytes(slice(bytes, size)?).filter(|s| s.guid == i.model.guid && s.set.len() == i.model.variables.len());
+            let state = FmuState::from_bytes(slice(bytes, size)?)
+                .filter(|s| s.guid == i.model.guid && s.set.len() == i.model.variables.len());
             let state = state.ok_or(("fmi-error-fmu-state", format!("{size} bytes")))?;
             let slot = slot.as_mut().ok_or(("fmi-error-fmu-state", "null".to_string()))?;
             match (*slot as *mut FmuState).as_mut() {
@@ -722,7 +809,15 @@ pub(crate) unsafe fn state_deserialize(c: *mut c_void, bytes: *const u8, size: u
 ///
 /// # Safety
 /// See `with`; the pointers point to as many values as their counts say.
-pub(crate) unsafe fn zero_derivative(c: *mut c_void, unknowns: *const u32, n_unknowns: usize, knowns: *const u32, n_knowns: usize, out: *mut f64, n: usize) -> fmi2Status {
+pub(crate) unsafe fn zero_derivative(
+    c: *mut c_void,
+    unknowns: *const u32,
+    n_unknowns: usize,
+    knowns: *const u32,
+    n_knowns: usize,
+    out: *mut f64,
+    n: usize,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             i.check_derivative(slice(unknowns, n_unknowns)?, slice(knowns, n_knowns)?)?;
@@ -755,9 +850,18 @@ pub unsafe extern "C" fn fmi2Instantiate(
     _loggingOn: fmi2Boolean,
 ) -> fmi2Component {
     let callbacks = unsafe { functions.as_ref() };
-    let (logger, environment) = (callbacks.and_then(|f| f.logger), callbacks.map_or(std::ptr::null_mut(), |f| f.componentEnvironment));
+    let (logger, environment) =
+        (callbacks.and_then(|f| f.logger), callbacks.map_or(std::ptr::null_mut(), |f| f.componentEnvironment));
     let resources = resource_dir(unsafe { text(fmuResourceLocation) });
-    instantiate(unsafe { text(instanceName) }, Logger::Fmi2(logger), environment, &resources, unsafe { text(fmuGUID) }, 2, fmuType == fmi2CoSimulation)
+    instantiate(
+        unsafe { text(instanceName) },
+        Logger::Fmi2(logger),
+        environment,
+        &resources,
+        unsafe { text(fmuGUID) },
+        2,
+        fmuType == fmi2CoSimulation,
+    )
 }
 
 /// # Safety
@@ -772,7 +876,12 @@ pub unsafe extern "C" fn fmi2FreeInstance(c: fmi2Component) {
 /// # Safety
 /// See `with`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetDebugLogging(c: fmi2Component, _loggingOn: fmi2Boolean, _nCategories: usize, _categories: *const fmi2String) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SetDebugLogging(
+    c: fmi2Component,
+    _loggingOn: fmi2Boolean,
+    _nCategories: usize,
+    _categories: *const fmi2String,
+) -> fmi2Status {
     // Only warnings and errors are ever logged, and those always.
     unsafe { with(c, |_| Ok(fmi2OK)) }
 }
@@ -780,8 +889,20 @@ pub unsafe extern "C" fn fmi2SetDebugLogging(c: fmi2Component, _loggingOn: fmi2B
 /// # Safety
 /// See `with`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetupExperiment(c: fmi2Component, toleranceDefined: fmi2Boolean, tolerance: fmi2Real, startTime: fmi2Real, stopTimeDefined: fmi2Boolean, stopTime: fmi2Real) -> fmi2Status {
-    unsafe { with(c, |i| i.setup((toleranceDefined != 0).then_some(tolerance), startTime, (stopTimeDefined != 0).then_some(stopTime)).map(|_| fmi2OK)) }
+pub unsafe extern "C" fn fmi2SetupExperiment(
+    c: fmi2Component,
+    toleranceDefined: fmi2Boolean,
+    tolerance: fmi2Real,
+    startTime: fmi2Real,
+    stopTimeDefined: fmi2Boolean,
+    stopTime: fmi2Real,
+) -> fmi2Status {
+    unsafe {
+        with(c, |i| {
+            i.setup((toleranceDefined != 0).then_some(tolerance), startTime, (stopTimeDefined != 0).then_some(stopTime))
+                .map(|_| fmi2OK)
+        })
+    }
 }
 
 /// # Safety
@@ -815,7 +936,12 @@ pub unsafe extern "C" fn fmi2Reset(c: fmi2Component) -> fmi2Status {
 /// # Safety
 /// See `with`; `vr` and `value` point to `nvr` values.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2GetReal(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *mut fmi2Real) -> fmi2Status {
+pub unsafe extern "C" fn fmi2GetReal(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *mut fmi2Real,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             for (r, v) in slice(vr, nvr)?.iter().zip(slice_mut(value, nvr)?) {
@@ -829,7 +955,12 @@ pub unsafe extern "C" fn fmi2GetReal(c: fmi2Component, vr: *const fmi2ValueRefer
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetReal(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *const fmi2Real) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SetReal(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *const fmi2Real,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             for (r, v) in slice(vr, nvr)?.iter().zip(slice(value, nvr)?) {
@@ -845,21 +976,36 @@ pub unsafe extern "C" fn fmi2SetReal(c: fmi2Component, vr: *const fmi2ValueRefer
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2GetInteger(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, _value: *mut fmi2Integer) -> fmi2Status {
+pub unsafe extern "C" fn fmi2GetInteger(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    _value: *mut fmi2Integer,
+) -> fmi2Status {
     unsafe { with(c, |i| slice(vr, nvr)?.first().map_or(Ok(fmi2OK), |r| i.variable(*r, "Integer").map(|_| fmi2OK))) }
 }
 
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetInteger(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, _value: *const fmi2Integer) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SetInteger(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    _value: *const fmi2Integer,
+) -> fmi2Status {
     unsafe { with(c, |i| slice(vr, nvr)?.first().map_or(Ok(fmi2OK), |r| i.variable(*r, "Integer").map(|_| fmi2OK))) }
 }
 
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2GetBoolean(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *mut fmi2Boolean) -> fmi2Status {
+pub unsafe extern "C" fn fmi2GetBoolean(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *mut fmi2Boolean,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             for (r, v) in slice(vr, nvr)?.iter().zip(slice_mut(value, nvr)?) {
@@ -873,7 +1019,12 @@ pub unsafe extern "C" fn fmi2GetBoolean(c: fmi2Component, vr: *const fmi2ValueRe
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetBoolean(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *const fmi2Boolean) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SetBoolean(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *const fmi2Boolean,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             for (r, v) in slice(vr, nvr)?.iter().zip(slice(value, nvr)?) {
@@ -889,14 +1040,24 @@ pub unsafe extern "C" fn fmi2SetBoolean(c: fmi2Component, vr: *const fmi2ValueRe
 /// # Safety
 /// See `fmi2GetReal`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2GetString(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *mut fmi2String) -> fmi2Status {
+pub unsafe extern "C" fn fmi2GetString(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *mut fmi2String,
+) -> fmi2Status {
     unsafe { get_strings(c, vr, nvr, value) }
 }
 
 /// # Safety
 /// See `fmi2GetReal`; every string is valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SetString(c: fmi2Component, vr: *const fmi2ValueReference, nvr: usize, value: *const fmi2String) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SetString(
+    c: fmi2Component,
+    vr: *const fmi2ValueReference,
+    nvr: usize,
+    value: *const fmi2String,
+) -> fmi2Status {
     unsafe {
         with(c, |i| {
             for (r, v) in slice(vr, nvr)?.iter().zip(slice(value, nvr)?) {
@@ -910,7 +1071,12 @@ pub unsafe extern "C" fn fmi2SetString(c: fmi2Component, vr: *const fmi2ValueRef
 /// # Safety
 /// See `with`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2DoStep(c: fmi2Component, currentCommunicationPoint: fmi2Real, communicationStepSize: fmi2Real, _noSetFMUStatePriorToCurrentPoint: fmi2Boolean) -> fmi2Status {
+pub unsafe extern "C" fn fmi2DoStep(
+    c: fmi2Component,
+    currentCommunicationPoint: fmi2Real,
+    communicationStepSize: fmi2Real,
+    _noSetFMUStatePriorToCurrentPoint: fmi2Boolean,
+) -> fmi2Status {
     unsafe { with(c, |i| i.do_step(currentCommunicationPoint, communicationStepSize)) }
 }
 
@@ -942,21 +1108,35 @@ pub unsafe extern "C" fn fmi2FreeFMUstate(c: fmi2Component, state: *mut fmi2FMUs
 /// # Safety
 /// See `fmi2SetFMUstate`; `size` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SerializedFMUstateSize(c: fmi2Component, state: fmi2FMUstate, size: *mut usize) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SerializedFMUstateSize(
+    c: fmi2Component,
+    state: fmi2FMUstate,
+    size: *mut usize,
+) -> fmi2Status {
     unsafe { state_size(c, state, size) }
 }
 
 /// # Safety
 /// See `fmi2SetFMUstate`; `bytes` points to `size` bytes, the size `fmi2SerializedFMUstateSize` gave.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2SerializeFMUstate(c: fmi2Component, state: fmi2FMUstate, bytes: *mut fmi2Byte, size: usize) -> fmi2Status {
+pub unsafe extern "C" fn fmi2SerializeFMUstate(
+    c: fmi2Component,
+    state: fmi2FMUstate,
+    bytes: *mut fmi2Byte,
+    size: usize,
+) -> fmi2Status {
     unsafe { state_serialize(c, state, bytes as *mut u8, size) }
 }
 
 /// # Safety
 /// See `fmi2GetFMUstate`; `bytes` points to `size` bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi2DeSerializeFMUstate(c: fmi2Component, bytes: *const fmi2Byte, size: usize, state: *mut fmi2FMUstate) -> fmi2Status {
+pub unsafe extern "C" fn fmi2DeSerializeFMUstate(
+    c: fmi2Component,
+    bytes: *const fmi2Byte,
+    size: usize,
+    state: *mut fmi2FMUstate,
+) -> fmi2Status {
     unsafe { state_deserialize(c, bytes as *const u8, size, state) }
 }
 

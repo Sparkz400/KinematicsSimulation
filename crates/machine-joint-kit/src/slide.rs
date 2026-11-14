@@ -73,7 +73,8 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
             let motor = LinearMotor::from_config(cfg)?;
             joint.ripple.cogging_order = motor.cogging_order();
             if cfg.bool("effects.joint_friction")? {
-                joint.friction.coulomb += cfg.non_negative("linear_motor.guide_friction_coefficient")? * motor.attraction;
+                joint.friction.coulomb +=
+                    cfg.non_negative("linear_motor.guide_friction_coefficient")? * motor.attraction;
             }
             // The forcer moves with the carriage as a rotor turns with its shaft: its mass is `rotor_inertia_kgm2`.
             let forcer = joint.rotor_inertia;
@@ -145,34 +146,90 @@ impl Mechanism for Slide {
         let at = |x: f64, up: f64| [x * c - up * s, 0.0, x * s + up * c];
         let grey = [0.62, 0.64, 0.68];
         let half = 0.5 * self.stroke;
-        out.parts.push(Part::new("frame", Shape::Segment { to: at(self.stroke + 0.1, -0.05), width: 0.08 }, at(-0.1, -0.05), grey));
+        out.parts.push(Part::new(
+            "frame",
+            Shape::Segment { to: at(self.stroke + 0.1, -0.05), width: 0.08 },
+            at(-0.1, -0.05),
+            grey,
+        ));
         let (drive_id, drive_colour) = match self.drive {
             Drive::Screw(_) => ("screw", [0.75, 0.75, 0.78]),
             Drive::Rack(..) => ("rack", [0.4, 0.4, 0.42]),
             Drive::Linear(..) => ("magnet-track", [0.25, 0.3, 0.5]),
         };
-        out.parts.push(Part::new(drive_id, Shape::Segment { to: at(self.stroke + 0.05, 0.0), width: 0.02 }, at(-0.05, 0.0), drive_colour));
-        out.parts.push(Part::new("carriage", Shape::Box { size: [0.15, 0.12, 0.06] }, at(q[0], 0.03), [0.2, 0.22, 0.26]));
+        out.parts.push(Part::new(
+            drive_id,
+            Shape::Segment { to: at(self.stroke + 0.05, 0.0), width: 0.02 },
+            at(-0.05, 0.0),
+            drive_colour,
+        ));
+        out.parts.push(Part::new(
+            "carriage",
+            Shape::Box { size: [0.15, 0.12, 0.06] },
+            at(q[0], 0.03),
+            [0.2, 0.22, 0.26],
+        ));
         if self.attached && self.payload > 0.0 {
             out.parts.push(Part::new("payload", Shape::Box { size: [0.1, 0.1, 0.08] }, at(q[0], 0.1), [0.2, 0.7, 0.3]));
         }
         let speed = rotor_speeds[0];
         match self.drive {
             Drive::Linear(..) => {
-                out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Box { size: [0.12, 0.1, 0.02] }, at(q[0], -0.01), [0.9, 0.45, 0.1]));
-                out.labels.push(Label { pos: at(q[0], 0.2), owner_key: "motor-joint-1", value: speed, unit_key: "unit-m-per-s", decimals: 2 });
+                out.parts.push(Part::new(
+                    sim_core::scene::MOTOR_PART,
+                    Shape::Box { size: [0.12, 0.1, 0.02] },
+                    at(q[0], -0.01),
+                    [0.9, 0.45, 0.1],
+                ));
+                out.labels.push(Label {
+                    pos: at(q[0], 0.2),
+                    owner_key: "motor-joint-1",
+                    value: speed,
+                    unit_key: "unit-m-per-s",
+                    decimals: 2,
+                });
             }
             _ => {
                 let motor = at(-0.15, 0.0);
-                out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Cylinder { radius: 0.05, length: 0.12 }, motor, [0.9, 0.45, 0.1]));
+                out.parts.push(Part::new(
+                    sim_core::scene::MOTOR_PART,
+                    Shape::Cylinder { radius: 0.05, length: 0.12 },
+                    motor,
+                    [0.9, 0.45, 0.1],
+                ));
                 if self.geared {
-                    out.parts.push(Part::new("gearbox", Shape::Box { size: [0.08, 0.08, 0.08] }, at(-0.05, 0.0), [0.25, 0.25, 0.28]));
+                    out.parts.push(Part::new(
+                        "gearbox",
+                        Shape::Box { size: [0.08, 0.08, 0.08] },
+                        at(-0.05, 0.0),
+                        [0.25, 0.25, 0.28],
+                    ));
                 }
-                out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [motor[0], -0.07, motor[2]], [0.1, 0.1, 0.1]).turned(rotors[0]));
-                out.labels.push(Label { pos: at(-0.15, 0.12), owner_key: "motor-joint-1", value: speed * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 });
+                out.parts.push(
+                    Part::new(
+                        "rotor-bar",
+                        Shape::Box { size: [0.07, 0.004, 0.012] },
+                        [motor[0], -0.07, motor[2]],
+                        [0.1, 0.1, 0.1],
+                    )
+                    .turned(rotors[0]),
+                );
+                out.labels.push(Label {
+                    pos: at(-0.15, 0.12),
+                    owner_key: "motor-joint-1",
+                    value: speed * 60.0 / TAU,
+                    unit_key: "unit-rpm",
+                    decimals: 0,
+                });
             }
         }
-        out.labels.push(Label { pos: at(half, -0.15), owner_key: "axis-x", value: q[0], unit_key: "unit-m", decimals: 3 });
+        out.labels.push(Label {
+            pos: at(half, -0.15),
+            owner_key: "axis-x",
+            value: q[0],
+            unit_key: "unit-m",
+            decimals: 3,
+        });
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
         let (s, c) = self.incline.sin_cos();

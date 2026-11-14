@@ -3,7 +3,10 @@
 
 use crate::control::{Command, CommandError};
 use crate::sim::Sim;
-use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Mode, RatingCheck, Rk4, SignalInfo, TORQUE_PARTS, ThermalPart, advance};
+use sim_core::{
+    Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Mode, RatingCheck, Rk4, SignalInfo, TORQUE_PARTS,
+    ThermalPart, advance,
+};
 
 /// The load on one motor over one pass of the cycle.
 #[derive(Debug, Clone, Default)]
@@ -115,7 +118,10 @@ impl EnergyBudget {
     /// every machine and config with the back-EMF on, loss-free ones included; the rest of `unaccounted` is the
     /// machine's own balance.
     pub fn electrical_unaccounted(&self) -> f64 {
-        let electrical = |id: &str| id.starts_with("copper.") || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors");
+        let electrical = |id: &str| {
+            id.starts_with("copper.")
+                || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors")
+        };
         self.supply - self.shaft_work - self.rows.iter().filter(|r| electrical(&r.id)).map(|r| r.energy).sum::<f64>()
     }
 }
@@ -250,9 +256,19 @@ fn set_rises(sim: &mut Sim, rises: &[f64]) {
 /// slowly (about -0.4 on the EXCT-30's guide: still 0.3 K off after four passes). With the slope m of the last two passes the
 /// fixed point lies at r + (s - r) / (1 - m); m is clamped to [-20, 0.5], and taken as 0 (substitution) on the first
 /// warm pass and where the start did not move. A winding's settled rise depends on its current alone: m = 0.
-fn warm_pass(sim: &mut Sim, started_at: &[f64], load: &CycleLoad, passes: usize, before: &mut Option<(Vec<f64>, Vec<f64>)>) -> Option<WarmStart> {
+fn warm_pass(
+    sim: &mut Sim,
+    started_at: &[f64],
+    load: &CycleLoad,
+    passes: usize,
+    before: &mut Option<(Vec<f64>, Vec<f64>)>,
+) -> Option<WarmStart> {
     let settled = settled_rises(sim, load);
-    let change = settled.iter().zip(started_at).map(|(s, r)| if s.is_finite() { (s - r).abs() } else { f64::INFINITY }).fold(0.0, f64::max);
+    let change = settled
+        .iter()
+        .zip(started_at)
+        .map(|(s, r)| if s.is_finite() { (s - r).abs() } else { f64::INFINITY })
+        .fold(0.0, f64::max);
     let done = WarmStart { passes, change };
     // A rise that does not settle (a winding loaded beyond what its copper can shed) cannot be started at.
     if done.converged() || passes == WARM_START_PASSES || change.is_infinite() {
@@ -261,7 +277,10 @@ fn warm_pass(sim: &mut Sim, started_at: &[f64], load: &CycleLoad, passes: usize,
     let next: Vec<f64> = (0..settled.len())
         .map(|i| {
             let (r, s) = (started_at[i], settled[i]);
-            let slope = before.as_ref().filter(|(r0, _)| (r - r0[i]).abs() > 1e-9).map_or(0.0, |(r0, s0)| ((s - s0[i]) / (r - r0[i])).clamp(-20.0, 0.5));
+            let slope = before
+                .as_ref()
+                .filter(|(r0, _)| (r - r0[i]).abs() > 1e-9)
+                .map_or(0.0, |(r0, s0)| ((s - s0[i]) / (r - r0[i])).clamp(-20.0, 0.5));
             (r + (s - r) / (1.0 - slope)).max(0.0)
         })
         .collect();
@@ -371,7 +390,8 @@ fn distance_to_piece(p: &[f64], a: &[f64], b: &[f64]) -> f64 {
     // Without closures behind references: the path error asks this 500 times per millisecond.
     let (ab, ap) = (|i: usize| b[i] - a[i], |i: usize| p[i] - a[i]);
     let length = (0..p.len()).map(|i| ab(i) * ab(i)).sum::<f64>();
-    let along = if length > 0.0 { ((0..p.len()).map(|i| ap(i) * ab(i)).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
+    let along =
+        if length > 0.0 { ((0..p.len()).map(|i| ap(i) * ab(i)).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
     (0..p.len()).map(|i| (ap(i) - along * ab(i)).powi(2)).sum::<f64>().sqrt()
 }
 
@@ -379,16 +399,34 @@ impl Tally {
     fn new(sim: &Sim, views: bool) -> Self {
         let motors = sim.machine.motors().len();
         let infos = sim.signal_infos();
-        let named = |start: &str, end: &str| -> Vec<usize> { infos.iter().enumerate().filter(|(_, s)| s.id.starts_with(start) && s.id.ends_with(end)).map(|(i, _)| i).collect() };
+        let named = |start: &str, end: &str| -> Vec<usize> {
+            infos
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.id.starts_with(start) && s.id.ends_with(end))
+                .map(|(i, _)| i)
+                .collect()
+        };
         let guides = named("axis.", ".guide_load");
         let own = sim.machine.signal_infos();
-        let gear = |motor: &sim_core::MotorInfo| Some((own.iter().position(|s| s.id == format!("gearbox.{}.output_torque", motor.id))?, 0.0, 0.0));
+        let gear = |motor: &sim_core::MotorInfo| {
+            Some((own.iter().position(|s| s.id == format!("gearbox.{}.output_torque", motor.id))?, 0.0, 0.0))
+        };
         let parts = |motor: &sim_core::MotorInfo| -> Option<[usize; 4]> {
-            let found: Vec<usize> = TORQUE_PARTS.iter().filter_map(|part| own.iter().position(|s| s.id == format!("motor.{}.torque_{part}", motor.id))).collect();
+            let found: Vec<usize> = TORQUE_PARTS
+                .iter()
+                .filter_map(|part| own.iter().position(|s| s.id == format!("motor.{}.torque_{part}", motor.id)))
+                .collect();
             found.try_into().ok()
         };
         // Without the views, only what `base_signals` gives is looked at.
-        let own_named = |prefix: &str| own.iter().enumerate().filter(|(_, s)| views && s.id.starts_with(prefix)).map(|(i, _)| i).collect::<Vec<_>>();
+        let own_named = |prefix: &str| {
+            own.iter()
+                .enumerate()
+                .filter(|(_, s)| views && s.id.starts_with(prefix))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
         let (losses, energies) = (own_named(LOSS_PREFIX), own_named("energy."));
         let mut machine_signals = Vec::new();
         if views {
@@ -397,14 +435,34 @@ impl Tally {
             sim.machine.base_signals(&sim.state, &sim.torque, &mut machine_signals);
         }
         let (windings, capacitors) = stored_electrically(sim);
-        let (tensions, radial, slack, jumps, detuning) =
-            (named("belt.", ".tension"), named("pulley.", ".radial_load"), infos.iter().position(|s| s.id == "belt.slack_time"), named("pulley.", ".tooth_jumps"), infos.iter().position(|s| s.id == "belt.span_detuning"));
+        let (tensions, radial, slack, jumps, detuning) = (
+            named("belt.", ".tension"),
+            named("pulley.", ".radial_load"),
+            infos.iter().position(|s| s.id == "belt.slack_time"),
+            named("pulley.", ".tooth_jumps"),
+            infos.iter().position(|s| s.id == "belt.span_detuning"),
+        );
         let mut base = Vec::new();
         sim.sample_base(&mut base);
         let condition = infos.iter().position(|s| s.id == "kinematics.condition");
-        let checks: Vec<(RatingCheck, usize, f64, f64)> = sim.machine.rating_checks().into_iter().filter_map(|c| Some((infos.iter().position(|s| s.id == c.signal)?, c))).map(|(i, c)| (c, i, 0.0, 0.0)).collect();
+        let checks: Vec<(RatingCheck, usize, f64, f64)> = sim
+            .machine
+            .rating_checks()
+            .into_iter()
+            .filter_map(|c| Some((infos.iter().position(|s| s.id == c.signal)?, c)))
+            .map(|(i, c)| (c, i, 0.0, 0.0))
+            .collect();
         let check_places: Vec<usize> = checks.iter().map(|c| c.1).collect();
-        let base_only = tensions.iter().chain(&radial).chain(&guides).chain(&jumps).chain(&slack).chain(&detuning).chain(&condition).chain(&check_places).all(|&i| i < base.len());
+        let base_only = tensions
+            .iter()
+            .chain(&radial)
+            .chain(&guides)
+            .chain(&jumps)
+            .chain(&slack)
+            .chain(&detuning)
+            .chain(&condition)
+            .chain(&check_places)
+            .all(|&i| i < base.len());
         Self {
             gear: sim.machine.motors().iter().map(gear).collect(),
             parts: sim.machine.motors().iter().map(|m| if views { parts(m) } else { None }).collect(),
@@ -438,9 +496,17 @@ impl Tally {
             checks,
             radial_peak: 0.0,
             guide_loads: vec![(0.0, 0.0); guides.len()],
-            guide_axes: guides.iter().map(|&i| sim.machine.axes().iter().position(|a| infos[i].id == format!("axis.{}.guide_load", a.id))).collect(),
+            guide_axes: guides
+                .iter()
+                .map(|&i| sim.machine.axes().iter().position(|a| infos[i].id == format!("axis.{}.guide_load", a.id)))
+                .collect(),
             guide_speeds: vec![0.0; guides.len()],
-            pulley_radial: sim.machine.motors().iter().map(|m| infos.iter().position(|s| s.id == format!("pulley.{}.radial_load", m.id))).collect(),
+            pulley_radial: sim
+                .machine
+                .motors()
+                .iter()
+                .map(|m| infos.iter().position(|s| s.id == format!("pulley.{}.radial_load", m.id)))
+                .collect(),
             radial_sums: vec![(0.0, 0.0); motors],
             gear_life: vec![0.0; motors],
             gear_bands: vec![Vec::new(); motors],
@@ -448,8 +514,17 @@ impl Tally {
             guides,
             slack_start: 0.0,
             cubic: vec![(0.0, 0.0); motors],
-            loads: sim.machine.motors().iter().map(|m| MotorLoad { id: m.id.to_string(), ..MotorLoad::default() }).collect(),
-            pos: { let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]); sim.machine.motor_state(&sim.state, &mut pos, &mut speed); pos },
+            loads: sim
+                .machine
+                .motors()
+                .iter()
+                .map(|m| MotorLoad { id: m.id.to_string(), ..MotorLoad::default() })
+                .collect(),
+            pos: {
+                let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
+                sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
+                pos
+            },
             speed: vec![0.0; motors],
             steps: 0,
             every: (1e-3 / sim.dt).round().max(1.0) as u64,
@@ -506,7 +581,8 @@ impl Tally {
             }
             // Steady speed: no axis accelerates by its setpoint, and one moves. A sweep through a resonance while
             // speeding up is passed in moments; a cruise on it is not.
-            let steady = sim.control.set_acc.iter().all(|a| a.abs() <= 1e-9) && sim.control.set_vel.iter().any(|v| v.abs() > 1e-9);
+            let steady = sim.control.set_acc.iter().all(|a| a.abs() <= 1e-9)
+                && sim.control.set_vel.iter().any(|v| v.abs() > 1e-9);
             if let (true, Some(i)) = (steady, self.detuning) {
                 self.lowest_detuning = self.lowest_detuning.min(self.sample[i]);
             }
@@ -520,11 +596,13 @@ impl Tally {
             }
             for (k, (signal, (cubed, weight))) in self.pulley_radial.iter().zip(&mut self.radial_sums).enumerate() {
                 if let Some(i) = *signal {
-                    (*cubed, *weight) = (*cubed + self.sample[i].powi(3) * self.speed[k].abs(), *weight + self.speed[k].abs());
+                    (*cubed, *weight) =
+                        (*cubed + self.sample[i].powi(3) * self.speed[k].abs(), *weight + self.speed[k].abs());
                 }
             }
             // The oldest setpoint's place is reused for the newest.
-            let mut newest = if self.path.len() >= 500 { self.path.pop_front().unwrap_or_default() } else { Vec::new() };
+            let mut newest =
+                if self.path.len() >= 500 { self.path.pop_front().unwrap_or_default() } else { Vec::new() };
             newest.clone_from(&sim.control.set_pos);
             self.path.push_back(newest);
             let now = self.path.back().unwrap();
@@ -533,12 +611,14 @@ impl Tally {
             // the nearest, and is skipped. The smallest distance is the same as over all pieces.
             let mut off_path = distance_to_piece(&tool, now, now);
             for (b, a) in self.path.iter().rev().zip(self.path.iter().rev().skip(1)) {
-                let beyond = (0..axes).map(|i| (tool[i] - a[i]).abs() - (b[i] - a[i]).abs()).fold(f64::NEG_INFINITY, f64::max);
+                let beyond =
+                    (0..axes).map(|i| (tool[i] - a[i]).abs() - (b[i] - a[i]).abs()).fold(f64::NEG_INFINITY, f64::max);
                 if !(beyond > off_path + 1e-12) {
                     off_path = off_path.min(distance_to_piece(&tool, a, b));
                 }
             }
-            self.path_error = (self.path_error.0.max(off_path), self.path_error.1 + off_path * off_path, self.path_error.2 + 1);
+            self.path_error =
+                (self.path_error.0.max(off_path), self.path_error.1 + off_path * off_path, self.path_error.2 + 1);
             self.tracking_error = self.tracking_error.max(distance_to_piece(&tool, now, now));
             if sim.control.dwell_progress().is_some_and(|done| done >= 0.5) {
                 let target = sim.control.planned_pos();
@@ -575,7 +655,8 @@ impl Tally {
             // A shared DC link has one resistor, rectifier and line module, which every drive reports as its own.
             let shared = sim.control.drive_params().shared_dc_link;
             let link = |power: fn(&crate::drive::Drive) -> f64| -> f64 {
-                let total: f64 = if shared { drives.first().map_or(0.0, power) } else { drives.iter().map(power).sum() };
+                let total: f64 =
+                    if shared { drives.first().map_or(0.0, power) } else { drives.iter().map(power).sum() };
                 total * sim.dt
             };
             self.resistor += link(|d| d.resistor_power);
@@ -590,7 +671,8 @@ impl Tally {
                 self.crash.1 = sim.crash_energy;
             }
         }
-        for (k, (i, peak, cubed)) in self.gear.iter_mut().enumerate().filter_map(|(k, gear)| Some((k, gear.as_mut()?))) {
+        for (k, (i, peak, cubed)) in self.gear.iter_mut().enumerate().filter_map(|(k, gear)| Some((k, gear.as_mut()?)))
+        {
             let (torque, speed) = (self.machine_signals[*i].abs(), self.speed[k].abs());
             (*peak, *cubed) = (peak.max(torque), *cubed + torque.powi(3) * speed);
             self.gear_life[k] += torque.powf(10.0 / 3.0) * speed;
@@ -601,7 +683,10 @@ impl Tally {
             }
             bands[band] = bands[band].max(torque);
             if torque >= TORQUE_FLOOR && speed > 0.0 {
-                let (spectrum, band) = (&mut self.gear_spectrum[k], (((torque / TORQUE_FLOOR).ln() / TORQUE_BAND.ln()) as usize).min(4000));
+                let (spectrum, band) = (
+                    &mut self.gear_spectrum[k],
+                    (((torque / TORQUE_FLOOR).ln() / TORQUE_BAND.ln()) as usize).min(4000),
+                );
                 if spectrum.len() <= band {
                     spectrum.resize(band + 1, 0.0);
                 }
@@ -615,7 +700,9 @@ impl Tally {
             load.rms_current += current * current;
             load.peak_current = load.peak_current.max(current.abs());
             if sim.control.drive_params().drive_max_current.is_finite() {
-                load.peak_current = load.peak_current.max(sim.control.drive_params().current_for(sim.control.drives[k].torque_demand).abs());
+                load.peak_current = load
+                    .peak_current
+                    .max(sim.control.drive_params().current_for(sim.control.drives[k].torque_demand).abs());
             }
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
@@ -627,7 +714,8 @@ impl Tally {
                 load.largest_regeneration = load.largest_regeneration.max(self.braking[k]);
             }
             load.rms_torque += torque * torque;
-            self.cubic[k] = (self.cubic[k].0 + torque.abs().powi(3) * self.speed[k].abs(), self.cubic[k].1 + self.speed[k].abs());
+            self.cubic[k] =
+                (self.cubic[k].0 + torque.abs().powi(3) * self.speed[k].abs(), self.cubic[k].1 + self.speed[k].abs());
             let drive = &sim.control.drives[k];
             load.resistor_energy += drive.resistor_power * sim.dt;
             load.peak_resistor_power = load.peak_resistor_power.max(drive.resistor_power);
@@ -663,33 +751,46 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
-            load.cubic_mean_torque = if self.cubic[k].1 > 0.0 { (self.cubic[k].0 / self.cubic[k].1).cbrt() } else { 0.0 };
-            load.gearbox_torque = self.gear[k].map(|(_, peak, cubed)| (peak, if self.cubic[k].1 > 0.0 { (cubed / self.cubic[k].1).cbrt() } else { 0.0 }));
+            load.cubic_mean_torque =
+                if self.cubic[k].1 > 0.0 { (self.cubic[k].0 / self.cubic[k].1).cbrt() } else { 0.0 };
+            load.gearbox_torque = self.gear[k].map(|(_, peak, cubed)| {
+                (peak, if self.cubic[k].1 > 0.0 { (cubed / self.cubic[k].1).cbrt() } else { 0.0 })
+            });
             load.mean_speed = self.cubic[k].1 / steps;
-            load.gearbox_life_torque = self.gear[k].map(|_| if self.cubic[k].1 > 0.0 { (self.gear_life[k] / self.cubic[k].1).powf(0.3) } else { 0.0 });
+            load.gearbox_life_torque = self.gear[k]
+                .map(|_| if self.cubic[k].1 > 0.0 { (self.gear_life[k] / self.cubic[k].1).powf(0.3) } else { 0.0 });
             load.gearbox_torque_by_speed = std::mem::take(&mut self.gear_bands[k]);
             load.gearbox_torque_spectrum = self.gear_spectrum[k].iter().map(|speed| speed / steps).collect();
             let (cubed, weight) = self.radial_sums[k];
-            load.radial_load_equivalent = self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
+            load.radial_load_equivalent =
+                self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
             load.winding_rise = sim.control.drive_params_of(k).settled_rise(load.rms_current);
             load.thermal_utilisation = load.rms_torque / sim.control.drive_params_of(k).rated_torque;
-            load.torque_parts = self.parts[k].map(|_| self.part_sums[k].map(|(peak, squares)| (peak, (squares / steps).sqrt())));
+            load.torque_parts =
+                self.parts[k].map(|_| self.part_sums[k].map(|(peak, squares)| (peak, (squares / steps).sqrt())));
             // A tripped drive's DC link stays where it tripped, also when that was before the measured pass.
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(sim.control.drives[k].dc_voltage);
         }
         self.sample_now(sim);
         let budget = self.budget(sim);
-        let part_rises = sim.heated.iter().zip(&self.heat).map(|(h, heat)| (h.part.clone(), h.resistance * heat / duration)).collect();
+        let part_rises = sim
+            .heated
+            .iter()
+            .zip(&self.heat)
+            .map(|(h, heat)| (h.part.clone(), h.resistance * heat / duration))
+            .collect();
         let samples = self.path_error.2.max(1) as f64;
         // The guide that the life estimate is about: the one with the highest equivalent load.
-        let guide = (0..self.guide_loads.len()).max_by(|&a, &b| self.guide_loads[a].1.total_cmp(&self.guide_loads[b].1));
+        let guide =
+            (0..self.guide_loads.len()).max_by(|&a, &b| self.guide_loads[a].1.total_cmp(&self.guide_loads[b].1));
         let guide_load = guide.map(|g| (self.guide_loads[g].0, (self.guide_loads[g].1 / samples).cbrt()));
         let guide_speed = guide.and_then(|g| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples));
         CycleLoad {
             duration,
             belt_tension: self.belt_tension,
             belt_slack_time: self.slack.map(|i| self.sample[i] - self.slack_start),
-            belt_tooth_jumps: (!self.jumps.is_empty()).then(|| self.jumps.iter().map(|&i| self.sample[i]).sum::<f64>() - self.jumps_start),
+            belt_tooth_jumps: (!self.jumps.is_empty())
+                .then(|| self.jumps.iter().map(|&i| self.sample[i]).sum::<f64>() - self.jumps_start),
             belt_span_detuning: self.detuning.map(|_| self.lowest_detuning),
             radial_load_peak: (!self.radial.is_empty()).then_some(self.radial_peak),
             condition_peak: self.condition.map(|_| self.condition_peak),
@@ -703,13 +804,18 @@ impl Tally {
             motors: self.loads,
             budget,
             part_rises,
-            checks: std::mem::take(&mut self.checks).into_iter().map(|(c, _, peak, sum)| { let value = if c.life { samples / sum } else { peak }; (c, value) }).collect(),
+            checks: std::mem::take(&mut self.checks)
+                .into_iter()
+                .map(|(c, _, peak, sum)| {
+                    let value = if c.life { samples / sum } else { peak };
+                    (c, value)
+                })
+                .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
             contact: sim.contact.clone(),
             braking_power_peak: self.braking_peak,
             warm_start: None,
         }
-
     }
 
     /// The energy budget of the steps counted, where the machine reports its losses.
@@ -721,8 +827,19 @@ impl Tally {
         // The stores where the flows stop, after the last step counted: a cycle's measured pass ends with the step in
         // which the next pass begins, which is not counted, as the step in which it began is not.
         let (now, (windings, capacitors, payload)) = (&self.machine_signals, self.end);
-        let row = |id: &str, owner_key: &str, quantity_key: &str, energy: f64| BudgetRow { id: id.into(), owner_key: owner_key.into(), quantity_key: quantity_key.into(), energy };
-        let mut rows: Vec<BudgetRow> = sim.machine.motors().iter().zip(&self.copper).map(|(m, copper)| row(&format!("copper.{}", m.id), m.key, "budget-copper", *copper)).collect();
+        let row = |id: &str, owner_key: &str, quantity_key: &str, energy: f64| BudgetRow {
+            id: id.into(),
+            owner_key: owner_key.into(),
+            quantity_key: quantity_key.into(),
+            energy,
+        };
+        let mut rows: Vec<BudgetRow> = sim
+            .machine
+            .motors()
+            .iter()
+            .zip(&self.copper)
+            .map(|(m, copper)| row(&format!("copper.{}", m.id), m.key, "budget-copper", *copper))
+            .collect();
         let p = sim.control.drive_params();
         if p.dc_link {
             rows.push(row("resistor", "group-drive", "budget-resistor", self.resistor));
@@ -732,12 +849,22 @@ impl Tally {
             rows.push(row("mains", "group-drive", "budget-mains", self.mains));
             rows.push(row("line_module", "group-drive", "budget-line-module", self.line_loss));
         }
-        rows.extend(self.losses.iter().zip(&self.lost).map(|(&i, lost)| row(&own[i].id, &own[i].owner_key, &own[i].quantity_key, *lost)));
+        rows.extend(
+            self.losses
+                .iter()
+                .zip(&self.lost)
+                .map(|(&i, lost)| row(&own[i].id, &own[i].owner_key, &own[i].quantity_key, *lost)),
+        );
         rows.push(row("windings", "group-drive", "budget-windings", windings - self.start.1));
         if p.dc_link {
             rows.push(row("capacitors", "group-drive", "budget-capacitors", capacitors - self.start.2));
         }
-        rows.extend(self.energies.iter().zip(&self.start.0).map(|(&i, start)| row(&own[i].id, &own[i].owner_key, &own[i].quantity_key, now[i] - start)));
+        rows.extend(
+            self.energies
+                .iter()
+                .zip(&self.start.0)
+                .map(|(&i, start)| row(&own[i].id, &own[i].owner_key, &own[i].quantity_key, now[i] - start)),
+        );
         // A payload picked up brings energy into the machine, one put down takes it away.
         rows.push(row("payload", "group-energy", "budget-payload", self.start.3 - payload));
         // What the stops at obstacles took out of the machine (effects.crash).
@@ -755,8 +882,15 @@ impl Tally {
 fn stored_electrically(sim: &Sim) -> (f64, f64) {
     let p = sim.control.drive_params();
     let drives = &sim.control.drives;
-    let windings = drives.iter().enumerate().map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current).sum();
-    (windings, if p.dc_link { drives.iter().map(|d| 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage).sum() } else { 0.0 })
+    let windings = drives
+        .iter()
+        .enumerate()
+        .map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current)
+        .sum();
+    (
+        windings,
+        if p.dc_link { drives.iter().map(|d| 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage).sum() } else { 0.0 },
+    )
 }
 
 /// Runs the configured cycle and measures its second pass, when the machine has settled into it. If a
@@ -831,7 +965,11 @@ pub fn analyse_trajectory(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result
 }
 
 /// `analyse_trajectory`, with the effect views only where `views` asks for them (see `analyse_cycle_with`).
-pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, views: bool) -> Result<CycleLoad, CommandError> {
+pub fn analyse_trajectory_with(
+    sim: &mut Sim,
+    points: Vec<(f64, Vec<f64>)>,
+    views: bool,
+) -> Result<CycleLoad, CommandError> {
     let end = points.last().map_or(0.0, |p| p.0) + 0.3;
     let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
     let first = points.first().map(|p| p.1.clone());
@@ -854,7 +992,10 @@ pub fn analyse_trajectory_with(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>, view
             return Ok(load);
         }
         if !sim.control.enabled() {
-            return Ok(CycleLoad { warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY }), ..load });
+            return Ok(CycleLoad {
+                warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY }),
+                ..load
+            });
         }
         if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
             return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
@@ -900,7 +1041,18 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 10] = ["belt-slack", "pulley-bearing-life", "gearbox-life", "gearbox-gearing-life", "motor-bearing-life", "guide-life", "belt-span-resonance", "screw-life", "strain-wave-life", "collision"];
+pub const AT_LEAST: [&str; 10] = [
+    "belt-slack",
+    "pulley-bearing-life",
+    "gearbox-life",
+    "gearbox-gearing-life",
+    "motor-bearing-life",
+    "guide-life",
+    "belt-span-resonance",
+    "screw-life",
+    "strain-wave-life",
+    "collision",
+];
 
 /// How close a verdict is to its limit, as a share: value over limit, or for the checks of `AT_LEAST` limit over value.
 /// Above 1 it fails (but "belt-slack" at exactly 1). A contact ("collision" at no clearance) is infinitely far over.
@@ -1021,7 +1173,8 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         }
         // Braking: what the DC link capacitors take between the bus voltage and the threshold. If one
         // braking gives back more, the braking resistor has to take the mean and the peak power.
-        if let (Some(capacitance), Some(threshold)) = (rating("dc_link_capacitance_uf"), rating("braking_threshold_v")) {
+        if let (Some(capacitance), Some(threshold)) = (rating("dc_link_capacitance_uf"), rating("braking_threshold_v"))
+        {
             // A threshold at or below the bus is a rating for another bus, not a DC link without room.
             if threshold <= bus {
                 return Err(ConfigError::Invalid("ratings.braking_threshold_v".into()));
@@ -1033,10 +1186,21 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 let stored = 0.5 * capacitance * 1e-6 * (m.peak_dc_link_voltage.powi(2) - bus * bus);
                 (stored, m.resistor_energy > 0.0, m.resistor_energy / load.duration, m.peak_resistor_power)
             } else {
-                (m.largest_regeneration, m.largest_regeneration > room, m.energy_regenerated / load.duration, m.peak_regenerated_power)
+                (
+                    m.largest_regeneration,
+                    m.largest_regeneration > room,
+                    m.energy_regenerated / load.duration,
+                    m.peak_regenerated_power,
+                )
             };
             // With a resistor to fall back on, a full DC link is no failure in itself.
-            out.push(Verdict { check: "dc-link-energy", motor: Some(k), value: stored, limit: room, ok: !resistor || continuous.is_some() });
+            out.push(Verdict {
+                check: "dc-link-energy",
+                motor: Some(k),
+                value: stored,
+                limit: room,
+                ok: !resistor || continuous.is_some(),
+            });
             line_up_brakes |= resistor;
             if resistor && !line_up {
                 if let Some(limit) = continuous {
@@ -1088,7 +1252,13 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
             // The one check where the value has to stay above its limit. The tension is looked at once per
             // millisecond; the slack time also counts what falls between.
             let never_slack = load.belt_slack_time.is_none_or(|time| time <= 0.0);
-            out.push(Verdict { check: "belt-slack", motor: None, value: slackest, limit, ok: slackest > limit && never_slack });
+            out.push(Verdict {
+                check: "belt-slack",
+                motor: None,
+                value: slackest,
+                limit,
+                ok: slackest > limit && never_slack,
+            });
         }
     }
     if let Some(jumps) = load.belt_tooth_jumps {
@@ -1100,13 +1270,24 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // The machine's own parts (`Machine::rating_checks`): a peak at most its limit, a life (an L10) times the life
     // factor a1 at least its required life.
     for (check, value) in &load.checks {
-        let a1 = reliability_factor(cfg).ok_or_else(|| ConfigError::Invalid("ratings.bearing_reliability_percent".into()))?;
-        out.push(if check.life { at_least(check.check, check.motor, value * a1, check.limit) } else { at_most(check.check, check.motor, *value, check.limit) });
+        let a1 = reliability_factor(cfg)
+            .ok_or_else(|| ConfigError::Invalid("ratings.bearing_reliability_percent".into()))?;
+        out.push(if check.life {
+            at_least(check.check, check.motor, value * a1, check.limit)
+        } else {
+            at_most(check.check, check.motor, *value, check.limit)
+        });
     }
     // The least clearance to the obstacles against `profile.min_clearance_m`; a contact fails whatever the limit.
     if let Some(clearance) = load.clearance {
         let limit = cfg.non_negative("profile.min_clearance_m")?;
-        out.push(Verdict { check: "collision", motor: None, value: clearance, limit, ok: clearance >= limit && clearance > 0.0 });
+        out.push(Verdict {
+            check: "collision",
+            motor: None,
+            value: clearance,
+            limit,
+            ok: clearance >= limit && clearance > 0.0,
+        });
     }
     if let (Some(value), Some(limit)) = (load.condition_peak, rating("max_condition_number")) {
         out.push(at_most("singularity", None, value, limit));
@@ -1124,7 +1305,8 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // the parts warm, as a rating left out is not judged either.
     if crate::sim::heats(cfg)? {
         for (kind, check) in [("gearbox", "gearbox-thermal"), ("guide", "guide-thermal")] {
-            let hottest = load.part_rises.iter().filter(|(part, _)| part.kind == kind).map(|(_, rise)| *rise).reduce(f64::max);
+            let hottest =
+                load.part_rises.iter().filter(|(part, _)| part.kind == kind).map(|(_, rise)| *rise).reduce(f64::max);
             if let Some(rise) = hottest {
                 out.push(at_most(check, None, rise, cfg.positive(&format!("thermal.{kind}_max_rise_k"))?));
             }
@@ -1197,7 +1379,10 @@ pub fn pulley_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 /// invalid. κ is that of the mean speed.
 pub fn pulley_bearing_a_iso(cfg: &Config, p: f64, rpm: f64) -> Option<f64> {
     Some(match lubrication(cfg).ok()? {
-        Some(l) => life_modification_factor(l.viscosity / reference_viscosity(rpm, l.mean_diameter_mm), l.contamination * l.fatigue_limit / p),
+        Some(l) => life_modification_factor(
+            l.viscosity / reference_viscosity(rpm, l.mean_diameter_mm),
+            l.contamination * l.fatigue_limit / p,
+        ),
         None => 1.0,
     })
 }
@@ -1216,8 +1401,12 @@ pub struct Lubrication {
 }
 
 /// The keys of `Lubrication`, in its order.
-pub const LUBRICATION_KEYS: [&str; 4] =
-    ["ratings.bearing_lubricant_viscosity_mm2_s", "ratings.bearing_contamination_factor", "ratings.pulley_bearing_fatigue_limit_n", "ratings.pulley_bearing_mean_diameter_mm"];
+pub const LUBRICATION_KEYS: [&str; 4] = [
+    "ratings.bearing_lubricant_viscosity_mm2_s",
+    "ratings.bearing_contamination_factor",
+    "ratings.pulley_bearing_fatigue_limit_n",
+    "ratings.pulley_bearing_mean_diameter_mm",
+];
 
 /// The pulley shaft bearing's `Lubrication`, `None` where the config has none of its keys (then a_ISO is 1). A config
 /// with some of them must have all: ν and D_pw above 0, e_C from 0 to 1, C_u not negative.
@@ -1229,7 +1418,11 @@ pub fn lubrication(cfg: &Config) -> Result<Option<Lubrication>, ConfigError> {
     if contamination > 1.0 {
         return Err(ConfigError::Invalid(LUBRICATION_KEYS[1].into()));
     }
-    let (viscosity, fatigue_limit, mean_diameter_mm) = (cfg.positive(LUBRICATION_KEYS[0])?, cfg.non_negative(LUBRICATION_KEYS[2])?, cfg.positive(LUBRICATION_KEYS[3])?);
+    let (viscosity, fatigue_limit, mean_diameter_mm) = (
+        cfg.positive(LUBRICATION_KEYS[0])?,
+        cfg.non_negative(LUBRICATION_KEYS[2])?,
+        cfg.positive(LUBRICATION_KEYS[3])?,
+    );
     Ok(Some(Lubrication { viscosity, contamination, fatigue_limit, mean_diameter_mm }))
 }
 
@@ -1237,7 +1430,11 @@ pub fn lubrication(cfg: &Config) -> Result<Option<Lubrication>, ConfigError> {
 /// for a bearing of mean diameter D_pw (`mean_diameter_mm`) at n (`rpm`, r/min): 45000 · n^-0.83 · D_pw^-0.5 below
 /// 1000 r/min, 4500 · n^-0.5 · D_pw^-0.5 from 1000 r/min. The viscosity ratio is κ = ν / ν1.
 pub fn reference_viscosity(rpm: f64, mean_diameter_mm: f64) -> f64 {
-    if rpm < 1000.0 { 45000.0 * rpm.powf(-0.83) / mean_diameter_mm.sqrt() } else { 4500.0 / rpm.sqrt() / mean_diameter_mm.sqrt() }
+    if rpm < 1000.0 {
+        45000.0 * rpm.powf(-0.83) / mean_diameter_mm.sqrt()
+    } else {
+        4500.0 / rpm.sqrt() / mean_diameter_mm.sqrt()
+    }
 }
 
 /// The life modification factor a_ISO of ISO 281:2007 (section 6.3.3.3, radial ball bearings) for the viscosity ratio κ
@@ -1266,8 +1463,12 @@ pub fn life_modification_factor(kappa: f64, load_ratio: f64) -> f64 {
 /// exponent 10/3 weighted with the speed (`MotorLoad::gearbox_life_torque`). Where the machine reports the output torque
 /// and the config has both ratings. Times the life factor a1 (`reliability_factor`): Siemens' figure is an L10 too.
 pub fn gearbox_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
-    let (rated, reference) = (cfg.f64("ratings.gearbox_rated_torque_nm").ok()?, cfg.f64("ratings.gearbox_reference_speed_rpm").ok()?);
-    Some(reliability_factor(cfg)? * 20000.0 * reference / output_rpm(cfg, m) * (rated / m.gearbox_life_torque?).powf(10.0 / 3.0))
+    let (rated, reference) =
+        (cfg.f64("ratings.gearbox_rated_torque_nm").ok()?, cfg.f64("ratings.gearbox_reference_speed_rpm").ok()?);
+    Some(
+        reliability_factor(cfg)? * 20000.0 * reference / output_rpm(cfg, m)
+            * (rated / m.gearbox_life_torque?).powf(10.0 / 3.0),
+    )
 }
 
 /// The lowest torque of `MotorLoad::gearbox_torque_spectrum`, N m, and the ratio of a band's upper torque to its lower:
@@ -1291,7 +1492,11 @@ pub const MAX_TORQUE_REVOLUTIONS: f64 = 30000.0;
 /// life its inverse; infinite where no torque is above M2N.
 pub fn gearing_life_h(spectrum: impl IntoIterator<Item = (f64, f64)>, rated: f64, max: f64, exponent: f64) -> f64 {
     // A fold, not `sum`: an empty sum of f64 is -0.0, whose inverse is -inf.
-    1.0 / spectrum.into_iter().filter(|&(torque, _)| torque > rated).map(|(torque, revolutions)| revolutions / (MAX_TORQUE_REVOLUTIONS * (max / torque).powf(exponent))).fold(0.0, |sum, d| sum + d)
+    1.0 / spectrum
+        .into_iter()
+        .filter(|&(torque, _)| torque > rated)
+        .map(|(torque, revolutions)| revolutions / (MAX_TORQUE_REVOLUTIONS * (max / torque).powf(exponent)))
+        .fold(0.0, |sum, d| sum + d)
 }
 
 /// The fatigue life of the gearbox's gearing in hours, where the machine reports the output torque and the config has
@@ -1304,10 +1509,19 @@ pub fn gearing_life_h(spectrum: impl IntoIterator<Item = (f64, f64)>, rated: f64
 /// it has no figure (`None`), as a rating left out is not judged; the life would be infinite.
 pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
     let rating = |key: &str| cfg.f64(&format!("ratings.{key}")).ok();
-    let (rated, max, exponent) = (rating("gearbox_rated_torque_nm")?, rating("gearbox_max_torque_nm")?, rating("gearbox_gearing_wohler_exponent")?);
+    let (rated, max, exponent) = (
+        rating("gearbox_rated_torque_nm")?,
+        rating("gearbox_max_torque_nm")?,
+        rating("gearbox_gearing_wohler_exponent")?,
+    );
     m.gearbox_torque?;
     let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / cfg.f64("gearbox.ratio").unwrap_or(1.0);
-    let life = gearing_life_h(m.gearbox_torque_spectrum.iter().enumerate().map(|(i, speed)| (torque_band_floor(i + 1), speed * per_hour)), rated, max, exponent);
+    let life = gearing_life_h(
+        m.gearbox_torque_spectrum.iter().enumerate().map(|(i, speed)| (torque_band_floor(i + 1), speed * per_hour)),
+        rated,
+        max,
+        exponent,
+    );
     life.is_finite().then_some(life)
 }
 
@@ -1341,7 +1555,14 @@ pub fn motor_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>, ConfigError> {
     let Ok(rpm) = cfg.f64s("ratings.belt_tooth_load_rpm") else { return Ok(None) };
     let get = |key: &str| cfg.f64(key).ok();
-    let (Some(width), Some(teeth), Some(factor), Some(radius)) = (get("ratings.belt_width_mm"), get("ratings.belt_teeth_in_mesh"), get("ratings.belt_service_factor"), get("geometry.pulley_radius_m")) else { return Ok(None) };
+    let (Some(width), Some(teeth), Some(factor), Some(radius)) = (
+        get("ratings.belt_width_mm"),
+        get("ratings.belt_teeth_in_mesh"),
+        get("ratings.belt_service_factor"),
+        get("geometry.pulley_radius_m"),
+    ) else {
+        return Ok(None);
+    };
     let load = cfg.f64s("ratings.belt_tooth_load_n_cm")?;
     if load.len() != rpm.len() || rpm.is_empty() || rpm.windows(2).any(|w| w[0] >= w[1]) {
         return Err(ConfigError::Invalid("ratings.belt_tooth_load_rpm".into()));
@@ -1366,7 +1587,13 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
     };
     let capacity = |n: f64| allowed(n) * width / 10.0 * teeth.min(12.0);
     let band_rpm = |i: usize| (i + 1) as f64 * SPEED_BAND * 30.0 / std::f64::consts::PI / ratio;
-    Ok(Some(m.gearbox_torque_by_speed.iter().enumerate().map(|(i, torque)| torque / radius * factor / capacity(band_rpm(i))).fold(0.0, f64::max)))
+    Ok(Some(
+        m.gearbox_torque_by_speed
+            .iter()
+            .enumerate()
+            .map(|(i, torque)| torque / radius * factor / capacity(band_rpm(i)))
+            .fold(0.0, f64::max),
+    ))
 }
 
 /// The low and high bound of every uncertain parameter of a config, as (path, low, high).
@@ -1379,9 +1606,16 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
 /// is off uses (`PATH_EFFECTS`, e.g. `thermal.*` without effects.part_heating), or that no cycle uses (the DC link's
 /// discharge while disabled), is checked and left out.
 pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
-    fn walk(path: &str, value: &toml::Value, cfg: &Config, out: &mut Vec<(String, f64, f64)>) -> Result<(), ConfigError> {
+    fn walk(
+        path: &str,
+        value: &toml::Value,
+        cfg: &Config,
+        out: &mut Vec<(String, f64, f64)>,
+    ) -> Result<(), ConfigError> {
         if let Some(table) = value.as_table() {
-            return table.iter().try_for_each(|(key, v)| walk(&if path.is_empty() { key.clone() } else { format!("{path}.{key}") }, v, cfg, out));
+            return table.iter().try_for_each(|(key, v)| {
+                walk(&if path.is_empty() { key.clone() } else { format!("{path}.{key}") }, v, cfg, out)
+            });
         }
         cfg.f64(path)?;
         match cfg.f64s(&format!("bounds.{path}"))?[..] {
@@ -1412,7 +1646,9 @@ const PATH_EFFECTS: [(&str, &[&str]); 5] = [
 /// Whether `path` is a value only an effect uses (`PATH_EFFECTS`), and that effect is off in `cfg`, or a value no cycle
 /// uses: varying it would only run the cycle again for nothing.
 fn effect_off(cfg: &Config, path: &str) -> bool {
-    PATH_EFFECTS.iter().any(|(start, effects)| path.starts_with(start) && !effects.iter().any(|effect| cfg.bool(&format!("effects.{effect}")).unwrap_or(false)))
+    PATH_EFFECTS.iter().any(|(start, effects)| {
+        path.starts_with(start) && !effects.iter().any(|effect| cfg.bool(&format!("effects.{effect}")).unwrap_or(false))
+    })
 }
 
 /// A verdict with what the uncertain parameters do to it: the lowest and the highest value it took, and
@@ -1448,7 +1684,11 @@ fn judged(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Verdict>, ConfigErro
 
 /// The cycle of each config `make(0..count)` makes, judged; the runs are independent, so they share the processors.
 /// In the order of `make`.
-fn judge_each(entry: &MachineEntry, count: usize, make: impl Fn(usize) -> Result<Config, ConfigError> + Sync) -> Vec<Result<Vec<Verdict>, ConfigError>> {
+fn judge_each(
+    entry: &MachineEntry,
+    count: usize,
+    make: impl Fn(usize) -> Result<Config, ConfigError> + Sync,
+) -> Vec<Result<Vec<Verdict>, ConfigError>> {
     on_all_cores(count, |run| make(run).and_then(|cfg| judged(entry, &cfg)))
 }
 
@@ -1481,7 +1721,12 @@ fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<
 
 /// The bands of the cycle of `cfg` (already with its parts in) and of the configs `changed(0..count)` makes of
 /// it. The runs are independent, so they share the processors; the bands come out the same in any case.
-fn envelope(entry: &MachineEntry, cfg: &Config, count: usize, changed: impl Fn(usize) -> Result<Config, ConfigError> + Sync) -> Result<Vec<Band>, ConfigError> {
+fn envelope(
+    entry: &MachineEntry,
+    cfg: &Config,
+    count: usize,
+    changed: impl Fn(usize) -> Result<Config, ConfigError> + Sync,
+) -> Result<Vec<Band>, ConfigError> {
     // Run 0 is the config as it is.
     bands_of(judge_each(entry, count + 1, |run| if run == 0 { Ok(cfg.clone()) } else { changed(run - 1) }))
 }
@@ -1519,7 +1764,11 @@ fn bands_of(runs: Vec<Result<Vec<Verdict>, ConfigError>>) -> Result<Vec<Band>, C
 /// One at a time ignores interactions: two parameters that are both off can take a verdict beyond its
 /// band. The band says which verdicts are safe against any single uncertain value, no more;
 /// `verdict_bands_sampled` moves them all at once.
-pub fn verdict_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64, f64)]) -> Result<Vec<Band>, ConfigError> {
+pub fn verdict_bands(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+) -> Result<Vec<Band>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     envelope(entry, cfg, 2 * bounds.len(), |run| {
         let ((path, low, high), mut changed) = (&bounds[run / 2], cfg.clone());
@@ -1541,7 +1790,13 @@ pub fn verdict_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64,
 /// What it does not do: put a parameter exactly on a bound (`verdict_bands` does), or search for the worst
 /// corner (`verdict_worst` does). With n parameters there are 2^n corners, and a few dozen runs meet none of
 /// them: a check that fails only with several values near their bounds at once can pass every sample.
-pub fn verdict_bands_sampled(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64, f64)], samples: usize, seed: u64) -> Result<Vec<Band>, ConfigError> {
+pub fn verdict_bands_sampled(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+    samples: usize,
+    seed: u64,
+) -> Result<Vec<Band>, ConfigError> {
     if samples == 0 {
         return Err(ConfigError::Invalid("samples".into()));
     }
@@ -1550,7 +1805,9 @@ pub fn verdict_bands_sampled(entry: &MachineEntry, cfg: &Config, bounds: &[(Stri
     let columns: Vec<Vec<f64>> = bounds
         .iter()
         .map(|(_, low, high)| {
-            let mut values: Vec<f64> = (0..samples).map(|part| low + (high - low) * (part as f64 + random.uniform()) / samples as f64).collect();
+            let mut values: Vec<f64> = (0..samples)
+                .map(|part| low + (high - low) * (part as f64 + random.uniform()) / samples as f64)
+                .collect();
             for i in (1..samples).rev() {
                 values.swap(i, (random.uniform() * (i + 1) as f64) as usize);
             }
@@ -1615,16 +1872,26 @@ fn badness(v: &Verdict) -> f64 {
 /// It is a search, not a proof: a verdict that is worst at a corner which no single flip from the sign corner
 /// leads to, or inside the bounds and not at a corner at all (a resonance hit by a stiffness between its bounds),
 /// can be missed. `verdict_bands_sampled` looks inside.
-pub fn verdict_worst(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64, f64)]) -> Result<(Vec<Worst>, usize), ConfigError> {
+pub fn verdict_worst(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+) -> Result<(Vec<Worst>, usize), ConfigError> {
     verdict_worst_and_bands(entry, cfg, bounds).map(|(worst, _, runs)| (worst, runs))
 }
 
 /// `verdict_worst`, and `verdict_bands` of the same bounds from the runs the search starts with, which are those of the
 /// bands (the config as it is, then each parameter at its low and at its high bound): the bands cost no cycle more.
-pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64, f64)]) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
+pub fn verdict_worst_and_bands(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let n = bounds.len();
-    let set = |cfg: &mut Config, i: usize, high: bool| cfg.set_text(&format!("{} = {:?}", bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 }));
+    let set = |cfg: &mut Config, i: usize, high: bool| {
+        cfg.set_text(&format!("{} = {:?}", bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 }))
+    };
     // Run 0 is the config as it is, then each parameter at its low and at its high bound.
     let alone = judge_each(entry, 2 * n + 1, |run| {
         let mut changed = cfg.clone();
@@ -1642,14 +1909,24 @@ pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(St
         }
     }
     // How bad a verdict is in a run; a run in which it did not come up counts as the best.
-    let bad = |run: &[Verdict], id: (&str, Option<usize>)| run.iter().find(|v| (v.check, v.motor) == id).map_or(f64::NEG_INFINITY, badness);
-    let mut corners: Vec<Vec<bool>> = ids.iter().map(|&id| (0..n).map(|i| bad(&alone[2 * i + 2], id) >= bad(&alone[2 * i + 1], id)).collect()).collect();
-    let moves: Vec<Vec<usize>> = ids.iter().map(|&id| (0..n).filter(|&i| bad(&alone[2 * i + 2], id) != bad(&alone[2 * i + 1], id)).collect()).collect();
+    let bad = |run: &[Verdict], id: (&str, Option<usize>)| {
+        run.iter().find(|v| (v.check, v.motor) == id).map_or(f64::NEG_INFINITY, badness)
+    };
+    let mut corners: Vec<Vec<bool>> = ids
+        .iter()
+        .map(|&id| (0..n).map(|i| bad(&alone[2 * i + 2], id) >= bad(&alone[2 * i + 1], id)).collect())
+        .collect();
+    let moves: Vec<Vec<usize>> = ids
+        .iter()
+        .map(|&id| (0..n).filter(|&i| bad(&alone[2 * i + 2], id) != bad(&alone[2 * i + 1], id)).collect())
+        .collect();
 
     let mut seen: std::collections::HashMap<Vec<bool>, Vec<Verdict>> = std::collections::HashMap::new();
     let mut runs = alone.len();
     // Runs the corners not run before.
-    let mut run_corners = |wanted: Vec<Vec<bool>>, seen: &mut std::collections::HashMap<Vec<bool>, Vec<Verdict>>| -> Result<(), ConfigError> {
+    let mut run_corners = |wanted: Vec<Vec<bool>>,
+                           seen: &mut std::collections::HashMap<Vec<bool>, Vec<Verdict>>|
+     -> Result<(), ConfigError> {
         let mut new: Vec<Vec<bool>> = Vec::new();
         for corner in wanted {
             if !seen.contains_key(&corner) && !new.contains(&corner) {
@@ -1678,14 +1955,30 @@ pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(St
         out
     };
     for _ in 0..WORST_PASSES {
-        let singles: Vec<Vec<bool>> = (0..ids.len()).flat_map(|k| moves[k].iter().map(|&i| flipped(&corners[k], &[i])).collect::<Vec<_>>()).collect();
+        let singles: Vec<Vec<bool>> = (0..ids.len())
+            .flat_map(|k| moves[k].iter().map(|&i| flipped(&corners[k], &[i])).collect::<Vec<_>>())
+            .collect();
         run_corners(singles, &mut seen)?;
         // Per verdict the flips that made it worse, and all of them together.
-        let worse: Vec<Vec<usize>> = (0..ids.len()).map(|k| moves[k].iter().copied().filter(|&i| bad(&seen[&flipped(&corners[k], &[i])], ids[k]) > bad(&seen[&corners[k]], ids[k])).collect()).collect();
-        run_corners((0..ids.len()).filter(|&k| worse[k].len() > 1).map(|k| flipped(&corners[k], &worse[k])).collect(), &mut seen)?;
+        let worse: Vec<Vec<usize>> = (0..ids.len())
+            .map(|k| {
+                moves[k]
+                    .iter()
+                    .copied()
+                    .filter(|&i| bad(&seen[&flipped(&corners[k], &[i])], ids[k]) > bad(&seen[&corners[k]], ids[k]))
+                    .collect()
+            })
+            .collect();
+        run_corners(
+            (0..ids.len()).filter(|&k| worse[k].len() > 1).map(|k| flipped(&corners[k], &worse[k])).collect(),
+            &mut seen,
+        )?;
         let mut changed = false;
         for k in 0..ids.len() {
-            let candidates = worse[k].iter().map(|&i| flipped(&corners[k], &[i])).chain((worse[k].len() > 1).then(|| flipped(&corners[k], &worse[k])));
+            let candidates = worse[k]
+                .iter()
+                .map(|&i| flipped(&corners[k], &[i]))
+                .chain((worse[k].len() > 1).then(|| flipped(&corners[k], &worse[k])));
             if let Some(best) = candidates.max_by(|a, b| bad(&seen[a], ids[k]).total_cmp(&bad(&seen[b], ids[k]))) {
                 corners[k] = best;
                 changed = true;
@@ -1697,13 +1990,16 @@ pub fn verdict_worst_and_bands(entry: &MachineEntry, cfg: &Config, bounds: &[(St
     }
     // Per verdict the worst it was in any run: at a corner, or with one parameter at a bound or none (so that the worst
     // is never better than `verdict_bands` reports).
-    let alone_at = |run: usize| -> Vec<Option<bool>> { (0..n).map(|i| (run > 0 && (run - 1) / 2 == i).then_some(run.is_multiple_of(2))).collect() };
+    let alone_at = |run: usize| -> Vec<Option<bool>> {
+        (0..n).map(|i| (run > 0 && (run - 1) / 2 == i).then_some(run.is_multiple_of(2))).collect()
+    };
     let worst = ids
         .iter()
         .filter_map(|&id| {
             let corners = seen.iter().map(|(corner, run)| (corner.iter().map(|&h| Some(h)).collect::<Vec<_>>(), run));
             let candidates = corners.chain(alone.iter().enumerate().map(|(r, run)| (alone_at(r), run)));
-            let (high, run) = candidates.max_by(|a, b| bad(a.1, id).total_cmp(&bad(b.1, id)).then_with(|| b.0.cmp(&a.0)))?;
+            let (high, run) =
+                candidates.max_by(|a, b| bad(a.1, id).total_cmp(&bad(b.1, id)).then_with(|| b.0.cmp(&a.0)))?;
             let verdict = run.iter().find(|v| (v.check, v.motor) == id)?.clone();
             Some(Worst { verdict, high })
         })
@@ -1773,7 +2069,11 @@ pub struct FrontPoint {
 // is drawn for a regenerative supply.
 pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
-    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) { load.motors.first().map_or(0.0, |m| m.resistor_energy) } else { load.motors.iter().map(|m| m.resistor_energy).sum() };
+    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) {
+        load.motors.first().map_or(0.0, |m| m.resistor_energy)
+    } else {
+        load.motors.iter().map(|m| m.resistor_energy).sum()
+    };
     net + burned
 }
 
@@ -1781,7 +2081,9 @@ pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
 /// a point that is there twice is kept once.
 pub fn non_dominated(points: &[FrontPoint]) -> Vec<FrontPoint> {
     let figures = |p: &FrontPoint| [p.duration, p.energy, p.utilisation];
-    let beats = |a: &FrontPoint, b: &FrontPoint| figures(a).iter().zip(figures(b)).all(|(x, y)| *x <= y) && figures(a) != figures(b);
+    let beats = |a: &FrontPoint, b: &FrontPoint| {
+        figures(a).iter().zip(figures(b)).all(|(x, y)| *x <= y) && figures(a) != figures(b)
+    };
     let mut front: Vec<FrontPoint> = Vec::new();
     for p in points {
         if !points.iter().any(|q| beats(q, p)) && !front.iter().any(|q| figures(q) == figures(p)) {
@@ -1830,16 +2132,30 @@ struct Lift {
 fn lifts(cfg: &Config, clearance: f64) -> Result<Vec<Lift>, ConfigError> {
     let segments = cfg.array("cycle.segment")?;
     let n = segments.len();
-    let target = |i: usize| -> Option<Vec<f64>> { segments[i].get("target")?.as_array()?.iter().map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).collect() };
+    let target = |i: usize| -> Option<Vec<f64>> {
+        segments[i]
+            .get("target")?
+            .as_array()?
+            .iter()
+            .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+            .collect()
+    };
     let plain = |i: usize| segments[i].get("via").is_none();
-    let quiet = |i: usize| segments[i].get("dwell_s").and_then(|d| d.as_float().or_else(|| d.as_integer().map(|i| i as f64))) == Some(0.0) && segments[i].get("payload") == segments[(i + n - 1) % n].get("payload");
+    let quiet = |i: usize| {
+        segments[i].get("dwell_s").and_then(|d| d.as_float().or_else(|| d.as_integer().map(|i| i as f64))) == Some(0.0)
+            && segments[i].get("payload") == segments[(i + n - 1) % n].get("payload")
+    };
     let mut out = Vec::new();
     if n < 3 {
         return Ok(out);
     }
     for a in 0..n {
         let (b, c) = ((a + 1) % n, (a + 2) % n);
-        let (Some(from), Some(lift), Some(traverse), Some(to)) = (target((a + n - 1) % n), target(a), target(b), target(c)) else { continue };
+        let (Some(from), Some(lift), Some(traverse), Some(to)) =
+            (target((a + n - 1) % n), target(a), target(b), target(c))
+        else {
+            continue;
+        };
         let z = from.len().wrapping_sub(1);
         if from.len() < 2 || [&lift, &traverse, &to].iter().any(|p| p.len() != from.len()) {
             continue;
@@ -1847,7 +2163,12 @@ fn lifts(cfg: &Config, clearance: f64) -> Result<Vec<Lift>, ConfigError> {
         let along_z = |p: &[f64], q: &[f64]| p[..z] == q[..z] && p[z] != q[z];
         let height = lift[z];
         let up = (height - from[z]).signum();
-        if !(along_z(&from, &lift) && traverse[z] == height && traverse[..z] != lift[..z] && along_z(&traverse, &to) && (height - to[z]).signum() == up) {
+        if !(along_z(&from, &lift)
+            && traverse[z] == height
+            && traverse[..z] != lift[..z]
+            && along_z(&traverse, &to)
+            && (height - to[z]).signum() == up)
+        {
             continue;
         }
         if !(quiet(a) && quiet(b) && plain(a) && plain(b) && plain(c)) {
@@ -1872,7 +2193,13 @@ fn lifts(cfg: &Config, clearance: f64) -> Result<Vec<Lift>, ConfigError> {
 /// (down, never below `lowest`) until it is the clearance to 1 nm. The bodies move with the last axis, so the clearance
 /// changes by no more than the height: a box across the traverse is cleared in one step, to the clearance exactly. `None`
 /// where 40 steps within the axis's range find no height that clears (a box beside the traverse that reaches above it).
-fn over_obstacles(machine: &mut dyn sim_core::Machine, obstacles: &[sim_core::Obstacle], lift: &Lift, clearance: f64, axis: &sim_core::AxisInfo) -> Option<(f64, Option<Vec<f64>>)> {
+fn over_obstacles(
+    machine: &mut dyn sim_core::Machine,
+    obstacles: &[sim_core::Obstacle],
+    lift: &Lift,
+    clearance: f64,
+    axis: &sim_core::AxisInfo,
+) -> Option<(f64, Option<Vec<f64>>)> {
     let z = lift.from.len() - 1;
     machine.set_payload_attached(lift.payload);
     let machine: &dyn sim_core::Machine = machine;
@@ -1890,7 +2217,11 @@ fn over_obstacles(machine: &mut dyn sim_core::Machine, obstacles: &[sim_core::Ob
         }
         // How far beyond `lowest` the next height is (on the side `up`): what it is now, plus what the clearance lacks.
         let next = lift.lowest + lift.up * (lift.up * (height - lift.lowest) + clearance - gap).max(0.0);
-        if !gap.is_finite() || (gap - clearance).abs() <= 1e-9 || next == height || !(axis.min..=axis.max).contains(&next) {
+        if !gap.is_finite()
+            || (gap - clearance).abs() <= 1e-9
+            || next == height
+            || !(axis.min..=axis.max).contains(&next)
+        {
             break;
         }
         height = next;
@@ -1899,7 +2230,12 @@ fn over_obstacles(machine: &mut dyn sim_core::Machine, obstacles: &[sim_core::Ob
 }
 
 /// The cycle with each lift at `heights` and, where `vias` has one, rounded through that via point (see `LiftChange`).
-fn cycle_with(cfg: &Config, lifts: &[Lift], heights: &[f64], vias: &[Option<Vec<f64>>]) -> Result<toml::Value, ConfigError> {
+fn cycle_with(
+    cfg: &Config,
+    lifts: &[Lift],
+    heights: &[f64],
+    vias: &[Option<Vec<f64>>],
+) -> Result<toml::Value, ConfigError> {
     let mut segments = cfg.array("cycle.segment")?.clone();
     let number_list = |p: &[f64]| toml::Value::Array(p.iter().map(|x| toml::Value::Float(*x)).collect());
     let mut dropped = Vec::new();
@@ -1914,14 +2250,19 @@ fn cycle_with(cfg: &Config, lifts: &[Lift], heights: &[f64], vias: &[Option<Vec<
             None => {
                 for i in [a, b] {
                     let old = segments[i].get("target").and_then(|t| t.as_array()).cloned().unwrap_or_default();
-                    let pose: Vec<f64> = old.iter().filter_map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).collect();
+                    let pose: Vec<f64> =
+                        old.iter().filter_map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).collect();
                     if let Some(t) = segments[i].as_table_mut() {
                         t.insert("target".into(), number_list(&at_height(&pose)));
                     }
                 }
             }
             Some(point) => {
-                let via = toml::Value::Array(vec![number_list(&at_height(&lift.from)), number_list(point), number_list(&at_height(&lift.to))]);
+                let via = toml::Value::Array(vec![
+                    number_list(&at_height(&lift.from)),
+                    number_list(point),
+                    number_list(&at_height(&lift.to)),
+                ]);
                 if let Some(t) = segments[c].as_table_mut() {
                     t.insert("via".into(), via);
                 }
@@ -1937,7 +2278,15 @@ fn cycle_with(cfg: &Config, lifts: &[Lift], heights: &[f64], vias: &[Option<Vec<
 /// ends along the other axes is at `lowest` or beyond, less the path tolerance the transition curves may use; and where
 /// there are obstacles, the machine's collision bodies keep `clearance` to them along the whole path, at rest at each
 /// planned pose (`collision::check_path`).
-fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, height: f64, via: &[f64], bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64)) -> bool {
+fn clears(
+    axes: &[sim_core::AxisInfo],
+    cycle: f64,
+    tolerance: f64,
+    lift: &Lift,
+    height: f64,
+    via: &[f64],
+    bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64),
+) -> bool {
     let z = lift.from.len() - 1;
     let at_height = |p: &[f64]| {
         let mut p = p.to_vec();
@@ -1945,7 +2294,9 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
         p
     };
     let pieces = crate::control::via_pieces(&[at_height(&lift.from), via.to_vec(), at_height(&lift.to)], &lift.to);
-    let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK) else { return false };
+    let Ok(points) = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK) else {
+        return false;
+    };
     let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
     let width = across.iter().map(|d| d * d).sum::<f64>();
     let above = points.iter().all(|(_, pose)| {
@@ -1958,7 +2309,8 @@ fn clears(axes: &[sim_core::AxisInfo], cycle: f64, tolerance: f64, lift: &Lift, 
     }
     machine.set_payload_attached(lift.payload);
     let mut check = crate::collision::PlanCheck::default();
-    let poses: Vec<Vec<f64>> = std::iter::once(lift.from.clone()).chain(points.into_iter().map(|(_, pose)| pose)).collect();
+    let poses: Vec<Vec<f64>> =
+        std::iter::once(lift.from.clone()).chain(points.into_iter().map(|(_, pose)| pose)).collect();
     crate::collision::check_path(&*machine, obstacles, &poses, &mut check);
     check.clearance >= clearance - 1e-9
 }
@@ -2005,7 +2357,11 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
 /// lowest collision body reaches below the tool. A lift that an obstacle raises is tried rounded through a via point
 /// over that obstacle as well, its ends at the clearance above pick and place; every via point's path is checked
 /// against the obstacles before it runs.
-pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &OptimiseOptions) -> Result<Optimised, ConfigError> {
+pub fn optimise_cycle_with(
+    entry: &MachineEntry,
+    cfg: &Config,
+    options: &OptimiseOptions,
+) -> Result<Optimised, ConfigError> {
     let max_runs = options.max_runs;
     let mut probe = Sim::new(entry, cfg)?;
     let clearance = cfg.non_negative("profile.min_clearance_m")?;
@@ -2016,13 +2372,19 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
     if !obstacles.is_empty() {
         for lift in &mut lifts {
             let axis = &axis_infos[lift.from.len() - 1];
-            (lift.needed, lift.over) = over_obstacles(probe.machine.as_mut(), &obstacles, lift, clearance, axis).unwrap_or((lift.height, None));
+            (lift.needed, lift.over) = over_obstacles(probe.machine.as_mut(), &obstacles, lift, clearance, axis)
+                .unwrap_or((lift.height, None));
         }
     }
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
-    let (first, configured) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
+    let (first, configured) =
+        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
     let second_mode = probe.machine.modes(probe.control.planned_pos()).get(1).map(|mode| mode.hz);
-    let second_frequency = if configured > 0.0 { Some(configured) } else { second_mode.or(resonance.filter(|f| (f / first - 1.0).abs() > 0.1)) };
+    let second_frequency = if configured > 0.0 {
+        Some(configured)
+    } else {
+        second_mode.or(resonance.filter(|f| (f / first - 1.0).abs() > 0.1))
+    };
     // In the axis's own unit: `axis.x.max_velocity_m_s`, `axis.c.max_velocity_rad_s` (with metres alone, a machine with an
     // axis in rad could not be built and its cycle was said to fail a verdict).
     let limits = ["max_velocity_{unit}_s", "max_acceleration_{unit}_s2", "max_jerk_{unit}_s3"];
@@ -2048,8 +2410,13 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
         changed.set_text(&format!("effects.corner_blending = {}", setting.blending))?;
         changed.set_text(&format!("effects.input_shaping = {}", setting.shaping))?;
         changed.set_text(&format!("effects.shaper_follows_pose = {}", setting.follows))?;
-        changed.set_text(&format!("profile.shaper2_frequency_hz = {:?}", if setting.second { second_frequency.unwrap_or(0.0) } else { 0.0 }))?;
-        if setting.heights.iter().zip(&lifts).any(|(h, lift)| *h != lift.height) || setting.vias.iter().any(Option::is_some) {
+        changed.set_text(&format!(
+            "profile.shaper2_frequency_hz = {:?}",
+            if setting.second { second_frequency.unwrap_or(0.0) } else { 0.0 }
+        ))?;
+        if setting.heights.iter().zip(&lifts).any(|(h, lift)| *h != lift.height)
+            || setting.vias.iter().any(Option::is_some)
+        {
             changed.set("cycle.segment", cycle_with(cfg, &lifts, &setting.heights, &setting.vias)?)?;
         }
         Ok(changed)
@@ -2066,11 +2433,19 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
             return None;
         }
         let load = analyse_cycle_with(&mut sim, false).ok()?;
-        let failed: Vec<&'static str> = verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
+        let failed: Vec<&'static str> =
+            verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
         if failed.is_empty() {
             let utilisation = load.motors.iter().fold(0.0, |a: f64, m| a.max(m.utilisation));
             let (factors, blending, shaping) = (setting.factors, setting.blending, setting.shaping);
-            passed.borrow_mut().push(FrontPoint { duration: load.duration, energy: supply_energy(&changed, &load), utilisation, factors, blending, shaping });
+            passed.borrow_mut().push(FrontPoint {
+                duration: load.duration,
+                energy: supply_energy(&changed, &load),
+                utilisation,
+                factors,
+                blending,
+                shaping,
+            });
         }
         Some((load, failed))
     };
@@ -2090,7 +2465,9 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
     // The setting with the lifts the obstacles raised (where it changed them) higher by `lack`, their via points with them.
     let raised_by = |setting: &Setting, lack: f64| {
         let mut higher = setting.clone();
-        for (k, lift) in lifts.iter().enumerate().filter(|(k, lift)| lift.over.is_some() && setting.heights[*k] != lift.height) {
+        for (k, lift) in
+            lifts.iter().enumerate().filter(|(k, lift)| lift.over.is_some() && setting.heights[*k] != lift.height)
+        {
             higher.heights[k] += lift.up * lack;
             if let Some(z) = higher.vias[k].as_mut().and_then(|via| via.last_mut()) {
                 *z += lift.up * lack;
@@ -2152,8 +2529,10 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
                     // Over the obstacle that raised the lift, the ends as low as pick and place allow.
                     for above in [0.0, 0.125] {
                         if let Some(over) = &lift.over {
-                            let via = over[..z].iter().copied().chain([lift.needed + lift.up * above * width]).collect();
-                            candidates.push(Setting { heights: lower(&best, k, lift.lowest).heights, ..with_via(Some(via)) });
+                            let via =
+                                over[..z].iter().copied().chain([lift.needed + lift.up * above * width]).collect();
+                            candidates
+                                .push(Setting { heights: lower(&best, k, lift.lowest).heights, ..with_via(Some(via)) });
                         }
                     }
                 }
@@ -2173,7 +2552,21 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
         }
         // A via point whose path would come too near to pick and place, or to an obstacle, is not run.
         let machine = probe.machine.as_mut();
-        candidates.retain(|c| lifts.iter().enumerate().all(|(k, lift)| c.vias[k].as_ref().is_none_or(|via| clears(&axis_infos, cycle_s, tolerance, lift, c.heights[k], via, (&mut *machine, &obstacles, clearance)))));
+        candidates.retain(|c| {
+            lifts.iter().enumerate().all(|(k, lift)| {
+                c.vias[k].as_ref().is_none_or(|via| {
+                    clears(
+                        &axis_infos,
+                        cycle_s,
+                        tolerance,
+                        lift,
+                        c.heights[k],
+                        via,
+                        (&mut *machine, &obstacles, clearance),
+                    )
+                })
+            })
+        });
         'candidates: for candidate in candidates {
             // A candidate that only leaves the tool swinging gets its tries with the shaper right after it.
             let mut tries = std::collections::VecDeque::from([candidate]);
@@ -2234,7 +2627,9 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
             (false, 0) => nominal_fails.clone(),
             (false, _) => fails(&accepted[0].0)?.0,
         };
-        let judged_on = |checks: &[&'static str]| -> Vec<&'static str> { checks.iter().copied().filter(|c| !excused.contains(c)).collect() };
+        let judged_on = |checks: &[&'static str]| -> Vec<&'static str> {
+            checks.iter().copied().filter(|c| !excused.contains(c)).collect()
+        };
         // Pass or fail in the bands need not follow the cycle time, so the steps are judged from the fastest down, and
         // no further than the first that passes; the cycle as configured passes what it is judged on by definition.
         let (mut k, mut failing) = (last, judged_on(&nominal_fails));
@@ -2291,7 +2686,12 @@ pub fn optimise_cycle_with(entry: &MachineEntry, cfg: &Config, options: &Optimis
         .iter()
         .enumerate()
         .filter(|(k, lift)| best.heights[*k] != lift.height || best.vias[*k].is_some())
-        .map(|(k, lift)| LiftChange { segments: lift.segments, before: lift.height, after: best.heights[k], via: best.vias[k].clone() })
+        .map(|(k, lift)| LiftChange {
+            segments: lift.segments,
+            before: lift.height,
+            after: best.heights[k],
+            via: best.vias[k].clone(),
+        })
         .collect();
     Ok(Optimised { before, after: best_load, changes, lifts, runs: runs.get(), robust, front })
 }
@@ -2317,7 +2717,11 @@ impl Sensitivity {
     pub fn changes(&self, nominal: &CycleLoad) -> [f64; 6] {
         let change = |a: f64, b: f64| if b.abs() > 1e-12 { a / b - 1.0 } else { 0.0 };
         let per_motor = |load: &CycleLoad, pick: fn(&MotorLoad) -> f64| -> f64 {
-            load.motors.iter().zip(&nominal.motors).map(|(m, n)| change(pick(m), pick(n))).fold(0.0, |a: f64, b| if b.abs() > a.abs() { b } else { a })
+            load.motors
+                .iter()
+                .zip(&nominal.motors)
+                .map(|(m, n)| change(pick(m), pick(n)))
+                .fold(0.0, |a: f64, b| if b.abs() > a.abs() { b } else { a })
         };
         [
             per_motor(&self.low, |m| m.peak_torque),
@@ -2341,7 +2745,12 @@ impl Sensitivity {
 /// so which are worth measuring. A parameter that is not a number, whose changed value the machine
 /// refuses, or that only an effect that is off uses (see `bounds`), is left out, and so are the analysis' own choices
 /// in `NOT_MACHINE_DATA`.
-pub fn sensitivity(entry: &MachineEntry, cfg: &Config, paths: &[String], delta: f64) -> Result<(CycleLoad, Vec<Sensitivity>), ConfigError> {
+pub fn sensitivity(
+    entry: &MachineEntry,
+    cfg: &Config,
+    paths: &[String],
+    delta: f64,
+) -> Result<(CycleLoad, Vec<Sensitivity>), ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let configured = bounds(cfg)?;
     let run = |cfg: &Config| -> Option<CycleLoad> { analyse_cycle_with(&mut Sim::new(entry, cfg).ok()?, false).ok() };
@@ -2351,7 +2760,14 @@ pub fn sensitivity(entry: &MachineEntry, cfg: &Config, paths: &[String], delta: 
         .filter(|path| !effect_off(cfg, path) && !NOT_MACHINE_DATA.contains(&path.as_str()))
         .filter_map(|path| {
             let value = cfg.f64(path).ok()?;
-            Some((path, value, configured.iter().find(|b| b.0 == *path).map_or((value * (1.0 - delta), value * (1.0 + delta)), |b| (b.1, b.2))))
+            Some((
+                path,
+                value,
+                configured
+                    .iter()
+                    .find(|b| b.0 == *path)
+                    .map_or((value * (1.0 - delta), value * (1.0 + delta)), |b| (b.1, b.2)),
+            ))
         })
         .collect();
     // Run 0 is the config as it is, then each parameter at its low and at its high value.
@@ -2403,7 +2819,13 @@ pub fn default_sweep_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64
 /// torques, measured at that motor's speed once the response has settled. Belt resonances show as
 /// peaks, the load swinging against the held motor as a dip. Each frequency starts from the same rest, on a machine
 /// of its own, so they share the processors.
-pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<SweepPoint>, ConfigError> {
+pub fn frequency_sweep(
+    entry: &MachineEntry,
+    cfg: &Config,
+    motor: usize,
+    frequencies: &[f64],
+    amplitude: f64,
+) -> Result<Vec<SweepPoint>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let (dt, substeps) = (cfg.positive("sim.dt_s")?, cfg.positive("sim.substeps")? as u32);
     // The machine at rest at its start pose under the holding torques.
@@ -2452,7 +2874,11 @@ pub fn frequency_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, frequen
 
 /// A response is measured over whole periods: at 0 Hz that never ends, and below it means nothing.
 fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
-    if frequencies.iter().all(|f| f.is_finite() && *f > 0.0) { Ok(()) } else { Err(ConfigError::Invalid("frequency".into())) }
+    if frequencies.iter().all(|f| f.is_finite() && *f > 0.0) {
+        Ok(())
+    } else {
+        Err(ConfigError::Invalid("frequency".into()))
+    }
 }
 
 /// The modes the machine reports (`Machine::modes`) at `points` places spread evenly over the range of axis `axis`, both
@@ -2511,7 +2937,13 @@ fn tool_position(sim: &Sim, axis: usize) -> f64 {
 
 /// Steps the position setpoint of one axis by `size` (without feedforward, so only the feedback
 /// loops answer) and records the tool position. With friction on, a small step shows stiction too.
-pub fn step_response(entry: &MachineEntry, cfg: &Config, axis: usize, size: f64, seconds: f64) -> Result<StepResponse, ConfigError> {
+pub fn step_response(
+    entry: &MachineEntry,
+    cfg: &Config,
+    axis: usize,
+    size: f64,
+    seconds: f64,
+) -> Result<StepResponse, ConfigError> {
     let (mut sim, start) = settled(entry, cfg, axis)?;
     sim.control.setpoint_offset[axis] = size;
     let (t0, every) = (sim.time(), (0.25e-3 / sim.dt).round().max(1.0) as u64);
@@ -2530,7 +2962,13 @@ pub fn step_response(entry: &MachineEntry, cfg: &Config, axis: usize, size: f64,
 /// Closed-loop frequency response of the position loop of one axis: a sine on the position
 /// setpoint, measured at the tool. Gain is tool amplitude over setpoint amplitude. Each frequency is measured on a
 /// simulation of its own, so they share the processors.
-pub fn closed_loop_response(entry: &MachineEntry, cfg: &Config, axis: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<SweepPoint>, ConfigError> {
+pub fn closed_loop_response(
+    entry: &MachineEntry,
+    cfg: &Config,
+    axis: usize,
+    frequencies: &[f64],
+    amplitude: f64,
+) -> Result<Vec<SweepPoint>, ConfigError> {
     check_frequencies(frequencies)?;
     on_all_cores(frequencies.len(), |i| {
         let frequency = frequencies[i];
@@ -2584,7 +3022,13 @@ pub struct LoopPoint {
 /// L = -U / E and S = E / D at the frequency. Everything between the two is in L: velocity filter, PI, torque
 /// filter, delays, current loop, the elastic mechanics, and the position loop around it. Sampled at the velocity
 /// cycle, over whole periods: at least 0.1 s to settle and 0.1 s to measure.
-pub fn velocity_loop_response(entry: &MachineEntry, cfg: &Config, motor: usize, frequencies: &[f64], amplitude: f64) -> Result<Vec<LoopPoint>, ConfigError> {
+pub fn velocity_loop_response(
+    entry: &MachineEntry,
+    cfg: &Config,
+    motor: usize,
+    frequencies: &[f64],
+    amplitude: f64,
+) -> Result<Vec<LoopPoint>, ConfigError> {
     check_frequencies(frequencies)?;
     let mut out = Vec::new();
     for &frequency in frequencies {
@@ -2597,7 +3041,8 @@ pub fn velocity_loop_response(entry: &MachineEntry, cfg: &Config, motor: usize, 
         let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
         let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
         let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
-        let (mut seen, mut limited, mut pos, mut speed) = (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
+        let (mut seen, mut limited, mut pos, mut speed) =
+            (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
         for step in 0..total {
             let due = sim.step % every == 0;
             let (s, c) = (omega * (sim.time() - t0)).sin_cos();
@@ -2614,20 +3059,27 @@ pub fn velocity_loop_response(entry: &MachineEntry, cfg: &Config, motor: usize, 
                 limited |= !(low < e && e < high);
                 if step >= settle_steps {
                     let u = drive.torque_demand;
-                    (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) = (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
+                    (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) =
+                        (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
                     samples += 1.0;
                     seen.push((s, c, e));
                 }
             }
         }
         // Phasors (sine part, cosine part) of u and e; L = -U / E.
-        let (u, e) = ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
+        let (u, e) =
+            ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
         // What of e is not the sine of the injection and not a constant: a loop that moves on its own (unstable, or in a
         // limit cycle) shows here. More of it than the injection itself, and the point is not a measurement of L.
         let mean = seen.iter().map(|(_, _, x)| x).sum::<f64>() / samples;
-        let rest = (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
+        let rest =
+            (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
         let e2 = e[0] * e[0] + e[1] * e[1];
-        let (re, im) = if limited || !(rest < amplitude) { (f64::NAN, f64::NAN) } else { (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2) };
+        let (re, im) = if limited || !(rest < amplitude) {
+            (f64::NAN, f64::NAN)
+        } else {
+            (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
+        };
         out.push(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude });
     }
     Ok(out)
@@ -2668,7 +3120,14 @@ impl LoopMargins {
 /// A point without a measurement (NaN) makes the margins not valid (and NaN).
 pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     let measured = |p: &&LoopPoint| p.re.is_finite() && p.im.is_finite();
-    let mut m = LoopMargins { crossover_hz: f64::NAN, phase_margin_deg: f64::INFINITY, gain_margin_db: f64::INFINITY, valid: points.iter().all(|p| measured(&p)), peak_sensitivity: 0.0, peak_frequency_hz: f64::NAN };
+    let mut m = LoopMargins {
+        crossover_hz: f64::NAN,
+        phase_margin_deg: f64::INFINITY,
+        gain_margin_db: f64::INFINITY,
+        valid: points.iter().all(|p| measured(&p)),
+        peak_sensitivity: 0.0,
+        peak_frequency_hz: f64::NAN,
+    };
     let points: Vec<&LoopPoint> = points.iter().filter(measured).collect();
     for p in &points {
         if p.sensitivity > m.peak_sensitivity {
@@ -2687,7 +3146,10 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     }
     let gain: Vec<f64> = points.iter().map(|p| p.re.hypot(p.im).ln()).collect();
     // Gain crossovers: (segment, share of the way along it).
-    let crossovers: Vec<(usize, f64)> = (1..points.len()).filter(|&i| gain[i - 1].signum() != gain[i].signum()).map(|i| (i, gain[i - 1] / (gain[i - 1] - gain[i]))).collect();
+    let crossovers: Vec<(usize, f64)> = (1..points.len())
+        .filter(|&i| gain[i - 1].signum() != gain[i].signum())
+        .map(|i| (i, gain[i - 1] / (gain[i - 1] - gain[i])))
+        .collect();
     // The turn is fixed by the phase at the first crossover, taken in (-360, 0]; without a crossover by the first
     // point, taken in (-270, 90] (a loop with up to three integrators, or a lead, there).
     let shift = match crossovers.first() {
@@ -2698,7 +3160,8 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     for &(i, share) in &crossovers {
         let margin = 180.0 + phase[i - 1] + (phase[i] - phase[i - 1]) * share;
         if margin < m.phase_margin_deg {
-            (m.phase_margin_deg, m.crossover_hz) = (margin, points[i - 1].frequency * (points[i].frequency / points[i - 1].frequency).powf(share));
+            (m.phase_margin_deg, m.crossover_hz) =
+                (margin, points[i - 1].frequency * (points[i].frequency / points[i - 1].frequency).powf(share));
         }
     }
     // Crossings of the negative real axis (the phase through an odd multiple of -180 degrees), in frequency order,
@@ -2707,14 +3170,23 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     // falling crossing is an encirclement of -1 and a later rising one beyond -1 undoes it (Nyquist: the loop is
     // stable when none is left). The gain margin is the worst falling crossing not undone: negative where |L| > 1.
     let (mut open, mut worst) = (Vec::new(), f64::INFINITY);
-    let samples: Vec<(f64, f64)> = points.first().map(|_| (0.0, gain[0])).into_iter().chain(phase.iter().copied().zip(gain.iter().copied())).collect();
+    let samples: Vec<(f64, f64)> = points
+        .first()
+        .map(|_| (0.0, gain[0]))
+        .into_iter()
+        .chain(phase.iter().copied().zip(gain.iter().copied()))
+        .collect();
     for w in samples.windows(2) {
         let ((pa, ga), (pb, gb)) = (w[0], w[1]);
         let at = |level: f64| ga + (gb - ga) * (pa - level) / (pa - pb);
         let mut level = -180.0 + 360.0 * ((pa + 180.0) / 360.0).floor();
         while pb < level && level <= pa {
             let g = at(level);
-            if g > 0.0 { open.push(g) } else { worst = worst.min(-g) }
+            if g > 0.0 {
+                open.push(g)
+            } else {
+                worst = worst.min(-g)
+            }
             level -= 360.0;
         }
         level += 360.0;
@@ -2744,9 +3216,14 @@ pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigE
 /// The margins of every motor's velocity loop for the config as it is and with each value of `bounds` at its low
 /// and at its high bound, one at a time (as `verdict_bands`): per run its name ("" for the config as it is,
 /// "path=value" otherwise) and the margins per motor. The runs share the processors.
-pub fn velocity_loop_margins(entry: &MachineEntry, cfg: &Config, bounds: &[(String, f64, f64)]) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
+pub fn velocity_loop_margins(
+    entry: &MachineEntry,
+    cfg: &Config,
+    bounds: &[(String, f64, f64)],
+) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let (frequencies, amplitude, motors) = (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
+    let (frequencies, amplitude, motors) =
+        (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
     let mut runs = vec![(String::new(), cfg.clone())];
     for (path, low, high) in bounds {
         for value in [low, high] {
@@ -2764,7 +3241,9 @@ pub fn velocity_loop_margins(entry: &MachineEntry, cfg: &Config, bounds: &[(Stri
     let mut points = points.into_iter();
     let mut out = Vec::new();
     for (name, _) in &runs {
-        let margins = (0..motors).map(|_| points.by_ref().take(frequencies.len()).collect::<Result<Vec<_>, _>>().map(|p| loop_margins(&p))).collect::<Result<Vec<_>, _>>()?;
+        let margins = (0..motors)
+            .map(|_| points.by_ref().take(frequencies.len()).collect::<Result<Vec<_>, _>>().map(|p| loop_margins(&p)))
+            .collect::<Result<Vec<_>, _>>()?;
         out.push((name.clone(), margins));
     }
     Ok(out)
@@ -2800,7 +3279,8 @@ pub(crate) fn record_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Vec<Vec
     let refused = |e: CommandError| ConfigError::Invalid(e.key.into());
     sim.command(Command::StartCycle).map_err(refused)?;
     let every = ((1e-3 / sim.dt).round() as u64).max(1);
-    let (mut passes, mut last, mut start, mut rows, mut sample) = (0, sim.control.cycle_passes(), None, Vec::new(), Vec::new());
+    let (mut passes, mut last, mut start, mut rows, mut sample) =
+        (0, sim.control.cycle_passes(), None, Vec::new(), Vec::new());
     loop {
         sim.step();
         let now = sim.control.cycle_passes();
@@ -2890,7 +3370,11 @@ mod tests {
         close(gearbox_life_h(&cfg, &m).unwrap(), 352777.89, "gearbox");
         close(belt_tooth_utilisation(&cfg, &m).unwrap().unwrap(), 0.137073, "tooth load");
         bands[199] = 1.6;
-        close(belt_tooth_utilisation(&cfg, &MotorLoad { gearbox_torque_by_speed: bands, ..m.clone() }).unwrap().unwrap(), 112.0 / 780.0, "tooth load beyond the table");
+        close(
+            belt_tooth_utilisation(&cfg, &MotorLoad { gearbox_torque_by_speed: bands, ..m.clone() }).unwrap().unwrap(),
+            112.0 / 780.0,
+            "tooth load beyond the table",
+        );
         let load = CycleLoad {
             duration: 1.0,
             belt_tension: None,
@@ -2920,7 +3404,13 @@ mod tests {
         // What a config or a machine lacks gives no figure: no output torque, no radial load, no rating.
         assert_eq!(belt_tooth_utilisation(&cfg, &MotorLoad { gearbox_torque: None, ..m.clone() }).unwrap(), None);
         assert_eq!(pulley_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m.clone() }), None);
-        assert_eq!(gearbox_life_h(&Config::parse("format_version = 1\n[ratings]\ngearbox_rated_torque_nm = 40.0\n").unwrap(), &m), None);
+        assert_eq!(
+            gearbox_life_h(
+                &Config::parse("format_version = 1\n[ratings]\ngearbox_rated_torque_nm = 40.0\n").unwrap(),
+                &m
+            ),
+            None
+        );
         // Life factor a1 (ISO 281), by hand: 0.95 * (ln(100/99) / ln(100/90))^(2/3) + 0.05 = 0.248332 at 99 %
         // (the table's 0.25); 0.637912 at 95 % (0.64); 0.076832 at 99.95 % (0.077). Both bearing lives scale with it.
         let mut reliable = cfg.clone();
@@ -2957,26 +3447,49 @@ mod tests {
         let close = |a: f64, b: f64, what: &str| assert!((a / b - 1.0).abs() < 1e-5, "{what}: {a} against {b} by hand");
         close(reference_viscosity(100.0, 36.0), 164.082122, "ν1 below 1000 r/min");
         close(reference_viscosity(1000.0, 36.0), 23.717082, "ν1 from 1000 r/min");
-        for (kappa, a_iso) in [(1.0, 3.276474), (0.2, 0.198152), (0.5, 0.610291), (2.0, 6.035768), (4.0, 11.060568), (8.0, 11.060568), (0.05, 0.100176)] {
+        for (kappa, a_iso) in [
+            (1.0, 3.276474),
+            (0.2, 0.198152),
+            (0.5, 0.610291),
+            (2.0, 6.035768),
+            (4.0, 11.060568),
+            (8.0, 11.060568),
+            (0.05, 0.100176),
+        ] {
             close(life_modification_factor(kappa, 0.125), a_iso, &format!("a_ISO at κ {kappa}"));
         }
         // The three branches meet: the standard's curves are continuous.
-        assert!((life_modification_factor(0.4 - 1e-9, 0.125) / life_modification_factor(0.4, 0.125) - 1.0).abs() < 1e-3);
-        assert!((life_modification_factor(1.0 - 1e-9, 0.125) / life_modification_factor(1.0, 0.125) - 1.0).abs() < 1e-5);
+        assert!(
+            (life_modification_factor(0.4 - 1e-9, 0.125) / life_modification_factor(0.4, 0.125) - 1.0).abs() < 1e-3
+        );
+        assert!(
+            (life_modification_factor(1.0 - 1e-9, 0.125) / life_modification_factor(1.0, 0.125) - 1.0).abs() < 1e-5
+        );
         assert_eq!(life_modification_factor(4.0, 2.0), 50.0);
         let text = "format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\nbearing_lubricant_viscosity_mm2_s = 120.0\n\
                     bearing_contamination_factor = 0.5\npulley_bearing_fatigue_limit_n = 150.0\npulley_bearing_mean_diameter_mm = 36.0\n";
         let cfg = Config::parse(text).unwrap();
-        let m = MotorLoad { mean_speed: 500.0 * std::f64::consts::PI / 30.0, radial_load_equivalent: Some(600.0), ..MotorLoad::default() };
+        let m = MotorLoad {
+            mean_speed: 500.0 * std::f64::consts::PI / 30.0,
+            radial_load_equivalent: Some(600.0),
+            ..MotorLoad::default()
+        };
         close(pulley_bearing_life_h(&cfg, &m).unwrap(), 728945.29, "pulley bearing with a_ISO");
         // Some of the four values and not all, or e_C above 1, is refused by name; none of them is a_ISO = 1.
         let partial = Config::parse(&text.replace("pulley_bearing_mean_diameter_mm = 36.0\n", "")).unwrap();
-        assert!(matches!(lubrication(&partial), Err(ConfigError::Missing(key)) if key == "ratings.pulley_bearing_mean_diameter_mm"));
+        assert!(
+            matches!(lubrication(&partial), Err(ConfigError::Missing(key)) if key == "ratings.pulley_bearing_mean_diameter_mm")
+        );
         assert_eq!(pulley_bearing_life_h(&partial, &m), None);
         let mut dirty = cfg.clone();
         dirty.set_text("ratings.bearing_contamination_factor = 1.5").unwrap();
-        assert!(matches!(lubrication(&dirty), Err(ConfigError::Invalid(key)) if key == "ratings.bearing_contamination_factor"));
-        let bare = Config::parse("format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\n").unwrap();
+        assert!(
+            matches!(lubrication(&dirty), Err(ConfigError::Invalid(key)) if key == "ratings.bearing_contamination_factor")
+        );
+        let bare = Config::parse(
+            "format_version = 1\n[gearbox]\nratio = 5.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\n",
+        )
+        .unwrap();
         close(pulley_bearing_life_h(&bare, &m).unwrap(), 468696.16, "pulley bearing without a_ISO");
     }
 
@@ -2991,7 +3504,11 @@ mod tests {
     #[test]
     fn the_gearing_life_is_the_hand_calculated_damage_sum() {
         let close = |a: f64, b: f64, what: &str| assert!((a / b - 1.0).abs() < 1e-6, "{what}: {a} against {b} by hand");
-        close(gearing_life_h([(30.0, 5000.0), (48.0, 1000.0), (60.0, 100.0)], 40.0, 64.0, 6.0), 122.014741, "two levels");
+        close(
+            gearing_life_h([(30.0, 5000.0), (48.0, 1000.0), (60.0, 100.0)], 40.0, 64.0, 6.0),
+            122.014741,
+            "two levels",
+        );
         assert_eq!(gearing_life_h([(30.0, 5000.0), (40.0, 5000.0)], 40.0, 64.0, 6.0), f64::INFINITY);
         // At M2max the line gives Siemens' 30000 revolutions: 30000 rev/h last one hour.
         close(gearing_life_h([(64.0, 30000.0)], 40.0, 64.0, 6.0), 1.0, "at M2max");
@@ -3001,7 +3518,8 @@ mod tests {
         let rad_s = |rev_h: f64| rev_h * std::f64::consts::TAU * 5.0 / 3600.0;
         let mut spectrum = vec![0.0; 700];
         (spectrum[573], spectrum[620], spectrum[642]) = (rad_s(5000.0), rad_s(1000.0), rad_s(100.0));
-        let m = MotorLoad { gearbox_torque: Some((60.0, 40.0)), gearbox_torque_spectrum: spectrum, ..MotorLoad::default() };
+        let m =
+            MotorLoad { gearbox_torque: Some((60.0, 40.0)), gearbox_torque_spectrum: spectrum, ..MotorLoad::default() };
         close(torque_band_floor(621), 48.258422, "band 620's upper torque");
         close(gearbox_gearing_life_h(&cfg, &m).unwrap(), 118.971035, "through the spectrum");
         // Never above M2N: no figure, as the life would be infinite.
@@ -3018,8 +3536,15 @@ mod tests {
     /// at a mean 1000 r/min: 25000 h * (1000 / 600)^3 * (1500 / 1000) = 173611 h. Behind a gearbox there is no figure.
     #[test]
     fn the_motor_bearing_life_is_the_hand_calculated_one() {
-        let cfg = Config::parse("format_version = 1\n[gearbox]\nratio = 1.0\n[ratings]\nmotor_bearing_load_rating_n = 13103.7\n").unwrap();
-        let m = MotorLoad { mean_speed: 1000.0 * std::f64::consts::PI / 30.0, radial_load_equivalent: Some(600.0), ..MotorLoad::default() };
+        let cfg = Config::parse(
+            "format_version = 1\n[gearbox]\nratio = 1.0\n[ratings]\nmotor_bearing_load_rating_n = 13103.7\n",
+        )
+        .unwrap();
+        let m = MotorLoad {
+            mean_speed: 1000.0 * std::f64::consts::PI / 30.0,
+            radial_load_equivalent: Some(600.0),
+            ..MotorLoad::default()
+        };
         let life = motor_bearing_life_h(&cfg, &m).unwrap();
         assert!((life / 173611.11 - 1.0).abs() < 1e-5, "{life} against 173611 h by hand");
         let mut geared = cfg.clone();
@@ -3048,7 +3573,8 @@ mod tests {
         assert!((m.phase_margin_deg - 54.0).abs() < 0.1, "phase margin {}", m.phase_margin_deg);
         assert!((m.gain_margin_db - 20.0 * 2.5f64.log10()).abs() < 0.01, "gain margin {}", m.gain_margin_db);
         // Without a crossover and without a crossing of the negative real axis, both margins are infinite.
-        let m = loop_margins(&points[..10].iter().map(|p| LoopPoint { re: 2.0 + p.re.abs(), ..*p }).collect::<Vec<_>>());
+        let m =
+            loop_margins(&points[..10].iter().map(|p| LoopPoint { re: 2.0 + p.re.abs(), ..*p }).collect::<Vec<_>>());
         assert!(m.phase_margin_deg.is_infinite() && m.gain_margin_db.is_infinite() && m.crossover_hz.is_nan());
     }
 
@@ -3068,9 +3594,17 @@ mod tests {
                 })
                 .collect()
         };
-        for (fc, tau, phase, gain) in [(100.0, 0.5e-3, 72.0, 13.979), (200.0, 0.5e-3, 54.0, 7.959), (300.0, 1e-3, -18.0, -1.584), (400.0, 1e-3, -54.0, -4.082)] {
+        for (fc, tau, phase, gain) in [
+            (100.0, 0.5e-3, 72.0, 13.979),
+            (200.0, 0.5e-3, 54.0, 7.959),
+            (300.0, 1e-3, -18.0, -1.584),
+            (400.0, 1e-3, -54.0, -4.082),
+        ] {
             let m = loop_margins(&response(fc, tau));
-            assert!((m.phase_margin_deg - phase).abs() < 0.1 && (m.gain_margin_db - gain).abs() < 0.01 && m.valid, "{fc} Hz, {tau} s: {m:?}");
+            assert!(
+                (m.phase_margin_deg - phase).abs() < 0.1 && (m.gain_margin_db - gain).abs() < 0.01 && m.valid,
+                "{fc} Hz, {tau} s: {m:?}"
+            );
         }
         let mut points = response(100.0, 0.5e-3);
         points[500].re = f64::NAN;
@@ -3103,7 +3637,13 @@ mod tests {
                 let gain = k * (1.0 + (w / a).powi(2)) / (w * (1.0 + (w / b).powi(2)) * (1.0 + (w / c).powi(2)).sqrt());
                 (gain, 2.0 * (w / a).atan() - std::f64::consts::FRAC_PI_2 - 2.0 * (w / b).atan() - (w / c).atan())
             }));
-            assert!(m.stable() && m.gain_margin_db.is_infinite() && (m.phase_margin_deg - phase).abs() < 0.3 && (m.crossover_hz / hz - 1.0).abs() < 0.01, "K {k}: {m:?}");
+            assert!(
+                m.stable()
+                    && m.gain_margin_db.is_infinite()
+                    && (m.phase_margin_deg - phase).abs() < 0.3
+                    && (m.crossover_hz / hz - 1.0).abs() < 0.01,
+                "K {k}: {m:?}"
+            );
         }
     }
 
@@ -3115,9 +3655,18 @@ mod tests {
         let w = |n: f64| std::f64::consts::TAU * n;
         let m = loop_margins(&loop_points(log_spaced(1.0, 10000.0, 200), |x| {
             let lag = |n: f64| (1.0 + (x / w(n)).powi(2)).sqrt();
-            (3.0 * lag(5.0) / (lag(50.0) * lag(200.0) * lag(400.0)), (x / w(5.0)).atan() - (x / w(50.0)).atan() - (x / w(200.0)).atan() - (x / w(400.0)).atan())
+            (
+                3.0 * lag(5.0) / (lag(50.0) * lag(200.0) * lag(400.0)),
+                (x / w(5.0)).atan() - (x / w(50.0)).atan() - (x / w(200.0)).atan() - (x / w(400.0)).atan(),
+            )
         }));
-        assert!(m.stable() && m.gain_margin_db.is_infinite() && (m.phase_margin_deg - 24.0).abs() < 0.2 && (m.crossover_hz / 1516.0 - 1.0).abs() < 0.01, "{m:?}");
+        assert!(
+            m.stable()
+                && m.gain_margin_db.is_infinite()
+                && (m.phase_margin_deg - 24.0).abs() < 0.2
+                && (m.crossover_hz / 1516.0 - 1.0).abs() < 0.01,
+            "{m:?}"
+        );
     }
 
     /// With the belt's wrap known (effects.belt_wrap) the teeth in mesh are wrap r / p in place of
@@ -3145,10 +3694,20 @@ belt_service_factor = 1.4
         .unwrap();
         let mut bands = vec![0.0; 200];
         bands[9] = 2.0;
-        let m = MotorLoad { gearbox_torque: Some((2.0, 1.0)), gearbox_torque_by_speed: bands, belt_wrap: Some(2.0), ..MotorLoad::default() };
+        let m = MotorLoad {
+            gearbox_torque: Some((2.0, 1.0)),
+            gearbox_torque_by_speed: bands,
+            belt_wrap: Some(2.0),
+            ..MotorLoad::default()
+        };
         let close = |a: f64, b: f64| assert!((a / b - 1.0).abs() < 1e-5, "{a} against {b} by hand");
         close(belt_tooth_utilisation(&cfg, &m).unwrap().unwrap(), 0.205610);
-        close(belt_tooth_utilisation(&cfg, &MotorLoad { belt_wrap: Some(std::f64::consts::PI), ..m.clone() }).unwrap().unwrap(), 0.137073);
+        close(
+            belt_tooth_utilisation(&cfg, &MotorLoad { belt_wrap: Some(std::f64::consts::PI), ..m.clone() })
+                .unwrap()
+                .unwrap(),
+            0.137073,
+        );
     }
 
     /// The front keeps what no other point beats in all three figures at once. By hand, as (cycle time, energy,
@@ -3157,8 +3716,21 @@ belt_service_factor = 1.4
     /// once; F (1, 3, 0.6) is A with a higher utilisation, beaten by A alone.
     #[test]
     fn the_front_keeps_the_points_no_other_beats_in_every_figure() {
-        let point = |duration: f64, energy: f64, utilisation: f64| FrontPoint { duration, energy, utilisation, factors: [1.0; 3], blending: false, shaping: false };
-        let (a, b, c, d, f) = (point(1.0, 3.0, 0.5), point(2.0, 2.0, 0.5), point(2.0, 3.0, 0.5), point(3.0, 1.0, 0.9), point(1.0, 3.0, 0.6));
+        let point = |duration: f64, energy: f64, utilisation: f64| FrontPoint {
+            duration,
+            energy,
+            utilisation,
+            factors: [1.0; 3],
+            blending: false,
+            shaping: false,
+        };
+        let (a, b, c, d, f) = (
+            point(1.0, 3.0, 0.5),
+            point(2.0, 2.0, 0.5),
+            point(2.0, 3.0, 0.5),
+            point(3.0, 1.0, 0.9),
+            point(1.0, 3.0, 0.6),
+        );
         let front = non_dominated(&[d.clone(), c, b.clone(), a.clone(), a.clone(), f]);
         assert_eq!(front, [a, b, d]);
     }

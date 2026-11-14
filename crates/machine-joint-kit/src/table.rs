@@ -26,7 +26,9 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let mut strain_wave = None;
     match cfg.get("table.gear")?.as_str() {
         Some("planetary") => {}
-        Some("strain-wave") => strain_wave = Some((StrainWave::from_config(cfg)?, required_life(cfg).unwrap_or(f64::INFINITY))),
+        Some("strain-wave") => {
+            strain_wave = Some((StrainWave::from_config(cfg)?, required_life(cfg).unwrap_or(f64::INFINITY)))
+        }
         Some("worm") if cfg.bool("effects.gearbox_efficiency")? => {
             let worm = WormGear::from_config(cfg)?.efficiency();
             joint.extra_efficiency = worm / joint.gearbox.efficiency;
@@ -68,7 +70,11 @@ impl Mechanism for Table {
         }
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {
-        self.strain_wave.iter().filter(|(_, life)| life.is_finite()).map(|(g, life)| g.rating_check("1", 0, *life)).collect()
+        self.strain_wave
+            .iter()
+            .filter(|(_, life)| life.is_finite())
+            .map(|(g, life)| g.rating_check("1", 0, *life))
+            .collect()
     }
 
     fn collision_parts(&self) -> &'static [&'static str] {
@@ -78,18 +84,66 @@ impl Mechanism for Table {
     /// The table seen from the front, its index mark turning, the fixture on it; the motor beneath it.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let r = self.radius;
-        out.parts.push(Part::new("base", Shape::Box { size: [2.2 * r, 2.2 * r, 0.1] }, [0.0, 0.0, -0.1], [0.62, 0.64, 0.68]));
-        out.parts.push(Part::new("table", Shape::Cylinder { radius: r, length: 0.04 }, [0.0, 0.0, 0.25], [0.55, 0.55, 0.6]));
-        out.parts.push(Part::new("index-mark", Shape::Box { size: [1.8 * r, 0.004, 0.02] }, [0.0, -0.025, 0.25], [0.1, 0.1, 0.1]).turned(q[0]));
+        out.parts.push(Part::new(
+            "base",
+            Shape::Box { size: [2.2 * r, 2.2 * r, 0.1] },
+            [0.0, 0.0, -0.1],
+            [0.62, 0.64, 0.68],
+        ));
+        out.parts.push(Part::new(
+            "table",
+            Shape::Cylinder { radius: r, length: 0.04 },
+            [0.0, 0.0, 0.25],
+            [0.55, 0.55, 0.6],
+        ));
+        out.parts.push(
+            Part::new("index-mark", Shape::Box { size: [1.8 * r, 0.004, 0.02] }, [0.0, -0.025, 0.25], [0.1, 0.1, 0.1])
+                .turned(q[0]),
+        );
         // The fixture as the box it turns within, for the collision with obstacles.
-        out.parts.push(Part::new("fixture", Shape::Box { size: [1.2 * r, 0.08, 0.1] }, [0.0, 0.0, 0.32], [0.45, 0.45, 0.5]));
+        out.parts.push(Part::new(
+            "fixture",
+            Shape::Box { size: [1.2 * r, 0.08, 0.1] },
+            [0.0, 0.0, 0.32],
+            [0.45, 0.45, 0.5],
+        ));
         if self.attached && self.payload > 0.0 {
-            out.parts.push(Part::new("payload", Shape::Box { size: [0.4 * r, 0.06, 0.4 * r] }, [0.6 * r * q[0].cos(), -0.05, 0.25 + 0.6 * r * q[0].sin()], [0.2, 0.7, 0.3]));
+            out.parts.push(Part::new(
+                "payload",
+                Shape::Box { size: [0.4 * r, 0.06, 0.4 * r] },
+                [0.6 * r * q[0].cos(), -0.05, 0.25 + 0.6 * r * q[0].sin()],
+                [0.2, 0.7, 0.3],
+            ));
         }
-        out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Cylinder { radius: 0.05, length: 0.12 }, [r + 0.15, 0.0, 0.0], [0.9, 0.45, 0.1]));
-        out.parts.push(Part::new("gearbox", Shape::Box { size: [0.1, 0.1, 0.1] }, [r + 0.15, 0.0, 0.12], [0.25, 0.25, 0.28]));
-        out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [r + 0.15, -0.07, 0.0], [0.1, 0.1, 0.1]).turned(rotors[0]));
-        out.labels.push(Label { pos: [r + 0.15, 0.0, -0.12], owner_key: "motor-joint-1", value: rotor_speeds[0] * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 });
-        out.labels.push(Label { pos: [0.0, 0.0, 0.25 + 1.2 * r], owner_key: "axis-c", value: q[0].to_degrees(), unit_key: "unit-deg", decimals: 1 });
+        out.parts.push(Part::new(
+            sim_core::scene::MOTOR_PART,
+            Shape::Cylinder { radius: 0.05, length: 0.12 },
+            [r + 0.15, 0.0, 0.0],
+            [0.9, 0.45, 0.1],
+        ));
+        out.parts.push(Part::new(
+            "gearbox",
+            Shape::Box { size: [0.1, 0.1, 0.1] },
+            [r + 0.15, 0.0, 0.12],
+            [0.25, 0.25, 0.28],
+        ));
+        out.parts.push(
+            Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [r + 0.15, -0.07, 0.0], [0.1, 0.1, 0.1])
+                .turned(rotors[0]),
+        );
+        out.labels.push(Label {
+            pos: [r + 0.15, 0.0, -0.12],
+            owner_key: "motor-joint-1",
+            value: rotor_speeds[0] * 60.0 / TAU,
+            unit_key: "unit-rpm",
+            decimals: 0,
+        });
+        out.labels.push(Label {
+            pos: [0.0, 0.0, 0.25 + 1.2 * r],
+            owner_key: "axis-c",
+            value: q[0].to_degrees(),
+            unit_key: "unit-deg",
+            decimals: 1,
+        });
     }
 }

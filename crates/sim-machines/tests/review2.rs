@@ -55,7 +55,12 @@ fn tool(sim: &Sim) -> Vec<f64> {
 
 fn tensions(sim: &Sim) -> Vec<f64> {
     let row = sample(sim);
-    sim.signal_infos().iter().zip(row).filter(|(s, _)| s.id.starts_with("belt.") && s.id.ends_with(".tension")).map(|(_, v)| v).collect()
+    sim.signal_infos()
+        .iter()
+        .zip(row)
+        .filter(|(s, _)| s.id.starts_with("belt.") && s.id.ends_with(".tension"))
+        .map(|(_, v)| v)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -67,10 +72,14 @@ fn tensions(sim: &Sim) -> Vec<f64> {
 fn bad_config_values_are_refused_with_their_key() {
     for entry in MACHINES.iter().copied() {
         let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
-        let pose = |first: &str| format!("start.pose = [{}]", [&[first][..], &vec!["0.2"; axes - 1]].concat().join(", "));
+        let pose =
+            |first: &str| format!("start.pose = [{}]", [&[first][..], &vec!["0.2"; axes - 1]].concat().join(", "));
         let (not_a_number, beyond) = (pose("nan"), pose("5.0"));
         // A no-load speed below the rated speed (rad/s of a motor, m/s of a linear motor).
-        let slow = format!("drive.no_load_speed_rad_s = {:?}", 0.9995 * entry.config().f64("drive.rated_speed_rad_s").unwrap());
+        let slow = format!(
+            "drive.no_load_speed_rad_s = {:?}",
+            0.9995 * entry.config().f64("drive.rated_speed_rad_s").unwrap()
+        );
         let table = [
             ("gearbox.backlash_rad = -0.001", "gearbox.backlash_rad"),
             ("gearbox.inertia_at_input_kgm2 = -0.3e-4", "gearbox.inertia_at_input_kgm2"),
@@ -90,7 +99,8 @@ fn bad_config_values_are_refused_with_their_key() {
             ("hard_stop.damping_n_s_m = -5.0", "hard_stop.damping_n_s_m"),
         ];
         // Keys of belt and guide on the machines that have them.
-        for (edit, key) in table.into_iter().filter(|(_, key)| *key == "start.pose" || entry.config().get(key).is_ok()) {
+        for (edit, key) in table.into_iter().filter(|(_, key)| *key == "start.pose" || entry.config().get(key).is_ok())
+        {
             let cfg = config(entry, &[edit]);
             let refused = refusal(entry, &cfg).unwrap_or_else(|| panic!("{}: {edit} was accepted", entry.id));
             assert_eq!((refused.key(), refused.detail()), ("error-config-invalid", key), "{}: {edit}", entry.id);
@@ -99,14 +109,23 @@ fn bad_config_values_are_refused_with_their_key() {
             sim.command(Command::StartCycle).unwrap();
             sim.run(0.02, |_| {});
             let before = sim.state.clone();
-            assert_eq!(sim.reconfigure(entry, &cfg).err().map(|e| e.detail().to_string()).as_deref(), Some(key), "{}: {edit}", entry.id);
+            assert_eq!(
+                sim.reconfigure(entry, &cfg).err().map(|e| e.detail().to_string()).as_deref(),
+                Some(key),
+                "{}: {edit}",
+                entry.id
+            );
             assert_eq!(sim.state, before);
             sim.run(0.02, |_| {});
             assert!(sample(&sim).iter().all(|v| v.is_finite()), "{}: {edit}", entry.id);
         }
         // A rating that is no number is refused where it is read, not passed over as if it were left out.
         let load = analyse_cycle(&mut Sim::new(entry, &entry.config()).unwrap()).unwrap();
-        let rating = if entry.config().get("ratings.belt_max_tension_n").is_ok() { "ratings.belt_max_tension_n" } else { "ratings.settling_tolerance_m" };
+        let rating = if entry.config().get("ratings.belt_max_tension_n").is_ok() {
+            "ratings.belt_max_tension_n"
+        } else {
+            "ratings.settling_tolerance_m"
+        };
         let no_number = config(entry, &[&format!("{rating} = nan")]);
         assert_eq!(verdicts(&no_number, &load).err(), Some(ConfigError::Invalid(rating.into())), "{}", entry.id);
         // A cycle segment that dwells for a negative or an endless time is refused too.
@@ -115,8 +134,13 @@ fn bad_config_values_are_refused_with_their_key() {
             text[at..at + text[at..].find('\n').unwrap()].to_string()
         };
         for dwell in ["-1.0", "inf", "nan"] {
-            let text = entry.default_config.replacen(&format!("dwell_s = {}", first_dwell(entry.default_config)), &format!("dwell_s = {dwell}"), 1);
-            let refused = refusal(entry, &Config::parse(&text).unwrap()).unwrap_or_else(|| panic!("{}: a dwell of {dwell} was accepted", entry.id));
+            let text = entry.default_config.replacen(
+                &format!("dwell_s = {}", first_dwell(entry.default_config)),
+                &format!("dwell_s = {dwell}"),
+                1,
+            );
+            let refused = refusal(entry, &Config::parse(&text).unwrap())
+                .unwrap_or_else(|| panic!("{}: a dwell of {dwell} was accepted", entry.id));
             assert!(refused.detail().starts_with("cycle.segment["), "{}: {refused:?}", entry.id);
         }
     }
@@ -127,7 +151,13 @@ fn bad_config_values_are_refused_with_their_key() {
 #[test]
 fn no_single_bad_number_panics_the_simulation_or_fills_it_with_nan() {
     for entry in MACHINES.iter().copied() {
-        let numeric: Vec<String> = entry.config().leaves().into_iter().filter(|(_, v)| v.is_float() || v.is_integer()).map(|(path, _)| path).collect();
+        let numeric: Vec<String> = entry
+            .config()
+            .leaves()
+            .into_iter()
+            .filter(|(_, v)| v.is_float() || v.is_integer())
+            .map(|(path, _)| path)
+            .collect();
         assert!(numeric.len() > 100, "{}: only {} numbers found", entry.id, numeric.len());
         let (mut refused, mut ran) = (0, 0);
         for path in &numeric {
@@ -147,7 +177,9 @@ fn no_single_bad_number_panics_the_simulation_or_fills_it_with_nan() {
                 });
                 match outcome {
                     Err(_) => panic!("{}: {path} = {value} panics", entry.id),
-                    Ok(Some(false)) => panic!("{}: {path} = {value} is accepted and gives signals that are not finite", entry.id),
+                    Ok(Some(false)) => {
+                        panic!("{}: {path} = {value} is accepted and gives signals that are not finite", entry.id)
+                    }
                     Ok(Some(true)) => ran += 1,
                     Ok(None) => refused += 1,
                 }
@@ -169,15 +201,28 @@ fn a_part_that_is_no_name_and_a_key_the_machine_does_not_know_are_refused() {
 
         assert!(load_config(entry, entry.default_config).is_ok());
         let misspelt = entry.default_config.replacen("\n[gearbox]\nratio = ", "\n[gearbox]\nratoi = ", 1);
-        assert_eq!(load_config(entry, &misspelt).err(), Some(ConfigError::Unknown("gearbox.ratoi".into())), "{}", entry.id);
+        assert_eq!(
+            load_config(entry, &misspelt).err(),
+            Some(ConfigError::Unknown("gearbox.ratoi".into())),
+            "{}",
+            entry.id
+        );
         let table = format!("{}\n[gearbxo]\nratio = 3.0\n", entry.default_config);
         assert_eq!(load_config(entry, &table).err(), Some(ConfigError::Unknown("gearbxo".into())), "{}", entry.id);
         let rating = entry.default_config.replacen("\n[ratings]\n", "\n[ratings]\nbelt_max_tensoin_n = 1.0\n", 1);
-        assert_eq!(load_config(entry, &rating).err(), Some(ConfigError::Unknown("ratings.belt_max_tensoin_n".into())), "{}", entry.id);
+        assert_eq!(
+            load_config(entry, &rating).err(),
+            Some(ConfigError::Unknown("ratings.belt_max_tensoin_n".into())),
+            "{}",
+            entry.id
+        );
         // Bounds have their own check, which names the bound.
         let bound = entry.default_config.replacen("\n[bounds]\n", "\n[bounds]\nbelt.pretention_n = [1.0, 2.0]\n", 1);
         assert!(load_config(entry, &bound).is_ok());
-        assert_eq!(sim_components::analysis::bounds(&Config::parse(&bound).unwrap()).err(), Some(ConfigError::Missing("belt.pretention_n".into())));
+        assert_eq!(
+            sim_components::analysis::bounds(&Config::parse(&bound).unwrap()).err(),
+            Some(ConfigError::Missing("belt.pretention_n".into()))
+        );
     }
     // The real machine's config file passes: it has a rating more than the default config, and no other key.
     assert_eq!(load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).err(), None);
@@ -229,14 +274,36 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
     for entry in MACHINES.iter().copied() {
         let (step, demand, sim) = setpoint_steps(entry, None);
         let v_max = sim.machine.axes()[0].max_vel;
-        assert!(step > 0.5e-3 * v_max && step <= 1e-3 * v_max * (1.0 + 1e-9), "{}: the undisturbed move steps by {step} m", entry.id);
-        for change in ["effects.input_shaping = false", "profile.shaper_frequency_hz = 40.0", "effects.shaper_follows_pose = true"] {
+        assert!(
+            step > 0.5e-3 * v_max && step <= 1e-3 * v_max * (1.0 + 1e-9),
+            "{}: the undisturbed move steps by {step} m",
+            entry.id
+        );
+        for change in [
+            "effects.input_shaping = false",
+            "profile.shaper_frequency_hz = 40.0",
+            "effects.shaper_follows_pose = true",
+        ] {
             let (changed_step, changed_demand, mut sim) = setpoint_steps(entry, Some(change));
-            assert!(changed_step <= step * (1.0 + 1e-9), "{}: {change} makes the setpoint step by {changed_step} m, undisturbed {step} m", entry.id);
-            assert!(changed_demand <= 1.05 * demand, "{}: {change} asks for {changed_demand} N m, undisturbed {demand} N m", entry.id);
+            assert!(
+                changed_step <= step * (1.0 + 1e-9),
+                "{}: {change} makes the setpoint step by {changed_step} m, undisturbed {step} m",
+                entry.id
+            );
+            assert!(
+                changed_demand <= 1.05 * demand,
+                "{}: {change} asks for {changed_demand} N m, undisturbed {demand} N m",
+                entry.id
+            );
             // At rest the change was taken: without the shaper the setpoint is the plan again, also on the way.
             if change.ends_with("false") {
-                let back = sim.control.planned_pos().iter().zip(sim.machine.axes()).map(|(p, a)| p - 0.2 * (a.max - a.min)).collect();
+                let back = sim
+                    .control
+                    .planned_pos()
+                    .iter()
+                    .zip(sim.machine.axes())
+                    .map(|(p, a)| p - 0.2 * (a.max - a.min))
+                    .collect();
                 sim.command(Command::MoveTo(back)).unwrap();
                 // On the way and to its end (the gantries' moves take longer than 0.2 s, the delta's not).
                 sim.step();
@@ -263,7 +330,9 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
 fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
     for entry in MACHINES.iter().copied() {
         // The pulley radius where there are pulleys.
-        for path in ["gearbox.ratio", "geometry.pulley_radius_m"].into_iter().filter(|path| entry.config().get(path).is_ok()) {
+        for path in
+            ["gearbox.ratio", "geometry.pulley_radius_m"].into_iter().filter(|path| entry.config().get(path).is_ok())
+        {
             for moving in [false, true] {
                 // With the fieldbus delay, so that setpoints worked out with the old kinematics are on their way.
                 let cfg = config(entry, &["effects.fieldbus_delay = true"]);
@@ -275,7 +344,9 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                         sim.command(Command::MoveTo(long_move(sim))).unwrap();
                     }
                     // 0.4 s in, or in the middle of a move too short for that (the delta's 0.42 s), at speed.
-                    let duration = sim_components::profile::Move::new(&sim.control.set_pos, &long_move(sim), sim.machine.axes()).duration();
+                    let duration =
+                        sim_components::profile::Move::new(&sim.control.set_pos, &long_move(sim), sim.machine.axes())
+                            .duration();
                     sim.run(if moving { f64::min(0.4, 0.5 * duration) } else { 0.4 }, |_| {});
                 }
                 assert_eq!(sims[0].control.busy(), moving);
@@ -285,11 +356,16 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 let (mut tension_off, mut tool_off) = (0f64, 0f64);
                 for _ in 0..(0.5 / sims[0].dt) as usize {
                     sims.iter_mut().for_each(Sim::step);
-                    let off = |a: Vec<f64>, b: Vec<f64>| a.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+                    let off =
+                        |a: Vec<f64>, b: Vec<f64>| a.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
                     tension_off = tension_off.max(off(tensions(&sims[0]), tensions(&sims[1])));
                     tool_off = tool_off.max(off(tool(&sims[0]), tool(&sims[1])));
                 }
-                let what = format!("{}: {path} changed by 1 % {}", entry.id, if moving { "during a move" } else { "at standstill" });
+                let what = format!(
+                    "{}: {path} changed by 1 % {}",
+                    entry.id,
+                    if moving { "during a move" } else { "at standstill" }
+                );
                 assert!(tension_off <= 0.1 * pretension, "{what}: belt tension off by {tension_off} N");
                 // 0.1 mm, or a tenth of what the machine's gears sag at rest where that is more (the delta's backlash
                 // takes up anew after the change: 0.13 mm with 9 arcmin); on a turning axis 1e-4 of its range in rad
@@ -299,13 +375,17 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 let limit = (0.1 * sims[0].machine.setpoint_slack()).max(1e-4).max(turning);
                 assert!(tool_off < limit, "{what}: tool off by {tool_off}, limit {limit}");
                 // The motors stand where the new kinematics put them for this pose.
-                let (mut wanted, mut speed) = (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
+                let (mut wanted, mut speed) =
+                    (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
                 sims[1].machine.inverse(&tool(&sims[1]), &mut wanted);
                 let mut angle = wanted.clone();
                 sims[1].machine.motor_state(&sims[1].state, &mut angle, &mut speed);
                 // To 0.05 rad, or 1 %: an arm's gears twist under its weight (2.6 mrad at joint 2), which its motors see
                 // times the ratio (0.3 rad behind 120).
-                assert!(wanted.iter().zip(&angle).all(|(w, a)| (w - a).abs() < f64::max(0.05, 0.01 * w.abs())), "{what}: motors at {angle:?}, the pose asks for {wanted:?}");
+                assert!(
+                    wanted.iter().zip(&angle).all(|(w, a)| (w - a).abs() < f64::max(0.05, 0.01 * w.abs())),
+                    "{what}: motors at {angle:?}, the pose asks for {wanted:?}"
+                );
             }
         }
     }
@@ -338,7 +418,11 @@ fn a_running_cycle_survives_losing_segments() {
         assert_eq!(sim.control.cycle_segment(), Some(0));
         let passes = sim.control.cycle_passes();
         sim.run(3.0, |sim| assert_eq!(sim.control.cycle_segment(), Some(0)));
-        assert!(sim.control.cycle_passes() > passes && sample(&sim).iter().all(|v| v.is_finite()), "{}: the cycle of one segment does not run", entry.id);
+        assert!(
+            sim.control.cycle_passes() > passes && sample(&sim).iter().all(|v| v.is_finite()),
+            "{}: the cycle of one segment does not run",
+            entry.id
+        );
 
         let mut sim = running();
         let mut none = cfg.clone();
@@ -367,8 +451,16 @@ fn an_external_setpoint_beyond_the_speed_limit_is_refused() {
         // there was refused as out of range, not as too far.
         let side = if axis.max - start[0] >= start[0] - axis.min { 1.0 } else { -1.0 };
         let at = |offset: f64| [&[start[0] + side * offset][..], &start[1..]].concat();
-        assert_eq!(sim.command(Command::Setpoint(at(0.25))).err().map(|e| e.key), Some("error-setpoint-too-far"), "{}", entry.id);
-        assert_eq!(sim.command(Command::Setpoint(at(1.01 * axis.max_vel * interval))).err().map(|e| e.key), Some("error-setpoint-too-far"));
+        assert_eq!(
+            sim.command(Command::Setpoint(at(0.25))).err().map(|e| e.key),
+            Some("error-setpoint-too-far"),
+            "{}",
+            entry.id
+        );
+        assert_eq!(
+            sim.command(Command::Setpoint(at(1.01 * axis.max_vel * interval))).err().map(|e| e.key),
+            Some("error-setpoint-too-far")
+        );
         sim.run(0.05, |_| {});
         assert_eq!(sim.control.set_pos, start, "{}: a refused setpoint moved the axis", entry.id);
         // Exactly at the limit is within it.
@@ -377,7 +469,8 @@ fn an_external_setpoint_beyond_the_speed_limit_is_refused() {
         // Once followed, the plan stands at the value sent, to the last bit: a link shows it as its setpoint.
         // Near zero, where one setpoint is several times the last: there from + (to - from) is not always to.
         for step in 1..=50 {
-            let sent = [&[axis.min + 1e-3 + 0.137e-3 * step as f64 + 5e-3 * (step % 2) as f64][..], &start[1..]].concat();
+            let sent =
+                [&[axis.min + 1e-3 + 0.137e-3 * step as f64 + 5e-3 * (step % 2) as f64][..], &start[1..]].concat();
             if step == 1 {
                 sim.command(Command::MoveTo(sent.clone())).unwrap();
                 sim.run(3.0, |_| {});
@@ -405,12 +498,29 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
     // Tripped before a warm pass began: measured from cold, so no warm start to judge (the trip is the finding).
     assert!(load.tripped && !sim.control.enabled() && sim.control.cycle_passes() < 2 && load.warm_start.is_none());
     let motor = &load.motors[0];
-    assert!(load.duration > 0.1 && motor.peak_torque > 1.0 && motor.rms_torque > 0.1 && motor.utilisation > 0.5 && motor.peak_speed > 10.0, "{motor:?} in {} s", load.duration);
+    assert!(
+        load.duration > 0.1
+            && motor.peak_torque > 1.0
+            && motor.rms_torque > 0.1
+            && motor.utilisation > 0.5
+            && motor.peak_speed > 10.0,
+        "{motor:?} in {} s",
+        load.duration
+    );
     let judged = verdicts(&cfg, &load).unwrap();
     let peak = judged.iter().find(|v| v.check == "motor-peak").unwrap();
     assert!(peak.value > 0.5, "motor-peak judges {}", peak.value);
     assert!(judged.iter().any(|v| v.check == "dc-link-overvoltage" && !v.ok));
-    let candidate = Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load, judged)), refused: "" };
+    let candidate = Candidate {
+        article: "",
+        gearbox: String::new(),
+        drive: "",
+        axis: String::new(),
+        mass: 1.0,
+        cost: 1.0,
+        result: Some((load, judged)),
+        refused: "",
+    };
     assert!(!candidate.passes());
     assert_eq!(candidate.tightest(), Some(("dc-link-overvoltage", f64::INFINITY)));
     // A cycle that does not trip is measured as before over its second pass, and since 13 November, with
@@ -421,7 +531,12 @@ fn a_cycle_that_trips_before_the_measured_pass_reports_the_run_up_to_the_trip() 
     let mut sim = Sim::new(entry, &entry.config()).unwrap();
     let load = analyse_cycle(&mut sim).unwrap();
     let warm = load.warm_start.unwrap();
-    assert!((load.motors[0].winding_rise - 1.812).abs() < 1e-3 && warm.passes == 1 && warm.converged(), "{:?}, {} K", load.warm_start, load.motors[0].winding_rise);
+    assert!(
+        (load.motors[0].winding_rise - 1.812).abs() < 1e-3 && warm.passes == 1 && warm.converged(),
+        "{:?}, {} K",
+        load.warm_start,
+        load.motors[0].winding_rise
+    );
     assert!(!load.tripped && sim.control.cycle_passes() == 3 + 1);
 }
 
@@ -435,7 +550,12 @@ fn replay_refuses_a_trace_too_short_to_replay() {
         let cfg = entry.config();
         let sim = Sim::new(entry, &cfg).unwrap();
         for rows in 0..=4usize {
-            let motors = sim.control.drives.iter().map(|d| MotorTrace { setpoint: vec![d.pos_set; rows], angle: vec![d.pos_set; rows], speed: vec![0.0; rows], torque: vec![0.0; rows] });
+            let motors = sim.control.drives.iter().map(|d| MotorTrace {
+                setpoint: vec![d.pos_set; rows],
+                angle: vec![d.pos_set; rows],
+                speed: vec![0.0; rows],
+                torque: vec![0.0; rows],
+            });
             let trace = Trace { time: (0..rows).map(|i| i as f64 * 1e-3).collect(), motors: motors.collect() };
             let replayed = replay(entry, &cfg, &trace);
             // Since 13 November a transformation that is not linear (the delta, the SCARA) replays as well.

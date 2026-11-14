@@ -31,7 +31,8 @@ pub const fmi3Error: fmi3Status = 3;
 pub const fmi3Fatal: fmi3Status = 4;
 
 pub type fmi3LogMessageCallback = unsafe extern "C" fn(fmi3InstanceEnvironment, fmi3Status, fmi3String, fmi3String);
-pub type fmi3IntermediateUpdateCallback = unsafe extern "C" fn(fmi3InstanceEnvironment, f64, bool, bool, bool, bool, *mut bool, *mut f64);
+pub type fmi3IntermediateUpdateCallback =
+    unsafe extern "C" fn(fmi3InstanceEnvironment, f64, bool, bool, bool, bool, *mut bool, *mut f64);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn fmi3GetVersion() -> *const c_char {
@@ -58,7 +59,15 @@ pub unsafe extern "C" fn fmi3InstantiateCoSimulation(
     _intermediateUpdate: Option<fmi3IntermediateUpdateCallback>,
 ) -> fmi3Instance {
     let resources = Path::new(unsafe { text(resourcePath) });
-    instantiate(unsafe { text(instanceName) }, Logger::Fmi3(logMessage), instanceEnvironment, resources, unsafe { text(instantiationToken) }, 3, true)
+    instantiate(
+        unsafe { text(instanceName) },
+        Logger::Fmi3(logMessage),
+        instanceEnvironment,
+        resources,
+        unsafe { text(instantiationToken) },
+        3,
+        true,
+    )
 }
 
 /// Not supported: logs why and returns null.
@@ -76,7 +85,15 @@ pub unsafe extern "C" fn fmi3InstantiateModelExchange(
     logMessage: Option<fmi3LogMessageCallback>,
 ) -> fmi3Instance {
     let resources = Path::new(unsafe { text(resourcePath) });
-    instantiate(unsafe { text(instanceName) }, Logger::Fmi3(logMessage), instanceEnvironment, resources, unsafe { text(instantiationToken) }, 3, false)
+    instantiate(
+        unsafe { text(instanceName) },
+        Logger::Fmi3(logMessage),
+        instanceEnvironment,
+        resources,
+        unsafe { text(instantiationToken) },
+        3,
+        false,
+    )
 }
 
 /// Not supported: logs why and returns null.
@@ -97,7 +114,15 @@ pub unsafe extern "C" fn fmi3InstantiateScheduledExecution(
     _unlockPreemption: *const c_void,
 ) -> fmi3Instance {
     let resources = Path::new(unsafe { text(resourcePath) });
-    instantiate(unsafe { text(instanceName) }, Logger::Fmi3(logMessage), instanceEnvironment, resources, unsafe { text(instantiationToken) }, 3, false)
+    instantiate(
+        unsafe { text(instanceName) },
+        Logger::Fmi3(logMessage),
+        instanceEnvironment,
+        resources,
+        unsafe { text(instantiationToken) },
+        3,
+        false,
+    )
 }
 
 /// # Safety
@@ -112,7 +137,12 @@ pub unsafe extern "C" fn fmi3FreeInstance(c: fmi3Instance) {
 /// # Safety
 /// See `api::with`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SetDebugLogging(c: fmi3Instance, _loggingOn: fmi3Boolean, _nCategories: usize, _categories: *const fmi3String) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SetDebugLogging(
+    c: fmi3Instance,
+    _loggingOn: fmi3Boolean,
+    _nCategories: usize,
+    _categories: *const fmi3String,
+) -> fmi3Status {
     // Only warnings and errors are ever logged, and those always.
     unsafe { with(c, |_| Ok(fmi3OK)) }
 }
@@ -120,7 +150,14 @@ pub unsafe extern "C" fn fmi3SetDebugLogging(c: fmi3Instance, _loggingOn: fmi3Bo
 /// # Safety
 /// See `api::with`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3EnterInitializationMode(c: fmi3Instance, toleranceDefined: fmi3Boolean, tolerance: f64, startTime: f64, stopTimeDefined: fmi3Boolean, stopTime: f64) -> fmi3Status {
+pub unsafe extern "C" fn fmi3EnterInitializationMode(
+    c: fmi3Instance,
+    toleranceDefined: fmi3Boolean,
+    tolerance: f64,
+    startTime: f64,
+    stopTimeDefined: fmi3Boolean,
+    stopTime: f64,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             i.setup(toleranceDefined.then_some(tolerance), startTime, stopTimeDefined.then_some(stopTime))?;
@@ -160,7 +197,13 @@ fn counts(nvr: usize, n_values: usize) -> Result<(), crate::api::Fail> {
 /// # Safety
 /// See `api::with`; `vr` points to `nvr` values, `values` to `nValues`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3GetFloat64(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *mut f64, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3GetFloat64(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *mut f64,
+    nValues: usize,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             counts(nvr, nValues)?;
@@ -175,7 +218,13 @@ pub unsafe extern "C" fn fmi3GetFloat64(c: fmi3Instance, vr: *const fmi3ValueRef
 /// # Safety
 /// See `fmi3GetFloat64`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SetFloat64(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *const f64, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SetFloat64(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *const f64,
+    nValues: usize,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             counts(nvr, nValues)?;
@@ -190,7 +239,13 @@ pub unsafe extern "C" fn fmi3SetFloat64(c: fmi3Instance, vr: *const fmi3ValueRef
 /// # Safety
 /// See `fmi3GetFloat64`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3GetBoolean(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *mut fmi3Boolean, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3GetBoolean(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *mut fmi3Boolean,
+    nValues: usize,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             counts(nvr, nValues)?;
@@ -205,7 +260,13 @@ pub unsafe extern "C" fn fmi3GetBoolean(c: fmi3Instance, vr: *const fmi3ValueRef
 /// # Safety
 /// See `fmi3GetFloat64`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SetBoolean(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *const fmi3Boolean, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SetBoolean(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *const fmi3Boolean,
+    nValues: usize,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             counts(nvr, nValues)?;
@@ -222,7 +283,13 @@ pub unsafe extern "C" fn fmi3SetBoolean(c: fmi3Instance, vr: *const fmi3ValueRef
 /// # Safety
 /// See `fmi3GetFloat64`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3GetString(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *mut fmi3String, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3GetString(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *mut fmi3String,
+    nValues: usize,
+) -> fmi3Status {
     if nvr != nValues {
         return unsafe { with(c, |_| counts(nvr, nValues).map(|_| fmi3OK)) };
     }
@@ -232,7 +299,13 @@ pub unsafe extern "C" fn fmi3GetString(c: fmi3Instance, vr: *const fmi3ValueRefe
 /// # Safety
 /// See `fmi3GetFloat64`; every string is valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SetString(c: fmi3Instance, vr: *const fmi3ValueReference, nvr: usize, values: *const fmi3String, nValues: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SetString(
+    c: fmi3Instance,
+    vr: *const fmi3ValueReference,
+    nvr: usize,
+    values: *const fmi3String,
+    nValues: usize,
+) -> fmi3Status {
     unsafe {
         with(c, |i| {
             counts(nvr, nValues)?;
@@ -296,21 +369,35 @@ pub unsafe extern "C" fn fmi3FreeFMUState(c: fmi3Instance, state: *mut fmi3FMUSt
 /// # Safety
 /// See `fmi2SerializedFMUstateSize`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SerializedFMUStateSize(c: fmi3Instance, state: fmi3FMUState, size: *mut usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SerializedFMUStateSize(
+    c: fmi3Instance,
+    state: fmi3FMUState,
+    size: *mut usize,
+) -> fmi3Status {
     unsafe { crate::api::state_size(c, state, size) }
 }
 
 /// # Safety
 /// See `fmi2SerializeFMUstate`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3SerializeFMUState(c: fmi3Instance, state: fmi3FMUState, serializedState: *mut fmi3Byte, size: usize) -> fmi3Status {
+pub unsafe extern "C" fn fmi3SerializeFMUState(
+    c: fmi3Instance,
+    state: fmi3FMUState,
+    serializedState: *mut fmi3Byte,
+    size: usize,
+) -> fmi3Status {
     unsafe { crate::api::state_serialize(c, state, serializedState, size) }
 }
 
 /// # Safety
 /// See `fmi2DeSerializeFMUstate`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fmi3DeserializeFMUState(c: fmi3Instance, serializedState: *const fmi3Byte, size: usize, state: *mut fmi3FMUState) -> fmi3Status {
+pub unsafe extern "C" fn fmi3DeserializeFMUState(
+    c: fmi3Instance,
+    serializedState: *const fmi3Byte,
+    size: usize,
+    state: *mut fmi3FMUState,
+) -> fmi3Status {
     unsafe { crate::api::state_deserialize(c, serializedState, size, state) }
 }
 

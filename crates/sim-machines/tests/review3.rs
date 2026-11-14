@@ -23,31 +23,74 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
         // The corners of the strokes; a machine whose working range is not the box of its strokes (the delta's
         // cylinder) stands on the middles of the box's faces instead, which are on the edge of its range.
         let machine = (entry.build)(&entry.config()).unwrap();
-        let corners: Vec<Vec<f64>> = (0..1 << axes.len()).map(|corner| axes.iter().enumerate().map(|(i, a)| if corner >> i & 1 == 1 { a.max } else { a.min }).collect()).collect();
-        let faces: Vec<Vec<f64>> = (0..2 * axes.len()).map(|f| axes.iter().enumerate().map(|(i, a)| if i == f / 2 { if f % 2 == 1 { a.max } else { a.min } } else { 0.5 * (a.min + a.max) }).collect()).collect();
+        let corners: Vec<Vec<f64>> = (0..1 << axes.len())
+            .map(|corner| {
+                axes.iter().enumerate().map(|(i, a)| if corner >> i & 1 == 1 { a.max } else { a.min }).collect()
+            })
+            .collect();
+        let faces: Vec<Vec<f64>> = (0..2 * axes.len())
+            .map(|f| {
+                axes.iter()
+                    .enumerate()
+                    .map(
+                        |(i, a)| {
+                            if i == f / 2 { if f % 2 == 1 { a.max } else { a.min } } else { 0.5 * (a.min + a.max) }
+                        },
+                    )
+                    .collect()
+            })
+            .collect();
         let poses = if corners.iter().all(|p| machine.unreachable(p, 0.0).is_none()) { corners } else { faces };
         for pose in poses {
             let mut cfg = entry.config();
             cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
             let mut sim = Sim::new(entry, &cfg).unwrap();
             beyond_range += sim.control.set_pos.iter().zip(&axes).filter(|(p, a)| **p < a.min || **p > a.max).count();
-            let path = sim.plan_path(&[Piece::Line(middle.clone())], false).unwrap_or_else(|e| panic!("{}: from {pose:?}: {e:?}", entry.id));
+            let path = sim
+                .plan_path(&[Piece::Line(middle.clone())], false)
+                .unwrap_or_else(|e| panic!("{}: from {pose:?}: {e:?}", entry.id));
             let duration = path[path.len() - 1].0;
-            assert_eq!(sim.command(Command::Trajectory(path)).err().map(|e| e.key), None, "{}: path from {pose:?}", entry.id);
+            assert_eq!(
+                sim.command(Command::Trajectory(path)).err().map(|e| e.key),
+                None,
+                "{}: path from {pose:?}",
+                entry.id
+            );
             sim.run(duration + 0.3, |_| {});
             let (mut tool, mut speed) = (middle.clone(), middle.clone());
             sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
             // To 1 mm, or the machine's own settling tolerance where that is wider (an arm's gears twist under its weight,
             // which its motors' encoders do not see: 3 mrad).
             let tolerance = f64::max(1e-3, cfg.f64("ratings.settling_tolerance_m").unwrap_or(0.0));
-            assert!(tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < tolerance), "{}: from {pose:?} the tool arrives at {tool:?}", entry.id);
+            assert!(
+                tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < tolerance),
+                "{}: from {pose:?} the tool arrives at {tool:?}",
+                entry.id
+            );
 
             let mut sim = Sim::new(entry, &cfg).unwrap();
             // A millimetre beyond what the controller takes as the setpoint's give (`Machine::setpoint_slack`).
             let by = 1e-3 + sim.machine.setpoint_slack();
-            let outside: Vec<f64> = pose.iter().zip(&axes).map(|(p, a)| if *p == a.max { p + by } else if *p == a.min { p - by } else { *p }).collect();
+            let outside: Vec<f64> = pose
+                .iter()
+                .zip(&axes)
+                .map(|(p, a)| {
+                    if *p == a.max {
+                        p + by
+                    } else if *p == a.min {
+                        p - by
+                    } else {
+                        *p
+                    }
+                })
+                .collect();
             let leaves = vec![(0.0, sim.control.set_pos.clone()), (0.5, outside), (1.0, pose.clone())];
-            assert_eq!(sim.command(Command::Trajectory(leaves)).err().map(|e| e.key), Some("error-trajectory"), "{}", entry.id);
+            assert_eq!(
+                sim.command(Command::Trajectory(leaves)).err().map(|e| e.key),
+                Some("error-trajectory"),
+                "{}",
+                entry.id
+            );
         }
         starts_beyond += beyond_range;
     }
@@ -89,7 +132,12 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
             assert!(room > 20, "{}: room for {room} setpoints", entry.id);
             for k in 0..40.min(room) {
                 target[0] += step;
-                assert_eq!(sim.command(Command::Setpoint(target.clone())).err().map(|e| e.key), None, "{}: setpoint {k} at {share} of the speed limit, jitter {jitter}", entry.id);
+                assert_eq!(
+                    sim.command(Command::Setpoint(target.clone())).err().map(|e| e.key),
+                    None,
+                    "{}: setpoint {k} at {share} of the speed limit, jitter {jitter}",
+                    entry.id
+                );
                 // Early and late in turn, by `jitter` base steps.
                 for _ in 0..if k % 2 == 0 { per - jitter } else { per + jitter } {
                     sim.step();
@@ -102,11 +150,20 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
             assert_eq!(sim.control.planned_pos()[0], target[0], "{}: the stream ends elsewhere", entry.id);
             if jitter == 0 {
                 let speed = share * axis.max_vel;
-                assert!(fastest <= speed * (1.0 + 1e-9) && slowest >= speed * (1.0 - 1e-9), "{}: a stream at {speed} m/s is followed at {slowest} to {fastest} m/s", entry.id);
+                assert!(
+                    fastest <= speed * (1.0 + 1e-9) && slowest >= speed * (1.0 - 1e-9),
+                    "{}: a stream at {speed} m/s is followed at {slowest} to {fastest} m/s",
+                    entry.id
+                );
             }
             // Twice as far as the axis may go in one interval is still refused.
             target[0] += 2.0 * axis.max_vel * interval;
-            assert_eq!(sim.command(Command::Setpoint(target)).err().map(|e| e.key), Some("error-setpoint-too-far"), "{}", entry.id);
+            assert_eq!(
+                sim.command(Command::Setpoint(target)).err().map(|e| e.key),
+                Some("error-setpoint-too-far"),
+                "{}",
+                entry.id
+            );
         }
     }
 }
@@ -127,6 +184,10 @@ fn a_pass_share_below_one_never_shows_as_one() {
     assert_eq!(format!("{:.3}", shown(2001.0, 2001.0, 3)), "1.000");
     for passed in 0..=200 {
         let thousandths = passed * 5;
-        assert_eq!(format!("{:.3}", shown(passed as f64, 200.0, 3)), format!("{}.{:03}", thousandths / 1000, thousandths % 1000), "{passed} of 200 passed");
+        assert_eq!(
+            format!("{:.3}", shown(passed as f64, 200.0, 3)),
+            format!("{}.{:03}", thousandths / 1000, thousandths % 1000),
+            "{passed} of 200 passed"
+        );
     }
 }

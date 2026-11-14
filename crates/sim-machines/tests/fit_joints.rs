@@ -13,7 +13,14 @@ use sim_core::{Config, MachineEntry};
 /// amplitude and frequency (`swing`: amplitude, Hz), faded in and out over a second, for `seconds`; recorded every
 /// millisecond, then noise on what a drive measures (torque, speed, angle) of the size the single axis's fit takes,
 /// the torque's scaled to the motor.
-fn noisy_trace(entry: &MachineEntry, cfg: &Config, swing: &[(f64, f64)], seconds: f64, torque_noise: f64, noise: &mut Noise) -> Trace {
+fn noisy_trace(
+    entry: &MachineEntry,
+    cfg: &Config,
+    swing: &[(f64, f64)],
+    seconds: f64,
+    torque_noise: f64,
+    noise: &mut Noise,
+) -> Trace {
     let mut sim = Sim::new(entry, cfg).unwrap();
     let n = swing.len();
     // About where the setpoint stands, which a trajectory has to start from.
@@ -51,16 +58,23 @@ fn scale(cfg: &mut Config, paths: &[&str], factor: f64) {
 
 /// The value named `quantity` of `of`: (config, fitted, error).
 fn value(fit: &JointFit, quantity: &str, of: &str) -> (f64, f64, f64) {
-    let v = fit.values.iter().find(|v| v.quantity == quantity && v.of == of).unwrap_or_else(|| panic!("{quantity} {of} missing"));
+    let v = fit
+        .values
+        .iter()
+        .find(|v| v.quantity == quantity && v.of == of)
+        .unwrap_or_else(|| panic!("{quantity} {of} missing"));
     (v.config, v.fitted, v.error)
 }
-
 
 /// Asserts that the change the fit finds in `quantity` of motor `of` (fitted less config) is `expected` within three of
 /// its standard errors.
 fn change_is(fit: &JointFit, quantity: &str, of: &str, expected: f64) {
     let (config, fitted, error) = value(fit, quantity, of);
-    assert!((fitted - config - expected).abs() < 3.0 * error, "{quantity} {of}: {:.4e} ± {error:.2e}, by hand {expected:.4e}", fitted - config);
+    assert!(
+        (fitted - config - expected).abs() < 3.0 * error,
+        "{quantity} {of}: {:.4e} ± {error:.2e}, by hand {expected:.4e}",
+        fitted - config
+    );
 }
 
 /// The payload's factor, fitted over the config's, is `expected` within three standard errors, and the error is below
@@ -68,7 +82,10 @@ fn change_is(fit: &JointFit, quantity: &str, of: &str, expected: f64) {
 fn payload_is(fit: &JointFit, expected: f64) {
     let (config, fitted, error) = value(fit, "payload_factor", "payload");
     let (factor, band) = (fitted / config, error / config);
-    assert!((factor - expected).abs() < 3.0 * band && band < 0.02 * factor, "payload × {factor:.4} ± {band:.4}, in truth × {expected:.4}");
+    assert!(
+        (factor - expected).abs() < 3.0 * band && band < 0.02 * factor,
+        "payload × {factor:.4} ± {band:.4}, in truth × {expected:.4}"
+    );
 }
 
 /// The delta picker with all its shipped effects (elastic gearboxes with backlash and losses, ripple, the motor's
@@ -86,7 +103,10 @@ fn the_delta_fit_finds_a_heavier_payload_and_more_joint_friction() {
     let cfg = entry.config();
     // Neither the per-axis fit nor its refusal: the arms' angles are not linear in the platform's pose.
     assert!(!per_axis_fit((entry.build)(&cfg).unwrap().as_ref()));
-    assert_eq!(sim_components::identify::fit_rigid(entry, &cfg, &Trace::default()).err().map(|e| e.key), Some("error-trace-not-linear"));
+    assert_eq!(
+        sim_components::identify::fit_rigid(entry, &cfg, &Trace::default()).err().map(|e| e.key),
+        Some("error-trace-not-linear")
+    );
     let mut truth = cfg.clone();
     scale(&mut truth, &["mass.payload_kg"], 4.0 / 3.0);
     scale(&mut truth, &["joint.friction_coulomb_nm", "joint.friction_viscous_nm_s_rad"], 2.0);
@@ -126,7 +146,8 @@ fn the_scara_fit_finds_a_heavier_payload_and_more_joint_friction() {
     scale(&mut truth, &["arm.payload_kg"], 4.0 / 3.0);
     scale(&mut truth, &["joint.friction_coulomb_nm", "joint.friction_viscous_nm_s_rad"], 2.0);
     // About the start pose [0, 0.5, 0.05, 0]; the elbow stays bent, between 0.15 and 0.85 rad.
-    let trace = noisy_trace(entry, &truth, &[(0.8, 0.5), (0.35, 0.7), (0.04, 0.9), (0.8, 1.1)], 8.0, 0.01, &mut Noise(1));
+    let trace =
+        noisy_trace(entry, &truth, &[(0.8, 0.5), (0.35, 0.7), (0.04, 0.9), (0.8, 1.1)], 8.0, 0.01, &mut Noise(1));
     let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
     payload_is(&fit, 4.0 / 3.0);
     for (motor, ratio) in [("1", 100.0), ("2", 80.0), ("4", 50.0)] {

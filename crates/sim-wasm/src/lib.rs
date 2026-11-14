@@ -21,7 +21,8 @@ use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::fmt::Write;
 
 /// The verdicts' labels are the app's: one translation source for every front end.
-static CHECK_LABELS: &[(&str, &str)] = &[("en", include_str!("../../sim-app/i18n/en.ftl")), ("de", include_str!("../../sim-app/i18n/de.ftl"))];
+static CHECK_LABELS: &[(&str, &str)] =
+    &[("en", include_str!("../../sim-app/i18n/en.ftl")), ("de", include_str!("../../sim-app/i18n/de.ftl"))];
 
 thread_local! {
     static OUT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -64,7 +65,8 @@ pub unsafe extern "C" fn call(kind: u32, ptr: *mut u8, len: usize) -> u32 {
 /// The answer to a request as `call` gets it, or the message of why there is none.
 pub fn handle(kind: u32, request: &str) -> Result<String, String> {
     let mut lines = request.splitn(3, '\n');
-    let (first, second, rest) = (lines.next().unwrap_or("").trim(), lines.next().unwrap_or("").trim(), lines.next().unwrap_or(""));
+    let (first, second, rest) =
+        (lines.next().unwrap_or("").trim(), lines.next().unwrap_or("").trim(), lines.next().unwrap_or(""));
     match kind {
         0 => Ok(list(language(first))),
         1 => {
@@ -81,7 +83,10 @@ fn language(asked: &str) -> &'static str {
 }
 
 fn list(lang: &str) -> String {
-    let rows: Vec<String> = MACHINES.iter().map(|m| format!("{{\"id\":{},\"name\":{}}}", quote(m.id), quote(translations(lang, m).tr(m.key)))).collect();
+    let rows: Vec<String> = MACHINES
+        .iter()
+        .map(|m| format!("{{\"id\":{},\"name\":{}}}", quote(m.id), quote(translations(lang, m).tr(m.key))))
+        .collect();
     format!("[{}]", rows.join(","))
 }
 
@@ -91,14 +96,27 @@ fn size(id: &str, lang: &str, text: &str) -> Result<String, String> {
     let mut tr = translations(lang, entry);
     CHECK_LABELS.iter().filter(|(l, _)| *l == lang).for_each(|(_, t)| tr.add(t));
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
-    let cfg: Config = if text.trim().is_empty() { entry.config() } else { load_config(entry, text).map_err(refused)? };
+    let cfg: Config =
+        if text.trim().is_empty() { entry.config() } else { load_config(entry, text).map_err(refused)? };
     let cfg = sim_components::catalog::resolve(entry, &cfg).map_err(refused)?;
     let mut sim = Sim::new(entry, &cfg).map_err(refused)?;
     let motors = sim.machine.motors().to_vec();
-    let warnings: Vec<String> = sim.limit_violations.iter().map(|v| quote(&tr.tr_arg(v.key, &format!("{}: {:.4} > {:.4}", tr.tr(motors[v.motor].key), v.needed, v.allowed)))).collect();
+    let warnings: Vec<String> = sim
+        .limit_violations
+        .iter()
+        .map(|v| {
+            quote(&tr.tr_arg(v.key, &format!("{}: {:.4} > {:.4}", tr.tr(motors[v.motor].key), v.needed, v.allowed)))
+        })
+        .collect();
     let load = analyse_cycle_with(&mut sim, false).map_err(|e| tr.tr(e.key).to_string())?;
     let judged = verdicts(&cfg, &load).map_err(refused)?;
-    let mut json = format!("{{\"machine\":{},\"cycle_s\":{},\"tripped\":{},\"warnings\":[{}],\"motors\":[", quote(entry.id), number(load.duration), load.tripped, warnings.join(","));
+    let mut json = format!(
+        "{{\"machine\":{},\"cycle_s\":{},\"tripped\":{},\"warnings\":[{}],\"motors\":[",
+        quote(entry.id),
+        number(load.duration),
+        load.tripped,
+        warnings.join(",")
+    );
     for (k, (motor, m)) in motors.iter().zip(&load.motors).enumerate() {
         let _ = write!(
             json,

@@ -80,7 +80,10 @@ fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_a
     let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5));
     close(m_nt, d.m_nt(), 1e-3, "m_nt");
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
-    println!("centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox", t.to_degrees());
+    println!(
+        "centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox",
+        t.to_degrees()
+    );
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&[0.0, 0.0, z], &mut state, &mut torque);
     for k in 0..3 {
@@ -112,7 +115,9 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
     println!("edge: {by_hand:?} N m");
-    assert!((by_hand[0] + 22.2).abs() < 0.1 && (by_hand[1] + 1.35).abs() < 0.05 && (by_hand[1] - by_hand[2]).abs() < 1e-6);
+    assert!(
+        (by_hand[0] + 22.2).abs() < 0.1 && (by_hand[1] + 1.35).abs() < 0.05 && (by_hand[1] - by_hand[2]).abs() < 1e-6
+    );
     // The rigid model held there stays put; so does the elastic one (the standard suite checks the middle).
     for elastic in [false, true] {
         let d = delta(&[&format!("effects.joint_elasticity = {elastic}")]);
@@ -130,7 +135,14 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
 /// feedforward says so, and the rigid model given that torque accelerates the platform at 10 m/s^2 with no sideways part.
 #[test]
 fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque() {
-    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", "effects.forearm_inertia = false"]);
+    let d = delta(&[
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+        "effects.forearm_inertia = false",
+    ]);
     let z = -0.775;
     let (_, dz) = centre_by_hand(&d, z);
     let i_b = 0.048 + 0.16 * (0.3 + 0.6667 * 0.5);
@@ -194,7 +206,10 @@ fn the_adept_cycle_takes_the_hand_calculated_time() {
     let by_hand = 4.0 * lift + 2.0 * traverse + 2.0 * 0.035;
     let mut sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
     let load = sim_components::analysis::analyse_cycle_with(&mut sim, false).unwrap();
-    println!("Adept cycle 25/305/25: {:.4} s simulated, {by_hand:.4} s by hand (traverse {traverse:.5} s, lift {lift:.5} s); ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg", load.duration);
+    println!(
+        "Adept cycle 25/305/25: {:.4} s simulated, {by_hand:.4} s by hand (traverse {traverse:.5} s, lift {lift:.5} s); ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg",
+        load.duration
+    );
     let cycles = |t: f64| (t / 1e-3 - 1e-9).ceil();
     let ticked = 4.0 * (cycles(lift) + 2.0) + 2.0 * (cycles(traverse) + 2.0) + 2.0 * (35.0 + 1.0 - 2.0);
     assert!((load.duration - ticked * 1e-3).abs() < 1e-9 && ticked == 720.0, "{} s, {ticked} cycles", load.duration);
@@ -212,7 +227,14 @@ fn the_cycle_is_judged_against_the_condition_number_limit() {
     assert!(v.ok && v.value == peak && v.limit == 5.0 && peak > 1.5 && peak < 2.5, "{v:?}");
     let mut tight = cfg.clone();
     tight.set_text("ratings.max_condition_number = 1.5").unwrap();
-    assert!(!sim_components::analysis::verdicts(&tight, &load).unwrap().iter().find(|v| v.check == "singularity").unwrap().ok);
+    assert!(
+        !sim_components::analysis::verdicts(&tight, &load)
+            .unwrap()
+            .iter()
+            .find(|v| v.check == "singularity")
+            .unwrap()
+            .ok
+    );
 }
 
 /// The condition number of a matrix whose singular values are known: diag(1, 2, 4) turned has 4.
@@ -262,15 +284,20 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     assert!(a + 2.0 * b < -1.5 && a - b > 0.0 && c + 2.0 * d > 2.0 && c - d > 0.0);
 }
 
-
-
 /// The feedforward with the speed is the rigid, loss-free model's torque: given it at a pose where the platform moves
 /// at (2, -1, 0.5) m/s, the model accelerates the platform at the asked (10, 5, -20) m/s^2, the velocity term
 /// m_nt J^T J_x^-1 w included (to 1e-9 m/s^2). Without the speed (the old feedforward) it misses by that term's
 /// effect, here more than 1 m/s^2.
 #[test]
 fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
-    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", "effects.gravity = true"]);
+    let d = delta(&[
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+        "effects.gravity = true",
+    ]);
     let (p, v, a) = ([0.2, -0.1, -0.85], [2.0, -1.0, 0.5], [10.0, 5.0, -20.0]);
     let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut hold);
@@ -296,7 +323,6 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
     assert!((0..3).all(|k| (moving[k] - still[k]).abs() < 1e-12));
 }
 
-
 /// The setpoint at rest is where the motors stand; the platform's weight twists the gearboxes and sits them at a side
 /// of their backlash, so the tool is off it. `setpoint_slack` (`rest_sag`: twist and half the backlash either way at
 /// every arm, over the range) covers what the simulation shows after 0.5 s at rest at five poses, the rim's lower edge
@@ -306,7 +332,8 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
 fn the_setpoint_slack_covers_the_sag_at_rest() {
     let slack = delta(&[]).setpoint_slack();
     let mut most = 0f64;
-    for pose in [[-0.6, 0.0, -0.7], [0.0, 0.0, -0.9], [0.3, 0.4, -0.8], [0.0, -0.55, -0.75], [0.29995, 0.51953, -0.874]] {
+    for pose in [[-0.6, 0.0, -0.7], [0.0, 0.0, -0.9], [0.3, 0.4, -0.8], [0.0, -0.55, -0.75], [0.29995, 0.51953, -0.874]]
+    {
         let mut cfg = ENTRY.config();
         cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
         let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -314,7 +341,8 @@ fn the_setpoint_slack_covers_the_sag_at_rest() {
         let mut out = Vec::new();
         sim.sample(&mut out);
         let at = |id: &str| out[sim.signal_index(id).unwrap()];
-        let off = ["x", "y", "z"].map(|a| at(&format!("axis.{a}.position_setpoint")) - at(&format!("axis.{a}.position")));
+        let off =
+            ["x", "y", "z"].map(|a| at(&format!("axis.{a}.position_setpoint")) - at(&format!("axis.{a}.position")));
         let off = norm(off);
         println!("{pose:?}: setpoint {:.3} mm off the tool", off * 1e3);
         most = most.max(off);
@@ -342,7 +370,10 @@ fn a_first_arc_from_rest_is_laid_out_with_the_machines_slack() {
 fn a_path_may_not_use_the_setpoint_slack_away_from_its_start() {
     let mut sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
     let line = |x: f64| sim_components::path::parse(&format!("line,{x},0.0,-0.775")).unwrap();
-    assert_eq!(sim.command(Command::MoveTo(vec![0.6014, 0.0, -0.775])).err().map(|e| e.key), Some("error-target-out-of-range"));
+    assert_eq!(
+        sim.command(Command::MoveTo(vec![0.6014, 0.0, -0.775])).err().map(|e| e.key),
+        Some("error-target-out-of-range")
+    );
     for time_optimal in [false, true] {
         assert_eq!(sim.plan_path(&line(0.6014), time_optimal).err().map(|e| e.key), Some("error-path-range"));
         assert!(sim.plan_path(&line(0.6), time_optimal).is_ok());
@@ -359,14 +390,25 @@ fn an_arc_along_the_rim_of_the_range_is_planned() {
     let sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
     let rim = sim_components::path::parse("line,0.6,0.0,-0.775\narc,0.0,0.6,-0.775,0.0,0.0,-0.775,ccw").unwrap();
     for time_optimal in [false, true] {
-        assert!(sim.plan_path(&rim, time_optimal).is_ok(), "{time_optimal}: {:?}", sim.plan_path(&rim, time_optimal).err());
+        assert!(
+            sim.plan_path(&rim, time_optimal).is_ok(),
+            "{time_optimal}: {:?}",
+            sim.plan_path(&rim, time_optimal).err()
+        );
     }
 }
 
 /// The rigid, loss-free model with or without the forearm rods (effects.forearm_inertia).
 fn loss_free(rods: bool, more: &[&str]) -> Delta {
     let rods = format!("effects.forearm_inertia = {rods}");
-    let mut edits = vec!["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false", &rods];
+    let mut edits = vec![
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+        &rods,
+    ];
     edits.extend(more);
     delta(&edits)
 }
@@ -384,7 +426,8 @@ const LEVEL: f64 = -0.774_596_669_241_483;
 /// 10 m/s^2 straight up.
 #[test]
 fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_torque_with_rods() {
-    let by_hand: f64 = (-(0.048 + 0.16 * 0.3) * 25.0 - 0.4 * 0.5 * 10.0 - 0.4 / 3.0 * 4.2 * 10.0) / 20.0 + (1.7e-4 + 4.06e-5) * 20.0 * -25.0;
+    let by_hand: f64 = (-(0.048 + 0.16 * 0.3) * 25.0 - 0.4 * 0.5 * 10.0 - 0.4 / 3.0 * 4.2 * 10.0) / 20.0
+        + (1.7e-4 + 4.06e-5) * 20.0 * -25.0;
     assert!((by_hand + 0.6053).abs() < 1e-4, "{by_hand}");
     for rods in [true, false] {
         let d = loss_free(rods, &[]);
@@ -402,7 +445,10 @@ fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_to
         let mut rates = vec![0.0; d.state_len()];
         d.derivatives(&state, &moving, &mut rates);
         let platform = mul(&d.pose(t).1, [rates[3], rates[4], rates[5]]);
-        assert!(platform[0].abs() < 1e-9 && platform[1].abs() < 1e-9 && (platform[2] - 10.0).abs() < 1e-9, "rods {rods}: {platform:?}");
+        assert!(
+            platform[0].abs() < 1e-9 && platform[1].abs() < 1e-9 && (platform[2] - 10.0).abs() < 1e-9,
+            "rods {rods}: {platform:?}"
+        );
     }
 }
 
@@ -438,9 +484,15 @@ fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
 /// and rigid joints. A velocity term or a gravity that does not belong to the mass matrix shows as a drift.
 #[test]
 fn a_free_loss_free_motion_keeps_its_energy() {
-    for (rods, bending, elastic) in [(true, false, true), (false, true, true), (true, true, true), (true, true, false)] {
+    for (rods, bending, elastic) in [(true, false, true), (false, true, true), (true, true, true), (true, true, false)]
+    {
         let mut cfg = lossless_config();
-        for e in [format!("effects.forearm_inertia = {rods}"), format!("effects.link_elasticity = {bending}"), format!("effects.joint_elasticity = {elastic}"), "effects.gearbox_backlash = false".into()] {
+        for e in [
+            format!("effects.forearm_inertia = {rods}"),
+            format!("effects.link_elasticity = {bending}"),
+            format!("effects.joint_elasticity = {elastic}"),
+            "effects.gearbox_backlash = false".into(),
+        ] {
             cfg.set_text(&e).unwrap();
         }
         let d = Delta::new(&cfg).unwrap();
@@ -473,7 +525,9 @@ fn a_free_loss_free_motion_keeps_its_energy() {
         let (mut at, mut vel) = ([0.0; 3], [0.0; 3]);
         d.tool_state(&s, &mut at, &mut vel);
         let travel = norm(sub(at, [0.1, -0.05, -0.85]));
-        println!("rods {rods}, bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, {travel:.3} m travelled");
+        println!(
+            "rods {rods}, bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, {travel:.3} m travelled"
+        );
         assert!(travel > 0.05, "{travel} m");
         assert!(drift < 1e-7 * kinetic, "rods {rods}, bending {bending}, elastic {elastic}: {drift} J");
     }
@@ -500,14 +554,26 @@ fn the_lowest_mode_is_the_hand_calculated_one() {
     let hz = |w2: f64| w2.sqrt() / std::f64::consts::TAU;
     let (b, c) = (kg * sideways + kb * sideways + kb * i_arm, kg * kb);
     let both = (b - (b * b - 4.0 * i_arm * sideways * c).sqrt()) / (2.0 * i_arm * sideways);
-    let cases = [("bending", false, true, kb / sideways), ("gearboxes", true, false, kg / (i_arm + sideways)), ("both", true, true, both)];
+    let cases = [
+        ("bending", false, true, kb / sideways),
+        ("gearboxes", true, false, kg / (i_arm + sideways)),
+        ("both", true, true, both),
+    ];
     for (what, elastic, bending, w2) in cases {
-        let d = delta(&["effects.forearm_inertia = false", &format!("effects.joint_elasticity = {elastic}"), &format!("effects.link_elasticity = {bending}")]);
+        let d = delta(&[
+            "effects.forearm_inertia = false",
+            &format!("effects.joint_elasticity = {elastic}"),
+            &format!("effects.link_elasticity = {bending}"),
+        ]);
         let found = d.resonance_hz(&[0.0, 0.0, LEVEL]).unwrap();
         println!("{what}: {found:.4} Hz, by hand {:.4} Hz", hz(w2));
         close(found, hz(w2), 1e-6, what);
     }
-    assert!((hz(kb / sideways) - 38.76).abs() < 0.01 && (hz(kb / vertical) - 68.39).abs() < 0.01 && (hz(kg / (i_arm + sideways)) - 28.14).abs() < 0.01);
+    assert!(
+        (hz(kb / sideways) - 38.76).abs() < 0.01
+            && (hz(kb / vertical) - 68.39).abs() < 0.01
+            && (hz(kg / (i_arm + sideways)) - 28.14).abs() < 0.01
+    );
     assert!(hz(both) < hz(kg / (i_arm + sideways)));
     assert_eq!(delta(&["effects.joint_elasticity = false"]).resonance_hz(&[0.0, 0.0, LEVEL]), None);
     let d = delta(&["effects.forearm_inertia = false", "effects.link_elasticity = true"]);
@@ -536,7 +602,10 @@ fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let middle: V3 = std::array::from_fn(|i| 0.5 * (from[i] + to[i]));
     println!("rod middle at the centre: {middle:?}");
     assert!(middle[1] > 0.0 && middle[2] - 0.015 - (p[2] + 0.015) > 0.3, "{middle:?}");
-    let obstacle = format!("obstacles = [{{ name = \"rod\", centre_m = [{:?}, {:?}, {:?}], size_m = [0.03, 0.03, 0.03] }}]", middle[0], middle[1], middle[2]);
+    let obstacle = format!(
+        "obstacles = [{{ name = \"rod\", centre_m = [{:?}, {:?}, {:?}], size_m = [0.03, 0.03, 0.03] }}]",
+        middle[0], middle[1], middle[2]
+    );
     let mut cfg = ENTRY.config();
     cfg.set_text(&obstacle).unwrap();
     let start = cfg.f64s("start.pose").unwrap();
@@ -571,7 +640,24 @@ fn a_path_in_a_tilted_plane_gets_its_transition_curves() {
     let (e1, e2) = ([1.0, 0.0, 0.0], [0.0, t.cos(), t.sin()]);
     let at = |a: f64, b: f64| [0, 1, 2].map(|i| c[i] + a * e1[i] + b * e2[i]);
     let (start, onto, off, end) = (at(-0.2, -r), at(0.0, -r), at(r, 0.0), at(r, 0.15));
-    let text = format!("line,{:?},{:?},{:?}\nline,{:?},{:?},{:?}\narc,{:?},{:?},{:?},{:?},{:?},{:?},ccw\nline,{:?},{:?},{:?}", start[0], start[1], start[2], onto[0], onto[1], onto[2], off[0], off[1], off[2], c[0], c[1], c[2], end[0], end[1], end[2]);
+    let text = format!(
+        "line,{:?},{:?},{:?}\nline,{:?},{:?},{:?}\narc,{:?},{:?},{:?},{:?},{:?},{:?},ccw\nline,{:?},{:?},{:?}",
+        start[0],
+        start[1],
+        start[2],
+        onto[0],
+        onto[1],
+        onto[2],
+        off[0],
+        off[1],
+        off[2],
+        c[0],
+        c[1],
+        c[2],
+        end[0],
+        end[1],
+        end[2]
+    );
     let pieces = sim_components::path::parse(&text).unwrap();
     let mut cfg = ENTRY.config();
     cfg.set_text("profile.path_tolerance_m = 0.0001").unwrap();
@@ -593,18 +679,32 @@ fn a_path_in_a_tilted_plane_gets_its_transition_curves() {
     for time_optimal in [false, true] {
         let points = blended.plan_path(&pieces, time_optimal).unwrap();
         let reported = blended.path_deviation(&pieces, time_optimal).unwrap();
-        assert!(reported > 0.0 && reported <= 1e-4 * (1.0 + 1e-9), "time-optimal {time_optimal}: {reported} m reported");
+        assert!(
+            reported > 0.0 && reported <= 1e-4 * (1.0 + 1e-9),
+            "time-optimal {time_optimal}: {reported} m reported"
+        );
         if !time_optimal {
             close(reported, 1e-4, 1e-9, "e = L^2 / (24 r) within the axis limits");
         }
         let home: [f64; 3] = [points[0].1[0], points[0].1[1], points[0].1[2]];
-        let off_path = |p: &[f64]| to_segment(p, home, start).min(to_segment(p, start, onto)).min(to_arc(p)).min(to_segment(p, off, end));
+        let off_path = |p: &[f64]| {
+            to_segment(p, home, start).min(to_segment(p, start, onto)).min(to_arc(p)).min(to_segment(p, off, end))
+        };
         let furthest = points.iter().map(|p| off_path(&p.1)).fold(0.0, f64::max);
-        assert!(furthest <= reported + 1e-7 && furthest > 0.5 * reported, "time-optimal {time_optimal}: {furthest} m off the path, {reported} m reported");
+        assert!(
+            furthest <= reported + 1e-7 && furthest > 0.5 * reported,
+            "time-optimal {time_optimal}: {furthest} m off the path, {reported} m reported"
+        );
         let as_given = given.plan_path(&pieces, time_optimal).unwrap();
         let (time, before) = (points[points.len() - 1].0, as_given[as_given.len() - 1].0);
-        assert!(time < before - 0.01 && dot(sub(&points[points.len() - 1].1, end), sub(&points[points.len() - 1].1, end)).sqrt() < 1e-9, "time-optimal {time_optimal}: {time} s against {before} s");
-        println!("time-optimal {time_optimal}: {time} s against {before} s, off by {furthest} m, {reported} m reported");
+        assert!(
+            time < before - 0.01
+                && dot(sub(&points[points.len() - 1].1, end), sub(&points[points.len() - 1].1, end)).sqrt() < 1e-9,
+            "time-optimal {time_optimal}: {time} s against {before} s"
+        );
+        println!(
+            "time-optimal {time_optimal}: {time} s against {before} s, off by {furthest} m, {reported} m reported"
+        );
     }
 }
 
@@ -624,8 +724,10 @@ fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
     let cfg = ENTRY.config();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
     let (from, to) = ([0.5, 0.0, -0.85], [-0.5, 0.0, -0.85]);
-    let points = sim.plan_path(&sim_components::path::parse("line,0.5,0.0,-0.85\nline,-0.5,0.0,-0.85").unwrap(), true).unwrap();
-    let (reserve, rated, c) = (cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap(), 1e-3);
+    let points =
+        sim.plan_path(&sim_components::path::parse("line,0.5,0.0,-0.85\nline,-0.5,0.0,-0.85").unwrap(), true).unwrap();
+    let (reserve, rated, c) =
+        (cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap(), 1e-3);
     // The tool speed along the second line at which the fastest motor turns at its rated speed, at its places.
     let length = (0..3).map(|i| (to[i] - from[i]) * (to[i] - from[i])).sum::<f64>().sqrt();
     let speed_at = |k: usize| {
@@ -658,7 +760,11 @@ fn the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line() {
             let speed = (ahead[k] - here[k]) / c;
             let (low, high) = sim.control.torque_curve(speed);
             let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
-            used = [used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })), used[1].max(speed.abs() / rated), used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk)];
+            used = [
+                used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })),
+                used[1].max(speed.abs() / rated),
+                used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk),
+            ];
         }
     }
     let (duration, last) = (points[points.len() - 1].0, &points[points.len() - 1].1);

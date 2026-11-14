@@ -2,11 +2,13 @@
 //! friction levels, backlash, belt natural frequency.
 
 use super::*;
-use sim_core::testkit::{DT, Noise, PulseRun};
+use sim_components::Sim;
+use sim_components::analysis::{
+    analyse_cycle, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response,
+};
 use sim_components::identify::{fit_rigid, resonance};
 use sim_components::trace::Trace;
-use sim_components::Sim;
-use sim_components::analysis::{analyse_cycle, bandwidth, closed_loop_response, frequency_sweep, log_spaced, step_response};
+use sim_core::testkit::{DT, Noise, PulseRun};
 use sim_core::{Rk4, advance};
 
 fn machine(mut cfg: Config, edit: &[&str]) -> SingleAxis {
@@ -23,7 +25,13 @@ fn rigid(edit: &[&str]) -> SingleAxis {
 }
 
 /// Runs from `state` with a torque that may depend on time; `each` sees (t, state, torque).
-fn simulate(m: &SingleAxis, state: &mut [f64], seconds: f64, torque: impl Fn(f64) -> f64, mut each: impl FnMut(f64, &[f64], f64)) {
+fn simulate(
+    m: &SingleAxis,
+    state: &mut [f64],
+    seconds: f64,
+    torque: impl Fn(f64) -> f64,
+    mut each: impl FnMut(f64, &[f64], f64),
+) {
     let mut rk = Rk4::new(state.len());
     for step in 0..(seconds / DT).round() as usize {
         let t = step as f64 * DT;
@@ -76,11 +84,17 @@ fn breakaway_force_equals_the_stiction_level() {
     // Push with a force that rises by 5 N/s and watch the friction force until the carriage slides.
     let force_to_torque = 0.02 / 5.0;
     let mut peak = 0f64;
-    simulate(&m, &mut state, 6.0, |t| 5.0 * t * force_to_torque, |_, s, torque| {
-        if s[1] < m.friction.stribeck_v {
-            peak = peak.max(signal(&m, s, torque, "axis.x.friction"));
-        }
-    });
+    simulate(
+        &m,
+        &mut state,
+        6.0,
+        |t| 5.0 * t * force_to_torque,
+        |_, s, torque| {
+            if s[1] < m.friction.stribeck_v {
+                peak = peak.max(signal(&m, s, torque, "axis.x.friction"));
+            }
+        },
+    );
     assert!(state[1] > 0.1, "the carriage never broke away");
     assert!((peak - 20.0).abs() < 0.02 * 20.0, "breakaway at {peak} N, stiction level is 20 N");
 }
@@ -215,7 +229,12 @@ fn a_slack_belt_section_is_counted_and_a_tight_one_is_not() {
         let mut cfg = ENTRY.config();
         cfg.set_text(pretension).unwrap();
         let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
-        let ok = sim_components::analysis::verdicts(&cfg, &load).unwrap().iter().find(|v| v.check == "belt-slack").unwrap().ok;
+        let ok = sim_components::analysis::verdicts(&cfg, &load)
+            .unwrap()
+            .iter()
+            .find(|v| v.check == "belt-slack")
+            .unwrap()
+            .ok;
         (load.belt_slack_time.unwrap(), ok)
     };
     let (loose_cycle, ok) = judged("belt.pretension_n = 20.0");
@@ -292,15 +311,28 @@ fn reference_cycle_torque_matches_hand_calculation() {
     // draws and does not feed back is the copper loss, R I^2 over the cycle (R rises by less than 1 % here).
     let copper = 4.0 * m.rms_current * m.rms_current * load.duration;
     assert!(m.energy_regenerated > 0.0 && m.largest_regeneration > 0.0 && m.peak_regenerated_power > 0.0);
-    assert!((m.energy_in - m.energy_regenerated - copper).abs() < 0.03 * copper, "{} J in, {} J back, {copper} J of copper loss", m.energy_in, m.energy_regenerated);
+    assert!(
+        (m.energy_in - m.energy_regenerated - copper).abs() < 0.03 * copper,
+        "{} J in, {} J back, {copper} J of copper loss",
+        m.energy_in,
+        m.energy_regenerated
+    );
     // Each braking gives back the kinetic energy, less the copper loss on the way: at most 1/2 m_eff v^2.
-    assert!(m.largest_regeneration < 0.5 * m_total * v * v && m.largest_regeneration > 0.3 * 0.5 * m_total * v * v, "{} J", m.largest_regeneration);
+    assert!(
+        m.largest_regeneration < 0.5 * m_total * v * v && m.largest_regeneration > 0.3 * 0.5 * m_total * v * v,
+        "{} J",
+        m.largest_regeneration
+    );
     // The winding settles where the copper loss of the RMS current balances: far below the rated 100 K.
     let rated_current = 2.822;
     let q = 100.0 / 1.39 * (m.rms_current / rated_current).powi(2);
     assert!((m.winding_rise - q / (1.0 - 0.0039 * q)).abs() < 1e-9 && m.winding_rise < 100.0, "{} K", m.winding_rise);
     // The thermal verdict: RMS torque over the rated torque of the config.
-    assert!((m.thermal_utilisation - m.rms_torque / 1.27).abs() < 1e-12, "thermal utilisation {}", m.thermal_utilisation);
+    assert!(
+        (m.thermal_utilisation - m.rms_torque / 1.27).abs() < 1e-12,
+        "thermal utilisation {}",
+        m.thermal_utilisation
+    );
     assert!(m.points.len() as f64 > 0.99 * duration * 1000.0);
 }
 
@@ -353,7 +385,12 @@ fn frequency_sweep_shows_the_belt_resonance() {
     // Far below the dip the machine still looks like its rigid inertia (within the belt's give).
     let j_motor_side = (6.0 * 0.02 * 0.02 + 1.0e-4 + 0.1 * 2.6 * 0.02 * 0.02) / 25.0 + 0.3e-4;
     let rigid = 1.0 / (j_motor_side * std::f64::consts::TAU * far_below.frequency);
-    assert!((far_below.gain - rigid).abs() < 0.03 * rigid, "gain {} at {} Hz, rigid {rigid}", far_below.gain, far_below.frequency);
+    assert!(
+        (far_below.gain - rigid).abs() < 0.03 * rigid,
+        "gain {} at {} Hz, rigid {rigid}",
+        far_below.gain,
+        far_below.frequency
+    );
     assert!(lowest.gain * lowest.frequency < 0.1 * far_below.gain * far_below.frequency, "no clear dip");
 }
 
@@ -367,7 +404,12 @@ fn frequency_sweep_shows_the_belt_resonance() {
 fn the_velocity_loop_response_is_the_hand_calculated_loop() {
     use sim_components::analysis::{loop_margins, velocity_loop_response};
     let mut cfg = ideal_rigid();
-    for e in ["effects.drive_delay = false", "effects.back_emf = false", "effects.torque_saturation = false", "drive.velocity_kp_nm_s_rad = 0.025"] {
+    for e in [
+        "effects.drive_delay = false",
+        "effects.back_emf = false",
+        "effects.torque_saturation = false",
+        "drive.velocity_kp_nm_s_rad = 0.025",
+    ] {
         cfg.set_text(e).unwrap();
     }
     let (kp, tn, kv, t, j) = (0.025, 0.01, 50.0, 0.010 / 40.0, 3e-5 + (1e-4 + 4.0 * 0.02 * 0.02) / 25.0);
@@ -419,16 +461,31 @@ fn step_and_frequency_response_show_the_position_loop_gain() {
         let at_tau = step.trace.iter().find(|(t, _)| *t >= 1.0 / kv).unwrap().1 / step.size;
         assert!((at_tau - 0.632).abs() < 0.05, "Kv {kv}: {at_tau} of the step after 1/Kv");
         let rise = 9f64.ln() / kv;
-        assert!((step.rise_time - rise).abs() < 0.1 * rise, "Kv {kv}: rise time {} s, by hand {rise} s", step.rise_time);
-        assert!(step.overshoot < 0.05 && step.settling_time < 6.0 / kv, "Kv {kv}: {} overshoot, settled after {} s", step.overshoot, step.settling_time);
+        assert!(
+            (step.rise_time - rise).abs() < 0.1 * rise,
+            "Kv {kv}: rise time {} s, by hand {rise} s",
+            step.rise_time
+        );
+        assert!(
+            step.overshoot < 0.05 && step.settling_time < 6.0 / kv,
+            "Kv {kv}: {} overshoot, settled after {} s",
+            step.overshoot,
+            step.settling_time
+        );
         assert!((step.trace.last().unwrap().1 - step.size).abs() < 1e-3 * step.size);
 
         // By hand: -3 dB and -45 degrees at Kv / 2 pi; gain 1 far below.
         let corner = kv / std::f64::consts::TAU;
-        let response = closed_loop_response(&ENTRY, &cfg, 0, &log_spaced(corner / 8.0, corner * 4.0, 25), 0.0005).unwrap();
+        let response =
+            closed_loop_response(&ENTRY, &cfg, 0, &log_spaced(corner / 8.0, corner * 4.0, 25), 0.0005).unwrap();
         let measured = bandwidth(&response).unwrap();
         assert!((measured - corner).abs() < 0.1 * corner, "Kv {kv}: bandwidth {measured} Hz, by hand {corner} Hz");
-        assert!((response[0].gain - 1.0).abs() < 0.02, "Kv {kv}: gain {} at {} Hz", response[0].gain, response[0].frequency);
+        assert!(
+            (response[0].gain - 1.0).abs() < 0.02,
+            "Kv {kv}: gain {} at {} Hz",
+            response[0].gain,
+            response[0].frequency
+        );
         let at_corner = closed_loop_response(&ENTRY, &cfg, 0, &[corner], 0.0005).unwrap()[0];
         assert!((at_corner.phase_deg + 45.0).abs() < 10.0, "Kv {kv}: phase {} at the corner", at_corner.phase_deg);
     }
@@ -469,7 +526,13 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
     // 10 m/s^2 = 0.85 N m, against 40 N m rated and 64 N m maximum. The rotor's own 25 J_rotor / r^2 = 1.875 kg
     // never pass through it: the motor torque times the ratio of 5 is 1.225 N m.
     let peak = find(&all, "gearbox-peak").unwrap();
-    assert!((peak.value - 0.85).abs() < 0.02 * 0.85 && peak.limit == 64.0 && (5.0 * m.peak_torque - 1.225).abs() < 0.02 * 1.225, "{} N m", peak.value);
+    assert!(
+        (peak.value - 0.85).abs() < 0.02 * 0.85
+            && peak.limit == 64.0
+            && (5.0 * m.peak_torque - 1.225).abs() < 0.02 * 1.225,
+        "{} N m",
+        peak.value
+    );
     // Continuous: the cubic mean of the torque, weighted with the speed. Each of the four ramps is 0.1 s of
     // rising and 0.1 s of falling acceleration (a = 100 t, v = 50 t^2, and mirrored from v = 1 m/s), so the
     // integral of a^3 v dt over a ramp is 5e7 t^6 / 6 = 8.33 plus 1e6 u^4 / 4 - 5e7 u^6 / 6 = 16.67, 25 in all,
@@ -478,17 +541,31 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
     // (m + J_pulley / r^2) r = 4.25 kg * 0.02 m; the motor's own cubic mean has the rotor in it, 6.125 kg.
     let continuous = find(&all, "gearbox-continuous").unwrap();
     let by_hand = 4.25 * 0.02 * (100.0f64 / 1.6).cbrt();
-    assert!((continuous.value - by_hand).abs() < 0.02 * by_hand && continuous.limit == 40.0, "{} N m, by hand {by_hand} N m", continuous.value);
-    assert!(m.gearbox_torque == Some((peak.value, continuous.value)) && (5.0 * m.cubic_mean_torque - by_hand * 6.125 / 4.25).abs() < 0.02 * by_hand && m.cubic_mean_torque > 1.1 * m.rms_torque);
+    assert!(
+        (continuous.value - by_hand).abs() < 0.02 * by_hand && continuous.limit == 40.0,
+        "{} N m, by hand {by_hand} N m",
+        continuous.value
+    );
+    assert!(
+        m.gearbox_torque == Some((peak.value, continuous.value))
+            && (5.0 * m.cubic_mean_torque - by_hand * 6.125 / 4.25).abs() < 0.02 * by_hand
+            && m.cubic_mean_torque > 1.1 * m.rms_torque
+    );
     // The gearbox input turns at v i / r = 1 * 5 / 0.02 = 250 rad/s = 2387 r/min at most, against 13000 r/min.
     let speed = find(&all, "gearbox-input-speed").unwrap();
     assert!((speed.value - 2387.3).abs() < 0.01 * 2387.3 && speed.limit == 13000.0, "{} r/min", speed.value);
     // The rigid model's belt does not stretch: both sections pull the pulley shaft with the pretension, 2 * 300 N.
-    assert_eq!(find(&all, "gearbox-radial-load").unwrap(), Verdict { check: "gearbox-radial-load", motor: None, value: 600.0, limit: 1500.0, ok: true });
+    assert_eq!(
+        find(&all, "gearbox-radial-load").unwrap(),
+        Verdict { check: "gearbox-radial-load", motor: None, value: 600.0, limit: 1500.0, ok: true }
+    );
     // The guide carries the carriage of 4 kg (this config has no payload): 39.23 N, against 2000 N.
     let guide = find(&all, "guide-load").unwrap();
     assert!((guide.value - 4.0 * G).abs() < 1e-9 && guide.limit == 2000.0, "{} N", guide.value);
-    assert_eq!(find(&all, "motor-thermal").unwrap(), Verdict { check: "motor-thermal", motor: Some(0), value: m.winding_rise, limit: 100.0, ok: true });
+    assert_eq!(
+        find(&all, "motor-thermal").unwrap(),
+        Verdict { check: "motor-thermal", motor: Some(0), value: m.winding_rise, limit: 100.0, ok: true }
+    );
     // The DC link: 470 uF between 155.13 V and 224.65 V hold C (U2^2 - U1^2) / 2 = 6.2 J, more than one braking gives back.
     let link = find(&all, "dc-link-energy").unwrap();
     assert!((link.limit - 6.204).abs() < 1e-3 && link.value == m.largest_regeneration && link.value < link.limit);
@@ -498,14 +575,24 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
     let (load, all) = judged(&["ratings.dc_link_capacitance_uf = 47.0"]);
     let m = &load.motors[0];
     assert!(find(&all, "dc-link-energy").unwrap().value > 0.62 && all.iter().all(|v| v.ok), "{all:?}");
-    assert!((find(&all, "braking-resistor-continuous").unwrap().value - m.energy_regenerated / load.duration).abs() < 1e-12);
+    assert!(
+        (find(&all, "braking-resistor-continuous").unwrap().value - m.energy_regenerated / load.duration).abs() < 1e-12
+    );
     assert_eq!(find(&all, "braking-resistor-peak").unwrap().value, m.peak_regenerated_power);
     // A resistor that is too small for the mean power fails; so does a gearbox below the peak torque.
-    let (_, all) = judged(&["ratings.dc_link_capacitance_uf = 47.0", "ratings.braking_resistor_continuous_w = 0.5", "ratings.gearbox_max_torque_nm = 0.8"]);
+    let (_, all) = judged(&[
+        "ratings.dc_link_capacitance_uf = 47.0",
+        "ratings.braking_resistor_continuous_w = 0.5",
+        "ratings.gearbox_max_torque_nm = 0.8",
+    ]);
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["gearbox-peak", "braking-resistor-continuous"]);
     // So do a gearbox that may not turn that fast, a shaft and a guide that are too weak.
-    let (_, all) = judged(&["ratings.gearbox_max_input_speed_rpm = 2000.0", "ratings.shaft_max_radial_load_n = 500.0", "ratings.guide_max_load_n = 30.0"]);
+    let (_, all) = judged(&[
+        "ratings.gearbox_max_input_speed_rpm = 2000.0",
+        "ratings.shaft_max_radial_load_n = 500.0",
+        "ratings.guide_max_load_n = 30.0",
+    ]);
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["gearbox-input-speed", "gearbox-radial-load", "guide-load"]);
 
@@ -544,14 +631,23 @@ fn the_dc_link_takes_braking_energy_the_resistor_the_rest_and_too_small_a_resist
         let verdicts = verdicts(&cfg, &load).unwrap();
         (sim, load, verdicts)
     };
-    let value = |all: &[sim_components::analysis::Verdict], check: &str| all.iter().find(|v| v.check == check).map(|v| v.value);
+    let value =
+        |all: &[sim_components::analysis::Verdict], check: &str| all.iter().find(|v| v.check == check).map(|v| v.value);
 
     let (_, load, all) = run(&[]);
     let m = &load.motors[0];
     let stored = 0.5 * 470e-6 * (m.peak_dc_link_voltage.powi(2) - 155.13 * 155.13);
-    assert!((stored - m.largest_regeneration).abs() < 1e-3 && (stored - 2.983).abs() < 0.01, "{stored} J stored, {} J fed back in one braking", m.largest_regeneration);
+    assert!(
+        (stored - m.largest_regeneration).abs() < 1e-3 && (stored - 2.983).abs() < 0.01,
+        "{stored} J stored, {} J fed back in one braking",
+        m.largest_regeneration
+    );
     assert!((m.peak_dc_link_voltage - 191.7).abs() < 0.1 && m.resistor_energy == 0.0, "{} V", m.peak_dc_link_voltage);
-    assert!(all.iter().all(|v| v.ok) && (value(&all, "dc-link-energy").unwrap() - stored).abs() < 1e-9 && value(&all, "dc-link-overvoltage") == Some(m.peak_dc_link_voltage));
+    assert!(
+        all.iter().all(|v| v.ok)
+            && (value(&all, "dc-link-energy").unwrap() - stored).abs() < 1e-9
+            && value(&all, "dc-link-overvoltage") == Some(m.peak_dc_link_voltage)
+    );
     assert!(value(&all, "braking-resistor-continuous").is_none());
 
     let (_, load, all) = run(&["ratings.dc_link_capacitance_uf = 4.7"]);
@@ -559,14 +655,26 @@ fn the_dc_link_takes_braking_energy_the_resistor_the_rest_and_too_small_a_resist
     let by_hand = (m.energy_regenerated - 2.0 * 0.062) / load.duration;
     let mean = m.resistor_energy / load.duration;
     assert!((mean - by_hand).abs() < 0.01 * by_hand && mean > 1.0, "resistor {mean} W, by hand {by_hand} W");
-    assert!((m.peak_dc_link_voltage - 224.65).abs() < 0.01 && m.peak_resistor_power > 30.0 && m.peak_resistor_power < 62.0, "{} V, {} W", m.peak_dc_link_voltage, m.peak_resistor_power);
+    assert!(
+        (m.peak_dc_link_voltage - 224.65).abs() < 0.01 && m.peak_resistor_power > 30.0 && m.peak_resistor_power < 62.0,
+        "{} V, {} W",
+        m.peak_dc_link_voltage,
+        m.peak_resistor_power
+    );
     assert!(all.iter().all(|v| v.ok), "{all:?}");
-    assert_eq!((value(&all, "braking-resistor-continuous"), value(&all, "braking-resistor-peak")), (Some(mean), Some(m.peak_resistor_power)));
+    assert_eq!(
+        (value(&all, "braking-resistor-continuous"), value(&all, "braking-resistor-peak")),
+        (Some(mean), Some(m.peak_resistor_power))
+    );
 
     let (mut sim, load, all) = run(&["ratings.dc_link_capacitance_uf = 4.7", "ratings.braking_resistor_peak_w = 5.0"]);
     sim.step();
     assert!(sim.control.drives[0].tripped && !sim.control.enabled() && sim.torque[0] == 0.0);
-    assert!(load.motors[0].peak_dc_link_voltage > 257.6 && load.motors[0].peak_dc_link_voltage < 258.6, "{} V", load.motors[0].peak_dc_link_voltage);
+    assert!(
+        load.motors[0].peak_dc_link_voltage > 257.6 && load.motors[0].peak_dc_link_voltage < 258.6,
+        "{} V",
+        load.motors[0].peak_dc_link_voltage
+    );
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["dc-link-overvoltage"]);
     // Tripped drives refuse commands like disabled ones. Enabling them keeps the DC link's charge (the horizontal axis
@@ -575,9 +683,19 @@ fn the_dc_link_takes_braking_energy_the_resistor_the_rest_and_too_small_a_resist
     assert_eq!(sim.command(sim_components::Command::StartCycle).unwrap_err().key, "error-disabled");
     let charged = sim.control.drives[0].dc_voltage;
     sim.command(sim_components::Command::Enable).unwrap();
-    assert!(sim.control.enabled() && !sim.control.drives[0].tripped && sim.control.drives[0].dc_voltage == charged && charged > 257.6, "{charged} V");
+    assert!(
+        sim.control.enabled()
+            && !sim.control.drives[0].tripped
+            && sim.control.drives[0].dc_voltage == charged
+            && charged > 257.6,
+        "{charged} V"
+    );
     sim.step();
-    assert!(!sim.control.drives[0].tripped && sim.control.enabled() && sim.control.drives[0].dc_voltage < 257.6, "{charged} V, then {} V", sim.control.drives[0].dc_voltage);
+    assert!(
+        !sim.control.drives[0].tripped && sim.control.enabled() && sim.control.drives[0].dc_voltage < 257.6,
+        "{charged} V, then {} V",
+        sim.control.drives[0].dc_voltage
+    );
     // A threshold that is not between the bus voltage and the trip level is refused.
     let mut cfg = ideal_rigid();
     cfg.set_text("effects.dc_link = true").unwrap();
@@ -619,7 +737,11 @@ fn a_fieldbus_delay_shifts_the_move_by_its_cycles() {
 fn a_fieldbus_jitter_spreads_the_setpoints_by_the_hand_calculated_rms() {
     let setpoints = |on: bool, jitter: usize| {
         let mut cfg = ideal_rigid();
-        for e in ["effects.fieldbus_delay = true".to_string(), format!("effects.fieldbus_jitter = {on}"), format!("profile.fieldbus_jitter_cycles = {jitter}")] {
+        for e in [
+            "effects.fieldbus_delay = true".to_string(),
+            format!("effects.fieldbus_jitter = {on}"),
+            format!("profile.fieldbus_jitter_cycles = {jitter}"),
+        ] {
             cfg.set_text(&e).unwrap();
         }
         let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -633,7 +755,10 @@ fn a_fieldbus_jitter_spreads_the_setpoints_by_the_hand_calculated_rms() {
         out
     };
     let plain = setpoints(false, 3);
-    for (jitter, shares, rms) in [(1, vec![0.5, 0.5], 0.5f64.sqrt() * 0.25), (2, vec![1.0 / 3.0, 4.0 / 9.0, 2.0 / 9.0], (4.0f64 / 3.0).sqrt() * 0.25)] {
+    for (jitter, shares, rms) in [
+        (1, vec![0.5, 0.5], 0.5f64.sqrt() * 0.25),
+        (2, vec![1.0 / 3.0, 4.0 / 9.0, 2.0 / 9.0], (4.0f64 / 3.0).sqrt() * 0.25),
+    ] {
         let late = setpoints(true, jitter);
         let mut counts = vec![0.0; jitter + 1];
         let (mut sum, mut n) = (0.0, 0.0);
@@ -642,15 +767,25 @@ fn a_fieldbus_jitter_spreads_the_setpoints_by_the_hand_calculated_rms() {
             if plain[i - jitter - 1..=i].iter().all(|(_, v)| (v - 250.0).abs() < 1e-6) {
                 let behind = plain[i].0 - late[i].0;
                 let cycles = (behind / 0.25).round();
-                assert!((behind - 0.25 * cycles).abs() < 1e-9 && (0.0..=jitter as f64).contains(&cycles), "{behind} rad behind");
+                assert!(
+                    (behind - 0.25 * cycles).abs() < 1e-9 && (0.0..=jitter as f64).contains(&cycles),
+                    "{behind} rad behind"
+                );
                 counts[cycles as usize] += 1.0;
                 (sum, n) = (sum + behind * behind, n + 1.0);
             }
         }
         let measured = (sum / n).sqrt();
-        assert!(n > 500.0 && (measured - rms).abs() < 0.05 * rms, "N = {jitter}: RMS {measured} rad over {n} cycles, by hand {rms}");
+        assert!(
+            n > 500.0 && (measured - rms).abs() < 0.05 * rms,
+            "N = {jitter}: RMS {measured} rad over {n} cycles, by hand {rms}"
+        );
         for (count, share) in counts.iter().zip(&shares) {
-            assert!((count / n - share).abs() < 0.05, "N = {jitter}: shares {:?}, by hand {shares:?}", counts.iter().map(|c| c / n).collect::<Vec<_>>());
+            assert!(
+                (count / n - share).abs() < 0.05,
+                "N = {jitter}: shares {:?}, by hand {shares:?}",
+                counts.iter().map(|c| c / n).collect::<Vec<_>>()
+            );
         }
     }
     // Switched on with no cycles of jitter, the setpoints are those with the switch off.
@@ -669,7 +804,13 @@ fn a_fieldbus_jitter_spreads_the_setpoints_by_the_hand_calculated_rms() {
 fn a_second_shaper_suppresses_a_second_resonance_by_the_zvd_formula() {
     let accelerations = |shaping: bool, first: f64, second: f64| {
         let mut cfg = ideal_rigid();
-        for e in [format!("effects.input_shaping = {shaping}"), format!("profile.shaper_frequency_hz = {first:?}"), format!("profile.shaper2_frequency_hz = {second:?}"), "profile.shaper_damping = 0.0".into(), "profile.shaper2_damping = 0.0".into()] {
+        for e in [
+            format!("effects.input_shaping = {shaping}"),
+            format!("profile.shaper_frequency_hz = {first:?}"),
+            format!("profile.shaper2_frequency_hz = {second:?}"),
+            "profile.shaper_damping = 0.0".into(),
+            "profile.shaper2_damping = 0.0".into(),
+        ] {
             cfg.set_text(&e).unwrap();
         }
         let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -681,18 +822,33 @@ fn a_second_shaper_suppresses_a_second_resonance_by_the_zvd_formula() {
             }
         });
         // The setpoint has arrived, with both shapers: the move ends at rest on the target.
-        assert!((sim.control.set_pos[0] - 0.85).abs() < 1e-12 && sim.control.set_acc[0] == 0.0, "{} m", sim.control.set_pos[0]);
+        assert!(
+            (sim.control.set_pos[0] - 0.85).abs() < 1e-12 && sim.control.set_acc[0] == 0.0,
+            "{} m",
+            sim.control.set_pos[0]
+        );
         out
     };
     let swing = |acc: &[f64], f: f64| {
         let w = std::f64::consts::TAU * f;
-        let (c, s) = acc.iter().enumerate().fold((0.0, 0.0), |(c, s), (n, a)| (c + a * (w * n as f64 * 1e-3).cos(), s + a * (w * n as f64 * 1e-3).sin()));
+        let (c, s) = acc.iter().enumerate().fold((0.0, 0.0), |(c, s), (n, a)| {
+            (c + a * (w * n as f64 * 1e-3).cos(), s + a * (w * n as f64 * 1e-3).sin())
+        });
         c.hypot(s) * 1e-3 / w
     };
     let plain = accelerations(false, 25.0, 0.0);
     let left = |acc: &[f64], f: f64| swing(acc, f) / swing(&plain, f);
-    let (at_25, at_62, both) = (accelerations(true, 25.0, 0.0), accelerations(true, 62.0, 0.0), accelerations(true, 25.0, 62.0));
-    println!("left: shaper at 25 Hz {:.4} / {:.4}, at 62 Hz {:.4} / {:.4}, both {:.4} / {:.4}", left(&at_25, 25.0), left(&at_25, 62.0), left(&at_62, 25.0), left(&at_62, 62.0), left(&both, 25.0), left(&both, 62.0));
+    let (at_25, at_62, both) =
+        (accelerations(true, 25.0, 0.0), accelerations(true, 62.0, 0.0), accelerations(true, 25.0, 62.0));
+    println!(
+        "left: shaper at 25 Hz {:.4} / {:.4}, at 62 Hz {:.4} / {:.4}, both {:.4} / {:.4}",
+        left(&at_25, 25.0),
+        left(&at_25, 62.0),
+        left(&at_62, 25.0),
+        left(&at_62, 62.0),
+        left(&both, 25.0),
+        left(&both, 62.0)
+    );
     assert!(swing(&plain, 25.0) > 0.0 && swing(&plain, 62.0) > 0.0);
     assert!(left(&at_25, 25.0) < 0.01 && (left(&at_25, 62.0) - 0.5314).abs() < 0.02, "one shaper at 25 Hz");
     assert!(left(&at_62, 62.0) < 0.03 && (left(&at_62, 25.0) - 0.6503).abs() < 0.02, "one shaper at 62 Hz");
@@ -715,7 +871,10 @@ fn radial_load_on_the_pulley_shaft_is_the_sum_of_both_section_tensions() {
     let level = machine(lossless_config(), &[]);
     level.equilibrium(&[0.5], &mut state, &mut hold);
     assert!((signal(&level, &state, hold[0], "pulley.m.radial_load") - 600.0).abs() < 1e-6);
-    assert!((signal(&level, &state, hold[0], "axis.x.guide_load") - 6.0 * G).abs() < 1e-12 && signal(&m, &state, hold[0], "axis.x.guide_load").abs() < 1e-12);
+    assert!(
+        (signal(&level, &state, hold[0], "axis.x.guide_load") - 6.0 * G).abs() < 1e-12
+            && signal(&m, &state, hold[0], "axis.x.guide_load").abs() < 1e-12
+    );
 }
 
 /// Hard stops against a hand calculation. The motor pushes the carriage into the stop at x = 0 with 0.1 N m,
@@ -723,7 +882,12 @@ fn radial_load_on_the_pulley_shaft_is_the_sum_of_both_section_tensions() {
 /// would hold part of the force, so it is off.
 #[test]
 fn a_carriage_pushed_into_the_hard_stop_rests_at_the_hand_calculated_depth() {
-    let edit = ["effects.guide_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.tooth_meshing = false"];
+    let edit = [
+        "effects.guide_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.tooth_meshing = false",
+    ];
     // (how far beyond the end of the stroke, speed) after 2 s of pushing.
     let pushed = |m: &SingleAxis, end: f64, push: f64| {
         let (mut state, mut hold) = (Vec::new(), [0.0]);
@@ -771,7 +935,8 @@ fn a_bound_on_the_moved_mass_gives_the_hand_calculated_band_and_fails_the_verdic
 
     // The bounds of a config are read from its [bounds]; one on a value the config does not have is refused.
     assert!(bounds(&ENTRY.config()).unwrap().contains(&("friction_x.coulomb_n".to_string(), 10.0, 20.0)));
-    let typo = Config::parse(&ENTRY.default_config.replace("[bounds]\n", "[bounds]\nmass.cariage_kg = [3.0, 5.0]\n")).unwrap();
+    let typo =
+        Config::parse(&ENTRY.default_config.replace("[bounds]\n", "[bounds]\nmass.cariage_kg = [3.0, 5.0]\n")).unwrap();
     assert_eq!(bounds(&typo).unwrap_err().detail(), "mass.cariage_kg");
 }
 
@@ -782,7 +947,12 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
     use sim_components::analysis::{optimise_cycle, verdicts};
     let cfg = ENTRY.config();
     let found = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
-    assert!(found.runs <= 14 && found.after.duration < 0.95 * found.before.duration, "{} s to {} s", found.before.duration, found.after.duration);
+    assert!(
+        found.runs <= 14 && found.after.duration < 0.95 * found.before.duration,
+        "{} s to {} s",
+        found.before.duration,
+        found.after.duration
+    );
     // The settings it reports give that cycle, and the cycle passes.
     let mut faster = cfg.clone();
     for (path, _, after) in &found.changes {
@@ -790,7 +960,9 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
     }
     assert!(!found.changes.is_empty());
     let load = analyse_cycle(&mut Sim::new(&ENTRY, &faster).unwrap()).unwrap();
-    assert!((load.duration - found.after.duration).abs() < 1e-9 && verdicts(&faster, &load).unwrap().iter().all(|v| v.ok));
+    assert!(
+        (load.duration - found.after.duration).abs() < 1e-9 && verdicts(&faster, &load).unwrap().iter().all(|v| v.ok)
+    );
     assert!(load.dwell_error_peak <= cfg.f64("ratings.settling_tolerance_m").unwrap());
 
     // With a tolerance no machine meets, the cycle as configured fails and there is nothing to start from.
@@ -806,15 +978,31 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
 /// robust part, and its result fails in the bands where the robust one passes.
 #[test]
 fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_bands() {
-    use sim_components::analysis::{Optimised, OptimiseOptions, bounds, optimise_cycle, optimise_cycle_with, verdict_bands};
+    use sim_components::analysis::{
+        OptimiseOptions, Optimised, bounds, optimise_cycle, optimise_cycle_with, verdict_bands,
+    };
     let mut cfg = ENTRY.config();
     cfg.set_text("bounds = { mass = { payload_kg = [2.0, 20.0] } }").unwrap();
     let nominal = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
-    let found = optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { max_runs: 14, robust: true, pareto: false }).unwrap();
+    let found =
+        optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { max_runs: 14, robust: true, pareto: false }).unwrap();
     let robust = found.robust.clone().unwrap();
-    assert_eq!((robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs), (["belt-slack"].as_slice(), 0, 1, 9), "{robust:?}");
-    assert!(nominal.robust.is_none() && robust.nominal_duration == nominal.after.duration, "{} s", robust.nominal_duration);
-    assert!(found.after.duration > nominal.after.duration && found.after.duration < found.before.duration, "{} s to {} s", found.before.duration, found.after.duration);
+    assert_eq!(
+        (robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs),
+        (["belt-slack"].as_slice(), 0, 1, 9),
+        "{robust:?}"
+    );
+    assert!(
+        nominal.robust.is_none() && robust.nominal_duration == nominal.after.duration,
+        "{} s",
+        robust.nominal_duration
+    );
+    assert!(
+        found.after.duration > nominal.after.duration && found.after.duration < found.before.duration,
+        "{} s to {} s",
+        found.before.duration,
+        found.after.duration
+    );
     let applied = |found: &Optimised| {
         let mut out = cfg.clone();
         for (path, _, after) in &found.changes {
@@ -839,7 +1027,11 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
     use sim_components::analysis::supply_energy;
     let run = |a: f64| {
         let mut cfg = ideal_rigid();
-        for e in ["effects.dc_link = true".to_string(), "ratings.dc_link_capacitance_uf = 4.7".into(), format!("axis.x.max_acceleration_m_s2 = {a:?}")] {
+        for e in [
+            "effects.dc_link = true".to_string(),
+            "ratings.dc_link_capacitance_uf = 4.7".into(),
+            format!("axis.x.max_acceleration_m_s2 = {a:?}"),
+        ] {
             cfg.set_text(&e).unwrap();
         }
         let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
@@ -854,11 +1046,22 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
     assert!((kinetic(1.0) - 2.4228).abs() < 1e-4 && (kinetic(0.5) - 1.2202).abs() < 1e-4);
     let ((back_fast, supply_fast), (back_slow, supply_slow)) = (run(1.0), run(0.5));
     for (back, a) in [(back_fast, 1.0), (back_slow, 0.5)] {
-        assert!(back < 2.0 * kinetic(a) && back > 0.98 * 2.0 * kinetic(a), "{back} J fed back at {a} m/s^2, by hand {} J", 2.0 * kinetic(a));
+        assert!(
+            back < 2.0 * kinetic(a) && back > 0.98 * 2.0 * kinetic(a),
+            "{back} J fed back at {a} m/s^2, by hand {} J",
+            2.0 * kinetic(a)
+        );
     }
     let less = 2.0 * (kinetic(1.0) - kinetic(0.5));
-    assert!(((back_fast - back_slow) / less - 1.0).abs() < 0.02, "{} J less fed back, by hand {less} J", back_fast - back_slow);
-    assert!(((supply_fast - supply_slow) / less - 1.0).abs() < 0.03, "{supply_fast} J and {supply_slow} J from the supply, by hand {less} J less");
+    assert!(
+        ((back_fast - back_slow) / less - 1.0).abs() < 0.02,
+        "{} J less fed back, by hand {less} J",
+        back_fast - back_slow
+    );
+    assert!(
+        ((supply_fast - supply_slow) / less - 1.0).abs() < 0.03,
+        "{supply_fast} J and {supply_slow} J from the supply, by hand {less} J less"
+    );
 }
 
 /// The front of `sim-cli optimise --pareto` on the default config: the settings of the search that pass, and the
@@ -868,7 +1071,9 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
 #[test]
 fn every_row_of_the_energy_front_is_beaten_by_no_other() {
     use sim_components::analysis::{OptimiseOptions, optimise_cycle_with};
-    let found = optimise_cycle_with(&ENTRY, &ENTRY.config(), &OptimiseOptions { max_runs: 14, robust: false, pareto: true }).unwrap();
+    let found =
+        optimise_cycle_with(&ENTRY, &ENTRY.config(), &OptimiseOptions { max_runs: 14, robust: false, pareto: true })
+            .unwrap();
     assert!(found.runs <= 14 + 6 && found.front.len() >= 3, "{} runs, {:?}", found.runs, found.front);
     let figures = |p: &sim_components::analysis::FrontPoint| [p.duration, p.energy, p.utilisation];
     for p in &found.front {
@@ -878,7 +1083,11 @@ fn every_row_of_the_energy_front_is_beaten_by_no_other() {
         }
     }
     assert!(found.front.windows(2).all(|w| w[0].duration <= w[1].duration));
-    assert!(found.front[0].duration == found.after.duration && found.front.last().unwrap().duration > found.before.duration, "{:?}", found.front);
+    assert!(
+        found.front[0].duration == found.after.duration && found.front.last().unwrap().duration > found.before.duration,
+        "{:?}",
+        found.front
+    );
 }
 
 /// A drive trace of the axis going to the far end and back, one row per millisecond as a run writes it,
@@ -927,10 +1136,20 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     let m_total = 6.0 + (1.0e-4 + 25.0 * 0.3e-4 + 0.1 * 2.6 * 0.02 * 0.02) / (0.02 * 0.02);
     assert!((fit.config[0] - m_total).abs() < 0.03 * m_total, "config mass {} kg, by hand {m_total} kg", fit.config[0]);
     let errors = [fit.error[0], fit.error[1] / fit.config[1], fit.error[2] / fit.config[2], fit.error[3]];
-    let found = [fit.fitted[0] - fit.config[0], fit.fitted[1] / fit.config[1], fit.fitted[2] / fit.config[2], fit.fitted[3] - fit.config[3]];
+    let found = [
+        fit.fitted[0] - fit.config[0],
+        fit.fitted[1] / fit.config[1],
+        fit.fitted[2] / fit.config[2],
+        fit.fitted[3] - fit.config[3],
+    ];
     // Mass in kg, friction as factors, and no constant force on a level axis.
     for (q, expected) in [1.5, 1.3, 1.4, 0.0].into_iter().enumerate() {
-        assert!((found[q] - expected).abs() < 3.0 * errors[q], "value {q}: {} ± {}, expected {expected}", found[q], errors[q]);
+        assert!(
+            (found[q] - expected).abs() < 3.0 * errors[q],
+            "value {q}: {} ± {}, expected {expected}",
+            found[q],
+            errors[q]
+        );
     }
     // The bands are narrow enough to be of use: 1 % of the mass, 2 % of the friction.
     assert!(errors[0] < 0.01 * fit.fitted[0] && errors[1] < 0.02 && errors[2] < 0.02, "{errors:?}");
@@ -938,18 +1157,26 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     // The changes as the command line advises them, then a second pass. Through the gearbox's losses a
     // wrong friction looks a little like mass and the other way round; the second pass takes that out.
     let apply = |cfg: &mut Config, fit: &sim_components::identify::AxisFit| {
-        cfg.set_text(&format!("mass.carriage_kg = {:?}", cfg.f64("mass.carriage_kg").unwrap() + fit.fitted[0] - fit.config[0])).unwrap();
+        cfg.set_text(&format!(
+            "mass.carriage_kg = {:?}",
+            cfg.f64("mass.carriage_kg").unwrap() + fit.fitted[0] - fit.config[0]
+        ))
+        .unwrap();
         scale(cfg, &viscous, fit.fitted[1] / fit.config[1]);
         scale(cfg, &coulomb, fit.fitted[2] / fit.config[2]);
     };
     apply(&mut cfg, &fit);
     let second = fit_rigid(&ENTRY, &cfg, &trace).unwrap()[0].clone().unwrap();
     apply(&mut cfg, &second);
-    let (mass, drag, dry) = (cfg.f64("mass.carriage_kg").unwrap() + 2.0, cfg.f64(viscous[0]).unwrap(), cfg.f64(coulomb[0]).unwrap());
+    let (mass, drag, dry) =
+        (cfg.f64("mass.carriage_kg").unwrap() + 2.0, cfg.f64(viscous[0]).unwrap(), cfg.f64(coulomb[0]).unwrap());
     // Two standard errors, as for the friction below: with the winding integrated with the mechanics the second pass
     // lands 0.03 kg off (it was within one before).
     assert!((mass - 7.5).abs() < 2.0 * errors[0], "carriage and payload {mass} kg, in truth 7.5 kg ± {}", errors[0]);
-    assert!((drag / 26.0 - 1.0).abs() < 2.0 * errors[1] && (dry / 21.0 - 1.0).abs() < 2.0 * errors[2], "viscous {drag} N s/m of 26, Coulomb {dry} N of 21");
+    assert!(
+        (drag / 26.0 - 1.0).abs() < 2.0 * errors[1] && (dry / 21.0 - 1.0).abs() < 2.0 * errors[2],
+        "viscous {drag} N s/m of 26, Coulomb {dry} N of 21"
+    );
 
     // Stage 2, the stiffness, from a frequency sweep of the measured machine with 2 % noise on its gains,
     // against the sweep of the config with the masses now right. The torque has to be large enough to
@@ -958,16 +1185,26 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     let mut noise = Noise(2);
     let mut measured = frequency_sweep(&ENTRY, &truth, 0, &frequencies, 1.5).unwrap();
     measured.iter_mut().for_each(|p| p.gain *= 1.0 + 0.02 * noise.next());
-    let (config, fitted) = (resonance(&frequency_sweep(&ENTRY, &cfg, 0, &frequencies, 1.5).unwrap()).unwrap(), resonance(&measured).unwrap());
+    let (config, fitted) = (
+        resonance(&frequency_sweep(&ENTRY, &cfg, 0, &frequencies, 1.5).unwrap()).unwrap(),
+        resonance(&measured).unwrap(),
+    );
     // By hand for the config: belt sections of 0.25 m and 2.35 m and the gearbox in series, 7.5 kg on them.
     // The play makes the spring softer than that, so the dip lies lower, but not by much.
     let k = 1.0 / (1.0 / (5.0e5 * (1.0 / 0.25 + 1.0 / 2.35)) + 0.02 * 0.02 / 1.0e4);
     let by_hand = f64::sqrt(k / 7.5) / std::f64::consts::TAU;
-    assert!(config.frequency < by_hand && config.frequency > 0.85 * by_hand, "dip at {} Hz, by hand {by_hand} Hz", config.frequency);
+    assert!(
+        config.frequency < by_hand && config.frequency > 0.85 * by_hand,
+        "dip at {} Hz, by hand {by_hand} Hz",
+        config.frequency
+    );
     let stiffness = (fitted.frequency / config.frequency).powi(2);
     let band = 2.0 * stiffness * fitted.frequency_error / fitted.frequency;
     // The belt is not the only spring: with the gearbox in series, 0.7 on the belt is 0.72 on the whole.
-    assert!((stiffness - 0.7).abs() < 3.0 * band && band < 0.03, "stiffness factor {stiffness} ± {band}, belt in truth 0.7");
+    assert!(
+        (stiffness - 0.7).abs() < 3.0 * band && band < 0.03,
+        "stiffness factor {stiffness} ± {band}, belt in truth 0.7"
+    );
     assert!(fitted.damping > 0.03 && fitted.damping < 0.3, "damping {}", fitted.damping);
 }
 
@@ -994,18 +1231,25 @@ fn a_time_optimal_line_takes_the_hand_calculated_time() {
         assert!((points[points.len() - 1].1[0] - 0.9).abs() < 1e-15, "ends at {:?}", points[points.len() - 1].1);
         // The top speed and the hardest acceleration of the plan, by differences.
         let speed = points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]) / 1e-3).fold(0.0, f64::max);
-        let acc = points.windows(3).map(|w| ((w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / 1e-6).abs()).fold(0.0, f64::max);
+        let acc =
+            points.windows(3).map(|w| ((w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / 1e-6).abs()).fold(0.0, f64::max);
         (points[points.len() - 1].0, speed, acc)
     };
     let (time, top, hardest) = duration(&cfg);
     assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
-    assert!((top - v).abs() < 1e-3 * v && (hardest - a).abs() < 1e-3 * a, "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {a} m/s^2");
+    assert!(
+        (top - v).abs() < 1e-3 * v && (hardest - a).abs() < 1e-3 * a,
+        "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {a} m/s^2"
+    );
     cfg.set_text("axis.x.max_jerk_m_s3 = 100.0").unwrap();
     let (by_hand, gentler) = (dist / v + 2.0 * (v / 100.0f64).sqrt(), (v * 100.0f64).sqrt());
     let (time, top, hardest) = duration(&cfg);
     assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
     // The acceleration peaks for an instant, which differences over a cycle of 1 ms round off by 0.3 %.
-    assert!((top - v).abs() < 1e-3 * v && (hardest - gentler).abs() < 5e-3 * gentler, "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {gentler} m/s^2");
+    assert!(
+        (top - v).abs() < 1e-3 * v && (hardest - gentler).abs() < 5e-3 * gentler,
+        "{top} m/s, {hardest} m/s^2, by hand {v} m/s, {gentler} m/s^2"
+    );
     // The plan within the axis limits (1 m/s, 10 m/s^2) is slower, and an arc needs two axes.
     cfg.set_text("drive.peak_torque_nm = 3.8").unwrap();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -1028,14 +1272,25 @@ fn a_cycle_on_the_torque_limit_fails_the_peak_verdict() {
     cfg.set_text("effects.dc_link = false").unwrap();
     let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
     let m = &load.motors[0];
-    assert!(m.peak_torque < 1.03 * 3.8 && load.tracking_error_peak > 0.01, "{} N m, {} m behind", m.peak_torque, load.tracking_error_peak);
+    assert!(
+        m.peak_torque < 1.03 * 3.8 && load.tracking_error_peak > 0.01,
+        "{} N m, {} m behind",
+        m.peak_torque,
+        load.tracking_error_peak
+    );
     assert!(m.utilisation > 5.05 / 3.8, "utilisation {}", m.utilisation);
-    let peak = sim_components::analysis::verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "motor-peak").unwrap();
+    let peak =
+        sim_components::analysis::verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "motor-peak").unwrap();
     assert!(!peak.ok && peak.value == m.utilisation);
     // The default cycle asks for what it gets: the two ways of counting agree within the lag of the current loop.
     let load = analyse_cycle(&mut Sim::new(&ENTRY, &ENTRY.config()).unwrap()).unwrap();
     let m = &load.motors[0];
-    assert!((m.utilisation - m.peak_torque / 3.8).abs() < 0.05 * m.utilisation, "utilisation {}, peak {} N m", m.utilisation, m.peak_torque);
+    assert!(
+        (m.utilisation - m.peak_torque / 3.8).abs() < 0.05 * m.utilisation,
+        "utilisation {}, peak {} N m",
+        m.utilisation,
+        m.peak_torque
+    );
 }
 
 /// effects.drive_current_limit: a move that asks more than a 0.5 A drive gives. Rigid model, payload off, the guide's
@@ -1051,13 +1306,21 @@ fn a_cycle_on_the_torque_limit_fails_the_peak_verdict() {
 fn a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rate() {
     let limited = |edits: &[&str]| {
         let mut cfg = ideal_rigid();
-        let base = ["effects.drive_current_limit = true", "ratings.drive_max_current_a = 0.5", "effects.guide_friction = true", "friction_x.viscous_n_s_m = 0.0", "effects.torque_saturation = false"];
+        let base = [
+            "effects.drive_current_limit = true",
+            "ratings.drive_max_current_a = 0.5",
+            "effects.guide_friction = true",
+            "friction_x.viscous_n_s_m = 0.0",
+            "effects.torque_saturation = false",
+        ];
         for e in base.iter().chain(edits) {
             cfg.set_text(e).unwrap();
         }
         cfg
     };
-    for (edits, torque, by_hand) in [(&[][..], 0.225, 41.25 / 6.125), (&["drive.peak_torque_nm = 0.18"][..], 0.18, 30.0 / 6.125)] {
+    for (edits, torque, by_hand) in
+        [(&[][..], 0.225, 41.25 / 6.125), (&["drive.peak_torque_nm = 0.18"][..], 0.18, 30.0 / 6.125)]
+    {
         let mut sim = Sim::new(&ENTRY, &limited(edits)).unwrap();
         sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
         let speed = |sim: &Sim| {
@@ -1067,7 +1330,13 @@ fn a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rat
         };
         sim.run(0.12, |_| {});
         let before = speed(&sim);
-        sim.run(0.05, |sim| assert!((sim.control.drives[0].torque - torque).abs() < 5e-3 * torque, "{} N m, not on the limit", sim.control.drives[0].torque));
+        sim.run(0.05, |sim| {
+            assert!(
+                (sim.control.drives[0].torque - torque).abs() < 5e-3 * torque,
+                "{} N m, not on the limit",
+                sim.control.drives[0].torque
+            )
+        });
         let a = (speed(&sim) - before) / 0.05;
         assert!((a - by_hand).abs() < 0.01 * by_hand, "{a} m/s^2, by hand {by_hand} m/s^2");
     }
@@ -1077,9 +1346,23 @@ fn a_move_held_at_the_drive_current_limit_accelerates_at_the_hand_calculated_rat
     let mut cfg = ENTRY.config();
     cfg.set_text(&format!("ratings.drive_max_current_a = {}", 0.7 * free.motors[0].peak_current)).unwrap();
     let held = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
-    let check = sim_components::analysis::verdicts(&cfg, &held).unwrap().into_iter().find(|v| v.check == "drive-peak-current").unwrap();
-    assert!(!check.ok && check.value > 0.95 * free.motors[0].peak_current, "{} A against {} A", check.value, check.limit);
-    assert!(held.tracking_error_peak > 1.2 * free.tracking_error_peak, "{} m behind, {} m without the limit", held.tracking_error_peak, free.tracking_error_peak);
+    let check = sim_components::analysis::verdicts(&cfg, &held)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.check == "drive-peak-current")
+        .unwrap();
+    assert!(
+        !check.ok && check.value > 0.95 * free.motors[0].peak_current,
+        "{} A against {} A",
+        check.value,
+        check.limit
+    );
+    assert!(
+        held.tracking_error_peak > 1.2 * free.tracking_error_peak,
+        "{} m behind, {} m without the limit",
+        held.tracking_error_peak,
+        free.tracking_error_peak
+    );
 }
 
 /// The gearbox verdicts judge the torque at the gearbox output, not the motor torque times the ratio. On a
@@ -1103,11 +1386,18 @@ fn the_gearbox_verdicts_judge_the_torque_at_the_gearbox_output() {
         let (state, mut d) = ([0.5, speed, 0.0, 0.0], [0.0; N_RIGID]);
         m.derivatives(&state, &[motor], &mut d);
         let output = signal(&m, &state, motor, "gearbox.m.output_torque");
-        assert!(d[1].abs() < 1e-9 && (output - weight).abs() < 1e-9 && (weight - 0.7845).abs() < 1e-4, "at {speed} m/s: {output} N m, {} m/s^2", d[1]);
+        assert!(
+            d[1].abs() < 1e-9 && (output - weight).abs() < 1e-9 && (weight - 0.7845).abs() < 1e-4,
+            "at {speed} m/s: {output} N m, {} m/s^2",
+            d[1]
+        );
         assert!((5.0 * motor / weight - if speed > 0.0 { 1.0 / 0.9 } else { 0.9 }).abs() < 1e-12);
     }
 
-    let m = machine(lossless_config(), &[&lossy[..], &["effects.belt_damping = true", "gearbox.damping_nm_s_rad = 0.2"]].concat());
+    let m = machine(
+        lossless_config(),
+        &[&lossy[..], &["effects.belt_damping = true", "gearbox.damping_nm_s_rad = 0.2"]].concat(),
+    );
     let (mut state, mut hold) = (Vec::new(), [0.0]);
     m.equilibrium(&[0.6], &mut state, &mut hold);
     m.set_tool_velocity(&mut state, &[-0.5]);
@@ -1120,7 +1410,11 @@ fn the_gearbox_verdicts_judge_the_torque_at_the_gearbox_output() {
         cfg.set_text(e).unwrap();
     }
     let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
-    let peak = sim_components::analysis::verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "gearbox-peak").unwrap();
+    let peak = sim_components::analysis::verdicts(&cfg, &load)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.check == "gearbox-peak")
+        .unwrap();
     let (by_hand, motor) = ((4.0 * G + 4.25 * 10.0) * 0.02, 5.0 * load.motors[0].peak_torque);
     assert!((peak.value - by_hand).abs() < 0.02 * by_hand, "{} N m at the output, by hand {by_hand} N m", peak.value);
     assert!((motor - (by_hand / 0.9 + 0.375)).abs() < 0.02 * motor, "{motor} N m by the motor torque");
@@ -1145,7 +1439,14 @@ fn sampled_bands_find_the_two_masses_that_fail_only_together() {
     let near = |value: f64, by_hand: f64| (value - by_hand).abs() < 0.02 * by_hand;
 
     let alone = peak(verdict_bands(&ENTRY, &cfg, &masses).unwrap());
-    assert!(alone.ok && alone.share == 1.0 && near(alone.verdict.value, 1.25) && near(alone.low, 1.25) && near(alone.high, 1.65), "{alone:?}");
+    assert!(
+        alone.ok
+            && alone.share == 1.0
+            && near(alone.verdict.value, 1.25)
+            && near(alone.low, 1.25)
+            && near(alone.high, 1.65),
+        "{alone:?}"
+    );
 
     let together = peak(verdict_bands_sampled(&ENTRY, &cfg, &masses, 40, 1).unwrap());
     assert!(together.verdict.ok && !together.ok, "{together:?}");
@@ -1157,7 +1458,10 @@ fn sampled_bands_find_the_two_masses_that_fail_only_together() {
     let other = peak(verdict_bands_sampled(&ENTRY, &cfg, &masses, 40, 2).unwrap());
     assert!(other.high != together.high && !other.ok && (other.share - 0.72).abs() < 0.1, "{other:?}");
     assert_eq!(verdict_bands_sampled(&ENTRY, &cfg, &masses, 0, 1).unwrap_err().detail(), "samples");
-    println!("alone {:.4} to {:.4} N m; together {:.4} to {:.4} N m, {:.3} pass; seed 2: {:.4} N m, {:.3} pass", alone.low, alone.high, together.low, together.high, together.share, other.high, other.share);
+    println!(
+        "alone {:.4} to {:.4} N m; together {:.4} to {:.4} N m, {:.3} pass; seed 2: {:.4} N m, {:.3} pass",
+        alone.low, alone.high, together.low, together.high, together.share, other.high, other.share
+    );
 }
 
 /// The search for the worst corner of the bounds (`verdict_worst`), against a hand calculation and against samples.
@@ -1175,29 +1479,56 @@ fn sampled_bands_find_the_two_masses_that_fail_only_together() {
 fn the_worst_corner_search_finds_the_hand_calculated_corner() {
     use sim_components::analysis::{verdict_bands, verdict_bands_sampled, verdict_worst, verdict_worst_and_bands};
     let mut cfg = ideal_rigid();
-    for e in ["effects.payload = true", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.9", "effects.dc_link = false"] {
+    for e in [
+        "effects.payload = true",
+        "effects.gearbox_efficiency = true",
+        "gearbox.efficiency = 0.9",
+        "effects.dc_link = false",
+    ] {
         cfg.set_text(e).unwrap();
     }
-    let bounds = [("mass.carriage_kg".to_string(), 4.0, 6.0), ("mass.payload_kg".to_string(), 2.0, 4.0), ("gearbox.efficiency".to_string(), 0.85, 0.95), ("belt.damping_n_s_m".to_string(), 50.0, 200.0)];
+    let bounds = [
+        ("mass.carriage_kg".to_string(), 4.0, 6.0),
+        ("mass.payload_kg".to_string(), 2.0, 4.0),
+        ("gearbox.efficiency".to_string(), 0.85, 0.95),
+        ("belt.damping_n_s_m".to_string(), 50.0, 200.0),
+    ];
     let (worst, runs) = verdict_worst(&ENTRY, &cfg, &bounds).unwrap();
     let (again, bands, _) = verdict_worst_and_bands(&ENTRY, &cfg, &bounds).unwrap();
     assert!(again == worst && bands == verdict_bands(&ENTRY, &cfg, &bounds).unwrap());
     let find = |check: &str| worst.iter().find(|w| w.verdict.check == check).unwrap().clone();
     let (gearbox, motor) = (find("gearbox-peak"), find("motor-peak"));
-    assert!(gearbox.high[..2] == [Some(true), Some(true)] && (gearbox.verdict.value / 2.05 - 1.0).abs() < 0.02, "{gearbox:?}");
-    assert!(motor.high[..3] == [Some(true), Some(true), Some(false)] && (motor.verdict.value / ((2.05 / 0.85 + 0.375) / 5.0 / 3.8) - 1.0).abs() < 0.02, "{motor:?}");
+    assert!(
+        gearbox.high[..2] == [Some(true), Some(true)] && (gearbox.verdict.value / 2.05 - 1.0).abs() < 0.02,
+        "{gearbox:?}"
+    );
+    assert!(
+        motor.high[..3] == [Some(true), Some(true), Some(false)]
+            && (motor.verdict.value / ((2.05 / 0.85 + 0.375) / 5.0 / 3.8) - 1.0).abs() < 0.02,
+        "{motor:?}"
+    );
     for seed in [1, 2] {
         let sampled = verdict_bands_sampled(&ENTRY, &cfg, &bounds, 40, seed).unwrap();
         for w in &worst {
-            let band = sampled.iter().find(|b| (b.verdict.check, b.verdict.motor) == (w.verdict.check, w.verdict.motor)).unwrap();
+            let band = sampled
+                .iter()
+                .find(|b| (b.verdict.check, b.verdict.motor) == (w.verdict.check, w.verdict.motor))
+                .unwrap();
             // A check that has to stay above its limit (the belt's slack, the lives) is worst at its lowest.
             let below = sim_components::analysis::AT_LEAST.contains(&w.verdict.check);
             let sampled_worst = if below { band.low } else { band.high };
             let worse = if below { w.verdict.value <= sampled_worst } else { w.verdict.value >= sampled_worst };
-            assert!(worse, "{}: {} at the corner, {sampled_worst} in a sample (seed {seed})", w.verdict.check, w.verdict.value);
+            assert!(
+                worse,
+                "{}: {} at the corner, {sampled_worst} in a sample (seed {seed})",
+                w.verdict.check, w.verdict.value
+            );
         }
     }
-    println!("{runs} cycles; gearbox-peak {} N m, motor-peak {} at {:?}", gearbox.verdict.value, motor.verdict.value, motor.high);
+    println!(
+        "{runs} cycles; gearbox-peak {} N m, motor-peak {} at {:?}",
+        gearbox.verdict.value, motor.verdict.value, motor.high
+    );
 }
 
 /// Carriage with payload, pulley and rotor as mass at the belt, without belt mass:
@@ -1240,11 +1571,22 @@ fn cable_chain_adds_the_hand_calculated_force_at_two_positions() {
         let incline = [&chained[..], &["geometry.incline_deg = 30.0"]].concat();
         let extra = chain * G * 0.5 * 0.02 / 5.0;
         for (model, tolerance) in [(rigid(&incline), 1e-12), (machine(lossless_config(), &incline), 2e-6)] {
-            let bare = machine(lossless_config(), &["geometry.incline_deg = 30.0", "effects.belt_mass = false", if model.elastic { "effects.belt_stretch = true" } else { "effects.belt_stretch = false" }]);
+            let bare = machine(
+                lossless_config(),
+                &[
+                    "geometry.incline_deg = 30.0",
+                    "effects.belt_mass = false",
+                    if model.elastic { "effects.belt_stretch = true" } else { "effects.belt_stretch = false" },
+                ],
+            );
             let (mut with, mut without) = ([0.0], [0.0]);
             model.equilibrium(&[x], &mut state, &mut with);
             bare.equilibrium(&[x], &mut state, &mut without);
-            assert!((with[0] - without[0] - extra).abs() < tolerance, "x = {x}: {} N m more to hold, by hand {extra} N m", with[0] - without[0]);
+            assert!(
+                (with[0] - without[0] - extra).abs() < tolerance,
+                "x = {x}: {} N m more to hold, by hand {extra} N m",
+                with[0] - without[0]
+            );
         }
     }
 }
@@ -1293,7 +1635,14 @@ fn the_holding_brake_holds_the_upright_axis_when_it_is_strong_enough() {
     for elastic in [true, false] {
         let disabled = |brake_torque: f64| {
             let mut cfg = lossless_config();
-            for e in ["effects.holding_brake = true", "effects.belt_mass = false", "geometry.incline_deg = 90.0", "start.pose = [0.5]", &format!("motor.brake_torque_nm = {brake_torque:?}"), &format!("effects.belt_stretch = {elastic}")] {
+            for e in [
+                "effects.holding_brake = true",
+                "effects.belt_mass = false",
+                "geometry.incline_deg = 90.0",
+                "start.pose = [0.5]",
+                &format!("motor.brake_torque_nm = {brake_torque:?}"),
+                &format!("effects.belt_stretch = {elastic}"),
+            ] {
                 cfg.set_text(e).unwrap();
             }
             let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -1302,7 +1651,11 @@ fn the_holding_brake_holds_the_upright_axis_when_it_is_strong_enough() {
             sim
         };
         let mut held = disabled(0.26);
-        assert!((held.state[0] - 0.5).abs() < 1e-4 && held.torque[0] == 0.0, "elastic {elastic}: held at {} m", held.state[0]);
+        assert!(
+            (held.state[0] - 0.5).abs() < 1e-4 && held.torque[0] == 0.0,
+            "elastic {elastic}: held at {} m",
+            held.state[0]
+        );
         // Nothing moves a disabled machine; enabled again, the drive holds where it stands.
         assert_eq!(held.command(Command::MoveTo(vec![0.6])).unwrap_err().key, "error-disabled");
         held.command(Command::Enable).unwrap();
@@ -1331,7 +1684,10 @@ fn the_scene_point_of_a_tool_pose_is_where_the_scene_draws_the_carriage() {
             let (mut tool, mut speed) = ([0.0], [0.0]);
             m.tool_state(&state, &mut tool, &mut speed);
             let mapped = m.scene_point(&tool).unwrap();
-            assert!((0..3).all(|i| (mapped[i] - carriage[i]).abs() < 1e-12) && (mapped[0] - 0.15 - x).abs() < 1e-12, "at {x}: mapped {mapped:?}, drawn {carriage:?}");
+            assert!(
+                (0..3).all(|i| (mapped[i] - carriage[i]).abs() < 1e-12) && (mapped[0] - 0.15 - x).abs() < 1e-12,
+                "at {x}: mapped {mapped:?}, drawn {carriage:?}"
+            );
         }
     }
 }
@@ -1358,7 +1714,10 @@ fn holding_the_vertical_axis_is_all_gravity() {
     assert!((part("gravity") - by_hand).abs() < 1e-12, "{} N m", part("gravity"));
     assert!((sim.torque[0] - by_hand).abs() < 2e-3 * by_hand, "torque {} N m", sim.torque[0]);
     let (inertia, friction, rest) = (part("inertia"), part("friction"), part("rest"));
-    assert!(inertia.abs() < 5e-3 * by_hand && friction.abs() < 5e-3 * by_hand && rest.abs() < 5e-3 * by_hand, "{inertia}, {friction}, {rest}");
+    assert!(
+        inertia.abs() < 5e-3 * by_hand && friction.abs() < 5e-3 * by_hand && rest.abs() < 5e-3 * by_hand,
+        "{inertia}, {friction}, {rest}"
+    );
 }
 
 /// The friction view's curve is the formula with the config's values (Fc 15 N, Fs 20 N, b 20 N s/m, vs 0.01 m/s):
@@ -1383,7 +1742,10 @@ fn the_carriage_mode_is_the_hand_calculated_one_at_two_places() {
     let m = machine(ENTRY.config(), &[]);
     for (x, hz, damping) in [(0.5, 65.8025, 0.040311), (0.1, 96.6523, 0.027445)] {
         let modes = m.modes(&[x]);
-        assert!(modes.len() == 1 && (modes[0].hz - hz).abs() < 1e-3 && (modes[0].damping - damping).abs() < 1e-5, "x = {x}: {modes:?}");
+        assert!(
+            modes.len() == 1 && (modes[0].hz - hz).abs() < 1e-3 && (modes[0].damping - damping).abs() < 1e-5,
+            "x = {x}: {modes:?}"
+        );
         assert_eq!(m.resonance_hz(&[x]), Some(modes[0].hz));
     }
     assert!(rigid(&[]).modes(&[0.5]).is_empty());

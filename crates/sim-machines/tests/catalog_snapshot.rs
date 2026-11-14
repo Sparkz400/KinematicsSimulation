@@ -13,7 +13,8 @@ fn diff(out: &mut String, label: &str, before: &Config, after: Result<Config, si
     match after {
         Err(e) => writeln!(out, "{label}: error {} {}", e.key(), e.detail()).unwrap(),
         Ok(after) => {
-            let old: std::collections::HashMap<String, String> = before.leaves().into_iter().map(|(k, v)| (k, format!("{v:?}"))).collect();
+            let old: std::collections::HashMap<String, String> =
+                before.leaves().into_iter().map(|(k, v)| (k, format!("{v:?}"))).collect();
             for (path, value) in after.leaves() {
                 let value = format!("{value:?}");
                 if old.get(&path) != Some(&value) {
@@ -39,24 +40,42 @@ fn snapshot() -> String {
         for article in motor_articles_for(supply) {
             let label = format!("motor {article} {supply}");
             diff(&mut out, &label, &base, applied(&|c| apply_motor(c, article, supply)));
-            writeln!(out, "{label}: paired {:?}, mass {:?}", paired_drive(article, supply), motor_mass(article, supply)).unwrap();
+            writeln!(
+                out,
+                "{label}: paired {:?}, mass {:?}",
+                paired_drive(article, supply),
+                motor_mass(article, supply)
+            )
+            .unwrap();
             for series in ["NRB", "NRK", "NLC"] {
                 writeln!(out, "{label}: {series} {:?}", fitting_gearboxes(article, series, 5.0)).unwrap();
             }
         }
     }
-    let drives: std::collections::BTreeSet<&str> = SUPPLIES.iter().flat_map(|s| motor_articles_for(s).into_iter().map(move |a| paired_drive(a, s))).collect();
-    for drive in drives.iter().chain(["6SL3120-2TE13-0AD0", "6SL5310-1BE10-8DF0", "6SL3210-5HB10-8UF0", "6SL3210-0XX00-0XX0"].iter()) {
+    let drives: std::collections::BTreeSet<&str> =
+        SUPPLIES.iter().flat_map(|s| motor_articles_for(s).into_iter().map(move |a| paired_drive(a, s))).collect();
+    for drive in drives
+        .iter()
+        .chain(["6SL3120-2TE13-0AD0", "6SL5310-1BE10-8DF0", "6SL3210-5HB10-8UF0", "6SL3210-0XX00-0XX0"].iter())
+    {
         for supply in SUPPLIES {
             for (name, cfg) in [("single", &base), ("exct", &exct)] {
                 let mut with = cfg.clone();
-                diff(&mut out, &format!("drive {drive} {supply} {name}"), cfg, apply_drive(&mut with, drive, supply).map(|()| with));
+                diff(
+                    &mut out,
+                    &format!("drive {drive} {supply} {name}"),
+                    cfg,
+                    apply_drive(&mut with, drive, supply).map(|()| with),
+                );
             }
         }
     }
     for series in ["NRB", "NRK", "NLC"] {
         for frame in ["02", "03", "04", "05", "06", "07", "08", "10"] {
-            for ratio in ["3", "4", "5", "7", "8", "9", "10", "12", "15", "16", "20", "25", "32", "40", "50", "60", "64", "80", "100", "120", "160", "200", "256", "320", "11"] {
+            for ratio in [
+                "3", "4", "5", "7", "8", "9", "10", "12", "15", "16", "20", "25", "32", "40", "50", "60", "64", "80",
+                "100", "120", "160", "200", "256", "320", "11",
+            ] {
                 for size in ["040", "050", "060", "070", "080", "090", "120", "155", "160"] {
                     let name = format!("{series}{size}-{frame}-{ratio}");
                     let mut cfg = base.clone();
@@ -69,7 +88,9 @@ fn snapshot() -> String {
         }
     }
     for profile in ["T5", "AT3", "AT5", "AT10", "MTD3", "MTD5", "MTD8", "XL"] {
-        for width in ["4", "6", "9", "10", "12", "15", "16", "20", "25", "30", "32", "48", "50", "70", "75", "100", "150", "200"] {
+        for width in
+            ["4", "6", "9", "10", "12", "15", "16", "20", "25", "30", "32", "48", "50", "70", "75", "100", "150", "200"]
+        {
             let name = format!("{profile}-{width}");
             diff(&mut out, &format!("belt {name}"), &exct, {
                 let mut cfg = exct.clone();
@@ -101,5 +122,10 @@ fn the_catalogue_gives_every_config_the_values_it_gave_before_the_schema() {
     }
     let before = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
     let changed: Vec<(&str, &str)> = before.lines().zip(now.lines()).filter(|(a, b)| a != b).take(10).collect();
-    assert!(changed.is_empty() && before.lines().count() == now.lines().count(), "{} lines before, {} now; first changes: {changed:#?}", before.lines().count(), now.lines().count());
+    assert!(
+        changed.is_empty() && before.lines().count() == now.lines().count(),
+        "{} lines before, {} now; first changes: {changed:#?}",
+        before.lines().count(),
+        now.lines().count()
+    );
 }

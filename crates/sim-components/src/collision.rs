@@ -14,7 +14,12 @@ pub fn obstacles(cfg: &Config) -> Result<Vec<Obstacle>, ConfigError> {
         .map(|(i, item)| {
             let bad = || ConfigError::Invalid(format!("obstacles[{i}]"));
             let three = |key: &str| -> Option<[f64; 3]> {
-                let values: Vec<f64> = item.get(key)?.as_array()?.iter().map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).collect::<Option<_>>()?;
+                let values: Vec<f64> = item
+                    .get(key)?
+                    .as_array()?
+                    .iter()
+                    .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+                    .collect::<Option<_>>()?;
                 values.try_into().ok().filter(|v: &[f64; 3]| v.iter().all(|x| x.is_finite()))
             };
             // A misspelt key in an entry would otherwise pass silently, as `Config::check_keys` leaves arrays out.
@@ -32,7 +37,11 @@ pub fn obstacles(cfg: &Config) -> Result<Vec<Obstacle>, ConfigError> {
 /// The least clearance between the parts `bodies` and the obstacles: which obstacle, the nearest points and the
 /// clearance (`Aabb::gap`, negative in an overlap). `None` without parts or obstacles.
 pub fn nearest(bodies: &[Aabb], obstacles: &[Obstacle]) -> Option<(usize, ([f64; 3], [f64; 3], f64))> {
-    obstacles.iter().enumerate().flat_map(|(k, o)| bodies.iter().map(move |b| (k, b.gap(&o.aabb)))).min_by(|a, b| a.1.2.total_cmp(&b.1.2))
+    obstacles
+        .iter()
+        .enumerate()
+        .flat_map(|(k, o)| bodies.iter().map(move |b| (k, b.gap(&o.aabb))))
+        .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
 }
 
 /// What a path keeps from the obstacles before it runs: the least clearance along it (m, infinite without obstacles),
@@ -97,11 +106,20 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
     let mut segments = Vec::new();
     for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
         let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
-        let target: Vec<f64> = segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
+        let target: Vec<f64> =
+            segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
         let payload = segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?;
         let via: Option<Vec<Vec<f64>>> = match segment.get("via") {
             None => None,
-            Some(points) => Some(points.as_array().ok_or_else(bad)?.iter().map(|p| p.as_array().map(|p| p.iter().filter_map(number).collect())).collect::<Option<_>>().ok_or_else(bad)?),
+            Some(points) => Some(
+                points
+                    .as_array()
+                    .ok_or_else(bad)?
+                    .iter()
+                    .map(|p| p.as_array().map(|p| p.iter().filter_map(number).collect()))
+                    .collect::<Option<_>>()
+                    .ok_or_else(bad)?,
+            ),
         };
         segments.push((target, payload, via, i));
     }
@@ -110,14 +128,17 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
     let n = segments.len();
     // Leg k ends at segment k; leg n is the way round from the last segment to the first.
     for k in (0..=n).filter(|_| n > 0) {
-        let (from, payload) = if k == 0 { (start.clone(), true) } else { (segments[k - 1].0.clone(), segments[k - 1].1) };
+        let (from, payload) =
+            if k == 0 { (start.clone(), true) } else { (segments[k - 1].0.clone(), segments[k - 1].1) };
         let (target, _, via, i) = &segments[k % n];
         machine.set_payload_attached(payload);
         let poses = match via {
             None => vec![from, target.clone()],
             Some(points) => {
                 let pieces = crate::control::via_pieces(points, target);
-                let planned = crate::path::plan(machine.axes(), &from, &pieces, cycle, tolerance, crate::path::ARC_SLACK).map_err(|_| ConfigError::Invalid(format!("cycle.segment[{i}].via")))?;
+                let planned =
+                    crate::path::plan(machine.axes(), &from, &pieces, cycle, tolerance, crate::path::ARC_SLACK)
+                        .map_err(|_| ConfigError::Invalid(format!("cycle.segment[{i}].via")))?;
                 std::iter::once(from).chain(planned.into_iter().map(|(_, pose)| pose)).collect()
             }
         };

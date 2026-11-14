@@ -3,7 +3,10 @@
 
 use opcua::client::{ClientBuilder, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
-use opcua::types::{AttributeId, DataValue, MessageSecurityMode, NodeId, NumericRange, StatusCode, TimestampsToReturn, Variant, WriteValue};
+use opcua::types::{
+    AttributeId, DataValue, MessageSecurityMode, NodeId, NumericRange, StatusCode, TimestampsToReturn, Variant,
+    WriteValue,
+};
 use sim_components::Sim;
 use sim_core::MachineEntry;
 use sim_machines::{MACHINES, translations};
@@ -32,7 +35,9 @@ async fn connect_with(entry: &'static MachineEntry, cfg: &sim_core::Config, name
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("opc.tcp://{}/", listener.local_addr().unwrap());
     let labels = translations("en", entry);
-    let link = serve(entry, cfg, &labels, listener, &scratch(&format!("{name}-server")), Duration::from_millis(10)).await.unwrap();
+    let link = serve(entry, cfg, &labels, listener, &scratch(&format!("{name}-server")), Duration::from_millis(10))
+        .await
+        .unwrap();
 
     let mut client = ClientBuilder::new()
         .application_name("test-plc")
@@ -72,7 +77,11 @@ impl Plc {
     }
 
     async fn numbers(&self, names: &[String]) -> Vec<f64> {
-        self.read(names).await.into_iter().map(|v| if let Variant::Double(x) = v { x } else { panic!("not a number: {v:?}") }).collect()
+        self.read(names)
+            .await
+            .into_iter()
+            .map(|v| if let Variant::Double(x) = v { x } else { panic!("not a number: {v:?}") })
+            .collect()
     }
 
     async fn write(&self, values: Vec<(String, Variant)>) -> Vec<StatusCode> {
@@ -123,11 +132,16 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         let axes = sim.machine.axes();
         let start = sim.control.set_pos.clone();
         // Every axis moves 0.2 of its range towards the middle.
-        let target: Vec<f64> = axes.iter().zip(&start).map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum()).collect();
+        let target: Vec<f64> = axes
+            .iter()
+            .zip(&start)
+            .map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum())
+            .collect();
         let position: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect();
         let error: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.following_error", a.id)).collect();
 
-        let mut writes: Vec<(String, Variant)> = axes.iter().zip(&target).map(|(a, t)| (format!("command.target.{}", a.id), Variant::Double(*t))).collect();
+        let mut writes: Vec<(String, Variant)> =
+            axes.iter().zip(&target).map(|(a, t)| (format!("command.target.{}", a.id), Variant::Double(*t))).collect();
         writes.push(("command.move".into(), Variant::Boolean(true)));
         assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
 
@@ -150,24 +164,50 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         let reached = plc.numbers(&position).await;
         // The setpoint is the target; the tool is off it by what the gearboxes and belts give way under the weight
         // they hold (`at_rest_within`).
-        let setpoint = plc.numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>()).await;
+        let setpoint = plc
+            .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
+            .await;
         let rest = at_rest_within(entry, &target);
         for i in 0..axes.len() {
-            assert!((setpoint[i] - target[i]).abs() < 1e-6, "{}: axis {i} set to {} m, target {} m", entry.id, setpoint[i], target[i]);
-            assert!((reached[i] - target[i]).abs() < rest, "{}: axis {i} at {} m, target {} m, within {rest} m", entry.id, reached[i], target[i]);
+            assert!(
+                (setpoint[i] - target[i]).abs() < 1e-6,
+                "{}: axis {i} set to {} m, target {} m",
+                entry.id,
+                setpoint[i],
+                target[i]
+            );
+            assert!(
+                (reached[i] - target[i]).abs() < rest,
+                "{}: axis {i} at {} m, target {} m, within {rest} m",
+                entry.id,
+                reached[i],
+                target[i]
+            );
             // Below 1 mm, and on a fast machine 0.04 mm per m/s2 of its fastest axis (the delta's diagonal move at 50 m/s2
             // per axis: up to 1.4 mm, 2 mm allowed).
             let fastest = axes.iter().map(|a| a.max_acc).fold(0.0, f64::max);
-            assert!(peak_error[i] > 1e-7 && peak_error[i] < f64::max(1e-3, 4e-5 * fastest), "{}: axis {i} reported a following error of {} m", entry.id, peak_error[i]);
+            assert!(
+                peak_error[i] > 1e-7 && peak_error[i] < f64::max(1e-3, 4e-5 * fastest),
+                "{}: axis {i} reported a following error of {} m",
+                entry.id,
+                peak_error[i]
+            );
         }
         let status = plc.read(&["status.refused".to_string()]).await;
         assert_eq!(status[0], Variant::from(""), "{}", entry.id);
 
         // A target outside the travel range is refused, and the PLC can see why.
-        plc.write(vec![(format!("command.target.{}", axes[0].id), Variant::Double(axes[0].max + 1.0)), ("command.move".into(), Variant::Boolean(true))]).await;
+        plc.write(vec![
+            (format!("command.target.{}", axes[0].id), Variant::Double(axes[0].max + 1.0)),
+            ("command.move".into(), Variant::Boolean(true)),
+        ])
+        .await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from("error-target-out-of-range"));
-        assert!(!plc.write(vec![("command.move".into(), Variant::Double(1.0))]).await[0].is_good(), "a number is not a start signal");
+        assert!(
+            !plc.write(vec![("command.move".into(), Variant::Double(1.0))]).await[0].is_good(),
+            "a number is not a start signal"
+        );
     }
 }
 
@@ -200,7 +240,8 @@ async fn the_plc_disables_and_enables_the_drives() {
     for entry in MACHINES.iter().copied() {
         let plc = connect(entry, &format!("enable-{}", entry.id)).await;
         let sim = Sim::new(entry, &entry.config()).unwrap();
-        let torque: Vec<String> = sim.machine.motors().iter().map(|m| format!("signal.motor.{}.torque", m.id)).collect();
+        let torque: Vec<String> =
+            sim.machine.motors().iter().map(|m| format!("signal.motor.{}.torque", m.id)).collect();
         let set = |name: &str| vec![(name.to_string(), Variant::Boolean(true))];
         let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
 
@@ -221,13 +262,22 @@ async fn the_plc_disables_and_enables_the_drives() {
         // unwritten, they are where the axes stand.
         assert!(plc.write(set("command.enable")).await[0].is_good());
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let mut back: Vec<(String, Variant)> = sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(a, p)| (format!("command.target.{}", a.id), Variant::Double(*p))).collect();
+        let mut back: Vec<(String, Variant)> = sim
+            .machine
+            .axes()
+            .iter()
+            .zip(&sim.control.set_pos)
+            .map(|(a, p)| (format!("command.target.{}", a.id), Variant::Double(*p)))
+            .collect();
         back.extend(set("command.move"));
         plc.write(back).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
         assert!(plc.busy().await, "{}: no move after enabling", entry.id);
-        assert!(!plc.write(vec![("command.disable".into(), Variant::Double(1.0))]).await[0].is_good(), "a number is not a switch");
+        assert!(
+            !plc.write(vec![("command.disable".into(), Variant::Double(1.0))]).await[0].is_good(),
+            "a number is not a switch"
+        );
     }
 }
 
@@ -250,15 +300,24 @@ async fn move_done(plc: &Plc) {
 /// started (0.25 m in 10 ms), and a target written for one axis moved the other back as well.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
-    let entry = MACHINES.iter().copied().find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1).expect("no machine with two axes");
+    let entry = MACHINES
+        .iter()
+        .copied()
+        .find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1)
+        .expect("no machine with two axes");
     let plc = connect(entry, "one-axis").await;
     let sim = Sim::new(entry, &entry.config()).unwrap();
     let axes = sim.machine.axes();
     let names = |kind: &str| -> Vec<String> { axes.iter().map(|a| format!("{kind}.{}", a.id)).collect() };
     let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
     // Every axis moves 0.2 of its range towards the middle.
-    let target: Vec<f64> = axes.iter().zip(&sim.control.set_pos).map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum()).collect();
-    let mut writes: Vec<(String, Variant)> = names("command.target").into_iter().zip(&target).map(|(n, t)| (n, Variant::Double(*t))).collect();
+    let target: Vec<f64> = axes
+        .iter()
+        .zip(&sim.control.set_pos)
+        .map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum())
+        .collect();
+    let mut writes: Vec<(String, Variant)> =
+        names("command.target").into_iter().zip(&target).map(|(n, t)| (n, Variant::Double(*t))).collect();
     writes.push(("command.move".into(), Variant::Boolean(true)));
     assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
     move_done(&plc).await;
@@ -266,24 +325,42 @@ async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
     // Both variables read where the axes now stand.
     for kind in ["command.setpoint", "command.target"] {
         let shown = plc.numbers(&names(kind)).await;
-        assert!(shown.iter().zip(&target).all(|(s, t)| (s - t).abs() < 1e-9), "{kind} reads {shown:?} after a move to {target:?}");
+        assert!(
+            shown.iter().zip(&target).all(|(s, t)| (s - t).abs() < 1e-9),
+            "{kind} reads {shown:?} after a move to {target:?}"
+        );
     }
 
     // A setpoint for the second axis alone: it is followed, and the first axis stays.
-    assert!(plc.write(vec![(names("command.setpoint").remove(1), Variant::Double(target[1] + 0.001))]).await[0].is_good());
+    assert!(
+        plc.write(vec![(names("command.setpoint").remove(1), Variant::Double(target[1] + 0.001))]).await[0].is_good()
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(refused().await, Variant::from(""));
     let positions: Vec<String> = names("signal.axis").iter().map(|n| format!("{n}.position")).collect();
     let reached = plc.numbers(&positions).await;
-    assert!((reached[0] - target[0]).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4, "at {reached:?} after a setpoint for one axis from {target:?}");
-    assert!((plc.numbers(&names("command.target")).await[1] - target[1] - 0.001).abs() < 1e-9, "the target does not read where the setpoint took the axis");
+    assert!(
+        (reached[0] - target[0]).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4,
+        "at {reached:?} after a setpoint for one axis from {target:?}"
+    );
+    assert!(
+        (plc.numbers(&names("command.target")).await[1] - target[1] - 0.001).abs() < 1e-9,
+        "the target does not read where the setpoint took the axis"
+    );
 
     // A target for the first axis alone, and a move: the second axis stays where the setpoint took it.
-    plc.write(vec![(names("command.target").remove(0), Variant::Double(target[0] - 0.05)), ("command.move".into(), Variant::Boolean(true))]).await;
+    plc.write(vec![
+        (names("command.target").remove(0), Variant::Double(target[0] - 0.05)),
+        ("command.move".into(), Variant::Boolean(true)),
+    ])
+    .await;
     move_done(&plc).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let reached = plc.numbers(&positions).await;
-    assert!((reached[0] - target[0] + 0.05).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4, "at {reached:?} after a move of one axis from {target:?}");
+    assert!(
+        (reached[0] - target[0] + 0.05).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4,
+        "at {reached:?} after a move of one axis from {target:?}"
+    );
     assert_eq!(refused().await, Variant::from(""));
 }
 
@@ -307,13 +384,22 @@ async fn a_refusal_stays_until_a_command_of_its_kind_is_accepted() {
         // Accepted commands of other kinds: enabling, and setpoints that are followed.
         assert!(plc.write(vec![("command.enable".to_string(), Variant::Boolean(true))]).await[0].is_good());
         for step in 1..=5 {
-            assert!(plc.write(vec![(setpoint.clone(), Variant::Double(sim.control.set_pos[0] + 0.0005 * step as f64))]).await[0].is_good());
+            assert!(
+                plc.write(vec![(setpoint.clone(), Variant::Double(sim.control.set_pos[0] + 0.0005 * step as f64))])
+                    .await[0]
+                    .is_good()
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let position = plc.numbers(&[format!("signal.axis.{}.position", axis.id)]).await[0];
         assert!((position - before - 0.0025).abs() < 2e-4, "{}: the setpoints were not followed", entry.id);
-        assert_eq!(refused().await, Variant::from("error-target-out-of-range"), "{}: an accepted setpoint wiped the refused move", entry.id);
+        assert_eq!(
+            refused().await,
+            Variant::from("error-target-out-of-range"),
+            "{}: an accepted setpoint wiped the refused move",
+            entry.id
+        );
         // An accepted move settles it.
         plc.write(vec![(target.clone(), Variant::Double(sim.control.set_pos[0])), go()]).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -338,7 +424,13 @@ async fn enable_path_and_run_in_one_write_run_the_path() {
         plc.write(vec![set("command.disable")]).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         let middle = axes.iter().map(|a| format!("{}", 0.5 * (a.min + a.max))).collect::<Vec<_>>().join(",");
-        let written = plc.write(vec![set("command.enable"), ("command.path".into(), Variant::from(format!("line,{middle}").as_str())), set("command.run_path")]).await;
+        let written = plc
+            .write(vec![
+                set("command.enable"),
+                ("command.path".into(), Variant::from(format!("line,{middle}").as_str())),
+                set("command.run_path"),
+            ])
+            .await;
         assert!(written.iter().all(|s| s.is_good()));
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
@@ -360,7 +452,11 @@ async fn run_path_written_before_the_path_runs_the_new_path() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let middle = axes.iter().map(|a| format!("{}", 0.5 * (a.min + a.max))).collect::<Vec<_>>().join(",");
         let new = format!("line,{middle}");
-        plc.write(vec![("command.run_path".into(), Variant::Boolean(true)), ("command.path".into(), Variant::from(new.as_str()))]).await;
+        plc.write(vec![
+            ("command.run_path".into(), Variant::Boolean(true)),
+            ("command.path".into(), Variant::from(new.as_str())),
+        ])
+        .await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(refused().await, Variant::from(""), "{}: the old path was run", entry.id);
         assert!(plc.busy().await, "{}: the new path does not run", entry.id);
@@ -371,9 +467,14 @@ async fn run_path_written_before_the_path_runs_the_new_path() {
 /// How far `pose` is from the polyline through `points`.
 fn off_path(points: &[(f64, Vec<f64>)], pose: &[f64]) -> f64 {
     let segment = |a: &[f64], b: &[f64]| {
-        let (ab, ap): (Vec<f64>, Vec<f64>) = (a.iter().zip(b).map(|(a, b)| b - a).collect(), a.iter().zip(pose).map(|(a, p)| p - a).collect());
+        let (ab, ap): (Vec<f64>, Vec<f64>) =
+            (a.iter().zip(b).map(|(a, b)| b - a).collect(), a.iter().zip(pose).map(|(a, p)| p - a).collect());
         let length = ab.iter().map(|d| d * d).sum::<f64>();
-        let along = if length > 0.0 { (ab.iter().zip(&ap).map(|(d, p)| d * p).sum::<f64>() / length).clamp(0.0, 1.0) } else { 0.0 };
+        let along = if length > 0.0 {
+            (ab.iter().zip(&ap).map(|(d, p)| d * p).sum::<f64>() / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         ab.iter().zip(&ap).map(|(d, p)| (p - along * d).powi(2)).sum::<f64>().sqrt()
     };
     points.windows(2).map(|w| segment(&w[0].1, &w[1].1)).fold(f64::INFINITY, f64::min)
@@ -408,7 +509,10 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut values = plc.read(&names).await;
         let busy = matches!(values.pop(), Some(Variant::Boolean(true)));
-        let mut read: Vec<f64> = values.into_iter().map(|v| if let Variant::Double(x) = v { x } else { panic!("not a number: {v:?}") }).collect();
+        let mut read: Vec<f64> = values
+            .into_iter()
+            .map(|v| if let Variant::Double(x) = v { x } else { panic!("not a number: {v:?}") })
+            .collect();
         let time = read.pop().unwrap();
         times.push(time);
         polls += 1;
@@ -417,7 +521,10 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
             (true, None) => started = Some(time),
             (false, Some(start)) => {
                 let steps: Vec<f64> = times.windows(2).map(|w| w[1] - w[0]).collect();
-                let (largest_step, mean_step) = (steps.iter().fold(0.0, |a: f64, b| a.max(*b)), (times[times.len() - 1] - times[0]) / steps.len() as f64);
+                let (largest_step, mean_step) = (
+                    steps.iter().fold(0.0, |a: f64, b| a.max(*b)),
+                    (times[times.len() - 1] - times[0]) / steps.len() as f64,
+                );
                 return Polled { poses, busy: time - start, largest_step, mean_step };
             }
             _ => {}
@@ -453,7 +560,9 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         let axes = sim.machine.axes();
         let position: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect();
         let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
-        let point = |share: f64| axes.iter().map(|a| format!("{}", a.min + share * (a.max - a.min))).collect::<Vec<_>>().join(",");
+        let point = |share: f64| {
+            axes.iter().map(|a| format!("{}", a.min + share * (a.max - a.min))).collect::<Vec<_>>().join(",")
+        };
         let text = format!("# two lines\nline,{}\nline,{}\n", point(0.5), point(0.75));
         tokio::time::sleep(Duration::from_millis(200)).await;
         let at_rest = plc.numbers(&position).await;
@@ -461,33 +570,58 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // Refused, with the reason, and the machine stays: a line that cannot be read, a path out of the
         // stroke, an arc on a machine with one axis.
         let beyond = axes.iter().map(|a| format!("{}", a.max + 0.1)).collect::<Vec<_>>().join(",");
-        let mut bad = vec![("line,0.5\ncircle,1,2".to_string(), "opcua-error-path-line"), (format!("line,{beyond}"), "error-path-range")];
+        let mut bad = vec![
+            ("line,0.5\ncircle,1,2".to_string(), "opcua-error-path-line"),
+            (format!("line,{beyond}"), "error-path-range"),
+        ];
         if axes.len() == 1 {
             bad.push(("arc,0.6,0.25,0.5,0.25,cw".into(), "error-path"));
         }
         for (path, key) in bad {
-            let written = plc.write(vec![("command.path".into(), Variant::from(path.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
+            let written = plc
+                .write(vec![
+                    ("command.path".into(), Variant::from(path.as_str())),
+                    ("command.run_path".into(), Variant::Boolean(true)),
+                ])
+                .await;
             assert!(written.iter().all(|s| s.is_good()));
             assert_eq!(refusal(&plc, key).await, Variant::from(key), "{}: {path}", entry.id);
             assert!(!plc.busy().await, "{}: {path}", entry.id);
             let now = plc.numbers(&position).await;
-            assert!(now.iter().zip(&at_rest).all(|(n, r)| (n - r).abs() < 1e-6), "{}: moved to {now:?} from {at_rest:?} on {path}", entry.id);
+            assert!(
+                now.iter().zip(&at_rest).all(|(n, r)| (n - r).abs() < 1e-6),
+                "{}: moved to {now:?} from {at_rest:?} on {path}",
+                entry.id
+            );
         }
-        assert!(!plc.write(vec![("command.path".into(), Variant::Double(1.0))]).await[0].is_good(), "a number is not a path");
+        assert!(
+            !plc.write(vec![("command.path".into(), Variant::Double(1.0))]).await[0].is_good(),
+            "a number is not a path"
+        );
 
         // The same path the simulator would plan, and the path error the analysis gives for it.
         let pieces = sim_components::path::parse(&text).unwrap();
         let planned = sim.plan_path(&pieces, false).unwrap();
-        let analysed = sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap();
+        let analysed =
+            sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap();
         let path_error = analysed.path_error_peak;
         let slow = run_path(&plc, &text, false, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}: an accepted path leaves a refusal", entry.id);
-        assert_eq!(plc.read(&["command.path".to_string()]).await[0], Variant::from(text.as_str()), "the path reads back what was written");
+        assert_eq!(
+            plc.read(&["command.path".to_string()]).await[0],
+            Variant::from(text.as_str()),
+            "the path reads back what was written"
+        );
         // Polled while it ran: at least half the polls its planned time takes at the mean step seen (a loaded machine
         // polls less often, and the simulator still keeps to real time).
         let slow_plan = planned.last().unwrap().0;
         let polls = slow.poses.len() as f64;
-        assert!(polls >= 0.5 * slow_plan / slow.mean_step, "{}: {polls} poses read in {slow_plan} s, a poll every {} s", entry.id, slow.mean_step);
+        assert!(
+            polls >= 0.5 * slow_plan / slow.mean_step,
+            "{}: {polls} poses read in {slow_plan} s, a poll every {} s",
+            entry.id,
+            slow.mean_step
+        );
         let worst = slow.poses.iter().map(|p| off_path(&planned, p)).fold(0.0, f64::max);
         assert!(worst <= path_error, "{}: {worst} m off the planned path, the analysis gives {path_error} m", entry.id);
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -496,17 +630,41 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // The setpoint stands on the path's end; the tool is off it by what gears and belts give way under the load
         // there (`at_rest_within`; on the delta with its catalogue gearboxes more than the settling tolerance: the
         // cycle fails `settling` there, a sizing finding).
-        let setpoint = plc.numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>()).await;
-        assert!(setpoint.iter().zip(end).all(|(s, e)| (s - e).abs() < 1e-6), "{}: set to {setpoint:?}, the path ends at {end:?}", entry.id);
+        let setpoint = plc
+            .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
+            .await;
+        assert!(
+            setpoint.iter().zip(end).all(|(s, e)| (s - e).abs() < 1e-6),
+            "{}: set to {setpoint:?}, the path ends at {end:?}",
+            entry.id
+        );
         let tolerance = at_rest_within(entry, end);
-        assert!(reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance), "{}: at {reached:?}, the path ends at {end:?}, within {tolerance} m", entry.id);
+        assert!(
+            reached.iter().zip(end).all(|(r, e)| (r - e).abs() < tolerance),
+            "{}: at {reached:?}, the path ends at {end:?}, within {tolerance} m",
+            entry.id
+        );
         // The busy time is known to one poll: within the largest step of `signal.time` seen, and 1 ms.
-        assert!((slow.busy - slow_plan).abs() <= slow.largest_step + 1e-3, "{}: busy for {} s, planned {slow_plan} s, polled up to {} s apart", entry.id, slow.busy, slow.largest_step);
+        assert!(
+            (slow.busy - slow_plan).abs() <= slow.largest_step + 1e-3,
+            "{}: busy for {} s, planned {slow_plan} s, polled up to {} s apart",
+            entry.id,
+            slow.busy,
+            slow.largest_step
+        );
 
         // Busy: a path started while one runs is refused.
         // Back by the middle, a stop on the way, so that it still runs when the second start arrives on a loaded machine.
-        let back = format!("line,{}\nline,{}", point(0.5), at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(","));
-        plc.write(vec![("command.path".into(), Variant::from(back.as_str())), ("command.run_path".into(), Variant::Boolean(true))]).await;
+        let back = format!(
+            "line,{}\nline,{}",
+            point(0.5),
+            at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(",")
+        );
+        plc.write(vec![
+            ("command.path".into(), Variant::from(back.as_str())),
+            ("command.run_path".into(), Variant::Boolean(true)),
+        ])
+        .await;
         let start = std::time::Instant::now();
         while !plc.busy().await {
             assert!(start.elapsed() < Duration::from_secs(5), "{}: not on the way back", entry.id);
@@ -536,15 +694,40 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // the axes' 2500 m/s^3 along each (d 0.206 and 0.233 m, j 3381 and 2911 m/s^3): 0.125 + 0.137 = 0.262 s, 6.8 % below
         // the 0.281 s within the axis limits, of which 5 % would ask three quarters. The run keeps to its plan as the slow
         // one does.
-        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY) + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
+        let floor = cfg.f64("ratings.belt_min_tension_n").unwrap_or(f64::NEG_INFINITY)
+            + cfg.f64("profile.tension_margin_n").unwrap_or(0.0);
         if analysed.belt_tension.is_none_or(|(slackest, _)| slackest >= floor) {
-            let lifted: Vec<_> = axes.iter().map(|a| sim_core::AxisInfo { max_vel: 1e3 * a.max_vel, max_acc: 1e3 * a.max_acc, ..a.clone() }).collect();
+            let lifted: Vec<_> = axes
+                .iter()
+                .map(|a| sim_core::AxisInfo { max_vel: 1e3 * a.max_vel, max_acc: 1e3 * a.max_acc, ..a.clone() })
+                .collect();
             let path_tolerance = cfg.f64("profile.path_tolerance_m").unwrap();
-            let jerk_plan = sim_components::path::plan(&lifted, &planned[0].1, &pieces, cfg.f64("profile.cycle_s").unwrap(), path_tolerance, sim.machine.setpoint_slack()).unwrap().last().unwrap().0;
+            let jerk_plan = sim_components::path::plan(
+                &lifted,
+                &planned[0].1,
+                &pieces,
+                cfg.f64("profile.cycle_s").unwrap(),
+                path_tolerance,
+                sim.machine.setpoint_slack(),
+            )
+            .unwrap()
+            .last()
+            .unwrap()
+            .0;
             let sooner = (0.05 * slow_plan).min(0.5 * (slow_plan - jerk_plan));
-            assert!(fast_plan < slow_plan - sooner, "{}: planned {fast_plan} s time-optimal, {slow_plan} s within the axis limits, {jerk_plan} s with the jerk limits alone", entry.id);
+            assert!(
+                fast_plan < slow_plan - sooner,
+                "{}: planned {fast_plan} s time-optimal, {slow_plan} s within the axis limits, {jerk_plan} s with the jerk limits alone",
+                entry.id
+            );
         }
-        assert!((fast.busy - fast_plan).abs() <= fast.largest_step + 1e-3, "{}: busy for {} s time-optimal, planned {fast_plan} s, polled up to {} s apart", entry.id, fast.busy, fast.largest_step);
+        assert!(
+            (fast.busy - fast_plan).abs() <= fast.largest_step + 1e-3,
+            "{}: busy for {} s time-optimal, planned {fast_plan} s, polled up to {} s apart",
+            entry.id,
+            fast.busy,
+            fast.largest_step
+        );
     }
 }
 
@@ -563,7 +746,9 @@ impl Plc {
     }
 
     async fn axis_write(&self, axis: &str, values: &[(&str, Variant)]) {
-        let written = self.write(values.iter().map(|(name, value)| (format!("axis.{axis}.{name}"), value.clone())).collect()).await;
+        let written = self
+            .write(values.iter().map(|(name, value)| (format!("axis.{axis}.{name}"), value.clone())).collect())
+            .await;
         assert!(written.iter().all(|s| s.is_good()), "{axis}: {values:?} -> {written:?}");
     }
 
@@ -590,7 +775,8 @@ impl Plc {
 
     /// A rising edge on `<fb>.Execute`: false, then true, in one write, with the inputs before them.
     async fn execute(&self, axis: &str, fb: &str, inputs: &[(&str, f64)]) {
-        let mut values: Vec<(String, Variant)> = inputs.iter().map(|(name, v)| (format!("{fb}.{name}"), Variant::Double(*v))).collect();
+        let mut values: Vec<(String, Variant)> =
+            inputs.iter().map(|(name, v)| (format!("{fb}.{name}"), Variant::Double(*v))).collect();
         values.push((format!("{fb}.Execute"), Variant::Boolean(false)));
         values.push((format!("{fb}.Execute"), Variant::Boolean(true)));
         let values: Vec<(&str, Variant)> = values.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
@@ -611,7 +797,13 @@ fn at_rest_within(entry: &'static MachineEntry, pose: &[f64]) -> f64 {
     let mut out = Vec::new();
     sim.sample(&mut out);
     let at = |id: String| out[sim.signal_index(&id).unwrap()];
-    let sag = sim.machine.axes().iter().map(|a| (at(format!("axis.{}.position_setpoint", a.id)) - at(format!("axis.{}.position", a.id))).powi(2)).sum::<f64>().sqrt();
+    let sag = sim
+        .machine
+        .axes()
+        .iter()
+        .map(|a| (at(format!("axis.{}.position_setpoint", a.id)) - at(format!("axis.{}.position", a.id))).powi(2))
+        .sum::<f64>()
+        .sqrt();
     (1.2 * sag).max(2e-4)
 }
 
@@ -629,7 +821,8 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
         let sim = Sim::new(entry, &entry.config()).unwrap();
         // The setpoint is the target to 1e-6 m; the tool is off it by what gearboxes and belts give way at the pose the
         // setpoints make (`at_rest_within`).
-        let setpoints: Vec<String> = sim.machine.axes().iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect();
+        let setpoints: Vec<String> =
+            sim.machine.axes().iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect();
         let index = |id: &str| sim.machine.axes().iter().position(|a| a.id == id).unwrap();
         for (axis, home) in sim.machine.axes().iter().zip(&sim.control.set_pos) {
             let id = axis.id;
@@ -651,22 +844,39 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             // axes were there in 0.1 s), a poll comes while it runs; one that ended unseen fails.
             let speed = f64::min(0.5 * axis.max_vel, (target - home).abs() / 0.5);
             plc.execute(id, "MoveAbsolute", &[("Position", target), ("Velocity", speed)]).await;
-            let outputs: Vec<String> = ["MoveAbsolute.Busy", "MoveAbsolute.Active", "MoveAbsolute.Done", "State"].iter().map(|n| format!("axis.{id}.{n}")).collect();
+            let outputs: Vec<String> = ["MoveAbsolute.Busy", "MoveAbsolute.Active", "MoveAbsolute.Done", "State"]
+                .iter()
+                .map(|n| format!("axis.{id}.{n}"))
+                .collect();
             let start = std::time::Instant::now();
             loop {
                 let read = plc.read(&outputs).await;
                 if read[0] == Variant::Boolean(true) {
-                    assert_eq!((&read[1], &read[3]), (&Variant::Boolean(true), &Variant::from("DiscreteMotion")), "{}.{id}", entry.id);
+                    assert_eq!(
+                        (&read[1], &read[3]),
+                        (&Variant::Boolean(true), &Variant::from("DiscreteMotion")),
+                        "{}.{id}",
+                        entry.id
+                    );
                     break;
                 }
-                assert!(read[2] != Variant::Boolean(true) && start.elapsed() < Duration::from_secs(5), "{}.{id}: MoveAbsolute not seen busy before {read:?}", entry.id);
+                assert!(
+                    read[2] != Variant::Boolean(true) && start.elapsed() < Duration::from_secs(5),
+                    "{}.{id}: MoveAbsolute not seen busy before {read:?}",
+                    entry.id
+                );
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             plc.until(id, "MoveAbsolute.Done", 5.0).await;
             plc.simulated(0.3).await;
             let at = plc.axis_number(id, "ActualPosition").await;
             let set = plc.numbers(&setpoints).await;
-            assert!((set[index(id)] - target).abs() < 1e-6, "{}.{id}: set to {} m, target {target} m", entry.id, set[index(id)]);
+            assert!(
+                (set[index(id)] - target).abs() < 1e-6,
+                "{}.{id}: set to {} m, target {target} m",
+                entry.id,
+                set[index(id)]
+            );
             let rest = at_rest_within(entry, &set);
             assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m, within {rest} m", entry.id);
             assert!(plc.axis_number(id, "ActualVelocity").await.abs() < 1e-2);
@@ -679,9 +889,18 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             plc.simulated(0.3).await;
             let moved = plc.axis_number(id, "ActualPosition").await;
             let (set, wanted) = (plc.numbers(&setpoints).await, target - back);
-            assert!((set[index(id)] - wanted).abs() < 1e-6, "{}.{id}: set to {} m, wanted {wanted} m", entry.id, set[index(id)]);
+            assert!(
+                (set[index(id)] - wanted).abs() < 1e-6,
+                "{}.{id}: set to {} m, wanted {wanted} m",
+                entry.id,
+                set[index(id)]
+            );
             let rest = at_rest_within(entry, &set);
-            assert!((moved - wanted).abs() < rest, "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m", entry.id);
+            assert!(
+                (moved - wanted).abs() < rest,
+                "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m",
+                entry.id
+            );
             assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
             assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""));
         }
@@ -700,7 +919,11 @@ async fn plcopen_stop_brakes_a_move_in_the_middle() {
     let (id, home) = (axis.id, sim.control.set_pos[0]);
     plc.axis_write(id, &[("Power.Enable", Variant::Boolean(true))]).await;
     plc.until(id, "Power.Status", 1.0).await;
-    let far = if home - axis.min > axis.max - home { axis.min + 0.05 * (axis.max - axis.min) } else { axis.max - 0.05 * (axis.max - axis.min) };
+    let far = if home - axis.min > axis.max - home {
+        axis.min + 0.05 * (axis.max - axis.min)
+    } else {
+        axis.max - 0.05 * (axis.max - axis.min)
+    };
     let speed = 0.25 * axis.max_vel;
     plc.execute(id, "MoveAbsolute", &[("Position", far), ("Velocity", speed), ("Acceleration", axis.max_acc)]).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -728,7 +951,11 @@ async fn plcopen_stop_brakes_a_move_in_the_middle() {
 /// Two axes move at the same time, each with its own profile, started 0.1 s apart; both arrive.
 #[tokio::test(flavor = "multi_thread")]
 async fn plcopen_axes_move_at_the_same_time() {
-    let entry = MACHINES.iter().copied().find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1).expect("no machine with two axes");
+    let entry = MACHINES
+        .iter()
+        .copied()
+        .find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1)
+        .expect("no machine with two axes");
     let plc = connect(entry, "plcopen-concurrent").await;
     let sim = Sim::new(entry, &entry.config()).unwrap();
     let axes = sim.machine.axes();
@@ -740,7 +967,10 @@ async fn plcopen_axes_move_at_the_same_time() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     plc.execute(axes[1].id, "MoveAbsolute", &[("Position", targets[1]), ("Velocity", 0.3 * axes[1].max_vel)]).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(plc.axis_flag(axes[0].id, "MoveAbsolute.Busy").await && plc.axis_flag(axes[1].id, "MoveAbsolute.Busy").await, "not both moving");
+    assert!(
+        plc.axis_flag(axes[0].id, "MoveAbsolute.Busy").await && plc.axis_flag(axes[1].id, "MoveAbsolute.Busy").await,
+        "not both moving"
+    );
     for axis in &axes[..2] {
         plc.until(axis.id, "MoveAbsolute.Done", 5.0).await;
     }
@@ -766,7 +996,8 @@ async fn plcopen_errors_and_reset() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(plc.axis_flag(id, "MoveRelative.Error").await && !plc.axis_flag(id, "MoveRelative.Busy").await);
     assert_eq!(plc.axis_read(id, "MoveRelative.ErrorID").await, Variant::UInt16(ERR_NOT_POWERED));
-    plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false)), ("Power.Enable", Variant::Boolean(true))]).await;
+    plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false)), ("Power.Enable", Variant::Boolean(true))])
+        .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!plc.axis_flag(id, "MoveRelative.Error").await, "the falling edge clears Error");
     plc.execute(id, "MoveAbsolute", &[("Position", axis.max + 0.1)]).await;
@@ -799,7 +1030,8 @@ async fn plcopen_a_crash_is_reported_reset_and_left() {
     // The wall lies across the stroke of the machine with one axis, where its scene draws the carriage.
     let entry = *MACHINES.iter().find(|e| e.config().f64s("start.pose").unwrap().len() == 1).unwrap();
     let mut cfg = entry.config();
-    cfg.set_text(r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#).unwrap();
+    cfg.set_text(r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#)
+        .unwrap();
     cfg.set_text("effects.crash = true").unwrap();
     let plc = connect_with(entry, &cfg, "plcopen-crash").await;
     let id = Sim::new(entry, &cfg).unwrap().machine.axes()[0].id;
@@ -812,7 +1044,12 @@ async fn plcopen_a_crash_is_reported_reset_and_left() {
     plc.until(id, "Reset.Done", 1.0).await;
     plc.until(id, "Power.Status", 1.0).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "ErrorID {:?}", plc.axis_read(id, "ErrorID").await);
+    assert_eq!(
+        plc.axis_read(id, "State").await,
+        Variant::from("Standstill"),
+        "ErrorID {:?}",
+        plc.axis_read(id, "ErrorID").await
+    );
     plc.execute(id, "MoveAbsolute", &[("Position", 0.1)]).await;
     plc.until(id, "MoveAbsolute.Done", 5.0).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -836,7 +1073,11 @@ async fn plcopen_execute_is_edge_triggered() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(plc.axis_flag(id, "MoveRelative.Done").await && !plc.axis_flag(id, "MoveRelative.Busy").await);
     assert!((plc.axis_number(id, "ActualPosition").await - at).abs() < 1e-4, "true written again moved the axis");
-    assert_eq!(plc.axis_read(id, "MoveRelative.Execute").await, Variant::Boolean(true), "Execute reads back what was written");
+    assert_eq!(
+        plc.axis_read(id, "MoveRelative.Execute").await,
+        Variant::Boolean(true),
+        "Execute reads back what was written"
+    );
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false))]).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!plc.axis_flag(id, "MoveRelative.Done").await);
@@ -855,7 +1096,10 @@ async fn plcopen_execute_is_edge_triggered() {
 async fn pacing_is_measured_and_can_be_reset() {
     let plc = connect(MACHINES[0], "pacing").await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
-    let names: Vec<String> = ["cycle_s", "cycle_period_s", "jitter_max_s", "jitter_rms_s", "realtime_factor"].iter().map(|n| format!("status.{n}")).collect();
+    let names: Vec<String> = ["cycle_s", "cycle_period_s", "jitter_max_s", "jitter_rms_s", "realtime_factor"]
+        .iter()
+        .map(|n| format!("status.{n}"))
+        .collect();
     let p = plc.numbers(&names).await;
     assert_eq!(p[0], 0.01);
     assert!((p[1] - 0.01).abs() < 0.005, "mean period {} s", p[1]);
@@ -875,8 +1119,22 @@ async fn pacing_is_measured_and_can_be_reset() {
 async fn a_long_cycle_keeps_real_time() {
     let entry = MACHINES[0];
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let link = serve(entry, &entry.config(), &translations("en", entry), listener, &scratch("long-cycle-server"), Duration::from_millis(250)).await.unwrap();
+    let link = serve(
+        entry,
+        &entry.config(),
+        &translations("en", entry),
+        listener,
+        &scratch("long-cycle-server"),
+        Duration::from_millis(250),
+    )
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(1600)).await;
     let pacing = link.pacing.lock().unwrap().clone();
-    assert!(pacing.cycles >= 4 && (pacing.realtime_factor() - 1.0).abs() < 0.05, "real-time factor {} over {} cycles", pacing.realtime_factor(), pacing.cycles);
+    assert!(
+        pacing.cycles >= 4 && (pacing.realtime_factor() - 1.0).abs() < 0.05,
+        "real-time factor {} over {} cycles",
+        pacing.realtime_factor(),
+        pacing.cycles
+    );
 }

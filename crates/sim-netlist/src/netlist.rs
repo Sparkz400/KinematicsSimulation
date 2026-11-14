@@ -49,7 +49,8 @@ const fn field(name: &'static str, kind: Kind, required: bool, doc: &'static str
 }
 
 const ID: Field = field("id", Kind::Id, true, "Stable id of the node; signals and other nodes refer to it.");
-const POS: Field = field("pos", Kind::Position, false, "Where a node editor draws the node, [x, y]. Not read by the simulation.");
+const POS: Field =
+    field("pos", Kind::Position, false, "Where a node editor draws the node, [x, y]. Not read by the simulation.");
 
 /// The node lists of `[machine]`, in the order they are read, each with its fields.
 pub const NODES: &[(&str, &str, &[Field])] = &[
@@ -60,9 +61,24 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             ID,
             field("key", Kind::Key, false, "Translation key of its name; default axis-<id>."),
             field("stroke_m", Kind::Number, false, "Stroke, m; every axis but a rotary one has it."),
-            field("stroke_rad", Kind::Number, false, "Range of a rotary axis (one a rotary node turns), from 0, rad; in place of stroke_m."),
-            field("incline_deg", Kind::Number, false, "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0."),
-            field("cable_chain", Kind::Bool, false, "The axis drags a cable chain fixed at its 0 end (effects.cable_chain, values in [cable_chain]). Default false."),
+            field(
+                "stroke_rad",
+                Kind::Number,
+                false,
+                "Range of a rotary axis (one a rotary node turns), from 0, rad; in place of stroke_m.",
+            ),
+            field(
+                "incline_deg",
+                Kind::Number,
+                false,
+                "Angle of the axis above the horizontal, deg; 90 is vertical, rising towards +. Default 0.",
+            ),
+            field(
+                "cable_chain",
+                Kind::Bool,
+                false,
+                "The axis drags a cable chain fixed at its 0 end (effects.cable_chain, values in [cable_chain]). Default false.",
+            ),
             POS,
         ],
     ),
@@ -84,7 +100,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
             field("radius_m", Kind::Number, true, "Pitch radius, m."),
             field("inertia_kgm2", Kind::Number, true, "Inertia without the belt, kg m^2."),
-            field("at_m", Kind::Point, false, "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis."),
+            field(
+                "at_m",
+                Kind::Point,
+                false,
+                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis.",
+            ),
             POS,
         ],
     ),
@@ -96,8 +117,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("key", Kind::Key, false, "Translation key of its name; default belt-section-<id>."),
             field("length_m", Kind::Number, true, "Length with every axis at 0, m."),
             field("axes", Kind::Coefficients("axis"), true, "How much longer the section gets per metre of each axis."),
-            field("pulleys", Kind::Coefficients("pulley"), true, "+1 for a pulley whose forward turn feeds belt into the section, -1 for one that takes belt out of it."),
-            field("route", Kind::Route(&["pulley", "idler", "body"]), false, "The pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to."),
+            field(
+                "pulleys",
+                Kind::Coefficients("pulley"),
+                true,
+                "+1 for a pulley whose forward turn feeds belt into the section, -1 for one that takes belt out of it.",
+            ),
+            field(
+                "route",
+                Kind::Route(&["pulley", "idler", "body"]),
+                false,
+                "The pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to.",
+            ),
             POS,
         ],
     ),
@@ -107,7 +138,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("mass_kg", Kind::Number, true, "Mass, kg."),
-            field("payload_kg", Kind::Number, false, "Payload it carries while effects.payload is on and the payload is attached, kg."),
+            field(
+                "payload_kg",
+                Kind::Number,
+                false,
+                "Payload it carries while effects.payload is on and the payload is attached, kg.",
+            ),
             field("axes", Kind::Refs("axis"), true, "The axes it moves along: it moves with each of them."),
             POS,
         ],
@@ -118,14 +154,49 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("axis", Kind::Ref("axis"), true, "The axis it guides; one guide per axis at most."),
-            field("friction", Kind::Table, true, "The table of its friction values, laid out as [friction_x] of the shipped files."),
+            field(
+                "friction",
+                Kind::Table,
+                true,
+                "The table of its friction values, laid out as [friction_x] of the shipped files.",
+            ),
             field("carries", Kind::Refs("body"), false, "Bodies whose weight across the axis it carries."),
-            field("overhang", Kind::Ref("body"), false, "A body that overhangs the guide: accelerated along overhang_axis it tilts the guide's carriages."),
-            field("overhang_axis", Kind::Ref("axis"), false, "The axis along which the overhang's acceleration tilts the guide."),
-            field("lever_m", Kind::Number, false, "Distance of the overhang's centre of mass from the guide with lever_axis at 0, m."),
-            field("lever_axis", Kind::Ref("axis"), false, "An axis whose travel shortens the lever (the overhang rises towards the guide)."),
-            field("spacing_m", Kind::Number, false, "Spacing of the guide's two carriages, m; the tilt puts 2 m a lever / spacing on them."),
-            field("side_load", Kind::Bool, false, "The guide also carries the overhang's inertia force m a sideways. Default false."),
+            field(
+                "overhang",
+                Kind::Ref("body"),
+                false,
+                "A body that overhangs the guide: accelerated along overhang_axis it tilts the guide's carriages.",
+            ),
+            field(
+                "overhang_axis",
+                Kind::Ref("axis"),
+                false,
+                "The axis along which the overhang's acceleration tilts the guide.",
+            ),
+            field(
+                "lever_m",
+                Kind::Number,
+                false,
+                "Distance of the overhang's centre of mass from the guide with lever_axis at 0, m.",
+            ),
+            field(
+                "lever_axis",
+                Kind::Ref("axis"),
+                false,
+                "An axis whose travel shortens the lever (the overhang rises towards the guide).",
+            ),
+            field(
+                "spacing_m",
+                Kind::Number,
+                false,
+                "Spacing of the guide's two carriages, m; the tilt puts 2 m a lever / spacing on them.",
+            ),
+            field(
+                "side_load",
+                Kind::Bool,
+                false,
+                "The guide also carries the overhang's inertia force m a sideways. Default false.",
+            ),
             POS,
         ],
     ),
@@ -134,12 +205,27 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         "A free pulley the belt runs over (effects.idlers): its inertia and bearing friction, at the belt speed past it.",
         &[
             ID,
-            field("speed", Kind::Coefficients("axis"), true, "Belt speed past it per speed of each axis (m/s per m/s)."),
+            field(
+                "speed",
+                Kind::Coefficients("axis"),
+                true,
+                "Belt speed past it per speed of each axis (m/s per m/s).",
+            ),
             field("radius_m", Kind::Number, true, "Radius, m."),
             field("inertia_kgm2", Kind::Number, true, "Inertia, kg m^2."),
             field("friction_nm", Kind::Number, true, "Bearing friction torque, N m."),
-            field("body", Kind::Ref("body"), false, "A body it rides on, for the 3D view: at_m is then from that body."),
-            field("at_m", Kind::Point, false, "Where the 3D view draws it, [x, y, z], m (from its body where it has one)."),
+            field(
+                "body",
+                Kind::Ref("body"),
+                false,
+                "A body it rides on, for the 3D view: at_m is then from that body.",
+            ),
+            field(
+                "at_m",
+                Kind::Point,
+                false,
+                "Where the 3D view draws it, [x, y, z], m (from its body where it has one).",
+            ),
             POS,
         ],
     ),
@@ -149,7 +235,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("axis", Kind::Ref("axis"), true, "The axis the frame sways along; it has to be horizontal."),
-            field("mass_kg", Kind::Number, true, "The frame's mass in its sway, kg; bodies that do not move along the axis ride on it too."),
+            field(
+                "mass_kg",
+                Kind::Number,
+                true,
+                "The frame's mass in its sway, kg; bodies that do not move along the axis ride on it too.",
+            ),
             field("stiffness_n_m", Kind::Number, true, "Its stiffness, N/m."),
             field("damping_n_s_m", Kind::Number, true, "Its damping, N s/m."),
             POS,
@@ -172,8 +263,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
-            field("axis", Kind::Ref("axis"), true, "The axis its nut drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [screw] of the registered screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings)."),
+            field(
+                "axis",
+                Kind::Ref("axis"),
+                true,
+                "The axis its nut drives; one screw, rack, linear motor or rotary per axis.",
+            ),
+            field(
+                "values",
+                Kind::Table,
+                true,
+                "The table of its values, laid out as [screw] of the registered screw axis (lead, diameters, length, mounting, efficiency, nut and bearing stiffness, preload, load ratings).",
+            ),
             POS,
         ],
     ),
@@ -183,8 +284,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns the pinion."),
-            field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [rack] of the registered rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force)."),
+            field(
+                "axis",
+                Kind::Ref("axis"),
+                true,
+                "The axis it drives; one screw, rack, linear motor or rotary per axis.",
+            ),
+            field(
+                "values",
+                Kind::Table,
+                true,
+                "The table of its values, laid out as [rack] of the registered rack axis (module, teeth, helix angle, efficiency, stiffness, backlash, pinion inertia, rated feed force).",
+            ),
             POS,
         ],
     ),
@@ -194,8 +305,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
         &[
             ID,
             field("motor", Kind::Ref("motor"), true, "The motor it is; that motor has no gearbox node."),
-            field("axis", Kind::Ref("axis"), true, "The axis it drives; one screw, rack, linear motor or rotary per axis."),
-            field("values", Kind::Table, true, "The table of its values, laid out as [linear_motor] of the registered linear motor axis (attraction force, pole pitch, guide friction coefficient)."),
+            field(
+                "axis",
+                Kind::Ref("axis"),
+                true,
+                "The axis it drives; one screw, rack, linear motor or rotary per axis.",
+            ),
+            field(
+                "values",
+                Kind::Table,
+                true,
+                "The table of its values, laid out as [linear_motor] of the registered linear motor axis (attraction force, pole pitch, guide friction coefficient).",
+            ),
             POS,
         ],
     ),
@@ -207,8 +328,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns it."),
             field("axis", Kind::Ref("axis"), true, "The axis it turns, which has stroke_rad; no body moves with it."),
             field("inertia_kgm2", Kind::Number, true, "Inertia it turns, kg m^2."),
-            field("payload_inertia_kgm2", Kind::Number, false, "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2."),
-            field("strain_wave", Kind::Table, false, "The table of the strain wave gear's life values, laid out as [strain_wave] of the registered rotary table."),
+            field(
+                "payload_inertia_kgm2",
+                Kind::Number,
+                false,
+                "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2.",
+            ),
+            field(
+                "strain_wave",
+                Kind::Table,
+                false,
+                "The table of the strain wave gear's life values, laid out as [strain_wave] of the registered rotary table.",
+            ),
             POS,
         ],
     ),
@@ -359,7 +490,11 @@ impl Node<'_> {
     /// An optional [x, y, z] of numbers.
     fn point(&self, name: &str) -> Result<Option<[f64; 3]>> {
         let Some(value) = self.get(name) else { return Ok(None) };
-        let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| p.iter().map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|f| f.is_finite())).collect());
+        let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| {
+            p.iter()
+                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|f| f.is_finite()))
+                .collect()
+        });
         match numbers.as_deref() {
             Some(&[x, y, z]) => Ok(Some([x, y, z])),
             _ => Err(ConfigError::Type(self.at(name))),
@@ -422,10 +557,16 @@ impl Netlist {
                 let mut node = Node { table, path: format!("machine.{list}[#{}]", n + 1), fields };
                 let id = node.required("id")?.as_str().ok_or_else(|| ConfigError::Type(node.at("id")))?;
                 if !valid_id(id) {
-                    return Err(ConfigError::Invalid(format!("{} = \"{id}\" (letters, digits, _ and - only)", node.at("id"))));
+                    return Err(ConfigError::Invalid(format!(
+                        "{} = \"{id}\" (letters, digits, _ and - only)",
+                        node.at("id")
+                    )));
                 }
                 if ids.iter().any(|known| known == id) {
-                    return Err(ConfigError::Invalid(format!("{} = \"{id}\" (another node has this id)", node.at("id"))));
+                    return Err(ConfigError::Invalid(format!(
+                        "{} = \"{id}\" (another node has this id)",
+                        node.at("id")
+                    )));
                 }
                 ids.push(id.into());
                 node.path = format!("machine.{list}[{id}]");
@@ -438,7 +579,9 @@ impl Netlist {
                     node.required(f.name)?;
                 }
                 if let Some(pos) = node.get("pos") {
-                    let ok = pos.as_array().is_some_and(|p| p.len() == 2 && p.iter().all(|v| v.is_float() || v.is_integer()));
+                    let ok = pos
+                        .as_array()
+                        .is_some_and(|p| p.len() == 2 && p.iter().all(|v| v.is_float() || v.is_integer()));
                     if !ok {
                         return Err(ConfigError::Type(node.at("pos")));
                     }
@@ -447,8 +590,22 @@ impl Netlist {
             }
             lists.push(nodes);
         }
-        let [axes, motors, gearboxes, pulleys, sections, bodies, guides, idlers, frames, spans, screws, racks, linears, rotaries] =
-            <[Vec<Node>; 14]>::try_from(lists).ok().expect("one list per entry of NODES");
+        let [
+            axes,
+            motors,
+            gearboxes,
+            pulleys,
+            sections,
+            bodies,
+            guides,
+            idlers,
+            frames,
+            spans,
+            screws,
+            racks,
+            linears,
+            rotaries,
+        ] = <[Vec<Node>; 14]>::try_from(lists).ok().expect("one list per entry of NODES");
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
@@ -458,7 +615,10 @@ impl Netlist {
         let id_of = |node: &Node| node.table["id"].as_str().unwrap_or_default().to_string();
         // A reference to a node of a list, as its index there.
         let find = |nodes: &[Node], node: &Node, name: &str, id: &str| -> Result<usize> {
-            nodes.iter().position(|n| n.table["id"].as_str() == Some(id)).ok_or_else(|| ConfigError::Invalid(format!("{}.{name} = \"{id}\"", node.path)))
+            nodes
+                .iter()
+                .position(|n| n.table["id"].as_str() == Some(id))
+                .ok_or_else(|| ConfigError::Invalid(format!("{}.{name} = \"{id}\"", node.path)))
         };
         let mut refs = Vec::new();
 
@@ -468,10 +628,17 @@ impl Netlist {
         for node in &axes {
             let id = id_of(node);
             let rotary = turned.contains(&id.as_str());
-            let incline = node.get("incline_deg").map(|v| number(cfg, v, &node.at("incline_deg"), &mut refs)).transpose()?.unwrap_or(0.0);
+            let incline = node
+                .get("incline_deg")
+                .map(|v| number(cfg, v, &node.at("incline_deg"), &mut refs))
+                .transpose()?
+                .unwrap_or(0.0);
             let (stroke_field, other) = if rotary { ("stroke_rad", "stroke_m") } else { ("stroke_m", "stroke_rad") };
             if node.get(other).is_some() {
-                return Err(ConfigError::Invalid(format!("{} (a rotary axis has stroke_rad, any other stroke_m)", node.at(other))));
+                return Err(ConfigError::Invalid(format!(
+                    "{} (a rotary axis has stroke_rad, any other stroke_m)",
+                    node.at(other)
+                )));
             }
             let stroke = number(cfg, node.required(stroke_field)?, &node.at(stroke_field), &mut refs)?;
             if stroke <= 0.0 {
@@ -479,18 +646,30 @@ impl Netlist {
             }
             // A table turns about a vertical axis and drags no chain.
             if rotary && incline != 0.0 {
-                return Err(ConfigError::Invalid(format!("{} (a rotary axis turns about a vertical axis)", node.at("incline_deg"))));
+                return Err(ConfigError::Invalid(format!(
+                    "{} (a rotary axis turns about a vertical axis)",
+                    node.at("incline_deg")
+                )));
             }
             if rotary && node.bool("cable_chain")? {
                 return Err(ConfigError::Invalid(format!("{} (not on a rotary axis)", node.at("cable_chain"))));
             }
             let key = node.text("key")?.map_or_else(|| format!("axis-{id}"), str::to_string);
-            axis_nodes.push(AxisNode { id, key, stroke, incline_deg: incline, cable_chain: node.bool("cable_chain")?, rotary });
+            axis_nodes.push(AxisNode {
+                id,
+                key,
+                stroke,
+                incline_deg: incline,
+                cable_chain: node.bool("cable_chain")?,
+                rotary,
+            });
         }
 
         // Each motor turns one gearbox, and each gearbox one pulley, screw, rack or rotary; or the motor is a linear
         // motor, with no gearbox node. The drive trains, in the order of the motors.
-        let refers = |nodes: &[Node], field: &str, to: &str| -> Vec<usize> { (0..nodes.len()).filter(|&i| nodes[i].table.get(field).and_then(Value::as_str) == Some(to)).collect() };
+        let refers = |nodes: &[Node], field: &str, to: &str| -> Vec<usize> {
+            (0..nodes.len()).filter(|&i| nodes[i].table.get(field).and_then(Value::as_str) == Some(to)).collect()
+        };
         // A node's field that names a table of the file.
         let table_path = |node: &Node, name: &str| -> Result<String> {
             let path = node.required(name)?.as_str().ok_or_else(|| ConfigError::Type(node.at(name)))?;
@@ -506,43 +685,94 @@ impl Netlist {
         for motor in &motors {
             let id = id_of(motor);
             let key = motor.text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
-            let (node, transmission) = match (&refers(&gearboxes, "motor", &id)[..], &refers(&linears, "motor", &id)[..]) {
-                ([], [l]) => (&linears[*l], Transmission::LinearMotor { values: table_path(&linears[*l], "values")? }),
-                ([g], []) => {
-                    let gearbox = &gearboxes[*g];
-                    let gearbox_id = id_of(gearbox);
-                    let outputs: Vec<(usize, usize)> = [&pulleys, &screws, &racks, &rotaries].into_iter().enumerate().flat_map(|(list, nodes)| refers(nodes, "gearbox", &gearbox_id).into_iter().map(move |i| (list, i))).collect();
-                    let [(list, i)] = outputs[..] else { return Err(ConfigError::Invalid(format!("{} (one pulley, screw, rack or rotary per gearbox)", gearbox.path))) };
-                    match list {
-                        0 => {
-                            let pulley = &pulleys[i];
-                            let radius = number(cfg, pulley.required("radius_m")?, &pulley.at("radius_m"), &mut refs)?;
-                            let inertia = number(cfg, pulley.required("inertia_kgm2")?, &pulley.at("inertia_kgm2"), &mut refs)?;
-                            if radius <= 0.0 || inertia <= 0.0 {
-                                return Err(ConfigError::Invalid(pulley.at(if radius <= 0.0 { "radius_m" } else { "inertia_kgm2" })));
+            let (node, transmission) =
+                match (&refers(&gearboxes, "motor", &id)[..], &refers(&linears, "motor", &id)[..]) {
+                    ([], [l]) => {
+                        (&linears[*l], Transmission::LinearMotor { values: table_path(&linears[*l], "values")? })
+                    }
+                    ([g], []) => {
+                        let gearbox = &gearboxes[*g];
+                        let gearbox_id = id_of(gearbox);
+                        let outputs: Vec<(usize, usize)> = [&pulleys, &screws, &racks, &rotaries]
+                            .into_iter()
+                            .enumerate()
+                            .flat_map(|(list, nodes)| {
+                                refers(nodes, "gearbox", &gearbox_id).into_iter().map(move |i| (list, i))
+                            })
+                            .collect();
+                        let [(list, i)] = outputs[..] else {
+                            return Err(ConfigError::Invalid(format!(
+                                "{} (one pulley, screw, rack or rotary per gearbox)",
+                                gearbox.path
+                            )));
+                        };
+                        match list {
+                            0 => {
+                                let pulley = &pulleys[i];
+                                let radius =
+                                    number(cfg, pulley.required("radius_m")?, &pulley.at("radius_m"), &mut refs)?;
+                                let inertia = number(
+                                    cfg,
+                                    pulley.required("inertia_kgm2")?,
+                                    &pulley.at("inertia_kgm2"),
+                                    &mut refs,
+                                )?;
+                                if radius <= 0.0 || inertia <= 0.0 {
+                                    return Err(ConfigError::Invalid(pulley.at(if radius <= 0.0 {
+                                        "radius_m"
+                                    } else {
+                                        "inertia_kgm2"
+                                    })));
+                                }
+                                motor_nodes.push(MotorNode {
+                                    id,
+                                    key,
+                                    radius,
+                                    inertia,
+                                    pulley: id_of(pulley),
+                                    at: pulley.point("at_m")?,
+                                    transmission: Transmission::Belt,
+                                    axis: None,
+                                });
+                                continue;
                             }
-                            motor_nodes.push(MotorNode { id, key, radius, inertia, pulley: id_of(pulley), at: pulley.point("at_m")?, transmission: Transmission::Belt, axis: None });
-                            continue;
-                        }
-                        1 => (&screws[i], Transmission::Screw { values: table_path(&screws[i], "values")? }),
-                        2 => (&racks[i], Transmission::Rack { values: table_path(&racks[i], "values")? }),
-                        _ => {
-                            let node = &rotaries[i];
-                            let inertia = number(cfg, node.required("inertia_kgm2")?, &node.at("inertia_kgm2"), &mut refs)?;
-                            let payload = node.get("payload_inertia_kgm2").map(|v| number(cfg, v, &node.at("payload_inertia_kgm2"), &mut refs)).transpose()?.unwrap_or(0.0);
-                            if inertia <= 0.0 || payload < 0.0 {
-                                return Err(ConfigError::Invalid(node.at(if inertia <= 0.0 { "inertia_kgm2" } else { "payload_inertia_kgm2" })));
+                            1 => (&screws[i], Transmission::Screw { values: table_path(&screws[i], "values")? }),
+                            2 => (&racks[i], Transmission::Rack { values: table_path(&racks[i], "values")? }),
+                            _ => {
+                                let node = &rotaries[i];
+                                let inertia =
+                                    number(cfg, node.required("inertia_kgm2")?, &node.at("inertia_kgm2"), &mut refs)?;
+                                let payload = node
+                                    .get("payload_inertia_kgm2")
+                                    .map(|v| number(cfg, v, &node.at("payload_inertia_kgm2"), &mut refs))
+                                    .transpose()?
+                                    .unwrap_or(0.0);
+                                if inertia <= 0.0 || payload < 0.0 {
+                                    return Err(ConfigError::Invalid(node.at(if inertia <= 0.0 {
+                                        "inertia_kgm2"
+                                    } else {
+                                        "payload_inertia_kgm2"
+                                    })));
+                                }
+                                let strain_wave =
+                                    node.get("strain_wave").map(|_| table_path(node, "strain_wave")).transpose()?;
+                                (node, Transmission::Rotary { inertia, payload, strain_wave })
                             }
-                            let strain_wave = node.get("strain_wave").map(|_| table_path(node, "strain_wave")).transpose()?;
-                            (node, Transmission::Rotary { inertia, payload, strain_wave })
                         }
                     }
-                }
-                _ => return Err(ConfigError::Invalid(format!("{} (one gearbox per motor, or one linear motor)", motor.path))),
-            };
+                    _ => {
+                        return Err(ConfigError::Invalid(format!(
+                            "{} (one gearbox per motor, or one linear motor)",
+                            motor.path
+                        )));
+                    }
+                };
             let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
             if let Some(other) = &driven[axis] {
-                return Err(ConfigError::Invalid(format!("{} (one screw, rack, linear motor or rotary per axis; {other} drives it too)", node.at("axis"))));
+                return Err(ConfigError::Invalid(format!(
+                    "{} (one screw, rack, linear motor or rotary per axis; {other} drives it too)",
+                    node.at("axis")
+                )));
             }
             driven[axis] = Some(id_of(node));
             match &transmission {
@@ -552,12 +782,27 @@ impl Netlist {
                 Transmission::Rotary { strain_wave: Some(v), .. } => values.push(("strain_wave", v.clone())),
                 _ => {}
             }
-            motor_nodes.push(MotorNode { id, key, radius: 1.0, inertia: 0.0, pulley: String::new(), at: None, transmission, axis: Some(axis) });
+            motor_nodes.push(MotorNode {
+                id,
+                key,
+                radius: 1.0,
+                inertia: 0.0,
+                pulley: String::new(),
+                at: None,
+                transmission,
+                axis: Some(axis),
+            });
         }
         for gearbox in &gearboxes {
             find(&motors, gearbox, "motor", gearbox.text("motor")?.unwrap_or_default())?;
         }
-        for (nodes, field, targets) in [(&pulleys, "gearbox", &gearboxes), (&screws, "gearbox", &gearboxes), (&racks, "gearbox", &gearboxes), (&rotaries, "gearbox", &gearboxes), (&linears, "motor", &motors)] {
+        for (nodes, field, targets) in [
+            (&pulleys, "gearbox", &gearboxes),
+            (&screws, "gearbox", &gearboxes),
+            (&racks, "gearbox", &gearboxes),
+            (&rotaries, "gearbox", &gearboxes),
+            (&linears, "motor", &motors),
+        ] {
             for node in nodes {
                 find(targets, node, field, node.text(field)?.unwrap_or_default())?;
             }
@@ -593,8 +838,11 @@ impl Netlist {
             let mut route = Vec::new();
             for target in node.id_list("route")? {
                 let found = motor_nodes.iter().position(|m| m.pulley == target).map(Waypoint::Pulley);
-                let found = found.or_else(|| idlers.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Idler));
-                let found = found.or_else(|| bodies.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Body));
+                let found = found.or_else(|| {
+                    idlers.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Idler)
+                });
+                let found = found
+                    .or_else(|| bodies.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Body));
                 route.push(found.ok_or_else(|| ConfigError::Invalid(format!("{} = \"{target}\"", node.at("route"))))?);
             }
             section_nodes.push(SectionNode { id, key, length, axes: along, pulleys: fed, route });
@@ -605,7 +853,8 @@ impl Netlist {
             let Some(value) = node.get(name) else { return Ok(out) };
             for (target, value) in value.as_table().ok_or_else(|| ConfigError::Type(node.at(name)))? {
                 let at = format!("{}.{target}", node.at(name));
-                let i = axis_nodes.iter().position(|a| &a.id == target).ok_or_else(|| ConfigError::Invalid(at.clone()))?;
+                let i =
+                    axis_nodes.iter().position(|a| &a.id == target).ok_or_else(|| ConfigError::Invalid(at.clone()))?;
                 out[i] = number(cfg, value, &at, refs)?;
             }
             Ok(out)
@@ -614,7 +863,11 @@ impl Netlist {
         let mut body_nodes = Vec::new();
         for node in &bodies {
             let mass = number(cfg, node.required("mass_kg")?, &node.at("mass_kg"), &mut refs)?;
-            let payload = node.get("payload_kg").map(|v| number(cfg, v, &node.at("payload_kg"), &mut refs)).transpose()?.unwrap_or(0.0);
+            let payload = node
+                .get("payload_kg")
+                .map(|v| number(cfg, v, &node.at("payload_kg"), &mut refs))
+                .transpose()?
+                .unwrap_or(0.0);
             if mass <= 0.0 || payload < 0.0 {
                 return Err(ConfigError::Invalid(node.at(if mass <= 0.0 { "mass_kg" } else { "payload_kg" })));
             }
@@ -623,7 +876,10 @@ impl Netlist {
                 let i = find(&axes, node, "axes", id)?;
                 // A rotary axis turns its rotary's inertia; a body on it would move on a circle, not along the axes.
                 if axis_nodes[i].rotary {
-                    return Err(ConfigError::Invalid(format!("{} (no body moves with the rotary axis {id})", node.at("axes"))));
+                    return Err(ConfigError::Invalid(format!(
+                        "{} (no body moves with the rotary axis {id})",
+                        node.at("axes")
+                    )));
                 }
                 moves[i] = true;
             }
@@ -648,18 +904,29 @@ impl Netlist {
             if !cfg.get(&friction).is_ok_and(Value::is_table) {
                 return Err(ConfigError::Missing(format!("{} = \"{friction}\"", node.at("friction"))));
             }
-            let carries = node.id_list("carries")?.into_iter().map(|id| find(&bodies, node, "carries", id)).collect::<Result<Vec<_>>>()?;
+            let carries = node
+                .id_list("carries")?
+                .into_iter()
+                .map(|id| find(&bodies, node, "carries", id))
+                .collect::<Result<Vec<_>>>()?;
             let overhang = match node.text("overhang")? {
                 None => {
-                    if let Some(extra) = ["overhang_axis", "lever_m", "lever_axis", "spacing_m", "side_load"].into_iter().find(|f| node.get(f).is_some()) {
+                    if let Some(extra) = ["overhang_axis", "lever_m", "lever_axis", "spacing_m", "side_load"]
+                        .into_iter()
+                        .find(|f| node.get(f).is_some())
+                    {
                         return Err(ConfigError::Missing(format!("{} (with {extra})", node.at("overhang"))));
                     }
                     None
                 }
                 Some(body) => {
                     let body = find(&bodies, node, "overhang", body)?;
-                    let axis_id = node.required("overhang_axis")?.as_str().ok_or_else(|| ConfigError::Type(node.at("overhang_axis")))?;
-                    let lever_axis = node.text("lever_axis")?.map(|id| find(&axes, node, "lever_axis", id)).transpose()?;
+                    let axis_id = node
+                        .required("overhang_axis")?
+                        .as_str()
+                        .ok_or_else(|| ConfigError::Type(node.at("overhang_axis")))?;
+                    let lever_axis =
+                        node.text("lever_axis")?.map(|id| find(&axes, node, "lever_axis", id)).transpose()?;
                     let spacing = number(cfg, node.required("spacing_m")?, &node.at("spacing_m"), &mut refs)?;
                     if spacing <= 0.0 {
                         return Err(ConfigError::Invalid(node.at("spacing_m")));
@@ -680,13 +947,28 @@ impl Netlist {
         let mut idler_nodes = Vec::new();
         for node in &idlers {
             let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
-            let (radius, inertia, friction) = (value("radius_m", &mut refs)?, value("inertia_kgm2", &mut refs)?, value("friction_nm", &mut refs)?);
+            let (radius, inertia, friction) =
+                (value("radius_m", &mut refs)?, value("inertia_kgm2", &mut refs)?, value("friction_nm", &mut refs)?);
             if radius <= 0.0 || inertia < 0.0 || friction < 0.0 {
-                return Err(ConfigError::Invalid(node.at(if radius <= 0.0 { "radius_m" } else if inertia < 0.0 { "inertia_kgm2" } else { "friction_nm" })));
+                return Err(ConfigError::Invalid(node.at(if radius <= 0.0 {
+                    "radius_m"
+                } else if inertia < 0.0 {
+                    "inertia_kgm2"
+                } else {
+                    "friction_nm"
+                })));
             }
             let speed = coefficients(node, "speed", &mut refs)?;
             let body = node.text("body")?.map(|id| find(&bodies, node, "body", id)).transpose()?;
-            idler_nodes.push(IdlerNode { id: id_of(node), speed, radius, inertia, friction, body, at: node.point("at_m")? });
+            idler_nodes.push(IdlerNode {
+                id: id_of(node),
+                speed,
+                radius,
+                inertia,
+                friction,
+                body,
+                at: node.point("at_m")?,
+            });
         }
 
         let frame = match &frames[..] {
@@ -695,12 +977,26 @@ impl Netlist {
                 let axis = find(&axes, node, "axis", node.text("axis")?.unwrap_or_default())?;
                 // A frame swaying along a sloped axis would move the bodies' weight with it.
                 if axis_nodes[axis].incline_deg != 0.0 || axis_nodes[axis].rotary {
-                    return Err(ConfigError::Invalid(format!("{} (the frame sways along a horizontal axis)", node.at("axis"))));
+                    return Err(ConfigError::Invalid(format!(
+                        "{} (the frame sways along a horizontal axis)",
+                        node.at("axis")
+                    )));
                 }
-                let value = |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
-                let (mass, stiffness, damping) = (value("mass_kg", &mut refs)?, value("stiffness_n_m", &mut refs)?, value("damping_n_s_m", &mut refs)?);
+                let value =
+                    |name: &str, refs: &mut Vec<String>| number(cfg, node.required(name)?, &node.at(name), refs);
+                let (mass, stiffness, damping) = (
+                    value("mass_kg", &mut refs)?,
+                    value("stiffness_n_m", &mut refs)?,
+                    value("damping_n_s_m", &mut refs)?,
+                );
                 if mass <= 0.0 || stiffness <= 0.0 || damping < 0.0 {
-                    return Err(ConfigError::Invalid(node.at(if mass <= 0.0 { "mass_kg" } else if stiffness <= 0.0 { "stiffness_n_m" } else { "damping_n_s_m" })));
+                    return Err(ConfigError::Invalid(node.at(if mass <= 0.0 {
+                        "mass_kg"
+                    } else if stiffness <= 0.0 {
+                        "stiffness_n_m"
+                    } else {
+                        "damping_n_s_m"
+                    })));
                 }
                 Some(FrameNode { axis, mass, stiffness, damping })
             }
@@ -714,10 +1010,21 @@ impl Netlist {
             if length <= 0.0 {
                 return Err(ConfigError::Invalid(node.at("length_m")));
             }
-            span_nodes.push(SpanNode { id: id_of(node), section, length, axes: coefficients(node, "axes", &mut refs)? });
+            span_nodes.push(SpanNode {
+                id: id_of(node),
+                section,
+                length,
+                axes: coefficients(node, "axes", &mut refs)?,
+            });
         }
         // Checked here: a field of the schema with the wrong type that the reading above passed over.
-        for node in [&axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries].into_iter().flatten() {
+        for node in [
+            &axes, &motors, &gearboxes, &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws,
+            &racks, &linears, &rotaries,
+        ]
+        .into_iter()
+        .flatten()
+        {
             for f in node.fields {
                 let Some(value) = node.get(f.name) else { continue };
                 let ok = match f.kind {
@@ -731,21 +1038,35 @@ impl Netlist {
                 }
             }
         }
-        if let Some(i) = (0..axis_nodes.len()).find(|&i| !axis_nodes[i].rotary && !body_nodes.iter().any(|b| b.axes[i])) {
+        if let Some(i) = (0..axis_nodes.len()).find(|&i| !axis_nodes[i].rotary && !body_nodes.iter().any(|b| b.axes[i]))
+        {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
         for (key, check) in [("id", true), ("name", false)] {
             match machine.get(key) {
                 None => {}
                 Some(Value::String(text)) if !check || valid_id(text) => {}
-                Some(Value::String(_)) => return Err(ConfigError::Invalid(format!("machine.{key} (letters, digits, _ and - only)"))),
+                Some(Value::String(_)) => {
+                    return Err(ConfigError::Invalid(format!("machine.{key} (letters, digits, _ and - only)")));
+                }
                 Some(_) => return Err(ConfigError::Type(format!("machine.{key}"))),
             }
         }
         if motor_nodes.len() != axis_nodes.len() {
             return Err(ConfigError::Invalid("machine.motor (as many motors as axes)".into()));
         }
-        Ok(Self { axes: axis_nodes, motors: motor_nodes, sections: section_nodes, bodies: body_nodes, guides: guide_nodes, idlers: idler_nodes, frame, spans: span_nodes, refs, values })
+        Ok(Self {
+            axes: axis_nodes,
+            motors: motor_nodes,
+            sections: section_nodes,
+            bodies: body_nodes,
+            guides: guide_nodes,
+            idlers: idler_nodes,
+            frame,
+            spans: span_nodes,
+            refs,
+            values,
+        })
     }
 }
 
@@ -757,7 +1078,17 @@ pub fn json_schema() -> Value {
         Value::Table(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
     let text = |t: &str| Value::String(t.into());
-    let number = obj([("oneOf", Value::Array(vec![obj([("type", text("number"))]), obj([("type", text("string")), ("pattern", text(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$")), ("description", text("Dotted path of a number in the file."))])]))]);
+    let number = obj([(
+        "oneOf",
+        Value::Array(vec![
+            obj([("type", text("number"))]),
+            obj([
+                ("type", text("string")),
+                ("pattern", text(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$")),
+                ("description", text("Dotted path of a number in the file.")),
+            ]),
+        ]),
+    )]);
     let id = obj([("type", text("string")), ("pattern", text("^[A-Za-z0-9_-]+$"))]);
     let mut lists = Table::new();
     for (list, doc, fields) in NODES {
@@ -767,34 +1098,108 @@ pub fn json_schema() -> Value {
                 Kind::Id => (id.clone(), None),
                 Kind::Key | Kind::Table => (obj([("type", text("string"))]), None),
                 Kind::Ref(target) => (obj([("type", text("string"))]), Some(format!("Id of a machine.{target} node."))),
-                Kind::Refs(target) => (obj([("type", text("array")), ("items", obj([("type", text("string"))]))]), Some(format!("Ids of machine.{target} nodes."))),
-                Kind::Coefficients(target) => (obj([("type", text("object")), ("additionalProperties", number.clone())]), Some(format!("Keys: ids of machine.{target} nodes."))),
+                Kind::Refs(target) => (
+                    obj([("type", text("array")), ("items", obj([("type", text("string"))]))]),
+                    Some(format!("Ids of machine.{target} nodes.")),
+                ),
+                Kind::Coefficients(target) => (
+                    obj([("type", text("object")), ("additionalProperties", number.clone())]),
+                    Some(format!("Keys: ids of machine.{target} nodes.")),
+                ),
                 Kind::Number => (number.clone(), None),
                 Kind::Bool => (obj([("type", text("boolean"))]), None),
-                Kind::Position => (obj([("type", text("array")), ("items", obj([("type", text("number"))])), ("minItems", Value::Integer(2)), ("maxItems", Value::Integer(2))]), None),
-                Kind::Point => (obj([("type", text("array")), ("items", obj([("type", text("number"))])), ("minItems", Value::Integer(3)), ("maxItems", Value::Integer(3))]), None),
-                Kind::Route(targets) => (obj([("type", text("array")), ("items", obj([("type", text("string"))]))]), Some(format!("Ids of {} nodes.", targets.iter().map(|t| format!("machine.{t}")).collect::<Vec<_>>().join(", ")))),
+                Kind::Position => (
+                    obj([
+                        ("type", text("array")),
+                        ("items", obj([("type", text("number"))])),
+                        ("minItems", Value::Integer(2)),
+                        ("maxItems", Value::Integer(2)),
+                    ]),
+                    None,
+                ),
+                Kind::Point => (
+                    obj([
+                        ("type", text("array")),
+                        ("items", obj([("type", text("number"))])),
+                        ("minItems", Value::Integer(3)),
+                        ("maxItems", Value::Integer(3)),
+                    ]),
+                    None,
+                ),
+                Kind::Route(targets) => (
+                    obj([("type", text("array")), ("items", obj([("type", text("string"))]))]),
+                    Some(format!(
+                        "Ids of {} nodes.",
+                        targets.iter().map(|t| format!("machine.{t}")).collect::<Vec<_>>().join(", ")
+                    )),
+                ),
             };
             let mut schema = schema.as_table().cloned().unwrap_or_default();
-            schema.insert("description".into(), text(&about.map_or_else(|| f.doc.to_string(), |a| format!("{} {a}", f.doc))));
+            schema.insert(
+                "description".into(),
+                text(&about.map_or_else(|| f.doc.to_string(), |a| format!("{} {a}", f.doc))),
+            );
             properties.insert(f.name.into(), Value::Table(schema));
         }
         let required = fields.iter().filter(|f| f.required).map(|f| text(f.name)).collect();
-        let items = obj([("type", text("object")), ("properties", Value::Table(properties)), ("required", Value::Array(required)), ("additionalProperties", Value::Boolean(false))]);
+        let items = obj([
+            ("type", text("object")),
+            ("properties", Value::Table(properties)),
+            ("required", Value::Array(required)),
+            ("additionalProperties", Value::Boolean(false)),
+        ]);
         lists.insert((*list).into(), obj([("type", text("array")), ("description", text(doc)), ("items", items)]));
     }
-    lists.insert("version".into(), obj([("const", Value::Integer(VERSION)), ("description", text("Version of the [machine] part."))]));
-    lists.insert("id".into(), obj([("type", text("string")), ("pattern", text("^[A-Za-z0-9_-]+$")), ("description", text("Id of the machine, as the front ends list it; default the file name without its extension."))]));
-    lists.insert("name".into(), obj([("type", text("string")), ("description", text("Translation key or plain text of the machine's name; default its id."))]));
+    lists.insert(
+        "version".into(),
+        obj([("const", Value::Integer(VERSION)), ("description", text("Version of the [machine] part."))]),
+    );
+    lists.insert(
+        "id".into(),
+        obj([
+            ("type", text("string")),
+            ("pattern", text("^[A-Za-z0-9_-]+$")),
+            (
+                "description",
+                text("Id of the machine, as the front ends list it; default the file name without its extension."),
+            ),
+        ]),
+    );
+    lists.insert(
+        "name".into(),
+        obj([
+            ("type", text("string")),
+            ("description", text("Translation key or plain text of the machine's name; default its id.")),
+        ]),
+    );
     let required = ["version", "axis", "motor"].map(text).to_vec();
     obj([
         ("$schema", text("https://json-schema.org/draft/2020-12/schema")),
         ("$id", text("https://github.com/kinematics-simulation/machine-file.schema.json")),
         ("title", text("Machine file")),
-        ("description", text("A machine as a netlist of simulation components: [machine] says what is connected to what, the other tables hold the values (see docs/machine-files.md). Generated by sim_netlist::json_schema; do not edit.")),
+        (
+            "description",
+            text(
+                "A machine as a netlist of simulation components: [machine] says what is connected to what, the other tables hold the values (see docs/machine-files.md). Generated by sim_netlist::json_schema; do not edit.",
+            ),
+        ),
         ("type", text("object")),
         ("required", Value::Array(vec![text("format_version"), text("machine")])),
-        ("properties", obj([("format_version", obj([("const", Value::Integer(sim_core::config::FORMAT_VERSION))])), ("machine", obj([("type", text("object")), ("required", Value::Array(required)), ("properties", Value::Table(lists)), ("additionalProperties", Value::Boolean(false))]))])),
+        (
+            "properties",
+            obj([
+                ("format_version", obj([("const", Value::Integer(sim_core::config::FORMAT_VERSION))])),
+                (
+                    "machine",
+                    obj([
+                        ("type", text("object")),
+                        ("required", Value::Array(required)),
+                        ("properties", Value::Table(lists)),
+                        ("additionalProperties", Value::Boolean(false)),
+                    ]),
+                ),
+            ]),
+        ),
         ("additionalProperties", obj([("type", Value::Array(vec![text("object"), text("array")]))])),
     ])
 }

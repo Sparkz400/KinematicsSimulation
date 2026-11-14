@@ -10,10 +10,8 @@ fn crates_dir() -> PathBuf {
 }
 
 fn crate_names() -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(crates_dir())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
+    let mut names: Vec<String> =
+        fs::read_dir(crates_dir()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
     names.sort();
     names
 }
@@ -88,7 +86,8 @@ fn text_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.unwrap().path();
         if path.is_dir() {
             text_files(&path, out);
-        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "toml" | "ftl" | "py" | "md" | "txt")) {
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "toml" | "ftl" | "py" | "md" | "txt"))
+        {
             out.push(path);
         }
     }

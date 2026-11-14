@@ -2,8 +2,8 @@
 //! judge the lives against the required life.
 
 use sim_components::analysis::{
-    SPEED_BAND, analyse_trajectory, belt_tooth_utilisation, gearbox_gearing_life_h, gearbox_life_h, guide_life_h, motor_bearing_life_h, pulley_bearing_life_h, sensitivity,
-    torque_band_floor, verdicts,
+    SPEED_BAND, analyse_trajectory, belt_tooth_utilisation, gearbox_gearing_life_h, gearbox_life_h, guide_life_h,
+    motor_bearing_life_h, pulley_bearing_life_h, sensitivity, torque_band_floor, verdicts,
 };
 use sim_components::path::Piece;
 use sim_components::{Command, Sim};
@@ -40,10 +40,15 @@ fn the_life_loads_are_the_signals_added_up() {
         let radial: Vec<Option<usize>> = motors.iter().map(|m| find(format!("pulley.{}.radial_load", m.id))).collect();
         // A linear motor has no gearbox, so no gearbox torque either.
         let gear: Vec<Option<usize>> = motors.iter().map(|m| find(format!("gearbox.{}.output_torque", m.id))).collect();
-        let guides: Vec<(usize, usize)> = axes.iter().enumerate().filter_map(|(a, axis)| Some((find(format!("axis.{}.guide_load", axis.id))?, a))).collect();
+        let guides: Vec<(usize, usize)> = axes
+            .iter()
+            .enumerate()
+            .filter_map(|(a, axis)| Some((find(format!("axis.{}.guide_load", axis.id))?, a)))
+            .collect();
         let every = (1e-3 / sim.dt).round().max(1.0) as u64;
         let n = motors.len();
-        let (mut speed_sum, mut cubed, mut weight, mut life, mut bands) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![vec![0.0f64; 4001]; n]);
+        let (mut speed_sum, mut cubed, mut weight, mut life, mut bands) =
+            (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![vec![0.0f64; 4001]; n]);
         let mut spectra = vec![vec![0.0f64; 4001]; n];
         let (mut guide_cubed, mut guide_speed, mut samples) = (vec![0.0; guides.len()], vec![0.0; guides.len()], 0.0);
         let (mut pos, mut speed, mut values) = (vec![0.0; n], vec![0.0; n], Vec::new());
@@ -76,7 +81,9 @@ fn the_life_loads_are_the_signals_added_up() {
             }
             steps += 1;
         }
-        let close = |a: f64, b: f64, what: &str| assert!((a - b).abs() <= 1e-9 * b.abs().max(1e-12), "{}: {what} {a} against {b}", entry.id);
+        let close = |a: f64, b: f64, what: &str| {
+            assert!((a - b).abs() <= 1e-9 * b.abs().max(1e-12), "{}: {what} {a} against {b}", entry.id)
+        };
         for k in 0..n {
             let m = &load.motors[k];
             close(m.mean_speed, speed_sum[k] / steps as f64, "mean speed");
@@ -113,7 +120,10 @@ fn the_life_loads_are_the_signals_added_up() {
         } else {
             assert!(load.guide_load.is_none() && load.guide_speed.is_none(), "{}", entry.id);
         }
-        println!("{}: motor speed {:.2} rad/s, radial {:?} N, guide {:?} m/s", entry.id, load.motors[0].mean_speed, load.motors[0].radial_load_equivalent, load.guide_speed);
+        println!(
+            "{}: motor speed {:.2} rad/s, radial {:?} N, guide {:?} m/s",
+            entry.id, load.motors[0].mean_speed, load.motors[0].radial_load_equivalent, load.guide_speed
+        );
     }
 }
 
@@ -122,33 +132,62 @@ fn the_life_loads_are_the_signals_added_up() {
 #[test]
 fn the_life_verdicts_judge_the_lives_against_the_required_life() {
     let mut configs: Vec<_> = MACHINES.iter().map(|e| (*e, e.config())).collect();
-    configs.push((&machine_t_gantry::ENTRY, sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap()));
+    configs.push((
+        &machine_t_gantry::ENTRY,
+        sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap(),
+    ));
     for (entry, cfg) in configs {
         let load = sim_components::analysis::analyse_cycle_with(&mut Sim::new(entry, &cfg).unwrap(), false).unwrap();
         let judged = verdicts(&cfg, &load).unwrap();
-        let find = |v: &[sim_components::analysis::Verdict], check: &str, motor: Option<usize>| v.iter().find(|v| v.check == check && v.motor == motor).cloned();
+        let find = |v: &[sim_components::analysis::Verdict], check: &str, motor: Option<usize>| {
+            v.iter().find(|v| v.check == check && v.motor == motor).cloned()
+        };
         let required = cfg.f64("ratings.required_life_h").unwrap();
         // Each life is judged where the machine reports what it needs: a delta has no guide, pulley or belt.
         let guide = guide_life_h(&cfg, &load);
-        assert_eq!(find(&judged, "guide-life", None).map(|v| (v.value, v.limit)), guide.map(|g| (g, required)), "{}", entry.id);
+        assert_eq!(
+            find(&judged, "guide-life", None).map(|v| (v.value, v.limit)),
+            guide.map(|g| (g, required)),
+            "{}",
+            entry.id
+        );
         for (k, m) in load.motors.iter().enumerate() {
             // The EXCT-30 has no gearbox and no gearbox rating: its gearbox life is not judged.
-            assert_eq!(find(&judged, "gearbox-life", Some(k)).map(|v| v.value), gearbox_life_h(&cfg, m), "{}", entry.id);
+            assert_eq!(
+                find(&judged, "gearbox-life", Some(k)).map(|v| v.value),
+                gearbox_life_h(&cfg, m),
+                "{}",
+                entry.id
+            );
             // The gearing where the config has its S-N line and the cycle takes the gearbox above its rated torque (of the
             // shipped configs only the delta's first arm: about 9000 h, a finding).
             let gearing = gearbox_gearing_life_h(&cfg, m);
             assert_eq!(find(&judged, "gearbox-gearing-life", Some(k)).map(|v| v.value), gearing, "{}", entry.id);
             assert!(gearing.is_none_or(|life| life.is_finite() && life > 0.0), "{}: gearing {gearing:?} h", entry.id);
             // In no shipped config does a belt pull on a motor shaft: no motor bearing life.
-            assert!(motor_bearing_life_h(&cfg, m).is_none() && find(&judged, "motor-bearing-life", Some(k)).is_none(), "{}", entry.id);
+            assert!(
+                motor_bearing_life_h(&cfg, m).is_none() && find(&judged, "motor-bearing-life", Some(k)).is_none(),
+                "{}",
+                entry.id
+            );
             let Some(bearing) = pulley_bearing_life_h(&cfg, m) else {
-                assert!(find(&judged, "pulley-bearing-life", Some(k)).is_none() && belt_tooth_utilisation(&cfg, m).unwrap().is_none(), "{}", entry.id);
+                assert!(
+                    find(&judged, "pulley-bearing-life", Some(k)).is_none()
+                        && belt_tooth_utilisation(&cfg, m).unwrap().is_none(),
+                    "{}",
+                    entry.id
+                );
                 // A machine without gearbox ratings (a screw on a coupling, a linear motor) has no gearbox life.
                 let Some(life) = gearbox_life_h(&cfg, m) else { continue };
                 for (factor, ok) in [(1.001, false), (0.999, true)] {
                     let mut edited = cfg.clone();
                     edited.set_text(&format!("ratings.required_life_h = {:?}", life * factor)).unwrap();
-                    assert_eq!(find(&verdicts(&edited, &load).unwrap(), "gearbox-life", Some(k)).unwrap().ok, ok, "{}", entry.id);
+                    assert_eq!(
+                        find(&verdicts(&edited, &load).unwrap(), "gearbox-life", Some(k)).unwrap().ok,
+                        ok,
+                        "{}",
+                        entry.id
+                    );
                 }
                 continue;
             };
@@ -158,20 +197,41 @@ fn the_life_verdicts_judge_the_lives_against_the_required_life() {
             for (factor, ok) in [(1.001, false), (0.999, true)] {
                 let mut edited = cfg.clone();
                 edited.set_text(&format!("ratings.required_life_h = {:?}", bearing * factor)).unwrap();
-                assert_eq!(find(&verdicts(&edited, &load).unwrap(), "pulley-bearing-life", Some(k)).unwrap().ok, ok, "{}", entry.id);
+                assert_eq!(
+                    find(&verdicts(&edited, &load).unwrap(), "pulley-bearing-life", Some(k)).unwrap().ok,
+                    ok,
+                    "{}",
+                    entry.id
+                );
             }
         }
         // A reliability the standard (ISO 281) has no life factor for is refused by name.
         let mut unreliable = cfg.clone();
         unreliable.set_text("ratings.bearing_reliability_percent = 99.99").unwrap();
-        assert_eq!(verdicts(&unreliable, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_reliability_percent".into())), "{}", entry.id);
+        assert_eq!(
+            verdicts(&unreliable, &load).err(),
+            Some(sim_core::ConfigError::Invalid("ratings.bearing_reliability_percent".into())),
+            "{}",
+            entry.id
+        );
         // So is a contamination factor above 1 (ISO 281's e_C), where the config has the lubrication for a_ISO.
         if cfg.get("ratings.bearing_contamination_factor").is_ok() {
             let mut dirty = cfg.clone();
             dirty.set_text("ratings.bearing_contamination_factor = 1.5").unwrap();
-            assert_eq!(verdicts(&dirty, &load).err(), Some(sim_core::ConfigError::Invalid("ratings.bearing_contamination_factor".into())), "{}", entry.id);
+            assert_eq!(
+                verdicts(&dirty, &load).err(),
+                Some(sim_core::ConfigError::Invalid("ratings.bearing_contamination_factor".into())),
+                "{}",
+                entry.id
+            );
         }
-        println!("{}: guide {guide:?} h, pulley bearing {:?} h, gearbox {:?} h, tooth load {:?}", entry.id, pulley_bearing_life_h(&cfg, &load.motors[0]), gearbox_life_h(&cfg, &load.motors[0]), belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap());
+        println!(
+            "{}: guide {guide:?} h, pulley bearing {:?} h, gearbox {:?} h, tooth load {:?}",
+            entry.id,
+            pulley_bearing_life_h(&cfg, &load.motors[0]),
+            gearbox_life_h(&cfg, &load.motors[0]),
+            belt_tooth_utilisation(&cfg, &load.motors[0]).unwrap()
+        );
     }
 }
 

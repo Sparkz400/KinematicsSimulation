@@ -28,7 +28,11 @@ fn the_default_sweep_finds_the_lowest_dip_on_every_config() {
         for motor in 0..motors {
             let found = resonance(&frequency_sweep(entry, &cfg, motor, &frequencies, amplitude).unwrap());
             let found = found.unwrap_or_else(|| panic!("{} motor {motor}: no dip at {amplitude} N m", entry.id));
-            assert!((found.frequency / expected - 1.0).abs() < 0.03 && found.damping > 0.0, "{} motor {motor}: {found:?}", entry.id);
+            assert!(
+                (found.frequency / expected - 1.0).abs() < 0.03 && found.damping > 0.0,
+                "{} motor {motor}: {found:?}",
+                entry.id
+            );
         }
     }
 }

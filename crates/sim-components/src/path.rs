@@ -45,17 +45,17 @@ pub fn parse(text: &str) -> Result<Vec<Piece>, String> {
     let mut pieces = Vec::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let fields: Vec<&str> = line.split(',').map(str::trim).collect();
-        let numbers = |fields: &[&str]| fields.iter().map(|v| v.parse().ok().filter(|n: &f64| n.is_finite())).collect::<Option<Vec<f64>>>();
+        let numbers = |fields: &[&str]| {
+            fields.iter().map(|v| v.parse().ok().filter(|n: &f64| n.is_finite())).collect::<Option<Vec<f64>>>()
+        };
         let turn = fields[fields.len() - 1];
         let piece = match fields[0] {
             "line" if fields.len() > 1 => numbers(&fields[1..]).map(Piece::Line),
             "spline" if fields.len() > 1 => numbers(&fields[1..]).map(Piece::Spline),
-            "arc" if fields.len() == 6 && (turn == "cw" || turn == "ccw") => {
-                numbers(&fields[1..5]).map(|n| Piece::Arc { to: n[..2].to_vec(), centre: n[2..].to_vec(), clockwise: turn == "cw" })
-            }
-            "arc" if fields.len() == 8 && (turn == "cw" || turn == "ccw") => {
-                numbers(&fields[1..7]).map(|n| Piece::Arc { to: n[..3].to_vec(), centre: n[3..].to_vec(), clockwise: turn == "cw" })
-            }
+            "arc" if fields.len() == 6 && (turn == "cw" || turn == "ccw") => numbers(&fields[1..5])
+                .map(|n| Piece::Arc { to: n[..2].to_vec(), centre: n[2..].to_vec(), clockwise: turn == "cw" }),
+            "arc" if fields.len() == 8 && (turn == "cw" || turn == "ccw") => numbers(&fields[1..7])
+                .map(|n| Piece::Arc { to: n[..3].to_vec(), centre: n[3..].to_vec(), clockwise: turn == "cw" }),
             _ => None,
         };
         pieces.push(piece.ok_or(line.to_string())?);
@@ -78,23 +78,53 @@ pub fn parse_trajectory(text: &str) -> Result<Vec<(f64, Vec<f64>)>, String> {
 /// A piece with its start and its length worked out.
 #[derive(Clone)]
 enum Geo {
-    Line { from: Vec<f64>, dir: Vec<f64>, length: f64 },
+    Line {
+        from: Vec<f64>,
+        dir: Vec<f64>,
+        length: f64,
+    },
     /// `turn` is 1 counter-clockwise and -1 clockwise.
-    Arc { centre: [f64; 2], radius: f64, from_angle: f64, turn: f64, length: f64 },
+    Arc {
+        centre: [f64; 2],
+        radius: f64,
+        from_angle: f64,
+        turn: f64,
+        length: f64,
+    },
     /// An arc in space: at the angle phi = s / radius from its start the point centre + radius (cos phi u + sin phi w),
     /// u from the centre to its start, w at right angles to it in its plane, in the direction it turns.
-    Arc3 { centre: [f64; 3], u: [f64; 3], w: [f64; 3], radius: f64, length: f64 },
+    Arc3 {
+        centre: [f64; 3],
+        u: [f64; 3],
+        w: [f64; 3],
+        radius: f64,
+        length: f64,
+    },
     /// A transition curve (clothoid): from the point `from` in the direction `heading`, the curvature goes
     /// evenly with the distance from `k0` to `k1`. Curvature is 1 / radius, positive counter-clockwise. On three axes
     /// `plane` is where the curve lies: a point (the origin of `from`) and the two directions of its first and second
     /// coordinate; `None` on two axes.
-    Clothoid { from: [f64; 2], heading: f64, k0: f64, k1: f64, length: f64, plane: Option<[[f64; 3]; 3]> },
+    Clothoid {
+        from: [f64; 2],
+        heading: f64,
+        k0: f64,
+        k1: f64,
+        length: f64,
+        plane: Option<[[f64; 3]; 3]>,
+    },
     /// One span of a spline, from one via point to the next, or a part of one: the polynomial c0 + c1 u + ... +
     /// c5 u^5 for u from 0 to `h` (a cubic, c4 = c5 = 0, but where a spline is eased into a line or an arc,
     /// `ease`). `travelled` is the distance along it at `SPLINE_PARTS` + 1 evenly spaced u, the last being the
     /// length; `tightest` and `rate` are the most its curvature and the change of curvature per distance get.
     /// `dims` is the number of axes it runs in, two or three (a two-axis span has its third coefficients zero).
-    Spline { c: Poly, h: f64, travelled: Vec<f64>, tightest: f64, rate: f64, dims: usize },
+    Spline {
+        c: Poly,
+        h: f64,
+        travelled: Vec<f64>,
+        tightest: f64,
+        rate: f64,
+        dims: usize,
+    },
 }
 
 /// The coefficients of a spline span's polynomial in u, per power, for up to three axes.
@@ -121,7 +151,9 @@ const SPLINE_MARGIN: f64 = 1.05;
 /// Derivatives of a spline span's polynomial by u: first, second, third.
 fn poly_rates(c: &Poly, u: f64) -> [[f64; 3]; 3] {
     // The k-th derivative: sum over m of m! / (m - k)! c_m u^(m - k).
-    let rate = |k: usize, i: usize| (k..6).rev().fold(0.0, |sum, m| sum * u + c[m][i] * ((m - k + 1)..=m).map(|f| f as f64).product::<f64>());
+    let rate = |k: usize, i: usize| {
+        (k..6).rev().fold(0.0, |sum, m| sum * u + c[m][i] * ((m - k + 1)..=m).map(|f| f as f64).product::<f64>())
+    };
     [1, 2, 3].map(|k| [rate(k, 0), rate(k, 1), rate(k, 2)])
 }
 
@@ -144,10 +176,21 @@ fn poly_shift(c: &Poly, from: f64) -> Poly {
 /// Distance travelled on a spline span between two values of u: five-point Gauss-Legendre, exact to rounding
 /// for a part of a 64th of a span.
 fn poly_distance(c: &Poly, from: f64, to: f64) -> f64 {
-    const NODES: [(f64, f64); 5] =
-        [(0.0, 0.568_888_888_888_888_9), (0.538_469_310_105_683_1, 0.478_628_670_499_366_5), (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5), (0.906_179_845_938_664, 0.236_926_885_056_189_1), (-0.906_179_845_938_664, 0.236_926_885_056_189_1)];
+    const NODES: [(f64, f64); 5] = [
+        (0.0, 0.568_888_888_888_888_9),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
     let (mid, half) = (0.5 * (from + to), 0.5 * (to - from));
-    half * NODES.iter().map(|(x, w)| { let [d, ..] = poly_rates(c, mid + half * x); w * norm3(d) }).sum::<f64>()
+    half * NODES
+        .iter()
+        .map(|(x, w)| {
+            let [d, ..] = poly_rates(c, mid + half * x);
+            w * norm3(d)
+        })
+        .sum::<f64>()
 }
 
 /// A spline span of the polynomial `c` for u from 0 to `h`, with its table of distance travelled and the most its
@@ -181,7 +224,10 @@ fn span(c: Poly, h: f64, dims: usize) -> Option<Geo> {
 impl Geo {
     fn length(&self) -> f64 {
         match self {
-            Geo::Line { length, .. } | Geo::Arc { length, .. } | Geo::Arc3 { length, .. } | Geo::Clothoid { length, .. } => *length,
+            Geo::Line { length, .. }
+            | Geo::Arc { length, .. }
+            | Geo::Arc3 { length, .. }
+            | Geo::Clothoid { length, .. } => *length,
             Geo::Spline { travelled, .. } => travelled[SPLINE_PARTS],
         }
     }
@@ -190,14 +236,24 @@ impl Geo {
     /// and second derivative by the distance travelled.
     fn at(&self, s: f64) -> [Vec<f64>; 3] {
         match self {
-            Geo::Line { from, dir, .. } => [from.iter().zip(dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; dir.len()]],
+            Geo::Line { from, dir, .. } => {
+                [from.iter().zip(dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; dir.len()]]
+            }
             Geo::Arc { centre, radius, from_angle, turn, .. } => {
                 let (sin, cos) = (from_angle + turn * s / radius).sin_cos();
-                [vec![centre[0] + radius * cos, centre[1] + radius * sin], vec![-turn * sin, turn * cos], vec![-cos / radius, -sin / radius]]
+                [
+                    vec![centre[0] + radius * cos, centre[1] + radius * sin],
+                    vec![-turn * sin, turn * cos],
+                    vec![-cos / radius, -sin / radius],
+                ]
             }
             Geo::Arc3 { centre, u, w, radius, .. } => {
                 let (sin, cos) = (s / radius).sin_cos();
-                [(0..3).map(|i| centre[i] + radius * (cos * u[i] + sin * w[i])).collect(), (0..3).map(|i| -sin * u[i] + cos * w[i]).collect(), (0..3).map(|i| -(cos * u[i] + sin * w[i]) / radius).collect()]
+                [
+                    (0..3).map(|i| centre[i] + radius * (cos * u[i] + sin * w[i])).collect(),
+                    (0..3).map(|i| -sin * u[i] + cos * w[i]).collect(),
+                    (0..3).map(|i| -(cos * u[i] + sin * w[i]) / radius).collect(),
+                ]
             }
             Geo::Clothoid { from, heading, k0, k1, length, plane } => {
                 let angle = |u: f64| heading + k0 * u + 0.5 * (k1 - k0) * u * u / length;
@@ -206,7 +262,13 @@ impl Geo {
                 let (n, h) = (64, s / 64.0);
                 let (mut x, mut y) = (0.0, 0.0);
                 for i in 0..=n {
-                    let weight = if i == 0 || i == n { 1.0 } else if i % 2 == 1 { 4.0 } else { 2.0 };
+                    let weight = if i == 0 || i == n {
+                        1.0
+                    } else if i % 2 == 1 {
+                        4.0
+                    } else {
+                        2.0
+                    };
                     let (sin, cos) = angle(i as f64 * h).sin_cos();
                     (x, y) = (x + weight * cos, y + weight * sin);
                 }
@@ -216,7 +278,9 @@ impl Geo {
                     None => flat.map(|v| v.to_vec()),
                     // In space: the pose from the plane's point, direction and curvature along its two directions.
                     Some([o, e1, e2]) => {
-                        let lift = |v: [f64; 2], point: f64| (0..3).map(|i| point * o[i] + v[0] * e1[i] + v[1] * e2[i]).collect();
+                        let lift = |v: [f64; 2], point: f64| {
+                            (0..3).map(|i| point * o[i] + v[0] * e1[i] + v[1] * e2[i]).collect()
+                        };
                         [lift(flat[0], 1.0), lift(flat[1], 0.0), lift(flat[2], 0.0)]
                     }
                 }
@@ -272,7 +336,10 @@ fn spline(points: &[Vec<f64>], before: Option<[f64; 3]>, after: Option<[f64; 3]>
             (0, None, _) => ([0.0, 2.0, 1.0], [0, 1, 2].map(|axis| 3.0 * chord(0, axis))),
             (i, _, Some(dir)) if i == n => ([0.0, 1.0, 0.0], dir),
             (i, _, None) if i == n => ([1.0, 2.0, 0.0], [0, 1, 2].map(|axis| 3.0 * chord(n - 1, axis))),
-            _ => ([h[i], 2.0 * (h[i - 1] + h[i]), h[i - 1]], [0, 1, 2].map(|axis| 3.0 * (h[i] * chord(i - 1, axis) + h[i - 1] * chord(i, axis)))),
+            _ => (
+                [h[i], 2.0 * (h[i - 1] + h[i]), h[i - 1]],
+                [0, 1, 2].map(|axis| 3.0 * (h[i] * chord(i - 1, axis) + h[i - 1] * chord(i, axis))),
+            ),
         };
         rows.push(row);
         right.push(side);
@@ -312,7 +379,14 @@ fn distance(a: &[f64], b: &[f64]) -> f64 {
 /// far that path is from the given one at most. `speed` is the highest speed along a piece that the planner will
 /// allow, which sets how long a transition has to be. On three axes the curves between lines and arcs are laid in the
 /// arcs' planes (`blend3`); paths on other numbers of axes have only lines and run as given.
-fn geometry(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, speed: &dyn Fn(&Geo) -> f64, slack: f64) -> Result<(Vec<Geo>, f64), CommandError> {
+fn geometry(
+    axes: &[AxisInfo],
+    start: &[f64],
+    pieces: &[Piece],
+    tolerance: f64,
+    speed: &dyn Fn(&Geo) -> f64,
+    slack: f64,
+) -> Result<(Vec<Geo>, f64), CommandError> {
     let (geo, off) = given(start, pieces, slack)?;
     if tolerance <= 0.0 {
         return Ok((geo, off));
@@ -338,7 +412,13 @@ fn axis_speed(axes: &[AxisInfo]) -> impl Fn(&Geo) -> f64 {
 /// How far the path that is planned for these pieces is from the pieces as given, at most: the deviation
 /// the transition curves make, plus how far an arc ends off its stated end (`given`). Zero with a tolerance of
 /// zero and arcs that end on their circles. For the plan within the axis limits.
-pub fn deviation(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<f64, CommandError> {
+pub fn deviation(
+    axes: &[AxisInfo],
+    start: &[f64],
+    pieces: &[Piece],
+    tolerance: f64,
+    slack: f64,
+) -> Result<f64, CommandError> {
     Ok(geometry(axes, start, pieces, tolerance, &axis_speed(axes), slack)?.1)
 }
 
@@ -378,7 +458,10 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                 // The whole run of spline pieces is one curve; a via point given twice counts once.
                 let run = 1 + rest.iter().take_while(|p| matches!(p, Piece::Spline(_))).count();
                 let mut points = vec![here.clone()];
-                for to in std::iter::once(piece).chain(&rest[..run - 1]).filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None }) {
+                for to in std::iter::once(piece)
+                    .chain(&rest[..run - 1])
+                    .filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None })
+                {
                     if to.len() != here.len() {
                         return bad;
                     }
@@ -396,12 +479,20 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                 let dir3 = |v: &[f64]| [0, 1, 2].map(|i| v.get(i).copied().unwrap_or(0.0));
                 let before = out.last().map(|g| dir3(&g.at(g.length())[1]));
                 let after = match rest.first() {
-                    Some(Piece::Line(to)) if to.len() == end.len() && distance(to, end) > 1e-9 => Some(dir3(&to.iter().zip(end).map(|(t, e)| (t - e) / distance(to, end)).collect::<Vec<_>>())),
-                    Some(Piece::Arc { centre, clockwise, .. }) if centre.len() == 2 && end.len() == 2 && distance(end, centre) > 1e-6 => {
+                    Some(Piece::Line(to)) if to.len() == end.len() && distance(to, end) > 1e-9 => {
+                        Some(dir3(&to.iter().zip(end).map(|(t, e)| (t - e) / distance(to, end)).collect::<Vec<_>>()))
+                    }
+                    Some(Piece::Arc { centre, clockwise, .. })
+                        if centre.len() == 2 && end.len() == 2 && distance(end, centre) > 1e-6 =>
+                    {
                         let (turn, radius) = (if *clockwise { -1.0 } else { 1.0 }, distance(end, centre));
                         Some([-turn * (end[1] - centre[1]) / radius, turn * (end[0] - centre[0]) / radius, 0.0])
                     }
-                    Some(Piece::Arc { to, centre, clockwise }) if end.len() == 3 && to.len() == 3 && centre.len() == 3 => arc3(end, to, centre, *clockwise).map(|g| dir3(&g.at(0.0)[1])),
+                    Some(Piece::Arc { to, centre, clockwise })
+                        if end.len() == 3 && to.len() == 3 && centre.len() == 3 =>
+                    {
+                        arc3(end, to, centre, *clockwise).map(|g| dir3(&g.at(0.0)[1]))
+                    }
                     _ => None,
                 };
                 let Some(spans) = spline(&points, before, after) else { return bad };
@@ -411,7 +502,11 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
             }
             Piece::Line(to) if to.len() == here.len() => {
                 let length = distance(to, &here);
-                Geo::Line { dir: to.iter().zip(&here).map(|(t, h)| (t - h) / length).collect(), from: here.clone(), length }
+                Geo::Line {
+                    dir: to.iter().zip(&here).map(|(t, h)| (t - h) / length).collect(),
+                    from: here.clone(),
+                    length,
+                }
             }
             Piece::Arc { to, centre, clockwise } if here.len() == 2 && to.len() == 2 && centre.len() == 2 => {
                 let radius = distance(&here, centre);
@@ -419,7 +514,10 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                 // or by which angle it turns, is told from the points the file states: the end stated before
                 // it and its own. Only a first piece has none before it and is told from where the machine
                 // stands, with the slack that needs; too near to there it is not told at all (`FIRST_ARC`).
-                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], slack) };
+                let (from, slack) = match stated {
+                    Some(p) => (&p[..], ARC_TOLERANCE),
+                    None => (&here[..], slack),
+                };
                 if !(radius > 1e-6 && (distance(to, centre) - distance(from, centre)).abs() < slack) {
                     return bad;
                 }
@@ -429,13 +527,26 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                 let angle = |p: &[f64]| (p[1] - centre[1]).atan2(p[0] - centre[0]);
                 let turn = if *clockwise { -1.0 } else { 1.0 };
                 let full = distance(to, from) < 1e-9;
-                let sweep = if full { std::f64::consts::TAU } else { (turn * (angle(to) - angle(from))).rem_euclid(std::f64::consts::TAU) };
-                Geo::Arc { centre: [centre[0], centre[1]], radius, from_angle: angle(&here), turn, length: sweep * radius }
+                let sweep = if full {
+                    std::f64::consts::TAU
+                } else {
+                    (turn * (angle(to) - angle(from))).rem_euclid(std::f64::consts::TAU)
+                };
+                Geo::Arc {
+                    centre: [centre[0], centre[1]],
+                    radius,
+                    from_angle: angle(&here),
+                    turn,
+                    length: sweep * radius,
+                }
             }
             Piece::Arc { to, centre, clockwise } if here.len() == 3 && to.len() == 3 && centre.len() == 3 => {
                 // Its end is told from the end stated before it, as on two axes. An arc in space is never a full turn,
                 // so a first arc needs no distance from where the machine stands.
-                let (from, slack) = match stated { Some(p) => (&p[..], ARC_TOLERANCE), None => (&here[..], slack) };
+                let (from, slack) = match stated {
+                    Some(p) => (&p[..], ARC_TOLERANCE),
+                    None => (&here[..], slack),
+                };
                 if (distance(to, centre) - distance(from, centre)).abs() >= slack {
                     return bad;
                 }
@@ -470,7 +581,13 @@ fn arc3(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo
         return None;
     }
     normal = normal.map(|x| x / size);
-    let view = if normal[2].abs() > 1e-9 { [0.0, 0.0, 1.0] } else if normal[1].abs() > 1e-9 { [0.0, -1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let view = if normal[2].abs() > 1e-9 {
+        [0.0, 0.0, 1.0]
+    } else if normal[1].abs() > 1e-9 {
+        [0.0, -1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
     if dot3(normal, view) < 0.0 {
         normal = normal.map(|x| -x);
     }
@@ -526,28 +643,60 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
             let to_centre = [centre[0] - point[0], centre[1] - point[1]];
             // The centre is this far beside the line; the curve's own circle has to end up as far beside +x.
             let beside = (dir[0] * to_centre[1] - dir[1] * to_centre[0]).abs();
-            let length = largest(0.0, longest(k), |length| length == 0.0 || centre_at_end(0.0, k, length)[1].abs() <= beside);
+            let length =
+                largest(0.0, longest(k), |length| length == 0.0 || centre_at_end(0.0, k, length)[1].abs() <= beside);
             let along = dir[0] * to_centre[0] + dir[1] * to_centre[1] - centre_at_end(0.0, k, length)[0];
             let from = [point[0] + along * dir[0], point[1] + along * dir[1]];
-            (length > 0.0 && length < longest(k)).then(|| Geo::Clothoid { from, heading: dir[1].atan2(dir[0]), k0: 0.0, k1: k, length, plane: None })
+            (length > 0.0 && length < longest(k)).then(|| Geo::Clothoid {
+                from,
+                heading: dir[1].atan2(dir[0]),
+                k0: 0.0,
+                k1: k,
+                length,
+                plane: None,
+            })
         }
         // The same curve run backwards: every direction and every turn is the other way round.
         (Side::Circle { centre, curvature }, Side::Line { point, dir }) => {
-            let back = transition(Side::Line { point, dir: [-dir[0], -dir[1]] }, Side::Circle { centre, curvature: -curvature }, gap)?;
+            let back = transition(
+                Side::Line { point, dir: [-dir[0], -dir[1]] },
+                Side::Circle { centre, curvature: -curvature },
+                gap,
+            )?;
             let [end, dir, _] = back.at(back.length());
-            Some(Geo::Clothoid { from: [end[0], end[1]], heading: (-dir[1]).atan2(-dir[0]), k0: curvature, k1: 0.0, length: back.length(), plane: None })
+            Some(Geo::Clothoid {
+                from: [end[0], end[1]],
+                heading: (-dir[1]).atan2(-dir[0]),
+                k0: curvature,
+                k1: 0.0,
+                length: back.length(),
+                plane: None,
+            })
         }
         (Side::Circle { centre: ca, curvature: k0 }, Side::Circle { centre: cb, curvature: k1 }) => {
             // The two circles of the curve start out touching and move apart (or into each other) as it
             // gets longer; it fits when their centres are as far apart as the real ones.
-            let apart = |length: f64| if length == 0.0 { (1.0 / k1 - 1.0 / k0).abs() } else { distance(&centre_at_end(k0, k1, length), &[0.0, 1.0 / k0]) };
+            let apart = |length: f64| {
+                if length == 0.0 {
+                    (1.0 / k1 - 1.0 / k0).abs()
+                } else {
+                    distance(&centre_at_end(k0, k1, length), &[0.0, 1.0 / k0])
+                }
+            };
             let moved = (distance(&ca, &cb) - apart(0.0)).abs();
             let length = largest(0.0, longest(k1 - k0), |length| (apart(length) - apart(0.0)).abs() <= moved);
             // Turned so that the line between the curve's centres lies on the line between the real ones.
             let end = centre_at_end(k0, k1, length);
             let heading = (cb[1] - ca[1]).atan2(cb[0] - ca[0]) - (end[1] - 1.0 / k0).atan2(end[0]);
             let from = [ca[0] + heading.sin() / k0, ca[1] - heading.cos() / k0];
-            (length > 0.0 && length < longest(k1 - k0)).then_some(Geo::Clothoid { from, heading, k0, k1, length, plane: None })
+            (length > 0.0 && length < longest(k1 - k0)).then_some(Geo::Clothoid {
+                from,
+                heading,
+                k0,
+                k1,
+                length,
+                plane: None,
+            })
         }
         _ => None,
     }
@@ -595,11 +744,13 @@ fn transition(a: Side, b: Side, gap: f64) -> Option<Geo> {
 /// lengths and the moved arcs' shrink times their angles (a whole turn gained or lost).
 fn blend(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
     let n = geo.len();
-    let k: Vec<f64> = geo.iter().map(|g| if let Geo::Arc { radius, turn, .. } = g { turn / radius } else { 0.0 }).collect();
+    let k: Vec<f64> =
+        geo.iter().map(|g| if let Geo::Arc { radius, turn, .. } = g { turn / radius } else { 0.0 }).collect();
     // Junction j is where piece j - 1 hands over to piece j; it gets a curve where both are lines or arcs that
     // meet in the same direction.
     let spline = |i: usize| matches!(geo[i], Geo::Spline { .. });
-    let tangent: Vec<bool> = (0..=n).map(|j| j > 0 && j < n && !corner(&geo[j - 1], &geo[j]) && !spline(j - 1) && !spline(j)).collect();
+    let tangent: Vec<bool> =
+        (0..=n).map(|j| j > 0 && j < n && !corner(&geo[j - 1], &geo[j]) && !spline(j - 1) && !spline(j)).collect();
     let free: Vec<bool> = (0..n).map(|i| k[i] != 0.0 && tangent[i] && tangent[i + 1]).collect();
     // The angle an arc turns through.
     let sweep = |i: usize| geo[i].length() * k[i].abs();
@@ -625,8 +776,15 @@ fn blend(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Ve
             if !blended(i) {
                 return [0.0; 2];
             }
-            let room = if fixed[i].is_some() && sweep(i) > std::f64::consts::PI { 0.5 * tolerance * (1.0 - sweep(i).cos()) } else { tolerance };
-            [[i, i + 1].into_iter().filter(|&j| tangent[j]).map(needed).fold(0.0, f64::max), (24.0 * room / k[i].abs()).sqrt()]
+            let room = if fixed[i].is_some() && sweep(i) > std::f64::consts::PI {
+                0.5 * tolerance * (1.0 - sweep(i).cos())
+            } else {
+                tolerance
+            };
+            [
+                [i, i + 1].into_iter().filter(|&j| tangent[j]).map(needed).fold(0.0, f64::max),
+                (24.0 * room / k[i].abs()).sqrt(),
+            ]
         })
         .collect();
     // Arcs that hand over to one another turning the same way share one L, along the whole chain of them.
@@ -647,10 +805,19 @@ fn blend(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Ve
 }
 
 /// `blend` for one length of the transition curves per arc; `None` if a piece is too short for its curves.
-fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tangent: &[bool], length: &[f64]) -> Option<(Vec<Geo>, f64)> {
+fn blend_with(
+    geo: &[Geo],
+    k: &[f64],
+    free: &[bool],
+    fixed: &[Option<bool>],
+    tangent: &[bool],
+    length: &[f64],
+) -> Option<(Vec<Geo>, f64)> {
     let n = geo.len();
     // The gap each arc leaves to a line beside it: moved in by it, or (fixed at one end) shrunk and moved.
-    let mut inset: Vec<f64> = (0..n).map(|i| if free[i] || fixed[i].is_some() { k[i].abs() * length[i] * length[i] / 24.0 } else { 0.0 }).collect();
+    let mut inset: Vec<f64> = (0..n)
+        .map(|i| if free[i] || fixed[i].is_some() { k[i].abs() * length[i] * length[i] / 24.0 } else { 0.0 })
+        .collect();
     // The circle each arc is laid on: centre and radius. A fixed arc's circle moves towards its fixed end.
     let circle = |inset: &[f64], i: usize| match &geo[i] {
         Geo::Arc { centre, radius, from_angle, turn, length } => Some(match fixed[i] {
@@ -666,9 +833,10 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
     };
     for i in 0..n {
         if let (Some(_), Some((_, moved)), Geo::Arc { radius, .. }) = (fixed[i], circle(&inset, i), &geo[i])
-            && moved < 0.5 * radius {
-                inset[i] = 0.0;
-            }
+            && moved < 0.5 * radius
+        {
+            inset[i] = 0.0;
+        }
     }
     // Curvatures this close are one (two arcs on one circle come out with radii apart by rounding), and pieces this
     // close touch: a curve between them would be built from rounding, and may take any angle of the arcs.
@@ -684,7 +852,9 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
         (inset[j - 1], inset[j]) = (0.0, 0.0);
     }
     let side = |i: usize| match &geo[i] {
-        Geo::Arc { turn, .. } => circle(&inset, i).map(|(centre, radius)| Side::Circle { centre, curvature: turn / radius }),
+        Geo::Arc { turn, .. } => {
+            circle(&inset, i).map(|(centre, radius)| Side::Circle { centre, curvature: turn / radius })
+        }
         Geo::Line { from, dir, .. } => Some(Side::Line { point: [from[0], from[1]], dir: [dir[0], dir[1]] }),
         Geo::Clothoid { .. } | Geo::Spline { .. } | Geo::Arc3 { .. } => None,
     };
@@ -694,7 +864,8 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
         curves.push(if tangent[j] && gap > 0.0 { Some(transition(side(j - 1)?, side(j)?, gap)?) } else { None });
         // A curve that turns half a circle is no blend, and what it takes of an arc could no longer be told
         // from a whole turn more.
-        if matches!(curves[j], Some(Geo::Clothoid { k0, k1, length, .. }) if 0.5 * (k0.abs() + k1.abs()) * length >= std::f64::consts::PI) {
+        if matches!(curves[j], Some(Geo::Clothoid { k0, k1, length, .. }) if 0.5 * (k0.abs() + k1.abs()) * length >= std::f64::consts::PI)
+        {
             return None;
         }
     }
@@ -734,7 +905,9 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
                 // meets it. (The angle between the two curves alone does not tell curves that overlap from
                 // an arc: overlapping by more than the rest of the circle, they read as a short arc again,
                 // and the path went round once more than the given one.)
-                let taken = |by: &Option<Vec<f64>>, arc_end: f64, sign: f64| by.as_ref().map_or(0.0, |p| (sign * turn * (angle(p) - arc_end)).rem_euclid(std::f64::consts::TAU));
+                let taken = |by: &Option<Vec<f64>>, arc_end: f64, sign: f64| {
+                    by.as_ref().map_or(0.0, |p| (sign * turn * (angle(p) - arc_end)).rem_euclid(std::f64::consts::TAU))
+                };
                 let (before, after) = (taken(&start, *from_angle, 1.0), taken(&end, from_angle + turn * sweep, -1.0));
                 // More than a curve can take is a wrapped angle, a whole turn off: refused.
                 if before > reaches.0 || after > reaches.1 {
@@ -747,10 +920,22 @@ fn blend_with(geo: &[Geo], k: &[f64], free: &[bool], fixed: &[Option<bool>], tan
                 let shrink = radius - moved;
                 // On its smaller circle the arc is shorter by up to the shrink times its angle.
                 cut += shrink.abs() * sweep;
-                let swing = if fixed[i].is_some() { radius - (radius * radius - 2.0 * shrink * moved * (1.0 - sweep.min(std::f64::consts::PI).cos())).sqrt() } else { 0.0 };
+                let swing = if fixed[i].is_some() {
+                    radius
+                        - (radius * radius - 2.0 * shrink * moved * (1.0 - sweep.min(std::f64::consts::PI).cos()))
+                            .sqrt()
+                } else {
+                    0.0
+                };
                 off = off.max(inset[i]).max(swing);
                 // Curves that overlap leave less than nothing: a length below zero, refused below.
-                Geo::Arc { centre, radius: moved, from_angle: start.as_deref().map_or(*from_angle, angle), turn: *turn, length: left * moved }
+                Geo::Arc {
+                    centre,
+                    radius: moved,
+                    from_angle: start.as_deref().map_or(*from_angle, angle),
+                    turn: *turn,
+                    length: left * moved,
+                }
             }
             Geo::Spline { .. } | Geo::Arc3 { .. } => piece.clone(),
             Geo::Clothoid { .. } => return None,
@@ -787,8 +972,10 @@ fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (V
     // shortcut: a piece more than 1 nm off its run's plane ends the run, and two arcs in different planes keep their
     // junction; project such pieces (adding the projection to the deviation) or build a space curve with torsion there
     // if hand-written tilted paths or helix-like tool paths have to pass those junctions at speed.
-    let plane_of = |g: &Geo| if let Geo::Arc3 { centre, u, w, .. } = g { Some([*centre, *u, *w, cross3(*u, *w)]) } else { None };
-    let near = |p: &[f64], [o, _, _, normal]: &Plane| dot3([p[0] - o[0], p[1] - o[1], p[2] - o[2]], *normal).abs() < 1e-9;
+    let plane_of =
+        |g: &Geo| if let Geo::Arc3 { centre, u, w, .. } = g { Some([*centre, *u, *w, cross3(*u, *w)]) } else { None };
+    let near =
+        |p: &[f64], [o, _, _, normal]: &Plane| dot3([p[0] - o[0], p[1] - o[1], p[2] - o[2]], *normal).abs() < 1e-9;
     let lies_in = |g: &Geo, plane: &Plane| match g {
         Geo::Line { .. } => near(&g.at(0.0)[0], plane) && near(&g.at(g.length())[0], plane),
         Geo::Arc3 { centre, u, w, .. } => near(centre, plane) && norm3(cross3(cross3(*u, *w), plane[3])) < 1e-9,
@@ -803,7 +990,11 @@ fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (V
         off = off.max(moved);
     };
     for (g, v) in geo.into_iter().zip(speed.iter().copied()) {
-        let joins = run.last().is_some_and(|(last, _)| matches!(last, Geo::Line { .. } | Geo::Arc3 { .. }) && matches!(g, Geo::Line { .. } | Geo::Arc3 { .. }) && !corner(last, &g));
+        let joins = run.last().is_some_and(|(last, _)| {
+            matches!(last, Geo::Line { .. } | Geo::Arc3 { .. })
+                && matches!(g, Geo::Line { .. } | Geo::Arc3 { .. })
+                && !corner(last, &g)
+        });
         let own = plane_of(&g);
         match (joins, plane, own) {
             (true, Some(p), _) if lies_in(&g, &p) => run.push((g, v)),
@@ -812,7 +1003,10 @@ fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (V
                 let shared = match run.last() {
                     Some((line @ Geo::Line { from, dir, length }, _)) if lies_in(line, &q) => {
                         let middle: Vec<f64> = from.iter().zip(dir).map(|(f, d)| f + 0.5 * length * d).collect();
-                        Some((Geo::Line { from: from.clone(), dir: dir.clone(), length: 0.5 * length }, Geo::Line { from: middle, dir: dir.clone(), length: 0.5 * length }))
+                        Some((
+                            Geo::Line { from: from.clone(), dir: dir.clone(), length: 0.5 * length },
+                            Geo::Line { from: middle, dir: dir.clone(), length: 0.5 * length },
+                        ))
                     }
                     _ => None,
                 };
@@ -846,7 +1040,9 @@ fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (V
 
 /// A run of lines and arcs in one plane (`blend3`) blended there and laid back into space.
 fn blend_in_plane(run: Vec<(Geo, f64)>, plane: Option<Plane>, axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
-    let Some([o, e1, e2, normal]) = plane.filter(|_| run.len() > 1) else { return (run.into_iter().map(|(g, _)| g).collect(), 0.0) };
+    let Some([o, e1, e2, normal]) = plane.filter(|_| run.len() > 1) else {
+        return (run.into_iter().map(|(g, _)| g).collect(), 0.0);
+    };
     let along = |d: &[f64]| vec![dot3([d[0], d[1], d[2]], e1), dot3([d[0], d[1], d[2]], e2)];
     let flat = |p: &[f64]| along(&[p[0] - o[0], p[1] - o[1], p[2] - o[2]]);
     let (pieces, speeds): (Vec<Geo>, Vec<f64>) = run
@@ -856,7 +1052,13 @@ fn blend_in_plane(run: Vec<(Geo, f64)>, plane: Option<Plane>, axes: &[AxisInfo],
                 Geo::Line { from, dir, length } => Geo::Line { from: flat(&from), dir: along(&dir), length },
                 Geo::Arc3 { centre, u, w, radius, length } => {
                     let c = flat(&centre);
-                    Geo::Arc { centre: [c[0], c[1]], radius, from_angle: dot3(u, e2).atan2(dot3(u, e1)), turn: dot3(cross3(u, w), normal).signum(), length }
+                    Geo::Arc {
+                        centre: [c[0], c[1]],
+                        radius,
+                        from_angle: dot3(u, e2).atan2(dot3(u, e1)),
+                        turn: dot3(cross3(u, w), normal).signum(),
+                        length,
+                    }
                 }
                 other => other,
             };
@@ -868,12 +1070,22 @@ fn blend_in_plane(run: Vec<(Geo, f64)>, plane: Option<Plane>, axes: &[AxisInfo],
     let lifted = blended
         .into_iter()
         .map(|g| match g {
-            Geo::Line { from, dir, length } => Geo::Line { from: up(&from, 1.0).to_vec(), dir: up(&dir, 0.0).to_vec(), length },
+            Geo::Line { from, dir, length } => {
+                Geo::Line { from: up(&from, 1.0).to_vec(), dir: up(&dir, 0.0).to_vec(), length }
+            }
             Geo::Arc { centre, radius, from_angle, turn, length } => {
                 let (sin, cos) = from_angle.sin_cos();
-                Geo::Arc3 { centre: up(&centre, 1.0), u: up(&[cos, sin], 0.0), w: up(&[-turn * sin, turn * cos], 0.0), radius, length }
+                Geo::Arc3 {
+                    centre: up(&centre, 1.0),
+                    u: up(&[cos, sin], 0.0),
+                    w: up(&[-turn * sin, turn * cos], 0.0),
+                    radius,
+                    length,
+                }
             }
-            Geo::Clothoid { from, heading, k0, k1, length, .. } => Geo::Clothoid { from, heading, k0, k1, length, plane: Some([o, e1, e2]) },
+            Geo::Clothoid { from, heading, k0, k1, length, .. } => {
+                Geo::Clothoid { from, heading, k0, k1, length, plane: Some([o, e1, e2]) }
+            }
             other => other,
         })
         .collect();
@@ -938,7 +1150,11 @@ fn ease(mut geo: Vec<Geo>, axes: &[AxisInfo], tolerance: f64, speed: &dyn Fn(&Ge
                 // The eased part and the rest, each a polynomial of its own with u from 0.
                 let (mut eased, rest) = if into { (c, poly_shift(&c, l)) } else { (poly_shift(&c, h - l), c) };
                 // delta expanded in powers of u: from the junction at u = 0, or towards it at u = l.
-                let powers = if into { [0.5, -1.5 / l, 1.5 / (l * l), -0.5 / (l * l * l)] } else { [0.0, 0.5 / l, -1.0 / (l * l), 0.5 / (l * l * l)] };
+                let powers = if into {
+                    [0.5, -1.5 / l, 1.5 / (l * l), -0.5 / (l * l * l)]
+                } else {
+                    [0.0, 0.5 / l, -1.0 / (l * l), 0.5 / (l * l * l)]
+                };
                 for (m, p) in powers.iter().enumerate() {
                     for i in 0..3 {
                         eased[m + 2][i] += p * change[i];
@@ -992,13 +1208,20 @@ type Bounds = Vec<(Vec<f64>, f64)>;
 
 /// The velocity, acceleration and jerk limits of the axes as bounds.
 fn axis_bounds(axes: &[AxisInfo]) -> [Bounds; 3] {
-    let rows = |limit: fn(&AxisInfo) -> f64| axes.iter().enumerate().map(|(i, a)| ((0..axes.len()).map(|k| (k == i) as u8 as f64).collect(), limit(a))).collect();
+    let rows = |limit: fn(&AxisInfo) -> f64| {
+        axes.iter()
+            .enumerate()
+            .map(|(i, a)| ((0..axes.len()).map(|k| (k == i) as u8 as f64).collect(), limit(a)))
+            .collect()
+    };
     [rows(|a| a.max_vel), rows(|a| a.max_acc), rows(|a| a.max_jerk)]
 }
 
 /// Speed, acceleration and jerk along a piece that keep the tool within its bounds wherever on the piece.
 fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
-    let tightest = |per_row: &dyn Fn(&[f64]) -> f64| bounds.each_ref().map(|rows| rows.iter().map(|(row, most)| most / per_row(row)).fold(f64::INFINITY, f64::min));
+    let tightest = |per_row: &dyn Fn(&[f64]) -> f64| {
+        bounds.each_ref().map(|rows| rows.iter().map(|(row, most)| most / per_row(row)).fold(f64::INFINITY, f64::min))
+    };
     // The direction turns through the axes on a curve, so there a bound holds for the length of the vector.
     let any = || tightest(&|row| row.iter().map(|w| w * w).sum::<f64>().sqrt());
     match geo {
@@ -1055,7 +1278,14 @@ fn junction_speed(a: &Geo, b: &Geo, axes: &[AxisInfo], cycle: f64) -> f64 {
 ///
 /// With a `tolerance` above zero the path gets transition curves first (`blend`), which let it pass from a
 /// line into an arc at speed, and is off the given pieces by up to the tolerance (`deviation` says by how much).
-pub fn plan(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64, slack: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+pub fn plan(
+    axes: &[AxisInfo],
+    start: &[f64],
+    pieces: &[Piece],
+    cycle: f64,
+    tolerance: f64,
+    slack: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let (geo, bounds) = (geometry(axes, start, pieces, tolerance, &axis_speed(axes), slack)?.0, axis_bounds(axes));
     let limits: Vec<[f64; 3]> = geo.iter().map(|g| limits(g, &bounds)).collect();
     Ok(timed(axes, &geo, &limits, cycle))
@@ -1095,7 +1325,17 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
         let top = largest(v0.max(v1), v_max, |top| covered(top) <= length);
         let (up, down, cruise) = (ramp(top - v0, a, j), ramp(top - v1, a, j), ((length - covered(top)) / top).max(0.0));
         let steady = |v: f64| if v > 0.0 { hold } else { 0.0 };
-        phases.push([(steady(v0), 0.0), (up.0, j), (up.1, 0.0), (up.0, -j), (cruise, 0.0), (down.0, -j), (down.1, 0.0), (down.0, j), (steady(v1), 0.0)]);
+        phases.push([
+            (steady(v0), 0.0),
+            (up.0, j),
+            (up.1, 0.0),
+            (up.0, -j),
+            (cruise, 0.0),
+            (down.0, -j),
+            (down.1, 0.0),
+            (down.0, j),
+            (steady(v1), 0.0),
+        ]);
     }
 
     let duration = |i: usize| phases[i].iter().map(|p| p.0).sum::<f64>();
@@ -1149,16 +1389,36 @@ fn timed(axes: &[AxisInfo], geo: &[Geo], limits: &[[f64; 3]], cycle: f64) -> Vec
 /// room both ways. The rest of the room is for what the rigid model leaves out: the margin for the guide friction the
 /// belt pulls, the share (0.5 in the shipped configs) for the belt's vibration, which after a quick ramp of acceleration
 /// overshoots by up to the rigid model's change of tension, either way.
-pub fn plan_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], cycle: f64, tolerance: f64, slack: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+pub fn plan_time_optimal(
+    machine: &dyn Machine,
+    drive: &DriveParams,
+    reserve: f64,
+    tension: [f64; 3],
+    start: &[f64],
+    pieces: &[Piece],
+    cycle: f64,
+    tolerance: f64,
+    slack: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let ((geo, _), _) = time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?;
-    let limits = geo.iter().map(|piece| piece_limits(machine, drive, reserve, tension, piece)).collect::<Result<Vec<_>, _>>()?;
+    let limits =
+        geo.iter().map(|piece| piece_limits(machine, drive, reserve, tension, piece)).collect::<Result<Vec<_>, _>>()?;
     timed_by_motors(machine.axes(), &geo, &limits, cycle)
 }
 
 /// The same path as `plan` times, transition curves included, their lengths for the speeds the motors allow, with
 /// the deviation and the motors' limits per piece; refused where a piece has no torque left beyond holding the tool
 /// or turns no motor, or where the belt holding the tool there is already beyond its tension limits.
-fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
+fn time_optimal_geometry(
+    machine: &dyn Machine,
+    drive: &DriveParams,
+    reserve: f64,
+    tension: [f64; 3],
+    start: &[f64],
+    pieces: &[Piece],
+    tolerance: f64,
+    slack: f64,
+) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
     let piece_limits = motor_limits(machine, drive, reserve, tension);
     let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0], slack)?;
     let mut limited = Vec::new();
@@ -1167,7 +1427,8 @@ fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f6
         let limits = piece_limits(piece);
         if !usable(&limits) {
             // Said by what is short: the torque, or the belt alone.
-            let torque_alone = usable(&motor_limits(machine, drive, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
+            let torque_alone =
+                usable(&motor_limits(machine, drive, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
             return Err(CommandError { key: if torque_alone { "error-path-tension" } else { "error-path-torque" } });
         }
         limited.push(limits);
@@ -1177,13 +1438,27 @@ fn time_optimal_geometry(machine: &dyn Machine, drive: &DriveParams, reserve: f6
 
 /// `deviation` for the path `plan_time_optimal` plans: its transition curves are as long as the speeds the
 /// motors allow need them to be, not the speeds of the axis limits. Refused as that plan is.
-pub fn deviation_time_optimal(machine: &dyn Machine, drive: &DriveParams, reserve: f64, tension: [f64; 3], start: &[f64], pieces: &[Piece], tolerance: f64, slack: f64) -> Result<f64, CommandError> {
+pub fn deviation_time_optimal(
+    machine: &dyn Machine,
+    drive: &DriveParams,
+    reserve: f64,
+    tension: [f64; 3],
+    start: &[f64],
+    pieces: &[Piece],
+    tolerance: f64,
+    slack: f64,
+) -> Result<f64, CommandError> {
     Ok(time_optimal_geometry(machine, drive, reserve, tension, start, pieces, tolerance, slack)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
 /// from the motors and the belt's tension limits, jerk from the axes.
-fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f64, [lowest, highest, share]: [f64; 3]) -> impl Fn(&Geo) -> [f64; 3] + 'a {
+fn motor_limits<'a>(
+    machine: &'a dyn Machine,
+    drive: &'a DriveParams,
+    reserve: f64,
+    [lowest, highest, share]: [f64; 3],
+) -> impl Fn(&Geo) -> [f64; 3] + 'a {
     let axes = machine.axes();
     let [_, _, jerk] = axis_bounds(axes);
     let (torque, h) = (reserve * drive.torque_curve(drive.rated_speed).1, 1e-3);
@@ -1196,12 +1471,28 @@ fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f
         let (mut vel, mut acc) = (Vec::new(), Vec::new());
         for i in 0..=8 {
             let pose = &piece.at(piece.length() * i as f64 / 8.0)[0];
-            let unit = |axis: usize, size: f64| -> Vec<f64> { (0..axes.len()).map(|k| if k == axis { size } else { 0.0 }).collect() };
+            let unit = |axis: usize, size: f64| -> Vec<f64> {
+                (0..axes.len()).map(|k| if k == axis { size } else { 0.0 }).collect()
+            };
             let hold = per_motor(&|out| machine.feedforward_torque(pose, &unit(0, 0.0), out));
             // Per axis and motor: the torque for an acceleration of 1 m/s^2, and the angle per metre.
-            let per_acc: Vec<Vec<f64>> = (0..axes.len()).map(|a| per_motor(&|out| machine.feedforward_torque(pose, &unit(a, 1.0), out))).collect();
-            let angle = |a: usize, sign: f64| per_motor(&|out| machine.inverse(&pose.iter().zip(unit(a, sign * h)).map(|(p, d)| p + d).collect::<Vec<_>>(), out));
-            let turn: Vec<Vec<f64>> = (0..axes.len()).map(|a| angle(a, 1.0).iter().zip(angle(a, -1.0)).map(|(ahead, behind)| (ahead - behind) / (2.0 * h)).collect()).collect();
+            let per_acc: Vec<Vec<f64>> = (0..axes.len())
+                .map(|a| per_motor(&|out| machine.feedforward_torque(pose, &unit(a, 1.0), out)))
+                .collect();
+            let angle = |a: usize, sign: f64| {
+                per_motor(&|out| {
+                    machine.inverse(&pose.iter().zip(unit(a, sign * h)).map(|(p, d)| p + d).collect::<Vec<_>>(), out)
+                })
+            };
+            let turn: Vec<Vec<f64>> = (0..axes.len())
+                .map(|a| {
+                    angle(a, 1.0)
+                        .iter()
+                        .zip(angle(a, -1.0))
+                        .map(|(ahead, behind)| (ahead - behind) / (2.0 * h))
+                        .collect()
+                })
+                .collect();
             for m in 0..hold.len() {
                 vel.push((turn.iter().map(|per_axis| per_axis[m]).collect(), drive.rated_speed));
                 acc.push((per_acc.iter().map(|per_axis| per_axis[m] - hold[m]).collect(), torque - hold[m].abs()));
@@ -1215,7 +1506,10 @@ fn motor_limits<'a>(machine: &'a dyn Machine, drive: &'a DriveParams, reserve: f
                 let still = tensions(&unit(0, 0.0));
                 let per_acc: Vec<Vec<f64>> = (0..axes.len()).map(|a| tensions(&unit(a, 1.0))).collect();
                 for (k, c) in still.iter().enumerate() {
-                    acc.push((per_acc.iter().map(|per_axis| per_axis[k] - c).collect(), share * (highest - c).min(c - lowest)));
+                    acc.push((
+                        per_acc.iter().map(|per_axis| per_axis[k] - c).collect(),
+                        share * (highest - c).min(c - lowest),
+                    ));
                 }
             }
         }
@@ -1273,7 +1567,11 @@ impl Place {
             let room = |at: f64| if c * sign > 0.0 { high - at } else { at - low };
             room(*e).min(room(d * x + e)) / c.abs()
         });
-        let bends = self.bends.iter().filter(|b| b[0] > 0.0 && top > 0.0).map(|[p2, p3, room]| (room - p3 * top.powi(3)) / (p2 * top));
+        let bends = self
+            .bends
+            .iter()
+            .filter(|b| b[0] > 0.0 && top > 0.0)
+            .map(|[p2, p3, room]| (room - p3 * top.powi(3)) / (p2 * top));
         rows.chain(bends).fold(f64::INFINITY, f64::min).max(0.0)
     }
 }
@@ -1322,7 +1620,13 @@ impl PieceLimits {
 
 /// The places of a piece and what bounds the time-optimal plan at each (see `plan_time_optimal`). Refused where the
 /// torque that holds the tool or the belt's holding tension leaves no room, or where the piece turns no motor.
-fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowest, highest, share]: [f64; 3], geo: &Geo) -> Result<PieceLimits, CommandError> {
+fn piece_limits(
+    machine: &dyn Machine,
+    drive: &DriveParams,
+    reserve: f64,
+    [lowest, highest, share]: [f64; 3],
+    geo: &Geo,
+) -> Result<PieceLimits, CommandError> {
     let (axes, motors, length) = (machine.axes(), machine.motors().len(), geo.length());
     // The tightest curvature, so that on a tight curve the places are no more than `PLACE_TURN` of its turning apart.
     let tightest = match geo {
@@ -1331,7 +1635,8 @@ fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowes
         Geo::Clothoid { k0, k1, .. } => k0.abs().max(k1.abs()),
         Geo::Spline { tightest, .. } => *tightest,
     };
-    let count = ((length / PLACE_SPACING).max(tightest * length / PLACE_TURN).ceil() as usize).clamp(PLACES_LEAST, PLACES_MOST);
+    let count =
+        ((length / PLACE_SPACING).max(tightest * length / PLACE_TURN).ceil() as usize).clamp(PLACES_LEAST, PLACES_MOST);
     let spacing = length / count as f64;
     // The pose and its derivatives by distance; the third from the second by central differences within the piece.
     let h = spacing / 4.0;
@@ -1346,7 +1651,10 @@ fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowes
         .collect();
     // The ramps' jerk along the path: on a line all of the axes' jerk limits; on a curve 0.4 of it, as `curved` shares
     // it out, and the bends get the rest.
-    let along = derivatives.iter().flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs())).fold(f64::INFINITY, f64::min);
+    let along = derivatives
+        .iter()
+        .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(|(a, d)| a.max_jerk / d.abs()))
+        .fold(f64::INFINITY, f64::min);
     let jerk = if matches!(geo, Geo::Line { .. }) { 1.0 } else { 0.4 } * along;
     let torque = (1.0 - KEPT_BACK) * reserve * drive.torque_curve(drive.rated_speed).1;
     let zero = vec![0.0; axes.len()];
@@ -1362,7 +1670,8 @@ fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowes
         if hold.iter().any(|t| t.abs() >= torque) {
             return Err(CommandError { key: "error-path-torque" });
         }
-        let mut rows: Vec<[f64; 5]> = (0..motors).map(|m| [per_acc[m] - hold[m], per_speed[m] - hold[m], hold[m], -torque, torque]).collect();
+        let mut rows: Vec<[f64; 5]> =
+            (0..motors).map(|m| [per_acc[m] - hold[m], per_speed[m] - hold[m], hold[m], -torque, torque]).collect();
         if lowest.is_finite() || highest.is_finite() {
             let tensions = |acc: &[f64]| {
                 let mut out = Vec::new();
@@ -1380,7 +1689,11 @@ fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowes
                 rows.push([per_acc[k] - still[k], per_speed[k] - still[k], 0.0, -room, room]);
             }
         }
-        let bends: Vec<[f64; 3]> = axes.iter().enumerate().map(|(i, a)| [3.0 * d2[i].abs(), d3[i].abs(), a.max_jerk - jerk * d1[i].abs()]).collect();
+        let bends: Vec<[f64; 3]> = axes
+            .iter()
+            .enumerate()
+            .map(|(i, a)| [3.0 * d2[i].abs(), d3[i].abs(), a.max_jerk - jerk * d1[i].abs()])
+            .collect();
         // The highest speed squared: each motor at its rated speed, each row and bend without acceleration.
         let angles = |sign: f64| {
             let mut out = vec![0.0; motors];
@@ -1388,7 +1701,9 @@ fn piece_limits(machine: &dyn Machine, drive: &DriveParams, reserve: f64, [lowes
             out
         };
         let (ahead, behind) = (angles(1.0), angles(-1.0));
-        let mut x = (0..motors).map(|m| (drive.rated_speed * 2.0 * TURN_STEP / (ahead[m] - behind[m]).abs()).powi(2)).fold(f64::INFINITY, f64::min);
+        let mut x = (0..motors)
+            .map(|m| (drive.rated_speed * 2.0 * TURN_STEP / (ahead[m] - behind[m]).abs()).powi(2))
+            .fold(f64::INFINITY, f64::min);
         for [_, d, e, low, high] in rows.iter().filter(|r| r[1] != 0.0) {
             x = x.min(if *d > 0.0 { (high - e) / d } else { (e - low) / -d });
         }
@@ -1419,7 +1734,15 @@ fn ceiling_at(most: &[f64], spacing: f64, s: f64) -> f64 {
 /// of `step`. As fast as the jerk and the ceiling allow: the acceleration rises at the jerk limit, follows the
 /// ceiling, and falls so that it reaches zero as the speed reaches `top`, at the jerk limit or, where the ceiling held
 /// it lower, less. `None` where it does not get there by `end`, or passes the cap.
-fn climb(from: f64, top: f64, jerk: f64, [start, end]: [f64; 2], most: &dyn Fn(f64) -> f64, cap: &dyn Fn(f64) -> f64, step: f64) -> Option<Vec<[f64; 4]>> {
+fn climb(
+    from: f64,
+    top: f64,
+    jerk: f64,
+    [start, end]: [f64; 2],
+    most: &dyn Fn(f64) -> f64,
+    cap: &dyn Fn(f64) -> f64,
+    step: f64,
+) -> Option<Vec<[f64; 4]>> {
     let mut knots = vec![[0.0, start, from, 0.0]];
     let rise = jerk * step;
     while knots.len() < CLIMB_STEPS {
@@ -1463,17 +1786,36 @@ fn climb(from: f64, top: f64, jerk: f64, [start, end]: [f64; 2], most: &dyn Fn(f
 /// shortcut: one cruise speed per piece, so a piece whose speed limit rises and falls between its ramps cruises at the
 /// lowest of it there; let the cruise follow the limit (ramps with acceleration across it) if a machine's speed limit
 /// changes much within one cruise.
-fn piece_timing(limits: &PieceLimits, length: f64, [v0, v1, top]: [f64; 3], hold: f64, step: f64, slack: f64) -> Option<Vec<[f64; 4]>> {
+fn piece_timing(
+    limits: &PieceLimits,
+    length: f64,
+    [v0, v1, top]: [f64; 3],
+    hold: f64,
+    step: f64,
+    slack: f64,
+) -> Option<Vec<[f64; 4]>> {
     let (start, end) = (hold * v0, length + slack - hold * v1);
     let (up, down) = (limits.ceiling(top, 1.0), limits.ceiling(top, -1.0));
-    let (ahead, behind) = (limits.along(1.0, |p| PieceLimits::passing(top, p)), limits.along(-1.0, |p| PieceLimits::passing(top, p)));
+    let (ahead, behind) =
+        (limits.along(1.0, |p| PieceLimits::passing(top, p)), limits.along(-1.0, |p| PieceLimits::passing(top, p)));
     let at = |table: &[f64], s: f64| ceiling_at(table, limits.spacing, s);
     let rise = climb(v0, top, limits.jerk, [start, end], &|s| at(&up, s), &|s| at(&ahead, s), step)?;
     let reached = rise[rise.len() - 1][1];
-    let fall = climb(v1, top, limits.jerk, [hold * v1, length + slack - reached], &|s| at(&down, s), &|s| at(&behind, s), step)?;
+    let fall = climb(
+        v1,
+        top,
+        limits.jerk,
+        [hold * v1, length + slack - reached],
+        &|s| at(&down, s),
+        &|s| at(&behind, s),
+        step,
+    )?;
     let (braking, took) = ((length - fall[fall.len() - 1][1]).max(reached), fall[fall.len() - 1][0]);
     // The cruise between the climbs holds at top at every place it passes.
-    let (first, last) = ((reached / limits.spacing).floor() as usize, ((braking / limits.spacing).ceil() as usize).min(limits.places.len() - 1));
+    let (first, last) = (
+        (reached / limits.spacing).floor() as usize,
+        ((braking / limits.spacing).ceil() as usize).min(limits.places.len() - 1),
+    );
     if limits.places[first.min(last)..=last].iter().any(|p| p.top < top) {
         return None;
     }
@@ -1500,10 +1842,17 @@ fn piece_timing(limits: &PieceLimits, length: f64, [v0, v1, top]: [f64; 3], hold
 /// The timing of `plan_time_optimal`: the look-ahead and the junction speeds of `timed`, with each piece timed point
 /// by point (`piece_timing`) under its `PieceLimits`. A junction is passed no faster than the slowest place of either
 /// piece, so that each piece can be passed at that speed all along; the top speed of a piece may be higher.
-fn timed_by_motors(axes: &[AxisInfo], geo: &[Geo], limits: &[PieceLimits], cycle: f64) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+fn timed_by_motors(
+    axes: &[AxisInfo],
+    geo: &[Geo],
+    limits: &[PieceLimits],
+    cycle: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let n = geo.len();
     let (hold, step) = (2.0 * cycle, cycle / STEPS_PER_CYCLE);
-    let timing = |i: usize, v0: f64, v1: f64, top: f64, slack: f64| piece_timing(&limits[i], geo[i].length(), [v0, v1, top], hold, step, slack);
+    let timing = |i: usize, v0: f64, v1: f64, top: f64, slack: f64| {
+        piece_timing(&limits[i], geo[i].length(), [v0, v1, top], hold, step, slack)
+    };
     let fits = |i: usize, v0: f64, v1: f64| timing(i, v0, v1, v0.max(v1), 0.0).is_some();
 
     // Speed at the start of each piece and at the end of the last; at rest at both ends of the path.
@@ -1511,7 +1860,10 @@ fn timed_by_motors(axes: &[AxisInfo], geo: &[Geo], limits: &[PieceLimits], cycle
     for i in 1..n {
         // A piece too short for the steady cycles at both of its ends is passed slowly enough to have them.
         let short = geo[i - 1].length().min(geo[i].length()) / (2.0 * hold);
-        speed[i] = junction_speed(&geo[i - 1], &geo[i], axes, cycle).min(limits[i - 1].lowest).min(limits[i].lowest).min(short);
+        speed[i] = junction_speed(&geo[i - 1], &geo[i], axes, cycle)
+            .min(limits[i - 1].lowest)
+            .min(limits[i].lowest)
+            .min(short);
     }
     for i in (0..n).rev() {
         let after = speed[i + 1];
@@ -1540,7 +1892,8 @@ fn timed_by_motors(axes: &[AxisInfo], geo: &[Geo], limits: &[PieceLimits], cycle
             }
             for k in 1..=TOP_TRIES {
                 let tried = from + width * k as f64 / TOP_TRIES as f64;
-                if let Some(took) = timing(i, v0, v1, tried, 0.0).map(|k| k[k.len() - 1][0]).filter(|took| *took < best) {
+                if let Some(took) = timing(i, v0, v1, tried, 0.0).map(|k| k[k.len() - 1][0]).filter(|took| *took < best)
+                {
                     (top, best) = (tried, took);
                 }
             }
@@ -1580,12 +1933,30 @@ mod tests {
     use super::*;
 
     fn axes() -> [AxisInfo; 2] {
-        let axis = |max_vel: f64, max_acc: f64| AxisInfo { id: "", key: "", unit: "m", min: 0.0, max: 1.0, max_vel, max_acc, max_jerk: 100.0 };
+        let axis = |max_vel: f64, max_acc: f64| AxisInfo {
+            id: "",
+            key: "",
+            unit: "m",
+            min: 0.0,
+            max: 1.0,
+            max_vel,
+            max_acc,
+            max_jerk: 100.0,
+        };
         [axis(0.8, 8.0), axis(0.4, 6.0)]
     }
 
     fn axes3() -> [AxisInfo; 3] {
-        let axis = |min: f64, max: f64| AxisInfo { id: "", key: "", unit: "m", min, max, max_vel: 3.0, max_acc: 50.0, max_jerk: 2500.0 };
+        let axis = |min: f64, max: f64| AxisInfo {
+            id: "",
+            key: "",
+            unit: "m",
+            min,
+            max,
+            max_vel: 3.0,
+            max_acc: 50.0,
+            max_jerk: 2500.0,
+        };
         [axis(-0.6, 0.6), axis(-0.6, 0.6), axis(-1.1, -0.6)]
     }
 
@@ -1597,9 +1968,12 @@ mod tests {
     /// one line (a half or a full turn) leaves its plane open and is refused.
     #[test]
     fn arcs_on_three_axes_lie_in_the_plane_of_their_points() {
-        let pieces = parse("line,0.1,0.0,-0.8
+        let pieces = parse(
+            "line,0.1,0.0,-0.8
 arc,0.0,0.0,-0.7,0.0,0.0,-0.8,ccw
-arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
+arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
+        )
+        .unwrap();
         assert_eq!(pieces[1], Piece::Arc { to: vec![0.0, 0.0, -0.7], centre: vec![0.0, 0.0, -0.8], clockwise: false });
         let geo = given(&[0.1, 0.0, -0.9], &pieces, ARC_SLACK).unwrap().0;
         assert_eq!(geo.len(), 3);
@@ -1607,14 +1981,26 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
         assert!((geo[1].length() - quarter).abs() < 1e-12 && (geo[2].length() - quarter).abs() < 1e-12);
         let half = 0.1 * std::f64::consts::FRAC_1_SQRT_2;
         let [mid, dir, curve] = geo[1].at(0.5 * quarter);
-        assert!(distance(&mid, &[half, 0.0, -0.8 + half]) < 1e-12 && distance(&dir, &[-std::f64::consts::FRAC_1_SQRT_2, 0.0, std::f64::consts::FRAC_1_SQRT_2]) < 1e-12);
+        assert!(
+            distance(&mid, &[half, 0.0, -0.8 + half]) < 1e-12
+                && distance(&dir, &[-std::f64::consts::FRAC_1_SQRT_2, 0.0, std::f64::consts::FRAC_1_SQRT_2]) < 1e-12
+        );
         // Its curvature points at the centre, 1 / r long.
-        assert!(distance(&curve, &[-10.0 * std::f64::consts::FRAC_1_SQRT_2, 0.0, -10.0 * std::f64::consts::FRAC_1_SQRT_2]) < 1e-9);
+        assert!(
+            distance(&curve, &[-10.0 * std::f64::consts::FRAC_1_SQRT_2, 0.0, -10.0 * std::f64::consts::FRAC_1_SQRT_2])
+                < 1e-9
+        );
         let cw = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.0,-0.7,0.0,0.0,-0.8,cw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((cw[0].length() - 3.0 * quarter).abs() < 1e-12 && cw[0].at(cw[0].length() / 3.0)[0][2] < -0.8);
         let flat = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.1,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((flat[0].length() - quarter).abs() < 1e-12 && flat[0].at(0.5 * quarter)[0][1] > 0.0);
-        assert_eq!(given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).err().unwrap().key, "error-path");
+        assert_eq!(
+            given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK)
+                .err()
+                .unwrap()
+                .key,
+            "error-path"
+        );
         // Planned within the axis limits, the path ends where it was told.
         let points = plan(&axes3(), &[0.1, 0.0, -0.9], &pieces, 1e-3, 0.0, ARC_SLACK).unwrap();
         assert!(distance(&points[points.len() - 1].1, &[-0.1, 0.0, -0.8]) < 1e-9);
@@ -1624,21 +2010,30 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap();
     /// plan keeps every axis within its speed, acceleration and jerk (to the 0.1 % of differencing the planned poses).
     #[test]
     fn a_spline_on_three_axes_passes_through_its_points_within_the_limits() {
-        let pieces = parse("line,0.0,0.0,-0.8
+        let pieces = parse(
+            "line,0.0,0.0,-0.8
 spline,0.1,0.1,-0.75
 spline,0.2,0.0,-0.8
-line,0.2,0.0,-0.9").unwrap();
+line,0.2,0.0,-0.9",
+        )
+        .unwrap();
         let geo = given(&[0.0, 0.0, -0.9], &pieces, ARC_SLACK).unwrap().0;
         let ends: Vec<Vec<f64>> = geo.iter().map(|g| g.at(g.length())[0].clone()).collect();
         assert!(distance(&ends[1], &[0.1, 0.1, -0.75]) < 1e-9 && distance(&ends[2], &[0.2, 0.0, -0.8]) < 1e-9);
         // Out of the vertical line upwards, into the last line downwards: no corner at either junction.
-        assert!(distance(&geo[1].at(0.0)[1], &[0.0, 0.0, 1.0]) < 1e-9 && distance(&geo[2].at(geo[2].length())[1], &[0.0, 0.0, -1.0]) < 1e-9);
+        assert!(
+            distance(&geo[1].at(0.0)[1], &[0.0, 0.0, 1.0]) < 1e-9
+                && distance(&geo[2].at(geo[2].length())[1], &[0.0, 0.0, -1.0]) < 1e-9
+        );
         let (axes, cycle) = (axes3(), 1e-3);
         let points = plan(&axes, &[0.0, 0.0, -0.9], &pieces, cycle, 0.0, ARC_SLACK).unwrap();
         for w in points.windows(4) {
             for (i, axis) in axes.iter().enumerate() {
                 let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
-                assert!(((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc);
+                assert!(
+                    ((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel
+                        && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc
+                );
                 assert!(((p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)).abs() <= 1.001 * axis.max_jerk);
             }
         }
@@ -1650,17 +2045,29 @@ line,0.2,0.0,-0.9").unwrap();
 
     #[test]
     fn a_path_file_is_read_line_by_line() {
-        let pieces = parse("# a corner rounded off\nline, 0.5, 0.35\n\narc,0.6,0.25,0.5,0.25,cw\nline,0.6,0.05\n").unwrap();
+        let pieces =
+            parse("# a corner rounded off\nline, 0.5, 0.35\n\narc,0.6,0.25,0.5,0.25,cw\nline,0.6,0.05\n").unwrap();
         assert_eq!(pieces.len(), 3);
         assert_eq!(pieces[0], Piece::Line(vec![0.5, 0.35]));
         assert_eq!(pieces[1], Piece::Arc { to: vec![0.6, 0.25], centre: vec![0.5, 0.25], clockwise: true });
         assert_eq!(parse("spline, 0.7,0.2").unwrap(), [Piece::Spline(vec![0.7, 0.2])]);
-        for bad in ["circle,1,2", "line", "line,a", "arc,0.6,0.25,0.5,0.25", "arc,0.6,0.25,0.5,0.25,left", "line,inf", "spline", "spline,0.5,nan"] {
+        for bad in [
+            "circle,1,2",
+            "line",
+            "line,a",
+            "arc,0.6,0.25,0.5,0.25",
+            "arc,0.6,0.25,0.5,0.25,left",
+            "line,inf",
+            "spline",
+            "spline,0.5,nan",
+        ] {
             assert_eq!(parse(&format!("line,0.5\n{bad}")), Err(bad.to_string()));
         }
         // An arc whose end is not on the circle through the start, an arc on one axis and a point with the
         // wrong number of positions cannot be laid out.
-        let refused = |start: &[f64], text: &str| plan(&axes()[..start.len()], start, &parse(text).unwrap(), 1e-3, 0.0, ARC_SLACK).unwrap_err().key;
+        let refused = |start: &[f64], text: &str| {
+            plan(&axes()[..start.len()], start, &parse(text).unwrap(), 1e-3, 0.0, ARC_SLACK).unwrap_err().key
+        };
         assert_eq!(refused(&[0.5, 0.35], "arc,0.6,0.26,0.5,0.25,cw"), "error-path");
         // A start up to 0.1 mm off the circle (the setpoint of a machine at rest) is run; one a millimetre off
         // is not.
@@ -1691,19 +2098,46 @@ line,0.2,0.0,-0.9").unwrap();
     #[test]
     fn a_short_arc_is_not_a_full_turn_and_an_arc_off_its_end_is_reported() {
         let (axes, top) = (axes(), vec![0.3, 0.35]);
-        let arc = |by: f64, r: f64| Piece::Arc { to: vec![0.3 + r * by.sin(), 0.25 + r * by.cos()], centre: vec![0.3, 0.25], clockwise: true };
-        let lengths = |start: &[f64], pieces: &[Piece]| given(start, pieces, ARC_SLACK).unwrap().0.iter().map(Geo::length).collect::<Vec<f64>>();
+        let arc = |by: f64, r: f64| Piece::Arc {
+            to: vec![0.3 + r * by.sin(), 0.25 + r * by.cos()],
+            centre: vec![0.3, 0.25],
+            clockwise: true,
+        };
+        let lengths = |start: &[f64], pieces: &[Piece]| {
+            given(start, pieces, ARC_SLACK).unwrap().0.iter().map(Geo::length).collect::<Vec<f64>>()
+        };
         let short = [Piece::Line(top.clone()), arc(8e-4, 0.1), Piece::Line(vec![0.5, 0.35])];
         assert!((lengths(&[0.1, 0.35], &short)[1] - 8e-5).abs() < 1e-12, "{:?}", lengths(&[0.1, 0.35], &short));
-        let lowest = plan(&axes, &[0.1, 0.35], &short, 1e-3, 0.0, ARC_SLACK).unwrap().iter().map(|p| p.1[1]).fold(f64::INFINITY, f64::min);
+        let lowest = plan(&axes, &[0.1, 0.35], &short, 1e-3, 0.0, ARC_SLACK)
+            .unwrap()
+            .iter()
+            .map(|p| p.1[1])
+            .fold(f64::INFINITY, f64::min);
         assert!(lowest > 0.3499, "the path goes down to z = {lowest}");
         assert_eq!(deviation(&axes, &[0.1, 0.35], &short, 0.0, ARC_SLACK).unwrap(), 0.0);
-        assert!((lengths(&[0.1, 0.35], &[Piece::Line(top.clone()), arc(0.0, 0.1)])[1] - std::f64::consts::TAU * 0.1).abs() < 1e-12);
+        assert!(
+            (lengths(&[0.1, 0.35], &[Piece::Line(top.clone()), arc(0.0, 0.1)])[1] - std::f64::consts::TAU * 0.1).abs()
+                < 1e-12
+        );
 
         let (pose, rest) = (vec![0.1, 0.35], [0.0999876, 0.3500458]);
-        let up = |by: f64| Piece::Arc { to: vec![0.2 - 0.1 * by.cos(), 0.35 + 0.1 * by.sin()], centre: vec![0.2, 0.35], clockwise: true };
-        for (start, first) in [(&rest[..], up(1.3e-3)), (&rest[..], up(0.0)), (&pose[..], up(0.0)), (&top[..], arc(5e-4, 0.1)), (&top[..], arc(9.9e-3, 0.1))] {
-            assert_eq!(deviation(&axes, start, std::slice::from_ref(&first), 0.0, ARC_SLACK).unwrap_err().key, "error-path-first-arc", "{first:?} from {start:?}");
+        let up = |by: f64| Piece::Arc {
+            to: vec![0.2 - 0.1 * by.cos(), 0.35 + 0.1 * by.sin()],
+            centre: vec![0.2, 0.35],
+            clockwise: true,
+        };
+        for (start, first) in [
+            (&rest[..], up(1.3e-3)),
+            (&rest[..], up(0.0)),
+            (&pose[..], up(0.0)),
+            (&top[..], arc(5e-4, 0.1)),
+            (&top[..], arc(9.9e-3, 0.1)),
+        ] {
+            assert_eq!(
+                deviation(&axes, start, std::slice::from_ref(&first), 0.0, ARC_SLACK).unwrap_err().key,
+                "error-path-first-arc",
+                "{first:?} from {start:?}"
+            );
         }
         assert!((lengths(&rest, &[up(0.02)])[0] - 2e-3).abs() < 1e-4);
         for (by, length) in [(1.3e-3, 1.3e-4), (0.0, std::f64::consts::TAU * 0.1)] {
@@ -1714,15 +2148,19 @@ line,0.2,0.0,-0.9").unwrap();
         let sagged = lengths(&[0.300012, 0.350046], &[Piece::Line(top.clone()), arc(5e-4, 0.1)]);
         assert!(sagged.len() == 2 && (sagged[1] - 5e-5).abs() < 1e-12, "{sagged:?}");
 
-        let off_by = |by: f64| [Piece::Line(top.clone()), arc(std::f64::consts::FRAC_PI_2, 0.1 + by), Piece::Line(vec![0.4, 0.05])];
+        let off_by = |by: f64| {
+            [Piece::Line(top.clone()), arc(std::f64::consts::FRAC_PI_2, 0.1 + by), Piece::Line(vec![0.4, 0.05])]
+        };
         assert_eq!(deviation(&axes, &[0.1, 0.35], &off_by(-9e-5), 0.0, ARC_SLACK).unwrap_err().key, "error-path");
         let reported = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 0.0, ARC_SLACK).unwrap();
         assert!((reported - 8e-6).abs() < 1e-12, "{reported} m reported");
-        let spiral: Vec<Piece> = std::iter::once(Piece::Line(top.clone())).chain((1..=4).map(|k| arc(k as f64 * std::f64::consts::FRAC_PI_2, 0.1 + 9e-6 * k as f64))).collect();
+        let spiral: Vec<Piece> = std::iter::once(Piece::Line(top.clone()))
+            .chain((1..=4).map(|k| arc(k as f64 * std::f64::consts::FRAC_PI_2, 0.1 + 9e-6 * k as f64)))
+            .collect();
         let added = deviation(&axes, &[0.1, 0.35], &spiral, 0.0, ARC_SLACK).unwrap();
         assert!((added - 3.6e-5).abs() < 1e-12, "{added} m reported");
         let blended = deviation(&axes, &[0.1, 0.35], &off_by(8e-6), 1e-4, ARC_SLACK).unwrap();
-        assert!((blended - 1.08e-4).abs() < 1e-6,"{blended} m reported with transition curves");
+        assert!((blended - 1.08e-4).abs() < 1e-6, "{blended} m reported with transition curves");
     }
 
     /// Splines: smooth curves through via points.
@@ -1740,28 +2178,44 @@ line,0.2,0.0,-0.9").unwrap();
         let (axes, cycle) = (axes(), 1e-3);
         let straight = plan(&axes, &[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), cycle, 0.0, ARC_SLACK).unwrap();
         // On the line through (0.1, 0.1) and (0.5, 0.4): 3 (x - 0.1) = 4 (z - 0.1).
-        assert!(straight.iter().all(|(_, p)| (3.0 * (p[0] - 0.1) - 4.0 * (p[1] - 0.1)).abs() < 1e-12) && distance(&straight[straight.len() - 1].1, &[0.5, 0.4]) < 1e-12);
-        let [Geo::Spline { travelled, .. }] = &given(&[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), ARC_SLACK).unwrap().0[..] else { panic!("one span") };
+        assert!(
+            straight.iter().all(|(_, p)| (3.0 * (p[0] - 0.1) - 4.0 * (p[1] - 0.1)).abs() < 1e-12)
+                && distance(&straight[straight.len() - 1].1, &[0.5, 0.4]) < 1e-12
+        );
+        let [Geo::Spline { travelled, .. }] =
+            &given(&[0.1, 0.1], &parse("spline,0.5,0.4").unwrap(), ARC_SLACK).unwrap().0[..]
+        else {
+            panic!("one span")
+        };
         assert!((travelled[SPLINE_PARTS] - 0.5).abs() < 1e-14 && (travelled[16] - 0.125).abs() < 1e-14);
 
         let paths = [
             ([0.1, 0.35], "line,0.3,0.35\nspline,0.4,0.3\nspline,0.5,0.32\nspline,0.6,0.2\nline,0.6,0.05"),
             ([0.2, 0.1], "spline,0.3,0.2\nspline,0.5,0.25\nspline,0.7,0.1"),
-            ([0.1, 0.5], "line,0.3,0.5\narc,0.4,0.4,0.3,0.4,cw\nspline,0.45,0.3\nspline,0.55,0.25\narc,0.65,0.15,0.55,0.15,cw\nline,0.65,0.05"),
-            ([0.3, 0.2], "line,0.4,0.2\nspline,0.42,0.21\nspline,0.44,0.19\nspline,0.46,0.21\nspline,0.48,0.2\nline,0.6,0.2"),
+            (
+                [0.1, 0.5],
+                "line,0.3,0.5\narc,0.4,0.4,0.3,0.4,cw\nspline,0.45,0.3\nspline,0.55,0.25\narc,0.65,0.15,0.55,0.15,cw\nline,0.65,0.05",
+            ),
+            (
+                [0.3, 0.2],
+                "line,0.4,0.2\nspline,0.42,0.21\nspline,0.44,0.19\nspline,0.46,0.21\nspline,0.48,0.2\nline,0.6,0.2",
+            ),
         ];
         for (start, text) in paths {
             let pieces = parse(text).unwrap();
             let geo = given(&start, &pieces, ARC_SLACK).unwrap().0;
-            let via: Vec<&Vec<f64>> = pieces.iter().filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None }).collect();
-            let ends: Vec<Vec<f64>> = geo.iter().filter(|g| matches!(g, Geo::Spline { .. })).map(|g| g.at(g.length())[0].clone()).collect();
+            let via: Vec<&Vec<f64>> =
+                pieces.iter().filter_map(|p| if let Piece::Spline(to) = p { Some(to) } else { None }).collect();
+            let ends: Vec<Vec<f64>> =
+                geo.iter().filter(|g| matches!(g, Geo::Spline { .. })).map(|g| g.at(g.length())[0].clone()).collect();
             assert_eq!(ends.len(), via.len(), "{text}");
             for (end, via) in ends.iter().zip(&via) {
                 assert!(distance(end, via) < 1e-12, "{text}: span ends at {end:?}, via point {via:?}");
             }
             for pair in geo.windows(2) {
                 let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
-                let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+                let steps =
+                    [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 let both = matches!(pair, [Geo::Spline { .. }, Geo::Spline { .. }]);
                 assert!(steps[0] < 1e-12 && steps[1] < 1e-9 && (!both || steps[2] < 1e-6), "{text}: steps {steps:?}");
             }
@@ -1770,16 +2224,30 @@ line,0.2,0.0,-0.9").unwrap();
             // or curvature at any junction, every planned pose within the reported deviation of the path as given, the
             // reported deviation within the tolerance, the axis limits kept, the via points still passed, and faster.
             let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes), ARC_SLACK).unwrap();
-            assert!(reported <= 1e-4 + 1e-12 && (reported > 0.0) == (eased.len() > geo.len()), "{text}: {reported} m reported, {} pieces from {}", eased.len(), geo.len());
+            assert!(
+                reported <= 1e-4 + 1e-12 && (reported > 0.0) == (eased.len() > geo.len()),
+                "{text}: {reported} m reported, {} pieces from {}",
+                eased.len(),
+                geo.len()
+            );
             for pair in eased.windows(2) {
                 let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
-                let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+                let steps =
+                    [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-6, "{text}, eased: steps {steps:?}");
             }
-            let (smooth, given_plan) = (plan(&axes, &start, &pieces, cycle, 1e-4, ARC_SLACK).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap());
+            let (smooth, given_plan) = (
+                plan(&axes, &start, &pieces, cycle, 1e-4, ARC_SLACK).unwrap(),
+                plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap(),
+            );
             let peak = peak_rates(&smooth, cycle);
             for (i, axis) in axes.iter().enumerate() {
-                assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, eased, axis {i}: {peak:?}");
+                assert!(
+                    peak[0][i] <= 1.001 * axis.max_vel
+                        && peak[1][i] <= 1.001 * axis.max_acc
+                        && peak[2][i] <= 1.001 * axis.max_jerk,
+                    "{text}, eased, axis {i}: {peak:?}"
+                );
             }
             let line = polyline(&geo);
             let furthest = smooth.iter().map(|p| off_line(&line, &p.1)).fold(0.0, f64::max);
@@ -1795,11 +2263,21 @@ line,0.2,0.0,-0.9").unwrap();
             let points = plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
-                assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
+                assert!(
+                    peak[0][i] <= 1.001 * axis.max_vel
+                        && peak[1][i] <= 1.001 * axis.max_acc
+                        && peak[2][i] <= 1.001 * axis.max_jerk,
+                    "{text}, axis {i}: {peak:?}"
+                );
             }
             let last = points.len() - 1;
             let end = geo[geo.len() - 1].at(geo[geo.len() - 1].length())[0].clone();
-            assert!(points[0].1 == start && distance(&points[last].1, &end) < 1e-9 && distance(&points[last].1, &points[last - 1].1) < 1e-6, "{text}");
+            assert!(
+                points[0].1 == start
+                    && distance(&points[last].1, &end) < 1e-9
+                    && distance(&points[last].1, &points[last - 1].1) < 1e-6,
+                "{text}"
+            );
             for via in &via {
                 let nearest = points.iter().map(|p| distance(&p.1, via)).fold(f64::INFINITY, f64::min);
                 assert!(nearest <= 0.5 * 0.8 * cycle * 1.01, "{text}: {nearest} m past the via point {via:?}");
@@ -1808,11 +2286,21 @@ line,0.2,0.0,-0.9").unwrap();
         }
 
         // A via point straight back along the line before it: the curve would have to turn on the spot.
-        assert_eq!(plan(&axes, &[0.1, 0.35], &parse("line,0.5,0.35\nspline,0.3,0.35").unwrap(), cycle, 0.0, ARC_SLACK).unwrap_err().key, "error-path");
+        assert_eq!(
+            plan(&axes, &[0.1, 0.35], &parse("line,0.5,0.35\nspline,0.3,0.35").unwrap(), cycle, 0.0, ARC_SLACK)
+                .unwrap_err()
+                .key,
+            "error-path"
+        );
         // A via point given twice counts once, and a spline of nothing but where the path stands is no piece.
-        let twice = given(&[0.2, 0.1], &parse("spline,0.3,0.2\nspline,0.3,0.2\nspline,0.5,0.25").unwrap(), ARC_SLACK).unwrap().0;
+        let twice = given(&[0.2, 0.1], &parse("spline,0.3,0.2\nspline,0.3,0.2\nspline,0.5,0.25").unwrap(), ARC_SLACK)
+            .unwrap()
+            .0;
         assert_eq!(twice.len(), 2);
-        assert_eq!(plan(&axes, &[0.2, 0.1], &parse("spline,0.2,0.1").unwrap(), cycle, 0.0, ARC_SLACK).unwrap_err().key, "error-path");
+        assert_eq!(
+            plan(&axes, &[0.2, 0.1], &parse("spline,0.2,0.1").unwrap(), cycle, 0.0, ARC_SLACK).unwrap_err().key,
+            "error-path"
+        );
     }
 
     /// Rates of the planned poses by differences over one cycle: the largest speed, acceleration and jerk
@@ -1822,7 +2310,11 @@ line,0.2,0.0,-0.9").unwrap();
         for w in points.windows(4) {
             for i in 0..2 {
                 let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
-                let rates = [(p[1] - p[0]) / cycle, (p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2), (p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)];
+                let rates = [
+                    (p[1] - p[0]) / cycle,
+                    (p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2),
+                    (p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3),
+                ];
                 for (peak, rate) in peak.iter_mut().zip(rates) {
                     peak[i] = peak[i].max(rate.abs());
                 }
@@ -1869,7 +2361,12 @@ line,0.2,0.0,-0.9").unwrap();
         let points = plan(&axes, &[0.1, 0.35], &pieces, cycle, 0.0, ARC_SLACK).unwrap();
         let peak = peak_rates(&points, cycle);
         for (i, axis) in axes.iter().enumerate() {
-            assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "axis {i}: {peak:?}");
+            assert!(
+                peak[0][i] <= 1.001 * axis.max_vel
+                    && peak[1][i] <= 1.001 * axis.max_acc
+                    && peak[2][i] <= 1.001 * axis.max_jerk,
+                "axis {i}: {peak:?}"
+            );
         }
         // The limits are used: full speed and acceleration on the first line, most of the jerk limit.
         assert!(peak[0][0] > 0.999 * 0.8 && peak[1][0] > 0.99 * 8.0 && peak[2][0] > 0.95 * 100.0, "{peak:?}");
@@ -1878,7 +2375,11 @@ line,0.2,0.0,-0.9").unwrap();
         let (mut off_path, mut arc_speed, mut junction_speed) = (0f64, 0f64, f64::INFINITY);
         for w in points.windows(2) {
             let p = &w[1].1;
-            let off = if on_arc(p) { (distance(p, &[0.5, 0.25]) - 0.1).abs() } else { (p[1] - 0.35).abs().min((p[0] - 0.6).abs()) };
+            let off = if on_arc(p) {
+                (distance(p, &[0.5, 0.25]) - 0.1).abs()
+            } else {
+                (p[1] - 0.35).abs().min((p[0] - 0.6).abs())
+            };
             off_path = off_path.max(off);
             let speed = distance(&w[0].1, p) / cycle;
             if on_arc(p) && on_arc(&w[0].1) {
@@ -1894,7 +2395,10 @@ line,0.2,0.0,-0.9").unwrap();
         let last = points.len() - 1;
         assert!(points[0].1 == [0.1, 0.35] && distance(&points[last].1, &[0.6, 0.05]) < 1e-12);
         assert!(distance(&points[1].1, &points[0].1) < 1e-6 && distance(&points[last].1, &points[last - 1].1) < 1e-6);
-        println!("duration {} s, peak rates {peak:?}, arc {arc_speed} m/s, junction {junction_speed} m/s", points[last].0);
+        println!(
+            "duration {} s, peak rates {peak:?}, arc {arc_speed} m/s, junction {junction_speed} m/s",
+            points[last].0
+        );
     }
 
     /// Transition curves on the same line, arc, line. Without them the path crawls into and out of the arc at
@@ -1911,38 +2415,74 @@ line,0.2,0.0,-0.9").unwrap();
     #[test]
     fn transition_curves_let_the_path_enter_an_arc_at_speed() {
         let (axes, cycle, start) = (axes(), 1e-3, [0.1, 0.35]);
-        let pieces = parse("line,0.5,0.35
+        let pieces = parse(
+            "line,0.5,0.35
 arc,0.6,0.25,0.5,0.25,cw
-line,0.6,0.05").unwrap();
+line,0.6,0.05",
+        )
+        .unwrap();
         let given = plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap();
         assert_eq!(deviation(&axes, &start, &pieces, 0.0, ARC_SLACK).unwrap(), 0.0);
         // How far a pose is from the given path: from the first line, the arc or the second line.
-        let off = |p: &[f64]| if p[0] <= 0.5 { (p[1] - 0.35).abs() } else if p[1] <= 0.25 { (p[0] - 0.6).abs() } else { (distance(p, &[0.5, 0.25]) - 0.1).abs() };
+        let off = |p: &[f64]| {
+            if p[0] <= 0.5 {
+                (p[1] - 0.35).abs()
+            } else if p[1] <= 0.25 {
+                (p[0] - 0.6).abs()
+            } else {
+                (distance(p, &[0.5, 0.25]) - 0.1).abs()
+            }
+        };
         let curves = |tolerance: f64| -> Vec<f64> {
             let geo = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap().0;
             geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect()
         };
         for (tolerance, by_hand, length, speed) in [(1e-4, 1e-4, 0.01549, 0.3957), (1e-3, 0.1067e-3, 0.016, 0.4)] {
             let reported = deviation(&axes, &start, &pieces, tolerance, ARC_SLACK).unwrap();
-            assert!((reported / by_hand - 1.0).abs() < 2e-3 && reported <= tolerance, "{reported} m reported, {by_hand} m by hand");
+            assert!(
+                (reported / by_hand - 1.0).abs() < 2e-3 && reported <= tolerance,
+                "{reported} m reported, {by_hand} m by hand"
+            );
             let lengths = curves(tolerance);
-            assert!(lengths.len() == 2 && lengths.iter().all(|l| (l / length - 1.0).abs() < 5e-3), "{lengths:?} against {length}");
+            assert!(
+                lengths.len() == 2 && lengths.iter().all(|l| (l / length - 1.0).abs() < 5e-3),
+                "{lengths:?} against {length}"
+            );
 
             let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
-                assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "axis {i}: {peak:?}");
+                assert!(
+                    peak[0][i] <= 1.001 * axis.max_vel
+                        && peak[1][i] <= 1.001 * axis.max_acc
+                        && peak[2][i] <= 1.001 * axis.max_jerk,
+                    "axis {i}: {peak:?}"
+                );
             }
             let furthest = points.iter().map(|p| off(&p.1)).fold(0.0, f64::max);
-            assert!(furthest <= reported + 1e-9 && furthest > 0.999 * reported, "{furthest} m off the path, {reported} m reported");
+            assert!(
+                furthest <= reported + 1e-9 && furthest > 0.999 * reported,
+                "{furthest} m off the path, {reported} m reported"
+            );
             // The slowest the path gets between leaving the first line and being back on the second.
             let blended = |p: &[f64]| off(p) > 1e-9;
-            let slowest = points.windows(2).filter(|w| blended(&w[0].1) && blended(&w[1].1)).map(|w| distance(&w[0].1, &w[1].1) / cycle).fold(f64::INFINITY, f64::min);
+            let slowest = points
+                .windows(2)
+                .filter(|w| blended(&w[0].1) && blended(&w[1].1))
+                .map(|w| distance(&w[0].1, &w[1].1) / cycle)
+                .fold(f64::INFINITY, f64::min);
             assert!((slowest - speed).abs() < 2e-3, "{slowest} m/s through the blend, {speed} m/s by hand");
             let (last, before) = (points.len() - 1, given[given.len() - 1].0);
-            assert!(points[0].1 == start && distance(&points[last].1, &[0.6, 0.05]) < 1e-9 && distance(&points[last].1, &points[last - 1].1) < 1e-6);
+            assert!(
+                points[0].1 == start
+                    && distance(&points[last].1, &[0.6, 0.05]) < 1e-9
+                    && distance(&points[last].1, &points[last - 1].1) < 1e-6
+            );
             assert!(points[last].0 < 0.9 * before, "{} s with transition curves, {before} s without", points[last].0);
-            println!("tolerance {tolerance} m: {} s against {before} s, off by {furthest} m, curves {lengths:?} m, slowest {slowest} m/s, peak rates {peak:?}", points[last].0);
+            println!(
+                "tolerance {tolerance} m: {} s against {before} s, off by {furthest} m, curves {lengths:?} m, slowest {slowest} m/s, peak rates {peak:?}",
+                points[last].0
+            );
         }
     }
 
@@ -1969,16 +2509,29 @@ line,0.1,0.35";
             assert!((reported - tolerance).abs() < 1e-12, "{reported}");
             for pair in geo.windows(2) {
                 let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
-                let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+                let steps =
+                    [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{text}: steps {steps:?}");
             }
-            let (points, given) = (plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap(), plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap());
+            let (points, given) = (
+                plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap(),
+                plan(&axes, &start, &pieces, cycle, 0.0, ARC_SLACK).unwrap(),
+            );
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
-                assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
+                assert!(
+                    peak[0][i] <= 1.001 * axis.max_vel
+                        && peak[1][i] <= 1.001 * axis.max_acc
+                        && peak[2][i] <= 1.001 * axis.max_jerk,
+                    "{text}, axis {i}: {peak:?}"
+                );
             }
             let (last, before) = (points.len() - 1, given[given.len() - 1].0);
-            assert!(distance(&points[last].1, &end) < 1e-9 && points[last].0 < 0.9 * before, "{text}: {} s against {before} s", points[last].0);
+            assert!(
+                distance(&points[last].1, &end) < 1e-9 && points[last].0 < 0.9 * before,
+                "{text}: {} s against {before} s",
+                points[last].0
+            );
             println!("{} s against {before} s", points[last].0);
         }
     }
@@ -2000,7 +2553,8 @@ line,0.1,0.35";
         let c2 = [p1[0] + (c1[0] - p1[0]) * tight / wide, p1[1] + (c1[1] - p1[1]) * tight / wide];
         let p2 = on(c2, tight, a + b);
         let end = [p2[0] + 0.02 * (a + b).sin(), p2[1] + 0.02 * (a + b).cos()];
-        let arc = |to: [f64; 2], centre: [f64; 2]| Piece::Arc { to: to.to_vec(), centre: centre.to_vec(), clockwise: true };
+        let arc =
+            |to: [f64; 2], centre: [f64; 2]| Piece::Arc { to: to.to_vec(), centre: centre.to_vec(), clockwise: true };
         let pieces = [Piece::Line(vec![0.2, 0.2]), arc(p1, c1), arc(p2, c2), Piece::Line(end.to_vec())];
         let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         let turned: f64 = geo
@@ -2013,7 +2567,10 @@ line,0.1,0.35";
             .sum();
         assert!((turned + a + b).abs() < 1e-9, "the planned path turns by {turned} rad, the given one by {}", -a - b);
         // It is blended all the same, with shorter curves, and the tight arc moves in by less than its radius.
-        assert!(geo.iter().any(|g| matches!(g, Geo::Clothoid { .. })) && reported > 0.0 && reported < tight, "{reported} m reported");
+        assert!(
+            geo.iter().any(|g| matches!(g, Geo::Clothoid { .. })) && reported > 0.0 && reported < tight,
+            "{reported} m reported"
+        );
         let points = plan(&axes, &start, &pieces, 1e-3, tolerance, ARC_SLACK).unwrap();
         assert!(distance(&points[points.len() - 1].1, &end) < 1e-9);
         println!("turned {turned} rad, off by {reported} m, {} pieces", geo.len());
@@ -2037,14 +2594,31 @@ line,0.1,0.35";
     #[test]
     fn a_corner_is_stopped_at() {
         let (axes, cycle) = (axes(), 1e-3);
-        let points = plan(&axes, &[0.1, 0.1], &[Piece::Line(vec![0.5, 0.1]), Piece::Line(vec![0.5, 0.3])], cycle, 0.0, ARC_SLACK).unwrap();
-        let moves = [crate::profile::Move::new(&[0.1, 0.1], &[0.5, 0.1], &axes), crate::profile::Move::new(&[0.5, 0.1], &[0.5, 0.3], &axes)];
+        let points = plan(
+            &axes,
+            &[0.1, 0.1],
+            &[Piece::Line(vec![0.5, 0.1]), Piece::Line(vec![0.5, 0.3])],
+            cycle,
+            0.0,
+            ARC_SLACK,
+        )
+        .unwrap();
+        let moves = [
+            crate::profile::Move::new(&[0.1, 0.1], &[0.5, 0.1], &axes),
+            crate::profile::Move::new(&[0.5, 0.1], &[0.5, 0.3], &axes),
+        ];
         let duration = points[points.len() - 1].0;
         assert!((duration - moves[0].duration() - moves[1].duration()).abs() <= cycle, "{duration} s");
         let corner = (moves[0].duration() / cycle).round() as usize;
-        assert!(distance(&points[corner].1, &[0.5, 0.1]) < 1e-6 && distance(&points[corner + 1].1, &points[corner].1) < 1e-6);
+        assert!(
+            distance(&points[corner].1, &[0.5, 0.1]) < 1e-6
+                && distance(&points[corner + 1].1, &points[corner].1) < 1e-6
+        );
         let peak = peak_rates(&points, cycle);
-        assert!(peak[1][0] <= 8.0 * 1.001 && peak[1][1] <= 6.0 * 1.001 && peak[2][0] <= 100.1 && peak[2][1] <= 100.1, "{peak:?}");
+        assert!(
+            peak[1][0] <= 8.0 * 1.001 && peak[1][1] <= 6.0 * 1.001 && peak[2][0] <= 100.1 && peak[2][1] <= 100.1,
+            "{peak:?}"
+        );
     }
 
     /// An arc that touches an end of the path or a corner: a line into a quarter arc of 0.1 m that ends the path,
@@ -2059,36 +2633,73 @@ line,0.1,0.35";
     fn an_arc_at_an_end_or_a_corner_gets_its_transition_curve() {
         let (axes, cycle, start, tolerance) = (axes(), 1e-3, [0.1, 0.35], 1e-4);
         // How far a pose is from the given path: the first line, the arc, or the line after the corner.
-        let off = |p: &[f64]| if p[0] <= 0.5 { (p[1] - 0.35).abs() } else if p[0] <= 0.6 { (distance(p, &[0.5, 0.25]) - 0.1).abs() } else { (p[1] - 0.25).abs() };
-        for (text, end) in [("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw", [0.6, 0.25]), ("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw\nline,0.7,0.25", [0.7, 0.25])] {
+        let off = |p: &[f64]| {
+            if p[0] <= 0.5 {
+                (p[1] - 0.35).abs()
+            } else if p[0] <= 0.6 {
+                (distance(p, &[0.5, 0.25]) - 0.1).abs()
+            } else {
+                (p[1] - 0.25).abs()
+            }
+        };
+        for (text, end) in [
+            ("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw", [0.6, 0.25]),
+            ("line,0.5,0.35\narc,0.6,0.25,0.5,0.25,cw\nline,0.7,0.25", [0.7, 0.25]),
+        ] {
             let pieces = parse(text).unwrap();
             let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
             let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
             assert!(curves.len() == 1 && (curves[0] / 0.01549 - 1.0).abs() < 5e-3, "{text}: curves {curves:?}");
-            assert!((reported / tolerance - 1.0).abs() < 2e-3 && reported <= tolerance, "{text}: {reported} m reported");
+            assert!(
+                (reported / tolerance - 1.0).abs() < 2e-3 && reported <= tolerance,
+                "{text}: {reported} m reported"
+            );
             let arc = geo.iter().find(|g| matches!(g, Geo::Arc { .. })).unwrap();
-            assert!(distance(&arc.at(arc.length())[0], &[0.6, 0.25]) < 1e-12 && distance(&arc.at(arc.length())[1], &[0.0, -1.0]) < 1e-12, "{text}: the arc ends elsewhere");
+            assert!(
+                distance(&arc.at(arc.length())[0], &[0.6, 0.25]) < 1e-12
+                    && distance(&arc.at(arc.length())[1], &[0.0, -1.0]) < 1e-12,
+                "{text}: the arc ends elsewhere"
+            );
             for pair in geo.windows(2).filter(|pair| !corner(&pair[0], &pair[1])) {
                 let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
-                let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+                let steps =
+                    [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
                 assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{text}: steps {steps:?}");
             }
             for tolerance in [0.0, tolerance] {
                 let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
                 let peak = peak_rates(&points, cycle);
                 for (i, axis) in axes.iter().enumerate() {
-                    assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "{text}, axis {i}: {peak:?}");
+                    assert!(
+                        peak[0][i] <= 1.001 * axis.max_vel
+                            && peak[1][i] <= 1.001 * axis.max_acc
+                            && peak[2][i] <= 1.001 * axis.max_jerk,
+                        "{text}, axis {i}: {peak:?}"
+                    );
                 }
                 let furthest = points.iter().map(|p| off(&p.1)).fold(0.0, f64::max);
-                assert!(furthest <= reported + 1e-9 && (tolerance == 0.0 || furthest > 0.5 * reported), "{text}: {furthest} m off the path");
+                assert!(
+                    furthest <= reported + 1e-9 && (tolerance == 0.0 || furthest > 0.5 * reported),
+                    "{text}: {furthest} m off the path"
+                );
                 // The arc's end is passed exactly (the path stops there), and the path ends on its target.
-                assert!(points.iter().any(|p| distance(&p.1, &[0.6, 0.25]) < 1e-6) && distance(&points[points.len() - 1].1, &end) < 1e-9, "{text}");
+                assert!(
+                    points.iter().any(|p| distance(&p.1, &[0.6, 0.25]) < 1e-6)
+                        && distance(&points[points.len() - 1].1, &end) < 1e-9,
+                    "{text}"
+                );
                 // The speed where the path leaves the first line.
                 let leaves = points.iter().position(|p| off(&p.1) > 1e-9 || p.1[0] > 0.5).unwrap();
                 let speed = distance(&points[leaves].1, &points[leaves - 1].1) / cycle;
                 let by_hand = if tolerance > 0.0 { 0.3957 } else { 0.0707 };
-                assert!((speed - by_hand).abs() < 2e-3, "{text}, tolerance {tolerance}: {speed} m/s into the arc, {by_hand} by hand");
-                println!("{text:?}, tolerance {tolerance}: {} s, {speed} m/s into the arc, off by {furthest} m", points[points.len() - 1].0);
+                assert!(
+                    (speed - by_hand).abs() < 2e-3,
+                    "{text}, tolerance {tolerance}: {speed} m/s into the arc, {by_hand} by hand"
+                );
+                println!(
+                    "{text:?}, tolerance {tolerance}: {} s, {speed} m/s into the arc, off by {furthest} m",
+                    points[points.len() - 1].0
+                );
             }
         }
     }
@@ -2117,21 +2728,39 @@ line,0.1,0.35";
         assert!((d[0] - 1.0).abs() < 1e-12 && d[1].abs() < 1e-12 && (d2[1] - 10.0).abs() < 1e-9, "{d:?} {d2:?}");
         let (eased, reported) = geometry(&axes, &start, &pieces, 1e-4, &axis_speed(&axes), ARC_SLACK).unwrap();
         let Geo::Spline { h: l, .. } = &eased[1] else { panic!("the eased part") };
-        assert!(eased.len() == 3 && (l - 0.024056).abs() < 1e-5 && (reported - 1e-4).abs() < 1e-12, "{l} m eased, {reported} m reported");
+        assert!(
+            eased.len() == 3 && (l - 0.024056).abs() < 1e-5 && (reported - 1e-4).abs() < 1e-12,
+            "{l} m eased, {reported} m reported"
+        );
         for (tolerance, by_hand) in [(0.0, 0.0707), (1e-4, 0.2189)] {
             let points = plan(&axes, &start, &pieces, cycle, tolerance, ARC_SLACK).unwrap();
             let peak = peak_rates(&points, cycle);
             for (i, axis) in axes.iter().enumerate() {
-                assert!(peak[0][i] <= 1.001 * axis.max_vel && peak[1][i] <= 1.001 * axis.max_acc && peak[2][i] <= 1.001 * axis.max_jerk, "tolerance {tolerance}, axis {i}: {peak:?}");
+                assert!(
+                    peak[0][i] <= 1.001 * axis.max_vel
+                        && peak[1][i] <= 1.001 * axis.max_acc
+                        && peak[2][i] <= 1.001 * axis.max_jerk,
+                    "tolerance {tolerance}, axis {i}: {peak:?}"
+                );
             }
             let past = points.iter().position(|p| p.1[0] > 0.3).unwrap();
             let speed = distance(&points[past].1, &points[past - 1].1) / cycle;
-            assert!((speed / by_hand - 1.0).abs() < 0.01, "tolerance {tolerance}: {speed} m/s at the junction, {by_hand} by hand");
+            assert!(
+                (speed / by_hand - 1.0).abs() < 0.01,
+                "tolerance {tolerance}: {speed} m/s at the junction, {by_hand} by hand"
+            );
             let line = polyline(&geo);
             let furthest = points.iter().map(|p| off_line(&line, &p.1)).fold(0.0, f64::max);
-            assert!(furthest <= reported * (tolerance > 0.0) as u8 as f64 + 1e-7 && (tolerance == 0.0 || furthest > 0.9 * reported), "tolerance {tolerance}: {furthest} m off");
+            assert!(
+                furthest <= reported * (tolerance > 0.0) as u8 as f64 + 1e-7
+                    && (tolerance == 0.0 || furthest > 0.9 * reported),
+                "tolerance {tolerance}: {furthest} m off"
+            );
             assert!(distance(&points[points.len() - 1].1, &[0.39, 0.23]) < 1e-9);
-            println!("tolerance {tolerance}: {} s, {speed} m/s at the junction, off by {furthest} m", points[points.len() - 1].0);
+            println!(
+                "tolerance {tolerance}: {} s, {speed} m/s at the junction, off by {furthest} m",
+                points[points.len() - 1].0
+            );
         }
     }
 
@@ -2152,11 +2781,18 @@ line,0.1,0.35";
         let axes = axes();
         let (given, _) = geometry(&axes, start, pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap();
         let (planned, reported) = geometry(&axes, start, pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
-        let ((given_length, given_turn), (planned_length, planned_turn)) = (length_and_turning(&given), length_and_turning(&planned));
+        let ((given_length, given_turn), (planned_length, planned_turn)) =
+            (length_and_turning(&given), length_and_turning(&planned));
         let curves: f64 = planned.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).sum();
         let allowance = curves + reported * given_turn.abs().max(planned_turn.abs()) + 1e-12;
-        assert!((planned_length - given_length).abs() <= allowance, "{what}: given {given_length} m, planned {planned_length} m, allowance {allowance} m");
-        assert!((planned_turn - given_turn).abs() < 1e-6, "{what}: given turns {given_turn} rad, planned {planned_turn} rad");
+        assert!(
+            (planned_length - given_length).abs() <= allowance,
+            "{what}: given {given_length} m, planned {planned_length} m, allowance {allowance} m"
+        );
+        assert!(
+            (planned_turn - given_turn).abs() < 1e-6,
+            "{what}: given turns {given_turn} rad, planned {planned_turn} rad"
+        );
     }
 
     /// Two arcs on the same circle that together turn more than a whole turn (4 rad, then pi + 0.05 rad, radius
@@ -2167,12 +2803,20 @@ line,0.1,0.35";
     fn two_arcs_on_one_circle_keep_their_whole_turn() {
         let (centre, r) = ([0.5, 0.5], 0.05);
         let at = |angle: f64| vec![centre[0] + r * angle.cos(), centre[1] + r * angle.sin()];
-        let (a1, a2) = (std::f64::consts::FRAC_PI_2 - 4.0, std::f64::consts::FRAC_PI_2 - 4.0 - std::f64::consts::PI - 0.05);
+        let (a1, a2) =
+            (std::f64::consts::FRAC_PI_2 - 4.0, std::f64::consts::FRAC_PI_2 - 4.0 - std::f64::consts::PI - 0.05);
         let end = at(a2);
         let arc = |to: Vec<f64>| Piece::Arc { to, centre: centre.to_vec(), clockwise: true };
-        let pieces = [Piece::Line(vec![0.5, 0.55]), arc(at(a1)), arc(end.clone()), Piece::Line(vec![end[0] + 0.1 * a2.sin(), end[1] - 0.1 * a2.cos()])];
+        let pieces = [
+            Piece::Line(vec![0.5, 0.55]),
+            arc(at(a1)),
+            arc(end.clone()),
+            Piece::Line(vec![end[0] + 0.1 * a2.sin(), end[1] - 0.1 * a2.cos()]),
+        ];
         let axes = axes();
-        let given = length_and_turning(&geometry(&axes, &[0.45, 0.55], &pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap().0).0;
+        let given =
+            length_and_turning(&geometry(&axes, &[0.45, 0.55], &pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap().0)
+                .0;
         assert!((given - (0.05 + 0.05 * (4.0 + std::f64::consts::PI + 0.05) + 0.1)).abs() < 1e-9, "{given} m");
         assert_blend_keeps_the_path(&[0.45, 0.55], &pieces, 1e-4, "two arcs on one circle");
     }
@@ -2224,7 +2868,12 @@ line,0.1,0.35";
             let lead = [0.5 - 0.01 * start_heading.cos(), 0.5 - 0.01 * start_heading.sin()];
             let pieces = [&[Piece::Line(vec![0.5, 0.5])][..], &pieces].concat();
             for tolerance in [1e-5, 1e-4, 1e-3] {
-                assert_blend_keeps_the_path(&lead, &pieces, tolerance, &format!("case {case}, tolerance {tolerance}: {pieces:?}"));
+                assert_blend_keeps_the_path(
+                    &lead,
+                    &pieces,
+                    tolerance,
+                    &format!("case {case}, tolerance {tolerance}: {pieces:?}"),
+                );
             }
         }
     }
@@ -2233,7 +2882,8 @@ line,0.1,0.35";
     fn assert_no_steps(geo: &[Geo], what: &str) {
         for pair in geo.windows(2).filter(|pair| !corner(&pair[0], &pair[1])) {
             let (before, after) = (pair[0].at(pair[0].length()), pair[1].at(0.0));
-            let steps = [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
+            let steps =
+                [distance(&before[0], &after[0]), distance(&before[1], &after[1]), distance(&before[2], &after[2])];
             assert!(steps[0] < 1e-11 && steps[1] < 1e-9 && steps[2] < 1e-7, "{what}: steps {steps:?}");
         }
     }
@@ -2241,23 +2891,47 @@ line,0.1,0.35";
     /// Every planned pose is within the reported deviation of the given path (and a part of it gets there), the axis
     /// limits hold (by differences, as above), the path ends on `end`, and it takes less time than as given (the gain
     /// is that of the junctions only: 5 % on a path that is mostly one arc at full speed). The planned poses.
-    fn assert_blend_runs_within(axes: &[AxisInfo], start: &[f64], pieces: &[Piece], tolerance: f64, end: &[f64], what: &str) -> Vec<(f64, Vec<f64>)> {
+    fn assert_blend_runs_within(
+        axes: &[AxisInfo],
+        start: &[f64],
+        pieces: &[Piece],
+        tolerance: f64,
+        end: &[f64],
+        what: &str,
+    ) -> Vec<(f64, Vec<f64>)> {
         let (cycle, given) = (1e-3, geometry(axes, start, pieces, 0.0, &axis_speed(axes), ARC_SLACK).unwrap().0);
         let reported = deviation(axes, start, pieces, tolerance, ARC_SLACK).unwrap();
         assert!(reported > 0.0 && reported <= tolerance * (1.0 + 1e-9), "{what}: {reported} m reported");
-        let (points, before) = (plan(axes, start, pieces, cycle, tolerance, ARC_SLACK).unwrap(), plan(axes, start, pieces, cycle, 0.0, ARC_SLACK).unwrap());
+        let (points, before) = (
+            plan(axes, start, pieces, cycle, tolerance, ARC_SLACK).unwrap(),
+            plan(axes, start, pieces, cycle, 0.0, ARC_SLACK).unwrap(),
+        );
         let line = polyline(&given);
         let furthest = points.iter().map(|p| off_line(&line, &p.1)).fold(0.0, f64::max);
-        assert!(furthest <= reported + 1e-7 && furthest > 0.5 * reported, "{what}: {furthest} m off, {reported} m reported");
+        assert!(
+            furthest <= reported + 1e-7 && furthest > 0.5 * reported,
+            "{what}: {furthest} m off, {reported} m reported"
+        );
         for w in points.windows(4) {
             for (i, axis) in axes.iter().enumerate() {
                 let p = [w[0].1[i], w[1].1[i], w[2].1[i], w[3].1[i]];
-                assert!(((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc, "{what}, axis {i}");
-                assert!(((p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)).abs() <= 1.001 * axis.max_jerk, "{what}, axis {i}");
+                assert!(
+                    ((p[1] - p[0]) / cycle).abs() <= 1.001 * axis.max_vel
+                        && ((p[2] - 2.0 * p[1] + p[0]) / cycle.powi(2)).abs() <= 1.001 * axis.max_acc,
+                    "{what}, axis {i}"
+                );
+                assert!(
+                    ((p[3] - 3.0 * p[2] + 3.0 * p[1] - p[0]) / cycle.powi(3)).abs() <= 1.001 * axis.max_jerk,
+                    "{what}, axis {i}"
+                );
             }
         }
         let (last, slower) = (points.len() - 1, before[before.len() - 1].0);
-        assert!(distance(&points[last].1, end) < 1e-9 && points[last].0 < slower - 0.01,"{what}: {} s against {slower} s", points[last].0);
+        assert!(
+            distance(&points[last].1, end) < 1e-9 && points[last].0 < slower - 0.01,
+            "{what}: {} s against {slower} s",
+            points[last].0
+        );
         println!("{what}: {} s against {slower} s, off by {furthest} m, {reported} m reported", points[last].0);
         points
     }
@@ -2267,9 +2941,14 @@ line,0.1,0.35";
     /// around that point, a quarter of it counter-clockwise, then 0.15 m on in its direction. The start, the plane's
     /// point and its two directions.
     fn tilted_path() -> (Vec<f64>, Vec<Piece>, [[f64; 3]; 3]) {
-        let (c, e1, e2, r) = ([0.0, 0.0, -0.85], [1.0, 0.0, 0.0], [0.0, 30f64.to_radians().cos(), 30f64.to_radians().sin()], 0.1);
+        let (c, e1, e2, r) =
+            ([0.0, 0.0, -0.85], [1.0, 0.0, 0.0], [0.0, 30f64.to_radians().cos(), 30f64.to_radians().sin()], 0.1);
         let at = |a: f64, b: f64| (0..3).map(|i| c[i] + a * e1[i] + b * e2[i]).collect::<Vec<f64>>();
-        let pieces = vec![Piece::Line(at(0.0, -r)), Piece::Arc { to: at(r, 0.0), centre: c.to_vec(), clockwise: false }, Piece::Line(at(r, 0.15))];
+        let pieces = vec![
+            Piece::Line(at(0.0, -r)),
+            Piece::Arc { to: at(r, 0.0), centre: c.to_vec(), clockwise: false },
+            Piece::Line(at(r, 0.15)),
+        ];
         (at(-0.2, -r), pieces, [c, e1, e2])
     }
 
@@ -2290,11 +2969,24 @@ line,0.1,0.35";
         let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         assert!((reported - 1e-4).abs() < 1e-12, "{reported} m reported, 0.1 mm by hand");
         let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
-        assert!(curves.len() == 2 && curves.iter().all(|l| (l / 0.01549 - 1.0).abs() < 5e-3), "curves {curves:?}, 15.49 mm by hand");
-        assert!(geo.iter().any(|g| matches!(g, Geo::Arc3 { radius, .. } if (radius - 0.0999).abs() < 1e-12)), "the arc moved in by 0.1 mm");
+        assert!(
+            curves.len() == 2 && curves.iter().all(|l| (l / 0.01549 - 1.0).abs() < 5e-3),
+            "curves {curves:?}, 15.49 mm by hand"
+        );
+        assert!(
+            geo.iter().any(|g| matches!(g, Geo::Arc3 { radius, .. } if (radius - 0.0999).abs() < 1e-12)),
+            "the arc moved in by 0.1 mm"
+        );
         assert_no_steps(&geo, "tilted");
         let in_plane = |p: &[f64]| dot3([p[0] - c[0], p[1] - c[1], p[2] - c[2]], normal).abs();
-        let points = assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.1, 0.15 * e2[1], -0.85 + 0.15 * e2[2]], "tilted");
+        let points = assert_blend_runs_within(
+            &axes,
+            &start,
+            &pieces,
+            tolerance,
+            &[0.1, 0.15 * e2[1], -0.85 + 0.15 * e2[2]],
+            "tilted",
+        );
         let off_plane = points.iter().map(|p| in_plane(&p.1)).fold(0.0, f64::max);
         assert!(off_plane < 1e-12, "{off_plane} m off the plane");
 
@@ -2303,7 +2995,14 @@ line,0.1,0.35";
         let q = [0.1, 0.15 * e2[1], -0.85 + 0.15 * e2[2]];
         let centre: Vec<f64> = (0..3).map(|i| q[i] + 0.05 * normal[i]).collect();
         let end: Vec<f64> = (0..3).map(|i| centre[i] + 0.05 * e2[i] + 0.1 * normal[i]).collect();
-        let more = [pieces, vec![Piece::Arc { to: (0..3).map(|i| centre[i] + 0.05 * e2[i]).collect(), centre, clockwise: false }, Piece::Line(end.clone())]].concat();
+        let more = [
+            pieces,
+            vec![
+                Piece::Arc { to: (0..3).map(|i| centre[i] + 0.05 * e2[i]).collect(), centre, clockwise: false },
+                Piece::Line(end.clone()),
+            ],
+        ]
+        .concat();
         let (geo, _) = geometry(&axes, &start, &more, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         assert_eq!(geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).count(), 4);
         assert_no_steps(&geo, "two planes");
@@ -2320,18 +3019,24 @@ line,0.1,0.35";
     #[test]
     fn each_arc_gets_the_curve_its_own_junctions_need() {
         let (axes, start, tolerance) = (axes(), [0.1, 0.35], 1e-3);
-        let pieces = parse("line,0.5,0.35
+        let pieces = parse(
+            "line,0.5,0.35
 arc,0.6,0.25,0.5,0.25,cw
 line,0.6,0.15
 arc,0.58,0.13,0.58,0.15,cw
-line,0.3,0.13").unwrap();
+line,0.3,0.13",
+        )
+        .unwrap();
         let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         let curves: Vec<f64> = geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).map(Geo::length).collect();
         assert_eq!(curves.len(), 4);
         println!("curves {curves:?} m");
         assert!(curves[..2].iter().all(|l| (l / 0.016 - 1.0).abs() < 5e-3), "{curves:?}: the wide arc's 16 mm by hand");
         // Fitted exactly, 19.67 mm: e = L^2 / (24 r) is the first term, and a curve as long as the radius turns 0.5 rad.
-        assert!(curves[2..].iter().all(|l| (l / 0.020 - 1.0).abs() < 0.02), "{curves:?}: the tight arc's 20 mm by hand");
+        assert!(
+            curves[2..].iter().all(|l| (l / 0.020 - 1.0).abs() < 0.02),
+            "{curves:?}: the tight arc's 20 mm by hand"
+        );
         assert!((reported / 0.833e-3 - 1.0).abs() < 2e-3, "{reported} m reported, 0.833 mm by hand");
         assert_no_steps(&geo, "two arcs");
         assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.3, 0.13], "two arcs");
@@ -2345,7 +3050,10 @@ line,0.3,0.13").unwrap();
     #[test]
     fn an_arc_fixed_at_one_end_gets_its_curve_towards_an_arc() {
         let (axes, start, tolerance) = (axes(), [0.3, 0.5], 1e-4);
-        for (text, end) in [("arc,0.4,0.4,0.3,0.4,cw\narc,0.45,0.35,0.45,0.4,ccw\nline,0.7,0.35", [0.7, 0.35]), ("arc,0.4,0.4,0.3,0.4,cw\narc,0.35,0.35,0.35,0.4,cw\nline,0.1,0.35", [0.1, 0.35])] {
+        for (text, end) in [
+            ("arc,0.4,0.4,0.3,0.4,cw\narc,0.45,0.35,0.45,0.4,ccw\nline,0.7,0.35", [0.7, 0.35]),
+            ("arc,0.4,0.4,0.3,0.4,cw\narc,0.35,0.35,0.35,0.4,cw\nline,0.1,0.35", [0.1, 0.35]),
+        ] {
             let pieces = parse(text).unwrap();
             let (geo, _) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
             assert_eq!(geo.iter().filter(|g| matches!(g, Geo::Clothoid { .. })).count(), 2, "{text}");

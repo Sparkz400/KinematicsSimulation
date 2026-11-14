@@ -40,7 +40,10 @@
 use machine_delta_d3::{Delta, PlatformDrag};
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
-use sim_core::{AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_core::{
+    AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, RatingCheck,
+    Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d4",
@@ -53,7 +56,8 @@ pub static ENTRY: MachineEntry = MachineEntry {
 
 /// Effects that take energy out or put it in; the standard suite runs with them off: the D3's and the telescope's
 /// sliding friction.
-pub const LOSSY_EFFECTS: [&str; 6] = ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake", "telescope_friction"];
+pub const LOSSY_EFFECTS: [&str; 6] =
+    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake", "telescope_friction"];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta4::new(cfg)?))
@@ -65,7 +69,13 @@ pub fn lossless_config() -> Config {
     for effect in LOSSY_EFFECTS {
         cfg.set_text(&format!("effects.{effect} = false")).unwrap();
     }
-    for damping in ["gearbox.damping_nm_s_rad", "joint.stop_damping_nm_s_rad", "upper_arm.bending_damping_nm_s_rad", "tool_gearbox.damping_nm_s_rad", "shaft.torsional_damping_nm_s_rad"] {
+    for damping in [
+        "gearbox.damping_nm_s_rad",
+        "joint.stop_damping_nm_s_rad",
+        "upper_arm.bending_damping_nm_s_rad",
+        "tool_gearbox.damping_nm_s_rad",
+        "shaft.torsional_damping_nm_s_rad",
+    ] {
         cfg.set_text(&format!("{damping} = 0.0")).unwrap();
     }
     cfg
@@ -81,7 +91,15 @@ fn lowered(cfg: &mut Config, dz: f64) {
         .iter()
         .map(|s| {
             let t: Vec<f64> = s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect();
-            format!("{{ target = [{:?}, {:?}, {:?}, {:?}], dwell_s = {:?}, payload = {} }}", t[0], t[1], t[2] + dz, t[3], s["dwell_s"].as_float().unwrap(), s["payload"].as_bool().unwrap())
+            format!(
+                "{{ target = [{:?}, {:?}, {:?}, {:?}], dwell_s = {:?}, payload = {} }}",
+                t[0],
+                t[1],
+                t[2] + dz,
+                t[3],
+                s["dwell_s"].as_float().unwrap(),
+                s["payload"].as_bool().unwrap()
+            )
         })
         .collect();
     cfg.set_text(&format!("cycle.segment = [{}]", segments.join(", "))).unwrap();
@@ -230,7 +248,9 @@ impl Delta4 {
         arms.set_platform_drag(drag.clone());
         // The tool's joint: the motor of [motor] behind the gearbox of [tool_gearbox] (read as a [gearbox]).
         let mut tcfg = cfg.clone();
-        for key in ["ratio", "efficiency", "backlash_rad", "stiffness_nm_rad", "damping_nm_s_rad", "inertia_at_input_kgm2"] {
+        for key in
+            ["ratio", "efficiency", "backlash_rad", "stiffness_nm_rad", "damping_nm_s_rad", "inertia_at_input_kgm2"]
+        {
             tcfg.set_text(&format!("gearbox.{key} = {:?}", cfg.f64(&format!("tool_gearbox.{key}"))?))?;
         }
         let bearing = cfg.bool("effects.joint_friction")?;
@@ -245,7 +265,8 @@ impl Delta4 {
         }
         // No stops: the turn is endless, the axis range is the controller's.
         let mut tool = RotaryJoint::with(&tcfg, friction, HardStop { stiffness: 0.0, damping: 0.0 }, (min, max))?;
-        let (k_shaft, c_shaft) = (cfg.positive("shaft.torsional_stiffness_nm_rad")?, cfg.non_negative("shaft.torsional_damping_nm_s_rad")?);
+        let (k_shaft, c_shaft) =
+            (cfg.positive("shaft.torsional_stiffness_nm_rad")?, cfg.non_negative("shaft.torsional_damping_nm_s_rad")?);
         if cfg.bool("effects.shaft_torsion")? {
             // shortcut: the shaft's spin inertia sits at the tool and the gearbox's output has none, so gearbox and shaft
             // are one spring in series, damped by the shaft (the softer by far); a body between the two springs if the
@@ -287,7 +308,11 @@ impl Delta4 {
             brake_engaged: false,
             shaft,
             drag,
-            tool_gearbox_max: cfg.get("ratings.tool_gearbox_max_torque_nm").is_ok().then(|| cfg.positive("ratings.tool_gearbox_max_torque_nm")).transpose()?,
+            tool_gearbox_max: cfg
+                .get("ratings.tool_gearbox_max_torque_nm")
+                .is_ok()
+                .then(|| cfg.positive("ratings.tool_gearbox_max_torque_nm"))
+                .transpose()?,
             thermal: ThermalFeedback::from_config(&tcfg)?,
             tool,
             axes: axes.try_into().map_err(|_| ConfigError::Invalid("axis".into()))?,
@@ -359,7 +384,8 @@ impl Delta4 {
         out[0] = w;
         if self.elastic {
             let o = self.n3;
-            let (gear, rotor_acc, brake_rate) = self.tool.rotor(torque, s[o + 2], s[o + 3], c, w, s[o + 4], self.brake_engaged);
+            let (gear, rotor_acc, brake_rate) =
+                self.tool.rotor(torque, s[o + 2], s[o + 3], c, w, s[o + 4], self.brake_engaged);
             out[1] = (gear.output + self.tool.output_torque(c, w)) / self.tool_inertia();
             out[2] = s[o + 3];
             out[3] = rotor_acc;
@@ -420,7 +446,10 @@ impl Delta4 {
             return None;
         }
         let (k, j) = (self.tool.gearbox.stiffness, self.tool_inertia());
-        Some(Mode { hz: (k / j).sqrt() / std::f64::consts::TAU, damping: self.tool.gearbox.damping / (2.0 * (k * j).sqrt()) })
+        Some(Mode {
+            hz: (k / j).sqrt() / std::f64::consts::TAU,
+            damping: self.tool.gearbox.damping / (2.0 * (k * j).sqrt()),
+        })
     }
 
     /// The telescope as drawn with the platform's centre at p: the outer tube down from the upper joint and the inner
@@ -430,7 +459,10 @@ impl Delta4 {
         let (length, ..) = self.shaft.geometry(p);
         let u: V3 = std::array::from_fn(|k| (lower[k] - upper[k]) / length);
         let part = (self.shaft.min_length - 0.05).min(length);
-        [(upper, std::array::from_fn(|k| upper[k] + part * u[k]), TUBE_WIDTH), (lower, std::array::from_fn(|k| lower[k] - part * u[k]), INNER_WIDTH)]
+        [
+            (upper, std::array::from_fn(|k| upper[k] + part * u[k]), TUBE_WIDTH),
+            (lower, std::array::from_fn(|k| lower[k] - part * u[k]), INNER_WIDTH),
+        ]
     }
 
     /// The telescope's tube and inner shaft as collision boxes, `PIECES` along each, each piece widened by its width.
@@ -440,7 +472,10 @@ impl Delta4 {
             out.extend((0..PIECES).map(|n| {
                 let at = |f: f64| -> V3 { std::array::from_fn(|i| from[i] + f * (to[i] - from[i])) };
                 let (a, b) = (at(n as f64 / PIECES as f64), at((n + 1) as f64 / PIECES as f64));
-                sim_core::Aabb { centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])), size: std::array::from_fn(|i| (b[i] - a[i]).abs() + width) }
+                sim_core::Aabb {
+                    centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])),
+                    size: std::array::from_fn(|i| (b[i] - a[i]).abs() + width),
+                }
             }));
         }
         out
@@ -456,7 +491,13 @@ const PIECES: usize = 6;
 impl Machine for Delta4 {
     fn rating_checks(&self) -> Vec<RatingCheck> {
         self.tool_gearbox_max
-            .map(|limit| RatingCheck { check: "tool-gearbox-peak", signal: "gearbox.4.output_torque".into(), motor: Some(3), limit, life: false })
+            .map(|limit| RatingCheck {
+                check: "tool-gearbox-peak",
+                signal: "gearbox.4.output_torque".into(),
+                motor: Some(3),
+                limit,
+                life: false,
+            })
             .into_iter()
             .collect()
     }
@@ -547,9 +588,10 @@ impl Machine for Delta4 {
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         self.arms.set_part_temperatures(&rises[..rises.len().min(3)]);
         if let (Some(law), Some(rise)) = (&self.thermal, rises.get(3))
-            && !self.tool.gearbox.is_coupling() {
-                self.tool.gearbox.efficiency = law.gearbox_efficiency(*rise);
-            }
+            && !self.tool.gearbox.is_coupling()
+        {
+            self.tool.gearbox.efficiency = law.gearbox_efficiency(*rise);
+        }
     }
 
     /// The arms' modes (the D3's) and the tool's torsion (`tool_mode`), lowest first.
@@ -601,8 +643,14 @@ impl Machine for Delta4 {
         out.push(SignalInfo::new("shaft.cardan_angle", "group-shaft", "quantity-cardan-angle", "rad"));
         out.push(SignalInfo::new("shaft.speed", "group-shaft", "quantity-shaft-speed", "rad/s"));
         out.extend_from_slice(effects);
-        out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.4.torque_{part}"), "motor-tool", &format!("quantity-torque-{part}"), "N m")));
-        let gear = if self.tool.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+        out.extend(TORQUE_PARTS.map(|part| {
+            SignalInfo::new(format!("motor.4.torque_{part}"), "motor-tool", &format!("quantity-torque-{part}"), "N m")
+        }));
+        let gear = if self.tool.gearbox.is_coupling() {
+            "quantity-coupling-loss-power"
+        } else {
+            "quantity-gearbox-loss-power"
+        };
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}joint_4"), "group-tool", "quantity-friction-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_4"), "motor-tool", "quantity-shaft-friction-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_4"), "motor-tool", gear, "W"));
@@ -632,7 +680,11 @@ impl Machine for Delta4 {
         self.tool_rates(s, torque[3], &mut rates);
         let losses = self.tool_losses(s, torque[3]);
         let held = j.brake.torque(self.brake_engaged, speed, self.brake(s)).0;
-        let parts = [(self.tool_inertia() + j.reflected_inertia()) * rates[1] / j.ratio(), 0.0, j.shaft.torque(speed) + held + losses.gear_at_rotor + j.friction.torque(w) / j.ratio()];
+        let parts = [
+            (self.tool_inertia() + j.reflected_inertia()) * rates[1] / j.ratio(),
+            0.0,
+            j.shaft.torque(speed) + held + losses.gear_at_rotor + j.friction.torque(w) / j.ratio(),
+        ];
         out.extend(parts);
         out.push(torque[3] - parts.iter().sum::<f64>());
         out.extend(losses.powers);
@@ -647,7 +699,13 @@ impl Machine for Delta4 {
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         let mut out = self.arms.thermal_parts();
         if !self.tool.gearbox.is_coupling() {
-            out.push(ThermalPart { id: "gearbox_4", kind: "gearbox", owner_key: "motor-tool", scene_part: "gearbox", scene_index: 3 });
+            out.push(ThermalPart {
+                id: "gearbox_4",
+                kind: "gearbox",
+                owner_key: "motor-tool",
+                scene_part: "gearbox",
+                scene_index: 3,
+            });
         }
         out
     }
@@ -662,19 +720,48 @@ impl Machine for Delta4 {
         let (upper, lower) = self.shaft.joints(p);
         let [(tube_from, tube_to, tube), (inner_from, inner_to, inner)] = self.telescope(p);
         let dark = [0.25, 0.25, 0.28];
-        out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Box { size: [0.09, 0.09, 0.12] }, [0.0, 0.0, 0.16], [0.9, 0.45, 0.1]));
+        out.parts.push(Part::new(
+            sim_core::scene::MOTOR_PART,
+            Shape::Box { size: [0.09, 0.09, 0.12] },
+            [0.0, 0.0, 0.16],
+            [0.9, 0.45, 0.1],
+        ));
         out.parts.push(Part::new("gearbox", Shape::Box { size: [0.08, 0.08, 0.05] }, [0.0, 0.0, 0.065], dark));
-        out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [0.0, 0.0, 0.225], [0.1, 0.1, 0.1]).turned(rotor));
-        out.parts.push(Part::new("shaft-tube", Shape::Segment { to: tube_to, width: tube }, tube_from, [0.7, 0.72, 0.75]));
-        out.parts.push(Part::new("shaft-inner", Shape::Segment { to: inner_to, width: inner }, inner_from, [0.5, 0.5, 0.52]));
+        out.parts.push(
+            Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [0.0, 0.0, 0.225], [0.1, 0.1, 0.1])
+                .turned(rotor),
+        );
+        out.parts.push(Part::new(
+            "shaft-tube",
+            Shape::Segment { to: tube_to, width: tube },
+            tube_from,
+            [0.7, 0.72, 0.75],
+        ));
+        out.parts.push(Part::new(
+            "shaft-inner",
+            Shape::Segment { to: inner_to, width: inner },
+            inner_from,
+            [0.5, 0.5, 0.52],
+        ));
         for at in [upper, lower] {
             out.parts.push(Part::new("cardan", Shape::Box { size: [0.035, 0.035, 0.035] }, at, dark));
         }
         let half = [0.06 * c.cos(), 0.06 * c.sin(), 0.0];
         let under = [p[0], p[1], p[2] - 0.025];
-        out.parts.push(Part::new("tool", Shape::Segment { to: std::array::from_fn(|k| under[k] + half[k]), width: 0.015 }, std::array::from_fn(|k| under[k] - half[k]), [0.85, 0.75, 0.2]));
+        out.parts.push(Part::new(
+            "tool",
+            Shape::Segment { to: std::array::from_fn(|k| under[k] + half[k]), width: 0.015 },
+            std::array::from_fn(|k| under[k] - half[k]),
+            [0.85, 0.75, 0.2],
+        ));
         // The tool motor's speed after the arms' three (the D3's z label is not in rpm).
-        let rpm = Label { pos: [0.0, 0.0, 0.3], owner_key: "motor-tool", value: speed * 60.0 / std::f64::consts::TAU, unit_key: "unit-rpm", decimals: 0 };
+        let rpm = Label {
+            pos: [0.0, 0.0, 0.3],
+            owner_key: "motor-tool",
+            value: speed * 60.0 / std::f64::consts::TAU,
+            unit_key: "unit-rpm",
+            decimals: 0,
+        };
         let at = out.labels.iter().rposition(|l| l.unit_key == "unit-rpm").map_or(out.labels.len(), |i| i + 1);
         out.labels.insert(at, rpm);
     }

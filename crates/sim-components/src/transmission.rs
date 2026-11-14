@@ -84,7 +84,8 @@ impl Converter {
         g.ratio = i / l;
         g.stiffness = 1.0 / (l * l / g.stiffness + 1.0 / self.stiffness);
         g.damping /= l * l;
-        g.half_backlash = g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
+        g.half_backlash =
+            g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
         if cfg.bool("effects.gearbox_efficiency")? {
             g.efficiency *= self.efficiency;
             joint.extra_efficiency *= self.efficiency;
@@ -125,7 +126,11 @@ pub struct BallScrew {
 impl BallScrew {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         let p = |name: &str| cfg.positive(&format!("screw.{name}"));
-        let mounting = cfg.get("screw.mounting")?.as_str().and_then(Mounting::parse).ok_or_else(|| ConfigError::Invalid("screw.mounting".into()))?;
+        let mounting = cfg
+            .get("screw.mounting")?
+            .as_str()
+            .and_then(Mounting::parse)
+            .ok_or_else(|| ConfigError::Invalid("screw.mounting".into()))?;
         let (nominal, root) = (p("nominal_diameter_m")?, p("root_diameter_m")?);
         if root > nominal {
             return Err(ConfigError::Invalid("screw.root_diameter_m".into()));
@@ -243,7 +248,13 @@ impl BallScrew {
     /// shortcut: one stiffness for the whole stroke (the joint's gearbox has one); pass the softest nut position
     /// (the far end, the middle for fixed-fixed) to judge resonance and settling on the safe side.
     pub fn converter(&self, x: f64) -> Converter {
-        Converter { lever: 1.0 / self.ratio(), stiffness: self.stiffness(x), backlash: 0.0, efficiency: self.efficiency, inertia: self.inertia() }
+        Converter {
+            lever: 1.0 / self.ratio(),
+            stiffness: self.stiffness(x),
+            backlash: 0.0,
+            efficiency: self.efficiency,
+            inertia: self.inertia(),
+        }
     }
 
     /// Where the shaft is softest: its far end, or its middle where both ends are fixed.
@@ -274,7 +285,9 @@ impl RackPinion {
         let helix = cfg.non_negative("rack.helix_angle_deg")?;
         let efficiency = p("efficiency")?;
         if helix >= 45.0 || efficiency > 1.0 {
-            return Err(ConfigError::Invalid(if helix >= 45.0 { "rack.helix_angle_deg" } else { "rack.efficiency" }.into()));
+            return Err(ConfigError::Invalid(
+                if helix >= 45.0 { "rack.helix_angle_deg" } else { "rack.efficiency" }.into(),
+            ));
         }
         Ok(Self {
             module: p("module_m")?,
@@ -300,7 +313,13 @@ impl RackPinion {
     }
 
     pub fn converter(&self) -> Converter {
-        Converter { lever: self.radius(), stiffness: self.stiffness, backlash: self.backlash, efficiency: self.efficiency, inertia: self.pinion_inertia }
+        Converter {
+            lever: self.radius(),
+            stiffness: self.stiffness,
+            backlash: self.backlash,
+            efficiency: self.efficiency,
+            inertia: self.pinion_inertia,
+        }
     }
 }
 
@@ -316,7 +335,10 @@ pub struct LinearMotor {
 
 impl LinearMotor {
     pub fn from_config(cfg: &Config) -> Result<Self> {
-        Ok(Self { attraction: cfg.non_negative("linear_motor.attraction_force_n")?, pole_pitch: cfg.positive("linear_motor.pole_pitch_m")? })
+        Ok(Self {
+            attraction: cfg.non_negative("linear_motor.attraction_force_n")?,
+            pole_pitch: cfg.positive("linear_motor.pole_pitch_m")?,
+        })
     }
 
     /// The cogging's order for `mech::Ripple`, whose angle is here the forcer's position: one period per pole pitch.
@@ -339,9 +361,15 @@ impl WormGear {
         let gamma = cfg.positive("worm.lead_angle_deg")?;
         let alpha = cfg.non_negative("worm.pressure_angle_deg")?;
         if gamma >= 45.0 || alpha >= 45.0 {
-            return Err(ConfigError::Invalid(if gamma >= 45.0 { "worm.lead_angle_deg" } else { "worm.pressure_angle_deg" }.into()));
+            return Err(ConfigError::Invalid(
+                if gamma >= 45.0 { "worm.lead_angle_deg" } else { "worm.pressure_angle_deg" }.into(),
+            ));
         }
-        Ok(Self { lead_angle: gamma.to_radians(), friction: cfg.non_negative("worm.friction_coefficient")?, pressure_angle: alpha.to_radians() })
+        Ok(Self {
+            lead_angle: gamma.to_radians(),
+            friction: cfg.non_negative("worm.friction_coefficient")?,
+            pressure_angle: alpha.to_radians(),
+        })
     }
 
     /// The friction angle on the flank: rho' = atan(mu / cos alpha_n).
@@ -374,7 +402,11 @@ pub struct StrainWave {
 impl StrainWave {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         let p = |name: &str| cfg.positive(&format!("strain_wave.{name}"));
-        Ok(Self { rated_torque: p("rated_torque_nm")?, rated_speed: p("rated_input_speed_rpm")?, rated_life: p("rated_life_h")? })
+        Ok(Self {
+            rated_torque: p("rated_torque_nm")?,
+            rated_speed: p("rated_input_speed_rpm")?,
+            rated_life: p("rated_life_h")?,
+        })
     }
 
     /// The share of the rated life used per hour at an output torque and input speed (r/min): |n| / nr (|T| / Tr)^3 / Ln.
@@ -404,7 +436,13 @@ impl BallScrew {
     }
 
     pub fn rating_checks(&self, id: &str, motor: usize, required_life_h: Option<f64>) -> Vec<RatingCheck> {
-        let check = |check: &'static str, signal: &str, limit: f64, life: bool| RatingCheck { check, signal: signal.into(), motor: Some(motor), limit, life };
+        let check = |check: &'static str, signal: &str, limit: f64, life: bool| RatingCheck {
+            check,
+            signal: signal.into(),
+            motor: Some(motor),
+            limit,
+            life,
+        };
         let force = format!("joint.{id}.force");
         let mut out = vec![
             check("screw-speed", &format!("screw.{id}.speed"), self.allowed_speed_rpm(), false),
@@ -435,7 +473,13 @@ impl RackPinion {
 
     /// "rack-feed-force": the force on the teeth of joint `id` (signal `rack.<id>.feed_force`) against `allowed_force`.
     pub fn rating_checks(&self, id: &str, motor: usize) -> Vec<RatingCheck> {
-        vec![RatingCheck { check: "rack-feed-force", signal: format!("rack.{id}.feed_force"), motor: Some(motor), limit: self.allowed_force(), life: false }]
+        vec![RatingCheck {
+            check: "rack-feed-force",
+            signal: format!("rack.{id}.feed_force"),
+            motor: Some(motor),
+            limit: self.allowed_force(),
+            life: false,
+        }]
     }
 }
 
@@ -451,7 +495,13 @@ impl StrainWave {
     }
 
     pub fn rating_check(&self, id: &str, motor: usize, required_life_h: f64) -> RatingCheck {
-        RatingCheck { check: "strain-wave-life", signal: format!("strain_wave.{id}.damage_rate"), motor: Some(motor), limit: required_life_h, life: true }
+        RatingCheck {
+            check: "strain-wave-life",
+            signal: format!("strain_wave.{id}.damage_rate"),
+            motor: Some(motor),
+            limit: required_life_h,
+            life: true,
+        }
     }
 }
 
@@ -519,7 +569,17 @@ mod tests {
     /// Module 2 mm, 30 teeth, 19.5283 degrees helix: r = 0.002 30 / (2 cos 19.5283) = 31.831 mm (100 mm travel per turn).
     #[test]
     fn a_helical_pinion_has_its_pitch_radius() {
-        let r = RackPinion { module: 0.002, teeth: 30.0, helix_angle: 19.5283f64.to_radians(), efficiency: 0.97, stiffness: 1e8, backlash: 0.0, pinion_inertia: 1e-4, rated_force: 3000.0, service_factor: 1.5 };
+        let r = RackPinion {
+            module: 0.002,
+            teeth: 30.0,
+            helix_angle: 19.5283f64.to_radians(),
+            efficiency: 0.97,
+            stiffness: 1e8,
+            backlash: 0.0,
+            pinion_inertia: 1e-4,
+            rated_force: 3000.0,
+            service_factor: 1.5,
+        };
         close(r.radius() * 2.0 * PI, 0.2, "travel per turn");
         close(r.allowed_force(), 2000.0, "allowed force");
     }
@@ -556,9 +616,13 @@ mod tests {
         close(out[0], 3000.0, "rpm");
         close(out[1], 75000.0, "dn");
         close(out[2], 7.3728e-4, "damage");
-        assert_eq!(s.signal_infos("3", "joint-3").iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["screw.3.speed", "screw.3.dn", "screw.3.damage_rate"]);
+        assert_eq!(
+            s.signal_infos("3", "joint-3").iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["screw.3.speed", "screw.3.dn", "screw.3.damage_rate"]
+        );
         let checks = s.rating_checks("3", 2, Some(20000.0));
-        let limit = |id: &str| checks.iter().find(|c| c.check == id).map(|c| (c.limit, c.signal.clone(), c.life, c.motor));
+        let limit =
+            |id: &str| checks.iter().find(|c| c.check == id).map(|c| (c.limit, c.signal.clone(), c.life, c.motor));
         assert_eq!(limit("screw-life"), Some((20000.0, "screw.3.damage_rate".into(), true, Some(2))));
         close(limit("screw-speed").unwrap().0, 0.8 * 3959.7, "speed limit");
         close(limit("screw-buckling").unwrap().0, 19855.5, "buckling limit");
@@ -577,12 +641,24 @@ mod tests {
         let g = StrainWave { rated_torque: 50.0, rated_speed: 2000.0, rated_life: 7000.0 };
         close(g.signal(100.0, 1000.0 * 2.0 * PI / 60.0), 5.7143e-4, "damage");
         let c = g.rating_check("2", 1, 15000.0);
-        assert!(c.life && c.check == "strain-wave-life" && c.signal == "strain_wave.2.damage_rate" && c.limit == 15000.0);
+        assert!(
+            c.life && c.check == "strain-wave-life" && c.signal == "strain_wave.2.damage_rate" && c.limit == 15000.0
+        );
     }
 
     #[test]
     fn a_rack_is_checked_against_its_feed_force_over_the_service_factor() {
-        let r = RackPinion { module: 0.002, teeth: 30.0, helix_angle: 0.0, efficiency: 0.97, stiffness: 1e8, backlash: 0.0, pinion_inertia: 1e-4, rated_force: 3000.0, service_factor: 1.25 };
+        let r = RackPinion {
+            module: 0.002,
+            teeth: 30.0,
+            helix_angle: 0.0,
+            efficiency: 0.97,
+            stiffness: 1e8,
+            backlash: 0.0,
+            pinion_inertia: 1e-4,
+            rated_force: 3000.0,
+            service_factor: 1.25,
+        };
         let c = &r.rating_checks("1", 0)[0];
         assert!(c.check == "rack-feed-force" && c.signal == "rack.1.feed_force" && c.limit == 2400.0 && !c.life);
         // 970 N to the load at 97 %: 1000 N on the teeth driving, 940.9 N braking.

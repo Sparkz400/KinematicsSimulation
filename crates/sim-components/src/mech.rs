@@ -9,7 +9,11 @@ type Result<T> = std::result::Result<T, ConfigError>;
 /// The hand-set factor of effects.temperature. With effects.thermal_feedback it is not used: the temperatures then
 /// come from `ThermalFeedback`.
 fn temperature_scale(cfg: &Config, leaf: &str) -> Result<f64> {
-    Ok(if cfg.bool("effects.temperature")? && !cfg.bool("effects.thermal_feedback")? { cfg.positive(&format!("temperature.{leaf}"))? } else { 1.0 })
+    Ok(if cfg.bool("effects.temperature")? && !cfg.bool("effects.thermal_feedback")? {
+        cfg.positive(&format!("temperature.{leaf}"))?
+    } else {
+        1.0
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -187,7 +191,8 @@ impl ToothJump {
         if slip[2] == 0.0 {
             return 0.0;
         }
-        let ridge = slip[5] * self.pitch / std::f64::consts::TAU * (1.0 - (std::f64::consts::TAU * (slip[0] - slip[3]) / self.pitch).cos());
+        let ridge = slip[5] * self.pitch / std::f64::consts::TAU
+            * (1.0 - (std::f64::consts::TAU * (slip[0] - slip[3]) / self.pitch).cos());
         0.5 * self.mass * slip[1] * (2.0 * surface_speed + slip[1]) + ridge
     }
 
@@ -344,7 +349,11 @@ impl Belt {
     /// force on the belt fed in) less what its stored energy gains. c (rate)^2 while it is taut.
     pub fn loss_power(&self, geo: f64, mat: f64, geo_rate: f64, mat_rate: f64) -> f64 {
         let (f, e) = (self.section(geo, mat, geo_rate, mat_rate), geo - mat);
-        let stored = if self.slack && e < 0.0 { 0.0 } else { self.ea * e / mat * (geo_rate - mat_rate) - 0.5 * self.ea * e * e / (mat * mat) * mat_rate };
+        let stored = if self.slack && e < 0.0 {
+            0.0
+        } else {
+            self.ea * e / mat * (geo_rate - mat_rate) - 0.5 * self.ea * e * e / (mat * mat) * mat_rate
+        };
         f.tension * geo_rate - f.material * mat_rate - stored
     }
 
@@ -377,8 +386,13 @@ pub struct HardStop {
 
 impl HardStop {
     pub fn from_config(cfg: &Config) -> Result<Self> {
-        let (stiffness, damping) = (cfg.positive("hard_stop.stiffness_n_m")?, cfg.non_negative("hard_stop.damping_n_s_m")?);
-        Ok(if cfg.bool("effects.hard_stops")? { Self { stiffness, damping } } else { Self { stiffness: 0.0, damping: 0.0 } })
+        let (stiffness, damping) =
+            (cfg.positive("hard_stop.stiffness_n_m")?, cfg.non_negative("hard_stop.damping_n_s_m")?);
+        Ok(if cfg.bool("effects.hard_stops")? {
+            Self { stiffness, damping }
+        } else {
+            Self { stiffness: 0.0, damping: 0.0 }
+        })
     }
 
     /// How far a position is beyond the stroke: negative below 0, positive above the stroke.
@@ -512,7 +526,9 @@ impl Lugre {
             sigma0: cfg.positive(&format!("{table}.bristle_stiffness_n_m"))?,
             sigma1: get("bristle_damping_n_s_m")?,
             // With the feedback, at ambient; the machine follows the guide's temperature (`ThermalFeedback`).
-            viscous: get("viscous_n_s_m")? * scale * ThermalFeedback::from_config(cfg)?.map_or(1.0, |t| t.viscosity_factor(0.0)),
+            viscous: get("viscous_n_s_m")?
+                * scale
+                * ThermalFeedback::from_config(cfg)?.map_or(1.0, |t| t.viscosity_factor(0.0)),
             coulomb,
             // Breaking away takes at least what sliding takes. A value below the Coulomb level counts as that
             // level: uncertainty bounds of the two that overlap would otherwise give runs that slide harder
@@ -642,12 +658,14 @@ impl Ripple {
 
     /// Torque at the shaft for a torque produced by the current.
     pub fn apply(&self, torque: f64, angle: f64) -> f64 {
-        torque * (1.0 + self.ripple * (self.ripple_order * angle).sin()) + self.cogging * (self.cogging_order * angle).sin()
+        torque * (1.0 + self.ripple * (self.ripple_order * angle).sin())
+            + self.cogging * (self.cogging_order * angle).sin()
     }
 
     /// The current torque that gives `shaft` at the shaft: the inverse of `apply`.
     pub fn invert(&self, shaft: f64, angle: f64) -> f64 {
-        (shaft - self.cogging * (self.cogging_order * angle).sin()) / (1.0 + self.ripple * (self.ripple_order * angle).sin())
+        (shaft - self.cogging * (self.cogging_order * angle).sin())
+            / (1.0 + self.ripple * (self.ripple_order * angle).sin())
     }
 }
 
@@ -754,7 +772,11 @@ impl Gearbox {
 
     /// Twist at rest that transmits `output_torque`, on the matching side of the backlash.
     pub fn static_twist(&self, output_torque: f64) -> f64 {
-        if output_torque == 0.0 { 0.0 } else { output_torque / self.stiffness + self.half_backlash.copysign(output_torque) }
+        if output_torque == 0.0 {
+            0.0
+        } else {
+            output_torque / self.stiffness + self.half_backlash.copysign(output_torque)
+        }
     }
 
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
@@ -775,7 +797,15 @@ mod tests {
     use super::*;
 
     fn belt() -> Belt {
-        Belt { ea: 5e5, damping: 0.0, damping_time: 0.0, pretension: 300.0, slack: true, mass_per_m: 0.0, tooth_length: 0.0 }
+        Belt {
+            ea: 5e5,
+            damping: 0.0,
+            damping_time: 0.0,
+            pretension: 300.0,
+            slack: true,
+            mass_per_m: 0.0,
+            tooth_length: 0.0,
+        }
     }
 
     #[test]
@@ -915,7 +945,12 @@ mod tests {
     fn lugre_steady_curve_and_live_split_follow_the_formula() {
         let f = lugre();
         let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1e-5);
-        for (v, scale, expected) in [(0.5, 1.0, [15.0, 10.0, 0.0]), (0.01, 1.0, [15.0, 0.2, 1.83940]), (-0.005, 1.0, [-15.0, -0.1, -3.89400]), (0.01, 2.0, [30.0, 0.2, 3.67879])] {
+        for (v, scale, expected) in [
+            (0.5, 1.0, [15.0, 10.0, 0.0]),
+            (0.01, 1.0, [15.0, 0.2, 1.83940]),
+            (-0.005, 1.0, [-15.0, -0.1, -3.89400]),
+            (0.01, 2.0, [30.0, 0.2, 3.67879]),
+        ] {
             let steady = f.steady(v, scale);
             assert!(close(steady, expected), "{v} m/s: {steady:?}");
             let s = f.level(v, scale) * v.signum() / f.sigma0;
@@ -943,11 +978,18 @@ mod tests {
         let mut b = belt();
         b.damping = 100.0;
         let mat = b.rest_length(1.0);
-        assert!((b.loss_power(1.0, mat, 0.5, 0.2) - 9.0).abs() < 1e-9 && (b.loss_power(1.003, mat, -0.1, 0.2) - 9.0).abs() < 1e-9);
+        assert!(
+            (b.loss_power(1.0, mat, 0.5, 0.2) - 9.0).abs() < 1e-9
+                && (b.loss_power(1.003, mat, -0.1, 0.2) - 9.0).abs() < 1e-9
+        );
         let mut g = gearbox();
         g.efficiency = 0.9;
         let twist = 5.0 * g.static_twist(2.0);
-        assert!((g.loss_power(twist, 250.0, 0.0, 50.0) - 10.0).abs() < 1e-9, "{}", g.loss_power(twist, 250.0, 0.0, 50.0));
+        assert!(
+            (g.loss_power(twist, 250.0, 0.0, 50.0) - 10.0).abs() < 1e-9,
+            "{}",
+            g.loss_power(twist, 250.0, 0.0, 50.0)
+        );
         assert!((g.loss_power(twist, -250.0, 0.0, -50.0) - (2.0 / 0.9 - 2.0) * 50.0).abs() < 1e-9);
         let g = Gearbox { damping: 5.0, half_backlash: 0.0, ..gearbox() };
         assert!((g.loss_power(5.0 * 1e-4, 5.0, 0.0, 0.0) - 5.0).abs() < 1e-9);
@@ -968,7 +1010,8 @@ mod tests {
     #[test]
     fn lugre_stiction_is_never_below_coulomb() {
         let level = |stiction: f64| {
-            let text = format!("format_version = 1
+            let text = format!(
+                "format_version = 1
 [effects]
 guide_friction = true
 temperature = false
@@ -982,7 +1025,8 @@ coulomb_n = 26.0
 stiction_n = {stiction:?}
 stribeck_m_s = 0.01
 preload_n = 200.0
-");
+"
+            );
             let f = Lugre::from_config(&Config::parse(&text).unwrap(), "guide").unwrap();
             (f.level(0.0, 1.0), f.level(1.0, 1.0))
         };
@@ -1056,7 +1100,14 @@ preload_n = 200.0
     }
 
     fn feedback() -> ThermalFeedback {
-        ThermalFeedback { ambient: 293.15, reference: 293.15, viscosity_slope: 4000.0, gearbox_viscous_share: 0.5, belt_coefficient: 3e-4, efficiency: 0.95 }
+        ThermalFeedback {
+            ambient: 293.15,
+            reference: 293.15,
+            viscosity_slope: 4000.0,
+            gearbox_viscous_share: 0.5,
+            belt_coefficient: 3e-4,
+            efficiency: 0.95,
+        }
     }
 
     /// The temperature laws at fixed temperatures, by hand. B 4000 K, ambient and reference 20 °C. 30 K above:
@@ -1103,14 +1154,24 @@ preload_n = 200.0
     #[test]
     fn a_tooth_jump_starts_at_the_climb_limit_and_ends_one_pitch_on() {
         let jump = ToothJump { pitch: 0.005, climb: 6.0, factor: 2.4, mass: 0.26 };
-        assert!(jump.climbs(100.0, 700.1) && jump.climbs(700.1, 100.0) && !jump.climbs(100.0, 600.0) && jump.climbs(0.0, 1.0));
+        assert!(
+            jump.climbs(100.0, 700.1)
+                && jump.climbs(700.1, 100.0)
+                && !jump.climbs(100.0, 600.0)
+                && jump.climbs(0.0, 1.0)
+        );
         let mut slip = [0.0; JUMP_STATES];
         let mut v = 1.0;
         assert!(!jump.update(&mut slip, 100.0, 600.0, 1.0, &mut v) && slip == [0.0; JUMP_STATES]);
         assert_eq!(jump.pulley_force(&slip, -500.0), -500.0);
         // Section b is the tight one: the belt slides towards it, -u.
-        assert!(jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [0.0, 0.0, -1.0, 0.0, 0.0, 600.0] && v == 1.0);
-        assert_eq!((jump.pulley_inertia(&slip, 1e-3, 0.02), jump.pulley_inertia(&[0.0; JUMP_STATES], 1e-3, 0.02)), (1e-3 - 0.26 * 4e-4, 1e-3));
+        assert!(
+            jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [0.0, 0.0, -1.0, 0.0, 0.0, 600.0] && v == 1.0
+        );
+        assert_eq!(
+            (jump.pulley_inertia(&slip, 1e-3, 0.02), jump.pulley_inertia(&[0.0; JUMP_STATES], 1e-3, 0.02)),
+            (1e-3 - 0.26 * 4e-4, 1e-3)
+        );
         slip[0] = -0.00125;
         assert!((jump.pulley_force(&slip, -601.0) + 600.0).abs() < 1e-9);
         let mut rates = [0.0; JUMP_STATES];
@@ -1126,7 +1187,10 @@ preload_n = 200.0
         // Landed one pitch on: a pulley of 1 kg at its surface at 1 m/s and the belt of 0.26 kg at 0 m/s run on at
         // 1 / 1.26 = 0.793651 m/s.
         slip[0] = -0.0051;
-        assert!(jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [-0.005, 0.0, 0.0, 0.0, 1.0, 0.0], "{slip:?}");
+        assert!(
+            jump.update(&mut slip, 100.0, 701.0, 1.0, &mut v) && slip == [-0.005, 0.0, 0.0, 0.0, 1.0, 0.0],
+            "{slip:?}"
+        );
         assert!((v - 0.793651).abs() < 1e-6, "{v}");
         // Back over the groove it left: in again where it was, not counted.
         let mut back = [0.0101, -0.1, 1.0, 0.01, 2.0, 50.0];
@@ -1144,11 +1208,17 @@ preload_n = 200.0
         let f = span_frequency(0.25, 300.0, 0.1);
         assert!((f - 109.544512).abs() < 1e-6, "{f}");
         assert!((span_detuning(f, &[0.0, 100.0, 300.0]) - 0.087129).abs() < 1e-6);
-        assert_eq!((span_detuning(f, &[0.0]), span_detuning(0.0, &[100.0]), span_frequency(0.25, 0.0, 0.1)), (1.0, 1.0, 0.0));
+        assert_eq!(
+            (span_detuning(f, &[0.0]), span_detuning(0.0, &[100.0]), span_frequency(0.25, 0.0, 0.1)),
+            (1.0, 1.0, 0.0)
+        );
         let ripple = Ripple { ripple: 0.02, ripple_order: 24.0, cogging: 0.01, cogging_order: 24.0 };
         let mut out = Vec::new();
         drive_excitations(0.005, -1.0, &ripple, -250.0, &mut out);
-        assert!(out.len() == 3 && (out[0] - 200.0).abs() < 1e-9 && (out[1] - 954.929659).abs() < 1e-6 && out[1] == out[2], "{out:?}");
+        assert!(
+            out.len() == 3 && (out[0] - 200.0).abs() < 1e-9 && (out[1] - 954.929659).abs() < 1e-6 && out[1] == out[2],
+            "{out:?}"
+        );
         out.clear();
         drive_excitations(0.005, 1.0, &Ripple { ripple: 0.0, cogging: 0.0, ..ripple }, 250.0, &mut out);
         assert_eq!(out.len(), 1);

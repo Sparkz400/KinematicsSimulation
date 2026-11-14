@@ -140,8 +140,14 @@ fn the_working_range_ends_where_a_rod_tilts_too_far_or_a_carriage_meets_its_stop
     assert_eq!(d.unreachable(&[0.4, 0.3, -1.17], 0.0), Some("error-delta-outside-envelope"));
     assert_eq!(d.unreachable(&[0.0, 0.0, -1.1], 0.0), Some("error-delta-outside-envelope"));
     assert_eq!(d.unreachable(&[-0.475, 0.0, -1.22], 0.0), None);
-    assert_eq!(delta(&["geometry.rod_m = 0.9"]).unreachable(&[-0.475, 0.0, -1.22], 0.0), Some("error-delta-out-of-reach"));
-    assert_eq!(delta(&["workspace.max_condition_number = 3.0"]).unreachable(&[0.0, 0.0, -1.17], 0.0), Some("error-delta-singularity"));
+    assert_eq!(
+        delta(&["geometry.rod_m = 0.9"]).unreachable(&[-0.475, 0.0, -1.22], 0.0),
+        Some("error-delta-out-of-reach")
+    );
+    assert_eq!(
+        delta(&["workspace.max_condition_number = 3.0"]).unreachable(&[0.0, 0.0, -1.17], 0.0),
+        Some("error-delta-singularity")
+    );
     let steepest = (0.925f64 / 1.1).asin().to_degrees();
     assert!((steepest - 57.24).abs() < 0.01 && steepest < 60.0);
 }
@@ -154,7 +160,12 @@ fn the_working_range_ends_where_a_rod_tilts_too_far_or_a_carriage_meets_its_stop
 /// 0.63355 N m; the belt (0.07 kg/m of 4 * 0.1 + 2 * 0.7 = 1.8 m, 0.126 kg) on the pulley included.
 #[test]
 fn the_feedforward_gives_the_asked_acceleration() {
-    let d = delta(&["effects.guide_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.belt_stretch = false"]);
+    let d = delta(&[
+        "effects.guide_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.belt_stretch = false",
+    ]);
     let (p, v, a) = ([0.2, -0.1, -1.17], [2.0, -1.0, 0.5], [10.0, 5.0, -20.0]);
     let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut hold);
@@ -215,7 +226,9 @@ fn the_setpoint_slack_covers_the_sag_at_rest() {
         let mut out = Vec::new();
         sim.sample(&mut out);
         let at = |id: &str| out[sim.signal_index(id).unwrap()];
-        let off = norm(["x", "y", "z"].map(|a| at(&format!("axis.{a}.position_setpoint")) - at(&format!("axis.{a}.position"))));
+        let off = norm(
+            ["x", "y", "z"].map(|a| at(&format!("axis.{a}.position_setpoint")) - at(&format!("axis.{a}.position"))),
+        );
         println!("{pose:?}: setpoint {:.4} mm off the tool, slack {:.4} mm", off * 1e3, slack * 1e3);
         assert!(off <= slack, "{off} m at rest, slack {slack} m");
     }

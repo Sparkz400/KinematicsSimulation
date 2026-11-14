@@ -24,7 +24,8 @@ fn with(entry: &sim_core::MachineEntry, settings: &[&str]) -> Config {
 #[test]
 fn a_box_beside_a_straight_move_keeps_the_clearance_by_hand() {
     let entry = find("single-axis").unwrap();
-    let cfg = with(entry, &[r#"obstacles = [{ name = "beside", centre_m = [0.5, 0.2, 0.06], size_m = [0.1, 0.1, 0.1] }]"#]);
+    let cfg =
+        with(entry, &[r#"obstacles = [{ name = "beside", centre_m = [0.5, 0.2, 0.06], size_m = [0.1, 0.1, 0.1] }]"#]);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let planned = sim.check_plan(&[vec![0.1], vec![0.6]]).unwrap();
     assert!((planned.clearance - 0.13).abs() < 1e-9 && planned.contact.is_none(), "{planned:?}");
@@ -98,8 +99,17 @@ fn a_move_into_a_box_stops_at_its_face_at_the_planned_speed() {
     let crash = budget.rows.iter().find(|r| r.id == "crash").map(|r| r.energy);
     println!("crash {crash:?} J, unaccounted {} J of {} J", budget.unaccounted(), budget.supply);
     assert!(load.contact.is_some() && crash.is_some_and(|e| e > 0.0), "{crash:?}");
-    assert!(budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * budget.supply, "{} J of {} J not accounted for", budget.unaccounted(), budget.supply);
-    assert!(budget.electrical_unaccounted().abs() < sim_components::analysis::ELECTRICAL_TOLERANCE * budget.supply, "electrical: {} J", budget.electrical_unaccounted());
+    assert!(
+        budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
+    assert!(
+        budget.electrical_unaccounted().abs() < sim_components::analysis::ELECTRICAL_TOLERANCE * budget.supply,
+        "electrical: {} J",
+        budget.electrical_unaccounted()
+    );
 }
 
 /// The T-gantry draws its payload, a 0.1 m cube, centred 0.752 m below the tool's z in the 3D view's z and 0.692 m
@@ -124,7 +134,8 @@ fn a_box_under_the_traverse_is_judged_by_the_collision_check() {
     let relaxed = with(entry, &[low, "profile.min_clearance_m = 0.04"]);
     assert!(verdicts(&relaxed, &load).unwrap().iter().any(|v| v.check == "collision" && v.ok));
     // A box in the way of the traverse is a contact before the cycle runs.
-    let hit = with(entry, &[r#"obstacles = [{ name = "post", centre_m = [0.65, -0.05, -0.45], size_m = [0.1, 0.2, 0.1] }]"#]);
+    let hit =
+        with(entry, &[r#"obstacles = [{ name = "post", centre_m = [0.65, -0.05, -0.45], size_m = [0.1, 0.2, 0.1] }]"#]);
     let planned = check_cycle(entry, &hit).unwrap().unwrap();
     assert!(planned.clearance < 0.0 && planned.contact.as_ref().is_some_and(|p| p[1] == 0.35), "{planned:?}");
     // No obstacles: nothing is checked, and no verdict can fail on it.
@@ -132,7 +143,11 @@ fn a_box_under_the_traverse_is_judged_by_the_collision_check() {
         let cfg = entry.config();
         assert_eq!(check_cycle(entry, &cfg).unwrap(), None);
         let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
-        assert!(load.clearance.is_none() && !verdicts(&cfg, &load).unwrap().iter().any(|v| v.check == "collision"), "{}", entry.id);
+        assert!(
+            load.clearance.is_none() && !verdicts(&cfg, &load).unwrap().iter().any(|v| v.check == "collision"),
+            "{}",
+            entry.id
+        );
     }
 }
 
@@ -151,12 +166,19 @@ fn the_optimiser_lifts_each_traverse_over_a_box_across_it_by_hand() {
     let entry = find("t-gantry").unwrap();
     let clearance = "profile.min_clearance_m = 0.05";
     let found = optimise_cycle(entry, &with(entry, &[clearance]), 2).unwrap();
-    assert!(found.lifts.len() == 2 && found.lifts.iter().all(|l| l.before == 0.35 && (l.after - 0.1).abs() < 1e-12), "{:?}", found.lifts);
+    assert!(
+        found.lifts.len() == 2 && found.lifts.iter().all(|l| l.before == 0.35 && (l.after - 0.1).abs() < 1e-12),
+        "{:?}",
+        found.lifts
+    );
     let boxed = r#"obstacles = [{ name = "box", centre_m = [0.65, -0.05, -0.65], size_m = [0.1, 0.2, 0.1] }]"#;
     let found = optimise_cycle(entry, &with(entry, &[clearance, boxed]), 3).unwrap();
     assert_eq!(found.lifts.iter().map(|l| l.segments).collect::<Vec<_>>(), [[1, 2, 3], [4, 5, 0]]);
     for (lift, by_hand) in found.lifts.iter().zip([-0.6 + 0.05 + 0.802, -0.6 + 0.05 + 0.702]) {
-        assert!(lift.after >= by_hand - 1e-12 && lift.after < by_hand + 2e-4 && lift.via.is_none(), "{lift:?}, by hand {by_hand} m");
+        assert!(
+            lift.after >= by_hand - 1e-12 && lift.after < by_hand + 2e-4 && lift.via.is_none(),
+            "{lift:?}, by hand {by_hand} m"
+        );
     }
     let mut applied = with(entry, &[clearance, boxed, "effects.crash = true"]);
     for (path, _, after) in &found.changes {
@@ -180,8 +202,18 @@ fn a_time_optimal_path_into_an_obstacle_is_refused() {
     assert!(sim.plan_path(&path, false).is_ok());
     // Short of the wall by 0.1 m: refused at a clearance of 0.15 m, planned at 0.05 m.
     let short = [Piece::Line(vec![0.37])];
-    assert!(Sim::new(entry, &with(entry, &[wall, "profile.min_clearance_m = 0.15"])).unwrap().plan_path(&short, true).is_err());
-    assert!(Sim::new(entry, &with(entry, &[wall, "profile.min_clearance_m = 0.05"])).unwrap().plan_path(&short, true).is_ok());
+    assert!(
+        Sim::new(entry, &with(entry, &[wall, "profile.min_clearance_m = 0.15"]))
+            .unwrap()
+            .plan_path(&short, true)
+            .is_err()
+    );
+    assert!(
+        Sim::new(entry, &with(entry, &[wall, "profile.min_clearance_m = 0.05"]))
+            .unwrap()
+            .plan_path(&short, true)
+            .is_ok()
+    );
     assert!(Sim::new(entry, &entry.config()).unwrap().plan_path(&path, true).is_ok());
 }
 
@@ -207,8 +239,13 @@ fn the_collision_bodies_are_boxes_of_the_scene() {
                 // centre on the segment, no wider than the segment's extent plus its width.
                 let along = |from: [f64; 3], to: [f64; 3], width: f64| {
                     let d: Vec<f64> = (0..3).map(|i| to[i] - from[i]).collect();
-                    let f = (0..3).map(|i| (body.centre[i] - from[i]) * d[i]).sum::<f64>() / d.iter().map(|v| v * v).sum::<f64>();
-                    (0.0..=1.0).contains(&f) && (0..3).all(|i| (from[i] + f * d[i] - body.centre[i]).abs() < 1e-9 && body.size[i] <= d[i].abs() + width + 1e-12)
+                    let f = (0..3).map(|i| (body.centre[i] - from[i]) * d[i]).sum::<f64>()
+                        / d.iter().map(|v| v * v).sum::<f64>();
+                    (0.0..=1.0).contains(&f)
+                        && (0..3).all(|i| {
+                            (from[i] + f * d[i] - body.centre[i]).abs() < 1e-9
+                                && body.size[i] <= d[i].abs() + width + 1e-12
+                        })
                 };
                 let drawn = scene.parts.iter().any(|p| match p.shape {
                     sim_core::Shape::Box { size } => size.map(f64::abs) == body.size && p.pos == body.centre,
@@ -282,7 +319,8 @@ fn after_a_crash_the_drives_are_enabled_again_and_move_out() {
 fn obstacles_stop_the_machine_with_its_drives_off() {
     let entry = find("single-axis").unwrap();
     let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
-    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true", "effects.holding_brake = false"])).unwrap();
+    let mut sim =
+        Sim::new(entry, &with(entry, &[wall, "effects.crash = true", "effects.holding_brake = false"])).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     while carriage_front(&sim).0 < 0.44 {
         sim.step();
@@ -296,7 +334,8 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
 
     let entry = find("t-gantry").unwrap();
     let table = r#"obstacles = [{ name = "table", centre_m = [0.25, -0.05, -0.75], size_m = [0.2, 0.2, 0.1] }]"#;
-    let mut sim = Sim::new(entry, &with(entry, &[table, "effects.crash = true", "effects.holding_brake = false"])).unwrap();
+    let mut sim =
+        Sim::new(entry, &with(entry, &[table, "effects.crash = true", "effects.holding_brake = false"])).unwrap();
     let points = sim.plan_path(&[Piece::Line(vec![0.1, 0.05])], false).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     sim.run(0.5, |_| {});
@@ -304,12 +343,26 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
     sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
     println!("z {} m, clearance {} m, speed {} m/s", pos[1], sim.clearance, vel[1]);
     // It may creep `CREEP` (1 um) in before it is put back where it stood.
-    assert!(sim.crashed && sim.clearance > -2e-6 && sim.clearance < 1e-3 && (pos[1] - 0.102).abs() < 2e-6 && vel[1].abs() < 1e-3, "z {} m, clearance {} m", pos[1], sim.clearance);
+    assert!(
+        sim.crashed
+            && sim.clearance > -2e-6
+            && sim.clearance < 1e-3
+            && (pos[1] - 0.102).abs() < 2e-6
+            && vel[1].abs() < 1e-3,
+        "z {} m, clearance {} m",
+        pos[1],
+        sim.clearance
+    );
     // The drives draw 0.18 J for a lower that gravity drives: 17 J of potential energy go through the losses, which is
     // what the budget's error (the losses summed step by step) scales with; to `BUDGET_TOLERANCE` of the two.
     let budget = load.budget.unwrap();
     let potential = budget.rows.iter().find(|r| r.id == "energy.potential").unwrap().energy.abs();
     let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
     assert!(load.contact.is_some() && crash > 0.0, "crash {crash} J");
-    assert!(budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * (budget.supply + potential), "{} J of {} J and {potential} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(
+        budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * (budget.supply + potential),
+        "{} J of {} J and {potential} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
 }

@@ -50,7 +50,11 @@ struct Segment {
 /// arrives at its target on straight lines, and rounds the corners in between: with via points straight above the start
 /// and the target, a lift, traverse and lower without a stop. One via point alone is two lines, with a stop between.
 pub fn via_pieces(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
-    let mut pieces: Vec<Piece> = via.iter().enumerate().map(|(i, point)| if i == 0 { Piece::Line(point.clone()) } else { Piece::Spline(point.clone()) }).collect();
+    let mut pieces: Vec<Piece> = via
+        .iter()
+        .enumerate()
+        .map(|(i, point)| if i == 0 { Piece::Line(point.clone()) } else { Piece::Spline(point.clone()) })
+        .collect();
     pieces.push(Piece::Line(target.to_vec()));
     pieces
 }
@@ -60,12 +64,26 @@ enum Motion {
     Idle,
     /// `tail` is the previous move still finishing while this one has already started (corner
     /// blending): its remaining distance is added on top.
-    Moving { mv: Move, start_tick: u64, tail: Option<(Move, u64)> },
-    Dwell { until_tick: u64 },
+    Moving {
+        mv: Move,
+        start_tick: u64,
+        tail: Option<(Move, u64)>,
+    },
+    Dwell {
+        until_tick: u64,
+    },
     /// Linear interpolation from `from` to `to` between two ticks.
-    Following { from: Vec<f64>, to: Vec<f64>, start_tick: u64 },
+    Following {
+        from: Vec<f64>,
+        to: Vec<f64>,
+        start_tick: u64,
+    },
     /// A cubic curve through the points with the given speeds at them (Hermite interpolation).
-    Trajectory { points: Vec<(f64, Vec<f64>)>, speeds: Vec<Vec<f64>>, start_tick: u64 },
+    Trajectory {
+        points: Vec<(f64, Vec<f64>)>,
+        speeds: Vec<Vec<f64>>,
+        start_tick: u64,
+    },
 }
 
 pub struct Controller {
@@ -145,7 +163,11 @@ pub struct Controller {
 fn steps(cfg: &Config, path: &str, dt: f64) -> Result<u64> {
     let n = (cfg.positive(path)? / dt).round();
     // A loop cycle must be a whole number of base steps.
-    if n >= 1.0 && (n * dt - cfg.f64(path)?).abs() < 1e-6 * dt { Ok(n as u64) } else { Err(ConfigError::Invalid(path.into())) }
+    if n >= 1.0 && (n * dt - cfg.f64(path)?).abs() < 1e-6 * dt {
+        Ok(n as u64)
+    } else {
+        Err(ConfigError::Invalid(path.into()))
+    }
 }
 
 impl Controller {
@@ -223,12 +245,16 @@ impl Controller {
         // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
         // if a budget across an enable ever needs to close there.
         let kept: Vec<(f64, f64)> = self.drives.iter().map(|d| (d.temperature_rise, d.dc_voltage)).collect();
-        self.drives = (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
+        self.drives =
+            (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
         for (k, (drive, (rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
             drive.temperature_rise = rise;
             if p.dc_link {
-                drive.dc_voltage = (voltage * voltage - p.inductance * drive.current * drive.current / p.dc_capacitance).max(0.0).sqrt();
+                drive.dc_voltage = (voltage * voltage
+                    - p.inductance * drive.current * drive.current / p.dc_capacitance)
+                    .max(0.0)
+                    .sqrt();
             }
         }
         // Every drive has noise of its own; the multiplier spreads neighbouring seeds over the generator's cycle.
@@ -253,13 +279,19 @@ impl Controller {
         let profile_cycle = n_profile as f64 * dt;
         let setpoint_ticks = steps(cfg, "profile.setpoint_interval_s", profile_cycle)?;
         let params = DriveParams::from_config(cfg, dt, n_velocity as f64 * dt)?;
-        let motor_params = machine.motors().iter().map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt)).collect::<Result<Vec<_>>>()?;
+        let motor_params = machine
+            .motors()
+            .iter()
+            .map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt))
+            .collect::<Result<Vec<_>>>()?;
         let (mut shaper, mut shaper_follows) = (None, None);
-        let (frequency, damping) = (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
+        let (frequency, damping) =
+            (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
         if damping >= 1.0 {
             return Err(ConfigError::Invalid("profile.shaper_damping".into()));
         }
-        let (frequency2, damping2) = (cfg.non_negative("profile.shaper2_frequency_hz")?, cfg.non_negative("profile.shaper2_damping")?);
+        let (frequency2, damping2) =
+            (cfg.non_negative("profile.shaper2_frequency_hz")?, cfg.non_negative("profile.shaper2_damping")?);
         if damping2 >= 1.0 {
             return Err(ConfigError::Invalid("profile.shaper2_damping".into()));
         }
@@ -270,7 +302,8 @@ impl Controller {
         };
         if cfg.bool("effects.input_shaping")? {
             let per_hz = |damping: f64| 0.5 / (1.0 - damping * damping).sqrt() / profile_cycle;
-            let ((k, half), (k2, half2)) = (zvd(frequency, damping), if frequency2 > 0.0 { zvd(frequency2, damping2) } else { (0.0, 0.0) });
+            let ((k, half), (k2, half2)) =
+                (zvd(frequency, damping), if frequency2 > 0.0 { zvd(frequency2, damping2) } else { (0.0, 0.0) });
             shaper = Some((k, half, k2, half2));
             shaper_follows = cfg.bool("effects.shaper_follows_pose")?.then_some((per_hz(damping), per_hz(damping2)));
         }
@@ -300,7 +333,8 @@ impl Controller {
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
             let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
-            let target: Vec<f64> = segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
+            let target: Vec<f64> =
+                segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
             if !in_range(machine, &target) {
                 return Err(bad());
             }
@@ -308,7 +342,13 @@ impl Controller {
                 None => None,
                 Some(points) => {
                     let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].via"));
-                    let points: Vec<Vec<f64>> = points.as_array().ok_or_else(bad)?.iter().map(|p| Some(p.as_array()?.iter().filter_map(number).collect())).collect::<Option<_>>().ok_or_else(bad)?;
+                    let points: Vec<Vec<f64>> = points
+                        .as_array()
+                        .ok_or_else(bad)?
+                        .iter()
+                        .map(|p| Some(p.as_array()?.iter().filter_map(number).collect()))
+                        .collect::<Option<_>>()
+                        .ok_or_else(bad)?;
                     if points.is_empty() || !points.iter().all(|p| in_range(machine, p)) {
                         return Err(bad());
                     }
@@ -317,7 +357,13 @@ impl Controller {
             };
             segments.push(Segment {
                 target,
-                dwell_ticks: (segment.get("dwell_s").and_then(number).filter(|d| d.is_finite() && *d >= 0.0).ok_or_else(bad)? / profile_cycle).round() as u64,
+                dwell_ticks: (segment
+                    .get("dwell_s")
+                    .and_then(number)
+                    .filter(|d| d.is_finite() && *d >= 0.0)
+                    .ok_or_else(bad)?
+                    / profile_cycle)
+                    .round() as u64,
                 payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
                 path: via,
             });
@@ -326,7 +372,8 @@ impl Controller {
         for (i, segment) in segments.iter().enumerate() {
             let from = &segments[(i + segments.len() - 1) % segments.len()].target;
             if let Some(pieces) = &segment.path
-                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK).map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose)))
+                && path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK)
+                    .map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose)))
             {
                 return Err(ConfigError::Invalid(format!("cycle.segment[{i}].via")));
             }
@@ -338,14 +385,20 @@ impl Controller {
         // was going, and the next one starts from there. A cycle that lost all its segments ends.
         self.cycle = self.cycle.and_then(|i| Some(i.min(segments.len().checked_sub(1)?)));
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
-        (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) = (profile_cycle, setpoint_ticks, params, segments);
+        (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
+            (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
         self.blend_time = blend_time;
         (self.torque_reserve, self.path_tolerance) = (torque_reserve, path_tolerance);
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
-        self.belt_tension = [cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin), cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin), tension_reserve];
-        (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) = (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
+        self.belt_tension = [
+            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
+            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
+            tension_reserve,
+        ];
+        (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
+            (Some((shaper, shaper_follows)), fieldbus_delay, fieldbus_jitter);
         Ok(())
     }
 
@@ -383,7 +436,9 @@ impl Controller {
             for back in (0..=(newest as f64 * ratio).floor() as usize).rev() {
                 let (whole, part) = ((back as f64 / ratio).floor() as usize, (back as f64 / ratio).fract());
                 let (a, b) = (&old[newest - whole.min(newest)], &old[newest - (whole + 1).min(newest)]);
-                self.history.push_back(std::array::from_fn(|which| a[which].iter().zip(&b[which]).map(|(a, b)| a * (1.0 - part) + b * part).collect()));
+                self.history.push_back(std::array::from_fn(|which| {
+                    a[which].iter().zip(&b[which]).map(|(a, b)| a * (1.0 - part) + b * part).collect()
+                }));
             }
             self.shaper_reach = 0;
         }
@@ -409,7 +464,11 @@ impl Controller {
                     return Err(CommandError { key: "error-busy" });
                 }
                 // The tick is filled in when the profile generator picks the move up.
-                self.motion = Motion::Moving { mv: Move::new(&self.raw_pos, &target, machine.axes()), start_tick: u64::MAX, tail: None };
+                self.motion = Motion::Moving {
+                    mv: Move::new(&self.raw_pos, &target, machine.axes()),
+                    start_tick: u64::MAX,
+                    tail: None,
+                };
             }
             Command::StartCycle => {
                 if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
@@ -432,7 +491,12 @@ impl Controller {
                 // Measured from the last setpoint, not from where the plan stands on its way there: a stream
                 // whose setpoints come a cycle early would otherwise be refused from 10/11 of the speed limit on.
                 let reach = self.setpoint_ticks as f64 * self.profile_cycle * (1.0 + 1e-9);
-                if target.iter().zip(self.external_setpoint()).zip(machine.axes()).any(|((to, from), axis)| (to - from).abs() > axis.max_vel * reach) {
+                if target
+                    .iter()
+                    .zip(self.external_setpoint())
+                    .zip(machine.axes())
+                    .any(|((to, from), axis)| (to - from).abs() > axis.max_vel * reach)
+                {
                     return Err(CommandError { key: "error-setpoint-too-far" });
                 }
                 self.motion = Motion::Following { from: self.raw_pos.clone(), to: target, start_tick: u64::MAX };
@@ -448,7 +512,11 @@ impl Controller {
                 // which may be up to that slack off this setpoint (below): a path planned by another simulation from
                 // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
                 // stop where this setpoint is on it, and was refused.
-                if points.len() < 2 || points[0].0 != 0.0 || !rising || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose)) {
+                if points.len() < 2
+                    || points[0].0 != 0.0
+                    || !rising
+                    || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose))
+                {
                     return Err(CommandError { key: "error-trajectory" });
                 }
                 // A path that starts elsewhere would make the setpoint jump.
@@ -468,11 +536,33 @@ impl Controller {
 
     /// The timing for a path of lines and arcs from where the setpoint stands, as the poses that
     /// `Command::Trajectory` runs: within the axis limits, or as fast as the motors allow (see `path`).
-    pub fn plan_path(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    pub fn plan_path(
+        &self,
+        machine: &dyn Machine,
+        pieces: &[Piece],
+        time_optimal: bool,
+    ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = if time_optimal {
-            path::plan_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack())
+            path::plan_time_optimal(
+                machine,
+                &self.params,
+                self.torque_reserve,
+                self.belt_tension,
+                &self.raw_pos,
+                pieces,
+                self.profile_cycle,
+                self.path_tolerance,
+                machine.setpoint_slack(),
+            )
         } else {
-            path::plan(machine.axes(), &self.raw_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack())
+            path::plan(
+                machine.axes(),
+                &self.raw_pos,
+                pieces,
+                self.profile_cycle,
+                self.path_tolerance,
+                machine.setpoint_slack(),
+            )
         }?;
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
@@ -486,10 +576,24 @@ impl Controller {
     /// `path::deviation`): zero unless `profile.path_tolerance_m` allows transition curves. The time-optimal plan's
     /// curves are as long as the motors' speeds need, so its deviation can differ. A path `plan_path` refuses is
     /// refused here the same way (it is planned for that).
-    pub fn path_deviation(&self, machine: &dyn Machine, pieces: &[Piece], time_optimal: bool) -> std::result::Result<f64, CommandError> {
+    pub fn path_deviation(
+        &self,
+        machine: &dyn Machine,
+        pieces: &[Piece],
+        time_optimal: bool,
+    ) -> std::result::Result<f64, CommandError> {
         self.plan_path(machine, pieces, time_optimal)?;
         if time_optimal {
-            path::deviation_time_optimal(machine, &self.params, self.torque_reserve, self.belt_tension, &self.raw_pos, pieces, self.path_tolerance, machine.setpoint_slack())
+            path::deviation_time_optimal(
+                machine,
+                &self.params,
+                self.torque_reserve,
+                self.belt_tension,
+                &self.raw_pos,
+                pieces,
+                self.path_tolerance,
+                machine.setpoint_slack(),
+            )
         } else {
             path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance, machine.setpoint_slack())
         }
@@ -497,7 +601,8 @@ impl Controller {
 
     /// True while a move, a dwell or the cycle is under way.
     pub fn busy(&self) -> bool {
-        self.cycle.is_some() || matches!(self.motion, Motion::Moving { .. } | Motion::Dwell { .. } | Motion::Trajectory { .. })
+        self.cycle.is_some()
+            || matches!(self.motion, Motion::Moving { .. } | Motion::Dwell { .. } | Motion::Trajectory { .. })
     }
 
     /// False between `Command::Disable` and `Command::Enable`.
@@ -601,7 +706,8 @@ impl Controller {
                 drive.position_loop(&self.motor_params[k], *pos);
             }
             // Following error per motor, transformed back to the tool axes for display.
-            let (set, actual): (Vec<f64>, Vec<f64>) = self.drives.iter().map(|d| (d.pos_set, d.pos_set - d.following_error)).unzip();
+            let (set, actual): (Vec<f64>, Vec<f64>) =
+                self.drives.iter().map(|d| (d.pos_set, d.pos_set - d.following_error)).unzip();
             let (mut tool_set, mut tool_actual) = (self.set_pos.clone(), self.set_pos.clone());
             machine.forward(&set, &mut tool_set);
             machine.forward(&actual, &mut tool_actual);
@@ -672,9 +778,16 @@ impl Controller {
                 }
                 // With input shaping the setpoint arrives after the plan. Where the gripper acts or the cycle
                 // dwells, both wait for the setpoint: the tool is not there before.
-                let waits = self.cycle.is_some_and(|i| self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached);
+                let waits = self.cycle.is_some_and(|i| {
+                    self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached
+                });
                 // The shaper's oldest copy is a whole period old, read between two stored cycles.
-                let lag = if waits { self.shaper_halves(machine, &self.set_pos).map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil()) } else { 0.0 };
+                let lag = if waits {
+                    self.shaper_halves(machine, &self.set_pos)
+                        .map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil())
+                } else {
+                    0.0
+                };
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
@@ -709,8 +822,14 @@ impl Controller {
                     // A cycle segment's path arrives as a move does (see above): the gripper acts and the dwell starts
                     // once the shaped setpoint is there, where the segment waits for it.
                     if let Some(i) = self.cycle {
-                        let waits = self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
-                        let lag = if waits { self.shaper_halves(machine, &self.set_pos).map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil()) } else { 0.0 };
+                        let waits =
+                            self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
+                        let lag = if waits {
+                            self.shaper_halves(machine, &self.set_pos)
+                                .map_or(0.0, |(half, half2)| (2.0 * half + 2.0 * half2).ceil())
+                        } else {
+                            0.0
+                        };
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.payload_attached = self.segments[i].payload;
                             Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
@@ -726,12 +845,27 @@ impl Controller {
                     let s = (t - points[i].0) / h;
                     // Cubic through both points with the speeds there: position, and its first and second rate.
                     let basis = [
-                        [2.0 * s * s * s - 3.0 * s * s + 1.0, s * s * s - 2.0 * s * s + s, -2.0 * s * s * s + 3.0 * s * s, s * s * s - s * s],
-                        [6.0 * s * s - 6.0 * s, 3.0 * s * s - 4.0 * s + 1.0, -6.0 * s * s + 6.0 * s, 3.0 * s * s - 2.0 * s],
+                        [
+                            2.0 * s * s * s - 3.0 * s * s + 1.0,
+                            s * s * s - 2.0 * s * s + s,
+                            -2.0 * s * s * s + 3.0 * s * s,
+                            s * s * s - s * s,
+                        ],
+                        [
+                            6.0 * s * s - 6.0 * s,
+                            3.0 * s * s - 4.0 * s + 1.0,
+                            -6.0 * s * s + 6.0 * s,
+                            3.0 * s * s - 2.0 * s,
+                        ],
                         [12.0 * s - 6.0, 6.0 * s - 4.0, -12.0 * s + 6.0, 6.0 * s - 2.0],
                     ];
                     for a in 0..self.set_pos.len() {
-                        let at = |b: [f64; 4]| b[0] * points[i].1[a] + b[1] * h * speeds[i][a] + b[2] * points[i + 1].1[a] + b[3] * h * speeds[i + 1][a];
+                        let at = |b: [f64; 4]| {
+                            b[0] * points[i].1[a]
+                                + b[1] * h * speeds[i][a]
+                                + b[2] * points[i + 1].1[a]
+                                + b[3] * h * speeds[i + 1][a]
+                        };
                         self.set_pos[a] = at(basis[0]);
                         self.set_vel[a] = at(basis[1]) / h;
                         self.set_acc[a] = at(basis[2]) / (h * h);
@@ -775,25 +909,34 @@ impl Controller {
         self.shape(machine);
 
         let motors = self.drives.len();
-        let (mut pos, mut ahead, mut behind, mut ff) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
+        let (mut pos, mut ahead, mut behind, mut ff) =
+            (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
         let offset_pos: Vec<f64> = self.set_pos.iter().zip(&self.setpoint_offset).map(|(p, o)| p + o).collect();
         machine.inverse(&offset_pos, &mut pos);
         // Motor speed setpoints: the inverse transformation applied a moment ahead and behind.
         let h = 1e-3;
-        let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_vel).map(|(p, v)| p + sign * h * v).collect() };
+        let shifted =
+            |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_vel).map(|(p, v)| p + sign * h * v).collect() };
         machine.inverse(&shifted(1.0), &mut ahead);
         machine.inverse(&shifted(-1.0), &mut behind);
         machine.feedforward_torque_moving(&self.set_pos, &self.set_vel, &self.set_acc, &mut ff);
         // Motor acceleration setpoints the same way, for the drives' fine interpolation.
         let (mut acc_ahead, mut acc_behind) = (vec![0.0; motors], vec![0.0; motors]);
-        let shifted = |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_acc).map(|(p, a)| p + sign * h * a).collect() };
+        let shifted =
+            |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_acc).map(|(p, a)| p + sign * h * a).collect() };
         machine.inverse(&shifted(1.0), &mut acc_ahead);
         machine.inverse(&shifted(-1.0), &mut acc_behind);
-        let setpoints = (0..motors).map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), (acc_ahead[k] - acc_behind[k]) / (2.0 * h), ff[k]]).collect();
+        let setpoints = (0..motors)
+            .map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), (acc_ahead[k] - acc_behind[k]) / (2.0 * h), ff[k]])
+            .collect();
         // Fieldbus: the drives get the newest frame that has arrived, one the controller computed some cycles ago. With
         // jitter each frame takes its own number of cycles, and a late one leaves the drives the frame before. Frames
         // older than the longest delay have arrived and are dropped; before any has arrived, the oldest.
-        let late = if self.fieldbus_jitter > 0 { (self.jitter.uniform() * (self.fieldbus_jitter + 1) as f64) as usize } else { 0 };
+        let late = if self.fieldbus_jitter > 0 {
+            (self.jitter.uniform() * (self.fieldbus_jitter + 1) as f64) as usize
+        } else {
+            0
+        };
         self.fieldbus.push_back((self.fieldbus_delay + late, setpoints));
         while self.fieldbus.len() > self.fieldbus_delay + self.fieldbus_jitter + 1 {
             self.fieldbus.pop_front();
@@ -854,11 +997,24 @@ impl Controller {
             at(whole) * (1.0 - part) + at(whole + 1) * part
         };
         let sum = (1.0 + k) * (1.0 + k) * (1.0 + k2) * (1.0 + k2);
-        let (first, second) = ([(0.0, 1.0), (half, 2.0 * k), (2.0 * half, k * k)], [(0.0, 1.0), (half2, 2.0 * k2), (2.0 * half2, k2 * k2)]);
-        let shaped = |which: usize, axis: usize| first.iter().flat_map(|a| second.iter().map(move |b| (a.0 + b.0, a.1 * b.1))).map(|(delay, weight)| weight * ago(which, axis, delay)).sum::<f64>() / sum;
+        let (first, second) = (
+            [(0.0, 1.0), (half, 2.0 * k), (2.0 * half, k * k)],
+            [(0.0, 1.0), (half2, 2.0 * k2), (2.0 * half2, k2 * k2)],
+        );
+        let shaped = |which: usize, axis: usize| {
+            first
+                .iter()
+                .flat_map(|a| second.iter().map(move |b| (a.0 + b.0, a.1 * b.1)))
+                .map(|(delay, weight)| weight * ago(which, axis, delay))
+                .sum::<f64>()
+                / sum
+        };
         let axes = self.set_pos.len();
-        let (pos, vel, acc): (Vec<f64>, Vec<f64>, Vec<f64>) =
-            ((0..axes).map(|a| shaped(0, a)).collect(), (0..axes).map(|a| shaped(1, a)).collect(), (0..axes).map(|a| shaped(2, a)).collect());
+        let (pos, vel, acc): (Vec<f64>, Vec<f64>, Vec<f64>) = (
+            (0..axes).map(|a| shaped(0, a)).collect(),
+            (0..axes).map(|a| shaped(1, a)).collect(),
+            (0..axes).map(|a| shaped(2, a)).collect(),
+        );
         (self.set_pos, self.set_vel, self.set_acc) = (pos, vel, acc);
     }
 
@@ -868,10 +1024,21 @@ impl Controller {
     /// Only where the machine does not have to stop anyway (no dwell, no gripper action), where no
     /// axis reverses, and only while both moves are on their ramps, so the speeds add up to no
     /// more than either cruise speed.
-    fn blend_into_next(&mut self, current: &Move, t: f64, blending_already: bool, machine: &dyn Machine) -> Option<Move> {
+    fn blend_into_next(
+        &mut self,
+        current: &Move,
+        t: f64,
+        blending_already: bool,
+        machine: &dyn Machine,
+    ) -> Option<Move> {
         let i = self.cycle?;
         let segment = &self.segments[i];
-        if self.blend_time <= 0.0 || self.stopping || blending_already || segment.dwell_ticks > 0 || segment.payload != self.payload_attached {
+        if self.blend_time <= 0.0
+            || self.stopping
+            || blending_already
+            || segment.dwell_ticks > 0
+            || segment.payload != self.payload_attached
+        {
             return None;
         }
         let next_index = (i + 1) % self.segments.len();
@@ -903,10 +1070,26 @@ impl Controller {
         self.passes += (next == 0) as u64;
         // A path through via points, planned from where the plan stands; were it refused from there (the first segment,
         // from the start pose), the straight move.
-        let planned = self.segments[next].path.as_ref().and_then(|pieces| path::plan(machine.axes(), &self.set_pos, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack()).ok());
+        let planned = self.segments[next].path.as_ref().and_then(|pieces| {
+            path::plan(
+                machine.axes(),
+                &self.set_pos,
+                pieces,
+                self.profile_cycle,
+                self.path_tolerance,
+                machine.setpoint_slack(),
+            )
+            .ok()
+        });
         self.motion = match planned {
-            Some(points) if points.iter().all(|(_, pose)| near_start(machine, &self.set_pos, pose)) => trajectory(points),
-            _ => Motion::Moving { mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()), start_tick: u64::MAX, tail: None },
+            Some(points) if points.iter().all(|(_, pose)| near_start(machine, &self.set_pos, pose)) => {
+                trajectory(points)
+            }
+            _ => Motion::Moving {
+                mv: Move::new(&self.set_pos, &self.segments[next].target, machine.axes()),
+                start_tick: u64::MAX,
+                tail: None,
+            },
         };
     }
 }
@@ -949,15 +1132,20 @@ pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
 /// which let a delta's path run 1.4 mm beyond its 0.6 m range where a move there was refused.
 fn near_start(machine: &dyn Machine, start: &[f64], pose: &[f64]) -> bool {
     let slack = machine.setpoint_slack();
-    if pose.len() == start.len() && pose.iter().zip(start).map(|(p, s)| (p - s) * (p - s)).sum::<f64>().sqrt() <= slack {
+    if pose.len() == start.len() && pose.iter().zip(start).map(|(p, s)| (p - s) * (p - s)).sum::<f64>().sqrt() <= slack
+    {
         return near_range(machine, pose, slack);
     }
     let axes = machine.axes();
     let beyond = |s: f64, a: &sim_core::AxisInfo| ((a.min - s).clamp(0.0, slack), (s - a.max).clamp(0.0, slack));
     pose.len() == axes.len()
         && start.len() == axes.len()
-        && pose.iter().zip(start).zip(axes).all(|((t, s), a)| t.is_finite() && *t >= a.min - beyond(*s, a).0 - ROUNDING && *t <= a.max + beyond(*s, a).1 + ROUNDING)
-        && machine.unreachable(pose, ROUNDING + if machine.unreachable(start, 0.0).is_some() { slack } else { 0.0 }).is_none()
+        && pose.iter().zip(start).zip(axes).all(|((t, s), a)| {
+            t.is_finite() && *t >= a.min - beyond(*s, a).0 - ROUNDING && *t <= a.max + beyond(*s, a).1 + ROUNDING
+        })
+        && machine
+            .unreachable(pose, ROUNDING + if machine.unreachable(start, 0.0).is_some() { slack } else { 0.0 })
+            .is_none()
 }
 
 /// What a pose away from the start may be off the range by rounding alone: an arc along the rim of a cylindrical
@@ -968,7 +1156,9 @@ const ROUNDING: f64 = 1e-9;
 /// (`Machine::unreachable`).
 fn near_range(machine: &dyn Machine, target: &[f64], slack: f64) -> bool {
     let axes = machine.axes();
-    target.len() == axes.len() && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - slack && *t <= a.max + slack) && machine.unreachable(target, slack).is_none()
+    target.len() == axes.len()
+        && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - slack && *t <= a.max + slack)
+        && machine.unreachable(target, slack).is_none()
 }
 
 /// A target that a move or a setpoint cannot go to, with the reason: outside an axis range, or where the machine says
@@ -977,7 +1167,9 @@ fn near_range(machine: &dyn Machine, target: &[f64], slack: f64) -> bool {
 /// delta's tool at rest at x = 0.4 m reads 0.40000000000000013), and a move back there was refused.
 fn refuse_target(machine: &dyn Machine, target: &[f64]) -> std::result::Result<(), CommandError> {
     let axes = machine.axes();
-    if target.len() != axes.len() || !target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - ROUNDING && *t <= a.max + ROUNDING) {
+    if target.len() != axes.len()
+        || !target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min - ROUNDING && *t <= a.max + ROUNDING)
+    {
         return Err(CommandError { key: "error-target-out-of-range" });
     }
     machine.unreachable(target, ROUNDING).map_or(Ok(()), |key| Err(CommandError { key }))
@@ -1003,7 +1195,9 @@ pub fn check_limits(machine: &dyn Machine, cfg: &Config) -> Result<Vec<LimitViol
     for combo in 0..1u32 << axes.len() {
         let sign = |i: usize| if combo >> i & 1 == 1 { 1.0 } else { -1.0 };
         let h = 1e-3;
-        let shifted = |s: f64| -> Vec<f64> { axes.iter().enumerate().map(|(i, ax)| pose[i] + s * h * sign(i) * ax.max_vel).collect() };
+        let shifted = |s: f64| -> Vec<f64> {
+            axes.iter().enumerate().map(|(i, ax)| pose[i] + s * h * sign(i) * ax.max_vel).collect()
+        };
         machine.inverse(&shifted(1.0), &mut a);
         machine.inverse(&shifted(-1.0), &mut b);
         let acc: Vec<f64> = axes.iter().enumerate().map(|(i, ax)| sign(i) * ax.max_acc).collect();

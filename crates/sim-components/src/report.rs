@@ -47,7 +47,10 @@ pub struct Report {
 pub fn sources(text: &str) -> BTreeMap<String, String> {
     let tags = |comment: &str| {
         let lower = comment.to_lowercase();
-        let mut found: Vec<(usize, &str)> = ["catalogue", "estimate", "cad"].into_iter().filter_map(|t| lower.find(&format!("[{t}]")).map(|at| (at, t))).collect();
+        let mut found: Vec<(usize, &str)> = ["catalogue", "estimate", "cad"]
+            .into_iter()
+            .filter_map(|t| lower.find(&format!("[{t}]")).map(|at| (at, t)))
+            .collect();
         found.sort();
         (!found.is_empty()).then(|| found.iter().map(|(_, t)| format!("[{t}]")).collect::<Vec<_>>().join(" / "))
     };
@@ -65,7 +68,8 @@ pub fn sources(text: &str) -> BTreeMap<String, String> {
             // Arrays of tables (the cycle's segments) are the motion, not machine data.
             (table, block, current) = (None, None, None);
         } else if let Some(name) = code.strip_prefix('[').and_then(|l| l.split(']').next()) {
-            (table, table_tag, block, current) = (Some(name.trim().to_string()), tags(comment).or(block.flatten()), None, None);
+            (table, table_tag, block, current) =
+                (Some(name.trim().to_string()), tags(comment).or(block.flatten()), None, None);
         } else if let (Some(table), Some((key, _))) = (&table, code.split_once('=')) {
             if let Some(found) = block.take() {
                 current = found;
@@ -87,7 +91,15 @@ pub fn sources(text: &str) -> BTreeMap<String, String> {
 /// `named` is the file with the parts named for this run in `[parts]` and not yet resolved, and `cfg` the config the
 /// run uses (`named`, resolved or not, with whatever was set on top). With `bands`, the error bands of `verdict_bands`
 /// over the config's `[bounds]` too.
-pub fn make(entry: &MachineEntry, text: &str, source: &str, named: &Config, cfg: &Config, bands: bool, tr: &Translations) -> Result<Report, ConfigError> {
+pub fn make(
+    entry: &MachineEntry,
+    text: &str,
+    source: &str,
+    named: &Config,
+    cfg: &Config,
+    bands: bool,
+    tr: &Translations,
+) -> Result<Report, ConfigError> {
     let resolved = catalog::resolve(entry, cfg)?;
     let sim = Sim::new(entry, &resolved)?;
     let motors = sim.machine.motors().to_vec();
@@ -96,12 +108,17 @@ pub fn make(entry: &MachineEntry, text: &str, source: &str, named: &Config, cfg:
     let judged = verdict_bands(entry, &resolved, &if bands { bounds(&resolved)? } else { Vec::new() })?;
     let rows = record_cycle(entry, &resolved)?;
     let t = |key: &str| tr.tr(key).to_string();
-    let motor_name = |k: Option<usize>| k.map_or(String::new(), |k| format!("{} ({})", motors[k].id, tr.tr(motors[k].key)));
+    let motor_name =
+        |k: Option<usize>| k.map_or(String::new(), |k| format!("{} ({})", motors[k].id, tr.tr(motors[k].key)));
     let failed = judged.iter().filter(|b| !(if bands { b.ok } else { b.verdict.ok })).count();
     let passed = failed == 0;
 
     let mut blocks = vec![Block::Heading(t("report-machine"))];
-    let summary = if passed { tr.tr_arg("report-pass", &judged.len().to_string()) } else { tr.tr_arg("report-fail", &format!("{failed} / {}", judged.len())) };
+    let summary = if passed {
+        tr.tr_arg("report-pass", &judged.len().to_string())
+    } else {
+        tr.tr_arg("report-fail", &format!("{failed} / {}", judged.len()))
+    };
     let duration = rows.last().map_or(0.0, |r| r[0]);
     let facts = [
         ("report-machine-name", tr.tr(entry.key).to_string()),
@@ -111,12 +128,21 @@ pub fn make(entry: &MachineEntry, text: &str, source: &str, named: &Config, cfg:
         ("report-cycle-time", format!("{duration:.3} s")),
         ("report-result", summary),
     ];
-    blocks.push(Block::Table(vec![t("report-item"), t("report-value")], facts.into_iter().map(|(k, v)| (vec![t(k), v], false)).collect()));
+    blocks.push(Block::Table(
+        vec![t("report-item"), t("report-value")],
+        facts.into_iter().map(|(k, v)| (vec![t(k), v], false)).collect(),
+    ));
     let source_of = provenance(entry, text, named, &resolved, tr)?;
     // Resolving empties `[parts]`: its names come from `named`.
-    let parts = named.leaves().into_iter().filter(|(path, value)| path.starts_with("parts.") && value.as_str() != Some(""));
+    let parts =
+        named.leaves().into_iter().filter(|(path, value)| path.starts_with("parts.") && value.as_str() != Some(""));
     let described: Vec<(Vec<String>, bool)> = parts
-        .chain(resolved.leaves().into_iter().filter(|(path, _)| path.starts_with("mass.") || path.starts_with("geometry.")))
+        .chain(
+            resolved
+                .leaves()
+                .into_iter()
+                .filter(|(path, _)| path.starts_with("mass.") || path.starts_with("geometry.")),
+        )
         .map(|(path, value)| (vec![label(&path, tr), shown(&value), source_of(&path)], false))
         .collect();
     blocks.push(Block::Table(vec![t("report-quantity"), t("report-value"), t("report-source")], described));
@@ -125,10 +151,29 @@ pub fn make(entry: &MachineEntry, text: &str, source: &str, named: &Config, cfg:
     blocks.push(Block::Text(t("report-cycle-text")));
     let column = |id: String| signals.iter().position(|s| s.id == id);
     let series = |quantity: &str| -> Vec<(String, Vec<[f64; 2]>, bool)> {
-        motors.iter().filter_map(|m| column(format!("motor.{}.{quantity}", m.id)).map(|c| (m.id.to_string(), rows.iter().map(|r| [r[0], r[c]]).collect(), false))).collect()
+        motors
+            .iter()
+            .filter_map(|m| {
+                column(format!("motor.{}.{quantity}", m.id))
+                    .map(|c| (m.id.to_string(), rows.iter().map(|r| [r[0], r[c]]).collect(), false))
+            })
+            .collect()
     };
-    blocks.push(Block::Plot(Plot { title: t("report-plot-torque"), x_label: "t [s]".into(), y_label: "M [N m]".into(), series: series("torque") }));
-    blocks.push(Block::Plot(Plot { title: t("report-plot-speed"), x_label: "t [s]".into(), y_label: "n [1/min]".into(), series: series("speed").into_iter().map(|(n, p, d)| (n, p.iter().map(|q| [q[0], q[1] * 60.0 / std::f64::consts::TAU]).collect(), d)).collect() }));
+    blocks.push(Block::Plot(Plot {
+        title: t("report-plot-torque"),
+        x_label: "t [s]".into(),
+        y_label: "M [N m]".into(),
+        series: series("torque"),
+    }));
+    blocks.push(Block::Plot(Plot {
+        title: t("report-plot-speed"),
+        x_label: "t [s]".into(),
+        y_label: "n [1/min]".into(),
+        series: series("speed")
+            .into_iter()
+            .map(|(n, p, d)| (n, p.iter().map(|q| [q[0], q[1] * 60.0 / std::f64::consts::TAU]).collect(), d))
+            .collect(),
+    }));
     // The operating points against the drive's torque-speed curve (`DriveParams::torque_curve`, straight between these speeds).
     let mut points: Vec<(String, Vec<[f64; 2]>, bool)> = motors
         .iter()
@@ -141,47 +186,105 @@ pub fn make(entry: &MachineEntry, text: &str, source: &str, named: &Config, cfg:
     points.iter_mut().for_each(|s| s.1.iter_mut().for_each(|p| p[0] *= rpm));
     let corners = [-drive.no_load_speed, -drive.rated_speed, 0.0, drive.rated_speed, drive.no_load_speed];
     for (name, side) in [(t("report-curve-max"), 1), (t("report-curve-min"), 0)] {
-        points.push((name, corners.iter().map(|&s| [s * rpm, if side == 1 { drive.torque_curve(s).1 } else { drive.torque_curve(s).0 }]).collect(), false));
+        points.push((
+            name,
+            corners
+                .iter()
+                .map(|&s| [s * rpm, if side == 1 { drive.torque_curve(s).1 } else { drive.torque_curve(s).0 }])
+                .collect(),
+            false,
+        ));
     }
-    blocks.push(Block::Plot(Plot { title: t("report-plot-curve"), x_label: "n [1/min]".into(), y_label: "M [N m]".into(), series: points }));
+    blocks.push(Block::Plot(Plot {
+        title: t("report-plot-curve"),
+        x_label: "n [1/min]".into(),
+        y_label: "M [N m]".into(),
+        series: points,
+    }));
 
     blocks.push(Block::Heading(t("report-verdicts")));
     blocks.push(Block::Text(t("report-verdicts-text")));
-    let head = ["report-check", "report-motor", "report-value", "report-limit", "report-margin", "report-result"].map(t).to_vec();
+    let head = ["report-check", "report-motor", "report-value", "report-limit", "report-margin", "report-result"]
+        .map(t)
+        .to_vec();
     let result = |ok: bool| t(if ok { "report-ok" } else { "report-not-ok" });
     let check = |b: &Band| tr.tr(&format!("check-{}", b.verdict.check)).to_string();
     let verdict_rows = judged.iter().map(|b| {
         let v = &b.verdict;
-        (vec![check(b), motor_name(v.motor), number(v.value), number(v.limit), margin(1.0 - utilisation(v)), result(v.ok)], !v.ok)
+        (
+            vec![
+                check(b),
+                motor_name(v.motor),
+                number(v.value),
+                number(v.limit),
+                margin(1.0 - utilisation(v)),
+                result(v.ok),
+            ],
+            !v.ok,
+        )
     });
     blocks.push(Block::Table(head, verdict_rows.collect()));
     if bands {
         blocks.push(Block::Heading(t("report-bands")));
         blocks.push(Block::Text(tr.tr_arg("report-bands-text", &bounds(&resolved)?.len().to_string())));
-        let head = ["report-check", "report-motor", "report-low", "report-high", "report-limit", "report-worst-case"].map(t).to_vec();
-        let band_rows = judged.iter().map(|b| (vec![check(b), motor_name(b.verdict.motor), number(b.low), number(b.high), number(b.verdict.limit), result(b.ok)], !b.ok));
+        let head = ["report-check", "report-motor", "report-low", "report-high", "report-limit", "report-worst-case"]
+            .map(t)
+            .to_vec();
+        let band_rows = judged.iter().map(|b| {
+            (
+                vec![
+                    check(b),
+                    motor_name(b.verdict.motor),
+                    number(b.low),
+                    number(b.high),
+                    number(b.verdict.limit),
+                    result(b.ok),
+                ],
+                !b.ok,
+            )
+        });
         blocks.push(Block::Table(head, band_rows.collect()));
     }
 
     blocks.push(Block::Heading(t("report-inputs")));
     blocks.push(Block::Text(t("report-inputs-text")));
-    let value = |path: &str, value: toml::Value| if path.starts_with("parts.") { named.get(path).map_or(String::new(), shown) } else { shown(&value) };
-    let inputs = resolved.leaves().into_iter().filter(|(path, _)| path != "format_version").map(|(path, v)| (vec![path.clone(), value(&path, v), source_of(&path)], false));
+    let value = |path: &str, value: toml::Value| {
+        if path.starts_with("parts.") { named.get(path).map_or(String::new(), shown) } else { shown(&value) }
+    };
+    let inputs = resolved
+        .leaves()
+        .into_iter()
+        .filter(|(path, _)| path != "format_version")
+        .map(|(path, v)| (vec![path.clone(), value(&path, v), source_of(&path)], false));
     blocks.push(Block::Table(vec![t("report-parameter"), t("report-value"), t("report-source")], inputs.collect()));
 
     blocks.push(Block::Heading(t("report-sign-off")));
     blocks.push(Block::Text(t("report-sign-off-text")));
     let roles = ["report-prepared", "report-checked", "report-accepted"].map(t).to_vec();
-    blocks.push(Block::SignOff(roles, ["report-name", "report-company", "report-date", "report-signature"].map(t).to_vec()));
+    blocks.push(Block::SignOff(
+        roles,
+        ["report-name", "report-company", "report-date", "report-signature"].map(t).to_vec(),
+    ));
     Ok(Report { title: format!("{} – {}", t("report-title"), tr.tr(entry.key)), blocks, passed })
 }
 
 /// Where each value the run used comes from: set on top of the file, brought by a part named in `[parts]`, or the
 /// file's own comment tag (see `sources`).
-fn provenance<'a>(entry: &MachineEntry, text: &str, named: &'a Config, resolved: &'a Config, tr: &'a Translations) -> Result<impl Fn(&str) -> String + 'a, ConfigError> {
+fn provenance<'a>(
+    entry: &MachineEntry,
+    text: &str,
+    named: &'a Config,
+    resolved: &'a Config,
+    tr: &'a Translations,
+) -> Result<impl Fn(&str) -> String + 'a, ConfigError> {
     let (tags, file, from_parts) = (sources(text), Config::parse(text).ok(), catalog::resolve(entry, named)?);
     Ok(move |path: &str| {
-        let (in_file, before, brought, used) = (file.as_ref().and_then(|f| f.get(path).ok()), named.get(path).ok(), from_parts.get(path).ok(), resolved.get(path).ok());
+        let (in_file, before, brought, used) = (
+            file.as_ref().and_then(|f| f.get(path).ok()),
+            named.get(path).ok(),
+            from_parts.get(path).ok(),
+            resolved.get(path).ok(),
+        );
         // `[parts]` itself is emptied by resolving: its names are judged before.
         let parts = path.starts_with("parts.");
         if (!parts && used != brought) || (brought == before && before != in_file) || (parts && before != in_file) {
@@ -216,7 +319,8 @@ fn margin(share: f64) -> String {
 
 /// Today's date (UTC) as YYYY-MM-DD, from the days since 1970 (H. Hinnant's civil-from-days).
 fn today() -> String {
-    let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86_400) as i64;
+    let days =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86_400) as i64;
     let z = days + 719_468;
     let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
@@ -226,7 +330,14 @@ fn today() -> String {
     format!("{:04}-{m:02}-{d:02}", yoe + era * 400 + i64::from(m <= 2))
 }
 
-const COLORS: [(f64, f64, f64); 6] = [(0.16, 0.38, 0.72), (0.85, 0.42, 0.10), (0.20, 0.60, 0.30), (0.55, 0.30, 0.65), (0.45, 0.45, 0.45), (0.45, 0.45, 0.45)];
+const COLORS: [(f64, f64, f64); 6] = [
+    (0.16, 0.38, 0.72),
+    (0.85, 0.42, 0.10),
+    (0.20, 0.60, 0.30),
+    (0.55, 0.30, 0.65),
+    (0.45, 0.45, 0.45),
+    (0.45, 0.45, 0.45),
+];
 
 /// What a plot is drawn with, in a box of `w` by `h` with y downward: lines, dots, and text with its anchor (0 start,
 /// 0.5 middle, 1 end).
@@ -255,12 +366,21 @@ fn marks(plot: &Plot, w: f64, h: f64) -> Vec<Mark> {
     let all = || plot.series.iter().flat_map(|s| s.1.iter());
     let range = |i: usize| {
         let (lo, hi) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[i]), hi.max(p[i])));
-        if lo.is_finite() && hi > lo { (lo, hi) } else if lo.is_finite() { (lo - 1.0, lo + 1.0) } else { (0.0, 1.0) }
+        if lo.is_finite() && hi > lo {
+            (lo, hi)
+        } else if lo.is_finite() {
+            (lo - 1.0, lo + 1.0)
+        } else {
+            (0.0, 1.0)
+        }
     };
     let ((x0, x1), (y0, y1)) = (range(0), range(1));
     let (sx, sy) = (tick_step(x1 - x0), tick_step(y1 - y0));
-    let (x0, x1, y0, y1) = ((x0 / sx).floor() * sx, (x1 / sx).ceil() * sx, (y0 / sy).floor() * sy, (y1 / sy).ceil() * sy);
-    let at = |p: &[f64; 2]| [left + (p[0] - x0) / (x1 - x0) * (right - left), bottom - (p[1] - y0) / (y1 - y0) * (bottom - top)];
+    let (x0, x1, y0, y1) =
+        ((x0 / sx).floor() * sx, (x1 / sx).ceil() * sx, (y0 / sy).floor() * sy, (y1 / sy).ceil() * sy);
+    let at = |p: &[f64; 2]| {
+        [left + (p[0] - x0) / (x1 - x0) * (right - left), bottom - (p[1] - y0) / (y1 - y0) * (bottom - top)]
+    };
     let grey = (0.75, 0.75, 0.75);
     let mut out = vec![Mark::Text([left, 12.0], plot.title.clone(), 10.0, 0.0)];
     let mut x = x0;
@@ -333,17 +453,46 @@ impl Report {
                 }
                 Block::Plot(plot) => {
                     let (w, h) = (720.0, 300.0);
-                    _ = write!(out, "<svg viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" font-family=\"Helvetica,Arial,sans-serif\">");
+                    _ = write!(
+                        out,
+                        "<svg viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" font-family=\"Helvetica,Arial,sans-serif\">"
+                    );
                     for mark in marks(plot, w, h) {
                         match mark {
                             Mark::Line(points, c, width) => {
-                                let p: Vec<String> = points.iter().map(|p| format!("{:.1},{:.1}", p[0], p[1])).collect();
-                                _ = write!(out, "<polyline fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\" points=\"{}\"/>", rgb(c), p.join(" "));
+                                let p: Vec<String> =
+                                    points.iter().map(|p| format!("{:.1},{:.1}", p[0], p[1])).collect();
+                                _ = write!(
+                                    out,
+                                    "<polyline fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\" points=\"{}\"/>",
+                                    rgb(c),
+                                    p.join(" ")
+                                );
                             }
-                            Mark::Dot(p, c) => _ = write!(out, "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1\" fill=\"{}\"/>", p[0], p[1], rgb(c)),
+                            Mark::Dot(p, c) => {
+                                _ = write!(
+                                    out,
+                                    "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1\" fill=\"{}\"/>",
+                                    p[0],
+                                    p[1],
+                                    rgb(c)
+                                )
+                            }
                             Mark::Text(p, text, size, anchor) => {
-                                let anchor = if anchor == 0.0 { "start" } else if anchor == 1.0 { "end" } else { "middle" };
-                                _ = write!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{size}\" text-anchor=\"{anchor}\">{}</text>", p[0], p[1], escape(&text));
+                                let anchor = if anchor == 0.0 {
+                                    "start"
+                                } else if anchor == 1.0 {
+                                    "end"
+                                } else {
+                                    "middle"
+                                };
+                                _ = write!(
+                                    out,
+                                    "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{size}\" text-anchor=\"{anchor}\">{}</text>",
+                                    p[0],
+                                    p[1],
+                                    escape(&text)
+                                );
                             }
                         }
                     }
@@ -391,9 +540,19 @@ impl Report {
                     let (x0, y0) = (MARGIN, pdf.y);
                     for mark in marks(plot, w, h) {
                         match mark {
-                            Mark::Line(points, c, width) => pdf.line(&points.iter().map(|p| [x0 + p[0], y0 + p[1]]).collect::<Vec<_>>(), c, width),
-                            Mark::Dot(p, c) => pdf.line(&[[x0 + p[0] - 0.6, y0 + p[1]], [x0 + p[0] + 0.6, y0 + p[1]]], c, 1.2),
-                            Mark::Text(p, text, size, anchor) => pdf.text_at(x0 + p[0] - anchor * width(&text, size, false), y0 + p[1], &text, size, false),
+                            Mark::Line(points, c, width) => {
+                                pdf.line(&points.iter().map(|p| [x0 + p[0], y0 + p[1]]).collect::<Vec<_>>(), c, width)
+                            }
+                            Mark::Dot(p, c) => {
+                                pdf.line(&[[x0 + p[0] - 0.6, y0 + p[1]], [x0 + p[0] + 0.6, y0 + p[1]]], c, 1.2)
+                            }
+                            Mark::Text(p, text, size, anchor) => pdf.text_at(
+                                x0 + p[0] - anchor * width(&text, size, false),
+                                y0 + p[1],
+                                &text,
+                                size,
+                                false,
+                            ),
                         }
                     }
                     pdf.y += h + 6.0;
@@ -426,15 +585,18 @@ const BOTTOM: f64 = PAGE.1 - 50.0;
 
 /// Helvetica's advance widths of the printable ASCII characters (AFM, per 1000 units of the font size).
 const HELVETICA: [u16; 95] = [
-    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278,
-    500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278,
-    556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556,
+    556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833,
+    722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556,
+    556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334,
+    260, 334, 584,
 ];
 
 /// Text width in points. Bold is taken as 6 % wider: shortcut: the bold metrics are not in the table, upgrade if a
 /// bold column ever needs to fit exactly.
 fn width(text: &str, size: f64, bold: bool) -> f64 {
-    let units: f64 = text.chars().map(|c| HELVETICA.get((c as usize).wrapping_sub(32)).copied().unwrap_or(556) as f64).sum();
+    let units: f64 =
+        text.chars().map(|c| HELVETICA.get((c as usize).wrapping_sub(32)).copied().unwrap_or(556) as f64).sum();
     units * size / 1000.0 * if bold { 1.06 } else { 1.0 }
 }
 
@@ -451,7 +613,10 @@ fn wrap(text: &str, room: f64, size: f64, bold: bool) -> Vec<String> {
         }
         while width(lines.last().unwrap(), size, bold) > room && lines.last().unwrap().chars().count() > 1 {
             let long = lines.pop().unwrap();
-            let fit = (1..=long.chars().count()).take_while(|&n| width(&long.chars().take(n).collect::<String>(), size, bold) <= room).last().unwrap_or(1);
+            let fit = (1..=long.chars().count())
+                .take_while(|&n| width(&long.chars().take(n).collect::<String>(), size, bold) <= room)
+                .last()
+                .unwrap_or(1);
             lines.push(long.chars().take(fit).collect());
             lines.push(long.chars().skip(fit).collect());
         }
@@ -538,7 +703,14 @@ impl Pdf {
     }
 
     fn fill(&mut self, x: f64, y: f64, w: f64, h: f64, c: (f64, f64, f64)) {
-        _ = writeln!(Bytes(self.page()), "{} {} {} rg {x:.2} {:.2} {w:.2} {h:.2} re f 0 0 0 rg", c.0, c.1, c.2, PAGE.1 - y - h);
+        _ = writeln!(
+            Bytes(self.page()),
+            "{} {} {} rg {x:.2} {:.2} {w:.2} {h:.2} re f 0 0 0 rg",
+            c.0,
+            c.1,
+            c.2,
+            PAGE.1 - y - h
+        );
     }
 
     /// A table across the page: columns as wide as their widest cell where all fit, the wide ones narrowed in
@@ -546,7 +718,12 @@ impl Pdf {
     fn table(&mut self, head: &[String], rows: &[(Vec<String>, bool)]) {
         let (size, pad) = (7.5, 3.0);
         let natural: Vec<f64> = (0..head.len())
-            .map(|i| std::iter::once(width(&head[i], size, true)).chain(rows.iter().map(|r| width(&r.0[i], size, false))).fold(0.0, f64::max) + 2.0 * pad)
+            .map(|i| {
+                std::iter::once(width(&head[i], size, true))
+                    .chain(rows.iter().map(|r| width(&r.0[i], size, false)))
+                    .fold(0.0, f64::max)
+                    + 2.0 * pad
+            })
             .collect();
         let fair = WIDTH / head.len() as f64;
         let narrow: f64 = natural.iter().filter(|w| **w <= fair).sum();
@@ -554,7 +731,8 @@ impl Pdf {
         let scale = if narrow + wide <= WIDTH { 1.0 } else { (WIDTH - narrow) / wide };
         let widths: Vec<f64> = natural.iter().map(|w| if *w <= fair { *w } else { w * scale }).collect();
         let draw = |pdf: &mut Pdf, cells: &[String], bold: bool, shade: Option<(f64, f64, f64)>| {
-            let lines: Vec<Vec<String>> = cells.iter().zip(&widths).map(|(c, w)| wrap(c, w - 2.0 * pad, size, bold)).collect();
+            let lines: Vec<Vec<String>> =
+                cells.iter().zip(&widths).map(|(c, w)| wrap(c, w - 2.0 * pad, size, bold)).collect();
             let height = lines.iter().map(Vec::len).max().unwrap_or(1) as f64 * size * 1.25 + 2.0 * pad;
             pdf.room(height);
             let top = pdf.y;
@@ -568,7 +746,11 @@ impl Pdf {
                 }
                 x += w;
             }
-            pdf.line(&[[MARGIN, top + height], [MARGIN + widths.iter().sum::<f64>(), top + height]], (0.7, 0.7, 0.7), 0.4);
+            pdf.line(
+                &[[MARGIN, top + height], [MARGIN + widths.iter().sum::<f64>(), top + height]],
+                (0.7, 0.7, 0.7),
+                0.4,
+            );
             pdf.y = top + height;
         };
         self.room(30.0);
@@ -596,12 +778,21 @@ impl Pdf {
         // Objects: 1 catalogue, 2 page tree, 3 and 4 fonts, then per page its page object and its contents.
         let mut objects: Vec<Vec<u8>> = vec![
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            format!("<< /Type /Pages /Count {count} /Kids [{}] >>", (0..count).map(|n| format!("{} 0 R", 5 + 2 * n)).collect::<Vec<_>>().join(" ")).into_bytes(),
+            format!(
+                "<< /Type /Pages /Count {count} /Kids [{}] >>",
+                (0..count).map(|n| format!("{} 0 R", 5 + 2 * n)).collect::<Vec<_>>().join(" ")
+            )
+            .into_bytes(),
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".to_vec(),
         ];
         for (n, content) in self.pages.into_iter().enumerate() {
-            let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {} 0 R >>", PAGE.0, PAGE.1, 6 + 2 * n);
+            let page = format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {} 0 R >>",
+                PAGE.0,
+                PAGE.1,
+                6 + 2 * n
+            );
             objects.push(page.into_bytes());
             let mut stream = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
             stream.extend(content);
@@ -619,7 +810,9 @@ impl Pdf {
         let xref = out.len();
         out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
         offsets.iter().for_each(|o| out.extend(format!("{o:010} 00000 n \n").bytes()));
-        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+        out.extend(
+            format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes(),
+        );
         out
     }
 }
@@ -671,7 +864,11 @@ g = 1
         assert_eq!(get("mass.c_kg"), Some("[estimate]"), "after a blank line the table's tag holds");
         assert_eq!(get("mass.d_kg"), Some("[cad]"));
         assert_eq!(get("mass.d2_kg"), Some("[estimate]"), "a [cad] line marks one key");
-        assert_eq!(get("mass.e_kg"), Some("[estimate]"), "a comment without a tag ends the one above, the table's holds");
+        assert_eq!(
+            get("mass.e_kg"),
+            Some("[estimate]"),
+            "a comment without a tag ends the one above, the table's holds"
+        );
         assert_eq!(get("mass.f_kg"), Some("[catalogue]"), "a tag at the end of the line");
         assert_eq!(get("mass.g"), Some("[catalogue] / [estimate]"));
         assert_eq!(get("belt.f"), None);
@@ -687,21 +884,51 @@ g = 1
         assert_eq!(margin(f64::INFINITY), "–");
         assert_eq!(tick_step(10.0), 2.0);
         assert_eq!(tick_step(0.7), 0.2);
-        assert_eq!((tick(0.5, 0.5), tick(2.0, 1.0), tick(-1e-17, 0.2), tick(0.4, 0.2)), ("0.5".into(), "2".into(), "0.0".into(), "0.4".into()));
+        assert_eq!(
+            (tick(0.5, 0.5), tick(2.0, 1.0), tick(-1e-17, 0.2), tick(0.4, 0.2)),
+            ("0.5".into(), "2".into(), "0.0".into(), "0.4".into())
+        );
     }
 
     #[test]
     fn pdf_is_well_formed() {
-        let rows: Vec<(Vec<String>, bool)> = (0..200).map(|i| (vec![format!("row {i} (with brackets) and a long text that wraps over more than one line of its column"), "1.0".into()], i == 3)).collect();
-        let plot = Plot { title: "p".into(), x_label: "x".into(), y_label: "y".into(), series: vec![("a".into(), vec![[0.0, 1.0], [1.0, -2.0]], false), ("b".into(), vec![[0.5, 0.5]], true)] };
-        let report = Report { title: "Größe – test".into(), blocks: vec![Block::Heading("h".into()), Block::Table(vec!["a".into(), "b".into()], rows), Block::Plot(plot), Block::SignOff(vec!["x".into()], vec!["Name".into()])], passed: true };
+        let rows: Vec<(Vec<String>, bool)> = (0..200)
+            .map(|i| {
+                (
+                    vec![
+                        format!(
+                            "row {i} (with brackets) and a long text that wraps over more than one line of its column"
+                        ),
+                        "1.0".into(),
+                    ],
+                    i == 3,
+                )
+            })
+            .collect();
+        let plot = Plot {
+            title: "p".into(),
+            x_label: "x".into(),
+            y_label: "y".into(),
+            series: vec![("a".into(), vec![[0.0, 1.0], [1.0, -2.0]], false), ("b".into(), vec![[0.5, 0.5]], true)],
+        };
+        let report = Report {
+            title: "Größe – test".into(),
+            blocks: vec![
+                Block::Heading("h".into()),
+                Block::Table(vec!["a".into(), "b".into()], rows),
+                Block::Plot(plot),
+                Block::SignOff(vec!["x".into()], vec!["Name".into()]),
+            ],
+            passed: true,
+        };
         let pdf = report.pdf();
         // One character per byte, so that offsets in the text are offsets in the file.
         let text: String = pdf.iter().map(|&b| if b.is_ascii() { b as char } else { '?' }).collect();
         assert!(text.starts_with("%PDF-1.4") && text.ends_with("%%EOF\n"));
         // Every object starts where the cross-reference table says.
         let xref: usize = text.rsplit("startxref\n").next().unwrap().lines().next().unwrap().parse().unwrap();
-        let entries: Vec<usize> = text[xref..].lines().skip(3).take_while(|l| l.ends_with(" n ")).map(|l| l[..10].parse().unwrap()).collect();
+        let entries: Vec<usize> =
+            text[xref..].lines().skip(3).take_while(|l| l.ends_with(" n ")).map(|l| l[..10].parse().unwrap()).collect();
         for (i, offset) in entries.iter().enumerate() {
             assert!(pdf[*offset..].starts_with(format!("{} 0 obj", i + 1).as_bytes()), "object {}", i + 1);
         }

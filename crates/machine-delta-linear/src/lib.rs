@@ -32,7 +32,10 @@
 //! The guides are LuGre contacts (`Lugre`), loaded across the rail by the rods' pull.
 
 use sim_components::mech::{Belt, Gearbox, HardStop, HoldingBrake, Lugre, Ripple, SectionForce, ShaftFriction};
-use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS};
+use sim_core::{
+    AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label,
+    Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS,
+};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-linear",
@@ -46,7 +49,16 @@ pub static ENTRY: MachineEntry = MachineEntry {
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 8] = ["belt_damping", "guide_friction", "load_dependent_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "temperature", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 8] = [
+    "belt_damping",
+    "guide_friction",
+    "load_dependent_friction",
+    "motor_friction",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "temperature",
+    "holding_brake",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(LinearDelta::new(cfg)?))
@@ -203,7 +215,10 @@ impl Legs {
             return None;
         }
         let base: V3 = std::array::from_fn(|k| c[0][k] + x * ex[k] + y * ey[k]);
-        let (up, down): (V3, V3) = (std::array::from_fn(|k| base[k] + z2.sqrt() * ez[k]), std::array::from_fn(|k| base[k] - z2.sqrt() * ez[k]));
+        let (up, down): (V3, V3) = (
+            std::array::from_fn(|k| base[k] + z2.sqrt() * ez[k]),
+            std::array::from_fn(|k| base[k] - z2.sqrt() * ez[k]),
+        );
         Some(if up[2] < down[2] { up } else { down })
     }
 
@@ -296,7 +311,14 @@ const N_RIGID: usize = 12;
 const N_LOSSES: usize = 14;
 
 const SECTIONS: [&str; 6] = ["belt.1", "belt.2", "belt.3", "belt.4", "belt.5", "belt.6"];
-const SECTION_KEYS: [&str; 6] = ["belt-section-1-1", "belt-section-1-2", "belt-section-2-1", "belt-section-2-2", "belt-section-3-1", "belt-section-3-2"];
+const SECTION_KEYS: [&str; 6] = [
+    "belt-section-1-1",
+    "belt-section-1-2",
+    "belt-section-2-1",
+    "belt-section-2-2",
+    "belt-section-3-1",
+    "belt-section-3-2",
+];
 const CARRIAGES: [&str; 3] = ["carriage-1", "carriage-2", "carriage-3"];
 const CONTACTS: [&str; 3] = ["carriage.1", "carriage.2", "carriage.3"];
 
@@ -321,7 +343,8 @@ impl LinearDelta {
             return Err(ConfigError::Invalid("mass.rod_carriage_share".into()));
         }
         let m_rod = cfg.non_negative("mass.rod_pair_kg")?;
-        let (radius, top, bottom) = (cfg.positive("workspace.radius_m")?, cfg.f64("workspace.top_z_m")?, cfg.f64("workspace.bottom_z_m")?);
+        let (radius, top, bottom) =
+            (cfg.positive("workspace.radius_m")?, cfg.f64("workspace.top_z_m")?, cfg.f64("workspace.bottom_z_m")?);
         if bottom >= top {
             return Err(ConfigError::Invalid("workspace.bottom_z_m".into()));
         }
@@ -372,8 +395,16 @@ impl LinearDelta {
             top,
             max_tilt,
             max_condition: cfg.positive("workspace.max_condition_number")?,
-            axes: [axis("x", "axis-x", -radius, radius)?, axis("y", "axis-y", -radius, radius)?, axis("z", "axis-z", bottom, top)?],
-            motors: [MotorInfo { id: "1", key: "motor-column-1" }, MotorInfo { id: "2", key: "motor-column-2" }, MotorInfo { id: "3", key: "motor-column-3" }],
+            axes: [
+                axis("x", "axis-x", -radius, radius)?,
+                axis("y", "axis-y", -radius, radius)?,
+                axis("z", "axis-z", bottom, top)?,
+            ],
+            motors: [
+                MotorInfo { id: "1", key: "motor-column-1" },
+                MotorInfo { id: "2", key: "motor-column-2" },
+                MotorInfo { id: "3", key: "motor-column-3" },
+            ],
             rest_slack: std::sync::OnceLock::new(),
         };
         let geo = m.geo(0.0);
@@ -401,7 +432,8 @@ impl LinearDelta {
                         if self.unreachable(&p, 0.0).is_some() {
                             continue;
                         }
-                        let (mut state, mut torque, mut motors, mut speed, mut tool) = (Vec::new(), [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]);
+                        let (mut state, mut torque, mut motors, mut speed, mut tool) =
+                            (Vec::new(), [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]);
                         self.equilibrium(&p, &mut state, &mut torque);
                         self.motor_state(&state, &mut motors, &mut speed);
                         self.forward(&motors, &mut tool);
@@ -476,7 +508,10 @@ impl LinearDelta {
 
     /// Where the plate is and the Jacobian there, for carriage heights; NaN where the legs cannot be assembled.
     fn pose(&self, h: V3) -> (V3, M3) {
-        self.legs.forward(h).and_then(|p| Some((p, self.legs.jacobian(h, p)?))).unwrap_or(([f64::NAN; 3], [[f64::NAN; 3]; 3]))
+        self.legs
+            .forward(h)
+            .and_then(|p| Some((p, self.legs.jacobian(h, p)?)))
+            .unwrap_or(([f64::NAN; 3], [[f64::NAN; 3]; 3]))
     }
 
     /// The load's mass matrix M (carriages and plate), the velocity term m_nt J^T J_x^-1 w and the generalised gravity
@@ -485,8 +520,11 @@ impl LinearDelta {
         let (p, j) = self.pose(h);
         let jt = transpose(&j);
         let m = self.m_nt();
-        let mass: M3 = std::array::from_fn(|r| std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { self.m_c } else { 0.0 }));
-        let velocity = self.legs.velocity_term(h, p, v, mul(&j, v)).map_or([f64::NAN; 3], |a| mul(&jt, a.map(|x| m * x)));
+        let mass: M3 = std::array::from_fn(|r| {
+            std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { self.m_c } else { 0.0 })
+        });
+        let velocity =
+            self.legs.velocity_term(h, p, v, mul(&j, v)).map_or([f64::NAN; 3], |a| mul(&jt, a.map(|x| m * x)));
         let gravity: V3 = std::array::from_fn(|k| -self.g * self.m_c - m * self.g * j[2][k]);
         (mass, velocity, gravity)
     }
@@ -519,15 +557,28 @@ impl LinearDelta {
         let (brakes, frictions, scales) = (self.brakes(s), self.frictions(s), self.load_scales(h));
         let (mass, velocity, gravity) = self.load(h, v);
         // Belt force the motor would give with a loss-free gearbox and a massless rotor; a brake holds the rotor.
-        let drive: V3 = std::array::from_fn(|k| ratio * (self.ripple.apply(torque[k], rotor[k]) - self.shaft.torque(speed[k]) - self.brake.torque(self.brake_engaged, speed[k], brakes[k]).0) / r);
-        let rest: V3 = std::array::from_fn(|k| gravity[k] - velocity[k] - self.friction.eval(v[k], frictions[k], scales[k]).0 + self.stop_force(h[k], v[k]));
+        let drive: V3 = std::array::from_fn(|k| {
+            ratio
+                * (self.ripple.apply(torque[k], rotor[k])
+                    - self.shaft.torque(speed[k])
+                    - self.brake.torque(self.brake_engaged, speed[k], brakes[k]).0)
+                / r
+        });
+        let rest: V3 = std::array::from_fn(|k| {
+            gravity[k] - velocity[k] - self.friction.eval(v[k], frictions[k], scales[k]).0 + self.stop_force(h[k], v[k])
+        });
         let rotor_mass = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: V3| -> V3 {
-            let m: M3 = std::array::from_fn(|i| std::array::from_fn(|c| mass[i][c] + if i == c { self.j_pulley / (r * r) + loss[i] * rotor_mass } else { 0.0 }));
+            let m: M3 = std::array::from_fn(|i| {
+                std::array::from_fn(|c| {
+                    mass[i][c] + if i == c { self.j_pulley / (r * r) + loss[i] * rotor_mass } else { 0.0 }
+                })
+            });
             inverse(&m).map_or([f64::NAN; 3], |inv| mul(&inv, std::array::from_fn(|k| loss[k] * drive[k] + rest[k])))
         };
         let first = solve([1.0; 3]);
-        let loss: V3 = std::array::from_fn(|k| self.gearbox.loss_factor((drive[k] - rotor_mass * first[k]) * r, v[k] / r));
+        let loss: V3 =
+            std::array::from_fn(|k| self.gearbox.loss_factor((drive[k] - rotor_mass * first[k]) * r, v[k] / r));
         let acc = solve(loss);
         let into: V3 = std::array::from_fn(|k| (drive[k] - rotor_mass * acc[k]) * r);
         Rigid { acc, into, out: std::array::from_fn(|k| loss[k] * into[k]) }
@@ -555,7 +606,9 @@ impl LinearDelta {
 
     /// Each section's tension; in the rigid model the pretension.
     fn tensions(&self, s: &[f64]) -> [f64; 6] {
-        std::array::from_fn(|i| if self.elastic { self.sections(s, i / 2)[i % 2].tension } else { self.belt.pretension })
+        std::array::from_fn(
+            |i| if self.elastic { self.sections(s, i / 2)[i % 2].tension } else { self.belt.pretension },
+        )
     }
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
@@ -569,7 +622,9 @@ impl LinearDelta {
             for k in 0..3 {
                 kinetic += 0.5 * (self.j_pulley * s[12 + k] * s[12 + k] + self.j_rotor * s[15 + k] * s[15 + k]);
                 let (geo, fed) = (self.geo(h[k] - self.h_min()), self.r_mat * s[3 + k]);
-                elastic += self.belt.energy(geo[0], self.mat0[0] - fed) + self.belt.energy(geo[1], self.mat0[1] + fed) + self.gearbox.energy(s[6 + k], s[3 + k]);
+                elastic += self.belt.energy(geo[0], self.mat0[0] - fed)
+                    + self.belt.energy(geo[1], self.mat0[1] + fed)
+                    + self.gearbox.energy(s[6 + k], s[3 + k]);
             }
         } else {
             let (r, ratio) = (self.r, self.gearbox.ratio);
@@ -598,12 +653,19 @@ impl LinearDelta {
                 None => {
                     let g = self.gearbox.torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
                     gear_at_rotor[k] = g.rotor - g.output / ratio;
-                    let (geo, fed, rate) = (self.geo(h[k] - self.h_min()), self.r_mat * s[3 + k], self.r_mat * s[12 + k]);
-                    let belt = self.belt.loss_power(geo[0], self.mat0[0] - fed, -v[k], -rate) + self.belt.loss_power(geo[1], self.mat0[1] + fed, v[k], rate);
+                    let (geo, fed, rate) =
+                        (self.geo(h[k] - self.h_min()), self.r_mat * s[3 + k], self.r_mat * s[12 + k]);
+                    let belt = self.belt.loss_power(geo[0], self.mat0[0] - fed, -v[k], -rate)
+                        + self.belt.loss_power(geo[1], self.mat0[1] + fed, v[k], rate);
                     (self.gearbox.loss_power(s[6 + k], s[15 + k], s[3 + k], s[12 + k]), belt)
                 }
             };
-            powers[4 * k..4 * k + 4].copy_from_slice(&[guide, (self.shaft.torque(speed[k]) + held[k]) * speed[k], gear, belt]);
+            powers[4 * k..4 * k + 4].copy_from_slice(&[
+                guide,
+                (self.shaft.torque(speed[k]) + held[k]) * speed[k],
+                gear,
+                belt,
+            ]);
             powers[12] += self.stops.loss_power(h[k] - self.h_min(), v[k], self.stroke);
             powers[13] += (torque[k] - self.ripple.apply(torque[k], rotor[k])) * speed[k];
         }
@@ -632,7 +694,10 @@ impl LinearDelta {
             let parts = [
                 r / ratio * (moving[k] + velocity[k] + inertia * acc[k]),
                 -r / ratio * gravity[k],
-                self.shaft.torque(speed[k]) + held[k] + gear_at_rotor[k] + r / ratio * self.friction.eval(v[k], frictions[k], scales[k]).0,
+                self.shaft.torque(speed[k])
+                    + held[k]
+                    + gear_at_rotor[k]
+                    + r / ratio * self.friction.eval(v[k], frictions[k], scales[k]).0,
             ];
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
@@ -648,25 +713,54 @@ impl LinearDelta {
         for i in 0..6 {
             let (k, side) = (i / 2, i % 2);
             let geo = self.geo(h[k] - self.h_min())[side];
-            let mat = if self.elastic { self.mat0[side] + if side == 0 { -1.0 } else { 1.0 } * self.r_mat * s[3 + k] } else { self.belt.rest_length(geo) };
+            let mat = if self.elastic {
+                self.mat0[side] + if side == 0 { -1.0 } else { 1.0 } * self.r_mat * s[3 + k]
+            } else {
+                self.belt.rest_length(geo)
+            };
             out.push(geo - mat);
         }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
         for motor in &self.motors {
-            out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+            out.extend(TORQUE_PARTS.map(|part| {
+                SignalInfo::new(
+                    format!("motor.{}.torque_{part}", motor.id),
+                    motor.key,
+                    &format!("quantity-torque-{part}"),
+                    "N m",
+                )
+            }));
         }
         for (k, motor) in self.motors.iter().enumerate() {
-            let gear = if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}guide_{}", motor.id), CARRIAGES[k], "quantity-friction-power", "W"));
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_{}", motor.id), motor.key, "quantity-shaft-friction-power", "W"));
+            let gear =
+                if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}guide_{}", motor.id),
+                CARRIAGES[k],
+                "quantity-friction-power",
+                "W",
+            ));
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}shaft_{}", motor.id),
+                motor.key,
+                "quantity-shaft-friction-power",
+                "W",
+            ));
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", motor.id), motor.key, gear, "W"));
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}belt_{}", motor.id), CARRIAGES[k], "quantity-damping-power", "W"));
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}belt_{}", motor.id),
+                CARRIAGES[k],
+                "quantity-damping-power",
+                "W",
+            ));
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-hard_stop", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
-        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        out.extend(ENERGY_PARTS.map(|part| {
+            SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
+        }));
         for (k, contact) in CONTACTS.iter().enumerate() {
             for part in FRICTION_SIGNALS {
                 let unit = match part {
@@ -674,10 +768,20 @@ impl LinearDelta {
                     "load_scale" => "",
                     _ => "N",
                 };
-                out.push(SignalInfo::new(format!("{contact}.friction_{part}"), CARRIAGES[k], &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+                out.push(SignalInfo::new(
+                    format!("{contact}.friction_{part}"),
+                    CARRIAGES[k],
+                    &format!("quantity-friction-{}", part.replace('_', "-")),
+                    unit,
+                ));
             }
         }
-        out.extend(SECTIONS.iter().zip(SECTION_KEYS).map(|(id, key)| SignalInfo::new(format!("{id}.stretch"), key, "quantity-section-stretch", "m")));
+        out.extend(
+            SECTIONS
+                .iter()
+                .zip(SECTION_KEYS)
+                .map(|(id, key)| SignalInfo::new(format!("{id}.stretch"), key, "quantity-section-stretch", "m")),
+        );
     }
 
     /// The plate at `p` and the payload under it, as `scene` draws them.
@@ -685,7 +789,12 @@ impl LinearDelta {
         let size = 2.4 * self.plate_radius.max(0.03);
         let mut parts = vec![Part::new("plate", Shape::Box { size: [size, size, 0.03] }, p, [0.55, 0.55, 0.6])];
         if self.payload_attached && self.m_payload > 0.0 {
-            parts.push(Part::new("payload", Shape::Box { size: [0.1, 0.1, 0.08] }, [p[0], p[1], p[2] - 0.06], [0.2, 0.7, 0.3]));
+            parts.push(Part::new(
+                "payload",
+                Shape::Box { size: [0.1, 0.1, 0.08] },
+                [p[0], p[1], p[2] - 0.06],
+                [0.2, 0.7, 0.3],
+            ));
         }
         parts
     }
@@ -777,7 +886,8 @@ impl Machine for LinearDelta {
             out[3 + k] = s[12 + k];
             out[6 + k] = s[15 + k];
             out[12 + k] = (gear.output + self.r_mat * (sec[1].material - sec[0].material)) / self.j_pulley;
-            out[15 + k] = (self.ripple.apply(torque[k], s[6 + k]) - gear.rotor - self.shaft.torque(s[15 + k]) - brake) / self.j_rotor;
+            out[15 + k] = (self.ripple.apply(torque[k], s[6 + k]) - gear.rotor - self.shaft.torque(s[15 + k]) - brake)
+                / self.j_rotor;
             out[18 + k] = ds;
             out[21 + k] = brake_rate;
         }
@@ -885,7 +995,8 @@ impl Machine for LinearDelta {
             for k in 0..3 {
                 let geo = self.geo(state[k] - self.h_min())[0];
                 state[3 + k] = (self.mat0[0] - geo + signal(format!("{}.stretch", SECTIONS[2 * k]))) / self.r_mat;
-                state[6 + k] = self.gearbox.ratio * (state[3 + k] + self.gearbox.static_twist(signal(format!("gearbox.{}.output_torque", k + 1))));
+                state[6 + k] = self.gearbox.ratio
+                    * (state[3 + k] + self.gearbox.static_twist(signal(format!("gearbox.{}.output_torque", k + 1))));
             }
         }
         state
@@ -928,12 +1039,42 @@ impl Machine for LinearDelta {
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
         for (k, motor) in self.motors.iter().enumerate() {
-            out.push(SignalInfo::new(format!("carriage.{}.height", motor.id), CARRIAGES[k], "quantity-carriage-height", "m"));
-            out.push(SignalInfo::new(format!("{}.tension", SECTIONS[2 * k]), SECTION_KEYS[2 * k], "quantity-tension", "N"));
-            out.push(SignalInfo::new(format!("{}.tension", SECTIONS[2 * k + 1]), SECTION_KEYS[2 * k + 1], "quantity-tension", "N"));
-            out.push(SignalInfo::new(format!("pulley.{}.radial_load", motor.id), motor.key, "quantity-radial-load", "N"));
-            out.push(SignalInfo::new(format!("carriage.{}.guide_load", motor.id), CARRIAGES[k], "quantity-guide-load", "N"));
-            out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
+            out.push(SignalInfo::new(
+                format!("carriage.{}.height", motor.id),
+                CARRIAGES[k],
+                "quantity-carriage-height",
+                "m",
+            ));
+            out.push(SignalInfo::new(
+                format!("{}.tension", SECTIONS[2 * k]),
+                SECTION_KEYS[2 * k],
+                "quantity-tension",
+                "N",
+            ));
+            out.push(SignalInfo::new(
+                format!("{}.tension", SECTIONS[2 * k + 1]),
+                SECTION_KEYS[2 * k + 1],
+                "quantity-tension",
+                "N",
+            ));
+            out.push(SignalInfo::new(
+                format!("pulley.{}.radial_load", motor.id),
+                motor.key,
+                "quantity-radial-load",
+                "N",
+            ));
+            out.push(SignalInfo::new(
+                format!("carriage.{}.guide_load", motor.id),
+                CARRIAGES[k],
+                "quantity-guide-load",
+                "N",
+            ));
+            out.push(SignalInfo::new(
+                format!("gearbox.{}.output_torque", motor.id),
+                motor.key,
+                "quantity-gearbox-torque",
+                "N m",
+            ));
         }
         out.push(SignalInfo::new("kinematics.condition", "group-kinematics", "quantity-condition-number", ""));
         out.push(SignalInfo::new("belt.slack_time", "group-belt", "quantity-slack-time", "s"));
@@ -947,7 +1088,14 @@ impl Machine for LinearDelta {
         let (h, _) = self.heights(s);
         let (tensions, gear, guides) = (self.tensions(s), self.gear_output(s, torque), self.guide_loads(h));
         for k in 0..3 {
-            out.extend([h[k], tensions[2 * k], tensions[2 * k + 1], tensions[2 * k] + tensions[2 * k + 1], guides[k], gear[k]]);
+            out.extend([
+                h[k],
+                tensions[2 * k],
+                tensions[2 * k + 1],
+                tensions[2 * k] + tensions[2 * k + 1],
+                guides[k],
+                gear[k],
+            ]);
         }
         let (_, j) = self.pose(h);
         out.push(condition_number(&j));
@@ -970,7 +1118,11 @@ impl Machine for LinearDelta {
     /// Two sections per column, in the order of the signals `belt.<i>.tension`: column 1's to the carriage from above and
     /// round the idler, then column 2's and 3's.
     fn belt_sections(&self) -> Vec<BeltSection> {
-        SECTIONS.iter().zip(SECTION_KEYS).map(|(id, owner_key)| BeltSection { id, owner_key, pretension: self.belt.pretension }).collect()
+        SECTIONS
+            .iter()
+            .zip(SECTION_KEYS)
+            .map(|(id, owner_key)| BeltSection { id, owner_key, pretension: self.belt.pretension })
+            .collect()
     }
 
     // shortcut: no part warms with its loss (`thermal_parts` empty): the couplings of the shipped direct drives lose
@@ -992,23 +1144,49 @@ impl Machine for LinearDelta {
         let grey = [0.62, 0.64, 0.68];
         let (top, bottom) = (self.top_stop + self.span_min, self.h_min() - self.span_min);
         let rim = self.column_radius + 0.08;
-        out.parts.push(Part::new("frame", Shape::Box { size: [2.0 * rim, 2.0 * rim, 0.04] }, [0.0, 0.0, top + 0.12], grey));
+        out.parts.push(Part::new(
+            "frame",
+            Shape::Box { size: [2.0 * rim, 2.0 * rim, 0.04] },
+            [0.0, 0.0, top + 0.12],
+            grey,
+        ));
         for k in 0..3 {
             let (c, sn) = self.legs.azimuth[k];
             let (cx, cy) = (self.column_radius * c, self.column_radius * sn);
-            out.parts.push(Part::new("column", Shape::Box { size: [0.08, 0.08, top - bottom + 0.2] }, [cx * rim / self.column_radius, cy * rim / self.column_radius, 0.5 * (top + bottom)], grey));
+            out.parts.push(Part::new(
+                "column",
+                Shape::Box { size: [0.08, 0.08, top - bottom + 0.2] },
+                [cx * rim / self.column_radius, cy * rim / self.column_radius, 0.5 * (top + bottom)],
+                grey,
+            ));
             let pulley = if self.elastic { s[3 + k] } else { rotor[k] / self.gearbox.ratio };
             // The belt's plane, in front of the column's centre; x across it, z up.
             let y = cy - 0.05;
-            let shade = [0, 1].map(|i| ((tensions[2 * k + i] - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
+            let shade = [0, 1].map(|i| {
+                ((tensions[2 * k + i] - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32
+            });
             // A positive pulley angle lifts the carriage on the run at x = cx + r: the pulley turns anticlockwise seen
             // from the front.
             drive_unit(&mut out.parts, [cx, top], y, r, pulley, rotor[k], [0.9, 0.45, 0.1]);
             idler(&mut out.parts, [cx, bottom], y, r, pulley);
-            let path = [[cx + r, h[k]], [cx + r, top], [cx, top + r], [cx - r, top], [cx - r, bottom], [cx, bottom - r], [cx + r, bottom], [cx + r, h[k]]];
+            let path = [
+                [cx + r, h[k]],
+                [cx + r, top],
+                [cx, top + r],
+                [cx - r, top],
+                [cx - r, bottom],
+                [cx, bottom - r],
+                [cx + r, bottom],
+                [cx + r, h[k]],
+            ];
             belt(&mut out.parts, &path, y, 0.025, 0.003 * 8.0, |i| shade[if i < 2 { 0 } else { 1 }]);
             let joint = [cx, cy, h[k]];
-            out.parts.push(Part::new("carriage", Shape::Box { size: [0.12, 0.06, 0.1] }, [cx + r, cy - 0.02, h[k]], [0.2, 0.22, 0.26]));
+            out.parts.push(Part::new(
+                "carriage",
+                Shape::Box { size: [0.12, 0.06, 0.1] },
+                [cx + r, cy - 0.02, h[k]],
+                [0.2, 0.22, 0.26],
+            ));
             // The two rods of the pair, apart along the carriage's width (tangential to the frame).
             let half = [-0.5 * self.rod_spacing * sn, 0.5 * self.rod_spacing * c, 0.0];
             let plate_end = [p[0] + self.plate_radius * c, p[1] + self.plate_radius * sn, p[2]];
@@ -1017,10 +1195,22 @@ impl Machine for LinearDelta {
                 let to = std::array::from_fn(|i| plate_end[i] + side * half[i]);
                 out.parts.push(Part::new("rod", Shape::Segment { to, width: 0.012 }, from, [0.15, 0.15, 0.15]));
             }
-            out.labels.push(Label { pos: [cx, cy, top + 0.25], owner_key: self.motors[k].key, value: rotor_speed[k] * 60.0 / std::f64::consts::TAU, unit_key: "unit-rpm", decimals: 0 });
+            out.labels.push(Label {
+                pos: [cx, cy, top + 0.25],
+                owner_key: self.motors[k].key,
+                value: rotor_speed[k] * 60.0 / std::f64::consts::TAU,
+                unit_key: "unit-rpm",
+                decimals: 0,
+            });
         }
         out.parts.extend(self.on_plate(p));
-        out.labels.push(Label { pos: [p[0], p[1], p[2] - 0.15], owner_key: "axis-z", value: p[2], unit_key: "unit-m", decimals: 3 });
+        out.labels.push(Label {
+            pos: [p[0], p[1], p[2] - 0.15],
+            owner_key: "axis-z",
+            value: p[2],
+            unit_key: "unit-m",
+            decimals: 3,
+        });
     }
 
     /// The plate's centre: the machine's frame is the scene's.

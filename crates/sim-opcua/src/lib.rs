@@ -72,9 +72,9 @@ use opcua::server::diagnostics::NamespaceMetadata;
 use opcua::server::node_manager::memory::{SimpleNodeManager, simple_node_manager};
 use opcua::server::{ANONYMOUS_USER_TOKEN_ID, ServerBuilder, ServerHandle};
 use opcua::types::{DataTypeId, DataValue, MessageSecurityMode, NodeId, ObjectId, StatusCode, Variant};
+use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use sim_components::{Command, Sim};
 use sim_core::{Config, MachineEntry, Translations};
-use plcopen::{Axis, ERR_CRASH, ERR_DRIVES_OFF, ERR_REFUSED, FBS};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -179,12 +179,20 @@ fn flag(value: &DataValue) -> Option<bool> {
 
 /// Starts the server on `listener` and the simulation behind it, in real time, in ticks of `cycle`.
 /// `labels` names the variables for people browsing the server; `pki_dir` holds the server's keys.
-pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translations, listener: TcpListener, pki_dir: &Path, cycle: Duration) -> Result<Link, LinkError> {
+pub async fn serve(
+    entry: &'static MachineEntry,
+    cfg: &Config,
+    labels: &Translations,
+    listener: TcpListener,
+    pki_dir: &Path,
+    cycle: Duration,
+) -> Result<Link, LinkError> {
     let sim = Sim::new(entry, cfg).map_err(|e| LinkError(e.key(), e.detail().into()))?;
     // The PLCopen axes stream one setpoint per setpoint interval, counted in simulation steps.
     let interval = cfg.f64("profile.setpoint_interval_s").map_err(|e| LinkError(e.key(), e.detail().into()))?;
     let stream_steps = ((interval / sim.dt).round() as u64).max(1);
-    let plc: Vec<Axis> = sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(info, home)| Axis::new(info, *home)).collect();
+    let plc: Vec<Axis> =
+        sim.machine.axes().iter().zip(&sim.control.set_pos).map(|(info, home)| Axis::new(info, *home)).collect();
     let address = listener.local_addr().map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
     let (server, handle) = ServerBuilder::new()
         .application_name("sim-opcua")
@@ -197,11 +205,20 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
         .host(address.ip().to_string())
         .port(address.port())
         .discovery_urls(vec![format!("opc.tcp://{address}/")])
-        .add_endpoint("none", ("/", SecurityPolicy::None, MessageSecurityMode::None, &[ANONYMOUS_USER_TOKEN_ID] as &[&str]))
-        .with_node_manager(simple_node_manager(NamespaceMetadata { namespace_uri: NAMESPACE.to_owned(), ..Default::default() }, "simulator"))
+        .add_endpoint(
+            "none",
+            ("/", SecurityPolicy::None, MessageSecurityMode::None, &[ANONYMOUS_USER_TOKEN_ID] as &[&str]),
+        )
+        .with_node_manager(simple_node_manager(
+            NamespaceMetadata { namespace_uri: NAMESPACE.to_owned(), ..Default::default() },
+            "simulator",
+        ))
         .build()
         .map_err(|e| LinkError("opcua-error-start", e.to_string()))?;
-    let manager = handle.node_managers().get_of_type::<SimpleNodeManager>().ok_or(LinkError("opcua-error-start", String::new()))?;
+    let manager = handle
+        .node_managers()
+        .get_of_type::<SimpleNodeManager>()
+        .ok_or(LinkError("opcua-error-start", String::new()))?;
     let namespace = handle.get_namespace_index(NAMESPACE).ok_or(LinkError("opcua-error-start", String::new()))?;
     let node = |name: String| NodeId::new(namespace, name);
 
@@ -214,14 +231,30 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
         let mut space = manager.address_space().write();
         let folder = node("simulator".into());
         space.add_folder(&folder, "simulator", labels.tr(entry.key), &NodeId::from(ObjectId::ObjectsFolder));
-        let add_to = |space: &mut opcua::server::address_space::AddressSpace, parent: &NodeId, id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| {
+        let add_to = |space: &mut opcua::server::address_space::AddressSpace,
+                      parent: &NodeId,
+                      id: &NodeId,
+                      name: &str,
+                      label: String,
+                      kind: DataTypeId,
+                      start: Variant,
+                      writable: bool| {
             let variable = VariableBuilder::new(id, name, label).data_type(kind).value(start).organized_by(parent);
-            let access = if writable { AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE } else { AccessLevel::CURRENT_READ };
+            let access = if writable {
+                AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE
+            } else {
+                AccessLevel::CURRENT_READ
+            };
             variable.access_level(access).user_access_level(access).insert(space);
         };
         for (i, axis) in plc.iter().enumerate() {
             let parent = node(format!("axis.{}", axes[i]));
-            space.add_folder(&parent, format!("axis.{}", axes[i]).as_str(), format!("{} · {}", labels.tr(axis_keys[i]), labels.tr("opcua-plcopen-axis")), &folder);
+            space.add_folder(
+                &parent,
+                format!("axis.{}", axes[i]).as_str(),
+                format!("{} · {}", labels.tr(axis_keys[i]), labels.tr("opcua-plcopen-axis")),
+                &folder,
+            );
             for (name, start, writable) in axis.variables(true, (0.0, 0.0)) {
                 let kind = match start {
                     Variant::Boolean(_) => DataTypeId::Boolean,
@@ -231,12 +264,24 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
                     _ => DataTypeId::Double,
                 };
                 let label = format!("{} · {name}", labels.tr(axis_keys[i]));
-                add_to(&mut space, &parent, &node(format!("axis.{}.{name}", axes[i])), &name, label, kind, start, writable);
+                add_to(
+                    &mut space,
+                    &parent,
+                    &node(format!("axis.{}.{name}", axes[i])),
+                    &name,
+                    label,
+                    kind,
+                    start,
+                    writable,
+                );
             }
         }
-        let mut add = |id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| add_to(&mut space, &folder, id, name, label, kind, start, writable);
+        let mut add = |id: &NodeId, name: &str, label: String, kind: DataTypeId, start: Variant, writable: bool| {
+            add_to(&mut space, &folder, id, name, label, kind, start, writable)
+        };
         for signal in &signals {
-            let label = format!("{} · {} [{}]", labels.tr(&signal.owner_key), labels.tr(&signal.quantity_key), signal.unit);
+            let label =
+                format!("{} · {} [{}]", labels.tr(&signal.owner_key), labels.tr(&signal.quantity_key), signal.unit);
             add(&node(format!("signal.{}", signal.id)), &signal.id, label, DataTypeId::Double, 0.0.into(), false);
         }
         for (i, axis) in axes.iter().enumerate() {
@@ -270,12 +315,13 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
         }
     }
     // Writes arrive on the server's tasks; they are queued for the simulation loop.
-    let on_write = |name: String, convert: fn(&DataValue, usize) -> Option<Input>, index: usize, inputs: Sender<Input>| {
-        manager.inner().add_write_callback(node(name), move |value, _| match convert(&value, index) {
-            Some(input) => inputs.send(input).map_or(StatusCode::BadShutdown, |_| StatusCode::Good),
-            None => StatusCode::BadTypeMismatch,
-        });
-    };
+    let on_write =
+        |name: String, convert: fn(&DataValue, usize) -> Option<Input>, index: usize, inputs: Sender<Input>| {
+            manager.inner().add_write_callback(node(name), move |value, _| match convert(&value, index) {
+                Some(input) => inputs.send(input).map_or(StatusCode::BadShutdown, |_| StatusCode::Good),
+                None => StatusCode::BadTypeMismatch,
+            });
+        };
     for (i, axis) in axes.iter().enumerate() {
         on_write(format!("command.target.{axis}"), |v, i| Some(Input::Target(i, number(v)?)), i, inputs.clone());
         on_write(format!("command.setpoint.{axis}"), |v, i| Some(Input::Setpoint(i, number(v)?)), i, inputs.clone());
@@ -296,7 +342,11 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
             let inputs = inputs.clone();
             let is_flag = matches!(start, Variant::Boolean(_));
             manager.inner().add_write_callback(node(format!("axis.{}.{name}", axes[i])), move |value, _| {
-                let input = if is_flag { flag(&value).map(|on| Input::AxisFlag(i, name.clone(), on)) } else { number(&value).map(|v| Input::AxisNumber(i, name.clone(), v)) };
+                let input = if is_flag {
+                    flag(&value).map(|on| Input::AxisFlag(i, name.clone(), on))
+                } else {
+                    number(&value).map(|v| Input::AxisNumber(i, name.clone(), v))
+                };
                 match input {
                     Some(input) => inputs.send(input).map_or(StatusCode::BadShutdown, |_| StatusCode::Good),
                     None => StatusCode::BadTypeMismatch,
@@ -307,7 +357,18 @@ pub async fn serve(entry: &'static MachineEntry, cfg: &Config, labels: &Translat
 
     let pacing = Arc::new(Mutex::new(Pacing { cycle_s: cycle.as_secs_f64(), ..Default::default() }));
     tokio::spawn(server.run_with(listener));
-    tokio::spawn(simulate(SimLoop { sim, inbox, handle: handle.clone(), namespace, axes, plc, stream_steps, interval, cycle, pacing: pacing.clone() }));
+    tokio::spawn(simulate(SimLoop {
+        sim,
+        inbox,
+        handle: handle.clone(),
+        namespace,
+        axes,
+        plc,
+        stream_steps,
+        interval,
+        cycle,
+        pacing: pacing.clone(),
+    }));
     Ok(Link { handle, namespace, pacing })
 }
 
@@ -361,10 +422,21 @@ async fn simulate(mut s: SimLoop) {
     // The path the PLC has written, and whether to plan it as fast as the motors allow.
     let (mut path, mut time_optimal) = (String::new(), false);
     let mut sample = Vec::new();
-    let actual: Vec<(Option<usize>, Option<usize>)> =
-        s.axes.iter().map(|id| (s.sim.signal_index(&format!("axis.{id}.position")), s.sim.signal_index(&format!("axis.{id}.velocity")))).collect();
-    let axis_nodes: Vec<Vec<NodeId>> =
-        s.plc.iter().zip(&s.axes).map(|(axis, id)| axis.variables(true, (0.0, 0.0)).into_iter().map(|(name, _, _)| node(format!("axis.{id}.{name}"))).collect()).collect();
+    let actual: Vec<(Option<usize>, Option<usize>)> = s
+        .axes
+        .iter()
+        .map(|id| {
+            (s.sim.signal_index(&format!("axis.{id}.position")), s.sim.signal_index(&format!("axis.{id}.velocity")))
+        })
+        .collect();
+    let axis_nodes: Vec<Vec<NodeId>> = s
+        .plc
+        .iter()
+        .zip(&s.axes)
+        .map(|(axis, id)| {
+            axis.variables(true, (0.0, 0.0)).into_iter().map(|(name, _, _)| node(format!("axis.{id}.{name}"))).collect()
+        })
+        .collect();
     // Whether a PLCopen axis was powered at the last tick: switched off all together, the drives go off.
     let mut was_powered = false;
     let mut last = Instant::now();
@@ -490,7 +562,8 @@ async fn simulate(mut s: SimLoop) {
         setpoint.copy_from_slice(s.sim.control.external_setpoint());
 
         s.sim.sample(&mut sample);
-        let mut values: Vec<(NodeId, DataValue)> = signal_nodes.iter().cloned().zip(sample.iter().map(|v| DataValue::new_now(*v))).collect();
+        let mut values: Vec<(NodeId, DataValue)> =
+            signal_nodes.iter().cloned().zip(sample.iter().map(|v| DataValue::new_now(*v))).collect();
         for (i, axis) in s.axes.iter().enumerate() {
             values.push((node(format!("command.target.{axis}")), DataValue::new_now(target[i])));
             values.push((node(format!("command.setpoint.{axis}")), DataValue::new_now(setpoint[i])));
@@ -518,7 +591,8 @@ async fn simulate(mut s: SimLoop) {
                 values.push((id.clone(), DataValue::new_now(value)));
             }
         }
-        let _ = manager.set_values(s.handle.subscriptions(), values.iter().map(|(id, value)| (id, None, value.clone())));
+        let _ =
+            manager.set_values(s.handle.subscriptions(), values.iter().map(|(id, value)| (id, None, value.clone())));
     }
 }
 
@@ -528,7 +602,10 @@ mod tests {
     #[test]
     fn every_link_message_exists_in_every_language() {
         let sources = [include_str!("lib.rs"), include_str!("main.rs")].concat();
-        let keys: Vec<&str> = sources.split('"').filter(|s| s.starts_with("opcua-") && s.len() > 6 && s.chars().all(|c| c.is_ascii_lowercase() || c == '-')).collect();
+        let keys: Vec<&str> = sources
+            .split('"')
+            .filter(|s| s.starts_with("opcua-") && s.len() > 6 && s.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            .collect();
         assert!(keys.len() >= 10, "{keys:?}");
         for (lang, text) in super::I18N {
             let tr = sim_core::Translations::parse(text);

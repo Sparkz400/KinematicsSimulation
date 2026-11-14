@@ -32,7 +32,13 @@ impl ConfigError {
     }
     pub fn detail(&self) -> &str {
         match self {
-            Self::Parse(d) | Self::Version(d) | Self::Missing(d) | Self::Type(d) | Self::Invalid(d) | Self::Unknown(d) | Self::Part(_, d) => d,
+            Self::Parse(d)
+            | Self::Version(d)
+            | Self::Missing(d)
+            | Self::Type(d)
+            | Self::Invalid(d)
+            | Self::Unknown(d)
+            | Self::Part(_, d) => d,
         }
     }
 }
@@ -123,7 +129,8 @@ impl Config {
         let (parents, leaf) = path.rsplit_once('.').unwrap_or(("", path));
         let mut table = &mut self.0;
         for part in parents.split('.').filter(|p| !p.is_empty()) {
-            table = table.get_mut(part).and_then(Value::as_table_mut).ok_or_else(|| ConfigError::Missing(path.into()))?;
+            table =
+                table.get_mut(part).and_then(Value::as_table_mut).ok_or_else(|| ConfigError::Missing(path.into()))?;
         }
         table.insert(leaf.into(), value);
         Ok(())
@@ -225,7 +232,9 @@ mod tests {
     #[test]
     fn a_key_the_schema_does_not_have_is_refused() {
         let schema = Config::parse(TEXT).unwrap();
-        let file = |text: &str| Config::parse(&format!("format_version = 1\n{text}")).unwrap().check_keys(&schema, &["a.more_kg"]);
+        let file = |text: &str| {
+            Config::parse(&format!("format_version = 1\n{text}")).unwrap().check_keys(&schema, &["a.more_kg"])
+        };
         assert_eq!(file("[a]\nmass_kg = 3.0\nmore_kg = 1.0\n[bounds]\nanything = [1, 2]\n"), Ok(()));
         assert_eq!(file("[a]\nmas_kg = 3.0\n"), Err(ConfigError::Unknown("a.mas_kg".into())));
         assert_eq!(file("[a.b]\nlist = [1]\nmore = 1\n"), Err(ConfigError::Unknown("a.b.more".into())));

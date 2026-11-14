@@ -40,9 +40,21 @@ const PAIRS: [(&str, &str); 2] = [("single-axis", "single-axis.toml"), ("t-gantr
 const VARIANTS: [&[&str]; 5] = [
     &[],
     &["effects.belt_stretch = false"],
-    &["effects.guide_friction = false", "effects.motor_friction = false", "effects.gearbox_efficiency = false", "effects.torque_ripple = false", "effects.tooth_meshing = false", "effects.belt_damping = false"],
+    &[
+        "effects.guide_friction = false",
+        "effects.motor_friction = false",
+        "effects.gearbox_efficiency = false",
+        "effects.torque_ripple = false",
+        "effects.tooth_meshing = false",
+        "effects.belt_damping = false",
+    ],
     &["effects.gravity = false", "effects.belt_stretch = false", "effects.hard_stops = false"],
-    &["effects.belt_mass = false", "effects.gearbox_backlash = false", "effects.payload = false", "effects.load_dependent_friction = false"],
+    &[
+        "effects.belt_mass = false",
+        "effects.gearbox_backlash = false",
+        "effects.payload = false",
+        "effects.load_dependent_friction = false",
+    ],
 ];
 
 fn close(a: f64, b: f64, tol: f64) -> bool {
@@ -80,7 +92,12 @@ fn shared_signals(a: &dyn Machine, b: &dyn Machine, sa: &[f64], sb: &[f64], torq
 fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &str) {
     let [(ea, ca), (eb, cb)] = pair(id, name, changes);
     let (mut a, mut b) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
-    let ids = |m: &dyn Machine| (m.axes().iter().map(|a| (a.id, a.min, a.max, a.max_vel)).collect::<Vec<_>>(), m.motors().iter().map(|m| m.id).collect::<Vec<_>>());
+    let ids = |m: &dyn Machine| {
+        (
+            m.axes().iter().map(|a| (a.id, a.min, a.max, a.max_vel)).collect::<Vec<_>>(),
+            m.motors().iter().map(|m| m.id).collect::<Vec<_>>(),
+        )
+    };
     assert_eq!(ids(a.as_ref()), ids(b.as_ref()), "{what}");
     for machine in [&mut a, &mut b] {
         machine.set_part_temperatures(rises);
@@ -153,10 +170,15 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
         assert_close(&format!("{what}: rigid tensions"), &ra, &rb, 1e-9);
 
         let shared = shared_signals(a.as_ref(), b.as_ref(), &sa, &sb, &torque, what);
-        assert!(shared >= b.signal_infos().len() * 9 / 10, "{what}: only {shared} of the file machine's signals are the crate's");
+        assert!(
+            shared >= b.signal_infos().len() * 9 / 10,
+            "{what}: only {shared} of the file machine's signals are the crate's"
+        );
         // The spans (nodes span_1 to span_8 in the file) give their signals the crate's names, so the comparison above
         // took their frequencies too.
-        let names = |m: &dyn Machine| m.signal_infos().iter().filter(|s| s.id.starts_with("belt.span.")).map(|s| s.id.clone()).collect::<Vec<_>>();
+        let names = |m: &dyn Machine| {
+            m.signal_infos().iter().filter(|s| s.id.starts_with("belt.span.")).map(|s| s.id.clone()).collect::<Vec<_>>()
+        };
         assert_eq!(names(a.as_ref()), names(b.as_ref()), "{what}: span signals");
     }
 }
@@ -176,13 +198,27 @@ fn the_netlist_machines_are_their_crates() {
 /// give the same numbers. The parts warm by 10 to 40 K for the thermal feedback.
 #[test]
 fn the_effects_of_a_machine_file_are_its_crates() {
-    let effects = ["frame_compliance", "idlers", "cable_chain", "process_force", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration"];
+    let effects = [
+        "frame_compliance",
+        "idlers",
+        "cable_chain",
+        "process_force",
+        "thermal_feedback",
+        "belt_tooth_jump",
+        "belt_span_vibration",
+    ];
     let rises = [10.0, 20.0, 30.0, 40.0];
     for rigid in [false, true] {
         let stretch = format!("effects.belt_stretch = {}", !rigid);
         for effect in effects {
             let on = format!("effects.{effect} = true");
-            same_machine("t-gantry", "t-gantry.toml", &[&stretch, &on, "effects.part_heating = true"], &rises, &format!("{effect}, rigid {rigid}"));
+            same_machine(
+                "t-gantry",
+                "t-gantry.toml",
+                &[&stretch, &on, "effects.part_heating = true"],
+                &rises,
+                &format!("{effect}, rigid {rigid}"),
+            );
         }
         let all: Vec<String> = effects.iter().map(|e| format!("effects.{e} = true")).collect();
         let mut changes: Vec<&str> = all.iter().map(String::as_str).collect();
@@ -196,7 +232,16 @@ fn cycle_numbers(entry: &'static MachineEntry, cfg: &Config) -> (Vec<String>, Ve
     let load = analyse_cycle(&mut Sim::new(entry, cfg).unwrap()).unwrap();
     let (mut names, mut values) = (vec!["duration".to_string()], vec![load.duration]);
     for (k, m) in load.motors.iter().enumerate() {
-        for (name, v) in [("peak torque", m.peak_torque), ("rms torque", m.rms_torque), ("peak speed", m.peak_speed), ("utilisation", m.utilisation), ("rms current", m.rms_current), ("peak current", m.peak_current), ("energy in", m.energy_in), ("energy regenerated", m.energy_regenerated)] {
+        for (name, v) in [
+            ("peak torque", m.peak_torque),
+            ("rms torque", m.rms_torque),
+            ("peak speed", m.peak_speed),
+            ("utilisation", m.utilisation),
+            ("rms current", m.rms_current),
+            ("peak current", m.peak_current),
+            ("energy in", m.energy_in),
+            ("energy regenerated", m.energy_regenerated),
+        ] {
             names.push(format!("motor {k} {name}"));
             values.push(v);
         }
@@ -216,13 +261,19 @@ fn cycle_numbers(entry: &'static MachineEntry, cfg: &Config) -> (Vec<String>, Ve
 fn the_netlist_machines_run_their_crates_cycle() {
     for (id, name) in PAIRS {
         for rigid in [false, true] {
-            let changes = ["effects.encoder_resolution = false".to_string(), format!("effects.belt_stretch = {}", !rigid)];
+            let changes =
+                ["effects.encoder_resolution = false".to_string(), format!("effects.belt_stretch = {}", !rigid)];
             let changes: Vec<&str> = changes.iter().map(String::as_str).collect();
             let [(ea, ca), (eb, cb)] = pair(id, name, &changes);
             let ((names, crate_values), (file_names, values)) = (cycle_numbers(ea, &ca), cycle_numbers(eb, &cb));
             assert_eq!(names, file_names, "{id} rigid {rigid}: the same numbers, limits and verdicts");
             for (i, name) in names.iter().enumerate() {
-                assert!(close(crate_values[i], values[i], 1e-5), "{id} rigid {rigid}: {name}: crate {}, file {}", crate_values[i], values[i]);
+                assert!(
+                    close(crate_values[i], values[i], 1e-5),
+                    "{id} rigid {rigid}: {name}: crate {}, file {}",
+                    crate_values[i],
+                    values[i]
+                );
             }
         }
     }
@@ -253,7 +304,13 @@ fn the_netlist_machines_give_their_crates_verdicts() {
         assert_eq!(names, file_names, "{id}: the same numbers, limits and verdicts");
         for (i, name) in names.iter().enumerate() {
             let allowed = (3.0 * spread[i]).max(1e-4 * (1.0 + nominal[i].abs()));
-            assert!((values[i] - nominal[i]).abs() <= allowed, "{id}: {name}: crate {}, file {}, crate's own spread {}", nominal[i], values[i], spread[i]);
+            assert!(
+                (values[i] - nominal[i]).abs() <= allowed,
+                "{id}: {name}: crate {}, file {}, crate's own spread {}",
+                nominal[i],
+                values[i],
+                spread[i]
+            );
         }
     }
 }
@@ -282,7 +339,10 @@ fn the_json_schema_file_is_current() {
         std::fs::write(&path, &schema).unwrap();
     }
     let on_disk = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-    assert!(on_disk == schema, "schema/machine-file.schema.json is out of date: run the tests with MACHINE_SCHEMA_WRITE=1");
+    assert!(
+        on_disk == schema,
+        "schema/machine-file.schema.json is out of date: run the tests with MACHINE_SCHEMA_WRITE=1"
+    );
     // It is valid JSON and lists every node kind.
     let parsed: serde_json::Value = serde_json::from_str(&schema).unwrap();
     for (list, ..) in sim_netlist::netlist::NODES {
@@ -317,7 +377,8 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     let one = |from: &'static str, to: &'static str| move |t: &str| t.replacen(from, to, 1);
 
     // A reference to a node that is not there.
-    let (e, line) = refused(one("pulleys = { pulley_a = -1, pulley_b = 1 }", "pulleys = { pulley_a = -1, pulley_c = 1 }"));
+    let (e, line) =
+        refused(one("pulleys = { pulley_a = -1, pulley_b = 1 }", "pulleys = { pulley_a = -1, pulley_c = 1 }"));
     assert_eq!(e, ConfigError::Invalid("machine.section[2].pulleys.pulley_c".into()));
     assert_eq!(line, Some(line_with(&text, "pulleys = { pulley_a = -1, pulley_b = 1 }")));
 
@@ -358,11 +419,6 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     assert_eq!(line, Some(text.lines().position(|l| l == "[machine]").unwrap() + 2));
 }
 
-
-
-
-
-
 /// Every shipped machine file, the H-bot of docs/machine-files.md among them, passes the standard suite of every
 /// machine (round trip, static hold, determinism, energy conservation without losses, the loss budget with them), on
 /// its file without losses, elastic and rigid.
@@ -378,7 +434,17 @@ fn every_machine_file_passes_the_standard_suite() {
         let mut configs = Vec::new();
         for elastic in [true, false] {
             let mut cfg = shipped.config();
-            for effect in ["belt_damping", "guide_friction", "load_dependent_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "tooth_meshing", "temperature", "holding_brake"] {
+            for effect in [
+                "belt_damping",
+                "guide_friction",
+                "load_dependent_friction",
+                "motor_friction",
+                "gearbox_efficiency",
+                "torque_ripple",
+                "tooth_meshing",
+                "temperature",
+                "holding_brake",
+            ] {
                 cfg.set_text(&format!("effects.{effect} = false")).unwrap();
             }
             for damping in ["gearbox.damping_nm_s_rad = 0.0", "hard_stop.damping_n_s_m = 0.0"] {
@@ -480,7 +546,8 @@ fn the_portal_moves_and_holds_as_worked_out_by_hand() {
     assert_eq!([0, 2].map(|k| sim.control.drive_params_of(k).rated_torque), [1.27, 0.635]);
     let load = analyse_cycle(&mut Sim::new(entry, &entry.config()).unwrap()).unwrap();
     let all = verdicts(&entry.config(), &load).unwrap();
-    let limit = |check: &str, motor: usize| all.iter().find(|v| v.check == check && v.motor == Some(motor)).map(|v| v.limit);
+    let limit =
+        |check: &str, motor: usize| all.iter().find(|v| v.check == check && v.motor == Some(motor)).map(|v| v.limit);
     assert_eq!((limit("drive-current", 0), limit("drive-current", 2)), (Some(3.0), Some(1.5)));
     assert_eq!((limit("gearbox-continuous", 0), limit("gearbox-continuous", 2)), (Some(40.0), Some(18.0)));
     assert!(all.iter().all(|v| v.ok), "{all:?}");

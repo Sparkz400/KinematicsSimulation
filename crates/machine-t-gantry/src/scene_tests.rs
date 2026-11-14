@@ -43,7 +43,12 @@ fn deflections_drawn_larger_move_the_tool_by_the_factor() {
         assert!((flange[0] - expected).abs() < 1e-12, "x{k}: flange at {}, by hand {expected}", flange[0]);
         if k == 1.0 {
             let mapped = m.scene_point(&tool).unwrap();
-            assert!((flange[0] - mapped[0]).abs() < 1e-12, "as it is, the flange is where the tool is: {} {}", flange[0], mapped[0]);
+            assert!(
+                (flange[0] - mapped[0]).abs() < 1e-12,
+                "as it is, the flange is where the tool is: {} {}",
+                flange[0],
+                mapped[0]
+            );
         }
         // The column's top is above the carriage: it moves against the tool.
         let clamp = part(&scene, "clamp", 0).pos[0];
@@ -79,7 +84,11 @@ fn the_cable_chain_keeps_its_length_and_its_loop_moves_half_as_far() {
             // The last link ends at the bracket: its middle at most a link short of it (just inside the loop where the
             // upper run is shorter than a link).
             let last = chain.last().unwrap();
-            assert!((bracket - last.pos[0]).abs() < 0.035 && last.pos[0] < bracket, "at {x}: last link at {}, bracket {bracket}", last.pos[0]);
+            assert!(
+                (bracket - last.pos[0]).abs() < 0.035 && last.pos[0] < bracket,
+                "at {x}: last link at {}, bracket {bracket}",
+                last.pos[0]
+            );
             let loop_left = chain.iter().map(|p| p.pos[0]).fold(f64::MAX, f64::min);
             let by_hand = span + x - 0.1 - 0.02 - x / 2.0 - 0.09;
             assert!((loop_left - by_hand).abs() < 0.002, "span {span} at {x}: loop at {loop_left}, by hand {by_hand}");
@@ -143,18 +152,26 @@ fn the_mode_shape_is_the_eigenvector_of_the_carriage_and_the_leaning_z_axis() {
             assert!(vu > vx, "z = {z}: low on the Z axis mostly lean: {vx} {vu}");
         }
         if z == 0.05 {
-            assert!((w2 - 2.394e4).abs() < 10.0 && (tip - 2.585).abs() < 1e-3 && (vx - 0.050).abs() < 1e-3 && (vu - 0.368).abs() < 1e-3, "{w2} {tip} {vx} {vu}");
+            assert!(
+                (w2 - 2.394e4).abs() < 10.0
+                    && (tip - 2.585).abs() < 1e-3
+                    && (vx - 0.050).abs() < 1e-3
+                    && (vu - 0.368).abs() < 1e-3,
+                "{w2} {tip} {vx} {vu}"
+            );
         }
     }
     // No resonance, no mode.
-    assert!(TGantry::new(&{
-        let mut cfg = ENTRY.config();
-        cfg.set_text("effects.tool_flex = false").unwrap();
-        cfg
-    })
-    .unwrap()
-    .mode_shape(&[x, 0.05])
-    .is_none());
+    assert!(
+        TGantry::new(&{
+            let mut cfg = ENTRY.config();
+            cfg.set_text("effects.tool_flex = false").unwrap();
+            cfg
+        })
+        .unwrap()
+        .mode_shape(&[x, 0.05])
+        .is_none()
+    );
 }
 
 /// Equilibrium plus 1e-3 times the shape moves the tool by 1e-3 m (`tool_state`) and, drawn as it is, the flange
@@ -210,7 +227,11 @@ fn a_belt_span_sags_by_its_catenary() {
     // The deepest drawn point of the upper left span.
     let middle = |scene: &Scene| {
         let (points, _) = belt_drawn(scene);
-        points.iter().filter(|p| p[0] > 1e-9 && p[0] < span - 1e-9 && p[2] > 0.0).map(|p| r - p[2]).fold(f64::MIN, f64::max)
+        points
+            .iter()
+            .filter(|p| p[0] > 1e-9 && p[0] < span - 1e-9 && p[2] > 0.0)
+            .map(|p| r - p[2])
+            .fold(f64::MIN, f64::max)
     };
     let tension = m.sections(&rest)[0].tension;
     assert!((tension - 300.0).abs() < 60.0, "{tension} N");
@@ -247,7 +268,8 @@ fn belt_teeth_stay_put_and_the_sag_lengthens_the_belt_as_its_shape_says() {
     let mut slack = rest.clone();
     slack[A] += 0.1;
     let (span, s0, s1) = (0.52, span_sag(0.1 * 9.80665, 0.52, m.sections(&rest)[0].tension), 0.015);
-    let longer = belt_length(&belt_drawn(&drawn(&m, &slack, 1.0)).0) - belt_length(&belt_drawn(&drawn(&m, &rest, 1.0)).0);
+    let longer =
+        belt_length(&belt_drawn(&drawn(&m, &slack, 1.0)).0) - belt_length(&belt_drawn(&drawn(&m, &rest, 1.0)).0);
     let smooth = 3.0375 * (s1 * s1 - s0 * s0) / span;
     assert!(longer < smooth && longer > 0.9 * smooth, "drawn {longer} m longer, the smooth sag {smooth} m");
 }

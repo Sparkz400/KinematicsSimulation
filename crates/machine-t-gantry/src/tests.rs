@@ -108,7 +108,8 @@ fn guide_friction_grows_with_acceleration_and_overhang() {
 #[test]
 fn stiff_belt_converges_to_the_rigid_reference() {
     let travel = |edit: &[&str], substeps: u32| {
-        let mut all = vec!["effects.gearbox_backlash = false", "effects.frame_compliance = false", "effects.tool_flex = false"];
+        let mut all =
+            vec!["effects.gearbox_backlash = false", "effects.frame_compliance = false", "effects.tool_flex = false"];
         all.extend(edit);
         let m = machine(ENTRY.config(), &all);
         let mut run = PulseRun::new(&m, DT, 1.0, 0.2);
@@ -132,7 +133,8 @@ fn stiff_belt_converges_to_the_rigid_reference() {
 
 /// The torque pattern of the reference move: a push, a pause, a pull back.
 fn reference_pulse(t: f64) -> f64 {
-    let bump = |t0: f64| if t > t0 && t < t0 + 0.15 { (std::f64::consts::PI * (t - t0) / 0.15).sin().powi(2) } else { 0.0 };
+    let bump =
+        |t0: f64| if t > t0 && t < t0 + 0.15 { (std::f64::consts::PI * (t - t0) / 0.15).sin().powi(2) } else { 0.0 };
     bump(0.0) - bump(0.3)
 }
 
@@ -203,7 +205,11 @@ fn exct_30_config_agrees_with_the_catalogue() {
     // The motor, from the row of the 1FK2205-4AF in the Siemens file.
     let motor = row(include_str!("../../../catalog/siemens/motors_s210.csv"), "1FK2205-4AF,");
     assert!(close(cfg.f64("motor.rotor_inertia_kgm2").unwrap(), motor("rotor_inertia_kgm2"), 1e-9));
-    assert!(close(cfg.f64("motor.torque_constant_nm_a").unwrap(), motor("static_torque_nm") / motor("stall_current_a"), 1e-3));
+    assert!(close(
+        cfg.f64("motor.torque_constant_nm_a").unwrap(),
+        motor("static_torque_nm") / motor("stall_current_a"),
+        1e-3
+    ));
     assert!(cfg.f64("drive.peak_torque_nm").unwrap() <= motor("max_torque_nm"));
     assert!(close(cfg.f64("drive.rated_speed_rad_s").unwrap(), motor("rated_speed_400v_rad_s"), 1e-3));
 
@@ -215,9 +221,16 @@ fn exct_30_config_agrees_with_the_catalogue() {
         let gantry = machine(cfg.clone(), &[&format!("mass.payload_kg = {load:?}")]);
         let mut torque = [0.0; 2];
         gantry.feedforward_torque(&[0.5, 0.1], &[a / 2f64.sqrt(), a / 2f64.sqrt()], &mut torque);
-        let festo_torque = a * (c("load_factor_m") * load + c("motor_inertia_factor_1_m") * motor("rotor_inertia_kgm2") + c("constant_kg_m"))
+        let festo_torque = a
+            * (c("load_factor_m") * load
+                + c("motor_inertia_factor_1_m") * motor("rotor_inertia_kgm2")
+                + c("constant_kg_m"))
             + c("gravity_factor_nm_kg") * (c("gravity_mass_kg") + load);
-        assert!(close(torque[0], festo_torque, 0.02), "a = {a}, load = {load}: {} against Festo's {festo_torque}", torque[0]);
+        assert!(
+            close(torque[0], festo_torque, 0.02),
+            "a = {a}, load = {load}: {} against Festo's {festo_torque}",
+            torque[0]
+        );
     }
 }
 
@@ -240,7 +253,11 @@ fn leaning_z_axis_matches_the_two_mass_hand_calculation() {
         assert!((d[V + U] + u * k * (1.0 / m_z + 1.0 / m_c)).abs() < 1e-6 * u * k, "z = {z}: {} m/s2", d[V + U]);
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
         m.tool_state(&state, &mut pos, &mut vel);
-        assert!((pos[0] - 0.5 - k * u * (1.0 / lateral + h * h_tool / tilt)).abs() < 1e-12, "tip at z = {z}: {}", pos[0] - 0.5);
+        assert!(
+            (pos[0] - 0.5 - k * u * (1.0 / lateral + h * h_tool / tilt)).abs() < 1e-12,
+            "tip at z = {z}: {}",
+            pos[0] - 0.5
+        );
         // Lower down the arm is longer and the axis leans more easily.
         let hz = (k * (1.0 / m_z + 1.0 / m_c)).sqrt() / std::f64::consts::TAU;
         assert!(hz > softer && hz > 20.0 && hz < 400.0, "{hz} Hz at z = {z}");
@@ -261,7 +278,8 @@ fn leaning_z_axis_matches_the_two_mass_hand_calculation() {
 fn sensitivity_shows_that_the_lifted_mass_matters_and_the_tooth_pitch_hardly() {
     let paths = ["mass.z_axis_kg".to_string(), "belt.tooth_pitch_m".to_string()];
     let (nominal, rows) = sim_components::analysis::sensitivity(&ENTRY, &ENTRY.config(), &paths, 0.2).unwrap();
-    let peak = |load: &sim_components::analysis::CycleLoad| load.motors[0].peak_torque / nominal.motors[0].peak_torque - 1.0;
+    let peak =
+        |load: &sim_components::analysis::CycleLoad| load.motors[0].peak_torque / nominal.motors[0].peak_torque - 1.0;
     let (mass, pitch) = (&rows[0], &rows[1]);
     assert!(peak(&mass.low) < -0.03 && peak(&mass.high) > 0.03, "{} and {}", peak(&mass.low), peak(&mass.high));
     assert!(peak(&pitch.low).abs() < peak(&mass.high) && peak(&pitch.high).abs() < peak(&mass.high));
@@ -292,39 +310,65 @@ fn path_error_on_a_circle_matches_the_hand_calculation() {
     for i in 0..=steps {
         let t = i as f64 * dt;
         points.push((t, vec![0.5 + radius * f64::cos(angle), 0.25 + radius * f64::sin(angle)]));
-        let share = if t < ramp { t / ramp } else if t > ramp + steady { (2.0 * ramp + steady - t) / ramp } else { 1.0 };
+        let share = if t < ramp {
+            t / ramp
+        } else if t > ramp + steady {
+            (2.0 * ramp + steady - t) / ramp
+        } else {
+            1.0
+        };
         angle += w * (std::f64::consts::FRAC_PI_2 * share.clamp(0.0, 1.0)).sin().powi(2) * dt;
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
     let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
-    assert!((load.path_error_peak - off_path).abs() < 0.1 * off_path, "{} m off the path, by hand {off_path} m", load.path_error_peak);
-    assert!((load.tracking_error_peak - behind).abs() < 0.1 * behind, "{} m behind, by hand {behind} m", load.tracking_error_peak);
+    assert!(
+        (load.path_error_peak - off_path).abs() < 0.1 * off_path,
+        "{} m off the path, by hand {off_path} m",
+        load.path_error_peak
+    );
+    assert!(
+        (load.tracking_error_peak - behind).abs() < 0.1 * behind,
+        "{} m behind, by hand {behind} m",
+        load.tracking_error_peak
+    );
     assert!(load.path_error_rms < load.path_error_peak && load.path_error_peak < 0.1 * load.tracking_error_peak);
 
     // A path that starts elsewhere, or runs backwards in time, is refused.
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
-    let refused = |sim: &mut sim_components::Sim, points| sim.command(sim_components::Command::Trajectory(points)).unwrap_err().key;
+    let refused = |sim: &mut sim_components::Sim, points| {
+        sim.command(sim_components::Command::Trajectory(points)).unwrap_err().key
+    };
     assert_eq!(refused(&mut sim, vec![(0.0, vec![0.3, 0.25]), (1.0, vec![0.4, 0.25])]), "error-trajectory-start");
     assert_eq!(refused(&mut sim, vec![(0.0, vec![0.55, 0.25]), (0.0, vec![0.5, 0.25])]), "error-trajectory");
     // A spline that swings out of the travel range between via points inside it is refused as a path that
     // leaves the range, by both planners.
     let sim = sim_components::Sim::new(&ENTRY, &ENTRY.config()).unwrap();
-    let bulge = sim_components::path::parse("spline,0.3,0.5
+    let bulge = sim_components::path::parse(
+        "spline,0.3,0.5
 spline,0.5,0.5
-spline,0.7,0.35").unwrap();
+spline,0.7,0.35",
+    )
+    .unwrap();
     assert_eq!([false, true].map(|fast| sim.plan_path(&bulge, fast).unwrap_err().key), ["error-path-range"; 2]);
     // Its deviation from the path as given is refused the same way: it was reported for a path whose transition
     // curves are allowed 0.1 mm and whose arc leaves the range, and the plan refused afterwards.
     let mut cfg = ENTRY.config();
     cfg.set_text("profile.path_tolerance_m = 0.0001").unwrap();
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
-    let out = sim_components::path::parse("line,0.5,0.35
+    let out = sim_components::path::parse(
+        "line,0.5,0.35
 arc,0.25,0.1,0.5,0.1,cw
-line,0.25,0.3").unwrap();
+line,0.25,0.3",
+    )
+    .unwrap();
     for (pieces, fast) in [(&bulge, false), (&bulge, true), (&out, false), (&out, true)] {
-        assert_eq!((sim.plan_path(pieces, fast).unwrap_err().key, sim.path_deviation(pieces, fast).unwrap_err().key), ("error-path-range", "error-path-range"), "time-optimal {fast}");
+        assert_eq!(
+            (sim.plan_path(pieces, fast).unwrap_err().key, sim.path_deviation(pieces, fast).unwrap_err().key),
+            ("error-path-range", "error-path-range"),
+            "time-optimal {fast}"
+        );
     }
 }
 
@@ -340,7 +384,14 @@ fn leaning_resonance(z: f64) -> f64 {
 fn swing_after_a_traverse(z: f64, edit: &[String]) -> f64 {
     let mut cfg = ENTRY.config();
     // A sharp profile, so that the plain move does start the swing.
-    for e in ["effects.frame_compliance = false".to_string(), format!("start.pose = [0.1, {z:?}]"), "axis.x.max_jerk_m_s3 = 2000.0".to_string()].iter().chain(edit) {
+    for e in [
+        "effects.frame_compliance = false".to_string(),
+        format!("start.pose = [0.1, {z:?}]"),
+        "axis.x.max_jerk_m_s3 = 2000.0".to_string(),
+    ]
+    .iter()
+    .chain(edit)
+    {
         cfg.set_text(e).unwrap();
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
@@ -367,7 +418,12 @@ fn swing_after_a_traverse(z: f64, edit: &[String]) -> f64 {
 fn input_shaping_leaves_under_a_tenth_of_the_tool_swing() {
     let resonance = leaning_resonance(0.05);
     assert!((resonance - 26.2).abs() < 0.2, "{resonance} Hz");
-    let swing = |shaping: bool| swing_after_a_traverse(0.05, &[format!("effects.input_shaping = {shaping}"), format!("profile.shaper_frequency_hz = {resonance:?}")]);
+    let swing = |shaping: bool| {
+        swing_after_a_traverse(
+            0.05,
+            &[format!("effects.input_shaping = {shaping}"), format!("profile.shaper_frequency_hz = {resonance:?}")],
+        )
+    };
     let (plain, shaped) = (swing(false), swing(true));
     assert!(plain > 2e-6, "the plain move hardly swings: {plain} m");
     assert!(shaped < 0.1 * plain, "{shaped} m left of {plain} m");
@@ -398,14 +454,26 @@ fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
 
     let fixed = m.resonance_hz(&[0.9, 0.15]).unwrap();
     let swing = |z: f64, shaping: bool, follows: bool| {
-        swing_after_a_traverse(z, &[format!("effects.input_shaping = {shaping}"), format!("effects.shaper_follows_pose = {follows}"), format!("profile.shaper_frequency_hz = {fixed:?}")])
+        swing_after_a_traverse(
+            z,
+            &[
+                format!("effects.input_shaping = {shaping}"),
+                format!("effects.shaper_follows_pose = {follows}"),
+                format!("profile.shaper_frequency_hz = {fixed:?}"),
+            ],
+        )
     };
     for (z, fixed_is_enough) in [(0.15, true), (0.05, false)] {
         let (plain, fixed, following) = (swing(z, false, false), swing(z, true, false), swing(z, true, true));
-        println!("z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 35.6 Hz, {following:.3e} m with the shaper following");
+        println!(
+            "z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 35.6 Hz, {following:.3e} m with the shaper following"
+        );
         assert!(plain > 2e-6, "z = {z}: the plain move hardly swings: {plain} m");
         assert!(following < 0.11 * plain, "z = {z}: following, {following} m left of {plain} m");
-        assert!(if fixed_is_enough { fixed < 0.11 * plain } else { fixed > 0.15 * plain }, "z = {z}: fixed, {fixed} m left of {plain} m");
+        assert!(
+            if fixed_is_enough { fixed < 0.11 * plain } else { fixed > 0.15 * plain },
+            "z = {z}: fixed, {fixed} m left of {plain} m"
+        );
     }
 
     // A move that changes the height changes the shaper's period on the way. Its weights still add up to
@@ -421,7 +489,14 @@ fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
     }
     sim.run(0.1, |_| {});
     let c = &sim.control;
-    assert!((c.set_pos[0] - 0.9).abs() < 1e-15 && (c.set_pos[1] - 0.3).abs() < 1e-15 && c.set_vel == [0.0, 0.0] && c.set_acc == [0.0, 0.0], "{:?}", c.set_pos);
+    assert!(
+        (c.set_pos[0] - 0.9).abs() < 1e-15
+            && (c.set_pos[1] - 0.3).abs() < 1e-15
+            && c.set_vel == [0.0, 0.0]
+            && c.set_acc == [0.0, 0.0],
+        "{:?}",
+        c.set_pos
+    );
 }
 
 /// Guide loads and the radial load on the pulley shafts against a hand calculation. 0.1 N m more on both
@@ -442,7 +517,10 @@ fn guide_loads_and_shaft_loads_match_the_hand_calculation() {
     let m = rigid(&["effects.belt_mass = false"]);
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.05], &mut state, &mut hold);
-    assert!((value(&m, &state, &hold, "axis.x.guide_load") - 11.0 * G).abs() < 1e-9 && value(&m, &state, &hold, "axis.z.guide_load").abs() < 1e-9);
+    assert!(
+        (value(&m, &state, &hold, "axis.x.guide_load") - 11.0 * G).abs() < 1e-9
+            && value(&m, &state, &hold, "axis.z.guide_load").abs() < 1e-9
+    );
     let pushed = [hold[0] + 0.1, hold[1] + 0.1];
     let (x, z) = (value(&m, &state, &pushed, "axis.x.guide_load"), value(&m, &state, &pushed, "axis.z.guide_load"));
     assert!((x - (107.87 + 95.63)).abs() < 0.01 && (z - (22.95 + 95.63)).abs() < 0.01, "X guide {x} N, Z guide {z} N");
@@ -570,7 +648,15 @@ fn process_force_changes_the_holding_torque_by_the_hand_calculated_amount() {
 /// 0.05 N m on each motor is 25 N and 25 um. Friction would hold part of the force, so it is off.
 #[test]
 fn a_carriage_pushed_into_the_hard_stop_rests_at_the_hand_calculated_depth() {
-    let m = machine(ENTRY.config(), &["effects.guide_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.tooth_meshing = false"]);
+    let m = machine(
+        ENTRY.config(),
+        &[
+            "effects.guide_friction = false",
+            "effects.motor_friction = false",
+            "effects.torque_ripple = false",
+            "effects.tooth_meshing = false",
+        ],
+    );
     for (pose, push, axis, depth) in [([0.0, 0.25], [-0.1, -0.1], X, -50e-6), ([0.5, 0.5], [0.05, -0.05], Z, 25e-6)] {
         let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
         m.equilibrium(&pose, &mut state, &mut hold);
@@ -580,7 +666,10 @@ fn a_carriage_pushed_into_the_hard_stop_rests_at_the_hand_calculated_depth() {
             advance(&m, &mut rk, &mut state, &torque, DT, 4);
         }
         let beyond = state[axis] - pose[axis];
-        assert!((beyond - depth).abs() < 0.01 * depth.abs(), "axis {axis}: {beyond} m beyond the stroke, by hand {depth} m");
+        assert!(
+            (beyond - depth).abs() < 0.01 * depth.abs(),
+            "axis {axis}: {beyond} m beyond the stroke, by hand {depth} m"
+        );
         assert!(state[V + axis].abs() < 1e-6, "axis {axis} still moves at {} m/s", state[V + axis]);
     }
 }
@@ -597,7 +686,12 @@ fn holding_brakes_hold_the_z_axis_when_they_are_strong_enough() {
     for elastic in [true, false] {
         let disabled = |brake_torque: f64| {
             let mut cfg = lossless_config();
-            for e in ["effects.holding_brake = true", "effects.belt_mass = false", &format!("motor.brake_torque_nm = {brake_torque:?}"), &format!("effects.belt_stretch = {elastic}")] {
+            for e in [
+                "effects.holding_brake = true",
+                "effects.belt_mass = false",
+                &format!("motor.brake_torque_nm = {brake_torque:?}"),
+                &format!("effects.belt_stretch = {elastic}"),
+            ] {
                 cfg.set_text(e).unwrap();
             }
             let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
@@ -627,7 +721,15 @@ fn holding_brakes_hold_the_z_axis_when_they_are_strong_enough() {
 #[test]
 fn the_fit_tells_the_two_axes_apart() {
     let mut truth = ENTRY.config();
-    for (path, value) in [("mass.carriage_kg", 5.0), ("mass.payload_kg", 3.0), ("friction_x.coulomb_n", 19.5), ("friction_x.stiction_n", 26.0), ("friction_z.coulomb_n", 13.0), ("friction_z.stiction_n", 18.2), ("motor.friction_coulomb_nm", 0.026)] {
+    for (path, value) in [
+        ("mass.carriage_kg", 5.0),
+        ("mass.payload_kg", 3.0),
+        ("friction_x.coulomb_n", 19.5),
+        ("friction_x.stiction_n", 26.0),
+        ("friction_z.coulomb_n", 13.0),
+        ("friction_z.stiction_n", 18.2),
+        ("motor.friction_coulomb_nm", 0.026),
+    ] {
         truth.set_text(&format!("{path} = {value:?}")).unwrap();
     }
     // One axis at a time, each there and back: moving both at once leaves too little to tell them apart.
@@ -655,7 +757,13 @@ fn the_fit_tells_the_two_axes_apart() {
         let found = [fit.fitted[0] - fit.config[0], fit.fitted[2] / fit.config[2], fit.fitted[3] - fit.config[3]];
         let errors = [fit.error[0], fit.error[2] / fit.config[2], fit.error[3]];
         for q in 0..3 {
-            assert!((found[q] - expected[q]).abs() < 3.0 * errors[q], "value {q}: {} ± {}, expected {}", found[q], errors[q], expected[q]);
+            assert!(
+                (found[q] - expected[q]).abs() < 3.0 * errors[q],
+                "value {q}: {} ± {}, expected {}",
+                found[q],
+                errors[q],
+                expected[q]
+            );
         }
         assert!(errors[0] < 0.2 && errors[1] < 0.05 && errors[2] < 0.6, "{errors:?}");
     }
@@ -683,7 +791,8 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
         cfg.set_text(e).unwrap();
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
-    let turns = sim_components::path::parse("line,0.55,0.25\narc,0.55,0.25,0.5,0.25,ccw\narc,0.55,0.25,0.5,0.25,ccw").unwrap();
+    let turns =
+        sim_components::path::parse("line,0.55,0.25\narc,0.55,0.25,0.5,0.25,ccw\narc,0.55,0.25,0.5,0.25,ccw").unwrap();
     let points = sim.plan_path(&turns, false).unwrap();
     // Two turns at 0.25 m/s take 2.51 s; the planner adds the two ramps, and every pose is on the circle.
     let (radius, w) = (0.05, 0.25 / 0.05);
@@ -691,14 +800,23 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
     let duration = points[points.len() - 1].0;
     assert!(duration > steady && duration < steady + 0.4, "{duration} s");
     assert!(points.iter().all(|(_, p)| ((p[0] - 0.5).hypot(p[1] - 0.25) - radius).abs() < 1e-12));
-    let fastest = points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]).hypot(w[1].1[1] - w[0].1[1]) / 1e-3).fold(0.0, f64::max);
+    let fastest =
+        points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]).hypot(w[1].1[1] - w[0].1[1]) / 1e-3).fold(0.0, f64::max);
     assert!((fastest - 0.25).abs() < 1e-4, "{fastest} m/s");
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
     let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
-    assert!((load.path_error_peak - off_path).abs() < 0.1 * off_path, "{} m off the path, by hand {off_path} m", load.path_error_peak);
-    assert!((load.tracking_error_peak - behind).abs() < 0.1 * behind, "{} m behind, by hand {behind} m", load.tracking_error_peak);
+    assert!(
+        (load.path_error_peak - off_path).abs() < 0.1 * off_path,
+        "{} m off the path, by hand {off_path} m",
+        load.path_error_peak
+    );
+    assert!(
+        (load.tracking_error_peak - behind).abs() < 0.1 * behind,
+        "{} m behind, by hand {behind} m",
+        load.tracking_error_peak
+    );
 }
 
 /// Time-optimal timing of a path: a line, an arc of radius 0.1 m and a line, tangent to each other.
@@ -715,9 +833,12 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
 /// all default effects, the plan stays on the torque-speed curve.
 #[test]
 fn the_time_optimal_plan_is_shorter_keeps_a_limit_active_and_stays_on_the_torque_speed_curve() {
-    let pieces = sim_components::path::parse("line,0.5,0.35
+    let pieces = sim_components::path::parse(
+        "line,0.5,0.35
 arc,0.6,0.25,0.5,0.25,cw
-line,0.6,0.05").unwrap();
+line,0.6,0.05",
+    )
+    .unwrap();
     // The plan of a config, its duration, the share of its poses with a limit active and the most each limit is used.
     let plan = |edits: &[&str]| {
         let mut cfg = ENTRY.config();
@@ -730,8 +851,17 @@ line,0.6,0.05").unwrap();
         let active = |limit: usize| used.iter().filter(|u| u[limit] >= 0.97).count() as f64 / used.len() as f64;
         let share = used.iter().filter(|u| u.iter().any(|u| *u >= 0.97)).count() as f64 / used.len() as f64;
         let most = most_used(&used);
-        println!("{edits:?}: {} s, a limit active at {share} of the poses (torque {}, speed {}, jerk {}), most used {most:?}", points[points.len() - 1].0, active(0), active(1), active(2));
-        assert!(share > 0.6 && most.iter().all(|m| *m <= 1.001), "{edits:?}: a limit active at {share} of the poses, used to {most:?}");
+        println!(
+            "{edits:?}: {} s, a limit active at {share} of the poses (torque {}, speed {}, jerk {}), most used {most:?}",
+            points[points.len() - 1].0,
+            active(0),
+            active(1),
+            active(2)
+        );
+        assert!(
+            share > 0.6 && most.iter().all(|m| *m <= 1.001),
+            "{edits:?}: a limit active at {share} of the poses, used to {most:?}"
+        );
         (sim, points, most)
     };
     let (mut sim, points, most) = plan(&[]);
@@ -739,12 +869,18 @@ line,0.6,0.05").unwrap();
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
     assert!(duration < 0.8 * slow, "{duration} s as fast as the motors allow, {slow} s within the axis limits");
-    let most = plan(&["drive.peak_torque_nm = 0.6", "axis.x.max_jerk_m_s3 = 2000.0", "axis.z.max_jerk_m_s3 = 2000.0"]).2;
+    let most =
+        plan(&["drive.peak_torque_nm = 0.6", "axis.x.max_jerk_m_s3 = 2000.0", "axis.z.max_jerk_m_s3 = 2000.0"]).2;
     assert!(most.iter().all(|m| *m > 0.999), "a small motor: torque, speed and jerk used to {most:?}");
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     for m in &load.motors {
-        assert!(m.utilisation < 0.6 && m.peak_speed < 1.03 * 314.0, "utilisation {}, {} rad/s", m.utilisation, m.peak_speed);
+        assert!(
+            m.utilisation < 0.6 && m.peak_speed < 1.03 * 314.0,
+            "utilisation {}, {} rad/s",
+            m.utilisation,
+            m.peak_speed
+        );
     }
     assert!(load.path_error_peak < 1e-3, "{} m off the path", load.path_error_peak);
 }
@@ -764,20 +900,34 @@ fn both_planners_time_the_path_with_its_transition_curves() {
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let reported = sim.path_deviation(&pieces, false).unwrap();
     assert!((reported - 1e-4).abs() < 1e-9, "{reported} m");
-    let off = |p: &[f64]| if p[0] <= 0.5 { (p[1] - 0.35).abs() } else if p[1] <= 0.25 { (p[0] - 0.6).abs() } else { ((p[0] - 0.5).hypot(p[1] - 0.25) - 0.1).abs() };
+    let off = |p: &[f64]| {
+        if p[0] <= 0.5 {
+            (p[1] - 0.35).abs()
+        } else if p[1] <= 0.25 {
+            (p[0] - 0.6).abs()
+        } else {
+            ((p[0] - 0.5).hypot(p[1] - 0.25) - 0.1).abs()
+        }
+    };
     let mut durations = Vec::new();
     for time_optimal in [false, true] {
         let points = sim.plan_path(&pieces, time_optimal).unwrap();
         let furthest = points.iter().map(|p| off(&p.1)).fold(0.0, f64::max);
         // The setpoint the path starts from is a few micrometres from the configured start pose.
-        assert!(furthest <= reported + 1e-5 && furthest > 0.99 * reported, "time-optimal {time_optimal}: {furthest} m off the given path");
+        assert!(
+            furthest <= reported + 1e-5 && furthest > 0.99 * reported,
+            "time-optimal {time_optimal}: {furthest} m off the given path"
+        );
         let last = &points[points.len() - 1];
         assert!((last.1[0] - 0.6).abs() < 1e-9 && (last.1[1] - 0.05).abs() < 1e-9, "ends at {:?}", last.1);
         durations.push(last.0);
     }
     let slow = given.plan_path(&pieces, false).unwrap();
     let slow = slow[slow.len() - 1].0;
-    assert!(durations[0] < 0.9 * slow && durations[1] < 0.8 * durations[0], "{durations:?} s with transition curves, {slow} s without");
+    assert!(
+        durations[0] < 0.9 * slow && durations[1] < 0.8 * durations[0],
+        "{durations:?} s with transition curves, {slow} s without"
+    );
 }
 
 /// How much each pose of a plan uses of what the time-optimal planner promises, from the planned poses by
@@ -785,7 +935,8 @@ fn both_planners_time_the_path_with_its_transition_curves() {
 /// `profile.torque_reserve` times the torque-speed curve, motor speed over the rated speed, and axis jerk
 /// over the axis's limit.
 fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)]) -> Vec<[f64; 3]> {
-    let (c, reserve, rated) = (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap());
+    let (c, reserve, rated) =
+        (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap());
     let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
     let mut all = Vec::new();
     for i in 0..points.len() as isize {
@@ -800,7 +951,11 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
             let speed = (ahead[k] - here[k]) / c;
             let (low, high) = sim.control.torque_curve(speed);
             let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
-            used = [used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })), used[1].max(speed.abs() / rated), used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk)];
+            used = [
+                used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })),
+                used[1].max(speed.abs() / rated),
+                used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk),
+            ];
         }
         all.push(used);
     }
@@ -845,8 +1000,15 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
         let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
         let mut judged = cfg.clone();
         judged.set_text("ratings.belt_max_tension_n = 400.0").unwrap();
-        let verdict = sim_components::analysis::verdicts(&judged, &load).unwrap().into_iter().find(|v| v.check == "belt-tension").unwrap();
-        println!("limit {rated} N: {most_acc} m/s^2, {most_used} of the bound, rigid {most_tension} N, simulated {} N", verdict.value);
+        let verdict = sim_components::analysis::verdicts(&judged, &load)
+            .unwrap()
+            .into_iter()
+            .find(|v| v.check == "belt-tension")
+            .unwrap();
+        println!(
+            "limit {rated} N: {most_acc} m/s^2, {most_used} of the bound, rigid {most_tension} N, simulated {} N",
+            verdict.value
+        );
         (most_acc, most_used, most_tension, verdict)
     };
     // The tension law of the rigid model, by hand, at rest and accelerating at x = 0.9.
@@ -860,11 +1022,19 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.5 * (400.0 - 31.0 - (300.0 - weight * 0.95 / 4.2)));
     let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
     assert!((allowed - 6.328).abs() < 5e-3 && (still + room - 326.74).abs() < 0.01, "{allowed}");
-    assert!((belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.016).abs() < 5e-3, "{} {}", belt_bound(0.95), belt_bound(0.7));
+    assert!(
+        (belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.016).abs() < 5e-3,
+        "{} {}",
+        belt_bound(0.95),
+        belt_bound(0.7)
+    );
     let (old_acc, ..) = run(1e12);
     assert!(old_acc > 1.3 * allowed && !run(1e12).3.ok, "{old_acc} m/s^2");
     let (acc, used, tension, new) = run(400.0);
-    assert!(used <= 1.002 && used > 0.995 && acc > 1.05 * allowed, "{acc} m/s^2, {used} of the bound at its pose, the far end allows {allowed}");
+    assert!(
+        used <= 1.002 && used > 0.995 && acc > 1.05 * allowed,
+        "{acc} m/s^2, {used} of the bound at its pose, the far end allows {allowed}"
+    );
     assert!(tension <= (still + room) * 1.001 && tension >= 0.99 * (still + room), "{tension} N");
     assert!(new.ok, "{new:?}");
 }
@@ -897,8 +1067,15 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
     let by_hand = 0.8 / 1.2559 + 1.2559 / belt_bound(0.9) + belt_bound(0.9) / 300.0;
-    assert!((belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8531).abs() < 1e-4, "{} m/s^2, {by_hand} s", belt_bound(0.9));
-    assert!(duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3, "{duration} s, with one limit per piece {by_hand} s");
+    assert!(
+        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8531).abs() < 1e-4,
+        "{} m/s^2, {by_hand} s",
+        belt_bound(0.9)
+    );
+    assert!(
+        duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3,
+        "{duration} s, with one limit per piece {by_hand} s"
+    );
     let (c, mut of_bound, mut hardest, mut most_change) = (1e-3, 0f64, 0f64, 0f64);
     for w in points.windows(3) {
         let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
@@ -910,11 +1087,16 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
         hardest = hardest.max(acc[0].abs());
     }
     let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
-    assert!(of_bound <= 1.002 && of_bound > 0.995 && hardest > 1.03 * belt_bound(0.9), "{of_bound} of the bound, {hardest} m/s^2");
+    assert!(
+        of_bound <= 1.002 && of_bound > 0.995 && hardest > 1.03 * belt_bound(0.9),
+        "{of_bound} of the bound, {hardest} m/s^2"
+    );
     assert!(most_change <= 1.001 * room && most_change > 0.99 * room, "{most_change} N of {room} N");
     let used = most_used(&plan_use(&sim, &cfg, &points));
     assert!(used.iter().all(|u| *u <= 1.001), "torque, speed and jerk used to {used:?}");
-    println!("{duration} s (one limit per piece {by_hand} s), {of_bound} of the bound, hardest {hardest} m/s^2, {most_change} N");
+    println!(
+        "{duration} s (one limit per piece {by_hand} s), {of_bound} of the bound, hardest {hardest} m/s^2, {most_change} N"
+    );
 }
 
 /// The tenth review's paths, as fast as the motors and a belt rated 330 to 1500 N allow (330 N with the default axis
@@ -927,10 +1109,19 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
 fn the_full_model_keeps_the_belt_ratings_on_a_time_optimal_plan_at_high_jerk() {
     let reviewed = "line,0.9,0.3\nline,0.1,0.05\nline,0.5,0.4";
     let refused = |rated: f64| rated <= 340.0;
-    for (path, rated, fast) in [(reviewed, 330.0, false), (reviewed, 340.0, true), (reviewed, 360.0, true), (reviewed, 400.0, true), (reviewed, 1500.0, true), ("line,0.7,0.35\nline,0.95,0.35\nline,0.2,0.1\nline,0.9,0.05\nline,0.5,0.35", 400.0, true)] {
+    for (path, rated, fast) in [
+        (reviewed, 330.0, false),
+        (reviewed, 340.0, true),
+        (reviewed, 360.0, true),
+        (reviewed, 400.0, true),
+        (reviewed, 1500.0, true),
+        ("line,0.7,0.35\nline,0.95,0.35\nline,0.2,0.1\nline,0.9,0.05\nline,0.5,0.35", 400.0, true),
+    ] {
         let mut cfg = ENTRY.config();
         if fast {
-            for (axis, key, value) in ["x", "z"].into_iter().flat_map(|a| [(a, "max_jerk_m_s3", 2000.0), (a, "max_acceleration_m_s2", 40.0), (a, "max_velocity_m_s", 2.0)]) {
+            for (axis, key, value) in ["x", "z"].into_iter().flat_map(|a| {
+                [(a, "max_jerk_m_s3", 2000.0), (a, "max_acceleration_m_s2", 40.0), (a, "max_velocity_m_s", 2.0)]
+            }) {
                 cfg.set_text(&format!("axis.{axis}.{key} = {value:?}")).unwrap();
             }
         }
@@ -1022,17 +1213,22 @@ fn time_optimal_plans_of_random_paths_stay_within_torque_speed_and_jerk() {
                 let count = uniform(1.0, 4.0) as usize;
                 for _ in 0..count {
                     heading += uniform(-0.6, 0.6);
-                    here = vec![here[0] + length / count as f64 * heading.cos(), here[1] + length / count as f64 * heading.sin()];
+                    here = vec![
+                        here[0] + length / count as f64 * heading.cos(),
+                        here[1] + length / count as f64 * heading.sin(),
+                    ];
                     fits &= inside(&here);
                     pieces.push(Piece::Spline(here.clone()));
                 }
                 heading += uniform(-0.6, 0.6);
             } else {
-                let (radius, turn) = (uniform(2e-3f64.ln(), 0.3f64.ln()).exp(), if uniform(0.0, 1.0) < 0.5 { 1.0 } else { -1.0 });
+                let (radius, turn) =
+                    (uniform(2e-3f64.ln(), 0.3f64.ln()).exp(), if uniform(0.0, 1.0) < 0.5 { 1.0 } else { -1.0 });
                 let sweep = (length / radius).min(4.5);
                 // The centre is to the left of the heading for a turn counter-clockwise.
                 let centre = vec![here[0] - turn * radius * heading.sin(), here[1] + turn * radius * heading.cos()];
-                let on = |angle: f64| vec![centre[0] + turn * radius * angle.sin(), centre[1] - turn * radius * angle.cos()];
+                let on =
+                    |angle: f64| vec![centre[0] + turn * radius * angle.sin(), centre[1] - turn * radius * angle.cos()];
                 fits &= (1..16).all(|i| inside(&on(heading + turn * sweep * i as f64 / 16.0)));
                 heading += turn * sweep;
                 here = on(heading);
@@ -1045,8 +1241,15 @@ fn time_optimal_plans_of_random_paths_stay_within_torque_speed_and_jerk() {
         }
         let points = sim.plan_path(&pieces, true).unwrap();
         let (used, last) = (most_used(&plan_use(&sim, &cfg, &points)), &points[points.len() - 1]);
-        assert!(used.iter().all(|u| *u <= 1.001), "path {planned}, tolerance {tolerance} m, {pieces:?}: torque, speed and jerk used to {used:?}");
-        assert!((last.1[0] - here[0]).hypot(last.1[1] - here[1]) < 1e-9, "path {planned}: ends at {:?}, not at {here:?}", last.1);
+        assert!(
+            used.iter().all(|u| *u <= 1.001),
+            "path {planned}, tolerance {tolerance} m, {pieces:?}: torque, speed and jerk used to {used:?}"
+        );
+        assert!(
+            (last.1[0] - here[0]).hypot(last.1[1] - here[1]) < 1e-9,
+            "path {planned}: ends at {:?}, not at {here:?}",
+            last.1
+        );
         for (worst, used) in worst.iter_mut().zip(used) {
             *worst = worst.max(used);
         }
@@ -1067,7 +1270,14 @@ fn time_optimal_plans_of_random_paths_stay_within_torque_speed_and_jerk() {
 fn a_brake_that_engages_at_speed_stops_the_axis_with_its_torque_and_no_more() {
     use sim_components::Command;
     let mut cfg = lossless_config();
-    for e in ["effects.holding_brake = true", "effects.belt_mass = false", "effects.gravity = false", "effects.belt_damping = true", "effects.frame_compliance = false", "start.pose = [0.1, 0.25]"] {
+    for e in [
+        "effects.holding_brake = true",
+        "effects.belt_mass = false",
+        "effects.gravity = false",
+        "effects.belt_damping = true",
+        "effects.frame_compliance = false",
+        "start.pose = [0.1, 0.25]",
+    ] {
         cfg.set_text(e).unwrap();
     }
     let mut m = machine(cfg.clone(), &[]);
@@ -1080,7 +1290,11 @@ fn a_brake_that_engages_at_speed_stops_the_axis_with_its_torque_and_no_more() {
     assert!((braked[V + PA] - free[V + PA] + 1.0 / 0.3e-4).abs() < 1e-6, "{} rad/s2", braked[V + PA] - free[V + PA]);
     for speed in [-400.0, -200.0, -1e-3, 0.0, 1e-3, 200.0, 400.0] {
         for deflection in [-0.02, -1e-3, 0.0, 5e-4, 0.02] {
-            assert!(m.brake.torque(m.brake_engaged, speed, deflection).0.abs() <= 1.0, "{} N m at {speed} rad/s, {deflection} rad", m.brake.torque(m.brake_engaged, speed, deflection).0);
+            assert!(
+                m.brake.torque(m.brake_engaged, speed, deflection).0.abs() <= 1.0,
+                "{} N m at {speed} rad/s, {deflection} rad",
+                m.brake.torque(m.brake_engaged, speed, deflection).0
+            );
         }
     }
 
@@ -1102,7 +1316,12 @@ fn a_brake_that_engages_at_speed_stops_the_axis_with_its_torque_and_no_more() {
     });
     let (stopped_after, by_hand) = (sim.state[X] - x, v * v / (2.0 * 500.0 / (11.0 + M_MOTORS)));
     assert!((stopped_after - by_hand).abs() < 0.05 * by_hand, "stopped after {stopped_after} m, by hand {by_hand} m");
-    assert!(sim.state[V + X].abs() < 1e-3 && sim.state[V + PA].abs() < 0.1, "still moving: {} m/s, {} rad/s", sim.state[V + X], sim.state[V + PA]);
+    assert!(
+        sim.state[V + X].abs() < 1e-3 && sim.state[V + PA].abs() < 0.1,
+        "still moving: {} m/s, {} rad/s",
+        sim.state[V + X],
+        sim.state[V + PA]
+    );
 }
 
 /// The reported tool position counts the frame's sway: the workpiece stands on the floor, the carriage rides
@@ -1117,10 +1336,14 @@ fn the_tool_position_includes_the_frame_deflection() {
     (state[Q], state[V + Q]) = (1e-4, 0.01);
     let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
     m.tool_state(&state, &mut pos, &mut vel);
-    assert!((pos[0] - 0.5001).abs() < 1e-15 && (vel[0] - 0.01).abs() < 1e-15 && pos[1] == 0.25 && vel[1] == 0.0, "{pos:?}, {vel:?}");
+    assert!(
+        (pos[0] - 0.5001).abs() < 1e-15 && (vel[0] - 0.01).abs() < 1e-15 && pos[1] == 0.25 && vel[1] == 0.0,
+        "{pos:?}, {vel:?}"
+    );
 
     let mut sim = sim_components::Sim::new(&ENTRY, &ENTRY.config()).unwrap();
-    let [position, frame, lean] = ["axis.x.position", "frame.deflection", "axis.x.tool_deflection"].map(|id| sim.signal_index(id).unwrap());
+    let [position, frame, lean] =
+        ["axis.x.position", "frame.deflection", "axis.x.tool_deflection"].map(|id| sim.signal_index(id).unwrap());
     sim.command(sim_components::Command::StartCycle).unwrap();
     let (mut sample, mut sway) = (Vec::new(), 0f64);
     sim.run(4.0, |s| {
@@ -1143,12 +1366,26 @@ fn the_optimiser_switches_input_shaping_on_where_a_faster_cycle_fails_settling()
     let text = ENTRY.default_config;
     let cycle = "[[cycle.segment]]\ntarget = [0.9, 0.05]\ndwell_s = 0.1\npayload = true\n\n[[cycle.segment]]\ntarget = [0.1, 0.05]\ndwell_s = 0.1\npayload = true\n";
     let mut cfg = Config::parse(&format!("{}{cycle}", &text[..text.find("[[cycle.segment]]").unwrap()])).unwrap();
-    for e in ["start.pose = [0.1, 0.05]", "axis.x.max_velocity_m_s = 0.5", "axis.z.max_velocity_m_s = 0.25", "ratings.settling_tolerance_m = 1.8e-4"] {
+    for e in [
+        "start.pose = [0.1, 0.05]",
+        "axis.x.max_velocity_m_s = 0.5",
+        "axis.z.max_velocity_m_s = 0.25",
+        "ratings.settling_tolerance_m = 1.8e-4",
+    ] {
         cfg.set_text(e).unwrap();
     }
     let found = optimise_cycle(&ENTRY, &cfg, 12).unwrap();
-    assert!(found.after.duration < 0.8 * found.before.duration, "{} s to {} s", found.before.duration, found.after.duration);
-    assert!(found.changes.contains(&("effects.input_shaping".to_string(), "false".to_string(), "true".to_string())), "{:?}", found.changes);
+    assert!(
+        found.after.duration < 0.8 * found.before.duration,
+        "{} s to {} s",
+        found.before.duration,
+        found.after.duration
+    );
+    assert!(
+        found.changes.contains(&("effects.input_shaping".to_string(), "false".to_string(), "true".to_string())),
+        "{:?}",
+        found.changes
+    );
     // The settings it reports pass, and the same limits without the shaper fail on settling alone.
     let mut faster = cfg.clone();
     for (path, _, after) in &found.changes {
@@ -1184,12 +1421,22 @@ fn the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated
     let saved = 4.0 * (t(0.3) - t(0.1));
     assert!((saved - 2.0).abs() < 1e-12);
     let shorter = found.before.duration - found.after.duration;
-    assert!((shorter - saved).abs() < 5e-3, "{} s to {} s: {shorter} s saved", found.before.duration, found.after.duration);
+    assert!(
+        (shorter - saved).abs() < 5e-3,
+        "{} s to {} s: {shorter} s saved",
+        found.before.duration,
+        found.after.duration
+    );
     // "Apply" writes the cycle with the lower lifts; it is the one the optimiser ran.
     let (path, _, after) = found.changes.iter().find(|c| c.0 == "cycle.segment").unwrap();
     cfg.set_text(&format!("{path} = {after}")).unwrap();
     assert_eq!(cfg.f64s("start.pose").unwrap().len(), 2);
-    let targets: Vec<Vec<f64>> = cfg.array("cycle.segment").unwrap().iter().map(|s| s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect()).collect();
+    let targets: Vec<Vec<f64>> = cfg
+        .array("cycle.segment")
+        .unwrap()
+        .iter()
+        .map(|s| s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect())
+        .collect();
     assert_eq!(targets.iter().filter(|t| (t[1] - 0.15).abs() < 1e-12).count(), 4, "{targets:?}");
     let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
     assert!((load.duration - found.after.duration).abs() < 1e-12);
@@ -1202,7 +1449,8 @@ fn the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated
 fn a_cycle_segment_runs_its_path_through_via_points() {
     let cfg = |via: &str| {
         let text = ENTRY.default_config;
-        let cycle = format!("[[cycle.segment]]
+        let cycle = format!(
+            "[[cycle.segment]]
 target = [0.1, 0.05]
 dwell_s = 0.1
 payload = true
@@ -1212,7 +1460,8 @@ target = [0.9, 0.05]
 dwell_s = 0.1
 payload = false
 via = {via}
-");
+"
+        );
         let mut cfg = Config::parse(&format!("{}{cycle}", &text[..text.find("[[cycle.segment]]").unwrap()])).unwrap();
         cfg.set_text("start.pose = [0.1, 0.05]").unwrap();
         cfg
@@ -1232,7 +1481,10 @@ via = {via}
             arrived |= (c.set_pos[0] - 0.9).abs() < 1e-9 && (c.set_pos[1] - 0.05).abs() < 1e-9 && !c.payload_attached;
         }
     });
-    assert!(highest > 0.29 && highest < 0.35 && !stopped_above && arrived, "highest {highest}, stopped {stopped_above}, arrived {arrived}");
+    assert!(
+        highest > 0.29 && highest < 0.35 && !stopped_above && arrived,
+        "highest {highest}, stopped {stopped_above}, arrived {arrived}"
+    );
     // Outside the stroke the config is refused, naming the via points.
     let outside = sim_components::Sim::new(&ENTRY, &cfg("[[0.1, 0.15], [0.5, 9.0], [0.9, 0.15]]"));
     assert_eq!(outside.err().map(|e| e.detail().to_string()), Some("cycle.segment[1].via".to_string()));
@@ -1256,15 +1508,25 @@ fn gearbox_torque_is_the_load_at_the_pulleys_whichever_way_it_is_driven() {
     for (vz, motor) in [(0.3, by_hand / (5.0 * 0.9)), (-0.3, 0.9 * by_hand / 5.0)] {
         let (state, torque, mut d) = ([0.5, 0.25, 0.0, vz, 0.0, 0.0, 0.0, 0.0], [motor, -motor], [0.0; N_RIGID]);
         m.derivatives(&state, &torque, &mut d);
-        let (a, b) = (value(&m, &state, &torque, "gearbox.a.output_torque"), value(&m, &state, &torque, "gearbox.b.output_torque"));
+        let (a, b) = (
+            value(&m, &state, &torque, "gearbox.a.output_torque"),
+            value(&m, &state, &torque, "gearbox.b.output_torque"),
+        );
         assert!(d[2].abs() < 1e-9 && d[3].abs() < 1e-9, "vz = {vz}: {d:?}");
-        assert!((a - by_hand).abs() < 1e-9 && (b + by_hand).abs() < 1e-9 && (by_hand - 0.6865).abs() < 1e-4, "vz = {vz}: {a} N m and {b} N m");
+        assert!(
+            (a - by_hand).abs() < 1e-9 && (b + by_hand).abs() < 1e-9 && (by_hand - 0.6865).abs() < 1e-4,
+            "vz = {vz}: {a} N m and {b} N m"
+        );
     }
     let m = machine(lossless_config(), &lossy);
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut hold);
-    let (a, b) = (value(&m, &state, &hold, "gearbox.a.output_torque"), value(&m, &state, &hold, "gearbox.b.output_torque"));
-    assert!((a - by_hand).abs() < 1e-3 * by_hand && (b + by_hand).abs() < 1e-3 * by_hand, "at rest: {a} N m and {b} N m");
+    let (a, b) =
+        (value(&m, &state, &hold, "gearbox.a.output_torque"), value(&m, &state, &hold, "gearbox.b.output_torque"));
+    assert!(
+        (a - by_hand).abs() < 1e-3 * by_hand && (b + by_hand).abs() < 1e-3 * by_hand,
+        "at rest: {a} N m and {b} N m"
+    );
 }
 
 /// The mapping from a tool pose into the scene, for drawing paths there: it is where the scene draws the
@@ -1284,8 +1546,14 @@ fn the_scene_point_of_a_tool_pose_is_where_the_scene_draws_the_tool() {
             let (mut tool, mut speed) = ([0.0; 2], [0.0; 2]);
             m.tool_state(&state, &mut tool, &mut speed);
             let mapped = m.scene_point(&tool).unwrap();
-            assert!((0..3).all(|i| (mapped[i] - flange[i]).abs() < 1e-12), "at {pose:?}: mapped {mapped:?}, drawn {flange:?}");
-            assert!((mapped[0] - at[0] - (pose[0] - 0.3)).abs() < 1e-12 && (mapped[2] - at[2] - (pose[1] - 0.1)).abs() < 1e-12);
+            assert!(
+                (0..3).all(|i| (mapped[i] - flange[i]).abs() < 1e-12),
+                "at {pose:?}: mapped {mapped:?}, drawn {flange:?}"
+            );
+            assert!(
+                (mapped[0] - at[0] - (pose[0] - 0.3)).abs() < 1e-12
+                    && (mapped[2] - at[2] - (pose[1] - 0.1)).abs() < 1e-12
+            );
         }
     }
 }
@@ -1335,7 +1603,10 @@ fn a_pure_inertia_move_is_all_inertia() {
     let torque = [0.15, 0.05];
     for (motor, expected) in [("a", 0.15), ("b", 0.05)] {
         let parts = torque_parts(&m, &state, &torque, motor);
-        assert!((parts[0] - expected).abs() < 1e-12 && parts[1..].iter().all(|p| p.abs() < 1e-12), "{motor}: {parts:?}");
+        assert!(
+            (parts[0] - expected).abs() < 1e-12 && parts[1..].iter().all(|p| p.abs() < 1e-12),
+            "{motor}: {parts:?}"
+        );
     }
 }
 
@@ -1363,8 +1634,15 @@ fn holding_z_is_all_gravity() {
     for (k, (motor, sign)) in [("a", 1.0), ("b", -1.0)].into_iter().enumerate() {
         let [inertia, gravity, friction, rest] = mean[k];
         assert!((gravity - sign * by_hand).abs() < 1e-12, "{motor}: {gravity} N m");
-        assert!((torque[k] - gravity).abs() < 2e-3 * by_hand, "{motor}: torque {} N m, parts {inertia} {friction} {rest}", torque[k]);
-        assert!([inertia, friction, rest].iter().all(|p| p.abs() < 2e-3 * by_hand), "{motor}: {inertia}, {friction}, {rest}");
+        assert!(
+            (torque[k] - gravity).abs() < 2e-3 * by_hand,
+            "{motor}: torque {} N m, parts {inertia} {friction} {rest}",
+            torque[k]
+        );
+        assert!(
+            [inertia, friction, rest].iter().all(|p| p.abs() < 2e-3 * by_hand),
+            "{motor}: {inertia}, {friction}, {rest}"
+        );
         assert!((copper[k] - 0.37235).abs() < 2e-3 * 0.37235, "{motor}: {} W", copper[k]);
     }
 }
@@ -1390,7 +1668,8 @@ fn a_constant_speed_move_is_coulomb_plus_viscous_friction() {
     assert!((a[2] + b[2] - 0.004 * (15.0 + 20.0 * v)).abs() < 1e-9, "{} N m", a[2] + b[2]);
     assert!((a[2] + b[2] - 0.124).abs() < 1e-4);
     assert!((sim.torque[0] + sim.torque[1] - 0.124).abs() < 0.02 * 0.124, "{:?}", sim.torque);
-    let split = ["coulomb", "viscous", "stiction"].map(|part| effect_signal(m, &sim.state, &sim.torque, &format!("axis.x.friction_{part}")));
+    let split = ["coulomb", "viscous", "stiction"]
+        .map(|part| effect_signal(m, &sim.state, &sim.torque, &format!("axis.x.friction_{part}")));
     assert!((split[0] - 15.0).abs() < 1e-6 && (split[1] - 20.0 * v).abs() < 1e-9 && split[2].abs() < 1e-6, "{split:?}");
     assert!((split.iter().sum::<f64>() - effect_signal(m, &sim.state, &sim.torque, "axis.x.friction")).abs() < 1e-9);
 }
@@ -1403,9 +1682,17 @@ fn a_constant_speed_move_is_coulomb_plus_viscous_friction() {
 fn the_friction_curves_are_the_formula() {
     let m = machine(ENTRY.config(), &[]);
     assert_eq!(m.friction_contacts().iter().map(|c| c.id).collect::<Vec<_>>(), ["axis.x", "axis.z"]);
-    for (contact, speed, scale, expected) in [(0, 0.5, 1.0, [15.0, 10.0, 0.0]), (0, 0.01, 1.0, [15.0, 0.2, 1.83940]), (1, -0.2, 2.0, [-20.0, -3.0, 0.0]), (1, 0.005, 1.0, [10.0, 0.075, 3.11520])] {
+    for (contact, speed, scale, expected) in [
+        (0, 0.5, 1.0, [15.0, 10.0, 0.0]),
+        (0, 0.01, 1.0, [15.0, 0.2, 1.83940]),
+        (1, -0.2, 2.0, [-20.0, -3.0, 0.0]),
+        (1, 0.005, 1.0, [10.0, 0.075, 3.11520]),
+    ] {
         let curve = m.friction_curve(contact, speed, scale);
-        assert!(curve.iter().zip(&expected).all(|(a, b)| (a - b).abs() < 1e-5), "contact {contact} at {speed} m/s: {curve:?}");
+        assert!(
+            curve.iter().zip(&expected).all(|(a, b)| (a - b).abs() < 1e-5),
+            "contact {contact} at {speed} m/s: {curve:?}"
+        );
     }
 }
 
@@ -1465,11 +1752,16 @@ fn the_report_names_the_source_of_each_exct_30_value() {
 #[test]
 fn both_modes_are_the_roots_of_the_two_mass_hand_calculation() {
     let m = machine(ENTRY.config(), &[]);
-    for (z, by_hand) in [(0.05, [(24.6303, 0.029751), (104.1875, 0.055161)]), (0.15, [(35.6220, 0.017328), (109.5573, 0.053512)])] {
+    for (z, by_hand) in
+        [(0.05, [(24.6303, 0.029751), (104.1875, 0.055161)]), (0.15, [(35.6220, 0.017328), (109.5573, 0.053512)])]
+    {
         let modes = m.modes(&[0.9, z]);
         assert_eq!(modes.len(), 2);
         for (mode, (hz, damping)) in modes.iter().zip(by_hand) {
-            assert!((mode.hz - hz).abs() < 1e-3 && (mode.damping - damping).abs() < 1e-5, "z = {z}: {mode:?}, by hand {hz} Hz, {damping}");
+            assert!(
+                (mode.hz - hz).abs() < 1e-3 && (mode.damping - damping).abs() < 1e-5,
+                "z = {z}: {mode:?}, by hand {hz} Hz, {damping}"
+            );
         }
         assert_eq!(m.resonance_hz(&[0.9, z]), Some(modes[0].hz));
     }
@@ -1486,7 +1778,11 @@ fn both_modes_are_the_roots_of_the_two_mass_hand_calculation() {
 fn the_second_shaper_follows_the_second_mode_at_each_pose() {
     let shaper = |follows: bool| {
         let mut cfg = ENTRY.config();
-        for edit in ["effects.input_shaping = true", "profile.shaper2_frequency_hz = 100.0", &format!("effects.shaper_follows_pose = {follows}")] {
+        for edit in [
+            "effects.input_shaping = true",
+            "profile.shaper2_frequency_hz = 100.0",
+            &format!("effects.shaper_follows_pose = {follows}"),
+        ] {
             cfg.set_text(edit).unwrap();
         }
         sim_components::Sim::new(&ENTRY, &cfg).unwrap()
@@ -1495,7 +1791,12 @@ fn the_second_shaper_follows_the_second_mode_at_each_pose() {
     let sim = shaper(true);
     for (z, first, second) in [(0.05, 24.6303, 104.1875), (0.15, 35.6220, 109.5573)] {
         let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, z]).unwrap();
-        assert!((hz(half) - first).abs() < 1e-3 && (hz(half2) - second).abs() < 1e-3, "z = {z}: {} Hz and {} Hz", hz(half), hz(half2));
+        assert!(
+            (hz(half) - first).abs() < 1e-3 && (hz(half2) - second).abs() < 1e-3,
+            "z = {z}: {} Hz and {} Hz",
+            hz(half),
+            hz(half2)
+        );
     }
     let sim = shaper(false);
     let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, 0.05]).unwrap();
@@ -1516,7 +1817,10 @@ fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k
     let m = machine(ENTRY.config(), &["effects.belt_wrap = true"]);
     for x in [0.1, 0.9] {
         let wraps = m.belt_wraps(&[x, 0.2]);
-        assert!(wraps.len() == 2 && wraps.iter().all(|w| (w - std::f64::consts::PI).abs() < 1e-12), "x = {x}: {wraps:?}");
+        assert!(
+            wraps.len() == 2 && wraps.iter().all(|w| (w - std::f64::consts::PI).abs() < 1e-12),
+            "x = {x}: {wraps:?}"
+        );
     }
     assert!(machine(ENTRY.config(), &[]).belt_wraps(&[0.5, 0.2]).is_empty());
 
@@ -1538,4 +1842,3 @@ fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k
     assert!(jumps(false), "with the configured teeth the teeth climb out above 6 times the slack side");
     assert!(!jumps(true), "with the wrap they hold up to 7.54 times");
 }
-

@@ -130,7 +130,8 @@ impl DriveParams {
         let (kt, resistance) = (cfg.positive("motor.torque_constant_nm_a")?, cfg.positive("motor.resistance_ohm")?);
         // The torque fades out between the two speeds; with the no-load speed at or below the rated one it
         // would have no slope to fade on.
-        let (rated_speed, no_load_speed) = (cfg.positive("drive.rated_speed_rad_s")?, cfg.positive("drive.no_load_speed_rad_s")?);
+        let (rated_speed, no_load_speed) =
+            (cfg.positive("drive.rated_speed_rad_s")?, cfg.positive("drive.no_load_speed_rad_s")?);
         if no_load_speed <= rated_speed {
             return Err(ConfigError::Invalid("drive.no_load_speed_rad_s".into()));
         }
@@ -193,14 +194,26 @@ impl DriveParams {
             kv: cfg.positive("drive.kv_1_s")?,
             kp,
             ki: kp / cfg.positive("drive.velocity_tn_s")?,
-            velocity_ff: if on("velocity_feedforward")? { cfg.non_negative("drive.velocity_feedforward_factor")? } else { 0.0 },
-            torque_ff: if on("torque_feedforward")? { cfg.non_negative("drive.torque_feedforward_factor")? } else { 0.0 },
+            velocity_ff: if on("velocity_feedforward")? {
+                cfg.non_negative("drive.velocity_feedforward_factor")?
+            } else {
+                0.0
+            },
+            torque_ff: if on("torque_feedforward")? {
+                cfg.non_negative("drive.torque_feedforward_factor")?
+            } else {
+                0.0
+            },
             peak_torque: cfg.positive("drive.peak_torque_nm")?,
             rated_torque: cfg.positive("drive.rated_torque_nm")?,
             rated_speed,
             no_load_speed,
             limit: on("torque_limit")?,
-            encoder_step: if on("encoder_resolution")? { TAU / cfg.positive("drive.encoder_counts_per_rev")? } else { 0.0 },
+            encoder_step: if on("encoder_resolution")? {
+                TAU / cfg.positive("drive.encoder_counts_per_rev")?
+            } else {
+                0.0
+            },
             velocity_filter: low_pass("velocity_filter", "velocity_filter_s")?,
             torque_filter: low_pass("torque_filter", "torque_filter_s")?,
             notch,
@@ -215,7 +228,11 @@ impl DriveParams {
             start_rise: cfg.non_negative("motor.start_temperature_rise_k")?,
             saturation: if on("torque_saturation")? { 1.0 - kt_at_max / kt } else { 0.0 },
             max_current: cfg.positive("motor.max_current_a")?,
-            drive_max_current: if drive_limit && cfg.get("ratings.drive_max_current_a").is_ok() { cfg.positive("ratings.drive_max_current_a")? } else { f64::INFINITY },
+            drive_max_current: if drive_limit && cfg.get("ratings.drive_max_current_a").is_ok() {
+                cfg.positive("ratings.drive_max_current_a")?
+            } else {
+                f64::INFINITY
+            },
         })
     }
 
@@ -442,7 +459,8 @@ impl Drive {
         }
         let (low, high) = p.torque_range(self.speed);
         self.torque_demand = out;
-        self.torque_command = delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
+        self.torque_command =
+            delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
         // Anti-windup: the integrator stops while it would push further into the limit.
         if (out <= high || error < 0.0) && (out >= low || error > 0.0) {
             self.integral += p.ki * error * p.velocity_cycle;
@@ -459,7 +477,8 @@ impl Drive {
         let back_emf = p.back_emf(self.current, speed);
         let wanted = p.current_kp * error + self.current_integral + back_emf;
         // The voltage limit is what the DC link has at this moment.
-        let max_voltage = if p.dc_link && p.max_voltage.is_finite() { WINDING_PER_DC_LINK * self.dc_voltage } else { p.max_voltage };
+        let max_voltage =
+            if p.dc_link && p.max_voltage.is_finite() { WINDING_PER_DC_LINK * self.dc_voltage } else { p.max_voltage };
         let limited = wanted.clamp(-max_voltage, max_voltage);
         self.voltage = delayed(&mut self.voltage_queue, limited, p.current_delay);
         // Anti-windup: the integrator stops while the bus voltage is used up.
@@ -479,7 +498,8 @@ impl Drive {
     pub fn winding_stepped(&mut self, p: &DriveParams, current: f64, [electrical, copper, work]: [f64; 3]) {
         let dt = p.current_cycle;
         (self.current, self.torque) = (current, p.torque_of(current));
-        (self.power, self.copper_loss, self.shaft_power, self.discharge_power) = (electrical / dt, copper / dt, work / dt, 0.0);
+        (self.power, self.copper_loss, self.shaft_power, self.discharge_power) =
+            (electrical / dt, copper / dt, work / dt, 0.0);
         // A DC link of its own. A shared one is stepped once all drives have had this step (`shared_dc_link`).
         if p.dc_link && !p.shared_dc_link {
             self.own_dc_link(p);
@@ -503,7 +523,8 @@ impl Drive {
             // at the bus level, a regenerative supply takes what is above.
             let before = self.dc_voltage;
             self.dc_voltage *= (-p.current_cycle / p.discharge_time_constant).exp();
-            self.discharge_power = 0.5 * p.dc_capacitance * (before * before - self.dc_voltage * self.dc_voltage) / p.current_cycle;
+            self.discharge_power =
+                0.5 * p.dc_capacitance * (before * before - self.dc_voltage * self.dc_voltage) / p.current_cycle;
             if !p.shared_dc_link {
                 self.own_dc_link(p);
             }
@@ -517,7 +538,8 @@ impl Drive {
     }
 
     fn set_dc_link(&mut self, p: &DriveParams, step: DcLinkStep) {
-        (self.dc_voltage, self.resistor_power, self.rectifier_power, self.mains_power, self.line_loss) = (step.voltage, step.resistor, step.drawn, step.mains, step.line_loss);
+        (self.dc_voltage, self.resistor_power, self.rectifier_power, self.mains_power, self.line_loss) =
+            (step.voltage, step.resistor, step.drawn, step.mains, step.line_loss);
         self.tripped |= self.dc_voltage > p.overvoltage;
     }
 
@@ -558,8 +580,18 @@ fn dc_link_step(p: &DriveParams, capacitance: f64, stored: f64, power: f64) -> D
     let burned = (energy - fed - at(p.braking_threshold)).clamp(0.0, p.resistor_peak * dt);
     // The rectifier feeds from the line as soon as the voltage would fall below the bus level.
     let left = energy - fed - burned;
-    let (voltage, drawn) = if left > at(p.bus_voltage) { ((2.0 * left / capacitance).sqrt(), 0.0) } else { (p.bus_voltage, at(p.bus_voltage) - left) };
-    DcLinkStep { voltage, resistor: burned / dt, drawn: drawn / dt, mains: p.line_efficiency * fed / dt, line_loss: (1.0 - p.line_efficiency) * fed / dt }
+    let (voltage, drawn) = if left > at(p.bus_voltage) {
+        ((2.0 * left / capacitance).sqrt(), 0.0)
+    } else {
+        (p.bus_voltage, at(p.bus_voltage) - left)
+    };
+    DcLinkStep {
+        voltage,
+        resistor: burned / dt,
+        drawn: drawn / dt,
+        mains: p.line_efficiency * fed / dt,
+        line_loss: (1.0 - p.line_efficiency) * fed / dt,
+    }
 }
 
 /// One base step of the DC link that all `drives` share, after their current loops: one Line Module, one DC
@@ -651,7 +683,11 @@ mod tests {
             let mut y = [self.current, 0.0, 0.0, 0.0];
             let mut rk = sim_core::Rk4::new(4);
             for _ in 0..4 {
-                rk.step(|y, dy| dy.copy_from_slice(&p.winding_rates(voltage, resistance, y[0], speed)), &mut y, p.current_cycle / 4.0);
+                rk.step(
+                    |y, dy| dy.copy_from_slice(&p.winding_rates(voltage, resistance, y[0], speed)),
+                    &mut y,
+                    p.current_cycle / 4.0,
+                );
             }
             self.winding_stepped(p, y[0], [y[1], y[2], y[3]]);
         }
@@ -684,28 +720,51 @@ mod tests {
         };
         let apart = DriveParams { dc_link: true, ..params() };
         let (drives, burned) = run(&apart);
-        assert!((drives[0].dc_voltage - 231.40).abs() < 0.01 && drives[1].dc_voltage == 190.0 && burned == [0.0; 2], "{} V and {} V", drives[0].dc_voltage, drives[1].dc_voltage);
+        assert!(
+            (drives[0].dc_voltage - 231.40).abs() < 0.01 && drives[1].dc_voltage == 190.0 && burned == [0.0; 2],
+            "{} V and {} V",
+            drives[0].dc_voltage,
+            drives[1].dc_voltage
+        );
 
         let shared = DriveParams { shared_dc_link: true, ..apart.clone() };
         let (drives, burned) = run(&shared);
         let by_hand = (2.0 * (2.0 * 8.4835 + 4.1 - 2.35) / 940e-6f64).sqrt();
-        assert!((by_hand - 199.56).abs() < 0.01 && (drives[0].dc_voltage - by_hand).abs() < 0.01, "{} V, by hand {by_hand} V", drives[0].dc_voltage);
-        assert!(drives[1].dc_voltage == drives[0].dc_voltage && burned == [0.0; 2] && !drives[0].tripped && !drives[1].tripped);
+        assert!(
+            (by_hand - 199.56).abs() < 0.01 && (drives[0].dc_voltage - by_hand).abs() < 0.01,
+            "{} V, by hand {by_hand} V",
+            drives[0].dc_voltage
+        );
+        assert!(
+            drives[1].dc_voltage == drives[0].dc_voltage
+                && burned == [0.0; 2]
+                && !drives[0].tripped
+                && !drives[1].tripped
+        );
         println!("separate 231.40 V and 190 V; shared {} V, by hand {by_hand} V", drives[0].dc_voltage);
 
         // One chopper, one resistor: both drives report the same 0.845 J.
         let (drives, burned) = run(&DriveParams { braking_threshold: 195.0, ..shared.clone() });
-        assert!((drives[0].dc_voltage - 195.0).abs() < 1e-9 && drives[1].dc_voltage == drives[0].dc_voltage, "{} V", drives[0].dc_voltage);
+        assert!(
+            (drives[0].dc_voltage - 195.0).abs() < 1e-9 && drives[1].dc_voltage == drives[0].dc_voltage,
+            "{} V",
+            drives[0].dc_voltage
+        );
         assert!((burned[0] - 0.845).abs() < 0.002 && burned[1] == burned[0], "{burned:?} J burned");
         // One trip.
-        let (drives, _) = run(&DriveParams { braking_threshold: 195.0, resistor_peak: 5.0, overvoltage: 198.0, ..shared.clone() });
+        let (drives, _) =
+            run(&DriveParams { braking_threshold: 195.0, resistor_peak: 5.0, overvoltage: 198.0, ..shared.clone() });
         assert!(drives[0].tripped && drives[1].tripped);
         // Links that are joined while they differ put their energies together: 231.40 V and 190 V on 470 uF
         // each are 12.5835 J + 8.4835 J on 940 uF, 211.72 V.
         let (mut drives, _) = run(&apart);
         drives.iter_mut().for_each(|d| d.power = 0.0);
         shared_dc_link(&shared, &mut drives);
-        assert!((drives[0].dc_voltage - 211.72).abs() < 0.01 && drives[1].dc_voltage == drives[0].dc_voltage, "{} V", drives[0].dc_voltage);
+        assert!(
+            (drives[0].dc_voltage - 211.72).abs() < 0.01 && drives[1].dc_voltage == drives[0].dc_voltage,
+            "{} V",
+            drives[0].dc_voltage
+        );
     }
 
     /// The DC link against a hand calculation. The motor turns at 100 rad/s and brakes with 0.45 N m: 1 A
@@ -740,7 +799,13 @@ mod tests {
         // Between 190 V and the threshold of 250 V the capacitors hold 470 uF (250^2 - 190^2) / 2 = 6.204 J.
         // In 0.3 s the motor feeds back 12.3 J: the chopper holds 250 V and the resistor burns the other 6.096 J.
         let (d, fed_back, burned) = brake(&p, 0.3);
-        assert!((d.dc_voltage - 250.0).abs() < 1e-9 && (burned - (fed_back - 6.204)).abs() < 1e-9 && (burned - 6.096).abs() < 1e-3, "{} V, {burned} J", d.dc_voltage);
+        assert!(
+            (d.dc_voltage - 250.0).abs() < 1e-9
+                && (burned - (fed_back - 6.204)).abs() < 1e-9
+                && (burned - 6.096).abs() < 1e-3,
+            "{} V, {burned} J",
+            d.dc_voltage
+        );
         // A resistor that takes 20 W at most leaves 21 W to charge on: 280 V, 3.736 J above the threshold,
         // are reached 0.178 s after the 0.151 s that the threshold takes, and the drive trips.
         let weak = DriveParams { resistor_peak: 20.0, ..p.clone() };
@@ -767,15 +832,32 @@ mod tests {
             let (mut mains, mut lost, mut burned, mut drawn) = (0.0, 0.0, 0.0, 0.0);
             for _ in 0..1600 {
                 d.current_loop(p, 100.0);
-                (mains, lost, burned, drawn) = (mains + d.mains_power * p.current_cycle, lost + d.line_loss * p.current_cycle, burned + d.resistor_power * p.current_cycle, drawn + d.rectifier_power * p.current_cycle);
+                (mains, lost, burned, drawn) = (
+                    mains + d.mains_power * p.current_cycle,
+                    lost + d.line_loss * p.current_cycle,
+                    burned + d.resistor_power * p.current_cycle,
+                    drawn + d.rectifier_power * p.current_cycle,
+                );
             }
             (d, mains, lost, burned, drawn)
         };
         let p = DriveParams { dc_link: true, regenerative: true, ..params() };
         let (d, mains, lost, burned, drawn) = run(&p, -0.45);
-        assert!(d.dc_voltage == 190.0 && (mains - 4.018).abs() < 1e-9 && (lost - 0.082).abs() < 1e-9 && burned == 0.0 && drawn == 0.0, "{} V, {mains} J, {lost} J", d.dc_voltage);
+        assert!(
+            d.dc_voltage == 190.0
+                && (mains - 4.018).abs() < 1e-9
+                && (lost - 0.082).abs() < 1e-9
+                && burned == 0.0
+                && drawn == 0.0,
+            "{} V, {mains} J, {lost} J",
+            d.dc_voltage
+        );
         let (d, mains, _, burned, _) = run(&DriveParams { line_max_power: 20.0, ..p.clone() }, -0.45);
-        assert!((d.dc_voltage - 212.217).abs() < 1e-3 && (mains - 1.96).abs() < 1e-9 && burned == 0.0, "{} V, {mains} J", d.dc_voltage);
+        assert!(
+            (d.dc_voltage - 212.217).abs() < 1e-3 && (mains - 1.96).abs() < 1e-9 && burned == 0.0,
+            "{} V, {mains} J",
+            d.dc_voltage
+        );
         let (d, mains, _, _, drawn) = run(&p, 0.45);
         assert!(d.dc_voltage == 190.0 && mains == 0.0 && (drawn - 4.9).abs() < 1e-9, "{drawn} J drawn");
     }
@@ -871,7 +953,11 @@ mod tests {
         d.velocity_loop(&small, 0.0, 0.0);
         let before = d.integral;
         d.velocity_loop(&small, 0.0, 0.0);
-        assert!(d.torque_command == 2.25 && d.integral == before && (small.current_for(d.torque_command) - 5.0).abs() < 1e-12);
+        assert!(
+            d.torque_command == 2.25
+                && d.integral == before
+                && (small.current_for(d.torque_command) - 5.0).abs() < 1e-12
+        );
         assert_eq!(DriveParams { drive_max_current: 10.9, ..params() }.torque_range(100.0), (-3.8, 3.8));
         assert_eq!(DriveParams { limit: false, ..small.clone() }.torque_range(100.0), (-2.25, 2.25));
         // What the motor and drive can give, which "motor-peak" judges against, is the motor's.
@@ -936,7 +1022,11 @@ mod tests {
         let first = d.torque_command;
         d.velocity_loop(&p, 0.0, 4.0);
         // The first cycle has nothing older to act; the second acts what the first computed.
-        assert!((first - 0.08 * 6.0).abs() < 1e-12 && (d.torque_command - 0.08 * 6.0).abs() < 1e-12, "{first}, {}", d.torque_command);
+        assert!(
+            (first - 0.08 * 6.0).abs() < 1e-12 && (d.torque_command - 0.08 * 6.0).abs() < 1e-12,
+            "{first}, {}",
+            d.torque_command
+        );
         d.velocity_loop(&p, 0.0, 4.0);
         assert!((d.torque_command - (0.08 * 6.0 + 8.0 * 6.0 * 125e-6)).abs() < 1e-12);
     }
@@ -962,7 +1052,12 @@ mod tests {
         // Half the current: a quarter of the loss, less the resistance that did not rise as far. By hand:
         // q = 100 / 1.39 / 4 = 17.99 K, settled at q / (1 - 0.0039 q) = 19.34 K.
         let half = run(0.5 * p.rated_current, 6.0);
-        assert!((half.temperature_rise - 19.34).abs() < 0.05 && (p.settled_rise(0.5 * p.rated_current) - 19.34).abs() < 0.01, "{} K", half.temperature_rise);
+        assert!(
+            (half.temperature_rise - 19.34).abs() < 0.05
+                && (p.settled_rise(0.5 * p.rated_current) - 19.34).abs() < 0.01,
+            "{} K",
+            half.temperature_rise
+        );
         // Switched off, the winding stays as it is.
         let cold = DriveParams { heating: false, ..p.clone() };
         let mut d = Drive { torque_command: 1.27, ..Drive::default() };
@@ -984,7 +1079,15 @@ mod tests {
     /// The 1FK2205-4AF of the catalogue: 6 N m at 4.7 A at standstill, 18 N m at its maximum current of 15.1 A.
     fn saturating() -> DriveParams {
         let kt = 6.0 / 4.7;
-        DriveParams { kt, ke: kt, saturation: 1.0 - 18.0 / 15.1 / kt, max_current: 15.1, max_voltage: f64::INFINITY, peak_torque: 18.0, ..params() }
+        DriveParams {
+            kt,
+            ke: kt,
+            saturation: 1.0 - 18.0 / 15.1 / kt,
+            max_current: 15.1,
+            max_voltage: f64::INFINITY,
+            peak_torque: 18.0,
+            ..params()
+        }
     }
 
     /// The current setpoint is the inverse of the saturation curve. Commanding the maximum torque takes the
@@ -1023,7 +1126,12 @@ mod tests {
             d.current_loop(&p, 100.0);
         }
         assert!((d.voltage - (60.4 + 1800.0 / 15.1)).abs() < 1e-3, "{} V", d.voltage);
-        assert!((d.power - (4.0 * 15.1 * 15.1 + d.torque * 100.0)).abs() < 1e-2 && (d.torque - 18.0).abs() < 1e-6, "{} W, {} N m", d.power, d.torque);
+        assert!(
+            (d.power - (4.0 * 15.1 * 15.1 + d.torque * 100.0)).abs() < 1e-2 && (d.torque - 18.0).abs() < 1e-6,
+            "{} W, {} N m",
+            d.power,
+            d.torque
+        );
     }
 
     #[test]

@@ -56,7 +56,8 @@ impl SCurve {
             return (self.dist, 0.0, 0.0, 0.0);
         }
         let j = self.jerk;
-        let segments = [(self.tj, j), (self.ta, 0.0), (self.tj, -j), (self.tv, 0.0), (self.tj, -j), (self.ta, 0.0), (self.tj, j)];
+        let segments =
+            [(self.tj, j), (self.ta, 0.0), (self.tj, -j), (self.tv, 0.0), (self.tj, -j), (self.ta, 0.0), (self.tj, j)];
         let (mut p, mut v, mut a, mut left) = (0.0, 0.0, 0.0, t.max(0.0));
         for (duration, jerk) in segments {
             let h = left.min(duration);
@@ -86,7 +87,11 @@ impl Move {
     pub fn new(start: &[f64], target: &[f64], axes: &[AxisInfo]) -> Self {
         let delta: Vec<f64> = target.iter().zip(start).map(|(t, s)| t - s).collect();
         let tightest = |limit: fn(&AxisInfo) -> f64| {
-            axes.iter().zip(&delta).filter(|(_, d)| **d != 0.0).map(|(a, d)| limit(a) / d.abs()).fold(f64::INFINITY, f64::min)
+            axes.iter()
+                .zip(&delta)
+                .filter(|(_, d)| **d != 0.0)
+                .map(|(a, d)| limit(a) / d.abs())
+                .fold(f64::INFINITY, f64::min)
         };
         let moving = delta.iter().any(|d| *d != 0.0);
         let curve = if moving {
@@ -130,10 +135,10 @@ mod tests {
     #[test]
     fn velocity_acceleration_and_jerk_stay_within_limits() {
         let cases = [
-            (1.0, 0.8, 8.0, 100.0), // all seven segments
-            (0.05, 0.8, 8.0, 100.0), // no cruise, acceleration limit reached
+            (1.0, 0.8, 8.0, 100.0),   // all seven segments
+            (0.05, 0.8, 8.0, 100.0),  // no cruise, acceleration limit reached
             (0.001, 0.8, 8.0, 100.0), // no cruise, acceleration limit not reached
-            (1.0, 0.2, 8.0, 100.0), // cruise, acceleration limit not reached
+            (1.0, 0.2, 8.0, 100.0),   // cruise, acceleration limit not reached
             (0.3, 2.0, 5.0, 20.0),
             (1e-6, 1.0, 10.0, 100.0),
         ];
@@ -149,7 +154,10 @@ mod tests {
                 assert!(now.2.abs() <= a * (1.0 + 1e-9), "{dist}: a {}", now.2);
                 assert!(now.3.abs() <= j, "{dist}: j {}", now.3);
                 // The reported derivatives are the real ones: check them against differences.
-                assert!((now.0 - last.0 - 0.5 * (now.1 + last.1) * h).abs() <= 1e-9 * dist + j * h.powi(3), "{dist}: p/v");
+                assert!(
+                    (now.0 - last.0 - 0.5 * (now.1 + last.1) * h).abs() <= 1e-9 * dist + j * h.powi(3),
+                    "{dist}: p/v"
+                );
                 assert!(((now.2 - last.2) / h).abs() <= j * (1.0 + 1e-6), "{dist}: da/dt {}", (now.2 - last.2) / h);
                 v_peak = v_peak.max(now.1);
                 a_peak = a_peak.max(now.2.abs());

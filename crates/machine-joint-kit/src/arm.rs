@@ -22,7 +22,10 @@ use sim_components::transmission::{BallScrew, StrainWave};
 use sim_core::{Config, ConfigError, Label, Machine, Part, RatingCheck, Scene, Shape, SignalInfo};
 use std::f64::consts::TAU;
 
-const BUILTIN: [(&str, &str); 2] = [("builtin:six-axis", include_str!("../urdf/six-axis.urdf")), ("builtin:scara", include_str!("../urdf/scara.urdf"))];
+const BUILTIN: [(&str, &str); 2] = [
+    ("builtin:six-axis", include_str!("../urdf/six-axis.urdf")),
+    ("builtin:scara", include_str!("../urdf/scara.urdf")),
+];
 
 const AXIS_IDS: [&str; 7] = ["j1", "j2", "j3", "j4", "j5", "j6", "j7"];
 
@@ -41,10 +44,13 @@ pub struct Arm {
 
 /// The chain of `arm.urdf_file`.
 pub fn chain(cfg: &Config) -> Result<Chain, ConfigError> {
-    let name = cfg.get("arm.urdf_file")?.as_str().ok_or_else(|| ConfigError::Invalid("arm.urdf_file".into()))?.to_string();
+    let name =
+        cfg.get("arm.urdf_file")?.as_str().ok_or_else(|| ConfigError::Invalid("arm.urdf_file".into()))?.to_string();
     let text = match BUILTIN.iter().find(|(n, _)| *n == name) {
         Some((_, text)) => text.to_string(),
-        None => std::fs::read_to_string(&name).map_err(|e| ConfigError::Invalid(format!("arm.urdf_file: {name}: {e}")))?,
+        None => {
+            std::fs::read_to_string(&name).map_err(|e| ConfigError::Invalid(format!("arm.urdf_file: {name}: {e}")))?
+        }
     };
     Chain::from_urdf(&text)
 }
@@ -65,7 +71,9 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let ratios = per_joint("gear_ratios")?;
     // shortcut: the gearbox life takes every joint's speed through `gearbox.ratio` (analysis::output_rpm), so it is
     // refused where the joints' ratios differ; report each motor's ratio to the analysis to allow it.
-    if cfg.f64("ratings.gearbox_reference_speed_rpm").is_ok() && ratios.iter().any(|r| Some(*r) != cfg.f64("gearbox.ratio").ok()) {
+    if cfg.f64("ratings.gearbox_reference_speed_rpm").is_ok()
+        && ratios.iter().any(|r| Some(*r) != cfg.f64("gearbox.ratio").ok())
+    {
         return Err(ConfigError::Invalid("ratings.gearbox_reference_speed_rpm".into()));
     }
     let screw = if chain.bodies.iter().any(|b| b.prismatic) { Some(BallScrew::from_config(cfg)?) } else { None };
@@ -177,16 +185,45 @@ impl Mechanism for Arm {
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let frames = self.chain.frames(q);
         let (_, tip) = self.chain.tip(q);
-        out.parts.push(Part::new("base", Shape::Box { size: [0.3, 0.3, 0.05] }, [0.0, 0.0, -0.025], [0.62, 0.64, 0.68]));
+        out.parts.push(Part::new(
+            "base",
+            Shape::Box { size: [0.3, 0.3, 0.05] },
+            [0.0, 0.0, -0.025],
+            [0.62, 0.64, 0.68],
+        ));
         let mut from = [0.0; 3];
         for (k, (_, at)) in frames.iter().enumerate() {
             out.parts.push(Part::new("link", Shape::Segment { to: *at, width: 0.05 }, from, [0.2, 0.22, 0.26]));
-            out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Cylinder { radius: 0.04, length: 0.08 }, *at, [0.9, 0.45, 0.1]));
-            out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.06, 0.004, 0.01] }, [at[0], at[1] - 0.05, at[2]], [0.1, 0.1, 0.1]).turned(rotors[k]));
+            out.parts.push(Part::new(
+                sim_core::scene::MOTOR_PART,
+                Shape::Cylinder { radius: 0.04, length: 0.08 },
+                *at,
+                [0.9, 0.45, 0.1],
+            ));
+            out.parts.push(
+                Part::new(
+                    "rotor-bar",
+                    Shape::Box { size: [0.06, 0.004, 0.01] },
+                    [at[0], at[1] - 0.05, at[2]],
+                    [0.1, 0.1, 0.1],
+                )
+                .turned(rotors[k]),
+            );
             if !self.chain.bodies[k].prismatic {
-                out.parts.push(Part::new("gearbox", Shape::Box { size: [0.07, 0.07, 0.05] }, [at[0], at[1], at[2] - 0.06], [0.25, 0.25, 0.28]));
+                out.parts.push(Part::new(
+                    "gearbox",
+                    Shape::Box { size: [0.07, 0.07, 0.05] },
+                    [at[0], at[1], at[2] - 0.06],
+                    [0.25, 0.25, 0.28],
+                ));
             }
-            out.labels.push(Label { pos: [at[0], at[1], at[2] + 0.08], owner_key: MOTOR_KEYS[k], value: rotor_speeds[k] * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 });
+            out.labels.push(Label {
+                pos: [at[0], at[1], at[2] + 0.08],
+                owner_key: MOTOR_KEYS[k],
+                value: rotor_speeds[k] * 60.0 / TAU,
+                unit_key: "unit-rpm",
+                decimals: 0,
+            });
             from = *at;
         }
         out.parts.push(Part::new("link", Shape::Segment { to: tip, width: 0.03 }, from, [0.2, 0.22, 0.26]));
@@ -194,7 +231,13 @@ impl Mechanism for Arm {
         if self.extra().is_some() {
             out.parts.push(Part::new("payload", Shape::Box { size: [0.08, 0.08, 0.08] }, tip, [0.2, 0.7, 0.3]));
         }
-        out.labels.push(Label { pos: [tip[0], tip[1], tip[2] - 0.1], owner_key: "axis-z", value: tip[2], unit_key: "unit-m", decimals: 3 });
+        out.labels.push(Label {
+            pos: [tip[0], tip[1], tip[2] - 0.1],
+            owner_key: "axis-z",
+            value: tip[2],
+            unit_key: "unit-m",
+            decimals: 3,
+        });
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
         Some(self.chain.tip(tool).1)

@@ -84,7 +84,10 @@ fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms
     close(m_nt, d.m_nt(), 1e-3, "m_nt");
     close(m_lg, d.arm_moment(), 1e-12, "m_LG");
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
-    println!("centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox", t.to_degrees());
+    println!(
+        "centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox",
+        t.to_degrees()
+    );
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     d.equilibrium(&[0.0, z], &mut state, &mut torque);
     for k in 0..2 {
@@ -134,7 +137,13 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
 /// The feedforward says so, and the rigid model given that torque accelerates the plate at 10 m/s^2 with no sideways part.
 #[test]
 fn a_vertical_acceleration_at_the_centre_takes_the_hand_calculated_inertia_torque() {
-    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false"]);
+    let d = delta(&[
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+    ]);
     let z = -0.5;
     let (_, dz) = centre_by_hand(&d, z);
     let i_b = 0.064 + 0.16 * (0.4 + 0.6667 * 0.6);
@@ -193,7 +202,10 @@ fn targets_outside_the_working_range_are_refused_with_their_reason() {
     assert_eq!(refused(&mut sim, [0.4, -0.75]), Some("error-delta-outside-envelope"));
     assert_eq!(refused(&mut sim, [0.0, -0.45]), None);
     assert_eq!(delta(&["joint.max_angle_deg = 60.0"]).unreachable(&[0.4, -0.5], 0.0), Some("error-delta-joint-stop"));
-    assert_eq!(delta(&["geometry.forearm_m = 0.45"]).unreachable(&[0.0, -0.877], 0.0), Some("error-delta-out-of-reach"));
+    assert_eq!(
+        delta(&["geometry.forearm_m = 0.45"]).unreachable(&[0.0, -0.877], 0.0),
+        Some("error-delta-out-of-reach")
+    );
     let d = delta(&["workspace.max_condition_number = 1.2"]);
     assert_eq!(d.unreachable(&[0.4, -0.5], 0.0), Some("error-delta-singularity"));
     assert_eq!(d.unreachable(&[0.0, -0.5], 0.0), None);
@@ -230,7 +242,14 @@ fn the_default_cycle_passes_its_verdicts() {
     assert!(v.value == peak && v.limit == 5.0 && peak > 1.1 && peak < 1.2, "{v:?}");
     let mut tight = cfg.clone();
     tight.set_text("ratings.max_condition_number = 1.05").unwrap();
-    assert!(!sim_components::analysis::verdicts(&tight, &load).unwrap().iter().find(|v| v.check == "singularity").unwrap().ok);
+    assert!(
+        !sim_components::analysis::verdicts(&tight, &load)
+            .unwrap()
+            .iter()
+            .find(|v| v.check == "singularity")
+            .unwrap()
+            .ok
+    );
 }
 
 /// The condition number of a matrix whose singular values are known: diag(1, 4) turned has 4.
@@ -284,7 +303,13 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
 /// included. Without the speed it misses by that term's effect, here more than 1 m/s^2.
 #[test]
 fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
-    let d = delta(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false"]);
+    let d = delta(&[
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+    ]);
     let (p, v, a) = ([0.2, -0.6], [2.0, -1.0], [10.0, -20.0]);
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     d.equilibrium(&p, &mut state, &mut hold);
@@ -339,7 +364,10 @@ fn the_setpoint_slack_covers_the_sag_at_rest() {
 fn a_path_may_not_use_the_setpoint_slack_away_from_its_start() {
     let mut sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
     let line = |x: f64| sim_components::path::parse(&format!("line,{x},-0.5")).unwrap();
-    assert_eq!(sim.command(Command::MoveTo(vec![0.4014, -0.5])).err().map(|e| e.key), Some("error-target-out-of-range"));
+    assert_eq!(
+        sim.command(Command::MoveTo(vec![0.4014, -0.5])).err().map(|e| e.key),
+        Some("error-target-out-of-range")
+    );
     for time_optimal in [false, true] {
         assert_eq!(sim.plan_path(&line(0.4014), time_optimal).err().map(|e| e.key), Some("error-path-range"));
         assert!(sim.plan_path(&line(0.4), time_optimal).is_ok());
@@ -357,7 +385,11 @@ fn the_collision_bodies_are_the_plate_and_the_payload_at_the_tool() {
     assert_eq!(bodies.len(), 2);
     let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
     d.tool_state(&state, &mut pos, &mut vel);
-    assert!((bodies[0].centre[0] - pos[0]).abs() < 1e-12 && bodies[0].centre[1] == 0.0 && (bodies[0].centre[2] - pos[1]).abs() < 1e-12);
+    assert!(
+        (bodies[0].centre[0] - pos[0]).abs() < 1e-12
+            && bodies[0].centre[1] == 0.0
+            && (bodies[0].centre[2] - pos[1]).abs() < 1e-12
+    );
     assert!((bodies[1].centre[2] - (pos[1] - 0.07)).abs() < 1e-12);
     let mut scene = Scene::default();
     d.scene(&state, &mut scene);

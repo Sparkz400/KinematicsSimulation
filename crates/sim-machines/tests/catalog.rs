@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-
 fn catalog() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog")
 }
@@ -35,7 +34,12 @@ fn exct_30_cycle_stays_within_motor_and_belt_limits() {
     assert!(sim.limit_violations.is_empty(), "{:?}", sim.limit_violations);
     let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
     for motor in &load.motors {
-        assert!(motor.utilisation < 0.8 && motor.thermal_utilisation < 0.8, "{} of the peak curve, {} thermal", motor.utilisation, motor.thermal_utilisation);
+        assert!(
+            motor.utilisation < 0.8 && motor.thermal_utilisation < 0.8,
+            "{} of the peak curve, {} thermal",
+            motor.utilisation,
+            motor.thermal_utilisation
+        );
     }
     let (slackest, tightest) = load.belt_tension.unwrap();
     assert!(slackest > 0.0, "a belt section goes slack");
@@ -47,14 +51,40 @@ fn exct_30_cycle_stays_within_motor_and_belt_limits() {
 fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
     let by_hand = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
     let mut cfg = by_hand.clone();
-    for wrong in ["motor.torque_constant_nm_a = 0.2", "motor.rated_current_a = 1.0", "drive.peak_torque_nm = 1.0", "drive.rated_torque_nm = 0.1", "drive.rated_speed_rad_s = 10.0", "motor.thermal_time_constant_s = 5.0"] {
+    for wrong in [
+        "motor.torque_constant_nm_a = 0.2",
+        "motor.rated_current_a = 1.0",
+        "drive.peak_torque_nm = 1.0",
+        "drive.rated_torque_nm = 0.1",
+        "drive.rated_speed_rad_s = 10.0",
+        "motor.thermal_time_constant_s = 5.0",
+    ] {
         cfg.set_text(wrong).unwrap();
     }
     // The config names its motor in [parts]; that brings the catalogue values back.
     assert_eq!(cfg.get("parts.motor").unwrap().as_str(), Some("1FK2205-4AF"));
     let mut cfg = sim_components::catalog::resolve(&machine_t_gantry::ENTRY, &cfg).unwrap();
-    for path in ["motor.rotor_inertia_kgm2", "motor.torque_constant_nm_a", "motor.max_current_a", "motor.rated_current_a", "motor.torque_constant_at_max_current_nm_a", "motor.thermal_time_constant_s", "drive.peak_torque_nm", "drive.rated_torque_nm", "drive.rated_speed_rad_s", "drive.no_load_speed_rad_s", "drive.bus_voltage_v", "ratings.braking_threshold_v", "ratings.dc_link_overvoltage_v"] {
-        assert!(close(cfg.f64(path).unwrap(), by_hand.f64(path).unwrap(), 2e-3), "{path}: {} against {} by hand", cfg.f64(path).unwrap(), by_hand.f64(path).unwrap());
+    for path in [
+        "motor.rotor_inertia_kgm2",
+        "motor.torque_constant_nm_a",
+        "motor.max_current_a",
+        "motor.rated_current_a",
+        "motor.torque_constant_at_max_current_nm_a",
+        "motor.thermal_time_constant_s",
+        "drive.peak_torque_nm",
+        "drive.rated_torque_nm",
+        "drive.rated_speed_rad_s",
+        "drive.no_load_speed_rad_s",
+        "drive.bus_voltage_v",
+        "ratings.braking_threshold_v",
+        "ratings.dc_link_overvoltage_v",
+    ] {
+        assert!(
+            close(cfg.f64(path).unwrap(), by_hand.f64(path).unwrap(), 2e-3),
+            "{path}: {} against {} by hand",
+            cfg.f64(path).unwrap(),
+            by_hand.f64(path).unwrap()
+        );
     }
     // The numbers of the file are the motor's own, so there is nothing to retune the velocity gain for.
     assert!(close(cfg.f64("drive.velocity_kp_nm_s_rad").unwrap(), 0.45, 1e-9));
@@ -63,7 +93,11 @@ fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
     // row whose rated current is a misprint (3.75 A at a stall current of 2.8 A) stops 5 % above the stall current.
     for (article, supply, rated) in [("1FK2204-5AK", "400v", 1.95), ("1FT2206-2AC", "230v", 1.05 * 2.8)] {
         sim_components::catalog::apply_motor(&mut cfg, article, supply).unwrap();
-        assert!(close(cfg.f64("motor.rated_current_a").unwrap(), rated, 1e-12), "{article}: {} A", cfg.f64("motor.rated_current_a").unwrap());
+        assert!(
+            close(cfg.f64("motor.rated_current_a").unwrap(), rated, 1e-12),
+            "{article}: {} A",
+            cfg.f64("motor.rated_current_a").unwrap()
+        );
     }
     // Not offered at 230 V single-phase data, and an unknown article, are refused.
     assert!(sim_components::catalog::apply_motor(&mut cfg, "1FK2205-4AF", "110v").is_err());
@@ -77,14 +111,20 @@ fn a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings() {
     let rotor = cfg.f64("motor.rotor_inertia_kgm2").unwrap();
     assert_eq!(cfg.f64("gearbox.inertia_at_input_kgm2").unwrap(), 0.0);
     sim_components::catalog::apply_gearbox(&mut cfg, "NRK070-04-10").unwrap();
-    let row = csv("siemens/gearbox_nrk.csv").into_iter().find(|r| r["size"] == "NRK070" && r["motor_frame"] == "04" && r["ratio"] == "10").unwrap();
+    let row = csv("siemens/gearbox_nrk.csv")
+        .into_iter()
+        .find(|r| r["size"] == "NRK070" && r["motor_frame"] == "04" && r["ratio"] == "10")
+        .unwrap();
     let number = |column: &str| -> f64 { row[column].parse().unwrap() };
     assert_eq!(cfg.f64("gearbox.ratio").unwrap(), 10.0);
     assert!(close(cfg.f64("gearbox.stiffness_nm_rad").unwrap(), number("torsional_stiffness_nm_rad"), 1e-9));
     assert!(close(cfg.f64("gearbox.backlash_rad").unwrap(), number("backlash_rad"), 1e-9));
     assert_eq!(cfg.f64("gearbox.efficiency").unwrap(), number("efficiency_full_load"));
     // The gearbox's inertia has a key of its own and leaves the rotor's alone.
-    assert!(close(cfg.f64("gearbox.inertia_at_input_kgm2").unwrap(), number("inertia_at_input_kgm2"), 1e-9) && cfg.f64("motor.rotor_inertia_kgm2").unwrap() == rotor);
+    assert!(
+        close(cfg.f64("gearbox.inertia_at_input_kgm2").unwrap(), number("inertia_at_input_kgm2"), 1e-9)
+            && cfg.f64("motor.rotor_inertia_kgm2").unwrap() == rotor
+    );
     assert_eq!(cfg.f64("ratings.gearbox_max_torque_nm").unwrap(), number("max_output_torque_nm"));
     assert!(sim_components::catalog::apply_gearbox(&mut cfg, "NRK070-04-11").is_err());
 }
@@ -94,7 +134,8 @@ fn a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings() {
 #[test]
 fn the_motor_search_ranks_passing_motors_by_weight_and_fails_the_small_ones() {
     let cfg = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
-    let wanted = |article: &str| ["1FK2102-1AG", "1FK2203-4AK", "1FK2205-2AF", "1FK2205-4AF", "1FK2206-2AF"].contains(&article);
+    let wanted =
+        |article: &str| ["1FK2102-1AG", "1FK2203-4AK", "1FK2205-2AF", "1FK2205-4AF", "1FK2206-2AF"].contains(&article);
     let found = sim_components::catalog::search_motors(&machine_t_gantry::ENTRY, &cfg, "400v", &wanted, None);
     let place = |article: &str| found.iter().position(|c| c.article == article);
     let by_hand = &found[place("1FK2205-4AF").unwrap()];
@@ -125,7 +166,8 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         apply_motor(&mut numbers, "1FK2104-4AK", "400v").unwrap();
         let resolved = resolve(entry, &named).unwrap();
         // The rotor is a little heavier than the config's and the gearbox adds its own inertia: more gain.
-        let (gain, own) = (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
+        let (gain, own) =
+            (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
         // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
         // gain with it (a screw on a coupling: far less).
         if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
@@ -187,7 +229,10 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     use sim_components::catalog::{search_motors, with_parts};
     let entry = &machine_t_gantry::ENTRY;
     let cfg = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
-    let cycle = |cfg: &sim_core::Config| sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, cfg).unwrap()).unwrap().motors[0].clone();
+    let cycle = |cfg: &sim_core::Config| {
+        sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, cfg).unwrap()).unwrap().motors[0]
+            .clone()
+    };
     let own = cycle(&cfg);
     // The motor's numbers in the config and the gain left as it is: what naming the motor used to give.
     let mut same_gain = cfg.clone();
@@ -205,20 +250,43 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     // adds a little to both sums.
     let seen = |rotor: f64| 4.0 * (rotor + 2.0e-5) / 0.01591 + 22.56 * 0.01591;
     let own_gain = cfg.f64("drive.velocity_kp_nm_s_rad").unwrap();
-    let (gain, by_hand) = (retuned.f64("drive.velocity_kp_nm_s_rad").unwrap(), own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt());
+    let (gain, by_hand) = (
+        retuned.f64("drive.velocity_kp_nm_s_rad").unwrap(),
+        own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt(),
+    );
     assert!(close(gain, by_hand, 0.02), "gain {gain}, by hand {by_hand}");
     let (oscillating, calm) = (cycle(&same_gain), cycle(&retuned));
-    assert!(oscillating.rms_torque > 2.0 * own.rms_torque && oscillating.winding_rise > 100.0, "{} N m, {} K", oscillating.rms_torque, oscillating.winding_rise);
+    assert!(
+        oscillating.rms_torque > 2.0 * own.rms_torque && oscillating.winding_rise > 100.0,
+        "{} N m, {} K",
+        oscillating.rms_torque,
+        oscillating.winding_rise
+    );
     // The lighter rotor needs a little less torque than the config's own motor (1.74 N m RMS).
-    assert!(calm.rms_torque > 0.7 * own.rms_torque && calm.rms_torque < 1.05 * own.rms_torque, "{} N m against {} N m", calm.rms_torque, own.rms_torque);
+    assert!(
+        calm.rms_torque > 0.7 * own.rms_torque && calm.rms_torque < 1.05 * own.rms_torque,
+        "{} N m against {} N m",
+        calm.rms_torque,
+        own.rms_torque
+    );
     assert!(calm.winding_rise < 50.0, "{} K", calm.winding_rise);
     // The lightest rotor that has the torque for this cycle. The rule before gave it the config's gain times 0.77.
     let lightest = with_parts(entry, &cfg, "1FK2104-5AF", "400v", "").unwrap();
     let mut total_only = lightest.clone();
     total_only.set_text(&format!("drive.velocity_kp_nm_s_rad = {:?}", own_gain * seen(5.6e-5) / seen(5.1e-4))).unwrap();
     let (oscillating, calm) = (cycle(&total_only), cycle(&lightest));
-    assert!(oscillating.rms_torque > 2.0 * own.rms_torque && oscillating.winding_rise > 100.0, "{} N m, {} K", oscillating.rms_torque, oscillating.winding_rise);
-    assert!(calm.rms_torque > 0.7 * own.rms_torque && calm.rms_torque < 1.05 * own.rms_torque, "{} N m against {} N m", calm.rms_torque, own.rms_torque);
+    assert!(
+        oscillating.rms_torque > 2.0 * own.rms_torque && oscillating.winding_rise > 100.0,
+        "{} N m, {} K",
+        oscillating.rms_torque,
+        oscillating.winding_rise
+    );
+    assert!(
+        calm.rms_torque > 0.7 * own.rms_torque && calm.rms_torque < 1.05 * own.rms_torque,
+        "{} N m against {} N m",
+        calm.rms_torque,
+        own.rms_torque
+    );
     assert!(calm.winding_rise < 50.0, "{} K", calm.winding_rise);
     // The search does the same, and this machine has no gearbox to exchange (ratio 1), so none is tried.
     let found = search_motors(entry, &cfg, "400v", &|article| article == "1FK2204-6AF", Some("NRK"));
@@ -237,7 +305,13 @@ fn the_gearbox_search_rules_out_by_catalogue_numbers_only_what_would_fail() {
     use sim_components::catalog::{search_motors, with_parts};
     let entry = &machine_single_axis::ENTRY;
     let cfg = entry.config();
-    let found = search_motors(entry, &cfg, "400v", &|article| ["1FK2104-4AF", "1FK2104-5AK"].contains(&article), Some("NRK070"));
+    let found = search_motors(
+        entry,
+        &cfg,
+        "400v",
+        &|article| ["1FK2104-4AF", "1FK2104-5AK"].contains(&article),
+        Some("NRK070"),
+    );
     let ratios = ["3", "4", "5", "7", "8", "9", "10"];
     assert_eq!(found.len(), 2 * ratios.len());
     for c in &found {
@@ -249,7 +323,12 @@ fn the_gearbox_search_rules_out_by_catalogue_numbers_only_what_would_fail() {
             let with = with_parts(entry, &cfg, c.article, "400v", &c.gearbox).unwrap();
             let load = analyse_cycle(&mut sim_components::Sim::new(entry, &with).unwrap()).unwrap();
             let (reached, rated) = (load.motors[0].peak_speed, with.f64("drive.rated_speed_rad_s").unwrap());
-            assert!(reached > rated, "{} {} was ruled out and stays at {reached} of {rated} rad/s", c.article, c.gearbox);
+            assert!(
+                reached > rated,
+                "{} {} was ruled out and stays at {reached} of {rated} rad/s",
+                c.article,
+                c.gearbox
+            );
         }
     }
     // Passing ones first, lightest motor first (the gearbox files have no mass), then the rest.
@@ -266,7 +345,14 @@ fn the_gearbox_search_rules_out_by_catalogue_numbers_only_what_would_fail() {
 #[test]
 fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
     use sim_components::catalog::{apply_motor, search_motors};
-    let physical = ["motor-peak", "motor-thermal", "gearbox-peak", "gearbox-continuous", "braking-resistor-continuous", "braking-resistor-peak"];
+    let physical = [
+        "motor-peak",
+        "motor-thermal",
+        "gearbox-peak",
+        "gearbox-continuous",
+        "braking-resistor-continuous",
+        "braking-resistor-peak",
+    ];
     for entry in sim_machines::MACHINES {
         let mut cfg = entry.config();
         // A config written for a catalogue motor's own DC link (540 V) has no placeholder drive to correct.
@@ -286,23 +372,46 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
         let mut named = entry.config();
         named.set_text("parts.motor = \"1FK2104-5AK\"").unwrap();
         named.set_text("effects.dc_link = true").unwrap();
-        let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &named).unwrap()).unwrap();
-        let link = sim_components::analysis::verdicts(&named, &load).unwrap().into_iter().find(|v| v.check == "dc-link-energy").unwrap();
+        let load =
+            sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &named).unwrap()).unwrap();
+        let link = sim_components::analysis::verdicts(&named, &load)
+            .unwrap()
+            .into_iter()
+            .find(|v| v.check == "dc-link-energy")
+            .unwrap();
         assert!(link.limit > 0.0 && link.value <= link.limit && link.ok, "{}: {link:?}", entry.id);
         // A threshold below the bus is refused, simulated or not.
         named.set_text("effects.dc_link = false").unwrap();
         named.set_text("parts.motor = \"\"").unwrap();
         named.set_text("drive.bus_voltage_v = 300.0").unwrap();
-        assert_eq!(sim_components::analysis::verdicts(&named, &load).unwrap_err().detail(), "ratings.braking_threshold_v", "{}", entry.id);
+        assert_eq!(
+            sim_components::analysis::verdicts(&named, &load).unwrap_err().detail(),
+            "ratings.braking_threshold_v",
+            "{}",
+            entry.id
+        );
         let wanted = |article: &str| ["1FK2104-5AF", "1FK2205-4AF", "1FK2206-4AF", "1FK2208-3AC"].contains(&article);
         let found = search_motors(entry, &entry.config(), "400v", &wanted, None);
         assert_eq!(found.len(), 4, "{}", entry.id);
         for c in &found {
             // Rated for 2000 r/min: too slow for either machine behind its 5:1 gearbox.
-            assert_eq!(c.refused == "limit-motor-speed", c.article == "1FK2208-3AC", "{} {}: {}", entry.id, c.article, c.refused);
+            assert_eq!(
+                c.refused == "limit-motor-speed",
+                c.article == "1FK2208-3AC",
+                "{} {}: {}",
+                entry.id,
+                c.article,
+                c.refused
+            );
             let Some((load, verdicts)) = &c.result else { continue };
             let settling = verdicts.iter().find(|v| v.check == "settling").unwrap();
-            assert!(settling.ok && settling.value < 0.6 * settling.limit, "{} {}: {} m from the target", entry.id, c.article, settling.value);
+            assert!(
+                settling.ok && settling.value < 0.6 * settling.limit,
+                "{} {}: {} m from the target",
+                entry.id,
+                c.article,
+                settling.value
+            );
             for v in verdicts.iter().filter(|v| !v.ok) {
                 assert!(physical.contains(&v.check), "{} {} fails {}", entry.id, c.article, v.check);
             }
@@ -333,7 +442,12 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
             let p = DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap();
             assert_eq!(p.bus_voltage, bus);
             let back_emf = p.back_emf(0.0, p.rated_speed);
-            assert!(back_emf < p.max_voltage, "{} at {supply}: {back_emf} V of back-EMF, {} V at the winding", m["part_number"], p.max_voltage);
+            assert!(
+                back_emf < p.max_voltage,
+                "{} at {supply}: {back_emf} V of back-EMF, {} V at the winding",
+                m["part_number"],
+                p.max_voltage
+            );
             // The torque-speed curve agrees: full torque at the rated speed, and none where the voltage is used up.
             assert!(p.torque_curve(p.rated_speed).1 == p.peak_torque && p.no_load_speed >= 1.1 * p.rated_speed);
             rows += 1;
@@ -356,11 +470,21 @@ fn a_gearbox_named_before_the_search_keeps_its_inertia() {
     // As the command line does: the config's parts first, then the search's motor.
     let before = with_parts(entry, &resolve(entry, &named).unwrap(), "1FK2104-5AF", "400v", "").unwrap();
     let by_search = with_parts(entry, &entry.config(), "1FK2104-5AF", "400v", "NRK070-04-5").unwrap();
-    let inertia = |cfg: &sim_core::Config| cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap();
+    let inertia = |cfg: &sim_core::Config| {
+        cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap()
+    };
     // Rotor 0.56 kg cm2 and gearbox 0.135 kg cm2 (catalog/siemens/gearbox_nrk.csv).
-    let row = csv("siemens/gearbox_nrk.csv").into_iter().find(|r| r["size"] == "NRK070" && r["motor_frame"] == "04" && r["ratio"] == "5").unwrap();
+    let row = csv("siemens/gearbox_nrk.csv")
+        .into_iter()
+        .find(|r| r["size"] == "NRK070" && r["motor_frame"] == "04" && r["ratio"] == "5")
+        .unwrap();
     let by_hand = 0.56e-4 + row["inertia_at_input_kgm2"].parse::<f64>().unwrap();
-    assert!(close(inertia(&before), by_hand, 1e-12) && close(inertia(&by_search), by_hand, 1e-12), "{} and {} kg m2", inertia(&before), inertia(&by_search));
+    assert!(
+        close(inertia(&before), by_hand, 1e-12) && close(inertia(&by_search), by_hand, 1e-12),
+        "{} and {} kg m2",
+        inertia(&before),
+        inertia(&by_search)
+    );
     for ((path, a), (_, b)) in before.leaves().into_iter().zip(by_search.leaves()) {
         let same = match (a.as_float(), b.as_float()) {
             (Some(a), Some(b)) => close(a, b, 1e-12) || a == b,
@@ -368,7 +492,10 @@ fn a_gearbox_named_before_the_search_keeps_its_inertia() {
         };
         assert!(same, "{path}: {a} with the gearbox named before, {b} with the search's");
     }
-    let peak = |cfg: &sim_core::Config| sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, cfg).unwrap()).unwrap().motors[0].peak_torque;
+    let peak = |cfg: &sim_core::Config| {
+        sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, cfg).unwrap()).unwrap().motors[0]
+            .peak_torque
+    };
     assert!(close(peak(&before), peak(&by_search), 1e-6), "{} and {} N m", peak(&before), peak(&by_search));
 }
 
@@ -380,26 +507,97 @@ fn a_gearbox_named_before_the_search_keeps_its_inertia() {
 fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     use sim_components::analysis::{CycleLoad, Verdict};
     use sim_components::catalog::Candidate;
-    let verdict = |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
-    let load = CycleLoad { duration: 1.0, belt_tension: None, belt_slack_time: None, belt_tooth_jumps: None, belt_span_detuning: None, radial_load_peak: None, condition_peak: None, guide_load: None, guide_speed: None, path_error_peak: 0.0, path_error_rms: 0.0, tracking_error_peak: 0.0, dwell_error_peak: 0.0, tripped: false, motors: Vec::new(), budget: None, part_rises: Vec::new(), checks: Vec::new(), clearance: None, contact: None, braking_power_peak: 0.0, warm_start: None };
-    let candidate = |verdicts: Vec<Verdict>| Candidate { article: "", gearbox: String::new(), drive: "", axis: String::new(), mass: 1.0, cost: 1.0, result: Some((load.clone(), verdicts)), refused: "" };
+    let verdict =
+        |check: &'static str, value: f64, limit: f64, ok: bool| Verdict { check, motor: Some(0), value, limit, ok };
+    let load = CycleLoad {
+        duration: 1.0,
+        belt_tension: None,
+        belt_slack_time: None,
+        belt_tooth_jumps: None,
+        belt_span_detuning: None,
+        radial_load_peak: None,
+        condition_peak: None,
+        guide_load: None,
+        guide_speed: None,
+        path_error_peak: 0.0,
+        path_error_rms: 0.0,
+        tracking_error_peak: 0.0,
+        dwell_error_peak: 0.0,
+        tripped: false,
+        motors: Vec::new(),
+        budget: None,
+        part_rises: Vec::new(),
+        checks: Vec::new(),
+        clearance: None,
+        contact: None,
+        braking_power_peak: 0.0,
+        warm_start: None,
+    };
+    let candidate = |verdicts: Vec<Verdict>| Candidate {
+        article: "",
+        gearbox: String::new(),
+        drive: "",
+        axis: String::new(),
+        mass: 1.0,
+        cost: 1.0,
+        result: Some((load.clone(), verdicts)),
+        refused: "",
+    };
     let full = verdict("dc-link-energy", 6.2, 6.2, true);
-    let with_resistor = candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), verdict("braking-resistor-continuous", 6.0, 20.0, true), verdict("dc-link-overvoltage", 770.0, 820.0, true)]);
+    let with_resistor = candidate(vec![
+        verdict("motor-peak", 0.7, 1.0, true),
+        full.clone(),
+        verdict("braking-resistor-continuous", 6.0, 20.0, true),
+        verdict("dc-link-overvoltage", 770.0, 820.0, true),
+    ]);
     assert_eq!(with_resistor.tightest(), Some(("motor-peak", 0.7)));
     // An S120 line-up's one Braking Module is judged once, without a motor: it backs every axis's DC link.
     let module = Verdict { motor: None, ..verdict("braking-resistor-continuous", 600.0, 1500.0, true) };
-    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), module]).tightest(), Some(("motor-peak", 0.7)));
+    assert_eq!(
+        candidate(vec![verdict("motor-peak", 0.7, 1.0, true), full.clone(), module]).tightest(),
+        Some(("motor-peak", 0.7))
+    );
     // Without a resistor a full DC link is the limit, and one that fails is the reason. The voltage, which
     // starts at the bus level, says nothing while it passes.
-    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-energy", 5.0, 6.2, true), verdict("dc-link-overvoltage", 760.0, 820.0, true)]).tightest().unwrap().0, "dc-link-energy");
-    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-overvoltage", 830.0, 820.0, false)]).tightest().unwrap().0, "dc-link-overvoltage");
-    assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-energy", 9.3, 6.2, false), verdict("braking-resistor-peak", 1.0, 2.0, true)]).tightest(), Some(("dc-link-energy", 1.5)));
+    assert_eq!(
+        candidate(vec![
+            verdict("motor-peak", 0.7, 1.0, true),
+            verdict("dc-link-energy", 5.0, 6.2, true),
+            verdict("dc-link-overvoltage", 760.0, 820.0, true)
+        ])
+        .tightest()
+        .unwrap()
+        .0,
+        "dc-link-energy"
+    );
+    assert_eq!(
+        candidate(vec![verdict("motor-peak", 0.7, 1.0, true), verdict("dc-link-overvoltage", 830.0, 820.0, false)])
+            .tightest()
+            .unwrap()
+            .0,
+        "dc-link-overvoltage"
+    );
+    assert_eq!(
+        candidate(vec![
+            verdict("motor-peak", 0.7, 1.0, true),
+            verdict("dc-link-energy", 9.3, 6.2, false),
+            verdict("braking-resistor-peak", 1.0, 2.0, true)
+        ])
+        .tightest(),
+        Some(("dc-link-energy", 1.5))
+    );
     // A contact with no clearance asked for (`profile.min_clearance_m` 0, as on the single axis) fails and is the
     // tightest; the same check passing at a clearance has no share.
     let contact = Verdict { motor: None, ..verdict("collision", -0.03, 0.0, false) };
-    assert_eq!(candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), contact]).tightest(), Some(("collision", f64::INFINITY)));
+    assert_eq!(
+        candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), contact]).tightest(),
+        Some(("collision", f64::INFINITY))
+    );
     let clear = Verdict { motor: None, ..verdict("collision", 0.1, 0.0, true) };
-    assert_eq!(candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), clear]).tightest(), Some(("gearbox-radial-load", 0.42)));
+    assert_eq!(
+        candidate(vec![verdict("gearbox-radial-load", 0.42, 1.0, true), clear]).tightest(),
+        Some(("gearbox-radial-load", 0.42))
+    );
 }
 
 /// The EXCT-30 config passes every check with margin: in the worst case of both band modes. One at a time,
@@ -422,7 +620,10 @@ fn the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes() 
     let cfg = sim_components::load_config(&machine_t_gantry::ENTRY, machine_t_gantry::EXCT_30_CONFIG).unwrap();
     let bounded = bounds(&cfg).unwrap();
     assert!(bounded.len() >= 60 && bounded.contains(&("belt.pretension_n".to_string(), 350.0, 550.0)));
-    exct_30_passes_with_margin("sampled", &verdict_bands_sampled(&machine_t_gantry::ENTRY, &cfg, &bounded, 60, 1).unwrap());
+    exct_30_passes_with_margin(
+        "sampled",
+        &verdict_bands_sampled(&machine_t_gantry::ENTRY, &cfg, &bounded, 60, 1).unwrap(),
+    );
     let cycle = analyse_cycle(&mut sim_components::Sim::new(&machine_t_gantry::ENTRY, &cfg).unwrap()).unwrap().duration;
     assert!((cycle - 2.048).abs() < 0.01, "cycle {cycle} s");
 }
@@ -435,11 +636,20 @@ fn exct_30_passes_with_margin(mode: &str, bands: &[sim_components::analysis::Ban
     let bearing = band("pulley-bearing-life");
     assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
     let (slack, settling, radial) = (band("belt-slack"), band("settling"), band("gearbox-radial-load"));
-    assert!(slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0, "{mode}: slackest {} N, settling {} m, radial {} N", slack.low, settling.high, radial.high);
+    assert!(
+        slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0,
+        "{mode}: slackest {} N, settling {} m, radial {} N",
+        slack.low,
+        settling.high,
+        radial.high
+    );
     // The highest belt tension is judged too, against the estimate of 2140 N (a 5 mm pitch belt as stiff as Festo's), and passes in the worst case.
     let tension = band("belt-tension");
     assert!(tension.verdict.limit == 2140.0 && tension.ok && tension.share == 1.0, "{mode}: {tension:?}");
-    println!("{mode}: slackest {:.1} N, settling {:.2e} m, radial load {:.0} N, tightest {:.0} N", slack.low, settling.high, radial.high, tension.high);
+    println!(
+        "{mode}: slackest {:.1} N, settling {:.2e} m, radial load {:.0} N, tightest {:.0} N",
+        slack.low, settling.high, radial.high, tension.high
+    );
 }
 
 /// The EXCT-30 passes `settling` at the worst corner of its bounds that `verdict_worst` finds, with the second input
@@ -455,7 +665,11 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
     // in the test above, whose judgement of them is made here.
     let (worst, bands, runs) = verdict_worst_and_bands(&machine_t_gantry::ENTRY, &cfg, &bounds(&cfg).unwrap()).unwrap();
     exct_30_passes_with_margin("one at a time", &bands);
-    let failed: Vec<_> = worst.iter().filter(|w| !w.verdict.ok && w.verdict.check != "pulley-bearing-life").map(|w| &w.verdict).collect();
+    let failed: Vec<_> = worst
+        .iter()
+        .filter(|w| !w.verdict.ok && w.verdict.check != "pulley-bearing-life")
+        .map(|w| &w.verdict)
+        .collect();
     assert!(failed.is_empty(), "{failed:?}");
     let settling = worst.iter().find(|w| w.verdict.check == "settling").unwrap();
     assert!(settling.verdict.value < 0.1e-3, "{:?}", settling.verdict);
@@ -467,6 +681,9 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
         let id = (band.verdict.check, band.verdict.motor);
         let w = &worst.iter().find(|w| (w.verdict.check, w.verdict.motor) == id).unwrap().verdict;
         let below = sim_components::analysis::AT_LEAST.contains(&id.0);
-        assert!(if below { w.value <= band.low } else { w.value >= band.high } && (band.ok || !w.ok), "{id:?}: worst {w:?}, bands {band:?}");
+        assert!(
+            if below { w.value <= band.low } else { w.value >= band.high } && (band.ok || !w.ok),
+            "{id:?}: worst {w:?}, bands {band:?}"
+        );
     }
 }

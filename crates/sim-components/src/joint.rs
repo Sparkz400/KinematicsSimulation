@@ -13,7 +13,7 @@
 //!   `min_angle_deg`, `max_angle_deg` (the stops), `stop_stiffness_nm_rad`, `stop_damping_nm_s_rad`
 //!   (effects.hard_stops).
 
-use crate::mech::{Gearbox, GearTorque, HardStop, HoldingBrake, Ripple, ShaftFriction};
+use crate::mech::{GearTorque, Gearbox, HardStop, HoldingBrake, Ripple, ShaftFriction};
 use sim_core::{Config, ConfigError};
 
 #[derive(Debug, Clone)]
@@ -47,7 +47,8 @@ impl RotaryJoint {
         if min >= max {
             return Err(ConfigError::Invalid("joint.max_angle_deg".into()));
         }
-        let (stiffness, damping) = (cfg.positive("joint.stop_stiffness_nm_rad")?, cfg.non_negative("joint.stop_damping_nm_s_rad")?);
+        let (stiffness, damping) =
+            (cfg.positive("joint.stop_stiffness_nm_rad")?, cfg.non_negative("joint.stop_damping_nm_s_rad")?);
         let friction = ShaftFriction {
             coulomb: if on { cfg.non_negative("joint.friction_coulomb_nm")? } else { 0.0 },
             viscous: if on { cfg.non_negative("joint.friction_viscous_nm_s_rad")? } else { 0.0 },
@@ -67,17 +68,28 @@ impl RotaryJoint {
             viscous: if on { cfg.non_negative("slide.friction_viscous_n_s_m")? } else { 0.0 },
             smoothing: cfg.positive("slide.friction_smoothing_m_s")?,
         };
-        let stops = Self::stops(cfg, cfg.positive("slide.stop_stiffness_n_m")?, cfg.non_negative("slide.stop_damping_n_s_m")?)?;
+        let stops =
+            Self::stops(cfg, cfg.positive("slide.stop_stiffness_n_m")?, cfg.non_negative("slide.stop_damping_n_s_m")?)?;
         Self::with(cfg, friction, stops, (0.0, cfg.positive("slide.stroke_m")?))
     }
 
     fn stops(cfg: &Config, stiffness: f64, damping: f64) -> Result<HardStop, ConfigError> {
-        Ok(if cfg.bool("effects.hard_stops")? { HardStop { stiffness, damping } } else { HardStop { stiffness: 0.0, damping: 0.0 } })
+        Ok(if cfg.bool("effects.hard_stops")? {
+            HardStop { stiffness, damping }
+        } else {
+            HardStop { stiffness: 0.0, damping: 0.0 }
+        })
     }
 
     /// Motor and gearbox from `[motor]` and `[gearbox]`, with the joint's own friction, stops and range.
-    pub fn with(cfg: &Config, friction: ShaftFriction, stops: HardStop, range: (f64, f64)) -> Result<Self, ConfigError> {
-        let rotor_inertia = cfg.positive("motor.rotor_inertia_kgm2")? + cfg.non_negative("gearbox.inertia_at_input_kgm2")?;
+    pub fn with(
+        cfg: &Config,
+        friction: ShaftFriction,
+        stops: HardStop,
+        range: (f64, f64),
+    ) -> Result<Self, ConfigError> {
+        let rotor_inertia =
+            cfg.positive("motor.rotor_inertia_kgm2")? + cfg.non_negative("gearbox.inertia_at_input_kgm2")?;
         let gearbox = Gearbox::from_config(cfg)?;
         Ok(Self {
             coupled: gearbox.is_coupling(),
@@ -111,10 +123,20 @@ impl RotaryJoint {
 
     /// Elastic model: the gearbox torques between rotor and arm, the rotor's acceleration under the motor's torque
     /// `command` (before ripple), and the rate of the brake's deflection `brake`.
-    pub fn rotor(&self, command: f64, rotor: f64, rotor_speed: f64, angle: f64, speed: f64, brake: f64, engaged: bool) -> (GearTorque, f64, f64) {
+    pub fn rotor(
+        &self,
+        command: f64,
+        rotor: f64,
+        rotor_speed: f64,
+        angle: f64,
+        speed: f64,
+        brake: f64,
+        engaged: bool,
+    ) -> (GearTorque, f64, f64) {
         let gear = self.gearbox.torque(rotor, rotor_speed, angle, speed);
         let (held, rate) = self.brake.torque(engaged, rotor_speed, brake);
-        let acc = (self.ripple.apply(command, rotor) - gear.rotor - self.shaft.torque(rotor_speed) - held) / self.rotor_inertia;
+        let acc = (self.ripple.apply(command, rotor) - gear.rotor - self.shaft.torque(rotor_speed) - held)
+            / self.rotor_inertia;
         (gear, acc, rate)
     }
 
@@ -136,7 +158,11 @@ impl RotaryJoint {
     pub fn losses(&self, angle: f64, speed: f64, rotor_speed: f64, brake: f64, engaged: bool) -> [f64; 3] {
         let (min, max) = self.range;
         let held = self.brake.torque(engaged, rotor_speed, brake).0;
-        [self.friction.torque(speed) * speed, self.stops.loss_power(angle - min, speed, max - min), (self.shaft.torque(rotor_speed) + held) * rotor_speed]
+        [
+            self.friction.torque(speed) * speed,
+            self.stops.loss_power(angle - min, speed, max - min),
+            (self.shaft.torque(rotor_speed) + held) * rotor_speed,
+        ]
     }
 }
 
@@ -186,7 +212,9 @@ mod tests {
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
         pinion.apply(&cfg, &mut j).unwrap();
         let close = |a: f64, b: f64| (a / b - 1.0).abs() < 1e-9;
-        assert!(close(j.ratio(), 400.0) && close(j.gearbox.stiffness, 2.857142857e6) && close(j.gearbox.efficiency, 0.855));
+        assert!(
+            close(j.ratio(), 400.0) && close(j.gearbox.stiffness, 2.857142857e6) && close(j.gearbox.efficiency, 0.855)
+        );
         assert!(close(j.rotor_inertia, 3e-4) && j.gearbox.half_backlash == 0.0);
         cfg.set_text("effects.gearbox_backlash = true").unwrap();
         cfg.set_text("gearbox.backlash_rad = 0.002").unwrap();
@@ -198,7 +226,8 @@ mod tests {
     /// The slide's own table: its stroke, its guides' friction in N, its stops in N/m.
     #[test]
     fn a_linear_joint_reads_its_slide() {
-        let text = joint_text() + "[slide]
+        let text = joint_text()
+            + "[slide]
 stroke_m = 0.8
 friction_coulomb_n = 30.0
 friction_viscous_n_s_m = 40.0

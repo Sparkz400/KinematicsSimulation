@@ -22,7 +22,8 @@ fn unpack(entry: &'static MachineEntry, name: &str) -> (Model, CString) {
         std::fs::write(file, bytes).unwrap();
     }
     // A space in the folder name would come percent-encoded; the URI keeps it plain where it can.
-    let uri = format!("file:///{}", dir.join("resources").display().to_string().replace('\\', "/").trim_start_matches('/'));
+    let uri =
+        format!("file:///{}", dir.join("resources").display().to_string().replace('\\', "/").trim_start_matches('/'));
     (model, CString::new(uri).unwrap())
 }
 
@@ -30,7 +31,10 @@ fn unpack(entry: &'static MachineEntry, name: &str) -> (Model, CString) {
 fn machine_files() -> Vec<&'static MachineEntry> {
     ["h-bot.toml", "corexy.toml", "xyz-portal.toml"]
         .iter()
-        .map(|name| sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name)).unwrap_or_else(|e| panic!("{e}")))
+        .map(|name| {
+            sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name))
+                .unwrap_or_else(|e| panic!("{e}"))
+        })
         .collect()
 }
 
@@ -62,10 +66,21 @@ fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
     for entry in MACHINES.iter().copied().chain(machine_files()) {
         let (model, resources) = unpack(entry, "move");
         // A machine file goes along with the FMU, a registered machine is found by its id.
-        assert_eq!(model.files().iter().any(|(path, _)| path == "resources/machine.toml"), !sim_fmi::is_registered(entry), "{}", entry.id);
+        assert_eq!(
+            model.files().iter().any(|(path, _)| path == "resources/machine.toml"),
+            !sim_fmi::is_registered(entry),
+            "{}",
+            entry.id
+        );
         let cfg = load_config(entry, &model.config_text).unwrap();
         let mut sim = Sim::new(entry, &cfg).unwrap();
-        let signals: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect();
+        let signals: Vec<u32> = model
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| matches!(v.kind, Kind::Signal(_)))
+            .map(|(i, _)| i as u32)
+            .collect();
         assert_eq!(signals.len(), sim.signal_infos().len(), "{}: every signal is a variable", entry.id);
         let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
         assert!(!c.is_null(), "{}", entry.id);
@@ -80,7 +95,8 @@ fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
         let axis = sim.machine.axes()[0].clone();
         let setpoint = vr(&model, &Kind::Setpoint(0));
         let mut target = sim.control.set_pos.clone();
-        let (step, direction) = (0.2 * axis.max_vel * interval, if target[0] < 0.5 * (axis.min + axis.max) { 1.0 } else { -1.0 });
+        let (step, direction) =
+            (0.2 * axis.max_vel * interval, if target[0] < 0.5 * (axis.min + axis.max) { 1.0 } else { -1.0 });
         let steps = (interval / sim.dt).round() as u64;
         for k in 0..40 {
             if k < 20 {
@@ -251,7 +267,11 @@ fn effect_switches_and_the_drive_enable_act_on_the_simulation() {
         }
     }
     // The first effect switched over through its parameter gives the simulation of the config switched over.
-    let (name, on) = cfg.leaves().into_iter().find_map(|(p, v)| Some((p.strip_prefix("effects.")?.to_string(), v.as_bool()?))).unwrap();
+    let (name, on) = cfg
+        .leaves()
+        .into_iter()
+        .find_map(|(p, v)| Some((p.strip_prefix("effects.")?.to_string(), v.as_bool()?)))
+        .unwrap();
     let mut switched = cfg.clone();
     switched.set_text(&format!("effects.{name} = {}", !on)).unwrap();
     let mut sim = Sim::new(entry, &switched).unwrap();
@@ -259,7 +279,13 @@ fn effect_switches_and_the_drive_enable_act_on_the_simulation() {
     let (effect, enable) = (vr(&model, &Kind::Effect(name.clone())), vr(&model, &Kind::Enable));
     unsafe { assert_eq!(fmi2SetBoolean(c, &effect, 1, &(!on as i32)), fmi2OK) };
     start(c);
-    let signals: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect();
+    let signals: Vec<u32> = model
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| matches!(v.kind, Kind::Signal(_)))
+        .map(|(i, _)| i as u32)
+        .collect();
     let mut expected = Vec::new();
     // Drives off after the first step: the controller disables them as the command would.
     for k in 0..4 {
@@ -289,9 +315,21 @@ fn effect_switches_and_the_drive_enable_act_on_the_simulation() {
 fn a_saved_fmu_state_restores_the_simulation_bit_for_bit() {
     let entry = MACHINES[0];
     let (model, resources) = unpack(entry, "state");
-    let signals: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect();
+    let signals: Vec<u32> = model
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| matches!(v.kind, Kind::Signal(_)))
+        .map(|(i, _)| i as u32)
+        .collect();
     let (setpoint, enable) = (vr(&model, &Kind::Setpoint(0)), vr(&model, &Kind::Enable));
-    let interval: f64 = model.config_text.lines().find_map(|l| l.trim().strip_prefix("setpoint_interval_s = ")).unwrap().parse().unwrap();
+    let interval: f64 = model
+        .config_text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("setpoint_interval_s = "))
+        .unwrap()
+        .parse()
+        .unwrap();
     let first: f64 = model.variables[setpoint as usize].start.as_ref().unwrap().parse().unwrap();
     // One communication step: a setpoint 1 mm on, the drives off at step 6.
     let step = |c: fmi2Component, k: usize| {
@@ -353,9 +391,16 @@ fn the_directional_derivative_is_the_finite_difference_zero() {
     let entry = MACHINES[0];
     let (model, resources) = unpack(entry, "derivative");
     let c = instantiate_started(&model, &resources);
-    let outputs: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i as u32).collect();
+    let outputs: Vec<u32> =
+        model.variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i as u32).collect();
     let setpoint = vr(&model, &Kind::Setpoint(0));
-    let interval: f64 = model.config_text.lines().find_map(|l| l.trim().strip_prefix("setpoint_interval_s = ")).unwrap().parse().unwrap();
+    let interval: f64 = model
+        .config_text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("setpoint_interval_s = "))
+        .unwrap()
+        .parse()
+        .unwrap();
     unsafe { assert_eq!(fmi2DoStep(c, 0.0, interval, 1), fmi2OK) };
     let base = get_reals(c, &outputs);
     let u = get_reals(c, &[setpoint])[0];
@@ -364,12 +409,29 @@ fn the_directional_derivative_is_the_finite_difference_zero() {
     let by_hand: Vec<f64> = get_reals(c, &outputs).iter().zip(&base).map(|(a, b)| (a - b) / h).collect();
     let mut derivative = vec![f64::NAN; outputs.len()];
     unsafe {
-        assert_eq!(fmi2GetDirectionalDerivative(c, outputs.as_ptr(), outputs.len(), &setpoint, 1, &1.0, derivative.as_mut_ptr()), fmi2OK);
+        assert_eq!(
+            fmi2GetDirectionalDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                &setpoint,
+                1,
+                &1.0,
+                derivative.as_mut_ptr()
+            ),
+            fmi2OK
+        );
         assert_eq!(derivative, by_hand);
         assert!(derivative.iter().all(|d| *d == 0.0));
         // An input as unknown, an output as known.
-        assert_eq!(fmi2GetDirectionalDerivative(c, &setpoint, 1, &setpoint, 1, &1.0, derivative.as_mut_ptr()), fmi2Error);
-        assert_eq!(fmi2GetDirectionalDerivative(c, &outputs[0], 1, &outputs[1], 1, &1.0, derivative.as_mut_ptr()), fmi2Error);
+        assert_eq!(
+            fmi2GetDirectionalDerivative(c, &setpoint, 1, &setpoint, 1, &1.0, derivative.as_mut_ptr()),
+            fmi2Error
+        );
+        assert_eq!(
+            fmi2GetDirectionalDerivative(c, &outputs[0], 1, &outputs[1], 1, &1.0, derivative.as_mut_ptr()),
+            fmi2Error
+        );
         fmi2FreeInstance(c);
     }
 }
@@ -389,7 +451,12 @@ fn the_guid_changes_with_the_model_description() {
     assert_ne!(a.guid, Model::new(entry, &text, "de").unwrap().guid, "the descriptions are part of it");
     let mut cfg = entry.config();
     // An effect switch: the FMU's boolean start values are the effects (`drive.braking_module` is no variable).
-    let (name, on) = cfg.leaves().into_iter().filter(|(p, _)| p.starts_with("effects.")).find_map(|(p, v)| Some((p, v.as_bool()?))).unwrap();
+    let (name, on) = cfg
+        .leaves()
+        .into_iter()
+        .filter(|(p, _)| p.starts_with("effects."))
+        .find_map(|(p, v)| Some((p, v.as_bool()?)))
+        .unwrap();
     cfg.set_text(&format!("{name} = {}", !on)).unwrap();
     assert_ne!(a.guid, Model::new(entry, &cfg.to_text().unwrap(), "en").unwrap().guid, "a start value is part of it");
 }

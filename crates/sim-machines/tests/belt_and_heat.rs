@@ -39,11 +39,20 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
         }
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let guide = |id: &str| cfg.get(&format!("friction_{}", id.trim_start_matches("axis."))).is_ok();
-        let contacts: Vec<_> = sim.machine.friction_contacts().into_iter().enumerate().filter(|(_, c)| guide(c.id)).collect();
+        let contacts: Vec<_> =
+            sim.machine.friction_contacts().into_iter().enumerate().filter(|(_, c)| guide(c.id)).collect();
         for (i, contact) in contacts.iter().map(|(i, c)| (*i, c)) {
             let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
             let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
-            assert_eq!((coulomb, viscous), (cfg.f64(&format!("{table}.coulomb_n")).unwrap(), 0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap()), "{}", entry.id);
+            assert_eq!(
+                (coulomb, viscous),
+                (
+                    cfg.f64(&format!("{table}.coulomb_n")).unwrap(),
+                    0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap()
+                ),
+                "{}",
+                entry.id
+            );
         }
         // Into a cruise, then the same state with every part 30 K warm. From near the low end of the range, as the long
         // moves of control.rs: from the start pose the D2's 228 mm peaked at 2.91 m/s of its 3, and the loop waiting for
@@ -58,12 +67,24 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
         let mut target: Vec<f64> = cfg.f64s("start.pose").unwrap();
         target[0] = axis.max - 0.05 * axis.max;
         sim.command(Command::MoveTo(target)).unwrap();
-        while sim.control.busy() && (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9 {
+        while sim.control.busy()
+            && (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9
+        {
             sim.step();
         }
-        assert!(sim.control.busy(), "{}: the move ended without a cruise at {} {}/s", entry.id, axis.max_vel, axis.unit);
+        assert!(
+            sim.control.busy(),
+            "{}: the move ended without a cruise at {} {}/s",
+            entry.id,
+            axis.max_vel,
+            axis.unit
+        );
         sim.run(0.1, |_| {});
-        let gearbox = sim.heated.iter().position(|h| h.part.kind == "gearbox").map(|i| format!("power.{}", sim.heated[i].part.id));
+        let gearbox = sim
+            .heated
+            .iter()
+            .position(|h| h.part.kind == "gearbox")
+            .map(|i| format!("power.{}", sim.heated[i].part.id));
         let cold = gearbox.as_ref().map(|id| signal(&sim, id));
         for part in &mut sim.heated {
             part.rise = 30.0;
@@ -73,7 +94,11 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
             let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
             let by_hand = 0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap() * 0.281749;
-            assert!(coulomb == cfg.f64(&format!("{table}.coulomb_n")).unwrap() && (viscous - by_hand).abs() < 1e-5, "{}: {viscous} N against {by_hand} N", entry.id);
+            assert!(
+                coulomb == cfg.f64(&format!("{table}.coulomb_n")).unwrap() && (viscous - by_hand).abs() < 1e-5,
+                "{}: {viscous} N against {by_hand} N",
+                entry.id
+            );
         }
         if let (Some(id), Some(cold)) = (gearbox, cold) {
             let warm = signal(&sim, &id);
@@ -83,11 +108,20 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
             let g = cfg.f64("gearbox.efficiency").unwrap();
             // An arm's heated gearboxes are those of its turning joints, with nothing behind them.
-            let e = if cfg.get("arm.gear_ratios").is_ok() { 1.0 } else { ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0) };
+            let e = if cfg.get("arm.gear_ratios").is_ok() {
+                1.0
+            } else {
+                ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)
+            };
             let warm_eta = (1.0 - 0.64088 * (1.0 - g)) * e;
-            let (input_set, output_set) = ((1.0 - warm_eta) / (1.0 - g * e), (1.0 - warm_eta) / warm_eta / ((1.0 - g * e) / (g * e)));
+            let (input_set, output_set) =
+                ((1.0 - warm_eta) / (1.0 - g * e), (1.0 - warm_eta) / warm_eta / ((1.0 - g * e) / (g * e)));
             let ratio = warm / cold;
-            assert!(ratio > output_set.min(input_set) - 0.005 && ratio < output_set.max(input_set) + 0.005, "{}: {warm} W against {cold} W, {ratio} not within {output_set} to {input_set}", entry.id);
+            assert!(
+                ratio > output_set.min(input_set) - 0.005 && ratio < output_set.max(input_set) + 0.005,
+                "{}: {warm} W against {cold} W, {ratio} not within {output_set} to {input_set}",
+                entry.id
+            );
         }
     }
 }
@@ -100,7 +134,15 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
 #[test]
 fn a_guide_settles_where_its_loss_and_heat_flow_balance() {
     let entry = &machine_single_axis::ENTRY;
-    let mut cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true", "thermal.guide_time_constant_s = 0.02", "thermal.guide_resistance_k_w = 2.0"]);
+    let mut cfg = edited(
+        entry,
+        &[
+            "effects.part_heating = true",
+            "effects.thermal_feedback = true",
+            "thermal.guide_time_constant_s = 0.02",
+            "thermal.guide_resistance_k_w = 2.0",
+        ],
+    );
     cfg.set_text("start.pose = [0.05]").unwrap();
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let part = sim.heated.iter().position(|h| h.part.id == "guide_x").unwrap();
@@ -109,7 +151,9 @@ fn a_guide_settles_where_its_loss_and_heat_flow_balance() {
         sim.step();
     }
     // Fourteen time constants of cruise.
-    sim.run(0.28, |sim| assert!((signal(sim, "axis.x.velocity_setpoint") - 1.0).abs() < 1e-9, "the move stopped cruising"));
+    sim.run(0.28, |sim| {
+        assert!((signal(sim, "axis.x.velocity_setpoint") - 1.0).abs() < 1e-9, "the move stopped cruising")
+    });
     let (scale, v) = (signal(&sim, "axis.x.friction_load_scale"), signal(&sim, "axis.x.friction_speed"));
     let balance = |rise: f64| 2.0 * (scale * 15.0 + 20.0 * viscosity(rise) * v) * v - rise;
     let (mut low, mut high) = (0.0, 100.0);
@@ -133,18 +177,32 @@ fn a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_
     let run = |warm: bool| {
         let cfg = edited(entry, &["motor.rated_current_a = 0.5", &format!("effects.thermal_warm_start = {warm}")]);
         let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
-        let copper = load.budget.as_ref().unwrap().rows.iter().find(|r| r.id == "copper.m").unwrap().energy / load.duration;
+        let copper =
+            load.budget.as_ref().unwrap().rows.iter().find(|r| r.id == "copper.m").unwrap().energy / load.duration;
         (load, copper)
     };
     let by_hand = |rms: f64, rise: f64| 4.0 * (1.0 + 0.0039 * rise) * rms * rms;
     let ((cold, cold_loss), (warm, warm_loss)) = (run(false), run(true));
     let (c, w) = (&cold.motors[0], &warm.motors[0]);
     assert!(cold.warm_start.is_none() && warm.warm_start.is_some_and(|s| s.converged()), "{:?}", warm.warm_start);
-    assert!((w.rms_current - 0.4463).abs() < 5e-4 && (w.winding_rise - 73.82).abs() < 0.1, "{} A, {} K", w.rms_current, w.winding_rise);
-    assert!((warm_loss - by_hand(w.rms_current, w.winding_rise)).abs() < 2e-3 * warm_loss, "{warm_loss} W, by hand {} W", by_hand(w.rms_current, w.winding_rise));
+    assert!(
+        (w.rms_current - 0.4463).abs() < 5e-4 && (w.winding_rise - 73.82).abs() < 0.1,
+        "{} A, {} K",
+        w.rms_current,
+        w.winding_rise
+    );
+    assert!(
+        (warm_loss - by_hand(w.rms_current, w.winding_rise)).abs() < 2e-3 * warm_loss,
+        "{warm_loss} W, by hand {} W",
+        by_hand(w.rms_current, w.winding_rise)
+    );
     assert!((warm_loss - 1.0261).abs() < 5e-3 * 1.0261, "{warm_loss} W");
     // From cold the winding warms by a fifth of a kelvin over the two passes (time constant 30 min).
-    assert!((cold_loss - by_hand(c.rms_current, 0.0)).abs() < 2e-3 * cold_loss, "{cold_loss} W, by hand {} W", by_hand(c.rms_current, 0.0));
+    assert!(
+        (cold_loss - by_hand(c.rms_current, 0.0)).abs() < 2e-3 * cold_loss,
+        "{cold_loss} W, by hand {} W",
+        by_hand(c.rms_current, 0.0)
+    );
 }
 
 /// A guide with effects.thermal_feedback, started warm: the single axis's shipped cycle with the parts warming
@@ -155,7 +213,10 @@ fn a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_
 #[test]
 fn a_guide_started_warm_has_the_hand_calculated_friction_at_its_settled_rise() {
     let entry = &machine_single_axis::ENTRY;
-    let cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = true"]);
+    let cfg = edited(
+        entry,
+        &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = true"],
+    );
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let load = analyse_cycle(&mut sim).unwrap();
     let start = load.warm_start.unwrap();
@@ -167,10 +228,20 @@ fn a_guide_started_warm_has_the_hand_calculated_friction_at_its_settled_rise() {
     assert!((now - settled).abs() < 0.15, "{now} K against {settled} K");
     let guide = sim.machine.friction_contacts().iter().position(|c| c.id == "axis.x").unwrap();
     let viscous = sim.machine.friction_curve(guide, 0.5, 1.0)[1];
-    assert!((viscous - 10.0 * viscosity(settled)).abs() < 2e-3 * viscous && (viscous - 6.3673).abs() < 0.01 * 6.3673, "{viscous} N, by hand {} N", 10.0 * viscosity(settled));
-    let cold = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = false"]);
+    assert!(
+        (viscous - 10.0 * viscosity(settled)).abs() < 2e-3 * viscous && (viscous - 6.3673).abs() < 0.01 * 6.3673,
+        "{viscous} N, by hand {} N",
+        10.0 * viscosity(settled)
+    );
+    let cold = edited(
+        entry,
+        &["effects.part_heating = true", "effects.thermal_feedback = true", "effects.thermal_warm_start = false"],
+    );
     let cold = analyse_cycle(&mut Sim::new(entry, &cold).unwrap()).unwrap();
-    assert!(cold.warm_start.is_none() && (cold.part_rises.iter().find(|(p, _)| p.id == "guide_x").unwrap().1 - 12.51).abs() < 0.05);
+    assert!(
+        cold.warm_start.is_none()
+            && (cold.part_rises.iter().find(|(p, _)| p.id == "guide_x").unwrap().1 - 12.51).abs() < 0.05
+    );
 }
 
 /// The warm start converges on the default T-gantry within its pass limit, its windings alone (the shipped switches)
@@ -198,16 +269,22 @@ fn the_belt_teeth_jump_at_the_hand_calculated_pull() {
     let entry = &machine_single_axis::ENTRY;
     let hold = |share: f64| {
         let payload = share * 28.5765 - 4.0;
-        let cfg = edited(entry, &[
-            "effects.belt_tooth_jump = true",
-            "effects.tooth_meshing = false",
-            "effects.torque_ripple = false",
-            "geometry.incline_deg = 90.0",
-            &format!("mass.payload_kg = {payload}"),
-        ]);
+        let cfg = edited(
+            entry,
+            &[
+                "effects.belt_tooth_jump = true",
+                "effects.tooth_meshing = false",
+                "effects.torque_ripple = false",
+                "geometry.incline_deg = 90.0",
+                &format!("mass.payload_kg = {payload}"),
+            ],
+        );
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let (t1, t2) = (signal(&sim, "belt.1.tension"), signal(&sim, "belt.2.tension"));
-        assert!((t2 - t1 - share * 280.24).abs() < 0.01 * 280.0 && (t1 - (300.0 - share * 280.24 * 2.35 / 2.6)).abs() < 1.0, "{t1} N, {t2} N");
+        assert!(
+            (t2 - t1 - share * 280.24).abs() < 0.01 * 280.0 && (t1 - (300.0 - share * 280.24 * 2.35 / 2.6)).abs() < 1.0,
+            "{t1} N, {t2} N"
+        );
         let mut first = None;
         for _ in 0..16000 {
             sim.step();
@@ -230,14 +307,17 @@ fn with_the_wrap_the_belt_teeth_jump_at_the_pull_of_half_a_turn() {
     let entry = &machine_single_axis::ENTRY;
     let hold = |share: f64| {
         let payload = share * 29.5149 - 4.0;
-        let cfg = edited(entry, &[
-            "effects.belt_tooth_jump = true",
-            "effects.belt_wrap = true",
-            "effects.tooth_meshing = false",
-            "effects.torque_ripple = false",
-            "geometry.incline_deg = 90.0",
-            &format!("mass.payload_kg = {payload}"),
-        ]);
+        let cfg = edited(
+            entry,
+            &[
+                "effects.belt_tooth_jump = true",
+                "effects.belt_wrap = true",
+                "effects.tooth_meshing = false",
+                "effects.torque_ripple = false",
+                "geometry.incline_deg = 90.0",
+                &format!("mass.payload_kg = {payload}"),
+            ],
+        );
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let mut first = None;
         for _ in 0..16000 {
@@ -267,7 +347,12 @@ fn jumping_teeth_fail_the_check_and_close_the_energy_budget() {
     assert!(jumps > 0.0, "no jump");
     let budget = load.budget.as_ref().unwrap();
     let lost = budget.rows.iter().find(|r| r.id == "power.tooth_jump").unwrap().energy;
-    assert!(lost > 0.0 && budget.unaccounted().abs() < 5.0 * BUDGET_TOLERANCE * budget.supply, "{jumps} jumps, {lost} J in them, {} J of {} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(
+        lost > 0.0 && budget.unaccounted().abs() < 5.0 * BUDGET_TOLERANCE * budget.supply,
+        "{jumps} jumps, {lost} J in them, {} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
     let v = verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "belt-tooth-jump").unwrap();
     assert!(!v.ok && v.value == jumps && v.limit == 0.0);
     // The default config's teeth hold: the check passes.

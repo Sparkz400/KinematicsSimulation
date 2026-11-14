@@ -26,7 +26,11 @@ macro_rules! entry {
         pub static $name: MachineEntry = MachineEntry {
             id: $id,
             key: concat!("machine-", $id),
-            default_config: concat!(include_str!("../config/common.toml"), "\n", include_str!(concat!("../config/", $file))),
+            default_config: concat!(
+                include_str!("../config/common.toml"),
+                "\n",
+                include_str!(concat!("../config/", $file))
+            ),
             i18n: I18N,
             build: $build,
             suite_configs: || suite_configs(&$name),
@@ -44,7 +48,8 @@ entry!(SCARA, "scara", "scara.toml", arm::build);
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 5] = ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 5] =
+    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
 
 /// The default config with every loss switched off.
 pub fn lossless_config(entry: &MachineEntry) -> Config {
@@ -53,7 +58,11 @@ pub fn lossless_config(entry: &MachineEntry) -> Config {
         cfg.set_text(&format!("effects.{effect} = false")).unwrap();
     }
     cfg.set_text("gearbox.damping_nm_s_rad = 0.0").unwrap();
-    let stops = if cfg.get("slide.stop_damping_n_s_m").is_ok() { "slide.stop_damping_n_s_m" } else { "joint.stop_damping_nm_s_rad" };
+    let stops = if cfg.get("slide.stop_damping_n_s_m").is_ok() {
+        "slide.stop_damping_n_s_m"
+    } else {
+        "joint.stop_damping_nm_s_rad"
+    };
     cfg.set_text(&format!("{stops} = 0.0")).unwrap();
     cfg
 }
@@ -91,17 +100,48 @@ fn payload(cfg: &Config, key: &str) -> Result<f64, ConfigError> {
 }
 
 /// An axis whose limits are `axis.<id>.max_velocity_<unit>_s`, `max_acceleration_<unit>_s2` and `max_jerk_<unit>_s3`.
-fn axis(cfg: &Config, id: &'static str, key: &'static str, unit: &'static str, (min, max): (f64, f64)) -> Result<AxisInfo, ConfigError> {
+fn axis(
+    cfg: &Config,
+    id: &'static str,
+    key: &'static str,
+    unit: &'static str,
+    (min, max): (f64, f64),
+) -> Result<AxisInfo, ConfigError> {
     let get = |what: &str, rate: &str| cfg.positive(&format!("axis.{id}.max_{what}_{unit}_{rate}"));
-    Ok(AxisInfo { id, key, unit, min, max, max_vel: get("velocity", "s")?, max_acc: get("acceleration", "s2")?, max_jerk: get("jerk", "s3")? })
+    Ok(AxisInfo {
+        id,
+        key,
+        unit,
+        min,
+        max,
+        max_vel: get("velocity", "s")?,
+        max_acc: get("acceleration", "s2")?,
+        max_jerk: get("jerk", "s3")?,
+    })
 }
 
 /// A joint machine of `joints` (each with its gear lever, `None` where the joint is driven without a converter) and
 /// `axes`, one motor per joint.
-fn machine<M: Mechanism + 'static>(cfg: &Config, mechanism: M, joints: Vec<(RotaryJoint, Option<f64>)>, axes: Vec<AxisInfo>) -> Result<Box<dyn Machine>, ConfigError> {
-    let specs = joints.into_iter().enumerate().map(|(k, (drive, gear_lever))| JointSpec { drive, id: MOTOR_IDS[k], key: JOINT_KEYS[k], gear_lever }).collect::<Vec<_>>();
+fn machine<M: Mechanism + 'static>(
+    cfg: &Config,
+    mechanism: M,
+    joints: Vec<(RotaryJoint, Option<f64>)>,
+    axes: Vec<AxisInfo>,
+) -> Result<Box<dyn Machine>, ConfigError> {
+    let specs = joints
+        .into_iter()
+        .enumerate()
+        .map(|(k, (drive, gear_lever))| JointSpec { drive, id: MOTOR_IDS[k], key: JOINT_KEYS[k], gear_lever })
+        .collect::<Vec<_>>();
     let motors = (0..specs.len()).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect();
-    Ok(Box::new(JointMachine::new(mechanism, specs, cfg.bool("effects.joint_elasticity")?, ThermalFeedback::from_config(cfg)?, axes, motors)))
+    Ok(Box::new(JointMachine::new(
+        mechanism,
+        specs,
+        cfg.bool("effects.joint_elasticity")?,
+        ThermalFeedback::from_config(cfg)?,
+        axes,
+        motors,
+    )))
 }
 
 /// `ratings.required_life_h`, where it is set.

@@ -31,7 +31,12 @@ pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
         b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
     };
     let at = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<f64>>();
-    (0..axes.len()).all(|axis| turned(&at(0.4), axis).iter().zip(turned(&at(0.6), axis)).all(|(a, b)| (a - b).abs() <= 1e-9 * a.abs().max(1e-6)))
+    (0..axes.len()).all(|axis| {
+        turned(&at(0.4), axis)
+            .iter()
+            .zip(turned(&at(0.6), axis))
+            .all(|(a, b)| (a - b).abs() <= 1e-9 * a.abs().max(1e-6))
+    })
 }
 
 /// Whether the fit per axis (`identify::fit_rigid`) applies: a linear transformation, and a rigid model whose torques
@@ -81,10 +86,16 @@ pub struct Trace {
 /// dropped; columns that are not asked for are ignored.
 pub fn columns(text: &str, names: &[String]) -> Result<Vec<Vec<f64>>, TraceError> {
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-    let header: Vec<&str> = lines.next().unwrap_or("").split(',').map(|h| h.split('[').next().unwrap_or("").trim()).collect();
+    let header: Vec<&str> =
+        lines.next().unwrap_or("").split(',').map(|h| h.split('[').next().unwrap_or("").trim()).collect();
     let mut at = Vec::new();
     for name in names {
-        at.push(header.iter().position(|h| h == name).ok_or_else(|| TraceError { key: "error-trace-column", detail: name.clone() })?);
+        at.push(
+            header
+                .iter()
+                .position(|h| h == name)
+                .ok_or_else(|| TraceError { key: "error-trace-column", detail: name.clone() })?,
+        );
     }
     let mut out = vec![Vec::new(); names.len()];
     for line in lines {
@@ -108,7 +119,10 @@ impl Trace {
         let mut found = columns(text, &names)?.into_iter();
         let time = found.next().unwrap_or_default();
         let mut next = || found.next().unwrap_or_default();
-        let motors = motors.iter().map(|_| MotorTrace { setpoint: next(), angle: next(), speed: next(), torque: next() }).collect();
+        let motors = motors
+            .iter()
+            .map(|_| MotorTrace { setpoint: next(), angle: next(), speed: next(), torque: next() })
+            .collect();
         Ok(Self { time, motors })
     }
 
@@ -177,7 +191,8 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
 /// following errors.
 pub fn differences(measured: &Trace, simulated: &Trace) -> Vec<[f64; 4]> {
     let apart = |(m, s): (&MotorTrace, &MotorTrace)| {
-        let (torque, error) = (difference(&m.torque, &s.torque), difference(&m.following_error(), &s.following_error()));
+        let (torque, error) =
+            (difference(&m.torque, &s.torque), difference(&m.following_error(), &s.following_error()));
         [torque.0, torque.1, error.0, error.1]
     };
     measured.motors.iter().zip(&simulated.motors).map(apart).collect()
@@ -187,14 +202,17 @@ pub fn differences(measured: &Trace, simulated: &Trace) -> Vec<[f64; 4]> {
 /// per row of the trace, as CSV with a header.
 pub fn overlay_csv(ids: &[&str], measured: &Trace, simulated: &Trace) -> String {
     let names = ["torque", "speed", "following_error"];
-    let header: Vec<String> = ids.iter().flat_map(|id| names.map(|n| format!("motor.{id}.{n}_measured,motor.{id}.{n}_simulated"))).collect();
+    let header: Vec<String> =
+        ids.iter().flat_map(|id| names.map(|n| format!("motor.{id}.{n}_measured,motor.{id}.{n}_simulated"))).collect();
     let mut out = format!("time,{}\n", header.join(","));
     let pairs = || measured.motors.iter().zip(&simulated.motors);
     let errors: Vec<(Vec<f64>, Vec<f64>)> = pairs().map(|(m, s)| (m.following_error(), s.following_error())).collect();
     for (row, time) in measured.time.iter().enumerate() {
         let values: Vec<String> = pairs()
             .zip(&errors)
-            .flat_map(|((m, s), (m_error, s_error))| [m.torque[row], s.torque[row], m.speed[row], s.speed[row], m_error[row], s_error[row]])
+            .flat_map(|((m, s), (m_error, s_error))| {
+                [m.torque[row], s.torque[row], m.speed[row], s.speed[row], m_error[row], s_error[row]]
+            })
             .map(|v| format!("{v:.9e}"))
             .collect();
         out += &format!("{time:.9e},{}\n", values.join(","));

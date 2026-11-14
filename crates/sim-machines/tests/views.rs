@@ -30,7 +30,14 @@ fn a_guide_at_constant_speed_warms_to_resistance_times_its_loss() {
             continue;
         }
         // A short time constant, so that the guide settles within the cruise of a move.
-        let mut cfg = edited(entry, &["effects.part_heating = true", "thermal.guide_time_constant_s = 0.02", "thermal.guide_resistance_k_w = 2.0"]);
+        let mut cfg = edited(
+            entry,
+            &[
+                "effects.part_heating = true",
+                "thermal.guide_time_constant_s = 0.02",
+                "thermal.guide_resistance_k_w = 2.0",
+            ],
+        );
         let machine = (entry.build)(&cfg).unwrap();
         let axis = &machine.axes()[0];
         let mut start: Vec<f64> = machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
@@ -45,7 +52,11 @@ fn a_guide_at_constant_speed_warms_to_resistance_times_its_loss() {
         let cruise = |sim: &mut Sim, seconds: f64| {
             for _ in 0..(seconds / sim.dt).round() as usize {
                 sim.step();
-                assert!((signal(sim, "axis.x.velocity_setpoint") - top).abs() < 1e-9, "{}: the move stopped cruising", entry.id);
+                assert!(
+                    (signal(sim, "axis.x.velocity_setpoint") - top).abs() < 1e-9,
+                    "{}: the move stopped cruising",
+                    entry.id
+                );
             }
         };
         // Up to the cruise, and 0.15 s into it.
@@ -58,14 +69,22 @@ fn a_guide_at_constant_speed_warms_to_resistance_times_its_loss() {
         cruise(&mut sim, tau);
         let by_hand = 2.0 * signal(&sim, "power.guide_x") * (1.0 - (-1f64).exp());
         let rise = signal(&sim, "temperature.guide_x");
-        assert!((rise - by_hand).abs() < 0.01 * by_hand, "{}: {rise} K after one time constant against {by_hand} K", entry.id);
+        assert!(
+            (rise - by_hand).abs() < 0.01 * by_hand,
+            "{}: {rise} K after one time constant against {by_hand} K",
+            entry.id
+        );
         // Twelve time constants later it has settled at R P, P = (lambda F_c + b v) v by hand from the config.
         cruise(&mut sim, 12.0 * tau);
         let (scale, v) = (signal(&sim, "axis.x.friction_load_scale"), signal(&sim, "axis.x.friction_speed"));
         let force = scale * cfg.f64("friction_x.coulomb_n").unwrap() + cfg.f64("friction_x.viscous_n_s_m").unwrap() * v;
         let settled = 2.0 * force * v;
         let rise = signal(&sim, "temperature.guide_x");
-        assert!((rise - settled).abs() < 0.01 * settled, "{}: {rise} K against 2 K/W * {force} N * {v} m/s = {settled} K", entry.id);
+        assert!(
+            (rise - settled).abs() < 0.01 * settled,
+            "{}: {rise} K against 2 K/W * {force} N * {v} m/s = {settled} K",
+            entry.id
+        );
         assert_eq!(rise, sim.heated[part].rise);
         // Switched off, nothing warms.
         let mut sim = Sim::new(entry, &entry.config()).unwrap();
@@ -79,7 +98,14 @@ fn a_guide_at_constant_speed_warms_to_resistance_times_its_loss() {
 #[test]
 fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
     for entry in MACHINES.iter().copied() {
-        let cfg = edited(entry, &["effects.part_heating = true", "motor.start_temperature_rise_k = 25.0", "motor.rated_temperature_rise_k = 100.0"]);
+        let cfg = edited(
+            entry,
+            &[
+                "effects.part_heating = true",
+                "motor.start_temperature_rise_k = 25.0",
+                "motor.rated_temperature_rise_k = 100.0",
+            ],
+        );
         let mut sim = Sim::new(entry, &cfg).unwrap();
         // A screw on a coupling, a linear motor: no part but the motor warms.
         let parts = !sim.heated.is_empty();
@@ -90,10 +116,18 @@ fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
         sim.scene(&mut scene);
         let motors: Vec<_> = scene.parts.iter().filter(|p| p.id == sim_core::scene::MOTOR_PART).collect();
         assert_eq!(motors.len(), sim.machine.motors().len());
-        assert!(motors.iter().all(|p| p.heat == Some(0.25)), "{}: {:?}", entry.id, motors.iter().map(|p| p.heat).collect::<Vec<_>>());
+        assert!(
+            motors.iter().all(|p| p.heat == Some(0.25)),
+            "{}: {:?}",
+            entry.id,
+            motors.iter().map(|p| p.heat).collect::<Vec<_>>()
+        );
         if parts {
             let first = &sim.heated[0].part;
-            assert_eq!(scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index).unwrap().heat, Some(0.5));
+            assert_eq!(
+                scene.parts.iter().filter(|p| p.id == first.scene_part).nth(first.scene_index).unwrap().heat,
+                Some(0.5)
+            );
         }
         // Without the heating effects the parts keep their colours.
         let mut scene = Scene::default();
@@ -128,7 +162,12 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
         let pose = sim.machine.axes().iter().map(|a| a.id).collect::<Vec<_>>();
         let start = entry.config().f64s("start.pose").unwrap();
         let length = if pose.len() == 1 { 0.15 + start[0] } else { 2.0 * 0.15 + start[0] + start[1] };
-        assert!((first - length * p / (ea + p)).abs() < 1e-12, "{}: {first} m against {} m", entry.id, length * p / (ea + p));
+        assert!(
+            (first - length * p / (ea + p)).abs() < 1e-12,
+            "{}: {first} m against {} m",
+            entry.id,
+            length * p / (ea + p)
+        );
 
         let held = if pose.len() == 1 { edited(entry, &["geometry.incline_deg = 30.0"]) } else { entry.config() };
         let sim = Sim::new(entry, &held).unwrap();
@@ -141,7 +180,11 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
         } else {
             // Z axis and payload, 5 + 2 kg: 68.6466 N.
             let weight = 7.0 * g;
-            assert!((2.0 * t[1] - t[0] - t[2] - weight).abs() < 1e-6 && (t[0] - t[2]).abs() < 1e-6, "{}: {t:?} against {weight} N", entry.id);
+            assert!(
+                (2.0 * t[1] - t[0] - t[2] - weight).abs() < 1e-6 && (t[0] - t[2]).abs() < 1e-6,
+                "{}: {t:?} against {weight} N",
+                entry.id
+            );
         }
         let mut scene = Scene::default();
         sim.scene(&mut scene);
@@ -181,15 +224,30 @@ fn comparing_friction_on_and_off_gives_the_friction_torque() {
         // The middle of the first stretch of 0.2 s at which X cruises at its top speed with every other axis at rest,
         // on both runs.
         let cruising = |row: &Vec<f64>| {
-            let others = found.signals.iter().zip(row).filter(|(s, _)| s.id.ends_with(".velocity_setpoint") && s.id != "axis.x.velocity_setpoint");
+            let others = found
+                .signals
+                .iter()
+                .zip(row)
+                .filter(|(s, _)| s.id.ends_with(".velocity_setpoint") && s.id != "axis.x.velocity_setpoint");
             (row[set].abs() - top).abs() < 1e-9 && row[acc] == 0.0 && others.into_iter().all(|(_, v)| *v == 0.0)
         };
-        let rows: Vec<usize> = (0..found.on.len().min(found.off.len())).filter(|&i| cruising(&found.on[i]) && cruising(&found.off[i])).collect();
-        let run = rows.windows(200).find(|w| w[199] - w[0] == 199).unwrap_or_else(|| panic!("{}: no cruise of 0.2 s", entry.id));
+        let rows: Vec<usize> = (0..found.on.len().min(found.off.len()))
+            .filter(|&i| cruising(&found.on[i]) && cruising(&found.off[i]))
+            .collect();
+        let run = rows
+            .windows(200)
+            .find(|w| w[199] - w[0] == 199)
+            .unwrap_or_else(|| panic!("{}: no cruise of 0.2 s", entry.id));
         let (on, off) = (&found.on[run[150]], &found.off[run[150]]);
-        let (r, ratio, eta) = (cfg.f64("geometry.pulley_radius_m").unwrap(), cfg.f64("gearbox.ratio").unwrap(), cfg.f64("gearbox.efficiency").unwrap());
+        let (r, ratio, eta) = (
+            cfg.f64("geometry.pulley_radius_m").unwrap(),
+            cfg.f64("gearbox.ratio").unwrap(),
+            cfg.f64("gearbox.efficiency").unwrap(),
+        );
         let v = on[speed];
-        let force = (on[scale] * cfg.f64("friction_x.coulomb_n").unwrap() + cfg.f64("friction_x.viscous_n_s_m").unwrap() * v.abs()) * v.signum();
+        let force = (on[scale] * cfg.f64("friction_x.coulomb_n").unwrap()
+            + cfg.f64("friction_x.viscous_n_s_m").unwrap() * v.abs())
+            * v.signum();
         // The T-gantry moves X with both motors, each giving half: k_r = r / (2 i).
         let share = 1.0 / machine.motors().len() as f64;
         // On the T-gantry the Z guide's friction is switched with it. Z stands still, so its bristles hold what they
@@ -197,7 +255,8 @@ fn comparing_friction_on_and_off_gives_the_friction_torque() {
         let held_z = found.signals.iter().position(|s| s.id == "axis.z.friction").map_or(0.0, |i| on[i]);
         let mut checked = 0;
         for (k, motor) in machine.motors().iter().enumerate() {
-            let (torque, turn) = (place(&format!("motor.{}.torque", motor.id)), place(&format!("motor.{}.speed", motor.id)));
+            let (torque, turn) =
+                (place(&format!("motor.{}.torque", motor.id)), place(&format!("motor.{}.speed", motor.id)));
             // Through the gearbox: divided by the efficiency where the motor drives it, times it where it is driven back.
             let factor = match (on[torque] * on[turn] > 0.0, off[torque] * off[turn] > 0.0) {
                 (true, true) => 1.0 / eta,
@@ -207,9 +266,16 @@ fn comparing_friction_on_and_off_gives_the_friction_torque() {
             let by_hand = share * r / ratio * (force + [1.0, -1.0][k] * held_z) * factor;
             // Over the second half of the cruise's first 0.2 s: the difference swings by about 3 % around its mean with
             // the belt mode (about 22 Hz on the T-gantry), which the velocity loop no longer damps away within 0.15 s.
-            let difference = run[100..200].iter().map(|&i| found.on[i][torque] - found.off[i][torque]).sum::<f64>() / 100.0;
+            let difference =
+                run[100..200].iter().map(|&i| found.on[i][torque] - found.off[i][torque]).sum::<f64>() / 100.0;
             println!("{} motor {}: {difference:.4} against {by_hand:.4} N m", entry.id, motor.id);
-            assert!((difference - by_hand).abs() < 0.02 * by_hand.abs(), "{} motor {} at {} s: {difference} N m against {by_hand} N m (v {v} m/s, F_z {held_z} N)", entry.id, motor.id, on[0]);
+            assert!(
+                (difference - by_hand).abs() < 0.02 * by_hand.abs(),
+                "{} motor {} at {} s: {difference} N m against {by_hand} N m (v {v} m/s, F_z {held_z} N)",
+                entry.id,
+                motor.id,
+                on[0]
+            );
             let (peak, rms) = found.difference(torque);
             assert!(peak >= difference.abs() && rms > 0.0 && rms <= peak);
             checked += 1;

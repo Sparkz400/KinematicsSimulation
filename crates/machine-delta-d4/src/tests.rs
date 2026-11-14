@@ -28,7 +28,11 @@ fn the_shafts_length_and_cardan_angles_are_the_hand_calculated() {
     close(length, 0.943398, 1e-6, "length");
     close(beta.to_degrees(), 32.0054, 1e-5, "cardan angle");
     close(azimuth.to_degrees(), 53.1301, 1e-5, "bending plane");
-    let (top, edge_top, edge_bottom) = (m.shaft().geometry([0.0, 0.0, -0.675]), m.shaft().geometry([0.6, 0.0, -0.675]), m.shaft().geometry([0.6, 0.0, -0.875]));
+    let (top, edge_top, edge_bottom) = (
+        m.shaft().geometry([0.0, 0.0, -0.675]),
+        m.shaft().geometry([0.6, 0.0, -0.675]),
+        m.shaft().geometry([0.6, 0.0, -0.875]),
+    );
     close(top.0, 0.625, 1e-12, "shortest");
     close(edge_bottom.0, 1.020110, 1e-6, "longest");
     close(edge_top.1.to_degrees(), 43.8309, 1e-5, "largest bend");
@@ -46,8 +50,14 @@ fn the_shafts_length_and_cardan_angles_are_the_hand_calculated() {
     }
     assert!(tried > 500, "{tried} poses");
     // Beyond the telescope's stroke or the joints' bend the target is refused with its reason.
-    assert_eq!(d4(&["shaft.max_length_m = 0.9"]).unreachable(&[0.3, 0.4, -0.85, 0.0], 0.0), Some("error-delta-shaft-stroke"));
-    assert_eq!(d4(&["shaft.max_cardan_angle_deg = 30.0"]).unreachable(&[0.3, 0.4, -0.85, 0.0], 0.0), Some("error-delta-cardan-angle"));
+    assert_eq!(
+        d4(&["shaft.max_length_m = 0.9"]).unreachable(&[0.3, 0.4, -0.85, 0.0], 0.0),
+        Some("error-delta-shaft-stroke")
+    );
+    assert_eq!(
+        d4(&["shaft.max_cardan_angle_deg = 30.0"]).unreachable(&[0.3, 0.4, -0.85, 0.0], 0.0),
+        Some("error-delta-cardan-angle")
+    );
 }
 
 /// One cardan joint bent by beta passes its input's angle phi (from the bending plane) on as tan chi = tan phi / cos beta:
@@ -68,7 +78,12 @@ fn the_tool_turns_with_the_motor_through_the_cardan_pair_and_the_shaft_between_u
         assert!((cardan_back(beta, cardan(beta, phi)) - phi).abs() < 1e-12, "{phi}");
         // The single joint's speed ratio is the derivative of its angle.
         let h = 1e-6;
-        close(cardan_speed_ratio(beta, phi), (cardan(beta, phi + h) - cardan(beta, phi - h)) / (2.0 * h), 1e-7, "speed ratio");
+        close(
+            cardan_speed_ratio(beta, phi),
+            (cardan(beta, phi + h) - cardan(beta, phi - h)) / (2.0 * h),
+            1e-7,
+            "speed ratio",
+        );
     }
     close(cardan_speed_ratio(beta, 0.0), 1.0 / beta.cos(), 1e-12, "fastest");
     close(cardan_speed_ratio(beta, std::f64::consts::FRAC_PI_2), beta.cos(), 1e-12, "slowest");
@@ -98,7 +113,13 @@ fn the_tool_turns_with_the_motor_through_the_cardan_pair_and_the_shaft_between_u
 /// Given that torque the model turns the tool at 100 rad/s^2, and the arms' torques do not change.
 #[test]
 fn the_tool_motors_torque_for_a_turn_is_the_hand_calculated() {
-    let m = d4(&["effects.joint_friction = false", "effects.motor_friction = false", "effects.torque_ripple = false", "effects.gearbox_efficiency = false", "effects.joint_elasticity = false"]);
+    let m = d4(&[
+        "effects.joint_friction = false",
+        "effects.motor_friction = false",
+        "effects.torque_ripple = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_elasticity = false",
+    ]);
     close(m.tool_inertia(), 7.08e-3, 1e-12, "J_c");
     let pose = [0.1, -0.1, -0.8, 0.5];
     let (mut moving, mut still) = ([0.0; 4], [0.0; 4]);

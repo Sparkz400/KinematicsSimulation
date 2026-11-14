@@ -123,17 +123,23 @@ fn mistakes_in_the_mapping_say_what_is_wrong() {
     let err = |map: &str| Mapping::parse(map).unwrap_err().detail;
     assert!(err("format = \"excel\"\n[[motor]]\nsetpoint=\"a\"\nangle=\"a\"\ntorque=\"a\"").contains("excel"));
     assert!(err("format = \"csv\"\n[[motor]]\nsetpoint=\"a\"\nangle=\"a\"").contains("torque"));
-    assert!(err("format = \"csv\"\n[[motor]]\nsetpoint=\"a\"\nangle={signal=\"a\",per_revs=3}\ntorque=\"a\"").contains("per_revs"));
-    let map = Mapping::parse("format = \"sinamics\"\n[[motor]]\nsetpoint=\"r2665\"\nangle=\"r2521\"\ntorque=\"r80\"").unwrap();
+    assert!(
+        err("format = \"csv\"\n[[motor]]\nsetpoint=\"a\"\nangle={signal=\"a\",per_revs=3}\ntorque=\"a\"")
+            .contains("per_revs")
+    );
+    let map = Mapping::parse("format = \"sinamics\"\n[[motor]]\nsetpoint=\"r2665\"\nangle=\"r2521\"\ntorque=\"r80\"")
+        .unwrap();
     let e = import(&fixture("sinamics_trace.csv"), &map).unwrap_err();
     assert_eq!((e.key, e.detail.as_str()), ("error-import-per-rev", "r2665: LU"));
-    let map = Mapping::parse("format = \"sinamics\"\n[[motor]]\nsetpoint=\"r9999\"\nangle=\"r2521\"\ntorque=\"r80\"").unwrap();
+    let map = Mapping::parse("format = \"sinamics\"\n[[motor]]\nsetpoint=\"r9999\"\nangle=\"r2521\"\ntorque=\"r80\"")
+        .unwrap();
     assert_eq!(import(&fixture("sinamics_trace.csv"), &map).unwrap_err().key, "error-import-signal");
 }
 
 #[test]
 fn the_dataset_template_mapping_loads() {
-    let text = std::fs::read_to_string(format!("{}/../../datasets/template/map.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let text =
+        std::fs::read_to_string(format!("{}/../../datasets/template/map.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let map = Mapping::parse(&text).unwrap();
     assert_eq!((map.format.as_str(), map.motors.len()), ("sinamics", 1));
     // And it reads the SINAMICS fixture, whose position is in LU at 10000 per turn.
@@ -151,7 +157,18 @@ fn plain_map(extra: &str) -> Mapping {
 #[test]
 fn real_world_csv_quirks() {
     let rows = |sep: &str, comma: bool, trail: &str, quote: &str| -> String {
-        (0..6).map(|i| [i as f64 * 0.125, i as f64 * 2.5, 0.25].map(|v| { let v = format!("{v}"); format!("{quote}{}{quote}", if comma { v.replace('.', ",") } else { v }) }).join(sep) + trail + "\n").collect()
+        (0..6)
+            .map(|i| {
+                [i as f64 * 0.125, i as f64 * 2.5, 0.25]
+                    .map(|v| {
+                        let v = format!("{v}");
+                        format!("{quote}{}{quote}", if comma { v.replace('.', ",") } else { v })
+                    })
+                    .join(sep)
+                    + trail
+                    + "\n"
+            })
+            .collect()
     };
     let cases = [
         format!("time [s];pos;torque\n{}", rows(";", true, "", "")),
@@ -174,7 +191,12 @@ fn time_unit_overrides_the_files_unit_and_is_refused_where_the_format_has_its_ow
     let text = "time [ms],pos,torque\n0,0,0\n1,1,0\n2,2,0\n3,3,0\n4,4,0\n";
     close(import(text, &plain_map("time_unit = \"ms\"")).unwrap().trace.time[4], 0.004);
     close(import(text, &plain_map("time_unit = \"us\"")).unwrap().trace.time[4], 4e-6);
-    assert!(Mapping::parse("format = \"twincat\"\ntime_unit = \"ms\"\n[[motor]]\nsetpoint=\"a\"\nangle=\"a\"\ntorque=\"a\"").is_err());
+    assert!(
+        Mapping::parse(
+            "format = \"twincat\"\ntime_unit = \"ms\"\n[[motor]]\nsetpoint=\"a\"\nangle=\"a\"\ntorque=\"a\""
+        )
+        .is_err()
+    );
 }
 
 /// Found by review: a tiny `sample_time_s` asked for a grid that did not fit in memory.

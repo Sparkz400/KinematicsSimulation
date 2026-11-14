@@ -112,7 +112,9 @@ fn least_squares(start: &[f64], scale: &[f64], residuals: &dyn Fn(&[f64]) -> Vec
             })
             .collect()
     };
-    let normal = |jac: &[Vec<f64>]| -> Vec<Vec<f64>> { (0..n).map(|a| (0..n).map(|b| jac[a].iter().zip(&jac[b]).map(|(x, y)| x * y).sum()).collect()).collect() };
+    let normal = |jac: &[Vec<f64>]| -> Vec<Vec<f64>> {
+        (0..n).map(|a| (0..n).map(|b| jac[a].iter().zip(&jac[b]).map(|(x, y)| x * y).sum()).collect()).collect()
+    };
     let mut lambda = 1e-3;
     for _ in 0..200 {
         let jac = jacobian(&p, &r);
@@ -122,7 +124,10 @@ fn least_squares(start: &[f64], scale: &[f64], residuals: &dyn Fn(&[f64]) -> Vec
         while lambda < 1e12 {
             let mut damped = a.clone();
             (0..n).for_each(|i| damped[i][i] += lambda * a[i][i].max(1e-300));
-            let Some(step) = solve_scaled(&damped, &g) else { lambda *= 10.0; continue };
+            let Some(step) = solve_scaled(&damped, &g) else {
+                lambda *= 10.0;
+                continue;
+            };
             let q: Vec<f64> = p.iter().zip(&step).map(|(a, b)| a + b).collect();
             let rq = residuals(&q);
             let cq = cost(&rq);
@@ -215,14 +220,19 @@ pub fn friction(time: &[f64], angle: &[f64], speed: &[f64], torque: &[f64]) -> O
     }
     // A row whose window spans a reversal would average the two Coulomb levels: only windows of one sign.
     let used: Vec<usize> = (w..rows.saturating_sub(w))
-        .filter(|&i| smooth[i].0.abs() > 0.01 * top && speed[i - w..=i + w].iter().all(|v| v.signum() == smooth[i].0.signum()))
+        .filter(|&i| {
+            smooth[i].0.abs() > 0.01 * top && speed[i - w..=i + w].iter().all(|v| v.signum() == smooth[i].0.signum())
+        })
         .collect();
     let one_way = |sign: f64| used.iter().filter(|&&i| smooth[i].0.signum() == sign).count();
     if one_way(1.0).min(one_way(-1.0)) < 10 * (2 * w + 1) {
         return None;
     }
-    let stribeck = |p: &[f64], v: f64, a: f64| p[0] * a + p[1] * v + (p[2] + p.get(4).map_or(0.0, |ds| ds * (-(v / p[5]).powi(2)).exp())) * v.signum() + p[3];
-    let residuals = |p: &[f64]| -> Vec<f64> { used.iter().map(|&i| stribeck(p, smooth[i].0, smooth[i].1) - smooth[i].2).collect() };
+    let stribeck = |p: &[f64], v: f64, a: f64| {
+        p[0] * a + p[1] * v + (p[2] + p.get(4).map_or(0.0, |ds| ds * (-(v / p[5]).powi(2)).exp())) * v.signum() + p[3]
+    };
+    let residuals =
+        |p: &[f64]| -> Vec<f64> { used.iter().map(|&i| stribeck(p, smooth[i].0, smooth[i].1) - smooth[i].2).collect() };
     let level = torque.iter().fold(0.0, |a: f64, b| a.max(b.abs())).max(1e-9);
     let accel = used.iter().fold(0.0, |a: f64, &i| a.max(smooth[i].1.abs())).max(1e-9);
     let scale = [level / accel, level / top, level, level, level, top];
@@ -249,7 +259,9 @@ pub fn friction(time: &[f64], angle: &[f64], speed: &[f64], torque: &[f64]) -> O
         inertia: at(0),
         viscous: at(1),
         coulomb,
-        stiction: curved.as_ref().map(|f| propagate(&|v| v[0] + v[1], &[at(2), Estimate { value: f.values[4], error: f.errors[4] }])),
+        stiction: curved
+            .as_ref()
+            .map(|f| propagate(&|v| v[0] + v[1], &[at(2), Estimate { value: f.values[4], error: f.errors[4] }])),
         stribeck_speed: curved.as_ref().map(|f| Estimate { value: f.values[5].abs(), error: f.errors[5] }),
         constant: at(3),
         presliding_stiffness: presliding,
@@ -265,7 +277,17 @@ pub fn friction(time: &[f64], angle: &[f64], speed: &[f64], torque: &[f64]) -> O
 /// within 0.5 s while the speed stays below `slow` (else it is a fast reversal, where the swing is the
 /// loops' doing) and covers at least four rows; the median of them, with their spread as its error.
 #[allow(clippy::too_many_arguments)]
-fn presliding(time: &[f64], angle: &[f64], speed: &[f64], torque: &[f64], smooth: &[(f64, f64, f64)], w: usize, p: &[f64], coulomb: f64, slow: f64) -> Option<Estimate> {
+fn presliding(
+    time: &[f64],
+    angle: &[f64],
+    speed: &[f64],
+    torque: &[f64],
+    smooth: &[(f64, f64, f64)],
+    w: usize,
+    p: &[f64],
+    coulomb: f64,
+    slow: f64,
+) -> Option<Estimate> {
     let rows = time.len();
     let half = 0.5 * coulomb.abs();
     let mut slopes = Vec::new();
@@ -384,9 +406,12 @@ pub fn lag(time: &[f64], input: &[f64], output: &[f64]) -> Option<Lag> {
     }
     let step = (time[rows - 1] - time[0]) / (rows - 1) as f64;
     // The output at rest is fitted too ([gain, ln τ, dead time, rest]): one noisy first sample would bias all.
-    let span = output.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)) - output.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let span =
+        output.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)) - output.iter().fold(f64::INFINITY, |a, &b| a.min(b));
     let rest = output[..rows.min(5)].iter().sum::<f64>() / rows.min(5) as f64;
-    let residuals = |p: &[f64]| -> Vec<f64> { lag_response(time, input, p[3], p[0], p[1].exp(), p[2]).iter().zip(output).map(|(m, y)| m - y).collect() };
+    let residuals = |p: &[f64]| -> Vec<f64> {
+        lag_response(time, input, p[3], p[0], p[1].exp(), p[2]).iter().zip(output).map(|(m, y)| m - y).collect()
+    };
     let cost = |p: &[f64]| residuals(p).iter().map(|v| v * v).sum::<f64>();
     let none = (1e-6 * step).ln();
     let mut best = (f64::INFINITY, [1.0, step.ln(), 0.0, rest]);
@@ -406,13 +431,25 @@ pub fn lag(time: &[f64], input: &[f64], output: &[f64]) -> Option<Lag> {
     let (gain, tau, dead, rest) = match resolved {
         Some(f) => {
             let tau = f.values[1].exp();
-            (Estimate { value: f.values[0], error: f.errors[0] }, Estimate { value: tau, error: tau * f.errors[1] }, Estimate { value: f.values[2], error: f.errors[2] }, f.values[3])
+            (
+                Estimate { value: f.values[0], error: f.errors[0] },
+                Estimate { value: tau, error: tau * f.errors[1] },
+                Estimate { value: f.values[2], error: f.errors[2] },
+                f.values[3],
+            )
         }
         // A held input delayed without a lag is a staircase that moves in whole rows, with no slope to fit the
         // delay on; between rows the input is taken as linear instead.
         None => {
-            let f = least_squares(&[best.1[0], best.1[2], rest], &[1.0, step, scale[3]], &|p: &[f64]| delayed(time, input, p[2], p[0], p[1]).iter().zip(output).map(|(m, y)| m - y).collect())?;
-            (Estimate { value: f.values[0], error: f.errors[0] }, Estimate { value: 0.0, error: step }, Estimate { value: f.values[1], error: f.errors[1] }, f.values[2])
+            let f = least_squares(&[best.1[0], best.1[2], rest], &[1.0, step, scale[3]], &|p: &[f64]| {
+                delayed(time, input, p[2], p[0], p[1]).iter().zip(output).map(|(m, y)| m - y).collect()
+            })?;
+            (
+                Estimate { value: f.values[0], error: f.errors[0] },
+                Estimate { value: 0.0, error: step },
+                Estimate { value: f.values[1], error: f.errors[1] },
+                f.values[2],
+            )
         }
     };
     let model = match tau.value {
@@ -435,7 +472,12 @@ pub fn lag(time: &[f64], input: &[f64], output: &[f64]) -> Option<Lag> {
 /// long enough for four periods of the lowest frequency. With it the coherence, 0 to 1: below about 0.8
 /// the point is mostly noise or the response is not linear there. `None` for a trace too short for eight
 /// windows: with few windows the coherence of pure noise comes out near 1.
-pub fn frequency_response(time: &[f64], input: &[f64], output: &[f64], frequencies: &[f64]) -> Option<Vec<(SweepPoint, f64)>> {
+pub fn frequency_response(
+    time: &[f64],
+    input: &[f64],
+    output: &[f64],
+    frequencies: &[f64],
+) -> Option<Vec<(SweepPoint, f64)>> {
     let rows = time.len();
     if rows < 32 || frequencies.is_empty() {
         return None;
@@ -504,13 +546,17 @@ pub fn two_mass(sweep: &[SweepPoint]) -> Option<TwoMass> {
     sweep.sort_by(|a, b| a.frequency.total_cmp(&b.frequency));
     let Resonance { frequency: fa, damping: zeta, frequency_error: fa_error } = resonance(&sweep)?;
     let level: Vec<f64> = sweep.iter().map(|p| p.gain * p.frequency).collect();
-    let above: Vec<usize> = (0..sweep.len()).filter(|&i| sweep[i].frequency > fa && sweep[i].frequency <= 5.0 * fa).collect();
+    let above: Vec<usize> =
+        (0..sweep.len()).filter(|&i| sweep[i].frequency > fa && sweep[i].frequency <= 5.0 * fa).collect();
     let peak = *above.iter().max_by(|&&a, &&b| level[a].total_cmp(&level[b]))?;
     if peak == 0 || peak + 1 >= sweep.len() || level[peak] < level[peak - 1] || level[peak] < level[peak + 1] {
         return None;
     }
     // A parabola through the three points in log frequency and log level.
-    let (x, y) = ([peak - 1, peak, peak + 1].map(|i| sweep[i].frequency.ln()), [peak - 1, peak, peak + 1].map(|i| level[i].ln()));
+    let (x, y) = (
+        [peak - 1, peak, peak + 1].map(|i| sweep[i].frequency.ln()),
+        [peak - 1, peak, peak + 1].map(|i| level[i].ln()),
+    );
     let (d1, d2) = ((y[1] - y[0]) / (x[1] - x[0]), (y[2] - y[1]) / (x[2] - x[1]));
     let curve = (d2 - d1) / (0.5 * (x[2] - x[0]));
     let top = if curve < 0.0 { 0.5 * (x[0] + x[1]) - d1 / curve } else { x[1] };
@@ -518,13 +564,18 @@ pub fn two_mass(sweep: &[SweepPoint]) -> Option<TwoMass> {
     // Below the dip the response is that of the total inertia times (1 - (f/fa)²) / (1 - (f/fr)²) (without
     // damping), which is taken out.
     let correction = |f: f64| (1.0 - (f / fa).powi(2)) / (1.0 - (f / fr.value).powi(2));
-    let low: Vec<f64> = sweep.iter().filter(|p| p.frequency < fa / 3.0).map(|p| correction(p.frequency) / (TAU * p.gain * p.frequency)).collect();
+    let low: Vec<f64> = sweep
+        .iter()
+        .filter(|p| p.frequency < fa / 3.0)
+        .map(|p| correction(p.frequency) / (TAU * p.gain * p.frequency))
+        .collect();
     if low.len() < 3 {
         return None;
     }
     let n = low.len() as f64;
     let mean = low.iter().sum::<f64>() / n;
-    let total = Estimate { value: mean, error: (low.iter().map(|j| (j - mean).powi(2)).sum::<f64>() / (n - 1.0) / n).sqrt() };
+    let total =
+        Estimate { value: mean, error: (low.iter().map(|j| (j - mean).powi(2)).sum::<f64>() / (n - 1.0) / n).sqrt() };
     let fa = Estimate { value: fa, error: fa_error };
     let inputs = [total, fa, fr, Estimate { value: zeta, error: 0.0 }];
     let motor = |v: &[f64]| v[0] * (v[1] / v[2]).powi(2);
@@ -550,7 +601,8 @@ pub fn two_mass(sweep: &[SweepPoint]) -> Option<TwoMass> {
     }
     let start = [total.value.ln(), share, rough.stiffness.value.ln(), rough.damping.value.ln(), 0.0];
     let b_scale = total.value * TAU * sweep[0].frequency;
-    let residuals = |p: &[f64]| -> Vec<f64> { sweep.iter().map(|q| (two_mass_gain(p, q.frequency) / q.gain).ln()).collect() };
+    let residuals =
+        |p: &[f64]| -> Vec<f64> { sweep.iter().map(|q| (two_mass_gain(p, q.frequency) / q.gain).ln()).collect() };
     let Some(fit) = least_squares(&start, &[1.0, 1.0, 1.0, 1.0, b_scale], &residuals) else { return Some(rough) };
     let at = |q: usize| Estimate { value: fit.values[q], error: fit.errors[q] };
     let exp = |q: usize| propagate(&|v| v[0].exp(), &[at(q)]);
@@ -605,17 +657,23 @@ pub fn ringing(time: &[f64], signal: &[f64], from: f64, until: f64) -> Option<Ri
     let y: Vec<f64> = rows.iter().map(|&i| signal[i]).collect();
     let span = t[t.len() - 1];
     let level = y.iter().fold(0.0, |a: f64, b| a.max(b.abs())).max(1e-12);
-    let trend = least_squares(&[0.0; 3], &[level, level / span, level / span / span], &|p: &[f64]| t.iter().zip(&y).map(|(t, y)| p[0] + p[1] * t + p[2] * t * t - y).collect())?;
+    let trend = least_squares(&[0.0; 3], &[level, level / span, level / span / span], &|p: &[f64]| {
+        t.iter().zip(&y).map(|(t, y)| p[0] + p[1] * t + p[2] * t * t - y).collect()
+    })?;
     let rest = &trend.residuals;
     let step = span / (t.len() - 1) as f64;
     let candidates = crate::analysis::log_spaced(2.0 / span, 0.25 / step, 200);
     let power = |f: f64| {
-        let (re, im) = t.iter().zip(rest).fold((0.0, 0.0), |(re, im), (t, r)| (re + r * (TAU * f * t).cos(), im + r * (TAU * f * t).sin()));
+        let (re, im) = t
+            .iter()
+            .zip(rest)
+            .fold((0.0, 0.0), |(re, im), (t, r)| (re + r * (TAU * f * t).cos(), im + r * (TAU * f * t).sin()));
         re * re + im * im
     };
     let fd = candidates.into_iter().max_by(|a, b| power(*a).total_cmp(&power(*b)))?;
     let amplitude = rest.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
-    let model = |p: &[f64], t: f64| p[0] * (-p[3] * t).exp() * (TAU * p[2] * t + p[1]).sin() + p[4] + p[5] * t + p[6] * t * t;
+    let model =
+        |p: &[f64], t: f64| p[0] * (-p[3] * t).exp() * (TAU * p[2] * t + p[1]).sin() + p[4] + p[5] * t + p[6] * t * t;
     let residuals = |p: &[f64]| -> Vec<f64> { t.iter().zip(&y).map(|(&t, y)| model(p, t) - y).collect() };
     let tp = &trend.values;
     let cost = |p: &[f64]| residuals(p).iter().map(|v| v * v).sum::<f64>();
@@ -623,7 +681,10 @@ pub fn ringing(time: &[f64], signal: &[f64], from: f64, until: f64) -> Option<Ri
         .map(|k| [amplitude, k as f64 * TAU / 8.0, fd, 0.1 * TAU * fd, tp[0], tp[1], tp[2]])
         .min_by(|a, b| cost(a).total_cmp(&cost(b)))?;
     let fit = least_squares(&start, &[level, 1.0, fd, TAU * fd, level, level / span, level / span / span], &residuals)?;
-    let (wd, sigma) = (Estimate { value: TAU * fit.values[2], error: TAU * fit.errors[2] }, Estimate { value: fit.values[3], error: fit.errors[3] });
+    let (wd, sigma) = (
+        Estimate { value: TAU * fit.values[2], error: TAU * fit.errors[2] },
+        Estimate { value: fit.values[3], error: fit.errors[3] },
+    );
     let fitted: Vec<f64> = t.iter().map(|&t| model(&fit.values, t)).collect();
     Some(Ringing {
         frequency: propagate(&|v| v[0].hypot(v[1]) / TAU, &[wd, sigma]),
@@ -698,11 +759,23 @@ impl Identified {
     pub fn estimates(&self) -> Vec<(&'static str, Estimate)> {
         let mut out = Vec::new();
         if let Some(f) = &self.friction {
-            out.extend([("inertia_kg_m2", f.inertia), ("viscous_nm_s_rad", f.viscous), ("coulomb_nm", f.coulomb), ("constant_torque_nm", f.constant)]);
-            let optional = [("stiction_nm", f.stiction), ("stribeck_speed_rad_s", f.stribeck_speed), ("presliding_stiffness_nm_rad", f.presliding_stiffness)];
+            out.extend([
+                ("inertia_kg_m2", f.inertia),
+                ("viscous_nm_s_rad", f.viscous),
+                ("coulomb_nm", f.coulomb),
+                ("constant_torque_nm", f.constant),
+            ]);
+            let optional = [
+                ("stiction_nm", f.stiction),
+                ("stribeck_speed_rad_s", f.stribeck_speed),
+                ("presliding_stiffness_nm_rad", f.presliding_stiffness),
+            ];
             out.extend(optional.into_iter().filter_map(|(name, e)| e.map(|e| (name, e))));
         }
-        for (names, lag) in [(["current_loop_gain", "current_loop_time_constant_s", "current_loop_dead_time_s"], &self.current_loop), (["position_loop_gain", "position_loop_time_constant_s", "position_loop_dead_time_s"], &self.position_loop)] {
+        for (names, lag) in [
+            (["current_loop_gain", "current_loop_time_constant_s", "current_loop_dead_time_s"], &self.current_loop),
+            (["position_loop_gain", "position_loop_time_constant_s", "position_loop_dead_time_s"], &self.position_loop),
+        ] {
             if let Some(l) = lag {
                 out.extend(names.into_iter().zip([l.gain, l.time_constant, l.dead_time]));
             }
@@ -714,9 +787,15 @@ impl Identified {
     pub fn qualities(&self) -> Vec<(&'static str, f64)> {
         let mut out = Vec::new();
         if let Some(f) = &self.friction {
-            out.extend([("friction_model_fit_percent", f.quality.fit_percent), ("friction_model_rms_nm", f.quality.rms)]);
+            out.extend([
+                ("friction_model_fit_percent", f.quality.fit_percent),
+                ("friction_model_rms_nm", f.quality.rms),
+            ]);
         }
-        for (names, lag) in [(["current_loop_fit_percent", "current_loop_following_error_fit_percent"], &self.current_loop), (["position_loop_fit_percent", "position_loop_following_error_fit_percent"], &self.position_loop)] {
+        for (names, lag) in [
+            (["current_loop_fit_percent", "current_loop_following_error_fit_percent"], &self.current_loop),
+            (["position_loop_fit_percent", "position_loop_following_error_fit_percent"], &self.position_loop),
+        ] {
             if let Some(l) = lag {
                 out.extend(names.into_iter().zip([l.quality.fit_percent, l.error_quality.fit_percent]));
             }

@@ -8,7 +8,10 @@ use sim_machines::MACHINES;
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
 /// gearboxes' elasticity on one of arms.
 fn model_switch(cfg: &Config) -> &'static str {
-    ["effects.belt_stretch", "effects.joint_elasticity"].into_iter().find(|key| cfg.bool(key).is_ok()).expect("a machine with an elastic and a rigid model")
+    ["effects.belt_stretch", "effects.joint_elasticity"]
+        .into_iter()
+        .find(|key| cfg.bool(key).is_ok())
+        .expect("a machine with an elastic and a rigid model")
 }
 
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
@@ -37,7 +40,8 @@ fn with_via_point(entry: &MachineEntry) -> Config {
     let machine = (entry.build)(&cfg).unwrap();
     let middle: Vec<String> = machine.axes().iter().map(|a| format!("{:?}", 0.5 * (a.min + a.max))).collect();
     let gripper = cfg.array("cycle.segment").unwrap().last().unwrap().get("payload").unwrap().as_bool().unwrap();
-    let segment = format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
+    let segment =
+        format!("\n[[cycle.segment]]\ntarget = [{}]\ndwell_s = 0.0\npayload = {gripper}\n", middle.join(", "));
     Config::parse(&format!("{}{segment}", entry.default_config)).unwrap()
 }
 
@@ -183,7 +187,12 @@ fn a_move_arrives_and_comes_to_rest() {
         });
         // The drive controls the motor; belt stretch, gear twist, backlash and friction leave a standstill error, up to
         // the machine's setpoint slack (the delta's 9 arcmin: 0.21 mm here).
-        assert!((0.5 * (low + high) - target[0]).abs() < sim.machine.setpoint_slack().max(1e-4), "{}: rests at {low}..{high}, target {}", entry.id, target[0]);
+        assert!(
+            (0.5 * (low + high) - target[0]).abs() < sim.machine.setpoint_slack().max(1e-4),
+            "{}: rests at {low}..{high}, target {}",
+            entry.id,
+            target[0]
+        );
         assert!(high - low < 2e-5, "{}: still moving by {} m at rest", entry.id, high - low);
     }
 }
@@ -211,13 +220,21 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
             worst_error = s.control.tool_error.iter().fold(worst_error, |w, e| w.max(e.abs()));
         });
         // Every segment ran, and the cycle started over.
-        assert!(visited.iter().all(|n| *n >= 1) && visited[0] >= 2, "{}: segments run {visited:?} times in 8 s", entry.id);
+        assert!(
+            visited.iter().all(|n| *n >= 1) && visited[0] >= 2,
+            "{}: segments run {visited:?} times in 8 s",
+            entry.id
+        );
         assert!(payload_seen == [true, true], "{}: the payload never switched", entry.id);
         // 0.5 mm, and on a fast machine 0.03 mm per m/s2 of its fastest axis: the delta (50 m/s2, 1.5 mm) has up to
         // 1.23 mm at the motors in its Adept cycle, from the gearboxes' springs that the rigid feedforward leaves out.
         let fastest = sim.machine.axes().iter().map(|a| a.max_acc).fold(0.0, f64::max);
         let limit = f64::max(5e-4, 3e-5 * fastest);
-        assert!(worst_error < limit, "{}: following error up to {worst_error} m in the cycle, limit {limit} m", entry.id);
+        assert!(
+            worst_error < limit,
+            "{}: following error up to {worst_error} m in the cycle, limit {limit} m",
+            entry.id
+        );
         // Stop ends the cycle after the segment under way.
         sim.command(Command::Stop).unwrap();
         sim.run(3.0, |_| {});
@@ -276,7 +293,11 @@ fn axis_limits_are_checked_against_motor_limits() {
         }
         let faster: Vec<&str> = faster.iter().map(String::as_str).collect();
         assert!(violations(&faster).iter().any(|v| v.key == "limit-motor-speed"), "{}", entry.id);
-        assert!(violations(&["drive.peak_torque_nm = 0.2"]).iter().any(|v| v.key == "limit-motor-torque"), "{}", entry.id);
+        assert!(
+            violations(&["drive.peak_torque_nm = 0.2"]).iter().any(|v| v.key == "limit-motor-torque"),
+            "{}",
+            entry.id
+        );
     }
 }
 
@@ -298,7 +319,11 @@ fn the_same_run_twice_is_bit_identical() {
         assert!(trace(&[]) == trace(&[]), "{}: two identical runs differ", entry.id);
         let noisy = trace(&["effects.sensor_noise = true"]);
         assert!(noisy == trace(&["effects.sensor_noise = true"]), "{}: two identical runs with noise differ", entry.id);
-        assert!(noisy != trace(&["effects.sensor_noise = true", "drive.noise_seed = 2"]), "{}: the seed changes nothing", entry.id);
+        assert!(
+            noisy != trace(&["effects.sensor_noise = true", "drive.noise_seed = 2"]),
+            "{}: the seed changes nothing",
+            entry.id
+        );
     }
 }
 
@@ -358,10 +383,16 @@ fn every_effect_switch_changes_the_traces() {
             machine.equilibrium(&base.f64s("start.pose").unwrap(), &mut Vec::new(), &mut torque);
             torque.iter().fold(0.0f64, |m, t| m.max(t.abs()))
         };
-        let peak = format!("drive.peak_torque_nm = {:?}", f64::max(0.3, 1.5 * hold).max(0.3 / 3.8 * base.f64("drive.peak_torque_nm").unwrap()));
+        let peak = format!(
+            "drive.peak_torque_nm = {:?}",
+            f64::max(0.3, 1.5 * hold).max(0.3 / 3.8 * base.f64("drive.peak_torque_nm").unwrap())
+        );
         // The low bus at 81.65 V for a rotary motor; a linear motor's force constant (N/A) is tens of times a rotary
         // motor's torque constant, and its bus is lowered with it (65 N/A: 37.7 V, 0.71 m/s at no load).
-        let bus = format!("drive.bus_voltage_v = {:?}", 81.65 * f64::min(1.0, 30.0 / base.f64("motor.torque_constant_nm_a").unwrap()));
+        let bus = format!(
+            "drive.bus_voltage_v = {:?}",
+            81.65 * f64::min(1.0, 30.0 / base.f64("motor.torque_constant_nm_a").unwrap())
+        );
         for e in ["belt.pretension_n = 20.0", peak.as_str(), bus.as_str()] {
             if base.get(e.split(' ').next().unwrap()).is_ok() {
                 base.set_text(e).unwrap();
@@ -400,12 +431,19 @@ fn every_effect_switch_changes_the_traces() {
             }
             at != reference.len()
         };
-        let effects: Vec<String> = base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
+        let effects: Vec<String> =
+            base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
         // A crash needs an obstacle, and the configs have none. The thermal warm start acts on the cycle analysis, not on
         // a run. Their own tests show them working.
-        let skipped = ["effects.hard_stops", "effects.holding_brake", "effects.shaper_follows_pose", "effects.crash", "effects.thermal_warm_start"];
+        let skipped = [
+            "effects.hard_stops",
+            "effects.holding_brake",
+            "effects.shaper_follows_pose",
+            "effects.crash",
+            "effects.thermal_warm_start",
+        ];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
         // An effect whose values are all zero (or all one) in this config has nothing to do (a backlash-free coupling and nut, a
@@ -425,18 +463,29 @@ fn every_effect_switch_changes_the_traces() {
             "effects.gearbox_backlash" => zero(&["gearbox.backlash_rad", "rack.backlash_m"]),
             "effects.motor_friction" => zero(&["motor.friction_coulomb_nm", "motor.friction_viscous_nm_s_rad"]),
             // Every efficiency 1 (a linear motor's forcer on its mounting).
-            "effects.gearbox_efficiency" => ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"].iter().all(|k| base.f64(k).map_or(true, |v| v == 1.0)),
+            "effects.gearbox_efficiency" => ["gearbox.efficiency", "screw.efficiency", "rack.efficiency"]
+                .iter()
+                .all(|k| base.f64(k).map_or(true, |v| v == 1.0)),
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             _ => false,
         };
-        let effects: Vec<String> = effects.into_iter().filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e)).collect();
+        let effects: Vec<String> = effects
+            .into_iter()
+            .filter(|e| !skipped.contains(&e.as_str()) && !(alone && e == "effects.shared_dc_link") && !idle(e))
+            .collect();
         assert!(effects.len() >= 20, "{}: only {} effect switches", entry.id, effects.len());
         // A switch that acts only in a setting the base has not is flipped from that setting, in both runs: the belt's
         // wrap sets how many teeth hold against a tooth jump, and the drive's current limit acts where it gives less
         // torque than the motor (the gantries' drives give 10.9 A, 4.9 N m, far above the weak drive's 0.3 N m).
-        let current = format!("ratings.drive_max_current_a = {:?}", 0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap());
-        let through = [("effects.belt_wrap", "effects.belt_tooth_jump = true"), ("effects.drive_current_limit", current.as_str())];
+        let current = format!(
+            "ratings.drive_max_current_a = {:?}",
+            0.8 * base.f64("drive.peak_torque_nm").unwrap() / base.f64("motor.torque_constant_nm_a").unwrap()
+        );
+        let through = [
+            ("effects.belt_wrap", "effects.belt_tooth_jump = true"),
+            ("effects.drive_current_limit", current.as_str()),
+        ];
         for effect in effects {
             let (from, own);
             let reference = match through.iter().find(|(e, _)| *e == effect) {
@@ -476,11 +525,17 @@ fn cycle_pass(entry: &MachineEntry, cfg: &Config) -> CyclePass {
         .array("cycle.segment")
         .unwrap()
         .iter()
-        .map(|s| (s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect(), s["dwell_s"].as_float().unwrap()))
+        .map(|s| {
+            (
+                s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect(),
+                s["dwell_s"].as_float().unwrap(),
+            )
+        })
         .collect();
     let mut closest = vec![f64::INFINITY; segments.len()];
     sim.command(Command::StartCycle).unwrap();
-    let (mut starts, mut last, mut pass) = (Vec::new(), None, CyclePass { duration: 0.0, stops: 0, peak_vel: 0.0, peak_acc: 0.0, dwell_miss: 0.0 });
+    let (mut starts, mut last, mut pass) =
+        (Vec::new(), None, CyclePass { duration: 0.0, stops: 0, peak_vel: 0.0, peak_acc: 0.0, dwell_miss: 0.0 });
     let mut moving = false;
     while starts.len() < 3 {
         sim.step();
@@ -509,7 +564,8 @@ fn cycle_pass(entry: &MachineEntry, cfg: &Config) -> CyclePass {
         }
     }
     pass.duration = starts[2] - starts[1];
-    pass.dwell_miss = segments.iter().zip(&closest).filter(|((_, dwell), _)| *dwell > 0.0).map(|(_, c)| *c).fold(0.0, f64::max);
+    pass.dwell_miss =
+        segments.iter().zip(&closest).filter(|((_, dwell), _)| *dwell > 0.0).map(|(_, c)| *c).fold(0.0, f64::max);
     pass
 }
 
@@ -522,9 +578,20 @@ fn corner_blending_shortens_the_cycle_and_still_reaches_every_dwell() {
         let mut blending = stopping.clone();
         blending.set_text("effects.corner_blending = true").unwrap();
         let (off, on) = (cycle_pass(entry, &stopping), cycle_pass(entry, &blending));
-        assert!(on.duration < off.duration - 0.05, "{}: {} s with blending, {} s without", entry.id, on.duration, off.duration);
+        assert!(
+            on.duration < off.duration - 0.05,
+            "{}: {} s with blending, {} s without",
+            entry.id,
+            on.duration,
+            off.duration
+        );
         assert!(on.stops < off.stops, "{}: {} stops with blending, {} without", entry.id, on.stops, off.stops);
-        assert!(off.dwell_miss < 1e-12 && on.dwell_miss < 1e-12, "{}: a dwell position was missed by {} m", entry.id, on.dwell_miss);
+        assert!(
+            off.dwell_miss < 1e-12 && on.dwell_miss < 1e-12,
+            "{}: a dwell position was missed by {} m",
+            entry.id,
+            on.dwell_miss
+        );
         // A longer lead time than the ramps allow changes nothing more: blending stays on the ramps.
         let mut greedy = blending.clone();
         greedy.set_text("profile.blend_time_s = 10.0").unwrap();
@@ -541,7 +608,13 @@ fn blended_default_cycles_stay_within_the_axis_limits() {
         cfg.set_text("effects.corner_blending = true").unwrap();
         cfg.set_text("profile.blend_time_s = 10.0").unwrap();
         let pass = cycle_pass(entry, &cfg);
-        assert!(pass.peak_vel <= 1.0 + 1e-9 && pass.peak_acc <= 1.0 + 1e-9, "{}: {} of v max, {} of a max", entry.id, pass.peak_vel, pass.peak_acc);
+        assert!(
+            pass.peak_vel <= 1.0 + 1e-9 && pass.peak_acc <= 1.0 + 1e-9,
+            "{}: {} of v max, {} of a max",
+            entry.id,
+            pass.peak_vel,
+            pass.peak_acc
+        );
         assert!(pass.dwell_miss < 1e-12, "{}", entry.id);
     }
 }
@@ -583,11 +656,20 @@ fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
                     step = step.max((sim.control.set_pos[i] - before[i]).abs() / per_cycle);
                 }
             }
-            assert!(apart < 3.0 && step < 1.01, "{}, shaping {shaping}, to {cycle} s: {apart} cycles of travel from the untouched run, {step} in one step", entry.id);
+            assert!(
+                apart < 3.0 && step < 1.01,
+                "{}, shaping {shaping}, to {cycle} s: {apart} cycles of travel from the untouched run, {step} in one step",
+                entry.id
+            );
             // The cycle goes on to its end with the new profile cycle.
             let segment = sim.control.cycle_segment();
             sim.run(3.0, |_| {});
-            assert!(sim.control.cycle_segment().is_some() && (sim.control.cycle_segment() != segment || sim.control.cycle_passes() > 1), "{}", entry.id);
+            assert!(
+                sim.control.cycle_segment().is_some()
+                    && (sim.control.cycle_segment() != segment || sim.control.cycle_passes() > 1),
+                "{}",
+                entry.id
+            );
         }
     });
 }
@@ -602,16 +684,26 @@ fn changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint() {
 fn with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived() {
     on_every_machine(|entry| {
         for follows in [false, true] {
-            let cfg = config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
+            let cfg =
+                config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
             let mut sim = Sim::new(entry, &cfg).unwrap();
             sim.command(Command::StartCycle).unwrap();
-            let on_target = |s: &Sim| s.control.set_pos.iter().zip(s.control.planned_pos()).all(|(set, plan)| (set - plan).abs() < 1e-6);
+            let on_target = |s: &Sim| {
+                s.control.set_pos.iter().zip(s.control.planned_pos()).all(|(set, plan)| (set - plan).abs() < 1e-6)
+            };
             let (mut dwells, mut switches, mut attached, mut dwelling) = (0, 0, sim.control.payload_attached, false);
             while sim.control.cycle_passes() < 3 {
                 sim.step();
                 let now = sim.control.dwell_progress().is_some();
                 if now || sim.control.payload_attached != attached {
-                    assert!(on_target(&sim), "{} at {} s: setpoint {:?}, plan {:?}", entry.id, sim.time(), sim.control.set_pos, sim.control.planned_pos());
+                    assert!(
+                        on_target(&sim),
+                        "{} at {} s: setpoint {:?}, plan {:?}",
+                        entry.id,
+                        sim.time(),
+                        sim.control.set_pos,
+                        sim.control.planned_pos()
+                    );
                 }
                 dwells += (now && !dwelling) as usize;
                 switches += (sim.control.payload_attached != attached) as usize;
@@ -636,7 +728,13 @@ fn a_cycle_of_one_segment_is_analysed() {
         let dwell = cfg.array("cycle.segment").unwrap()[0]["dwell_s"].as_float().unwrap();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
-        assert!(dwell > 0.0 && (load.duration - dwell).abs() < 2.1e-3 && sim.time() < 10.0, "{}: a pass of {} s, analysed after {} s", entry.id, load.duration, sim.time());
+        assert!(
+            dwell > 0.0 && (load.duration - dwell).abs() < 2.1e-3 && sim.time() < 10.0,
+            "{}: a pass of {} s, analysed after {} s",
+            entry.id,
+            load.duration,
+            sim.time()
+        );
     }
 }
 
@@ -673,7 +771,11 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             sim.reconfigure(entry, &other).unwrap();
             let after = tool(&sim);
             for i in 0..axes.len() {
-                assert!((after.0[i] - before.0[i]).abs() < 1e-12 && (after.1[i] - before.1[i]).abs() < 1e-12, "{}: {before:?} to {after:?}", entry.id);
+                assert!(
+                    (after.0[i] - before.0[i]).abs() < 1e-12 && (after.1[i] - before.1[i]).abs() < 1e-12,
+                    "{}: {before:?} to {after:?}",
+                    entry.id
+                );
             }
             assert!(before.1[0] > 0.95 * axes[0].max_vel);
             let (mut torque, mut off) = (0f64, 0f64);
@@ -681,7 +783,11 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
                 torque = s.control.drives.iter().map(|d| d.torque_command.abs()).fold(torque, f64::max);
                 off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
             });
-            assert!(torque < 0.5 * peak && off < behind + 2e-4, "{}, from elastic {elastic}: {torque} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)", entry.id);
+            assert!(
+                torque < 0.5 * peak && off < behind + 2e-4,
+                "{}, from elastic {elastic}: {torque} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",
+                entry.id
+            );
         }
     }
 }
@@ -701,7 +807,14 @@ fn a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine() {
             sim.run(4.0, |s| {
                 let drives = &s.control.drives;
                 peak = drives.iter().map(|d| d.dc_voltage).fold(peak, f64::max);
-                apart = drives.iter().map(|d| (d.dc_voltage - drives[0].dc_voltage).abs().max((d.resistor_power - drives[0].resistor_power).abs())).fold(apart, f64::max);
+                apart = drives
+                    .iter()
+                    .map(|d| {
+                        (d.dc_voltage - drives[0].dc_voltage)
+                            .abs()
+                            .max((d.resistor_power - drives[0].resistor_power).abs())
+                    })
+                    .fold(apart, f64::max);
             });
             (peak, apart, sim.control.drives.len())
         };
@@ -710,17 +823,30 @@ fn a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine() {
             continue;
         }
         let bus = entry.config().f64("drive.bus_voltage_v").unwrap();
-        assert!(apart > 1.0 && together == 0.0, "{}: links {apart} V apart when separate, {together} when shared", entry.id);
-        assert!(shared > bus && shared <= separate, "{}: {shared} V shared, {separate} V separate, bus {bus} V", entry.id);
+        assert!(
+            apart > 1.0 && together == 0.0,
+            "{}: links {apart} V apart when separate, {together} when shared",
+            entry.id
+        );
+        assert!(
+            shared > bus && shared <= separate,
+            "{}: {shared} V shared, {separate} V separate, bus {bus} V",
+            entry.id
+        );
         println!("{}: highest DC link voltage {separate} V separate, {shared} V shared", entry.id);
     }
 }
 
 /// The configs whose velocity loops are checked: every registered machine's default config, and the EXCT-30.
 fn shipped_configs() -> Vec<(String, Config, &'static MachineEntry)> {
-    let mut configs: Vec<(String, Config, &'static MachineEntry)> = MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e)).collect();
+    let mut configs: Vec<(String, Config, &'static MachineEntry)> =
+        MACHINES.iter().map(|e| (e.id.to_string(), e.config(), *e)).collect();
     let exct = &machine_t_gantry::ENTRY;
-    configs.push(("EXCT-30".into(), sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(), exct));
+    configs.push((
+        "EXCT-30".into(),
+        sim_components::load_config(exct, machine_t_gantry::EXCT_30_CONFIG).unwrap(),
+        exct,
+    ));
     configs
 }
 
@@ -740,25 +866,40 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
         let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
         frictions.iter().map(move |&friction| {
             // Motor friction, and the guides' or the joints' (whichever the machine has).
-            let other = if cfg.bool("effects.guide_friction").is_ok() { "effects.guide_friction" } else { "effects.joint_friction" };
-            let cfg = config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
+            let other = if cfg.bool("effects.guide_friction").is_ok() {
+                "effects.guide_friction"
+            } else {
+                "effects.joint_friction"
+            };
+            let cfg =
+                config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
             // With friction off, the friction values act on nothing: their runs gave the margins of the config as it is
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
             let mut bounded = if across { bounds(&cfg).unwrap() } else { Vec::new() };
-            bounded.retain(|(path, ..)| !skip || !["friction_", "motor.friction_", "joint.friction_"].iter().any(|start| path.starts_with(start)));
+            bounded.retain(|(path, ..)| {
+                !skip
+                    || !["friction_", "motor.friction_", "joint.friction_"].iter().any(|start| path.starts_with(start))
+            });
             (name, friction, cfg, *entry, bounded)
         })
     });
     // All passes at once: each spreads its runs over every core, and one waiting for its last run leaves the cores to
     // the others instead of idle (the 24 passes, one after the other, ended 24 times on one run).
     std::thread::scope(|scope| {
-        let workers: Vec<_> = passes.map(|(name, friction, cfg, entry, bounded)| scope.spawn(move || (name, friction, velocity_loop_margins(entry, &cfg, &bounded).unwrap()))).collect();
+        let workers: Vec<_> = passes
+            .map(|(name, friction, cfg, entry, bounded)| {
+                scope.spawn(move || (name, friction, velocity_loop_margins(entry, &cfg, &bounded).unwrap()))
+            })
+            .collect();
         for (name, friction, runs) in workers.into_iter().map(|w| w.join().unwrap()) {
             for (run, margins) in runs {
                 for (k, m) in margins.iter().enumerate() {
-                    assert!(m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain, "{name}, friction {friction}, run '{run}', motor {k}: {m:?}");
+                    assert!(
+                        m.stable() && m.phase_margin_deg >= phase && m.gain_margin_db >= gain,
+                        "{name}, friction {friction}, run '{run}', motor {k}: {m:?}"
+                    );
                 }
             }
         }
@@ -827,10 +968,13 @@ fn config_of(cfg: &Config, edit: &[&str]) -> Config {
 fn the_time_optimal_deviation_refuses_what_the_plan_refuses() {
     let mut refused = 0;
     for entry in MACHINES {
-        let sim = Sim::new(entry, &config(entry, &["profile.torque_reserve = 0.001", "profile.path_tolerance_m = 1e-4"])).unwrap();
+        let sim =
+            Sim::new(entry, &config(entry, &["profile.torque_reserve = 0.001", "profile.path_tolerance_m = 1e-4"]))
+                .unwrap();
         let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
         let pieces = [sim_components::path::Piece::Line(middle)];
-        let (plan, deviation) = (sim.plan_path(&pieces, true).err().map(|e| e.key), sim.path_deviation(&pieces, true).err().map(|e| e.key));
+        let (plan, deviation) =
+            (sim.plan_path(&pieces, true).err().map(|e| e.key), sim.path_deviation(&pieces, true).err().map(|e| e.key));
         assert_eq!(plan, deviation, "{}", entry.id);
         refused += (plan == Some("error-path-torque")) as usize;
     }

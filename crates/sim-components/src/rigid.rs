@@ -44,7 +44,11 @@ pub fn rpy(r: V3) -> M3 {
     let (sr, cr) = r[0].sin_cos();
     let (sp, cp) = r[1].sin_cos();
     let (sy, cy) = r[2].sin_cos();
-    [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr], [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr], [-sp, cp * sr, cp * cr]]
+    [
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ]
 }
 
 /// Rotation by `angle` about the unit vector `k` (Rodrigues).
@@ -75,10 +79,15 @@ impl Inertial {
         }
         let oc = add(mul(rot, other.com), pos);
         let com = scale(add(scale(self.com, self.mass), scale(oc, other.mass)), 1.0 / m);
-        let shift = |mass: f64, d: V3| -> M3 { std::array::from_fn(|r| std::array::from_fn(|c| mass * (if r == c { dot(d, d) } else { 0.0 } - d[r] * d[c]))) };
+        let shift = |mass: f64, d: V3| -> M3 {
+            std::array::from_fn(|r| {
+                std::array::from_fn(|c| mass * (if r == c { dot(d, d) } else { 0.0 } - d[r] * d[c]))
+            })
+        };
         let turned = matmul(&matmul(rot, &other.inertia), &transpose(rot));
         let (a, b) = (shift(self.mass, sub(self.com, com)), shift(other.mass, sub(oc, com)));
-        let inertia = std::array::from_fn(|r| std::array::from_fn(|c| self.inertia[r][c] + a[r][c] + turned[r][c] + b[r][c]));
+        let inertia =
+            std::array::from_fn(|r| std::array::from_fn(|c| self.inertia[r][c] + a[r][c] + turned[r][c] + b[r][c]));
         Inertial { mass: m, com, inertia }
     }
 }
@@ -156,14 +165,30 @@ impl Chain {
     /// Recursive Newton-Euler: the joint torques (forces for prismatic joints) that give the accelerations `qdd` at
     /// positions `q` and speeds `qd` under gravity `g` (m/s^2, along -z of the base), `extra` a point mass and where it
     /// sits on the last body. Out: `tau`.
-    pub fn inverse_dynamics(&self, q: &[f64], qd: &[f64], qdd: &[f64], g: f64, extra: Option<(f64, V3)>, tau: &mut [f64]) {
+    pub fn inverse_dynamics(
+        &self,
+        q: &[f64],
+        qd: &[f64],
+        qdd: &[f64],
+        g: f64,
+        extra: Option<(f64, V3)>,
+        tau: &mut [f64],
+    ) {
         let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
         self.newton_euler(&links, qd, qdd, g, extra, tau);
     }
 
     /// `inverse_dynamics` with each body's frame in the one before it (`link`) worked out already: the mass matrix
     /// takes n + 1 passes at the same positions, and the links' rotations are most of a pass's work.
-    fn newton_euler(&self, links: &[(M3, V3)], qd: &[f64], qdd: &[f64], g: f64, extra: Option<(f64, V3)>, tau: &mut [f64]) {
+    fn newton_euler(
+        &self,
+        links: &[(M3, V3)],
+        qd: &[f64],
+        qdd: &[f64],
+        g: f64,
+        extra: Option<(f64, V3)>,
+        tau: &mut [f64],
+    ) {
         let n = self.len();
         let mut forces: Vec<(V3, V3)> = Vec::with_capacity(n);
         // The base accelerates up by g instead of gravity pulling down.
@@ -240,7 +265,13 @@ impl Chain {
             let c = add(pos, mul(&rot, body.com));
             let turned = matmul(&matmul(&rot, &body.inertia), &transpose(&rot));
             columns.clear();
-            columns.extend((0..=k).map(|j| if self.bodies[j].prismatic { (axes[j], [0.0; 3]) } else { (cross(axes[j], sub(c, origins[j])), axes[j]) }));
+            columns.extend((0..=k).map(|j| {
+                if self.bodies[j].prismatic {
+                    (axes[j], [0.0; 3])
+                } else {
+                    (cross(axes[j], sub(c, origins[j])), axes[j])
+                }
+            }));
             for (i, (vi, wi)) in columns.iter().enumerate() {
                 let iw = mul(&turned, *wi);
                 for (j, (vj, wj)) in columns.iter().enumerate() {
@@ -252,7 +283,15 @@ impl Chain {
 
     /// The mass matrix (`mass_matrix`) and the torques at zero acceleration (velocity terms and gravity,
     /// `inverse_dynamics` with q'' = 0) at once, the links worked out once for both.
-    pub fn dynamics(&self, q: &[f64], qd: &[f64], g: f64, extra: Option<(f64, V3)>, mass: &mut [f64], bias: &mut [f64]) {
+    pub fn dynamics(
+        &self,
+        q: &[f64],
+        qd: &[f64],
+        g: f64,
+        extra: Option<(f64, V3)>,
+        mass: &mut [f64],
+        bias: &mut [f64],
+    ) {
         let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
         self.mass_matrix_at(&links, extra, mass);
         self.newton_euler(&links, qd, &vec![0.0; q.len()], g, extra, bias);
@@ -315,7 +354,8 @@ impl Chain {
                                 "mass" => inertial.mass = c.number("value")?,
                                 "inertia" => {
                                     let v = |k: &str| c.number(k);
-                                    let (xx, xy, xz, yy, yz, zz) = (v("ixx")?, v("ixy")?, v("ixz")?, v("iyy")?, v("iyz")?, v("izz")?);
+                                    let (xx, xy, xz, yy, yz, zz) =
+                                        (v("ixx")?, v("ixy")?, v("ixz")?, v("iyy")?, v("iyz")?, v("izz")?);
                                     inertial.inertia = [[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]];
                                 }
                                 _ => {}
@@ -334,7 +374,15 @@ impl Chain {
                 }
                 ("joint", 1) => {
                     let kind = e.attr("type").ok_or_else(|| bad("a joint without a type"))?.to_string();
-                    let mut j = Joint { kind, parent: String::new(), child: String::new(), rot: IDENTITY, pos: [0.0; 3], axis: [1.0, 0.0, 0.0], limits: None };
+                    let mut j = Joint {
+                        kind,
+                        parent: String::new(),
+                        child: String::new(),
+                        rot: IDENTITY,
+                        pos: [0.0; 3],
+                        axis: [1.0, 0.0, 0.0],
+                        limits: None,
+                    };
                     let mut k = i + 1;
                     while k < elements.len() && elements[k].depth > 1 {
                         let c = &elements[k];
@@ -349,7 +397,8 @@ impl Chain {
                                 "axis" => j.axis = c.vec("xyz")?,
                                 // URDF's default for a bound left out is 0; a range that is empty or upside down is refused.
                                 "limit" if c.attr("lower").is_some() || c.attr("upper").is_some() => {
-                                    let bound = |name: &str| if c.attr(name).is_some() { c.number(name) } else { Ok(0.0) };
+                                    let bound =
+                                        |name: &str| if c.attr(name).is_some() { c.number(name) } else { Ok(0.0) };
                                     let (lower, upper) = (bound("lower")?, bound("upper")?);
                                     if lower >= upper {
                                         return Err(bad(&format!("the limits of the joint to {}", j.child)));
@@ -370,8 +419,15 @@ impl Chain {
             i += 1;
         }
         // The root: the link that is no joint's child.
-        let root = links.iter().find(|(name, _)| joints.iter().all(|j| &j.child != name)).ok_or_else(|| bad("no root link"))?.0.clone();
-        let inertial_of = |name: &str| links.iter().find(|(n, _)| n == name).map(|(_, i)| *i).ok_or_else(|| bad(&format!("no link {name}")));
+        let root = links
+            .iter()
+            .find(|(name, _)| joints.iter().all(|j| &j.child != name))
+            .ok_or_else(|| bad("no root link"))?
+            .0
+            .clone();
+        let inertial_of = |name: &str| {
+            links.iter().find(|(n, _)| n == name).map(|(_, i)| *i).ok_or_else(|| bad(&format!("no link {name}")))
+        };
         let mut chain = Chain { bodies: Vec::new(), tip_rot: IDENTITY, tip_pos: [0.0; 3] };
         // Fixed joints before the first moving one fold into where it sits on the base.
         let (mut pre_rot, mut pre_pos) = (IDENTITY, [0.0; 3]);
@@ -401,9 +457,21 @@ impl Chain {
                     if !(norm > 0.0) {
                         return Err(bad(&format!("the axis of the joint to {}", j.child)));
                     }
-                    let (rot, pos) = if chain.bodies.is_empty() { (matmul(&pre_rot, &j.rot), add(pre_pos, mul(&pre_rot, j.pos))) } else { (matmul(&chain.tip_rot, &j.rot), add(chain.tip_pos, mul(&chain.tip_rot, j.pos))) };
+                    let (rot, pos) = if chain.bodies.is_empty() {
+                        (matmul(&pre_rot, &j.rot), add(pre_pos, mul(&pre_rot, j.pos)))
+                    } else {
+                        (matmul(&chain.tip_rot, &j.rot), add(chain.tip_pos, mul(&chain.tip_rot, j.pos)))
+                    };
                     let limits = if j.kind == "continuous" { None } else { j.limits };
-                    chain.bodies.push(Body { name: j.child.clone(), origin_rot: rot, origin_pos: pos, axis: scale(j.axis, 1.0 / norm), prismatic: j.kind == "prismatic", inertial: child, limits });
+                    chain.bodies.push(Body {
+                        name: j.child.clone(),
+                        origin_rot: rot,
+                        origin_pos: pos,
+                        axis: scale(j.axis, 1.0 / norm),
+                        prismatic: j.kind == "prismatic",
+                        inertial: child,
+                        limits,
+                    });
                     (chain.tip_rot, chain.tip_pos) = (IDENTITY, [0.0; 3]);
                 }
                 other => return Err(bad(&format!("joint type {other} is not read"))),
@@ -430,12 +498,19 @@ impl Element {
         self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
     fn number(&self, name: &str) -> Result<f64, ConfigError> {
-        self.attr(name).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).ok_or_else(|| ConfigError::Invalid(format!("urdf: {} {name}", self.name)))
+        self.attr(name)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| ConfigError::Invalid(format!("urdf: {} {name}", self.name)))
     }
     /// Three numbers apart by spaces; zero where the attribute is left out (URDF's default).
     fn vec(&self, name: &str) -> Result<V3, ConfigError> {
         let Some(text) = self.attr(name) else { return Ok([0.0; 3]) };
-        let v: Vec<f64> = text.split_whitespace().map(|t| t.parse::<f64>()).collect::<Result<_, _>>().map_err(|_| ConfigError::Invalid(format!("urdf: {} {name}", self.name)))?;
+        let v: Vec<f64> = text
+            .split_whitespace()
+            .map(|t| t.parse::<f64>())
+            .collect::<Result<_, _>>()
+            .map_err(|_| ConfigError::Invalid(format!("urdf: {} {name}", self.name)))?;
         match v[..] {
             [a, b, c] if v.iter().all(|x| x.is_finite()) => Ok([a, b, c]),
             _ => Err(ConfigError::Invalid(format!("urdf: {} {name}", self.name))),
@@ -492,7 +567,12 @@ fn xml_elements(text: &str) -> Result<Vec<Element>, String> {
             let v = a[eq + 1..].trim_start();
             let q = v.chars().next().filter(|c| *c == '"' || *c == '\'').ok_or("an attribute value without quotes")?;
             let close = v[1..].find(q).ok_or("an attribute value that does not end")?;
-            let value = v[1..1 + close].replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+            let value = v[1..1 + close]
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&amp;", "&");
             attrs.push((key, value));
             a = v[close + 2..].trim_start();
         }
@@ -589,12 +669,16 @@ mod tests {
         let energy = |q: &[f64], qd: &[f64]| {
             let mut m = [0.0; 9];
             chain.mass_matrix(q, None, &mut m);
-            let kinetic: f64 = (0..3).map(|i| (0..3).map(|j| qd[i] * m[i * 3 + j] * qd[j]).sum::<f64>()).sum::<f64>() * 0.5;
+            let kinetic: f64 =
+                (0..3).map(|i| (0..3).map(|j| qd[i] * m[i * 3 + j] * qd[j]).sum::<f64>()).sum::<f64>() * 0.5;
             kinetic + chain.potential(q, 9.81, None)
         };
         // RK4 over 1 ms; the energy gained is the work of tau (constant) over the joint travel.
         let dt = 1e-3;
-        let f = |s: &[f64]| -> Vec<f64> { let a = accel(&s[..3], &s[3..]); s[3..].iter().copied().chain(a).collect() };
+        let f = |s: &[f64]| -> Vec<f64> {
+            let a = accel(&s[..3], &s[3..]);
+            s[3..].iter().copied().chain(a).collect()
+        };
         let s0: Vec<f64> = q0.iter().chain(&qd0).copied().collect();
         let step = |s: &[f64], k: &[f64], h: f64| -> Vec<f64> { s.iter().zip(k).map(|(a, b)| a + h * b).collect() };
         let k1 = f(&s0);
@@ -609,7 +693,11 @@ mod tests {
 
     #[test]
     fn bad_urdf_is_refused() {
-        for bad in ["<robot><link name=\"a\"/>", "<robot><link name=\"a\"/></robot>", "<robot><link name=\"a\"/><link name=\"b\"/><joint name=\"j\" type=\"planar\"><parent link=\"a\"/><child link=\"b\"/></joint></robot>"] {
+        for bad in [
+            "<robot><link name=\"a\"/>",
+            "<robot><link name=\"a\"/></robot>",
+            "<robot><link name=\"a\"/><link name=\"b\"/><joint name=\"j\" type=\"planar\"><parent link=\"a\"/><child link=\"b\"/></joint></robot>",
+        ] {
             assert!(Chain::from_urdf(bad).is_err(), "{bad}");
         }
     }
@@ -618,8 +706,15 @@ mod tests {
     /// out).
     #[test]
     fn urdf_limits_default_to_zero_and_must_be_a_range() {
-        let urdf = |limit: &str| format!("<robot><link name=\"a\"/><link name=\"b\"><inertial><mass value=\"1\"/><inertia ixx=\"1\" ixy=\"0\" ixz=\"0\" iyy=\"1\" iyz=\"0\" izz=\"1\"/></inertial></link><joint name=\"j\" type=\"prismatic\"><parent link=\"a\"/><child link=\"b\"/><axis xyz=\"0 0 1\"/>{limit}</joint></robot>");
-        assert_eq!(Chain::from_urdf(&urdf("<limit upper=\"0.3\" effort=\"1\" velocity=\"1\"/>")).unwrap().bodies[0].limits, Some((0.0, 0.3)));
+        let urdf = |limit: &str| {
+            format!(
+                "<robot><link name=\"a\"/><link name=\"b\"><inertial><mass value=\"1\"/><inertia ixx=\"1\" ixy=\"0\" ixz=\"0\" iyy=\"1\" iyz=\"0\" izz=\"1\"/></inertial></link><joint name=\"j\" type=\"prismatic\"><parent link=\"a\"/><child link=\"b\"/><axis xyz=\"0 0 1\"/>{limit}</joint></robot>"
+            )
+        };
+        assert_eq!(
+            Chain::from_urdf(&urdf("<limit upper=\"0.3\" effort=\"1\" velocity=\"1\"/>")).unwrap().bodies[0].limits,
+            Some((0.0, 0.3))
+        );
         assert!(Chain::from_urdf(&urdf("<limit lower=\"0.2\" upper=\"0.0\"/>")).is_err());
     }
 }

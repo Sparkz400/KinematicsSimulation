@@ -28,13 +28,31 @@ fn unpack(entry: &'static MachineEntry, name: &str) -> (Model, CString) {
 fn machine_files() -> Vec<&'static MachineEntry> {
     ["h-bot.toml", "corexy.toml", "xyz-portal.toml"]
         .iter()
-        .map(|name| sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name)).unwrap_or_else(|e| panic!("{e}")))
+        .map(|name| {
+            sim_machines::load_file(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../machines").join(name))
+                .unwrap_or_else(|e| panic!("{e}"))
+        })
         .collect()
 }
 
 fn instantiate(token: &str, resources: &CString) -> fmi3Instance {
     let (name, token) = (CString::new("test").unwrap(), CString::new(token).unwrap());
-    unsafe { fmi3InstantiateCoSimulation(name.as_ptr(), token.as_ptr(), resources.as_ptr(), false, false, false, false, null(), 0, null_mut(), None, None) }
+    unsafe {
+        fmi3InstantiateCoSimulation(
+            name.as_ptr(),
+            token.as_ptr(),
+            resources.as_ptr(),
+            false,
+            false,
+            false,
+            false,
+            null(),
+            0,
+            null_mut(),
+            None,
+            None,
+        )
+    }
 }
 
 fn started(model: &Model, resources: &CString) -> fmi3Instance {
@@ -52,7 +70,13 @@ fn vr(model: &Model, kind: &Kind) -> u32 {
 }
 
 fn signals(model: &Model) -> Vec<u32> {
-    model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_))).map(|(i, _)| i as u32).collect()
+    model
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| matches!(v.kind, Kind::Signal(_)))
+        .map(|(i, _)| i as u32)
+        .collect()
 }
 
 fn get(c: fmi3Instance, refs: &[u32]) -> Vec<f64> {
@@ -79,7 +103,10 @@ fn interval(model: &Model) -> f64 {
 fn a_move_through_the_fmi3_functions_matches_a_plain_simulation_bit_for_bit() {
     for entry in MACHINES.iter().copied().chain(machine_files()) {
         let (model, resources) = unpack(entry, "move");
-        assert!(model.xml.contains(r#"fmiVersion="3.0""#) && model.xml.contains(&format!(r#"instantiationToken="{}""#, model.guid)));
+        assert!(
+            model.xml.contains(r#"fmiVersion="3.0""#)
+                && model.xml.contains(&format!(r#"instantiationToken="{}""#, model.guid))
+        );
         let cfg = load_config(entry, &model.config_text).unwrap();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let c = started(&model, &resources);
@@ -91,7 +118,8 @@ fn a_move_through_the_fmi3_functions_matches_a_plain_simulation_bit_for_bit() {
         let axis = sim.machine.axes()[0].clone();
         let setpoint = vr(&model, &Kind::Setpoint(0));
         let mut target = sim.control.set_pos.clone();
-        let (step, direction) = (0.2 * axis.max_vel * interval, if target[0] < 0.5 * (axis.min + axis.max) { 1.0 } else { -1.0 });
+        let (step, direction) =
+            (0.2 * axis.max_vel * interval, if target[0] < 0.5 * (axis.min + axis.max) { 1.0 } else { -1.0 });
         let steps = (interval / sim.dt).round() as u64;
         for k in 0..30 {
             if k < 15 {
@@ -123,7 +151,8 @@ fn a_saved_fmi3_state_restores_the_simulation_bit_for_bit() {
     let (model, resources) = unpack(entry, "state");
     let refs = signals(&model);
     let (setpoint, enable) = (vr(&model, &Kind::Setpoint(0)), vr(&model, &Kind::Enable));
-    let (interval, first): (f64, f64) = (interval(&model), model.variables[setpoint as usize].start.as_ref().unwrap().parse().unwrap());
+    let (interval, first): (f64, f64) =
+        (interval(&model), model.variables[setpoint as usize].start.as_ref().unwrap().parse().unwrap());
     let step = |c: fmi3Instance, k: usize| {
         let target = first + 0.001 * k.min(8) as f64;
         unsafe {
@@ -163,7 +192,13 @@ fn a_saved_fmi3_state_restores_the_simulation_bit_for_bit() {
     let fmi2 = Model::new(entry, &model.config_text, "en").unwrap();
     assert_ne!(fmi2.guid, model.guid);
     let other = started(&model, &resources);
-    let foreign = [b"sim-fmi state 1\0".as_slice(), &(fmi2.guid.len() as u64).to_le_bytes(), fmi2.guid.as_bytes(), &bytes[16 + 8 + model.guid.len()..]].concat();
+    let foreign = [
+        b"sim-fmi state 1\0".as_slice(),
+        &(fmi2.guid.len() as u64).to_le_bytes(),
+        fmi2.guid.as_bytes(),
+        &bytes[16 + 8 + model.guid.len()..],
+    ]
+    .concat();
     unsafe {
         assert_eq!(fmi3DeserializeFMUState(other, foreign.as_ptr(), foreign.len(), &mut restored), fmi3Error);
         fmi3FreeInstance(other);
@@ -177,8 +212,15 @@ fn the_fmi3_derivatives_are_the_finite_difference_zero() {
     let entry = MACHINES[0];
     let (model, resources) = unpack(entry, "derivative");
     let c = started(&model, &resources);
-    let outputs: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i as u32).collect();
-    let setpoints: Vec<u32> = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Setpoint(_))).map(|(i, _)| i as u32).collect();
+    let outputs: Vec<u32> =
+        model.variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i as u32).collect();
+    let setpoints: Vec<u32> = model
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| matches!(v.kind, Kind::Setpoint(_)))
+        .map(|(i, _)| i as u32)
+        .collect();
     assert_eq!(do_step(c, 0.0, interval(&model)), fmi3OK);
     let base = get(c, &outputs);
     let u = get(c, &setpoints);
@@ -194,20 +236,111 @@ fn the_fmi3_derivatives_are_the_finite_difference_zero() {
     let seed = vec![1.0; outputs.len().max(setpoints.len())];
     unsafe {
         for s in &setpoints {
-            assert_eq!(fmi3GetDirectionalDerivative(c, outputs.as_ptr(), outputs.len(), s, 1, seed.as_ptr(), 1, column.as_mut_ptr(), column.len()), fmi3OK);
+            assert_eq!(
+                fmi3GetDirectionalDerivative(
+                    c,
+                    outputs.as_ptr(),
+                    outputs.len(),
+                    s,
+                    1,
+                    seed.as_ptr(),
+                    1,
+                    column.as_mut_ptr(),
+                    column.len()
+                ),
+                fmi3OK
+            );
             assert!(column.iter().all(|d| *d == 0.0));
         }
-        assert_eq!(fmi3GetAdjointDerivative(c, outputs.as_ptr(), outputs.len(), setpoints.as_ptr(), setpoints.len(), seed.as_ptr(), outputs.len(), row.as_mut_ptr(), row.len()), fmi3OK);
+        assert_eq!(
+            fmi3GetAdjointDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                setpoints.as_ptr(),
+                setpoints.len(),
+                seed.as_ptr(),
+                outputs.len(),
+                row.as_mut_ptr(),
+                row.len()
+            ),
+            fmi3OK
+        );
         assert!(row.iter().all(|d| *d == 0.0));
-        assert_eq!(fmi3GetDirectionalDerivative(c, setpoints.as_ptr(), 1, outputs.as_ptr(), 1, seed.as_ptr(), 1, column.as_mut_ptr(), 1), fmi3Error);
+        assert_eq!(
+            fmi3GetDirectionalDerivative(
+                c,
+                setpoints.as_ptr(),
+                1,
+                outputs.as_ptr(),
+                1,
+                seed.as_ptr(),
+                1,
+                column.as_mut_ptr(),
+                1
+            ),
+            fmi3Error
+        );
         // One seed per known and one sensitivity per unknown, the adjoint the other way round; fewer are refused
         // (fewer, so that a count not checked writes within the buffers).
         assert!(setpoints.len() >= 2);
         let s = &setpoints[0];
-        assert_eq!(fmi3GetDirectionalDerivative(c, outputs.as_ptr(), outputs.len(), s, 1, seed.as_ptr(), 1, column.as_mut_ptr(), outputs.len() - 1), fmi3Error);
-        assert_eq!(fmi3GetDirectionalDerivative(c, outputs.as_ptr(), outputs.len(), setpoints.as_ptr(), 2, seed.as_ptr(), 1, column.as_mut_ptr(), outputs.len()), fmi3Error);
-        assert_eq!(fmi3GetAdjointDerivative(c, outputs.as_ptr(), outputs.len(), setpoints.as_ptr(), setpoints.len(), seed.as_ptr(), outputs.len() - 1, row.as_mut_ptr(), row.len()), fmi3Error);
-        assert_eq!(fmi3GetAdjointDerivative(c, outputs.as_ptr(), outputs.len(), setpoints.as_ptr(), setpoints.len(), seed.as_ptr(), outputs.len(), row.as_mut_ptr(), row.len() - 1), fmi3Error);
+        assert_eq!(
+            fmi3GetDirectionalDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                s,
+                1,
+                seed.as_ptr(),
+                1,
+                column.as_mut_ptr(),
+                outputs.len() - 1
+            ),
+            fmi3Error
+        );
+        assert_eq!(
+            fmi3GetDirectionalDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                setpoints.as_ptr(),
+                2,
+                seed.as_ptr(),
+                1,
+                column.as_mut_ptr(),
+                outputs.len()
+            ),
+            fmi3Error
+        );
+        assert_eq!(
+            fmi3GetAdjointDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                setpoints.as_ptr(),
+                setpoints.len(),
+                seed.as_ptr(),
+                outputs.len() - 1,
+                row.as_mut_ptr(),
+                row.len()
+            ),
+            fmi3Error
+        );
+        assert_eq!(
+            fmi3GetAdjointDerivative(
+                c,
+                outputs.as_ptr(),
+                outputs.len(),
+                setpoints.as_ptr(),
+                setpoints.len(),
+                seed.as_ptr(),
+                outputs.len(),
+                row.as_mut_ptr(),
+                row.len() - 1
+            ),
+            fmi3Error
+        );
         fmi3FreeInstance(c);
     }
     assert!(jacobian_by_hand.iter().all(|d| *d == 0.0), "{jacobian_by_hand:?}");
@@ -220,8 +353,33 @@ fn what_fmi3_forbids_or_this_fmu_does_not_offer_is_refused() {
     let (name, token) = (CString::new("test").unwrap(), CString::new(model.guid.clone()).unwrap());
     unsafe {
         // Model Exchange and Scheduled Execution; another token; the FMI 2.0 FMU's GUID.
-        assert!(fmi3InstantiateModelExchange(name.as_ptr(), token.as_ptr(), resources.as_ptr(), false, false, null_mut(), None).is_null());
-        assert!(fmi3InstantiateScheduledExecution(name.as_ptr(), token.as_ptr(), resources.as_ptr(), false, false, null_mut(), None, null(), null(), null()).is_null());
+        assert!(
+            fmi3InstantiateModelExchange(
+                name.as_ptr(),
+                token.as_ptr(),
+                resources.as_ptr(),
+                false,
+                false,
+                null_mut(),
+                None
+            )
+            .is_null()
+        );
+        assert!(
+            fmi3InstantiateScheduledExecution(
+                name.as_ptr(),
+                token.as_ptr(),
+                resources.as_ptr(),
+                false,
+                false,
+                null_mut(),
+                None,
+                null(),
+                null(),
+                null()
+            )
+            .is_null()
+        );
     }
     assert!(instantiate("{00000000-0000-0000-0000-000000000000}", &resources).is_null());
     assert!(instantiate(&Model::new(entry, &model.config_text, "en").unwrap().guid, &resources).is_null());

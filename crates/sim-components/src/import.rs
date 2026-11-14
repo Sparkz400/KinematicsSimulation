@@ -39,7 +39,12 @@ fn bad(key: &'static str, detail: impl Into<String>) -> TraceError {
 /// is written, otherwise UTF-8 (a byte order mark dropped, invalid bytes replaced).
 pub fn decode(bytes: &[u8]) -> String {
     let utf16 = |big: bool| {
-        let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) }).collect();
+        let units: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) })
+            .collect();
         String::from_utf16_lossy(&units)
     };
     match bytes {
@@ -79,9 +84,11 @@ fn name_and_unit(header: &str) -> (String, String) {
     let header = header.trim().trim_matches('"').trim();
     for (open, close) in [('[', ']'), ('(', ')')] {
         if let (Some(a), Some(b)) = (header.rfind(open), header.rfind(close))
-            && a < b && b == header.len() - 1 {
-                return (header[..a].trim().to_string(), header[a + 1..b].trim().to_string());
-            }
+            && a < b
+            && b == header.len() - 1
+        {
+            return (header[..a].trim().to_string(), header[a + 1..b].trim().to_string());
+        }
     }
     (header.to_string(), String::new())
 }
@@ -100,7 +107,12 @@ fn seconds_per(unit: &str) -> Option<f64> {
 
 /// A unit written without spaces, in lower case, with µ as u and ° as deg.
 fn normal(unit: &str) -> String {
-    unit.chars().filter(|c| !c.is_whitespace() && *c != '·' && *c != '*').collect::<String>().to_lowercase().replace(['µ', 'μ'], "u").replace('°', "deg")
+    unit.chars()
+        .filter(|c| !c.is_whitespace() && *c != '·' && *c != '*')
+        .collect::<String>()
+        .to_lowercase()
+        .replace(['µ', 'μ'], "u")
+        .replace('°', "deg")
 }
 
 /// A table with one shared time column: `csv` and `sinamics`. `time` names the time column; without it the
@@ -115,15 +127,20 @@ fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result
         f.len() > 1 && f.iter().all(|f| f.trim().is_empty() || number(f, comma).is_some())
     };
     let first_data = lines.iter().position(|l| numeric(l));
-    let Some(first_data) = first_data.filter(|&i| i > 0) else { return Err(bad("error-import-layout", "no header line followed by numbers")) };
+    let Some(first_data) = first_data.filter(|&i| i > 0) else {
+        return Err(bad("error-import-layout", "no header line followed by numbers"));
+    };
     let width = fields(lines[first_data], sep).len();
     // Names, and under them maybe a line of units: short fields without brackets (a line of names with
     // units in brackets, or a metadata line, is not one).
     let mut names_at = first_data - 1;
     let mut units: Option<Vec<String>> = None;
-    let unit_like = |l: &str| fields(l, sep).iter().all(|f| f.trim().trim_matches('"').chars().count() <= 8 && !f.contains(['[', '(']));
+    let unit_like = |l: &str| {
+        fields(l, sep).iter().all(|f| f.trim().trim_matches('"').chars().count() <= 8 && !f.contains(['[', '(']))
+    };
     if first_data >= 2 && fields(lines[first_data - 2], sep).len() == width && unit_like(lines[first_data - 1]) {
-        units = Some(fields(lines[first_data - 1], sep).iter().map(|u| u.trim().trim_matches('"').to_string()).collect());
+        units =
+            Some(fields(lines[first_data - 1], sep).iter().map(|u| u.trim().trim_matches('"').to_string()).collect());
         names_at = first_data - 2;
     }
     let mut channels: Vec<Channel> = fields(lines[names_at], sep)
@@ -149,7 +166,8 @@ fn read_table(text: &str, time: Option<&str>, time_unit: Option<&str>) -> Result
         None => channels.iter().position(|c| lower(c).contains("time") || lower(c).contains("zeit")).unwrap_or(0),
     };
     let unit = time_unit.map_or(channels[t].unit.clone(), str::to_string);
-    let scale = seconds_per(&unit).ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", channels[t].names[0])))?;
+    let scale =
+        seconds_per(&unit).ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", channels[t].names[0])))?;
     let times: Vec<f64> = rows.iter().map(|r| r[t] * scale).collect();
     for (i, channel) in channels.iter_mut().enumerate() {
         channel.time.clone_from(&times);
@@ -165,15 +183,24 @@ fn read_twincat(text: &str) -> Result<Vec<Channel>, TraceError> {
     let sep = separator(lines.first().copied().unwrap_or(""));
     let comma = sep != ',';
     // The channel block starts at the second line that begins with "Name" (the first names the export).
-    let start = lines.iter().enumerate().filter(|(_, l)| l.split(sep).next().map(str::trim) == Some("Name")).nth(1).map(|(i, _)| i);
-    let Some(start) = start else { return Err(bad("error-import-layout", "no channel header (a second line starting with Name)")) };
+    let start = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.split(sep).next().map(str::trim) == Some("Name"))
+        .nth(1)
+        .map(|(i, _)| i);
+    let Some(start) = start else {
+        return Err(bad("error-import-layout", "no channel header (a second line starting with Name)"));
+    };
     let end = (start..lines.len()).find(|&i| lines[i].trim().is_empty()).unwrap_or(lines.len());
     let header: Vec<Vec<&str>> = lines[start..end].iter().map(|l| l.split(sep).collect()).collect();
     let row = |key: &str| header.iter().find(|r| r.first().map(|k| k.trim()) == Some(key));
     let names = row("Name").ok_or_else(|| bad("error-import-layout", "Name"))?;
     // Full header: key and value per channel. Shared time columns: the key once, then the values.
     let paired = names.get(2).map(|k| k.trim()) == Some("Name");
-    let value_at = |r: &Vec<&str>, c: usize| -> String { r.get(if paired { 2 * c + 1 } else { c + 1 }).map_or(String::new(), |v| v.trim().to_string()) };
+    let value_at = |r: &Vec<&str>, c: usize| -> String {
+        r.get(if paired { 2 * c + 1 } else { c + 1 }).map_or(String::new(), |v| v.trim().to_string())
+    };
     let count = if paired { names.len() / 2 } else { names.len() - 1 };
     let mut channels: Vec<Channel> = (0..count)
         .map(|c| {
@@ -183,7 +210,8 @@ fn read_twincat(text: &str) -> Result<Vec<Channel>, TraceError> {
             }
             let unit = row("Unit").map(|r| value_at(r, c)).unwrap_or_default();
             // "(None)", or a symbol and its quantity: "V (Voltage)".
-            let unit = if unit.starts_with('(') { String::new() } else { unit.split(" (").next().unwrap_or("").to_string() };
+            let unit =
+                if unit.starts_with('(') { String::new() } else { unit.split(" (").next().unwrap_or("").to_string() };
             Channel { names: found, unit, time: Vec::new(), values: Vec::new() }
         })
         .collect();
@@ -192,7 +220,8 @@ fn read_twincat(text: &str) -> Result<Vec<Channel>, TraceError> {
     for line in lines[end..].iter().filter(|l| !l.trim().is_empty() && l.trim() != "EOF") {
         let fields: Vec<&str> = line.split(sep).collect();
         for (c, channel) in channels.iter_mut().enumerate() {
-            let (t, v) = if paired { (fields.get(2 * c), fields.get(2 * c + 1)) } else { (fields.first(), fields.get(c + 1)) };
+            let (t, v) =
+                if paired { (fields.get(2 * c), fields.get(2 * c + 1)) } else { (fields.first(), fields.get(c + 1)) };
             // Shorter channels are padded with blank cells.
             match (t.and_then(|t| number(t, comma)), v.and_then(|v| number(v, comma))) {
                 (Some(t), Some(v)) => {
@@ -223,12 +252,19 @@ fn read_codesys(text: &str) -> Result<Vec<Channel>, TraceError> {
         return read_codesys_csv(&lines);
     }
     // .txt: a title, the project, then a header of names separated by spaces, the first the time with its unit.
-    let first_data = lines.iter().position(|l| !l.trim().is_empty() && l.split_whitespace().all(|f| number(f, false).is_some()));
-    let Some(first_data) = first_data.filter(|&i| i > 0) else { return Err(bad("error-import-layout", "no header line followed by numbers")) };
+    let first_data =
+        lines.iter().position(|l| !l.trim().is_empty() && l.split_whitespace().all(|f| number(f, false).is_some()));
+    let Some(first_data) = first_data.filter(|&i| i > 0) else {
+        return Err(bad("error-import-layout", "no header line followed by numbers"));
+    };
     let header: Vec<&str> = lines[first_data - 1].split_whitespace().collect();
     let (_, unit) = name_and_unit(header.first().copied().unwrap_or(""));
-    let scale = seconds_per(&unit).ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", header.first().copied().unwrap_or(""))))?;
-    let mut channels: Vec<Channel> = header[1..].iter().map(|n| Channel { names: vec![n.to_string()], unit: String::new(), time: vec![], values: vec![] }).collect();
+    let scale = seconds_per(&unit)
+        .ok_or_else(|| bad("error-import-unit", format!("{}: {unit}", header.first().copied().unwrap_or(""))))?;
+    let mut channels: Vec<Channel> = header[1..]
+        .iter()
+        .map(|n| Channel { names: vec![n.to_string()], unit: String::new(), time: vec![], values: vec![] })
+        .collect();
     for line in lines[first_data..].iter().filter(|l| !l.trim().is_empty()) {
         let row: Option<Vec<f64>> = line.split_whitespace().map(|f| number(f, false)).collect();
         let row = row.filter(|r| r.len() == channels.len() + 1).ok_or_else(|| bad("error-trace-row", *line))?;
@@ -249,7 +285,8 @@ fn element<'a>(text: &'a str, tag: &str, from: usize) -> Option<(&'a str, usize)
 
 fn read_codesys_xml(text: &str) -> Result<Vec<Channel>, TraceError> {
     // Timestamps in µs where the configuration says so, otherwise in ms.
-    let micro = text.find("Name=\"MicroSeconds\"").is_some_and(|i| text[i..].split('<').next().unwrap_or("").contains(">True"));
+    let micro =
+        text.find("Name=\"MicroSeconds\"").is_some_and(|i| text[i..].split('<').next().unwrap_or("").contains(">True"));
     let scale = if micro { 1e-6 } else { 1e-3 };
     let mut channels = Vec::new();
     let mut at = 0;
@@ -258,14 +295,26 @@ fn read_codesys_xml(text: &str) -> Result<Vec<Channel>, TraceError> {
         let name = text[start..].split("VarName=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("").to_string();
         let end = text[start..].find("</TraceVariable>").map_or(text.len(), |e| start + e);
         let list = |tag: &str| -> Result<Vec<f64>, TraceError> {
-            let (body, _) = element(&text[..end], tag, start).ok_or_else(|| bad("error-import-layout", format!("{name}: {tag}")))?;
-            body.split(',').filter(|v| !v.trim().is_empty()).map(|v| number(v, false).ok_or_else(|| bad("error-trace-row", v.trim()))).collect()
+            let (body, _) = element(&text[..end], tag, start)
+                .ok_or_else(|| bad("error-import-layout", format!("{name}: {tag}")))?;
+            body.split(',')
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| number(v, false).ok_or_else(|| bad("error-trace-row", v.trim())))
+                .collect()
         };
         let (values, time) = (list("Values")?, list("Timestamps")?);
         if values.len() != time.len() {
-            return Err(bad("error-import-layout", format!("{name}: {} values, {} timestamps", values.len(), time.len())));
+            return Err(bad(
+                "error-import-layout",
+                format!("{name}: {} values, {} timestamps", values.len(), time.len()),
+            ));
         }
-        channels.push(Channel { names: vec![name], unit: String::new(), time: time.iter().map(|t| t * scale).collect(), values });
+        channels.push(Channel {
+            names: vec![name],
+            unit: String::new(),
+            time: time.iter().map(|t| t * scale).collect(),
+            values,
+        });
         at = end;
     }
     Ok(channels)
@@ -274,7 +323,8 @@ fn read_codesys_xml(text: &str) -> Result<Vec<Channel>, TraceError> {
 fn read_codesys_csv(lines: &[&str]) -> Result<Vec<Channel>, TraceError> {
     let field = |line: &str, i: usize| line.split(';').nth(i).map(str::trim).unwrap_or("").to_string();
     // Flags 32 was set in the one µs export seen, 16 in the ms one: an inference, see the module comment.
-    let flags = lines.iter().find(|l| field(l, 0) == "Flags").map(|l| field(l, 1).parse::<u32>().unwrap_or(0)).unwrap_or(0);
+    let flags =
+        lines.iter().find(|l| field(l, 0) == "Flags").map(|l| field(l, 1).parse::<u32>().unwrap_or(0)).unwrap_or(0);
     let scale = if flags & 32 != 0 { 1e-6 } else { 1e-3 };
     let mut channels: Vec<Channel> = Vec::new();
     let mut current: Option<usize> = None;
@@ -303,8 +353,10 @@ fn read_codesys_csv(lines: &[&str]) -> Result<Vec<Channel>, TraceError> {
 /// channel's names, otherwise the one channel with `name` in one of its names.
 fn find(channels: &[Channel], name: &str) -> Result<usize, TraceError> {
     let wanted = name.trim().to_lowercase();
-    let exact: Vec<usize> = (0..channels.len()).filter(|&i| channels[i].names.iter().any(|n| n.trim().to_lowercase() == wanted)).collect();
-    let partial: Vec<usize> = (0..channels.len()).filter(|&i| channels[i].names.iter().any(|n| n.to_lowercase().contains(&wanted))).collect();
+    let exact: Vec<usize> =
+        (0..channels.len()).filter(|&i| channels[i].names.iter().any(|n| n.trim().to_lowercase() == wanted)).collect();
+    let partial: Vec<usize> =
+        (0..channels.len()).filter(|&i| channels[i].names.iter().any(|n| n.to_lowercase().contains(&wanted))).collect();
     match (exact.as_slice(), partial.as_slice()) {
         ([i], _) | ([], [i]) => Ok(*i),
         ([], []) => {
@@ -376,27 +428,41 @@ impl Mapping {
         let table: Table = text.parse().map_err(|e: toml::de::Error| bad("error-import-map", e.to_string()))?;
         known(&table, "", &["format", "time", "time_unit", "sample_time_s", "motor"])?;
         let text_of = |t: &Table, key: &str| -> Result<Option<String>, TraceError> {
-            t.get(key).map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad("error-import-map", key.to_string()))).transpose()
+            t.get(key)
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad("error-import-map", key.to_string())))
+                .transpose()
         };
         let format = text_of(&table, "format")?.ok_or_else(|| bad("error-import-map", "format"))?;
         if !FORMATS.contains(&format.as_str()) {
             return Err(bad("error-import-map", format!("format = {format}")));
         }
         // TwinCAT and CODESYS state their time column and unit in the file's layout.
-        if ["twincat", "codesys"].contains(&format.as_str()) && (table.contains_key("time") || table.contains_key("time_unit")) {
+        if ["twincat", "codesys"].contains(&format.as_str())
+            && (table.contains_key("time") || table.contains_key("time_unit"))
+        {
             return Err(bad("error-import-map", format!("time / time_unit with format = {format}")));
         }
         let positive = |t: &Table, key: &str| -> Result<Option<f64>, TraceError> {
-            t.get(key).map(|v| v.as_float().or(v.as_integer().map(|i| i as f64)).filter(|v| *v > 0.0 && v.is_finite()).ok_or_else(|| bad("error-import-map", key.to_string()))).transpose()
+            t.get(key)
+                .map(|v| {
+                    v.as_float()
+                        .or(v.as_integer().map(|i| i as f64))
+                        .filter(|v| *v > 0.0 && v.is_finite())
+                        .ok_or_else(|| bad("error-import-map", key.to_string()))
+                })
+                .transpose()
         };
-        let motors = table.get("motor").and_then(Value::as_array).ok_or_else(|| bad("error-import-map", "[[motor]]"))?;
+        let motors =
+            table.get("motor").and_then(Value::as_array).ok_or_else(|| bad("error-import-map", "[[motor]]"))?;
         let motors = motors
             .iter()
             .enumerate()
             .map(|(i, m)| {
                 let m = m.as_table().ok_or_else(|| bad("error-import-map", "[[motor]]"))?;
                 known(m, "motor.", &["id", "setpoint", "angle", "speed", "torque", "torque_setpoint"])?;
-                let signal = |key: &str| -> Result<Option<Signal>, TraceError> { m.get(key).map(|v| Signal::parse(v, key)).transpose() };
+                let signal = |key: &str| -> Result<Option<Signal>, TraceError> {
+                    m.get(key).map(|v| Signal::parse(v, key)).transpose()
+                };
                 let needed = |key: &str| signal(key)?.ok_or_else(|| bad("error-import-map", format!("motor.{key}")));
                 Ok(MotorMapping {
                     id: text_of(m, "id")?.unwrap_or_else(|| i.to_string()),
@@ -411,7 +477,13 @@ impl Mapping {
         if motors.is_empty() {
             return Err(bad("error-import-map", "[[motor]]"));
         }
-        Ok(Self { format, time: text_of(&table, "time")?, time_unit: text_of(&table, "time_unit")?, sample_time_s: positive(&table, "sample_time_s")?, motors })
+        Ok(Self {
+            format,
+            time: text_of(&table, "time")?,
+            time_unit: text_of(&table, "time_unit")?,
+            sample_time_s: positive(&table, "sample_time_s")?,
+            motors,
+        })
     }
 }
 
@@ -427,12 +499,33 @@ impl Signal {
         let wrong = |what: &str| bad("error-import-map", format!("{key}.{what}"));
         // A bare name is a signal without options.
         if let Some(name) = value.as_str() {
-            return Ok(Self { signal: name.into(), unit: None, per_rev: None, reference: None, scale: 1.0, offset: 0.0, wrap: None, time_offset_s: 0.0 });
+            return Ok(Self {
+                signal: name.into(),
+                unit: None,
+                per_rev: None,
+                reference: None,
+                scale: 1.0,
+                offset: 0.0,
+                wrap: None,
+                time_offset_s: 0.0,
+            });
         }
         let t = value.as_table().ok_or_else(|| wrong("signal"))?;
-        known(t, &format!("{key}."), &["signal", "unit", "per_rev", "reference", "scale", "offset", "wrap", "time_offset_s"])?;
-        let float = |k: &str| -> Result<Option<f64>, TraceError> { t.get(k).map(|v| v.as_float().or(v.as_integer().map(|i| i as f64)).filter(|v| v.is_finite()).ok_or_else(|| wrong(k))).transpose() };
-        let positive = |k: &str| -> Result<Option<f64>, TraceError> { float(k)?.map(|v| if v > 0.0 { Ok(v) } else { Err(wrong(k)) }).transpose() };
+        known(
+            t,
+            &format!("{key}."),
+            &["signal", "unit", "per_rev", "reference", "scale", "offset", "wrap", "time_offset_s"],
+        )?;
+        let float = |k: &str| -> Result<Option<f64>, TraceError> {
+            t.get(k)
+                .map(|v| {
+                    v.as_float().or(v.as_integer().map(|i| i as f64)).filter(|v| v.is_finite()).ok_or_else(|| wrong(k))
+                })
+                .transpose()
+        };
+        let positive = |k: &str| -> Result<Option<f64>, TraceError> {
+            float(k)?.map(|v| if v > 0.0 { Ok(v) } else { Err(wrong(k)) }).transpose()
+        };
         Ok(Self {
             signal: t.get("signal").and_then(Value::as_str).ok_or_else(|| wrong("signal"))?.into(),
             unit: t.get("unit").map(|v| v.as_str().map(str::to_string).ok_or_else(|| wrong("unit"))).transpose()?,
@@ -470,8 +563,14 @@ impl Signal {
                 "nm" => Ok(1.0),
                 "mnm" => Ok(1e-3),
                 "knm" => Ok(1e3),
-                "%" => Ok(self.reference.ok_or_else(|| bad("error-import-reference", format!("{}: %", self.signal)))? / 100.0),
-                "‰" | "permille" => Ok(self.reference.ok_or_else(|| bad("error-import-reference", format!("{}: ‰", self.signal)))? / 1000.0),
+                "%" => {
+                    Ok(self.reference.ok_or_else(|| bad("error-import-reference", format!("{}: %", self.signal)))?
+                        / 100.0)
+                }
+                "‰" | "permille" => {
+                    Ok(self.reference.ok_or_else(|| bad("error-import-reference", format!("{}: ‰", self.signal)))?
+                        / 1000.0)
+                }
                 // Any other unit (A, a raw count) only with a scale that turns it into N m.
                 _ if self.scale != 1.0 => Ok(1.0),
                 _ => Err(unknown()),
@@ -562,7 +661,10 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
     // A grid far finer than any signal is a mistake in `sample_time_s`, and would not fit in memory.
     let longest = signals.iter().flatten().map(|(t, _)| t.len()).max().unwrap_or(0) as f64;
     if count > 10.0 * longest + 10.0 {
-        return Err(bad("error-import-time", format!("sample_time_s = {step} gives {count} rows for {longest} samples")));
+        return Err(bad(
+            "error-import-time",
+            format!("sample_time_s = {step} gives {count} rows for {longest} samples"),
+        ));
     }
     let count = count as usize;
     let grid: Vec<f64> = (0..count).map(|i| from + i as f64 * step).collect();
@@ -572,7 +674,12 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
     for k in 0..mapping.motors.len() {
         let angle = on_grid(&signals[5 * k + 1]).expect("angle");
         let speed = on_grid(&signals[5 * k + 2]).unwrap_or_else(|| slope(&trace.time, &angle));
-        trace.motors.push(MotorTrace { setpoint: on_grid(&signals[5 * k]).expect("setpoint"), angle, speed, torque: on_grid(&signals[5 * k + 3]).expect("torque") });
+        trace.motors.push(MotorTrace {
+            setpoint: on_grid(&signals[5 * k]).expect("setpoint"),
+            angle,
+            speed,
+            torque: on_grid(&signals[5 * k + 3]).expect("torque"),
+        });
         torque_setpoints.push(on_grid(&signals[5 * k + 4]));
     }
     if trace.time.len() < 4 {
@@ -584,11 +691,12 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
 /// The slope of a signal: central differences, one-sided at the ends.
 fn slope(time: &[f64], values: &[f64]) -> Vec<f64> {
     let n = values.len();
-    (0..n).map(|i| {
-        let (a, b) = (i.saturating_sub(1), (i + 1).min(n - 1));
-        (values[b] - values[a]) / (time[b] - time[a])
-    })
-    .collect()
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i.saturating_sub(1), (i + 1).min(n - 1));
+            (values[b] - values[a]) / (time[b] - time[a])
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -597,7 +705,16 @@ mod tests {
 
     #[test]
     fn units_convert_to_the_motor_shaft() {
-        let s = |unit: &str| Signal { signal: "x".into(), unit: Some(unit.into()), per_rev: Some(10.0), reference: Some(2.0), scale: 1.0, offset: 0.0, wrap: None, time_offset_s: 0.0 };
+        let s = |unit: &str| Signal {
+            signal: "x".into(),
+            unit: Some(unit.into()),
+            per_rev: Some(10.0),
+            reference: Some(2.0),
+            scale: 1.0,
+            offset: 0.0,
+            wrap: None,
+            time_offset_s: 0.0,
+        };
         let close = |a: f64, b: f64| assert!((a - b).abs() < 1e-12 * b.abs(), "{a} {b}");
         close(s("1/min").factor("1/min", Quantity::Speed).unwrap(), TAU / 60.0);
         close(s("rpm").factor("rpm", Quantity::Speed).unwrap(), TAU / 60.0);
@@ -615,8 +732,22 @@ mod tests {
 
     #[test]
     fn a_wrapping_counter_is_unwrapped() {
-        let channel = Channel { names: vec!["c".into()], unit: "inc".into(), time: vec![0.0, 1.0, 2.0, 3.0], values: vec![4294967000.0, 4294967200.0, 104.0, 400.0] };
-        let s = Signal { signal: "c".into(), unit: None, per_rev: Some(1.0), reference: None, scale: 1.0, offset: 0.0, wrap: Some(4294967296.0), time_offset_s: 0.0 };
+        let channel = Channel {
+            names: vec!["c".into()],
+            unit: "inc".into(),
+            time: vec![0.0, 1.0, 2.0, 3.0],
+            values: vec![4294967000.0, 4294967200.0, 104.0, 400.0],
+        };
+        let s = Signal {
+            signal: "c".into(),
+            unit: None,
+            per_rev: Some(1.0),
+            reference: None,
+            scale: 1.0,
+            offset: 0.0,
+            wrap: Some(4294967296.0),
+            time_offset_s: 0.0,
+        };
         let (_, v) = s.convert(&[channel], Quantity::Angle).unwrap();
         let counts: Vec<f64> = v.iter().map(|v| (v / TAU).round()).collect();
         assert_eq!(counts, vec![4294967000.0, 4294967200.0, 4294967400.0, 4294967696.0]);

@@ -1,7 +1,10 @@
 //! A machine, its controller and the integrator, stepped together. Every front end runs this.
 
 use crate::control::{Command, CommandError, Controller, LimitViolation, check_limits, in_range};
-use sim_core::{Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Obstacle, Rk4, Scene, SignalInfo, TEMPERATURE_PREFIX, ThermalPart, advance};
+use sim_core::{
+    Config, ConfigError, LOSS_PREFIX, Machine, MachineEntry, Obstacle, Rk4, Scene, SignalInfo, TEMPERATURE_PREFIX,
+    ThermalPart, advance,
+};
 
 /// A part of the machine that warms with its loss power (`Machine::thermal_parts`, effects.part_heating): one thermal
 /// mass with a thermal resistance R to its surroundings, so that its temperature rise follows
@@ -27,8 +30,15 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
     let mut parts = Vec::new();
     for part in machine.thermal_parts() {
         let key = |name: &str| format!("thermal.{}_{name}", part.kind);
-        let loss = infos.iter().position(|s| s.id == format!("{LOSS_PREFIX}{}", part.id)).ok_or_else(|| ConfigError::Invalid(format!("{LOSS_PREFIX}{}", part.id)))?;
-        let (resistance, time_constant, max_rise) = (cfg.non_negative(&key("resistance_k_w"))?, cfg.positive(&key("time_constant_s"))?, cfg.positive(&key("max_rise_k"))?);
+        let loss = infos
+            .iter()
+            .position(|s| s.id == format!("{LOSS_PREFIX}{}", part.id))
+            .ok_or_else(|| ConfigError::Invalid(format!("{LOSS_PREFIX}{}", part.id)))?;
+        let (resistance, time_constant, max_rise) = (
+            cfg.non_negative(&key("resistance_k_w"))?,
+            cfg.positive(&key("time_constant_s"))?,
+            cfg.positive(&key("max_rise_k"))?,
+        );
         parts.push(HeatedPart { part, loss, loss_power: 0.0, resistance, time_constant, max_rise, rise: 0.0 });
     }
     Ok(parts)
@@ -228,7 +238,11 @@ impl Sim {
         (self.heated, self.part_heating) = (heated, heats(cfg)?);
         self.thermal_feedback = cfg.bool("effects.thermal_feedback")?;
         self.warm_start = warm_start(cfg)?;
-        (self.obstacles, self.crash, self.min_clearance) = (crate::collision::obstacles(cfg)?, cfg.bool("effects.crash")?, cfg.non_negative("profile.min_clearance_m")?);
+        (self.obstacles, self.crash, self.min_clearance) = (
+            crate::collision::obstacles(cfg)?,
+            cfg.bool("effects.crash")?,
+            cfg.non_negative("profile.min_clearance_m")?,
+        );
         self.machine = machine;
         self.feed_temperatures_back();
         self.substeps = substeps;
@@ -246,7 +260,11 @@ impl Sim {
     /// The timing for a path from where the machine stands, to run with `Command::Trajectory`.
     /// A time-optimal path that comes nearer to an obstacle than `profile.min_clearance_m`, or touches one, is refused
     /// (`error-path-collision`); one timed within the axis limits is planned all the same, and `check_plan` tells.
-    pub fn plan_path(&self, pieces: &[crate::path::Piece], time_optimal: bool) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    pub fn plan_path(
+        &self,
+        pieces: &[crate::path::Piece],
+        time_optimal: bool,
+    ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = self.control.plan_path(self.machine.as_ref(), pieces, time_optimal)?;
         if time_optimal
             && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
@@ -322,7 +340,9 @@ impl Sim {
     /// takes (the kinetic energy, and what springs held beyond their rest) is lost in the impact: `crash_energy`.
     fn check_obstacles(&mut self) {
         let bodies = self.machine.collision_bodies(&self.state);
-        let gap_to = |bodies: &[sim_core::Aabb], o: &Obstacle| bodies.iter().map(|b| b.gap(&o.aabb).2).fold(f64::INFINITY, f64::min);
+        let gap_to = |bodies: &[sim_core::Aabb], o: &Obstacle| {
+            bodies.iter().map(|b| b.gap(&o.aabb).2).fold(f64::INFINITY, f64::min)
+        };
         let mut gaps: Vec<f64> = self.obstacles.iter().map(|o| gap_to(&bodies, o)).collect();
         let (mut nearest, mut stop) = ((f64::INFINITY, 0), None::<f64>);
         let (known, mut held) = (self.gaps.len() == gaps.len(), false);
@@ -350,7 +370,8 @@ impl Sim {
         if nearest.0 <= 0.0 && self.contact.is_none() {
             let speed = vel.iter().map(|v| v * v).sum::<f64>().sqrt();
             // The step counter moves on after this check.
-            self.contact = Some(Contact { time: (self.step + 1) as f64 * self.dt, pose: pos.clone(), speed, obstacle: nearest.1 });
+            self.contact =
+                Some(Contact { time: (self.step + 1) as f64 * self.dt, pose: pos.clone(), speed, obstacle: nearest.1 });
         }
         self.gaps = gaps;
         if self.crash
@@ -390,7 +411,18 @@ impl Sim {
     /// motor torque follows the winding current within the step, and the electrical power, the copper loss and the
     /// shaft's work come from the same stages as the motion. The core's integrator sees one state vector.
     fn advance_with_windings(&mut self) {
-        let Self { machine, control, state, torque, rk_joint, joint, motor_buffers: [angle, speed, stage_torque], dt, substeps, .. } = self;
+        let Self {
+            machine,
+            control,
+            state,
+            torque,
+            rk_joint,
+            joint,
+            motor_buffers: [angle, speed, stage_torque],
+            dt,
+            substeps,
+            ..
+        } = self;
         let (n, drives) = (state.len(), &control.drives);
         joint.clear();
         joint.extend_from_slice(state);
@@ -406,7 +438,12 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
                         stage_torque[k] = p.torque_of(i);
-                        dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(d.voltage, d.winding_resistance(p), i, speed[k]));
+                        dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(
+                            d.voltage,
+                            d.winding_resistance(p),
+                            i,
+                            speed[k],
+                        ));
                     }
                     machine.derivatives(mech, stage_torque, dmech);
                 },
@@ -445,7 +482,12 @@ impl Sim {
                 ("acceleration-setpoint", rate2.as_str()),
                 ("following-error", unit),
             ] {
-                out.push(SignalInfo::new(format!("axis.{}.{}", axis.id, name.replace('-', "_")), axis.key, &format!("quantity-{name}"), unit));
+                out.push(SignalInfo::new(
+                    format!("axis.{}.{}", axis.id, name.replace('-', "_")),
+                    axis.key,
+                    &format!("quantity-{name}"),
+                    unit,
+                ));
             }
         }
         for motor in self.machine.motors() {
@@ -464,11 +506,23 @@ impl Sim {
                 ("following-error", "rad"),
                 ("angle-setpoint", "rad"),
             ] {
-                out.push(SignalInfo::new(format!("motor.{}.{}", motor.id, name.replace('-', "_")), motor.key, &format!("quantity-{name}"), unit));
+                out.push(SignalInfo::new(
+                    format!("motor.{}.{}", motor.id, name.replace('-', "_")),
+                    motor.key,
+                    &format!("quantity-{name}"),
+                    unit,
+                ));
             }
         }
         out.extend(self.machine.signal_infos());
-        out.extend(self.heated.iter().map(|h| SignalInfo::new(format!("{TEMPERATURE_PREFIX}{}", h.part.id), h.part.owner_key, &format!("quantity-{}-temperature", h.part.kind), "K")));
+        out.extend(self.heated.iter().map(|h| {
+            SignalInfo::new(
+                format!("{TEMPERATURE_PREFIX}{}", h.part.id),
+                h.part.owner_key,
+                &format!("quantity-{}-temperature", h.part.kind),
+                "K",
+            )
+        }));
         out
     }
 
@@ -494,7 +548,21 @@ impl Sim {
             out.extend([pos[i], vel[i], c.set_pos[i], c.set_vel[i], c.set_acc[i], c.tool_error[i]]);
         }
         for (k, d) in c.drives.iter().enumerate() {
-            out.extend([angle[k], speed[k], d.torque, d.torque_command, d.current, d.voltage, d.power, d.temperature_rise, d.dc_voltage, d.resistor_power, d.speed_command, d.following_error, d.pos_set]);
+            out.extend([
+                angle[k],
+                speed[k],
+                d.torque,
+                d.torque_command,
+                d.current,
+                d.voltage,
+                d.power,
+                d.temperature_rise,
+                d.dc_voltage,
+                d.resistor_power,
+                d.speed_command,
+                d.following_error,
+                d.pos_set,
+            ]);
         }
         self.machine.base_signals(&self.state, &self.torque, out);
     }
@@ -512,7 +580,8 @@ impl Sim {
         self.machine.scene(&self.state, out);
         out.tool = self.tool_point();
         out.obstacles.clone_from(&self.obstacles);
-        out.clearance = crate::collision::nearest(&self.machine.collision_bodies(&self.state), &self.obstacles).map(|(_, gap)| gap);
+        out.clearance =
+            crate::collision::nearest(&self.machine.collision_bodies(&self.state), &self.obstacles).map(|(_, gap)| gap);
         out.first_contact = self.contact.as_ref().map(|c| c.time);
         let mut colour = |id: &str, index: usize, heat: f64| {
             if let Some(part) = out.parts.iter_mut().filter(|p| p.id == id).nth(index) {

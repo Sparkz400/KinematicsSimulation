@@ -4,23 +4,28 @@
 mod ui;
 
 use bevy::anti_alias::smaa::Smaa;
+use bevy::asset::RenderAssetUsages;
 use bevy::asset::io::file::FileAssetReader;
-use bevy::gltf::GltfAssetLabel;
-use bevy::world_serialization::WorldAssetRoot;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraOutputMode, Hdr, RenderTarget, Viewport};
+use bevy::gltf::GltfAssetLabel;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
-use bevy::post_process::bloom::Bloom;
-use bevy::render::view::Tonemapping;
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use bevy::asset::RenderAssetUsages;
-use bevy::render::render_resource::{BlendState, Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension};
+use bevy::render::render_resource::{
+    BlendState, Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
+use bevy::render::view::Tonemapping;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures, PrimaryEguiContext, egui};
+use bevy::world_serialization::WorldAssetRoot;
+use bevy_egui::{
+    EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, EguiTextureHandle, EguiUserTextures,
+    PrimaryEguiContext, egui,
+};
 use sim_app::model::{Analysis, Model};
 use sim_app::session::{Event, Request, Session, TrailPoint};
 use sim_app::video;
@@ -136,21 +141,26 @@ struct Shapes {
 struct WorldCamera;
 
 fn main() {
-    let lang = std::env::var("SIM_APP_LANG").ok().and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l)).unwrap_or(LANGUAGES[0]);
+    let lang = std::env::var("SIM_APP_LANG")
+        .ok()
+        .and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l))
+        .unwrap_or(LANGUAGES[0]);
     let mut model = Model::new(MACHINES[0], lang);
     let args: Vec<String> = std::env::args().collect();
     // `sim-app --catalog DIR`: the catalogue from a directory instead of the compiled-in one. Before a machine file is
     // opened, which may name parts.
     if let Some(dir) = args.windows(2).find(|w| w[0] == "--catalog").map(|w| &w[1])
-        && let Err(e) = sim_components::catalog::use_directory(std::path::Path::new(dir)) {
-            eprintln!("{}", model.tr.tr_arg(e.key(), e.detail()));
-            std::process::exit(2);
-        }
+        && let Err(e) = sim_components::catalog::use_directory(std::path::Path::new(dir))
+    {
+        eprintln!("{}", model.tr.tr_arg(e.key(), e.detail()));
+        std::process::exit(2);
+    }
     // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md).
     if let Some(file) = args.windows(2).find(|w| w[0] == "--machine-file").map(|w| w[1].clone()) {
         model.open_config(&file);
     }
-    let window = Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
+    let window =
+        Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
     App::new()
         .insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
         .insert_resource(State {
@@ -183,7 +193,21 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (sync_scene, fill_obstacles, sync_ghost, paint_cad_parts, draw_paths, orbit_camera, follow_tool, developer_hooks, record).chain())
+        .add_systems(
+            Update,
+            (
+                sync_scene,
+                fill_obstacles,
+                sync_ghost,
+                paint_cad_parts,
+                draw_paths,
+                orbit_camera,
+                follow_tool,
+                developer_hooks,
+                record,
+            )
+                .chain(),
+        )
         // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
         .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
         .add_systems(EguiPrimaryContextPass, panels)
@@ -212,7 +236,12 @@ fn setup(
     // would clear or draw through the main view's picture under it. Only what the colours need is shared with the
     // main camera (HDR, the tone mapping, the sky light, the glow): without them the same parts look different.
     let size = (TOOL_VIEW_SIZE * 2.0).round();
-    let picture = images.add(Image::new_target_texture(size.x as u32, size.y as u32, TextureFormat::Rgba8Unorm, Some(TextureFormat::Rgba8UnormSrgb)));
+    let picture = images.add(Image::new_target_texture(
+        size.x as u32,
+        size.y as u32,
+        TextureFormat::Rgba8Unorm,
+        Some(TextureFormat::Rgba8UnormSrgb),
+    ));
     commands.insert_resource(ToolView(egui_textures.add_image(EguiTextureHandle::Strong(picture.clone()))));
     commands.spawn((
         ToolCamera,
@@ -243,7 +272,10 @@ fn setup(
         RenderLayers::none(),
         Camera {
             order: 1,
-            output_mode: CameraOutputMode::Write { blend_state: Some(BlendState::ALPHA_BLENDING), clear_color: ClearColorConfig::None },
+            output_mode: CameraOutputMode::Write {
+                blend_state: Some(BlendState::ALPHA_BLENDING),
+                clear_color: ClearColorConfig::None,
+            },
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
@@ -255,7 +287,10 @@ fn setup(
         CascadeShadowConfigBuilder { first_cascade_far_bound: 3.0, maximum_distance: 15.0, ..default() }.build(),
     ));
     // The sky light fills the shade now, so the back light only rims the edges.
-    commands.spawn((DirectionalLight { illuminance: 1500.0, ..default() }, Transform::from_xyz(-3.0, 2.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    commands.spawn((
+        DirectionalLight { illuminance: 1500.0, ..default() },
+        Transform::from_xyz(-3.0, 2.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 }
 
 /// The studio the parts reflect, as a cubemap: a dark grey room, a floor that bounces a little light back, a large
@@ -272,15 +307,28 @@ fn studio() -> Image {
         TextureFormat::Rgba16Float,
         RenderAssetUsages::default(),
     );
-    image.texture_view_descriptor = Some(TextureViewDescriptor { dimension: Some(TextureViewDimension::Cube), ..default() });
+    image.texture_view_descriptor =
+        Some(TextureViewDescriptor { dimension: Some(TextureViewDimension::Cube), ..default() });
     // (where it faces, its width and height as tangents of the half angle, how bright)
-    let boxes = [(Vec3::new(0.1, 1.0, 0.2), Vec2::new(0.7, 0.4), 6.0), (Vec3::new(-0.3, -0.05, 1.0), Vec2::new(0.6, 0.3), 5.0), (Vec3::new(0.35, 0.0, -1.0), Vec2::new(0.15, 0.6), 4.0)];
+    let boxes = [
+        (Vec3::new(0.1, 1.0, 0.2), Vec2::new(0.7, 0.4), 6.0),
+        (Vec3::new(-0.3, -0.05, 1.0), Vec2::new(0.6, 0.3), 5.0),
+        (Vec3::new(0.35, 0.0, -1.0), Vec2::new(0.15, 0.6), 4.0),
+    ];
     for face in 0..6 {
         for y in 0..SIZE {
             for x in 0..SIZE {
                 let (u, v) = ((x as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0, (y as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0);
                 // The cube's faces in their GPU order: +x, -x, +y, -y, +z, -z.
-                let d = [Vec3::new(1.0, -v, -u), Vec3::new(-1.0, -v, u), Vec3::new(u, 1.0, v), Vec3::new(u, -1.0, -v), Vec3::new(u, -v, 1.0), Vec3::new(-u, -v, -1.0)][face].normalize();
+                let d = [
+                    Vec3::new(1.0, -v, -u),
+                    Vec3::new(-1.0, -v, u),
+                    Vec3::new(u, 1.0, v),
+                    Vec3::new(u, -1.0, -v),
+                    Vec3::new(u, -v, 1.0),
+                    Vec3::new(-u, -v, -1.0),
+                ][face]
+                    .normalize();
                 let mut light = 0.05 + 0.1 * (-d.y).max(0.0).sqrt();
                 for (towards, half, bright) in boxes {
                     let normal = towards.normalize();
@@ -373,7 +421,10 @@ fn paint_cad_parts(
     let scene = shown(&state.model, &state.recorded, state.timeline);
     for (root, CadPart(index)) in &cad_parts {
         let (Some(part), Some((_, ours))) = (scene.parts.get(*index), state.parts.get(*index)) else { continue };
-        let coloured = part.heat.is_some() || part.highlight != 0.0 || state.overlays.xray || load_color(&state, scene, *index).is_some();
+        let coloured = part.heat.is_some()
+            || part.highlight != 0.0
+            || state.overlays.xray
+            || load_color(&state, scene, *index).is_some();
         for entity in children.iter_descendants(root) {
             let Ok((mut material, vendor)) = meshes.get_mut(entity) else { continue };
             let own = vendor.map_or(&material.0, |v| &v.0);
@@ -549,7 +600,17 @@ fn start_ghost(state: &mut State, effect: String) {
     let mut config = model.config.clone();
     let on = !config.bool(&effect).unwrap_or(false);
     match config.set(&effect, toml::Value::Boolean(on)).and_then(|()| Session::start(model.entry, &config)) {
-        Ok(session) => state.ghost = Some(Ghost { session, effect, on, entry: model.entry.id, base: model.config.clone(), scene: Scene::default(), sent: None }),
+        Ok(session) => {
+            state.ghost = Some(Ghost {
+                session,
+                effect,
+                on,
+                entry: model.entry.id,
+                base: model.config.clone(),
+                scene: Scene::default(),
+                sent: None,
+            })
+        }
         Err(e) => model.messages.push((e.key(), e.detail().into())),
     }
 }
@@ -585,7 +646,9 @@ fn sync_ghost(
     // Waits while the machine waits: paused, scrubbed back, or showing its mode.
     let wanted = (state.model.paused || state.mode_sent, state.model.speed, state.model.exaggeration);
     if ghost.sent != Some(wanted) {
-        [Request::Pause(wanted.0), Request::Speed(wanted.1), Request::Exaggeration(wanted.2)].into_iter().for_each(|r| ghost.session.send(r));
+        [Request::Pause(wanted.0), Request::Speed(wanted.1), Request::Exaggeration(wanted.2)]
+            .into_iter()
+            .for_each(|r| ghost.session.send(r));
         ghost.sent = Some(wanted);
     }
     for event in ghost.session.drain() {
@@ -599,7 +662,11 @@ fn sync_ghost(
             _ => {}
         }
     }
-    let material = material.get_or_insert_with(|| materials.add(StandardMaterial { base_color: GHOST, alpha_mode: AlphaMode::Blend, ..default() })).clone();
+    let material = material
+        .get_or_insert_with(|| {
+            materials.add(StandardMaterial { base_color: GHOST, alpha_mode: AlphaMode::Blend, ..default() })
+        })
+        .clone();
     let parts = &ghost.scene.parts;
     for (entity, _) in state.ghost_parts.drain(parts.len().min(state.ghost_parts.len())..) {
         commands.entity(entity).despawn();
@@ -618,7 +685,15 @@ fn sync_ghost(
                 }
             }
             None => {
-                let entity = commands.spawn((GhostPart, Mesh3d(mesh), MeshMaterial3d(material.clone()), part_transform(part), NotShadowCaster)).id();
+                let entity = commands
+                    .spawn((
+                        GhostPart,
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material.clone()),
+                        part_transform(part),
+                        NotShadowCaster,
+                    ))
+                    .id();
                 state.ghost_parts.push((entity, round));
             }
         }
@@ -662,7 +737,8 @@ fn sync_scene(
         // Only a changed scene (paused, the same one arrives again and again), and not closer to the last than a
         // `RECORDED`th of the window, so that the recording reaches back over all of it.
         let step = state.model.window_s / RECORDED as f64;
-        if !state.mode_sent && recorded.back().is_none_or(|(t, scene)| now - *t >= step && *scene != state.model.scene) {
+        if !state.mode_sent && recorded.back().is_none_or(|(t, scene)| now - *t >= step && *scene != state.model.scene)
+        {
             recorded.push_back((now, state.model.scene.clone()));
         }
         while recorded.len() > RECORDED || recorded.front().is_some_and(|(t, _)| *t < now - state.model.window_s) {
@@ -689,7 +765,8 @@ fn sync_scene(
         // "post"): the belt reorders its parts nearly every frame, and a CAD mesh spawned anew takes frames to
         // load. Another config file may bring other CAD meshes, so then everything is drawn anew.
         // Drawn parts that were forgotten (`part_ids` cleared for a new machine or config) are drawn anew too.
-        let same_config = state.model.inputs.config_file == state.mesh_config && state.part_ids.len() == state.parts.len();
+        let same_config =
+            state.model.inputs.config_file == state.mesh_config && state.part_ids.len() == state.parts.len();
         let mut kept = std::collections::HashMap::new();
         let mut seen = std::collections::HashMap::new();
         for (old_index, (entity, material)) in state.parts.drain(..).enumerate() {
@@ -713,11 +790,21 @@ fn sync_scene(
             let material = materials.add(StandardMaterial::default());
             if let Some(file) = cad_mesh(&state.mesh_config, part.id) {
                 let at = part_transform(part).with_scale(Vec3::ONE);
-                let entity = commands.spawn((WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))), at, CadPart(index))).id();
+                let entity = commands
+                    .spawn((
+                        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(file))),
+                        at,
+                        CadPart(index),
+                    ))
+                    .id();
                 state.parts.push((entity, material));
                 continue;
             }
-            let mesh = if matches!(part.shape, Shape::Cylinder { .. }) { shapes.cylinder.clone() } else { shapes.cube.clone() };
+            let mesh = if matches!(part.shape, Shape::Cylinder { .. }) {
+                shapes.cylinder.clone()
+            } else {
+                shapes.cube.clone()
+            };
             let entity = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), part_transform(part))).id();
             state.parts.push((entity, material));
         }
@@ -733,7 +820,8 @@ fn sync_scene(
                 let reach = turned.x_axis.abs() * half.x + turned.y_axis.abs() * half.y + turned.z_axis.abs() * half.z;
                 [t.translation - reach, t.translation + reach]
             });
-            let (low, high) = corners.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(l, h), c| (l.min(c), h.max(c)));
+            let (low, high) =
+                corners.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(l, h), c| (l.min(c), h.max(c)));
             state.bounds = Some((low, high));
             state.orbit.target = (low + high) / 2.0;
             state.fit = true;
@@ -743,7 +831,11 @@ fn sync_scene(
             // A floor some way around the machine, not to the horizon: under the dark sky it reads as a stage.
             let width = (high - low).x.max((high - low).z) * 2.2 + 0.6;
             let middle = Vec3::new(state.orbit.target.x, low.y - 0.02, state.orbit.target.z);
-            let ground = materials.add(StandardMaterial { base_color: Color::srgb(0.17, 0.18, 0.2), perceptual_roughness: 0.95, ..default() });
+            let ground = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.17, 0.18, 0.2),
+                perceptual_roughness: 0.95,
+                ..default()
+            });
             let place = Transform::from_translation(middle).with_scale(Vec3::new(width, 0.02, width));
             let floor = commands.spawn((Mesh3d(shapes.cube.clone()), MeshMaterial3d(ground), place)).id();
             state.floor = Some((floor, middle + Vec3::Y * 0.0105, width));
@@ -761,18 +853,25 @@ fn sync_scene(
         // The load view's colour in place of the part's own; x-ray: CAD parts see-through, to show the belt and pulleys they hide.
         let load = load_color(state, scene, index);
         let own = load.unwrap_or_else(|| part_color(part));
-        let (color, mode) = if cad && state.overlays.xray { (own.with_alpha(0.18), AlphaMode::Blend) } else { (own, AlphaMode::Opaque) };
+        let (color, mode) = if cad && state.overlays.xray {
+            (own.with_alpha(0.18), AlphaMode::Blend)
+        } else {
+            (own, AlphaMode::Opaque)
+        };
         // A meaning colour (heat, load, belt tension) is drawn painted on every part: a metal finish darkens it, so
         // the same colour would read differently on a profile than on a motor.
         let meaning = load.is_some() || part.heat.is_some() || part.highlight != 0.0;
         let [metallic, roughness, reflectance] = if meaning { PAINTED } else { finish(part) };
         // Only where something changed, so that the other materials are not sent to the graphics card again.
         if materials.get(material).is_some_and(|m| {
-            m.base_color != color || m.alpha_mode != mode || [m.metallic, m.perceptual_roughness, m.reflectance] != [metallic, roughness, reflectance]
+            m.base_color != color
+                || m.alpha_mode != mode
+                || [m.metallic, m.perceptual_roughness, m.reflectance] != [metallic, roughness, reflectance]
         }) && let Some(mut material) = materials.get_mut(material)
         {
             (material.base_color, material.alpha_mode) = (color, mode);
-            (material.metallic, material.perceptual_roughness, material.reflectance) = (metallic, roughness, reflectance);
+            (material.metallic, material.perceptual_roughness, material.reflectance) =
+                (metallic, roughness, reflectance);
         }
     }
 }
@@ -799,15 +898,30 @@ fn fill_obstacles(
         }
         for obstacle in &scene.obstacles {
             // Rough and unlit by reflections, so that the faces read as a tint and not as glass.
-            let material = materials.add(StandardMaterial { alpha_mode: AlphaMode::Blend, perceptual_roughness: 1.0, reflectance: 0.0, ..default() });
-            let place = Transform::from_translation(to_bevy(obstacle.aabb.centre)).with_scale(to_bevy(obstacle.aabb.size).abs());
-            let entity = commands.spawn((Mesh3d(shapes.cube.clone()), MeshMaterial3d(material.clone()), place, ObstacleFace, NotShadowCaster)).id();
+            let material = materials.add(StandardMaterial {
+                alpha_mode: AlphaMode::Blend,
+                perceptual_roughness: 1.0,
+                reflectance: 0.0,
+                ..default()
+            });
+            let place = Transform::from_translation(to_bevy(obstacle.aabb.centre))
+                .with_scale(to_bevy(obstacle.aabb.size).abs());
+            let entity = commands
+                .spawn((
+                    Mesh3d(shapes.cube.clone()),
+                    MeshMaterial3d(material.clone()),
+                    place,
+                    ObstacleFace,
+                    NotShadowCaster,
+                ))
+                .id();
             faces.push((entity, material));
         }
     }
     for (obstacle, (entity, material)) in scene.obstacles.iter().zip(faces.iter()) {
         if let Ok(mut transform) = transforms.get_mut(*entity) {
-            *transform = Transform::from_translation(to_bevy(obstacle.aabb.centre)).with_scale(to_bevy(obstacle.aabb.size).abs());
+            *transform = Transform::from_translation(to_bevy(obstacle.aabb.centre))
+                .with_scale(to_bevy(obstacle.aabb.size).abs());
         }
         let color = palette(if obstacle.contact { ui::LIMIT } else { ui::DIM }).with_alpha(0.22);
         if materials.get(material).is_some_and(|m| m.base_color != color)
@@ -825,7 +939,8 @@ fn fit_distance(low: Vec3, high: Vec3, target: Vec3, rotation: Quat, aspect: f32
     let tan_v = std::f32::consts::FRAC_PI_8.tan();
     let tan_h = tan_v * aspect;
     let into_camera = rotation.inverse();
-    let corners = (0..8).map(|i| Vec3::new([low.x, high.x][i & 1], [low.y, high.y][(i >> 1) & 1], [low.z, high.z][i >> 2]));
+    let corners =
+        (0..8).map(|i| Vec3::new([low.x, high.x][i & 1], [low.y, high.y][(i >> 1) & 1], [low.z, high.z][i >> 2]));
     // Seen from the camera, a corner at (x, y) and depth z towards it needs the camera at least that far back.
     let needed = corners.map(|c| into_camera * (c - target)).map(|p| p.z + (p.x.abs() / tan_h).max(p.y.abs() / tan_v));
     1.08 * needed.fold(0.1, f32::max)
@@ -861,10 +976,14 @@ fn orbit_camera(
     // The panels are drawn on egui's background layer; anything above it over the view (its controls, a menu, a
     // popup, a tooltip) takes the pointer, as does a control being dragged.
     let over_egui = contexts.ctx_mut().is_ok_and(|ctx| {
-        let above = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| ctx.layer_id_at(p)).is_some_and(|layer| layer.order != egui::Order::Background);
+        let above = ctx
+            .input(|i| i.pointer.hover_pos())
+            .and_then(|p| ctx.layer_id_at(p))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
         above || ctx.egui_is_using_pointer()
     });
-    let over_view = !over_egui && window.cursor_position().is_some_and(|p| p.x > left && p.x < right && p.y > top && p.y < bottom);
+    let over_view =
+        !over_egui && window.cursor_position().is_some_and(|p| p.x > left && p.x < right && p.y > top && p.y < bottom);
     if buttons.just_pressed(MouseButton::Left) {
         *pressed_at = window.cursor_position().filter(|_| over_view);
     }
@@ -876,11 +995,21 @@ fn orbit_camera(
         // In x-ray the CAD parts are see-through: a click goes through them to the belt and pulleys they hide.
         let xray = state.overlays.xray;
         // The compared run's ghost is never picked, nor an obstacle's faces: they are not the machine's parts.
-        let through = |e: Entity| !ghosts.contains(e) && !(xray && std::iter::once(e).chain(parents.iter_ancestors(e)).any(|a| cad.contains(a)));
+        let through = |e: Entity| {
+            !ghosts.contains(e)
+                && !(xray && std::iter::once(e).chain(parents.iter_ancestors(e)).any(|a| cad.contains(a)))
+        };
         let settings = MeshRayCastSettings::default().with_filter(&through);
-        let hit = lens.viewport_to_world(seen_from, at).ok().and_then(|ray| ray_cast.cast_ray(ray, &settings).first().map(|(entity, _)| *entity));
+        let hit = lens
+            .viewport_to_world(seen_from, at)
+            .ok()
+            .and_then(|ray| ray_cast.cast_ray(ray, &settings).first().map(|(entity, _)| *entity));
         // A CAD mesh's pieces are children of its part's entity, some levels down.
-        let index = hit.and_then(|hit| std::iter::once(hit).chain(parents.iter_ancestors(hit)).find_map(|e| state.parts.iter().position(|(part, _)| *part == e)));
+        let index = hit.and_then(|hit| {
+            std::iter::once(hit)
+                .chain(parents.iter_ancestors(hit))
+                .find_map(|e| state.parts.iter().position(|(part, _)| *part == e))
+        });
         let ids = &state.part_ids;
         let picked = index.map(|i| (ids[i], ids[..i].iter().filter(|id| **id == ids[i]).count()));
         state.panels.part = picked;
@@ -922,21 +1051,51 @@ fn panels(
         ui::apply_theme(ctx);
         state.themed = true;
     }
-    let mut root = egui::Ui::new(ctx.clone(), "root".into(), egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()));
+    let mut root = egui::Ui::new(
+        ctx.clone(),
+        "root".into(),
+        egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
+    );
     // The bar on top and the scopes below span the window; setup and tools flank the view between them.
     let edge = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::symmetric(10, 6));
-    let top = egui::Panel::top("bar").exact_size(52.0).frame(edge).show(&mut root, |ui| ui::top_bar(ui, &state.model, state.panels, state.recording.is_some(), &mut actions)).response.rect;
-    let bottom = egui::Panel::bottom("scopes").resizable(true).default_size(250.0).frame(edge).show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, &mut actions)).response.rect;
+    let top = egui::Panel::top("bar")
+        .exact_size(52.0)
+        .frame(edge)
+        .show(&mut root, |ui| ui::top_bar(ui, &state.model, state.panels, state.recording.is_some(), &mut actions))
+        .response
+        .rect;
+    let bottom = egui::Panel::bottom("scopes")
+        .resizable(true)
+        .default_size(250.0)
+        .frame(edge)
+        .show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, &mut actions))
+        .response
+        .rect;
     let side = egui::Frame::new().fill(ui::GRAPHITE).inner_margin(egui::Margin::same(10));
-    let left = egui::Panel::left("setup").resizable(true).default_size(270.0).frame(side).show(&mut root, |ui| ui::setup(ui, &state.model, state.panels, &mut actions)).response.rect;
+    let left = egui::Panel::left("setup")
+        .resizable(true)
+        .default_size(270.0)
+        .frame(side)
+        .show(&mut root, |ui| ui::setup(ui, &state.model, state.panels, &mut actions))
+        .response
+        .rect;
     let scene = shown(&state.model, &state.recorded, state.timeline);
-    let right = egui::Panel::right("tools").resizable(true).default_size(430.0).frame(side).show(&mut root, |ui| ui::tools(ui, &state.model, scene, state.panels, &mut actions, state.scroll)).response.rect;
+    let right = egui::Panel::right("tools")
+        .resizable(true)
+        .default_size(430.0)
+        .frame(side)
+        .show(&mut root, |ui| ui::tools(ui, &state.model, scene, state.panels, &mut actions, state.scroll))
+        .response
+        .rect;
 
     // The 3D camera draws into what the panels leave free.
     let scale = window.scale_factor();
     let (view_top, view_bottom) = (top.bottom(), bottom.top());
     let position = UVec2::new((left.right() * scale) as u32, (view_top * scale) as u32);
-    let size = UVec2::new(((right.left() - left.right()).max(0.0) * scale) as u32, ((view_bottom - view_top).max(0.0) * scale) as u32);
+    let size = UVec2::new(
+        ((right.left() - left.right()).max(0.0) * scale) as u32,
+        ((view_bottom - view_top).max(0.0) * scale) as u32,
+    );
     if size.x > 0 && size.y > 0 {
         camera.viewport = Some(Viewport { physical_position: position, physical_size: size, ..default() });
     }
@@ -944,40 +1103,55 @@ fn panels(
     // The view's own controls float over its top left corner. While recording, they, the timeline and the tool
     // view are hidden, so that the frames show the view alone; Stop is then in the top bar.
     let recording = state.recording.is_some();
-    let controls = (!recording).then(|| egui::Area::new("view-controls".into())
-        .fixed_pos(egui::pos2(left.right() + 10.0, view_top + 10.0))
-        .show(ctx, |ui| {
-            if state.compare_effect.is_empty() {
-                state.compare_effect = format!("effects.{}", state.model.inputs.compare_effect);
-            }
-            let view = ui::ViewInfo { has_mode: state.has_mode, range: trail_range(&state.trail_points, state.overlays.trail), compare: (state.ghost.is_some(), &state.compare_effect), recording: state.recording.is_some() };
-            ui::view_controls(ui, &state.model, state.overlays, view, &mut actions)
-        })
-        .response
-        .rect);
+    let controls = (!recording).then(|| {
+        egui::Area::new("view-controls".into())
+            .fixed_pos(egui::pos2(left.right() + 10.0, view_top + 10.0))
+            .show(ctx, |ui| {
+                if state.compare_effect.is_empty() {
+                    state.compare_effect = format!("effects.{}", state.model.inputs.compare_effect);
+                }
+                let view = ui::ViewInfo {
+                    has_mode: state.has_mode,
+                    range: trail_range(&state.trail_points, state.overlays.trail),
+                    compare: (state.ghost.is_some(), &state.compare_effect),
+                    recording: state.recording.is_some(),
+                };
+                ui::view_controls(ui, &state.model, state.overlays, view, &mut actions)
+            })
+            .response
+            .rect
+    });
     // The timeline floats over the view's bottom edge, once there is a scene to go back to.
     let span = state.recorded.front().zip(state.recorded.back()).map(|((first, _), (last, _))| (*first, *last));
     let timeline = span.filter(|_| !recording).map(|span| {
         let width = (right.left() - left.right() - 36.0).max(100.0);
-        let area = egui::Area::new("timeline".into()).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(egui::pos2(left.right() + 10.0, view_bottom - 10.0));
+        let area = egui::Area::new("timeline".into())
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(egui::pos2(left.right() + 10.0, view_bottom - 10.0));
         area.show(ctx, |ui| ui::timeline(ui, &state.model, state.timeline, span, width, &mut actions)).response.rect
     });
     // The tool view in the view's bottom right corner, above the timeline.
     let tool_picture = (state.overlays.tool_view && !recording).then(|| {
         let above = timeline.map_or(view_bottom, |t| t.top()) - 8.0;
-        let area = egui::Area::new("tool-view".into()).pivot(egui::Align2::RIGHT_BOTTOM).fixed_pos(egui::pos2(right.left() - 10.0, above));
+        let area = egui::Area::new("tool-view".into())
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(egui::pos2(right.left() - 10.0, above));
         let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, ui::MACHINED)).corner_radius(3);
         area.show(ctx, |ui| frame.show(ui, |ui| ui.image((tool_view.0, TOOL_VIEW_SIZE)))).response.rect
     });
     // Space replays, the arrow keys step, while the pointer is over the view (or the timeline on it) and no field
     // takes the keys.
     let [view_left, view_top, view_right, view_bottom] = state.view_rect;
-    let over_view = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x > view_left && p.x < view_right && p.y > view_top && p.y < view_bottom);
+    let over_view = ctx
+        .input(|i| i.pointer.hover_pos())
+        .is_some_and(|p| p.x > view_left && p.x < view_right && p.y > view_top && p.y < view_bottom);
     if let Some(span) = span
         && over_view
         && ctx.memory(|m| m.focused().is_none())
     {
-        let (space, back, on) = ctx.input(|i| (i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));
+        let (space, back, on) = ctx.input(|i| {
+            (i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight))
+        });
         if space {
             actions.push(Action::Timeline(state.timeline.toggled(span)));
         }
@@ -991,7 +1165,11 @@ fn panels(
     let values = scene.labels.iter().map(|label| (to_bevy(label.pos), ui::label_text(&state.model, label)));
     // What the compared run has switched, under its tool.
     let ghost = state.ghost.as_ref().and_then(|g| {
-        let effect = state.model.tr.tr(&format!("effect-{}", g.effect.strip_prefix("effects.").unwrap_or(&g.effect))).to_string();
+        let effect = state
+            .model
+            .tr
+            .tr(&format!("effect-{}", g.effect.strip_prefix("effects.").unwrap_or(&g.effect)))
+            .to_string();
         let text = state.model.tr.tr_arg(if g.on { "ui-compare-ghost-on" } else { "ui-compare-ghost-off" }, &effect);
         Some((to_bevy(g.scene.tool?) - Vec3::Y * 0.12, text))
     });
@@ -1016,12 +1194,14 @@ fn panels(
         .filter_map(|(pos, text)| {
             let at = camera.world_to_viewport(camera_transform, pos).ok()?;
             let at = egui::pos2(at.x, at.y);
-            view.contains(at).then(|| (at, painter.layout_no_wrap(text, egui::FontId::proportional(14.0), egui::Color32::WHITE)))
+            view.contains(at)
+                .then(|| (at, painter.layout_no_wrap(text, egui::FontId::proportional(14.0), egui::Color32::WHITE)))
         })
         .collect();
     // Top to bottom, each label where it is free of those placed before, of the view's controls and of the timeline.
     labels.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
-    let mut taken: Vec<egui::Rect> = [controls, timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
+    let mut taken: Vec<egui::Rect> =
+        [controls, timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
     for (at, galley) in labels {
         let size = galley.size() + egui::vec2(10.0, 6.0);
         let room = view.shrink(4.0);
@@ -1108,7 +1288,11 @@ fn panels(
             Action::ExportOverlay => model.export_overlay(std::path::Path::new("replay-overlay.csv")),
             Action::ExportReport => {
                 // The dialog holds up the window until it is closed, as the config's does.
-                let picked = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("HTML", &["html"]).set_file_name("sizing-report.pdf").save_file();
+                let picked = rfd::FileDialog::new()
+                    .add_filter("PDF", &["pdf"])
+                    .add_filter("HTML", &["html"])
+                    .set_file_name("sizing-report.pdf")
+                    .save_file();
                 if let Some(path) = picked {
                     model.export_report(&path.display().to_string());
                 }
@@ -1185,7 +1369,12 @@ fn set_recording(state: &mut State, on: bool) {
 
 /// While recording, a screenshot of the window for each frame due, cut to the 3D view; and the messages of videos
 /// made.
-fn record(mut state: ResMut<State>, mut commands: Commands, window: Single<&Window, With<PrimaryWindow>>, clear: Res<ClearColor>) {
+fn record(
+    mut state: ResMut<State>,
+    mut commands: Commands,
+    window: Single<&Window, With<PrimaryWindow>>,
+    clear: Res<ClearColor>,
+) {
     let state = &mut *state;
     if let Some(recording) = &mut state.recording {
         let due = recording.due();
@@ -1194,7 +1383,11 @@ fn record(mut state: ResMut<State>, mut commands: Commands, window: Single<&Wind
         let view = [left, top, right.saturating_sub(left), bottom.saturating_sub(top)];
         // Not before the panels have left the view room: the first frame fixes the video's size.
         if !due.is_empty() && view[2] >= 2 && view[3] >= 2 {
-            commands.spawn(Screenshot::primary_window()).observe(recording.saver(view, clear.0.to_srgba().to_u8_array(), due));
+            commands.spawn(Screenshot::primary_window()).observe(recording.saver(
+                view,
+                clear.0.to_srgba().to_u8_array(),
+                due,
+            ));
         }
     }
     let mut done = Vec::new();
@@ -1268,7 +1461,12 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// scrubs the timeline that far back from the newest scene, just before the screenshot. SIM_APP_RECORD (seconds)
 /// records the view for that long from the start, as the Record button does, and the app exits only once its video
 /// is made (or its frames are left).
-fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: MessageWriter<AppExit>, mut record_for: Local<Option<f64>>) {
+fn developer_hooks(
+    mut state: ResMut<State>,
+    mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
+    mut record_for: Local<Option<f64>>,
+) {
     let Ok(path) = std::env::var("SIM_APP_SCREENSHOT") else { return };
     state.frame += 1;
     if let (Some(limit), Some(recording)) = (*record_for, &state.recording)
@@ -1296,8 +1494,23 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
             let overlays = asked("SIM_APP_OVERLAYS").unwrap_or_default();
             let words: Vec<&str> = overlays.split(',').collect();
             let has = |word: &str| words.contains(&word);
-            let trail = if has("trail-speed") { ui::TrailColor::Speed } else if has("trail-error") { ui::TrailColor::FollowingError } else { ui::TrailColor::Plain };
-            state.overlays = ui::Overlays { xray: has("xray"), forces: has("forces"), planned: has("planned"), load: has("load"), mode: has("mode"), trail, tube: has("tube"), tool_view: has("toolview") };
+            let trail = if has("trail-speed") {
+                ui::TrailColor::Speed
+            } else if has("trail-error") {
+                ui::TrailColor::FollowingError
+            } else {
+                ui::TrailColor::Plain
+            };
+            state.overlays = ui::Overlays {
+                xray: has("xray"),
+                forces: has("forces"),
+                planned: has("planned"),
+                load: has("load"),
+                mode: has("mode"),
+                trail,
+                tube: has("tube"),
+                tool_view: has("toolview"),
+            };
             if let Some(effect) = words.iter().find_map(|w| w.strip_prefix("compare-")) {
                 start_ghost(&mut state, format!("effects.{effect}"));
             }
@@ -1308,24 +1521,41 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
             if let Some(check) = asked("SIM_APP_CHECK") {
                 state.panels = ui::PanelState { tools: ui::ToolTab::Cycle, check: Some(check.leak()), ..state.panels };
             }
-            let tabs = [("cycle", ui::ToolTab::Cycle), ("effects", ui::ToolTab::EffectViews), ("search", ui::ToolTab::Search), ("path", ui::ToolTab::Path), ("trace", ui::ToolTab::Trace), ("sweep", ui::ToolTab::Sweep), ("tuning", ui::ToolTab::Tuning)];
-            if let Some((_, tab)) = asked("SIM_APP_TAB").and_then(|name| tabs.into_iter().find(|(word, _)| *word == name)) {
+            let tabs = [
+                ("cycle", ui::ToolTab::Cycle),
+                ("effects", ui::ToolTab::EffectViews),
+                ("search", ui::ToolTab::Search),
+                ("path", ui::ToolTab::Path),
+                ("trace", ui::ToolTab::Trace),
+                ("sweep", ui::ToolTab::Sweep),
+                ("tuning", ui::ToolTab::Tuning),
+            ];
+            if let Some((_, tab)) =
+                asked("SIM_APP_TAB").and_then(|name| tabs.into_iter().find(|(word, _)| *word == name))
+            {
                 state.panels.tools = tab;
             }
             if let Some(height) = asked("SIM_APP_WORKSPACE_Z").and_then(|z| z.parse().ok()) {
                 state.model.inputs.workspace_z = Some(height);
             }
             if let Some(part) = asked("SIM_APP_PART") {
-                let (id, nth) = part.split_once(',').map_or((part.as_str(), 0), |(id, nth)| (id, nth.parse().unwrap_or(0)));
+                let (id, nth) =
+                    part.split_once(',').map_or((part.as_str(), 0), |(id, nth)| (id, nth.parse().unwrap_or(0)));
                 state.panels.part = Some((id.to_string().leak(), nth));
             }
-            if let Some([yaw, pitch]) = asked("SIM_APP_VIEW").and_then(|v| v.split_once(',').and_then(|(a, b)| Some([a.parse::<f32>().ok()?, b.parse::<f32>().ok()?]))) {
+            if let Some([yaw, pitch]) = asked("SIM_APP_VIEW").and_then(|v| {
+                v.split_once(',').and_then(|(a, b)| Some([a.parse::<f32>().ok()?, b.parse::<f32>().ok()?]))
+            }) {
                 (state.orbit.yaw, state.orbit.pitch) = (yaw.to_radians(), pitch.to_radians());
                 state.fit = true;
             }
             let model = &mut state.model;
             let inputs = &mut model.inputs;
-            let parts = [(asked("SIM_APP_SEARCH"), &mut inputs.series, Analysis::Search), (asked("SIM_APP_PATH"), &mut inputs.path_file, Analysis::Path), (asked("SIM_APP_TRACE"), &mut inputs.trace_file, Analysis::Trace)];
+            let parts = [
+                (asked("SIM_APP_SEARCH"), &mut inputs.series, Analysis::Search),
+                (asked("SIM_APP_PATH"), &mut inputs.path_file, Analysis::Path),
+                (asked("SIM_APP_TRACE"), &mut inputs.trace_file, Analysis::Trace),
+            ];
             let mut kinds = Vec::new();
             for (value, field, kind) in parts {
                 if let Some(value) = value {
@@ -1334,7 +1564,8 @@ fn developer_hooks(mut state: ResMut<State>, mut commands: Commands, mut exit: M
                 }
             }
             if let Some(file) = asked("SIM_APP_SWEEP") {
-                (inputs.sweep_from, inputs.sweep_to, inputs.sweep_count, inputs.sweep_amplitude) = (50.0, 130.0, 30, 1.5);
+                (inputs.sweep_from, inputs.sweep_to, inputs.sweep_count, inputs.sweep_amplitude) =
+                    (50.0, 130.0, 30, 1.5);
                 kinds.push(Analysis::Sweep);
                 if !file.is_empty() {
                     inputs.sweep_file = file;

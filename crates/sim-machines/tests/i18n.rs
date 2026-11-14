@@ -28,8 +28,26 @@ fn every_key_has_an_entry_in_every_language() {
                 keys.push(format!("group-{}", group.replace('.', "-")));
             }
         }
-        keys.extend(["parse", "version", "missing", "type", "invalid", "unknown", "part-motor", "part-gearbox"].map(|e| format!("error-config-{e}")));
-        keys.extend(["error-target-out-of-range", "error-busy", "error-no-cycle", "error-disabled", "error-setpoint-too-far", "error-path", "error-path-first-arc", "error-path-range", "error-path-torque", "limit-motor-speed", "limit-motor-torque"].map(String::from));
+        keys.extend(
+            ["parse", "version", "missing", "type", "invalid", "unknown", "part-motor", "part-gearbox"]
+                .map(|e| format!("error-config-{e}")),
+        );
+        keys.extend(
+            [
+                "error-target-out-of-range",
+                "error-busy",
+                "error-no-cycle",
+                "error-disabled",
+                "error-setpoint-too-far",
+                "error-path",
+                "error-path-first-arc",
+                "error-path-range",
+                "error-path-torque",
+                "limit-motor-speed",
+                "limit-motor-torque",
+            ]
+            .map(String::from),
+        );
         for lang in LANGUAGES {
             let tr = translations(lang, entry);
             for key in &keys {

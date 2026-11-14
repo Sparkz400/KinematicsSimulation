@@ -7,7 +7,9 @@ use sim_machines::MACHINES;
 use std::path::Path;
 
 fn hbot() -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/h-bot.toml")).unwrap().replace("\r\n", "\n")
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/h-bot.toml"))
+        .unwrap()
+        .replace("\r\n", "\n")
 }
 fn base() -> String {
     let t = hbot();
@@ -96,7 +98,18 @@ fn suite(entry: &'static MachineEntry) {
     let mut configs = Vec::new();
     for elastic in [true, false] {
         let mut cfg = entry.config();
-        for effect in ["belt_damping", "guide_friction", "load_dependent_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "tooth_meshing", "temperature", "holding_brake", "gearbox_backlash"] {
+        for effect in [
+            "belt_damping",
+            "guide_friction",
+            "load_dependent_friction",
+            "motor_friction",
+            "gearbox_efficiency",
+            "torque_ripple",
+            "tooth_meshing",
+            "temperature",
+            "holding_brake",
+            "gearbox_backlash",
+        ] {
             cfg.set_text(&format!("effects.{effect} = false")).unwrap();
         }
         for damping in ["gearbox.damping_nm_s_rad = 0.0", "hard_stop.damping_n_s_m = 0.0"] {
@@ -148,7 +161,10 @@ fn axis_without_body() {
     let bodies = "\n[[machine.body]]\nid = \"carriage\"\nmass_kg = 4.0\naxes = [\"x\"]\n";
     let text = file("", &format!("{TWO_LOOPS}{bodies}"));
     // It loaded, and the axis accelerated at infinity (its mass 0).
-    assert_eq!(load(&text).err().map(|e| e.0), Some(sim_core::ConfigError::Invalid("machine.axis[y] (no body moves with it)".into())));
+    assert_eq!(
+        load(&text).err().map(|e| e.0),
+        Some(sim_core::ConfigError::Invalid("machine.axis[y] (no body moves with it)".into()))
+    );
 }
 
 #[test]
@@ -183,28 +199,42 @@ fn machine_id_validation() {
     let t = hbot();
     use sim_core::ConfigError::{Invalid, Type};
     let err = |text: String| load(&text).err().map(|e| e.0);
-    assert_eq!(err(t.replace("id = \"h-bot\"", "id = \"bad id/x\"")), Some(Invalid("machine.id (letters, digits, _ and - only)".into())));
+    assert_eq!(
+        err(t.replace("id = \"h-bot\"", "id = \"bad id/x\"")),
+        Some(Invalid("machine.id (letters, digits, _ and - only)".into()))
+    );
     assert_eq!(err(t.replace("id = \"h-bot\"", "id = 42")), Some(Type("machine.id".into())));
     assert_eq!(err(t.replace("name = \"H-bot (machine file)\"", "name = [1]")), Some(Type("machine.name".into())));
     // Fine as they were: a misspelt table is refused, and so is a fourth section that pulley A would have to feed
     // with x alone while section 1 takes x + y from it.
-    assert!(load(&t.replace("[machine]
-", "[machin]
+    assert!(
+        load(&t.replace(
+            "[machine]
+",
+            "[machin]
 foo = 1
 [machine]
-")).is_err());
+"
+        ))
+        .is_err()
+    );
     let fourth = "pulleys = { pulley_b = -1 }
 [[machine.section]]
 id = \"4\"
 length_m = 1.0
 axes = { x = 1 }
 pulleys = { pulley_a = 1 }";
-    assert_eq!(err(t.replace("pulleys = { pulley_b = -1 }", fourth)), Some(Invalid("machine.section[1].axes (the belt cannot keep its length)".into())));
+    assert_eq!(
+        err(t.replace("pulleys = { pulley_b = -1 }", fourth)),
+        Some(Invalid("machine.section[1].axes (the belt cannot keep its length)".into()))
+    );
 }
 
 #[test]
 fn line_of_with_machine_id_equal_to_node_id() {
-    let t = hbot().replace("id = \"h-bot\"", "id = \"x\"").replace("stroke_m = \"geometry.stroke_x_m\"", "stroke_m = \"geometry.stroke_q_m\"");
+    let t = hbot()
+        .replace("id = \"h-bot\"", "id = \"x\"")
+        .replace("stroke_m = \"geometry.stroke_x_m\"", "stroke_m = \"geometry.stroke_q_m\"");
     let Err((e, line)) = load(&t) else { panic!("loaded") };
     let want = t.lines().position(|l| l.contains("stroke_q_m")).unwrap() + 1;
     let _ = e;
@@ -235,11 +265,26 @@ fn json_float_version() {
 #[test]
 fn commanded_acc_vs_true_acc() {
     let t = hbot();
-    let t = t.replacen("radius_m = \"geometry.pulley_radius_m\"\ninertia_kgm2 = \"pulley.inertia_kgm2\"\npos = [300, 300]", "radius_m = 0.04\ninertia_kgm2 = \"pulley.inertia_kgm2\"\npos = [300, 300]", 1);
+    let t = t.replacen(
+        "radius_m = \"geometry.pulley_radius_m\"\ninertia_kgm2 = \"pulley.inertia_kgm2\"\npos = [300, 300]",
+        "radius_m = 0.04\ninertia_kgm2 = \"pulley.inertia_kgm2\"\npos = [300, 300]",
+        1,
+    );
     let t = t.replace("carries = [\"carriage\", \"head\"]\n", "carries = [\"carriage\", \"head\"]\noverhang = \"head\"\noverhang_axis = \"x\"\nlever_m = 0.1\nspacing_m = 0.1\n");
     let entry = load(&t).unwrap_or_else(|e| panic!("{e:?}"));
     let mut cfg = entry.config();
-    for e in ["belt_stretch", "guide_friction", "load_dependent_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "tooth_meshing", "gravity", "holding_brake", "gearbox_backlash"] {
+    for e in [
+        "belt_stretch",
+        "guide_friction",
+        "load_dependent_friction",
+        "motor_friction",
+        "gearbox_efficiency",
+        "torque_ripple",
+        "tooth_meshing",
+        "gravity",
+        "holding_brake",
+        "gearbox_backlash",
+    ] {
         cfg.set_text(&format!("effects.{e} = false")).unwrap();
     }
     let m = (entry.build)(&cfg).unwrap();
@@ -297,7 +342,10 @@ mass_kg = 2.0
 axes = ["x", "y", "z"]
 "#;
     let mut text = file("", &format!("{TWO_LOOPS}{extra}"));
-    text = text.replace("[axis.y]", "[axis.z]\nmax_velocity_m_s = 0.4\nmax_acceleration_m_s2 = 6.0\nmax_jerk_m_s3 = 100.0\n\n[axis.y]");
+    text = text.replace(
+        "[axis.y]",
+        "[axis.z]\nmax_velocity_m_s = 0.4\nmax_acceleration_m_s2 = 6.0\nmax_jerk_m_s3 = 100.0\n\n[axis.y]",
+    );
     let text = regex_like(&text, |a, b| format!("[{a}, {b}, 0.1]"));
     let entry = load(&text).unwrap_or_else(|e| panic!("{e:?}"));
     let d = derivs_at_rest(entry, true, &[0.5, 0.25, 0.1]);
@@ -307,14 +355,18 @@ axes = ["x", "y", "z"]
 
 /// Rewrites every `pose = [a, b]` / `target = [a, b]`.
 fn regex_like(text: &str, f: impl Fn(&str, &str) -> String) -> String {
-    text.lines().map(|l| {
-        for key in ["pose = [", "target = ["] {
-            if let Some(rest) = l.strip_prefix(key) {
-                let inner = rest.trim_end_matches(']');
-                let (a, b) = inner.split_once(',').unwrap();
-                return format!("{} = {}", &key[..key.len() - 4], f(a.trim(), b.trim()));
+    text.lines()
+        .map(|l| {
+            for key in ["pose = [", "target = ["] {
+                if let Some(rest) = l.strip_prefix(key) {
+                    let inner = rest.trim_end_matches(']');
+                    let (a, b) = inner.split_once(',').unwrap();
+                    return format!("{} = {}", &key[..key.len() - 4], f(a.trim(), b.trim()));
+                }
             }
-        }
-        l.to_string()
-    }).collect::<Vec<_>>().join("\n") + "\n"
+            l.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }

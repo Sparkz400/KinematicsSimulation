@@ -3,7 +3,9 @@
 //! torque behind a current-loop lag and dead time), and a two-mass drive train.
 
 use sim_components::analysis::{SweepPoint, log_spaced};
-use sim_components::motor_fit::{Estimate, friction, frequency_response, lag, ringing, two_mass, two_mass_from_ringing};
+use sim_components::motor_fit::{
+    Estimate, frequency_response, friction, lag, ringing, two_mass, two_mass_from_ringing,
+};
 use std::f64::consts::TAU;
 
 /// A small deterministic noise source: uniform in -1..1.
@@ -158,7 +160,11 @@ fn two_mass_from_a_noisy_frequency_response() {
     let mut noise = Noise(7);
     let sweep: Vec<SweepPoint> = log_spaced(5.0, 400.0, 160)
         .into_iter()
-        .map(|f| SweepPoint { frequency: f, gain: two_mass_gain(f, JM, JL, K, C) * (1.0 + 0.01 * noise.normal()), phase_deg: 0.0 })
+        .map(|f| SweepPoint {
+            frequency: f,
+            gain: two_mass_gain(f, JM, JL, K, C) * (1.0 + 0.01 * noise.normal()),
+            phase_deg: 0.0,
+        })
         .collect();
     let m = two_mass(&sweep).expect("two-mass");
     within("total inertia", m.total_inertia, JM + JL, 5.0, 0.02);
@@ -282,8 +288,15 @@ fn static_model(seed: u64, noise: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64
     let mut n = Noise(seed);
     let time: Vec<f64> = (0..10_000).map(|i| i as f64 * 1e-3).collect();
     let speed: Vec<f64> = time.iter().map(|t| 100.0 * (TAU * 0.7 * t).sin() + 30.0 * (TAU * 2.3 * t).sin()).collect();
-    let accel: Vec<f64> = time.iter().map(|t| 100.0 * TAU * 0.7 * (TAU * 0.7 * t).cos() + 30.0 * TAU * 2.3 * (TAU * 2.3 * t).cos()).collect();
-    let torque = speed.iter().zip(&accel).map(|(v, a)| J * a + VISCOUS * v + COULOMB * v.signum() + CONSTANT + noise * n.normal()).collect();
+    let accel: Vec<f64> = time
+        .iter()
+        .map(|t| 100.0 * TAU * 0.7 * (TAU * 0.7 * t).cos() + 30.0 * TAU * 2.3 * (TAU * 2.3 * t).cos())
+        .collect();
+    let torque = speed
+        .iter()
+        .zip(&accel)
+        .map(|(v, a)| J * a + VISCOUS * v + COULOMB * v.signum() + CONSTANT + noise * n.normal())
+        .collect();
     let angle = vec![0.0; time.len()];
     (time, angle, speed, torque)
 }
@@ -294,12 +307,17 @@ fn static_model(seed: u64, noise: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64
 fn friction_estimates_are_unbiased_and_their_errors_hold_over_seeds() {
     let (time, angle, speed, torque) = static_model(1, 0.0);
     let f = friction(&time, &angle, &speed, &torque).unwrap();
-    assert!((f.viscous.value - VISCOUS).abs() < 0.02 * VISCOUS && (f.coulomb.value - COULOMB).abs() < 0.005 * COULOMB, "{f:?}");
+    assert!(
+        (f.viscous.value - VISCOUS).abs() < 0.02 * VISCOUS && (f.coulomb.value - COULOMB).abs() < 0.005 * COULOMB,
+        "{f:?}"
+    );
     let mut z = [0.0; 3];
     for seed in 1..=12 {
         let (time, angle, speed, torque) = static_model(seed * 7919, 0.004);
         let f = friction(&time, &angle, &speed, &torque).unwrap();
-        for (k, (e, truth)) in [(f.viscous, VISCOUS), (f.coulomb, COULOMB), (f.constant, CONSTANT)].into_iter().enumerate() {
+        for (k, (e, truth)) in
+            [(f.viscous, VISCOUS), (f.coulomb, COULOMB), (f.constant, CONSTANT)].into_iter().enumerate()
+        {
             z[k] += ((e.value - truth) / e.error).powi(2) / 12.0;
         }
     }
@@ -315,7 +333,12 @@ fn lag_does_not_hang_on_the_first_sample() {
     let after = lag(&r.time, &r.setpoint_torque, &r.torque).expect("lag");
     // One sample of 4000 moved by 12 noise widths may not move the fit by more than a standard error.
     assert!((after.gain.value - before.gain.value).abs() < before.gain.error, "{:?} {:?}", before.gain, after.gain);
-    assert!((after.time_constant.value - before.time_constant.value).abs() < before.time_constant.error, "{:?} {:?}", before.time_constant, after.time_constant);
+    assert!(
+        (after.time_constant.value - before.time_constant.value).abs() < before.time_constant.error,
+        "{:?} {:?}",
+        before.time_constant,
+        after.time_constant
+    );
 }
 
 /// Found by review: with one window the coherence of pure noise is 1, and below eight rows it panicked.

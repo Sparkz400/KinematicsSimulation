@@ -31,9 +31,18 @@ impl AxisFit {
     /// What the fit says to change in the config, as translation keys with their argument: the axis named
     /// `axis` with the change of mass and constant force, and the factors on the two kinds of friction.
     pub fn advice(&self, axis: &str) -> [(&'static str, String); 4] {
-        let change = |q: usize, unit: &str| format!("{axis}: {:+.3} {unit} ± {:.3}", self.fitted[q] - self.config[q], self.error[q]);
-        let factor = |q: usize| format!("{axis}: × {:.3} ± {:.3}", self.fitted[q] / self.config[q], (self.error[q] / self.config[q]).abs());
-        [("fit-mass", change(0, "kg")), ("fit-viscous", factor(1)), ("fit-coulomb", factor(2)), ("fit-constant", change(3, "N"))]
+        let change = |q: usize, unit: &str| {
+            format!("{axis}: {:+.3} {unit} ± {:.3}", self.fitted[q] - self.config[q], self.error[q])
+        };
+        let factor = |q: usize| {
+            format!("{axis}: × {:.3} ± {:.3}", self.fitted[q] / self.config[q], (self.error[q] / self.config[q]).abs())
+        };
+        [
+            ("fit-mass", change(0, "kg")),
+            ("fit-viscous", factor(1)),
+            ("fit-coulomb", factor(2)),
+            ("fit-constant", change(3, "N")),
+        ]
     }
 }
 
@@ -104,7 +113,10 @@ fn rigid_values(time: &[f64], force: &[f64], speed: &[f64]) -> Option<([f64; 4],
     for i in w..rows.saturating_sub(w) {
         let v = mean(speed, i);
         if v.abs() > 0.05 * top {
-            samples.push(([(speed[i + w] - speed[i - w]) / (time[i + w] - time[i - w]), v, v.signum(), 1.0], mean(force, i)));
+            samples.push((
+                [(speed[i + w] - speed[i - w]) / (time[i + w] - time[i - w]), v, v.signum(), 1.0],
+                mean(force, i),
+            ));
         }
     }
     let one_way = |sign: f64| samples.iter().filter(|(x, _)| x[2] == sign).count();
@@ -172,7 +184,8 @@ pub struct JointFit {
 pub const ALIKE: f64 = 0.95;
 
 /// The quantities of `fit_joints` per motor, after the factor on the payload (`payload_factor`).
-pub const JOINT_QUANTITIES: [&str; 4] = ["added_inertia_kg_m2", "viscous_friction_nm_s_rad", "coulomb_friction_nm", "constant_torque_nm"];
+pub const JOINT_QUANTITIES: [&str; 4] =
+    ["added_inertia_kg_m2", "viscous_friction_nm_s_rad", "coulomb_friction_nm", "constant_torque_nm"];
 
 impl JointFit {
     /// What the fit says to change in the config, as translation keys with their argument: the factor on the payload,
@@ -185,9 +198,16 @@ impl JointFit {
             .map(|v| {
                 let change = |unit: &str| format!("{}: {:+.4} {unit} ± {:.4}", v.of, v.fitted - v.config, v.error);
                 match v.quantity {
-                    "payload_factor" => ("fit-payload", format!("× {:.3} ± {:.3}", v.fitted / v.config, v.error / v.config)),
-                    "added_inertia_kg_m2" => ("fit-joint-inertia", format!("{}: {:+.3e} kg m² ± {:.1e}", v.of, v.fitted - v.config, v.error)),
-                    "viscous_friction_nm_s_rad" => ("fit-joint-viscous", format!("{}: {:+.2e} N m s/rad ± {:.1e}", v.of, v.fitted - v.config, v.error)),
+                    "payload_factor" => {
+                        ("fit-payload", format!("× {:.3} ± {:.3}", v.fitted / v.config, v.error / v.config))
+                    }
+                    "added_inertia_kg_m2" => {
+                        ("fit-joint-inertia", format!("{}: {:+.3e} kg m² ± {:.1e}", v.of, v.fitted - v.config, v.error))
+                    }
+                    "viscous_friction_nm_s_rad" => (
+                        "fit-joint-viscous",
+                        format!("{}: {:+.2e} N m s/rad ± {:.1e}", v.of, v.fitted - v.config, v.error),
+                    ),
                     "coulomb_friction_nm" => ("fit-joint-coulomb", change("N m")),
                     _ => ("fit-joint-constant", change("N m")),
                 }
@@ -227,7 +247,8 @@ fn joint_values(machine: &mut dyn sim_core::Machine, trace: &Trace) -> Option<(V
         let angle: Vec<f64> = trace.motors.iter().map(|m| m.angle[i]).collect();
         let speed: Vec<f64> = trace.motors.iter().map(|m| mean(&m.speed, i)).collect();
         let half = 0.5 * (trace.time[i + w] - trace.time[i - w]);
-        let acc: Vec<f64> = trace.motors.iter().map(|m| (m.angle[i + w] - 2.0 * m.angle[i] + m.angle[i - w]) / (half * half)).collect();
+        let acc: Vec<f64> =
+            trace.motors.iter().map(|m| (m.angle[i + w] - 2.0 * m.angle[i] + m.angle[i - w]) / (half * half)).collect();
         machine.set_payload_attached(false);
         machine.rigid_motor_torque(&angle, &speed, &acc, &mut without);
         machine.set_payload_attached(true);
@@ -263,7 +284,8 @@ fn joint_values(machine: &mut dyn sim_core::Machine, trace: &Trace) -> Option<(V
     for (a, &j) in used.iter().enumerate() {
         values[j] = (0..m).map(|b| inverse[a][b] * right[b]).sum::<f64>() / norm[j];
     }
-    let residual: f64 = samples.iter().map(|(x, y)| (y - used.iter().map(|&j| values[j] * x[j]).sum::<f64>()).powi(2)).sum();
+    let residual: f64 =
+        samples.iter().map(|(x, y)| (y - used.iter().map(|&j| values[j] * x[j]).sum::<f64>()).powi(2)).sum();
     // Neighbouring rows share most of their window, so only every (2w + 1)th row counts as a measurement.
     let variance = residual / (samples.len() - m) as f64 * (2 * w + 1) as f64;
     let mut covariance = vec![vec![f64::NAN; p]; p];
@@ -292,10 +314,13 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
     let simulated = replay(entry, cfg, trace)?;
     let mut machine = (entry.build)(&crate::catalog::resolve(entry, cfg)?)?;
     let ids: Vec<&str> = machine.motors().iter().map(|m| m.id).collect();
-    let (Some((fitted, error, covariance)), Some((config, ..))) = (joint_values(machine.as_mut(), trace), joint_values(machine.as_mut(), &simulated)) else {
+    let (Some((fitted, error, covariance)), Some((config, ..))) =
+        (joint_values(machine.as_mut(), trace), joint_values(machine.as_mut(), &simulated))
+    else {
         return Ok(None);
     };
-    let names = std::iter::once(("payload_factor", "payload".to_string())).chain(ids.iter().flat_map(|id| JOINT_QUANTITIES.map(|q| (q, id.to_string()))));
+    let names = std::iter::once(("payload_factor", "payload".to_string()))
+        .chain(ids.iter().flat_map(|id| JOINT_QUANTITIES.map(|q| (q, id.to_string()))));
     let kept: Vec<usize> = (0..fitted.len()).filter(|&j| fitted[j].is_finite()).collect();
     let values: Vec<JointValue> = names
         .enumerate()
@@ -357,7 +382,8 @@ pub fn resonance(sweep: &[SweepPoint]) -> Option<Resonance> {
     };
     let (low, high) = (crossing(below, below + 1), crossing(above, above - 1));
     let frequency = (low * high).sqrt();
-    let step = (sweep[below + 1].frequency - sweep[below].frequency).max(sweep[above].frequency - sweep[above - 1].frequency);
+    let step =
+        (sweep[below + 1].frequency - sweep[below].frequency).max(sweep[above].frequency - sweep[above - 1].frequency);
     Some(Resonance { frequency, damping: (high - low) / (2.0 * frequency), frequency_error: 0.5 * step })
 }
 
@@ -365,7 +391,11 @@ pub fn resonance(sweep: &[SweepPoint]) -> Option<Resonance> {
 /// phase is not read; the fit does not use it.
 pub fn parse_sweep(text: &str) -> Result<Vec<SweepPoint>, TraceError> {
     let table = crate::trace::columns(text, &["frequency_hz".to_string(), "gain_rad_s_per_nm".to_string()])?;
-    Ok(table[0].iter().zip(&table[1]).map(|(&frequency, &gain)| SweepPoint { frequency, gain, phase_deg: 0.0 }).collect())
+    Ok(table[0]
+        .iter()
+        .zip(&table[1])
+        .map(|(&frequency, &gain)| SweepPoint { frequency, gain, phase_deg: 0.0 })
+        .collect())
 }
 
 /// Stage 2 done: the resonance of the config's own sweep and that of the measured one.
@@ -391,7 +421,13 @@ impl SweepFit {
 
 /// Stage 2 on a measured sweep, taken on `motor` with a torque `amplitude`: the config's own sweep at the same
 /// frequencies, and the resonance of both. `None` where either shows no dip with both flanks.
-pub fn fit_sweep(entry: &MachineEntry, cfg: &Config, motor: usize, measured: &[SweepPoint], amplitude: f64) -> Result<Option<SweepFit>, ConfigError> {
+pub fn fit_sweep(
+    entry: &MachineEntry,
+    cfg: &Config,
+    motor: usize,
+    measured: &[SweepPoint],
+    amplitude: f64,
+) -> Result<Option<SweepFit>, ConfigError> {
     let frequencies: Vec<f64> = measured.iter().map(|p| p.frequency).collect();
     let config = crate::analysis::frequency_sweep(entry, cfg, motor, &frequencies, amplitude)?;
     Ok(resonance(&config).zip(resonance(measured)).map(|(config, fitted)| SweepFit { config, fitted }))
@@ -430,7 +466,10 @@ fn ringing(trace: &Trace) -> Vec<f64> {
     let w = ((0.01 / step).round() as usize).max(1);
     let mut out = Vec::new();
     for m in &trace.motors {
-        out.extend((w..rows.saturating_sub(w)).map(|i| m.torque[i] - m.torque[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64));
+        out.extend(
+            (w..rows.saturating_sub(w))
+                .map(|i| m.torque[i] - m.torque[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64),
+        );
     }
     out
 }
@@ -453,13 +492,19 @@ fn ringing(trace: &Trace) -> Vec<f64> {
 /// Refused with `fit-move-not-excited` where that error is above `MOVE_STIFFNESS_LIMIT` of the factor or the best
 /// factor lies at an end of the range: the trace's moves did not ring the load enough against its noise (a gentle
 /// move, a low jerk, a heavily damped mode). With `fit-move-no-key` where the config has no number at `key`.
-pub fn fit_move_stiffness(entry: &MachineEntry, cfg: &Config, trace: &Trace, key: &str) -> Result<MoveStiffness, TraceError> {
+pub fn fit_move_stiffness(
+    entry: &MachineEntry,
+    cfg: &Config,
+    trace: &Trace,
+    key: &str,
+) -> Result<MoveStiffness, TraceError> {
     let base = cfg.f64(key).map_err(|_| TraceError { key: "fit-move-no-key", detail: key.to_string() })?;
     let measured = ringing(trace);
     let cost = |u: f64| -> Result<(f64, Vec<f64>), TraceError> {
         let mut scaled = cfg.clone();
         scaled.set_text(&format!("{key} = {:?}", base * u.exp()))?;
-        let residuals: Vec<f64> = ringing(&replay(entry, &scaled, trace)?).iter().zip(&measured).map(|(s, m)| m - s).collect();
+        let residuals: Vec<f64> =
+            ringing(&replay(entry, &scaled, trace)?).iter().zip(&measured).map(|(s, m)| m - s).collect();
         Ok((residuals.iter().map(|r| r * r).sum(), residuals))
     };
     let not_excited = |detail: String| TraceError { key: "fit-move-not-excited", detail };
@@ -476,7 +521,10 @@ pub fn fit_move_stiffness(entry: &MachineEntry, cfg: &Config, trace: &Trace, key
     // the parabola: σ_p² (AᵀA)⁻¹ for the linear term over twice the square term, squared.
     let parabola = |from: f64, to: f64| -> Result<Option<(f64, f64, f64)>, TraceError> {
         let mid = 0.5 * (from + to);
-        let points = (0..7).map(|i| from + (to - from) * i as f64 / 6.0).map(|u| cost(u).map(|c| (u - mid, c.0))).collect::<Result<Vec<_>, _>>()?;
+        let points = (0..7)
+            .map(|i| from + (to - from) * i as f64 / 6.0)
+            .map(|u| cost(u).map(|c| (u - mid, c.0)))
+            .collect::<Result<Vec<_>, _>>()?;
         let (mut a, mut b) = (vec![0.0; 9], vec![0.0; 3]);
         for (x, c) in &points {
             let row = [1.0, *x, x * x];
@@ -486,11 +534,13 @@ pub fn fit_move_stiffness(entry: &MachineEntry, cfg: &Config, trace: &Trace, key
             }
         }
         let Some(v) = crate::chain::solve(&a, &b).filter(|v| v[2] > 0.0) else { return Ok(None) };
-        let scatter = points.iter().map(|(x, c)| (c - v[0] - v[1] * x - v[2] * x * x).powi(2)).sum::<f64>() / (points.len() - 3) as f64;
+        let scatter = points.iter().map(|(x, c)| (c - v[0] - v[1] * x - v[2] * x * x).powi(2)).sum::<f64>()
+            / (points.len() - 3) as f64;
         let linear = crate::chain::solve(&a, &[0.0, 1.0, 0.0]).map_or(f64::INFINITY, |column| column[1]);
         Ok(Some(((mid - 0.5 * v[1] / v[2]).clamp(from, to), 2.0 * v[2], (scatter * linear).sqrt() / (2.0 * v[2]))))
     };
-    let curved = |found: Option<(f64, f64, f64)>| found.ok_or_else(|| not_excited(format!("× {:.2} ± inf", grid[best].exp())));
+    let curved =
+        |found: Option<(f64, f64, f64)>| found.ok_or_else(|| not_excited(format!("× {:.2} ± inf", grid[best].exp())));
     let (first, ..) = curved(parabola(grid[best - 1], grid[best + 1])?)?;
     let (u, curvature, jagged) = curved(parabola(first - 0.1, first + 0.1)?)?;
     let (s, residuals) = cost(u)?;
@@ -536,7 +586,11 @@ mod tests {
         let dip = |f: f64, fa: f64, d: f64| (fa * fa - f * f).hypot(2.0 * d * fa * f) / (fa * fa);
         let sweep: Vec<SweepPoint> = crate::analysis::log_spaced(10.0, 200.0, 200)
             .into_iter()
-            .map(|f| SweepPoint { frequency: f, gain: 1000.0 * dip(f, 22.0, 0.05).min(1.0) * dip(f, 62.0, 0.01).min(1.0) / f, phase_deg: 0.0 })
+            .map(|f| SweepPoint {
+                frequency: f,
+                gain: 1000.0 * dip(f, 22.0, 0.05).min(1.0) * dip(f, 62.0, 0.01).min(1.0) / f,
+                phase_deg: 0.0,
+            })
             .collect();
         // The dip at 62 Hz goes down to 0.02, the one at 22 Hz to 0.1.
         let found = resonance(&sweep).unwrap();

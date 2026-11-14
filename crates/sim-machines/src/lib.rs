@@ -62,10 +62,13 @@ pub fn load_text(toml_text: &str, id: &str) -> Result<&'static MachineEntry, Con
 
 /// A JSON machine file as the TOML text of the same config.
 fn json_to_toml(text: &str) -> Result<String, ConfigError> {
-    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| ConfigError::Parse(format!("line {}: {e}", e.line())))?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| ConfigError::Parse(format!("line {}: {e}", e.line())))?;
     // JSON has one kind of number: a version written 1.0 is the version 1 the JSON Schema accepts.
     for version in ["/format_version", "/machine/version"] {
-        if let Some(v) = value.pointer_mut(version).filter(|v| v.as_f64().is_some_and(|f| f.fract() == 0.0 && f.abs() < 1e9)) {
+        if let Some(v) =
+            value.pointer_mut(version).filter(|v| v.as_f64().is_some_and(|f| f.fract() == 0.0 && f.abs() < 1e9))
+        {
             *v = serde_json::Value::from(v.as_f64().unwrap_or_default() as i64);
         }
     }
@@ -77,6 +80,7 @@ fn json_to_toml(text: &str) -> Result<String, ConfigError> {
 
 /// The JSON Schema of a machine file (`sim_netlist::json_schema`) as text: what schema/machine-file.schema.json holds.
 pub fn json_schema() -> String {
-    serde_json::to_string_pretty(&sim_netlist::json_schema()).expect("a TOML value is written as JSON") + "
+    serde_json::to_string_pretty(&sim_netlist::json_schema()).expect("a TOML value is written as JSON")
+        + "
 "
 }

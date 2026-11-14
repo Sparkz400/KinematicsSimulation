@@ -7,8 +7,14 @@
 //! section 2 from the pulley around the idler to the carriage (length const - x, fed by - r a).
 //! Belt force on the carriage: T2 - T1. Belt torque on the pulley: r (T1 - T2).
 
-use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle};
-use sim_core::{AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_components::mech::{
+    Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction,
+    ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle,
+};
+use sim_core::{
+    AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label,
+    Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "single-axis",
@@ -132,7 +138,12 @@ impl SingleAxis {
         let (cx, part) = (self.span_min + x, Part::new);
         let mut parts = vec![
             // The tool: drawn where `scene_point` says.
-            part("carriage", Shape::Box { size: [0.16, 0.05, 0.03] }, self.scene_point(&[x]).unwrap_or_default(), [0.2, 0.22, 0.26]),
+            part(
+                "carriage",
+                Shape::Box { size: [0.16, 0.05, 0.03] },
+                self.scene_point(&[x]).unwrap_or_default(),
+                [0.2, 0.22, 0.26],
+            ),
             part("clamp", Shape::Box { size: [0.06, 0.035, 0.03] }, [cx, -0.05, self.r + 0.017], [0.85, 0.3, 0.2]),
         ];
         if self.payload_attached && self.m_payload > 0.0 {
@@ -180,7 +191,11 @@ impl SingleAxis {
             },
             jump: None,
             jump_loss: 0.0,
-            span_mass: if cfg.bool("effects.belt_span_vibration")? { Some(cfg.positive("belt.mass_kg_m")?) } else { None },
+            span_mass: if cfg.bool("effects.belt_span_vibration")? {
+                Some(cfg.positive("belt.mass_kg_m")?)
+            } else {
+                None
+            },
             wrap: cfg.bool("effects.belt_wrap")?,
             axes: [AxisInfo {
                 id: "x",
@@ -235,10 +250,7 @@ impl SingleAxis {
     fn sections(&self, s: &[f64]) -> [SectionForce; 2] {
         let (geo, mat, r) = (self.geo(s[0]), self.mat(s), self.r_mat);
         let fed = r * (s[4] + self.slip(s).1 / self.r);
-        [
-            self.belt.section(geo[0], mat[0], s[3], fed),
-            self.belt.section(geo[1], mat[1], -s[3], -fed),
-        ]
+        [self.belt.section(geo[0], mat[0], s[3], fed), self.belt.section(geo[1], mat[1], -s[3], -fed)]
     }
 
     /// The guide carries the weight; the friction levels are given for the carriage without payload.
@@ -267,7 +279,9 @@ impl SingleAxis {
         out[..3].copy_from_slice(&s[3..6]);
         // The chain's moving run has inertia and, on an incline, weight like the carriage; it does not load the guide.
         let m = self.m() + self.chain.mass(s[0]).0;
-        out[3] = (sec[1].tension - sec[0].tension - ff + self.stop_force(s[0], s[3]) + self.extra_force(s[0], s[3])) / m - self.g_along;
+        out[3] = (sec[1].tension - sec[0].tension - ff + self.stop_force(s[0], s[3]) + self.extra_force(s[0], s[3]))
+            / m
+            - self.g_along;
         let belt_torque = self.r_mat * (sec[0].material - sec[1].material);
         // While its teeth are out of mesh the pulley feels only the ridge it holds the sliding belt back with.
         let on_pulley = self.jump.as_ref().map_or(belt_torque, |j| j.pulley_torque(&s[JUMP..], belt_torque, r));
@@ -296,7 +310,8 @@ impl SingleAxis {
         let drive = ratio * (self.ripple.apply(torque[0], angle) - self.shaft.torque(speed) - brake) / r;
         let (ff, ds) = self.friction.eval(s[1], s[2], self.load_scale());
         let m = self.m() + self.chain.mass(s[0]).0;
-        let load = self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
+        let load =
+            self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: f64| (loss * drive + load) / (m + self.j_pulley / (r * r) + loss * rotor);
         let through_gear = drive - rotor * solve(1.0);
@@ -317,8 +332,18 @@ impl SingleAxis {
         }
         let (geo, mat) = (self.geo(s[0]), self.mat(s));
         let slip = self.jump.as_ref().map_or(0.0, |j| j.slip_energy(&s[JUMP..], self.r * s[4]));
-        let kinetic = 0.5 * (self.m() + chain) * s[3] * s[3] + 0.5 * self.j_pulley * s[4] * s[4] + 0.5 * self.j_rotor * s[5] * s[5] + slip;
-        [kinetic, potential, stops + self.belt.energy(geo[0], mat[0]) + self.belt.energy(geo[1], mat[1]) + self.gearbox.energy(s[2], s[1])]
+        let kinetic = 0.5 * (self.m() + chain) * s[3] * s[3]
+            + 0.5 * self.j_pulley * s[4] * s[4]
+            + 0.5 * self.j_rotor * s[5] * s[5]
+            + slip;
+        [
+            kinetic,
+            potential,
+            stops
+                + self.belt.energy(geo[0], mat[0])
+                + self.belt.energy(geo[1], mat[1])
+                + self.gearbox.energy(s[2], s[1]),
+        ]
     }
 
     /// The loss powers in the order of `effect_infos`, the gearbox loss as a torque at the rotor and the brake torque,
@@ -337,7 +362,13 @@ impl SingleAxis {
             let (geo, mat, fed) = (self.geo(x), self.mat(s), self.r_mat * (s[4] + self.slip(s).1 / r));
             let belt = self.belt.loss_power(geo[0], mat[0], v, fed) + self.belt.loss_power(geo[1], mat[1], -v, -fed);
             let brake = self.brake.torque(self.brake_engaged, s[5], s[8]).0;
-            (gear.rotor - gear.output / ratio, self.gearbox.loss_power(s[2], s[5], s[1], s[4]), brake, r * self.mesh.force(r * s[1]) * s[4], belt)
+            (
+                gear.rotor - gear.output / ratio,
+                self.gearbox.loss_power(s[2], s[5], s[1], s[4]),
+                brake,
+                r * self.mesh.force(r * s[1]) * s[4],
+                belt,
+            )
         } else {
             let (_, _, _, out, into) = self.rigid_solve(s, torque);
             let loss = (into - out) / ratio;
@@ -346,7 +377,11 @@ impl SingleAxis {
         let process_in = if self.dwelling { self.process * v } else { 0.0 };
         let other = (torque[0] - self.ripple.apply(torque[0], angle)) * speed - mesh_in - process_in;
         let stops = self.stops.loss_power(x, v, self.axes[0].max);
-        ([ff * v, drag * v, (self.shaft.torque(speed) + brake) * speed, gear_power, belt, stops, other], gear_loss, brake)
+        (
+            [ff * v, drag * v, (self.shaft.torque(speed) + brake) * speed, gear_power, belt, stops, other],
+            gear_loss,
+            brake,
+        )
     }
 
     /// The signals of the effect views, in the order of `effect_infos`, with the transpose r / i:
@@ -414,30 +449,59 @@ impl SingleAxis {
     /// The signal list of `effect_signals`.
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
         let (motor, axis) = (&self.motors[0], self.axes[0].key);
-        out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+        out.extend(TORQUE_PARTS.map(|part| {
+            SignalInfo::new(
+                format!("motor.{}.torque_{part}", motor.id),
+                motor.key,
+                &format!("quantity-torque-{part}"),
+                "N m",
+            )
+        }));
         let powers = [
             ("guide_x", axis, "quantity-friction-power"),
             ("cable_chain", "group-cable_chain", "quantity-friction-power"),
             ("shaft_m", motor.key, "quantity-shaft-friction-power"),
-            ("gearbox_m", motor.key, if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" }),
+            (
+                "gearbox_m",
+                motor.key,
+                if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" },
+            ),
             ("belt", "group-belt", "quantity-damping-power"),
             ("hard_stops", "group-hard_stop", "quantity-damping-power"),
             ("other", "loss-other", "quantity-power-given-off"),
         ];
-        out.extend(powers.map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")));
+        out.extend(
+            powers.map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")),
+        );
         if self.jump.is_some() {
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}tooth_jump"), "group-belt", "quantity-tooth-jump-power", "W"));
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}tooth_jump"),
+                "group-belt",
+                "quantity-tooth-jump-power",
+                "W",
+            ));
         }
-        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        out.extend(ENERGY_PARTS.map(|part| {
+            SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
+        }));
         for part in FRICTION_SIGNALS {
             let unit = match part {
                 "speed" => "m/s",
                 "load_scale" => "",
                 _ => "N",
             };
-            out.push(SignalInfo::new(format!("axis.x.friction_{part}"), axis, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+            out.push(SignalInfo::new(
+                format!("axis.x.friction_{part}"),
+                axis,
+                &format!("quantity-friction-{}", part.replace('_', "-")),
+                unit,
+            ));
         }
-        out.extend(self.belt_sections().iter().map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")));
+        out.extend(
+            self.belt_sections()
+                .iter()
+                .map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")),
+        );
     }
 }
 
@@ -616,7 +680,14 @@ impl Machine for SingleAxis {
             out.push(SignalInfo::new("pulley.m.tooth_slip", self.motors[0].key, "quantity-tooth-slip", "m"));
         }
         if self.span_mass.is_some() {
-            out.extend((1..=3).map(|i| SignalInfo::new(format!("belt.span.{i}.frequency"), &format!("belt-span-{i}"), "quantity-span-frequency", "Hz")));
+            out.extend((1..=3).map(|i| {
+                SignalInfo::new(
+                    format!("belt.span.{i}.frequency"),
+                    &format!("belt-span-{i}"),
+                    "quantity-span-frequency",
+                    "Hz",
+                )
+            }));
             out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
         }
         self.effect_infos(&mut out);
@@ -633,14 +704,29 @@ impl Machine for SingleAxis {
     /// The two belt sections, in the order of the signals `belt.<i>.tension`.
     fn belt_sections(&self) -> Vec<BeltSection> {
         let pretension = self.belt.pretension;
-        vec![BeltSection { id: "belt.1", owner_key: "belt-section-1", pretension }, BeltSection { id: "belt.2", owner_key: "belt-section-2", pretension }]
+        vec![
+            BeltSection { id: "belt.1", owner_key: "belt-section-1", pretension },
+            BeltSection { id: "belt.2", owner_key: "belt-section-2", pretension },
+        ]
     }
 
     /// The gearbox, where there is one (not on a direct drive, see `Gearbox::is_coupling`), and the guide, shown by
     /// the carriage.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
-        let gearbox = ThermalPart { id: "gearbox_m", kind: "gearbox", owner_key: self.motors[0].key, scene_part: "gearbox", scene_index: 0 };
-        let guide = ThermalPart { id: "guide_x", kind: "guide", owner_key: self.axes[0].key, scene_part: "carriage", scene_index: 0 };
+        let gearbox = ThermalPart {
+            id: "gearbox_m",
+            kind: "gearbox",
+            owner_key: self.motors[0].key,
+            scene_part: "gearbox",
+            scene_index: 0,
+        };
+        let guide = ThermalPart {
+            id: "guide_x",
+            kind: "guide",
+            owner_key: self.axes[0].key,
+            scene_part: "carriage",
+            scene_index: 0,
+        };
         if self.gearbox.is_coupling() { vec![guide] } else { vec![gearbox, guide] }
     }
 
@@ -653,13 +739,24 @@ impl Machine for SingleAxis {
         if self.elastic {
             let sec = self.sections(s);
             let (ff, _) = self.friction.eval(s[3], s[6], self.load_scale());
-            out.extend([sec[0].tension, sec[1].tension, s[0] - self.r * s[1], ff, s[7], sec[0].tension + sec[1].tension]);
+            out.extend([
+                sec[0].tension,
+                sec[1].tension,
+                s[0] - self.r * s[1],
+                ff,
+                s[7],
+                sec[0].tension + sec[1].tension,
+            ]);
         } else {
             let (ff, _) = self.friction.eval(s[1], s[2], self.load_scale());
             out.extend([self.belt.pretension, self.belt.pretension, 0.0, ff, 0.0, 2.0 * self.belt.pretension]);
         }
         out.push(self.m() * self.g_normal);
-        out.push(if self.elastic { self.gearbox.torque(s[2], s[5], s[1], s[4]).output } else { self.rigid_solve(s, torque).3 });
+        out.push(if self.elastic {
+            self.gearbox.torque(s[2], s[5], s[1], s[4]).output
+        } else {
+            self.rigid_solve(s, torque).3
+        });
         if self.jump.is_some() {
             out.extend([s[JUMP + 4], s[JUMP]]);
         }
@@ -685,7 +782,8 @@ impl Machine for SingleAxis {
         self.motor_state(s, &mut rotor, &mut rotor_speed);
         let pulley = if self.elastic { s[1] } else { rotor[0] / ratio };
         let tension = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 2] };
-        let shade = tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
+        let shade =
+            tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
 
         // The belt loop runs in one plane in front of the beam, the motor sits behind it at the left end.
         let y = -0.05;
@@ -695,8 +793,18 @@ impl Machine for SingleAxis {
         out.parts.clear();
         out.parts.extend([
             part("beam", Shape::Box { size: [end - 0.14, 0.07, 0.09] }, [end / 2.0, 0.045, 0.0], [0.62, 0.64, 0.68]),
-            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
-            part("post", Shape::Box { size: [0.06, 0.06, -0.045 - floor] }, [end - 0.13, 0.045, (floor - 0.045) / 2.0], [0.45, 0.47, 0.5]),
+            part(
+                "post",
+                Shape::Box { size: [0.06, 0.06, -0.045 - floor] },
+                [0.13, 0.045, (floor - 0.045) / 2.0],
+                [0.45, 0.47, 0.5],
+            ),
+            part(
+                "post",
+                Shape::Box { size: [0.06, 0.06, -0.045 - floor] },
+                [end - 0.13, 0.045, (floor - 0.045) / 2.0],
+                [0.45, 0.47, 0.5],
+            ),
         ]);
         out.parts.extend(self.on_carriage(x));
         // A positive pulley angle moves the carriage to the right: the top of the pulley moves
@@ -724,7 +832,13 @@ impl Machine for SingleAxis {
         belt(&mut out.parts, &path, y, 0.025, 0.04, |i| shade[if i < 3 { 0 } else { 1 }]);
 
         out.labels.extend([
-            Label { pos: [0.0, y, 0.11], owner_key: self.motors[0].key, value: rotor_speed[0] * 60.0 / TAU, unit_key: "unit-rpm", decimals: 0 },
+            Label {
+                pos: [0.0, y, 0.11],
+                owner_key: self.motors[0].key,
+                value: rotor_speed[0] * 60.0 / TAU,
+                unit_key: "unit-rpm",
+                decimals: 0,
+            },
             Label { pos: [cx, y, 0.22], owner_key: self.axes[0].key, value: x, unit_key: "unit-m", decimals: 3 },
         ]);
     }

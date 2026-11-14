@@ -157,15 +157,39 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
         .signal_infos()
         .into_iter()
         .enumerate()
-        .map(|(i, s)| Variable { description: format!("{} · {}", tr.tr(&s.owner_key), tr.tr(&s.quantity_key)), name: s.id, kind: Kind::Signal(i), unit: s.unit, start: None })
+        .map(|(i, s)| Variable {
+            description: format!("{} · {}", tr.tr(&s.owner_key), tr.tr(&s.quantity_key)),
+            name: s.id,
+            kind: Kind::Signal(i),
+            unit: s.unit,
+            start: None,
+        })
         .collect();
     for (i, axis) in sim.machine.axes().iter().enumerate() {
         let description = format!("{} · {}", tr.tr(axis.key), tr.tr("fmi-setpoint"));
-        out.push(Variable { name: format!("command.setpoint.{}", axis.id), kind: Kind::Setpoint(i), description, unit: axis.unit.into(), start: Some(format!("{:?}", sim.control.set_pos[i])) });
+        out.push(Variable {
+            name: format!("command.setpoint.{}", axis.id),
+            kind: Kind::Setpoint(i),
+            description,
+            unit: axis.unit.into(),
+            start: Some(format!("{:?}", sim.control.set_pos[i])),
+        });
     }
-    let flag = |name: &str, kind: Kind, key: &str, start: bool| Variable { name: name.into(), kind, description: tr.tr(key).into(), unit: String::new(), start: Some(start.to_string()) };
+    let flag = |name: &str, kind: Kind, key: &str, start: bool| Variable {
+        name: name.into(),
+        kind,
+        description: tr.tr(key).into(),
+        unit: String::new(),
+        start: Some(start.to_string()),
+    };
     out.push(flag("command.enable", Kind::Enable, "fmi-enable", true));
-    let text = |name: &str, kind: Kind, key: &str, start: &str| Variable { name: name.into(), kind, description: tr.tr(key).into(), unit: String::new(), start: Some(start.into()) };
+    let text = |name: &str, kind: Kind, key: &str, start: &str| Variable {
+        name: name.into(),
+        kind,
+        description: tr.tr(key).into(),
+        unit: String::new(),
+        start: Some(start.into()),
+    };
     out.push(text("machine", Kind::Machine, "fmi-machine", machine));
     out.push(text("config_file", Kind::ConfigFile, "fmi-config-file", ""));
     for (path, value) in cfg.leaves() {
@@ -177,24 +201,43 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
 }
 
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;").replace('\n', "&#10;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+        .replace('\n', "&#10;")
 }
 
 /// The model description of FMI `fmi` (2 or 3); `guid` empty for the text the GUID is the hash of; `dt` the base step.
-fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables: &[Variable], guid: &str, fmi: u8, dt: f64) -> Result<String, ConfigError> {
+fn description(
+    entry: &MachineEntry,
+    cfg: &Config,
+    tr: &Translations,
+    variables: &[Variable],
+    guid: &str,
+    fmi: u8,
+    dt: f64,
+) -> Result<String, ConfigError> {
     let v3 = fmi == 3;
     let mut x = String::new();
     let tool = format!("sim-fmi {}", env!("CARGO_PKG_VERSION"));
     let (name, about) = (escape(entry.id), escape(tr.tr(entry.key)));
     let _ = writeln!(x, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
     if v3 {
-        let _ = writeln!(x, r#"<fmiModelDescription fmiVersion="3.0" modelName="{name}" instantiationToken="{guid}" description="{about}" generationTool="{tool}" variableNamingConvention="flat">"#);
+        let _ = writeln!(
+            x,
+            r#"<fmiModelDescription fmiVersion="3.0" modelName="{name}" instantiationToken="{guid}" description="{about}" generationTool="{tool}" variableNamingConvention="flat">"#
+        );
         let _ = writeln!(
             x,
             r#"  <CoSimulation modelIdentifier="{MODEL_IDENTIFIER}" canHandleVariableCommunicationStepSize="true" fixedInternalStepSize="{dt:?}" canBeInstantiatedOnlyOncePerProcess="false" canGetAndSetFMUState="true" canSerializeFMUState="true" providesDirectionalDerivatives="true" providesAdjointDerivatives="true" hasEventMode="false"/>"#
         );
     } else {
-        let _ = writeln!(x, r#"<fmiModelDescription fmiVersion="2.0" modelName="{name}" guid="{guid}" description="{about}" generationTool="{tool}" variableNamingConvention="flat" numberOfEventIndicators="0">"#);
+        let _ = writeln!(
+            x,
+            r#"<fmiModelDescription fmiVersion="2.0" modelName="{name}" guid="{guid}" description="{about}" generationTool="{tool}" variableNamingConvention="flat" numberOfEventIndicators="0">"#
+        );
         let _ = writeln!(
             x,
             r#"  <CoSimulation modelIdentifier="{MODEL_IDENTIFIER}" canHandleVariableCommunicationStepSize="true" canInterpolateInputs="false" canBeInstantiatedOnlyOncePerProcess="false" canNotUseMemoryManagementFunctions="true" canGetAndSetFMUstate="true" canSerializeFMUstate="true" providesDirectionalDerivative="true"/>"#
@@ -208,7 +251,11 @@ fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables:
         let _ = writeln!(x, r#"    <Unit name="{}"/>"#, escape(unit));
     }
     let _ = writeln!(x, "  </UnitDefinitions>");
-    let _ = writeln!(x, r#"  <DefaultExperiment startTime="0" stepSize="{:?}"/>"#, cfg.positive("profile.setpoint_interval_s")?);
+    let _ = writeln!(
+        x,
+        r#"  <DefaultExperiment startTime="0" stepSize="{:?}"/>"#,
+        cfg.positive("profile.setpoint_interval_s")?
+    );
     let _ = writeln!(x, "  <ModelVariables>");
     for (vr, v) in variables.iter().enumerate() {
         let variability = match (v.causality(), v.type_name()) {
@@ -216,7 +263,12 @@ fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables:
             (_, "Real") => "continuous",
             _ => "discrete",
         };
-        let attributes = format!(r#"name="{}" valueReference="{vr}" causality="{}" variability="{variability}" description="{}""#, escape(&v.name), v.causality(), escape(&v.description));
+        let attributes = format!(
+            r#"name="{}" valueReference="{vr}" causality="{}" variability="{variability}" description="{}""#,
+            escape(&v.name),
+            v.causality(),
+            escape(&v.description)
+        );
         let start = v.start.as_ref().map_or(String::new(), |s| format!(r#" start="{}""#, escape(s)));
         let unit = if v.unit.is_empty() { String::new() } else { format!(r#" unit="{}""#, escape(&v.unit)) };
         match (v3, v.type_name()) {
@@ -227,7 +279,11 @@ fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables:
                 let _ = writeln!(x, "    </String>");
             }
             (true, type_name) => {
-                let _ = writeln!(x, "    <{} {attributes}{start}{unit}/>", if type_name == "Real" { "Float64" } else { type_name });
+                let _ = writeln!(
+                    x,
+                    "    <{} {attributes}{start}{unit}/>",
+                    if type_name == "Real" { "Float64" } else { type_name }
+                );
             }
             (false, type_name) => {
                 let _ = writeln!(x, "    <ScalarVariable {attributes}>");
@@ -239,7 +295,8 @@ fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables:
     let _ = writeln!(x, "  </ModelVariables>");
     // Outputs are calculated during initialisation, so they are initial unknowns as well. They depend on no input
     // directly (dependencies=""): a setpoint reaches them only through the next communication step.
-    let outputs: Vec<usize> = variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i).collect();
+    let outputs: Vec<usize> =
+        variables.iter().enumerate().filter(|(_, v)| v.causality() == "output").map(|(i, _)| i).collect();
     let _ = writeln!(x, "  <ModelStructure>");
     if v3 {
         for vr in &outputs {
@@ -267,7 +324,14 @@ fn description(entry: &MachineEntry, cfg: &Config, tr: &Translations, variables:
 fn guid(text: &str) -> String {
     let fnv = |offset: u64| text.bytes().fold(offset, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
     let (a, b) = (fnv(0xcbf2_9ce4_8422_2325), fnv(0x6c62_272e_07bb_0142));
-    format!("{{{:08x}-{:04x}-{:04x}-{:04x}-{:012x}}}", a >> 32, (a >> 16) & 0xffff, a & 0xffff, b >> 48, b & 0xffff_ffff_ffff)
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:04x}-{:012x}}}",
+        a >> 32,
+        (a >> 16) & 0xffff,
+        a & 0xffff,
+        b >> 48,
+        b & 0xffff_ffff_ffff
+    )
 }
 
 /// Where a binary goes in the FMU, from its file name: `binaries/<platform>/sim_fmi.<extension>`.
@@ -392,13 +456,22 @@ mod tests {
         elf[18] = 183;
         assert_eq!(super::binary_path3("libsim_fmi.so", &elf).as_deref(), Some("binaries/aarch64-linux/sim_fmi.so"));
         let macho = [[0xcf, 0xfa, 0xed, 0xfe], 0x0100_0007u32.to_le_bytes()].concat();
-        assert_eq!(super::binary_path3("libsim_fmi.dylib", &macho).as_deref(), Some("binaries/x86_64-darwin/sim_fmi.dylib"));
+        assert_eq!(
+            super::binary_path3("libsim_fmi.dylib", &macho).as_deref(),
+            Some("binaries/x86_64-darwin/sim_fmi.dylib")
+        );
         let universal = [0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2];
         assert_eq!(super::binary_path3("libsim_fmi.dylib", &universal), None);
         assert_eq!(super::binary_path3("sim_fmi.dll", b"windows binary"), None);
         // The test program itself has the header of the platform it runs on.
         let me = std::fs::read(std::env::current_exe().unwrap()).unwrap();
-        let extension = if cfg!(windows) { "dll" } else if cfg!(target_os = "macos") { "dylib" } else { "so" };
+        let extension = if cfg!(windows) {
+            "dll"
+        } else if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
         let path = super::binary_path3(&format!("sim_fmi.{extension}"), &me).unwrap();
         assert!(path.contains(std::env::consts::ARCH), "{path}");
     }
@@ -407,7 +480,10 @@ mod tests {
     #[test]
     fn every_export_message_exists_in_every_language() {
         let sources = [include_str!("lib.rs"), include_str!("api.rs"), include_str!("api3.rs")].concat();
-        let keys: Vec<&str> = sources.split('"').filter(|s| s.starts_with("fmi-") && s.len() > 4 && s.chars().all(|c| c.is_ascii_lowercase() || c == '-')).collect();
+        let keys: Vec<&str> = sources
+            .split('"')
+            .filter(|s| s.starts_with("fmi-") && s.len() > 4 && s.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            .collect();
         assert!(keys.len() >= 10, "{keys:?}");
         for (lang, text) in super::I18N {
             let tr = sim_core::Translations::parse(text);

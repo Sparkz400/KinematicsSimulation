@@ -53,7 +53,12 @@ impl std::error::Error for FileError {}
 /// `fallback_id` names the machine where `machine.id` does not. `lines` says whether the text is the file as written,
 /// so that an error can name its line (a JSON file arrives here converted, and its lines are not these). The entry
 /// lives as long as the program. Files are read, and JSON converted, by `sim_machines::load_file`.
-pub fn from_text(toml_text: &str, lines: bool, fallback_id: &str, known: &[Config]) -> Result<&'static MachineEntry, (ConfigError, Option<usize>)> {
+pub fn from_text(
+    toml_text: &str,
+    lines: bool,
+    fallback_id: &str,
+    known: &[Config],
+) -> Result<&'static MachineEntry, (ConfigError, Option<usize>)> {
     let located = |e: ConfigError| {
         let line = if lines { line_of(toml_text, e.detail()) } else { None };
         (e, line)
@@ -129,7 +134,10 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
     for g in &net.guides {
         // At a dotted path ("friction.x") as nested tables; where a known value is in the way, the file's table there
         // stays unknown and is refused by name.
-        let nested = g.friction.rsplit('.').fold(friction.clone(), |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
+        let nested = g
+            .friction
+            .rsplit('.')
+            .fold(friction.clone(), |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
         if let Value::Table(nested) = nested {
             merge(&mut all, &nested);
         }
@@ -137,13 +145,16 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
     // The value tables of screws, racks, linear motors and strain wave gears, laid out as the registered one-axis machines'.
     for (layout, path) in &net.values {
         let Some(known) = all.get(*layout).cloned() else { continue };
-        let nested = path.rsplit('.').fold(known, |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
+        let nested =
+            path.rsplit('.').fold(known, |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
         if let Value::Table(nested) = nested {
             merge(&mut all, &nested);
         }
     }
     for path in &net.refs {
-        let nested = path.rsplit('.').fold(Value::Float(0.0), |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
+        let nested = path
+            .rsplit('.')
+            .fold(Value::Float(0.0), |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
         if let Value::Table(nested) = nested {
             merge(&mut all, &nested);
         }
@@ -162,10 +173,13 @@ pub fn line_of(text: &str, detail: &str) -> Option<usize> {
     let path = detail.split([' ', '(']).next().unwrap_or_default();
     let lines: Vec<&str> = text.lines().collect();
     let header = |line: &str| line.trim_start().starts_with('[');
-    let header_name = |line: &str| line.split('#').next().unwrap_or_default().trim().trim_matches(['[', ']']).trim().to_string();
+    let header_name =
+        |line: &str| line.split('#').next().unwrap_or_default().trim().trim_matches(['[', ']']).trim().to_string();
     let key_of = |line: &str| line.split('=').next().unwrap_or_default().trim().trim_matches('"').to_string();
     // The first line from `start` up to the next header that sets `key`.
-    let key_below = |start: usize, key: &str| (start..lines.len()).take_while(|&i| i == start || !header(lines[i])).find(|&i| key_of(lines[i]) == key);
+    let key_below = |start: usize, key: &str| {
+        (start..lines.len()).take_while(|&i| i == start || !header(lines[i])).find(|&i| key_of(lines[i]) == key)
+    };
 
     if let Some(rest) = path.strip_prefix("machine.").filter(|r| r.contains('[')) {
         let (list, rest) = rest.split_once('[')?;
@@ -173,15 +187,23 @@ pub fn line_of(text: &str, detail: &str) -> Option<usize> {
         let field = field.trim_start_matches('.').split('.').next().unwrap_or_default();
         let start = if let Some(n) = node.strip_prefix('#') {
             let n: usize = n.parse().ok()?;
-            lines.iter().enumerate().filter(|(_, l)| header(l) && header_name(l) == format!("machine.{list}")).nth(n.checked_sub(1)?)?.0
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| header(l) && header_name(l) == format!("machine.{list}"))
+                .nth(n.checked_sub(1)?)?
+                .0
         } else {
             // Ids are unique in a file: the line that gives this one starts its node (or is all of it, inline).
             // The line that gives this id under a header of its list ([[machine.<list>]]), or inline under [machine]:
             // the machine's own id and comments may give the same text elsewhere.
             (0..lines.len()).find(|&i| {
-                let compact: String = lines[i].split('#').next().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
+                let compact: String =
+                    lines[i].split('#').next().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
                 let under = (0..=i).rev().find(|&h| header(lines[h])).map(|h| header_name(lines[h]));
-                compact.contains(&format!("id=\"{node}\"")) && (under.as_deref() == Some(&format!("machine.{list}")) || (under.as_deref() == Some("machine") && compact.contains('{')))
+                compact.contains(&format!("id=\"{node}\""))
+                    && (under.as_deref() == Some(&format!("machine.{list}"))
+                        || (under.as_deref() == Some("machine") && compact.contains('{')))
             })?
         };
         // The node's header is the nearest one above its id.
@@ -194,11 +216,11 @@ pub fn line_of(text: &str, detail: &str) -> Option<usize> {
     let parts: Vec<&str> = path.split('.').collect();
     for split in (0..=parts.len()).rev() {
         let (table, key) = (parts[..split].join("."), parts[split..].join("."));
-        let top = if table.is_empty() { Some(0) } else { lines.iter().position(|l| header(l) && header_name(l) == table) };
+        let top =
+            if table.is_empty() { Some(0) } else { lines.iter().position(|l| header(l) && header_name(l) == table) };
         if let Some(top) = top {
             return Some(if key.is_empty() { top } else { key_below(top, &key).unwrap_or(top) } + 1);
         }
     }
     None
 }
-

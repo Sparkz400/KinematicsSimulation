@@ -29,7 +29,10 @@
 
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
-use sim_core::{AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_core::{
+    AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part, Scene,
+    Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d2",
@@ -44,7 +47,8 @@ const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off. The stops stay, without their
 /// damping.
-pub const LOSSY_EFFECTS: [&str; 5] = ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 5] =
+    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(Delta2::new(cfg)?))
@@ -71,7 +75,13 @@ fn lowered(cfg: &mut Config, dz: f64) {
         .iter()
         .map(|s| {
             let t: Vec<f64> = s["target"].as_array().unwrap().iter().map(|v| v.as_float().unwrap()).collect();
-            format!("{{ target = [{:?}, {:?}], dwell_s = {:?}, payload = {} }}", t[0], t[1] + dz, s["dwell_s"].as_float().unwrap(), s["payload"].as_bool().unwrap())
+            format!(
+                "{{ target = [{:?}, {:?}], dwell_s = {:?}, payload = {} }}",
+                t[0],
+                t[1] + dz,
+                s["dwell_s"].as_float().unwrap(),
+                s["payload"].as_bool().unwrap()
+            )
         })
         .collect();
     cfg.set_text(&format!("cycle.segment = [{}]", segments.join(", "))).unwrap();
@@ -135,7 +145,11 @@ fn inverse(m: &M2) -> Option<M2> {
 /// The 2-norm condition number of a 2 x 2 matrix: the square root of the larger over the smaller eigenvalue of
 /// J^T J, m +- sqrt(((a - c) / 2)^2 + b^2) with m = (a + c) / 2 for J^T J = [[a, b], [b, c]].
 pub fn condition_number(j: &M2) -> f64 {
-    let (a, b, c) = (j[0][0] * j[0][0] + j[1][0] * j[1][0], j[0][0] * j[0][1] + j[1][0] * j[1][1], j[0][1] * j[0][1] + j[1][1] * j[1][1]);
+    let (a, b, c) = (
+        j[0][0] * j[0][0] + j[1][0] * j[1][0],
+        j[0][0] * j[0][1] + j[1][0] * j[1][1],
+        j[0][1] * j[0][1] + j[1][1] * j[1][1],
+    );
     let (mean, half) = ((a + c) / 2.0, ((a - c) / 2.0).hypot(b));
     if mean - half <= 0.0 { f64::INFINITY } else { ((mean + half) / (mean - half)).sqrt() }
 }
@@ -169,7 +183,11 @@ impl Legs {
         let mut out = [0.0; 2];
         for (i, t) in out.iter_mut().enumerate() {
             let (x, z) = (SIDE[i] * p[0], p[1]);
-            let (a, b, c) = (-2.0 * self.la * (x - self.e), 2.0 * self.la * z, (x - self.e).powi(2) + z * z + self.la * self.la - self.lb * self.lb);
+            let (a, b, c) = (
+                -2.0 * self.la * (x - self.e),
+                2.0 * self.la * z,
+                (x - self.e).powi(2) + z * z + self.la * self.la - self.lb * self.lb,
+            );
             let d = a * a + b * b - c * c;
             if !(d >= 0.0) {
                 return None;
@@ -192,7 +210,8 @@ impl Legs {
         // Midway between the elbows, then h along the normal to the line joining them.
         let (mid, h) = ([0.5 * (c0[0] + c1[0]), 0.5 * (c0[1] + c1[1])], h2.sqrt());
         let normal = [-along[1] / d, along[0] / d];
-        let (one, other) = ([mid[0] + h * normal[0], mid[1] + h * normal[1]], [mid[0] - h * normal[0], mid[1] - h * normal[1]]);
+        let (one, other) =
+            ([mid[0] + h * normal[0], mid[1] + h * normal[1]], [mid[0] - h * normal[0], mid[1] - h * normal[1]]);
         Some(if one[1] < other[1] { one } else { other })
     }
 
@@ -268,9 +287,19 @@ impl Delta2 {
     /// The plate at `p` (x, z) and the payload under it, as `scene` draws them.
     fn on_platform(&self, p: V2) -> Vec<Part> {
         let size = 2.4 * self.platform_radius.max(0.03);
-        let mut parts = vec![Part::new("platform", Shape::Box { size: [size, self.rod_spacing.max(0.06) + 0.03, 0.03] }, [p[0], 0.0, p[1]], [0.55, 0.55, 0.6])];
+        let mut parts = vec![Part::new(
+            "platform",
+            Shape::Box { size: [size, self.rod_spacing.max(0.06) + 0.03, 0.03] },
+            [p[0], 0.0, p[1]],
+            [0.55, 0.55, 0.6],
+        )];
         if self.payload_attached && self.m_payload > 0.0 {
-            parts.push(Part::new("payload", Shape::Box { size: [0.12, 0.12, 0.1] }, [p[0], 0.0, p[1] - 0.07], [0.2, 0.7, 0.3]));
+            parts.push(Part::new(
+                "payload",
+                Shape::Box { size: [0.12, 0.12, 0.1] },
+                [p[0], 0.0, p[1] - 0.07],
+                [0.2, 0.7, 0.3],
+            ));
         }
         parts
     }
@@ -286,7 +315,11 @@ impl Delta2 {
         if share > 1.0 {
             return Err(ConfigError::Invalid("mass.forearm_elbow_share".into()));
         }
-        let (m_arm, cg, i_arm) = (cfg.positive("mass.upper_arm_kg")?, cfg.non_negative("mass.upper_arm_cg_m")?, cfg.positive("mass.upper_arm_inertia_kgm2")?);
+        let (m_arm, cg, i_arm) = (
+            cfg.positive("mass.upper_arm_kg")?,
+            cfg.non_negative("mass.upper_arm_cg_m")?,
+            cfg.positive("mass.upper_arm_inertia_kgm2")?,
+        );
         let (m_elbow, m_fb) = (cfg.non_negative("mass.elbow_kg")?, cfg.non_negative("mass.forearm_pair_kg")?);
         let elbow = m_elbow + share * m_fb;
         let (half_width, top) = (cfg.positive("workspace.half_width_m")?, cfg.f64("workspace.top_z_m")?);
@@ -364,7 +397,8 @@ impl Delta2 {
                 let Some(j) = self.legs.jacobian(t, p) else { continue };
                 for m in [self.m_platform, self.m_platform + self.m_payload] {
                     let twist: V2 = std::array::from_fn(|k| {
-                        let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k]) - self.joints[k].output_torque(t[k], 0.0);
+                        let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k])
+                            - self.joints[k].output_torque(t[k], 0.0);
                         held / self.joints[k].gearbox.stiffness
                     });
                     for signs in 0..4 {
@@ -424,7 +458,10 @@ impl Delta2 {
 
     /// Where the plate is and the Jacobian there, for arm angles; NaN where the legs cannot be assembled.
     fn pose(&self, t: V2) -> (V2, M2) {
-        self.legs.forward(t).and_then(|p| Some((p, self.legs.jacobian(t, p)?))).unwrap_or(([f64::NAN; 2], [[f64::NAN; 2]; 2]))
+        self.legs
+            .forward(t)
+            .and_then(|p| Some((p, self.legs.jacobian(t, p)?)))
+            .unwrap_or(([f64::NAN; 2], [[f64::NAN; 2]; 2]))
     }
 
     /// The load's mass matrix M, the velocity term m_nt J^T J' theta', and the generalised gravity Q_g at arm angles t
@@ -433,7 +470,9 @@ impl Delta2 {
         let (p, j) = self.pose(t);
         let jt = transpose(&j);
         let m = self.m_nt();
-        let mass: M2 = std::array::from_fn(|r| std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { self.arm_inertia } else { 0.0 }));
+        let mass: M2 = std::array::from_fn(|r| {
+            std::array::from_fn(|c| m * dot(jt[r], jt[c]) + if r == c { self.arm_inertia } else { 0.0 })
+        });
         let pv = mul(&j, w);
         let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 2], |a| mul(&jt, a.map(|v| m * v)));
         let gravity: V2 = std::array::from_fn(|k| self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k]);
@@ -447,15 +486,23 @@ impl Delta2 {
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
         let (mass, velocity, gravity) = self.load(t, w);
-        let drive: V2 = std::array::from_fn(|k| self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0);
+        let drive: V2 = std::array::from_fn(|k| {
+            self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
+        });
         let rest: V2 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
         let solve = |loss: V2| -> V2 {
-            let m: M2 = std::array::from_fn(|r| std::array::from_fn(|c| mass[r][c] + if r == c { loss[r] * self.joints[r].reflected_inertia() } else { 0.0 }));
+            let m: M2 = std::array::from_fn(|r| {
+                std::array::from_fn(|c| {
+                    mass[r][c] + if r == c { loss[r] * self.joints[r].reflected_inertia() } else { 0.0 }
+                })
+            });
             let rhs: V2 = std::array::from_fn(|k| loss[k] * drive[k] + rest[k]);
             inverse(&m).map_or([f64::NAN; 2], |inv| mul(&inv, rhs))
         };
         let first = solve([1.0; 2]);
-        let loss: V2 = std::array::from_fn(|k| self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k]));
+        let loss: V2 = std::array::from_fn(|k| {
+            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k])
+        });
         let acc = solve(loss);
         let into: V2 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);
         (acc, into, std::array::from_fn(|k| loss[k] * into[k]))
@@ -540,7 +587,8 @@ impl Delta2 {
     /// circle), widened by `slack`.
     fn in_envelope(&self, p: &[f64], slack: f64) -> bool {
         let (centre, r) = self.circle;
-        let above = if centre.is_finite() { p[0].hypot(p[1] - centre) <= r + slack } else { p[1] >= self.axes[1].min - slack };
+        let above =
+            if centre.is_finite() { p[0].hypot(p[1] - centre) <= r + slack } else { p[1] >= self.axes[1].min - slack };
         p[0].abs() <= self.half_width + slack && p[1] <= self.top + slack && above
     }
 
@@ -571,18 +619,36 @@ impl Delta2 {
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
         for motor in &self.motors {
-            out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+            out.extend(TORQUE_PARTS.map(|part| {
+                SignalInfo::new(
+                    format!("motor.{}.torque_{part}", motor.id),
+                    motor.key,
+                    &format!("quantity-torque-{part}"),
+                    "N m",
+                )
+            }));
         }
         for (k, motor) in self.motors.iter().enumerate() {
             let arm = ["arm-1", "arm-2"][k];
-            let gear = if self.joints[k].gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+            let gear = if self.joints[k].gearbox.is_coupling() {
+                "quantity-coupling-loss-power"
+            } else {
+                "quantity-gearbox-loss-power"
+            };
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}joint_{}", motor.id), arm, "quantity-friction-power", "W"));
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_{}", motor.id), motor.key, "quantity-shaft-friction-power", "W"));
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}shaft_{}", motor.id),
+                motor.key,
+                "quantity-shaft-friction-power",
+                "W",
+            ));
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", motor.id), motor.key, gear, "W"));
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
-        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        out.extend(ENERGY_PARTS.map(|part| {
+            SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
+        }));
     }
 }
 
@@ -648,7 +714,8 @@ impl Machine for Delta2 {
         let mut rhs = [0.0; 2];
         for k in 0..2 {
             let joint = &self.joints[k];
-            let (gear, rotor_acc, brake_rate) = joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
+            let (gear, rotor_acc, brake_rate) =
+                joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
             rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]);
             out[4 + k] = s[6 + k];
             out[6 + k] = rotor_acc;
@@ -710,7 +777,8 @@ impl Machine for Delta2 {
         let force = transpose(&j).map(|column| self.m_nt() * dot(column, pa));
         for k in 0..2 {
             let joint = &self.joints[k];
-            out[k] = (self.arm_inertia * arm_acc[k] + force[k] - gravity[k]) / joint.ratio() + joint.rotor_inertia * joint.ratio() * arm_acc[k];
+            out[k] = (self.arm_inertia * arm_acc[k] + force[k] - gravity[k]) / joint.ratio()
+                + joint.rotor_inertia * joint.ratio() * arm_acc[k];
         }
     }
 
@@ -765,7 +833,12 @@ impl Machine for Delta2 {
         for (k, motor) in self.motors.iter().enumerate() {
             let arm = ["arm-1", "arm-2"][k];
             out.push(SignalInfo::new(format!("arm.{}.angle", motor.id), arm, "quantity-arm-angle", "rad"));
-            out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
+            out.push(SignalInfo::new(
+                format!("gearbox.{}.output_torque", motor.id),
+                motor.key,
+                "quantity-gearbox-torque",
+                "N m",
+            ));
         }
         out.push(SignalInfo::new("kinematics.condition", "group-kinematics", "quantity-condition-number", ""));
         self.effect_infos(&mut out);
@@ -799,7 +872,13 @@ impl Machine for Delta2 {
         [("gearbox_1", "motor-arm-1"), ("gearbox_2", "motor-arm-2")]
             .into_iter()
             .enumerate()
-            .map(|(k, (id, owner_key))| ThermalPart { id, kind: "gearbox", owner_key, scene_part: "gearbox", scene_index: k })
+            .map(|(k, (id, owner_key))| ThermalPart {
+                id,
+                kind: "gearbox",
+                owner_key,
+                scene_part: "gearbox",
+                scene_index: k,
+            })
             .collect()
     }
 
@@ -812,7 +891,12 @@ impl Machine for Delta2 {
         out.parts.clear();
         out.labels.clear();
         let grey = [0.62, 0.64, 0.68];
-        out.parts.push(Part::new("base", Shape::Box { size: [2.0 * self.base_radius + 0.2, 0.2, 0.04] }, [0.0, 0.0, 0.1], grey));
+        out.parts.push(Part::new(
+            "base",
+            Shape::Box { size: [2.0 * self.base_radius + 0.2, 0.2, 0.04] },
+            [0.0, 0.0, 0.1],
+            grey,
+        ));
         for k in 0..2 {
             let side = SIDE[k];
             let shoulder = [side * self.base_radius, 0.0, 0.0];
@@ -820,19 +904,39 @@ impl Machine for Delta2 {
             let [elbow, ..] = self.legs.elbow(k, t[k]);
             let arm_end = [elbow[0] + side * self.platform_radius, 0.0, elbow[1]];
             let at = |z: f64| [side * self.base_radius, 0.0, z];
-            out.parts.push(Part::new(sim_core::scene::MOTOR_PART, Shape::Box { size: [0.09, 0.09, 0.12] }, at(0.16), [0.9, 0.45, 0.1]));
+            out.parts.push(Part::new(
+                sim_core::scene::MOTOR_PART,
+                Shape::Box { size: [0.09, 0.09, 0.12] },
+                at(0.16),
+                [0.9, 0.45, 0.1],
+            ));
             out.parts.push(Part::new("gearbox", Shape::Box { size: [0.09, 0.09, 0.06] }, at(0.05), [0.25, 0.25, 0.28]));
-            out.parts.push(Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, at(0.225), [0.1, 0.1, 0.1]).turned(rotor[k]));
+            out.parts.push(
+                Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, at(0.225), [0.1, 0.1, 0.1])
+                    .turned(rotor[k]),
+            );
             out.parts.push(Part::new("arm", Shape::Segment { to: arm_end, width: 0.04 }, shoulder, [0.2, 0.22, 0.26]));
             let platform_end = [p[0] + side * self.platform_radius, 0.0, p[1]];
             for half in [-0.5 * self.rod_spacing, 0.5 * self.rod_spacing] {
                 let (from, to) = ([arm_end[0], half, arm_end[2]], [platform_end[0], half, platform_end[2]]);
                 out.parts.push(Part::new("forearm", Shape::Segment { to, width: 0.012 }, from, [0.15, 0.15, 0.15]));
             }
-            out.labels.push(Label { pos: at(0.3), owner_key: self.motors[k].key, value: rotor_speed[k] * 60.0 / std::f64::consts::TAU, unit_key: "unit-rpm", decimals: 0 });
+            out.labels.push(Label {
+                pos: at(0.3),
+                owner_key: self.motors[k].key,
+                value: rotor_speed[k] * 60.0 / std::f64::consts::TAU,
+                unit_key: "unit-rpm",
+                decimals: 0,
+            });
         }
         out.parts.extend(self.on_platform(p));
-        out.labels.push(Label { pos: [p[0], 0.0, p[1] - 0.17], owner_key: "axis-z", value: p[1], unit_key: "unit-m", decimals: 3 });
+        out.labels.push(Label {
+            pos: [p[0], 0.0, p[1] - 0.17],
+            owner_key: "axis-z",
+            value: p[1],
+            unit_key: "unit-m",
+            decimals: 3,
+        });
     }
 
     /// The plate's centre, in the plane y = 0.

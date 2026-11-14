@@ -9,7 +9,15 @@ use toml::{Table, Value};
 
 pub const LICENSES: [&str; 5] = ["CC0-1.0", "CC-BY-4.0", "CC-BY-SA-4.0", "ODbL-1.0", "PDDL-1.0"];
 /// The test moves of docs/measurement-procedure.md.
-pub const TESTS: [&str; 7] = ["inertia-sines", "friction-map", "slow-reversal", "torque-step", "noise-excitation", "frequency-response", "cycle"];
+pub const TESTS: [&str; 7] = [
+    "inertia-sines",
+    "friction-map",
+    "slow-reversal",
+    "torque-step",
+    "noise-excitation",
+    "frequency-response",
+    "cycle",
+];
 
 /// (table, key, required, kind): `s` text, `n` number, `b` true/false.
 const SCHEMA: &[(&str, &str, bool, char)] = &[
@@ -71,18 +79,24 @@ pub fn personal_data(file: &str, text: &str) -> Vec<String> {
     for (n, line) in text.lines().enumerate() {
         let at = |what: &str| format!("{file}, line {}: {what}", n + 1);
         let lower = line.to_lowercase();
-        if line.split(|c: char| c.is_whitespace() || ",;\t\"'<>()".contains(c)).any(|w| w.contains('@') && w.split('@').nth(1).is_some_and(|d| d.contains('.'))) {
+        if line
+            .split(|c: char| c.is_whitespace() || ",;\t\"'<>()".contains(c))
+            .any(|w| w.contains('@') && w.split('@').nth(1).is_some_and(|d| d.contains('.')))
+        {
             found.push(at("an e-mail address"));
         }
         let dotted = line.split(|c: char| !(c.is_ascii_digit() || c == '.')).any(|w| {
             // A sentence's full stop is not part of the address.
             let parts: Vec<&str> = w.trim_matches('.').split('.').collect();
-            (parts.len() == 4 || parts.len() == 6) && parts.iter().all(|p| !p.is_empty() && p.len() <= 3 && p.parse::<u16>().is_ok_and(|v| v < 256))
+            (parts.len() == 4 || parts.len() == 6)
+                && parts.iter().all(|p| !p.is_empty() && p.len() <= 3 && p.parse::<u16>().is_ok_and(|v| v < 256))
         });
         // IPv6: hex groups with a "::" or all eight of them (a time 12:30:00 has neither).
         let ipv6 = line.split(|c: char| c.is_whitespace() || ",;\"'()[]<>".contains(c)).any(|w| {
             let groups = w.split(':').filter(|g| !g.is_empty()).count();
-            w.chars().all(|c| c.is_ascii_hexdigit() || c == ':') && groups >= 2 && (w.contains("::") || w.matches(':').count() == 7)
+            w.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
+                && groups >= 2
+                && (w.contains("::") || w.matches(':').count() == 7)
         });
         if dotted || ipv6 {
             found.push(at("an IP address or AMS Net ID"));
@@ -90,9 +104,17 @@ pub fn personal_data(file: &str, text: &str) -> Vec<String> {
         // A drive letter with either slash (not the scheme of a URL), a UNC share, or a user's home.
         let bytes = line.as_bytes();
         let drive_path = (0..bytes.len().saturating_sub(2)).any(|i| {
-            bytes[i].is_ascii_alphabetic() && bytes[i + 1] == b':' && (bytes[i + 2] == b'\\' || bytes[i + 2] == b'/') && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+            bytes[i].is_ascii_alphabetic()
+                && bytes[i + 1] == b':'
+                && (bytes[i + 2] == b'\\' || bytes[i + 2] == b'/')
+                && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
         });
-        if drive_path || line.contains("\\\\") || lower.contains("/home/") || lower.contains("/users/") || lower.contains("\\users\\") {
+        if drive_path
+            || line.contains("\\\\")
+            || lower.contains("/home/")
+            || lower.contains("/users/")
+            || lower.contains("\\users\\")
+        {
             found.push(at("an absolute path"));
         }
         if ["serial", "serien", "s/n", "s/no"].iter().any(|w| lower.contains(w)) {
@@ -133,7 +155,10 @@ pub fn check(dir: &Path) -> Vec<String> {
             problems.push(format!("dataset.license has to be one of {}", LICENSES.join(", ")));
         }
         let recorded = get("dataset", "recorded");
-        let month = recorded.len() == 7 && recorded.as_bytes()[4] == b'-' && recorded[..4].parse::<u16>().is_ok() && recorded[5..].parse::<u8>().is_ok_and(|m| (1..=12).contains(&m));
+        let month = recorded.len() == 7
+            && recorded.as_bytes()[4] == b'-'
+            && recorded[..4].parse::<u16>().is_ok()
+            && recorded[5..].parse::<u8>().is_ok_and(|m| (1..=12).contains(&m));
         if !month {
             problems.push("dataset.recorded has to be year and month only, YYYY-MM".into());
         }
@@ -180,7 +205,10 @@ pub fn check(dir: &Path) -> Vec<String> {
             problems.push(format!("{name}: a trace needs a map"));
             continue;
         }
-        let mapping = match read(&map).map_err(|e| e.to_string()).and_then(|m| Mapping::parse(&m).map_err(|e| format!("{} {}", e.key, e.detail))) {
+        let mapping = match read(&map)
+            .map_err(|e| e.to_string())
+            .and_then(|m| Mapping::parse(&m).map_err(|e| format!("{} {}", e.key, e.detail)))
+        {
             Ok(m) => m,
             Err(e) => {
                 problems.push(format!("{name}: map: {e}"));
@@ -191,7 +219,10 @@ pub fn check(dir: &Path) -> Vec<String> {
             Ok(imported) => {
                 let t = &imported.trace.time;
                 let step = (t[t.len() - 1] - t[0]) / (t.len() - 1) as f64;
-                let stated = r.get("sample_time_s").and_then(|v| v.as_float().or(v.as_integer().map(|i| i as f64))).unwrap_or(0.0);
+                let stated = r
+                    .get("sample_time_s")
+                    .and_then(|v| v.as_float().or(v.as_integer().map(|i| i as f64)))
+                    .unwrap_or(0.0);
                 if (step - stated).abs() > 0.01 * stated {
                     problems.push(format!("{name}: sample_time_s is {stated}, the trace has {step:e} s"));
                 }

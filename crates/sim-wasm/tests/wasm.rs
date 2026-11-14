@@ -40,7 +40,8 @@ fn a_config_from_the_page_is_checked_and_used() {
     let scale = cfg.f64("sim.dt_s").unwrap();
     cfg.set_text(&format!("sim.dt_s = {scale:?}")).unwrap();
     assert_eq!(handle(2, &format!("{}\nen\n{}", entry.id, cfg.to_text().unwrap())).unwrap(), base);
-    let error = handle(2, &format!("{}\nen\n{}\n[no_such_table]\nno_such_key = 1\n", entry.id, entry.default_config)).unwrap_err();
+    let error = handle(2, &format!("{}\nen\n{}\n[no_such_table]\nno_such_key = 1\n", entry.id, entry.default_config))
+        .unwrap_err();
     assert!(error.contains("no_such"), "{error}");
     assert!(handle(2, "no-such-machine\nen\n").unwrap_err().contains("no-such-machine"));
     assert!(handle(1, entry.id).unwrap().contains("[sim]"));

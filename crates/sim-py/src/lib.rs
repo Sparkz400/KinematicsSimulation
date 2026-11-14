@@ -9,7 +9,9 @@ use numpy::{PyArray1, PyArray2};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
-use sim_components::analysis::{CycleLoad, analyse_cycle_with, analyse_trajectory_with, bounds, verdict_bands, verdict_bands_sampled};
+use sim_components::analysis::{
+    CycleLoad, analyse_cycle_with, analyse_trajectory_with, bounds, verdict_bands, verdict_bands_sampled,
+};
 use sim_components::{Command, Sim, load_config};
 use sim_core::{ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
@@ -23,7 +25,12 @@ fn config_error(entry: &MachineEntry, e: ConfigError) -> PyErr {
 }
 
 fn machine(id: &str) -> PyResult<&'static MachineEntry> {
-    find(id).ok_or_else(|| PyKeyError::new_err(format!("unknown machine: {id}; known: {}", MACHINES.iter().map(|m| m.id).collect::<Vec<_>>().join(", "))))
+    find(id).ok_or_else(|| {
+        PyKeyError::new_err(format!(
+            "unknown machine: {id}; known: {}",
+            MACHINES.iter().map(|m| m.id).collect::<Vec<_>>().join(", ")
+        ))
+    })
 }
 
 /// A machine's config: its default, or a config file, with values set on top as `sim-cli --set` sets them.
@@ -42,11 +49,13 @@ struct PyConfig {
 
 impl PyConfig {
     fn rebuild(&mut self) -> PyResult<()> {
-        let mut cfg = sim_components::catalog::resolve(self.entry, &self.base).map_err(|e| config_error(self.entry, e))?;
+        let mut cfg =
+            sim_components::catalog::resolve(self.entry, &self.base).map_err(|e| config_error(self.entry, e))?;
         for (path, value) in &self.sets {
             cfg.set(path, value.clone()).map_err(|e| config_error(self.entry, e))?;
         }
-        cfg.check_keys(&self.entry.config(), &sim_components::analysis::RATINGS_BEYOND_DEFAULT).map_err(|e| config_error(self.entry, e))?;
+        cfg.check_keys(&self.entry.config(), &sim_components::analysis::RATINGS_BEYOND_DEFAULT)
+            .map_err(|e| config_error(self.entry, e))?;
         self.cfg = cfg;
         Ok(())
     }
@@ -75,7 +84,10 @@ impl PyConfig {
         let text = match (text, path) {
             (Some(_), Some(_)) => return Err(PyValueError::new_err("give text or path, not both")),
             (Some(text), None) => Some(text.to_string()),
-            (None, Some(path)) => Some(std::fs::read_to_string(&path).map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))?),
+            (None, Some(path)) => Some(
+                std::fs::read_to_string(&path)
+                    .map_err(|e| PyValueError::new_err(format!("{}: {e}", path.display())))?,
+            ),
             (None, None) => None,
         };
         let cfg = match text {
@@ -106,8 +118,12 @@ impl PyConfig {
 
     /// One `path = value` assignment with the value in TOML syntax, exactly as `sim-cli --set` takes it.
     fn set(&mut self, assignment: &str) -> PyResult<()> {
-        let (path, value) = assignment.split_once('=').ok_or_else(|| config_error(self.entry, ConfigError::Parse(assignment.into())))?;
-        let parsed: toml::Table = format!("v = {value}").parse().map_err(|_| config_error(self.entry, ConfigError::Parse(assignment.into())))?;
+        let (path, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| config_error(self.entry, ConfigError::Parse(assignment.into())))?;
+        let parsed: toml::Table = format!("v = {value}")
+            .parse()
+            .map_err(|_| config_error(self.entry, ConfigError::Parse(assignment.into())))?;
         self.assign(path.trim(), parsed["v"].clone())
     }
 
@@ -166,7 +182,9 @@ fn from_toml(py: Python<'_>, value: &toml::Value) -> PyResult<Py<PyAny>> {
         Value::Float(f) => f.into_pyobject(py)?.into_any().unbind(),
         Value::String(s) => s.into_pyobject(py)?.into_any().unbind(),
         Value::Datetime(d) => d.to_string().into_pyobject(py)?.into_any().unbind(),
-        Value::Array(items) => PyList::new(py, items.iter().map(|v| from_toml(py, v)).collect::<PyResult<Vec<_>>>()?)?.into_any().unbind(),
+        Value::Array(items) => {
+            PyList::new(py, items.iter().map(|v| from_toml(py, v)).collect::<PyResult<Vec<_>>>()?)?.into_any().unbind()
+        }
         Value::Table(table) => {
             let out = PyDict::new(py);
             for (k, v) in table {
@@ -207,7 +225,15 @@ fn signals(py: Python<'_>, config: &PyConfig) -> PyResult<Py<PyDict>> {
 
 /// What the machine is told to do: the cycle, a move, a path (text of a path file), or poses at times (text of a
 /// trajectory file); at most one.
-fn motion(entry: &MachineEntry, sim: &Sim, cycle: bool, move_to: Option<Vec<f64>>, path: Option<&str>, trajectory: Option<&str>, time_optimal: bool) -> Result<Option<Command>, String> {
+fn motion(
+    entry: &MachineEntry,
+    sim: &Sim,
+    cycle: bool,
+    move_to: Option<Vec<f64>>,
+    path: Option<&str>,
+    trajectory: Option<&str>,
+    time_optimal: bool,
+) -> Result<Option<Command>, String> {
     let given = [cycle, move_to.is_some(), path.is_some(), trajectory.is_some()].iter().filter(|g| **g).count();
     if given > 1 {
         return Err("give at most one of cycle, move_to, path, trajectory".into());
@@ -221,7 +247,13 @@ fn motion(entry: &MachineEntry, sim: &Sim, cycle: bool, move_to: Option<Vec<f64>
     })
 }
 
-fn poses(entry: &MachineEntry, sim: &Sim, path: Option<&str>, trajectory: Option<&str>, time_optimal: bool) -> Result<Option<Vec<(f64, Vec<f64>)>>, String> {
+fn poses(
+    entry: &MachineEntry,
+    sim: &Sim,
+    path: Option<&str>,
+    trajectory: Option<&str>,
+    time_optimal: bool,
+) -> Result<Option<Vec<(f64, Vec<f64>)>>, String> {
     if let Some(text) = trajectory {
         return sim_components::path::parse_trajectory(text).map(Some).map_err(|line| format!("trajectory: {line}"));
     }
@@ -257,7 +289,9 @@ fn run(
         .detach(|| -> Result<_, String> {
             let tr = texts(entry);
             let mut sim = Sim::new(entry, &cfg).map_err(|e| tr.tr_arg(e.key(), e.detail()))?;
-            if let Some(command) = motion(entry, &sim, cycle, move_to, path.as_deref(), trajectory.as_deref(), time_optimal)? {
+            if let Some(command) =
+                motion(entry, &sim, cycle, move_to, path.as_deref(), trajectory.as_deref(), time_optimal)?
+            {
                 sim.command(command).map_err(|e| tr.tr(e.key).to_string())?;
             }
             let ids: Vec<String> = sim.signal_infos().into_iter().map(|s| s.id).collect();
@@ -289,7 +323,14 @@ fn run(
 /// (N m) at its operating points.
 #[pyfunction]
 #[pyo3(signature = (config, *, path=None, trajectory=None, time_optimal=false, points=false))]
-fn analyze(py: Python<'_>, config: &PyConfig, path: Option<String>, trajectory: Option<String>, time_optimal: bool, points: bool) -> PyResult<Py<PyDict>> {
+fn analyze(
+    py: Python<'_>,
+    config: &PyConfig,
+    path: Option<String>,
+    trajectory: Option<String>,
+    time_optimal: bool,
+    points: bool,
+) -> PyResult<Py<PyDict>> {
     let (entry, cfg) = (config.entry, config.cfg.clone());
     let (motors, load) = py
         .detach(|| -> Result<(Vec<&'static str>, CycleLoad), String> {
@@ -305,7 +346,9 @@ fn analyze(py: Python<'_>, config: &PyConfig, path: Option<String>, trajectory: 
         })
         .map_err(PyValueError::new_err)?;
     let out = PyDict::new(py);
-    let column = |f: fn(&sim_components::analysis::MotorLoad) -> f64| PyArray1::from_vec(py, load.motors.iter().map(f).collect());
+    let column = |f: fn(&sim_components::analysis::MotorLoad) -> f64| {
+        PyArray1::from_vec(py, load.motors.iter().map(f).collect())
+    };
     out.set_item("motor", motors)?;
     out.set_item("cycle_s", PyArray1::from_vec(py, vec![load.duration; load.motors.len()]))?;
     out.set_item("peak_torque_nm", column(|m| m.peak_torque))?;
@@ -325,14 +368,23 @@ fn analyze(py: Python<'_>, config: &PyConfig, path: Option<String>, trajectory: 
     let (low, high) = load.belt_tension.unwrap_or((f64::NAN, f64::NAN));
     out.set_item("belt_tension_min_n", PyArray1::from_vec(py, vec![low; load.motors.len()]))?;
     out.set_item("belt_tension_max_n", PyArray1::from_vec(py, vec![high; load.motors.len()]))?;
-    for (name, value) in [("path_error_peak_m", load.path_error_peak), ("path_error_rms_m", load.path_error_rms), ("tracking_error_peak_m", load.tracking_error_peak), ("dwell_error_peak_m", load.dwell_error_peak)] {
+    for (name, value) in [
+        ("path_error_peak_m", load.path_error_peak),
+        ("path_error_rms_m", load.path_error_rms),
+        ("tracking_error_peak_m", load.tracking_error_peak),
+        ("dwell_error_peak_m", load.dwell_error_peak),
+    ] {
         out.set_item(name, PyArray1::from_vec(py, vec![value; load.motors.len()]))?;
     }
     if points {
         let list = PyList::empty(py);
         for m in &load.motors {
             let rows: Vec<Vec<f64>> = m.points.iter().map(|(s, t)| vec![*s, *t]).collect();
-            list.append(if rows.is_empty() { PyArray2::zeros(py, [0, 2], false) } else { PyArray2::from_vec2(py, &rows)? })?;
+            list.append(if rows.is_empty() {
+                PyArray2::zeros(py, [0, 2], false)
+            } else {
+                PyArray2::from_vec2(py, &rows)?
+            })?;
         }
         out.set_item("points", list)?;
     }
@@ -387,14 +439,26 @@ fn verdicts(py: Python<'_>, config: &PyConfig, bands: bool, samples: Option<usiz
 /// series to try as well, and `axes=True` tries every axis of the catalogue too.
 #[pyfunction]
 #[pyo3(signature = (config, *, supply="400v", series="", gearboxes=None, axes=false))]
-fn sizing(py: Python<'_>, config: &PyConfig, supply: &str, series: &str, gearboxes: Option<&str>, axes: bool) -> PyResult<Py<PyDict>> {
+fn sizing(
+    py: Python<'_>,
+    config: &PyConfig,
+    supply: &str,
+    series: &str,
+    gearboxes: Option<&str>,
+    axes: bool,
+) -> PyResult<Py<PyDict>> {
     let (entry, cfg) = (config.entry, config.cfg.clone());
     let found = py.detach(|| {
         let wanted = |article: &str| article.starts_with(series);
-        if axes { sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes) } else { sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes) }
+        if axes {
+            sim_components::catalog::search_axes(entry, &cfg, supply, &wanted, gearboxes)
+        } else {
+            sim_components::catalog::search_motors(entry, &cfg, supply, &wanted, gearboxes)
+        }
     });
     let out = PyDict::new(py);
-    let numbers = |f: &dyn Fn(&sim_components::catalog::Candidate) -> f64| PyArray1::from_vec(py, found.iter().map(f).collect());
+    let numbers =
+        |f: &dyn Fn(&sim_components::catalog::Candidate) -> f64| PyArray1::from_vec(py, found.iter().map(f).collect());
     out.set_item("axis", found.iter().map(|c| c.axis.clone()).collect::<Vec<_>>())?;
     out.set_item("motor", found.iter().map(|c| c.article).collect::<Vec<_>>())?;
     out.set_item("gearbox", found.iter().map(|c| c.gearbox.clone()).collect::<Vec<_>>())?;
@@ -404,7 +468,9 @@ fn sizing(py: Python<'_>, config: &PyConfig, supply: &str, series: &str, gearbox
     out.set_item("passes", PyArray1::from_vec(py, found.iter().map(|c| c.passes()).collect()))?;
     out.set_item("tightest_check", found.iter().map(|c| c.tightest().map_or(c.refused, |t| t.0)).collect::<Vec<_>>())?;
     out.set_item("tightest_utilisation", numbers(&|c| c.tightest().map_or(f64::NAN, |t| t.1)))?;
-    let peak = |c: &sim_components::catalog::Candidate| c.result.as_ref().map_or(f64::NAN, |(load, _)| load.motors.iter().map(|m| m.peak_torque).fold(0.0, f64::max));
+    let peak = |c: &sim_components::catalog::Candidate| {
+        c.result.as_ref().map_or(f64::NAN, |(load, _)| load.motors.iter().map(|m| m.peak_torque).fold(0.0, f64::max))
+    };
     out.set_item("peak_torque_nm", numbers(&peak))?;
     Ok(out.unbind())
 }

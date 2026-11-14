@@ -67,7 +67,11 @@ fn inertial_peak(entry: &MachineEntry, cfg: &Config, base: f64, payload: f64, si
     use sim_components::{Command, Sim};
     let mut sim = Sim::new(entry, cfg).unwrap();
     let axis = sim.machine.axes()[0].id;
-    let (speed, attached, at) = (sim.signal_index(&format!("axis.{axis}.velocity")).unwrap(), sim.signal_index("payload").unwrap(), sim.signal_index(signal).unwrap());
+    let (speed, attached, at) = (
+        sim.signal_index(&format!("axis.{axis}.velocity")).unwrap(),
+        sim.signal_index("payload").unwrap(),
+        sim.signal_index(signal).unwrap(),
+    );
     let dt = cfg.f64("sim.dt_s").unwrap();
     sim.command(Command::StartCycle).unwrap();
     let (mut sample, mut last, mut peaks): (Vec<f64>, Option<f64>, (f64, f64)) = (Vec::new(), None, (0.0, 0.0));
@@ -260,10 +264,14 @@ fn an_arm_refuses_what_it_cannot_size() {
     let mut cfg = SCARA.config();
     cfg.set_text("arm.gear_ratios = [100.0, 80.0, 2.0, 50.0]").unwrap();
     assert!((SCARA.build)(&cfg).is_err());
-    let mut cfg = Config::parse(&URDF_ARM.default_config.replace("[ratings]
-", "[ratings]
+    let mut cfg = Config::parse(&URDF_ARM.default_config.replace(
+        "[ratings]
+",
+        "[ratings]
 gearbox_reference_speed_rpm = 400.0
-")).unwrap();
+",
+    ))
+    .unwrap();
     assert!((URDF_ARM.build)(&cfg).is_err());
     cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_ok());
@@ -285,7 +293,13 @@ fn the_jacobian_mass_matrix_is_newton_eulers() {
             unit.iter_mut().enumerate().for_each(|(k, u)| *u = if k == j { 1.0 } else { 0.0 });
             chain.inverse_dynamics(&q, &vec![0.0; n], &unit, 0.0, extra, &mut tau);
             for i in 0..n {
-                assert!((fast[i * n + j] - tau[i]).abs() < 1e-12 * tau[i].abs().max(1.0), "{} M[{i}][{j}]: {} against {}", entry.id, fast[i * n + j], tau[i]);
+                assert!(
+                    (fast[i * n + j] - tau[i]).abs() < 1e-12 * tau[i].abs().max(1.0),
+                    "{} M[{i}][{j}]: {} against {}",
+                    entry.id,
+                    fast[i * n + j],
+                    tau[i]
+                );
             }
         }
     }

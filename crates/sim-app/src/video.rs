@@ -83,7 +83,8 @@ impl Recording {
     pub fn start() -> Result<Self, Message> {
         // Absolute: Blender reads relative paths from elsewhere, and the messages say where the files are.
         let refused = |e: std::io::Error| ("ui-video-refused", e.to_string());
-        let dir = new_folder(&std::path::absolute("recordings").map_err(refused)?, SystemTime::now()).map_err(refused)?;
+        let dir =
+            new_folder(&std::path::absolute("recordings").map_err(refused)?, SystemTime::now()).map_err(refused)?;
         let (frames, received) = mpsc::sync_channel::<Frame>(QUEUE);
         let (dropped, closing) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)));
         let (folder, lost, close) = (dir.clone(), dropped.clone(), closing.clone());
@@ -133,7 +134,12 @@ impl Recording {
     /// height in physical pixels), for `Screenshot`'s `observe`. Every frame has the first one's size, made even
     /// (H.264 stores colour at half resolution), however the window or the panels change meanwhile (`cut`); `fill`
     /// is the window's clear colour, for where the view got smaller.
-    pub fn saver(&mut self, view: [u32; 4], fill: [u8; 4], numbers: Range<u64>) -> impl FnMut(On<ScreenshotCaptured>) + use<> {
+    pub fn saver(
+        &mut self,
+        view: [u32; 4],
+        fill: [u8; 4],
+        numbers: Range<u64>,
+    ) -> impl FnMut(On<ScreenshotCaptured>) + use<> {
         let size = *self.size.get_or_insert([view[2] & !1, view[3] & !1]);
         let (frames, dropped) = (self.frames.clone(), self.dropped.clone());
         move |captured| {
@@ -141,12 +147,20 @@ impl Recording {
             let window = window.to_rgba8();
             let pixels = cut(&window, [window.width(), window.height()], view, size, fill);
             let extent = Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
-            let picture = Image::new(extent, TextureDimension::D2, pixels, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+            let picture = Image::new(
+                extent,
+                TextureDimension::D2,
+                pixels,
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::default(),
+            );
             let Ok(picture) = picture.try_into_dynamic() else { return };
             let picture = picture.to_rgb8();
             let numbers = numbers.clone();
             let count = numbers.end - numbers.start;
-            let save = move |folder: &Path| save_numbered(folder, numbers, |file| picture.save(file).map_err(|e| e.to_string()));
+            let save = move |folder: &Path| {
+                save_numbered(folder, numbers, |file| picture.save(file).map_err(|e| e.to_string()))
+            };
             // Never waits: a full queue would hold up the window until the disk caught up.
             if frames.try_send(Box::new(save)).is_err() {
                 dropped.fetch_add(count, Ordering::Relaxed);
@@ -178,7 +192,13 @@ fn new_folder(parent: &Path, now: SystemTime) -> std::io::Result<PathBuf> {
 
 /// The view at `view` (left, top, width, height) in a window's RGBA picture `[width, height]` across, cut to `size`:
 /// from the view's top left, as much of the view as fits in `size` and in the picture, the rest `fill`.
-fn cut(window: &[u8], [width, height]: [u32; 2], [left, top, view_width, view_height]: [u32; 4], size: [u32; 2], fill: [u8; 4]) -> Vec<u8> {
+fn cut(
+    window: &[u8],
+    [width, height]: [u32; 2],
+    [left, top, view_width, view_height]: [u32; 4],
+    size: [u32; 2],
+    fill: [u8; 4],
+) -> Vec<u8> {
     let (left, top) = (left.min(width) as usize, top.min(height) as usize);
     let (width, size_x) = (width as usize, size[0] as usize);
     let across = (view_width as usize).min(size_x).min(width - left);
@@ -193,7 +213,11 @@ fn cut(window: &[u8], [width, height]: [u32; 2], [left, top, view_width, view_he
 
 /// Saves one picture as each of the frames `numbers` in `folder`: encoded once by `write`, then copied, since a
 /// repeated frame is the same file and a copy is far quicker than encoding it again.
-fn save_numbered(folder: &Path, numbers: Range<u64>, write: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+fn save_numbered(
+    folder: &Path,
+    numbers: Range<u64>,
+    write: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     let file = |n: u64| folder.join(format!("{n:06}.png"));
     let first = file(numbers.start);
     write(&first)?;
@@ -243,7 +267,8 @@ fn find_blender(named: Option<OsString>, installs: &Path) -> Option<PathBuf> {
     let found = installs.flatten().filter_map(|entry| {
         let name = entry.file_name().into_string().ok()?;
         // "Blender 5.2" → [5, 2], so that 5.10 counts as newer than 5.9.
-        let version: Vec<u32> = name.strip_prefix("Blender ")?.split('.').map(|n| n.parse().ok()).collect::<Option<_>>()?;
+        let version: Vec<u32> =
+            name.strip_prefix("Blender ")?.split('.').map(|n| n.parse().ok()).collect::<Option<_>>()?;
         let exe = entry.path().join("blender.exe");
         exe.is_file().then_some((version, exe))
     });
@@ -308,7 +333,9 @@ mod tests {
     #[test]
     fn frames_keep_the_first_ones_even_size() {
         // A window whose every pixel tells where it is.
-        let window = |w: u32, h: u32| (0..h).flat_map(|y| (0..w).flat_map(move |x| [x as u8, y as u8, 0, 255])).collect::<Vec<u8>>();
+        let window = |w: u32, h: u32| {
+            (0..h).flat_map(|y| (0..w).flat_map(move |x| [x as u8, y as u8, 0, 255])).collect::<Vec<u8>>()
+        };
         let pixel = |out: &[u8], x: usize, y: usize| <[u8; 4]>::try_from(&out[(y * 4 + x) * 4..][..4]).unwrap();
         let fill = [9, 9, 9, 255];
         // The size as `saver` fixes it: the first view's, made even.
@@ -326,7 +353,10 @@ mod tests {
         assert_eq!((out.len(), pixel(&out, 0, 0)), (32, [0, 1, 0, 255]));
         // Shrunk to 3 by 1: padded right and below.
         let out = cut(&window(8, 6), [8, 6], [2, 2, 3, 1], [4, 2], fill);
-        assert_eq!((out.len(), pixel(&out, 2, 0), pixel(&out, 3, 0), pixel(&out, 0, 1)), (32, [4, 2, 0, 255], fill, fill));
+        assert_eq!(
+            (out.len(), pixel(&out, 2, 0), pixel(&out, 3, 0), pixel(&out, 0, 1)),
+            (32, [4, 2, 0, 255], fill, fill)
+        );
         // The window itself narrower than the cut, and a view reaching past it: nothing read outside the picture.
         let out = cut(&window(3, 1), [3, 1], [1, 0, 9, 9], [4, 2], fill);
         assert_eq!((out.len(), pixel(&out, 1, 0), pixel(&out, 2, 0)), (32, [2, 0, 0, 255], fill));

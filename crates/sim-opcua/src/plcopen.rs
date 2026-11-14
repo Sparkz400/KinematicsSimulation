@@ -104,7 +104,18 @@ impl Axis {
                 };
             }
         }
-        Self { info: info.clone(), home, enable: false, fbs, homed: false, error_id: 0, pos: home, vel: 0.0, motion: None, stopping: false }
+        Self {
+            info: info.clone(),
+            home,
+            enable: false,
+            fbs,
+            homed: false,
+            error_id: 0,
+            pos: home,
+            vel: 0.0,
+            motion: None,
+            stopping: false,
+        }
     }
 
     pub fn state(&self) -> State {
@@ -139,7 +150,13 @@ impl Axis {
             for (param, value) in params.iter().zip(fb.params) {
                 out.push((format!("{name}.{param}"), value.into(), true));
             }
-            for (output, value) in [("Done", fb.done), ("Busy", fb.busy), ("Active", fb.busy), ("CommandAborted", fb.aborted), ("Error", fb.error)] {
+            for (output, value) in [
+                ("Done", fb.done),
+                ("Busy", fb.busy),
+                ("Active", fb.busy),
+                ("CommandAborted", fb.aborted),
+                ("Error", fb.error),
+            ] {
                 out.push((format!("{name}.{output}"), value.into(), false));
             }
             out.push((format!("{name}.ErrorID"), fb.error_id.into(), false));
@@ -236,7 +253,12 @@ impl Axis {
             STOP => (None, a.max_vel, a.max_acc, cut(p[0], a.max_acc)),
             _ => {
                 let start = if self.moving() { self.pos } else { setpoint };
-                (Some(if k == MOVE_ABSOLUTE { p[0] } else { start + p[0] }), cut(p[1], a.max_vel), cut(p[2], a.max_acc), cut(p[3], a.max_acc))
+                (
+                    Some(if k == MOVE_ABSOLUTE { p[0] } else { start + p[0] }),
+                    cut(p[1], a.max_vel),
+                    cut(p[2], a.max_acc),
+                    cut(p[3], a.max_acc),
+                )
             }
         };
         let valid = [vel, acc, dec].iter().all(|v| v.is_finite() && *v > 0.0) && target.is_none_or(f64::is_finite);
@@ -303,7 +325,8 @@ mod tests {
     use super::*;
 
     fn axis() -> Axis {
-        let info = AxisInfo { id: "x", key: "", unit: "m", min: 0.0, max: 1.0, max_vel: 1.0, max_acc: 10.0, max_jerk: 100.0 };
+        let info =
+            AxisInfo { id: "x", key: "", unit: "m", min: 0.0, max: 1.0, max_vel: 1.0, max_acc: 10.0, max_jerk: 100.0 };
         let mut axis = Axis::new(&info, 0.1);
         axis.power(true);
         axis
@@ -430,7 +453,9 @@ mod tests {
     /// NaN and infinite numeric inputs are refused, not cut to the axis limits.
     #[test]
     fn nan_and_infinite_inputs_are_refused() {
-        for (fb, name) in [(MOVE_ABSOLUTE, "Velocity"), (MOVE_ABSOLUTE, "Acceleration"), (2, "Deceleration"), (STOP, "Deceleration")] {
+        for (fb, name) in
+            [(MOVE_ABSOLUTE, "Velocity"), (MOVE_ABSOLUTE, "Acceleration"), (2, "Deceleration"), (STOP, "Deceleration")]
+        {
             for bad in [f64::NAN, f64::INFINITY] {
                 let mut a = axis();
                 a.set_param("MoveAbsolute.Position", 0.5);
@@ -529,6 +554,11 @@ mod tests {
         a.execute(2, true, 0.0, false);
         assert!(a.fbs[2].busy && !a.fbs[2].aborted);
         step(&mut a, 300, (0.5, 1.0, 8.0));
-        assert!(!a.moving() && a.fbs[2].done && !a.fbs[2].aborted && (a.pos - at - 0.3).abs() < 1e-12, "{} from {at}, {:?}", a.pos, a.fbs[2]);
+        assert!(
+            !a.moving() && a.fbs[2].done && !a.fbs[2].aborted && (a.pos - at - 0.3).abs() < 1e-12,
+            "{} from {at}, {:?}",
+            a.pos,
+            a.fbs[2]
+        );
     }
 }

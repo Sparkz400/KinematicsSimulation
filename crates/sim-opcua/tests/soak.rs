@@ -5,7 +5,9 @@
 
 use opcua::client::{ClientBuilder, IdentityToken};
 use opcua::crypto::SecurityPolicy;
-use opcua::types::{AttributeId, DataValue, MessageSecurityMode, NodeId, NumericRange, TimestampsToReturn, Variant, WriteValue};
+use opcua::types::{
+    AttributeId, DataValue, MessageSecurityMode, NodeId, NumericRange, TimestampsToReturn, Variant, WriteValue,
+};
 use sim_components::Sim;
 use sim_machines::{MACHINES, translations};
 use sim_opcua::{NAMESPACE, serve};
@@ -21,13 +23,26 @@ fn resident() -> Option<u64> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
     let seconds: f64 = std::env::var("SOAK_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(20.0);
-    let entry = MACHINES.iter().copied().find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1).expect("no machine with two axes");
+    let entry = MACHINES
+        .iter()
+        .copied()
+        .find(|m| Sim::new(m, &m.config()).unwrap().machine.axes().len() > 1)
+        .expect("no machine with two axes");
     let sim = Sim::new(entry, &entry.config()).unwrap();
     let axes: Vec<_> = sim.machine.axes().to_vec();
     let scratch = |name: &str| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("opc.tcp://{}/", listener.local_addr().unwrap());
-    let link = serve(entry, &entry.config(), &translations("en", entry), listener, &scratch("soak-server"), Duration::from_millis(10)).await.unwrap();
+    let link = serve(
+        entry,
+        &entry.config(),
+        &translations("en", entry),
+        listener,
+        &scratch("soak-server"),
+        Duration::from_millis(10),
+    )
+    .await
+    .unwrap();
     let mut client = ClientBuilder::new()
         .application_name("soak-plc")
         .application_uri("urn:soak-plc")
@@ -37,7 +52,13 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
         .session_retry_limit(1)
         .client()
         .unwrap();
-    let (session, event_loop) = client.connect_to_matching_endpoint((url.as_str(), SecurityPolicy::None.to_str(), MessageSecurityMode::None), IdentityToken::Anonymous).await.unwrap();
+    let (session, event_loop) = client
+        .connect_to_matching_endpoint(
+            (url.as_str(), SecurityPolicy::None.to_str(), MessageSecurityMode::None),
+            IdentityToken::Anonymous,
+        )
+        .await
+        .unwrap();
     event_loop.spawn();
     assert!(session.wait_for_connection().await);
     let ns = session.get_namespace_index(NAMESPACE).await.unwrap();
@@ -45,7 +66,12 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
     let write = |values: Vec<(String, Variant)>| {
         let writes: Vec<WriteValue> = values
             .into_iter()
-            .map(|(name, value)| WriteValue { node_id: node(name), attribute_id: AttributeId::Value as u32, index_range: NumericRange::None, value: DataValue { value: Some(value), ..Default::default() } })
+            .map(|(name, value)| WriteValue {
+                node_id: node(name),
+                attribute_id: AttributeId::Value as u32,
+                index_range: NumericRange::None,
+                value: DataValue { value: Some(value), ..Default::default() },
+            })
             .collect();
         let session = session.clone();
         async move { assert!(session.write(&writes).await.unwrap().iter().all(|s| s.is_good())) }
@@ -53,7 +79,15 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
     let read = |names: Vec<String>| {
         let nodes: Vec<_> = names.iter().map(|n| node(n.clone()).into()).collect();
         let session = session.clone();
-        async move { session.read(&nodes, TimestampsToReturn::Neither, 0.0).await.unwrap().into_iter().map(|v| v.value.unwrap()).collect::<Vec<Variant>>() }
+        async move {
+            session
+                .read(&nodes, TimestampsToReturn::Neither, 0.0)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| v.value.unwrap())
+                .collect::<Vec<Variant>>()
+        }
     };
 
     for axis in &axes {
@@ -71,7 +105,8 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
         // The handshake a PLC uses: Execute down, wait until Done reads false (the outputs are published once a
         // cycle, so a Done read right after the write can be the last move's), then the inputs and Execute up.
         let done: Vec<String> = axes.iter().map(|a| format!("axis.{}.MoveAbsolute.Done", a.id)).collect();
-        write(axes.iter().map(|a| (format!("axis.{}.MoveAbsolute.Execute", a.id), Variant::Boolean(false))).collect()).await;
+        write(axes.iter().map(|a| (format!("axis.{}.MoveAbsolute.Execute", a.id), Variant::Boolean(false))).collect())
+            .await;
         while read(done.clone()).await.contains(&Variant::Boolean(true)) {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -81,11 +116,15 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
             values.push((format!("axis.{}.MoveAbsolute.Execute", axis.id), Variant::Boolean(true)));
         }
         write(values).await;
-        let watched: Vec<String> = axes.iter().flat_map(|a| ["MoveAbsolute.Done", "MoveAbsolute.Error", "Error"].map(|n| format!("axis.{}.{n}", a.id))).collect();
+        let watched: Vec<String> = axes
+            .iter()
+            .flat_map(|a| ["MoveAbsolute.Done", "MoveAbsolute.Error", "Error"].map(|n| format!("axis.{}.{n}", a.id)))
+            .collect();
         let waited = Instant::now();
         loop {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            let flags: Vec<bool> = read(watched.clone()).await.into_iter().map(|v| v == Variant::Boolean(true)).collect();
+            let flags: Vec<bool> =
+                read(watched.clone()).await.into_iter().map(|v| v == Variant::Boolean(true)).collect();
             assert!(flags.chunks(3).all(|f| !f[1] && !f[2]), "error after {moves} moves: {flags:?}");
             if flags.chunks(3).all(|f| f[0]) {
                 break;
@@ -122,12 +161,26 @@ async fn the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift() {
     assert!(worst_miss < 2e-4, "missed a target by {worst_miss} m");
     // Real time: the simulation keeps up with the wall clock, and the steps match the time it ran.
     assert!((pacing.realtime_factor() - 1.0).abs() < 0.02, "real-time factor {}", pacing.realtime_factor());
-    assert!((steps as f64 * sim.dt - started.elapsed().as_secs_f64()).abs() < 1.0 + 0.02 * seconds, "{steps} steps in {} s", started.elapsed().as_secs_f64());
+    assert!(
+        (steps as f64 * sim.dt - started.elapsed().as_secs_f64()).abs() < 1.0 + 0.02 * seconds,
+        "{steps} steps in {} s",
+        started.elapsed().as_secs_f64()
+    );
     assert!((pacing.period_s() - 0.01).abs() < 0.002, "mean period {} s", pacing.period_s());
     // Loose bounds: a desktop OS is no real-time system, and a CI host runs other jobs. On an idle host the jitter
     // is well under a millisecond; on one with all cores busy a plain sleep loop shows 8 ms RMS.
-    assert!(pacing.jitter_rms_s() < 0.01 && pacing.jitter_max_s < 0.1, "jitter rms {} s, max {} s", pacing.jitter_rms_s(), pacing.jitter_max_s);
-    assert!((pacing.overruns as f64) < 0.1 * pacing.cycles as f64, "{} overruns in {} cycles", pacing.overruns, pacing.cycles);
+    assert!(
+        pacing.jitter_rms_s() < 0.01 && pacing.jitter_max_s < 0.1,
+        "jitter rms {} s, max {} s",
+        pacing.jitter_rms_s(),
+        pacing.jitter_max_s
+    );
+    assert!(
+        (pacing.overruns as f64) < 0.1 * pacing.cycles as f64,
+        "{} overruns in {} cycles",
+        pacing.overruns,
+        pacing.cycles
+    );
     if let (Some(before), Some(after)) = (memory_before, resident()) {
         assert!(after < before + (64 << 20), "memory grew from {before} to {after} bytes");
     }

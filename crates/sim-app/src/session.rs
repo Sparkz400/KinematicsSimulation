@@ -92,7 +92,8 @@ pub fn mode_scene(sim: &Sim, exaggeration: f64, seconds: f64) -> Option<Scene> {
     let (hz, shape) = machine.mode_shape(pose)?;
     let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
     machine.equilibrium(pose, &mut state, &mut torque);
-    let amplitude = (MODE_TRAVEL * exaggeration).min(MODE_TRAVEL_MOST) * (std::f64::consts::TAU * MODE_SHOWN_HZ * seconds).sin();
+    let amplitude =
+        (MODE_TRAVEL * exaggeration).min(MODE_TRAVEL_MOST) * (std::f64::consts::TAU * MODE_SHOWN_HZ * seconds).sin();
     state.iter_mut().zip(&shape).for_each(|(s, d)| *s += amplitude * d);
     let mut scene = Scene { exaggeration: 1.0, ..Scene::default() };
     machine.scene(&state, &mut scene);
@@ -102,7 +103,13 @@ pub fn mode_scene(sim: &Sim, exaggeration: f64, seconds: f64) -> Option<Scene> {
     let at = scene.tool.unwrap_or_default();
     // The live values drawn from the swinging state would show the swing, not the machine: only the mode's label.
     scene.labels.clear();
-    scene.labels.push(Label { pos: [at[0] + 0.1, at[1], at[2]], owner_key: "ui-view-mode-label", value: hz, unit_key: "unit-hz", decimals: 1 });
+    scene.labels.push(Label {
+        pos: [at[0] + 0.1, at[1], at[2]],
+        owner_key: "ui-view-mode-label",
+        value: hz,
+        unit_key: "unit-hz",
+        decimals: 1,
+    });
     Some(scene)
 }
 
@@ -122,7 +129,9 @@ impl Outbox {
             // The points that wait belong to the path that ends here.
             Event::TrailStart(_) => self.events.retain(|waiting| !matches!(waiting, Event::Trail(_))),
             Event::Trail(points) => {
-                if let Some(Event::Trail(waiting)) = self.events.iter_mut().find(|waiting| matches!(waiting, Event::Trail(_))) {
+                if let Some(Event::Trail(waiting)) =
+                    self.events.iter_mut().find(|waiting| matches!(waiting, Event::Trail(_)))
+                {
                     return extend_trail(waiting, points);
                 }
             }
@@ -165,7 +174,16 @@ impl Runner {
     pub fn new(entry: &'static MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
         let sim = Sim::new(entry, cfg)?;
         let sample_every = (1e-3 / sim.dt).round().max(1.0) as u64;
-        Ok(Self { sim, entry, sample_every, tripped: false, trail: None, recording: false, trail_points: Vec::new(), trail_restarted: false })
+        Ok(Self {
+            sim,
+            entry,
+            sample_every,
+            tripped: false,
+            trail: None,
+            recording: false,
+            trail_points: Vec::new(),
+            trail_restarted: false,
+        })
     }
 
     pub fn handle(&mut self, request: Request, events: &mut Vec<Event>) {
@@ -175,7 +193,9 @@ impl Runner {
                 let (path, cycle) = (matches!(command, Command::Trajectory(_)), matches!(command, Command::StartCycle));
                 match self.sim.command(command) {
                     Err(e) => events.push(Event::Refused(e.key, String::new())),
-                    Ok(()) if path || cycle => self.start_trail(if path { self.sim.tool_point() } else { None }, events),
+                    Ok(()) if path || cycle => {
+                        self.start_trail(if path { self.sim.tool_point() } else { None }, events)
+                    }
                     // Another command ends the path only if it ends the trajectory (drives off). A stop after the
                     // segment or an enable is taken while it runs and leaves it running.
                     Ok(()) => self.recording &= self.sim.control.busy(),
@@ -227,12 +247,13 @@ impl Runner {
         for _ in 0..(seconds / self.sim.dt).round() as u64 {
             self.sim.step();
             if let (true, Some(last), Some(tool)) = (self.recording, self.trail, self.sim.tool_point())
-                && (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8 {
-                    travelled.push(tool);
-                    let point = self.trail_point(tool);
-                    self.trail_points.push(point);
-                    self.trail = Some(tool);
-                }
+                && (0..3).map(|i| (tool[i] - last[i]).powi(2)).sum::<f64>() > 1e-8
+            {
+                travelled.push(tool);
+                let point = self.trail_point(tool);
+                self.trail_points.push(point);
+                self.trail = Some(tool);
+            }
             // The trajectory is through: the path ends with it.
             self.recording &= self.sim.control.busy();
             if self.sim.step.is_multiple_of(self.sample_every) {
@@ -310,7 +331,8 @@ impl Session {
                 runner.advance(whole, &mut batch);
                 owed -= whole;
                 if now - last_scene > Duration::from_millis(8) {
-                    let swinging = mode.and_then(|since| mode_scene(&runner.sim, exaggeration, since.elapsed().as_secs_f64()));
+                    let swinging =
+                        mode.and_then(|since| mode_scene(&runner.sim, exaggeration, since.elapsed().as_secs_f64()));
                     let scene = swinging.unwrap_or_else(|| {
                         let mut scene = Scene { exaggeration, ..Scene::default() };
                         runner.sim.scene(&mut scene);
@@ -344,7 +366,11 @@ impl Session {
     /// The travelled path's points with their speed and plan since the last call, whether the path started anew
     /// before them (`ViewNews`), and whether the machine tells a mode to show. Never waits long.
     pub fn view_news(&self) -> ViewNews {
-        let take = |news: &mut ViewNews| ViewNews { restarted: std::mem::take(&mut news.restarted), trail: std::mem::take(&mut news.trail), has_mode: news.has_mode };
+        let take = |news: &mut ViewNews| ViewNews {
+            restarted: std::mem::take(&mut news.restarted),
+            trail: std::mem::take(&mut news.trail),
+            has_mode: news.has_mode,
+        };
         self.news.lock().map(|mut news| take(&mut news)).unwrap_or_default()
     }
 
@@ -393,11 +419,18 @@ mod tests {
             assert!(outbox.events.len() <= BACKLOG + 3);
         }
         let events = outbox.drain();
-        let samples: Vec<f64> = events.iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
-        assert_eq!((samples.len(), samples[0], samples[BACKLOG - 1]), (BACKLOG, (2 * BACKLOG) as f64, (3 * BACKLOG - 1) as f64));
+        let samples: Vec<f64> =
+            events.iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
+        assert_eq!(
+            (samples.len(), samples[0], samples[BACKLOG - 1]),
+            (BACKLOG, (2 * BACKLOG) as f64, (3 * BACKLOG - 1) as f64)
+        );
         assert!(samples.windows(2).all(|w| w[1] == w[0] + 1.0), "the samples that are left are out of order");
         assert_eq!(events.iter().filter(|e| matches!(e, Event::Scene(_))).count(), 1);
-        assert!(matches!(events[0], Event::Refused("first", _)) && events.iter().any(|e| matches!(e, Event::Configured(Ok(_)))));
+        assert!(
+            matches!(events[0], Event::Refused("first", _))
+                && events.iter().any(|e| matches!(e, Event::Configured(Ok(_))))
+        );
         // Read, the queue starts anew.
         outbox.push(Event::Sample(vec![0.0]));
         assert_eq!(outbox.drain().len(), 1);
@@ -412,13 +445,20 @@ mod tests {
         session.send(Request::Speed(100.0));
         std::thread::sleep(Duration::from_millis(1500));
         let events = session.drain();
-        let times: Vec<f64> = events.iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
+        let times: Vec<f64> =
+            events.iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
         assert!(times.len() <= BACKLOG && events.len() <= BACKLOG + 2, "{} events waited", events.len());
         assert_eq!(events.iter().filter(|e| matches!(e, Event::Scene(_))).count(), 1);
         std::thread::sleep(Duration::from_millis(100));
-        let newer: Vec<f64> = session.drain().iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
+        let newer: Vec<f64> =
+            session.drain().iter().filter_map(|e| if let Event::Sample(s) = e { Some(s[0]) } else { None }).collect();
         // What was read first reaches up to where the next read goes on: nothing newer was dropped.
-        assert!(!newer.is_empty() && (newer[0] - times[times.len() - 1] - 1e-3).abs() < 1e-9, "{:?} then {:?}", times.last(), newer.first());
+        assert!(
+            !newer.is_empty() && (newer[0] - times[times.len() - 1] - 1e-3).abs() < 1e-9,
+            "{:?} then {:?}",
+            times.last(),
+            newer.first()
+        );
     }
 
     /// Dropping a session (switching machine) does not wait for the simulation thread. With steps that

@@ -130,7 +130,19 @@ impl<'a> PulseRun<'a> {
         m.feedforward_torque(&pose, &acc, &mut with);
         m.feedforward_torque(&pose, &vec![0.0; acc.len()], &mut without);
         let delta = with.iter().zip(&without).map(|(a, b)| a - b).collect();
-        let mut run = Self { m, rk: Rk4::new(state.len()), torque: hold.clone(), state, hold, delta, motor0: vec![0.0; motors], step: 0, dt, pulse_s, substeps: SUBSTEPS };
+        let mut run = Self {
+            m,
+            rk: Rk4::new(state.len()),
+            torque: hold.clone(),
+            state,
+            hold,
+            delta,
+            motor0: vec![0.0; motors],
+            step: 0,
+            dt,
+            pulse_s,
+            substeps: SUBSTEPS,
+        };
         run.motor0 = run.motor_pos();
         run
     }
@@ -201,7 +213,9 @@ pub const LOSS_BUDGET_TOLERANCE: f64 = 1e-3;
 /// not checked.
 pub fn loss_budget(m: &dyn Machine) {
     let infos = m.signal_infos();
-    let pick = |prefix: &str| infos.iter().enumerate().filter(|(_, s)| s.id.starts_with(prefix)).map(|(i, _)| i).collect::<Vec<_>>();
+    let pick = |prefix: &str| {
+        infos.iter().enumerate().filter(|(_, s)| s.id.starts_with(prefix)).map(|(i, _)| i).collect::<Vec<_>>()
+    };
     let (losses, parts) = (pick(LOSS_PREFIX), pick("energy."));
     if losses.is_empty() {
         return;
@@ -223,8 +237,13 @@ pub fn loss_budget(m: &dyn Machine) {
     });
     let stored = m.energy(&run.state) - start;
     let off = work - stored - lost;
-    println!("loss budget: work {work:.6} J (gross {gross:.6}), stored {stored:.6} J, lost {lost:.6} J, off {off:.3e} J");
-    assert!(off.abs() < LOSS_BUDGET_TOLERANCE * gross, "work {work} J, stored {stored} J, lost {lost} J: off by {off} J of {gross} J");
+    println!(
+        "loss budget: work {work:.6} J (gross {gross:.6}), stored {stored:.6} J, lost {lost:.6} J, off {off:.3e} J"
+    );
+    assert!(
+        off.abs() < LOSS_BUDGET_TOLERANCE * gross,
+        "work {work} J, stored {stored} J, lost {lost} J: off by {off} J of {gross} J"
+    );
 }
 
 /// Halving the time step changes the result by less than 1 %.

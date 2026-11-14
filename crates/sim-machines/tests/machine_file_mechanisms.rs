@@ -75,13 +75,19 @@ fn a_screw_axis_takes_the_hand_calculated_torque_and_has_its_critical_speed() {
     assert!(close(signal(machine.as_ref(), &state, &torques, "screw.mz.speed"), 1800.0, 1e-12));
     let mut feedforward = [0.0; 3];
     machine.feedforward_torque(&pose, &[0.0, 0.0, acc], &mut feedforward);
-    assert!(close(feedforward[2], inertia * acc / lever + force * lever, 1e-12) && close(feedforward[2], 0.1194617, 1e-6), "{feedforward:?}");
+    assert!(
+        close(feedforward[2], inertia * acc / lever + force * lever, 1e-12) && close(feedforward[2], 0.1194617, 1e-6),
+        "{feedforward:?}"
+    );
 
     let critical = (3.926602f64 / 0.45).powi(2) * 0.0132 / 4.0 * (2.06e11f64 / 7850.0).sqrt() * 60.0 / (2.0 * PI);
     assert!(close(critical, 12291.16, 1e-6), "{critical}");
     let checks = machine.rating_checks();
     let speed = checks.iter().find(|c| c.check == "screw-speed").unwrap();
-    assert!(speed.signal == "screw.mz.speed" && speed.motor == Some(2) && close(speed.limit, 0.8 * critical, 1e-6), "{speed:?}");
+    assert!(
+        speed.signal == "screw.mz.speed" && speed.motor == Some(2) && close(speed.limit, 0.8 * critical, 1e-6),
+        "{speed:?}"
+    );
     let names: Vec<&str> = checks.iter().map(|c| c.check).collect();
     assert_eq!(names, ["screw-speed", "screw-buckling", "screw-static", "screw-dn", "screw-life"]);
 }
@@ -115,7 +121,13 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.0, 1e-9));
     assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.0 / 0.97, 1e-9));
     let check = machine.rating_checks();
-    assert!(check.len() == 1 && check[0].check == "rack-feed-force" && check[0].signal == "rack.mx.feed_force" && check[0].limit == 2400.0, "{check:?}");
+    assert!(
+        check.len() == 1
+            && check[0].check == "rack-feed-force"
+            && check[0].signal == "rack.mx.feed_force"
+            && check[0].limit == 2400.0,
+        "{check:?}"
+    );
 }
 
 /// A joint kit machine written as a machine file: its default config, the tables a machine file reads that the kit has
@@ -134,7 +146,8 @@ fn kit_as_file(id: &str, netlist: &str) -> Config {
         }
     }
     let mut kit: toml::Table = find(id).unwrap().default_config.parse().unwrap();
-    let mut single: toml::Table = std::fs::read_to_string(root().join("machines/single-axis.toml")).unwrap().parse().unwrap();
+    let mut single: toml::Table =
+        std::fs::read_to_string(root().join("machines/single-axis.toml")).unwrap().parse().unwrap();
     single.remove("machine");
     fill(&mut kit, &single);
     kit.insert("machine".into(), toml::Value::Table(netlist.parse().unwrap()));
@@ -161,11 +174,20 @@ fn kit_screw(elastic: bool) -> [Box<dyn Machine>; 2] {
     let mut kit = find("screw-axis").unwrap().config();
     let mut from_file = kit_as_file("screw-axis", SCREW_NETLIST);
     for cfg in [&mut kit, &mut from_file] {
-        for change in ["effects.joint_friction = false", "slide.incline_deg = 90.0", &format!("effects.joint_elasticity = {elastic}")] {
+        for change in [
+            "effects.joint_friction = false",
+            "slide.incline_deg = 90.0",
+            &format!("effects.joint_elasticity = {elastic}"),
+        ] {
             cfg.set_text(change).unwrap();
         }
     }
-    for change in ["effects.guide_friction = false", "hard_stop.stiffness_n_m = 2.0e6", "hard_stop.damping_n_s_m = 2000.0", &format!("effects.belt_stretch = {elastic}")] {
+    for change in [
+        "effects.guide_friction = false",
+        "hard_stop.stiffness_n_m = 2.0e6",
+        "hard_stop.damping_n_s_m = 2000.0",
+        &format!("effects.belt_stretch = {elastic}"),
+    ] {
         from_file.set_text(change).unwrap();
     }
     [(find("screw-axis").unwrap().build)(&kit).unwrap(), sim_netlist::build(&from_file).unwrap()]
@@ -183,11 +205,15 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
     for elastic in [true, false] {
         let [mut kit, mut from_file] = kit_screw(elastic);
         let what = format!("elastic {elastic}");
-        let axes = |m: &dyn Machine| m.axes().iter().map(|a| (a.id, a.unit, a.min, a.max, a.max_vel)).collect::<Vec<_>>();
+        let axes =
+            |m: &dyn Machine| m.axes().iter().map(|a| (a.id, a.unit, a.min, a.max, a.max_vel)).collect::<Vec<_>>();
         assert_eq!(axes(kit.as_ref()), axes(from_file.as_ref()), "{what}");
-        let file_state = |s: &[f64]| if elastic { vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4]] } else { vec![s[0], s[1], 0.0, s[2]] };
+        let file_state = |s: &[f64]| {
+            if elastic { vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4]] } else { vec![s[0], s[1], 0.0, s[2]] }
+        };
         // (kit, file) indices of the same rate: q', q'' (and rotor', rotor''), brake.
-        let rates: &[(usize, usize)] = if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8)] } else { &[(0, 0), (1, 1), (2, 3)] };
+        let rates: &[(usize, usize)] =
+            if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8)] } else { &[(0, 0), (1, 1), (2, 3)] };
         assert_eq!(from_file.state_len(), file_state(&vec![0.0; kit.state_len()]).len(), "{what}");
         for (k, pose) in [0.1, 0.62, 0.4].into_iter().enumerate() {
             for m in [&mut kit, &mut from_file] {
@@ -203,7 +229,10 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
             kit.equilibrium(&[pose], &mut sa, &mut ta);
             from_file.equilibrium(&[pose], &mut sb, &mut tb);
             assert!(close(ta[0], tb[0], 1e-9), "{what}: holding torque {ta:?} {tb:?}");
-            assert!(file_state(&sa).iter().zip(&sb).all(|(x, y)| close(*x, *y, 1e-9)), "{what}: rest state {sa:?} {sb:?}");
+            assert!(
+                file_state(&sa).iter().zip(&sb).all(|(x, y)| close(*x, *y, 1e-9)),
+                "{what}: rest state {sa:?} {sb:?}"
+            );
 
             kit.set_tool_velocity(&mut sa, &[0.4]);
             // Off rest: every state moved a little (the coupling twisted, the brake slipped).
@@ -223,12 +252,29 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
             kit.feedforward_torque(&[pose], &[3.0], &mut fa);
             from_file.feedforward_torque(&[pose], &[3.0], &mut fb);
             assert!(close(fa[0], fb[0], 1e-9), "{what}: feedforward {fa:?} {fb:?}");
-            for id in ["joint.1.force", "gearbox.1.output_torque", "screw.1.speed", "screw.1.dn", "screw.1.damage_rate", "motor.1.torque_inertia", "motor.1.torque_gravity", "motor.1.torque_friction", "motor.1.torque_rest", "power.shaft_1", "power.gearbox_1", "energy.kinetic", "energy.potential", "energy.elastic"] {
+            for id in [
+                "joint.1.force",
+                "gearbox.1.output_torque",
+                "screw.1.speed",
+                "screw.1.dn",
+                "screw.1.damage_rate",
+                "motor.1.torque_inertia",
+                "motor.1.torque_gravity",
+                "motor.1.torque_friction",
+                "motor.1.torque_rest",
+                "power.shaft_1",
+                "power.gearbox_1",
+                "energy.kinetic",
+                "energy.potential",
+                "energy.elastic",
+            ] {
                 let (x, y) = (signal(kit.as_ref(), &sa, &torque, id), signal(from_file.as_ref(), &sb, &torque, id));
                 assert!(close(x, y, 1e-9), "{what}: {id}: crate {x}, file {y}");
             }
         }
-        let checks = |m: &dyn Machine| m.rating_checks().into_iter().map(|c| (c.check, c.signal, c.motor, c.limit, c.life)).collect::<Vec<_>>();
+        let checks = |m: &dyn Machine| {
+            m.rating_checks().into_iter().map(|c| (c.check, c.signal, c.motor, c.limit, c.life)).collect::<Vec<_>>()
+        };
         assert_eq!(checks(kit.as_ref()), checks(from_file.as_ref()), "{what}");
     }
 }
@@ -262,7 +308,9 @@ fn a_linear_motor_axis_draws_the_hand_calculated_current_for_its_force() {
     let mut force = [0.0];
     machine.feedforward_torque(&[0.5], &[10.0], &mut force);
     assert!(close(force[0], 130.0, 1e-12), "{force:?}");
-    let drive = DriveParams::from_config(&cfg, cfg.f64("sim.dt_s").unwrap(), cfg.f64("drive.velocity_cycle_s").unwrap()).unwrap();
+    let drive =
+        DriveParams::from_config(&cfg, cfg.f64("sim.dt_s").unwrap(), cfg.f64("drive.velocity_cycle_s").unwrap())
+            .unwrap();
     assert!(close(drive.current_for(force[0]), 2.0, 1e-12), "{}", drive.current_for(force[0]));
     let (mut state, mut held) = (Vec::new(), [0.0]);
     machine.equilibrium(&[0.5], &mut state, &mut held);
@@ -297,7 +345,13 @@ fn a_rotary_axis_turns_in_rad_with_its_strain_wave_gear() {
     machine.feedforward_torque(&[1.0], &[10.0], &mut torque);
     assert!(close(torque[0], 0.76, 1e-12), "{torque:?}");
     let checks = machine.rating_checks();
-    assert!(checks.len() == 1 && checks[0].check == "strain-wave-life" && checks[0].signal == "strain_wave.1.damage_rate" && checks[0].limit == 20000.0, "{checks:?}");
+    assert!(
+        checks.len() == 1
+            && checks[0].check == "strain-wave-life"
+            && checks[0].signal == "strain_wave.1.damage_rate"
+            && checks[0].limit == 20000.0,
+        "{checks:?}"
+    );
 }
 
 /// Both shipped files pass the standard suite of every machine (round trip, static hold, determinism, energy
@@ -315,7 +369,18 @@ fn the_mechanism_files_pass_the_standard_suite() {
         let mut configs = Vec::new();
         for elastic in [true, false] {
             let mut cfg = shipped.config();
-            for effect in ["belt_damping", "guide_friction", "load_dependent_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "tooth_meshing", "temperature", "holding_brake", "gearbox_backlash"] {
+            for effect in [
+                "belt_damping",
+                "guide_friction",
+                "load_dependent_friction",
+                "motor_friction",
+                "gearbox_efficiency",
+                "torque_ripple",
+                "tooth_meshing",
+                "temperature",
+                "holding_brake",
+                "gearbox_backlash",
+            ] {
                 cfg.set_text(&format!("effects.{effect} = false")).unwrap();
             }
             for damping in ["gearbox.damping_nm_s_rad = 0.0", "hard_stop.damping_n_s_m = 0.0"] {
@@ -349,12 +414,27 @@ fn a_broken_mechanism_is_refused_with_its_key_and_line() {
         sim_netlist::from_text(&broken, true, "broken", &known).err().expect("a broken file loaded")
     };
     let (e, line) = refused("values = \"screw_z\"", "valeus = \"screw_z\"");
-    assert_eq!((e, line), (ConfigError::Unknown("machine.screw[screw_z].valeus".into()), Some(line_with(&text, "values = \"screw_z\""))));
+    assert_eq!(
+        (e, line),
+        (ConfigError::Unknown("machine.screw[screw_z].valeus".into()), Some(line_with(&text, "values = \"screw_z\"")))
+    );
     let (e, line) = refused("lead_m = 0.01", "lead_mm = 10.0");
     assert_eq!((e, line), (ConfigError::Unknown("screw_z.lead_mm".into()), Some(line_with(&text, "lead_m = 0.01"))));
     let (e, line) = refused("length_m = 0.45", "length_m = 0.25");
-    assert_eq!((e, line), (ConfigError::Invalid("screw_z.length_m (shorter than the stroke of axis z)".into()), Some(line_with(&text, "length_m = 0.45"))));
+    assert_eq!(
+        (e, line),
+        (
+            ConfigError::Invalid("screw_z.length_m (shorter than the stroke of axis z)".into()),
+            Some(line_with(&text, "length_m = 0.45"))
+        )
+    );
     // The screw on the Y gearbox, which turns Y's pulley: the motors are read in order, so Y's gearbox is named first.
     let (e, line) = refused("gearbox = \"gearbox_z\"\naxis = \"z\"", "gearbox = \"gearbox_y\"\naxis = \"z\"");
-    assert_eq!((e, line), (ConfigError::Invalid("machine.gearbox[gearbox_y] (one pulley, screw, rack or rotary per gearbox)".into()), Some(line_with(&text, "id = \"gearbox_y\""))));
+    assert_eq!(
+        (e, line),
+        (
+            ConfigError::Invalid("machine.gearbox[gearbox_y] (one pulley, screw, rack or rotary per gearbox)".into()),
+            Some(line_with(&text, "id = \"gearbox_y\""))
+        )
+    );
 }

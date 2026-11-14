@@ -14,7 +14,10 @@
 
 use crate::joint::RotaryJoint;
 use crate::mech::ThermalFeedback;
-use sim_core::{AxisInfo, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Machine, MotorInfo, RatingCheck, Scene, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_core::{
+    AxisInfo, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Machine, MotorInfo, RatingCheck, Scene,
+    SignalInfo, TORQUE_PARTS, ThermalPart,
+};
 
 /// Solves the n x n system `m` (row by row) x = b by Gaussian elimination with partial pivoting; `None` where `m` is
 /// singular.
@@ -124,9 +127,17 @@ struct Losses {
 
 impl<M: Mechanism> JointMachine<M> {
     /// `axes` as many as joints; one motor per joint, in their order.
-    pub fn new(mechanism: M, joints: Vec<JointSpec>, elastic: bool, thermal: Option<ThermalFeedback>, axes: Vec<AxisInfo>, motors: Vec<MotorInfo>) -> Self {
+    pub fn new(
+        mechanism: M,
+        joints: Vec<JointSpec>,
+        elastic: bool,
+        thermal: Option<ThermalFeedback>,
+        axes: Vec<AxisInfo>,
+        motors: Vec<MotorInfo>,
+    ) -> Self {
         assert!(joints.len() == axes.len() && joints.len() == motors.len());
-        let mut machine = Self { mechanism, joints, elastic, thermal, axes, motors, brake_engaged: false, rest_slack: 0.0 };
+        let mut machine =
+            Self { mechanism, joints, elastic, thermal, axes, motors, brake_engaged: false, rest_slack: 0.0 };
         machine.rest_slack = machine.rest_sag();
         machine
     }
@@ -141,7 +152,9 @@ impl<M: Mechanism> JointMachine<M> {
         if !self.elastic {
             return 1e-4;
         }
-        let mut poses: Vec<Vec<f64>> = (0..1usize << n).map(|c| self.axes.iter().enumerate().map(|(i, a)| if c >> i & 1 == 1 { a.max } else { a.min }).collect()).collect();
+        let mut poses: Vec<Vec<f64>> = (0..1usize << n)
+            .map(|c| self.axes.iter().enumerate().map(|(i, a)| if c >> i & 1 == 1 { a.max } else { a.min }).collect())
+            .collect();
         poses.push(self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect());
         let (mut q, mut tool, mut sagged) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
         let mut most = 0f64;
@@ -150,7 +163,8 @@ impl<M: Mechanism> JointMachine<M> {
                 continue;
             }
             let (_, gravity) = self.load(&q, &vec![0.0; n]);
-            let twisted: Vec<f64> = (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k])).collect();
+            let twisted: Vec<f64> =
+                (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k])).collect();
             self.mechanism.forward(&q, &mut tool);
             self.mechanism.forward(&twisted, &mut sagged);
             most = most.max(tool.iter().zip(&sagged).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max));
@@ -199,7 +213,11 @@ impl<M: Mechanism> JointMachine<M> {
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
         let (mass, bias) = self.load(q, qd);
-        let drive: Vec<f64> = (0..n).map(|k| self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0).collect();
+        let drive: Vec<f64> = (0..n)
+            .map(|k| {
+                self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
+            })
+            .collect();
         let rest: Vec<f64> = (0..n).map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k]).collect();
         let solve_with = |loss: &[f64]| -> Vec<f64> {
             let mut m = mass.clone();
@@ -210,7 +228,14 @@ impl<M: Mechanism> JointMachine<M> {
             solve(&m, &rhs).unwrap_or_else(|| vec![f64::NAN; n])
         };
         let first = solve_with(&vec![1.0; n]);
-        let loss: Vec<f64> = (0..n).map(|k| self.joints[k].drive.gearbox.loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * first[k], qd[k])).collect();
+        let loss: Vec<f64> = (0..n)
+            .map(|k| {
+                self.joints[k]
+                    .drive
+                    .gearbox
+                    .loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * first[k], qd[k])
+            })
+            .collect();
         let acc = solve_with(&loss);
         let into: Vec<f64> = (0..n).map(|k| drive[k] - self.joints[k].drive.reflected_inertia() * acc[k]).collect();
         let out = (0..n).map(|k| loss[k] * into[k]).collect();
@@ -223,7 +248,9 @@ impl<M: Mechanism> JointMachine<M> {
         if self.elastic {
             let mut d = vec![0.0; self.state_len()];
             self.derivatives(s, torque, &mut d);
-            let gear = (0..n).map(|k| self.joints[k].drive.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]).output).collect();
+            let gear = (0..n)
+                .map(|k| self.joints[k].drive.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]).output)
+                .collect();
             (d[n..2 * n].to_vec(), gear)
         } else {
             let (acc, _, out) = self.rigid_solve(s, torque);
@@ -235,7 +262,8 @@ impl<M: Mechanism> JointMachine<M> {
         let n = self.n();
         let (q, qd) = self.arms(s);
         let (mass, _) = self.load(q, &vec![0.0; n]);
-        let mut kinetic = 0.5 * (0..n).map(|i| (0..n).map(|j| qd[i] * mass[i * n + j] * qd[j]).sum::<f64>()).sum::<f64>();
+        let mut kinetic =
+            0.5 * (0..n).map(|i| (0..n).map(|j| qd[i] * mass[i * n + j] * qd[j]).sum::<f64>()).sum::<f64>();
         let potential = self.mechanism.potential(q);
         let mut elastic: f64 = (0..n).map(|k| self.joints[k].drive.stop_energy(q[k])).sum();
         for k in 0..n {
@@ -316,17 +344,40 @@ impl<M: Mechanism> JointMachine<M> {
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
         for motor in &self.motors {
-            out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+            out.extend(TORQUE_PARTS.map(|part| {
+                SignalInfo::new(
+                    format!("motor.{}.torque_{part}", motor.id),
+                    motor.key,
+                    &format!("quantity-torque-{part}"),
+                    "N m",
+                )
+            }));
         }
         for (k, motor) in self.motors.iter().enumerate() {
-            let gear = if self.joints[k].drive.coupled { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}joint_{}", motor.id), self.joints[k].key, "quantity-friction-power", "W"));
-            out.push(SignalInfo::new(format!("{LOSS_PREFIX}shaft_{}", motor.id), motor.key, "quantity-shaft-friction-power", "W"));
+            let gear = if self.joints[k].drive.coupled {
+                "quantity-coupling-loss-power"
+            } else {
+                "quantity-gearbox-loss-power"
+            };
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}joint_{}", motor.id),
+                self.joints[k].key,
+                "quantity-friction-power",
+                "W",
+            ));
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}shaft_{}", motor.id),
+                motor.key,
+                "quantity-shaft-friction-power",
+                "W",
+            ));
             out.push(SignalInfo::new(format!("{LOSS_PREFIX}gearbox_{}", motor.id), motor.key, gear, "W"));
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
-        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        out.extend(ENERGY_PARTS.map(|part| {
+            SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
+        }));
         for (k, contact) in self.friction_contacts().iter().enumerate() {
             let (speed, force) = self.units(k);
             for part in FRICTION_SIGNALS {
@@ -335,7 +386,12 @@ impl<M: Mechanism> JointMachine<M> {
                     "load_scale" => "",
                     _ => force,
                 };
-                out.push(SignalInfo::new(format!("{}.friction_{part}", contact.id), contact.owner_key, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+                out.push(SignalInfo::new(
+                    format!("{}.friction_{part}", contact.id),
+                    contact.owner_key,
+                    &format!("quantity-friction-{}", part.replace('_', "-")),
+                    unit,
+                ));
             }
         }
     }
@@ -348,7 +404,9 @@ impl<M: Mechanism> JointMachine<M> {
         }
         let (mass, _) = self.load(q, &[0.0]);
         let j = &self.joints[0].drive;
-        Some((j.gearbox.stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt() / (2.0 * std::f64::consts::PI))
+        Some(
+            (j.gearbox.stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt() / (2.0 * std::f64::consts::PI),
+        )
     }
 }
 
@@ -422,7 +480,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         let mut rhs = vec![0.0; n];
         for k in 0..n {
             let j = &self.joints[k].drive;
-            let (gear, rotor_acc, brake_rate) = j.rotor(torque[k], s[2 * n + k], s[3 * n + k], q[k], qd[k], s[4 * n + k], self.brake_engaged);
+            let (gear, rotor_acc, brake_rate) =
+                j.rotor(torque[k], s[2 * n + k], s[3 * n + k], q[k], qd[k], s[4 * n + k], self.brake_engaged);
             rhs[k] = gear.output - bias[k] + j.output_torque(q[k], qd[k]);
             out[2 * n + k] = s[3 * n + k];
             out[3 * n + k] = rotor_acc;
@@ -527,7 +586,11 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
         // A joint beyond its stops, by more than `slack` (taken in the joint's unit: where the tool is the joints, as on
         // the arms and slides, that is the controller's slack; an arm's gears twist under its weight beyond a stop).
-        let beyond = self.joints.iter().zip(&q).any(|(j, q)| *q < j.drive.range.0 - slack - 1e-9 || *q > j.drive.range.1 + slack + 1e-9);
+        let beyond = self
+            .joints
+            .iter()
+            .zip(&q)
+            .any(|(j, q)| *q < j.drive.range.0 - slack - 1e-9 || *q > j.drive.range.1 + slack + 1e-9);
         beyond.then_some("error-joint-beyond-stop")
     }
 
@@ -535,10 +598,25 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         let mut out = Vec::new();
         for (k, motor) in self.motors.iter().enumerate() {
             let unit = self.axes[k].unit;
-            out.push(SignalInfo::new(format!("joint.{}.position", self.joints[k].id), self.joints[k].key, "quantity-joint-position", unit));
-            out.push(SignalInfo::new(format!("joint.{}.force", self.joints[k].id), self.joints[k].key, "quantity-joint-force", self.units(k).1));
+            out.push(SignalInfo::new(
+                format!("joint.{}.position", self.joints[k].id),
+                self.joints[k].key,
+                "quantity-joint-position",
+                unit,
+            ));
+            out.push(SignalInfo::new(
+                format!("joint.{}.force", self.joints[k].id),
+                self.joints[k].key,
+                "quantity-joint-force",
+                self.units(k).1,
+            ));
             if self.joints[k].gear_lever.is_some() || self.axes[k].unit != "m" {
-                out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
+                out.push(SignalInfo::new(
+                    format!("gearbox.{}.output_torque", motor.id),
+                    motor.key,
+                    "quantity-gearbox-torque",
+                    "N m",
+                ));
             }
         }
         out.extend(self.mechanism.signal_infos());
@@ -574,7 +652,11 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// Each joint's friction (Coulomb and viscous, no stiction), owned by the joint's axis: the friction view spans that
     /// axis's speed limit (with the joint's own key it found no axis and spanned 1 m/s or rad/s).
     fn friction_contacts(&self) -> Vec<FrictionContact> {
-        self.joints.iter().zip(&self.axes).map(|(j, axis)| FrictionContact { id: j.id_signal(), owner_key: axis.key }).collect()
+        self.joints
+            .iter()
+            .zip(&self.axes)
+            .map(|(j, axis)| FrictionContact { id: j.id_signal(), owner_key: axis.key })
+            .collect()
     }
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
         let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
@@ -589,7 +671,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             .zip(&self.motors)
             .filter(|(j, _)| !j.drive.coupled)
             .enumerate()
-            .map(|(k, (_, m))| ThermalPart { id: GEARBOX_IDS[MOTOR_IDS.iter().position(|id| *id == m.id).unwrap_or(0)], kind: "gearbox", owner_key: m.key, scene_part: "gearbox", scene_index: k })
+            .map(|(k, (_, m))| ThermalPart {
+                id: GEARBOX_IDS[MOTOR_IDS.iter().position(|id| *id == m.id).unwrap_or(0)],
+                kind: "gearbox",
+                owner_key: m.key,
+                scene_part: "gearbox",
+                scene_index: k,
+            })
             .collect()
     }
 
@@ -636,9 +724,18 @@ impl<M: Mechanism> JointMachine<M> {
 
 /// Motor ids "1" to "7" and the ids of their gearboxes' loss powers, so that `ThermalPart` gets `&'static str`s.
 pub const MOTOR_IDS: [&str; 7] = ["1", "2", "3", "4", "5", "6", "7"];
-const GEARBOX_IDS: [&str; 7] = ["gearbox_1", "gearbox_2", "gearbox_3", "gearbox_4", "gearbox_5", "gearbox_6", "gearbox_7"];
+const GEARBOX_IDS: [&str; 7] =
+    ["gearbox_1", "gearbox_2", "gearbox_3", "gearbox_4", "gearbox_5", "gearbox_6", "gearbox_7"];
 /// Translation keys of motors 1 to 7 and of joints 1 to 7.
-pub const MOTOR_KEYS: [&str; 7] = ["motor-joint-1", "motor-joint-2", "motor-joint-3", "motor-joint-4", "motor-joint-5", "motor-joint-6", "motor-joint-7"];
+pub const MOTOR_KEYS: [&str; 7] = [
+    "motor-joint-1",
+    "motor-joint-2",
+    "motor-joint-3",
+    "motor-joint-4",
+    "motor-joint-5",
+    "motor-joint-6",
+    "motor-joint-7",
+];
 pub const JOINT_KEYS: [&str; 7] = ["joint-1", "joint-2", "joint-3", "joint-4", "joint-5", "joint-6", "joint-7"];
 const JOINT_SIGNALS: [&str; 7] = ["joint.1", "joint.2", "joint.3", "joint.4", "joint.5", "joint.6", "joint.7"];
 

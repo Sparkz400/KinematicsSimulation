@@ -21,14 +21,26 @@ fn tmp(name: &str) -> PathBuf {
 
 /// quantity -> (value, standard error) of an `identify` or `fit` table.
 fn table(csv: &str, value: usize) -> Vec<(String, f64, f64)> {
-    csv.lines().skip(1).map(|l| l.split(',').collect::<Vec<_>>()).map(|f| (f[0].to_string(), f[value].parse().unwrap(), f[value + 1].parse().unwrap_or(f64::NAN))).collect()
+    csv.lines()
+        .skip(1)
+        .map(|l| l.split(',').collect::<Vec<_>>())
+        .map(|f| (f[0].to_string(), f[value].parse().unwrap(), f[value + 1].parse().unwrap_or(f64::NAN)))
+        .collect()
 }
 
 #[test]
 fn identify_reads_the_example_dataset_and_writes_an_overlay() {
     let dir = datasets().join("example-synthetic-belt-axis");
     let overlay = tmp("identify-overlay.csv");
-    let out = cli(&["identify", "--trace", dir.join("trace.csv").to_str().unwrap(), "--map", dir.join("map.toml").to_str().unwrap(), "--overlay", overlay.to_str().unwrap()]);
+    let out = cli(&[
+        "identify",
+        "--trace",
+        dir.join("trace.csv").to_str().unwrap(),
+        "--map",
+        dir.join("map.toml").to_str().unwrap(),
+        "--overlay",
+        overlay.to_str().unwrap(),
+    ]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let rows = table(&text(&out.stdout), 2);
     let get = |q: &str| rows.iter().find(|r| r.0 == q).unwrap_or_else(|| panic!("{q} missing: {rows:?}")).clone();
@@ -38,7 +50,10 @@ fn identify_reads_the_example_dataset_and_writes_an_overlay() {
     assert!(get("friction_model_fit_percent").1 > 95.0);
     assert!(get("current_loop_gain").1 > 0.99);
     let header = std::fs::read_to_string(&overlay).unwrap().lines().next().unwrap().to_string();
-    assert_eq!(header, "time,torque_measured,torque_model,current_loop_measured,current_loop_model,position_loop_measured,position_loop_model");
+    assert_eq!(
+        header,
+        "time,torque_measured,torque_model,current_loop_measured,current_loop_model,position_loop_measured,position_loop_model"
+    );
 }
 
 #[test]
@@ -46,11 +61,25 @@ fn fit_through_a_mapping_gives_what_the_simulators_own_columns_give() {
     let run = tmp("map-run.csv");
     // The machine with one motor, by the registry: no machine is named outside its crate.
     let entry = sim_machines::MACHINES.iter().find(|m| (m.build)(&m.config()).unwrap().motors().len() == 1).unwrap();
-    let out = cli(&["run", entry.id, "--cycle", "--time", "2.5", "--set", "effects.payload=false", "--set", "mass.carriage_kg=5.5", "--out", run.to_str().unwrap()]);
+    let out = cli(&[
+        "run",
+        entry.id,
+        "--cycle",
+        "--time",
+        "2.5",
+        "--set",
+        "effects.payload=false",
+        "--set",
+        "mass.carriage_kg=5.5",
+        "--out",
+        run.to_str().unwrap(),
+    ]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let map = tmp("map-run.toml");
     let id = (entry.build)(&entry.config()).unwrap().motors()[0].id;
-    let mapping = format!("format = \"csv\"\ntime = \"time\"\n[[motor]]\nsetpoint = \"motor.{id}.angle_setpoint\"\nangle = \"motor.{id}.angle\"\nspeed = \"motor.{id}.speed\"\ntorque = \"motor.{id}.torque\"\n");
+    let mapping = format!(
+        "format = \"csv\"\ntime = \"time\"\n[[motor]]\nsetpoint = \"motor.{id}.angle_setpoint\"\nangle = \"motor.{id}.angle\"\nspeed = \"motor.{id}.speed\"\ntorque = \"motor.{id}.torque\"\n"
+    );
     std::fs::write(&map, mapping).unwrap();
     let fit = |extra: &[&str]| {
         let mut args = vec!["fit", entry.id, "--trace", run.to_str().unwrap(), "--set", "effects.payload=false"];
@@ -115,7 +144,12 @@ fn the_checker_finds_personal_data_and_stray_files() {
     let out = cli(&["check-dataset", copy.to_str().unwrap(), "--lang", "de"]);
     assert_eq!(out.status.code(), Some(2));
     let stdout = text(&out.stdout);
-    for expected in ["README.md, line 1: an e-mail address", "README.md, line 1: an IP address", "project.zip is not part of any recording", "Problem im Datensatz"] {
+    for expected in [
+        "README.md, line 1: an e-mail address",
+        "README.md, line 1: an IP address",
+        "project.zip is not part of any recording",
+        "Problem im Datensatz",
+    ] {
         assert!(stdout.contains(expected), "{expected} not in {stdout}");
     }
 }

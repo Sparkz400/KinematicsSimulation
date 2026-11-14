@@ -25,8 +25,14 @@
 //! lower carriage idlers at 2 vx + vz (left) and 2 vx - vz (right), and the Z-bottom idler, which rises
 //! with z, at 2 vx.
 
-use sim_components::mech::{Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction, ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle};
-use sim_core::{Arrow, AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart};
+use sim_components::mech::{
+    Belt, CableChain, Gearbox, HardStop, HoldingBrake, JUMP_STATES, Lugre, Ripple, SectionForce, ShaftFriction,
+    ThermalFeedback, ToothJump, ToothMesh, drive_excitations, span_detuning, span_frequency, wrap_angle,
+};
+use sim_core::{
+    Arrow, AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX,
+    Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+};
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "t-gantry",
@@ -81,7 +87,16 @@ fn suite_configs() -> Vec<Config> {
     let mut rigid = lossless_config();
     rigid.set_text("effects.belt_stretch = false").unwrap();
     let mut loaded = lossless_config();
-    for effect in ["belt_tooth_stiffness", "idlers", "cable_chain", "part_heating", "thermal_feedback", "belt_tooth_jump", "belt_span_vibration", "belt_wrap"] {
+    for effect in [
+        "belt_tooth_stiffness",
+        "idlers",
+        "cable_chain",
+        "part_heating",
+        "thermal_feedback",
+        "belt_tooth_jump",
+        "belt_span_vibration",
+        "belt_wrap",
+    ] {
         loaded.set_text(&format!("effects.{effect} = true")).unwrap();
     }
     vec![rigid, lossless_config(), loaded]
@@ -217,7 +232,9 @@ impl TGantry {
         } else {
             None
         };
-        let on = |effect: &str, value: f64| -> Result<f64, ConfigError> { Ok(if cfg.bool(&format!("effects.{effect}"))? { value } else { 0.0 }) };
+        let on = |effect: &str, value: f64| -> Result<f64, ConfigError> {
+            Ok(if cfg.bool(&format!("effects.{effect}"))? { value } else { 0.0 })
+        };
         let idler_radius = cfg.positive("idler.radius_m")?;
         let shaft = ShaftFriction::from_config(cfg)?;
         // The gearbox's own inertia turns with the rotor.
@@ -245,7 +262,10 @@ impl TGantry {
             idler_drag: on("idlers", cfg.non_negative("idler.friction_nm")? / idler_radius)?,
             idler_smoothing: shaft.smoothing * idler_radius,
             chain: CableChain::from_config(cfg)?,
-            process: [on("process_force", cfg.f64("process.force_x_n")?)?, on("process_force", cfg.f64("process.force_z_n")?)?],
+            process: [
+                on("process_force", cfg.f64("process.force_x_n")?)?,
+                on("process_force", cfg.f64("process.force_z_n")?)?,
+            ],
             dwelling: false,
             stops: HardStop::from_config(cfg)?,
             brake,
@@ -256,12 +276,19 @@ impl TGantry {
             gearbox: Gearbox::from_config(cfg)?,
             gears: [Gearbox::from_config(cfg)?, Gearbox::from_config(cfg)?],
             thermal: match ThermalFeedback::from_config(cfg)? {
-                Some(law) => Some((law, [cfg.non_negative("friction_x.viscous_n_s_m")?, cfg.non_negative("friction_z.viscous_n_s_m")?])),
+                Some(law) => Some((
+                    law,
+                    [cfg.non_negative("friction_x.viscous_n_s_m")?, cfg.non_negative("friction_z.viscous_n_s_m")?],
+                )),
                 None => None,
             },
             jump: None,
             jump_loss: 0.0,
-            span_mass: if cfg.bool("effects.belt_span_vibration")? { Some(cfg.positive("belt.mass_kg_m")?) } else { None },
+            span_mass: if cfg.bool("effects.belt_span_vibration")? {
+                Some(cfg.positive("belt.mass_kg_m")?)
+            } else {
+                None
+            },
             wrap_idler: if cfg.bool("effects.belt_wrap")? { Some(idler_radius) } else { None },
             frame,
             flex,
@@ -277,7 +304,11 @@ impl TGantry {
         m.mat0 = geo.map(|g| m.belt.rest_length(g));
         if m.elastic {
             // Half the belt's mass is lumped on each motor pulley (below).
-            m.jump = ToothJump::from_config(cfg, r, 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length))?;
+            m.jump = ToothJump::from_config(
+                cfg,
+                r,
+                0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length),
+            )?;
         }
         // Belt mass: the belt runs at pulley surface speed, so half of it is lumped on each pulley.
         m.j_pulley += 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length) * r * r;
@@ -323,13 +354,28 @@ impl TGantry {
         let (top, bottom) = (span + z, z - self.axes[1].max - span);
         let part = Part::new;
         let mut hanging = vec![
-            part("z-axis", Shape::Box { size: [0.04, 0.03, top - bottom] }, [cx, y, (top + bottom) / 2.0], [0.78, 0.8, 0.84]),
+            part(
+                "z-axis",
+                Shape::Box { size: [0.04, 0.03, top - bottom] },
+                [cx, y, (top + bottom) / 2.0],
+                [0.78, 0.8, 0.84],
+            ),
             part("clamp", Shape::Box { size: [0.09, 0.035, 0.03] }, [cx, y, top + 0.015], [0.85, 0.3, 0.2]),
             // The tool: drawn where `scene_point` says, at the carriage's place on the beam.
-            part("flange", Shape::Box { size: [0.07, 0.05, 0.02] }, self.scene_point(&[x, z]).unwrap_or_default(), [0.3, 0.3, 0.33]),
+            part(
+                "flange",
+                Shape::Box { size: [0.07, 0.05, 0.02] },
+                self.scene_point(&[x, z]).unwrap_or_default(),
+                [0.3, 0.3, 0.33],
+            ),
         ];
         if self.payload() > 0.0 {
-            hanging.push(part("payload", Shape::Box { size: [0.1, 0.1, 0.1] }, [cx, y, bottom - half - 0.072], [0.2, 0.7, 0.3]));
+            hanging.push(part(
+                "payload",
+                Shape::Box { size: [0.1, 0.1, 0.1] },
+                [cx, y, bottom - half - 0.072],
+                [0.2, 0.7, 0.3],
+            ));
         }
         sim_core::scene::idler(&mut hanging, [cx, bottom], y, half - 0.002, -2.0 * x / half);
         let u = if self.elastic { s[U] } else { 0.0 };
@@ -337,7 +383,8 @@ impl TGantry {
         let lean = (exaggeration * self.flex_at(z).2 * u / tool_arm.max(0.05)).clamp(-0.5, 0.5).asin();
         let (sin, cos) = lean.sin_cos();
         for p in &mut hanging {
-            [p.pos[0], p.pos[2]] = [cx + (p.pos[0] - cx) * cos - p.pos[2] * sin, (p.pos[0] - cx) * sin + p.pos[2] * cos];
+            [p.pos[0], p.pos[2]] =
+                [cx + (p.pos[0] - cx) * cos - p.pos[2] * sin, (p.pos[0] - cx) * sin + p.pos[2] * cos];
             p.angle += lean;
         }
         (hanging, lean)
@@ -416,7 +463,10 @@ impl TGantry {
     /// Friction level factors for the X and Z guides at an X acceleration of the Z axis.
     fn load_scales(&self, z: f64, ax: f64) -> (f64, f64) {
         let (load_x, load_z) = self.guide_loads(z, ax);
-        (self.friction_x.load_scale(load_x, (self.m_carriage + self.m_z_axis) * self.g), self.friction_z.load_scale(load_z, 0.0))
+        (
+            self.friction_x.load_scale(load_x, (self.m_carriage + self.m_z_axis) * self.g),
+            self.friction_z.load_scale(load_z, 0.0),
+        )
     }
 
     /// The X acceleration that the motor torques would give a loss-free rigid machine: what the guide
@@ -487,7 +537,8 @@ impl TGantry {
         }
         // The idlers add inertia in Z but no weight.
         let m_z = self.m_z() + self.m_idlers[1];
-        out[V + Z] = (fz_belt - ffz + fz_flex - idler_z + process_z + self.stop_force(1, s[Z], vz)) / m_z - self.g * (self.m_z() / m_z);
+        out[V + Z] = (fz_belt - ffz + fz_flex - idler_z + process_z + self.stop_force(1, s[Z], vz)) / m_z
+            - self.g * (self.m_z() / m_z);
         out[V + Q] = aq;
         let belt_torque =
             [self.r_mat * (sec[0].material - sec[1].material), self.r_mat * (sec[1].material - sec[2].material)];
@@ -496,8 +547,14 @@ impl TGantry {
             let gear = self.gears[k].torque(phi, w_phi, theta, w_theta);
             let (brake, brake_rate) = self.brake.torque(self.brake_engaged, w_phi, s[BRAKE + k]);
             // While its teeth are out of mesh the pulley feels only the ridge it holds the sliding belt back with.
-            let on_pulley = self.jump.as_ref().map_or(belt_torque[k], |j| j.pulley_torque(&s[JUMP + JUMP_STATES * k..], belt_torque[k], r));
-            let j_pulley = self.jump.as_ref().map_or(self.j_pulley, |j| j.pulley_inertia(&s[JUMP + JUMP_STATES * k..], self.j_pulley, r));
+            let on_pulley = self
+                .jump
+                .as_ref()
+                .map_or(belt_torque[k], |j| j.pulley_torque(&s[JUMP + JUMP_STATES * k..], belt_torque[k], r));
+            let j_pulley = self
+                .jump
+                .as_ref()
+                .map_or(self.j_pulley, |j| j.pulley_inertia(&s[JUMP + JUMP_STATES * k..], self.j_pulley, r));
             out[V + A + k] = (gear.output + on_pulley + r * self.mesh.force(r * theta)) / j_pulley;
             if let Some(jump) = &self.jump {
                 let at = JUMP + JUMP_STATES * k;
@@ -525,9 +582,11 @@ impl TGantry {
         self.inverse(&s[0..2], &mut pos);
         self.inverse(&s[2..4], &mut vel);
         // Belt force each motor would give with a loss-free gearbox and a massless rotor; a brake holds the rotor.
-        let brake: [f64; 2] = std::array::from_fn(|k| self.brake.torque(self.brake_engaged, vel[k], s[RIGID_BRAKE + k]).0);
-        let drive: [f64; 2] =
-            std::array::from_fn(|k| ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft.torque(vel[k]) - brake[k]) / r);
+        let brake: [f64; 2] =
+            std::array::from_fn(|k| self.brake.torque(self.brake_engaged, vel[k], s[RIGID_BRAKE + k]).0);
+        let drive: [f64; 2] = std::array::from_fn(|k| {
+            ratio * (self.ripple.apply(torque[k], pos[k]) - self.shaft.torque(vel[k]) - brake[k]) / r
+        });
         let mesh: [f64; 2] = std::array::from_fn(|k| self.mesh.force(r * pos[k] / ratio));
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let pulleys = 2.0 * self.j_pulley / (r * r);
@@ -537,7 +596,10 @@ impl TGantry {
         // Idlers, chain, process and end stops; the growing chain takes m' vx^2 / 2 (see the elastic model).
         let (idler_x, idler_z) = self.idler_friction(s[2], s[3]);
         let [process_x, process_z] = self.process_force();
-        let extra_x = process_x + self.stop_force(0, s[0], s[2]) - idler_x - self.chain_drag(s[2]) - 0.5 * chain_growth * s[2] * s[2];
+        let extra_x = process_x + self.stop_force(0, s[0], s[2])
+            - idler_x
+            - self.chain_drag(s[2])
+            - 0.5 * chain_growth * s[2] * s[2];
         let extra_z = process_z + self.stop_force(1, s[1], s[3]) - idler_z;
         let (mut loss, mut out) = ([1.0; 2], [0.0; 10]);
         for _ in 0..3 {
@@ -549,7 +611,18 @@ impl TGantry {
             let (ax, az) = ((bx * (mz + p) - q * bz) / det, ((mx + p) * bz - q * bx) / det);
             let through_gear = [drive[0] - rotor * (ax + az), drive[1] - rotor * (ax - az)];
             // The gearbox outputs carry what the rotors' own acceleration and the losses of this pass leave.
-            out = [ax, az, ffx, ffz, dsx, dsz, loss[0] * through_gear[0] * r, loss[1] * through_gear[1] * r, through_gear[0] * r, through_gear[1] * r];
+            out = [
+                ax,
+                az,
+                ffx,
+                ffz,
+                dsx,
+                dsz,
+                loss[0] * through_gear[0] * r,
+                loss[1] * through_gear[1] * r,
+                through_gear[0] * r,
+                through_gear[1] * r,
+            ];
             loss = std::array::from_fn(|k| self.gears[k].loss_factor(through_gear[k] * r, vel[k] / ratio));
         }
         out
@@ -569,17 +642,27 @@ impl TGantry {
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
         let potential = self.m_z() * self.g * s[Z];
         if !self.elastic {
-            let kinetic = 0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0) * s[2] * s[2]
-                + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3];
+            let kinetic =
+                0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0) * s[2] * s[2]
+                    + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3];
             return [kinetic, potential, self.stop_energy(s[0], s[1])];
         }
         let ([a, b], _) = self.fed_angles(s);
         let (geo, mat) = (self.geo(s[X], s[Z]), self.mat(a, b));
         let belt: f64 = (0..3).map(|i| self.belt.energy(geo[i], mat[i])).sum();
         let gears: f64 = (0..2).map(|k| self.gearbox.energy(s[PA + k], s[A + k])).sum();
-        let slip = self.jump.as_ref().map_or(0.0, |j| (0..2).map(|k| j.slip_energy(&s[JUMP + JUMP_STATES * k..], self.r * s[V + A + k])).sum());
-        let turning: f64 = slip + (0..2).map(|k| 0.5 * self.j_pulley * s[V + A + k].powi(2) + 0.5 * self.j_rotor * s[V + PA + k].powi(2)).sum::<f64>();
-        let frame = self.frame.as_ref().map_or([0.0; 2], |f| [0.5 * f.mass * s[V + Q].powi(2), 0.5 * f.stiffness * s[Q].powi(2)]);
+        let slip = self
+            .jump
+            .as_ref()
+            .map_or(0.0, |j| (0..2).map(|k| j.slip_energy(&s[JUMP + JUMP_STATES * k..], self.r * s[V + A + k])).sum());
+        let turning: f64 = slip
+            + (0..2)
+                .map(|k| 0.5 * self.j_pulley * s[V + A + k].powi(2) + 0.5 * self.j_rotor * s[V + PA + k].powi(2))
+                .sum::<f64>();
+        let frame = self
+            .frame
+            .as_ref()
+            .map_or([0.0; 2], |f| [0.5 * f.mass * s[V + Q].powi(2), 0.5 * f.stiffness * s[Q].powi(2)]);
         let v_carriage = s[V + X] + s[V + Q];
         let kinetic = 0.5 * (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(s[X]).0) * v_carriage.powi(2)
             + 0.5 * self.m_z() * (v_carriage + s[V + U]).powi(2)
@@ -639,7 +722,21 @@ impl TGantry {
         let ripple: f64 = (0..2).map(|k| (torque[k] - self.ripple.apply(torque[k], angle[k])) * speed[k]).sum();
         let stops = self.stops.loss_power(s[X], vx, self.axes[0].max) + self.stops.loss_power(z, vz, self.axes[1].max);
         let [belt, frame, flex] = damping;
-        let powers = [ffx * vx, ffz * vz, idler_x * vx + idler_z * vz, drag * vx, shaft[0], shaft[1], gear_power[0], gear_power[1], belt, frame, flex, stops, ripple - mesh_in - process_in];
+        let powers = [
+            ffx * vx,
+            ffz * vz,
+            idler_x * vx + idler_z * vz,
+            drag * vx,
+            shaft[0],
+            shaft[1],
+            gear_power[0],
+            gear_power[1],
+            belt,
+            frame,
+            flex,
+            stops,
+            ripple - mesh_in - process_in,
+        ];
         (powers, gear_loss, brake)
     }
 
@@ -658,7 +755,8 @@ impl TGantry {
         let v = if self.elastic { V } else { 2 };
         let (z, vx, vz) = (s[Z], s[v + X], s[v + Z]);
         let (sx, sz) = if self.elastic { (s[S], s[S + 1]) } else { (s[4], s[5]) };
-        let (scales, (ffx, ffz, ..)) = (self.load_scales(z, self.commanded_ax(torque)), self.guide_friction(z, vx, vz, sx, sz, torque));
+        let (scales, (ffx, ffz, ..)) =
+            (self.load_scales(z, self.commanded_ax(torque)), self.guide_friction(z, vx, vz, sx, sz, torque));
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
         let drag = self.chain_drag(vx);
         let (chain_mass, chain_growth) = self.chain.mass(s[X]);
@@ -673,7 +771,8 @@ impl TGantry {
             let (ax, az, aq, au) = (d[V + X], d[V + Z], d[V + Q], d[V + U]);
             let w = vx + s[V + Q];
             let m_carriage = self.m_x() - self.m_z() + idlers[0] + chain_mass;
-            let inertia_x = m_carriage * (ax + aq) + self.m_z() * (ax + aq + au) + motors * ax + chain_growth * w * (vx - 0.5 * w);
+            let inertia_x =
+                m_carriage * (ax + aq) + self.m_z() * (ax + aq + au) + motors * ax + chain_growth * w * (vx - 0.5 * w);
             [inertia_x, (self.m_z() + idlers[1] + motors) * az]
         } else {
             let solved = self.rigid_solve(s, torque);
@@ -696,7 +795,8 @@ impl TGantry {
             out.push(self.jump_loss);
         }
         out.extend(self.energy_parts(s));
-        for (friction, v, state, scale) in [(&self.friction_x, vx, sx, scales.0), (&self.friction_z, vz, sz, scales.1)] {
+        for (friction, v, state, scale) in [(&self.friction_x, vx, sx, scales.0), (&self.friction_z, vz, sz, scales.1)]
+        {
             out.push(v);
             out.extend(friction.split(v, state, scale));
             out.push(scale);
@@ -720,7 +820,16 @@ impl TGantry {
         let (x, z, sx, sz, span) = (s[X], s[Z], self.axes[0].max, self.axes[1].max, self.span_min);
         let t = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 3] };
         let (down, left, right) = (span + sz - z, span + x, span + sx - x);
-        let spans = [(span + z, t[0]), (left, t[0]), (left, t[1]), (down, t[1]), (down, t[1]), (right, t[1]), (right, t[2]), (span + z, t[2])];
+        let spans = [
+            (span + z, t[0]),
+            (left, t[0]),
+            (left, t[1]),
+            (down, t[1]),
+            (down, t[1]),
+            (right, t[1]),
+            (right, t[2]),
+            (span + z, t[2]),
+        ];
         let (mut angle, mut speed) = ([0.0; 2], [0.0; 2]);
         self.motor_state(s, &mut angle, &mut speed);
         let mut excitations = Vec::with_capacity(6);
@@ -736,21 +845,48 @@ impl TGantry {
     /// The signal list of `effect_signals`.
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
         for motor in &self.motors {
-            out.extend(TORQUE_PARTS.map(|part| SignalInfo::new(format!("motor.{}.torque_{part}", motor.id), motor.key, &format!("quantity-torque-{part}"), "N m")));
+            out.extend(TORQUE_PARTS.map(|part| {
+                SignalInfo::new(
+                    format!("motor.{}.torque_{part}", motor.id),
+                    motor.key,
+                    &format!("quantity-torque-{part}"),
+                    "N m",
+                )
+            }));
         }
         let friction = "quantity-friction-power";
-        let mut powers = vec![("guide_x", "axis-x", friction), ("guide_z", "axis-z", friction), ("idlers", "group-idler", friction), ("cable_chain", "group-cable_chain", friction)];
-        powers.extend([("shaft_a", "motor-a", "quantity-shaft-friction-power"), ("shaft_b", "motor-b", "quantity-shaft-friction-power")]);
-        let gear = if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
+        let mut powers = vec![
+            ("guide_x", "axis-x", friction),
+            ("guide_z", "axis-z", friction),
+            ("idlers", "group-idler", friction),
+            ("cable_chain", "group-cable_chain", friction),
+        ];
+        powers.extend([
+            ("shaft_a", "motor-a", "quantity-shaft-friction-power"),
+            ("shaft_b", "motor-b", "quantity-shaft-friction-power"),
+        ]);
+        let gear =
+            if self.gearbox.is_coupling() { "quantity-coupling-loss-power" } else { "quantity-gearbox-loss-power" };
         powers.extend([("gearbox_a", "motor-a", gear), ("gearbox_b", "motor-b", gear)]);
         let damping = "quantity-damping-power";
-        powers.extend([("belt", "group-belt", damping), ("frame", "frame", damping), ("tool_flex", "group-tool_flex", damping), ("hard_stops", "group-hard_stop", damping)]);
+        powers.extend([
+            ("belt", "group-belt", damping),
+            ("frame", "frame", damping),
+            ("tool_flex", "group-tool_flex", damping),
+            ("hard_stops", "group-hard_stop", damping),
+        ]);
         powers.push(("other", "loss-other", "quantity-power-given-off"));
         if self.jump.is_some() {
             powers.push(("tooth_jump", "group-belt", "quantity-tooth-jump-power"));
         }
-        out.extend(powers.into_iter().map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")));
-        out.extend(ENERGY_PARTS.map(|part| SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")));
+        out.extend(
+            powers
+                .into_iter()
+                .map(|(id, owner, quantity)| SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, quantity, "W")),
+        );
+        out.extend(ENERGY_PARTS.map(|part| {
+            SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
+        }));
         for contact in self.friction_contacts() {
             for part in FRICTION_SIGNALS {
                 let unit = match part {
@@ -758,10 +894,19 @@ impl TGantry {
                     "load_scale" => "",
                     _ => "N",
                 };
-                out.push(SignalInfo::new(format!("{}.friction_{part}", contact.id), contact.owner_key, &format!("quantity-friction-{}", part.replace('_', "-")), unit));
+                out.push(SignalInfo::new(
+                    format!("{}.friction_{part}", contact.id),
+                    contact.owner_key,
+                    &format!("quantity-friction-{}", part.replace('_', "-")),
+                    unit,
+                ));
             }
         }
-        out.extend(self.belt_sections().iter().map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")));
+        out.extend(
+            self.belt_sections()
+                .iter()
+                .map(|b| SignalInfo::new(format!("{}.stretch", b.id), b.owner_key, "quantity-section-stretch", "m")),
+        );
     }
 }
 
@@ -815,7 +960,9 @@ impl Machine for TGantry {
         *state = vec![0.0; self.state_len()];
         state[X] = x;
         state[Z] = z;
-        for (k, (theta, belt_torque)) in [(a, self.r_mat * (m[0] - m[1])), (b, self.r_mat * (m[1] - m[2]))].into_iter().enumerate() {
+        for (k, (theta, belt_torque)) in
+            [(a, self.r_mat * (m[0] - m[1])), (b, self.r_mat * (m[1] - m[2]))].into_iter().enumerate()
+        {
             let gear = -belt_torque - r * self.mesh.force(r * theta);
             let phi = ratio * (theta + self.gearbox.static_twist(gear));
             state[A + k] = theta;
@@ -825,7 +972,11 @@ impl Machine for TGantry {
     }
 
     fn derivatives(&self, state: &[f64], torque: &[f64], out: &mut [f64]) {
-        if self.elastic { self.elastic_derivatives(state, torque, out) } else { self.rigid_derivatives(state, torque, out) }
+        if self.elastic {
+            self.elastic_derivatives(state, torque, out)
+        } else {
+            self.rigid_derivatives(state, torque, out)
+        }
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
@@ -911,7 +1062,8 @@ impl Machine for TGantry {
             .map(|twice| {
                 let w2 = 0.5 * twice;
                 let (vx, vu) = (lean - w2 * mz, w2 * mz);
-                let (kinetic, damped) = (mc * vx * vx + mz * (vx + vu) * (vx + vu), belt_damping * vx * vx + flex.damping * vu * vu);
+                let (kinetic, damped) =
+                    (mc * vx * vx + mz * (vx + vu) * (vx + vu), belt_damping * vx * vx + flex.damping * vu * vu);
                 Mode { hz: w2.sqrt() / std::f64::consts::TAU, damping: damped / (2.0 * w2.sqrt() * kinetic) }
             })
             .to_vec()
@@ -925,7 +1077,10 @@ impl Machine for TGantry {
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         let Some(ri) = self.wrap_idler else { return Vec::new() };
         let (r, end, cx) = (self.r, 2.0 * self.span_min + self.axes[0].max, self.span_min + tool_pose[0]);
-        [cx - 0.03 - ri, end - cx - 0.03 - ri].iter().map(|&d| wrap_angle(r, [d, r + ri, ri], [d, r + ri, ri])).collect()
+        [cx - 0.03 - ri, end - cx - 0.03 - ri]
+            .iter()
+            .map(|&d| wrap_angle(r, [d, r + ri, ri], [d, r + ri, ri]))
+            .collect()
     }
 
     /// The mode of `resonance_hz`. What moves: the carriage on the frame, x (with the pulleys held, all of it is
@@ -941,7 +1096,12 @@ impl Machine for TGantry {
     /// (0.050, 0.368), the tool moving 1 m: it swings mostly by the Z axis leaning.
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         let hz = self.resonance_hz(tool_pose)?;
-        let (w2, kz, mz, tip) = ((std::f64::consts::TAU * hz).powi(2), self.flex_at(tool_pose[1]).0, self.m_z(), self.flex_at(tool_pose[1]).2);
+        let (w2, kz, mz, tip) = (
+            (std::f64::consts::TAU * hz).powi(2),
+            self.flex_at(tool_pose[1]).0,
+            self.m_z(),
+            self.flex_at(tool_pose[1]).2,
+        );
         let (vx, vu) = (kz - w2 * mz, w2 * mz);
         let largest = vx.abs().max((vx + tip * vu).abs());
         let mut shape = vec![0.0; self.state_len()];
@@ -992,7 +1152,9 @@ impl Machine for TGantry {
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out: Vec<SignalInfo> = (1..=3)
-            .map(|i| SignalInfo::new(format!("belt.{i}.tension"), &format!("belt-section-{i}"), "quantity-tension", "N"))
+            .map(|i| {
+                SignalInfo::new(format!("belt.{i}.tension"), &format!("belt-section-{i}"), "quantity-tension", "N")
+            })
             .collect();
         for axis in &self.axes {
             out.push(SignalInfo::new(format!("axis.{}.belt_stretch", axis.id), axis.key, "quantity-belt-stretch", "m"));
@@ -1002,22 +1164,49 @@ impl Machine for TGantry {
         out.push(SignalInfo::new("axis.x.tool_deflection", "axis-x", "quantity-tool-deflection", "m"));
         out.push(SignalInfo::new("belt.slack_time", "group-belt", "quantity-slack-time", "s"));
         for motor in &self.motors {
-            out.push(SignalInfo::new(format!("pulley.{}.radial_load", motor.id), motor.key, "quantity-radial-load", "N"));
+            out.push(SignalInfo::new(
+                format!("pulley.{}.radial_load", motor.id),
+                motor.key,
+                "quantity-radial-load",
+                "N",
+            ));
         }
         for axis in &self.axes {
             out.push(SignalInfo::new(format!("axis.{}.guide_load", axis.id), axis.key, "quantity-guide-load", "N"));
         }
         for motor in &self.motors {
-            out.push(SignalInfo::new(format!("gearbox.{}.output_torque", motor.id), motor.key, "quantity-gearbox-torque", "N m"));
+            out.push(SignalInfo::new(
+                format!("gearbox.{}.output_torque", motor.id),
+                motor.key,
+                "quantity-gearbox-torque",
+                "N m",
+            ));
         }
         if self.jump.is_some() {
             for motor in &self.motors {
-                out.push(SignalInfo::new(format!("pulley.{}.tooth_jumps", motor.id), motor.key, "quantity-tooth-jumps", ""));
-                out.push(SignalInfo::new(format!("pulley.{}.tooth_slip", motor.id), motor.key, "quantity-tooth-slip", "m"));
+                out.push(SignalInfo::new(
+                    format!("pulley.{}.tooth_jumps", motor.id),
+                    motor.key,
+                    "quantity-tooth-jumps",
+                    "",
+                ));
+                out.push(SignalInfo::new(
+                    format!("pulley.{}.tooth_slip", motor.id),
+                    motor.key,
+                    "quantity-tooth-slip",
+                    "m",
+                ));
             }
         }
         if self.span_mass.is_some() {
-            out.extend((1..=8).map(|i| SignalInfo::new(format!("belt.span.{i}.frequency"), &format!("belt-span-{i}"), "quantity-span-frequency", "Hz")));
+            out.extend((1..=8).map(|i| {
+                SignalInfo::new(
+                    format!("belt.span.{i}.frequency"),
+                    &format!("belt-span-{i}"),
+                    "quantity-span-frequency",
+                    "Hz",
+                )
+            }));
             out.push(SignalInfo::new("belt.span_detuning", "group-belt", "quantity-span-detuning", ""));
         }
         self.effect_infos(&mut out);
@@ -1026,7 +1215,10 @@ impl Machine for TGantry {
 
     /// The two guides. Their speeds are those of the carriage along the beam and of the Z axis.
     fn friction_contacts(&self) -> Vec<FrictionContact> {
-        vec![FrictionContact { id: "axis.x", owner_key: "axis-x" }, FrictionContact { id: "axis.z", owner_key: "axis-z" }]
+        vec![
+            FrictionContact { id: "axis.x", owner_key: "axis-x" },
+            FrictionContact { id: "axis.z", owner_key: "axis-z" },
+        ]
     }
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         [&self.friction_x, &self.friction_z].get(i).map_or([0.0; 3], |f| f.steady(speed, load_scale))
@@ -1034,16 +1226,27 @@ impl Machine for TGantry {
 
     /// The three belt sections, in the order of the signals `belt.<i>.tension`.
     fn belt_sections(&self) -> Vec<BeltSection> {
-        ["belt-section-1", "belt-section-2", "belt-section-3"].iter().zip(["belt.1", "belt.2", "belt.3"]).map(|(&owner_key, id)| BeltSection { id, owner_key, pretension: self.belt.pretension }).collect()
+        ["belt-section-1", "belt-section-2", "belt-section-3"]
+            .iter()
+            .zip(["belt.1", "belt.2", "belt.3"])
+            .map(|(&owner_key, id)| BeltSection { id, owner_key, pretension: self.belt.pretension })
+            .collect()
     }
 
     /// Both gearboxes, where there are gearboxes (not on a direct drive, see `Gearbox::is_coupling`), and both guides.
     /// The X guide is shown by the carriage, the Z guide by the Z axis's column.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
-        let part = |id, kind, owner_key, scene_part, scene_index| ThermalPart { id, kind, owner_key, scene_part, scene_index };
-        let gearboxes = [part("gearbox_a", "gearbox", "motor-a", "gearbox", 0), part("gearbox_b", "gearbox", "motor-b", "gearbox", 1)];
+        let part =
+            |id, kind, owner_key, scene_part, scene_index| ThermalPart { id, kind, owner_key, scene_part, scene_index };
+        let gearboxes = [
+            part("gearbox_a", "gearbox", "motor-a", "gearbox", 0),
+            part("gearbox_b", "gearbox", "motor-b", "gearbox", 1),
+        ];
         let mut parts = if self.gearbox.is_coupling() { Vec::new() } else { gearboxes.to_vec() };
-        parts.extend([part("guide_x", "guide", "axis-x", "carriage", 0), part("guide_z", "guide", "axis-z", "z-axis", 0)]);
+        parts.extend([
+            part("guide_x", "guide", "axis-x", "carriage", 0),
+            part("guide_z", "guide", "axis-z", "z-axis", 0),
+        ]);
         parts
     }
 
@@ -1068,7 +1271,15 @@ impl Machine for TGantry {
         let (ffx, ffz, ..) = self.guide_friction(s[Z], s[V + X], s[V + Z], s[S], s[S + 1], torque);
         let (a, b) = (s[A], s[A + 1]);
         out.extend(sec.iter().map(|f| f.tension));
-        out.extend([s[X] - self.r / 2.0 * (a + b), ffx, s[Z] - self.r / 2.0 * (a - b), ffz, s[Q], self.flex_at(s[Z]).2 * s[U], s[SLACK]]);
+        out.extend([
+            s[X] - self.r / 2.0 * (a + b),
+            ffx,
+            s[Z] - self.r / 2.0 * (a - b),
+            ffz,
+            s[Q],
+            self.flex_at(s[Z]).2 * s[U],
+            s[SLACK],
+        ]);
         out.extend([sec[0].tension + sec[1].tension, sec[1].tension + sec[2].tension, load_x, load_z]);
         out.extend((0..2).map(|k| self.gears[k].torque(s[PA + k], s[V + PA + k], s[A + k], s[V + A + k]).output));
         if self.jump.is_some() {
@@ -1100,7 +1311,8 @@ impl Machine for TGantry {
         let pulley = if self.elastic { [s[A], s[A + 1]] } else { rotor.map(|p| p / ratio) };
         // Belt colour: tension relative to pretension, per section.
         let tension = if self.elastic { self.sections(s).map(|f| f.tension) } else { [self.belt.pretension; 3] };
-        let shade = tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
+        let shade =
+            tension.map(|t| ((t - self.belt.pretension) / self.belt.pretension.max(1.0)).clamp(-1.0, 1.0) as f32);
 
         // The belt runs in one plane in front of the beam; the motors sit behind it at both ends.
         // The carriage rides on the beam at height 0; the Z axis hangs through it and rises with z.
@@ -1117,7 +1329,12 @@ impl Machine for TGantry {
         out.arrows.clear();
         let post = Shape::Box { size: [0.06, 0.06, -beam_half - floor] };
         out.parts.extend([
-            part("beam", Shape::Box { size: [end - 0.14, 0.07, 2.0 * beam_half] }, [end / 2.0, 0.045, 0.0], [0.62, 0.64, 0.68]),
+            part(
+                "beam",
+                Shape::Box { size: [end - 0.14, 0.07, 2.0 * beam_half] },
+                [end / 2.0, 0.045, 0.0],
+                [0.62, 0.64, 0.68],
+            ),
             part("post", post.clone(), [span, 0.045, (floor - beam_half) / 2.0], [0.45, 0.47, 0.5]),
             part("post", post, [end - span, 0.045, (floor - beam_half) / 2.0], [0.45, 0.47, 0.5]),
             part("carriage", Shape::Box { size: [0.16, 0.02, 0.16] }, [cx, -0.02, 0.0], [0.2, 0.22, 0.26]),
@@ -1176,7 +1393,8 @@ impl Machine for TGantry {
             // a pulley, a lower span its idler under the end away from it.
             let at_pulley = |point: [f64; 2]| point[0].abs() < 1e-9 || (point[0] - end).abs() < 1e-9;
             let level_at_q = if p[1] > 0.0 { at_pulley(q) } else { !at_pulley(q) };
-            let sag = if sags { (out.exaggeration * span_sag(weight, length, tension[sec])).min(length / 4.0) } else { 0.0 };
+            let sag =
+                if sags { (out.exaggeration * span_sag(weight, length, tension[sec])).min(length / 4.0) } else { 0.0 };
             let pieces = if sags { SAG_PIECES } else { 1 };
             let start = *along.last().unwrap();
             for k in 1..=pieces {
@@ -1201,10 +1419,28 @@ impl Machine for TGantry {
 
         let rpm = |speed: f64| speed * 60.0 / TAU;
         out.labels.extend([
-            Label { pos: [0.0, y, 0.11], owner_key: self.motors[0].key, value: rpm(rotor_speed[0]), unit_key: "unit-rpm", decimals: 0 },
-            Label { pos: [end, y, 0.11], owner_key: self.motors[1].key, value: rpm(rotor_speed[1]), unit_key: "unit-rpm", decimals: 0 },
+            Label {
+                pos: [0.0, y, 0.11],
+                owner_key: self.motors[0].key,
+                value: rpm(rotor_speed[0]),
+                unit_key: "unit-rpm",
+                decimals: 0,
+            },
+            Label {
+                pos: [end, y, 0.11],
+                owner_key: self.motors[1].key,
+                value: rpm(rotor_speed[1]),
+                unit_key: "unit-rpm",
+                decimals: 0,
+            },
             Label { pos: [cx, y, top + 0.08], owner_key: self.axes[0].key, value: x, unit_key: "unit-m", decimals: 3 },
-            Label { pos: [cx + 0.12, y, bottom], owner_key: self.axes[1].key, value: z, unit_key: "unit-m", decimals: 3 },
+            Label {
+                pos: [cx + 0.12, y, bottom],
+                owner_key: self.axes[1].key,
+                value: z,
+                unit_key: "unit-m",
+                decimals: 3,
+            },
         ]);
 
         // The frame sways by q (x is the carriage on the frame): all of it moves, and the posts lean from the floor.
@@ -1281,11 +1517,17 @@ fn cable_chain(parts: &mut Vec<Part>, end: f64, x: f64, cx: f64, beam_half: f64)
         } else {
             ([turn + along - lower - PI * radius, high], 0.0)
         };
-        Part::new("cable-chain", Shape::Box { size: [0.9 * pitch, width, height] }, [pos[0], depth, pos[1]], colour).turned(angle)
+        Part::new("cable-chain", Shape::Box { size: [0.9 * pitch, width, height] }, [pos[0], depth, pos[1]], colour)
+            .turned(angle)
     }));
     // The bracket that carries the chain's end on the carriage.
     let (base, lift) = (0.08, high - height / 2.0);
-    parts.push(Part::new("chain-bracket", Shape::Box { size: [0.02, width, lift - base] }, [moving, depth, (base + lift) / 2.0], colour));
+    parts.push(Part::new(
+        "chain-bracket",
+        Shape::Box { size: [0.02, width, lift - base] },
+        [moving, depth, (base + lift) / 2.0],
+        colour,
+    ));
 }
 
 #[cfg(test)]
