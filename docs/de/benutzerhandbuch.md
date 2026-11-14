@@ -1302,7 +1302,8 @@ Die Signale (in Klammern der Name, unter dem die App die Größe zeigt):
 | `motor.<id>.current`, `.voltage`, `.electrical_power` | A, V, W | Strom, Spannung und elektrische Leistung der Wicklung |
 | `motor.<id>.winding_temperature` | K | Übertemperatur der Wicklung |
 | `motor.<id>.dc_link_voltage`, `.braking_resistor_power` | V, W | Zwischenkreisspannung und Leistung am Bremswiderstand. Mit `effects.shared_dc_link` für jeden Motor gleich |
-| `motor.<id>.speed_command`, `.following_error`, `.angle_setpoint` | rad/s, rad, rad | Lageregler: Drehzahlsollwert, Schleppfehler, Winkelsollwert |
+| `motor.<id>.speed_command`, `.following_error`, `.angle_setpoint` | rad/s, rad, rad | Lageregler: Drehzahlsollwert, Schleppfehler, Winkelsollwert (der, mit dem der Regler verglich: feininterpoliert, symmetriert) |
+| `motor.<id>.torque_feedforward`, `.torque_feedback`, `.speed_from_position` | N m, N m, rad/s | Ausgang des Drehzahlreglers in seinen zwei Teilen, Vorsteuerung (starres oder Trägheitsmodell, Reibung) und PI-Regler, und der Anteil des Lagereglers am Drehzahlsollwert (Kv mal Schleppfehler) |
 | `gearbox.<motor id>.output_torque` | N m | Getriebe-Abtriebsmoment, an der Riemenscheibe. Das beurteilen die Prüfungen `pulley-torque`, `gearbox-peak` und `gearbox-continuous` |
 | `belt.<n>.tension` | N | Riemenkraft im Riementrum n |
 | `axis.<id>.belt_stretch` | m | Riemendehnung: Werkzeugposition minus dem, was die Winkel der Riemenscheiben ergeben |

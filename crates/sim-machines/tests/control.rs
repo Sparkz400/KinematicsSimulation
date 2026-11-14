@@ -994,3 +994,138 @@ fn the_time_optimal_deviation_refuses_what_the_plan_refuses() {
     }
     assert!(refused > 0, "no machine refused the path");
 }
+
+/// The single axis's motor inertia by hand: the 4 kg carriage, the pulley's 1e-4 kg m^2 and the rotor's 3e-5 kg m^2 (with
+/// no gearbox inertia) through the 20 mm pulley and the ratio 5: 4 * 0.02^2 / 25 + 1e-4 / 25 + 3e-5 = 9.8e-5 kg m^2,
+/// 6.125 kg at the carriage; the belt, 0.1 kg/m * (4 * 0.15 m + 2 * 1 m) = 0.26 kg, adds 0.26 * 0.02^2 / 25 = 4.16e-6
+/// kg m^2, and the 2 kg payload 2 * 0.02^2 / 25 = 3.2e-5. With the constant-inertia model the
+/// torque feedforward is that times the motor's acceleration setpoint, 250 rad per metre of the carriage's.
+#[test]
+fn the_constant_inertia_feedforward_is_j_times_the_motor_acceleration() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let cfg = config(entry, &["drive.torque_feedforward_model = \"inertia\""]);
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let j = sim_components::control::rigid_inertias(sim.machine.as_ref(), &cfg.f64s("start.pose").unwrap())[0];
+    let carried = if sim.control.payload_attached { 3.2e-5 } else { 0.0 };
+    assert!((j - (9.8e-5 + 4.16e-6 + carried)).abs() < 1e-9, "J = {j} kg m^2");
+    sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+    let mut seen = 0f64;
+    sim.run(0.3, |s| {
+        let d = &s.control.drives[0];
+        assert!((d.torque_ff - j * 250.0 * s.control.set_acc[0]).abs() < 1e-6 * j * 250.0 * 50.0, "{}", d.torque_ff);
+        seen = seen.max(d.torque_ff.abs());
+    });
+    assert!(seen > j * 250.0, "the move accelerates: {seen} N m");
+}
+
+/// A load-side scale of 0.1 mm on the single axis: the position loop measures the carriage in whole steps of it, at the
+/// motor 250 rad/m * round(x / 0.1 mm) * 0.1 mm, not the motor encoder. Checked at every position cycle of a move against
+/// the carriage's position at the start of the step in which the loop ran; the belt stretches between the two.
+#[test]
+fn a_load_side_encoder_measures_the_following_error_at_the_load() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let cfg = config(entry, &["effects.load_encoder = true", "drive.load_encoder_step = 1.0e-4"]);
+    let n_position = (cfg.f64("drive.position_cycle_s").unwrap() / cfg.f64("sim.dt_s").unwrap()).round() as u64;
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+    let (mut checked, mut stretch) = (0, 0f64);
+    let (mut x, mut v, mut angle, mut speed) = (vec![0.0], vec![0.0], vec![0.0], vec![0.0]);
+    while sim.time() < 0.3 {
+        let due = sim.step.is_multiple_of(n_position);
+        sim.machine.tool_state(&sim.state, &mut x, &mut v);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        sim.step();
+        if due {
+            let d = &sim.control.drives[0];
+            let at_load = 250.0 * (x[0] / 1e-4).round() * 1e-4;
+            assert!((d.following_error - (d.position_setpoint - at_load)).abs() < 1e-9, "{} rad", d.following_error);
+            stretch = stretch.max((angle[0] - 250.0 * x[0]).abs());
+            checked += 1;
+        }
+    }
+    assert!(checked > 250 && stretch > 1e-3, "{checked} cycles, {stretch} rad between motor and load");
+}
+
+/// With encoder noise, the position loop and the velocity loop of one base step use one sample: the position the
+/// position loop measured, setpoint less following error, is the encoder's reading the velocity loop took.
+#[test]
+fn both_loops_read_one_encoder_sample_per_step() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let cfg = config(entry, &["effects.sensor_noise = true"]);
+    let n_position = (cfg.f64("drive.position_cycle_s").unwrap() / cfg.f64("sim.dt_s").unwrap()).round() as u64;
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+    let mut checked = 0;
+    while sim.time() < 0.1 {
+        let due = sim.step.is_multiple_of(n_position);
+        sim.step();
+        let d = &sim.control.drives[0];
+        if due {
+            assert_eq!(d.position_setpoint - d.following_error, d.encoder());
+            checked += 1;
+        }
+    }
+    assert!(checked >= 100);
+}
+
+/// The single axis's cycle with a profile cycle (IPO) of 4 ms instead of 1 ms. With the setpoint held for the cycle its
+/// steps of v T (1 m/s: 4 mm) reach the torque through Kv: twice the peak torque (2.06x measured on 14 November 2026).
+/// With fine interpolation the peak stays within 5 % of the 1 ms one (2.2 % measured), and the path error of the
+/// analysis, measured against the plan of the moment, within 1.5x (1.13x measured), not the setpoint's way of a cycle.
+#[test]
+fn a_long_profile_cycle_with_fine_interpolation_keeps_the_peak_torque() {
+    use sim_components::analysis::analyse_cycle_with;
+    let entry = sim_machines::find("single-axis").unwrap();
+    let run = |edit: &[&str]| {
+        let mut all = vec!["effects.thermal_warm_start = false"];
+        all.extend_from_slice(edit);
+        analyse_cycle_with(&mut Sim::new(entry, &config(entry, &all)).unwrap(), false).unwrap()
+    };
+    let slow = ["profile.cycle_s = 4.0e-3", "profile.setpoint_interval_s = 12.0e-3"];
+    let (base, fine, held) = (run(&[]), run(&slow), run(&[slow[0], slow[1], "effects.fine_interpolation = false"]));
+    let peak = |c: &sim_components::analysis::CycleLoad| c.motors[0].peak_torque;
+    assert!((peak(&fine) / peak(&base) - 1.0).abs() < 0.05, "{} N m against {} N m", peak(&fine), peak(&base));
+    assert!(peak(&held) > 1.5 * peak(&base), "held: {} N m", peak(&held));
+    assert!(
+        fine.path_error_peak < 1.5 * base.path_error_peak,
+        "{} m against {} m",
+        fine.path_error_peak,
+        base.path_error_peak
+    );
+}
+
+/// On the D3 the motors accelerate while the tool cruises on a line: their acceleration setpoint is the second
+/// derivative of the inverse kinematics along the plan, J^-1 a + d(J^-1)/dt v, of which only the second term is left at a
+/// constant tool speed. It matches the change of the motors' speed setpoints from one profile cycle to the next (central
+/// difference over two cycles); J^-1 a alone would be 0 there.
+#[test]
+fn the_motor_acceleration_setpoint_has_the_speed_term_of_the_kinematics() {
+    let entry = sim_machines::find("delta-d3").unwrap();
+    let cfg = entry.config();
+    let n_profile = (cfg.f64("profile.cycle_s").unwrap() / cfg.f64("sim.dt_s").unwrap()).round() as u64;
+    let period = cfg.f64("profile.cycle_s").unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    to_low_end(&mut sim);
+    sim.command(Command::MoveTo(long_move(&sim))).unwrap();
+    // Per profile cycle: whether the tool cruised, and motor 0's speed and acceleration setpoints.
+    let mut ticks: Vec<(bool, f64, f64)> = Vec::new();
+    while sim.control.busy() {
+        let due = sim.step.is_multiple_of(n_profile);
+        sim.step();
+        if due {
+            let cruise = sim.control.set_acc.iter().all(|a| a.abs() < 1e-9) && sim.control.set_vel[0].abs() > 0.1;
+            ticks.push((cruise, sim.control.drives[0].vel_set, sim.control.drives[0].acc_set));
+        }
+    }
+    let mut checked = 0;
+    for w in ticks.windows(3).filter(|w| w.iter().all(|t| t.0)) {
+        let by_difference = (w[2].1 - w[0].1) / (2.0 * period);
+        assert!(
+            (w[1].2 - by_difference).abs() < 0.01 * by_difference.abs() + 1e-3,
+            "{} against {by_difference}",
+            w[1].2
+        );
+        checked += usize::from(by_difference.abs() > 0.1);
+    }
+    assert!(checked > 50, "{checked} cycles of the cruise with the motors accelerating");
+}

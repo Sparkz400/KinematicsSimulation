@@ -659,10 +659,12 @@ impl Tally {
                         (*cubed + self.sample[i].powi(3) * self.speed[k].abs(), *weight + self.speed[k].abs());
                 }
             }
-            // The oldest setpoint's place is reused for the newest.
+            // The oldest setpoint's place is reused for the newest: the plan at this moment, not the setpoint held from
+            // the last profile cycle, which would count a tool where the plan is now as off it by up to a cycle's way.
             let mut newest =
                 if self.path.len() >= 500 { self.path.pop_front().unwrap_or_default() } else { Vec::new() };
-            newest.clone_from(&sim.control.set_pos);
+            newest.resize(axes, 0.0);
+            sim.control.plan_now(sim.time(), &mut newest);
             self.path.push_back(newest);
             let now = self.path.back().unwrap();
             // The nearest piece, newest first. A piece is at least as far as the tool is beyond its extent along any one

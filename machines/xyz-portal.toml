@@ -55,6 +55,16 @@ holding_brake = true
 temperature = false
 velocity_feedforward = true
 torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
+# config has a recorded characteristic.
+friction_feedforward = false
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
 encoder_resolution = true
 velocity_filter = true
 torque_filter = true
@@ -333,6 +343,19 @@ velocity_kp_nm_s_rad = 0.04
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
+# Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
+# moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
+# speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
+torque_feedforward_model = "rigid"
+# With effects.friction_feedforward: the friction characteristic, torque over speed at rising speeds, linear between
+# the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
+friction_feedforward_speed_rad_s = [10.0]
+friction_feedforward_torque_nm = [0.0]
+# The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
+# it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
+precontrol_balance_s = 0.0
+# With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
+load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
 current_kp_v_a = 40.0
 current_tn_s = 2.5e-3

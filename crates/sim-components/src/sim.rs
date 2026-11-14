@@ -506,6 +506,9 @@ impl Sim {
                 ("speed-command", "rad/s"),
                 ("following-error", "rad"),
                 ("angle-setpoint", "rad"),
+                ("torque-feedforward", "N m"),
+                ("torque-feedback", "N m"),
+                ("speed-from-position", "rad/s"),
             ] {
                 out.push(SignalInfo::new(
                     format!("motor.{}.{}", motor.id, name.replace('-', "_")),
@@ -562,7 +565,10 @@ impl Sim {
                 d.resistor_power,
                 d.speed_command,
                 d.following_error,
-                d.pos_set,
+                d.position_setpoint,
+                d.feedforward_torque,
+                d.controller_torque,
+                d.position_part,
             ]);
         }
         self.machine.base_signals(&self.state, &self.torque, out);

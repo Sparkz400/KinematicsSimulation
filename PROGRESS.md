@@ -2543,3 +2543,78 @@ Left open:
 
 - Where a gearbox binds the faster plan, the path tests of the CLI, the app and the PLC ask it to be quicker or gentler,
   not both (the plan within the axis limits takes the D2's gearbox to 248 N m of 192 N m).
+
+## Drive loops and feedforward (14 November)
+
+What: the drive's loops behave as a SINAMICS S120/S210 axis in DSC. `drive.rs` (`Precontrol`, `position_loop`,
+`velocity_loop`, `read_encoder`), `control.rs` (`update`, `profile_tick`, `rigid_inertias`, `plan_now`), one line in
+`analysis.rs` (the path error's reference), three signals in `sim.rs`.
+
+- Fine interpolation (`effects.fine_interpolation`, on in every shipped config, off where a config lacks it): between
+  profile cycles the position loop's setpoint runs on as pos + v t + a t^2 / 2 from the last frame, the integral of the
+  speed feedforward that already ran on as v + a t. Quadratic extrapolation, not Siemens' cubic interpolation, which
+  needs the next frame and a cycle's delay; the jump at the next frame is j T^3 / 6. `position_cycle_s` may equal
+  `velocity_cycle_s` (DSC). Nothing changes in the shipped configs, whose position and profile cycles are equal.
+- The analysis measures path and tracking error against `Controller::plan_now`, the plan at the sample's moment.
+- `drive.torque_feedforward_model`: `rigid` (as before) or `inertia`, J_k from the rigid model at `start.pose`
+  (`rigid_inertias`, one motor accelerated alone, gravity taken off) times the motor's acceleration setpoint; none is
+  `effects.torque_feedforward = false`. Friction feedforward `effects.friction_feedforward` from the characteristic
+  `drive.friction_feedforward_speed_rad_s` / `_torque_nm` at the speed setpoint; the single axis ships one worked out
+  from its model (off). Balancing `drive.precontrol_balance_s` (0 in the shipped configs, as a drive comes).
+- Load-side encoder `effects.load_encoder`, `drive.load_encoder_step`: the position loop measures the tool axes in
+  steps of the scale, as motor angles through the inverse kinematics; the speed loop keeps the motor encoder.
+- Small: one encoder sample per base step for both loops; the current loop's back-EMF feedforward and field weakening at
+  the measured speed (the velocity loop's filtered one); the motor acceleration setpoint is the second difference of the
+  inverse kinematics along the plan, so it has d(J^-1)/dt v; the controller, not the velocity loop, advances the time
+  since the setpoints, a base step at a time.
+- Signals per motor: `torque_feedforward`, `torque_feedback` (PI), `speed_from_position` (Kv e); `angle_setpoint` is now
+  the setpoint the position loop compared with.
+
+Measured with `sim-cli analyze` (release), largest motor's peak torque, tracking and path error peak:
+
+| Machine | 1 ms | 4 ms held (as before) | 4 ms fine interpolation |
+| --- | --- | --- | --- |
+| single-axis | 0.496 N m, 0.20 mm, 0.041 mm | 1.022 N m, 1.56 mm, 0.017 mm | 0.507 N m, 0.21 mm, 0.047 mm |
+| t-gantry | 0.557 N m, 0.19 mm, 0.11 mm | 1.459 N m, 1.37 mm, 0.084 mm | 0.568 N m, 0.20 mm, 0.12 mm |
+| screw-axis | 2.457 N m, 0.082 mm, 0.046 mm | 6.267 N m, 1.21 mm, 0.040 mm | 2.714 N m, 0.12 mm, 0.049 mm |
+| delta-d3 | 7.64 N m, 4.12 mm, 1.97 mm | 9.78 N m, 5.45 mm, 1.13 mm | 7.98 N m, 4.47 mm, 2.16 mm |
+
+(4 ms with `profile.setpoint_interval_s = 12.0e-3`, the shipped 10 ms not being a multiple. The held column's path
+error is small because the analysis now measures against the plan of the moment; before, 4 ms read 3.0 mm on the
+single axis.)
+
+| Machine | torque feedforward rigid | inertia | none |
+| --- | --- | --- | --- |
+| single-axis | 0.496 N m, 0.20 mm, 0.041 mm | 0.496 N m, 0.18 mm, 0.041 mm | 0.507 N m, 0.31 mm, 0.15 mm |
+| t-gantry | 0.557 N m, 0.19 mm, 0.11 mm | 0.556 N m, 0.20 mm, 0.12 mm | 0.569 N m, 0.26 mm, 0.17 mm |
+| screw-axis | 2.457 N m, 0.082 mm, 0.046 mm | 2.457 N m, 0.078 mm, 0.070 mm | 2.769 N m, 0.38 mm, 0.29 mm |
+| delta-d3 | 7.64 N m, 4.12 mm, 1.97 mm | 8.31 N m, 6.13 mm, 2.11 mm | 9.48 N m, 10.9 mm, 7.26 mm |
+
+On the single and the T axis the constant inertia is as good as the rigid model (their inertia does not change with the
+pose, and gravity is off); on the delta it loses half the gain, as the inertia and the gravity change across the
+workspace. Friction feedforward on the single axis (its model's characteristic): tracking 0.20 mm -> 0.12 mm (rigid),
+0.10 mm (inertia). Load-side encoder on the single axis (belt): dwell error 0.021 mm -> 0.006 mm, path error peak
+0.041 -> 0.032 mm; inclined at 90 deg 0.055 -> 0.034 mm dwell, 0.22 -> 0.16 mm tracking. Balancing 2 ms with torque
+feedforward on lags the tool by 2 ms of way (tracking 1.6 mm): with torque precontrol the speed loop hardly lags, so a
+commissioning leaves it at the current loop's fraction of a millisecond or 0.
+
+Tests: `fine_interpolation_runs_the_setpoint_on_between_profile_cycles` (1 + 10 * 0.003 + 100 * 0.003^2 / 2 = 1.03045
+rad, Kv part 1.5225 rad/s), `the_friction_feedforward_is_the_characteristic_at_the_speed_setpoint` (0.1, -0.25, 0.3 N m
+from two points), `balancing_lags_the_position_setpoint_by_its_time_constant` (1 - e^-1, 1 - e^-2), drive.rs;
+`the_constant_inertia_feedforward_is_j_times_the_motor_acceleration` (single axis 9.8e-5 + belt 4.16e-6 + payload
+3.2e-5 kg m^2), `a_load_side_encoder_measures_the_following_error_at_the_load` (250 rad/m * round(x / 0.1 mm) * 0.1
+mm), `both_loops_read_one_encoder_sample_per_step` (with encoder noise), `a_long_profile_cycle_with_fine_interpolation_
+keeps_the_peak_torque` (within 5 %; held > 1.5x), `the_motor_acceleration_setpoint_has_the_speed_term_of_the_kinematics`
+(D3 cruise, against the speed setpoints' central difference), sim-machines control.rs.
+
+Left open:
+
+- The load-side scale measures the tool as `Machine::tool_state` reports it. On the T-gantry that is the tool tip in the
+  room, with the frame mode and the leaning Z axis inside the position loop: at Kv 50 it is unstable (53 mm), with both
+  effects off it is fine (0.08 mm), at Kv 20 too. A real scale sits on the frame and measures the carriage; that needs a
+  `Machine` method for the carriage relative to the frame (structure session's compliant base).
+- Fine interpolation is quadratic extrapolation; Siemens' cubic interpolator (one IPO cycle late) is not modelled, nor
+  the balancing dead time p1428.
+- The constant inertia is taken at `start.pose` with the payload state of the build; no config value for a mis-set
+  p1498 (scale it with `torque_feedforward_factor`).
+- Friction characteristics for the other machines: none recorded, a p3845-like recording run is not built.

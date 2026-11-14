@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveParams, shared_dc_link};
+use crate::drive::{Drive, DriveParams, quantise, shared_dc_link};
 use crate::path::{self, Piece};
 use crate::profile::Move;
 use sim_core::{Config, ConfigError, Machine};
@@ -166,6 +166,30 @@ pub struct Controller {
     pass: Option<Pass>,
     /// The simulated time at the profile cycle under way, s.
     clock: f64,
+    /// Each motor's moment of inertia in the rigid model at the start pose, for the constant-inertia torque
+    /// feedforward (`rigid_inertias`); empty while no drive uses it.
+    inertias: Vec<f64>,
+    /// effects.load_encoder: the step of the load-side scales (`drive.load_encoder_step`, in the tool axes' units, 0
+    /// ideal) on which the position loops close; `None` off, on the motor encoders.
+    load_encoder: Option<f64>,
+}
+
+/// Each motor's moment of inertia in the rigid, loss-free model at a tool pose: the torque it needs for a unit
+/// acceleration of its own while the others stand, less what it needs at rest (gravity). What a drive's constant-inertia
+/// precontrol is set to (S120 p1498, the load's inertia, plus the motor's).
+pub fn rigid_inertias(machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
+    let motors = machine.motors().len();
+    let (mut angle, zero) = (vec![0.0; motors], vec![0.0; motors]);
+    let (mut rest, mut moved) = (vec![0.0; motors], vec![0.0; motors]);
+    machine.inverse(pose, &mut angle);
+    machine.rigid_motor_torque(&angle, &zero, &zero, &mut rest);
+    (0..motors)
+        .map(|k| {
+            let unit: Vec<f64> = (0..motors).map(|j| if j == k { 1.0 } else { 0.0 }).collect();
+            machine.rigid_motor_torque(&angle, &zero, &unit, &mut moved);
+            moved[k] - rest[k]
+        })
+        .collect()
 }
 
 fn steps(cfg: &Config, path: &str, dt: f64) -> Result<u64> {
@@ -225,6 +249,8 @@ impl Controller {
             pass: None,
             clock: 0.0,
             history: Default::default(),
+            inertias: Vec::new(),
+            load_encoder: None,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -249,7 +275,7 @@ impl Controller {
         // Start holding the load: the torque that keeps the pose, and the feedforward's share of it.
         let (mut hold, mut ff) = (vec![0.0; motors], vec![0.0; motors]);
         machine.equilibrium(&self.set_pos, &mut Vec::new(), &mut hold);
-        machine.feedforward_torque(&self.set_pos, &self.set_acc, &mut ff);
+        self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &vec![0.0; motors], &mut ff);
         // A winding that was warm stays warm, and a DC link keeps its charge. The current that holds the load comes
         // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step.
         // shortcut: without the DC link simulated that L i^2 / 2 (about 1 mJ) comes from nowhere; book it on the supply
@@ -299,6 +325,16 @@ impl Controller {
             .iter()
             .map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt))
             .collect::<Result<Vec<_>>>()?;
+        let inertias = if motor_params.iter().any(|p| p.precontrol.constant_inertia) {
+            rigid_inertias(machine, &cfg.f64s("start.pose")?)
+        } else {
+            Vec::new()
+        };
+        let load_encoder = if cfg.get("effects.load_encoder").is_ok() && cfg.bool("effects.load_encoder")? {
+            Some(cfg.non_negative("drive.load_encoder_step")?)
+        } else {
+            None
+        };
         let (mut shaper, mut shaper_follows) = (None, None);
         let (frequency, damping) =
             (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper_damping")?);
@@ -440,6 +476,7 @@ impl Controller {
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
+        (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
         self.path_tolerance = path_tolerance;
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
@@ -752,7 +789,7 @@ impl Controller {
     pub fn motors_shifted(&mut self, shift: &[f64]) {
         for (k, (drive, by)) in self.drives.iter_mut().zip(shift).enumerate() {
             drive.shift_encoder(*by);
-            drive.pos_set += by;
+            drive.shift_setpoint(*by);
             for (_, setpoints) in &mut self.fieldbus {
                 setpoints[k][0] += by;
             }
@@ -779,13 +816,34 @@ impl Controller {
             self.clock = step as f64 * self.profile_cycle / self.n_profile as f64;
             self.profile_tick(self.tick + 1, machine);
         }
-        if step.is_multiple_of(self.n_position) {
+        let (position_due, velocity_due) = (step.is_multiple_of(self.n_position), step.is_multiple_of(self.n_velocity));
+        // One encoder sample per base step, which both loops use.
+        if position_due || velocity_due {
             for (k, (drive, pos)) in self.drives.iter_mut().zip(&self.motor_pos).enumerate() {
-                drive.position_loop(&self.motor_params[k], *pos);
+                drive.read_encoder(&self.motor_params[k], *pos);
+            }
+        }
+        if position_due {
+            // With a load-side encoder (effects.load_encoder) the position loop measures the tool axes, in whole
+            // steps of the scale, as motor angles through the rigid kinematics; the speed loop keeps the motor's.
+            // shortcut: the scale reads the tool as `tool_state` reports it, in the room (a compliant frame and a leaning
+            // tool inside the loop); add a `Machine` reading of the carriage against the frame when a machine needs it.
+            let load = self.load_encoder.map(|scale| {
+                let axes = self.set_pos.len();
+                let (mut tool, mut rate, mut motors) = (vec![0.0; axes], vec![0.0; axes], vec![0.0; self.drives.len()]);
+                machine.tool_state(state, &mut tool, &mut rate);
+                tool.iter_mut().for_each(|x| *x = quantise(*x, scale));
+                machine.inverse(&tool, &mut motors);
+                motors
+            });
+            let cycle = self.n_position as f64 * self.profile_cycle / self.n_profile as f64;
+            for (k, drive) in self.drives.iter_mut().enumerate() {
+                let measured = load.as_ref().map_or(drive.encoder(), |l| l[k]);
+                drive.position_loop(&self.motor_params[k], measured, cycle);
             }
             // Following error per motor, transformed back to the tool axes for display.
             let (set, actual): (Vec<f64>, Vec<f64>) =
-                self.drives.iter().map(|d| (d.pos_set, d.pos_set - d.following_error)).unzip();
+                self.drives.iter().map(|d| (d.position_setpoint, d.position_setpoint - d.following_error)).unzip();
             let (mut tool_set, mut tool_actual) = (self.set_pos.clone(), self.set_pos.clone());
             machine.forward(&set, &mut tool_set);
             machine.forward(&actual, &mut tool_actual);
@@ -793,11 +851,24 @@ impl Controller {
                 self.tool_error[i] = tool_set[i] - tool_actual[i];
             }
         }
+        let dt = self.profile_cycle / self.n_profile as f64;
         for (k, drive) in self.drives.iter_mut().enumerate() {
-            if step.is_multiple_of(self.n_velocity) {
-                drive.velocity_loop(&self.motor_params[k], self.motor_pos[k], self.motor_vel[k]);
+            if velocity_due {
+                drive.velocity_loop(&self.motor_params[k], self.motor_vel[k]);
             }
-            drive.current_control(&self.motor_params[k], self.motor_vel[k]);
+            // The back-EMF the current loop adds, and the field weakening, at the speed the drive has measured.
+            let speed = drive.measured_speed();
+            drive.current_control(&self.motor_params[k], speed);
+            drive.since_setpoint += dt;
+        }
+    }
+
+    /// The tool setpoint at `time`: the last profile cycle's run on by its speed and acceleration, as the drives' fine
+    /// interpolation runs the motors' on (at most one profile cycle). What the analysis measures the tool against.
+    pub fn plan_now(&self, time: f64, out: &mut [f64]) {
+        let t = (time - self.clock).clamp(0.0, self.profile_cycle);
+        for (i, x) in out.iter_mut().enumerate() {
+            *x = self.set_pos[i] + (self.set_vel[i] + 0.5 * self.set_acc[i] * t) * t;
         }
     }
 
@@ -1013,22 +1084,22 @@ impl Controller {
             (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
         let offset_pos: Vec<f64> = self.set_pos.iter().zip(&self.setpoint_offset).map(|(p, o)| p + o).collect();
         machine.inverse(&offset_pos, &mut pos);
-        // Motor speed setpoints: the inverse transformation applied a moment ahead and behind.
-        let h = 1e-3;
-        let shifted =
-            |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_vel).map(|(p, v)| p + sign * h * v).collect() };
-        machine.inverse(&shifted(1.0), &mut ahead);
-        machine.inverse(&shifted(-1.0), &mut behind);
-        machine.feedforward_torque_moving(&self.set_pos, &self.set_vel, &self.set_acc, &mut ff);
-        // Motor acceleration setpoints the same way, for the drives' fine interpolation.
-        let (mut acc_ahead, mut acc_behind) = (vec![0.0; motors], vec![0.0; motors]);
-        let shifted =
-            |sign: f64| -> Vec<f64> { self.set_pos.iter().zip(&self.set_acc).map(|(p, a)| p + sign * h * a).collect() };
-        machine.inverse(&shifted(1.0), &mut acc_ahead);
-        machine.inverse(&shifted(-1.0), &mut acc_behind);
-        let setpoints = (0..motors)
-            .map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), (acc_ahead[k] - acc_behind[k]) / (2.0 * h), ff[k]])
-            .collect();
+        // Motor speed and acceleration setpoints: the inverse transformation along the plan a moment ahead and behind,
+        // x(s) = x + v s + a s^2 / 2. The second difference is the motors' whole acceleration, J^-1 a and the part a
+        // kinematics that is not linear adds at speed (d/dt J^-1 times v), for the drives' fine interpolation.
+        let (h, mut here) = (1e-3, vec![0.0; motors]);
+        let along = |s: f64| -> Vec<f64> {
+            (0..self.set_pos.len())
+                .map(|i| self.set_pos[i] + s * self.set_vel[i] + 0.5 * s * s * self.set_acc[i])
+                .collect()
+        };
+        machine.inverse(&along(h), &mut ahead);
+        machine.inverse(&along(-h), &mut behind);
+        machine.inverse(&self.set_pos, &mut here);
+        let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
+        self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
+        let setpoints =
+            (0..motors).map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), motor_acc[k], ff[k]]).collect();
         // Fieldbus: the drives get the newest frame that has arrived, one the controller computed some cycles ago. With
         // jitter each frame takes its own number of cycles, and a late one leaves the drives the frame before. Frames
         // older than the longest delay have arrived and are dropped; before any has arrived, the oldest.
@@ -1046,6 +1117,26 @@ impl Controller {
         for (drive, &[pos, vel, acc, ff]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
             drive.since_setpoint = 0.0;
+        }
+    }
+
+    /// The torque feedforward per motor (before its weight): the rigid model's inverse dynamics, or, for a motor whose
+    /// drive has `drive.torque_feedforward_model = "inertia"`, its constant moment of inertia (`rigid_inertias`) times
+    /// its acceleration setpoint.
+    fn torque_feedforward(
+        &self,
+        machine: &dyn Machine,
+        pos: &[f64],
+        vel: &[f64],
+        acc: &[f64],
+        motor_acc: &[f64],
+        out: &mut [f64],
+    ) {
+        machine.feedforward_torque_moving(pos, vel, acc, out);
+        for (k, torque) in out.iter_mut().enumerate() {
+            if self.motor_params[k].precontrol.constant_inertia {
+                *torque = self.inertias[k] * motor_acc[k];
+            }
         }
     }
 
