@@ -5,6 +5,7 @@
 //! `from_text` checks a file's text into a `MachineEntry` that every front end takes like a registered machine;
 //! `sim_machines::load_file` reads the file (TOML, or JSON converted).
 
+pub mod linkage;
 pub mod machine;
 pub mod netlist;
 
@@ -19,7 +20,11 @@ use toml::{Table, Value};
 
 /// `MachineEntry::build` of every machine file: the netlist is in the config itself.
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(ConfigMachine::new(cfg, &Netlist::parse(cfg)?)?))
+    let net = Netlist::parse(cfg)?;
+    match &net.linkage {
+        Some(linkage) => Ok(Box::new(linkage::LinkageMachine::new(cfg, &net, linkage)?)),
+        None => Ok(Box::new(ConfigMachine::new(cfg, &net)?)),
+    }
 }
 
 /// shortcut: a machine file brings no loss-free configs for the standard suite; the tests build their own.
