@@ -120,6 +120,29 @@ pub struct Contact {
     pub obstacle: usize,
 }
 
+/// What a running simulation has come to apart from its machine (`Sim::snapshot`): the integrated state, the controller
+/// with its drives (loops, filters, windings, thermal and overload images), the parts' warmth and the obstacle record.
+/// `Sim::restore` takes it back into a simulation built from the same machine and config; what the machine itself keeps
+/// between steps (payload, brakes, dwelling, the parts' temperatures) is set again from it.
+#[derive(Clone)]
+pub struct Snapshot {
+    control: Controller,
+    state: Vec<f64>,
+    torque: Vec<f64>,
+    step: u64,
+    payload_attached: bool,
+    payload_energy: f64,
+    crash_energy: f64,
+    heated: Vec<HeatedPart>,
+    obstacles: Vec<Obstacle>,
+    clearance: f64,
+    least_clearance: f64,
+    contact: Option<Contact>,
+    crashed: bool,
+    gaps: Vec<f64>,
+    last_pose: Vec<f64>,
+}
+
 /// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
 /// temperatures.
 pub fn heats(cfg: &Config) -> Result<bool, ConfigError> {
@@ -251,6 +274,60 @@ impl Sim {
 
     pub fn time(&self) -> f64 {
         self.step as f64 * self.dt
+    }
+
+    /// Everything but the machine, to go back to with `restore`: a copy, as long as the simulation's state takes to copy.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            control: self.control.clone(),
+            state: self.state.clone(),
+            torque: self.torque.clone(),
+            step: self.step,
+            payload_attached: self.payload_attached,
+            payload_energy: self.payload_energy,
+            crash_energy: self.crash_energy,
+            heated: self.heated.clone(),
+            obstacles: self.obstacles.clone(),
+            clearance: self.clearance,
+            least_clearance: self.least_clearance,
+            contact: self.contact.clone(),
+            crashed: self.crashed,
+            gaps: self.gaps.clone(),
+            last_pose: self.last_pose.clone(),
+        }
+    }
+
+    /// Back to a snapshot of a simulation of the same machine and config (this one, or one built as it was): its next
+    /// steps are bit for bit those the snapshot's simulation took. A snapshot of another machine (other state, motor,
+    /// part or obstacle counts) is refused and changes nothing. What a machine works out per step for its signals alone
+    /// (a belt tooth jump's loss) reads as the machine has it until the next step: sample before restoring if the
+    /// signals at the snapshot are wanted.
+    pub fn restore(&mut self, s: &Snapshot) -> Result<(), ConfigError> {
+        if s.state.len() != self.state.len()
+            || s.torque.len() != self.torque.len()
+            || s.control.drives.len() != self.control.drives.len()
+            || s.heated.len() != self.heated.len()
+            || s.obstacles.len() != self.obstacles.len()
+        {
+            return Err(ConfigError::Invalid("snapshot".into()));
+        }
+        self.control = s.control.clone();
+        self.state.clone_from(&s.state);
+        self.torque.clone_from(&s.torque);
+        (self.step, self.payload_energy, self.crash_energy) = (s.step, s.payload_energy, s.crash_energy);
+        self.heated.clone_from(&s.heated);
+        self.obstacles.clone_from(&s.obstacles);
+        (self.clearance, self.least_clearance, self.crashed) = (s.clearance, s.least_clearance, s.crashed);
+        self.contact.clone_from(&s.contact);
+        self.gaps.clone_from(&s.gaps);
+        self.last_pose.clone_from(&s.last_pose);
+        // What the machine keeps between steps, as `step` sets it.
+        self.payload_attached = s.payload_attached;
+        self.machine.set_payload_attached(s.payload_attached);
+        self.machine.set_dwelling(self.control.dwell_progress().is_some());
+        self.machine.set_brake_engaged(!self.control.enabled());
+        self.feed_temperatures_back();
+        Ok(())
     }
 
     pub fn command(&mut self, command: Command) -> Result<(), CommandError> {

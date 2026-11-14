@@ -1373,6 +1373,9 @@ By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_f
 | every other signal of the [signal table](#record-raw-signals-switch-the-drives-off) | Real | output | E.g. `axis.x.position`, `motor.a.torque`, `belt.1.tension`, with its unit |
 | `command.setpoint.<axis id>` | Real | input | Position setpoint, as `command.setpoint.<axis id>` over OPC UA. Start value: the start pose |
 | `command.enable` | Boolean | input | `false` switches the drives off (brakes engage), `true` on again. Start value `true` |
+| `command.cycle` | Boolean | input | Turning `true` starts the configured cycle, turning `false` stops it at the end of its segment |
+| `command.target.<axis id>`, `command.move` | Real, Boolean | input | `command.move` turning `true` moves to the targets (start value: the start pose) |
+| `command.path`, `command.path_file`, `command.run_path` | String, String, Boolean | input | `command.run_path` turning `true` plans the path (the text of a path file, or the file named) from where the machine stands and runs it |
 | `machine` | String | parameter | The machine id |
 | `config_file` | String | parameter | A config file to use instead of the one in the FMU; empty (the start value) for the one in the FMU |
 | `effects.<name>` | Boolean | parameter | Each effect switch, start value as in the config; a value set here wins over the config file's |
@@ -1391,8 +1394,8 @@ How a step works:
 Limits for this task:
 
 - Checked with fmpy and OMSimulator (validation against the FMI schema, simulation compared with `sim-cli run`; [FMI export](fmi.md#validation) has the commands). Run in OpenModelica 1.27.1 through OMSimulator (FMI 2.0; its Modelica import takes Model Exchange only); import into Simulink or Dymola is untested.
-- Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). The FMU state works by replaying every step since initialisation, so restoring a state takes as long as simulating up to it. The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
-- Inputs are position setpoints only: no move targets, cycle or path commands, and no torque input. The servo loops stay inside the FMU.
+- Co-Simulation only, no Model Exchange ([why](fmi.md#why-there-is-no-model-exchange)). An FMU state holds a snapshot of the simulation and is set at once; a serialized one replays every step since initialisation, so setting it takes as long as simulating up to it ([FMU state](fmi.md#fmu-state)). The directional derivatives are zero, because the outputs depend on no input directly. No asynchronous steps.
+- Inputs are position setpoints and the cycle, move and path triggers ([FMI export](fmi.md#cycle-moves-and-paths)); a setpoint input once set takes the axes over from a cycle, move or path. No torque input: the servo loops stay inside the FMU.
 - Messages and descriptions in one language, the one of `--lang` when the FMU was written.
 - A 64-bit Windows binary unless a Linux one is added as above; no 32-bit binaries.
 

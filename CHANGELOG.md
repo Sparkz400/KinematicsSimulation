@@ -7,6 +7,22 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- FMI: inputs `command.cycle`, `command.target.<axis>` with `command.move`, and `command.path` / `command.path_file`
+  with `command.run_path`, which start the cycle, a move and a path as `sim-cli run --cycle`, `--move` and `--path`
+  do; log categories `logEvents`, `logStatusWarning`, `logStatusError`, `logAll` in the model description, switched by
+  `fmi2SetDebugLogging` / `fmi3SetDebugLogging` (which did nothing before).
+- FMI: an FMU state holds a snapshot of the simulation (`Sim::snapshot`, `Sim::restore`) and is set at once instead of
+  replaying every step since initialisation; a serialized state still replays (format `sim-fmi state 2`).
+- Python: `Config(machine_file=...)`, `sweep`, `optimise`, `fit` and `identify`, as the command line has them.
+- CI: clippy of sim-py in the job "python", and the CAD mass tests (`tools/cad/test_cadmass.py`) with cadquery-ocp.
+
+### Changed
+
+- FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
+  that print the format as it is (fmpy's Python callbacks) show the text.
+
 ### Fixed
 
 - Drive loops: the position setpoint is interpolated between profile cycles (`effects.fine_interpolation`, as a SINAMICS
@@ -14,6 +30,11 @@ item are in [PROGRESS.md](PROGRESS.md).
   0.496 N m at 1 ms). The analysis measures the tool against the plan of the moment, not the setpoint held for the
   cycle. Both loops read one encoder sample per base step; the current loop's back-EMF feedforward and field weakening
   use the measured speed; the motor acceleration setpoint has the d(J^-1)/dt v term of a kinematics that is not linear.
+
+- FMI: setting an FMU state whose simulation cannot be built again (its config file gone) left the instance in step
+  mode without a simulation, refusing every later step; now the state is refused and the instance goes on.
+- Python: an int beyond 64 bits set on a config became a float silently; now `OverflowError`. `run(time=1e12)` passed
+  its checks and never finished; a run beyond 1e8 base steps or 2.5e8 sampled values is now refused with `ValueError`.
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it
   implicitly). FMIL, the FMI library of OpenModelica and other importers, reported the declared one as an error for

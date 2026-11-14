@@ -170,7 +170,7 @@ fn what_the_standard_forbids_is_refused() {
         assert_eq!(fmi2CancelStep(c), fmi2Error);
         assert_eq!(fmi2SetFMUstate(c, std::ptr::null_mut()), fmi2Error);
         let mut state = std::ptr::null_mut();
-        assert_eq!(fmi2DeSerializeFMUstate(c, c"sim-fmi state 1".as_ptr(), 16, &mut state), fmi2Error);
+        assert_eq!(fmi2DeSerializeFMUstate(c, c"sim-fmi state 2".as_ptr(), 16, &mut state), fmi2Error);
         assert!(state.is_null());
         // The parameters read back; the machine is the one of the FMU.
         let machine = vr(&model, &Kind::Machine);
@@ -363,7 +363,7 @@ fn a_saved_fmu_state_restores_the_simulation_bit_for_bit() {
         bytes.resize(size, 0);
         assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size), fmi2OK);
         assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size - 1), fmi2Error);
-        assert!(bytes.starts_with(b"sim-fmi state 1\0"));
+        assert!(bytes.starts_with(b"sim-fmi state 2\0"));
         assert_eq!(fmi2FreeFMUstate(c, &mut state), fmi2OK);
         assert!(state.is_null());
         fmi2FreeInstance(c);
@@ -459,4 +459,192 @@ fn the_guid_changes_with_the_model_description() {
         .unwrap();
     cfg.set_text(&format!("{name} = {}", !on)).unwrap();
     assert_ne!(a.guid, Model::new(entry, &cfg.to_text().unwrap(), "en").unwrap().guid, "a start value is part of it");
+}
+
+fn set_bool(c: fmi2Component, vr: u32, on: bool) {
+    unsafe { assert_eq!(fmi2SetBoolean(c, &vr, 1, &(on as i32)), fmi2OK) };
+}
+
+fn set_text(c: fmi2Component, vr: u32, text: &str) {
+    let text = CString::new(text).unwrap();
+    unsafe { assert_eq!(fmi2SetString(c, &vr, 1, &text.as_ptr()), fmi2OK) };
+}
+
+fn signal_refs(model: &Model) -> Vec<u32> {
+    let signals = model.variables.iter().enumerate().filter(|(_, v)| matches!(v.kind, Kind::Signal(_)));
+    signals.map(|(i, _)| i as u32).collect()
+}
+
+/// A state whose simulation cannot be built again (its config file is gone) is refused, and the instance goes on
+/// where it was: before, it was left in step mode without a simulation, and every later step was refused.
+#[test]
+fn a_state_that_cannot_be_set_leaves_the_instance_as_it_was() {
+    let entry = MACHINES[0];
+    let (model, resources) = unpack(entry, "atomic");
+    let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("fmi-atomic-{}.toml", entry.id));
+    std::fs::write(&file, &model.config_text).unwrap();
+    let cfg = load_config(entry, &model.config_text).unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
+    let steps = (interval / sim.dt).round() as u64;
+    let signals = signal_refs(&model);
+    let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
+    set_text(c, vr(&model, &Kind::ConfigFile), file.to_str().unwrap());
+    set_bool(c, vr(&model, &Kind::Cycle), true);
+    start(c);
+    sim.command(Command::StartCycle).unwrap();
+    let mut state = std::ptr::null_mut();
+    let mut expected = Vec::new();
+    for k in 0..12 {
+        if k == 4 {
+            unsafe { assert_eq!(fmi2GetFMUstate(c, &mut state), fmi2OK) };
+        }
+        if k == 8 {
+            std::fs::remove_file(&file).unwrap();
+            unsafe { assert_eq!(fmi2SetFMUstate(c, state), fmi2Error) };
+        }
+        unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "step {k}") };
+        (0..steps).for_each(|_| sim.step());
+        sim.sample(&mut expected);
+        assert_eq!(get_reals(c, &signals), expected, "step {k}");
+    }
+    unsafe {
+        assert_eq!(fmi2FreeFMUstate(c, &mut state), fmi2OK);
+        fmi2FreeInstance(c);
+    }
+}
+
+/// On every machine with its cycle started through `command.cycle`: a state taken on the way, set after the
+/// simulation ran on, gives bit for bit the steps it gave the first time, from its snapshot; serialized (without the
+/// snapshot) and set on a new instance, from replaying its steps, the same again.
+#[test]
+fn a_restored_snapshot_continues_as_the_simulation_did_on_every_machine() {
+    for entry in MACHINES.iter().copied().chain(machine_files()) {
+        let (model, resources) = unpack(entry, "snapshot");
+        let cfg = load_config(entry, &model.config_text).unwrap();
+        let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
+        let signals = signal_refs(&model);
+        let step = |c: fmi2Component, k: usize| {
+            unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "{} step {k}", entry.id) };
+            get_reals(c, &signals)
+        };
+        let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
+        set_bool(c, vr(&model, &Kind::Cycle), true);
+        start(c);
+        for k in 0..15 {
+            step(c, k);
+        }
+        let mut state = std::ptr::null_mut();
+        unsafe { assert_eq!(fmi2GetFMUstate(c, &mut state), fmi2OK) };
+        let at_state = get_reals(c, &signals);
+        let after: Vec<Vec<f64>> = (15..30).map(|k| step(c, k)).collect();
+        unsafe { assert_eq!(fmi2SetFMUstate(c, state), fmi2OK) };
+        assert_eq!(get_reals(c, &signals), at_state, "{}: the outputs at the state", entry.id);
+        assert_eq!((15..30).map(|k| step(c, k)).collect::<Vec<_>>(), after, "{}: from the snapshot", entry.id);
+        let mut size = 0;
+        let mut bytes = Vec::new();
+        let other = instantiate(&model.guid, &resources, fmi2CoSimulation);
+        let mut restored = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(fmi2SerializedFMUstateSize(c, state, &mut size), fmi2OK);
+            bytes.resize(size, 0);
+            assert_eq!(fmi2SerializeFMUstate(c, state, bytes.as_mut_ptr() as *mut c_char, size), fmi2OK);
+            assert_eq!(fmi2FreeFMUstate(c, &mut state), fmi2OK);
+            fmi2FreeInstance(c);
+            assert_eq!(fmi2DeSerializeFMUstate(other, bytes.as_ptr() as *const c_char, size, &mut restored), fmi2OK);
+            assert_eq!(fmi2SetFMUstate(other, restored), fmi2OK);
+            assert_eq!(fmi2FreeFMUstate(other, &mut restored), fmi2OK);
+        }
+        assert_eq!((15..30).map(|k| step(other, k)).collect::<Vec<_>>(), after, "{}: replayed", entry.id);
+        unsafe { fmi2FreeInstance(other) };
+    }
+}
+
+/// `command.target.<axis>` and `command.move` move every machine as `Command::MoveTo` moves a plain simulation, bit
+/// for bit, to the target (the first axis up to 5 % of its range further in); the trigger held true gives no second move.
+/// `command.path` and `command.run_path` run a path as `plan_path` and `Command::Trajectory` do, and a text that is no
+/// path gives a warning.
+#[test]
+fn the_move_and_path_inputs_move_the_machine() {
+    for entry in MACHINES.iter().copied().chain(machine_files()) {
+        let (model, resources) = unpack(entry, "inputs");
+        let cfg = load_config(entry, &model.config_text).unwrap();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
+        let steps = (interval / sim.dt).round() as u64;
+        let signals = signal_refs(&model);
+        let axis = sim.machine.axes()[0].clone();
+        let start_pose = sim.control.set_pos.clone();
+        // 5 % of the range further in; halved where the controller refuses it (an arm's pose it cannot reach), which
+        // leaves the controller as it was.
+        let range = axis.max - axis.min;
+        let mut offset = if start_pose[0] < 0.5 * (axis.min + axis.max) { 0.05 } else { -0.05 } * range;
+        let target = loop {
+            let mut target = start_pose.clone();
+            target[0] += offset;
+            if sim.command(Command::MoveTo(target.clone())).is_ok() {
+                break target;
+            }
+            offset *= 0.5;
+            assert!(offset.abs() > 1e-3 * range, "{}: no move of the first axis is taken", entry.id);
+        };
+        let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
+        // The targets start at the start pose, as the setpoints do.
+        let target_ref = vr(&model, &Kind::Target(0));
+        assert_eq!(model.variables[target_ref as usize].start, Some(format!("{:?}", start_pose[0])), "{}", entry.id);
+        unsafe { assert_eq!(fmi2SetReal(c, &target_ref, 1, &target[0]), fmi2OK) };
+        set_bool(c, vr(&model, &Kind::Move), true);
+        start(c);
+        let mut expected = Vec::new();
+        let mut k = 0;
+        // Until the move is done, and some more.
+        while sim.control.busy() || k < 20 {
+            assert!(k < 5000, "{}: the move does not end", entry.id);
+            unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "{} {k}", entry.id) };
+            (0..steps).for_each(|_| sim.step());
+            sim.sample(&mut expected);
+            assert_eq!(get_reals(c, &signals), expected, "{} at step {k}", entry.id);
+            k += 1;
+        }
+        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
+        let tolerance = 1e-3 * (axis.max - axis.min);
+        assert!(
+            (expected[position] - target[0]).abs() < tolerance,
+            "{}: {} / {}",
+            entry.id,
+            expected[position],
+            target[0]
+        );
+        if entry.id == MACHINES[0].id {
+            // Back along a path given as text: a line to the start pose.
+            let line = format!("line,{}", start_pose.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>().join(","));
+            set_text(c, vr(&model, &Kind::PathText), &line);
+            set_bool(c, vr(&model, &Kind::RunPath), true);
+            let pieces = sim_components::path::parse(&line).unwrap();
+            let points = sim.plan_path(&pieces, false).unwrap();
+            sim.command(Command::Trajectory(points)).unwrap();
+            let first = k;
+            while sim.control.busy() || k < first + 2 {
+                assert!(k < first + 5000, "the path does not end");
+                unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "path {k}") };
+                (0..steps).for_each(|_| sim.step());
+                sim.sample(&mut expected);
+                assert_eq!(get_reals(c, &signals), expected, "path at step {k}");
+                k += 1;
+            }
+            assert!(
+                (expected[position] - start_pose[0]).abs() < tolerance,
+                "{} / {}",
+                expected[position],
+                start_pose[0]
+            );
+            // A text that is no path: a warning, and the machine stays.
+            set_bool(c, vr(&model, &Kind::RunPath), false);
+            unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK) };
+            set_text(c, vr(&model, &Kind::PathText), "this is not a path");
+            set_bool(c, vr(&model, &Kind::RunPath), true);
+            unsafe { assert_eq!(fmi2DoStep(c, (k + 1) as f64 * interval, interval, 1), fmi2Warning) };
+        }
+        unsafe { fmi2FreeInstance(c) };
+    }
 }

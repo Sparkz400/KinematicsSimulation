@@ -49,7 +49,7 @@ pub unsafe extern "C" fn fmi3InstantiateCoSimulation(
     instantiationToken: fmi3String,
     resourcePath: fmi3String,
     _visible: fmi3Boolean,
-    _loggingOn: fmi3Boolean,
+    loggingOn: fmi3Boolean,
     _eventModeUsed: fmi3Boolean,
     _earlyReturnAllowed: fmi3Boolean,
     _requiredIntermediateVariables: *const fmi3ValueReference,
@@ -67,6 +67,7 @@ pub unsafe extern "C" fn fmi3InstantiateCoSimulation(
         unsafe { text(instantiationToken) },
         3,
         true,
+        loggingOn,
     )
 }
 
@@ -92,6 +93,7 @@ pub unsafe extern "C" fn fmi3InstantiateModelExchange(
         resources,
         unsafe { text(instantiationToken) },
         3,
+        false,
         false,
     )
 }
@@ -122,6 +124,7 @@ pub unsafe extern "C" fn fmi3InstantiateScheduledExecution(
         unsafe { text(instantiationToken) },
         3,
         false,
+        false,
     )
 }
 
@@ -134,17 +137,18 @@ pub unsafe extern "C" fn fmi3FreeInstance(c: fmi3Instance) {
     }
 }
 
+/// See `fmi2SetDebugLogging`.
+///
 /// # Safety
-/// See `api::with`.
+/// See `api::with`; `categories` points to `nCategories` valid strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmi3SetDebugLogging(
     c: fmi3Instance,
-    _loggingOn: fmi3Boolean,
-    _nCategories: usize,
-    _categories: *const fmi3String,
+    loggingOn: fmi3Boolean,
+    nCategories: usize,
+    categories: *const fmi3String,
 ) -> fmi3Status {
-    // Only warnings and errors are ever logged, and those always.
-    unsafe { with(c, |_| Ok(fmi3OK)) }
+    unsafe { crate::api::debug_logging(c, loggingOn, nCategories, categories) }
 }
 
 /// # Safety

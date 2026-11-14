@@ -193,7 +193,7 @@ fn a_saved_fmi3_state_restores_the_simulation_bit_for_bit() {
     assert_ne!(fmi2.guid, model.guid);
     let other = started(&model, &resources);
     let foreign = [
-        b"sim-fmi state 1\0".as_slice(),
+        b"sim-fmi state 2\0".as_slice(),
         &(fmi2.guid.len() as u64).to_le_bytes(),
         fmi2.guid.as_bytes(),
         &bytes[16 + 8 + model.guid.len()..],
@@ -425,6 +425,92 @@ fn what_fmi3_forbids_or_this_fmu_does_not_offer_is_refused() {
         assert_eq!(fmi3Reset(c), fmi3OK);
         assert_eq!(fmi3GetFloat64(c, &time, 1, &mut value, 1), fmi3Error);
         assert_eq!(CStr::from_ptr(fmi3GetVersion()).to_str().unwrap(), "3.0");
+        fmi3FreeInstance(c);
+    }
+}
+
+/// What the logger has been given: (category, message).
+type Messages = std::cell::RefCell<Vec<(String, String)>>;
+
+unsafe extern "C" fn record(
+    environment: *mut std::ffi::c_void,
+    _: fmi3Status,
+    category: fmi3String,
+    message: fmi3String,
+) {
+    let text = |p: fmi3String| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+    unsafe { &*(environment as *const Messages) }.borrow_mut().push((text(category), text(message)));
+}
+
+/// The log categories: made with logging off, an instance reports errors and warnings but not the commands of its
+/// triggers; `fmi3SetDebugLogging` switches the categories named, all with none named or with `logAll`, and refuses
+/// a category the model description does not declare (all of them are declared there).
+#[test]
+fn debug_logging_switches_the_log_categories() {
+    let entry = MACHINES[0];
+    let (model, resources) = unpack(entry, "logging");
+    for (name, _) in sim_fmi::LOG_CATEGORIES {
+        assert!(model.xml.contains(&format!(r#"<Category name="{name}""#)), "{name}");
+    }
+    let messages = Messages::default();
+    let (name, token) = (CString::new("test").unwrap(), CString::new(model.guid.clone()).unwrap());
+    let environment = &messages as *const Messages as *mut std::ffi::c_void;
+    let c = unsafe {
+        fmi3InstantiateCoSimulation(
+            name.as_ptr(),
+            token.as_ptr(),
+            resources.as_ptr(),
+            false,
+            false,
+            false,
+            false,
+            null(),
+            0,
+            environment,
+            Some(record),
+            None,
+        )
+    };
+    assert!(!c.is_null());
+    let (cycle, step) = (vr(&model, &Kind::Cycle), interval(&model));
+    let categories = |names: &[&CStr]| names.iter().map(|n| n.as_ptr()).collect::<Vec<_>>();
+    let taken = || std::mem::take(&mut *messages.borrow_mut());
+    unsafe {
+        assert_eq!(fmi3EnterInitializationMode(c, false, 0.0, 0.0, false, 0.0), fmi3OK);
+        assert_eq!(fmi3ExitInitializationMode(c), fmi3OK);
+        // Off: the cycle starts without a message; an error is reported.
+        assert_eq!(fmi3SetBoolean(c, &cycle, 1, &true, 1), fmi3OK);
+        assert_eq!(do_step(c, 0.0, step), fmi3OK);
+        assert_eq!(fmi3EnterEventMode(c), fmi3Error);
+        let found = taken();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "logStatusError");
+        // logEvents on: stopping the cycle is a message of that category.
+        let events = categories(&[c"logEvents"]);
+        assert_eq!(fmi3SetDebugLogging(c, true, 1, events.as_ptr()), fmi3OK);
+        assert_eq!(fmi3SetBoolean(c, &cycle, 1, &false, 1), fmi3OK);
+        assert_eq!(do_step(c, step, step), fmi3OK);
+        let found = taken();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "logEvents");
+        assert!(found[0].1.contains("Stop"), "{}", found[0].1);
+        // An unknown category is refused, as an error, and changes nothing.
+        let unknown = categories(&[c"logEvents", c"logNoSuchThing"]);
+        assert_eq!(fmi3SetDebugLogging(c, false, 2, unknown.as_ptr()), fmi3Error);
+        assert_eq!(taken().iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["logStatusError"]);
+        // All off: neither commands nor errors.
+        assert_eq!(fmi3SetDebugLogging(c, false, 0, null()), fmi3OK);
+        assert_eq!(fmi3SetBoolean(c, &cycle, 1, &true, 1), fmi3OK);
+        assert_eq!(do_step(c, 2.0 * step, step), fmi3OK);
+        assert_eq!(fmi3EnterEventMode(c), fmi3Error);
+        assert!(taken().is_empty());
+        // logAll: every category again.
+        let all = categories(&[c"logAll"]);
+        assert_eq!(fmi3SetDebugLogging(c, true, 1, all.as_ptr()), fmi3OK);
+        assert_eq!(fmi3SetBoolean(c, &cycle, 1, &false, 1), fmi3OK);
+        assert_eq!(do_step(c, 3.0 * step, step), fmi3OK);
+        assert_eq!(fmi3EnterEventMode(c), fmi3Error);
+        assert_eq!(taken().iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["logEvents", "logStatusError"]);
         fmi3FreeInstance(c);
     }
 }

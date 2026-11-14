@@ -178,6 +178,107 @@ def test_calls_release_the_gil():
     np.testing.assert_array_equal(results[0], results[1])
 
 
+def test_a_machine_file_runs_as_with_the_cli():
+    # The first machine file of machines/, as `sim-cli --machine-file` takes it.
+    path = sorted((ROOT / "machines").glob("*.toml"))[0]
+    cfg = ks.Config(machine_file=path)
+    data = ks.run(cfg, cycle=True, time=0.2, every=16)
+    rows = cli("run", "--machine-file", str(path), "--cycle", "--time", "0.2", "--every", "16")
+    column = list(rows[0])[5]
+    np.testing.assert_allclose(data[column.split("[")[0]], [float(r[column]) for r in rows], rtol=1e-8, atol=1e-12)
+    with pytest.raises(ValueError):
+        ks.Config(FIRST, machine_file=path)
+    with pytest.raises(ValueError):
+        ks.Config()
+
+
+def test_a_machine_file_with_an_error_names_its_line(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("this is = not a machine\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="bad.toml"):
+        ks.Config(machine_file=bad)
+
+
+def test_an_integer_beyond_64_bits_is_an_overflow_not_a_float():
+    cfg = ks.Config(FIRST)
+    integer = next(k for k, v in cfg.leaves().items() if type(v) is int)
+    before = cfg[integer]
+    # 2**63 is one more than the largest 64-bit integer, 9223372036854775807; before, it became 9.223372036854776e18.
+    for big in (2**63, -(2**63) - 1, np.uint64(2**63)):
+        with pytest.raises(OverflowError):
+            cfg[integer] = big
+    assert cfg[integer] == before and type(cfg[integer]) is int
+
+
+def test_a_run_too_long_to_finish_or_to_hold_is_refused():
+    cfg = ks.Config(FIRST)
+    dt = cfg["sim.dt_s"]
+    # 1e12 s are 1e12 / dt base steps, far beyond the 1e8 allowed: refused at once instead of running for ever.
+    with pytest.raises(ValueError, match="base steps"):
+        ks.run(cfg, time=1e12)
+    # 1e8 * dt seconds sampled every step: 1e8 rows of every signal, far beyond 2.5e8 values.
+    with pytest.raises(ValueError, match="values"):
+        ks.run(cfg, time=1e8 * dt, every=1)
+
+
+def test_sweep_matches_the_cli():
+    cfg = ks.Config(FIRST)
+    result = ks.sweep(cfg, from_hz=10.0, to_hz=200.0, count=6)
+    rows = cli("sweep", FIRST, "--from", "10", "--to", "200", "--count", "6")
+    for column in ("frequency_hz", "gain_rad_s_per_nm", "phase_deg"):
+        np.testing.assert_allclose(result[column], [float(r[column]) for r in rows], rtol=1e-3, atol=1e-3, err_msg=column)
+    with pytest.raises(ValueError):
+        ks.sweep(cfg, from_hz=0.0)
+
+
+def test_optimise_matches_the_cli():
+    cfg = ks.Config(FIRST)
+    result = ks.optimise(cfg, runs=3, nominal=True)
+    rows = {r["setting"]: r for r in cli("optimise", FIRST, "--runs", "3", "--nominal")}
+    before, after = result["cycle_s"]
+    assert (round(before, 4), round(after, 4)) == (float(rows["cycle_s"]["before"]), float(rows["cycle_s"]["after"]))
+    assert after <= before and result["robust"] is None
+    assert [s for s in result["changes"]["setting"]] == [s for s in rows if s not in ("cycle_s", "dwell_error_peak_m")]
+
+
+@pytest.fixture(scope="module")
+def trace(tmp_path_factory):
+    """One pass of FIRST's cycle as the CLI writes it, with no payload and exact encoders (as the CLI's own fit test)."""
+    path = tmp_path_factory.mktemp("trace") / "trace.csv"
+    cli("run", FIRST, "--cycle", "--time", "6.2", "--out", str(path), *SETS)
+    return path
+
+
+SETS = ("--set", "effects.payload=false", "--set", "effects.encoder_resolution=false")
+
+
+def test_fit_matches_the_cli(trace):
+    cfg = ks.Config(FIRST)
+    cfg["effects.payload"] = False
+    cfg["effects.encoder_resolution"] = False
+    result = ks.fit(cfg, trace_file=trace)
+    rows = cli("fit", FIRST, "--trace", str(trace), *SETS)
+    assert result["quantity"] == [r["quantity"] for r in rows] and result["of"] == [r["of"] for r in rows]
+    np.testing.assert_allclose(result["fitted"], [float(r["fitted"]) for r in rows], rtol=1e-5)
+    np.testing.assert_allclose(result["standard_error"], [float(r["standard_error"]) for r in rows], rtol=1e-2)
+    assert result["advice"] and all(isinstance(a, str) for a in result["advice"])
+    with pytest.raises(ValueError):
+        ks.fit(cfg)
+    with pytest.raises(ValueError):
+        ks.fit(cfg, trace_file=trace.with_name("missing.csv"))
+
+
+def test_identify_matches_the_cli(trace):
+    cfg = ks.Config(FIRST)
+    result = ks.identify(trace_file=trace, config=cfg)
+    rows = cli("identify", FIRST, "--trace", str(trace))
+    assert result["quantity"] == [r["quantity"] for r in rows]
+    np.testing.assert_allclose(result["value"], [float(r["value"]) for r in rows], rtol=1e-5)
+    assert len(result["overlay"]["time"]) > 0 and all(len(v) == len(result["overlay"]["time"]) for v in result["overlay"].values())
+    with pytest.raises(ValueError):
+        ks.identify(trace_file=trace)
+
+
 def test_the_example_notebook_runs():
     nbformat = pytest.importorskip("nbformat")
     nbclient = pytest.importorskip("nbclient")

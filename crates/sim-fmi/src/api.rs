@@ -7,8 +7,15 @@
 //! derivatives. The rest (input derivatives, asynchronous steps, status queries) return `fmi2Error`; the model
 //! description says so. A panic inside the simulation returns `fmi2Fatal` instead of taking the importing tool down.
 //!
-//! An FMU state is what the importer set plus the inputs each communication step applied; setting it builds a fresh
-//! simulation and replays those steps, which gives bit for bit the simulation that was saved (tested).
+//! An FMU state is what the importer set, the inputs each communication step applied, and a snapshot of the simulation
+//! (`Sim::snapshot`). Setting it builds a fresh simulation from the parameters and restores the snapshot into it, which
+//! takes as long as building the machine; a state from `fmi2DeSerializeFMUstate` has no snapshot and replays the
+//! steps from the start instead. Either gives bit for bit the simulation that was saved (tested). A state that cannot
+//! be set (its config file gone, say) leaves the instance as it was.
+//!
+//! Log categories (`LOG_CATEGORIES`): `logEvents` (the commands the trigger inputs gave, states set) is on when the
+//! instance was made with logging on; `logStatusWarning` and `logStatusError` are on from the start; `SetDebugLogging`
+//! switches them, `logAll` or no category naming all.
 //! The directional derivative of an output with respect to an input is exactly zero at a communication point: the
 //! outputs are the signals at the end of the last step, and a new input acts on them only through the next step
 //! (the model description says `dependencies=""`).
@@ -16,8 +23,8 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 use crate::api3::fmi3LogMessageCallback;
-use crate::{Kind, Model, texts};
-use sim_components::{Command, Sim, load_config};
+use crate::{Kind, LOG_CATEGORIES, Model, texts};
+use sim_components::{Command, Sim, Snapshot, load_config};
 use sim_core::Translations;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -86,18 +93,29 @@ pub(crate) enum Logger {
 struct Applied {
     steps: u32,
     enable: bool,
+    /// The commands the triggers gave at its start: `StartCycle`, `Stop`, `MoveTo`, and `Trajectory` with the path as
+    /// it was planned then.
+    commands: Vec<Command>,
     /// Per axis, the setpoint input if the importer has set it.
     setpoints: Vec<Option<f64>>,
 }
 
-/// An FMU state: what the importer set, and every communication step since initialisation.
-#[derive(Debug, Clone, PartialEq)]
+/// The places in `Instance::logging` (and in `LOG_CATEGORIES`).
+const EVENTS: usize = 0;
+const WARNINGS: usize = 1;
+const ERRORS: usize = 2;
+
+/// An FMU state: what the importer set, the triggers as the last step saw them, every communication step since
+/// initialisation, and in memory the simulation with its outputs (none once serialized).
+#[derive(Clone)]
 pub struct FmuState {
     guid: String,
     mode: Mode,
     start_time: f64,
     set: Vec<Option<Value>>,
+    latched: [bool; 3],
     log: Vec<Applied>,
+    snapshot: Option<(Snapshot, Vec<f64>)>,
 }
 
 pub struct Instance {
@@ -117,21 +135,29 @@ pub struct Instance {
     strings: Vec<CString>,
     /// Every communication step since initialisation, for the FMU state.
     log: Vec<Applied>,
+    /// The triggers `command.cycle`, `command.move`, `command.run_path` as the last communication step saw them.
+    latched: [bool; 3],
+    /// Per log category (`EVENTS`, `WARNINGS`, `ERRORS`): whether its messages go to the logger.
+    logging: [bool; 3],
 }
 
 pub(crate) fn c_text(text: &str) -> CString {
     CString::new(text.replace('\0', "")).unwrap_or_default()
 }
 
-fn log(logger: Logger, environment: *mut c_void, name: &CStr, status: fmi2Status, message: &str) {
-    let category = if status == fmi2Warning { c"logStatusWarning" } else { c"logStatusError" };
-    let message = c_text(message);
+fn log(logger: Logger, environment: *mut c_void, name: &CStr, status: fmi2Status, category: usize, message: &str) {
+    let category = c_text(LOG_CATEGORIES[category].0);
     match logger {
-        // The message as an argument of "%s": a per cent sign in it is not a format.
+        // FMI 2.0's message is a printf format: a per cent sign in the text is doubled, so that it is no format, and
+        // a logger that prints the format as it is (fmpy's Python callbacks) still shows the text.
         Logger::Fmi2(Some(logger)) => unsafe {
-            logger(environment, name.as_ptr(), status, category.as_ptr(), c"%s".as_ptr(), message.as_ptr())
+            let format = c_text(&message.replace('%', "%%"));
+            logger(environment, name.as_ptr(), status, category.as_ptr(), format.as_ptr())
         },
-        Logger::Fmi3(Some(logger)) => unsafe { logger(environment, status, category.as_ptr(), message.as_ptr()) },
+        Logger::Fmi3(Some(logger)) => unsafe {
+            let message = c_text(message);
+            logger(environment, status, category.as_ptr(), message.as_ptr())
+        },
         _ => {}
     }
 }
@@ -190,6 +216,14 @@ pub(crate) unsafe fn slice_mut<'a, T>(p: *mut T, n: usize) -> Result<&'a mut [T]
     }
 }
 
+/// The outputs: every signal, the time on the importer's clock, which starts at its start time.
+fn sample_of(sim: &Sim, start_time: f64) -> Vec<f64> {
+    let mut out = Vec::new();
+    sim.sample(&mut out);
+    out[0] += start_time;
+    out
+}
+
 /// Gives the simulation one communication step's inputs and runs its base steps; the keys of the commands the
 /// controller refused.
 fn apply(sim: &mut Sim, applied: &Applied) -> Vec<&'static str> {
@@ -198,6 +232,11 @@ fn apply(sim: &mut Sim, applied: &Applied) -> Vec<&'static str> {
         && let Err(e) = sim.command(if applied.enable { Command::Enable } else { Command::Disable })
     {
         refused.push(e.key);
+    }
+    for command in &applied.commands {
+        if let Err(e) = sim.command(command.clone()) {
+            refused.push(e.key);
+        }
     }
     if sim.control.enabled() {
         // An axis the importer has not set stays at the setpoint the controller follows.
@@ -221,8 +260,31 @@ fn apply(sim: &mut Sim, applied: &Applied) -> Vec<&'static str> {
 
 impl Instance {
     pub(crate) fn fail(&self, status: fmi2Status, (key, arg): Fail) -> fmi2Status {
-        log(self.logger, self.environment, &self.name, status, &self.tr.tr_arg(key, &arg));
+        self.note(ERRORS, status, &self.tr.tr_arg(key, &arg));
         status
+    }
+
+    /// A message to the logger, if its category is on.
+    fn note(&self, category: usize, status: fmi2Status, message: &str) {
+        if self.logging[category] {
+            log(self.logger, self.environment, &self.name, status, category, message);
+        }
+    }
+
+    /// `fmi2SetDebugLogging`, `fmi3SetDebugLogging`: the categories named switched on or off; none named, all of them.
+    /// An unknown category is refused and changes nothing.
+    pub(crate) fn set_debug_logging(&mut self, on: bool, categories: &[&str]) -> Result<fmi2Status, Fail> {
+        let mut next = if categories.is_empty() { [on; 3] } else { self.logging };
+        for name in categories {
+            match LOG_CATEGORIES.iter().position(|(n, _)| n == name) {
+                Some(i) if i <= ERRORS => next[i] = on,
+                // logAll
+                Some(_) => next = [on; 3],
+                None => return Err(("fmi-error-category", name.to_string())),
+            }
+        }
+        self.logging = next;
+        Ok(fmi2OK)
     }
 
     /// `call` without its prefix, which is the version's.
@@ -247,7 +309,11 @@ impl Instance {
     }
 
     pub(crate) fn text_value(&self, index: usize) -> String {
-        match &self.set[index] {
+        self.text_in(&self.set, index)
+    }
+
+    fn text_in(&self, set: &[Option<Value>], index: usize) -> String {
+        match &set[index] {
             Some(Value::Text(t)) => t.clone(),
             _ => self.start(index).into(),
         }
@@ -260,21 +326,39 @@ impl Instance {
         }
     }
 
-    /// The simulation for the parameters as set: the config of the FMU or of `config_file`, with the effect switches
-    /// that were set on top. Refused when it would give other variables than the model description has.
-    fn ensure_sim(&mut self) -> Result<(), Fail> {
-        if self.sim.is_some() {
-            return Ok(());
+    fn real_value(&self, index: usize) -> f64 {
+        match self.set[index] {
+            Some(Value::Real(v)) => v,
+            _ => self.start(index).parse().unwrap_or(f64::NAN),
         }
-        let find = |kind: Kind| self.model.variables.iter().position(|v| v.kind == kind).unwrap_or(0);
-        let machine = self.text_value(find(Kind::Machine));
+    }
+
+    /// The place of the variable of `kind`; 0 (the time) where there is none.
+    fn find(&self, kind: &Kind) -> usize {
+        self.model.variables.iter().position(|v| &v.kind == kind).unwrap_or(0)
+    }
+
+    /// The simulation for the parameters as set, built when it is not there yet.
+    fn ensure_sim(&mut self) -> Result<(), Fail> {
+        if self.sim.is_none() {
+            self.sim = Some(self.build_sim(&self.set)?);
+            self.take_sample();
+        }
+        Ok(())
+    }
+
+    /// The simulation for the parameters in `set`: the config of the FMU or of `config_file`, with the effect switches
+    /// that were set on top. Refused when it would give other variables than the model description has.
+    fn build_sim(&self, set: &[Option<Value>]) -> Result<Sim, Fail> {
+        let find = |kind: Kind| self.find(&kind);
+        let machine = self.text_in(set, find(Kind::Machine));
         // The FMU's own machine, which may come from a machine file; another one by its id among the registered.
         let entry = if machine == self.model.entry.id {
             self.model.entry
         } else {
             sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))?
         };
-        let file = self.text_value(find(Kind::ConfigFile));
+        let file = self.text_in(set, find(Kind::ConfigFile));
         let text = if file.is_empty() {
             self.model.config_text.clone()
         } else {
@@ -283,7 +367,7 @@ impl Instance {
         let refused = |e: sim_core::ConfigError| ("fmi-error-config", self.tr.tr_arg(e.key(), e.detail()));
         let mut cfg = load_config(entry, &text).map_err(refused)?;
         for (index, v) in self.model.variables.iter().enumerate() {
-            if let (Kind::Effect(name), Some(Value::Bool(on))) = (&v.kind, &self.set[index]) {
+            if let (Kind::Effect(name), Some(Value::Bool(on))) = (&v.kind, &set[index]) {
                 cfg.set_text(&format!("effects.{name} = {on}")).map_err(refused)?;
             }
         }
@@ -303,16 +387,12 @@ impl Instance {
                 expected.iter().zip(&found).find(|(a, b)| a != b).map_or(String::new(), |(a, _)| a.0.into());
             return Err(("fmi-error-variables", differing));
         }
-        self.sim = Some(sim);
-        self.take_sample();
-        Ok(())
+        Ok(sim)
     }
 
     fn take_sample(&mut self) {
         if let Some(sim) = &self.sim {
-            sim.sample(&mut self.sample);
-            // The first signal is the time; the importer's clock starts at its start time.
-            self.sample[0] += self.start_time;
+            self.sample = sample_of(sim, self.start_time);
         }
     }
 
@@ -330,7 +410,8 @@ impl Instance {
                 (_, Some(sim)) => sim.control.external_setpoint()[i],
                 _ => self.start(index).parse().unwrap_or(f64::NAN),
             }),
-            _ => unreachable!("only signals and setpoints are Real"),
+            Kind::Target(_) => Ok(self.real_value(index)),
+            _ => unreachable!("only signals, setpoints and targets are Real"),
         }
     }
 
@@ -398,6 +479,7 @@ impl Instance {
         (self.mode, self.start_time, self.sim) = (Mode::Instantiated, 0.0, None);
         self.set.iter_mut().for_each(|v| *v = None);
         self.log.clear();
+        self.latched = [false; 3];
         Ok(fmi2OK)
     }
 
@@ -413,7 +495,7 @@ impl Instance {
             return Err(("fmi-error-step", format!("{point:?}, {size:?}")));
         }
         let now = self.now();
-        let sim = self.sim.as_mut().ok_or(("fmi-error-state", "DoStep".to_string()))?;
+        let sim = self.sim.as_ref().ok_or(("fmi-error-state", "DoStep".to_string()))?;
         let steps = (size / sim.dt).round();
         // More base steps than a u32 holds would run for days: refused as an importer's mistake.
         if !(1.0..=u32::MAX as f64).contains(&steps) || (steps * sim.dt - size).abs() > 1e-9 * size.max(sim.dt) {
@@ -422,10 +504,10 @@ impl Instance {
         if !((point - now).abs() <= 0.5 * sim.dt) {
             return Err(("fmi-error-time", format!("{point:?} / {now:?}")));
         }
-        let enable = self.model.variables.iter().position(|v| v.kind == Kind::Enable).unwrap_or(0);
         let mut applied = Applied {
             steps: steps as u32,
-            enable: !matches!(self.set[enable], Some(Value::Bool(false))),
+            enable: !matches!(self.set[self.find(&Kind::Enable)], Some(Value::Bool(false))),
+            commands: Vec::new(),
             setpoints: vec![None; sim.machine.axes().len()],
         };
         for (index, v) in self.model.variables.iter().enumerate() {
@@ -433,49 +515,100 @@ impl Instance {
                 applied.setpoints[*i] = Some(*value);
             }
         }
-        let refused = apply(sim, &applied);
+        // The triggers that changed since the last communication point.
+        let on = [Kind::Cycle, Kind::Move, Kind::RunPath].map(|kind| self.bool_value(self.find(&kind)));
+        let mut warnings = Vec::new();
+        if on[0] != self.latched[0] {
+            applied.commands.push(if on[0] { Command::StartCycle } else { Command::Stop });
+        }
+        if on[1] && !self.latched[1] {
+            let targets = (0..applied.setpoints.len()).map(|i| self.real_value(self.find(&Kind::Target(i))));
+            applied.commands.push(Command::MoveTo(targets.collect()));
+        }
+        if on[2] && !self.latched[2] {
+            match self.planned_path(sim) {
+                Ok(points) => applied.commands.push(Command::Trajectory(points)),
+                Err((key, arg)) => warnings.push(self.tr.tr_arg(key, &arg)),
+            }
+        }
+        for command in &applied.commands {
+            let what = match command {
+                Command::MoveTo(target) => format!("MoveTo {target:?}"),
+                Command::Trajectory(points) => {
+                    format!("Trajectory {} {:.4} s", points.len(), points.last().map_or(0.0, |p| p.0))
+                }
+                other => format!("{other:?}"),
+            };
+            self.note(EVENTS, fmi2OK, &self.tr.tr_arg("fmi-log-command", &format!("{now:?}: {what}")));
+        }
+        self.latched = on;
+        let refused = apply(self.sim.as_mut().expect("checked above"), &applied);
         self.log.push(applied);
-        for key in &refused {
-            log(
-                self.logger,
-                self.environment,
-                &self.name,
-                fmi2Warning,
-                &self.tr.tr_arg("fmi-refused", self.tr.tr(key)),
-            );
+        warnings.extend(refused.iter().map(|key| self.tr.tr_arg("fmi-refused", self.tr.tr(key))));
+        for warning in &warnings {
+            self.note(WARNINGS, fmi2Warning, warning);
         }
         self.take_sample();
-        Ok(if refused.is_empty() { fmi2OK } else { fmi2Warning })
+        Ok(if warnings.is_empty() { fmi2OK } else { fmi2Warning })
+    }
+
+    /// The path of `command.path_file` (where it is not empty) or of `command.path`, planned from where the machine
+    /// stands within the axis limits, as `sim-cli run --path` plans it.
+    fn planned_path(&self, sim: &Sim) -> Result<Vec<(f64, Vec<f64>)>, Fail> {
+        let file = self.text_value(self.find(&Kind::PathFile));
+        let text = if file.is_empty() {
+            self.text_value(self.find(&Kind::PathText))
+        } else {
+            std::fs::read_to_string(&file).map_err(|e| ("fmi-error-path", format!("{file}: {e}")))?
+        };
+        let pieces = sim_components::path::parse(&text).map_err(|line| ("fmi-error-path", line))?;
+        sim.plan_path(&pieces, false).map_err(|e| ("fmi-error-path", self.tr.tr(e.key).to_string()))
     }
 
     pub(crate) fn get_state(&self) -> FmuState {
+        let stepping = matches!(self.mode, Mode::Stepping | Mode::Terminated);
         FmuState {
             guid: self.model.guid.clone(),
             mode: self.mode,
             start_time: self.start_time,
             set: self.set.clone(),
+            latched: self.latched,
             log: self.log.clone(),
+            snapshot: self.sim.as_ref().filter(|_| stepping).map(|sim| (sim.snapshot(), self.sample.clone())),
         }
     }
 
+    /// Sets a state: in step mode the simulation is built from the state's parameters and its snapshot restored into
+    /// it, or without one (a deserialized state) its steps replayed. Everything is built before anything is changed,
+    /// so a state that cannot be set leaves the instance as it was.
     pub(crate) fn set_state(&mut self, state: &FmuState) -> Result<fmi2Status, Fail> {
         if state.guid != self.model.guid || state.set.len() != self.set.len() {
             return Err(("fmi-error-fmu-state", state.guid.clone()));
         }
-        (self.mode, self.start_time, self.set, self.sim) = (state.mode, state.start_time, state.set.clone(), None);
-        self.log.clear();
-        if matches!(state.mode, Mode::Stepping | Mode::Terminated) {
-            // shortcut: replays every step since initialisation from a fresh simulation, so restoring costs as long as
-            // simulating up to the saved point and the log grows with each step; snapshot the simulation instead once
-            // `Machine` and `Sim` can be cloned.
-            self.ensure_sim()?;
-            let sim = self.sim.as_mut().expect("just built");
-            for applied in &state.log {
-                apply(sim, applied);
+        let (sim, sample, how) = if matches!(state.mode, Mode::Stepping | Mode::Terminated) {
+            let mut sim = self.build_sim(&state.set)?;
+            match &state.snapshot {
+                Some((snapshot, sample)) => {
+                    sim.restore(snapshot).map_err(|_| ("fmi-error-fmu-state", state.guid.clone()))?;
+                    (Some(sim), sample.clone(), "snapshot")
+                }
+                None => {
+                    // shortcut: a deserialized state replays every step since initialisation, as long as simulating up
+                    // to it took, and its log grows with each step; serialize the snapshot once `Controller` and the
+                    // drives can be written to bytes.
+                    for applied in &state.log {
+                        apply(&mut sim, applied);
+                    }
+                    let sample = sample_of(&sim, state.start_time);
+                    (Some(sim), sample, "replay")
+                }
             }
-            self.log = state.log.clone();
-            self.take_sample();
-        }
+        } else {
+            (None, Vec::new(), "")
+        };
+        (self.mode, self.start_time, self.set, self.sim) = (state.mode, state.start_time, state.set.clone(), sim);
+        (self.sample, self.latched, self.log) = (sample, state.latched, state.log.clone());
+        self.note(EVENTS, fmi2OK, &self.tr.tr_arg("fmi-log-state", &format!("{:?} {how} {:?}", self.mode, self.now())));
         Ok(fmi2OK)
     }
 
@@ -498,19 +631,24 @@ impl Instance {
     }
 }
 
-const STATE_MAGIC: &[u8] = b"sim-fmi state 1\0";
+const STATE_MAGIC: &[u8] = b"sim-fmi state 2\0";
 
 impl FmuState {
-    /// The state as bytes: little-endian numbers, lengths as u64, texts as UTF-8.
+    /// The state as bytes, without the snapshot: little-endian numbers, lengths as u64, texts as UTF-8.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = STATE_MAGIC.to_vec();
         let text = |out: &mut Vec<u8>, t: &str| {
             out.extend((t.len() as u64).to_le_bytes());
             out.extend(t.as_bytes());
         };
+        let numbers = |out: &mut Vec<u8>, v: &[f64]| {
+            out.extend((v.len() as u64).to_le_bytes());
+            v.iter().for_each(|x| out.extend(x.to_le_bytes()));
+        };
         text(&mut out, &self.guid);
         out.push(self.mode as u8);
         out.extend(self.start_time.to_le_bytes());
+        out.extend(self.latched.map(u8::from));
         out.extend((self.set.len() as u64).to_le_bytes());
         for value in &self.set {
             match value {
@@ -530,6 +668,27 @@ impl FmuState {
         for applied in &self.log {
             out.extend(applied.steps.to_le_bytes());
             out.push(applied.enable as u8);
+            out.extend((applied.commands.len() as u64).to_le_bytes());
+            for command in &applied.commands {
+                match command {
+                    Command::StartCycle => out.push(0),
+                    Command::Stop => out.push(1),
+                    Command::MoveTo(target) => {
+                        out.push(2);
+                        numbers(&mut out, target);
+                    }
+                    Command::Trajectory(points) => {
+                        out.push(3);
+                        out.extend((points.len() as u64).to_le_bytes());
+                        for (time, pose) in points {
+                            out.extend(time.to_le_bytes());
+                            numbers(&mut out, pose);
+                        }
+                    }
+                    // `do_step` gives no other command; one would not read back.
+                    _ => out.push(u8::MAX),
+                }
+            }
             out.extend((applied.setpoints.len() as u64).to_le_bytes());
             for s in &applied.setpoints {
                 match s {
@@ -556,6 +715,7 @@ impl FmuState {
             _ => return None,
         };
         let start_time = read.f64()?;
+        let latched = [read.u8()? != 0, read.u8()? != 0, read.u8()? != 0];
         let mut set = Vec::new();
         for _ in 0..read.u64()? {
             set.push(match read.u8()? {
@@ -569,6 +729,22 @@ impl FmuState {
         let mut log = Vec::new();
         for _ in 0..read.u64()? {
             let (steps, enable) = (u32::from_le_bytes(read.take(4)?.try_into().ok()?), read.u8()? != 0);
+            let mut commands = Vec::new();
+            for _ in 0..read.u64()? {
+                commands.push(match read.u8()? {
+                    0 => Command::StartCycle,
+                    1 => Command::Stop,
+                    2 => Command::MoveTo(read.numbers()?),
+                    3 => {
+                        let mut points = Vec::new();
+                        for _ in 0..read.u64()? {
+                            points.push((read.f64()?, read.numbers()?));
+                        }
+                        Command::Trajectory(points)
+                    }
+                    _ => return None,
+                });
+            }
             let mut setpoints = Vec::new();
             for _ in 0..read.u64()? {
                 setpoints.push(match read.u8()? {
@@ -577,9 +753,9 @@ impl FmuState {
                     _ => return None,
                 });
             }
-            log.push(Applied { steps, enable, setpoints });
+            log.push(Applied { steps, enable, commands, setpoints });
         }
-        read.0.is_empty().then_some(Self { guid, mode, start_time, set, log })
+        read.0.is_empty().then_some(Self { guid, mode, start_time, set, latched, log, snapshot: None })
     }
 }
 
@@ -600,6 +776,12 @@ impl<'a> Reader<'a> {
     }
     fn f64(&mut self) -> Option<f64> {
         Some(f64::from_bits(self.u64()?))
+    }
+    /// A length and as many numbers; a length the bytes cannot hold is refused before anything is allocated.
+    fn numbers(&mut self) -> Option<Vec<f64>> {
+        let n = usize::try_from(self.u64()?).ok()?;
+        let bytes = self.take(n.checked_mul(8)?)?;
+        Some(bytes.as_chunks::<8>().0.iter().map(|c| f64::from_le_bytes(*c)).collect())
     }
     fn text(&mut self) -> Option<String> {
         let n = usize::try_from(self.u64()?).ok()?;
@@ -631,6 +813,7 @@ pub(crate) fn instantiate(
     token: &str,
     fmi: u8,
     co_simulation: bool,
+    logging_on: bool,
 ) -> *mut c_void {
     let name = c_text(name);
     let made = catch_unwind(AssertUnwindSafe(|| -> Result<Instance, (Translations, Fail)> {
@@ -676,12 +859,14 @@ pub(crate) fn instantiate(
             sample: Vec::new(),
             strings: Vec::new(),
             log: Vec::new(),
+            latched: [false; 3],
+            logging: [logging_on, true, true],
         })
     }));
     match made {
         Ok(Ok(instance)) => Box::into_raw(Box::new(instance)) as *mut c_void,
         Ok(Err((tr, (key, arg)))) => {
-            log(logger, environment, &name, fmi2Error, &tr.tr_arg(key, &arg));
+            log(logger, environment, &name, fmi2Error, ERRORS, &tr.tr_arg(key, &arg));
             std::ptr::null_mut()
         }
         Err(_) => std::ptr::null_mut(),
@@ -847,7 +1032,7 @@ pub unsafe extern "C" fn fmi2Instantiate(
     fmuResourceLocation: fmi2String,
     functions: *const fmi2CallbackFunctions,
     _visible: fmi2Boolean,
-    _loggingOn: fmi2Boolean,
+    loggingOn: fmi2Boolean,
 ) -> fmi2Component {
     let callbacks = unsafe { functions.as_ref() };
     let (logger, environment) =
@@ -861,7 +1046,21 @@ pub unsafe extern "C" fn fmi2Instantiate(
         unsafe { text(fmuGUID) },
         2,
         fmuType == fmi2CoSimulation,
+        loggingOn != 0,
     )
+}
+
+/// `fmi2SetDebugLogging` and `fmi3SetDebugLogging` alike.
+///
+/// # Safety
+/// See `with`; `categories` points to `n` valid strings.
+pub(crate) unsafe fn debug_logging(c: *mut c_void, on: bool, n: usize, categories: *const *const c_char) -> fmi2Status {
+    unsafe {
+        with(c, |i| {
+            let names: Vec<&str> = slice(categories, n)?.iter().map(|p| text(*p)).collect();
+            i.set_debug_logging(on, &names)
+        })
+    }
 }
 
 /// # Safety
@@ -873,17 +1072,18 @@ pub unsafe extern "C" fn fmi2FreeInstance(c: fmi2Component) {
     }
 }
 
+/// Switches the log categories named in `categories` (all of them where `nCategories` is 0, or with `logAll`).
+///
 /// # Safety
-/// See `with`.
+/// See `with`; `categories` points to `nCategories` valid strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fmi2SetDebugLogging(
     c: fmi2Component,
-    _loggingOn: fmi2Boolean,
-    _nCategories: usize,
-    _categories: *const fmi2String,
+    loggingOn: fmi2Boolean,
+    nCategories: usize,
+    categories: *const fmi2String,
 ) -> fmi2Status {
-    // Only warnings and errors are ever logged, and those always.
-    unsafe { with(c, |_| Ok(fmi2OK)) }
+    unsafe { debug_logging(c, loggingOn != 0, nCategories, categories) }
 }
 
 /// # Safety

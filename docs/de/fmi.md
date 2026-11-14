@@ -30,10 +30,29 @@ Die Variablen sind in beiden Versionen dieselben; nur die Typnamen unterscheiden
 | jedes andere Signal (`axis.x.position`, `motor.a.torque`, ...) | Real | Float64 | output | continuous |
 | `command.setpoint.<Achs-ID>` | Real | Float64 | input | continuous |
 | `command.enable` | Boolean | Boolean | input | discrete |
+| `command.cycle` | Boolean | Boolean | input | discrete |
+| `command.target.<Achs-ID>` | Real | Float64 | input | continuous |
+| `command.move` | Boolean | Boolean | input | discrete |
+| `command.path`, `command.path_file` | String | String | input | discrete |
+| `command.run_path` | Boolean | Boolean | input | discrete |
 | `machine`, `config_file` | String | String | parameter | fixed |
+| `effects.<Name>` | Boolean | Boolean | parameter | fixed |
 
 Eine FMU einer Maschinendatei (`sim-cli fmu --machine-file DATEI`) trägt die Datei als `resources/machine.toml` mit und baut ihre Maschine beim Instanziieren daraus, in beiden Versionen; ihr Parameter `machine` ist die Maschinen-id der Datei.
-| `effects.<Name>` | Boolean | Boolean | parameter | fixed |
+
+Die Ausgänge sind alle Signale der Simulation (`Sim::signal_infos`), erzeugt, nie je Maschine aufgezählt: Ein Signal, das der Simulator hinzubekommt (das Überlastabbild der Antriebe oder die Gehäusetemperatur eines Motors, sobald sie Signale sind), ist ein Ausgang jeder danach exportierten FMU, ohne Änderung hier.
+
+### Zyklus, Fahrten und Bahnen
+
+Neben den Sollwerten befehlen drei Auslöseeingänge die Maschine, wie `sim-cli run --cycle`, `--move` und `--path` es tun. Ein Auslöser wirkt an dem Kommunikationszeitpunkt, an dem er sich seit dem letzten geändert hat; der Befehl, den er gibt, wird unter `logEvents` protokolliert.
+
+| Eingang | Wann er wirkt | Befehl |
+| --- | --- | --- |
+| `command.cycle` | wird true / wird false | startet den konfigurierten Zyklus / hält ihn am Ende seines Segments an |
+| `command.move` | wird true | fährt zu `command.target.<Achs-ID>` (Start: die Startpose) |
+| `command.run_path` | wird true | plant die Bahn ab der Stelle, an der die Maschine steht, innerhalb der Achsgrenzen, und fährt sie |
+
+Die Bahn ist der Text einer Bahndatei ([Benutzerhandbuch](benutzerhandbuch.md)) in `command.path` oder die in `command.path_file` genannte Datei, die Vorrang hat, wenn sie nicht leer ist. Eine Bahn, die sich nicht lesen oder planen lässt, und ein Befehl, den der Regler ablehnt (Antriebe aus, Ziel außerhalb des Bereichs), ergibt `fmi2Warning` / `fmi3Warning` mit dem Grund, und die Maschine macht weiter wie zuvor. Ein Sollwerteingang übernimmt, einmal gesetzt, die Achsen, sobald er vom Sollwert abweicht, dem der Regler folgt, und ersetzt so einen Zyklus, eine Fahrt oder eine Bahn im nächsten Schritt: Die Maschine entweder über Sollwerte oder über Auslöser führen.
 
 In FMI 3.0 steht der Startwert eines Strings in einem Element `<Start value="..."/>`, wie das Schema von FMI 3.0 es verlangt. Die Modellstruktur führt jeden Ausgang als Ausgang und als Anfangsunbekannte. Die Ausgänge tragen `dependencies=""`: Kein Ausgang hängt direkt von einem Eingang ab, weil ein Sollwert die Ausgänge erst über den nächsten Kommunikationsschritt erreicht. Die Anfangsunbekannten tragen keine Abhängigkeitsliste; sie dürfen also von jedem Parameter abhängen.
 
@@ -60,14 +79,22 @@ Funktionen von FMI 3.0, die etwas brauchen, was diese FMU nicht hat, geben `fmi3
 
 `fmi2GetFMUstate` / `fmi3GetFMUState` kopieren den Zustand einer Instanz; `fmi2SetFMUstate` / `fmi3SetFMUState` stellen ihn wieder her; die Funktionen zum Freigeben, zur Größe, zum Serialisieren und Deserialisieren tun, was der Standard sagt.
 
-Was ein Zustand enthält: den Modus der Instanz, die Startzeit, jeden Wert, den der Importeur gesetzt hat (Eingänge und Parameter), und für jeden Kommunikationsschritt seit der Initialisierung die Zahl der Grundschritte, den Freigabeeingang und die Sollwerteingänge, die er angewendet hat. Beim Wiederherstellen wird aus den Parametern eine neue Simulation gebaut, und diese Schritte werden wiederholt. Die Simulation ist deterministisch, also ergibt die Wiederholung Bit für Bit die Signale der gespeicherten Simulation (geprüft in `crates/sim-fmi/tests/fmi.rs` und `tests/fmi3.rs` und über fmpy in `tools/check_fmu.py`).
+Was ein Zustand enthält: den Modus der Instanz, die Startzeit, jeden Wert, den der Importeur gesetzt hat (Eingänge und Parameter), die Auslöser, wie der letzte Schritt sie sah, für jeden Kommunikationsschritt seit der Initialisierung die Zahl der Grundschritte, den Freigabeeingang, die Befehle der Auslöser (eine Bahn so, wie sie geplant wurde) und die Sollwerteingänge, die er angewendet hat, und eine Momentaufnahme der Simulation mit ihren Ausgängen (`Sim::snapshot`: der integrierte Zustand, der Regler mit seinen Antrieben, Regelkreisen, Filtern, Wicklungen, Wärme- und Überlastabbildern, die Wärme der Bauteile und das Hindernisprotokoll; alles außer der Maschine, die die Parameter neu bauen).
+
+Beim Setzen eines Zustands wird die Maschine aus seinen Parametern gebaut und die Momentaufnahme in sie zurückgespielt: so lange, wie das Bauen der Maschine dauert, wie weit der Zustand auch vom Start entfernt ist. Ein deserialisierter Zustand hat keine Momentaufnahme; beim Setzen werden seine Schritte aus einer neuen Simulation wiederholt, so lange, wie das Simulieren bis zu ihm dauerte. Beides ergibt Bit für Bit die Signale der gespeicherten Simulation: auf jeder registrierten Maschine und jeder Maschinendatei aus `machines/` mit laufendem Zyklus (`crates/sim-fmi/tests/fmi.rs`, `tests/fmi3.rs` und über fmpy in `tools/check_fmu.py`).
+
+Alles wird gebaut, bevor die Instanz geändert wird: Ein Zustand, der sich nicht setzen lässt (seine `config_file` ist weg, eine Konfiguration wird jetzt abgelehnt), wird mit `fmi2Error` / `fmi3Error` abgelehnt, und die Instanz macht weiter, wo sie war.
 
 Grenzen:
 
-- Einen Zustand wiederherzustellen dauert so lange, wie vom Start bis zum gespeicherten Punkt zu simulieren, und ein Zustand wächst mit jedem Kommunikationsschritt um 13 Byte plus je Achse 9 Byte (1 Byte für eine Achse, deren Sollwert nicht gesetzt wurde). Der Grund: Die Simulation hält die Maschine als `Box<dyn Machine>`, die sich nicht kopieren lässt; eine direkte Momentaufnahme braucht kopierbare `Machine` und `Sim`. Der Code markiert das mit `shortcut:` in `crates/sim-fmi/src/api.rs`.
-- Ist `config_file` gesetzt, liest die Wiederholung diese Datei erneut. Eine seit dem Zustand auf der Platte geänderte Datei ergibt eine andere Simulation oder eine Ablehnung, wenn ihre Signale abweichen.
+- Ein serialisierter Zustand trägt die Schritte, nicht die Momentaufnahme: Er wächst mit jedem Kommunikationsschritt um 21 Byte plus je Achse 9 Byte (1 Byte für eine Achse, deren Sollwert nicht gesetzt wurde; eine geplante Bahn fügt je Punkt 16 Byte plus 8 je Achse hinzu), und deserialisiert wird er wiederholt. Die Momentaufnahme selbst als Bytes zu schreiben braucht jeden Teil des Reglers und der Antriebe ausgeschrieben; der Code markiert das mit `shortcut:` in `crates/sim-fmi/src/api.rs`.
+- Ist `config_file` gesetzt, liest das Setzen eines Zustands diese Datei erneut. Eine seit dem Zustand auf der Platte geänderte Datei ergibt eine andere Simulation oder eine Ablehnung, wenn ihre Signale abweichen.
 - Ein serialisierter Zustand wird gegen die GUID oder das Instanziierungs-Token der FMU und die Zahl ihrer Variablen geprüft; ein Zustand einer anderen FMU, ein abgeschnittener Zustand oder einer mit überzähligen Bytes wird mit `fmi2Error` / `fmi3Error` abgelehnt. Die bitgleiche Wiederholung wurde innerhalb eines Builds der Binärdatei geprüft; eine Binärdatei, die mit einem anderen Compiler oder für eine andere Plattform gebaut ist, wiederholt die Schritte mit ihren eigenen Gleitkommaergebnissen.
-- Das serialisierte Format ist Little-Endian: der Text `sim-fmi state 1` und ein Null-Byte, die GUID, der Modus, die Startzeit, die gesetzten Werte und die Schritte.
+- Das serialisierte Format ist Little-Endian: der Text `sim-fmi state 2` und ein Null-Byte, die GUID, der Modus, die Startzeit, die drei Auslöser, die gesetzten Werte und die Schritte mit ihren Befehlen. Zustände der Version 1 (vor dem 14. November 2026) werden abgelehnt.
+
+## Log-Kategorien
+
+Die Modellbeschreibung deklariert `logEvents` (die Befehle der Auslöser, gesetzte FMU-Zustände), `logStatusWarning` (abgelehnte Befehle, nicht planbare Bahnen), `logStatusError` (abgelehnte Aufrufe) und `logAll`. Eine Instanz, die mit `loggingOn` false angelegt wurde, meldet Warnungen und Fehler; mit true auch die Ereignisse. `fmi2SetDebugLogging` / `fmi3SetDebugLogging` schalten die genannten Kategorien ein oder aus, alle, wenn sie keine oder `logAll` nennen; eine unbekannte Kategorie wird mit einem Fehler abgelehnt und ändert nichts. Meldungen von FMI 2.0 gehen als Formatzeichenkette an den Logger, mit jedem `%` verdoppelt, sodass ein Logger, der formatiert, und einer, der sie unverändert ausgibt, beide den Text zeigen.
 
 ## Richtungs- und adjungierte Ableitungen
 
@@ -91,7 +118,7 @@ Punkt 2 allein bedeutet 16 000 Ereignisse je simulierter Sekunde. Der Integrator
 
 Durchgeführt unter Windows 11 x86_64 am 13. November 2026 mit der Binärdatei aus `cargo build --release -p sim-fmi -p sim-cli`. Die FMUs waren die Standardkonfigurationen von `t-gantry` und `single-axis` und `t-gantry` mit `crates/machine-t-gantry/exct-30.toml`, jeweils für FMI 2.0 und FMI 3.0.
 
-Rust-Tests (`cargo test -p sim-fmi -p sim-cli --release`): die Funktionen von FMI 2.0 und FMI 3.0 so aufgerufen, wie ein Importeur sie aufruft; die Signale jeder Maschine Bit für Bit gleich einer einfachen `Sim` mit denselben Sollwerten; der FMU-Zustand Bit für Bit wiederhergestellt auf derselben Instanz und, serialisiert, auf einer zweiten Instanz; Ableitungen gegen die finite Differenz von Hand; Ablehnungen.
+Rust-Tests (`cargo test -p sim-fmi -p sim-cli --release`): die Funktionen von FMI 2.0 und FMI 3.0 so aufgerufen, wie ein Importeur sie aufruft; die Signale jeder Maschine Bit für Bit gleich einer einfachen `Sim` mit denselben Sollwerten und mit derselben Fahrt und Bahn über die Auslöseeingänge; der FMU-Zustand Bit für Bit wiederhergestellt auf derselben Instanz (aus seiner Momentaufnahme, auf jeder Maschine mit laufendem Zyklus) und, serialisiert, auf einer zweiten Instanz (wiederholt); ein Zustand, der sich nicht setzen lässt, lässt die Instanz weiterlaufen; die Log-Kategorien geschaltet; Ableitungen gegen die finite Differenz von Hand; Ablehnungen.
 
 fmpy 0.3.32 mit numpy 2.3.4 unter Python 3.13.17, aus PyPI in eine virtuelle Umgebung installiert:
 

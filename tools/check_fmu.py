@@ -12,6 +12,8 @@ MACHINE is a registered machine's id, or a machine file (.toml or .json) that `s
 3. Through fmpy's own bindings of the C functions: an FMU state taken halfway brings back bit for bit the outputs of
    the steps after it, set on the same instance and serialized onto a second one; the directional derivative of
    the outputs by the first setpoint input is zero, as is the finite difference by hand.
+4. A move through the inputs command.target.* and command.move gives the outputs of `sim-cli run --move`; with the
+   log category logEvents switched on it is one message of that category, and with all switched off nothing is logged.
 Exits 1 on any failure.
 """
 import argparse, os, shutil, subprocess, sys, tempfile
@@ -126,6 +128,79 @@ print(f"FMU state: restored {'bit for bit' if same else 'DIFFERENT'}, serialized
       f"{'bit for bit' if elsewhere else 'DIFFERENT'}; directional derivative and finite difference "
       f"{'zero' if zero else 'NOT ZERO'}")
 failed |= not (same and elsewhere and zero)
+
+# 4. The move inputs and the log categories: the first axis moved 10 mm (or rad) through command.target and
+#    command.move gives the outputs of `sim-cli run --move` at the same instants; with logEvents switched on the move
+#    is one message of that category, and with every category off a refused call gives none.
+targets = [v for v in md.modelVariables if v.name.startswith("command.target.")]
+move = next(v for v in md.modelVariables if v.name == "command.move")
+messages = []
+
+
+def started_logging():
+    cls = FMU3Slave if v3 else FMU2Slave
+    s = cls(guid=md.guid, unzipDirectory=unzipped, modelIdentifier=md.coSimulation.modelIdentifier, instanceName="check")
+    if v3:
+        s.instantiate(logMessage=lambda env, status, category, message: messages.append((category.decode(), message.decode())))
+        s.enterInitializationMode(startTime=0.0)
+    else:
+        from fmpy.fmi2 import defaultCallbacks, fmi2CallbackFunctions, fmi2CallbackLoggerTYPE
+        cb = fmi2CallbackFunctions()
+        cb.logger = fmi2CallbackLoggerTYPE(lambda env, name, status, category, message: messages.append((category.decode(), message.decode())))
+        cb.allocateMemory, cb.freeMemory = defaultCallbacks.allocateMemory, defaultCallbacks.freeMemory
+        s.instantiate(callbacks=cb)
+        s.setupExperiment(startTime=0.0)
+        s.enterInitializationMode()
+    s.exitInitializationMode()
+    return s
+
+
+unzipped = extract(a.fmu)
+moved = None
+for offset in (0.01, -0.01):
+    target = [float(v.start) for v in targets]
+    target[0] += offset
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "move.csv")
+        machine = ["--machine-file", a.machine] if a.machine.endswith((".toml", ".json")) else [a.machine]
+        cmd = [os.path.abspath(a.cli), "run", *machine, *(["--config", a.config] if a.config else []), "--move",
+               ",".join(repr(x) for x in target), "--time", str(a.stop), "--every", "1", "--out", out]
+        if subprocess.run(cmd, capture_output=True).returncode == 0:
+            moved = np.genfromtxt(out, delimiter=",", names=True, deletechars="")
+            break
+if moved is None:
+    print("sim-cli refuses a move of the first axis by 10 mm either way"); failed = True
+else:
+    s = started_logging()
+    s.setDebugLogging(True, ["logEvents"])
+    put(s, [v.valueReference for v in targets], target)
+    s.setBoolean([move.valueReference], [True])
+    steps = int(round(a.stop / step))
+    rows = []
+    for k in range(steps):
+        s.doStep(k * step, step)
+        rows.append(get(s, out_refs))
+    events = [m for m in messages if m[0] == "logEvents"]
+    one_event = len(messages) == 1 and len(events) == 1 and "MoveTo" in events[0][1]
+    s.setDebugLogging(False, [])
+    try:
+        get(s, [max(v.valueReference for v in md.modelVariables) + 1])
+    except Exception:
+        pass
+    quiet = len(messages) == 1
+    s.terminate(); s.freeInstance()
+    mcols = {n.split("[")[0]: n for n in moved.dtype.names}
+    times = np.array([(k + 1) * step for k in range(steps)])
+    mrows = np.searchsorted(moved[mcols["time"]], times - 1e-9)
+    move_worst = 0.0
+    for i, name in enumerate(outputs):
+        f, c = np.array([r[i] for r in rows]), moved[mcols[name]][mrows]
+        move_worst = max(move_worst, np.max(np.abs(f - c)) / max(np.max(np.abs(c)), 1e-12))
+    print(f"move input: worst {move_worst:.1e} against sim-cli run --move; log categories: "
+          f"{'one logEvents message' if one_event else f'UNEXPECTED {messages}'}, "
+          f"{'none with logging off' if quiet else 'MESSAGES WITH LOGGING OFF'}")
+    failed |= move_worst > REL_TOL or not one_event or not quiet
+shutil.rmtree(unzipped, ignore_errors=True)
 
 print(f"{a.machine} {a.config or ''} (FMI {md.fmiVersion}): {len(problems)} validator problems, {len(outputs)} outputs, "
       f"{len(fmu)} rows, worst {worst[0]:.1e} ({worst[1]}): {'FAIL' if failed else 'ok'}")

@@ -89,6 +89,7 @@ enum Motion {
     },
 }
 
+#[derive(Clone)]
 pub struct Controller {
     params: DriveParams,
     /// Each motor's drive: `params` with that motor's own values (`catalog::motor_config`).
