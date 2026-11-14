@@ -46,13 +46,17 @@ fn the_time_optimal_plan_keeps_a_motor_within_its_maximum_speed() {
 }
 
 /// Above its rated speed a motor gives less than its full torque, and the plan may use it there: the single axis's curve
-/// falls from 3.8 N m at 314 rad/s to 0 at 420 rad/s (its maximum speed), and the plan keeps back (1 - 0.8) * 3.8 =
-/// 0.76 N m at every speed for friction. That leaves room up to 420 - 106 * 0.76 / 3.8 = 398.8 rad/s, 1.5952 m/s. Before,
-/// it stopped at the rated speed, 1.256 m/s.
+/// without field weakening (the linear fade) falls from 3.8 N m at 314 rad/s to 0 at 420 rad/s (its maximum speed), and
+/// the plan keeps back (1 - 0.8) * 3.8 = 0.76 N m at every speed for friction. That leaves room up to
+/// 420 - 106 * 0.76 / 3.8 = 398.8 rad/s, 1.5952 m/s (less where the motor's own friction comes off too). Before, it
+/// stopped at the rated speed, 1.256 m/s. Field weakening (on by default) keeps far more torque up to 420 rad/s, where
+/// the plan then cruises at the maximum speed.
 #[test]
 fn the_time_optimal_plan_turns_a_motor_above_its_rated_speed_along_its_curve() {
     let entry = &machine_single_axis::ENTRY;
-    let sim = Sim::new(entry, &entry.config()).unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.field_weakening = false").unwrap();
+    let sim = Sim::new(entry, &cfg).unwrap();
     let peak = peak_speed(&plan_across(&sim, 0), 0);
     assert!(peak > 314.0 / 250.0 * 1.01 && peak <= 398.8 / 250.0 * (1.0 + 1e-6), "{peak} m/s");
 }

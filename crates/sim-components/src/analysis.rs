@@ -1901,17 +1901,21 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
     Ok(out)
 }
 
-/// `bounds` as the resolved config `cfg` has them: a part by name has re-centred those of the values it set (see
-/// `bounds`). A path the resolved config has no bound for keeps the one given.
-fn followed(cfg: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
-    let at = |path: &String, given: (f64, f64)| match cfg.f64s(&format!("bounds.{path}")).as_deref() {
-        Ok([low, high]) => (*low, *high),
-        _ => given,
+/// `bounds` as the config resolved from `cfg` has them, where they are `cfg`'s own `[bounds]`: a part by name has
+/// re-centred those of the values it set (see `bounds`). A bound given otherwise (the caller's own range), or one the
+/// resolved config has none for, is kept.
+fn followed(cfg: &Config, resolved: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
+    let own = |c: &Config, path: &str| match c.f64s(&format!("bounds.{path}")).as_deref() {
+        Ok([low, high]) => Some((*low, *high)),
+        _ => None,
     };
     bounds
         .iter()
         .map(|(path, low, high)| {
-            let (low, high) = at(path, (*low, *high));
+            let (low, high) = match (own(cfg, path), own(resolved, path)) {
+                (Some(given), Some(now)) if given == (*low, *high) => now,
+                _ => (*low, *high),
+            };
             (path.clone(), low, high)
         })
         .collect()
@@ -2091,8 +2095,8 @@ pub fn verdict_bands(
     cfg: &Config,
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<Band>, ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     envelope(entry, cfg, 2 * bounds.len(), |run| {
         let ((path, low, high), mut changed) = (&bounds[run / 2], cfg.clone());
         set_bounded(&mut changed, path, if run % 2 == 0 { *low } else { *high })?;
@@ -2123,8 +2127,8 @@ pub fn verdict_bands_sampled(
     if samples == 0 {
         return Err(ConfigError::Invalid("samples".into()));
     }
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let mut random = sim_core::testkit::Noise(seed);
     let columns: Vec<Vec<f64>> = bounds
         .iter()
@@ -2226,8 +2230,8 @@ fn worst_search(
     from: &[Worst],
     stop: &(dyn Fn(&Verdict) -> bool + Sync),
 ) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let n = bounds.len();
     let set = |cfg: &mut Config, i: usize, high: bool| {
         set_bounded(cfg, &bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 })
@@ -3887,8 +3891,8 @@ pub fn velocity_loop_margins(
     cfg: &Config,
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let (frequencies, amplitude, motors) =
         (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
     let mut runs = vec![(String::new(), cfg.clone())];

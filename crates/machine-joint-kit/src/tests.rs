@@ -162,11 +162,12 @@ fn the_linear_motor_tells_the_time_optimal_plan_its_guide_load() {
 
 /// A path whose motors may hardly turn crawls as near a singularity: the SCARA's motors at 1e-4 rad/s turn some rad per
 /// metre of the tool, so 0.1 m along x would take some 1000 s and more, a pose per millisecond. The time-optimal plan
-/// refuses a plan longer than 1000 s instead of handing on that many poses.
+/// refuses a plan longer than 1000 s instead of handing on that many poses. (The plan's speed limit is the motors'
+/// maximum speed since 14 November, no longer the rated speed; joints 1 and 2, which the line turns, take the shared one.)
 #[test]
 fn the_time_optimal_plan_refuses_a_crawl_that_would_take_unbounded_poses() {
     let mut cfg = SCARA.config();
-    cfg.set_text("drive.rated_speed_rad_s = 1.0e-4").unwrap();
+    cfg.set_text("drive.max_speed_rad_s = 1.0e-4").unwrap();
     let sim = Sim::new(&SCARA, &cfg).unwrap();
     let start = sim.control.planned_pos().to_vec();
     let mut far = start.clone();
@@ -529,7 +530,10 @@ fn a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason() {
 /// limits (1 m/s along y), which so takes longer.
 #[test]
 fn the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line() {
-    let cfg = tool_config(&SCARA, SCARA_TOOL_CONFIG);
+    let mut cfg = tool_config(&SCARA, SCARA_TOOL_CONFIG);
+    // The maximum speed of joints 1 and 2 (the shared drive) at the rated speed: above it the plan would follow their
+    // curves (limits.rs). Joints 3 and 4, motors by name, keep the catalogue's maximum and turn slowly here.
+    cfg.set_text("drive.max_speed_rad_s = 314.159").unwrap();
     let sim = Sim::new(&SCARA, &cfg).unwrap();
     let rated = cfg.positive("drive.rated_speed_rad_s").unwrap();
     let line = sim_components::path::parse("line, 0.4, 0.25, 0.15, 1.5").unwrap();

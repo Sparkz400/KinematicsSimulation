@@ -823,10 +823,11 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
 /// (a) It is shorter than the plan within the axis limits: 1.395 s against 1.83 s (1.429 s with one limit per
 /// piece). (The plan without a jerk limit took 0.69 s and asked the motors for more than they have on a tight
 /// arc.) (b) No pose uses more than the plan promises, by differences (`plan_use`, margin 0.1 %): the motors'
-/// share of the torque-speed curve (`profile.torque_reserve`, 0.8), their rated speed and the jerk limits of the
-/// axes. (c) A limit is active, used to 97 % or more, at over 60 % of the poses. With the config's motor that is
-/// the jerk at 59 % and the rated speed at 10 %; the torque stays at 0.16 of its share, because at 100 m/s^3 the
-/// lines are too short to reach it. With a motor of 0.6 N m and a jerk limit of 2000 m/s^3 it is the torque at
+/// share of the torque-speed curve (`profile.torque_reserve`, 0.8), their rated speed (the maximum speed is set to it
+/// here) and the jerk limits of the axes. (c) A limit is active, used to 97 % or more, at over 60 % of the poses. With
+/// the config's motor that is the jerk at 59 % and the rated speed at 10 %; the torque stays at 0.16 of its share,
+/// because at 100 m/s^3 the lines are too short to reach it. With a motor of 0.6 N m and a jerk limit of 2000 m/s^3
+/// (and no motor friction or gearbox loss, which the plan keeps back) it is the torque at
 /// 33 % of the poses, the speed at 38 % and the jerk at 5 %. The other poses are on the arc, where the ramps get
 /// 0.4 of the jerk and the jerk the curve takes holds the speed below what the motors allow, and the steady
 /// cycles on either side of a junction. (d) Run on the full model with
@@ -842,6 +843,8 @@ line,0.6,0.05",
     // The plan of a config, its duration, the share of its poses with a limit active and the most each limit is used.
     let plan = |edits: &[&str]| {
         let mut cfg = ENTRY.config();
+        // The motors' maximum speed at their rated speed: above it the plan would follow their curves (limits.rs).
+        cfg.set_text("drive.max_speed_rad_s = 314.0").unwrap();
         for e in edits {
             cfg.set_text(e).unwrap();
         }
@@ -869,8 +872,17 @@ line,0.6,0.05",
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
     assert!(duration < 0.8 * slow, "{duration} s as fast as the motors allow, {slow} s within the axis limits");
-    let most =
-        plan(&["drive.peak_torque_nm = 0.6", "axis.x.max_jerk_m_s3 = 2000.0", "axis.z.max_jerk_m_s3 = 2000.0"]).2;
+    // Without the motors' friction and the gearboxes' loss, which the plan keeps back from the curve (0.02 N m and more, a
+    // twentieth of the small motor's 0.48 N m; 5 % of what passes the gearbox) and the loss-free rigid torque does not
+    // show.
+    let most = plan(&[
+        "drive.peak_torque_nm = 0.6",
+        "axis.x.max_jerk_m_s3 = 2000.0",
+        "axis.z.max_jerk_m_s3 = 2000.0",
+        "effects.motor_friction = false",
+        "effects.gearbox_efficiency = false",
+    ])
+    .2;
     assert!(most.iter().all(|m| *m > 0.999), "a small motor: torque, speed and jerk used to {most:?}");
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
@@ -932,11 +944,11 @@ fn both_planners_time_the_path_with_its_transition_curves() {
 
 /// How much each pose of a plan uses of what the time-optimal planner promises, from the planned poses by
 /// differences over one cycle, at rest before and after: the largest motor torque of the rigid model over
-/// `profile.torque_reserve` times the torque-speed curve, motor speed over the rated speed, and axis jerk
-/// over the axis's limit.
+/// `profile.torque_reserve` times the torque-speed curve, motor speed over the maximum speed (`drive.max_speed_rad_s`,
+/// up to which the plan may turn a motor along its curve since 14 November), and axis jerk over the axis's limit.
 fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)]) -> Vec<[f64; 3]> {
-    let (c, reserve, rated) =
-        (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap());
+    let (c, reserve, fastest) =
+        (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.max_speed_rad_s").unwrap());
     let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
     let mut all = Vec::new();
     for i in 0..points.len() as isize {
@@ -953,7 +965,7 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
             let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
             used = [
                 used[0].max(torque[k] / (reserve * if torque[k] >= 0.0 { high } else { low })),
-                used[1].max(speed.abs() / rated),
+                used[1].max(speed.abs() / fastest),
                 used[2].max(jerk.abs() / sim.machine.axes()[k].max_jerk),
             ];
         }
@@ -1063,7 +1075,13 @@ fn belt_bound(x: f64) -> f64 {
 #[test]
 fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let mut cfg = ENTRY.config();
-    for e in ["axis.x.max_jerk_m_s3 = 300.0", "axis.z.max_jerk_m_s3 = 300.0", "ratings.belt_max_tension_n = 400.0"] {
+    // The motors' maximum speed at their rated speed: above it the plan would follow their curves (limits.rs).
+    for e in [
+        "axis.x.max_jerk_m_s3 = 300.0",
+        "axis.z.max_jerk_m_s3 = 300.0",
+        "ratings.belt_max_tension_n = 400.0",
+        "drive.max_speed_rad_s = 314.0",
+    ] {
         cfg.set_text(e).unwrap();
     }
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
@@ -1415,7 +1433,8 @@ fn the_optimiser_switches_input_shaping_on_where_a_faster_cycle_fails_settling()
     use sim_components::analysis::{analyse_cycle, optimise_cycle, verdicts};
     let text = ENTRY.default_config;
     let cycle = "[[cycle.segment]]\ntarget = [0.9, 0.05]\ndwell_s = 0.1\npayload = true\n\n[[cycle.segment]]\ntarget = [0.1, 0.05]\ndwell_s = 0.1\npayload = true\n";
-    let mut cfg = Config::parse(&format!("{}{cycle}", &text[..text.find("[[cycle.segment]]").unwrap()])).unwrap();
+    // Cut at the first segment's line (a comment of [profile] names "[[cycle.segment]]" too).
+    let mut cfg = Config::parse(&format!("{}{cycle}", &text[..=text.find("\n[[cycle.segment]]").unwrap()])).unwrap();
     for e in [
         "start.pose = [0.1, 0.05]",
         "axis.x.max_velocity_m_s = 0.5",
@@ -1512,7 +1531,8 @@ payload = false
 via = {via}
 "
         );
-        let mut cfg = Config::parse(&format!("{}{cycle}", &text[..text.find("[[cycle.segment]]").unwrap()])).unwrap();
+        let mut cfg =
+            Config::parse(&format!("{}{cycle}", &text[..=text.find("\n[[cycle.segment]]").unwrap()])).unwrap();
         cfg.set_text("start.pose = [0.1, 0.05]").unwrap();
         cfg
     };
