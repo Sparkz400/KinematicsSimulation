@@ -9,7 +9,7 @@ use crate::sim::Sim;
 use sim_core::{Config, ConfigError, MachineEntry};
 use std::collections::HashMap;
 use std::f64::consts::PI;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 mod mechanics;
 pub use mechanics::{
@@ -203,13 +203,27 @@ fn vendor_rows(kind: &str, vendor: &str, line: f64) -> Vec<Row> {
         .collect()
 }
 
-type Row = HashMap<&'static str, &'static str>;
+type Row = &'static HashMap<&'static str, &'static str>;
 
-/// The rows of a catalogue file; lines starting with '#' are notes.
+/// The rows of a catalogue file; lines starting with '#' are notes. Each table is parsed once and kept for the life of
+/// the process, as its text is: a motor search reads the same tables for every motor it tries.
 fn rows(text: &'static str) -> Vec<Row> {
-    let mut lines = text.lines().filter(|l| !l.starts_with('#'));
-    let header: Vec<&str> = lines.next().unwrap_or("").split(',').collect();
-    lines.map(|line| header.iter().copied().zip(line.split(',')).collect()).collect()
+    type Parsed = Vec<((usize, usize), &'static [HashMap<&'static str, &'static str>])>;
+    static PARSED: Mutex<Parsed> = Mutex::new(Vec::new());
+    let key = (text.as_ptr() as usize, text.len());
+    let mut parsed = PARSED.lock().unwrap_or_else(PoisonError::into_inner);
+    let table = match parsed.iter().find(|(k, _)| *k == key) {
+        Some(&(_, table)) => table,
+        None => {
+            let mut lines = text.lines().filter(|l| !l.starts_with('#'));
+            let header: Vec<&str> = lines.next().unwrap_or("").split(',').collect();
+            let table: &'static [_] =
+                Vec::leak(lines.map(|line| header.iter().copied().zip(line.split(',')).collect()).collect());
+            parsed.push((key, table));
+            table
+        }
+    };
+    table.iter().collect()
 }
 
 fn number(row: &Row, column: &str) -> Option<f64> {
