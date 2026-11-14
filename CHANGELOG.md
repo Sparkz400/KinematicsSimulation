@@ -25,6 +25,15 @@ item are in [PROGRESS.md](PROGRESS.md).
 - The browser page shows the selected machine in 3D running its cycle (WebGL2, orbit camera, legend with tool position and cycle time), beside the sizing check; the wasm module exports the scene per frame as a flat float array (`frame`, `frame_len`, request 3).
 - `heat_color` and `part_color` moved from sim-app to `sim_core::scene`.
 
+### Added
+
+- Identification of links and of a payload picked during a trace (`identify::fit_joints`): on the URDF arm and the
+  SCARA each link's mass factor and first moment where the trace tells them apart (base parameters: a value is fitted
+  only where no value's variance is inflated by more than 100; the others are folded in, with their shares named),
+  and a payload picked or dropped during the trace found in the torques and fitted before and after
+  (`payload_step_s`). `Machine::links` and `Machine::set_link_change`. `sim-cli fit` and the app's trace panel show
+  both.
+
 ## [1.0.0-rc.1] - 2026-11-14
 
 Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.

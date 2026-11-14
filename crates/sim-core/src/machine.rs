@@ -171,6 +171,16 @@ pub trait Machine: Send {
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);
+    /// The rigid bodies whose inertial parameters a trace can be fitted for (`identify::fit_joints`), by name: the links
+    /// of a URDF chain. None by default.
+    fn links(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Changes link `link`'s inertial parameters about its joint's frame, from those it was built with: mass, first
+    /// moment and inertia all times `factor`, then `moment` (kg m, in its frame) added to the first moment with mass
+    /// and inertia about the frame kept. The rigid torques are linear in each, which the fit takes its columns from.
+    /// (1, [0; 3]) restores it. Nothing by default.
+    fn set_link_change(&mut self, _link: usize, _factor: f64, _moment: [f64; 3]) {}
     /// Told every step whether the cycle dwells at a target, for machines with a process force there.
     fn set_dwelling(&mut self, _dwelling: bool) {}
     /// Told every step whether the drives are disabled, for machines with holding brakes.

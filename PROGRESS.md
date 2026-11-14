@@ -2005,3 +2005,43 @@ Left open:
   hidden, so throttled; not measured in the foreground). Instanced drawing or fewer belt teeth would help if it is slow
   in a normal browser.
 - No obstacles, arrows, labels or tool trail in the page's view; no pinch zoom on touch screens.
+
+## Identification of links and of a payload that comes and goes (14 November)
+
+Goal 1. The two limits the 13 November fit left: one added inertia per motor for rotor and link together, and a payload
+held all through the trace. No new config key and no effect switch (an analysis of a trace); no golden snapshot changes.
+
+| What | How | Test |
+| --- | --- | --- |
+| A link's inertial parameters through the `Machine` trait | `Machine::links()` (names) and `set_link_change(link, factor, moment)`, default none; `Mechanism` the same, `JointMachine` passes them on, `Arm` (URDF arm and SCARA) changes its body from the one it was built with: mass, first moment m c and inertia about the frame times the factor, then `moment` added to the first moment with mass and inertia about the frame kept (`rigid::Inertial::changed`; the torques are linear in each) | `a_links_change_scales_its_parameters_about_its_frame_and_moves_its_centre` (rigid.rs): 2 kg at (0.1, 0, 0), diag(0.01, 0.02, 0.03), × 3 with 0.2 kg m along y: by hand 6 kg, centre (0.1, 1/30, 0), inertia about it xx 0.07/3, yy 0.06, zz 0.25/3, xy 0.02; × 1 gives the body back |
+| Per-link columns in the regressor | `identify::regressor`: after the payload's and the motors' columns, per link the change of the rigid torques with the factor 2 (`link_mass_factor`) and with 0.01 kg m more first moment along x, y, z of its frame, per unit (`link_first_moment_*_kg_m`). A column that changes the stacked rigid torque by less than 1e-9 of it is zeros (rounding of a parameter without effect) | the tests below |
+| Base parameters | `identify::solve`: the columns in their order (payload, motors, links), each taken where with it no value's variance inflation (diagonal of the inverse normal matrix, columns scaled to unit length) is above `WEAK` = 100 or below 1 − 1e-6 (an exactly dependent pair gave a negative one by rounding); every other column j is folded: X_j = Σ X_i B_ij + r_j, B the projection, r_j orthogonal to the basis, so its value enters base value i with B_ij (`JointValue::combines`, shares under 1 % of the column left out) and r_j only the residual. The config's replay is fitted on the trace's basis. Tried first: only exact dependence (R_jj² below 1e-9, the QR in column order); on the SCARA the payload, arm 2 and the quill (masses at the end of arm 2) then all stayed, nearly alike, the payload ± 0.73 instead of ± 0.007 | `the_scara_fit_finds_heavier_links_in_the_values_they_combine_with`: arm 2 × 1.25, quill × 1.5, noise as stage 1, gearbox losses off; by hand arm 1's factor into motor 1's inertia with (0.1 + 8 · 0.16²) / 100² = 3.048e-5 kg m² (to 1e-6), quill's and flange's into the payload's with 1.5 / 3 and 1 / 3 (found 0.5010, 0.3297), every value's change equal to the truth through what it combines within 3 standard errors (payload + 0.445 ± 0.007 for 0.764 · 0.25 + 0.501 · 0.5 = 0.441). `the_arm_fit_finds_heavier_links_and_folds_one_its_trace_does_not_excite`: six-axis arm, gears rigid, link 2 × 1.2, link 3 × 1.3; link 1's factor into motor 1's inertia with 0.25 / 120² (to 1e-6); link 2's factor a value of its own, error below 0.02 (+ 0.577 ± 0.013 for 0.2 + 1.217 · 0.3 = 0.565); with joint 2 held within 0.01 rad link 2's factor is folded |
+| Payload picked or dropped during the trace | Traces have no gripper column (`Trace` holds time and per motor setpoint, angle, speed, torque), so from the torques: `payload_step` splits the payload's column at every 11th row between a tenth and nine tenths of the trace, then at every row about the best, the sums of squares from running sums along the rows; the least is the step. Its error: how far the sum of squares stays within one variance of its least. It counts where the trace's factor after less before differs from the replay's (which holds the payload all along) by more than `PAYLOAD_STEP_SIGMAS` = 6 standard errors: on the six-axis arm with elastic gears the trace alone showed a "step" at 1.69 s of a trace without one, the replay the same | `a_payload_picked_during_the_trace_is_found_with_when`: the delta with every shipped effect, gripper empty until 3.5 s; step within 5 ms and its error at most 5 ms (found 3.503 ± 0.001 s), × 0 before and × 1 after within 3 standard errors with bands below 0.02 (× −0.014 ± 0.010, × 0.988 ± 0.010). The delta's and the SCARA's friction tests now also check that no step is found |
+| Command line | `fit --trace` writes the base values as before (link rows `link_mass_factor,<link>,...`), `payload_factor_before`/`_after` and `payload_step_s,payload,,<time>,<error>` where a step was found; advice `fit-payload-step`, `fit-link-mass`, `fit-link-moment`, `fit-combined`, `fit-no-effect` (EN, DE). `identify` (no config) has no rigid model and gets neither | `a_trace_from_run_replays_onto_itself_and_fits_its_own_config` counts the motors' rows apart from the links' (changed) |
+| App | The trace panel's fit table names a link's rows by the link's name, the step by its own row (`ui-trace-payload-step`); labels for the new quantities in EN and DE | `a_trace_is_replayed_and_fitted_in_the_app` counts the motors' rows apart from the links' and takes at least four advice lines per motor (changed); `every_label_exists_in_every_language` takes the new keys |
+
+Shared files touched, small: `sim-core/src/machine.rs` (two trait methods with defaults), `sim-components/src/chain.rs`
+(the same on `Mechanism`, passed on), `sim-components/src/rigid.rs` (`Inertial::changed`), `machine-joint-kit/src/arm.rs`
+(the built inertials and the two methods), `sim-app/src/model.rs` (the row names, one row, the label keys).
+
+Docs: measurement procedure (links, the payload step, the new rows), user guide EN/DE (a paragraph after the delta's fit
+example), validation (three rows). The German measurement procedure still does not exist.
+
+Run here: the six tests of `fit_joints.rs` (the three new ones and the three old) as plain functions in a release build,
+all pass (3 to 15 s each); `cargo check`, clippy `-D warnings` and rustfmt on every touched crate; `sim-cli fit` on the
+own cycle traces of the SCARA, the arm and the delta (config and fitted agree to the fourth digit). Not run: the unit
+test of `Inertial::changed` (its numbers worked by hand), any test
+suite, the changed app and CLI tests included.
+
+Left open:
+
+- On the six-axis arm with its gears elastic (as shipped), a trace of an arm with heavier links fits badly even without
+  the links' columns: a payload "step" at 6.17 s and joint 2's Coulomb friction 0.08 N m off. The rigid model at the
+  motor's angle misses what the gears' twist does on that arm; the arm test runs with `joint_elasticity` off. On the
+  SCARA and the delta (elastic too) the fits hold.
+- The links' values are the shares the trace tells apart, not a URDF: a folded link's change shows only through the
+  values it enters, and the advice says how. A first moment along a link's own joint's axis has no effect and is named
+  so. Inertia off the diagonal is not fitted on its own (it moves with the factor only).
+- One step of the payload per trace, between a tenth and nine tenths of it; several picks and drops would need a split
+  per gripper event (a gripper column in the trace format, where the drive or PLC records one).
+- The per-axis fit (`fit_rigid`, the belt machines) has neither: its payload is in the axis's moved mass.
