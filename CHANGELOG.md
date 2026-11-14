@@ -7,6 +7,13 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-11-14
+
+Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.
+Then four more delta pickers (D2, D4, linear), machine files with screws, racks and mechanisms, the warm start
+and the drive's current limit, life estimates with a_ISO, a point-by-point time-optimal plan, transition curves on
+three axes, a robust optimiser, modes, identification of non-linear machines and new app views.
+
 ### Added
 
 - Four-axis delta picker D4 (`delta-d4`, crate `machine-delta-d4`): the D3 with a turning tool, driven by a fourth
@@ -14,7 +21,6 @@ item are in [PROGRESS.md](PROGRESS.md).
   tool pose (x, y, z, c); switches `effects.shaft_mass`, `shaft_torsion`, `telescope_friction` (on); the check
   `tool-gearbox-peak`; its default cycle (the Adept cycle with a 90 degree turn) passes every verdict. The D3 gained
   `PlatformDrag` (`Delta::set_platform_drag`), a force on its platform along a line, for the telescope's friction.
-
 - Machine files: ball screws, racks, linear motors and rotary tables beside belts (nodes `screw`, `rack`,
   `linear_motor`, `rotary`; value tables laid out as the joint kit's `[screw]`, `[rack]`, `[linear_motor]`,
   `[strain_wave]`; a rotary axis in rad with `stroke_rad`), built with the joint kit's `RotaryJoint` and
@@ -23,11 +29,9 @@ item are in [PROGRESS.md](PROGRESS.md).
   ball screw with a brake) and `machines/rack-gantry.toml` (3 m X on rack and pinion, Y on a belt). The JSON schema no
   longer requires `pulley`, `section`, `body` and `gearbox`. Verdicts no longer judge belt-tooth load for a motor that
   turns no pulley (it reports neither a pulley radial load nor a belt wrap).
-
 - Delta picker D3: forearms as rigid rods with their inertia (`effects.forearm_inertia`, on; off is the lumped model),
   bending upper arms (`effects.link_elasticity`, `[upper_arm]`, off), the lowest mode with the motors held through
   `resonance_hz` and `mode_shape` (so `shaper_follows_pose` follows it), and the forearm rods as collision bodies.
-
 - Thermal warm start (`effects.thermal_warm_start`, on in the shipped configs): the cycle analysis measures its pass
   with the windings and, with `effects.thermal_feedback`, the gearboxes and guides at the rises they settle at,
   iterated from cold to within 0.1 K (secant step, at most 4 warm passes); verdict row `thermal-warm-start`, and
@@ -37,7 +41,6 @@ item are in [PROGRESS.md](PROGRESS.md).
   held to the torque of `ratings.drive_max_current_a` where that is below the motor's limit, with anti-windup; a cycle
   that asks more lags behind, and `drive-peak-current` judges the current asked for. Nothing changes on the shipped
   configs, whose drives give more than their motors take.
-
 - Transition curves on three axes (the delta): with `profile.path_tolerance_m` the curves between lines and arcs are
   laid in the plane of the arc they meet, a line between arcs in two planes is shared out, and deviation, plan and
   reports hold in space; spline junctions on three axes are eased as on two. Two arcs meeting in different planes
@@ -45,18 +48,15 @@ item are in [PROGRESS.md](PROGRESS.md).
 - Transition curves: one length per arc (from its own junctions' speed and its own tolerance limit) instead of one
   for the whole path; curves at an arc fixed at one end with an arc at its other end, and at one that turns more
   than half a circle (moved by at most half the tolerance).
-
 - Planar delta picker D2 (`delta-d2`, crate `machine-delta-d2`): two rotary arms in the x-z plane with forearm pairs
   to a plate that keeps its orientation, sized like the Codian D2-800-S020 (800 x 477 mm, 5 kg) with Siemens
   1FK2105-4AF behind ratio 20; kinematics, Jacobian and condition number, the D3's dynamics, scene, collision bodies,
   a default Adept cycle that passes its verdicts. The gearbox backlash is an estimate (1 arcmin): with the catalogue's
   9 arcmin the cycle fails settling.
-
 - `CITATION.cff`; `deny.toml` with a cargo-deny job in CI (licences, advisories, duplicate versions, sources).
 - GitHub Pages workflow (`pages.yml`) that publishes the browser sizing page: https://sparkz400.github.io/KinematicsSimulation/.
 - README: an animated GIF of the T-gantry's cycle and a screenshot of the delta picker; intro, machine list, limits
   and crate table brought up to date (nine machines, machine files, FMI 3.0, Python, WebAssembly), also in German.
-
 - Fit of a delta, SCARA or arm from a drive trace, in the motors' coordinates: the payload's mass (a factor) and per
   motor added inertia, viscous and Coulomb friction and constant torque, by least squares on the machine's own rigid
   model (`identify::fit_joints`, `Machine::rigid_motor_torque`), with the pairs the trace cannot tell apart; `sim-cli
@@ -64,7 +64,6 @@ item are in [PROGRESS.md](PROGRESS.md).
 - The belts' stiffness from an ordinary move's trace, without a sweep: `sim-cli fit --trace FILE --stiffness
   [--stiffness-key KEY]` and a checkbox in the app's trace panel (`identify::fit_move_stiffness`), refused with a
   reason where the moves do not ring the belt enough.
-
 - Linear delta (`delta-linear`, crate `machine-delta-linear`): three vertical toothed-belt axes with parallelogram rods
   to a level plate, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF motors on S210 converters. Inverse, forward
   kinematics, Jacobian, working range with the rods' tilt and the carriages' stroke, condition number; elastic belt
@@ -105,18 +104,6 @@ item are in [PROGRESS.md](PROGRESS.md).
   shaper uses it.
 - `effects.belt_wrap` (off): the teeth in mesh from the belt's wrap at the pose, for the tooth-jump law and the tooth
   load.
-
-### Changed
-
-- The time-optimal plan (`--time-optimal`) reads the motors' limits point by point, every 2 mm along a piece (and
-  every 0.02 rad on a curve), instead of one speed and one acceleration limit per piece from nine poses: each ramp
-  accelerates by what the torque, the belt's tension and the axes' jerk allow where it is, gravity counts each way
-  as it pushes, the centripetal and Coriolis torque of the speed counts, and a piece may cruise faster than its
-  slowest place where its ramps pass that place more slowly. Arcs no longer share the limits 3 : 4 : 5. The user
-  guide's line, arc, line takes 1.395 s instead of 1.429 s, its spline example 1.380 s instead of 1.674 s, a line
-  across the delta's range 0.411 s instead of 0.429 s; the default cycles of the T-gantry, the delta and the arms
-  are limited by jerk and speed and plan as before. Planning takes 1 to 21 ms instead of 0.2 to 1 ms.
-
 - Life estimates: the life modification factor a_ISO of ISO 281:2007 on the pulley shaft bearings (keys
   `ratings.bearing_lubricant_viscosity_mm2_s`, `bearing_contamination_factor`, `pulley_bearing_fatigue_limit_n`,
   `pulley_bearing_mean_diameter_mm`); the gearing's fatigue above the gearbox's rated torque by Palmgren–Miner on
@@ -124,30 +111,10 @@ item are in [PROGRESS.md](PROGRESS.md).
   own bearings where a pulley sits on its shaft (`motor-bearing-life`, key `ratings.motor_bearing_load_rating_n`, C
   from Siemens' allowable radial force, `catalog/siemens/motor_bearings_1fk2.csv`). `sim-cli analyze` has the columns
   `gearbox_gearing_life_h` and `motor_bearing_life_h`.
-
-### Changed
-
-- The pulley shaft bearings' life now includes a_ISO: the shipped configs' lives grow (EXCT-30 31800 h to 325800 h,
-  which now passes in both band modes; it still fails at the worst corner). The delta's first arm fails the new
-  gearing check (about 9000 h against 20000 h).
-
 - Cycle optimiser: lifts placed over the config's obstacles (each traverse no lower than keeps the clearance with the
   machine's collision bodies, a via point over the obstacle tried too); `sim-cli optimise --pareto FILE` writes the
   front of cycle time, energy per cycle from the supply and peak motor utilisation, which the app plots below the
   optimiser's table.
-
-### Changed
-
-- `sim-cli optimise` judges its result in the error bands of `[bounds]` too and steps back along the search to the
-  fastest setting that passes there (checks the configured cycle fails there already are listed, not judged);
-  `--nominal` gives the old result. EXCT-30: 1.590 s instead of 1.492 s. The app does so with "error bands" ticked.
-
-## [1.0.0-rc.1] - 2026-11-13
-
-Stages A to D of the plan's end goals, the effect views, the electrical drive and the FMI export.
-
-### Added
-
 - **Physics (stage A):** gearbox contact that cannot pull; the leaning Z axis (tool flex); drive computation delay,
   fieldbus delay and jitter, sensor noise; winding heating, torque saturation, a DC link with braking chopper and
   trip, shared or per drive; belt tooth stiffness, material damping, slack time, idler inertia and friction;
@@ -170,10 +137,29 @@ Stages A to D of the plan's end goals, the effect views, the electrical drive an
 - **App:** everything the command line does, config files opened and saved, CAD meshes in the 3D view.
 - **OPC UA:** paths, Disable and Enable.
 
+### Changed
+
+- The time-optimal plan (`--time-optimal`) reads the motors' limits point by point, every 2 mm along a piece (and
+  every 0.02 rad on a curve), instead of one speed and one acceleration limit per piece from nine poses: each ramp
+  accelerates by what the torque, the belt's tension and the axes' jerk allow where it is, gravity counts each way
+  as it pushes, the centripetal and Coriolis torque of the speed counts, and a piece may cruise faster than its
+  slowest place where its ramps pass that place more slowly. Arcs no longer share the limits 3 : 4 : 5. The user
+  guide's line, arc, line takes 1.395 s instead of 1.429 s, its spline example 1.380 s instead of 1.674 s, a line
+  across the delta's range 0.411 s instead of 0.429 s; the default cycles of the T-gantry, the delta and the arms
+  are limited by jerk and speed and plan as before. Planning takes 1 to 21 ms instead of 0.2 to 1 ms.
+- The pulley shaft bearings' life now includes a_ISO: the shipped configs' lives grow (EXCT-30 31800 h to 325800 h,
+  which now passes in both band modes; it still fails at the worst corner). The delta's first arm fails the new
+  gearing check (about 9000 h against 20000 h).
+- `sim-cli optimise` judges its result in the error bands of `[bounds]` too and steps back along the search to the
+  fastest setting that passes there (checks the configured cycle fails there already are listed, not judged);
+  `--nominal` gives the old result. EXCT-30: 1.590 s instead of 1.492 s. The app does so with "error bands" ticked.
+
 ### Fixed
 
 - Nine rounds of review by experiment; each fix has a test that was seen failing without it (PROGRESS.md,
   "Review fixes" to "Ninth review fixes").
+- Two rounds of fixes after merging fifteen branches: every test of the merged code passes, and the suite runs in
+  about 8 minutes again (PROGRESS.md, the sections of 14 November).
 
 ## [0.1.0] - 2026-11-11
 

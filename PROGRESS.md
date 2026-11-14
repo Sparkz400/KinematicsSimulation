@@ -1863,3 +1863,38 @@ Left as they are:
   the machines one after the other against the clock (112 s alone), switching an effect too (73 s, no clock).
 - The PLC tests run last in the group `real-time`, in the order of the binaries; started early they would run beside
   the busiest tests, against the clock. Their two longest (50 s each) end the run.
+
+## Merging fifteen branches, and what the merged code got wrong (14 November 2026)
+
+Fifteen branches of 13 November were built side by side and merged into main without their test suites run. The first
+full run of the merged code failed 43 tests and timed out 4; after six fix rounds all 580 pass (and the 13 margin sweeps
+that only CI runs by default). What was found, beyond tests whose expectations an intended change had outdated:
+
+| Defect | Cause | Fix | Test |
+| --- | --- | --- | --- |
+| Every move of the linear delta refused | Its start pose lay on the working range's top face; the pose it settles at (belts stretch a few um) lay outside | Start and cycle 10 mm lower | the control tests, which now name the machine they fail on |
+| Linear delta: 3 m/s on all axes asked 337.7 rad/s of motors rated 314.16 | z turns all carriages one to one | `axis.z.max_velocity_m_s = 2.5` (302.8 rad/s); the cycle's lifts never reach it | `axis_limits_are_checked_against_motor_limits` |
+| Linear delta: belt tension 33 N off after a ratio change at speed, 20 um creep at rest | The default state carry-over rebuilt the belts at rest; the integrator worked against stiff guide bristles through a soft loop | `adopt_state` keeps stretch, coupling torque and friction states; `velocity_tn_s` 0.012 (margins at least 38 deg, 8.8 dB) | `a_changed_ratio_or_pulley_radius_does_not_tear_the_machine`, `a_move_arrives_and_comes_to_rest` |
+| Energy check off by 0.042 J on the linear delta | A hard stop's damper jumps to c v^2 at contact; the check summed powers at the ends of 62.5 us steps | `testkit::loss_budget` sums on the integrator's sub-steps (error at most 0.011 J of 0.018 J allowed) | the standard suite |
+| A test hung on the planar delta | It stepped until the setpoint reached the axis's top speed, which a 0.68 m move never does | The test bounds its loop; tests that need a cruise lower the speed limit where the stroke is short (`cruising`) | `with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature` |
+| The app's saved config reordered dotted keys | `saved_text` rewrote the document with toml_edit, which groups dotted keys | Only each changed value's text is replaced | `a_config_file_is_opened_changed_saved_and_opened_again` |
+| A setpoint that had arrived moved during the delta's dwell | The shaper following the pose lengthened its period when the gripper picked (41.5 to 27.2 Hz), reaching back into the lift | The shaper's half periods are held while the plan stands still | `with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived` |
+| Tuning panel and `sim-cli modes` measured 46 um off the start pose they state | They took the rigid kinematics' pose of the motors | Both take `start.pose` | `tuning_measures_the_axis_with_the_current_gains` |
+| Machine files named their span signals unlike the crates | `belt.span.span_1.*` against `belt.span.1.*` | Numbered from 1 in file order | `the_effects_of_a_machine_file_are_its_crates` |
+| The D4's time-optimal plan slower than the plan within the axis limits | The D3's feedforward counted the telescope shaft's friction in its speed term, which the planner reads as d v^2: ninefold at 3 m/s | The feedforward, the rigid loss-free model, leaves the drag out | `a_path_file_is_planned_run_and_analysed_for_every_machine` |
+| A run that tripped also failed `thermal-warm-start` | A stopped run got a warm-start record with an infinite change | No row when the change has no value; the trip's own check fails | the single axis's DC link test |
+| `effects.belt_wrap` silently ignored in machine files; two deltas and four machine files without the warm start and the drive's current limit | Written before those switches existed | `belt_wrap` refused like `tool_flex`; the switches added | `every_machine_file_passes_the_standard_suite` |
+| A pose read back at a stroke's end refused as out of range | 0.40000000000000013 against 0.4 | Range checks allow `ROUNDING` (1e-9), as path checks did | `a_path_is_planned_run_and_analysed_in_the_app` |
+
+Repository: every workflow action pinned to a commit; a test stopped after 30 minutes in CI (nextest profile `ci`), the
+test job after 4 hours; the PLC tests in a CI step of their own, one at a time (six missed their wall-clock times beside
+the simulation tests on the Windows runner); clippy clean and `-D warnings` in CI, with four lints allowed on purpose in
+the root Cargo.toml; rustfmt at 120 characters (`rustfmt.toml`), checked in CI, the formatting commit in
+`.git-blame-ignore-revs`.
+
+Left open:
+
+- The app plans a path from the live setpoint as `start.pose`; its planning model then puts the setpoint one sag higher,
+  about 0.26 mm on the planar delta, within the slack.
+- Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
+  crates the same artifact names); agents built in cargo profiles of their own.
