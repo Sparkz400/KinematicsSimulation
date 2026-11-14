@@ -107,6 +107,74 @@ fn the_distribution_fixes_a_cable_at_its_bound_and_shares_out_the_rest() {
     assert!(distribute(&a, &[0.0, 10.0], 2.0, 6.0, 5.0).is_none());
 }
 
+/// The same three cables with the least tension just above the down cable's exact share: t_2 = 5 - (10 - 5 (2 s - 1)) / 2
+/// = 1.0355339 N, the band from t_2 + 1e-6 N. The penalised problem misses the wrench by 1 / RHO of the correction and
+/// leaves t_2 2e-6 N higher, inside the band, so the exact solve over the free cables took it to 1e-6 N below the band
+/// and refused tensions that exist: the down cable at the bound, the up ones (10 + t_min) / (2 s) each. On the spatial
+/// robot at (0.3774, 0, 1.1) m turned 0.047175 rad about z (on its way to the end of x) its cable 7 came to 19.97 N in
+/// the exact solve against 20 N, and its motors were given no setpoint there (14 November 2026).
+#[test]
+fn a_cable_the_exact_solve_takes_out_of_the_band_goes_to_its_bound() {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let a = [-s, s, 0.0, s, s, -1.0];
+    let low = 5.0 - (10.0 - 5.0 * (2.0 * s - 1.0)) / 2.0 + 1e-6;
+    let t = distribute(&a, &[0.0, 10.0], low, 100.0, 5.0).unwrap();
+    let up = (10.0 + low) / (2.0 * s);
+    assert!((t[2] - low).abs() < 1e-12 && (t[0] - up).abs() < 1e-9 && (t[1] - up).abs() < 1e-9, "{t:?}");
+    let robot = CableRobot::new(&SPATIAL.config()).unwrap();
+    let t = robot.static_tensions(&[0.3774, 0.0, 1.1, 0.0, 0.0, 0.047175]).unwrap();
+    assert!(t.iter().all(|v| (20.0 - 1e-6..=1000.0).contains(v)) && t.iter().any(|v| (v - 20.0).abs() < 1e-9), "{t:?}");
+}
+
+/// Motor angles that no pose fits, as a run with a following error has them: the spatial robot's motors 0.163 s and
+/// 1.703 s into its cycle on a weak drive (sim-app's `demanding` config, 14 November 2026), 2.5 rad behind on cable 1
+/// and 1.9 rad on cable 7, 12.7 and 9.6 mm of cable at 200 rad/m. Gauss-Newton on the lengths slowed to a ratio of
+/// 0.72 and then 0.97 a step there and ran out of steps, and the following error was shown as NaN. Now the pose that
+/// fits them best: the cables' misfit grows when the pose moves 1 um or 1 urad either way along any of its six axes.
+#[test]
+fn motor_angles_no_pose_fits_give_the_pose_that_fits_them_best() {
+    let robot = CableRobot::new(&SPATIAL.config()).unwrap();
+    for motors in [
+        [
+            218.1766718244078,
+            236.09204543034912,
+            246.82031457745563,
+            228.18806261401326,
+            230.0101951015795,
+            248.74408977052855,
+            257.55184642979265,
+            241.0469591701435,
+        ],
+        [
+            217.81652339558013,
+            236.09872513770574,
+            247.05701949764565,
+            228.0179794981002,
+            229.8651170709315,
+            249.02085196246475,
+            257.9467071660587,
+            241.16067748027044,
+        ],
+    ] {
+        let mut pose = vec![0.0; 6];
+        robot.forward(&motors, &mut pose);
+        let free: Vec<f64> = (0..8).map(|k| motors[k] / robot.winches[k].ratio()).collect();
+        let misfit = |pose: &[f64]| -> f64 {
+            robot.rest_lengths(pose).unwrap().iter().zip(&free).map(|(l, f)| (l - f).powi(2)).sum::<f64>().sqrt()
+        };
+        assert!(pose.iter().all(|v| v.is_finite()), "{pose:?}");
+        let best = misfit(&pose);
+        for axis in 0..6 {
+            for by in [-1e-6, 1e-6] {
+                let mut step = vec![0.0; 6];
+                step[axis] = by;
+                let moved = misfit(&robot.moved(&pose, &step));
+                assert!(moved > best, "{pose:?} fits by {best} m, moved by {by} along {axis} {moved} m");
+            }
+        }
+    }
+}
+
 /// The spatial robot's inverse and Gauss-Newton forward kinematics undo each other at three poses.
 #[test]
 fn the_spatial_forward_kinematics_undoes_the_inverse() {
@@ -136,4 +204,22 @@ fn the_default_cycles_pass_their_verdicts() {
             assert!(v.ok, "{}: {} of motor {:?} is {} against {}", entry.id, v.check, v.motor, v.value, v.limit);
         }
     }
+}
+
+/// What the planar carriage puts on a compliant base at the centre (x 0, z 0.8 m), moving at (0.5, -0.2) m/s: m = 3 + 2
+/// kg, so m v = (2.5, 0, -1.0) N s, and about the origin p x m v = (0, 0.8 x 2.5, 0) = (0, 2.0, 0) N m s; the first
+/// moment m p = (0, 0, 4.0) kg m.
+#[test]
+fn the_planar_carriage_has_the_hand_calculated_momentum() {
+    let robot = planar();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    robot.equilibrium(&CENTRE, &mut state, &mut torque);
+    robot.set_tool_velocity(&mut state, &[0.5, -0.2]);
+    let f = robot.frame_momentum(&state).unwrap();
+    for (got, want) in
+        f.linear.iter().chain(&f.angular).chain(&f.first_moment).zip([2.5, 0.0, -1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 4.0])
+    {
+        assert!((got - want).abs() < 1e-9, "{f:?}");
+    }
+    assert!((f.mass - 5.0).abs() < 1e-12 && (f.gravity[2] + 9.80665).abs() < 1e-12);
 }
