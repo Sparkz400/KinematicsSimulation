@@ -47,6 +47,10 @@ struct Segment {
     /// With `via`: the path to the target, planned where the segment starts (see `via_pieces`): by `path::plan`, or
     /// with `profile.cycle_timing = "time_optimal"` by `path::plan_time_optimal`.
     path: Option<Vec<Piece>>,
+    /// With `corners_m`: its via points joined by lines (`lines_through`) whose corners are rounded within this, in
+    /// place of `profile.corner_tolerance_m`.
+    #[serde(default)]
+    corner: Option<f64>,
     /// The motion law of its move: `profile.shape`, or the segment's own `shape`.
     law: MotionLaw,
 }
@@ -75,6 +79,13 @@ pub fn via_pieces(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
         .collect();
     pieces.push(Piece::Line(target.to_vec()));
     pieces
+}
+
+/// The path of a cycle segment with `corners_m`: lines through its via points to the target, whose corners the planner
+/// rounds within that tolerance (`path::round_corners`): a lift, traverse and lower through the two corners at the
+/// lift's height, passed without a stop.
+pub fn lines_through(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
+    via.iter().chain([&target.to_vec()]).map(|point| Piece::Line(point.clone())).collect()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -486,6 +497,14 @@ impl Controller {
             if !in_range(machine, &target) {
                 return Err(bad());
             }
+            let corner = match segment.get("corners_m") {
+                None => None,
+                Some(c) => Some(
+                    number(c)
+                        .filter(|c| c.is_finite() && *c >= 0.0)
+                        .ok_or_else(|| ConfigError::Invalid(format!("cycle.segment[{i}].corners_m")))?,
+                ),
+            };
             let via = match segment.get("via") {
                 None => None,
                 Some(points) => {
@@ -500,7 +519,7 @@ impl Controller {
                     if points.is_empty() || !points.iter().all(|p| in_range(machine, p)) {
                         return Err(bad());
                     }
-                    Some(via_pieces(&points, &target))
+                    Some(if corner.is_some() { lines_through(&points, &target) } else { via_pieces(&points, &target) })
                 }
             };
             let shape = match segment.get("shape") {
@@ -521,6 +540,7 @@ impl Controller {
                     .round() as u64,
                 payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
                 path: via,
+                corner,
                 law: MotionLaw { shape, ..law.clone() },
             });
         }
@@ -531,7 +551,18 @@ impl Controller {
             cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
             tension_reserve,
         ];
-        let plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide };
+        // Each motor's shaft friction and gearbox drag as its own config has them (`mech::ShaftFriction`); none where the
+        // config lacks their keys (an arm's joints, whose friction is the joint's).
+        let friction = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<[f64; 5]> {
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                Ok(crate::mech::ShaftFriction::from_config(&own)
+                    .map_or([0.0; 5], |f| [f.coulomb, f.viscous, f.smoothing, f.drag.torque, f.drag.speed]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {
@@ -544,6 +575,8 @@ impl Controller {
                 }
                 None => continue,
             };
+            let tolerance =
+                path::Tolerance { corner: segment.corner.unwrap_or(path_tolerance.corner), ..path_tolerance };
             let planned = if cycle_time_optimal {
                 path::plan_time_optimal(
                     machine,
@@ -552,11 +585,11 @@ impl Controller {
                     from,
                     pieces,
                     profile_cycle,
-                    path_tolerance,
+                    tolerance,
                     path::ARC_SLACK,
                 )
             } else {
-                path::plan(machine.axes(), from, pieces, profile_cycle, path_tolerance, path::ARC_SLACK)
+                path::plan(machine.axes(), from, pieces, profile_cycle, tolerance, path::ARC_SLACK)
             };
             if planned.map_or(true, |points| !points.iter().all(|(_, pose)| near_start(machine, from, pose))) {
                 return Err(ConfigError::Invalid(key));
@@ -842,8 +875,8 @@ impl Controller {
 
     /// The timing for a program (`program::read`) from where the setpoint stands, as the poses `Command::Trajectory`
     /// runs: each run planned from where the one before ends, at rest between them. A run with a feed is planned within
-    /// the axis limits with every axis's speed capped at the feed; one without as `plan_path` plans it, as fast as the
-    /// motors allow with `time_optimal`. A program without a move is refused (`error-path`).
+    /// the axis limits with its speed along the path capped at the feed (`path::plan_at`); one without as `plan_path`
+    /// plans it, as fast as the motors allow with `time_optimal`. A program without a move is refused (`error-path`).
     pub fn plan_program(
         &self,
         machine: &dyn Machine,
@@ -863,7 +896,7 @@ impl Controller {
         Ok(points)
     }
 
-    /// `plan_path` from `start`, with every axis's speed capped at `feed` where there is one (then within the axis
+    /// `plan_path` from `start`, with the speed along the path capped at `feed` where there is one (then within the axis
     /// limits, also with `time_optimal`).
     fn plan_from(
         &self,
@@ -874,11 +907,6 @@ impl Controller {
         feed: Option<f64>,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let time_optimal = time_optimal && feed.is_none();
-        let capped: Vec<sim_core::AxisInfo> = machine
-            .axes()
-            .iter()
-            .map(|a| sim_core::AxisInfo { max_vel: feed.map_or(a.max_vel, |f| a.max_vel.min(f)), ..a.clone() })
-            .collect();
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
         let reachable = |points: &[(f64, Vec<f64>)]| {
@@ -888,8 +916,10 @@ impl Controller {
                 Err(CommandError { key: "error-path-range" })
             }
         };
-        let within_axis_limits =
-            || path::plan(&capped, start, pieces, self.profile_cycle, self.path_tolerance, machine.setpoint_slack());
+        let within_axis_limits = || {
+            let (cycle, slack, feed) = (self.profile_cycle, machine.setpoint_slack(), feed.unwrap_or(f64::INFINITY));
+            path::plan_at(machine.axes(), start, pieces, cycle, self.path_tolerance, slack, feed)
+        };
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
             // turn infinitely fast) would time the plan to a standstill there: so the same path is checked first as
@@ -900,7 +930,7 @@ impl Controller {
             }
         }
         let points = if time_optimal {
-            self.plan_time_optimal_from(machine, &self.raw_pos, pieces)
+            self.plan_time_optimal_from(machine, start, pieces, self.path_tolerance)
         } else {
             within_axis_limits()
         }?;
@@ -908,12 +938,13 @@ impl Controller {
         Ok(points)
     }
 
-    /// `path::plan_time_optimal` from `from` with this controller's drive, limits, cycle and tolerances.
+    /// `path::plan_time_optimal` from `from` with this controller's drive, limits and cycle, within `tolerance`.
     fn plan_time_optimal_from(
         &self,
         machine: &dyn Machine,
         from: &[f64],
         pieces: &[Piece],
+        tolerance: path::Tolerance,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         path::plan_time_optimal(
             machine,
@@ -922,7 +953,7 @@ impl Controller {
             from,
             pieces,
             self.profile_cycle,
-            self.path_tolerance,
+            tolerance,
             machine.setpoint_slack(),
         )
     }
@@ -1619,20 +1650,18 @@ impl Controller {
         // the axis limits time it.
         let segment = &self.segments[next];
         let straight = [Piece::Line(segment.target.clone())];
+        let tolerance =
+            path::Tolerance { corner: segment.corner.unwrap_or(self.path_tolerance.corner), ..self.path_tolerance };
         let time_optimal = (self.cycle_time_optimal && !at_target(&self.set_pos, &segment.target))
-            .then(|| self.plan_time_optimal_from(machine, &self.set_pos, segment.path.as_deref().unwrap_or(&straight)))
+            .then(|| {
+                let pieces = segment.path.as_deref().unwrap_or(&straight);
+                self.plan_time_optimal_from(machine, &self.set_pos, pieces, tolerance)
+            })
             .and_then(|planned| planned.ok());
         let planned = time_optimal.or_else(|| {
             self.segments[next].path.as_ref().and_then(|pieces| {
-                path::plan(
-                    machine.axes(),
-                    &self.set_pos,
-                    pieces,
-                    self.profile_cycle,
-                    self.path_tolerance,
-                    machine.setpoint_slack(),
-                )
-                .ok()
+                let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
+                path::plan(machine.axes(), &self.set_pos, pieces, cycle, tolerance, slack).ok()
             })
         });
         self.motion = match planned {

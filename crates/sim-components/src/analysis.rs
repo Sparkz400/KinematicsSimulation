@@ -1049,6 +1049,10 @@ fn stored_electrically(sim: &Sim) -> (f64, f64) {
 /// after it is measured. At most `WARM_START_PASSES` warm passes; the last is the measured one, converged or not
 /// (`CycleLoad::warm_start`). With thermal time constants of minutes to an hour, a cycle of seconds would otherwise
 /// see every part at the temperature it started with.
+///
+/// Where the config gives a path in place of the cycle (`[path]`, `sim::with_path`), that path is planned and measured
+/// instead, as `analyse_trajectory` measures it: so the verdicts, the catalogue search and the optimiser judge the path's
+/// run, repeated with the windings and parts at the rises it settles at under effects.thermal_warm_start.
 pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
     analyse_cycle_with(sim, true)
 }
@@ -1056,6 +1060,9 @@ pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
 /// `analyse_cycle`, with the effect views (`MotorLoad::torque_parts`, `CycleLoad::budget`) only where `views` asks
 /// for them: they cost one more evaluation of the machine per step, and no verdict needs them.
 pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, CommandError> {
+    if let Some(points) = sim.plan_configured_path() {
+        return analyse_trajectory_with(sim, points?, views);
+    }
     sim.command(Command::StartCycle)?;
     let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
     let mut tally = Tally::new(sim, views);
@@ -1195,7 +1202,12 @@ pub struct Verdict {
 
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
 /// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
-pub const RATINGS_BEYOND_DEFAULT: [&str; 20] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
+    // A path in place of the cycle (`sim::with_path`).
+    "path",
+    "path.file",
+    "path.program",
+    "path.time_optimal",
     "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
@@ -2433,6 +2445,9 @@ pub struct LiftChange {
     pub before: f64,
     pub after: f64,
     pub via: Option<Vec<Vec<f64>>>,
+    /// Where the lift's corners are rounded instead (`corners_m` of the segment, `control::lines_through`): the corner
+    /// tolerance, its via points then none but the two corners at the lift's height.
+    pub corners: Option<f64>,
 }
 
 /// A lift, traverse and lower of a configured cycle (`lifts`): segment `lift` goes from `from` straight along the last
@@ -2643,8 +2658,8 @@ fn smoothed_profile(
     let mut by = 0.0;
     for _ in 0..4 {
         let via = raised(&points, lift.up * by);
-        let gap =
-            planned_clearance(axes, cycle, tolerance, lift, lift.lowest, &via, (&mut *machine, obstacles, clearance))?;
+        let at = (lift.lowest, None);
+        let gap = planned_clearance(axes, cycle, tolerance, lift, at, &via, (&mut *machine, obstacles, clearance))?;
         if gap >= clearance - 1e-9 {
             return Some((points, by));
         }
@@ -2672,17 +2687,19 @@ pub fn lift_profiles(entry: &MachineEntry, cfg: &Config) -> Result<Vec<([usize; 
     Ok(out)
 }
 
-/// The cycle with each lift at `heights` and, where `vias` has some, rounded through those via points (see `LiftChange`).
+/// The cycle with each lift at `heights` and, where `vias` has some, rounded through those via points, or where
+/// `corners` has a tolerance, its two corners rounded within it (see `LiftChange`).
 fn cycle_with(
     cfg: &Config,
     lifts: &[Lift],
     heights: &[f64],
     vias: &[Option<Vec<Vec<f64>>>],
+    corners: &[Option<f64>],
 ) -> Result<toml::Value, ConfigError> {
     let mut segments = cfg.array("cycle.segment")?.clone();
     let number_list = |p: &[f64]| toml::Value::Array(p.iter().map(|x| toml::Value::Float(*x)).collect());
     let mut dropped = Vec::new();
-    for ((lift, &height), via) in lifts.iter().zip(heights).zip(vias) {
+    for (((lift, &height), via), corner) in lifts.iter().zip(heights).zip(vias).zip(corners) {
         let [a, b, c] = lift.segments;
         let at_height = |p: &[f64]| {
             let mut p = p.to_vec();
@@ -2710,6 +2727,9 @@ fn cycle_with(
                 );
                 if let Some(t) = segments[c].as_table_mut() {
                     t.insert("via".into(), via);
+                    if let Some(corner) = corner {
+                        t.insert("corners_m".into(), toml::Value::Float(*corner));
+                    }
                 }
                 dropped.extend([a, b]);
             }
@@ -2728,7 +2748,7 @@ fn clears(
     cycle: f64,
     tolerance: f64,
     lift: &Lift,
-    height: f64,
+    height: (f64, Option<f64>),
     via: &[Vec<f64>],
     bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64),
 ) -> bool {
@@ -2737,36 +2757,20 @@ fn clears(
 }
 
 /// The least clearance to the obstacles of the planned path of a lift rounded through `via` (infinite without
-/// obstacles); `None` where it is not planned or comes nearer to pick and place than `lowest` (see `clears`).
+/// obstacles); `None` where it is not planned or comes nearer to pick and place than `lowest` (see `clears`). `height`:
+/// the lift's, and the corner tolerance where its corners are rounded (lines through the via points,
+/// `control::lines_through`) instead of a curve through them.
 fn planned_clearance(
     axes: &[sim_core::AxisInfo],
     cycle: f64,
     tolerance: f64,
     lift: &Lift,
-    height: f64,
+    (height, corner): (f64, Option<f64>),
     via: &[Vec<f64>],
     bodies: (&mut dyn sim_core::Machine, &[sim_core::Obstacle], f64),
 ) -> Option<f64> {
-    let z = lift.from.len() - 1;
-    let at_height = |p: &[f64]| {
-        let mut p = p.to_vec();
-        p[z] = height;
-        p
-    };
-    let via: Vec<Vec<f64>> =
-        std::iter::once(at_height(&lift.from)).chain(via.iter().cloned()).chain([at_height(&lift.to)]).collect();
-    let pieces = crate::control::via_pieces(&via, &lift.to);
-    let points = crate::path::plan(axes, &lift.from, &pieces, cycle, tolerance, crate::path::ARC_SLACK).ok()?;
-    let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
-    let width = across.iter().map(|d| d * d).sum::<f64>();
-    let above = points.iter().all(|(_, pose)| {
-        let along = (0..z).map(|i| (pose[i] - lift.from[i]) * across[i]).sum::<f64>() / width;
-        along <= 0.0 || along >= 1.0 || lift.up * (pose[z] - lift.lowest) >= -tolerance - 1e-9
-    });
+    let points = lift_path(axes, cycle, tolerance, lift, (height, corner), via)?;
     let (machine, obstacles, _) = bodies;
-    if !above {
-        return None;
-    }
     if obstacles.is_empty() {
         return Some(f64::INFINITY);
     }
@@ -2776,6 +2780,40 @@ fn planned_clearance(
         std::iter::once(lift.from.clone()).chain(points.into_iter().map(|(_, pose)| pose)).collect();
     crate::collision::check_path(&*machine, obstacles, &poses, &mut check);
     Some(check.clearance)
+}
+
+/// The planned path of a lift rounded through `via` (or with its corners rounded, see `planned_clearance`), `None`
+/// where it is not planned or comes nearer to pick and place than `lowest` (see `clears`).
+fn lift_path(
+    axes: &[sim_core::AxisInfo],
+    cycle: f64,
+    tolerance: f64,
+    lift: &Lift,
+    (height, corner): (f64, Option<f64>),
+    via: &[Vec<f64>],
+) -> Option<Vec<(f64, Vec<f64>)>> {
+    let z = lift.from.len() - 1;
+    let at_height = |p: &[f64]| {
+        let mut p = p.to_vec();
+        p[z] = height;
+        p
+    };
+    let via: Vec<Vec<f64>> =
+        std::iter::once(at_height(&lift.from)).chain(via.iter().cloned()).chain([at_height(&lift.to)]).collect();
+    let (pieces, rounded) = match corner {
+        Some(corner) => {
+            (crate::control::lines_through(&via, &lift.to), crate::path::Tolerance { path: tolerance, corner })
+        }
+        None => (crate::control::via_pieces(&via, &lift.to), tolerance.into()),
+    };
+    let points = crate::path::plan(axes, &lift.from, &pieces, cycle, rounded, crate::path::ARC_SLACK).ok()?;
+    let across: Vec<f64> = (0..z).map(|i| lift.to[i] - lift.from[i]).collect();
+    let width = across.iter().map(|d| d * d).sum::<f64>();
+    let above = points.iter().all(|(_, pose)| {
+        let along = (0..z).map(|i| (pose[i] - lift.from[i]) * across[i]).sum::<f64>() / width;
+        along <= 0.0 || along >= 1.0 || lift.up * (pose[z] - lift.lowest) >= -tolerance - 1e-9
+    });
+    above.then_some(points)
 }
 
 /// Shortens the cycle of a config without breaking a verdict. Tries corner blending, then raises speed,
@@ -2828,9 +2866,14 @@ pub fn optimise_cycle_with(
     let max_runs = options.max_runs;
     let mut probe = Sim::new(entry, cfg)?;
     let clearance = cfg.non_negative("profile.min_clearance_m")?;
-    // A conveyor's cycle picks from the belt (`[conveyor]`): `[[cycle.segment]]` does not run, so its lifts are left.
-    let conveyor = probe.control.conveyor().is_some();
+    // A conveyor's cycle picks from the belt (`[conveyor]`), and a path runs in place of the cycle (`[path]`):
+    // `[[cycle.segment]]` does not run, so its lifts are left.
+    let conveyor = probe.control.conveyor().is_some() || probe.path.is_some();
     let mut lifts = if conveyor { Vec::new() } else { lifts(cfg, clearance)? };
+    // How far a path may leave the given one: the larger of the path and the corner tolerance as configured. With a
+    // `[path]` the search tries both at it (transition curves and corners rounded within it, `path::geometry`).
+    let corner_s = cfg.non_negative("profile.corner_tolerance_m")?;
+    let allowed = if probe.path.is_some() { cfg.non_negative("profile.path_tolerance_m")?.max(corner_s) } else { 0.0 };
     let (cycle_s, tolerance) = (cfg.positive("profile.cycle_s")?, cfg.non_negative("profile.path_tolerance_m")?);
     let axis_infos = probe.machine.axes().to_vec();
     let obstacles = probe.obstacles.clone();
@@ -2866,9 +2909,16 @@ pub fn optimise_cycle_with(
         second: bool,
         heights: Vec<f64>,
         vias: Vec<Option<Vec<Vec<f64>>>>,
+        /// Per lift whose corners are rounded (its via points the two corners alone): the corner tolerance.
+        corners: Vec<Option<f64>>,
+        /// `profile.path_tolerance_m` and `corner_tolerance_m`.
+        tolerances: [f64; 2],
     }
     let build = |setting: &Setting| -> Result<Config, ConfigError> {
         let mut changed = cfg.clone();
+        let [path, corner] = setting.tolerances;
+        changed.set_text(&format!("profile.path_tolerance_m = {path:?}"))?;
+        changed.set_text(&format!("profile.corner_tolerance_m = {corner:?}"))?;
         for axis in &axis_infos {
             for (limit, factor) in limits.iter().zip(setting.factors) {
                 let path = format!("axis.{}.{}", axis.id, limit.replace("{unit}", axis.unit));
@@ -2885,7 +2935,8 @@ pub fn optimise_cycle_with(
         if setting.heights.iter().zip(&lifts).any(|(h, lift)| *h != lift.height)
             || setting.vias.iter().any(Option::is_some)
         {
-            changed.set("cycle.segment", cycle_with(cfg, &lifts, &setting.heights, &setting.vias)?)?;
+            changed
+                .set("cycle.segment", cycle_with(cfg, &lifts, &setting.heights, &setting.vias, &setting.corners)?)?;
         }
         Ok(changed)
     };
@@ -2922,6 +2973,8 @@ pub fn optimise_cycle_with(
         second: configured > 0.0,
         heights: lifts.iter().map(|lift| lift.height).collect(),
         vias: vec![None; lifts.len()],
+        corners: vec![None; lifts.len()],
+        tolerances: [tolerance, corner_s],
     };
     let before = match judged(&start) {
         Some((load, failed)) if failed.is_empty() => load,
@@ -2972,6 +3025,12 @@ pub fn optimise_cycle_with(
             candidates.push(lower(&best, k, 0.5 * (best.heights[k] + lift.needed)));
         }
         candidates.push(Setting { blending: !best.blending, ..best.clone() });
+        // A path's corners rounded and its transition curves laid within the deviation the config allows.
+        for k in (0..2).filter(|&k| best.tolerances[k] < allowed) {
+            let mut tolerances = best.tolerances;
+            tolerances[k] = allowed;
+            candidates.push(Setting { tolerances, ..best.clone() });
+        }
         if best.shaping {
             candidates.push(Setting { shaping: false, ..best.clone() });
         }
@@ -2991,11 +3050,20 @@ pub fn optimise_cycle_with(
             let width = (0..z).map(|i| (lift.to[i] - lift.from[i]).powi(2)).sum::<f64>().sqrt();
             let with_via = |via: Option<Vec<Vec<f64>>>| {
                 let mut out = best.clone();
-                out.vias[k] = via;
+                (out.vias[k], out.corners[k]) = (via, None);
                 out
             };
             match &best.vias[k] {
                 None => {
+                    // The lift's two corners rounded, so that the curve starts at `lowest` on the way up and ends there
+                    // on the way down: for a right angle it starts 16 / 3 of the tolerance before the corner
+                    // (`path::round_corners`), so the tolerance is 3 / 16 of the height above `lowest`.
+                    let above = lift.up * (best.heights[k] - lift.lowest);
+                    if above > 0.0 {
+                        let mut rounded = with_via(Some(Vec::new()));
+                        rounded.corners[k] = Some(3.0 * above / 16.0);
+                        candidates.push(rounded);
+                    }
                     for above in [0.5, 0.25, 0.125] {
                         let mut via: Vec<f64> = (0..z).map(|i| 0.5 * (lift.from[i] + lift.to[i])).collect();
                         via.push(best.heights[k] + lift.up * above * width);
@@ -3047,7 +3115,7 @@ pub fn optimise_cycle_with(
                         cycle_s,
                         tolerance,
                         lift,
-                        c.heights[k],
+                        (c.heights[k], c.corners[k]),
                         via,
                         (&mut *machine, &obstacles, clearance),
                     )
@@ -3250,7 +3318,8 @@ pub fn optimise_cycle_with(
             segments: lift.segments,
             before: lift.height,
             after: best.heights[k],
-            via: best.vias[k].clone(),
+            via: best.vias[k].clone().filter(|_| best.corners[k].is_none()),
+            corners: best.corners[k],
         })
         .collect();
     Ok(Optimised { before, after: best_load, changes, lifts, runs: runs.get(), robust, front })
@@ -3899,6 +3968,45 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lift whose corners are rounded keeps to `lowest` where the tolerance is 3 / 16 of its height above it: from
+    /// pick and place at 0 up to 0.3 m and across 0.4 m, `lowest` 0.25 m, the corners rounded within 3 * 0.05 / 16 =
+    /// 9.375 mm start d = 16 / 3 of that = 0.05 m before each corner (`path::round_corners`, a right angle), at 0.25 m on
+    /// the way up and down: the path stays at `lowest` or above. Half as much again starts 0.075 m before the corners, at
+    /// 0.225 m, below `lowest`: refused.
+    #[test]
+    fn a_lift_with_rounded_corners_keeps_above_the_lowest_height() {
+        let axis = |id| sim_core::AxisInfo {
+            id,
+            key: "",
+            unit: "m",
+            min: -1.0,
+            max: 1.0,
+            max_vel: 1.0,
+            max_acc: 10.0,
+            max_jerk: 200.0,
+        };
+        let axes = [axis("x"), axis("z")];
+        let lift = Lift {
+            segments: [0, 1, 2],
+            from: vec![0.0, 0.0],
+            to: vec![0.4, 0.0],
+            height: 0.3,
+            up: 1.0,
+            lowest: 0.25,
+            needed: 0.25,
+            over: None,
+            profile: None,
+            payload: true,
+        };
+        let path = |corner: f64| lift_path(&axes, 1e-3, 0.0, &lift, (0.3, Some(corner)), &[]);
+        let lowest = |points: &[(f64, Vec<f64>)]| {
+            points.iter().filter(|(_, p)| p[0] > 1e-9 && p[0] < 0.4 - 1e-9).map(|(_, p)| p[1]).fold(1.0, f64::min)
+        };
+        let rounded = path(3.0 * 0.05 / 16.0).expect("keeps to lowest");
+        assert!((lowest(&rounded) - 0.25).abs() < 1e-3, "{}", lowest(&rounded));
+        assert!(path(1.5 * 3.0 * 0.05 / 16.0).is_none());
+    }
 
     /// The lives and the tooth load from given loads, by hand. Pulley bearing (ISO 281): C 8469 N, P 600 N, the motor at
     /// 500 r/min behind a ratio of 5, so the pulley at 100 r/min: (8469 / 600)^3 * 10^6 / (60 * 100) = 468696 h. Gearbox

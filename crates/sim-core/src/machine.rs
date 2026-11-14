@@ -251,6 +251,11 @@ pub trait Machine: Send {
     /// and zero without. The time-optimal plan keeps it within `ratings.guide_max_load_n`. Appends nothing where the
     /// machine does not tell.
     fn rigid_guide_loads(&self, _tool_pos: &[f64], _tool_acc: &[f64], _out: &mut Vec<[f64; 2]>) {}
+    /// The steady friction of the guides (and other sliding contacts the motors drive, not the motors' own shafts and
+    /// gearboxes) as torque at each motor (in the order of `motors`), while the tool at `tool_pos` moves along `tool_dir`
+    /// (its rate per unit of path): [c, b] for c + b v at the speed v along the path, positive where the motor has to
+    /// give positive torque against it. For the time-optimal plan. Appends nothing where the machine does not tell.
+    fn rigid_friction(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);

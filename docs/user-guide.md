@@ -14,6 +14,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Size a hexapod or a cable robot](#size-a-hexapod-or-a-cable-robot)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Programs: G-code and robot programs](#programs-g-code-and-robot-programs)
+- [Verdicts, search and optimise on a path](#verdicts-search-and-optimise-on-a-path)
 - [Shape the moves](#shape-the-moves)
 - [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)
 - [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)
@@ -1147,15 +1148,29 @@ $ sim-cli run delta-d3 --path pick.mod --time-optimal
 | Extension | Read as | What is read |
 | --- | --- | --- |
 | `.nc`, `.ngc`, `.gcode`, `.g`, `.cnc`, `.tap` | G-code (DIN 66025 / ISO 6983) | G0 rapid, G1 line, G2/G3 arc (centre I, J, K from the start, or R; R < 0 the longer arc), F feed per minute, G17/G18/G19 plane, G20 inch / G21 mm (default), G90 absolute (default) / G91 incremental; X, Y, Z, A, B, C for the axes of those ids (A, B, C in degrees). Taken without effect: N, O, M, S, T words, G40, G49, G54, G80, G94, comments `( )` and `;`, `%` lines; M2 and M30 end the program |
-| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` in mm and degrees; components left out are kept from the point before; A, B, C, S, T and others move axes of those names where the machine has them and are left out otherwise |
-| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` to robtargets in place (`[[x, y, z], ...]`) or declared (`CONST robtarget p10 := [[...]];`), positions in mm; orientation, speed and zone are left out |
+| `.src` | KUKA KRL | `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` in mm and degrees; components left out are kept from the point before; A, B, C, S, T and others move axes of those names where the machine has them and are left out otherwise. On an arm in tool space (axes x, y, z, rx, ry, rz) A, B, C are the orientation (Rz(A) Ry(B) Rx(C)). `$VEL.CP = 0.2` (m/s) is the speed along the path of the LIN and CIRC moves after it; PTP runs at the axes' limits |
+| `.mod`, `.prg` | ABB RAPID | `MoveL`, `MoveJ`, `MoveC` to robtargets in place (`[[x, y, z], [q1, q2, q3, q4], ...]`) or declared (`CONST robtarget p10 := [[...]];`), positions in mm; on an arm in tool space the quaternion is the orientation. The speed: `v100` (mm/s), `vmax` (the axes' limits), in place `[250, 500, 5000, 1000]` or declared (`VAR speeddata vfast := [...];`), its TCP speed; the zone is left out |
 | any other, with lines `MoveL`, `MoveJ`, `MoveC` | robot moves as CSV | `MoveL,x,y,z`, `MoveJ,x,y,z`, `MoveC,via...,end...`: one value per axis in m (rad) |
 | any other | path file | as above |
 
 - The program starts where the machine stands; an axis a block does not name stays.
-- Each run of G1/G2/G3 moves at one feed is planned within the axis limits with every axis's speed capped at the feed, and the runs follow one another with a stop between. G0, and robot programs, run at the axes' limits, as fast as the motors allow with `--time-optimal`. The feed caps each axis, not the speed along the path: a diagonal can move up to √2 faster than F.
-- A PTP or MoveJ is a straight line in the machine's axes, as a MoveL: the readers suit machines whose axes are positions (gantries, deltas).
+- Each run of moves at one feed (G1/G2/G3 at F, a RAPID move at its speed, a KRL LIN or CIRC at `$VEL.CP`) is planned within the axis limits with its speed along the path capped at the feed, and the runs follow one another with a stop between. F is the speed along the path: G1 X100 Y100 F6000 runs the diagonal at 100 mm/s, each axis at 70.7 mm/s (before 14 November F capped each axis, and the diagonal ran at 141 mm/s). G0, `vmax`, PTP and robot CSV run at the axes' limits, as fast as the motors allow with `--time-optimal`. The speed counts all axes, as a path's length does: on an arm in tool space the rotation vector's radians count with the metres.
+- A PTP or MoveJ is a straight line in the machine's axes, as a MoveL: the readers suit machines whose axes are positions (gantries, deltas) and arms in tool space.
 - Anything else is refused with its line: another G code (G4, G41, G81, ...) or letter, a G1 before any F, an axis the machine does not have, an arc that also moves the plane's third axis (a helix), an arc whose start and end are at different distances from its centre, MoveAbsJ, PTP_REL, SPLINE, a named KRL point, an undeclared robtarget.
+
+## Verdicts, search and optimise on a path
+
+`verdicts`, `search` and `optimise` judge the configured cycle; with `--path FILE` (and `--time-optimal`) they judge a path or program in its place, read as `run --path` reads it (path file, G-code, KRL, RAPID, robot CSV). The path is planned once first, so a line that cannot be read is said with its number before any run. Every run then plans the path anew from where the machine stands, with that run's config: the bands with each bounded value, each catalogue candidate with its motor, gearbox and drive, each optimiser setting with its limits.
+
+```text
+$ sim-cli verdicts t-gantry --path pocket.nc --bands
+$ sim-cli search t-gantry --path corner.path --time-optimal --series 1FK2
+$ sim-cli optimise t-gantry --path corner.path --runs 20
+```
+
+- The run is measured as `analyze --path` measures it: the path and 0.3 s of rest. With `effects.thermal_warm_start` it is repeated (back to the path's start and a rest between passes) until the windings and parts start a pass at the rises they settle at, as a cycle is.
+- The optimiser shortens the path's time: the axis limits (all three factors), the input shaper, and, where the config allows a deviation (the larger of `profile.path_tolerance_m` and `corner_tolerance_m`), the transition curves and the corners rounded within it. It has no lifts to lower on a path; its changes are config values (`profile.*`, `axis.*`, `effects.*`).
+- Under the hood the config gets an optional `[path]` table ([config reference](config-reference.md#path)); a config file with one judges its path in place of the cycle in every command and in Python.
 
 ## Pick from a moving conveyor
 

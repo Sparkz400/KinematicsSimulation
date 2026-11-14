@@ -376,15 +376,7 @@ impl Geo {
                 }
             }
             Geo::Spline { c, h, travelled, dims, .. } => {
-                // The u at which the span has run the distance s: from the table, then Newton's method on the
-                // distance itself, which converges to rounding in two or three steps.
-                let part = travelled.partition_point(|t| *t <= s).clamp(1, SPLINE_PARTS) - 1;
-                let (u0, du) = (part as f64 * h / SPLINE_PARTS as f64, h / SPLINE_PARTS as f64);
-                let mut u = u0 + du * (s - travelled[part]) / (travelled[part + 1] - travelled[part]);
-                for _ in 0..4 {
-                    let [d, ..] = poly_rates(c, u);
-                    u -= (travelled[part] + poly_distance(c, u0, u) - s) / norm(&d);
-                }
+                let u = spline_u(c, *h, travelled, s);
                 let [d, d2, _] = poly_rates(c, u);
                 let speed = norm(&d);
                 let (dir, along) = (d.map(|x| x / speed), dot(&d, &d2) / speed);
@@ -404,6 +396,19 @@ impl Geo {
             }
         }
     }
+}
+
+/// The u at which a spline span has run the distance s: from its table of distance travelled, then Newton's method on
+/// the distance itself, which converges to rounding in two or three steps.
+fn spline_u(c: &Poly, h: f64, travelled: &[f64], s: f64) -> f64 {
+    let part = travelled.partition_point(|t| *t <= s).clamp(1, SPLINE_PARTS) - 1;
+    let (u0, du) = (part as f64 * h / SPLINE_PARTS as f64, h / SPLINE_PARTS as f64);
+    let mut u = u0 + du * (s - travelled[part]) / (travelled[part + 1] - travelled[part]);
+    for _ in 0..4 {
+        let [d, ..] = poly_rates(c, u);
+        u -= (travelled[part] + poly_distance(c, u0, u) - s) / norm(&d);
+    }
+    u
 }
 
 /// A smooth curve from `points[0]` through all of `points`: a cubic spline, one `Geo::Spline` per span.
@@ -478,8 +483,8 @@ fn distance(a: &[f64], b: &[f64]) -> f64 {
 /// tolerance allows them (`blend` between lines and arcs, `ease` where a spline meets a line or an arc), and how
 /// far that path is from the given one at most. `speed` is the highest speed along a piece that the planner will
 /// allow, which sets how long a transition has to be. On three axes the curves between lines and arcs are laid in the
-/// arcs' planes (`blend3`); paths on other numbers of axes have only lines and run as given. Corners between lines are
-/// rounded first, within the corner tolerance (`round_corners`).
+/// arcs' planes (`blend3`); paths on other numbers of axes have only lines and run as given. Corners are rounded first,
+/// within the corner tolerance (`round_corners`).
 fn geometry(
     axes: &[AxisInfo],
     start: &[f64],
@@ -517,7 +522,7 @@ fn geometry(
 }
 
 /// How far a planned path may leave the pieces as given: `path` for the transition curves where pieces meet in their
-/// direction (`profile.path_tolerance_m`), `corner` for rounding the corners between lines (`round_corners`,
+/// direction (`profile.path_tolerance_m`), `corner` for rounding the corners (`round_corners`,
 /// `profile.corner_tolerance_m`). A tolerance alone is a path tolerance, with corners stopped at.
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tolerance {
@@ -792,61 +797,190 @@ fn corner_curve(at: &[f64], ta: &[f64], tb: &[f64], d: f64) -> Option<Geo> {
     span(c, 2.0 * d, dims)
 }
 
-/// Rounds each corner between two lines (`corner`) by a curve (`corner_curve`) as far from the corner as `tolerance`
-/// allows, as a CNC rounds a corner within a tolerance (Siemens' G642) or a robot passes a point in a zone: the path no
-/// longer stops there. The curve starts and ends `d` from the corner on the lines, d such that the curve is nowhere
-/// further from the two lines than the tolerance (for a right angle d = 16 tolerance / 3, see `corner_curve`), but no
-/// more than half of either line, so that two rounded corners never overlap. The deviation is measured on the curve at
-/// 65 places against the two pieces of line it replaces, and it scales with d. A turn of nearly half a circle (where the
-/// curve would nearly stop, `span`) and a corner on more than `WIDEST` axes stay corners; so does every corner next to
-/// an arc or a spline.
+/// The curve that rounds a corner next to an arc or a spline (`round_corners`): the quintic in u from 0 to `h` that leaves
+/// `p0` in the unit direction `t0` with the curvature vector `k0` and arrives at `p1` in `t1` with `k1`, at a speed by u of
+/// 1 at both ends (quintic Hermite interpolation, in tau = u / h with the derivatives h t and h^2 k):
 ///
-/// shortcut: only corners between two lines are rounded; round a line into an arc or two arcs (their curves would have
-/// to keep the arc's curvature at one end) if paths with such corners have to be passed without a stop.
+/// ```text
+/// p = p0 + h t0 tau + h^2 k0 / 2 tau^2
+///   + (10 (p1 - p0) - h (6 t0 + 4 t1) - h^2 (3 k0 - k1) / 2) tau^3
+///   + (15 (p0 - p1) + h (8 t0 + 7 t1) + h^2 (3 k0 / 2 - k1)) tau^4
+///   + (6 (p1 - p0) - 3 h (t0 + t1) - h^2 (k0 - k1) / 2) tau^5
+/// ```
+///
+/// So the path keeps its place, direction and curvature at both ends (G2). Between two lines (k = 0, h = 2 d, p0 and p1
+/// `d` either side of the corner) it is `corner_curve`'s curve. `None` where it nearly stops (`span`).
+fn hermite_curve(start: [&[f64]; 3], end: [&[f64]; 3], h: f64) -> Option<Geo> {
+    let dims = start[0].len();
+    let ([p0, t0, k0], [p1, t1, k1]) = (start.map(wide), end.map(wide));
+    let (p0, t0, k0, p1, t1, k1) = (p0?, t0?, k0?, p1?, t1?, k1?);
+    let tau: [Wide; 6] = [
+        p0,
+        std::array::from_fn(|i| h * t0[i]),
+        std::array::from_fn(|i| h * h * k0[i] / 2.0),
+        std::array::from_fn(|i| {
+            10.0 * (p1[i] - p0[i]) - h * (6.0 * t0[i] + 4.0 * t1[i]) - h * h * (3.0 * k0[i] - k1[i]) / 2.0
+        }),
+        std::array::from_fn(|i| {
+            15.0 * (p0[i] - p1[i]) + h * (8.0 * t0[i] + 7.0 * t1[i]) + h * h * (1.5 * k0[i] - k1[i])
+        }),
+        std::array::from_fn(|i| 6.0 * (p1[i] - p0[i]) - 3.0 * h * (t0[i] + t1[i]) - h * h * (k0[i] - k1[i]) / 2.0),
+    ];
+    let c: Poly = std::array::from_fn(|m| tau[m].map(|x| x / h.powi(m as i32)));
+    span(c, h, dims)
+}
+
+/// The piece with `from` cut off its start and `to` off its end (both along it), for a corner rounded beside it. Lines,
+/// arcs and spline spans; `None` for the others, and where nothing is left.
+fn trimmed(geo: &Geo, from: f64, to: f64) -> Option<Geo> {
+    let length = geo.length() - from - to;
+    if length <= 1e-12 {
+        return None;
+    }
+    Some(match geo {
+        Geo::Line { from: start, dir, .. } => {
+            Geo::Line { from: start.iter().zip(dir).map(|(p, d)| p + from * d).collect(), dir: dir.clone(), length }
+        }
+        Geo::Arc { centre, radius, from_angle, turn, .. } => Geo::Arc {
+            centre: *centre,
+            radius: *radius,
+            from_angle: from_angle + turn * from / radius,
+            turn: *turn,
+            length,
+        },
+        Geo::Arc3 { centre, u, w, radius, .. } => {
+            let (sin, cos) = (from / radius).sin_cos();
+            Geo::Arc3 {
+                centre: *centre,
+                u: std::array::from_fn(|i| cos * u[i] + sin * w[i]),
+                w: std::array::from_fn(|i| -sin * u[i] + cos * w[i]),
+                radius: *radius,
+                length,
+            }
+        }
+        Geo::Carried { arc, from: start, by, length: whole } => {
+            let share = arc.length() / whole;
+            let arc = trimmed(arc, from * share, to * share)?;
+            let start = start.iter().zip(by).map(|(f, b)| f + b * from / whole).collect();
+            Geo::Carried {
+                arc: Box::new(arc),
+                from: start,
+                by: by.iter().map(|b| b * length / whole).collect(),
+                length,
+            }
+        }
+        Geo::Spline { c, h, travelled, dims, .. } => {
+            let (u0, u1) = (spline_u(c, *h, travelled, from), spline_u(c, *h, travelled, geo.length() - to));
+            span(poly_shift(c, u0), u1 - u0, *dims)?
+        }
+        Geo::Slerp { .. } | Geo::Clothoid { .. } => return None,
+    })
+}
+
+/// How far the points of `curve` are from the path it replaces, at most: the last `back` of `a` and the first `ahead` of
+/// `b`, each looked at at 65 places (as two broken lines, which lie within (d / 64)^2 / (8 r) of an arc of radius r).
+fn off_corner(curve: &Geo, a: &Geo, back: f64, b: &Geo, ahead: f64) -> f64 {
+    let la = a.length();
+    let line: Vec<Vec<f64>> = (0..=64)
+        .map(|k| a.at(la - back + back * k as f64 / 64.0)[0].clone())
+        .chain((1..=64).map(|k| b.at(ahead * k as f64 / 64.0)[0].clone()))
+        .collect();
+    (0..=64)
+        .map(|k| {
+            let p = &curve.at(curve.length() * k as f64 / 64.0)[0];
+            line.windows(2).map(|w| to_segment(p, &w[0], &w[1])).fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0, f64::max)
+}
+
+/// The curve that rounds the corner between `a` and `b`, either of them an arc or a spline (`hermite_curve`), from `d`
+/// before the corner on `a` to `d` after it on `b`, with `d` as large as keeps it within `tolerance` of them, at most
+/// `most`; with d and its deviation. The deviation grows about as d (3 d sin(theta) / 16 for the turn theta where the
+/// curvature is small against 1 / d, as between lines), so d is scaled by the tolerance over the deviation until the
+/// deviation is within 2 % below the tolerance, at most 30 times.
+fn round_corner(a: &Geo, b: &Geo, tolerance: f64, most: f64) -> Option<(f64, Geo, f64)> {
+    let curve_at = |d: f64| {
+        let ([p0, t0, k0], [p1, t1, k1]) = (a.at(a.length() - d), b.at(d));
+        let curve = hermite_curve([&p0, &t0, &k0], [&p1, &t1, &k1], 2.0 * d)?;
+        let off = off_corner(&curve, a, d, b, d);
+        Some((d, curve, off))
+    };
+    let mut best: Option<(f64, Geo, f64)> = None;
+    let mut d = most;
+    for _ in 0..30 {
+        let Some(found) = curve_at(d) else {
+            d *= 0.5;
+            continue;
+        };
+        let off = found.2;
+        if off <= tolerance {
+            let done = off >= 0.98 * tolerance || d >= most;
+            if best.as_ref().is_none_or(|b| found.0 > b.0) {
+                best = Some(found);
+            }
+            if done {
+                break;
+            }
+        }
+        d = (d * 0.99 * tolerance / off.max(1e-300)).min(most);
+    }
+    best
+}
+
+/// Rounds each corner (`corner`) by a curve as far from the corner as `tolerance` allows, as a CNC rounds a corner within
+/// a tolerance (Siemens' G642) or a robot passes a point in a zone: the path no longer stops there. Between two lines the
+/// curve is `corner_curve`'s: it starts and ends `d` from the corner on the lines, d such that the curve is nowhere
+/// further from the two lines than the tolerance (for a right angle d = 16 tolerance / 3); the deviation is measured on
+/// the curve at 65 places against the two pieces of line it replaces, and it scales with d. Where an arc or a spline
+/// meets the corner the curve is `hermite_curve`'s, from `d` back along the piece before to `d` on along the one after,
+/// with their directions and curvatures there (G2), d found by `round_corner`. Either way d is no more than half of either
+/// piece, so that two rounded corners never overlap. A turn of nearly half a circle (where the curve would nearly stop,
+/// `span`) and a corner on more than `WIDEST` axes stay corners.
 fn round_corners(geo: Vec<Geo>, tolerance: f64) -> (Vec<Geo>, f64) {
     let n = geo.len();
     if tolerance <= 0.0 || n < 2 {
         return (geo, 0.0);
     }
-    // Per line how much of it its corners take at its start and its end, and the curve at each junction.
+    // Per piece how much of it its corners take at its start and its end, and the curve at each junction.
     let (mut cut, mut curves, mut off) = (vec![[0.0f64; 2]; n], vec![None; n + 1], 0f64);
+    let roundable = |g: &Geo| !matches!(g, Geo::Slerp { .. } | Geo::Clothoid { .. });
     for j in 1..n {
-        let (Geo::Line { dir: ta, length: la, .. }, Geo::Line { from: at, dir: tb, length: lb }) =
-            (&geo[j - 1], &geo[j])
-        else {
-            continue;
-        };
-        if !corner(&geo[j - 1], &geo[j]) {
+        if !corner(&geo[j - 1], &geo[j]) || !roundable(&geo[j - 1]) || !roundable(&geo[j]) {
             continue;
         }
-        // The deviation for d = 1, against the corner's two lines as far as the curve reaches.
-        let Some(unit) = corner_curve(at, ta, tb, 1.0) else { continue };
-        let (before, after): (Vec<f64>, Vec<f64>) =
-            (at.iter().zip(ta).map(|(p, t)| p - t).collect(), at.iter().zip(tb).map(|(p, t)| p + t).collect());
-        let per_d = (0..=64)
-            .map(|k| {
-                let p = &unit.at(unit.length() * k as f64 / 64.0)[0];
-                to_segment(p, &before, at).min(to_segment(p, at, &after))
-            })
-            .fold(0.0, f64::max);
-        let d = (tolerance / per_d).min(0.5 * la).min(0.5 * lb);
-        let Some(curve) = corner_curve(at, ta, tb, d) else { continue };
+        let most = 0.5 * geo[j - 1].length().min(geo[j].length());
+        let (d, curve, by) = match (&geo[j - 1], &geo[j]) {
+            (Geo::Line { dir: ta, .. }, Geo::Line { from: at, dir: tb, .. }) => {
+                // The deviation for d = 1, against the corner's two lines as far as the curve reaches.
+                let Some(unit) = corner_curve(at, ta, tb, 1.0) else { continue };
+                let (before, after): (Vec<f64>, Vec<f64>) =
+                    (at.iter().zip(ta).map(|(p, t)| p - t).collect(), at.iter().zip(tb).map(|(p, t)| p + t).collect());
+                let per_d = (0..=64)
+                    .map(|k| {
+                        let p = &unit.at(unit.length() * k as f64 / 64.0)[0];
+                        to_segment(p, &before, at).min(to_segment(p, at, &after))
+                    })
+                    .fold(0.0, f64::max);
+                let d = (tolerance / per_d).min(most);
+                let Some(curve) = corner_curve(at, ta, tb, d) else { continue };
+                (d, curve, per_d * d)
+            }
+            (a, b) => {
+                let Some(found) = round_corner(a, b, tolerance, most) else { continue };
+                found
+            }
+        };
         (cut[j - 1][1], cut[j][0], curves[j]) = (d, d, Some(curve));
-        off = off.max(per_d * d);
+        off = off.max(by);
     }
     let mut out = Vec::new();
     for (i, piece) in geo.into_iter().enumerate() {
         out.extend(curves[i].take());
-        match piece {
-            Geo::Line { from, dir, length } => {
-                let length = length - cut[i][0] - cut[i][1];
-                // Two corners that each take half of a line leave nothing of it.
-                if length > 1e-12 {
-                    let from = from.iter().zip(&dir).map(|(p, d)| p + cut[i][0] * d).collect();
-                    out.push(Geo::Line { from, dir, length });
-                }
-            }
-            other => out.push(other),
+        if cut[i] == [0.0; 2] {
+            out.push(piece);
+        } else {
+            // Two corners that each take half of a piece leave nothing of it.
+            out.extend(trimmed(&piece, cut[i][0], cut[i][1]));
         }
     }
     (out, off)
@@ -1548,8 +1682,31 @@ pub fn plan(
     tolerance: impl Into<Tolerance>,
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let (geo, bounds) = (geometry(axes, start, pieces, tolerance, &axis_speed(axes), slack)?.0, axis_bounds(axes));
-    let limits: Vec<[f64; 3]> = geo.iter().map(|g| limits(g, &bounds)).collect();
+    plan_at(axes, start, pieces, cycle, tolerance, slack, f64::INFINITY)
+}
+
+/// `plan` with the speed along the path no higher than `feed` (in the axes' units per second, the length of the speed
+/// vector over all axes): a program's feed (G-code F, a robot's v or $VEL.CP), which is the speed along the path, not
+/// along each axis. Infinite: the axes' limits alone.
+pub fn plan_at(
+    axes: &[AxisInfo],
+    start: &[f64],
+    pieces: &[Piece],
+    cycle: f64,
+    tolerance: impl Into<Tolerance>,
+    slack: f64,
+    feed: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    let speed = axis_speed(axes);
+    let (geo, bounds) =
+        (geometry(axes, start, pieces, tolerance, &|g| speed(g).min(feed), slack)?.0, axis_bounds(axes));
+    let limits: Vec<[f64; 3]> = geo
+        .iter()
+        .map(|g| {
+            let [v, a, j] = limits(g, &bounds);
+            [v.min(feed), a, j]
+        })
+        .collect();
     Ok(timed(axes, &geo, &limits, cycle))
 }
 
@@ -1643,12 +1800,26 @@ pub struct PlanLimits {
     pub gearbox: Vec<Option<[f64; 4]>>,
     /// The most load a guide may carry, `ratings.guide_max_load_n` (N); infinite without. The plan keeps `reserve` of it.
     pub guide: f64,
+    /// Per motor (in the order of `Machine::motors`) the friction on its shaft as the motor and its gearbox have it:
+    /// [Coulomb level, viscous, smoothing speed, gearbox drag at its reference speed, that speed] in N m and rad/s
+    /// (`mech::ShaftFriction`, `mech::GearDrag`), all 0 with effects.motor_friction and gearbox_drag off. No entry: none.
+    #[serde(default)]
+    pub friction: Vec<[f64; 5]>,
 }
 
 impl PlanLimits {
-    /// The torque share and the belt only, with no gearbox or guide rating.
+    /// The torque share and the belt only, with no gearbox or guide rating and no friction.
     pub fn new(reserve: f64, tension: [f64; 3]) -> Self {
-        Self { reserve, tension, gearbox: Vec::new(), guide: f64::INFINITY }
+        Self { reserve, tension, gearbox: Vec::new(), guide: f64::INFINITY, friction: Vec::new() }
+    }
+
+    /// The steady friction on motor `m`'s shaft at the speed `speed` (rad/s, at least 0): c tanh(w / smoothing) + b w +
+    /// T0 (w / n0)^(2/3), as `mech::ShaftFriction::torque` has it at the reference temperature, without the breakaway's
+    /// Stribeck rise near a standstill.
+    pub fn shaft_friction(&self, m: usize, speed: f64) -> f64 {
+        let Some(&[coulomb, viscous, smoothing, drag, drag_speed]) = self.friction.get(m) else { return 0.0 };
+        let drag = if drag > 0.0 { drag * (speed / drag_speed).powf(crate::mech::DRAG_EXPONENT) } else { 0.0 };
+        coulomb * (speed / smoothing).tanh() + viscous * speed + drag
     }
 }
 
@@ -1669,7 +1840,9 @@ const CURVE_SAMPLES: usize = 256;
 /// it turns) and as it brakes, less what the reserve keeps at a standstill ((1 - reserve) times the torque there: for
 /// friction and elasticity, which do not shrink with the speed), read at `CURVE_SAMPLES` + 1 speeds `step` apart from
 /// zero to its maximum speed (`DriveParams::max_speed`) and lowered so that neither rises with the speed. Up to the
-/// rated speed that is `reserve` times the curve, as before; above it the room falls faster than the curve.
+/// rated speed that is `reserve` times the curve, as before; above it the room falls faster than the curve. The motor's
+/// own shaft friction and its gearbox's drag at each speed (`PlanLimits::shaft_friction`) come off as it drives; as it
+/// brakes they would help, which is not counted (at a standstill there is none).
 #[derive(Debug)]
 struct MotorCurve {
     step: f64,
@@ -1678,7 +1851,7 @@ struct MotorCurve {
 }
 
 impl MotorCurve {
-    fn new(drive: &DriveParams, reserve: f64) -> Self {
+    fn new(drive: &DriveParams, reserve: f64, friction: impl Fn(f64) -> f64) -> Self {
         let step = drive.max_speed / CURVE_SAMPLES as f64;
         let most =
             if drive.drive_max_current.is_finite() { drive.torque_of(drive.drive_max_current) } else { f64::INFINITY };
@@ -1693,7 +1866,7 @@ impl MotorCurve {
         let (mut drives, mut brakes) = (f64::INFINITY, f64::INFINITY);
         for i in 0..=CURVE_SAMPLES {
             let [high, low] = at(i as f64 * step);
-            drives = drives.min((1.0 - KEPT_BACK) * (high - kept[0]));
+            drives = drives.min((1.0 - KEPT_BACK) * (high - kept[0] - friction(i as f64 * step)));
             brakes = brakes.min((1.0 - KEPT_BACK) * (low - kept[1]));
             motoring.push(drives);
             braking.push(brakes);
@@ -1764,7 +1937,11 @@ pub fn plan_time_optimal(
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let ((geo, _), _) = time_optimal_geometry(machine, drives, limits, start, pieces, tolerance, slack)?;
-    let curves: Arc<[MotorCurve]> = drives.iter().map(|drive| MotorCurve::new(drive, limits.reserve)).collect();
+    let curves: Arc<[MotorCurve]> = drives
+        .iter()
+        .enumerate()
+        .map(|(m, drive)| MotorCurve::new(drive, limits.reserve, |w| limits.shaft_friction(m, w)))
+        .collect();
     let places =
         geo.iter().map(|piece| piece_limits(machine, &curves, limits, piece)).collect::<Result<Vec<_>, _>>()?;
     timed_by_motors(machine.axes(), &geo, &places, cycle)
@@ -1776,13 +1953,13 @@ pub fn plan_time_optimal(
 fn time_optimal_geometry(
     machine: &dyn Machine,
     drives: &[&DriveParams],
-    &PlanLimits { reserve, tension, .. }: &PlanLimits,
+    limits: &PlanLimits,
     start: &[f64],
     pieces: &[Piece],
     tolerance: impl Into<Tolerance>,
     slack: f64,
 ) -> Result<((Vec<Geo>, f64), Vec<[f64; 3]>), CommandError> {
-    let piece_limits = motor_limits(machine, drives, reserve, tension);
+    let (plan, piece_limits) = (limits, motor_limits(machine, drives, limits, limits.tension));
     let path = geometry(machine.axes(), start, pieces, tolerance, &|piece| piece_limits(piece)[0], slack)?;
     let mut limited = Vec::new();
     let usable = |limits: &[f64; 3]| limits.iter().all(|l| l.is_finite() && *l > 0.0);
@@ -1791,7 +1968,7 @@ fn time_optimal_geometry(
         if !usable(&limits) {
             // Said by what is short: the torque, or the belt alone.
             let torque_alone =
-                usable(&motor_limits(machine, drives, reserve, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
+                usable(&motor_limits(machine, drives, plan, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(piece));
             return Err(CommandError { key: if torque_alone { "error-path-tension" } else { "error-path-torque" } });
         }
         limited.push(limits);
@@ -1818,15 +1995,17 @@ pub fn deviation_time_optimal(
 fn motor_limits<'a>(
     machine: &'a dyn Machine,
     drives: &'a [&'a DriveParams],
-    reserve: f64,
+    plan: &'a PlanLimits,
     [lowest, highest, share]: [f64; 3],
 ) -> impl Fn(&Geo) -> [f64; 3] + 'a {
+    let reserve = plan.reserve;
     let axes = machine.axes();
     let [_, _, jerk] = axis_bounds(axes);
     let h = 1e-3;
     // shortcut: the transition curves are sized for the corner of each motor's curve (its rated speed at its full torque);
     // the timing then uses the whole curve. Size them along the curve if a plan above the rated speed needs longer ones.
-    let torque = move |m: usize| reserve * motor_torque(drives[m]);
+    // Less the shaft's friction at the rated speed (`MotorCurve`).
+    let torque = move |m: usize| reserve * motor_torque(drives[m]) - plan.shaft_friction(m, drives[m].rated_speed);
     move |piece| {
         let per_motor = |f: &dyn Fn(&mut [f64])| {
             let mut out = vec![0.0; machine.motors().len()];
@@ -1929,9 +2108,11 @@ fn piece_knots(
 /// the look-ahead of `timed` with `piece_fits`. A run from the junction into either piece has to keep below that piece's
 /// speed curve (`follow` with no top), which caps the junction before the look-ahead. The look-ahead takes each speed as
 /// fitting from the lower of a junction's speed and the next one's on, which holds where both are no faster than the
-/// slowest place of their pieces; where the speeds that come out leave a piece that does not fit, the path's junctions
-/// are taken as with `joins` off. With `joins` off, `curve_join` is left out and a junction is passed no faster than the
-/// slowest place of either piece, as before 14 November (also for the comparison in the tests).
+/// slowest place of their pieces; where the speeds that come out leave a piece that does not fit, the two junctions of
+/// that piece are lowered to what they are with `joins` off and the look-ahead runs again, piece by piece, as long as
+/// pieces are left that do not fit (at most once per piece; then the whole path as with `joins` off). With `joins` off,
+/// `curve_join` is left out and a junction is passed no faster than the slowest place of either piece, as before 14
+/// November (also for the comparison in the tests).
 fn junction_speeds(axes: &[AxisInfo], geo: &[Geo], limits: &[PieceLimits], cycle: f64, joins: bool) -> Vec<f64> {
     let n = geo.len();
     let (hold, step) = (2.0 * cycle, cycle / STEPS_PER_CYCLE);
@@ -1957,18 +2138,34 @@ fn junction_speeds(axes: &[AxisInfo], geo: &[Geo], limits: &[PieceLimits], cycle
             speed[i] = highest_fitting(slowest.min(speed[i]), speed[i], ok);
         }
     }
-    for i in (0..n).rev() {
-        let after = speed[i + 1];
-        speed[i] = largest(after.min(speed[i]), speed[i], |v| fits(i, v, after));
+    let look_ahead = |speed: &mut Vec<f64>| {
+        for i in (0..n).rev() {
+            let after = speed[i + 1];
+            speed[i] = largest(after.min(speed[i]), speed[i], |v| fits(i, v, after));
+        }
+        for i in 0..n {
+            let before = speed[i];
+            speed[i + 1] = largest(before.min(speed[i + 1]), speed[i + 1], |v| fits(i, before, v));
+        }
+    };
+    look_ahead(&mut speed);
+    if !joins {
+        return speed;
     }
-    for i in 0..n {
-        let before = speed[i];
-        speed[i + 1] = largest(before.min(speed[i + 1]), speed[i + 1], |v| fits(i, before, v));
+    // Per piece that does not fit, its two junctions as without the joins, where that is slower.
+    let mut without: Option<Vec<f64>> = None;
+    for _ in 0..n {
+        let misfits: Vec<usize> = (0..n).filter(|&i| !fits(i, speed[i], speed[i + 1])).collect();
+        if misfits.is_empty() {
+            return speed;
+        }
+        let without = without.get_or_insert_with(|| junction_speeds(axes, geo, limits, cycle, false));
+        for i in misfits {
+            (speed[i], speed[i + 1]) = (speed[i].min(without[i]), speed[i + 1].min(without[i + 1]));
+        }
+        look_ahead(&mut speed);
     }
-    if joins && !(0..n).all(|i| fits(i, speed[i], speed[i + 1])) {
-        return junction_speeds(axes, geo, limits, cycle, false);
-    }
-    speed
+    junction_speeds(axes, geo, limits, cycle, false)
 }
 
 /// The places at which the time-optimal plan reads the rigid model are about this far apart along a piece (m), and on
@@ -2029,6 +2226,9 @@ struct Place {
     /// are then those of its curve (`curves`) at that speed, not the row's own (which are those at a standstill).
     turn: Vec<f64>,
     curves: Arc<[MotorCurve]>,
+    /// Per motor the friction of the guides it drives (`Machine::rigid_friction`), as [c, b] for the torque c + b v it
+    /// gives against them at the speed v along the path; empty where the machine tells none.
+    guide: Vec<[f64; 2]>,
     /// Per axis, 3 |p''| v |a| + |p'''| v^3 <= room as [3 |p''|, |p'''|, room]: the part of the axis jerk that speed and
     /// acceleration take on a curve. The rest of the jerk limit is for the ramps.
     bends: Vec<[f64; 3]>,
@@ -2040,7 +2240,14 @@ impl Place {
     /// The low and high of row `i` at the speed `v` along the path, and at every speed below it.
     fn bounds(&self, i: usize, v: f64) -> (f64, f64) {
         match self.turn.get(i) {
-            Some(turn) => self.curves[i].range(turn * v),
+            Some(turn) => {
+                let (low, high) = self.curves[i].range(turn * v);
+                // The guides' friction takes its torque off the room on its side, at its most over the speeds up to v
+                // (from none at a standstill).
+                let [c, b] = self.guide.get(i).copied().unwrap_or([0.0; 2]);
+                let (least, most) = (c.min(c + b * v).min(0.0), c.max(c + b * v).max(0.0));
+                (low - least, high - most)
+            }
             None => (self.rows[i][3], self.rows[i][4]),
         }
     }
@@ -2340,7 +2547,22 @@ fn piece_limits(
         for [_, p3, room] in bends.iter().filter(|b| b[1] > 0.0) {
             x = x.min((room / p3).max(0.0).powf(2.0 / 3.0));
         }
-        let mut place = Place { rows, turn, curves: curves.clone(), bends, top: x.sqrt() };
+        let mut guide = Vec::new();
+        machine.rigid_friction(pose, d1, &mut guide);
+        // Behind a lossy gearbox the motor gives the friction's torque over the efficiency (as the load's, above).
+        for (m, g) in guide.iter_mut().enumerate() {
+            if let Some([.., efficiency]) = gearbox(m) {
+                *g = g.map(|t| t / efficiency);
+            }
+        }
+        let mut place = Place { rows, turn, curves: curves.clone(), guide, bends, top: x.sqrt() };
+        // A motor that turns here and has to hold the tool against more than its curve less its friction leaves no room.
+        if (0..motors).any(|m| {
+            let (low, high) = place.bounds(m, 0.0);
+            place.turn[m] != 0.0 && !(low..=high).contains(&place.rows[m][2])
+        }) {
+            return Err(CommandError { key: "error-path-torque" });
+        }
         let holds = |place: &Place, v: f64| {
             (0..motors).all(|m| {
                 let ([_, d, e, ..], (low, high)) = (place.rows[m], place.bounds(m, v));
@@ -2747,6 +2969,38 @@ line,0.2,0.0,-0.9",
         // With a tolerance its junctions with the lines are eased as on two axes, within the tolerance.
         let eased = deviation(&axes, &[0.0, 0.0, -0.9], &pieces, 1e-3, ARC_SLACK).unwrap();
         assert!(eased > 0.0 && eased <= 1e-3, "{eased} m");
+    }
+
+    /// A corner between a line and an arc is rounded within the corner tolerance, no longer stopped at. The line runs
+    /// along +x to (0.1, 0); the arc of radius 1 m around (-0.9, 0) leaves there along +y, counter-clockwise: a right
+    /// angle. Between two lines a right angle is rounded from d = 16 tolerance / 3 before the corner to d after it, its
+    /// deviation 3 d / 16 at the middle; the arc bends away from its tangent by d^2 / (2 R) = 1.4e-7 m over d, 0.1 % of
+    /// the tolerance, so with 0.1 mm the curve starts 16e-4 / 3 = 0.533 mm before the corner within the 2 % the search
+    /// leaves (`round_corner`), and its deviation is the tolerance within those 2 %. At its ends the curve has the
+    /// pieces' curvature: none on the line, 1 / R = 1 / m on the arc (G2). Before, the corner stayed a stop.
+    #[test]
+    fn a_line_arc_corner_is_rounded_within_the_corner_tolerance() {
+        let axes = axes();
+        let pieces = parse("line,0.1,0.0\narc,0.0950041652780258,0.0998334166468282,-0.9,0.0,ccw").unwrap();
+        let tolerance = Tolerance { path: 0.0, corner: 1e-4 };
+        let (geo, off) = geometry(&axes, &[0.0, 0.0], &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+        assert_eq!(geo.len(), 3, "line, curve, arc");
+        let d = 0.1 - geo[0].length();
+        assert!((d / (16e-4 / 3.0) - 1.0).abs() < 0.025, "{d} m");
+        assert!((0.97e-4..=1e-4).contains(&off), "{off} m");
+        let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let curve = &geo[1];
+        assert!(size(&curve.at(0.0)[2]) < 1e-6 && (size(&curve.at(curve.length())[2]) - 1.0).abs() < 1e-3);
+        assert!(!corner(&geo[0], &geo[1]) && !corner(&geo[1], &geo[2]));
+        // The plan passes the junctions at speed and ends on the arc's end.
+        let points = plan(&axes, &[0.0, 0.0], &pieces, 1e-3, tolerance, ARC_SLACK).unwrap();
+        let at = |p: &(f64, Vec<f64>)| (p.1[0] - 0.1).abs() + p.1[1].abs();
+        let near = points.windows(2).min_by(|a, b| at(&a[0]).total_cmp(&at(&b[0]))).unwrap();
+        assert!(distance(&near[0].1, &near[1].1) > 1e-5, "stops at the corner");
+        assert!(distance(&points[points.len() - 1].1, &[0.0950041652780258, 0.0998334166468282]) < 1e-9);
+        // Without a corner tolerance it stays a corner.
+        let (stopped, _) = geometry(&axes, &[0.0, 0.0], &pieces, 0.0, &axis_speed(&axes), ARC_SLACK).unwrap();
+        assert!(stopped.len() == 2 && corner(&stopped[0], &stopped[1]));
     }
 
     #[test]
@@ -3799,6 +4053,7 @@ line,0.3,0.13",
                 rows: vec![[1.0, 0.0, 0.0, -10.0, 10.0]],
                 turn: Vec::new(),
                 curves: Arc::from([]),
+                guide: Vec::new(),
                 bends: Vec::new(),
                 top: if k == 20 { 0.5 } else { 1.0 },
             })
@@ -3912,6 +4167,7 @@ line,0.3,0.13",
                 rows: vec![[1.0, 0.0, 0.0, -10.0, 10.0]],
                 turn: Vec::new(),
                 curves: Arc::from([]),
+                guide: Vec::new(),
                 bends: Vec::new(),
                 top: top(k as f64 / count as f64),
             })

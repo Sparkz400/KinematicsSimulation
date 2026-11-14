@@ -141,7 +141,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
-        Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst"],
+        Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst", "--path", "--time-optimal"],
         Some("search") => &[
             "--vendor",
             "--series",
@@ -152,10 +152,12 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
             "--rank-by",
             "--weights",
             "--robust",
+            "--path",
+            "--time-optimal",
         ],
         Some("transmission") => &["--key", "--from", "--to", "--count", "--gearboxes"],
         Some("compare-kinematics") => &["--machines", "--vendor", "--series", "--gearboxes", "--drives", "--rank-by"],
-        Some("verdicts") => &["--bands", "--samples", "--seed", "--worst"],
+        Some("verdicts") => &["--bands", "--samples", "--seed", "--worst", "--path", "--time-optimal"],
         Some("sensitivity") => &["--delta", "--group"],
         Some("step") => &["--axis-index", "--size", "--time"],
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
@@ -299,6 +301,20 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
         sim.command(command).map_err(|e| Failure(e.key, String::new()))?;
     }
     Ok(sim)
+}
+
+/// With `--path FILE` (and `--time-optimal`) of `verdicts`, `search` and `optimise`: the config with that path in place
+/// of the cycle (`sim::with_path`), so that every run they make runs the path. The path is planned once here, so that a
+/// file that cannot be read or a path that cannot be planned is said with its line before any run.
+fn path_instead(args: &Args, entry: &MachineEntry, cfg: Config) -> Result<Config, Failure> {
+    let Some(file) = args.option("--path") else { return Ok(cfg) };
+    let text = read(file)?;
+    let sim = Sim::new(entry, &cfg)?;
+    sim_components::program::read(file, &text, sim.machine.axes(), sim.control.planned_pos())
+        .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
+    let cfg = sim_components::sim::with_path(&cfg, file, &text, args.flag("--time-optimal"))?;
+    Sim::new(entry, &cfg)?.plan_configured_path().transpose().map_err(|e| Failure(e.key, file.to_string()))?;
+    Ok(cfg)
 }
 
 /// The poses at times to run: those of `--trajectory FILE`, or the lines and arcs of `--path FILE` (format:
@@ -726,6 +742,7 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 /// writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
 fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
+    let cfg = path_instead(args, entry, cfg)?;
     let runs = args.number("--runs")?.unwrap_or(40.0) as usize;
     let options = sim_components::analysis::OptimiseOptions {
         max_runs: runs,
@@ -779,6 +796,9 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
             let point: Vec<String> =
                 via.iter().map(|point| point.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(" ")).collect();
             writeln!(out, "cycle.segment[{a}-{b}-{c}].via_m,,{}", point.join("; ")).map_err(io)?;
+        }
+        if let Some(corner) = lift.corners {
+            writeln!(out, "cycle.segment[{a}-{b}-{c}].corners_m,,{corner:.6}").map_err(io)?;
         }
     }
     out.flush().map_err(io)
@@ -892,7 +912,11 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::catalog::{motor_config, resolve};
     use sim_components::search::{front, rank_by, robust_ranking};
     let (entry, cfg) = machine_and_config(args)?;
-    let duties = duties(args, entry)?;
+    let cfg = path_instead(args, entry, cfg)?;
+    let duties: Vec<(Config, f64)> = duties(args, entry)?
+        .into_iter()
+        .map(|(c, w)| Ok((path_instead(args, entry, c)?, w)))
+        .collect::<Result<_, Failure>>()?;
     // With a duty mix the first file's config is searched on.
     let cfg = duties.first().map_or(cfg, |(first, _)| first.clone());
     let prefix = args.option("--series").unwrap_or("");
@@ -1186,7 +1210,11 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::analysis::{bounds, verdict_bands, verdict_bands_sampled, verdict_worst};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
-    tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?);
+    // A path's clearance is in its run's verdict "collision"; the configured cycle's is told here.
+    if args.option("--path").is_none() {
+        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?);
+    }
+    let cfg = path_instead(args, entry, cfg)?;
     if args.flag("--worst") {
         if !args.flag("--bands") || args.option("--samples").is_some() || args.option("--seed").is_some() {
             return Err(Failure("cli-error-worst", String::new()));
@@ -1283,7 +1311,7 @@ fn sensitivity(args: &Args) -> Result<(), Failure> {
     let delta = args.number("--delta")?.unwrap_or(0.2);
     let groups = args.options("--group");
     // Timing, switches, limits, gains and the cycle itself are choices, not uncertain machine data.
-    let fixed = ["sim", "effects", "drive", "profile", "start", "axis", "temperature"];
+    let fixed = ["sim", "effects", "drive", "profile", "start", "axis", "temperature", "path"];
     let paths: Vec<String> = cfg
         .leaves()
         .into_iter()

@@ -9,6 +9,14 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- `verdicts`, `search` and `optimise --path FILE [--time-optimal]` (and Python's `path=`): the path or program is
+  judged, searched on and shortened in place of the cycle, through an optional `[path]` config table.
+- Corners next to an arc or a spline are rounded within `profile.corner_tolerance_m` (G2), no longer stopped at; the
+  optimiser tries a lift with its two corners rounded (`cycle.segment[i].corners_m`).
+- The time-optimal plan takes each motor's shaft friction, gearbox drag and (machine files) guide friction off its
+  torque at the planned speed (`Machine::rigid_friction`).
+- G-code F is the speed along the path; RAPID speeds (`v100`, speeddata) and KRL `$VEL.CP` are read, and on arms in tool
+  space RAPID's quaternions and KRL's A, B, C set the orientation.
 - Drive monitoring and fault reactions (`effects.drive_monitoring`, off by default): each drive trips on its
   following error window (S120 p2546), a standstill window (p2542/p2543), a motor blocked at its torque limit (F07900)
   and optionally a band around the expected torque, and every drive then stops by its own `drive.fault_reaction`
