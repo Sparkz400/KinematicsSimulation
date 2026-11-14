@@ -160,6 +160,9 @@ pub struct Runner {
     sample_every: u64,
     /// A drive has tripped and this has been reported.
     tripped: bool,
+    /// A monitor's trip (`Controller::fault`) and the stop after it have been reported.
+    fault_told: bool,
+    stop_told: bool,
     /// The last point reported of the travelled path; `None` while none is recorded.
     trail: Option<[f64; 3]>,
     /// The travelled path still grows: its trajectory runs. Finished, it stays shown as it is.
@@ -179,6 +182,8 @@ impl Runner {
             entry,
             sample_every,
             tripped: false,
+            fault_told: false,
+            stop_told: false,
             trail: None,
             recording: false,
             trail_points: Vec::new(),
@@ -268,6 +273,33 @@ impl Runner {
                 events.push(Event::Refused("ui-drive-tripped", String::new()));
             }
             self.tripped = tripped;
+            // A monitor's trip (effects.drive_monitoring): which, and each drive's fault reaction, at once while the
+            // axes ramp down or coast; then how far each axis went until the machine stood.
+            if let Some(fault) = &self.sim.control.fault {
+                let motors = self.sim.machine.motors();
+                if !self.fault_told {
+                    let detail = format!("{}, {:.3} s", motors[fault.drive].id, fault.time);
+                    events.push(Event::Refused("ui-drive-fault", detail));
+                    events.push(Event::Refused(fault.monitor.key(), String::new()));
+                    for (k, motor) in motors.iter().enumerate() {
+                        events.push(Event::Refused(self.sim.control.fault_reaction(k).key(), motor.id.to_string()));
+                    }
+                    self.fault_told = true;
+                }
+                if let (Some(stopped), false) = (fault.stopped, self.stop_told) {
+                    let axes = self.sim.machine.axes();
+                    let distances: Vec<String> = axes
+                        .iter()
+                        .zip(&fault.stopping)
+                        .map(|(axis, d)| format!("{} {:.1} m{}", axis.id, d * 1e3, axis.unit))
+                        .collect();
+                    events
+                        .push(Event::Refused("ui-drive-stopped", format!("{stopped:.3} s; {}", distances.join(", "))));
+                    self.stop_told = true;
+                }
+            } else {
+                (self.fault_told, self.stop_told) = (false, false);
+            }
         }
         if !travelled.is_empty() {
             events.push(Event::Trail(travelled));

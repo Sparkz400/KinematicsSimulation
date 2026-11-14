@@ -1578,23 +1578,28 @@ impl Machine for Delta {
         Some([tool_pose[0], tool_pose[1], tool_pose[2]])
     }
 
-    /// The platform and the payload under it, the six forearm rods and the three upper arms, where `scene` draws them,
-    /// without drawing the rest: the live check asks for them every base step. Each rod is `ROD_PIECES` boxes along it,
-    /// each arm `ARM_PIECES`, each the box around its piece of the drawn segment widened by the segment's width.
-    // shortcut: a slanted segment's pieces are boxes along the scene's axes, up to a piece's length (95 mm on a rod, 40
-    // mm on an arm) wider than the segment; capsules if a near miss of a rod or an arm ever matters.
+    /// The platform and the payload under it, where `scene` draws them, without drawing the rest: the live check asks
+    /// for them every base step. The rods and arms are `collision_capsules`.
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
         let ((t, _), (y, _)) = (self.elbows(s), self.lateral(s));
         let p = self.pose_moved(t, y).0;
-        let mut out = sim_core::scene::scene_boxes(&self.on_platform(p), &["platform", "payload"]);
+        sim_core::scene::scene_boxes(&self.on_platform(p), &["platform", "payload"])
+    }
+
+    /// The six forearm rods and the three upper arms, each the capsule along the segment `scene` draws, of half its
+    /// width: exact for a round rod of that width, and no wider than the drawn strip anywhere along it.
+    fn collision_capsules(&self, s: &[f64]) -> Vec<sim_core::Capsule> {
+        let ((t, _), (y, _)) = (self.elbows(s), self.lateral(s));
+        let p = self.pose_moved(t, y).0;
+        let mut out = Vec::new();
         for k in 0..3 {
             for (from, to) in self.legs.rods(k, t[k], y[k], p, self.platform_radius, self.rod_spacing) {
-                out.extend(segment_boxes(from, to, ROD_WIDTH, ROD_PIECES));
+                out.push(sim_core::Capsule { from, to, radius: ROD_WIDTH / 2.0 });
             }
         }
         for k in 0..3 {
-            let (shoulder, arm_end) = self.arm(k, t, y);
-            out.extend(segment_boxes(shoulder, arm_end, ARM_WIDTH, ARM_PIECES));
+            let (from, to) = self.arm(k, t, y);
+            out.push(sim_core::Capsule { from, to, radius: ARM_WIDTH / 2.0 });
         }
         out
     }
@@ -1636,24 +1641,9 @@ impl Machine for Delta {
     }
 }
 
-/// `pieces` boxes along the segment from `from` to `to`, each the box around its piece widened by `width`.
-fn segment_boxes(from: V3, to: V3, width: f64, pieces: usize) -> impl Iterator<Item = sim_core::Aabb> {
-    (0..pieces).map(move |n| {
-        let at = |f: f64| -> V3 { std::array::from_fn(|i| from[i] + f * (to[i] - from[i])) };
-        let (a, b) = (at(n as f64 / pieces as f64), at((n + 1) as f64 / pieces as f64));
-        sim_core::Aabb {
-            centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])),
-            size: std::array::from_fn(|i| (b[i] - a[i]).abs() + width),
-        }
-    })
-}
-
-/// The forearm rods' width as drawn and as collision bodies, m, and the pieces a rod's collision boxes cut it into;
-/// the same for the upper arms.
+/// The forearm rods' width and the upper arms', as drawn and as collision capsules (twice their radius), m.
 const ROD_WIDTH: f64 = 0.012;
-const ROD_PIECES: usize = 10;
 const ARM_WIDTH: f64 = 0.04;
-const ARM_PIECES: usize = 10;
 
 #[cfg(test)]
 mod tests;

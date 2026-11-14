@@ -3,6 +3,7 @@
 
 use crate::conveyor::{Conveyor, Pass};
 use crate::drive::{Drive, DriveParams, quantise, shared_dc_link};
+use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::Move;
 use sim_core::{Config, ConfigError, Machine};
@@ -173,6 +174,16 @@ pub struct Controller {
     /// effects.load_encoder: the step of the load-side scales (`drive.load_encoder_step`, in the tool axes' units, 0
     /// ideal) on which the position loops close; `None` off, on the motor encoders.
     load_encoder: Option<f64>,
+    /// effects.drive_monitoring: each drive's monitors (`fault::Watch`) trip all drives, which then stop by their
+    /// fault reactions. Per drive its settings and its monitors' running state.
+    monitoring: bool,
+    fault_settings: Vec<fault::Settings>,
+    watch: Vec<Watch>,
+    /// While the drives stop after a trip: per drive the speed setpoint of its stop ramp, `None` once its pulses are
+    /// off. The controller counts as enabled until the last is off, and refuses commands but `Enable` and `Disable`.
+    reacting: Option<Vec<Option<f64>>>,
+    /// The first trip since the drives were last enabled (effects.drive_monitoring).
+    pub fault: Option<Fault>,
 }
 
 /// Each motor's moment of inertia in the rigid, loss-free model at a tool pose: the torque it needs for a unit
@@ -252,6 +263,11 @@ impl Controller {
             history: Default::default(),
             inertias: Vec::new(),
             load_encoder: None,
+            monitoring: false,
+            fault_settings: Vec::new(),
+            watch: Vec::new(),
+            reacting: None,
+            fault: None,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -273,6 +289,7 @@ impl Controller {
         }
         self.history.clear();
         self.fieldbus.clear();
+        self.watch = vec![Watch::default(); motors];
         // Start holding the load: the torque that keeps the pose, and the feedforward's share of it.
         let (mut hold, mut ff) = (vec![0.0; motors], vec![0.0; motors]);
         machine.equilibrium(&self.set_pos, &mut Vec::new(), &mut hold);
@@ -326,6 +343,14 @@ impl Controller {
             .iter()
             .map(|m| DriveParams::from_config(&crate::catalog::motor_config(cfg, m.id)?, dt, n_velocity as f64 * dt))
             .collect::<Result<Vec<_>>>()?;
+        let fault_settings = machine
+            .motors()
+            .iter()
+            .zip(&motor_params)
+            .map(|(m, p)| fault::Settings::from_config(&crate::catalog::motor_config(cfg, m.id)?, p))
+            .collect::<Result<Vec<_>>>()?;
+        // A config written before 14 November 2026 has no drive monitoring.
+        let monitoring = cfg.get("effects.drive_monitoring").is_ok() && cfg.bool("effects.drive_monitoring")?;
         let inertias = if motor_params.iter().any(|p| p.precontrol.constant_inertia) {
             rigid_inertias(machine, &cfg.f64s("start.pose")?)
         } else {
@@ -477,6 +502,8 @@ impl Controller {
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
+        (self.fault_settings, self.monitoring) = (fault_settings, monitoring);
+        self.watch.resize(self.motor_params.len(), Watch::default());
         (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
         self.path_tolerance = path_tolerance;
@@ -542,11 +569,16 @@ impl Controller {
         if !self.enabled && !matches!(command, Command::Enable | Command::Disable) {
             return Err(CommandError { key: "error-disabled" });
         }
+        if self.reacting.is_some() && !matches!(command, Command::Enable | Command::Disable) {
+            return Err(CommandError { key: "error-fault" });
+        }
         match command {
             Command::Disable => self.disable(),
             Command::Enable => {
-                if !self.enabled {
-                    self.enabled = true;
+                // Enabling acknowledges a trip; drives still stopping are taken off and on again, holding where
+                // they stand.
+                if !self.enabled || self.reacting.is_some() {
+                    (self.enabled, self.reacting, self.fault) = (true, None, None);
                     self.hold_here(machine);
                 }
             }
@@ -624,6 +656,89 @@ impl Controller {
     /// Drives off: a move or cycle under way is dropped.
     fn disable(&mut self) {
         (self.motion, self.cycle, self.stopping, self.enabled) = (Motion::Idle, None, false, false);
+        self.reacting = None;
+    }
+
+    /// Whether the drives are stopping after a trip (`react`).
+    pub fn reacting(&self) -> bool {
+        self.reacting.is_some()
+    }
+
+    /// Each drive's fault reaction (effects.drive_monitoring).
+    pub fn fault_reaction(&self, k: usize) -> fault::Reaction {
+        self.fault_settings[k].reaction
+    }
+
+    /// A monitor of drive `k` has tripped at `time`: the motion is dropped and every drive stops by its own fault
+    /// reaction (`react`). The first trip since the last enable is kept in `fault`.
+    fn trip(&mut self, monitor: Monitor, k: usize, time: f64, machine: &dyn Machine, state: &[f64]) {
+        if self.fault.is_none() {
+            let axes = self.set_pos.len();
+            let (mut pose, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
+            machine.tool_state(state, &mut pose, &mut rate);
+            let stopping = vec![0.0; axes];
+            self.fault = Some(Fault { monitor, drive: k, time, pose, stopping, stopped: None });
+        }
+        (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
+        let ramps = self.drives.iter_mut().zip(&self.fault_settings).map(|(d, s)| {
+            d.pulses_off = s.deceleration().is_none();
+            (!d.pulses_off).then(|| d.measured_speed())
+        });
+        self.reacting = Some(ramps.collect());
+    }
+
+    /// One base step of the drives stopping after a trip: each with a ramp has its speed setpoint taken down by it and
+    /// its velocity and current loops follow (the position loop open); once the ramp is down and the motor below the
+    /// pulse-off speed, its pulses go off, as an STO drive's did at the trip. A drive with its pulses off gives no
+    /// torque (`disabled_step`; its winding is left out of the integration). When the last is off, the drives are
+    /// disabled and the holding brakes engage.
+    fn react(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
+        let Some(mut ramps) = self.reacting.take() else { return };
+        let dt = self.profile_cycle / self.n_profile as f64;
+        let velocity_due = step.is_multiple_of(self.n_velocity);
+        for (k, drive) in self.drives.iter_mut().enumerate() {
+            let p = &self.motor_params[k];
+            if let Some(speed) = ramps[k] {
+                let ramped = fault::ramp(speed, self.fault_settings[k].deceleration().unwrap_or(f64::INFINITY), dt);
+                if ramped == 0.0 && drive.measured_speed().abs() < self.fault_settings[k].pulse_off_speed {
+                    (ramps[k], drive.pulses_off) = (None, true);
+                } else {
+                    (ramps[k], drive.fault_speed) = (Some(ramped), Some(ramped));
+                    if velocity_due {
+                        drive.read_encoder(p, self.motor_pos[k]);
+                        drive.velocity_loop(p, self.motor_vel[k]);
+                    }
+                    drive.current_control(p, drive.measured_speed());
+                    continue;
+                }
+            }
+            drive.disabled_step(p);
+            torque[k] = 0.0;
+        }
+        if self.params.shared_dc_link {
+            shared_dc_link(&self.params, &mut self.drives);
+        }
+        self.track_stop(step, machine, state);
+        if ramps.iter().all(Option::is_none) {
+            self.disable();
+        } else {
+            self.reacting = Some(ramps);
+        }
+    }
+
+    /// After a trip, until the machine stands: how far each tool axis has gone since (`Fault::stopping`), and when
+    /// every drive is off and every motor below its pulse-off speed (`Fault::stopped`). An STO drive's motor coasts
+    /// until then (or its holding brake stops it, once all drives are off).
+    fn track_stop(&mut self, step: u64, machine: &dyn Machine, state: &[f64]) {
+        let Some(fault) = self.fault.as_mut().filter(|f| f.stopped.is_none()) else { return };
+        let axes = fault.pose.len();
+        let (mut pose, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
+        machine.tool_state(state, &mut pose, &mut rate);
+        fault.stopping = pose.iter().zip(&fault.pose).map(|(now, then)| (now - then).abs()).collect();
+        let standing = self.motor_vel.iter().zip(&self.fault_settings).all(|(w, s)| w.abs() < s.pulse_off_speed);
+        if !self.enabled && standing {
+            fault.stopped = Some(step as f64 * self.profile_cycle / self.n_profile as f64);
+        }
     }
 
     /// The timing for a path of lines and arcs from where the setpoint stands, as the poses that
@@ -811,6 +926,11 @@ impl Controller {
             if self.params.shared_dc_link {
                 shared_dc_link(&self.params, &mut self.drives);
             }
+            self.track_stop(step, machine, state);
+            return;
+        }
+        if self.reacting.is_some() {
+            self.react(step, machine, state, torque);
             return;
         }
         if step.is_multiple_of(self.n_profile) {
@@ -862,6 +982,15 @@ impl Controller {
             drive.current_control(&self.motor_params[k], speed);
             drive.since_setpoint += dt;
         }
+        if self.monitoring {
+            let tripped = (0..self.drives.len()).find_map(|k| {
+                let (s, peak) = (&self.fault_settings[k], self.motor_params[k].peak_torque);
+                self.watch[k].check(s, &self.drives[k], peak, dt).map(|m| (m, k))
+            });
+            if let Some((monitor, k)) = tripped {
+                self.trip(monitor, k, step as f64 * dt, machine, state);
+            }
+        }
     }
 
     /// The tool setpoint at `time`: the last profile cycle's run on by its speed and acceleration, as the drives' fine
@@ -877,7 +1006,10 @@ impl Controller {
     /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64]) {
         for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<4>().0).enumerate() {
-            drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
+            // A drive whose pulses are off after a trip has had its disabled step (`react`).
+            if !drive.pulses_off {
+                drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
+            }
         }
         if self.params.shared_dc_link {
             shared_dc_link(&self.params, &mut self.drives);

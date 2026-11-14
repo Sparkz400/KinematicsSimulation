@@ -279,6 +279,11 @@ pub trait Machine: Send {
         self.tool_state(state, &mut pos, &mut vel);
         self.scene_point(&pos).map(|centre| crate::Aabb { centre, size: [0.0; 3] }).into_iter().collect()
     }
+    /// The slanted parts of the machine that can hit an obstacle (rods, arms, shafts), as capsules in scene coordinates
+    /// at `state`, beside the boxes of `collision_bodies`. None by default.
+    fn collision_capsules(&self, _state: &[f64]) -> Vec<crate::Capsule> {
+        Vec::new()
+    }
 
     /// The friction contacts for the friction view. Empty where the machine tells none.
     fn friction_contacts(&self) -> Vec<FrictionContact> {

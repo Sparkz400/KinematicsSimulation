@@ -14,4 +14,4 @@ pub use machine::{
     AxisInfo, BeltSection, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Machine, MachineEntry, Mode,
     MotorInfo, RatingCheck, SignalInfo, TEMPERATURE_PREFIX, THERMAL_KINDS, TORQUE_PARTS, ThermalPart,
 };
-pub use scene::{Aabb, Arrow, Label, Obstacle, Part, Scene, Shape};
+pub use scene::{Aabb, Arrow, Capsule, Label, Obstacle, Part, Scene, Shape};

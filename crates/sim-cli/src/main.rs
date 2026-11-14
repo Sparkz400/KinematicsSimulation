@@ -335,17 +335,31 @@ fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanChe
     }
 }
 
-/// On the error stream: the least clearance of the run so far to the obstacles, in mm, and its first contact with one.
-/// Nothing without obstacles.
+/// On the error stream: the least clearance of the run so far to the obstacles, in mm, and its first contact with one,
+/// with effects.crash its largest contact force and its impact energy; and the drives' first trip (effects.
+/// drive_monitoring): which monitor of which motor when, each drive's fault reaction, and the stopping distances.
 fn tell_run(tr: &Translations, sim: &Sim) {
-    if sim.obstacles.is_empty() {
-        return;
+    if !sim.obstacles.is_empty() {
+        eprintln!("{}", tr.tr_arg("cli-run-clearance", &format!("{:.1}", sim.least_clearance * 1e3)));
     }
-    eprintln!("{}", tr.tr_arg("cli-run-clearance", &format!("{:.1}", sim.least_clearance * 1e3)));
     if let Some(c) = &sim.contact {
         let detail =
             format!("{}: {:.4} s, {:.4} /s, {}", sim.obstacles[c.obstacle].name, c.time, c.speed, pose_text(&c.pose));
         eprintln!("{}", tr.tr_arg("cli-run-contact", &detail));
+        if sim.crash {
+            let detail = format!("{:.1} N, {:.1} N, {:.4} J", c.peak_force, sim.contact_force, c.impact_energy);
+            eprintln!("{}", tr.tr_arg("cli-run-impact", &detail));
+        }
+    }
+    if let Some(f) = &sim.control.fault {
+        let motors = sim.machine.motors();
+        let reactions: Vec<String> =
+            (0..motors.len()).map(|k| tr.tr_arg(sim.control.fault_reaction(k).key(), motors[k].id)).collect();
+        let detail =
+            format!("{}: {}, {:.4} s; {}", tr.tr(f.monitor.key()), motors[f.drive].id, f.time, reactions.join(", "));
+        eprintln!("{}", tr.tr_arg("cli-run-fault", &detail));
+        let stopped = f.stopped.map_or_else(|| "-".to_string(), |t| format!("{t:.4} s"));
+        eprintln!("{}", tr.tr_arg("cli-run-stopping", &format!("{} ({stopped})", pose_text(&f.stopping))));
     }
 }
 

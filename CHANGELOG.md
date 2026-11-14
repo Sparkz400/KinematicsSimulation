@@ -9,6 +9,14 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Added
 
+- Drive monitoring and fault reactions (`effects.drive_monitoring`, off by default): each drive trips on its
+  following error window (S120 p2546), a standstill window (p2542/p2543), a motor blocked at its torque limit (F07900)
+  and optionally a band around the expected torque, and every drive then stops by its own `drive.fault_reaction`
+  (`off1`, `off3`, `sto`, `current_limit`; per motor as `[drive.<id>]`). `Controller::fault` reports the monitor, the
+  drive, the time and each axis' stopping distance; `sim-cli run` and the app's messages say them.
+- Capsules as collision bodies (`Machine::collision_capsules`, `sim_core::Capsule`) with an exact segment-to-box
+  clearance; the D3's rods and arms and the D4's telescope are capsules.
+- Obstacles take a contact `stiffness_n_m` and `damping_n_s_m`.
 - FMI: inputs `command.cycle`, `command.target.<axis>` with `command.move`, and `command.path` / `command.path_file`
   with `command.run_path`, which start the cycle, a move and a path as `sim-cli run --cycle`, `--move` and `--path`
   do; log categories `logEvents`, `logStatusWarning`, `logStatusError`, `logAll` in the model description, switched by
@@ -20,11 +28,19 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ### Changed
 
+- `effects.crash`: an obstacle pushes back on a part in it with its contact stiffness and damping, blocking the axes
+  in contact, instead of stopping the whole machine dead and switching the drives off on 1 µm of creep; the drives'
+  monitoring trips them. The budget's `crash` row is the work of the pushes, integrated with the motion. The contact
+  record has the largest force and the impact energy.
+- The conveyor's slats are drawn square across the belt however it runs.
 - FMI 2.0 log messages go to the logger as the format string with `%` doubled, not as an argument of `"%s"`, so loggers
   that print the format as it is (fmpy's Python callbacks) show the text.
 
 ### Fixed
 
+- `Aabb::gap`: a box inside another (or a point, the default collision body) had the width of the intersection, 0 for a
+  point, as its depth; now it is how far it has to move to part.
+- The D3's rods and upper arms were boxes up to 95 mm and 40 mm wider than they are where they slant.
 - Drive loops: the position setpoint is interpolated between profile cycles (`effects.fine_interpolation`, as a SINAMICS
   drive in DSC does); a 4 ms IPO no longer doubles the peak torque (single axis 1.02 N m held, 0.507 N m interpolated,
   0.496 N m at 1 ms). The analysis measures the tool against the plan of the moment, not the setpoint held for the

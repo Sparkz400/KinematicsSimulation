@@ -845,19 +845,24 @@ Die Hindernisse des Arbeitsraums kommen als Quader entlang der Achsen der 3D-Ans
 
 ```text
 $ sim-cli run single-axis --move 0.9 --time 1.5 --out run.csv --set "effects.crash=true" --lang de \
+    --set "effects.drive_monitoring=true" \
     --set 'obstacles=[{name="wall",centre_m=[0.75,-0.03,0.06],size_m=[0.1,0.2,0.2]}]'
-Geplante Bahn: kleinster Abstand zu den Hindernissen -85.0 mm
+Geplante Bahn: kleinster Abstand zu den Hindernissen -115.0 mm
 Geplante Bahn: erste Berührung eines Hindernisses in der Lage 0.4700
-Lauf: kleinster Abstand zu den Hindernissen -0.0 mm
+Lauf: kleinster Abstand zu den Hindernissen -2.6 mm
 Lauf: erste Berührung eines Hindernisses (Name: Zeit, Geschwindigkeit des Werkzeugs, Lage) wall: 0.4701 s, 1.0000 /s, 0.4700
+Lauf: größte Kontaktkraft, Kontaktkraft jetzt und Aufprallenergie 7205.5 N, 0.0 N, 1.3050 J
+Lauf: die Antriebe haben abgeschaltet (Überwachung: Motor, Zeit; Störreaktion je Motor) Schleppfehler außerhalb seines Fensters: m, 0.4750 s; m: AUS3, die Drehzahl fährt an der Schnellhalterampe herunter
+Lauf: Anhalteweg je Achse ab der Abschaltung (die Maschine stand um) 0.0070 (0.4884 s)
 ```
 
-- `run` sagt vor dem Lauf, welchen Abstand Fahrt, Bahn oder Zyklus wie geplant zu den Hindernissen halten, und danach den kleinsten Abstand des Laufs und seine erste Berührung: wann, wie schnell das Werkzeug war und wo. Ohne Hindernisse sagt es nichts.
+- `run` sagt vor dem Lauf, welchen Abstand Fahrt, Bahn oder Zyklus wie geplant zu den Hindernissen halten, und danach den kleinsten Abstand des Laufs und seine erste Berührung: wann, wie schnell das Werkzeug war und wo; mit dem Crash die größte Kontaktkraft, die Kraft jetzt und die Aufprallenergie; und wenn die Antriebe abgeschaltet haben, welche Überwachung welches Motors, wie jeder Antrieb anhält und wie weit jede Achse ab der Abschaltung fuhr, bis die Maschine stand. Ohne Hindernisse oder Abschaltung sagt es nichts.
 - `verdicts` sagt dasselbe für den geplanten Zyklus und beurteilt den Lauf mit der Prüfung `collision`: kleinster Abstand gegen `profile.min_clearance_m`, nicht bestanden bei jeder Berührung. Ohne Hindernisse entfällt die Prüfung.
-- `effects.crash` (voreingestellt aus) macht die Hindernisse starr: Ein Teil, das in eines hineinfährt, bleibt schlagartig an seiner Fläche stehen, ob die Antriebe ein- oder ausgeschaltet sind (eine Maschine, die mit abgeschalteten Antrieben ausläuft oder fällt, ebenso), und eingeschaltete Antriebe gehen aus. Wieder eingeschaltet, können die Antriebe die Maschine aus dem Hindernis fahren; eine Fahrt weiter hinein hält sie an und schaltet sie wieder ab. Eine PLCopen-Achse meldet einen solchen Stopp als ErrorID 8. Aus, werden Berührungen gemeldet, und die Maschine fährt hindurch.
+- `effects.crash` (voreingestellt aus) lässt die Hindernisse zurückdrücken, mit ihrer Kontaktsteifigkeit und -dämpfung (`stiffness_n_m`, `damping_n_s_m` im Eintrag eines Hindernisses; ohne 1e7 N/m und 1e4 N s/m), ob die Antriebe ein- oder ausgeschaltet sind: Die Achsen in Berührung sind blockiert, die anderen fahren weiter. Ein Antrieb an seiner Stromgrenze drückt mit seinem Spitzenmoment mal Übersetzung durch Riemenscheibenradius (950 N an der Einzelachse) und bleibt dort, solange ihn nichts abschaltet. Aus, werden Berührungen gemeldet, und die Maschine fährt hindurch.
+- `effects.drive_monitoring` (voreingestellt aus) lässt die Antriebe sich überwachen, wie Servoantriebe es tun: den Schleppfehler gegen ein Fenster (`drive.following_error_window_rad`, 1 rad am Motor), den Schleppfehler im Stillstand gegen ein engeres, einen Motor, der 3 s bei kleiner Drehzahl an seiner Momentengrenze hängt, und wahlweise das Moment gegen das des Modells. Die erste Überwachung, die anspricht, hält alle Antriebe an, jeden mit `drive.fault_reaction` (je Motor als `[drive.<id>]`): `"off3"` fährt an der Schnellhalterampe herunter (AUS3, `off3_ramp_s`, 0,1 s ab Nenndrehzahl), `"off1"` an der normalen Rampe (AUS1, `off1_ramp_s`, 1 s), `"current_limit"` bremst an der Momentengrenze, `"sto"` lässt den Motor austrudeln. Eine blockierte Achse schaltet Fenster durch Drehzahl nach der Berührung ab (4 ms an der Einzelachse bei 1 m/s); eine Achse ohne Berührung hält innerhalb v² / (2a) ihrer Rampe. Freigeben quittiert die Störung; wieder freigegeben, können die Antriebe die Maschine aus dem Hindernis fahren, und eine Fahrt hinein schaltet sie wieder ab. Eine PLCopen-Achse meldet einen Crash als ErrorID 8, sobald die Antriebe aus sind.
 - `--time-optimal` weist eine Bahn zurück, die näher kommt als der Abstand; `optimise` nimmt keine Einstellung, deren Lauf das tut.
-- Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste.
-- Der Abstand gilt zwischen Quadern: Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet, nicht ihre CAD-Formen. Die Unterarmstäbe und Oberarme des Delta-Pickers sind je zehn Quader entlang des gezeichneten Stabs oder Arms, wo er schräg steht bis zu einer Stücklänge (95 mm am Stab, 40 mm am Arm) breiter als er.
+- Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste. Schalten die Antriebe ab, sagen die Meldungen sofort, welcher Motor wann über welche Überwachung abgeschaltet hat und wie jeder Antrieb anhält, während 3D-Ansicht und Scopes die Achsen die Rampe herunterfahren oder austrudeln zeigen; steht die Maschine, wie weit jede Achse ab der Abschaltung fuhr.
+- Der Abstand gilt zwischen den Quadern von Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet (nicht ihren CAD-Formen), und den Kapseln der schrägen Teile: Unterarmstäbe und Oberarme des Delta-Pickers und das Teleskop des D4, jedes die Punkte innerhalb der halben gezeichneten Breite um seine gezeichnete Strecke, genau, wie schräg es auch steht.
 
 ## Von einem laufenden Förderband greifen
 
@@ -1239,7 +1244,7 @@ unaccounted,-8.666425e-4,-0.000006
 | `windings`, `capacitors` | Was die Induktivität der Wicklungen und die Zwischenkreiskondensatoren am Ende mehr halten als am Anfang |
 | `energy.kinetic`, `.potential`, `.elastic` | Was die Maschine am Ende des Durchlaufs mehr hält als am Anfang; bei einem wiederholten Zyklus nahe null |
 | `payload` | Energie, die mit der abgesetzten Nutzlast ging, weniger der, die mit der aufgenommenen kam |
-| `crash` | Mit `effects.crash`: was die Stopps an Hindernissen der Maschine genommen haben, beim Aufprall verloren |
+| `crash` | Mit `effects.crash`: die Arbeit, die das Zurückdrücken der Hindernisse der Maschine genommen hat (was ihre Dämpfung verlor und ihre Federn halten) |
 | `unaccounted` | Was die Zeilen von der Einspeisung übrig lassen. Unter 0,1 % davon auf jeder Konfiguration, auch den verlustfreien. Die elektrische Seite allein (Einspeisung gegen Kupfer, Widerstand, Netz, Line Module, Wicklungen, Kondensatoren und die Arbeit der Momente an den Wellen) wird auf ein Millionstel der Einspeisung geprüft: Der Wicklungsstrom wird zusammen mit der Mechanik integriert |
 
 Beim Standard-T-Portal nehmen die Führungen die Hälfte, die Motorwellen ein Drittel, Getriebe, Wicklungen und Bremswiderstand je einige Prozent; die Riemendämpfung fast nichts.

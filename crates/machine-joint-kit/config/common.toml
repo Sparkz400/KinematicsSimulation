@@ -75,8 +75,13 @@ fieldbus_delay = false
 fieldbus_jitter = false
 sensor_noise = false
 shaper_follows_pose = false
-# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+# Obstacles push back on a part that goes into them with their contact stiffness and damping, so that the axes in
+# contact are blocked (see docs/model-reference.md). Off by default; without obstacles it changes nothing.
 crash = false
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
 
 # With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
 # delta picker's planetary gearboxes.

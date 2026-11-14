@@ -1,12 +1,14 @@
-//! Obstacles and crash detection against hand calculations: the clearance of a box beside a straight move, the stop of
-//! a move into a box with effects.crash, the check "collision" on a cycle, and the refused time-optimal path.
+//! Obstacles and crash detection against hand calculations: the clearance of a box beside a straight move, a move into
+//! a box with effects.crash (blocked by the box's push, tripped by the drive's monitoring, stopped by its fault
+//! reaction), the check "collision" on a cycle, and the refused time-optimal path.
 
 use sim_components::analysis::{analyse_cycle, verdicts};
 use sim_components::collision::check_cycle;
+use sim_components::fault::Monitor;
 use sim_components::path::Piece;
 use sim_components::{Command, Sim};
 use sim_core::Config;
-use sim_machines::{MACHINES, find};
+use sim_machines::{MACHINES, find, load_file};
 
 fn with(entry: &sim_core::MachineEntry, settings: &[&str]) -> Config {
     let mut cfg = entry.config();
@@ -45,18 +47,23 @@ fn a_box_beside_a_straight_move_keeps_the_clearance_by_hand() {
 /// A box across the way: its face at x = 0.75 - 0.05 = 0.70, the carriage's front at 0.15 + x + 0.08, so they meet at
 /// x = 0.47. The move from 0.1 to 0.9 at 1 m/s, 10 m/s² and 100 m/s³ is at its top speed from 0.1 m after the start
 /// (a jerk-limited ramp of 0.2 s covers v T / 2 = 0.1 m) until 0.1 m before the end: at 0.37 m from the start it is
-/// cruising at 1 m/s. With effects.crash the carriage stops at the face (put back along the step that went in, where
-/// it was up to one base step's travel inside, 62.5 um at 1 m/s) and the drives go off; the impact speed is the
-/// planned 1 m/s. Without the crash the carriage runs through.
+/// cruising at 1 m/s. With effects.crash the box pushes back and blocks the axis. With effects.drive_monitoring the
+/// blocked motor's following error grows at the setpoint's speed, 1 m/s * i / r = 1 * 5 / 0.02 = 250 rad/s, and crosses
+/// its 1 rad window 1 / 250 = 4 ms after the contact; the position loop sees it at its next cycle (1 ms) and the motor
+/// takes some 0.1 rad more before it stands, so the drive trips 4 to 6 ms after the contact, on its following error.
+/// It stops (OFF3, the motor already nearly at rest) and the carriage comes to rest at the face: at most 3 mm in (it
+/// swings on its belt, as the push holds the motor: `Sim::pushes`), at most 20 mm back where the box pushed it.
+/// Without the crash the carriage runs through.
 #[test]
-fn a_move_into_a_box_stops_at_its_face_at_the_planned_speed() {
+fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
     let entry = find("single-axis").unwrap();
     let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
     let planned = Sim::new(entry, &with(entry, &[wall])).unwrap().check_plan(&[vec![0.1], vec![0.9]]).unwrap();
     let contact_pose = planned.contact.as_ref().unwrap()[0];
     assert!(planned.clearance < 0.0 && (contact_pose - 0.47).abs() <= 1e-3, "{planned:?}");
 
-    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    let monitored = [wall, "effects.crash = true", "effects.drive_monitoring = true"];
+    let mut sim = Sim::new(entry, &with(entry, &monitored)).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     let mut planned_speed = None;
     while sim.contact.is_none() && sim.time() < 2.0 {
@@ -72,12 +79,19 @@ fn a_move_into_a_box_stops_at_its_face_at_the_planned_speed() {
     assert!((contact.speed - 1.0).abs() < 0.03, "impact at {} m/s", contact.speed);
     // From rest at 0.1: 0.1 m in 0.2 s, then 0.27 m at 1 m/s, and the tool lags by the following error.
     assert!((contact.time - 0.47).abs() < 0.03, "contact at {} s", contact.time);
-    assert!(!sim.control.enabled());
     sim.run(0.5, |_| {});
+    let fault = sim.control.fault.clone().expect("the drive trips");
+    let after = fault.time - (contact.time + 1.0 / 250.0);
+    assert!(fault.monitor == Monitor::FollowingError && fault.drive == 0, "{fault:?}");
+    assert!((0.0..0.002).contains(&after), "tripped {after} s after the window crossing");
+    assert!(sim.crashed && !sim.control.enabled() && fault.stopped.is_some(), "{fault:?}");
+    let (_, front) = carriage_front(&sim);
     let (mut pos, mut vel) = ([0.0], [0.0]);
     sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
-    let front = 0.15 + pos[0] + 0.08;
-    assert!((front - 0.70).abs() < 1e-9 && vel[0].abs() < 1e-3, "front {front}, speed {}", vel[0]);
+    assert!(front < 0.703 && front > 0.68 && vel[0].abs() < 1e-3, "front {front}, speed {}", vel[0]);
+    // The impact is harder than the push at the current limit (950 N, below).
+    let impact = sim.contact.clone().unwrap();
+    assert!(impact.peak_force > 950.0 && impact.impact_energy > 0.0, "{impact:?}");
 
     let mut through = Sim::new(entry, &with(entry, &[wall])).unwrap();
     through.command(Command::MoveTo(vec![0.9])).unwrap();
@@ -88,10 +102,9 @@ fn a_move_into_a_box_stops_at_its_face_at_the_planned_speed() {
     // Through and past it: at x = 0.9 the carriage's back is at 0.97, beyond the wall's far face at 0.80.
     assert!(!scene.obstacles[0].contact && scene.first_contact == through.contact.as_ref().map(|c| c.time));
 
-    // The energy budget of the same move with the crash closes, to `BUDGET_TOLERANCE` as on the shipped cycles: what the
-    // stop took out of the machine is its own row, `crash` (it was not booked, and the budget was off by it), and so is
-    // what the DC link of the drives, off from the stop on, lost through its bleeder, `discharge` (0.07 J, 0.3 %); the
-    // electrical side closes to `ELECTRICAL_TOLERANCE`.
+    // The energy budget of the same move with the crash (the drive unmonitored, pushing on) closes, to
+    // `BUDGET_TOLERANCE` as on the shipped cycles: what the box's push took out of the machine is its own row, `crash`,
+    // integrated with the motion; the electrical side closes to `ELECTRICAL_TOLERANCE`.
     let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
     let points = sim.plan_path(&[Piece::Line(vec![0.9])], false).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
@@ -110,6 +123,77 @@ fn a_move_into_a_box_stops_at_its_face_at_the_planned_speed() {
         "electrical: {} J",
         budget.electrical_unaccounted()
     );
+}
+
+/// The same move into the box without drive monitoring: nothing trips, and the blocked drive pushes on at its torque
+/// limit, the peak torque 3.8 N m (at the motor's maximum current 9.5 A, within the drive's 10.9 A). At rest the box
+/// holds it with F = T_max i / r = 3.8 N m * 5 / 0.02 m = 950 N, less what the motor's own Coulomb friction (at most
+/// 0.02 N m, 5 N at the box) takes.
+#[test]
+fn a_blocked_axis_pushes_with_the_hand_calculated_force_at_the_current_limit() {
+    let entry = find("single-axis").unwrap();
+    let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
+    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    sim.command(Command::MoveTo(vec![0.9])).unwrap();
+    sim.run(1.5, |_| {});
+    let torque = sim.control.drives[0].torque;
+    println!("torque {torque} N m, contact force {} N", sim.contact_force);
+    assert!(sim.control.enabled() && sim.control.fault.is_none() && !sim.crashed);
+    assert!((torque - 3.8).abs() < 1e-3, "{torque} N m");
+    assert!((sim.contact_force - 950.0).abs() < 5.0, "{} N", sim.contact_force);
+}
+
+/// The xyz portal lowers onto a slab while it traverses: from (0.1, 0.1, 0.25) to (0.9, 0.1, 0.0), X cruising at its
+/// 0.8 m/s, Z at 0.25 m/s (the move takes as long on both). The parts' lowest point is 0.06 m below the tool, so the
+/// slab's top at z = 0.16 meets it at z = 0.10. Z is blocked there and trips on its following error after
+/// 1 rad / (0.25 m/s * 10 / 0.02 m) = 8 ms (one position cycle, 1 ms, more at most). X is not touched and runs on until
+/// its fault reaction stops it. OFF3: the rated speed 314 rad/s in 0.1 s at the motor is 3140 rad/s², times
+/// r / i = 0.02 / 5 m at the carriage 12.56 m/s²; from v = 0.8 m/s that takes v² / (2a) = 25.48 mm, give or take the
+/// speed loop's lag behind the ramp (about a millisecond, under 1.6 mm at 0.8 m/s). OFF1 (1 s from the rated speed,
+/// 1.256 m/s²) takes ten times as far, 254.8 mm. STO, without a holding brake, leaves the motor to coast on its
+/// friction, further than OFF3 by far.
+#[test]
+fn the_axis_not_in_contact_stops_on_its_fault_reaction_ramp() {
+    let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/xyz-portal.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let slab = r#"obstacles = [{ name = "slab", centre_m = [0.0, 0.0, -0.34], size_m = [10.0, 10.0, 1.0] }]"#;
+    let run = |reaction: &str| {
+        let reaction = format!("drive.fault_reaction = {reaction:?}");
+        let settings = [
+            slab,
+            "effects.crash = true",
+            "effects.drive_monitoring = true",
+            "effects.holding_brake = false",
+            &reaction,
+        ];
+        let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
+        sim.command(Command::MoveTo(vec![0.9, 0.1, 0.0])).unwrap();
+        // The tool's speed along x at the trip: the drives trip at the start of a step, on what the step before left.
+        let (mut pos, mut vel, mut speed) = ([0.0; 3], [0.0; 3], 0.0);
+        while sim.control.fault.is_none() && sim.time() < 2.0 {
+            sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+            speed = vel[0];
+            sim.step();
+        }
+        sim.run(1.5, |_| {});
+        (sim, speed)
+    };
+    let (sim, v) = run("off3");
+    let (contact, fault) = (sim.contact.clone().unwrap(), sim.control.fault.clone().unwrap());
+    println!("contact {contact:?}\n{fault:?}, {v} m/s at the trip");
+    let after = fault.time - contact.time;
+    assert!(fault.monitor == Monitor::FollowingError && fault.drive == 2, "{fault:?}");
+    assert!((0.008..0.010).contains(&after), "tripped {after} s after the contact");
+    assert!((v - 0.8).abs() < 0.01 && sim.crashed && !sim.control.enabled() && fault.stopped.is_some(), "{v} m/s");
+    let off3 = v * v / (2.0 * 3140.0 * 0.02 / 5.0);
+    // The ramp starts from the speed the drive measured, and the speed loop lags behind it: within 2 ms at v either way.
+    assert!((fault.stopping[0] - off3).abs() < 0.002 * v, "{} m against {off3} m", fault.stopping[0]);
+    let (sim, v) = run("off1");
+    let (stopping, off1) = (sim.control.fault.unwrap().stopping[0], v * v / (2.0 * 314.0 * 0.02 / 5.0));
+    assert!((stopping - off1).abs() < 0.002 * v, "OFF1: {stopping} m against {off1} m");
+    let (sim, _) = run("sto");
+    let coasted = sim.control.fault.unwrap().stopping[0];
+    assert!(coasted > 3.0 * off3, "STO: {coasted} m");
 }
 
 /// The T-gantry draws its payload, a 0.1 m cube, centred 0.752 m below the tool's z in the 3D view's z and 0.692 m
@@ -282,7 +366,7 @@ fn a_time_optimal_path_into_an_obstacle_is_refused() {
 }
 
 /// The collision bodies are built without the rest of the scene (it was drawn every base step), and are still the
-/// boxes the scene draws, to the last bit, or boxes around pieces of a segment it draws (the delta's forearms): on
+/// boxes the scene draws, to the last bit, and capsules along segments it draws (the deltas' rods, arms and shaft): on
 /// every machine, during its cycle (the T-gantry's Z axis leaning with tool flex and its frame swaying), with and
 /// without the payload.
 #[test]
@@ -298,6 +382,17 @@ fn the_collision_bodies_are_boxes_of_the_scene() {
             sim.machine.scene(&sim.state, &mut scene);
             let bodies = sim.machine.collision_bodies(&sim.state);
             assert!(!bodies.is_empty(), "{}", entry.id);
+            // A capsule is a drawn segment with half its width as radius.
+            for capsule in sim.machine.collision_capsules(&sim.state) {
+                let drawn = scene.parts.iter().any(|p| match p.shape {
+                    sim_core::Shape::Segment { to, width } => {
+                        let ends = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-12);
+                        ends(p.pos, capsule.from) && ends(to, capsule.to) && capsule.radius == width / 2.0
+                    }
+                    _ => false,
+                });
+                assert!(drawn, "{}: {capsule:?} is not drawn", entry.id);
+            }
             for body in bodies {
                 // A box drawn as such, or the box around a piece of a drawn segment (the delta's forearm rods): its
                 // centre on the segment, no wider than the segment's extent plus its width.
@@ -345,21 +440,20 @@ fn carriage_front(sim: &Sim) -> (f64, f64) {
     (pos[0], 0.15 + pos[0] + 0.08)
 }
 
-/// After a crash into the wall of `a_move_into_a_box_stops_at_its_face_at_the_planned_speed` the drives are enabled
-/// again and take the carriage back to 0.1; a move into the wall again stops it at the face and trips them again. (The
-/// stop used to leave the carriage up to one step's travel inside, and every step after `Enable` found the contact and
-/// tripped the drives: the machine could not be powered up again.)
+/// After a crash into the wall of `a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error` the drives
+/// are enabled again (which acknowledges the trip) and take the carriage back to 0.1; a move into the wall again is
+/// blocked at the face and trips them again. Held where the crash left them, they do not trip.
 #[test]
 fn after_a_crash_the_drives_are_enabled_again_and_move_out() {
     let entry = find("single-axis").unwrap();
     let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
-    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    let monitored = [wall, "effects.crash = true", "effects.drive_monitoring = true"];
+    let mut sim = Sim::new(entry, &with(entry, &monitored)).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     sim.run(1.0, |_| {});
     assert!(sim.crashed && !sim.control.enabled());
     sim.command(Command::Enable).unwrap();
-    // Held at the face, the drives stay on (they settle some 25 nm in; rounding alone moved it 4e-16 m in after 69
-    // steps, which tripped them).
+    assert!(sim.control.fault.is_none());
     sim.run(0.25, |_| {});
     assert!(sim.control.enabled() && !sim.crashed, "the drives tripped at rest at {:?}", carriage_front(&sim));
     sim.command(Command::MoveTo(vec![0.1])).unwrap();
@@ -371,14 +465,16 @@ fn after_a_crash_the_drives_are_enabled_again_and_move_out() {
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     sim.run(1.5, |_| {});
     let (_, front) = carriage_front(&sim);
-    assert!(sim.crashed && !sim.control.enabled() && (front - 0.70).abs() < 1e-9, "front {front}");
+    assert!(sim.crashed && !sim.control.enabled() && front < 0.703 && front > 0.68, "front {front}");
 }
 
-/// With effects.crash the obstacles are rigid with the drives off too. The single axis coasting at 1 m/s from x = 0.44
-/// with its drives off and no holding brake stops at the wall's face (it went 51 mm in). The T-gantry crashes its payload
-/// into a table at the pick position (top at -0.70, the payload's bottom 0.802 m below the tool's z in the view, so at
-/// z = 0.102) without a holding brake: the Z axis rests on the table (it fell the whole 0.1 m through). Both stop
-/// at the face (the T-gantry within `CREEP`, 1 um, of it), and the energy budget of the T-gantry's run closes.
+/// With effects.crash the obstacles push with the drives off too. The single axis coasting at 1 m/s from x = 0.44
+/// with its drives off and no holding brake is stopped by the wall and pushed back from it, at most 3 mm in (the
+/// carriage swings on its belt; the push holds the motor) and no more than 0.1 m back, where its friction stops it.
+/// The T-gantry lowers its payload onto a table at the pick position (top at -0.70, the payload's bottom 0.802 m below
+/// the tool's z in the view, so at z = 0.102) without a holding brake: blocked, its drives trip on their following
+/// error and stop, and the Z axis rests on the table, no more than 0.1 mm in (its weight on the belts' give, as the
+/// push holds the motors, and the push's own depth). The energy budget of the T-gantry's run closes.
 #[test]
 fn obstacles_stop_the_machine_with_its_drives_off() {
     let entry = find("single-axis").unwrap();
@@ -393,25 +489,23 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
     sim.run(0.5, |_| {});
     let (_, front) = carriage_front(&sim);
     assert!(sim.contact.is_some() && !sim.crashed && sim.crash_energy > 0.0, "{:?}", sim.contact);
-    // Stopped at the face, it is free to leave it: with no torque to hold it there it drifts a few um back.
-    assert!(front <= 0.70 + 1e-9 && front > 0.70 - 1e-4, "front {front}");
+    assert!(front < 0.703 && front > 0.6, "front {front}");
 
     let entry = find("t-gantry").unwrap();
     let table = r#"obstacles = [{ name = "table", centre_m = [0.25, -0.05, -0.75], size_m = [0.2, 0.2, 0.1] }]"#;
-    let mut sim =
-        Sim::new(entry, &with(entry, &[table, "effects.crash = true", "effects.holding_brake = false"])).unwrap();
+    let settings = [table, "effects.crash = true", "effects.holding_brake = false", "effects.drive_monitoring = true"];
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
     let points = sim.plan_path(&[Piece::Line(vec![0.1, 0.05])], false).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     sim.run(0.5, |_| {});
     let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
     sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
     println!("z {} m, clearance {} m, speed {} m/s", pos[1], sim.clearance, vel[1]);
-    // It may creep `CREEP` (1 um) in before it is put back where it stood.
     assert!(
         sim.crashed
-            && sim.clearance > -2e-6
+            && sim.clearance > -1e-4
             && sim.clearance < 1e-3
-            && (pos[1] - 0.102).abs() < 2e-6
+            && (pos[1] - 0.102).abs() < 1e-4
             && vel[1].abs() < 1e-3,
         "z {} m, clearance {} m",
         pos[1],

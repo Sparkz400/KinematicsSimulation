@@ -1030,9 +1030,9 @@ async fn plcopen_errors_and_reset() {
     plc.until(id, "MoveRelative.Done", 2.0).await;
 }
 
-/// A crash (effects.crash: the machine with one axis into a wall it meets at x = 0.47) puts the powered axis into
-/// ErrorStop with ErrorID 8, not 7. MC_Reset switches the drives on again, they stay on, and the axis moves out of
-/// the wall. (They tripped again at once: the stop left the carriage inside the wall, and every step found it there.)
+/// A crash (effects.crash: the machine with one axis into a wall it meets at x = 0.47; effects.drive_monitoring trips the
+/// blocked drive, which stops on its fault reaction) puts the powered axis into ErrorStop with ErrorID 8, not 7.
+/// MC_Reset switches the drives on again, they stay on, and the axis moves out of the wall.
 #[tokio::test(flavor = "multi_thread")]
 async fn plcopen_a_crash_is_reported_reset_and_left() {
     use sim_opcua::plcopen::ERR_CRASH;
@@ -1042,6 +1042,7 @@ async fn plcopen_a_crash_is_reported_reset_and_left() {
     cfg.set_text(r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#)
         .unwrap();
     cfg.set_text("effects.crash = true").unwrap();
+    cfg.set_text("effects.drive_monitoring = true").unwrap();
     let plc = connect_with(entry, &cfg, "plcopen-crash").await;
     let id = Sim::new(entry, &cfg).unwrap().machine.axes()[0].id;
     plc.axis_write(id, &[("Power.Enable", Variant::Boolean(true))]).await;

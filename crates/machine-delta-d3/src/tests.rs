@@ -1,6 +1,7 @@
 //! The delta against hand calculations: kinematics, holding torques, an inertia torque, the Adept cycle's time.
 
 use super::*;
+use sim_components::collision::Bodies;
 use sim_components::{Command, Sim};
 
 fn delta(edits: &[&str]) -> Delta {
@@ -695,10 +696,9 @@ fn the_arms_bending_out_of_their_planes_rings_at_the_hand_calculated_frequency()
 
 /// A box in the way of an upper arm and of nothing else: at the centre, 0.75 m down, arm 1's middle (on y = 0, the rods
 /// of its pair 0.05 m to either side) is where the box is put (0.02 m across). At the start pose (0.1525, 0, -0.75) arm
-/// 1 stands at another angle, its boxes some 6 mm from the obstacle; on the traverse to (-0.1525, 0, -0.75) it sweeps
-/// through it. Planned, the check
-/// finds the contact; run with effects.crash the drives trip. The platform's and the rods' boxes, the bodies until 14
-/// November, never touch it.
+/// 1 stands at another angle, its capsule more than 4 mm from the obstacle; on the traverse to (-0.1525, 0, -0.75) it
+/// sweeps through it. Planned, the check finds the contact; run with effects.crash and effects.drive_monitoring the
+/// blocked arm's drive trips and all stop. The platform's box and the rods' capsules never touch it.
 #[test]
 fn an_upper_arm_running_into_an_obstacle_is_a_crash() {
     let d = delta(&[]);
@@ -714,30 +714,52 @@ fn an_upper_arm_running_into_an_obstacle_is_a_crash() {
     cfg.set_text(&obstacle).unwrap();
     let start = cfg.f64s("start.pose").unwrap();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
-    let bodies = sim.machine.collision_bodies(&sim.state);
-    let rods = 2 + 6 * ROD_PIECES;
-    assert_eq!(bodies.len(), rods + 3 * ARM_PIECES);
-    let gap = |bodies: &[sim_core::Aabb]| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
-    println!("at the start {:.4} m, the rods and platform {:.4} m", gap(&bodies), gap(&bodies[..rods]));
-    assert!(gap(&bodies) > 0.004 && gap(&bodies[..rods]) > 0.05, "at the start {} m", gap(&bodies));
+    let bodies = Bodies::of(sim.machine.as_ref(), &sim.state);
+    assert_eq!((bodies.boxes.len(), bodies.capsules.len()), (2, 9));
+    let gap = |bodies: &Bodies| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
+    let rods = |b: &Bodies| Bodies { boxes: b.boxes.clone(), capsules: b.capsules[..6].to_vec() };
+    println!("at the start {:.4} m, the rods and platform {:.4} m", gap(&bodies), gap(&rods(&bodies)));
+    assert!(gap(&bodies) > 0.004 && gap(&rods(&bodies)) > 0.05, "at the start {} m", gap(&bodies));
     let planned = sim.check_plan(&[start, vec![-0.1525, 0.0, -0.75]]).unwrap();
     assert!(planned.clearance < 0.0 && planned.contact.is_some(), "{planned:?}");
     cfg.set_text("effects.crash = true").unwrap();
+    cfg.set_text("effects.drive_monitoring = true").unwrap();
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
     sim.command(Command::MoveTo(vec![-0.1525, 0.0, -0.75])).unwrap();
-    sim.run(0.5, |_| {});
+    sim.run(1.0, |_| {});
     let contact = sim.contact.as_ref().unwrap();
-    println!("contact at {:?}, {:.3} m/s", contact.pose, contact.speed);
-    assert!(sim.crashed && !sim.control.enabled() && contact.pose[0] > -0.1525 && contact.pose[0] < 0.1525);
-    let bodies = sim.machine.collision_bodies(&sim.state);
-    assert!(gap(&bodies[..rods]) > 0.0, "the rods and the platform {} m from it", gap(&bodies[..rods]));
+    let fault = sim.control.fault.as_ref().unwrap();
+    println!("contact at {:?}, {:.3} m/s; {fault:?}", contact.pose, contact.speed);
+    assert!(sim.crashed && !sim.control.enabled() && fault.stopped.is_some());
+    assert!(contact.pose[0] > -0.1525 && contact.pose[0] < 0.1525 && contact.peak_force > 0.0);
+    let bodies = Bodies::of(sim.machine.as_ref(), &sim.state);
+    assert!(gap(&rods(&bodies)) > 0.0, "the rods and the platform {} m from it", gap(&rods(&bodies)));
+}
+
+/// The forearm rods' collision bodies are as wide as the rods, not as the boxes around slanted pieces of them (up to a
+/// tenth of a rod, 95 mm, wider until 14 November). At the start pose a 0.1 mm cube is put 20 mm from each rod's
+/// middle, square to the rod: the clearance is 20 - 6 (the radius, half the 12 mm drawn) = 14 mm, less at most the
+/// cube's half diagonal (0.087 mm) for its corner. So no part of the body is wider than the rod's radius plus 0.1 mm.
+#[test]
+fn a_forearm_rod_is_no_wider_than_its_radius() {
+    let sim = Sim::new(&ENTRY, &ENTRY.config()).unwrap();
+    let bodies = Bodies::of(sim.machine.as_ref(), &sim.state);
+    for rod in &bodies.capsules[..6] {
+        assert_eq!(rod.radius, 0.006);
+        let u: V3 = std::array::from_fn(|i| rod.to[i] - rod.from[i]);
+        let side = if u[2].abs() < 0.9 * norm(u) { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+        let n = cross(u, side);
+        let centre: V3 = std::array::from_fn(|i| 0.5 * (rod.from[i] + rod.to[i]) + 0.02 * n[i] / norm(n));
+        let gap = rod.gap(&sim_core::Aabb { centre, size: [1e-4; 3] }).2;
+        assert!(gap <= 0.014 + 1e-12 && gap > 0.014 - 1e-4, "{gap}");
+    }
 }
 
 /// A box in the way of a forearm and of nothing else: at the centre, 0.75 m down, leg 1's rod on the +y side has its
 /// middle where the box is put (0.03 m across). From the start pose (0.1525, 0, -0.75) that middle is some 0.08 m
 /// away in x; on the traverse to (-0.1525, 0, -0.75) the rod sweeps through it. Planned, the check finds the contact;
-/// run with effects.crash the drives trip. The platform passes far below: the box's bottom lies more than 0.3 m above
-/// the platform's top, so the platform's and payload's boxes alone (the bodies until 13 November) never touch it.
+/// run with effects.crash and effects.drive_monitoring the drives trip. The platform passes far below: the box's
+/// bottom lies more than 0.3 m above the platform's top, so the platform's and payload's boxes alone never touch it.
 #[test]
 fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let d = delta(&[]);
@@ -755,21 +777,23 @@ fn a_forearm_running_into_an_obstacle_is_a_crash() {
     cfg.set_text(&obstacle).unwrap();
     let start = cfg.f64s("start.pose").unwrap();
     let sim = Sim::new(&ENTRY, &cfg).unwrap();
-    let bodies = sim.machine.collision_bodies(&sim.state);
-    assert_eq!(bodies.len(), 2 + 6 * ROD_PIECES + 3 * ARM_PIECES);
-    let gap = |bodies: &[sim_core::Aabb]| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
-    assert!(gap(&bodies) > 0.0 && gap(&bodies[..2]) > 0.3, "at the start {} m", gap(&bodies));
+    let bodies = Bodies::of(sim.machine.as_ref(), &sim.state);
+    assert_eq!((bodies.boxes.len(), bodies.capsules.len()), (2, 9));
+    let gap = |bodies: &Bodies| sim_components::collision::nearest(bodies, &sim.obstacles).unwrap().1.2;
+    let platform = |b: &Bodies| Bodies { boxes: b.boxes.clone(), capsules: Vec::new() };
+    assert!(gap(&bodies) > 0.0 && gap(&platform(&bodies)) > 0.3, "at the start {} m", gap(&bodies));
     let planned = sim.check_plan(&[start, vec![-0.1525, 0.0, -0.75]]).unwrap();
     assert!(planned.clearance < 0.0 && planned.contact.is_some(), "{planned:?}");
     cfg.set_text("effects.crash = true").unwrap();
+    cfg.set_text("effects.drive_monitoring = true").unwrap();
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
     sim.command(Command::MoveTo(vec![-0.1525, 0.0, -0.75])).unwrap();
-    sim.run(0.5, |_| {});
+    sim.run(1.0, |_| {});
     let contact = sim.contact.as_ref().unwrap();
-    println!("contact at {:?}, {:.3} m/s", contact.pose, contact.speed);
+    println!("contact at {:?}, {:.3} m/s; {:?}", contact.pose, contact.speed, sim.control.fault);
     assert!(sim.crashed && !sim.control.enabled() && contact.pose[0] > -0.1525 && contact.pose[0] < 0.1525);
-    let bodies = sim.machine.collision_bodies(&sim.state);
-    assert!(gap(&bodies[..2]) > 0.3, "the platform {} m from it", gap(&bodies[..2]));
+    let bodies = Bodies::of(sim.machine.as_ref(), &sim.state);
+    assert!(gap(&platform(&bodies)) > 0.3, "the platform {} m from it", gap(&platform(&bodies)));
 }
 
 /// Transition curves on the delta's three axes, with `profile.path_tolerance_m` = 0.1 mm: a line along x onto a circle

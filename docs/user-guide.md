@@ -843,19 +843,24 @@ Put the obstacles of the work area into the config as boxes along the axes of th
 
 ```text
 $ sim-cli run single-axis --move 0.9 --time 1.5 --out run.csv --set "effects.crash=true" \
+    --set "effects.drive_monitoring=true" \
     --set 'obstacles=[{name="wall",centre_m=[0.75,-0.03,0.06],size_m=[0.1,0.2,0.2]}]'
-Planned path: least clearance to the obstacles -85.0 mm
+Planned path: least clearance to the obstacles -115.0 mm
 Planned path: first contact with an obstacle at the pose 0.4700
-Run: least clearance to the obstacles -0.0 mm
+Run: least clearance to the obstacles -2.6 mm
 Run: first contact with an obstacle (name: time, speed of the tool, pose) wall: 0.4701 s, 1.0000 /s, 0.4700
+Run: largest contact force, contact force now and impact energy 7205.5 N, 0.0 N, 1.3050 J
+Run: the drives tripped (monitor: motor, time; fault reaction per motor) following error beyond its window: m, 0.4750 s; m: OFF3, the speed ramps down on the fast-stop ramp
+Run: stopping distance per axis from the trip (the machine stood at) 0.0070 (0.4884 s)
 ```
 
-- `run` says before the run what the move, path or cycle keeps from the obstacles as planned, and after it the run's least clearance and its first contact: when, how fast the tool went and where. Nothing is said without obstacles.
+- `run` says before the run what the move, path or cycle keeps from the obstacles as planned, and after it the run's least clearance and its first contact: when, how fast the tool went and where; with the crash the largest contact force, the force now and the impact energy; and when the drives tripped, which monitor of which motor, how each drive stops and how far each axis went from the trip until the machine stood. Nothing is said without obstacles or a trip.
 - `verdicts` says the same of the cycle as planned and judges the run with the check `collision`: its least clearance against `profile.min_clearance_m`, failing at any contact. Without obstacles the check is not made.
-- `effects.crash` (off by default) makes the obstacles rigid: a part moving into one stops dead at its face, with the drives on or off (a machine coasting or falling with its drives off stops there too), and drives that were on go off. Enabled again, the drives can take the machine out of the obstacle; a move further into it stops it and takes them off again. A PLCopen axis reports such a stop as ErrorID 8. Off, contacts are reported and the machine moves through.
+- `effects.crash` (off by default) makes the obstacles push back, with their contact stiffness and damping (`stiffness_n_m`, `damping_n_s_m` in an obstacle's entry; 1e7 N/m and 1e4 N s/m without), with the drives on or off: the axes in contact are blocked, the others go on. A drive at its current limit pushes with its peak torque times ratio over pulley radius (950 N on the single axis) and stays there as long as nothing trips it. Off, contacts are reported and the machine moves through.
+- `effects.drive_monitoring` (off by default) has the drives watch themselves as servo drives do: the following error against a window (`drive.following_error_window_rad`, 1 rad at the motor), the following error at standstill against a tighter one, a motor held at its torque limit at low speed for 3 s, and optionally the torque against the model's. The first that trips stops all drives, each by `drive.fault_reaction` (per motor as `[drive.<id>]`): `"off3"` ramps down on the fast-stop ramp (`off3_ramp_s`, 0.1 s from the rated speed), `"off1"` on the normal ramp (`off1_ramp_s`, 1 s), `"current_limit"` brakes at the torque limit, `"sto"` lets the motor coast. A blocked axis trips some window / speed after the contact (4 ms on the single axis at 1 m/s); an axis not in contact stops within v² / (2a) of its ramp. Enabling the drives acknowledges the trip; enabled again, they can take the machine out of the obstacle, and a move into it trips them again. A PLCopen axis reports a crash as ErrorID 8 once the drives are off.
 - `--time-optimal` refuses a path that comes nearer than the clearance; `optimise` takes no setting whose run does.
-- The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline.
-- The clearance is between boxes: the tool, carriage, Z axis, platform and payload as the 3D view draws them, not their CAD shapes. The delta's forearm rods and upper arms are each ten boxes along the drawn rod or arm, up to a piece's length (95 mm on a rod, 40 mm on an arm) wider than it where it slants.
+- The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline. When the drives trip, Messages says at once which motor tripped when, on which monitor, and how each drive stops, while the 3D view and the scopes show the axes ramping down or coasting; once the machine stands, how far each axis went from the trip.
+- The clearance is between the boxes of the tool, carriage, Z axis, platform and payload as the 3D view draws them (not their CAD shapes) and the capsules of the slanted parts: the delta's forearm rods and upper arms and the D4's telescope, each the points within half its drawn width of its drawn segment, exact however it slants.
 
 ## Pick from a moving conveyor
 
@@ -1213,7 +1218,7 @@ unaccounted,-8.666425e-4,-0.000006
 | `windings`, `capacitors` | What the windings' inductance and the DC link capacitors hold more at the end than at the start |
 | `energy.kinetic`, `.potential`, `.elastic` | What the machine holds more at the end of the pass than at the start; near zero for a repeating cycle |
 | `payload` | Energy that left with the payload put down, less what came with the one picked up |
-| `crash` | With `effects.crash`: what the stops at obstacles took out of the machine, lost in the impact |
+| `crash` | With `effects.crash`: the work the obstacles' pushes took out of the machine (what their damping lost and their springs hold) |
 | `unaccounted` | What the rows leave of the supply. Below 0.1 % of it on every config, the loss-free ones included. The electrical side alone (supply against copper, resistor, mains, line module, windings, capacitors and the work of the torques on the shafts) is checked to a millionth of the supply: the winding current is integrated together with the mechanics |
 
 On the default T-gantry the guides take half the supply, the motor shafts a third, gearboxes, windings and the braking resistor a few percent each; the belt's damping takes almost nothing.
