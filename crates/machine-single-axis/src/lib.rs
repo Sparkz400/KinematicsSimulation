@@ -677,6 +677,13 @@ impl Machine for SingleAxis {
         vec![wrap_angle(r, [self.span_min + tool_pose[0], r, 0.0], [end, 0.0, -r])]
     }
 
+    fn memory(&self) -> Vec<f64> {
+        self.gearbox.anchor.to_vec()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        Gearbox::set_anchors([&mut self.gearbox], memory)
+    }
+
     /// Belt tooth jump at the motor pulley (`ToothJump`); section 1 is the one a positive slip feeds.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;

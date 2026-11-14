@@ -2804,6 +2804,13 @@ impl Machine for ConfigMachine {
         self.brake_engaged = engaged;
     }
 
+    fn memory(&self) -> Vec<f64> {
+        Gearbox::anchors(&self.gears)
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        Gearbox::set_anchors(&mut self.gears, memory)
+    }
+
     /// Belt tooth jump at each motor pulley (`ToothJump`): a positive slip feeds the section the pulley feeds.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.jump_loss = 0.0;

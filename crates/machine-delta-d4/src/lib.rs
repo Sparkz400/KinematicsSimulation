@@ -588,6 +588,15 @@ impl Machine for Delta4 {
             self.tool.gearbox.commit(rotor, c);
         }
     }
+    /// The arms' gearboxes, then the tool's.
+    fn memory(&self) -> Vec<f64> {
+        [self.arms.memory(), self.tool.gearbox.anchor.to_vec()].concat()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        let arms = memory.len().saturating_sub(2);
+        self.arms.set_memory(&memory[..arms]);
+        sim_components::mech::Gearbox::set_anchors([&mut self.tool.gearbox], &memory[arms..]);
+    }
 
     /// The arms' three gearboxes, then the tool's.
     fn set_part_temperatures(&mut self, rises: &[f64]) {

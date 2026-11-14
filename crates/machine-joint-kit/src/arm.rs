@@ -650,6 +650,14 @@ impl Mechanism for Arm {
             Tool::Pose(p) => p.inverse(&|q: &[f64]| self.tip(q), tool, q),
         }
     }
+    fn memory(&self) -> Vec<f64> {
+        if let Tool::Pose(p) = &self.tool { p.memory() } else { Vec::new() }
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        if let Tool::Pose(p) = &self.tool {
+            p.set_memory(memory)
+        }
+    }
     /// In tool space: out of reach, a turn of the flange near half a turn from its orientation at zero joints (where
     /// its rotation vector jumps), or too near a singularity; the joints' stops are the joint machine's to check.
     fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {

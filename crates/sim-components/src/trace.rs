@@ -163,7 +163,12 @@ impl Trace {
 /// path. With a row per profile cycle the position setpoints are reproduced exactly; the speed and
 /// acceleration setpoints are slopes between rows.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
-    let mut sim = Sim::new(entry, cfg)?;
+    // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's
+    // `profile.trajectory_spline`): the C2 spline, clamped at rest at the end of the run-out below, rang back over
+    // the rows before it, the last ones off by 4 N m of torque on the single axis and 800 N m on the linear motor.
+    let mut cfg = cfg.clone();
+    cfg.set_text("profile.trajectory_spline = \"hermite\"")?;
+    let mut sim = Sim::new(entry, &cfg)?;
     let rows = trace.time.len();
     // The first row is the start, and carrying on behind the last one (below) takes three more.
     if rows < 4 {
