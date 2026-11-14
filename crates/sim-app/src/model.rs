@@ -245,13 +245,16 @@ fn answer<T>(job: &Job<T>) -> Option<Result<T, Message>> {
 pub type Table = Vec<Vec<String>>;
 
 /// The table headers of the analysis panel, as translation keys.
-const CYCLE_KEYS: [&str; 12] = [
+const CYCLE_KEYS: [&str; 15] = [
     "ui-analysis-cycle-time",
     "ui-analysis-duration",
     "ui-analysis-path-deviation",
     "ui-analysis-path-error",
     "ui-analysis-tracking-error",
     "ui-analysis-dwell-error",
+    "ui-analysis-path-angle-error",
+    "ui-analysis-tracking-angle-error",
+    "ui-analysis-dwell-angle-error",
     "ui-analysis-belt-min",
     "ui-analysis-slack-time",
     "ui-analysis-radial-load",
@@ -367,7 +370,7 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 42] = [
+const CHECKS: [&str; 43] = [
     "motor-peak",
     "motor-thermal",
     "pulley-torque",
@@ -377,6 +380,7 @@ const CHECKS: [&str; 42] = [
     "braking-resistor-continuous",
     "braking-resistor-peak",
     "settling",
+    "settling-angle",
     "belt-tension",
     "belt-slack",
     "gearbox-input-speed",
@@ -1658,7 +1662,8 @@ impl Model {
         )
         .ok();
         let life = resolved.as_ref().and_then(|cfg| guide_life_km(cfg, load));
-        // In the order of `CYCLE_KEYS`; lengths in mm.
+        // In the order of `CYCLE_KEYS`; lengths in mm, angles in mrad (where the tool has axes in rad: else all 0).
+        let turns = load.path_angle_error_peak > 0.0 || load.dwell_angle_error_peak > 0.0;
         let figures = [
             (!path).then_some(load.duration),
             path.then_some(load.duration),
@@ -1666,6 +1671,9 @@ impl Model {
             Some(load.path_error_peak * 1e3),
             path.then_some(load.tracking_error_peak * 1e3),
             (!path).then_some(load.dwell_error_peak * 1e3),
+            turns.then_some(load.path_angle_error_peak * 1e3),
+            (turns && path).then_some(load.tracking_angle_error_peak * 1e3),
+            (turns && !path).then_some(load.dwell_angle_error_peak * 1e3),
             load.belt_tension.map(|(lowest, _)| lowest),
             load.belt_slack_time,
             load.radial_load_peak,
@@ -2384,6 +2392,13 @@ impl Model {
             short(found.before.dwell_error_peak * 1e3),
             short(found.after.dwell_error_peak * 1e3),
         ]);
+        if found.before.dwell_angle_error_peak > 0.0 {
+            table.push(vec![
+                self.tr.tr("ui-analysis-dwell-angle-error").to_string(),
+                short(found.before.dwell_angle_error_peak * 1e3),
+                short(found.after.dwell_angle_error_peak * 1e3),
+            ]);
+        }
         // The new cycle itself is applied whole; its lifts say what changed in it (segments counted from 1).
         for (path, before, after) in found.changes.iter().filter(|c| c.0 != "cycle.segment") {
             table.push(vec![self.param_label(path), before.clone(), after.clone()]);

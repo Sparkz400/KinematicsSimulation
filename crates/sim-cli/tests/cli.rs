@@ -161,7 +161,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let table = text(&out.stdout);
         assert_eq!(
             table.lines().next().unwrap(),
-            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload"
+            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload"
         );
         let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
         assert_eq!(rows.len(), motors);
@@ -544,12 +544,20 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
             entry.id
         );
         // Four significant digits for every value: some tens of micrometres off the target do not print as 0.0000.
-        let settling = rows.iter().find(|r| r[0] == "settling").unwrap();
+        // The place's (axes in m) where the machine has such axes, else the turn's (axes in rad): a machine whose axes
+        // are all angles (an arm in joints, a table) is off by none in m.
+        let placed = sim_components::Sim::new(entry, &cfg).unwrap().machine.axes().iter().any(|a| a.unit == "m");
+        let (check, key) = if placed {
+            ("settling", "ratings.settling_tolerance_m")
+        } else {
+            ("settling-angle", "ratings.settling_tolerance_rad")
+        };
+        let settling = rows.iter().find(|r| r[0] == check).unwrap();
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
         assert!(
             value > 1e-6
                 && (value < limit) == (settling[4] == "ok")
-                && limit == entry.config().f64("ratings.settling_tolerance_m").unwrap()
+                && limit == entry.config().f64(key).unwrap()
                 && settling[2].trim_start_matches("0.0").len() >= 4,
             "{}: {settling:?}",
             entry.id

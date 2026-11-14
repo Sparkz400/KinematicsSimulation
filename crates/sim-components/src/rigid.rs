@@ -34,9 +34,6 @@ fn tmul(m: &M3, v: V3) -> V3 {
 pub fn matmul(a: &M3, b: &M3) -> M3 {
     std::array::from_fn(|r| std::array::from_fn(|c| a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c]))
 }
-fn transpose(m: &M3) -> M3 {
-    std::array::from_fn(|i| std::array::from_fn(|j| m[j][i]))
-}
 const IDENTITY: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 /// URDF's roll-pitch-yaw: R = Rz(yaw) Ry(pitch) Rx(roll).
@@ -62,6 +59,74 @@ pub fn about(k: V3, angle: f64) -> M3 {
     ]
 }
 
+pub fn transpose(m: &M3) -> M3 {
+    std::array::from_fn(|i| std::array::from_fn(|j| m[j][i]))
+}
+
+/// The rotation vector (axis times angle, angle up to pi) of a rotation matrix.
+pub fn log(r: &M3) -> V3 {
+    let vee = [r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1]];
+    let cos = ((r[0][0] + r[1][1] + r[2][2] - 1.0) / 2.0).clamp(-1.0, 1.0);
+    let sin = 0.5 * dot(vee, vee).sqrt();
+    let angle = sin.atan2(cos);
+    if angle < 1e-6 {
+        // sin a / a = 1 - a^2/6: below 1e-6 rad the correction is under 1e-12 of the angle.
+        return vee.map(|v| 0.5 * v * (1.0 + angle * angle / 6.0));
+    }
+    if angle < std::f64::consts::PI - 1e-6 {
+        return vee.map(|v| v * angle / (2.0 * sin));
+    }
+    // Near a half turn R + I = 2 k k^T (cos a + 1 small): the axis from its largest diagonal entry, its sign from vee.
+    let i = (0..3).max_by(|&a, &b| r[a][a].total_cmp(&r[b][b])).unwrap_or(0);
+    let col: V3 = std::array::from_fn(|k| r[k][i] + if k == i { 1.0 } else { 0.0 });
+    let norm = dot(col, col).sqrt();
+    let sign = if dot(col, vee) < 0.0 { -1.0 } else { 1.0 };
+    col.map(|v| sign * v / norm * angle)
+}
+
+/// The rotation of a rotation vector.
+pub fn exp(r: V3) -> M3 {
+    let angle = dot(r, r).sqrt();
+    if angle == 0.0 { IDENTITY } else { about(r.map(|v| v / angle), angle) }
+}
+
+/// The unit quaternion (w, x, y, z) of a rotation vector.
+pub fn quaternion(r: V3) -> [f64; 4] {
+    let angle = dot(r, r).sqrt();
+    let (s, c) = (0.5 * angle).sin_cos();
+    // sin(a/2) / a -> 1/2 for a small angle.
+    let k = if angle > 1e-12 { s / angle } else { 0.5 };
+    [c, k * r[0], k * r[1], k * r[2]]
+}
+
+/// The rotation vector of a unit quaternion, the angle up to pi (q and -q are the same rotation).
+pub fn from_quaternion(q: [f64; 4]) -> V3 {
+    let q = if q[0] < 0.0 { q.map(|v| -v) } else { q };
+    let s = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    let angle = 2.0 * s.atan2(q[0]);
+    let k = if s > 1e-12 { angle / s } else { 2.0 };
+    [k * q[1], k * q[2], k * q[3]]
+}
+
+/// Spherical linear interpolation of two orientations given as rotation vectors: the turn from `a` to `b` about one
+/// fixed axis, the shorter way, `s` of it done (Shoemake 1985). As a rotation vector.
+pub fn slerp(a: V3, b: V3, s: f64) -> V3 {
+    let (qa, mut qb) = (quaternion(a), quaternion(b));
+    let mut cos: f64 = (0..4).map(|i| qa[i] * qb[i]).sum();
+    if cos < 0.0 {
+        (qb, cos) = (qb.map(|v| -v), -cos);
+    }
+    let angle = cos.clamp(-1.0, 1.0).acos();
+    let (wa, wb) = if angle < 1e-9 {
+        (1.0 - s, s)
+    } else {
+        (((1.0 - s) * angle).sin() / angle.sin(), (s * angle).sin() / angle.sin())
+    };
+    let q: [f64; 4] = std::array::from_fn(|i| wa * qa[i] + wb * qb[i]);
+    let norm = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+    from_quaternion(q.map(|v| v / norm))
+}
+
 /// Mass, centre of mass and inertia about it, in a body's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Inertial {
@@ -71,6 +136,11 @@ pub struct Inertial {
 }
 
 impl Inertial {
+    /// A point mass at `com`.
+    pub fn point(mass: f64, com: V3) -> Inertial {
+        Inertial { mass, com, inertia: [[0.0; 3]; 3] }
+    }
+
     /// The two bodies as one, `other` given in a frame that `rot`, `pos` put into this one (parallel axis theorem).
     pub fn merged(&self, other: &Inertial, rot: &M3, pos: V3) -> Inertial {
         let m = self.mass + other.mass;
@@ -180,15 +250,15 @@ impl Chain {
     }
 
     /// Recursive Newton-Euler: the joint torques (forces for prismatic joints) that give the accelerations `qdd` at
-    /// positions `q` and speeds `qd` under gravity `g` (m/s^2, along -z of the base), `extra` a point mass and where it
-    /// sits on the last body. Out: `tau`.
+    /// positions `q` and speeds `qd` under gravity `g` (m/s^2, along -z of the base), `extra` a payload (mass, centre and
+    /// inertia about it) in the last body's frame. Out: `tau`.
     pub fn inverse_dynamics(
         &self,
         q: &[f64],
         qd: &[f64],
         qdd: &[f64],
         g: f64,
-        extra: Option<(f64, V3)>,
+        extra: Option<Inertial>,
         tau: &mut [f64],
     ) {
         let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
@@ -203,7 +273,7 @@ impl Chain {
         qd: &[f64],
         qdd: &[f64],
         g: f64,
-        extra: Option<(f64, V3)>,
+        extra: Option<Inertial>,
         tau: &mut [f64],
     ) {
         let n = self.len();
@@ -225,8 +295,8 @@ impl Chain {
                 a = a_here;
             }
             let mut body = b.inertial;
-            if let (true, Some((m, at))) = (i + 1 == n, extra) {
-                body = body.merged(&Inertial { mass: m, com: at, inertia: [[0.0; 3]; 3] }, &IDENTITY, [0.0; 3]);
+            if let (true, Some(payload)) = (i + 1 == n, extra) {
+                body = body.merged(&payload, &IDENTITY, [0.0; 3]);
             }
             let ac = add(a, add(cross(dw, body.com), cross(w, cross(w, body.com))));
             let force = scale(ac, body.mass);
@@ -252,7 +322,7 @@ impl Chain {
 
     /// The mass matrix M (n x n, row by row): column j is the inverse dynamics at rest without gravity for a unit
     /// acceleration of joint j.
-    pub fn mass_matrix(&self, q: &[f64], extra: Option<(f64, V3)>, out: &mut [f64]) {
+    pub fn mass_matrix(&self, q: &[f64], extra: Option<Inertial>, out: &mut [f64]) {
         let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
         self.mass_matrix_at(&links, extra, out);
     }
@@ -262,7 +332,7 @@ impl Chain {
     /// revolute joint j moves it by a_j x (c_k - o_j) and turns it by a_j, a prismatic one moves it by a_j), I_k its
     /// inertia about its centre in the base frame. The same matrix as n passes of Newton-Euler with a unit acceleration
     /// each, at a fraction of the work.
-    fn mass_matrix_at(&self, links: &[(M3, V3)], extra: Option<(f64, V3)>, out: &mut [f64]) {
+    fn mass_matrix_at(&self, links: &[(M3, V3)], extra: Option<Inertial>, out: &mut [f64]) {
         let n = self.len();
         out[..n * n].fill(0.0);
         let (mut rot, mut pos) = (IDENTITY, [0.0; 3]);
@@ -276,8 +346,8 @@ impl Chain {
             axes.push(mul(&rot, b.axis));
             origins.push(pos);
             let mut body = b.inertial;
-            if let (true, Some((m, at))) = (k + 1 == n, extra) {
-                body = body.merged(&Inertial { mass: m, com: at, inertia: [[0.0; 3]; 3] }, &IDENTITY, [0.0; 3]);
+            if let (true, Some(payload)) = (k + 1 == n, extra) {
+                body = body.merged(&payload, &IDENTITY, [0.0; 3]);
             }
             let c = add(pos, mul(&rot, body.com));
             let turned = matmul(&matmul(&rot, &body.inertia), &transpose(&rot));
@@ -300,22 +370,14 @@ impl Chain {
 
     /// The mass matrix (`mass_matrix`) and the torques at zero acceleration (velocity terms and gravity,
     /// `inverse_dynamics` with q'' = 0) at once, the links worked out once for both.
-    pub fn dynamics(
-        &self,
-        q: &[f64],
-        qd: &[f64],
-        g: f64,
-        extra: Option<(f64, V3)>,
-        mass: &mut [f64],
-        bias: &mut [f64],
-    ) {
+    pub fn dynamics(&self, q: &[f64], qd: &[f64], g: f64, extra: Option<Inertial>, mass: &mut [f64], bias: &mut [f64]) {
         let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
         self.mass_matrix_at(&links, extra, mass);
         self.newton_euler(&links, qd, &vec![0.0; q.len()], g, extra, bias);
     }
 
     /// Potential energy in gravity g: the sum of m g z of every centre of mass.
-    pub fn potential(&self, q: &[f64], g: f64, extra: Option<(f64, V3)>) -> f64 {
+    pub fn potential(&self, q: &[f64], g: f64, extra: Option<Inertial>) -> f64 {
         let frames = self.frames(q);
         let n = self.len();
         frames
@@ -324,8 +386,8 @@ impl Chain {
             .map(|(i, (rot, pos))| {
                 let b = &self.bodies[i].inertial;
                 let mut energy = b.mass * g * add(*pos, mul(rot, b.com))[2];
-                if let (true, Some((m, at))) = (i + 1 == n, extra) {
-                    energy += m * g * add(*pos, mul(rot, at))[2];
+                if let (true, Some(payload)) = (i + 1 == n, extra) {
+                    energy += payload.mass * g * add(*pos, mul(rot, payload.com))[2];
                 }
                 energy
             })
@@ -658,7 +720,7 @@ mod tests {
         let (_, tip) = chain.tip(&q);
         close(tip[0], 1.0, "tip x");
         close(tip[2], 0.6, "tip z");
-        chain.inverse_dynamics(&q, &[0.0; 2], &[0.0; 2], 9.81, Some((2.0, [1.1, 0.0, 0.0])), &mut tau);
+        chain.inverse_dynamics(&q, &[0.0; 2], &[0.0; 2], 9.81, Some(Inertial::point(2.0, [1.1, 0.0, 0.0])), &mut tau);
         close(tau[0], 34.335 + 2.0 * 9.81, "payload");
     }
 
@@ -758,5 +820,56 @@ mod tests {
         }
         let same = body.changed(1.0, [0.0; 3]);
         assert!((0..3).all(|r| (0..3).all(|c| close(same.inertia[r][c], body.inertia[r][c]))) && same.com == body.com);
+    }
+
+    /// A payload's own inertia counts about the last joint: on the textbook pendulum (second body 0.43 kg m^2 about the
+    /// elbow), 2 kg at 0.6 m along the second link with 0.05 kg m^2 about its centre around the joint's axis (y). At
+    /// rest, no gravity, q2'' = 1 rad/s^2: tau2 = 0.43 + 2 * 0.6^2 + 0.05 = 1.2 N m, of which the point mass alone gives
+    /// 1.15 N m.
+    #[test]
+    fn a_payloads_inertia_adds_its_torque_about_the_last_joint() {
+        let chain = Chain::from_urdf(PENDULUM).unwrap();
+        let mut tau = [0.0; 2];
+        let solid = Inertial {
+            mass: 2.0,
+            com: [0.6, 0.0, 0.0],
+            inertia: [[0.01, 0.0, 0.0], [0.0, 0.05, 0.0], [0.0, 0.0, 0.02]],
+        };
+        chain.inverse_dynamics(&[0.0; 2], &[0.0; 2], &[0.0, 1.0], 0.0, Some(solid), &mut tau);
+        assert!((tau[1] - 1.2).abs() < 1e-12, "{} N m against 1.2 by hand", tau[1]);
+        chain.inverse_dynamics(
+            &[0.0; 2],
+            &[0.0; 2],
+            &[0.0, 1.0],
+            0.0,
+            Some(Inertial::point(2.0, [0.6, 0.0, 0.0])),
+            &mut tau,
+        );
+        assert!((tau[1] - 1.15).abs() < 1e-12, "{} N m against 1.15 by hand", tau[1]);
+    }
+
+    /// The slerp midpoint of a quarter turn about x and a quarter turn about y. By hand with quaternions:
+    /// qa = (c, s, 0, 0), qb = (c, 0, s, 0), c = s = cos 45 deg; cos of the angle between them c^2 = 1/2, so 60 degrees;
+    /// the midpoint (qa + qb) / |qa + qb| = (2c, s, s, 0) / sqrt(4c^2 + 2s^2) = (2, 1, 1, 0) / sqrt(6): its angle
+    /// 2 acos(2 / sqrt 6) = 70.53 deg about (1, 1, 0) / sqrt 2, the rotation vector 1.2310 (0.70711, 0.70711, 0).
+    /// The linear blend of the rotation vectors, (pi/4, pi/4, 0), is 1.1107 rad about the same axis: 6.9 degrees short.
+    #[test]
+    fn the_slerp_midpoint_of_two_quarter_turns_is_worked_out_by_hand() {
+        use std::f64::consts::FRAC_PI_2;
+        let mid = slerp([FRAC_PI_2, 0.0, 0.0], [0.0, FRAC_PI_2, 0.0], 0.5);
+        let angle = 2.0 * (2.0 / 6f64.sqrt()).acos();
+        let want = [angle / 2f64.sqrt(), angle / 2f64.sqrt(), 0.0];
+        assert!((angle - 1.230_959_417).abs() < 1e-9);
+        assert!((0..3).all(|i| (mid[i] - want[i]).abs() < 1e-12), "{mid:?} against {want:?}");
+        // The ends, and the round trip through the quaternion.
+        let end = slerp([FRAC_PI_2, 0.0, 0.0], [0.0, FRAC_PI_2, 0.0], 1.0);
+        assert!((end[1] - FRAC_PI_2).abs() < 1e-12 && end[0].abs() < 1e-12);
+        let r = [0.3, -1.2, 2.0];
+        let back = from_quaternion(quaternion(r));
+        assert!((0..3).all(|i| (back[i] - r[i]).abs() < 1e-12));
+        // log inverts exp, near a half turn too.
+        let half = [0.0, 0.0, std::f64::consts::PI - 1e-9];
+        let again = log(&exp(half));
+        assert!((0..3).all(|i| (again[i] - half[i]).abs() < 1e-7), "{again:?}");
     }
 }

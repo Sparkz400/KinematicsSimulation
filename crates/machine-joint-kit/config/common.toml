@@ -18,6 +18,9 @@ axis = ""
 [effects]
 gravity = true
 payload = true
+# The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read
+# by the arms only.
+payload_swing = false
 # Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
 # machine is the rigid reference model, in which the motor turns with the joint times the ratio.
 joint_elasticity = true

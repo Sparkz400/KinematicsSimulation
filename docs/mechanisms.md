@@ -27,6 +27,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 | `rotary-table` | table of 3 kg m^2 plus the work | strain wave gear of ratio 100 (or worm, or planetary) | c (rad) | `strain-wave-life` |
 | `urdf-arm` | six-axis arm, `urdf/six-axis.urdf` | strain wave gears of ratio 120 and 80 | six joint angles (rad), or x, y, z, rx, ry, rz in tool space | `strain-wave-life` per joint |
 | `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad), or x, y, z, c in tool space | `strain-wave-life`, the screw's checks on joint 3 |
+| `palletiser` | four-axis palletiser, `urdf/palletiser.urdf`, a parallelogram keeping the flange level | gears of ratio 160, the flange's strain wave gear 50 | x, y, z, rz (shipped in tool space), or the four motors' joints | `strain-wave-life` per joint |
 
 Every one of them also gets the checks every machine gets: motor peak and RMS torque (`motor-peak`, `motor-thermal`),
 drive currents, gearbox peak, cubic-mean torque, input speed and life where `[ratings]` gives them, DC link and braking
@@ -132,60 +133,112 @@ The table turns about a vertical axis: M = table plus work inertia, no gravity t
 
 `rigid::Chain` reads a URDF file (links with their inertials, joints of type revolute, continuous, prismatic and fixed;
 fixed joints merge into the body before them; no xacro, no branches) and computes the dynamics by the recursive
-Newton-Euler algorithm (Luh, Walker and Paul 1980): the joint torques for given accelerations, the mass matrix column by
-column, gravity and velocity terms. The payload is a point mass at `arm.payload_offset_m` from the URDF's tip frame.
+Newton-Euler algorithm (Luh, Walker and Paul 1980): the joint torques for given accelerations, the mass matrix, gravity
+and velocity terms. The payload is a rigid body on the last link: its mass `arm.payload_kg`, its centre
+`arm.payload_offset_m` from the URDF's tip frame and its inertia about the centre `arm.payload_inertia_kgm2` (xx, yy, zz,
+xy, xz, yz in the tip frame), merged into the last body by the parallel axis theorem (`Inertial::merged`).
 
-Config `[arm]`: `urdf_file` is a path, or `builtin:six-axis` / `builtin:scara` for the examples in
-`crates/machine-joint-kit/urdf/`. `gear_ratios` has one entry per joint; each joint's limits are in `[axis.j1]`,
-`[axis.j2]`, ... (`max_velocity_rad_s`, or `max_velocity_m_s` for a prismatic joint, and so on). The URDF's limits are the joints' stops; a continuous joint takes `[joint]` `min_angle_deg` and
-`max_angle_deg`. A prismatic joint slides on the `[screw]`, coupled to its motor (its ratio must be 1; the
-`[gearbox]`'s stiffness and damping stand for the coupling, its efficiency and inertia do not count), with the `[slide]`
-friction (the SCARA's quill). A URDF limit left out is 0; an empty range is refused. `ratings.gearbox_reference_speed_rpm`
-is refused where the joints' ratios differ, as the gearbox life takes every motor's speed through `gearbox.ratio`. With a
+Config `[arm]`: `urdf_file` is a path, or `builtin:six-axis`, `builtin:scara`, `builtin:five-axis`,
+`builtin:seven-axis` or `builtin:palletiser` for the examples in `crates/machine-joint-kit/urdf/`. `gear_ratios` has one
+entry per motor; each motor joint's limits are in `[axis.j1]`, `[axis.j2]`, ... (`max_velocity_rad_s`, or
+`max_velocity_m_s` for a prismatic joint, and so on). The URDF's limits are the joints' stops; a continuous joint takes
+`[joint]` `min_angle_deg` and `max_angle_deg`. A prismatic joint slides on the `[screw]`, coupled to its motor (its
+ratio must be 1; the `[gearbox]`'s stiffness and damping stand for the coupling, its efficiency and inertia do not
+count), with the `[slide]` friction (the SCARA's quill). A URDF limit left out is 0; an empty range is refused. With a
 `[strain_wave]` table each revolute joint's gear gets the life check.
 
+Each joint has its own motor, drive and gear where the config says so: `[motor.<k>]`, `[drive.<k>]`, `[gearbox.<k>]`,
+`[strain_wave.<k>]`, `[joint.<k>]`, `[ratings.<k>]` and `[parts.<k>]` over the shared tables, k = 1, 2, ... (`catalog::motor_config`,
+as on the machine files). The shipped arms are sized so: the six-axis arm's wrist (joints 4 to 6) has the catalogue's
+1FK2104-5AF on an S210 6SL3210-5HE10-8UF0 behind a size-20 strain wave gear, its joints 1 to 3 the 1FK2105-4AF behind
+size 32; the SCARA's quill and flange the 1FK2104-5AF. `ratings.gearbox_reference_speed_rpm` is refused where a motor's
+ratio differs from its own `gearbox.ratio`, which the gearbox life takes the motor's speed through.
+
 The tool pose is the joint positions: cycles are given in joints and the sizing judges motors, gears and screws along
-them. The settling tolerance is then in rad (`ratings.settling_tolerance_m` keeps its name); it counts the gears' twist
-under the arm's weight, which the motors' encoders do not see (2.6 mrad at joint 2 of the six-axis example reaching
-out).
+them. Their dwell is judged by `ratings.settling_tolerance_rad` for the joints in rad and `settling_tolerance_m` for those
+in m (the SCARA's quill); it counts the gears' twist under the arm's weight, which the motors' encoders do not see (2.6
+mrad at joint 2 of the six-axis example reaching out). The controller's feedforward takes the velocity terms in joint
+space too: the Coriolis and centripetal torques of M(q) changing with the pose (two links of a planar arm at q2 = 90
+degrees and q' = (1, 2) rad/s ask -6 and 0.75 N m that the feedforward left out before; on the shipped cycles, which
+turn their joints at up to 2 rad/s, the motors' peak and RMS torque change by less than 0.3 %).
+
+### Coupled joints: a parallelogram
+
+URDF has no closed chains. A parallelogram that couples joints, as a palletiser's keeps its flange level, is
+`arm.joint_coupling`: one row per URDF joint, the URDF's joints as sums of the motors' joints, q_urdf = C q. The machine
+has one motor per column; the dynamics are the chain's taken to the motors' joints, M = C^T M_urdf C and h = C^T h_urdf
+(C is constant, so it adds no term; the coupling's forces do no work). A motor joint alone in a row of factor c takes
+that URDF joint's limits over c. `[]` is one motor per URDF joint.
+shortcut: the parallelogram's bars are in the links they move with, not bodies of their own.
+
+The palletiser (`palletiser`, `urdf/palletiser.urdf`, about 20 kg payload, 1.6 m reach) has five URDF joints and four
+motors: the turret, the upper arm, the forearm's angle against the base (a parallelogram from the base drives it: joint 3
+= motor 3 - motor 2) and the flange's turn, the wrist turning back the forearm's angle (joint 4 = - motor 3), so that the
+flange stays level everywhere. Its joints 1 to 3 have the catalogue's 1FK2106-4AF on 6SL3210-5HE15-0UF0 drives behind
+gears of 600 N m rated (an estimate), the flange a 1FK2104-5AF. Shipped in tool space: x, y, z and the flange's turn rz.
+The app draws it as it draws the arms.
+
+### A swinging payload
+
+With `effects.payload_swing` (off in every shipped config) the payload hangs on a pivot at the flange, about two axes
+across the line from the flange to its centre (`arm.payload_offset_m`, the pendulum's length), held towards its rest by
+`arm.payload_swing_stiffness_nm_rad` and damped by `arm.payload_swing_damping_nm_s_rad` per axis: a carton in a soft
+vacuum gripper or a sack in a sling. The two swing joints are joints no motor drives (`chain::Mechanism::passive_joints`):
+their angles and speeds follow the joint machine's other states, their dynamics are the chain's with the swing's bodies,
+the damper's power is the loss `power.payload_swing` and the angles the signals `swing.1.angle`, `swing.2.angle`. The
+feedforward and the poses at rest see the payload fixed to the flange. The palletiser's carton swings at 2.2 Hz
+(sqrt(k / (m l^2) + g / l) / 2 pi with 120 N m/rad, 20 kg, 0.2 m).
+shortcut: without the payload the swing's joints carry a unit inertia of their own, apart from the arm.
 
 ### Tool space
 
 With `kinematics.tool_space = true` the machine's axes are the flange's pose, and every planner, the cycle, the CLI
 and the app move the tool as they move a delta's: a line of a path is a straight line of the tool. The joint machine
 maps the pose to the joints through the mechanism's `inverse` and back through `forward`, the tool's speed to the
-joints' through the Jacobian of `forward` (central differences). The controller's feedforward then takes the speed
-terms: the joints' accelerations J^-1 (a - J' q'), J' q' the second difference of `forward` along q', and the
-centripetal and Coriolis torques of the Newton-Euler model (in joint space it leaves them out, as before). Targets are
-refused out of reach (`error-arm-out-of-reach`), beyond a joint's stop (`error-joint-beyond-stop`) or where the
-Jacobian's condition number is above `workspace.max_condition_number` (`error-arm-singularity`); a path through such a
-pose with `error-path-range`, as on the deltas. The workspace map and `ratings.max_condition_number` take the same
-number.
+joints' through the Jacobian of `forward` (central differences). The controller's feedforward takes the speed terms:
+the joints' accelerations J^-1 (a - J' q'), J' q' the second difference of `forward` along q', and the centripetal and
+Coriolis torques of the Newton-Euler model. Targets are refused out of reach (`error-arm-out-of-reach`), beyond a joint's
+stop (`error-joint-beyond-stop`) or where the Jacobian's condition number is above `workspace.max_condition_number`
+(`error-arm-singularity`); a path through such a pose with `error-path-range`, as on the deltas. The workspace map and
+`ratings.max_condition_number` take the same number. The time-optimal planner refuses a plan of more than ten million
+points (`error-path-torque`): where the motors allow only a crawl it would fill the memory.
 
-- SCARA (four joints: two arms about vertical axes, a vertical quill, a turning flange): the axes are x, y, z of the
-  flange (m) and its turn c about the vertical (rad: joints 1 + 2 + 4 plus the turn at zero), in closed form. The arms'
-  lengths and directions at zero, joint 1's place, the quill's direction and the flange's turn come from the URDF at
-  zero and are checked against the chain at three poses (a URDF that is no SCARA is refused). Joint 2 by the cosine law,
-  cos(beta) = (r^2 - L1^2 - L2^2) / (2 L1 L2), with `kinematics.elbow` "right" (beta > 0: joint 2 counter-clockwise
-  from the stretched arm, the elbow to the right of the line from the base to the tool, seen from above) or "left";
-  joint 1 = atan2(y, x) - atan2(L2 sin beta, L1 + L2 cos beta). The condition number is that of d(x, y)/d(q1, q2):
-  infinite at the stretched and the folded arm (25 at 11 degrees of elbow, the example's limit).
-- Six joints: x, y, z of the flange (m) and its orientation as a rotation vector rx, ry, rz (rad: axis times angle,
-  from the base frame), numerically. The joints are followed from `kinematics.home_joints` along the straight line from
-  the home's flange pose to the target, the orientation by slerp, in steps of at most 20 mm and 0.05 rad, each by
-  damped least squares on the geometric Jacobian (dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, the turn rows times
-  the flange's distance from joint 2 at the home), settled to 1 um, the last to 1e-13 m. So the solution stays on the
-  home's branch (shoulder, elbow, wrist; on an arm whose branches are parted by singularities, as the usual ones are,
-  it does not depend on the way there), and a step that does not settle (out of reach, or a singularity the branch
-  cannot pass) refuses the pose. A flange turned within 0.01 rad of half a turn from the base frame is refused
-  (`error-arm-orientation-half-turn`): there the rotation vector jumps. The condition number is that of the 6 x 6
-  geometric Jacobian with its turn rows scaled as above.
+- SCARA (four joints: two arms about vertical axes, a vertical quill, a turning flange, `kinematics.tool_axes = ["x",
+  "y", "z", "rz"]`): the axes are x, y, z of the flange (m) and its turn c about the vertical (rad: joints 1 + 2 + 4 plus
+  the turn at zero), in closed form. The arms' lengths and directions at zero, joint 1's place, the quill's direction
+  and the flange's turn come from the URDF at zero and are checked against the chain at three poses. Joint 2 by the
+  cosine law, cos(beta) = (r^2 - L1^2 - L2^2) / (2 L1 L2), with `kinematics.elbow` "right" (beta > 0: joint 2
+  counter-clockwise from the stretched arm, the elbow to the right of the line from the base to the tool, seen from
+  above) or "left"; joint 1 = atan2(y, x) - atan2(L2 sin beta, L1 + L2 cos beta). The condition number is that of
+  d(x, y)/d(q1, q2): infinite at the stretched and the folded arm (25 at 11 degrees of elbow, the example's limit).
+- Any other chain of 4 to 7 joints: the axes are those of x, y, z (m) and rx, ry, rz (rad) that `kinematics.tool_axes`
+  names, as many as the motors or one fewer (a redundant arm). The orientation is the rotation vector (axis times angle,
+  base frame) of the turn from the flange's orientation at zero joints: a URDF whose flange points down at zero is at
+  0 there, not half a turn from the base frame. A pose within 0.01 rad of half a turn from that is refused
+  (`error-arm-orientation-half-turn`): there the rotation vector jumps. The joints by damped least squares on the
+  Jacobian of the tool's axes (central differences; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, the turns times
+  the flange's distance from joint 2 at `kinematics.home_joints`), along the straight line from the last solution to
+  the target in steps of at most 20 mm and 0.05 rad, each settled to 1 um, the last to 1e-13 m. A walk from the last
+  solution that ends a step beyond `workspace.max_condition_number` may have changed the branch and is walked again
+  from the home, as is one that does not get there; so the solution stays on the home's branch (shoulder, elbow,
+  wrist). From the last solution an inverse along a cycle takes 7.7 us on the six-axis arm in release, from the home
+  74 us. A redundant arm (seven joints, six axes) spends its spare joint on staying nearest its home posture: each
+  iteration also moves within the null space of J, by (I - J^T (J J^T)^-1 J)(home - q), until that move is below 1e-11
+  rad; its joint speeds and accelerations are those of the inverse itself, by central differences along the tool's speed
+  and acceleration. The condition number is that of the weighted Jacobian (of its transpose on a redundant arm).
 
-The planners interpolate each axis linearly: a line holds the orientation where both ends have the same, and turns it
-by the slerp where the two rotation vectors are parallel (for a flange pointing down, a turn about the vertical is not:
-there the turn is close to the slerp, not it). `config/scara-tool.toml` and `config/arm-tool.toml` are the default
-configs with tool space on, a start pose and a cycle of straight lines (the arm's settling tolerance 5 mm: under the
-payload its flange rests 4.0 mm below the encoders' pose).
+A line of a path in x, y, z, rx, ry, rz moves the place straight and turns the orientation by slerp (`path`, the
+quaternions' spherical interpolation, Shoemake 1985): about one fixed axis at a steady rate, also between rotation
+vectors that are not parallel, where the straight line between them is another turn (a quarter turn about x to one about
+y: 70.5 degrees about their bisector halfway, the straight line's 63.6 degrees). Lines in fewer orientation axes (the
+SCARA's c, the palletiser's rz, the five-axis arm's rx, ry) run each axis straight.
+
+`config/scara-tool.toml` and `config/arm-tool.toml` are the default configs with tool space on, a start pose and a cycle
+of straight lines (the arm's settling tolerances 5 mm and 5 mrad: under the payload its flange rests 2.4 mm off the
+encoders' pose and turned 3.2 mrad). `config/arm5-tool.toml` and `config/arm7-tool.toml` are the five-axis example (`urdf/five-axis.urdf`:
+the six-axis arm without the flange's roll, pointing down at zero; axes x, y, z, rx, ry, where the tool points) and the
+seven-axis one (`urdf/seven-axis.urdf`: a roll joint in the upper arm; axes x, y, z, rx, ry, rz), each with a cycle of
+straight lines, for `--config` with the `urdf-arm` machine. Their proportions are generic, every value an estimate.
 
 ## Telescopic shaft with two cardan joints (delta-d4)
 
@@ -217,7 +270,15 @@ at ±pi/2 and joint 1 at 0 or 1.404514 rad by hand; forward of inverse returns p
 range, the arm's sampled around its home, its wrist on the home's side); every planned pose of a line lies within 1 um
 of it and the arm's orientation within 1e-6 rad; the joint speeds are J^-1 v by hand (1.538462 rad/s); a line into the
 stretched SCARA arm is refused; the time-optimal plan keeps the motors within their rated speed along a line; both tool
-cycles pass their verdicts. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
+cycles pass their verdicts. The arms of 14 November: the feedforward in joint space has a two-link arm's Coriolis and
+centripetal torques by hand (-6 and 0.75 N m at q2 = 90 degrees, q' = (1, 2) rad/s); a payload's own inertia counts
+about the last joint (1.2 N m against the point mass's 1.15 at 1 rad/s^2); the slerp midpoint of two quarter turns is
+70.53 degrees about their bisector, and a planned line of the arm's tool passes it; the warm-started inverse gives the
+joints a walk from the home gives (1e-9 rad); the seven-joint arm reaches a pose to 1e-9 with its joints' offset from
+the home free of the Jacobian's null space; a flange pointing down at zero is at no turn; the palletiser's flange stays
+level over its joints' ranges and its swinging carton has m g l (1 - cos 0.1) + k 0.1^2 / 2 = 0.79597 J turned by 0.1
+rad and (m l^2 + I) / 2 = 0.775 J swinging at 1 rad/s, and keeps the energy loss-free; each arm joint has its own
+catalogue motor; a time-optimal plan of a crawl is refused beyond ten million points. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
 screw's fails `screw-life`. With losses: the rack's gearbox torque and feed force are the load's force over 0.97, the
 screw's life shrinks by a1 at 99 % reliability, and the temperature feedback keeps the efficiency of screw, rack and
 worm.

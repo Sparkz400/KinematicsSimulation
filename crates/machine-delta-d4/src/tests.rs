@@ -253,3 +253,27 @@ fn the_default_cycle_turns_the_tool_and_passes_its_verdicts() {
     let failed: Vec<_> = verdicts(&catalogue).into_iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["settling"]);
 }
+
+/// The tool's place and its turn are judged apart: metres and radians are not added. The default cycle turns the tool
+/// by 90 degrees on each traverse; with those turns taken out of the targets (the same cycle, c = 0 all along) the
+/// place's path, tracking and dwell errors are the same (the tool's own motor turns it, the arms see none of it: 1.53 mm
+/// of path error both ways, where the place and the turn's 3.3 mrad counted together gave 3.53 mm), and the turn's own
+/// errors, in rad, are there with the turn and nil without.
+#[test]
+fn the_tools_place_error_is_the_same_with_and_without_its_turn() {
+    let turned = ENTRY.config();
+    let still = Config::parse(&ENTRY.default_config.replace(", 1.5707963267948966]", ", 0.0]")).unwrap();
+    let analysed = |cfg: &Config| {
+        sim_components::analysis::analyse_cycle_with(&mut Sim::new(&ENTRY, cfg).unwrap(), false).unwrap()
+    };
+    let (a, b) = (analysed(&turned), analysed(&still));
+    for (what, x, y) in [
+        ("path", a.path_error_peak, b.path_error_peak),
+        ("tracking", a.tracking_error_peak, b.tracking_error_peak),
+        ("dwell", a.dwell_error_peak, b.dwell_error_peak),
+    ] {
+        assert!(x > 1e-5 && (x - y).abs() < 1e-3 * x, "{what}: {x} m with the turn, {y} m without");
+    }
+    assert!(a.path_angle_error_peak > 1e-3 && a.dwell_angle_error_peak > 0.0, "{a:?}");
+    assert_eq!((b.path_angle_error_peak, b.dwell_angle_error_peak), (0.0, 0.0));
+}

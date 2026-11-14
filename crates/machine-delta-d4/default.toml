@@ -379,13 +379,13 @@ braking_module = false
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
-# How far the tool may be from its target in the second half of a dwell, when the gripper acts. It counts the
-# gearboxes' twist and backlash under the platform's weight, which the motors' encoders do not see, and the tool's turn
-# off its target in rad (counted as m, as on every machine with a turning axis): 0.37 mm with the 3 arcmin gearboxes
-# (see [gearbox]). [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue
-# 2024/12); the 0.1 mm the makers state is the repeatability, which a constant sag does not spoil. ABB states 0.4
-# degrees (7 mrad) for the IRB 360's axis 4 repeatability, far looser than what this counts.
+# How far the tool may be from its target in the second half of a dwell, when the gripper acts: its place (x, y, z, m)
+# and its turn (c, rad) apart. The place counts the gearboxes' twist and backlash under the platform's weight, which the
+# motors' encoders do not see. [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT,
+# catalogue 2024/12); the 0.1 mm the makers state is the repeatability, which a constant sag does not spoil. The turn:
+# [estimate] 5 mrad, inside the 0.4 degrees (7 mrad) ABB states for the IRB 360's axis 4 repeatability.
 settling_tolerance_m = 0.0005
+settling_tolerance_rad = 0.005
 # [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
 gearbox_rated_torque_nm = 120.0
 gearbox_max_torque_nm = 192.0

@@ -54,10 +54,17 @@ pub fn solve(m: &[f64], b: &[f64]) -> Option<Vec<f64>> {
 /// What a mechanism tells the joint machine.
 pub trait Mechanism: Send {
     /// The load's mass matrix M (n x n, row by row, without the rotors) and h with M q'' + h = the torques (forces) at
-    /// the joints: velocity terms plus gravity. With the payload as it is attached.
+    /// the joints: velocity terms plus gravity. With the payload as it is attached. Where the mechanism has passive
+    /// joints (`passive_joints`), q and q' hold them after the driven ones, and M and h are of them all.
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]);
-    /// The load's potential energy; its gravity torques are those of h at rest.
+    /// The load's potential energy (passive joints included, their springs not); its gravity torques are those of h at
+    /// rest.
     fn potential(&self, q: &[f64]) -> f64;
+    /// Joints that no motor drives, after the driven ones (a payload swinging on the flange): each with its spring
+    /// (N m/rad) and damper (N m s/rad) towards zero. None by default.
+    fn passive_joints(&self) -> Vec<(f64, f64)> {
+        Vec::new()
+    }
     fn set_payload_attached(&mut self, attached: bool);
     /// As `Machine::links` and `Machine::set_link_change`: the bodies whose inertial parameters a trace can be fitted for.
     fn links(&self) -> Vec<String> {
@@ -81,8 +88,8 @@ pub trait Mechanism: Send {
     fn condition(&self, _tool: &[f64]) -> Option<f64> {
         None
     }
-    /// Whether the tool pose is the joints themselves (`forward` and `inverse` as by default): then the controller's
-    /// feedforward leaves out the speed terms, as it always has; otherwise it takes them (`feedforward_torque_moving`).
+    /// Whether the tool pose is the joints themselves (`forward` and `inverse` as by default): then the joint speeds and
+    /// accelerations are the tool's, without going through the Jacobian.
     fn tool_is_joints(&self) -> bool {
         true
     }
@@ -102,7 +109,8 @@ pub trait Mechanism: Send {
         &[]
     }
 
-    /// Draws the machine at joint positions `q` with the motor shafts at `rotors` (rad) turning at `rotor_speeds`.
+    /// Draws the machine at joint positions `q` (passive ones included) with the motor shafts at `rotors` (rad) turning
+    /// at `rotor_speeds`.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene);
     fn scene_point(&self, _tool: &[f64]) -> Option<[f64; 3]> {
         None
@@ -132,6 +140,8 @@ pub struct JointMachine<M: Mechanism> {
     brake_engaged: bool,
     /// `Machine::setpoint_slack`, worked out once (`rest_sag`).
     rest_slack: f64,
+    /// `Mechanism::passive_joints`: their states follow all the others'.
+    passive: Vec<(f64, f64)>,
 }
 
 /// The losses of one moment: per joint its friction, its motor's friction with the brake, its gearbox; then the stops
@@ -142,7 +152,8 @@ struct Losses {
 }
 
 impl<M: Mechanism> JointMachine<M> {
-    /// `axes` as many as joints; one motor per joint, in their order.
+    /// `axes` as many as joints, or fewer where the joints are redundant to the tool (a seven-joint arm whose tool has
+    /// six axes: the mechanism's `inverse` resolves the redundancy); one motor per joint, in their order.
     pub fn new(
         mechanism: M,
         joints: Vec<JointSpec>,
@@ -151,9 +162,10 @@ impl<M: Mechanism> JointMachine<M> {
         axes: Vec<AxisInfo>,
         motors: Vec<MotorInfo>,
     ) -> Self {
-        assert!(joints.len() == axes.len() && joints.len() == motors.len());
+        assert!(axes.len() <= joints.len() && joints.len() == motors.len());
+        let passive = mechanism.passive_joints();
         let mut machine =
-            Self { mechanism, joints, elastic, thermal, axes, motors, brake_engaged: false, rest_slack: 0.0 };
+            Self { mechanism, joints, elastic, thermal, axes, motors, brake_engaged: false, rest_slack: 0.0, passive };
         machine.rest_slack = machine.rest_sag();
         machine
     }
@@ -172,7 +184,8 @@ impl<M: Mechanism> JointMachine<M> {
             .map(|c| self.axes.iter().enumerate().map(|(i, a)| if c >> i & 1 == 1 { a.max } else { a.min }).collect())
             .collect();
         poses.push(self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect());
-        let (mut q, mut tool, mut sagged) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        let m = self.axes.len();
+        let (mut q, mut tool, mut sagged) = (vec![0.0; n], vec![0.0; m], vec![0.0; m]);
         let mut most = 0f64;
         for pose in poses {
             if !self.mechanism.inverse(&pose, &mut q) {
@@ -214,34 +227,73 @@ impl<M: Mechanism> JointMachine<M> {
         &s[at..at + n]
     }
 
+    /// The driven joints' part of the load with the passive joints held at rest at zero: what the rigid feedforward
+    /// and the poses at rest see (the payload as if fixed to the flange).
     fn load(&self, q: &[f64], qd: &[f64]) -> (Vec<f64>, Vec<f64>) {
-        let n = self.n();
-        let (mut mass, mut bias) = (vec![0.0; n * n], vec![0.0; n]);
+        let (n, p) = (self.n(), self.passive.len());
+        if p == 0 {
+            let (mut mass, mut bias) = (vec![0.0; n * n], vec![0.0; n]);
+            self.mechanism.dynamics(q, qd, &mut mass, &mut bias);
+            return (mass, bias);
+        }
+        let rest = |x: &[f64]| -> Vec<f64> { x.iter().copied().chain(std::iter::repeat_n(0.0, p)).collect() };
+        let (mass, bias) = self.load_all(&rest(q), &rest(qd));
+        let all = n + p;
+        ((0..n * n).map(|rc| mass[rc / n * all + rc % n]).collect(), bias[..n].to_vec())
+    }
+
+    /// The load of all joints, passive ones included.
+    fn load_all(&self, q: &[f64], qd: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let all = q.len();
+        let (mut mass, mut bias) = (vec![0.0; all * all], vec![0.0; all]);
         self.mechanism.dynamics(q, qd, &mut mass, &mut bias);
         (mass, bias)
     }
 
-    /// Rigid model: the joints' accelerations, and per joint the torque into its gearbox (after the rotor's own
-    /// acceleration) and out of it, at the joint.
+    /// Where the passive joints' angles start in the state; their speeds follow them.
+    fn passive_at(&self) -> usize {
+        self.n() * if self.elastic { 5 } else { 3 }
+    }
+
+    /// All joints' positions and speeds, passive ones after the driven ones.
+    fn all_joints(&self, s: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let (p, at) = (self.passive.len(), self.passive_at());
+        let (q, qd) = self.arms(s);
+        (q.iter().chain(&s[at..at + p]).copied().collect(), qd.iter().chain(&s[at + p..at + 2 * p]).copied().collect())
+    }
+
+    /// The passive joints' spring and damper torques.
+    fn passive_torque(&self, qp: &[f64], qdp: &[f64]) -> Vec<f64> {
+        self.passive.iter().zip(qp.iter().zip(qdp)).map(|((k, c), (q, qd))| -k * q - c * qd).collect()
+    }
+
+    /// Rigid model: the joints' accelerations (passive ones after the driven ones), and per driven joint the torque
+    /// into its gearbox (after the rotor's own acceleration) and out of it, at the joint.
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-        let n = self.n();
+        let (n, p) = (self.n(), self.passive.len());
+        let all = n + p;
         let (q, qd) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (mass, bias) = self.load(q, qd);
+        let (qa, qda) = self.all_joints(s);
+        let (mass, bias) = self.load_all(&qa, &qda);
+        let springs = self.passive_torque(&qa[n..], &qda[n..]);
         let drive: Vec<f64> = (0..n)
             .map(|k| {
                 self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
             })
             .collect();
-        let rest: Vec<f64> = (0..n).map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k]).collect();
+        let rest: Vec<f64> = (0..n)
+            .map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k])
+            .chain((0..p).map(|i| springs[i] - bias[n + i]))
+            .collect();
         let solve_with = |loss: &[f64]| -> Vec<f64> {
             let mut m = mass.clone();
             for k in 0..n {
-                m[k * n + k] += loss[k] * self.joints[k].drive.reflected_inertia();
+                m[k * all + k] += loss[k] * self.joints[k].drive.reflected_inertia();
             }
-            let rhs: Vec<f64> = (0..n).map(|k| loss[k] * drive[k] + rest[k]).collect();
-            solve(&m, &rhs).unwrap_or_else(|| vec![f64::NAN; n])
+            let rhs: Vec<f64> = (0..all).map(|k| if k < n { loss[k] * drive[k] } else { 0.0 } + rest[k]).collect();
+            solve(&m, &rhs).unwrap_or_else(|| vec![f64::NAN; all])
         };
         let first = solve_with(&vec![1.0; n]);
         let loss: Vec<f64> = (0..n)
@@ -258,7 +310,8 @@ impl<M: Mechanism> JointMachine<M> {
         (acc, into, out)
     }
 
-    /// Joint accelerations and the force (torque) each transmission passes to its joint, in either model.
+    /// Joint accelerations (passive ones after the driven ones) and the force (torque) each transmission passes to its
+    /// joint, in either model.
     fn motion(&self, s: &[f64], torque: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let n = self.n();
         if self.elastic {
@@ -267,7 +320,8 @@ impl<M: Mechanism> JointMachine<M> {
             let gear = (0..n)
                 .map(|k| self.joints[k].drive.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]).output)
                 .collect();
-            (d[n..2 * n].to_vec(), gear)
+            let at = self.passive_at() + self.passive.len();
+            (d[n..2 * n].iter().chain(&d[at..at + self.passive.len()]).copied().collect(), gear)
         } else {
             let (acc, _, out) = self.rigid_solve(s, torque);
             (acc, out)
@@ -276,12 +330,14 @@ impl<M: Mechanism> JointMachine<M> {
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
         let n = self.n();
-        let (q, qd) = self.arms(s);
-        let (mass, _) = self.load(q, &vec![0.0; n]);
+        let (q, qd) = self.all_joints(s);
+        let all = q.len();
+        let (mass, _) = self.load_all(&q, &vec![0.0; all]);
         let mut kinetic =
-            0.5 * (0..n).map(|i| (0..n).map(|j| qd[i] * mass[i * n + j] * qd[j]).sum::<f64>()).sum::<f64>();
-        let potential = self.mechanism.potential(q);
-        let mut elastic: f64 = (0..n).map(|k| self.joints[k].drive.stop_energy(q[k])).sum();
+            0.5 * (0..all).map(|i| (0..all).map(|j| qd[i] * mass[i * all + j] * qd[j]).sum::<f64>()).sum::<f64>();
+        let potential = self.mechanism.potential(&q);
+        let mut elastic: f64 = (0..n).map(|k| self.joints[k].drive.stop_energy(q[k])).sum::<f64>()
+            + self.passive.iter().zip(&q[n..]).map(|((k, _), q)| 0.5 * k * q * q).sum::<f64>();
         for k in 0..n {
             let j = &self.joints[k].drive;
             if self.elastic {
@@ -299,7 +355,13 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2], vec![0.0; n]);
+        let p = self.passive.len();
+        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2 + p.min(1)], vec![0.0; n]);
+        if p > 0 {
+            // The swing's dampers.
+            let (_, qd) = self.all_joints(s);
+            powers[3 * n + 2] = self.passive.iter().zip(&qd[n..]).map(|((_, c), w)| c * w * w).sum();
+        }
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque));
         for k in 0..n {
             let j = &self.joints[k].drive;
@@ -325,17 +387,19 @@ impl<M: Mechanism> JointMachine<M> {
     /// The torque breakdown, loss powers, energies and friction signals of the effect views.
     fn view_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let n = self.n();
-        let (q, qd) = self.arms(s);
+        let (_, qd) = self.arms(s);
         let (_, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (mass, bias) = self.load(q, qd);
-        let (_, gravity) = self.load(q, &vec![0.0; n]);
+        let (qa, qda) = self.all_joints(s);
+        let all = qa.len();
+        let (mass, bias) = self.load_all(&qa, &qda);
+        let (_, gravity) = self.load_all(&qa, &vec![0.0; all]);
         let (acc, _) = self.motion(s, torque);
         let losses = self.losses(s, torque);
         for k in 0..n {
             let j = &self.joints[k].drive;
             let i = j.ratio();
-            let moving: f64 = (0..n).map(|c| mass[k * n + c] * acc[c]).sum();
+            let moving: f64 = (0..all).map(|c| mass[k * all + c] * acc[c]).sum();
             let held = j.brake.torque(self.brake_engaged, rotor_speed[k], brakes[k]).0;
             let parts = [
                 (moving + bias[k] - gravity[k] + j.reflected_inertia() * acc[k]) / i,
@@ -391,6 +455,14 @@ impl<M: Mechanism> JointMachine<M> {
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
+        if !self.passive.is_empty() {
+            out.push(SignalInfo::new(
+                format!("{LOSS_PREFIX}payload_swing"),
+                "group-payload-swing",
+                "quantity-damping-power",
+                "W",
+            ));
+        }
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
         }));
@@ -452,7 +524,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn state_len(&self) -> usize {
-        self.n() * if self.elastic { 5 } else { 3 }
+        self.passive_at() + 2 * self.passive.len()
     }
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
@@ -482,18 +554,23 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         let n = self.n();
         let (q, qd) = self.arms(s);
         out[..n].copy_from_slice(qd);
+        let (p, at) = (self.passive.len(), self.passive_at());
+        out[at..at + p].copy_from_slice(&s[at + p..at + 2 * p]);
         if !self.elastic {
             let (acc, ..) = self.rigid_solve(s, torque);
             let (_, rotor_speed) = self.rotors(s);
             let brakes = self.brakes(s);
-            out[n..2 * n].copy_from_slice(&acc);
+            out[n..2 * n].copy_from_slice(&acc[..n]);
+            out[at + p..at + 2 * p].copy_from_slice(&acc[n..]);
             for k in 0..n {
                 out[2 * n + k] = self.joints[k].drive.brake.torque(self.brake_engaged, rotor_speed[k], brakes[k]).1;
             }
             return;
         }
-        let (mass, bias) = self.load(q, qd);
-        let mut rhs = vec![0.0; n];
+        let (qa, qda) = self.all_joints(s);
+        let (mass, bias) = self.load_all(&qa, &qda);
+        let springs = self.passive_torque(&qa[n..], &qda[n..]);
+        let mut rhs: Vec<f64> = vec![0.0; n].into_iter().chain((0..p).map(|i| springs[i] - bias[n + i])).collect();
         for k in 0..n {
             let j = &self.joints[k].drive;
             let (gear, rotor_acc, brake_rate) =
@@ -503,8 +580,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             out[3 * n + k] = rotor_acc;
             out[4 * n + k] = brake_rate;
         }
-        let acc = solve(&mass, &rhs).unwrap_or_else(|| vec![f64::NAN; n]);
-        out[n..2 * n].copy_from_slice(&acc);
+        let acc = solve(&mass, &rhs).unwrap_or_else(|| vec![f64::NAN; n + p]);
+        out[n..2 * n].copy_from_slice(&acc[..n]);
+        out[at + p..at + 2 * p].copy_from_slice(&acc[n..]);
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
@@ -512,14 +590,16 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.forward(q, pos);
         let jac = self.jacobian(q);
         let n = self.n();
-        for (i, v) in vel.iter_mut().enumerate().take(n) {
+        for (i, v) in vel.iter_mut().enumerate().take(self.axes.len()) {
             *v = (0..n).map(|k| jac[i * n + k] * qd[k]).sum();
         }
     }
     fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {
         let n = self.n();
-        let jac = self.jacobian(&s[..n]);
-        let qd = solve(&jac, &vel[..n]).unwrap_or_else(|| vec![f64::NAN; n]);
+        let mut pos = vec![0.0; self.axes.len()];
+        self.mechanism.forward(&s[..n], &mut pos);
+        let zero = vec![0.0; pos.len()];
+        let (_, qd, _) = self.joint_motion(&pos, vel, &zero);
         s[n..2 * n].copy_from_slice(&qd);
         if self.elastic {
             for k in 0..n {
@@ -533,51 +613,20 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         vel[..self.n()].copy_from_slice(&speed);
     }
 
-    /// Rigid, loss-free, at rest: (M q'' + g) at the joint over the ratio, plus the rotor's own J i q''.
+    /// Rigid, loss-free, at rest: (M q'' + g) at the joint over the ratio, plus the rotor's own J i q'', with q'' what
+    /// the tool's acceleration asks at rest.
     fn feedforward_torque(&self, pos: &[f64], acc: &[f64], out: &mut [f64]) {
-        let n = self.n();
-        let mut q = vec![0.0; n];
-        if !self.mechanism.inverse(pos, &mut q) {
-            q.fill(f64::NAN);
-        }
-        let (mass, gravity) = self.load(&q, &vec![0.0; n]);
-        let qdd = solve(&self.jacobian(&q), &acc[..n]).unwrap_or_else(|| vec![f64::NAN; n]);
-        for k in 0..n {
-            let j = &self.joints[k].drive;
-            let at_joint: f64 = (0..n).map(|c| mass[k * n + c] * qdd[c]).sum::<f64>() + gravity[k];
-            out[k] = at_joint / j.ratio() + j.rotor_inertia * j.ratio() * qdd[k];
-        }
+        let zero = vec![0.0; pos.len()];
+        let (q, qd, qdd) = self.joint_motion(pos, &zero, acc);
+        let motor = |x: &[f64]| -> Vec<f64> { (0..self.n()).map(|k| x[k] * self.joints[k].drive.ratio()).collect() };
+        self.rigid_motor_torque(&motor(&q), &motor(&qd), &motor(&qdd), out);
     }
 
-    /// Where the tool is not the joints: the joint speeds J^-1 v and accelerations J^-1 (a - J' q') with J' q' the
-    /// second difference of the forward kinematics along q', then `rigid_motor_torque` with the velocity terms. Where it
-    /// is, `feedforward_torque` (no speed terms), as before.
+    /// The joints' motion (`joint_motion`), then `rigid_motor_torque` with the velocity terms: the Coriolis and
+    /// centripetal torques of M(q) changing with the pose, in joint space too.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
-        if self.mechanism.tool_is_joints() {
-            return self.feedforward_torque(pos, acc, out);
-        }
-        let n = self.n();
-        let mut q = vec![0.0; n];
-        if !self.mechanism.inverse(pos, &mut q) {
-            q.fill(f64::NAN);
-        }
-        let jac = self.jacobian(&q);
-        let qd = solve(&jac, &vel[..n]).unwrap_or_else(|| vec![f64::NAN; n]);
-        let speed = qd.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let mut curve = vec![0.0; n];
-        if speed > 0.0 {
-            // A step of 1e-4 rad (m) along q': truncation ~1e-8, rounding ~1e-16 / 1e-8 of the tool's size.
-            let h = 1e-4 / speed;
-            let (mut a, mut b, mut c) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
-            let at = |s: f64| -> Vec<f64> { (0..n).map(|k| q[k] + s * qd[k]).collect() };
-            self.mechanism.forward(&at(h), &mut a);
-            self.mechanism.forward(&q, &mut b);
-            self.mechanism.forward(&at(-h), &mut c);
-            curve = (0..n).map(|k| (a[k] - 2.0 * b[k] + c[k]) / (h * h)).collect();
-        }
-        let rhs: Vec<f64> = (0..n).map(|k| acc[k] - curve[k]).collect();
-        let qdd = solve(&jac, &rhs).unwrap_or_else(|| vec![f64::NAN; n]);
-        let motor = |x: &[f64]| -> Vec<f64> { (0..n).map(|k| x[k] * self.joints[k].drive.ratio()).collect() };
+        let (q, qd, qdd) = self.joint_motion(pos, vel, acc);
+        let motor = |x: &[f64]| -> Vec<f64> { (0..self.n()).map(|k| x[k] * self.joints[k].drive.ratio()).collect() };
         self.rigid_motor_torque(&motor(&q), &motor(&qd), &motor(&qdd), out);
     }
 
@@ -677,6 +726,14 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 ));
             }
         }
+        for k in 0..self.passive.len() {
+            out.push(SignalInfo::new(
+                format!("swing.{}.angle", k + 1),
+                "group-payload-swing",
+                "quantity-swing-angle",
+                "rad",
+            ));
+        }
         out.extend(self.mechanism.signal_infos());
         self.effect_infos(&mut out);
         out
@@ -698,6 +755,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 None => {}
             }
         }
+        let at = self.passive_at();
+        out.extend(&s[at..at + self.passive.len()]);
         self.mechanism.signals(q, qd, &acc, &force, out);
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
@@ -740,11 +799,11 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn scene(&self, s: &[f64], out: &mut Scene) {
-        let (q, _) = self.arms(s);
+        let (q, _) = self.all_joints(s);
         let (rotor, speed) = self.rotors(s);
         out.parts.clear();
         out.labels.clear();
-        self.mechanism.scene(q, &rotor, &speed, out);
+        self.mechanism.scene(&q, &rotor, &speed, out);
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
         self.mechanism.scene_point(tool)
@@ -759,11 +818,72 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 }
 
 impl<M: Mechanism> JointMachine<M> {
-    /// d tool / d q (n x n, row by row), by central differences of `Mechanism::forward`; exact (to rounding) where the
-    /// tool is the joints.
+    /// The joints' positions, speeds and accelerations for the tool's pose, speed and acceleration. Where the tool is
+    /// the joints, those themselves. With as many axes as joints: q' = J^-1 v and q'' = J^-1 (a - J' q'), J' q' the
+    /// second difference of the forward kinematics along q'. With fewer (a redundant arm): by central differences of
+    /// the mechanism's `inverse`, which resolves the redundancy, along v and along a, so that speeds and accelerations
+    /// are those of the very joints it gives: q' = (q(x + h v) - q(x - h v)) / 2h, q'' = (q(x + h v) - 2 q(x) +
+    /// q(x - h v)) / h^2 + (q(x + k a) - q(x - k a)) / 2k, steps of 1e-4 of the tool's units.
+    pub fn joint_motion(&self, pos: &[f64], vel: &[f64], acc: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let (n, m) = (self.n(), self.axes.len());
+        if self.mechanism.tool_is_joints() {
+            return (pos[..n].to_vec(), vel[..n].to_vec(), acc[..n].to_vec());
+        }
+        let solved = |x: &[f64]| -> Vec<f64> {
+            let mut q = vec![0.0; n];
+            if !self.mechanism.inverse(x, &mut q) {
+                q.fill(f64::NAN);
+            }
+            q
+        };
+        let q = solved(pos);
+        if m < n {
+            let along = |d: &[f64]| -> Option<(f64, Vec<f64>, Vec<f64>)> {
+                let size = d.iter().map(|v| v * v).sum::<f64>().sqrt();
+                (size > 0.0).then(|| {
+                    let h = 1e-4 / size;
+                    let at = |s: f64| solved(&(0..m).map(|i| pos[i] + s * d[i]).collect::<Vec<_>>());
+                    (h, at(h), at(-h))
+                })
+            };
+            let (mut qd, mut qdd) = (vec![0.0; n], vec![0.0; n]);
+            if let Some((h, ahead, behind)) = along(&vel[..m]) {
+                for k in 0..n {
+                    qd[k] = (ahead[k] - behind[k]) / (2.0 * h);
+                    qdd[k] = (ahead[k] - 2.0 * q[k] + behind[k]) / (h * h);
+                }
+            }
+            if let Some((h, ahead, behind)) = along(&acc[..m]) {
+                for k in 0..n {
+                    qdd[k] += (ahead[k] - behind[k]) / (2.0 * h);
+                }
+            }
+            return (q, qd, qdd);
+        }
+        let jac = self.jacobian(&q);
+        let qd = solve(&jac, &vel[..n]).unwrap_or_else(|| vec![f64::NAN; n]);
+        let speed = qd.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let mut curve = vec![0.0; n];
+        if speed > 0.0 {
+            // A step of 1e-4 rad (m) along q': truncation ~1e-8, rounding ~1e-16 / 1e-8 of the tool's size.
+            let h = 1e-4 / speed;
+            let (mut a, mut b, mut c) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+            let at = |s: f64| -> Vec<f64> { (0..n).map(|k| q[k] + s * qd[k]).collect() };
+            self.mechanism.forward(&at(h), &mut a);
+            self.mechanism.forward(&q, &mut b);
+            self.mechanism.forward(&at(-h), &mut c);
+            curve = (0..n).map(|k| (a[k] - 2.0 * b[k] + c[k]) / (h * h)).collect();
+        }
+        let rhs: Vec<f64> = (0..n).map(|k| acc[k] - curve[k]).collect();
+        let qdd = solve(&jac, &rhs).unwrap_or_else(|| vec![f64::NAN; n]);
+        (q, qd, qdd)
+    }
+
+    /// d tool / d q (axes x joints, row by row), by central differences of `Mechanism::forward`; exact (to rounding)
+    /// where the tool is the joints.
     pub fn jacobian(&self, q: &[f64]) -> Vec<f64> {
-        let n = self.n();
-        let (mut jac, mut a, mut b) = (vec![0.0; n * n], vec![0.0; n], vec![0.0; n]);
+        let (n, rows) = (self.n(), self.axes.len());
+        let (mut jac, mut a, mut b) = (vec![0.0; rows * n], vec![0.0; rows], vec![0.0; rows]);
         let mut p = q.to_vec();
         for c in 0..n {
             let h = 1e-6 * q[c].abs().max(1.0);
@@ -772,7 +892,7 @@ impl<M: Mechanism> JointMachine<M> {
             p[c] = q[c] - h;
             self.mechanism.forward(&p, &mut b);
             p[c] = q[c];
-            for r in 0..n {
+            for r in 0..rows {
                 jac[r * n + c] = (a[r] - b[r]) / (2.0 * h);
             }
         }

@@ -68,7 +68,7 @@ The cycle is the list of `[[cycle.segment]]` in the config: target pose, dwell t
 ```text
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
 a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,,0.00,0.0000
 b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,,0.00,0.0000
 ```
@@ -90,9 +90,10 @@ The simulator starts the cycle, lets the first pass go by, and measures the seco
 | `energy_regenerated_j` | J | Energy fed back while braking |
 | `peak_regenerated_power_w` | W | Highest power fed back |
 | `largest_regeneration_j` | J | Most energy fed back in one braking (one unbroken stretch of negative power) |
-| `path_error_peak_m`, `_rms_m` | m | How far the tool was from the path its setpoint drew. Machine-wide |
-| `tracking_error_peak_m` | m | How far the tool was from where its setpoint was at the same moment. Machine-wide |
-| `dwell_error_peak_m` | m | Most the tool was off its target in the second half of a dwell. Machine-wide |
+| `path_error_peak_m`, `_rms_m` | m | How far the tool was from the path its setpoint drew, in the axes in m (its place). Machine-wide |
+| `tracking_error_peak_m` | m | How far the tool was from where its setpoint was at the same moment, in the axes in m. Machine-wide |
+| `dwell_error_peak_m` | m | Most the tool was off its target in the second half of a dwell, in the axes in m. Machine-wide |
+| `path_angle_error_peak_rad`, `_rms_rad`, `tracking_angle_error_peak_rad`, `dwell_angle_error_peak_rad` | rad | The same three of the axes in rad (the tool's turn: the D4's c, the SCARA's c, an arm's orientation or its joints, the table), apart: metres and radians are never added. 0 on a machine without such an axis. Machine-wide |
 | `cubic_mean_torque_nm` | N m | Cube root of the mean of torque cubed, weighted with speed, of the motor torque. The check `gearbox-continuous` takes the same mean of the gearbox output torque |
 | `braking_resistor_energy_j` | J | Energy the simulated braking resistor burned. 0 without `effects.dc_link` |
 | `braking_resistor_mean_power_w` | W | That energy over the cycle time |
@@ -157,6 +158,7 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | `braking-resistor-peak` | peak power of the resistor | `ratings.braking_resistor_peak_w` | W |
 | `dc-link-overvoltage` | highest DC link voltage (only with `effects.dc_link`) | `ratings.dc_link_overvoltage_v` | V |
 | `settling` | `dwell_error_peak_m` | `ratings.settling_tolerance_m` | m |
+| `settling-angle` | `dwell_angle_error_peak_rad` | `ratings.settling_tolerance_rad` | rad |
 | `belt-tension` | highest belt tension | `ratings.belt_max_tension_n` | N |
 | `belt-slack` | lowest belt tension | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |

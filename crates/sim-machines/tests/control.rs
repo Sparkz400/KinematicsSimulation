@@ -436,13 +436,16 @@ fn every_effect_switch_changes_the_traces() {
         // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
         // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
         // A crash needs an obstacle, and the configs have none. The thermal warm start acts on the cycle analysis, not on
-        // a run. Their own tests show them working.
+        // a run. A swinging payload is the arms' alone (the joint kit's other machines read the switch but have no payload
+        // to hang, the SCARA's sits at its flange with no length to swing on), and it brings joints and signals of its
+        // own. Their own tests show them working.
         let skipped = [
             "effects.hard_stops",
             "effects.holding_brake",
             "effects.shaper_follows_pose",
             "effects.crash",
             "effects.thermal_warm_start",
+            "effects.payload_swing",
         ];
         // A machine with one drive has nothing to share a DC link with.
         let alone = Sim::new(entry, &base).unwrap().machine.motors().len() < 2;
@@ -957,6 +960,7 @@ mod across_the_bounds {
         rotary_table: "rotary-table",
         urdf_arm: "urdf-arm",
         scara: "scara",
+        palletiser: "palletiser",
         exct_30: "EXCT-30",
     );
 }

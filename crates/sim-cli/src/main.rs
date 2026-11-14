@@ -693,6 +693,8 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     writeln!(out, "cycle_s,{:.4},{:.4}", found.before.duration, found.after.duration).map_err(io)?;
     writeln!(out, "dwell_error_peak_m,{:.3e},{:.3e}", found.before.dwell_error_peak, found.after.dwell_error_peak)
         .map_err(io)?;
+    let (before, after) = (found.before.dwell_angle_error_peak, found.after.dwell_angle_error_peak);
+    writeln!(out, "dwell_angle_error_peak_rad,{before:.3e},{after:.3e}").map_err(io)?;
     if let Some(robust) = &found.robust {
         // The fastest setting on the verdicts as written, what it fails in the bands (or at the worst corner), and how
         // far the result went back.
@@ -977,7 +979,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-conveyor", &detail));
     }
     let mut out = output(args, "--out")?;
-    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload").map_err(io)?;
+    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload").map_err(io)?;
     // Empty where the machine does not report the signal or the config has no load rating for the guide.
     let or_empty = |value: Option<f64>| value.map_or(String::new(), |v| format!("{v:.4e}"));
     let machine_wide = format!(
@@ -999,8 +1001,15 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
             m.largest_regeneration
         );
         let electrical = format!(
-            "{electrical},{:.3e},{:.3e},{:.3e},{:.3e}",
-            load.path_error_peak, load.path_error_rms, load.tracking_error_peak, load.dwell_error_peak
+            "{electrical},{:.3e},{:.3e},{:.3e},{:.3e},{:.3e},{:.3e},{:.3e},{:.3e}",
+            load.path_error_peak,
+            load.path_error_rms,
+            load.tracking_error_peak,
+            load.dwell_error_peak,
+            load.path_angle_error_peak,
+            load.path_angle_error_rms,
+            load.tracking_angle_error_peak,
+            load.dwell_angle_error_peak
         );
         let electrical = format!(
             "{electrical},{:.6},{:.3},{:.3},{:.2},{machine_wide},{:.3}",

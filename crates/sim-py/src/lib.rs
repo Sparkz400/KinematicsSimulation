@@ -54,7 +54,8 @@ impl PyConfig {
         for (path, value) in &self.sets {
             cfg.set(path, value.clone()).map_err(|e| config_error(self.entry, e))?;
         }
-        cfg.check_keys(&self.entry.config(), &sim_components::analysis::RATINGS_BEYOND_DEFAULT)
+        let schema = sim_components::schema(self.entry, &cfg).map_err(|e| config_error(self.entry, e))?;
+        cfg.check_keys(&schema, &sim_components::analysis::RATINGS_BEYOND_DEFAULT)
             .map_err(|e| config_error(self.entry, e))?;
         self.cfg = cfg;
         Ok(())

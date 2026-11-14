@@ -7,6 +7,43 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Arms: generic tool-space kinematics for any URDF chain of 4 to 7 joints (`kinematics.tool_axes`, damped least squares,
+  warm-started from the last solution, a seven-joint arm resolved towards its home posture in the Jacobian's null
+  space); example configs `config/arm5-tool.toml` and `config/arm7-tool.toml` with `urdf/five-axis.urdf` and
+  `urdf/seven-axis.urdf`.
+- A palletiser (`palletiser`, `urdf/palletiser.urdf`): four motors, a parallelogram keeping the flange level as
+  `arm.joint_coupling` (the URDF's joints as sums of the motors'), shipped in tool space with catalogue motors.
+- `arm.payload_inertia_kgm2`: the payload's own inertia; `effects.payload_swing` (`arm.payload_swing_*`): a payload
+  swinging on the flange, two joints no motor drives (`chain::Mechanism::passive_joints`), signals `swing.<k>.angle`.
+- Each arm joint's own motor, drive, gear and ratings (`[motor.<k>]`, `[drive.<k>]`, `[gearbox.<k>]`,
+  `[strain_wave.<k>]`, `[ratings.<k>]`, `[parts.<k>]`); the shipped arms' wrists sized with smaller catalogue motors.
+- `ratings.settling_tolerance_rad`, the check `settling-angle`, and the turn's own path, tracking and dwell errors
+  (`path_angle_error_peak_rad`, `_rms_rad`, `tracking_angle_error_peak_rad`, `dwell_angle_error_peak_rad` in
+  `sim-cli analyze` and the app).
+
+### Changed
+
+- A line of a tool whose axes are x, y, z, rx, ry, rz turns its orientation by slerp (`path`, `rigid::slerp`).
+- The arms' orientation in tool space is the turn from the flange's orientation at zero joints (the base frame's on
+  the shipped six-axis URDF): a URDF whose flange points down at zero is no longer refused everywhere.
+- The six-axis arm's tool-space limits: the orientation range around pointing down, 0.9 m/s and 1.5 rad/s, so the axis
+  limits ask no motor beyond its rated speed (it warned "Motor joint 5: 370.5 > 314.2" and more).
+- `[strain_wave]` and `[joint]` are per-motor tables too (`catalog::PER_MOTOR_TABLES`); a config of a registered machine may
+  give a motor its own tables though the default config has none for it (`sim_components::schema`).
+
+### Fixed
+
+- The arms in joint space leave the Coriolis and centripetal torques out of the feedforward and the time-optimal plan
+  no longer; `Machine::feedforward_torque_moving`'s doc no longer calls the default exact where the motor angles are
+  linear in the tool pose.
+- The tool's error metric added metres and radians (the D4's path error 3.53 mm with its 90° turn, 1.53 mm without);
+  the place's errors and `settling` take the axes in m only, the turn's its own in rad.
+- `path::plan_time_optimal` refuses a plan of more than ten million points instead of filling the memory where the
+  motors allow only a crawl (a line onto the stretched SCARA arm asked some 64 GB).
+- `lossless_config` of the joint machines zeroes a joint's own gearbox damping too.
+
 ### Fixed
 
 - FMI 2.0: the model description no longer declares the independent variable `time` (the standard then has it

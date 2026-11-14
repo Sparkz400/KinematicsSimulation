@@ -968,8 +968,9 @@ pub(crate) fn parts_applied(cfg: &Config) -> Result<Config, ConfigError> {
 }
 
 /// The tables a config may give one motor its own values in, as `[<table>.<motor id>]` (a machine file's motors
-/// that differ: a smaller Z motor, another gearbox). See `motor_config`.
-pub const PER_MOTOR_TABLES: [&str; 5] = ["parts", "motor", "gearbox", "drive", "ratings"];
+/// that differ: a smaller Z motor, another gearbox; an arm's smaller strain wave gear and lighter joint friction in its
+/// wrist). See `motor_config`.
+pub const PER_MOTOR_TABLES: [&str; 7] = ["parts", "motor", "gearbox", "drive", "ratings", "strain_wave", "joint"];
 
 /// The config one motor sees: each table of `PER_MOTOR_TABLES` with that motor's `[<table>.<id>]` over it, and the
 /// motor, gearbox and drive its `[parts.<id>]` names applied from the catalogue over that. A key there has to be one

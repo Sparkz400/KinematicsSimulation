@@ -69,7 +69,7 @@ Der Zyklus ist die Liste der `[[cycle.segment]]` in der Konfiguration: Zielpose,
 ```text
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
-motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
+motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload
 a,6.080000,0.559501,0.165359,200.4517,0.1475,0.1302,204.63,334.36,0.3676,1.23,85.040,10.094,28.20,5.864,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.196870,0.000,0.000,221.40,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7222e5,6.7360e9,1.9094e-1,,,0.00,0.0000
 b,6.080000,0.460104,0.153384,200.4375,0.1211,0.1208,204.63,334.36,0.3410,1.05,74.377,15.292,35.02,7.081,1.369e-4,4.382e-5,1.706e-4,4.734e-5,0.175175,5.343,0.879,224.65,0.0000e0,6.4481e2,1.7783e2,4.7379e6,0.000,4.9950e6,4.7127e5,1.0201e10,1.5155e-1,,,0.00,0.0000
 ```
@@ -91,9 +91,10 @@ Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und m
 | `energy_regenerated_j` | J | Rückgespeiste Energie beim Bremsen |
 | `peak_regenerated_power_w` | W | Höchste rückgespeiste Leistung |
 | `largest_regeneration_j` | J | Größte Energie, die in einer einzelnen Bremsung zurückgespeist wurde (ein ununterbrochener Abschnitt negativer Leistung) |
-| `path_error_peak_m`, `_rms_m` | m | Bahnfehler: Abstand des Werkzeugs von der Bahn, die sein Sollwert gezeichnet hat. Gilt für die ganze Maschine |
-| `tracking_error_peak_m` | m | Abstand des Werkzeugs von der Stelle, an der sein Sollwert im selben Augenblick war. Gilt für die ganze Maschine |
-| `dwell_error_peak_m` | m | Größter Abstand vom Ziel beim Verweilen, gemessen in der zweiten Hälfte einer Verweilzeit. Gilt für die ganze Maschine |
+| `path_error_peak_m`, `_rms_m` | m | Bahnfehler: Abstand des Werkzeugs von der Bahn, die sein Sollwert gezeichnet hat, in den Achsen in m (sein Ort). Gilt für die ganze Maschine |
+| `tracking_error_peak_m` | m | Abstand des Werkzeugs von der Stelle, an der sein Sollwert im selben Augenblick war, in den Achsen in m. Gilt für die ganze Maschine |
+| `dwell_error_peak_m` | m | Größter Abstand vom Ziel beim Verweilen, gemessen in der zweiten Hälfte einer Verweilzeit, in den Achsen in m. Gilt für die ganze Maschine |
+| `path_angle_error_peak_rad`, `_rms_rad`, `tracking_angle_error_peak_rad`, `dwell_angle_error_peak_rad` | rad | Dieselben drei für die Achsen in rad (die Drehung des Werkzeugs: c des D4 und des SCARA, die Orientierung eines Arms oder seine Gelenke, der Rundtisch), getrennt: Meter und Radiant werden nie addiert. 0 bei einer Maschine ohne solche Achse. Gilt für die ganze Maschine |
 | `cubic_mean_torque_nm` | N m | Kubisches Mittel des Moments: dritte Wurzel aus dem Mittelwert der dritten Potenz des Moments, gewichtet mit der Drehzahl, und zwar des Motormoments. Die Prüfung `gearbox-continuous` bildet dasselbe Mittel aus dem Getriebe-Abtriebsmoment |
 | `braking_resistor_energy_j` | J | Energie, die der simulierte Bremswiderstand in Wärme umgesetzt hat. 0 ohne `effects.dc_link` |
 | `braking_resistor_mean_power_w` | W | Diese Energie geteilt durch die Zykluszeit |
@@ -160,6 +161,7 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | `braking-resistor-peak` | Bremswiderstand, Spitzenleistung | Spitzenleistung am Bremswiderstand | `ratings.braking_resistor_peak_w` | W |
 | `dc-link-overvoltage` | Höchste Zwischenkreisspannung | höchste Zwischenkreisspannung (nur mit `effects.dc_link`) | `ratings.dc_link_overvoltage_v` | V |
 | `settling` | Abstand vom Ziel beim Verweilen | `dwell_error_peak_m` | `ratings.settling_tolerance_m` | m |
+| `settling-angle` | Verdrehung gegen das Ziel beim Verweilen | `dwell_angle_error_peak_rad` | `ratings.settling_tolerance_rad` | rad |
 | `belt-tension` | Größte Riemenkraft | größte Riemenkraft | `ratings.belt_max_tension_n` | N |
 | `belt-slack` | Kleinste Riemenkraft | kleinste Riemenkraft | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | Radialkraft auf eine Scheibenwelle, Spitze | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |

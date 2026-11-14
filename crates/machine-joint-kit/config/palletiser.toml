@@ -1,0 +1,358 @@
+# Four-axis palletiser: a turret, an upper arm and a forearm whose parallelogram keeps the flange level, and a flange
+# turning about the vertical; bodies from urdf/palletiser.urdf (about 20 kg payload, 1.6 m reach). The URDF has five
+# joints, the machine four motors: arm.joint_coupling says how the parallelogram couples them. Joints 1 to 3 behind
+# large gears with 1FK2106 motors, the flange behind a small strain wave gear with a 1FK2104.
+#   [estimate]   all but the motors and drives.
+# The tool pose is the flange's x, y, z (m) and its turn rz (rad) about the vertical (kinematics.tool_space, as shipped);
+# off, the axes are the four motors' joints.
+
+[sim]
+dt_s = 62.5e-6
+substeps = 2
+
+[arm]
+urdf_file = "builtin:palletiser"
+gear_ratios = [160.0, 160.0, 160.0, 50.0]
+payload_kg = 20.0
+# From the flange frame (its z axis points down): the carton's centre 0.2 m below the flange.
+payload_offset_m = [0.0, 0.0, 0.2]
+# About its centre: xx, yy, zz, xy, xz, yz. [estimate] a 20 kg carton of 0.6 x 0.4 x 0.3 m: m (0.4^2 + 0.3^2) / 12 =
+# 0.41667, m (0.6^2 + 0.3^2) / 12 = 0.75, m (0.6^2 + 0.4^2) / 12 = 0.86667.
+payload_inertia_kgm2 = [0.41667, 0.75, 0.86667, 0.0, 0.0, 0.0]
+# The URDF's five joints from the four motors' joints, one row per URDF joint: the turret, the upper arm, the elbow as
+# the forearm's angle against the base (motor 3, which a parallelogram from the base turns) less the upper arm's, the
+# wrist turning back the forearm's angle (a second parallelogram: the flange stays level), the flange's turn.
+joint_coupling = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, -1.0, 1.0, 0.0],
+    [0.0, 0.0, -1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+]
+# With effects.payload_swing: the carton on a pivot at the flange, its centre 0.2 m below, with this spring and damper
+# per axis. [estimate] a vacuum gripper's bellows: 20 kg at 0.2 m swings at sqrt(k / (m l^2) + g / l) / 2 pi = 2.2 Hz.
+payload_swing_stiffness_nm_rad = 120.0
+payload_swing_damping_nm_s_rad = 3.0
+
+# On (as shipped): the axes are the flange's x, y, z (m) and its turn rz about the vertical (rad, from its orientation
+# at zero joints, pointing down), [axis.x] to [axis.rz]; the joints by damped least squares from the home. Off: the
+# four motors' joints, [axis.j1] to [axis.j4].
+[kinematics]
+tool_space = true
+home_joints = [0.0, 0.2, 0.3, 0.0]
+tool_axes = ["x", "y", "z", "rz"]
+# Read but not used: no SCARA.
+elbow = "right"
+
+# The range of x, y, z (m) and rz (rad): in front of the turret, the flange down to 0.6 m above the floor. Poses out of
+# reach, beyond a joint's stop or where the condition number of the Jacobian is above max_condition_number are
+# refused. [estimate]
+[workspace]
+tool_min = [1.0, -0.7, 0.6, -1.7]
+tool_max = [1.8, 0.7, 1.6, 1.7]
+max_condition_number = 30.0
+
+# The tool's limits. [estimate] below what the motors' rated speed allows with every axis at its limit at once.
+[axis.x]
+max_velocity_m_s = 1.2
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 40.0
+
+[axis.y]
+max_velocity_m_s = 1.2
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 40.0
+
+[axis.z]
+max_velocity_m_s = 1.2
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 40.0
+
+[axis.rz]
+max_velocity_rad_s = 2.5
+max_acceleration_rad_s2 = 10.0
+max_jerk_rad_s3 = 100.0
+
+# The motors' joints' limits ([estimate]: below the motors' rated 314 rad/s behind the ratios).
+[axis.j1]
+max_velocity_rad_s = 1.8
+max_acceleration_rad_s2 = 4.0
+max_jerk_rad_s3 = 40.0
+
+[axis.j2]
+max_velocity_rad_s = 1.8
+max_acceleration_rad_s2 = 4.0
+max_jerk_rad_s3 = 40.0
+
+[axis.j3]
+max_velocity_rad_s = 1.8
+max_acceleration_rad_s2 = 4.0
+max_jerk_rad_s3 = 40.0
+
+[axis.j4]
+max_velocity_rad_s = 5.0
+max_acceleration_rad_s2 = 20.0
+max_jerk_rad_s3 = 200.0
+
+[joint]
+friction_coulomb_nm = 4.0
+friction_viscous_nm_s_rad = 2.0
+friction_smoothing_rad_s = 0.01
+# Where the URDF gives no limits (a continuous joint), and for the table.
+min_angle_deg = -360.0
+max_angle_deg = 360.0
+stop_stiffness_nm_rad = 100000.0
+stop_damping_nm_s_rad = 50.0
+
+# [estimate] a strain wave gear of size 32, its ratio per joint from arm.gear_ratios.
+# [estimate] a gear of 600 N m rated per joint 1 to 3, its ratio from arm.gear_ratios.
+[gearbox]
+ratio = 160.0
+efficiency = 0.8
+backlash_rad = 0.0
+stiffness_nm_rad = 200000.0
+damping_nm_s_rad = 150.0
+inertia_at_input_kgm2 = 4.0e-4
+
+# The life of each joint's gear, as a strain wave gear's (transmission::StrainWave). [estimate]
+[strain_wave]
+rated_torque_nm = 600.0
+rated_input_speed_rpm = 2000.0
+rated_life_h = 10000.0
+
+[motor]
+# [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
+rotor_inertia_kgm2 = 1.7e-4
+# [estimate]
+friction_coulomb_nm = 0.05
+friction_viscous_nm_s_rad = 2.0e-4
+friction_smoothing_rad_s = 0.5
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.02
+cogging_order = 24.0
+# [catalogue] static torque 5 N m over stall current 4.65 A
+torque_constant_nm_a = 1.07527
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 2.0
+inductance_h = 0.010
+# With effects.field_weakening [estimate]: pole pairs (not published for the 1FK2; the 1FK7 have 4) and the d-axis
+# inductance, as the winding has it, here that of the q axis above (surface magnets).
+pole_pairs = 4.0
+d_inductance_h = 0.01
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance to the surroundings (the
+# rest is the stator and housing's), and its time constant against the housing.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 37 min; 15 N m at the maximum current of 18 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 2220.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 18.0
+torque_constant_at_max_current_nm_a = 0.83333
+# [estimate]
+brake_torque_nm = 8.0
+
+# One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# Placeholder: each motor's in [drive.<k>].
+velocity_kp_nm_s_rad = 0.15
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+current_kp_v_a = 40.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
+peak_torque_nm = 15.0
+rated_torque_nm = 4.6
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.07527 N m/A
+no_load_speed_rad_s = 615.07
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# Off: each axis brakes into a resistor of its own (an S210); on: one S120 Braking Module for all.
+braking_module = false
+
+# Each joint's motor and drive from the catalogue (their own tables over the shared ones above,
+# catalog::motor_config). [catalogue] joints 1 to 3: 1FK2106-4AF, 12 N m static, 33 N m maximum, rotor 6.0 kg cm2, on an
+# S210 6SL3210-5HE15-0UF0 (12 A rated, 44 A maximum); the flange: 1FK2104-5AF, 2.4 N m static, 7.5 N m maximum, rotor
+# 0.56 kg cm2, on a 6SL3210-5HE10-8UF0 (2.3 A rated, 7.6 A maximum). [estimate] their brakes, the flange's strain wave
+# gear of size 25 and the velocity gains, scaled from the arm's 0.15 by the inertia at the motor.
+[parts.1]
+motor = "1FK2106-4AF"
+drive = "6SL3210-5HE15-0UF0"
+
+[parts.2]
+motor = "1FK2106-4AF"
+drive = "6SL3210-5HE15-0UF0"
+
+[parts.3]
+motor = "1FK2106-4AF"
+drive = "6SL3210-5HE15-0UF0"
+
+[parts.4]
+motor = "1FK2104-5AF"
+drive = "6SL3210-5HE10-8UF0"
+
+[motor.1]
+brake_torque_nm = 22.0
+
+[motor.2]
+brake_torque_nm = 22.0
+
+[motor.3]
+brake_torque_nm = 22.0
+
+[motor.4]
+brake_torque_nm = 3.2
+
+[drive.1]
+velocity_kp_nm_s_rad = 0.4
+
+[drive.2]
+velocity_kp_nm_s_rad = 0.35
+
+[drive.3]
+velocity_kp_nm_s_rad = 0.35
+
+[drive.4]
+velocity_kp_nm_s_rad = 0.05
+
+[gearbox.4]
+stiffness_nm_rad = 31000.0
+inertia_at_input_kgm2 = 4.1e-5
+damping_nm_s_rad = 10.0
+efficiency = 0.75
+
+[strain_wave.4]
+rated_torque_nm = 67.0
+
+# The flange's bearings: lighter than the arms' (as the six-axis arm's joints). [estimate] With the arms' 4 N m (and
+# from 6 N m on) the light flange sticks while its velocity loop is measured, and has no margins to tell.
+[joint.4]
+friction_coulomb_nm = 1.0
+friction_viscous_nm_s_rad = 0.5
+
+[ratings.4]
+gearbox_rated_torque_nm = 108.0
+gearbox_max_torque_nm = 172.0
+
+[ratings]
+# In tool space, m: the gears' twist under the arm's and the payload's weight, which the motors' encoders do not see,
+# is part of it. [estimate] 4 mm, as a palletiser places a carton.
+settling_tolerance_m = 0.004
+# The flange's turn rz, rad. [estimate] 5 mrad: 1.5 mm at the carton's corner 0.3 m out.
+settling_tolerance_rad = 0.005
+# [estimate] a gear of 600 N m rated (strain wave size 50 or a small cycloidal gear): limit for the average torque,
+# repeated peak torque.
+gearbox_rated_torque_nm = 600.0
+gearbox_max_torque_nm = 1100.0
+gearbox_max_input_speed_rpm = 6000.0
+# The DC link of the S210 converter. [estimate] as for the delta picker.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 5700.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# Placeholders: each motor's drive in [parts.<k>] sets them.
+drive_rated_current_a = 5.0
+drive_max_current_a = 19.0
+# With effects.drive_overload [estimate]: the base load current the drive falls back to when its thermal image trips
+# (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
+# of the image, and how long the drive gives its maximum current from the rated load.
+drive_base_load_current_a = 4.25
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+
+# In tool space: x, y, z (m), rz (rad).
+[start]
+pose = [1.2, -0.5, 1.3, 0.0]
+
+# A palletising cycle: down onto the carton on the conveyor, up, across to the pallet turning it a quarter turn, down
+# onto the layer, up, back.
+[[cycle.segment]]
+target = [1.2, -0.5, 0.9, 0.0]
+dwell_s = 0.2
+payload = false
+
+[[cycle.segment]]
+target = [1.2, -0.5, 1.3, 0.0]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [1.6, 0.5, 1.3, 1.5707963267948966]
+dwell_s = 0.0
+payload = true
+
+[[cycle.segment]]
+target = [1.6, 0.5, 0.8, 1.5707963267948966]
+dwell_s = 0.2
+payload = true
+
+[[cycle.segment]]
+target = [1.6, 0.5, 1.3, 1.5707963267948966]
+dwell_s = 0.0
+payload = false
+
+[[cycle.segment]]
+target = [1.2, -0.5, 1.3, 0.0]
+dwell_s = 0.0
+payload = false
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.008, 0.012]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+joint.friction_coulomb_nm = [2.0, 8.0]
+joint.friction_viscous_nm_s_rad = [1.0, 4.0]
+gearbox.efficiency = [0.7, 0.9]
+gearbox.stiffness_nm_rad = [160000.0, 230000.0]
+gearbox.damping_nm_s_rad = [75.0, 300.0]
+gearbox.inertia_at_input_kgm2 = [3.0e-4, 5.0e-4]
+gearbox.backlash_rad = [0.0, 2.909e-4]
+motor.friction_coulomb_nm = [0.025, 0.1]
+motor.friction_viscous_nm_s_rad = [1.0e-4, 4.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.01, 0.04]
+motor.resistance_ohm = [1.5, 3.0]
+motor.inductance_h = [0.008, 0.012]
+strain_wave.rated_torque_nm = [500.0, 700.0]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+arm.payload_swing_stiffness_nm_rad = [60.0, 240.0]
+arm.payload_swing_damping_nm_s_rad = [1.0, 6.0]

@@ -19,6 +19,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_joint_kit::ROTARY_TABLE,
     &machine_joint_kit::URDF_ARM,
     &machine_joint_kit::SCARA,
+    &machine_joint_kit::PALLETISER,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

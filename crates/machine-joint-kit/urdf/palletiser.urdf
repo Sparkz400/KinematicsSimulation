@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<!-- A generic four-axis palletiser for the simulator's examples, about 20 kg payload and 1.6 m reach: a turret, an upper
+     arm (1.0 m, up at zero), a forearm (1.2 m, out at zero), a wrist that the parallelogram keeps level and a flange
+     turning about the vertical, pointing down. The URDF is a serial chain of five joints; the parallelogram is the
+     config's arm.joint_coupling: the forearm's motor sets its angle against the base (joint3 = motor 3 - motor 2) and
+     the wrist turns back what the arms turn (joint4 = - motor 3), so the flange stays level. The parallelogram's bars
+     are in the links they move with. All values are estimates of this project, not any maker's. z up. -->
+<robot name="palletiser-example">
+  <link name="base_link"/>
+  <link name="turret">
+    <inertial>
+      <origin xyz="0.1 0 0.25" rpy="0 0 0"/>
+      <mass value="60.0"/>
+      <inertia ixx="2.0" ixy="0" ixz="0" iyy="2.2" iyz="0" izz="1.8"/>
+    </inertial>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="turret"/>
+    <origin xyz="0 0 0.3" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="0" velocity="0"/>
+  </joint>
+  <link name="upper_arm">
+    <inertial>
+      <origin xyz="0 0 0.5" rpy="0 0 0"/>
+      <mass value="25.0"/>
+      <inertia ixx="2.2" ixy="0" ixz="0" iyy="2.2" iyz="0" izz="0.12"/>
+    </inertial>
+  </link>
+  <joint name="joint2" type="revolute">
+    <parent link="turret"/>
+    <child link="upper_arm"/>
+    <origin xyz="0.25 0 0.45" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-0.7" upper="0.9" effort="0" velocity="0"/>
+  </joint>
+  <link name="forearm">
+    <inertial>
+      <origin xyz="0.55 0 0" rpy="0 0 0"/>
+      <mass value="20.0"/>
+      <inertia ixx="0.08" ixy="0" ixz="0" iyy="2.5" iyz="0" izz="2.5"/>
+    </inertial>
+  </link>
+  <joint name="joint3" type="revolute">
+    <parent link="upper_arm"/>
+    <child link="forearm"/>
+    <origin xyz="0 0 1.0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="1.6" effort="0" velocity="0"/>
+  </joint>
+  <link name="wrist">
+    <inertial>
+      <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+      <mass value="5.0"/>
+      <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.02" iyz="0" izz="0.015"/>
+    </inertial>
+  </link>
+  <joint name="joint4" type="revolute">
+    <parent link="forearm"/>
+    <child link="wrist"/>
+    <origin xyz="1.2 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.0" upper="2.0" effort="0" velocity="0"/>
+  </joint>
+  <!-- The flange with the gripper's frame, turning about the vertical. -->
+  <link name="flange_link">
+    <inertial>
+      <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+      <mass value="8.0"/>
+      <inertia ixx="0.06" ixy="0" ixz="0" iyy="0.06" iyz="0" izz="0.1"/>
+    </inertial>
+  </link>
+  <joint name="joint5" type="revolute">
+    <parent link="wrist"/>
+    <child link="flange_link"/>
+    <origin xyz="0 0 -0.2" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="0" velocity="0"/>
+  </joint>
+  <!-- The flange's z axis points down. -->
+  <link name="tool0"/>
+  <joint name="flange" type="fixed">
+    <parent link="flange_link"/>
+    <child link="tool0"/>
+    <origin xyz="0 0 -0.05" rpy="3.141592653589793 0 0"/>
+  </joint>
+</robot>
