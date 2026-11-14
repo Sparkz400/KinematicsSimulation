@@ -382,6 +382,8 @@ pub struct ConfigMachine {
     stroke: Vec<f64>,
     gantry: Option<Gantry>,
     tcp: Option<TcpNode>,
+    /// A dual-drive gantry's two motors, the first the master (`Machine::gantry_motors`), whether or not its bridge yaws.
+    gantry_motors: Option<[usize; 2]>,
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -681,8 +683,25 @@ impl ConfigMachine {
             }));
         }
         let worms = worm_stages(cfg, net, &mut gears, &extra_efficiency)?;
-        // With a tcp the tool's tip reaches beyond the straight axes' strokes by its distance from the rotaries.
-        let reach = net.tcp.as_ref().map_or(0.0, |t| t.tool.iter().map(|x| x * x).sum::<f64>().sqrt());
+        // With a tcp the tool's range is where its tip can be whatever the head's angles: the strokes shifted by the tool
+        // turned by the head, per direction by the most and the least of it over the rotaries' strokes (sampled, 13
+        // angles each). Beyond that a pose may still be reachable at some angles (`unreachable` judges it).
+        let span = net.tcp.as_ref().map(|t| {
+            let mut span = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+            let samples = 13usize;
+            for k in 0..samples.pow(t.rotaries.len() as u32) {
+                let mut v = t.tool;
+                for (j, &r) in t.rotaries.iter().enumerate().rev() {
+                    let (a, step) = (&net.axes[r], (k / samples.pow(j as u32)) % samples);
+                    let turn = [a.incline_deg.to_radians().sin(), 0.0, a.incline_deg.to_radians().cos()];
+                    v = rotate(turn, a.stroke * step as f64 / (samples - 1) as f64, v);
+                }
+                for (s, x) in span.iter_mut().zip(v) {
+                    *s = [s[0].min(x), s[1].max(x)];
+                }
+            }
+            span
+        });
         let axes = net
             .axes
             .iter()
@@ -691,13 +710,29 @@ impl ConfigMachine {
                 // A rotary axis's limits are in rad: max_velocity_rad_s.
                 let unit = if a.rotary { "rad" } else { "m" };
                 let limit = |what: &str, rate: &str| cfg.positive(&format!("axis.{}.max_{what}_{unit}_{rate}", a.id));
-                let reach = if net.tcp.as_ref().is_some_and(|t| t.axes.contains(&i)) { reach } else { 0.0 };
+                let (min, max) = match net.tcp.as_ref().and_then(|t| Some((t, t.axes.iter().position(|&x| x == i)?))) {
+                    None => (0.0, a.stroke),
+                    Some((t, k)) if t.table.is_empty() => {
+                        let [low, high] = span.map_or([0.0; 2], |s| s[k]);
+                        (high, a.stroke + low)
+                    }
+                    // On a turning table: the workpiece within the round the table can turn under the tool, the box
+                    // about its pivot as wide as the pivot's least distance from an end of X's and Y's strokes.
+                    // shortcut: the head's tool offset is left out of that width; widen it if a head's reach matters.
+                    Some((t, k)) => {
+                        let half = (0..2)
+                            .map(|j| t.pivot[j].min(net.axes[t.axes[j]].stroke - t.pivot[j]))
+                            .fold(f64::INFINITY, f64::min)
+                            .max(0.0);
+                        (t.pivot[k] - half, t.pivot[k] + half)
+                    }
+                };
                 Ok(AxisInfo {
                     id: intern(&a.id),
                     key: intern(&a.key),
                     unit,
-                    min: -reach,
-                    max: a.stroke + reach,
+                    min,
+                    max,
                     max_vel: limit("velocity", "s")?,
                     max_acc: limit("acceleration", "s2")?,
                     max_jerk: limit("jerk", "s3")?,
@@ -993,6 +1028,10 @@ impl ConfigMachine {
             stroke: net.axes.iter().map(|a| a.stroke).collect(),
             gantry,
             tcp: net.tcp.clone(),
+            gantry_motors: net.gantry.as_ref().and_then(|g| {
+                let mut drives = g.drives.iter().enumerate().filter(|(_, d)| d.is_some()).map(|(k, _)| k);
+                Some([drives.next()?, drives.next()?])
+            }),
             motors: net.motors.iter().map(|d| MotorInfo { id: intern(&d.id), key: intern(&d.key) }).collect(),
             r_mat: r.iter().map(|r| belt.rest_length(*r)).collect(),
             j_pulley: net
@@ -1260,10 +1299,20 @@ impl ConfigMachine {
         let mut q = tool.to_vec();
         q.resize(self.n(), 0.0);
         if let Some(t) = &self.tcp {
+            // The tip on the workpiece where the table has turned it, less the tool turned by the head.
+            let on = [0, 1, 2].map(|k| q[t.axes[k]] - t.pivot[k]);
+            let at = self.turned_by(&t.table, &q, on);
             let r = self.turned_by(&t.rotaries, &q, t.tool);
-            t.axes.iter().zip(r).for_each(|(&i, r)| q[i] -= r);
+            (0..3).for_each(|k| q[t.axes[k]] = t.pivot[k] + at[k] - r[k]);
         }
         q
+    }
+    /// `v` turned back by the rotaries (outermost first) at their angles in q: `turned_by` undone.
+    fn unturned_by(&self, rotaries: &[usize], q: &[f64], mut v: [f64; 3]) -> [f64; 3] {
+        for &r in rotaries {
+            v = rotate(self.turn[r], -q[r], v);
+        }
+        v
     }
     /// The tool pose of the joint coordinates q.
     fn tool_of(&self, q: &[f64]) -> Vec<f64> {
@@ -1274,7 +1323,9 @@ impl ConfigMachine {
         }
         if let Some(t) = &self.tcp {
             let r = self.turned_by(&t.rotaries, q, t.tool);
-            t.axes.iter().zip(r).for_each(|(&i, r)| tool[i] += r);
+            let tip = [0, 1, 2].map(|k| tool[t.axes[k]] + r[k] - t.pivot[k]);
+            let on = self.unturned_by(&t.table, q, tip);
+            (0..3).for_each(|k| tool[t.axes[k]] = t.pivot[k] + on[k]);
         }
         tool
     }
@@ -2409,7 +2460,8 @@ impl Machine for ConfigMachine {
     // shortcut: the pulleys', idlers' and rotors' spin is left out (their axes are not in the netlist), and a linear
     // axis whose id is not x, y or z moves nothing; add them once the netlist places them.
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
-        let n = self.n();
+        // The axes, not the coordinates: a yawing gantry's yaw is one more, which no tool axis has.
+        let n = self.axes.len();
         let along: Vec<Option<usize>> =
             self.axes.iter().map(|a| ["x", "y", "z"].iter().position(|id| *id == a.id)).collect();
         let g = self.g_along.first().zip(self.g_across.first()).map_or(0.0, |(a, b)| a.hypot(*b));
@@ -2449,7 +2501,7 @@ impl Machine for ConfigMachine {
             let turned = self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
             f.angular[2] += turned * v[i];
         }
-        for (i, force) in self.process_force().iter().enumerate() {
+        for (i, force) in self.process_force().iter().enumerate().take(n) {
             if let Some(k) = along[i] {
                 f.external[k] = *force;
             }
@@ -2896,6 +2948,10 @@ impl Machine for ConfigMachine {
 
     /// The checks of the screws (speed, d n, buckling, static load, life), racks (feed force) and strain wave gears
     /// (life, where the motor's ratings.required_life_h is set), as the registered one-axis machines judge them.
+    fn gantry_motors(&self) -> Option<[usize; 2]> {
+        self.gantry_motors
+    }
+
     fn rating_checks(&self) -> Vec<RatingCheck> {
         let mut out = Vec::new();
         // The yaw's synchronisation error (width times yaw) against the gantry's tolerance, where it has one.

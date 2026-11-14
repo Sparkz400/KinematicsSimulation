@@ -305,6 +305,7 @@ gemeinsamen Prüfungen sind dieselben wie oben.
 | `slider-crank` | Servopresse: Kurbel 50 mm, Pleuel 200 mm, Stößel 15 kg und Werkzeug 10 kg darunter, Presskraft bis 3 kN | Planetengetriebe 20 | Kurbelwinkel (rad), 0 im unteren Totpunkt | `rod-force`, `slider-guide-load`, `crank-bearing-load` |
 | `rotary-knife` | Querschneider: Messerwalze mit 100 mm Radius, ein Messer, schneidet eine Bahn mit 1 m/s in Formate von 0,5 m | Planetengetriebe 10 | Walzenwinkel (rad), 0 mit einem Messer am Schnitt | |
 | `flying-saw` | Wagen 40 kg mit Säge 25 kg, Material mit 1 m/s, in Längen von 1,5 m in einem Fenster von 0,2 m geschnitten | Schrägverzahntes Ritzel auf Zahnstange hinter Planetengetriebe 5 | x (m) | `rack-feed-force` |
+| `disc-cam` | Kurvenscheibe: Grundkreis 60 mm, ein Rollenstößel von 2 kg (und ein Werkzeug von 1 kg), gegen seine Rückholfeder um 30 mm gehoben, 60 Umdrehungen je Minute | Planetengetriebe 10 | Scheibenwinkel (rad) | `disc-contact-force`, `disc-pressure-angle` |
 
 **Schubkurbel.** Der Abstand des Schiebers vom Kurbelmittelpunkt ist x(θ) = r cos θ + √(l² − r² sin² θ), seine
 Übersetzung x'(θ) = −r sin θ − r² sin θ cos θ / w mit w = √(l² − r² sin² θ), und x''(θ) = −r cos θ − r² cos 2θ / w −
@@ -334,6 +335,24 @@ Hub W + v² / a mit einem Bewegungsgesetz im Rest der Schnittlänge zurück, L �
 ohne Platz dafür wird abgewiesen (`saw.cut_length_m`). Der Schnitt drückt längs des Materials über dem Weg ins Fenster
 auf den Wagen (`[cut]`).
 
+**Kurvenscheibe.** Eine mechanische Kurvenscheibe: der Servo dreht die Scheibe, und die Scheibe hebt einen Rollenstößel
+auf einer geraden Führung, von einer Rückholfeder (F0 + k s, `follower.spring_preload_n`, `spring_n_m`) und seinem
+Gewicht auf ihr gehalten. Der Hub s(θ) des Stößels ist das Hubgesetz der Scheibe, Segmente der Gesetze der VDI 2143 über
+eine Umdrehung (`[[disc.segment]]`, ein 3-4-5-Hub von 30 mm über 120°, eine Rast, der Rückhub, eine Rast). Die Achse des
+Stößels liegt um e (`follower.offset_m`) neben der Scheibenmitte, seine Rolle vom Radius r_r rollt auf der Scheibe vom
+Grundkreis r_b: der Rollenmittelpunkt liegt s0 + s über der Mitte, s0 = √((r_b + r_r)² − e²), und der Druckwinkel,
+zwischen der Achse des Stößels und der gemeinsamen Normalen im Kontakt, ist tan φ = (s' − e) / (s0 + s), s' = ds/dθ (ein
+positiver Versatz senkt ihn beim Hub). Die Kontaktkraft entlang der Normalen ist N = (m s̈ + F0 + k s + m g) / cos φ mit
+s̈ = s''(θ) θ'² + s'(θ) θ''; die Führung nimmt N sin φ quer. Die Scheibe spürt J(θ) = J_Scheibe + m s'², den
+Geschwindigkeitsterm m s' s'' θ'² und das Moment von Feder und Gewicht (F0 + k s + m g) s' (ihr Potential
+F0 s + k s² / 2 + m g s): das Moment schwingt mit dem Hubgesetz und treibt die Scheibe beim Rückhub zurück. Signale: Hub,
+Geschwindigkeit und Beschleunigung des Stößels, die Kontaktkraft, der Druckwinkel, die Führungslast und J(θ); geprüft
+gegen `ratings.disc_max_contact_force_n` und `disc_max_pressure_angle_deg`. Mit `cam.run` dreht die Scheibe mit
+`disc.turns_per_min` weiter, ihr Leitwert virtuell. Die Rolle bleibt auf der Scheibe: wo N unter null fiele, höbe der
+Stößel ab, was das Signal zeigt und das Modell nicht trennt (eine so knapp ausgelegte Feder). Die Mitte des Bereichs der
+Scheibe liegt auf der ersten Hälfte des Hubs, wo s'' > 0 ist und Feder und Gewicht die Scheibe dort halten, wo sie gegen
+sie gehalten wird; hinter der Mitte des Hubs drehen sie sie weg.
+
 **Elektronische Kurvenscheibe.** `sim_components::cam` hält eine Kurvenscheibe als Folgewert über einem Leitwert,
 periodisch, der Folgewert steigt je Leitwertperiode um seinen Vorschub (Kurbel oder Messer eine Umdrehung, die Säge 0).
 Segmente nehmen die Bewegungsgesetze der VDI 2143: `linear` (Synchronlauf), `dwell` (Rast), `3-4-5` und `4-5-6-7` (Polynome
@@ -345,18 +364,25 @@ ohne sie der periodische kubische Spline (stetige Folgebeschleunigung). Mit `cam
 Kurvenscheibe statt `[[cycle.segment]]` als Zyklus: der Leitwert läuft mit einer sin²-Rampe in `cam.ramp_s` hoch, die
 Folgegeschwindigkeit ist s'(m) m', die Beschleunigung s''(m) m'² + s'(m) m''; ein Durchgang ist eine Leitwertperiode bei
 voller Geschwindigkeit, sodass `analyze` und `verdicts` den eingeschwungenen Zustand messen; ein Stopp fährt den Leitwert
-über dieselbe Rampe herunter. Verlangt die Kurvenscheibe bei der Leitgeschwindigkeit mehr Folgegeschwindigkeit,
--beschleunigung oder -ruck, als die Achsgrenzen erlauben, meldet das Programm `limit-cam-speed`, `-acceleration`,
-`-jerk` (wie die Motorgrenzen). Die Schubkurbel läuft mit konstanter Drehzahl (`crank.motion = "constant"`, eine
+über dieselbe Rampe herunter, und eine neue Leitgeschwindigkeit unter einer laufenden Kurvenscheibe (ein anderes
+`web.speed_m_s`, angewandt, während sie läuft) fährt von der Geschwindigkeit des Leitwerts über `cam.ramp_s` auf die neue,
+von dort, wo er steht: Weg v0 t + (v1 − v0) U(t), U die Rampe der Höhe eins (`cam::master_change`). Verlangt die
+Kurvenscheibe bei der Leitgeschwindigkeit mehr Folgegeschwindigkeit, -beschleunigung oder -ruck, als die Achsgrenzen
+erlauben, meldet das Programm beim Anwenden der Konfiguration `limit-cam-speed`, `-acceleration`, `-jerk` (wie die
+Motorgrenzen) und prüft es als Urteile des Zyklus `cam-speed`, `cam-acceleration`, `cam-jerk`, je Folgeachse, gegen die
+Achsgrenzen. Die Schubkurbel läuft mit konstanter Drehzahl (`crank.motion = "constant"`, eine
 Umdrehung je Hub wie eine mechanische Presse mit Schwungrad) oder mit der Servopressen-Kurve aus `[[cam.segment]]`
 (schnelle Annäherung, langsam durch die Umformzone, schneller Rückhub) bei `crank.strokes_per_min`.
 
 Die mitgelieferten Konfigurationen lassen `cam.run = false`: der Zyklus schwenkt die Kurbel vom oberen Totpunkt in den
 unteren und zurück (Servopresse im Pendelhub), taktet das Messer um eine halbe Umdrehung hin und zurück und fährt den
-Sägewagen über seinen Hub. Die Kurvenscheiben laufen mit `--set cam.run=true` (App: der Schalter der Gruppe
+Sägewagen über seinen Hub und dreht die Kurvenscheibe eine halbe Umdrehung hin und zurück. Neben jeder liegt
+`config/<id>-cam.toml`, dieselbe Konfiguration mit `cam.run = true`, die jedes Urteil besteht (die Grenzen der
+Kurvenscheibe darunter); oder die Kurvenscheiben laufen mit `--set cam.run=true` (App: der Schalter der Gruppe
 Elektronische Kurvenscheibe):
 
 ```text
+sim-cli verdicts slider-crank --config crates/machine-crank-cam/config/slider-crank-cam.toml
 sim-cli verdicts slider-crank --set cam.run=true
 sim-cli analyze rotary-knife --set cam.run=true --set knife.format_length_m=0.4
 sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
@@ -493,6 +519,14 @@ u der Einheitsvektor vom Anlenkpunkt zum Ablaufpunkt.
   (höchste Seilkraft gegen die Nennkraft) und `cable-min-tension` (jedes Unterschreiten fällt durch), Motoren und
   Antriebe wie an jeder Maschine.
 
+Die Kurve der Presse wechselt die Geschwindigkeit mit 4-5-6-7-Gesetzen: ein 3-4-5 in die langsame Zone verlangt an seinen
+Enden 6 Δv / Δm² + 60 c / Δm³ = 67,4 rad/rad³ Ruck (Δv 1,468, Δm 0,5 rad, c −0,067 rad), bei π rad/s Leitwert
+2090 rad/s³, mehr als die 2000 der Kurbel; das 4-5-6-7 hat dort keinen eigenen Ruck. Die Drehzahlregler der vier
+Maschinen haben Tn 0,01 s (das Messer Kp 0,25): der Integrator nimmt die Reibung am Ende einer Fahrt dreimal so schnell
+auf wie mit 0,03 s, und die Fehler beim Verweilen fallen auf 0,13 mrad (Kurbel), 0,16 mrad (Messer), 0,14 mm (Säge) und
+0,23 mrad (Scheibe), mit mindestens 35,8° und 8 dB Reserve in jedem Lauf über die Grenzen (`sim-cli margins <id>
+--bands`); die Toleranzen des Einschwingens sind 0,3 mrad, 0,3 mrad, 0,25 mm und 0,5 mrad.
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -541,7 +575,12 @@ Schnitten im Mittel 12,758984 rad/m und in der Mitte 15,173095, auf 0,8 m 7,7560
 über 0,1 m mit 7,5 m/s² Spitze, läuft 0,2 m mit dem Material und fährt mit 0,8333 m/s zurück. Jede Maschine besteht die
 Standardprüfungen, ihr Standardzyklus und ihre Kurvenscheibe bestehen alle Urteile, ein Durchgang der Kurvenscheibe dauert
 eine Leitwertperiode (2, 0,5 und 1,5 s) und ein Stopp endet innerhalb der Rampe; die Kurvenscheibe des Messers bei einer
-Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet.
+Grenze von 10 rad/s wird mit 15,17 rad/s gemeldet und fällt dort beim Urteil `cam-speed` durch. Eine neue
+Bahngeschwindigkeit unter der laufenden Kurvenscheibe des Messers fährt den Leitwert von 1 auf 0,8 m/s: 0,9 m/s in der
+Mitte der Rampe, 0,8 m/s nach 0,5 s, 0,45 m auf dem Weg, ohne Sprung der Geschwindigkeit. Die Kurvenscheibe bei 60°
+(Mitte eines 3-4-5-Hubs von 30 mm über 120°, r_b 60 mm, r_r 15 mm, e 10 mm): s0 = 0,0743303 m, s' = 0,0268574 m/rad,
+tan φ = 0,188709, φ = 10,687°; bei 2π rad/s drücken Feder und Gewicht mit 159,420 N, die Kontaktkraft ist 162,234 N, die
+Führungslast 30,084 N und das Moment an der Scheibe 4,28161 N m.
 
 Maschinentests (`machine-hexapod`, `machine-cable-robot`): Alle drei bestehen die Standardprüfungen, und ihre
 Standardzyklen bestehen alle Prüfungen. Hexapod: Jedes Bein ist in der Grundstellung (0, 0, 0,48 m) 0,5471158 m lang,
@@ -567,10 +606,11 @@ des räumlichen auf 1e-10 zurück.
 - Ein vom Abtrieb zurückgetriebenes Schneckengetriebe verliert wie jedes Getriebe (1 / Wirkungsgrad) und hemmt nie selbst.
 - Keine Unwucht am Rundtisch, keine Lebensdauerformel der Zahnstange (keine veröffentlicht), keine Prüfung des
   Kreuzrollenlagers.
-- Noch nicht gebaut: mechanische Kurvenscheiben mit Abtastrolle und ihre Kontaktkraft; das Förderband aus `[conveyor]`
-  kann noch nicht Leitwert einer Kurvenscheibe sein (der Leitwert ist ein eigener, mit dem Geschwindigkeits- und
-  Rampenmodell des Bands); kein MC_CamIn über OPC UA; eine geänderte Leitgeschwindigkeit gilt sofort, ohne Rampe;
-  das Gelenk von Kurbel und Messer hat keine Anschläge, solange die Kurvenscheibe es weiterdreht; die Presskraft wirkt
+- Das Förderband aus `[conveyor]` kann noch nicht Leitwert einer Kurvenscheibe sein (der Leitwert ist ein eigener, mit
+  dem Geschwindigkeits- und Rampenmodell des Bands); eine neue Leitgeschwindigkeit beginnt ihre Rampe bei der
+  Geschwindigkeit des Leitwerts ohne seine Beschleunigung (ein Sprung der Beschleunigung, wo sie während einer Rampe
+  kommt); das Gelenk von Kurbel, Messer und Kurvenscheibe hat keine Anschläge, solange die Kurvenscheibe es weiterdreht;
+  der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel) und hebt nie von der Scheibe ab; die Presskraft wirkt
   nur beim Ausfahren (keine Rückfederung), die Schnittkraft von Messer und Säge nur vorwärts.
 - Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,
   `geometry.column_incline_deg`) ist eine Parallelkinematik und keine dieser Maschinen; siehe die

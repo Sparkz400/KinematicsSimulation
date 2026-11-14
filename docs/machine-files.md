@@ -53,7 +53,7 @@ error bands of `[bounds]`, the sensitivity analysis, saving the config. A number
 by its path (`radius_m = "geometry.pulley_radius_m"`); then changing the value changes the machine. A plain number is
 fixed.
 
-Ten files ship in `machines/`:
+Fourteen files ship in `machines/`:
 
 | file | what it is |
 | ---- | ---------- |
@@ -67,6 +67,10 @@ Ten files ship in `machines/`:
 | `machines/planar-delta.toml` | the planar delta of `crates/machine-delta-d2` as a linkage of two arms ([below](#linkages-the-planar-and-the-spatial-delta)) |
 | `machines/delta-d3.toml` | the spatial delta of `crates/machine-delta-d3` as a linkage of three arms |
 | `machines/scissor-lift.toml` | a two-stage scissor lift table on a ball screw ([below](#a-scissor-lift)) |
+| `machines/dual-gantry.toml` | a dual-drive gantry: a yawing bridge on two racks, its drives in plain, master/slave or cross-coupled synchronisation ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
+| `machines/portal-c.toml` | the screw portal with a C axis turning a gripper, its tip the tool centre point |
+| `machines/five-axis.toml` | the screw portal with a fork head (C and A), its tool's tip the tool centre point |
+| `machines/five-axis-table.toml` | the screw portal over a tilting rotary table (A and C carry the workpiece, table/table), the tip on the workpiece the tool centre point |
 
 The easiest way to a new machine is to copy the one nearest to it and change `[machine]`.
 
@@ -293,8 +297,10 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `sections` | | per belt section that pulls the bridge's ends: its length per rad of yaw, m |
 | | `tolerance_m` | | the synchronisation error (width x yaw) check `gantry-sync` allows, m |
 | `tcp` | `axes` | required | the tool centre point: the three straight axes along x (the file's first), y (horizontal) and z (vertical); at most one |
-| | `rotaries` | required | the rotary axes that carry the tool, outermost first |
-| | `tool_m` | required | the tool's tip from where the rotaries' axes meet, `[x, y, z]` at angle 0, m |
+| | `rotaries` | | the rotary axes that carry the tool (a head), outermost first; `rotaries` or `table` or both |
+| | `table` | | the rotary axes that carry the workpiece (a rotary or tilting table), outermost first: the tool's x, y and z are the tip's on the workpiece |
+| | `table_pivot_m` | | with `table`: where the table's axes meet, in the straight axes' coordinates, `[x, y, z]`, m; default `[0, 0, 0]` |
+| | `tool_m` | required | the tool's tip from where the head's rotaries' axes meet (from the straight axes' point without a head), `[x, y, z]` at angle 0, m |
 
 There are as many motors as axes, and one more for each drive of a gantry beyond the first. A file names each list it uses; `axis` and `motor` are always there, `gearbox`,
 `pulley` and `section` where belts are driven, `body` where an axis moves one, and the others may be left out.
@@ -623,13 +629,24 @@ tolerance_m = "gantry.sync_tolerance_m"
 ```
 
 - **Two drives.** Two racks on the gantry's axis, one at each end: the file has one motor more than axes, and the two
-  set x and psi together. Each drive follows the axis's setpoint on its own encoder (setpoint coupling), so the two
-  position loops keep the bridge square, and their torques share the load by the lever rule: F2 - F1 = 2 m e a / B for
-  a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
+  set x and psi together. As shipped (`gantry.sync = "plain"`) each drive follows the axis's setpoint on its own encoder
+  (setpoint coupling), so the two position loops keep the bridge square, and their torques share the load by the lever
+  rule: F2 - F1 = 2 m e a / B for a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
   `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
   on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 16 um of 100, and the end the carriage starts
   near carries more (`rack-feed-force` 109 against 95 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
   155.0 Hz with J raised to 20 kg m² and the carriage in the middle, 149.5 Hz with it at an end (`sim-cli modes`).
+- **Synchronising the two drives** (`gantry.sync`, `gantry.sync_gain_1_s`, read where a gantry has two drives; the
+  first is the master). `"master_slave"`: the slave's position loop follows the master's actual position, its
+  setpoint less the master's following error, so the slave's lag comes on top of the master's: at a steady speed v with
+  the speed feedforward off and the same loops the ends run v / Kv apart, the master's following error (2 mm at
+  0.1 m/s and Kv 50 1/s), where the plain scheme keeps them together. With the feedforward on both lag little, and what
+  the scheme changes is how a disturbance at the master reaches the slave. `"cross_coupled"`: the synchronisation error
+  e (the slave's actual position less the master's, in the slave's units) is fed back to both speed commands with the
+  gain k, the slave's losing k e and the master's gaining k e; unequal loops then run apart by e0 / (1 + k (1 / Kv1 +
+  1 / Kv2)) instead of e0 = v (1 / Kv2 - 1 / Kv1) at a steady speed, so k = Kv1 Kv2 / (Kv1 + Kv2) halves the yaw
+  (16.7 1/s for Kv 50 and 25). Tests: `the_master_slave_sync_error_is_the_master_s_following_error`,
+  `the_cross_coupled_gain_halves_the_yaw_of_unequal_loops` (sim-machines `machine_file_gantries.rs`).
 - **One drive.** The rack gantry's one rack drives its bridge at one end (`drives = { mx = -0.5 }`): the joints' spring
   alone holds the far end, which lags while the bridge accelerates; with the effect on the path error of its cycle
   grows from 0.07 to 0.20 mm.
@@ -651,8 +668,9 @@ the centripetal and Coriolis forces: Lagrange's equations, so the energy keeps. 
 coordinates those of the tip: three straight axes along x (the file's first), y and z, the `rotaries` that carry the
 tool, and `tool_m`, the tip from where their axes meet. The axes stand at the tip less `tool_m` turned by the rotaries,
 so a path moves the tip straight while the rotaries turn, the straight axes making up for them, and the feedforward has
-the speed's part (`feedforward_torque_moving`). The tool's ranges are the strokes widened by |`tool_m`|, and a pose the
-straight axes cannot reach is refused (`error-tcp-joint-range`). The 3D view draws the tool from the rotaries to the
+the speed's part (`feedforward_torque_moving`). The tool's ranges are where its tip can be whatever the head's angles
+(the strokes shifted by `tool_m` turned by the rotaries, at their least), and a pose beyond the straight axes' strokes
+is refused (`error-tcp-joint-range`). The 3D view draws the tool from the rotaries to the
 tip, and the tool's path at the tip.
 
 ```toml
@@ -668,6 +686,31 @@ axis: its cycle carries a part while C turns it a quarter turn, the tip on a str
 the screw portal with a fork head, C about the vertical and A about x inside it, the tip 0.2 m below where they meet: its
 cycle tilts A and swings C half a turn round the still tip, X and Y running on a circle, and the spindle's weight on A.
 Both pass every verdict on their cycles. Their rotaries' gearboxes, inertias and the heads' masses are estimates.
+
+**A rotary table that carries the workpiece** (`table`, `table_pivot_m`). The tool's x, y and z are then the tip's
+place on the workpiece, as it lies at the table's angles 0; a point w of it lies in the room at p + R_table (w - p), p
+where the table's axes meet and R_table its rotaries' turn (the outermost last). So the straight axes stand at
+q = p + R_table (w - p) - R_head `tool_m`: a path on the workpiece is cut while the table turns it, the straight axes
+making up for the table, and the head's rotaries (`rotaries`) may tilt the tool beside it (head/table). The tool's
+ranges are the box about p as wide as p's least distance from an end of X's and Y's strokes, the workpiece the table
+can turn under the tool; a pose beyond the straight axes' strokes is refused (`error-tcp-joint-range`).
+`machines/five-axis-table.toml` is the screw portal over a trunnion: A about x carries C, the table, about its own axis,
+meeting at (0.5, 0.25, -0.2) m, the tool hanging 0.2 m below the Z slide. Its cycle tilts the table with the tip held on
+a point of the workpiece, turns the table half a turn under the still tip (X and Y on a circle round C's axis), and
+moves the tip on the workpiece with all five axes. The trunnion and the table ride on A and C (`offset_m`), so tilting
+A lifts their weight on A's motor. Test `a_table_table_tcp_keeps_the_tool_on_a_line_while_the_table_turns`: the tip on
+a straight line of the workpiece while C turns 2 rad at A 0.3 rad, every motor against its hand-worked angle; a
+head/table variant (A in the head, C in the table) in
+`a_head_table_tcp_turns_the_tool_in_the_head_and_the_workpiece_on_the_table`.
+
+```toml
+[[machine.tcp]]            # machines/five-axis-table.toml
+id = "tool_tip"
+axes = ["x", "y", "z"]
+table = ["a", "c"]         # A about x carries C, the table
+table_pivot_m = [0.5, 0.25, -0.2]
+tool_m = [0.0, 0.0, -0.2]  # without a head: from the straight axes' point
+```
 
 ## The other examples: a CoreXY and an XYZ portal
 

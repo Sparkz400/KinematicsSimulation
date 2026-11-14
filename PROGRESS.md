@@ -4147,3 +4147,95 @@ Left open:
 - The planner's and the analysis's torque curves still take the nominal bus.
 - Not run here: the test suites. Run: the six new tests by name, the catalogue golden and snapshot tests (to rewrite
   them), `cargo check --workspace --tests`, clippy on the touched crates.
+
+## Synchronised axes and cams: gantry sync, table TCP, disc cam, PLCopen GearIn/CamIn (14 November)
+
+What the gantries and cams sessions left open.
+
+- **Gantry synchronisation in the drives** (sim-components control.rs, sim-core `Machine::gantry_motors`, sim-netlist).
+  A machine file's gantry with two drives names its motors, the first the master, whether or not its bridge yaws.
+  `gantry.sync` chooses: `"plain"` (each follows the common setpoint, as before), `"master_slave"` (the slave's position
+  loop measures itself against the master's actual position: its setpoint less the master's following error times the
+  motors' ratio) and `"cross_coupled"` (e = ratio e_master - e_slave, the slave's actual less the master's, goes back to
+  both speed commands with `gantry.sync_gain_1_s`: the slave's loses k e, the master's gains k e / ratio). The ratio of
+  the two motors is that of their setpoints at the start pose. The verdict is the existing `gantry-sync` (width times
+  yaw), now with the scheme behind it. `machines/dual-gantry.toml` has `sync = "plain"`, `sync_gain_1_s = 25`.
+  Tests (sim-machines `machine_file_gantries.rs`): `the_master_slave_sync_error_is_the_master_s_following_error`
+  (cruising at 0.1 m/s with the speed feedforward off: the master lags v / Kv = 2 mm in metres of its end, to 1 %, and
+  the sync error equals it to 2 %; plain under 1 % of it) and `the_cross_coupled_gain_halves_the_yaw_of_unequal_loops`
+  (mx2 at Kv 25 against 50: plain yaw e0 / B = 0.1 (1/25 - 1/50) / 1.2 = 1.667 mrad to 2 %, and k = 50 * 25 / 75 =
+  16.7 1/s halves it, e = e0 / (1 + k (1/Kv1 + 1/Kv2)), to 2 %).
+- **Table/table and head/table TCP** (sim-netlist `machine.tcp`: `table`, `table_pivot_m`; `rotaries` no longer
+  required). The tool's x, y, z are the tip's on the workpiece: q = p + R_table (w - p) - R_head tool, and back
+  w = p + R_table^T (q + R_head tool - p). The tool's ranges: with a head only, where the tip can be at every angle of
+  the head (the strokes shifted by the turned tool, at their least; before, the strokes widened by |tool| either way,
+  which left only 14 % of portal-c's grid reachable and failed the standard suite); with a table, the box about the
+  pivot as wide as its least distance from an end of X's and Y's strokes. New `machines/five-axis-table.toml`: the
+  screw portal over a trunnion A carrying the table C, pivot (0.5, 0.25, -0.2), tool 0.2 m below the Z slide.
+  Tests: `a_table_table_tcp_keeps_the_tool_on_a_line_while_the_table_turns` (A 0.3 rad, C 0.5 to 2.5 rad, the tip on a
+  straight line of the workpiece; at s = 0.5 q = (0.5017684, 0.2472268, 0.0933498) by hand, every motor to 1e-12, back
+  to the pose), `a_head_table_tcp_turns_the_tool_in_the_head_and_the_workpiece_on_the_table` (the file with A moved to
+  the head: q = (0.5119566, 0.2832785, 0.0842122) at A 0.4, C 1), and the new file through the standard suite in
+  `the_gantry_and_rotary_files_pass_the_standard_suite`.
+- **Fixed on the way**: `ConfigMachine::frame_momentum` read past the tool axes on a yawing gantry (n coordinates
+  against nt axes): the standard suite of the gantry files panicked in its first file and never ran the others.
+- **Cam master ramp** (cam.rs `master_change`, control.rs). A config with another master speed or ramp under a running
+  cam starts a sin^2 ramp from the master's speed now to the new one, from where it stands; `Motion::Cam` keeps its own
+  speed and ramp. Tests: `a_new_master_speed_ramps_from_the_old_one` (2 to 4 m/s over 0.5 s: 3 m/s and pi (4 - 2) / 1 =
+  6.2832 m/s2 at mid-ramp, 1.5 m at its end, 2.5 m 0.25 s later, a stop at 1 s 1 m more; rates the differences) and
+  `a_new_master_speed_under_a_running_cam_ramps_to_it` (the knife's web from 1 to 0.8 m/s: 0.9 at mid-ramp, 0.8 after
+  0.5 s, 0.45 m on the way, no step above 0.628 m/s2 times a cycle).
+- **Cam limits as verdicts** (control.rs `cam_peaks`, analysis.rs `cam_checks`): `cam-speed`, `cam-acceleration`,
+  `cam-jerk` per slave axis against its limits, as rating checks of the cycle (labels EN/DE, app list). Test
+  `a_cam_beyond_the_axis_limits_fails_its_verdict` (the knife at 10 rad/s fails with 15.173 against 10; shipped, all
+  pass).
+- **Cam examples**: `config/<id>-cam.toml` beside each crank-cam machine, the config with `cam.run = true`; test
+  `every_cam_example_is_the_shipped_config_running_its_cam`, and `every_default_cycle_and_every_cam_passes_its_verdicts`
+  now runs them. The press's cam failed its jerk limit (2088 rad/s3 against 2000: 6 dv / dm^2 + 60 c / dm^3 = 67.4
+  rad/rad^3 at the 3-4-5's ends, times pi^3): its two speed changes are 4-5-6-7 now.
+- **Disc cam** (`machine-crank-cam` `disc.rs`, machine `disc-cam`): a servo-turned disc, a translating roller follower
+  with offset, return spring and weight; lift law from `[[disc.segment]]`; pressure angle tan phi = (s' - e) / (s0 + s),
+  contact force (m s'' + F0 + k s + m g) / cos phi, guide load N sin phi, J = J_disc + m s'^2; checks
+  `disc-contact-force`, `disc-pressure-angle`. Registered in sim-machines (and the `swept!` list). Margins across the
+  bounds at least 70.5 degrees and 13.1 dB; every verdict passes, cycle and cam. Tests:
+  `the_disc_cam_s_pressure_angle_and_contact_force_at_mid_rise_match_the_hand_calculation` (60 degrees: s0 0.0743303,
+  s' 0.0268574, tan phi 0.188709, phi 0.186515 rad, contact 162.234 N, guide 30.084 N, torque 4.28161 N m) and
+  `disc_cam_passes_the_standard_suite` (whose energy test failed at first with the range's middle past the rise's
+  inflection, an unstable hold: the range now centres on the first half of the rise).
+- **Settling tolerances** of the crank-cam machines: Tn 0.03 to 0.01 s (the knife also Kp 0.3 to 0.25, for 35.8 degrees
+  across the bounds where it had 31.6) brings the dwell errors from 1.06 mrad, 0.34 mrad, 0.27 mm to 0.13 mrad,
+  0.16 mrad, 0.14 mm; the tolerances are 0.3 mrad, 0.3 mrad and 0.25 mm (from 2, 1 and 0.5). The configs lacked keys
+  other branches added (gearbox efficiency map, drag, lost motion, stiffness curve, motor stiction, stall current, magnet
+  coefficient, braking resistor heating, drive chips, gearing life): added with the joint kit's values and bounds.
+- **PLCopen over OPC UA** (sim-opcua plcopen.rs, lib.rs): MC_GearIn, MC_GearOut, MC_CamIn, MC_CamOut on the slave's
+  folder, the master by its axis id (`GearIn.Master`, `CamIn.Master`, String inputs); `InGear`/`InSync` in place of
+  `Done`, Busy and Active while coupled; states ContinuousMotion 7 and SynchronizedMotion 8; ErrorID 9 (master) and 10
+  (table). The slave follows the master's setpoint in the same interval (`advance_all`: free axes first). CamIn takes the
+  client's table (`CamIn.Table`: segments `span, rise, law` or CSV points) or the machine's own cam (CamTableID 1,
+  sampled at 1440 points with slopes) with its virtual master (empty `Master`). A refused retrigger gives up the
+  coupling with Error alone and brakes the slave, as for moves; a lost master (ErrorStop, Disabled) ends it with ErrorID
+  9. ST examples `examples/plc/{twincat,codesys}/sim_sync.st` (not compiled, as the others). Tests:
+  `gear_in_reaches_in_gear_at_ratio_2_after_its_acceleration` (master 0.1 m/s, ratio 2, 1 m/s2: InGear in the 20th
+  interval of 10 ms, 2.021 m, then twice the master's travel; GearOut keeps 0.2 m/s),
+  `cam_in_follows_a_3_4_5_table_at_the_master_s_speed` (master 0.2 m/s: after 0.25 m 0.05 m at 0.075 m/s; 0.1 m at rest
+  after 0.5 m; back after 1 m), `a_lost_master_and_a_refused_gear_in_end_the_coupling_with_an_error` (0.5 to 0.45 m/s in
+  the first interval at 5 m/s2), `cam_in_runs_the_machine_s_own_cam_on_its_virtual_master` (2 m/s over a 0.5 s ramp:
+  2.5 m after 1.5 s).
+
+Shared files touched, each change small: sim-core machine.rs (`gantry_motors`), sim-components control.rs (sync, cam
+ramp, `cam_peaks`, `cam_master()`), analysis.rs (`cam_checks` into `CycleLoad::checks`), cam.rs, i18n (cam checks);
+sim-netlist lib.rs (the gantry's sync keys in the schema), machine.rs, netlist.rs; sim-app model.rs (three check ids);
+sim-machines lib.rs (DISC_CAM) and tests/control.rs (`swept!`).
+
+Left open:
+
+- `ratings.settling_tolerance_rad` (arms branch) is not on this base: once it is merged, the crank's, knife's and disc's
+  axes are in rad and `settling_tolerance_m` judges nothing there; move their values (0.3, 0.3, 0.5 mrad) to the new key.
+- Master/slave keeps the slave's speed and torque feedforward from the common setpoint; a drive taking the master's
+  actual speed as its feedforward is not modelled. Cross-coupling has no filter on e.
+- The disc cam's follower is translating only (no swinging lever) and never lifts off; no Hertz stress on the roller.
+- A new master speed starts its ramp without the master's acceleration (a step there when it comes during a ramp).
+- PLCopen: no MC_GearInPos, MC_Phasing, EndOfProfile, actual-value master source, ramp-in for an absolute CamIn; a
+  master may not itself be a slave.
+- The ST examples are not compiled (no TwinCAT or CODESYS here); the size TF6100's UA_Write takes for a STRING is to be
+  checked.

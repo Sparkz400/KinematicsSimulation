@@ -591,7 +591,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
     ),
     (
         "tcp",
-        "The tool centre point of a tool carried by rotary axes: the tool's coordinates of the three straight axes are where its tip is, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
+        "The tool centre point of a tool carried by rotary axes (a head), of a workpiece on a rotary table, or both (table/table, head/table): the tool's coordinates of the three straight axes are where its tip is on the workpiece, not where the axes stand, so the tip follows the path while the rotaries turn and the straight axes make up for them. At most one.",
         &[
             ID,
             field(
@@ -600,7 +600,24 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 true,
                 "The three straight axes along x (the first axis of the file), y (horizontal) and z (vertical), in that order.",
             ),
-            field("rotaries", Kind::Refs("axis"), true, "The rotary axes that carry the tool, outermost first."),
+            field(
+                "rotaries",
+                Kind::Refs("axis"),
+                false,
+                "The rotary axes that carry the tool (a head), outermost first; none for a table/table machine.",
+            ),
+            field(
+                "table",
+                Kind::Refs("axis"),
+                false,
+                "The rotary axes that carry the workpiece (a rotary or tilting table), outermost first: the tool's x, y and z are the tip's on the workpiece, which they turn. None for a head alone.",
+            ),
+            field(
+                "table_pivot_m",
+                Kind::Point,
+                false,
+                "With table: where the table's rotary axes meet, in the straight axes' coordinates (where they stand at 0), m; [0, 0, 0] if left out.",
+            ),
             field(
                 "tool_m",
                 Kind::Point,
@@ -763,6 +780,9 @@ pub struct TcpNode {
     pub axes: [usize; 3],
     pub rotaries: Vec<usize>,
     pub tool: [f64; 3],
+    /// The rotary axes that carry the workpiece (outermost first), and where their axes meet.
+    pub table: Vec<usize>,
+    pub pivot: [f64; 3],
 }
 
 pub struct Overhang {
@@ -1641,7 +1661,7 @@ fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Opt
             })
             .collect()
     };
-    let (straight, rotaries) = (find("axes")?, find("rotaries")?);
+    let (straight, rotaries, table) = (find("axes")?, find("rotaries")?, find("table")?);
     let incline = |i: usize| (!axis_nodes[i].rotary).then_some(axis_nodes[i].incline_deg);
     let axes = match straight[..] {
         [x, y, z]
@@ -1662,11 +1682,18 @@ fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Opt
             )));
         }
     };
-    if rotaries.is_empty() || rotaries.iter().any(|&r| !axis_nodes[r].rotary) {
-        return Err(ConfigError::Invalid(format!("{} (rotary axes)", node.at("rotaries"))));
+    for (name, list) in [("rotaries", &rotaries), ("table", &table)] {
+        let twice = |r: &usize| rotaries.iter().chain(&table).filter(|&s| s == r).count() > 1;
+        if list.iter().any(|&r| !axis_nodes[r].rotary || twice(&r)) {
+            return Err(ConfigError::Invalid(format!("{} (rotary axes, each once)", node.at(name))));
+        }
+    }
+    if rotaries.is_empty() && table.is_empty() {
+        return Err(ConfigError::Missing(format!("{} (or table)", node.at("rotaries"))));
     }
     let tool = node.point("tool_m")?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
-    Ok(Some(TcpNode { axes, rotaries, tool }))
+    let pivot = node.point("table_pivot_m")?.unwrap_or_default();
+    Ok(Some(TcpNode { axes, rotaries, tool, table, pivot }))
 }
 
 /// The JSON Schema (draft 2020-12) of a machine file, from `NODES`, as a value for a JSON writer (`sim_machines`

@@ -342,6 +342,8 @@ Machine files whose `machine.gantry` node names these values (`machines/dual-gan
 | `stiffness_nm_rad` | files | N m/rad | What holds the yaw beside drives and belts: the bridge's joints on its carriages and their guide blocks | estimate, bounds |
 | `damping_nm_s_rad` | files | N m s/rad | Damping of the yaw | estimate, bounds |
 | `sync_tolerance_m` | dual gantry | m | The synchronisation error (width times yaw) check `gantry-sync` allows; 0.1 mm | choice |
+| `sync` | dual gantry | – | How the gantry's two drives keep in step (read where its node names two drives, the first the master, whether or not the bridge yaws): `"plain"` each follows the common setpoint; `"master_slave"` the slave's position loop follows the master's actual position; `"cross_coupled"` the synchronisation error goes back to both speed commands with `sync_gain_1_s` ([machine files](machine-files.md#a-gantry-that-yaws-and-tools-on-rotary-axes)). `"plain"` as shipped | choice |
+| `sync_gain_1_s` | dual gantry | 1/s | With `sync = "cross_coupled"`: the gain k of the synchronisation error on both speed commands; Kv1 Kv2 / (Kv1 + Kv2) halves the yaw of unequal loops at a steady speed. 25 as shipped (unused there) | choice |
 
 ## `[idler]`
 
@@ -926,9 +928,13 @@ its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast alum
 | `youngs_modulus_pa` | Pa | E of all links: cast aluminium 7e10; bounds 6.5e10 to 7.2e10 | 7.0e10, estimate |
 | `damping_ratio` | – | Of every link's mode; bounds 0.01 to 0.05 | 0.02, estimate |
 
-## Slider-crank, rotary knife, flying saw (`machine-crank-cam`)
+## Slider-crank, rotary knife, flying saw, disc cam (`machine-crank-cam`)
 
-What the three machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
+Beside each machine's config in `crates/machine-crank-cam/config/` lies `<id>-cam.toml`, the same config (`common.toml`
+and the machine's file) with `cam.run = true` and nothing else changed (a test keeps it so): a whole config that runs
+the cam as its cycle, `sim-cli verdicts <id> --config crates/machine-crank-cam/config/<id>-cam.toml`.
+
+What the four machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
 crank and the knife a `[joint]` as the rotary table's, the saw a `[slide]` and `[rack]` as the rack axis's). Formulas in
 [mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). `effects.process_force` switches the press force and the
 cuts (on in all three).
@@ -960,10 +966,21 @@ cuts (on in all three).
 | `cam.ramp_s` | s | The master's sin² ramp from rest to speed and back | choice |
 | `cam.table_file` (crank) | – | A CSV cam table (master, slave[, slope], a header and `#` lines skipped; the last row closes the period); `""`: the segments | choice |
 | `[[cam.segment]]` `master`, `slave`, `law` (crank) | rad | One segment: master span, slave rise, law (`linear`, `dwell`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`) | choice |
+| `disc.base_radius_m` (disc cam) | m | The disc's base circle r_b, where the follower stands at lift 0 | [estimate] |
+| `disc.inertia_kgm2` (disc cam) | kg m² | The disc and its shaft about their axis | [estimate], [bounds] |
+| `disc.turns_per_min` (disc cam) | 1/min | The disc's speed with `cam.run` (its master turns it one turn per period) | choice |
+| `disc.table_file`, `[[disc.segment]]` `master`, `slave`, `law` (disc cam) | rad, m | The lift law over one turn of the disc: as `[cam]`'s table or segments; the spans add up to 2 pi, the rises to 0 | choice |
+| `follower.mass_kg` (disc cam) | kg | The follower, its slide and roller, the tool on it apart (`mass.payload_kg`) | [estimate], [bounds] |
+| `follower.roller_radius_m`, `follower.offset_m` (disc cam) | m | The roller's radius, and the follower's axis off the disc's centre (lowers the pressure angle on the rise where positive) | [estimate] |
+| `follower.spring_n_m`, `follower.spring_preload_n` (disc cam) | N/m, N | The return spring that holds the roller on the disc, and its force at the base circle | [estimate], [bounds] |
+| `ratings.disc_max_contact_force_n`, `ratings.disc_max_pressure_angle_deg` (disc cam) | N, ° | The verdicts `disc-contact-force` (the roller's load) and `disc-pressure-angle` (30° for a translating follower) | [estimate] |
 
-All three have `[axis.crank]`, `[axis.knife]` or `[axis.x]` with `max_velocity_*`, `max_acceleration_*` and `max_jerk_*`
-as every machine; with `cam.run` the cam's peaks at the master's speed are checked against them (`limit-cam-speed`,
-`limit-cam-acceleration`, `limit-cam-jerk`).
+All four have `[axis.crank]`, `[axis.knife]`, `[axis.x]` or `[axis.disc]` with `max_velocity_*`, `max_acceleration_*` and
+`max_jerk_*` as every machine; with `cam.run` the cam's peaks at the master's speed are checked against them when the
+config is applied (`limit-cam-speed`, `limit-cam-acceleration`, `limit-cam-jerk`) and judged as verdicts of the cycle
+(`cam-speed`, `cam-acceleration`, `cam-jerk`, per slave axis). A new master speed under a running cam (another
+`web.speed_m_s`, say) ramps the master from its speed to the new one over `cam.ramp_s` by the same sin² ramp, from where
+it stands.
 
 ## Hexapod
 

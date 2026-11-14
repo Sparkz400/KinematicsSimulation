@@ -4,15 +4,19 @@
 //! - `slider-crank`: a crank, a connecting rod and a slider on a guide, as in presses and pushers (`crank`).
 //! - `rotary-knife`: a knife roll cutting a moving web to format (`knife`).
 //! - `flying-saw`: a saw on a carriage that runs with the material while it cuts and returns (`saw`).
+//! - `disc-cam`: a cam disc turned by the servo lifting a roller follower on a slide against its spring (`disc`): the
+//!   mechanical cam, its lift law, contact force and pressure angle.
 //!
 //! With `cam.run = false` (as shipped) the cycle is the config's `[[cycle.segment]]`, as on every machine: the crank
 //! swings through its working stroke and back as a servo press in pendulum mode does, the knife indexes, the saw's
 //! carriage moves. With `cam.run = true` the controller runs the mechanism's cam instead: the master (virtual, or the
 //! web or material) comes up to speed in `cam.ramp_s` and the slave follows; one pass is one master period.
 //!
-//! Each has its config in `config/`: `config/common.toml` with what all share, then the machine's file.
+//! Each has its config in `config/`: `config/common.toml` with what all share, then the machine's file; beside it
+//! `<id>-cam.toml`, the same config with `cam.run = true`, a whole config to load.
 
 mod crank;
+mod disc;
 mod knife;
 mod saw;
 
@@ -22,6 +26,7 @@ use sim_components::mech::ThermalFeedback;
 use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, MotorInfo};
 
 pub use crank::SliderCrank;
+pub use disc::DiscCam;
 pub use knife::RotaryKnife;
 pub use saw::FlyingSaw;
 
@@ -47,6 +52,7 @@ macro_rules! entry {
 entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build);
 entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build);
 entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build);
+entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build);
 
 const G: f64 = 9.80665;
 

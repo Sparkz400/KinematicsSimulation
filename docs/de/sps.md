@@ -100,10 +100,12 @@ Jede Variable ist ein Skalar (ValueRank −1) im Namensraum `urn:kinematics-simu
 | `axis.*.ActualPosition`, `axis.*.ActualVelocity` | Double | LREAL | lesen |
 | `axis.*.Enable`, `axis.*.Execute` | Boolean | BOOL | lesen, schreiben |
 | `axis.*.Position`, `axis.*.Distance`, `axis.*.Velocity`, `axis.*.Acceleration`, `axis.*.Deceleration`, `axis.*.Jerk` | Double | LREAL | lesen, schreiben |
+| `axis.*.RatioNumerator`, `axis.*.RatioDenominator`, `axis.*.MasterOffset`, `axis.*.SlaveOffset`, `axis.*.MasterScaling`, `axis.*.SlaveScaling`, `axis.*.StartMode`, `axis.*.CamTableID` | Double | LREAL | lesen, schreiben |
+| `axis.*.Master`, `axis.*.Table` | String | STRING | lesen, schreiben |
 | `axis.*.ErrorID` | UInt16 | UINT | lesen |
 | `axis.*.StateID` | Int32 | DINT | lesen |
 | `axis.*.State` | String | STRING | lesen |
-| `axis.*.Status`, `axis.*.Valid`, `axis.*.Error`, `axis.*.Done`, `axis.*.Busy`, `axis.*.Active`, `axis.*.CommandAborted`, `axis.*.IsHomed` | Boolean | BOOL | lesen |
+| `axis.*.Status`, `axis.*.Valid`, `axis.*.Error`, `axis.*.Done`, `axis.*.InGear`, `axis.*.InSync`, `axis.*.Busy`, `axis.*.Active`, `axis.*.CommandAborted`, `axis.*.IsHomed` | Boolean | BOOL | lesen |
 
 Was die SPS-Clients brauchen:
 
@@ -133,10 +135,24 @@ Jede Achse der Maschine hat einen Ordner `axis.<Achsen-ID>` mit einem Satz Hands
 | `axis.<id>.Stop.Execute` | Boolean | schreiben | MC_Stop |
 | `axis.<id>.Stop.Deceleration` | Double | schreiben | Bremsverzögerung, m/s² |
 | `axis.<id>.Reset.Execute` | Boolean | schreiben | MC_Reset |
-| `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | lesen | Ausgänge von Home, MoveAbsolute, MoveRelative, Stop und Reset. `Active` liest dasselbe wie `Busy` |
+| `axis.<id>.GearIn.Execute` | Boolean | schreiben | MC_GearIn: diese Achse ist die Folgeachse |
+| `axis.<id>.GearIn.Master` | String | schreiben | Die Achs-ID der Leitachse |
+| `axis.<id>.GearIn.RatioNumerator`, `.RatioDenominator` | Double | schreiben | Das Übersetzungsverhältnis, Weg der Folgeachse über Weg der Leitachse (zu Beginn 1 und 1) |
+| `axis.<id>.GearIn.Acceleration`, `.Deceleration`, `.Jerk` | Double | schreiben | Wie die Geschwindigkeit der Folgeachse auf das Verhältnis mal die der Leitachse kommt; Deceleration bremst die Folgeachse auch, wenn die Leitachse verloren geht |
+| `axis.<id>.GearIn.InGear` | Boolean | lesen | Die Folgeachse fährt mit dem Verhältnis mal der Geschwindigkeit der Leitachse und folgt ihrem Weg mal dem Verhältnis (statt `Done`) |
+| `axis.<id>.GearOut.Execute` | Boolean | schreiben | MC_GearOut |
+| `axis.<id>.CamIn.Execute` | Boolean | schreiben | MC_CamIn: diese Achse ist die Folgeachse |
+| `axis.<id>.CamIn.Master` | String | schreiben | Die Achs-ID der Leitachse; leer für die virtuelle Leitachse der Maschine (mit CamTableID 1) |
+| `axis.<id>.CamIn.Table` | String | schreiben | Die Kurventabelle des Clients (CamTableID 0): Zeilen `Leitweg, Hub der Folgeachse, Gesetz` (`dwell`, `linear`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`) oder Punkte `Leitwert, Folgewert[, Steigung]`, durch die eine kubische Kurve läuft |
+| `axis.<id>.CamIn.MasterOffset`, `.SlaveOffset`, `.MasterScaling`, `.SlaveScaling` | Double | schreiben | Absolut: die Folgeachse bei SlaveOffset + SlaveScaling × Tabelle(MasterScaling × Leitwert + MasterOffset); zu Beginn 0, 0, 1, 1 |
+| `axis.<id>.CamIn.StartMode` | Double | schreiben | 1 relativ (zu Beginn): die Tabelle beginnt, wo Leit- und Folgeachse stehen, bei MasterOffset in ihr, SlaveOffset ungenutzt; 0 absolut: die Folgeachse muss stehen, wo die Tabelle sie hinlegt (kein Einkoppeln über eine Rampe) |
+| `axis.<id>.CamIn.CamTableID` | Double | schreiben | 0 die Tabelle des Clients, 1 die eigene elektronische Kurvenscheibe der Maschine für diese Achse |
+| `axis.<id>.CamIn.InSync` | Boolean | lesen | Die Folgeachse folgt der Tabelle (statt `Done`) |
+| `axis.<id>.CamOut.Execute` | Boolean | schreiben | MC_CamOut |
+| `axis.<id>.<FB>.Done`, `.Busy`, `.Active`, `.CommandAborted`, `.Error` | Boolean | lesen | Ausgänge jedes Bausteins (`InGear` und `InSync` statt `Done`). `Active` liest dasselbe wie `Busy` |
 | `axis.<id>.<FB>.ErrorID` | UInt16 | lesen | Warum der Baustein scheiterte, 0 ohne Fehler |
-| `axis.<id>.State` | String | lesen | `Disabled`, `Standstill`, `ErrorStop`, `Stopping`, `Homing` oder `DiscreteMotion` |
-| `axis.<id>.StateID` | Int32 | lesen | Der Zustand als Zahl: 1 Disabled, 2 Standstill, 3 ErrorStop, 4 Stopping, 5 Homing, 6 DiscreteMotion (wie `MC_AxisStates` in TwinCAT) |
+| `axis.<id>.State` | String | lesen | `Disabled`, `Standstill`, `ErrorStop`, `Stopping`, `Homing`, `DiscreteMotion`, `ContinuousMotion` oder `SynchronizedMotion` |
+| `axis.<id>.StateID` | Int32 | lesen | Der Zustand als Zahl: 1 Disabled, 2 Standstill, 3 ErrorStop, 4 Stopping, 5 Homing, 6 DiscreteMotion, 7 ContinuousMotion, 8 SynchronizedMotion (wie `MC_AxisStates` in TwinCAT) |
 | `axis.<id>.ActualPosition`, `.ActualVelocity` | Double | lesen | Lage und Geschwindigkeit der simulierten Achse (`signal.axis.<id>.position`, `.velocity`) |
 | `axis.<id>.IsHomed` | Boolean | lesen | MC_Home ist einmal fertig geworden |
 | `axis.<id>.Error`, `.ErrorID` | Boolean, UInt16 | lesen | Der Achsfehler. Ungleich 0 heißt ErrorStop |
@@ -144,13 +160,15 @@ Jede Achse der Maschine hat einen Ordner `axis.<Achsen-ID>` mit einem Satz Hands
 | ErrorID | Bedeutung |
 | --- | --- |
 | 1 | Die Achse ist nicht eingeschaltet (Disabled) |
-| 2 | In diesem Zustand nicht erlaubt: jeder Baustein außer Reset in ErrorStop, eine Fahrt in Stopping oder Homing, Home in DiscreteMotion |
+| 2 | In diesem Zustand nicht erlaubt: jeder Baustein außer Reset in ErrorStop, eine Fahrt in Stopping oder Homing, Home, während die Achse fährt, GearOut oder CamOut, während die Achse nicht gekoppelt ist |
 | 3 | Ein Parameter ist keine positive endliche Zahl |
 | 4 | Das Ziel liegt außerhalb des Achsbereichs |
 | 5 | Eine Fahrt, Bahn oder der Zyklus der übrigen Befehle der Kopplung läuft |
 | 6 | Der Regler hat einen gestreamten Sollwert abgelehnt (Achsfehler) |
 | 7 | Die Antriebe wurden ausgeschaltet, während die Achse eingeschaltet war: `command.disable` oder eine Zwischenkreis-Abschaltung (Achsfehler) |
 | 8 | Die Antriebe gingen aus, weil die Maschine gegen ein Hindernis fuhr (`effects.crash`, Achsfehler) |
+| 9 | GearIn oder CamIn: keine Achse dieser `Master`-ID, die Folgeachse selbst, eine Leitachse, die selbst Folgeachse ist, oder ein leerer `Master` ohne eigene Kurvenscheibe der Maschine; gekoppelt: die Leitachse ging in ErrorStop oder Disabled |
+| 10 | CamIn: die Kurventabelle des Clients ist nicht lesbar, oder die Maschine hat keine eigene Kurvenscheibe (CamTableID 1) |
 
 So verhalten sich die Bausteine:
 
@@ -164,6 +182,10 @@ So verhalten sich die Bausteine:
 - Ein Achsfehler bleibt über `Power.Enable` false hinweg bestehen, wie im Zustandsdiagramm von PLCopen: Die Achse bleibt in ErrorStop, und `Power.Error` und `Power.ErrorID` zeigen den Fehler. MC_Reset löscht den Achsfehler und verlässt ErrorStop nach Standstill (oder Disabled, wenn `Power.Enable` false ist). Nach ErrorID 7 oder 8 schaltet es die Antriebe wieder ein; nach einem Aufprall lässt sich die Achse dann aus dem Hindernis fahren, und eine Fahrt weiter hinein schaltet die Antriebe wieder ab.
 - MC_Power: Der Regler hat eine Freigabe für alle Antriebe. Die Antriebe gehen an, wenn eine Achse eingeschaltet wird, und aus, wenn die letzte Achse ausgeschaltet wird. Eine Achse mit `Power.Enable` false ist Disabled und lehnt Bausteine ab, ihr Motor hält aber die Lage, solange eine andere Achse die Antriebe an hält. Ausschalten einer Achse bricht ihre Bewegung ab.
 - Parameter über den Achsgrenzen werden auf die Grenzen gekürzt. Das Profil ist ein Trapez: Geschwindigkeit, Beschleunigung und Verzögerung werden eingehalten, `Jerk` wird angenommen und nicht verwendet.
+- MC_GearIn und MC_CamIn (PLCopen Teil 1) liegen im Ordner der Folgeachse und nennen die Leitachse bei ihrer Achs-ID. Die Folgeachse folgt dem Sollwert der Leitachse (MasterValueSource Sollwert) im selben Sollwertintervall: Die Leitachse fährt zuerst. MC_GearIn bringt die Geschwindigkeit der Folgeachse mit seiner `Acceleration` (seiner `Deceleration`, wo die Folgeachse langsamer werden muss) auf das Verhältnis mal die der Leitachse, meldet dann `InGear` und hält die Folgeachse auf dem Weg der Leitachse mal dem Verhältnis. MC_CamIn hält die Folgeachse ab seinem Start auf seiner Tabelle beim Leitwert und meldet sofort `InSync`. Beide bleiben `Busy` und `Active`, solange die Folgeachse gekoppelt ist, in `SynchronizedMotion`; eine Leitachse darf nicht selbst Folgeachse sein.
+- MC_GearOut und MC_CamOut lösen die Kopplung und melden `Done`: Der koppelnde Baustein ist nicht mehr busy (nicht `CommandAborted`), und die Folgeachse fährt mit ihrer Geschwindigkeit weiter, in `ContinuousMotion`, bis ein anderer Baustein (MC_Stop, eine Fahrt) sie übernimmt. Eine Fahrt oder MC_Stop an der Folgeachse löst die Kopplung ebenfalls: Der koppelnde Baustein meldet `CommandAborted`.
+- Geht eine Leitachse in ErrorStop oder Disabled, während eine Folgeachse gekoppelt ist, endet die Kopplung mit ErrorID 9: Die Folgeachse bremst mit der Verzögerung der Kopplung (`Deceleration` von GearIn, die Achsgrenze bei CamIn), ohne Baustein, dem die Bewegung gehört. Ein GearIn oder CamIn, das während `Busy` neu gestartet wird und dessen neue Eingänge abgewiesen werden, gibt seine Kopplung genauso ab (die Regel oben).
+- CamTableID 1 nimmt die eigene elektronische Kurvenscheibe der Maschine für diese Achse (die Kurbel- und Kurvenmaschinen, `Machine::cam`): ihre Tabelle über eine Leitperiode, an 1440 Punkten mit ihren Steigungen abgetastet. Mit leerem `CamIn.Master` ist die Leitachse die virtuelle der Maschine, aus dem Stand mit ihrer Rampe (`cam.ramp_s`) auf die Leitgeschwindigkeit der Kurvenscheibe gebracht; so fährt eine einachsige Kurvenmaschine ihre Kurvenscheibe über PLCopen.
 - Die PLCopen-Bausteine nicht gleichzeitig mit `command.setpoint.*`, `command.move`, `command.cycle` oder `command.run_path` an derselben Maschine verwenden. Bausteine, die gestartet werden, während diese laufen, scheitern mit ErrorID 5; ein Sollwertstrom, der startet, während Bausteine laufen, lässt den Regler einen der beiden ablehnen.
 
 ### Wie es arbeitet, und seine Grenzen
@@ -174,7 +196,7 @@ Grenzen:
 
 - Das gestreamte Profil hat eine Schrittweite von 10 ms. Innerhalb eines Schritts ist die Geschwindigkeit konstant, die Beschleunigung ändert sich also an jedem Schritt. Es gibt keine Ruckbegrenzung und kein Input Shaping der PLCopen-Fahrten.
 - Eine Fahrt, die eine schnelle Fahrt zu einem näheren Ziel abbricht oder umkehrt, bremst mit `Deceleration` und kann überschwingen. Verlässt das Überschwingen den Achsbereich, lehnt der Regler den Sollwert ab und die Achse geht nach ErrorStop (ErrorID 6).
-- Keine gepufferten oder überschliffenen Fahrten (`BufferMode`), kein MC_MoveVelocity, MC_Halt, MC_ReadParameter, keine Getriebe- und Kurvenscheibenbausteine (MC_CamIn, MC_GearIn). Eine Maschine mit elektronischer Kurvenscheibe (`machine-crank-cam`, `cam.run = true`) fährt sie als Zyklus: `command.cycle` startet sie, `command.stop` fährt ihren Leitwert herunter.
+- Keine gepufferten oder überschliffenen Fahrten (`BufferMode`), kein MC_MoveVelocity, MC_Halt, MC_ReadParameter. Von der synchronen Bewegung MC_GearIn, MC_GearOut, MC_CamIn und MC_CamOut, ohne MC_GearInPos, MC_Phasing, `EndOfProfile`, den Istwert der Leitachse als Quelle und ohne Einkoppeln über eine Rampe beim absoluten Kurvenstart; die Leitachse einer Folgeachse ist nie selbst Folgeachse. Eine Maschine mit elektronischer Kurvenscheibe (`machine-crank-cam`, `cam.run = true`) fährt sie als Zyklus: `command.cycle` startet sie, `command.stop` fährt ihren Leitwert herunter.
 - Die Kopplung fügt die Latenz von OPC UA hinzu: Ein Client sieht die Wirkung eines Schreibens nach ein bis zwei Schleifentakten plus seiner eigenen Pollzeit.
 
 ## Echtzeittakt und Jitter
@@ -236,6 +258,8 @@ Die Dateien sind ein Ausgangspunkt, der auf einer echten SPS zu übersetzen und 
 
 `sim_cycle.st` in jedem Ordner fügt `PRG_SimCycle` hinzu, ein Programm für eine 10-ms-Task, das tut, was ein SPS-Programm mit der Maschine tut: sich mit Basic256Sha256 SignAndEncrypt (oder None) und, falls gesetzt, Benutzername und Passwort verbinden; den Namensraumindex ermitteln; die Antriebe mit MC_Power einschalten; MC_MoveAbsolute fahren; eine Bahn schreiben (`command.path`) und fahren (`command.run_path`), bis `status.busy` fällt; ausschalten und trennen. Währenddessen liest `SIM_CyclicRead` in jedem Takt die Achslage (`signal.axis.<id>.position`) und den Schleppfehler (`signal.axis.<id>.following_error`) über Knoten-Handles, die einmal geholt werden, und das Programm merkt sich den größten Schleppfehler. Es verwendet die Bausteine aus `sim_plcopen.st`. Die Bahn ist für das T-Portal geschrieben (Achsen x und z, Startpose x 0,1 m, z 0,35 m); für eine andere Maschine sie und das Ziel ändern.
 
+`sim_sync.st` in jedem Ordner fügt die synchrone Bewegung hinzu: `SIM_MC_GearIn`, `SIM_MC_GearOut`, `SIM_MC_CamIn` und `SIM_MC_CamOut` mit PLCopen-Ein- und -Ausgängen, über `SIM_SyncHandshake`, das die Zahlen und Texte des Bausteins (`Master`, `Table`) schreibt, `Execute` setzt und dann `Busy`, `InGear` oder `InSync`, `CommandAborted`, `Error` und `ErrorID` pollt, solange der Baustein busy bleibt: Ein koppelnder Baustein ist, anders als eine Fahrt, busy, solange die Folgeachse gekoppelt ist. `PRG_SimSyncDemo` fährt die Leitachse `x` langsam über ihren Hub, koppelt `y` mit 2:1 ein, nach einer Sekunde im Gleichlauf wieder aus, koppelt sie auf eine 3-4-5-Tabelle von 20 mm über 0,1 m von `x` und zurück, löst sie und hält sie an. Es verwendet die Bausteine aus `sim_plcopen.st` (und für CODESYS `SIM_WriteString` aus `sim_cycle.st`); wie diese wurde es nicht übersetzt.
+
 ## Die Beispiele gegen sim-opcua auf demselben Rechner fahren
 
 Beide brauchen die SPS-Laufzeit auf diesem Rechner; nichts davon liegt diesem Projekt bei. Die Schritte folgen der Dokumentation der Hersteller und konnten hier nicht ausprobiert werden.
@@ -252,7 +276,7 @@ Sie lauscht auf `opc.tcp://127.0.0.1:4840/`, der URL in `PRG_SimCycle`, und nenn
 
 1. In TwinCAT XAE (Visual Studio) ein neues TwinCAT-XAE-Projekt anlegen und ein SPS-Projekt hinzufügen (Standard PLC Project).
 2. Unter References `Tc3_PLCopen_OpcUa` hinzufügen. TF6100 braucht eine Lizenz; eine 7-Tage-Testlizenz lässt sich unter System > License aktivieren.
-3. Den Code einfügen: TwinCAT importiert `.st`-Dateien nicht direkt. Für jeden `FUNCTION_BLOCK` und jedes `PROGRAM` aus `twincat/sim_plcopen.st` und `twincat/sim_cycle.st` eine POU dieses Namens anlegen, die Deklaration (vom Kopf bis `END_VAR`) in den oberen Teil und den Rumpf in den unteren Teil kopieren. `E_SimKind` in eine DUT.
+3. Den Code einfügen: TwinCAT importiert `.st`-Dateien nicht direkt. Für jeden `FUNCTION_BLOCK` und jedes `PROGRAM` aus `twincat/sim_plcopen.st`, `twincat/sim_cycle.st` und `twincat/sim_sync.st` eine POU dieses Namens anlegen, die Deklaration (vom Kopf bis `END_VAR`) in den oberen Teil und den Rumpf in den unteren Teil kopieren. `E_SimKind` in eine DUT.
 4. `PRG_SimCycle` aus der SPS-Task aufrufen und deren Zykluszeit auf 10 ms setzen.
 5. Die Konfiguration aktivieren, das Zielsystem in den Run-Modus setzen (die lokale Laufzeit braucht einen freien Kern oder Hyper-V-Einstellungen, wie Beckhoff sie beschreibt), einloggen und starten.
 6. TF6100 erzeugt beim ersten Start sein eigenes Client-Zertifikat, in seinem PKI-Ordner: `%TcInstallDir%\3.1\Target\OpcUa\Client\PKI` für Client 2.x, `%ProgramData%\Beckhoff\TF6100-OPC-UA\TcOpcUaClient\PKI` für 1.x. Beim ersten gesicherten Verbindungsaufbau legt es das Zertifikat des Servers in seinen `rejected`-Ordner: Es dort nach `trusted` verschieben und erneut verbinden.
@@ -262,7 +286,7 @@ Sie lauscht auf `opc.tcp://127.0.0.1:4840/`, der URL in `PRG_SimCycle`, und nenn
 
 1. CODESYS Development System V3.5 mit CODESYS Control Win (SoftSPS) installieren und die SoftSPS über ihr Taskleistensymbol starten.
 2. Ein Standardprojekt für das Gerät „CODESYS Control Win V3 x64“ anlegen und im Bibliotheksverwalter eine Bibliothek hinzufügen, die die PLCopen-Bausteine für OPC-UA-Clients bereitstellt (`UA_Connect`, `UA_NodeGetHandle`, ...). Die eigene Bibliothek „OPC UA Client“ von CODESYS ist objektorientiert und tut das nicht, soweit ihre öffentliche Hilfe zeigt: Dann sind die Dateien auf ihre Bausteine Client, Read und Write umzuschreiben.
-3. Für jeden Baustein aus `codesys/sim_plcopen.st` und `codesys/sim_cycle.st` eine POU anlegen und Deklaration und Rumpf einfügen; `E_SimKind` in eine DUT.
+3. Für jeden Baustein aus `codesys/sim_plcopen.st`, `codesys/sim_cycle.st` und `codesys/sim_sync.st` eine POU anlegen und Deklaration und Rumpf einfügen; `E_SimKind` in eine DUT.
 4. In der Taskkonfiguration eine zyklische Task von 10 ms anlegen, die `PRG_SimCycle` aufruft.
 5. Für die gesicherte Verbindung unter Ansicht > Security Screen, Registerkarte Geräte, das Zertifikat des Clients für das Gerät erzeugen. Beim ersten Versuch landet das Zertifikat des Servers (`pki/own/cert.der`) dort unter „Zertifikate in Quarantäne“: Es nach „Vertrauenswürdige Zertifikate“ ziehen. Oder für einen ersten Test am Endpunkt ohne Sicherheit `xSecure := FALSE` setzen.
 6. Einloggen, laden, starten. Beobachten, wie `iStep` auf 100 geht, `fbPosition.lrValue` und `lrLargestError`.

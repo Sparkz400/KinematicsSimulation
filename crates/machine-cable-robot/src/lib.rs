@@ -1021,7 +1021,8 @@ impl CableRobot {
         });
         for k in 0..m {
             let j = &self.winches[k];
-            let [friction, stop, shaft, drag] = j.losses(free[k], free_rates[k], speed[k], brakes[k], self.brake_engaged);
+            let [friction, stop, shaft, drag] =
+                j.losses(free[k], free_rates[k], speed[k], brakes[k], self.brake_engaged);
             let gear = match &rigid {
                 Some((_, _, into, out)) => {
                     at_rotor[k] = (into[k] - out[k]) / j.ratio();

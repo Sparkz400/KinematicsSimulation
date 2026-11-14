@@ -236,6 +236,7 @@ fn the_gantry_and_rotary_files_pass_the_standard_suite() {
         ("dual-gantry.toml", &["mx1", "mx2"][..]),
         ("portal-c.toml", &["mz", "mc"][..]),
         ("five-axis.toml", &["mz", "mc", "ma"][..]),
+        ("five-axis-table.toml", &["mz", "mc", "ma"][..]),
         ("h-bot.toml", &[][..]),
         ("corexy.toml", &[][..]),
         ("rack-gantry.toml", &["mx"][..]),
@@ -301,4 +302,147 @@ fn a_broken_gantry_or_tool_is_refused() {
     let portal = read("portal-c.toml");
     let axes = refused(&portal, "axes = [\"x\", \"y\", \"z\"]\nrotaries", "axes = [\"y\", \"x\", \"z\"]\nrotaries");
     assert!(axes.starts_with("machine.tcp[gripper_tip].axes"), "{axes}");
+}
+
+/// The dual-drive gantry cruising along X at 0.1 m/s with the carriage in the middle, the speed feedforward off (so that
+/// each drive's following error at a steady speed is v / Kv): the means over 1 s of the cruise of the sync error signal
+/// (width times yaw), the master's (mx1) following error in metres of its end, and the yaw.
+fn gantry_cruise(changes: &[&str]) -> (f64, f64, f64) {
+    use sim_components::{Command, sim::Sim};
+    let mut edits = vec![
+        "start.pose = [0.2, 0.4]",
+        "axis.x.max_velocity_m_s = 0.1",
+        "effects.velocity_feedforward = false",
+        "effects.gantry_yaw = true",
+    ];
+    // A change that is a table of its own ("[drive.mx2] ...") is added to the text.
+    edits.extend(changes.iter().filter(|c| !c.starts_with('[')));
+    let entry = file("dual-gantry.toml");
+    let mut cfg = config("dual-gantry.toml", &edits);
+    for table in changes.iter().filter(|c| c.starts_with('[')) {
+        cfg = Config::parse(&format!("{}\n{table}\n", cfg.to_text().unwrap())).unwrap();
+    }
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::MoveTo(vec![0.9, 0.4])).unwrap();
+    let (sync, yaw) =
+        (sim.signal_index("gantry.bridge_yaw.sync_error").unwrap(), sim.signal_index("gantry.bridge_yaw.yaw").unwrap());
+    let ratio = 10.0 / pinion_radius();
+    // Up to speed in 0.1 s; 1.5 s in the loops have settled into the cruise, which lasts to 7 s.
+    sim.run(1.5, |_| {});
+    let (mut sum, mut sample, mut n) = ([0.0; 3], Vec::new(), 0.0);
+    sim.run(1.0, |s| {
+        s.sample(&mut sample);
+        sum[0] += sample[sync];
+        sum[1] += s.control.drives[0].following_error / ratio;
+        sum[2] += sample[yaw];
+        n += 1.0;
+    });
+    assert!((sim.control.set_vel[0] - 0.1).abs() < 1e-9, "still cruising");
+    (sum[0] / n, sum[1] / n, sum[2] / n)
+}
+
+/// Master/slave by hand: at a steady speed v the master lags its setpoint by v / Kv = 0.1 / 50 = 2 mm (in metres of its
+/// end; the speed loop's integrator takes up the load, so the lag is the position loop's alone). The slave's loop is the
+/// same and follows the master's actual position, which runs at v too, so it lags that by another 2 mm: the ends run
+/// 2 mm apart, the master's following error. In the plain scheme both lag their setpoints alike and the ends run
+/// together (to within what the unequal loads and the noise leave, 1 % of it).
+#[test]
+fn the_master_slave_sync_error_is_the_master_s_following_error() {
+    let (sync, master, _) = gantry_cruise(&["gantry.sync = \"master_slave\""]);
+    assert!(close(master, 0.1 / 50.0, 0.01), "{master} m against 2 mm");
+    assert!(close(sync.abs(), master, 0.02), "sync error {sync} m against the master's following error {master} m");
+    let (plain, ..) = gantry_cruise(&[]);
+    assert!(plain.abs() < 0.01 * master, "plain: {plain} m");
+}
+
+/// Cross-coupling by hand: the slave's loop at half the master's gain (Kv1 = 50, Kv2 = 25 1/s). Plain, at the steady
+/// speed v the ends run apart by e0 = v (1 / Kv2 - 1 / Kv1) = 0.1 * 0.02 = 2 mm, a yaw of 2 mm / 1.2 m = 1.667 mrad.
+/// Cross-coupled, the slave's speed command loses k e and the master's gains k e: Kv1 e1 + k e = v, Kv2 e2 - k e = v
+/// with e = e1 - e2 give e = e0 / (1 + k (1 / Kv1 + 1 / Kv2)). The gain k = Kv1 Kv2 / (Kv1 + Kv2) = 16.667 1/s
+/// halves it: 1 mm, 0.833 mrad.
+#[test]
+fn the_cross_coupled_gain_halves_the_yaw_of_unequal_loops() {
+    let slow = "[drive.mx2]\nkv_1_s = 25.0";
+    let (_, _, plain) = gantry_cruise(&[slow]);
+    assert!(close(plain.abs(), 0.002 / 1.2, 0.02), "plain yaw {plain} rad against 1.667 mrad");
+    let gain = 50.0 * 25.0 / 75.0;
+    let coupled = format!("gantry.sync_gain_1_s = {gain}");
+    let (_, _, cross) = gantry_cruise(&[slow, "gantry.sync = \"cross_coupled\"", &coupled]);
+    assert!(close(cross / plain, 0.5, 0.02), "cross-coupled yaw {cross} rad against half of {plain} rad");
+}
+
+/// A vector turned about x by `a`, and about z by `c`, by hand.
+fn rx(a: f64, [x, y, z]: [f64; 3]) -> [f64; 3] {
+    [x, y * a.cos() - z * a.sin(), y * a.sin() + z * a.cos()]
+}
+
+fn rz(c: f64, [x, y, z]: [f64; 3]) -> [f64; 3] {
+    [x * c.cos() - y * c.sin(), x * c.sin() + y * c.cos(), z]
+}
+
+/// The tilting rotary table by hand (machines/five-axis-table.toml). The tool hangs straight 0.2 m below the Z slide;
+/// the trunnion A (about x) and the table C on it (about its own axis, the vertical at A = 0) meet at
+/// p = (0.5, 0.25, -0.2). A point w of the workpiece lies at p + Rx(A) Rz(C) (w - p) in the room, so for the tip to be
+/// there the axes stand at q = p + Rx(A) Rz(C) (w - p) + (0, 0, 0.2). With A held at 0.3 rad the table turns C from 0.5
+/// to 2.5 rad while the tip runs straight on the workpiece from (0.6, 0.3, -0.1) to (0.45, 0.2, -0.12): at s = 0.5, w =
+/// (0.525, 0.25, -0.11), C = 1.5, w - p = (0.025, 0, 0.09), turned by C (0.025 cos 1.5, 0.025 sin 1.5, 0.09) =
+/// (0.0017684, 0.0249374, 0.09) and by A (0.0017684, 0.0249374 cos 0.3 - 0.09 sin 0.3, 0.0249374 sin 0.3 + 0.09 cos 0.3)
+/// = (0.0017684, -0.0027732, 0.0933498): q = (0.5017684, 0.2472268, 0.0933498). The motors stand at 250 rad per metre of X
+/// and Y, 628.319 per metre of Z and 50 per rad of A and C. Back from the motors the tip is on the line again.
+#[test]
+fn a_table_table_tcp_keeps_the_tool_on_a_line_while_the_table_turns() {
+    let entry = file("five-axis-table.toml");
+    let table = (entry.build)(&entry.config()).unwrap();
+    let p = [0.5, 0.25, -0.2];
+    let (a, from, to) = (0.3, [0.6, 0.3, -0.1], [0.45, 0.2, -0.12]);
+    for s in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let w: [f64; 3] = std::array::from_fn(|k| from[k] + s * (to[k] - from[k]));
+        let c = 0.5 + 2.0 * s;
+        let turned = rx(a, rz(c, std::array::from_fn(|k| w[k] - p[k])));
+        let q: [f64; 3] = std::array::from_fn(|k| p[k] + turned[k] + if k == 2 { 0.2 } else { 0.0 });
+        if s == 0.5 {
+            assert!(
+                close(q[0], 0.5017684, 1e-6) && close(q[1], 0.2472268, 1e-6) && close(q[2], 0.0933498, 1e-6),
+                "{q:?}"
+            );
+        }
+        let mut motors = [0.0; 5];
+        table.inverse(&[w[0], w[1], w[2], a, c], &mut motors);
+        let hand = [250.0 * q[0], 250.0 * q[1], q[2] * TAU / 0.01, 50.0 * a, 50.0 * c];
+        for k in 0..5 {
+            assert!(close(motors[k], hand[k], 1e-12), "s = {s}: {motors:?} against {hand:?}");
+        }
+        let mut back = [0.0; 5];
+        table.forward(&motors, &mut back);
+        assert!(back.iter().zip([w[0], w[1], w[2], a, c]).all(|(x, y)| close(*x, y, 1e-12)), "{back:?}");
+    }
+    // Beyond Z's stroke the slide cannot follow: the tip 0.25 m below the pivot, at A = C = 0, asks for z = -0.45 + 0.2.
+    assert_eq!(table.unreachable(&[0.5, 0.25, -0.45, 0.0, 0.0], 1e-4), Some("error-tcp-joint-range"));
+}
+
+/// Head/table by hand: the five-axis file with A in the head (tilting the tool about x where it meets the Z slide) and C
+/// in the table (about the vertical through p = (0.5, 0.25, -0.2)). The tip is at q + Rx(A) (0, 0, -0.2) in the room and
+/// a workpiece point w at p + Rz(C) (w - p): q = p + Rz(C) (w - p) - Rx(A) (0, 0, -0.2), so
+/// q = p + Rz(C) (w - p) + (0, -0.2 sin A, 0.2 cos A). At w = (0.6, 0.3, -0.1), A = 0.4, C = 1: Rz(1) (0.1, 0.05, 0.1)
+/// = (0.1 cos 1 - 0.05 sin 1, 0.1 sin 1 + 0.05 cos 1, 0.1) = (0.0119566, 0.1111622, 0.1), and
+/// (0, -0.0778837, 0.1842122): q = (0.5119566, 0.2832785, 0.0842122).
+#[test]
+fn a_head_table_tcp_turns_the_tool_in_the_head_and_the_workpiece_on_the_table() {
+    let text = std::fs::read_to_string(root().join("machines/five-axis-table.toml")).unwrap().replace("\r\n", "\n");
+    let changed = text.replacen("table = [\"a\", \"c\"]\n", "rotaries = [\"a\"]\ntable = [\"c\"]\n", 1);
+    assert_ne!(changed, text);
+    let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
+    let entry = sim_netlist::from_text(&changed, true, "head-table", &known).unwrap_or_else(|e| panic!("{:?}", e.0));
+    let machine = (entry.build)(&entry.config()).unwrap();
+    let (w, a, c) = ([0.6, 0.3, -0.1], 0.4, 1.0);
+    let q = [0.5119566, 0.2832785, 0.0842122];
+    let mut motors = [0.0; 5];
+    machine.inverse(&[w[0], w[1], w[2], a, c], &mut motors);
+    let hand = [250.0 * q[0], 250.0 * q[1], q[2] * TAU / 0.01, 50.0 * a, 50.0 * c];
+    for k in 0..5 {
+        assert!(close(motors[k], hand[k], 1e-6), "{motors:?} against {hand:?}");
+    }
+    let mut back = [0.0; 5];
+    machine.forward(&motors, &mut back);
+    assert!(back.iter().zip([w[0], w[1], w[2], a, c]).all(|(x, y)| close(*x, y, 1e-12)), "{back:?}");
 }

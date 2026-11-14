@@ -28,6 +28,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_hexapod::ENTRY,
     &machine_cable_robot::PLANAR,
     &machine_cable_robot::SPATIAL,
+    &machine_crank_cam::DISC_CAM,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

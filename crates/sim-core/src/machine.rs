@@ -333,6 +333,11 @@ pub trait Machine: Send {
     /// With `cam`: each tool axis (the slaves) at the master position `master`, as [s, s', s'', s'''], the rates over
     /// the master.
     fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+    /// A dual-drive gantry: the two motors that drive its axis side by side, the master first, for the drives'
+    /// synchronisation (`gantry.sync`). `None` without one.
+    fn gantry_motors(&self) -> Option<[usize; 2]> {
+        None
+    }
 
     /// Signals beyond axis and motor positions, speeds and torques, which every machine gets for free: first those
     /// of `base_signals`, then those of `effect_signals`.

@@ -987,6 +987,7 @@ mod across_the_bounds {
         rotary_knife: "rotary-knife",
         flying_saw: "flying-saw",
         palletiser: "palletiser",
+        disc_cam: "disc-cam",
         exct_30: "EXCT-30",
     );
 }

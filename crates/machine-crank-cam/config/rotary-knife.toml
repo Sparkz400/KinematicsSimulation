@@ -53,25 +53,23 @@ backlash_rad = 0.0
 stiffness_nm_rad = 35752.6
 damping_nm_s_rad = 5.0
 inertia_at_input_kgm2 = 4.06e-5
-# The torque at which `efficiency` holds: the strain wave gear's rated torque, as Harmonic Drive gives its efficiency
-# ([estimate] as strain_wave.rated_torque_nm).
-efficiency_torque_nm = 137.0
-hysteresis_rad = 2.909e-4
-# With effects.gearbox_lost_motion: no backlash and no band (the flexspline's teeth are in mesh preloaded);
-# [catalogue] the hysteresis loss, Harmonic Drive's Table 44 (size 32, ratio 50 and up): 2.9e-4 rad (1 arcmin).
-lost_motion_band_rad = 0.0
-no_load_speed_rpm = 2000.0
-# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC. [catalogue] read
-# off Harmonic Drive's chart (CSF/CSG engineering data, "No Load Running Torque", housed unit, grease SK-1A/SK-2,
-# ratio 100, size 32, 2000 r/min, 20 degC): about 50 N cm, to about 20 %. The chart's fall from 20 to 40 degC (a
-# factor of about 0.54 for size 32) is what Palmgren's law with thermal_feedback.viscosity_slope_k gives (0.56).
-no_load_torque_nm = 0.5
-stiffness_k2_nm_rad = 110000.0
-stiffness_k3_nm_rad = 120000.0
-# With effects.gearbox_stiffness_curve: [catalogue] Harmonic Drive's Table 43 (ratio 80 and up, size 32): K1 is
-# stiffness_nm_rad up to T1, K2 up to T2, K3 beyond.
-stiffness_t1_nm = 29.0
-stiffness_t2_nm = 108.0
+# The torque at which `efficiency` holds: [estimate] the rated torque of the joint kit's planetary gearbox, whose
+# stiffness and inertia this one has.
+efficiency_torque_nm = 120.0
+# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC (thermal_feedback
+# .reference_c). [catalogue] Neugart PLE080, one stage: 0.20 to 0.35 N m, the middle.
+no_load_torque_nm = 0.275
+no_load_speed_rpm = 3000.0
+# With effects.gearbox_lost_motion [estimate]: the band beyond the backlash over which the flanks' stiffness rises from
+# 0 to stiffness_nm_rad, and the hysteresis loop's width at zero torque. The makers publish neither: half an arcmin each.
+lost_motion_band_rad = 1.454e-4
+hysteresis_rad = 1.454e-4
+# With effects.gearbox_stiffness_curve: knees T1, T2 and stiffnesses K2, K3 of a strain wave gear. A planetary gearbox
+# has one stiffness: the knees at the rated torque and K2 = K3 = stiffness_nm_rad, a straight line.
+stiffness_t1_nm = 120.0
+stiffness_t2_nm = 120.0
+stiffness_k2_nm_rad = 35752.6
+stiffness_k3_nm_rad = 35752.6
 
 [motor]
 # [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
@@ -80,6 +78,10 @@ rotor_inertia_kgm2 = 1.7e-4
 friction_coulomb_nm = 0.05
 friction_viscous_nm_s_rad = 2.0e-4
 friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level, and the speed over
+# which it falls to that level.
+friction_breakaway_nm = 0.075
+friction_stribeck_rad_s = 2.0
 ripple_fraction = 0.02
 ripple_order = 24.0
 cogging_nm = 0.02
@@ -102,24 +104,18 @@ rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
+# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
+# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
+stall_current_a = 4.35
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+magnet_temperature_coefficient_1_k = -0.0012
 max_current_a = 18.0
 torque_constant_at_max_current_nm_a = 0.83333
 # [estimate]
 brake_torque_nm = 8.0
 
 # [estimate] 20 rad/s is 1910 r/min of the motor.
-# With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
-# bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
-friction_breakaway_nm = 0.075
-friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
-# [bounds] -0.0013 ... -0.0009
-magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
-# rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
-# starts at kt times it.
-stall_current_a = 4.35
 [axis.knife]
 max_velocity_rad_s = 20.0
 max_acceleration_rad_s2 = 60.0
@@ -132,9 +128,12 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] scaled from the delta picker's 0.25 by the inertia at the motor (roll and bars over 100, rotor).
-velocity_kp_nm_s_rad = 0.3
-velocity_tn_s = 0.03
+# [estimate] scaled from the delta picker's 0.25 by the inertia at the motor (roll and bars over 100, rotor), then
+# lowered from 0.3 with Tn from 0.03 s to 0.01 s (14 November): the integrator takes up the friction at the end of a move
+# three times as fast and the dwell error falls from 0.34 to 0.16 mrad, and `sim-cli margins rotary-knife --bands`
+# finds at least 35.8 degrees and 8.0 dB (31.6 degrees with 0.3 and 0.03 s).
+velocity_kp_nm_s_rad = 0.25
+velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
@@ -194,19 +193,27 @@ standstill_window_rad = 0.1
 torque_band = 0.0
 
 [ratings]
-# [estimate] in rad of the roll: 0.1 mm at the blade's tip.
-settling_tolerance_m = 0.001
+# [estimate] in rad of the roll: 30 um at the blade's tip. The cycle settles to 0.16 mrad.
+settling_tolerance_m = 0.0003
 # [estimate] a planetary gearbox as the delta picker's NRB080: its limit for the average torque, its repeated peak torque
 # and its input speed.
 gearbox_rated_torque_nm = 120.0
 gearbox_max_torque_nm = 192.0
 gearbox_max_input_speed_rpm = 6000.0
+# [estimate] the speed at which the gearbox's life is rated, and the slope of the tooth root's S-N line (k = 8.7, ISO
+# 6336-3, as the joint kit's planetary gearbox).
+gearbox_reference_speed_rpm = 400.0
+gearbox_gearing_wohler_exponent = 8.7
 # The DC link of the S210 converter. [estimate] as for the delta picker.
 dc_link_capacitance_uf = 66.0
 braking_threshold_v = 770.0
 # [catalogue] internal braking resistor and trip level of the S210 (catalog/siemens/braking_s210.csv)
 braking_resistor_continuous_w = 100.0
 braking_resistor_peak_w = 5700.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
 dc_link_overvoltage_v = 820.0
 dc_link_discharge_time_constant_s = 130.0
 # [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
@@ -222,6 +229,10 @@ drive_max_current_a = 19.0
 # (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
 # of the image, and how long the drive gives its maximum current from the rated load.
 drive_base_load_current_a = 4.25
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
 
@@ -229,9 +240,6 @@ drive_max_current_time_s = 0.25
 # [[cycle.segment]] where run is on; the web comes up to speed in ramp_s.
 # With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
 # power. Siemens gives duty cycles (catalog/siemens/braking_s120.csv: peak power 1 s in 68 s), not these.
-# [bounds] time constant 20 ... 300 s, rise 100 ... 300 K
-braking_resistor_time_constant_s = 60.0
-braking_resistor_rated_rise_k = 200.0
 [cam]
 run = false
 ramp_s = 0.5
@@ -279,3 +287,14 @@ mass.payload_kg = [2.0, 4.0]
 joint.friction_coulomb_nm = [0.25, 1.0]
 joint.friction_viscous_nm_s_rad = [0.025, 0.1]
 gearbox.efficiency = [0.95, 0.98]
+gearbox.no_load_torque_nm = [0.20, 0.35]
+gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
+gearbox.hysteresis_rad = [0.0, 2.909e-4]
+motor.friction_breakaway_nm = [0.05, 0.1]
+motor.friction_stribeck_rad_s = [0.5, 10.0]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]
+ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
