@@ -623,7 +623,9 @@ impl Tally {
             let axes = sim.machine.axes().len();
             let (mut tool, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
             sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
-            for (load, wrap) in self.loads.iter_mut().zip(sim.machine.belt_wraps(&tool)) {
+            // A motor that drives no belt has no wrap (NaN).
+            for (load, wrap) in self.loads.iter_mut().zip(sim.machine.belt_wraps(&tool)).filter(|(_, w)| w.is_finite())
+            {
                 load.belt_wrap = Some(load.belt_wrap.map_or(wrap, |least| least.min(wrap)));
             }
             for (_, i, peak, sum) in &mut self.checks {

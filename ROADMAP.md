@@ -33,9 +33,9 @@ What is not built yet, from the "Left open" lists at the end of each section of 
   trace is not followed.
 - Optimiser: the robust check uses the error bands one bound at a time, not the worst corner of all of them; one lift
   height per traverse, not a height profile over the obstacles.
-- Machine files: linkages other than the planar delta (a scissor lift); `belt_wrap` beside a screw, rack, linear motor
-  or rotary; a self-locking worm that sticks (and takes the motor's push to lower a load) in place of fading in over
-  0.5 W.
+- Machine files: a self-locking worm's stick in the elastic model and once moving (it fades in over 0.5 W there); a
+  scissor lift with its arms' turning in its mass, or driven by a cylinder between the arms; a linkage or scissor lift
+  beside other mechanisms in one file.
 
 ## Front ends
 

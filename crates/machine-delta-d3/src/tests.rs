@@ -1,6 +1,9 @@
 //! The delta against hand calculations: kinematics, holding torques, an inertia torque, the Adept cycle's time.
 
 use super::*;
+use sim_netlist::spatial::{ARM_PIECES, M3, ROD_PIECES, V3, cross, dot, inverse, mul, norm, sub};
+
+const G: f64 = 9.80665;
 use sim_components::{Command, Sim};
 
 fn delta(edits: &[&str]) -> Delta {
@@ -29,18 +32,18 @@ fn the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_k
                     continue;
                 }
                 tried += 1;
-                let t = d.legs.inverse(p).unwrap();
-                let back = d.legs.forward(t).unwrap();
+                let t = d.legs().inverse(p).unwrap();
+                let back = d.legs().forward(t).unwrap();
                 for a in 0..3 {
                     assert!((back[a] - p[a]).abs() < 1e-12, "{p:?} back as {back:?}");
                 }
-                let jac = d.legs.jacobian(t, p).unwrap();
+                let jac = d.legs().jacobian(t, p).unwrap();
                 let h = 1e-6;
                 for c in 0..3 {
                     let (mut up, mut down) = (t, t);
                     up[c] += h;
                     down[c] -= h;
-                    let (pu, pd) = (d.legs.forward(up).unwrap(), d.legs.forward(down).unwrap());
+                    let (pu, pd) = (d.legs().forward(up).unwrap(), d.legs().forward(down).unwrap());
                     for r in 0..3 {
                         assert!((jac[r][c] - (pu[r] - pd[r]) / (2.0 * h)).abs() < 1e-7, "{p:?}: J[{r}][{c}]");
                     }
@@ -55,7 +58,7 @@ fn the_kinematics_round_trip_and_the_jacobian_is_the_derivative_of_the_forward_k
 /// (e + L_a cos t)^2 + (z + L_a sin t)^2 = L_b^2, and the platform's height per arm angle when all three turn together:
 /// differentiating that, dz/dt = -L_a cos t + (e + L_a cos t) L_a sin t / (z + L_a sin t), a third of it per arm.
 fn centre_by_hand(d: &Delta, z: f64) -> (f64, f64) {
-    let (e, la, lb) = (d.legs.e, d.legs.la, d.legs.lb);
+    let (e, la, lb) = (d.legs().e, d.legs().la, d.legs().lb);
     let f = |t: f64| (e + la * t.cos()).powi(2) + (z + la * t.sin()).powi(2) - lb * lb;
     // The elbow-out root lies between -60 and 90 degrees, where f rises with t at this height.
     let (mut lo, mut hi) = (-60f64.to_radians(), 90f64.to_radians());
@@ -101,7 +104,7 @@ fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_a
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let p = [0.6, 0.0, -0.775];
-    let t = d.legs.inverse(p).unwrap();
+    let t = d.legs().inverse(p).unwrap();
     let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5);
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut torque);
@@ -110,7 +113,7 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         let (mut up, mut down) = (t, t);
         up[k] += 1e-6;
         down[k] -= 1e-6;
-        let dz = (d.legs.forward(up).unwrap()[2] - d.legs.forward(down).unwrap()[2]) / 2e-6;
+        let dz = (d.legs().forward(up).unwrap()[2] - d.legs().forward(down).unwrap()[2]) / 2e-6;
         by_hand[k] = -G * m_lg * t[k].cos() + d.m_nt() * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
@@ -310,7 +313,7 @@ fn the_feedforward_with_the_speed_gives_the_asked_acceleration() {
         let t = [state[0], state[1], state[2]];
         let (_, j) = d.pose(t);
         let w = [state[3], state[4], state[5]];
-        let bend = d.legs.velocity_term(t, p, w, v).unwrap();
+        let bend = d.legs().velocity_term(t, p, w, v).unwrap();
         let along = mul(&j, [rates[3], rates[4], rates[5]]);
         [0, 1, 2].map(|i| along[i] + bend[i])
     };
@@ -435,7 +438,7 @@ fn with_the_arms_horizontal_a_vertical_acceleration_takes_the_hand_calculated_to
     for rods in [true, false] {
         let d = loss_free(rods, &["gearbox.inertia_at_input_kgm2 = 4.06e-5"]);
         let p = [0.0, 0.0, LEVEL];
-        let t = d.legs.inverse(p).unwrap();
+        let t = d.legs().inverse(p).unwrap();
         assert!(t.iter().all(|a| a.abs() < 1e-7), "{t:?}");
         let (mut moving, mut still) = ([0.0; 3], [0.0; 3]);
         d.feedforward_torque(&p, &[0.0, 0.0, 10.0], &mut moving);
@@ -623,15 +626,15 @@ fn the_rods_spin_is_the_hand_calculated_one() {
     };
     let (d, still) = (spin(0.01), spin(0.0));
     let p = [0.0, 0.1, -0.8];
-    let t = d.legs.inverse(p).unwrap();
-    let u = sub(p, d.legs.elbow(0, t[0])[0]);
+    let t = d.legs().inverse(p).unwrap();
+    let u = sub(p, d.legs().elbow(0, t[0])[0]);
     let pv = [u[2], 0.0, -u[0]].map(|v| v / u[0].hypot(u[2]));
-    let w = mul(&inverse(&d.legs.jacobian(t, p).unwrap()).unwrap(), pv);
+    let w = mul(&inverse(&d.legs().jacobian(t, p).unwrap()).unwrap(), pv);
     assert!(w[0].abs() < 1e-12, "{w:?}");
     close(d.rod_spin(0, t, [0.0; 3], w, [0.0; 3]), by_hand, 1e-9, "leg 1's spin");
     let plane = |i: usize, t: V3| -> (V3, V3) {
-        let e = sub(d.legs.forward(t).unwrap(), d.legs.elbow(i, t[i])[0]).map(|v| v / 0.95);
-        let a = d.legs.tangent(i);
+        let e = sub(d.legs().forward(t).unwrap(), d.legs().elbow(i, t[i])[0]).map(|v| v / 0.95);
+        let a = d.legs().tangent(i);
         let across = sub(a, e.map(|v| v * dot(a, e)));
         (e, across.map(|v| v / norm(across)))
     };
@@ -708,7 +711,7 @@ fn the_arms_bending_out_of_their_planes_rings_at_the_hand_calculated_frequency()
 #[test]
 fn an_upper_arm_running_into_an_obstacle_is_a_crash() {
     let d = delta(&[]);
-    let t = d.legs.inverse([0.0, 0.0, -0.75]).unwrap();
+    let t = d.legs().inverse([0.0, 0.0, -0.75]).unwrap();
     let (shoulder, end) = d.arm(0, t, [0.0; 3]);
     let middle: V3 = std::array::from_fn(|i| 0.5 * (shoulder[i] + end[i]));
     println!("arm 1's middle at the centre: {middle:?}, arm angles {t:?}");
@@ -748,8 +751,8 @@ fn an_upper_arm_running_into_an_obstacle_is_a_crash() {
 fn a_forearm_running_into_an_obstacle_is_a_crash() {
     let d = delta(&[]);
     let p = [0.0, 0.0, -0.75];
-    let t = d.legs.inverse(p).unwrap();
-    let [_, (from, to)] = d.legs.rods(0, t[0], 0.0, p, 0.05, 0.1);
+    let t = d.legs().inverse(p).unwrap();
+    let [_, (from, to)] = d.legs().rods(0, t[0], 0.0, p, 0.05, 0.1);
     let middle: V3 = std::array::from_fn(|i| 0.5 * (from[i] + to[i]));
     println!("rod middle at the centre: {middle:?}");
     assert!(middle[1] > 0.0 && middle[2] - 0.015 - (p[2] + 0.015) > 0.3, "{middle:?}");

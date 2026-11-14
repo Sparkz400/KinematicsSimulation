@@ -4333,6 +4333,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
+ "sim-netlist",
 ]
 
 [[package]]
@@ -4341,6 +4342,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "sim-components",
  "sim-core",
+ "sim-netlist",
 ]
 
 [[package]]

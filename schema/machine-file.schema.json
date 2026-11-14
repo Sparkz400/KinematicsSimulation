@@ -605,19 +605,19 @@
           "type": "array"
         },
         "linkage": {
-          "description": "A planar parallel linkage (crate sim-netlist, linkage.rs): two driven arms in the vertical x-z plane, one at each side of the base, each with a pair of forearms down to a plate that keeps its orientation (a five-bar with parallelograms, the planar delta). The tool is the plate's centre. A file with a linkage has two axes (no stroke: the working range below sets their range), two motors, a gearbox on each and the linkage; nothing else. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
+          "description": "A parallel linkage of driven arms, each with a pair of forearms (a parallelogram) down to a plate that keeps its orientation. Two arms (crate sim-netlist, linkage.rs): in the vertical x-z plane, one at each side of the base (the planar delta); the tool is the plate's centre, x and z. Three arms (spatial.rs): at 0, 120 and 240 degrees round the base (the spatial delta); the tool is x, y and z. A file with a linkage has as many axes as arms (no stroke: the working range below sets their range), one motor per arm, a gearbox on each and the linkage; nothing else, and no belt effect on. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
           "items": {
             "additionalProperties": false,
             "properties": {
               "arms": {
-                "description": "The gearboxes that turn the arms: the first the arm at +x, the second the one at -x. Ids of machine.gearbox nodes.",
+                "description": "The gearboxes that turn the arms: two (the first the arm at +x, the second the one at -x) or three (at 0, 120 and 240 degrees from +x). Ids of machine.gearbox nodes.",
                 "items": {
                   "type": "string"
                 },
                 "type": "array"
               },
               "axes": {
-                "description": "The tool's axes: the first across (x), the second up (z), from the shoulders' axis. Ids of machine.axis nodes.",
+                "description": "The tool's axes, as many as the arms: across (x), with three arms y, then up (z), from the shoulders' plane. Ids of machine.axis nodes.",
                 "items": {
                   "type": "string"
                 },
@@ -625,6 +625,32 @@
               },
               "base_radius_m": {
                 "description": "Shoulder axis from the centre, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "bending_damping_nm_s_rad": {
+                "description": "Its damping, N m s/rad. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "bending_stiffness_nm_rad": {
+                "description": "Three arms, effects.link_elasticity: an upper arm's bending in the plane it turns in, as a turn of the elbow, N m/rad. Required with three arms.",
                 "oneOf": [
                   {
                     "type": "number"
@@ -688,6 +714,19 @@
                   }
                 ]
               },
+              "forearm_rod_spin_inertia_kgm2": {
+                "description": "Three arms, effects.forearm_inertia: each rod's inertia about its own axis, kg m^2. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
               "forearm_spacing_m": {
                 "description": "Distance between the two rods of a forearm pair, m; the 3D view only. Default 0.",
                 "oneOf": [
@@ -702,7 +741,7 @@
                 ]
               },
               "half_width_m": {
-                "description": "Working range: half its width, m.",
+                "description": "Two arms: the working range's half width, m. Required there.",
                 "oneOf": [
                   {
                     "type": "number"
@@ -715,7 +754,7 @@
                 ]
               },
               "height_centre_m": {
-                "description": "Working range: its height at the centre, m; the bottom is an arc through both edges and the centre.",
+                "description": "Working range: its height at the centre, m; the bottom is an arc (two arms) or a sphere's cap (three) through the edges and the centre.",
                 "oneOf": [
                   {
                     "type": "number"
@@ -744,6 +783,32 @@
                 "description": "Stable id of the node; signals and other nodes refer to it.",
                 "pattern": "^[A-Za-z0-9_-]+$",
                 "type": "string"
+              },
+              "lateral_damping_n_s_m": {
+                "description": "Its damping, N s/m. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "lateral_stiffness_n_m": {
+                "description": "Three arms, effects.link_elasticity: the elbow's move along its axis, out of the arm's plane, N/m. Required with three arms.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
               },
               "max_condition_number": {
                 "description": "Targets where the Jacobian's condition number is above this are refused (near a singularity).",
@@ -805,6 +870,19 @@
                 "maxItems": 2,
                 "minItems": 2,
                 "type": "array"
+              },
+              "radius_m": {
+                "description": "Three arms: the working range's radius (a cylinder about z), m. Required there.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
               },
               "top_z_m": {
                 "description": "Working range: its top, z, m (below 0: under the shoulders).",
@@ -887,7 +965,6 @@
               "forearm_pair_kg",
               "forearm_elbow_share",
               "platform_kg",
-              "half_width_m",
               "top_z_m",
               "height_edge_m",
               "height_centre_m",
@@ -1056,6 +1133,32 @@
                 "description": "The axis it turns, which has stroke_rad; no body moves with it. Id of a machine.axis node.",
                 "type": "string"
               },
+              "friction_coulomb_nm": {
+                "description": "Its bearing's Coulomb friction at the axis, N m, while effects.guide_friction is on. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "friction_viscous_nm_s_rad": {
+                "description": "Its bearing's viscous friction at the axis, N m s/rad, while effects.guide_friction is on. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
               "gearbox": {
                 "description": "The gearbox that turns it. Id of a machine.gearbox node.",
                 "type": "string"
@@ -1110,6 +1213,180 @@
               "gearbox",
               "axis",
               "inertia_kgm2"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "scissor": {
+          "description": "A scissor lift (crate sim-netlist, scissor.rs): stages of crossed arm pairs on the base, a screw turned by the gearbox's output pulling the sliding foot of the lowest stage towards the fixed one; the tool is the platform's height. A file with a scissor lift has one axis (no stroke: min_height_m and max_height_m set its range), one motor, its gearbox and the scissor; nothing else, and no belt effect on.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arm_m": {
+                "description": "An arm from pin to pin, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "arms_kg": {
+                "description": "All the arms together, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "axis": {
+                "description": "The platform's height. Id of a machine.axis node.",
+                "type": "string"
+              },
+              "gearbox": {
+                "description": "The gearbox that turns the screw. Id of a machine.gearbox node.",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "lead_m": {
+                "description": "The screw's lead: the foot moves this far per turn, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "max_height_m": {
+                "description": "Its highest, below stages times arm_m, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "min_height_m": {
+                "description": "The platform's lowest height, above 0, m.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "payload_kg": {
+                "description": "Payload on the platform while effects.payload is on and the payload is attached, kg. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "platform_kg": {
+                "description": "The platform, kg.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "screw_efficiency": {
+                "description": "The screw's efficiency, with effects.gearbox_efficiency; above 0, at most 1. Default 1.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "screw_inertia_kgm2": {
+                "description": "The screw's inertia about its axis, kg m^2. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "stages": {
+                "description": "Stages of crossed arms, a whole number.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "gearbox",
+              "axis",
+              "stages",
+              "arm_m",
+              "lead_m",
+              "min_height_m",
+              "max_height_m",
+              "arms_kg",
+              "platform_kg"
             ],
             "type": "object"
           },

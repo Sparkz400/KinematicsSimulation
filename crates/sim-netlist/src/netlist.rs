@@ -343,6 +343,18 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "Inertia of its payload while effects.payload is on and the payload is attached, kg m^2.",
             ),
             field(
+                "friction_coulomb_nm",
+                Kind::Number,
+                false,
+                "Its bearing's Coulomb friction at the axis, N m, while effects.guide_friction is on. Default 0.",
+            ),
+            field(
+                "friction_viscous_nm_s_rad",
+                Kind::Number,
+                false,
+                "Its bearing's viscous friction at the axis, N m s/rad, while effects.guide_friction is on. Default 0.",
+            ),
+            field(
                 "strain_wave",
                 Kind::Table,
                 false,
@@ -353,20 +365,20 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
     ),
     (
         "linkage",
-        "A planar parallel linkage (crate sim-netlist, linkage.rs): two driven arms in the vertical x-z plane, one at each side of the base, each with a pair of forearms down to a plate that keeps its orientation (a five-bar with parallelograms, the planar delta). The tool is the plate's centre. A file with a linkage has two axes (no stroke: the working range below sets their range), two motors, a gearbox on each and the linkage; nothing else. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
+        "A parallel linkage of driven arms, each with a pair of forearms (a parallelogram) down to a plate that keeps its orientation. Two arms (crate sim-netlist, linkage.rs): in the vertical x-z plane, one at each side of the base (the planar delta); the tool is the plate's centre, x and z. Three arms (spatial.rs): at 0, 120 and 240 degrees round the base (the spatial delta); the tool is x, y and z. A file with a linkage has as many axes as arms (no stroke: the working range below sets their range), one motor per arm, a gearbox on each and the linkage; nothing else, and no belt effect on. The arms' joints read [joint] (bearing friction, stops), each motor its drive train as everywhere.",
         &[
             ID,
             field(
                 "arms",
                 Kind::Refs("gearbox"),
                 true,
-                "The gearboxes that turn the arms: the first the arm at +x, the second the one at -x.",
+                "The gearboxes that turn the arms: two (the first the arm at +x, the second the one at -x) or three (at 0, 120 and 240 degrees from +x).",
             ),
             field(
                 "axes",
                 Kind::Refs("axis"),
                 true,
-                "The tool's axes: the first across (x), the second up (z), from the shoulders' axis.",
+                "The tool's axes, as many as the arms: across (x), with three arms y, then up (z), from the shoulders' plane.",
             ),
             field("base_radius_m", Kind::Number, true, "Shoulder axis from the centre, m."),
             field("platform_radius_m", Kind::Number, true, "Forearms' joints on the plate from its centre, m."),
@@ -396,14 +408,40 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 false,
                 "Payload at the plate while effects.payload is on and the payload is attached, kg. Default 0.",
             ),
-            field("half_width_m", Kind::Number, true, "Working range: half its width, m."),
+            field("half_width_m", Kind::Number, false, "Two arms: the working range's half width, m. Required there."),
+            field(
+                "radius_m",
+                Kind::Number,
+                false,
+                "Three arms: the working range's radius (a cylinder about z), m. Required there.",
+            ),
+            field(
+                "forearm_rod_spin_inertia_kgm2",
+                Kind::Number,
+                false,
+                "Three arms, effects.forearm_inertia: each rod's inertia about its own axis, kg m^2. Default 0.",
+            ),
+            field(
+                "bending_stiffness_nm_rad",
+                Kind::Number,
+                false,
+                "Three arms, effects.link_elasticity: an upper arm's bending in the plane it turns in, as a turn of the elbow, N m/rad. Required with three arms.",
+            ),
+            field("bending_damping_nm_s_rad", Kind::Number, false, "Its damping, N m s/rad. Default 0."),
+            field(
+                "lateral_stiffness_n_m",
+                Kind::Number,
+                false,
+                "Three arms, effects.link_elasticity: the elbow's move along its axis, out of the arm's plane, N/m. Required with three arms.",
+            ),
+            field("lateral_damping_n_s_m", Kind::Number, false, "Its damping, N s/m. Default 0."),
             field("top_z_m", Kind::Number, true, "Working range: its top, z, m (below 0: under the shoulders)."),
             field("height_edge_m", Kind::Number, true, "Working range: its height at the edges, m."),
             field(
                 "height_centre_m",
                 Kind::Number,
                 true,
-                "Working range: its height at the centre, m; the bottom is an arc through both edges and the centre.",
+                "Working range: its height at the centre, m; the bottom is an arc (two arms) or a sphere's cap (three) through the edges and the centre.",
             ),
             field(
                 "max_condition_number",
@@ -411,6 +449,36 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 true,
                 "Targets where the Jacobian's condition number is above this are refused (near a singularity).",
             ),
+            POS,
+        ],
+    ),
+    (
+        "scissor",
+        "A scissor lift (crate sim-netlist, scissor.rs): stages of crossed arm pairs on the base, a screw turned by the gearbox's output pulling the sliding foot of the lowest stage towards the fixed one; the tool is the platform's height. A file with a scissor lift has one axis (no stroke: min_height_m and max_height_m set its range), one motor, its gearbox and the scissor; nothing else, and no belt effect on.",
+        &[
+            ID,
+            field("gearbox", Kind::Ref("gearbox"), true, "The gearbox that turns the screw."),
+            field("axis", Kind::Ref("axis"), true, "The platform's height."),
+            field("stages", Kind::Number, true, "Stages of crossed arms, a whole number."),
+            field("arm_m", Kind::Number, true, "An arm from pin to pin, m."),
+            field("lead_m", Kind::Number, true, "The screw's lead: the foot moves this far per turn, m."),
+            field("min_height_m", Kind::Number, true, "The platform's lowest height, above 0, m."),
+            field("max_height_m", Kind::Number, true, "Its highest, below stages times arm_m, m."),
+            field("arms_kg", Kind::Number, true, "All the arms together, kg."),
+            field("platform_kg", Kind::Number, true, "The platform, kg."),
+            field(
+                "payload_kg",
+                Kind::Number,
+                false,
+                "Payload on the platform while effects.payload is on and the payload is attached, kg. Default 0.",
+            ),
+            field(
+                "screw_efficiency",
+                Kind::Number,
+                false,
+                "The screw's efficiency, with effects.gearbox_efficiency; above 0, at most 1. Default 1.",
+            ),
+            field("screw_inertia_kgm2", Kind::Number, false, "The screw's inertia about its axis, kg m^2. Default 0."),
             POS,
         ],
     ),
@@ -468,10 +536,22 @@ pub struct AxisNode {
 /// path of its values' table).
 pub enum Transmission {
     Belt,
-    Screw { values: String },
-    Rack { values: String },
-    LinearMotor { values: String },
-    Rotary { inertia: f64, payload: f64, strain_wave: Option<String> },
+    Screw {
+        values: String,
+    },
+    Rack {
+        values: String,
+    },
+    LinearMotor {
+        values: String,
+    },
+    /// `bearing`: the bearing's Coulomb (N m) and viscous (N m s/rad) friction at the axis.
+    Rotary {
+        inertia: f64,
+        payload: f64,
+        strain_wave: Option<String>,
+        bearing: [f64; 2],
+    },
 }
 
 pub struct MotorNode {
@@ -597,8 +677,11 @@ pub struct Netlist {
     /// The value tables of screws, racks, linear motors and strain wave gears: the registered one-axis machines' table each is laid out
     /// as ("screw", ...), and its path in the file.
     pub values: Vec<(&'static str, String)>,
-    /// The planar linkage of a file that has one (`crate::linkage`); its netlist has no belts, bodies or guides.
+    /// The linkage of a file that has one, planar (`crate::linkage`) or spatial (`crate::spatial`); its netlist has no
+    /// belts, bodies or guides.
     pub linkage: Option<crate::linkage::LinkageNode>,
+    /// The scissor lift of a file that has one (`crate::scissor`); its netlist has one axis and one motor.
+    pub scissor: Option<crate::scissor::ScissorNode>,
 }
 
 /// One node of a list, with the path its errors name: `machine.<list>[<id>]`, or `machine.<list>[#<n>]` (from 1)
@@ -750,7 +833,7 @@ impl Netlist {
         let (bodies, guides, idlers, frames, spans) =
             (take("body"), take("guide"), take("idler"), take("frame"), take("span"));
         let (screws, racks, linears, rotaries) = (take("screw"), take("rack"), take("linear_motor"), take("rotary"));
-        let (leans, worms, linkages) = (take("lean"), take("worm"), take("linkage"));
+        let (leans, worms, linkages, scissors) = (take("lean"), take("worm"), take("linkage"), take("scissor"));
         // Pulleys, sections and bodies only where the motors drive belts and the axes move bodies: checked below.
         for (list, nodes) in [("axis", &axes), ("motor", &motors)] {
             if nodes.is_empty() {
@@ -766,6 +849,13 @@ impl Netlist {
                 }
                 Some(_) => return Err(ConfigError::Type(format!("machine.{key}"))),
             }
+        }
+        if !scissors.is_empty() {
+            let others = [
+                &pulleys, &sections, &bodies, &guides, &idlers, &frames, &spans, &screws, &racks, &linears, &rotaries,
+                &leans, &worms, &linkages,
+            ];
+            return crate::scissor::read(cfg, &axes, &motors, &gearboxes, &scissors, &others.map(|n| &n[..]));
         }
         if !linkages.is_empty() {
             let others = [
@@ -908,21 +998,23 @@ impl Netlist {
                                 let node = &rotaries[i];
                                 let inertia =
                                     number(cfg, node.required("inertia_kgm2")?, &node.at("inertia_kgm2"), &mut refs)?;
-                                let payload = node
-                                    .get("payload_inertia_kgm2")
-                                    .map(|v| number(cfg, v, &node.at("payload_inertia_kgm2"), &mut refs))
-                                    .transpose()?
-                                    .unwrap_or(0.0);
-                                if inertia <= 0.0 || payload < 0.0 {
-                                    return Err(ConfigError::Invalid(node.at(if inertia <= 0.0 {
-                                        "inertia_kgm2"
-                                    } else {
-                                        "payload_inertia_kgm2"
-                                    })));
+                                let mut optional = |name: &str| -> Result<f64> {
+                                    let v = node
+                                        .get(name)
+                                        .map(|v| number(cfg, v, &node.at(name), &mut refs))
+                                        .transpose()?
+                                        .unwrap_or(0.0);
+                                    if v < 0.0 { Err(ConfigError::Invalid(node.at(name))) } else { Ok(v) }
+                                };
+                                let payload = optional("payload_inertia_kgm2")?;
+                                let bearing =
+                                    [optional("friction_coulomb_nm")?, optional("friction_viscous_nm_s_rad")?];
+                                if inertia <= 0.0 {
+                                    return Err(ConfigError::Invalid(node.at("inertia_kgm2")));
                                 }
                                 let strain_wave =
                                     node.get("strain_wave").map(|_| table_path(node, "strain_wave")).transpose()?;
-                                (node, Transmission::Rotary { inertia, payload, strain_wave })
+                                (node, Transmission::Rotary { inertia, payload, strain_wave, bearing })
                             }
                         }
                     }
@@ -1064,8 +1156,7 @@ impl Netlist {
             if guide_nodes.iter().any(|g| g.axis == axis) {
                 return Err(ConfigError::Invalid(node.at("axis")));
             }
-            // shortcut: a rotary axis has no bearing friction of its own (only its motor's and gearbox's); give the
-            // rotary node a friction table if a table's bearing drag matters.
+            // A rotary axis's bearing friction is its rotary node's (friction_coulomb_nm, friction_viscous_nm_s_rad).
             if axis_nodes[axis].rotary {
                 return Err(ConfigError::Invalid(format!("{} (a rotary axis has no guide)", node.at("axis"))));
             }
@@ -1208,6 +1299,7 @@ impl Netlist {
             refs,
             values,
             linkage: None,
+            scissor: None,
         })
     }
 }

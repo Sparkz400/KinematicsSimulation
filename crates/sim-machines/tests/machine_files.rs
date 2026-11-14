@@ -610,12 +610,16 @@ fn a_machine_file_reports_its_belt_mode() {
     assert!(soft.resonance_hz(&[0.5, 0.25]).unwrap() < stiff.resonance_hz(&[0.5, 0.25]).unwrap());
 }
 
-/// The 3D view draws the belt: one strip per pair of points on each section's way. The H-bot's sections have no route,
-/// so each runs from its pulleys to the body it is clamped to: sections 1 and 3 one strip each (pulley, head), section 2
-/// two (pulley A, pulley B, head). The T-gantry's file routes them past its idlers: 2 + 4 + 2 strips, and five idlers.
+/// The 3D view draws the belt round its wheels: a strip per straight run from tangent to tangent, and 8 round each
+/// wheel inside a section's way and each motor pulley one section ends at and another starts from. The H-bot's
+/// sections have no route, so each runs between its pulleys and the head it is clamped to: sections 1 and 3 one run each
+/// (pulley A to the head, the head to pulley B), section 2 two runs and the arc round pulley A between them (head,
+/// pulley A, pulley B): 1 + 1 + 2 + 8 = 12; no pulley ends one way and starts another. The T-gantry's file routes them
+/// past its idlers: 2 + 4 + 2 runs, 8 round each of its 1 + 3 + 1 idlers inside the ways and each motor pulley, which
+/// one section ends at and the next starts from: 8 + 40 + 16 = 64 strips, and five idlers.
 #[test]
 fn the_3d_view_draws_the_belt_of_a_machine_file() {
-    for (name, strips, idlers) in [("h-bot.toml", 4, 0), ("t-gantry.toml", 8, 5)] {
+    for (name, strips, idlers) in [("h-bot.toml", 12, 0), ("t-gantry.toml", 64, 5)] {
         let entry = file(name);
         let sim = Sim::new(entry, &entry.config()).unwrap();
         let mut scene = sim_core::Scene::default();

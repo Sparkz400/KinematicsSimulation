@@ -32,11 +32,13 @@ use sim_core::{
     AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MotorInfo, Part, Scene, Shape,
     SignalInfo, TORQUE_PARTS, ThermalPart,
 };
+use toml::Value;
 
 const G: f64 = 9.80665;
 
-/// Values of the node that have to be above 0; `top_z_m` may be anything, every other value at least 0.
-const POSITIVE: [&str; 10] = [
+/// Values of the node that have to be above 0; `top_z_m` may be anything, every other value at least 0. The range's
+/// half width is the planar linkage's, its radius the spatial one's.
+const POSITIVE: [&str; 11] = [
     "base_radius_m",
     "upper_arm_m",
     "forearm_m",
@@ -44,16 +46,30 @@ const POSITIVE: [&str; 10] = [
     "upper_arm_inertia_kgm2",
     "platform_kg",
     "half_width_m",
+    "radius_m",
     "height_edge_m",
     "height_centre_m",
     "max_condition_number",
 ];
 
+/// Values only the spatial linkage (three arms) reads: the range's radius, the rods' spin, the upper arms' bending.
+pub const SPATIAL_ONLY: [&str; 6] = [
+    "radius_m",
+    "forearm_rod_spin_inertia_kgm2",
+    "bending_stiffness_nm_rad",
+    "bending_damping_nm_s_rad",
+    "lateral_stiffness_n_m",
+    "lateral_damping_n_s_m",
+];
+
 /// The linkage node, read and checked: its number fields by name (an optional one left out is 0), and per arm the
-/// gearbox node's id (arm k's motor is the netlist's motor k).
+/// gearbox node's id (arm k's motor is the netlist's motor k). Two arms: the planar linkage (`LinkageMachine`); three:
+/// the spatial one (`crate::spatial::Delta`).
 pub struct LinkageNode {
     pub id: String,
-    pub gearboxes: [String; 2],
+    pub gearboxes: Vec<String>,
+    /// The node's path in the file, `machine.linkage[<id>]`, for errors.
+    path: String,
     values: Vec<(&'static str, f64)>,
 }
 
@@ -64,9 +80,102 @@ impl LinkageNode {
     }
 }
 
-/// The netlist of a file with a linkage: its two axes (across, then up), its two arms' motors in the order of the
-/// node's `arms`, and the linkage. Such a file has axes, motors, gearboxes and one linkage, nothing else (`others`:
-/// the other node lists).
+/// Where a linkage reads its numbers: a crate's tables by their paths (`geometry.forearm_m`), or a file's linkage node
+/// by the path's last part (`forearm_m`), so that one constructor serves both.
+pub trait Numbers {
+    /// Any finite number.
+    fn number(&self, path: &str) -> Result<f64, ConfigError>;
+    /// The error that refuses the value at `path`.
+    fn invalid(&self, path: &str) -> ConfigError;
+    fn positive(&self, path: &str) -> Result<f64, ConfigError> {
+        let v = self.number(path)?;
+        if v > 0.0 { Ok(v) } else { Err(self.invalid(path)) }
+    }
+    fn non_negative(&self, path: &str) -> Result<f64, ConfigError> {
+        let v = self.number(path)?;
+        if v >= 0.0 { Ok(v) } else { Err(self.invalid(path)) }
+    }
+}
+
+impl Numbers for Config {
+    fn number(&self, path: &str) -> Result<f64, ConfigError> {
+        Config::f64(self, path)
+    }
+    fn invalid(&self, path: &str) -> ConfigError {
+        ConfigError::Invalid(path.into())
+    }
+}
+
+impl Numbers for LinkageNode {
+    fn number(&self, path: &str) -> Result<f64, ConfigError> {
+        Ok(self.value(path.rsplit('.').next().unwrap_or(path)))
+    }
+    fn invalid(&self, path: &str) -> ConfigError {
+        ConfigError::Invalid(format!("{}.{}", self.path, path.rsplit('.').next().unwrap_or(path)))
+    }
+}
+
+/// A linkage's drives and names: per arm its joint, its motor and its gearbox's id for its warmth (`gearbox_<motor>`, as
+/// its loss is named); per axis of the tool its id and key.
+pub struct Arms<const N: usize> {
+    pub joints: [RotaryJoint; N],
+    pub motors: [MotorInfo; N],
+    pub gearboxes: [&'static str; N],
+    pub axes: [(&'static str, &'static str); N],
+}
+
+impl<const N: usize> Arms<N> {
+    /// A crate's: one joint for every arm from `[joint]`, `[motor]` and `[gearbox]`; motors `1`, `2`, ... (keys
+    /// `motor-arm-k`), gearboxes `gearbox_k`; the axes as given.
+    pub fn shared(cfg: &Config, axes: [(&'static str, &'static str); N]) -> Result<Self, ConfigError> {
+        let joint = RotaryJoint::from_config(cfg)?;
+        Ok(Self {
+            joints: std::array::from_fn(|_| joint.clone()),
+            motors: std::array::from_fn(|k| MotorInfo {
+                id: ["1", "2", "3"][k],
+                key: ["motor-arm-1", "motor-arm-2", "motor-arm-3"][k],
+            }),
+            gearboxes: std::array::from_fn(|k| ["gearbox_1", "gearbox_2", "gearbox_3"][k]),
+            axes,
+        })
+    }
+
+    /// A file's: per arm the joint of its motor's own config (`catalog::motor_config`), the netlist's motors and axes.
+    pub fn of_file(cfg: &Config, net: &Netlist) -> Result<Self, ConfigError> {
+        let joints = (0..N)
+            .map(|k| RotaryJoint::from_config(&motor_config(cfg, &net.motors[k].id)?))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            joints: joints.try_into().unwrap_or_else(|_| unreachable!("N joints")),
+            motors: std::array::from_fn(|k| MotorInfo {
+                id: intern(&net.motors[k].id),
+                key: intern(&net.motors[k].key),
+            }),
+            // The warmth's id is that of the gearbox's loss, `power.gearbox_<motor>`.
+            gearboxes: std::array::from_fn(|k| intern(&format!("gearbox_{}", net.motors[k].id))),
+            axes: std::array::from_fn(|k| (intern(&net.axes[k].id), intern(&net.axes[k].key))),
+        })
+    }
+
+    /// Axis k's limits from `[axis.<id>]`, its range `min` to `max`, in m.
+    pub fn axis(&self, cfg: &Config, k: usize, min: f64, max: f64) -> Result<AxisInfo, ConfigError> {
+        let (id, key) = self.axes[k];
+        Ok(AxisInfo {
+            id,
+            key,
+            unit: "m",
+            min,
+            max,
+            max_vel: cfg.positive(&format!("axis.{id}.max_velocity_m_s"))?,
+            max_acc: cfg.positive(&format!("axis.{id}.max_acceleration_m_s2"))?,
+            max_jerk: cfg.positive(&format!("axis.{id}.max_jerk_m_s3"))?,
+        })
+    }
+}
+
+/// The netlist of a file with a linkage: its axes (across, then up; or x, y, z), its arms' motors in the order of the
+/// node's `arms`, and the linkage. Two arms make the planar linkage, three the spatial one. Such a file has axes,
+/// motors, gearboxes and one linkage, nothing else (`others`: the other node lists), and no belt effect switched on.
 pub(crate) fn read(
     cfg: &Config,
     axes: &[Node],
@@ -85,6 +194,13 @@ pub(crate) fn read(
             other.path
         )));
     }
+    // A linkage has no belt: a belt effect switched on would otherwise be ignored without a word.
+    let effects = cfg.get("effects").ok().and_then(Value::as_table);
+    for (effect, on) in effects.into_iter().flatten() {
+        if effect.starts_with("belt_") && on.as_bool() == Some(true) {
+            return Err(ConfigError::Invalid(format!("effects.{effect} (a linkage has no belt: switch it off)")));
+        }
+    }
     let id_of = |n: &Node| n.table["id"].as_str().unwrap_or_default().to_string();
     let by_id = |nodes: &'_ [Node], field: &str, id: &str| -> Result<usize, ConfigError> {
         nodes
@@ -92,25 +208,46 @@ pub(crate) fn read(
             .position(|n| n.table["id"].as_str() == Some(id))
             .ok_or_else(|| ConfigError::Invalid(format!("{} = \"{id}\"", node.at(field))))
     };
-    // Two of each, every one named once.
-    let pair = |field: &str, nodes: &[Node], list: &str| -> Result<[usize; 2], ConfigError> {
+    // Two or three of each, as many as the arms, every one named once.
+    let arm_count = node.id_list("arms")?.len();
+    let all = |field: &str, nodes: &[Node], list: &str| -> Result<Vec<usize>, ConfigError> {
         let ids = node.id_list(field)?;
         let found = ids.iter().map(|id| by_id(nodes, field, id)).collect::<Result<Vec<_>, _>>()?;
-        match found[..] {
-            [a, b] if a != b && nodes.len() == 2 => Ok([a, b]),
-            _ => Err(ConfigError::Invalid(format!(
-                "{} (two machine.{list} nodes, each once; the file has {})",
+        let distinct = found.iter().enumerate().all(|(i, a)| !found[..i].contains(a));
+        if (2..=3).contains(&found.len()) && found.len() == arm_count && distinct && nodes.len() == found.len() {
+            Ok(found)
+        } else {
+            Err(ConfigError::Invalid(format!(
+                "{} (two or three machine.{list} nodes, as many as the arms, each once; the file has {})",
                 node.at(field),
                 nodes.len()
-            ))),
+            )))
         }
     };
+    let spatial = arm_count == 3;
 
     let fields = NODES.iter().find(|(list, ..)| *list == "linkage").map_or(&[][..], |(_, _, f)| *f);
     let mut refs = Vec::new();
     let mut values = Vec::new();
     for f in fields.iter().filter(|f| f.kind == Kind::Number) {
-        let v = node.get(f.name).map(|v| number(cfg, v, &node.at(f.name), &mut refs)).transpose()?.unwrap_or(0.0);
+        // The planar linkage's range has a half width, the spatial one's a radius; each refuses the other's values.
+        let own = if spatial { f.name != "half_width_m" } else { !SPATIAL_ONLY.contains(&f.name) };
+        if !own {
+            if node.get(f.name).is_some() {
+                let arms = if spatial { "three" } else { "two" };
+                return Err(ConfigError::Invalid(format!("{} (not for a linkage of {arms} arms)", node.at(f.name))));
+            }
+            continue;
+        }
+        let v = node.get(f.name).map(|v| number(cfg, v, &node.at(f.name), &mut refs)).transpose()?;
+        // Required by one kind of linkage only, so not marked required in `NODES`.
+        let wanted =
+            ["half_width_m", "radius_m", "bending_stiffness_nm_rad", "lateral_stiffness_n_m"].contains(&f.name);
+        let v = match v {
+            Some(v) => v,
+            None if wanted => return Err(ConfigError::Missing(node.at(f.name))),
+            None => 0.0,
+        };
         let ok = if POSITIVE.contains(&f.name) { v > 0.0 } else { f.name == "top_z_m" || v >= 0.0 };
         if !ok {
             return Err(ConfigError::Invalid(node.at(f.name)));
@@ -129,7 +266,9 @@ pub(crate) fn read(
     }
 
     let mut axis_nodes = Vec::new();
-    for (k, i) in pair("axes", axes, "axis")?.into_iter().enumerate() {
+    let tool_axes = all("axes", axes, "axis")?;
+    let count = tool_axes.len();
+    for (k, i) in tool_axes.into_iter().enumerate() {
         let axis = &axes[i];
         for field in ["stroke_m", "stroke_rad", "incline_deg", "cable_chain"] {
             if axis.get(field).is_some() {
@@ -141,14 +280,18 @@ pub(crate) fn read(
         }
         let id = id_of(axis);
         let key = axis.text("key")?.map_or_else(|| format!("axis-{id}"), str::to_string);
-        // The range across, and up from the bottom at the centre.
-        let stroke = if k == 0 { 2.0 * value("half_width_m") } else { value("height_centre_m") };
+        // The range across (each way across on the spatial linkage), and up from the bottom at the centre.
+        let stroke = match (k + 1 == count, spatial) {
+            (true, _) => value("height_centre_m"),
+            (false, false) => 2.0 * value("half_width_m"),
+            (false, true) => 2.0 * value("radius_m"),
+        };
         axis_nodes.push(AxisNode { id, key, stroke, incline_deg: 0.0, cable_chain: false, rotary: false });
     }
 
-    let mut motor_nodes = Vec::new();
-    let arms = pair("arms", gearboxes, "gearbox")?;
-    for i in arms {
+    let mut motor_nodes: Vec<MotorNode> = Vec::new();
+    let arms = all("arms", gearboxes, "gearbox")?;
+    for &i in &arms {
         let gearbox = &gearboxes[i];
         let motor = gearbox.text("motor")?.unwrap_or_default();
         let m = motors
@@ -157,6 +300,9 @@ pub(crate) fn read(
             .ok_or_else(|| ConfigError::Invalid(format!("{} = \"{motor}\"", gearbox.at("motor"))))?;
         let id = id_of(&motors[m]);
         let key = motors[m].text("key")?.map_or_else(|| format!("motor-{id}"), str::to_string);
+        if motor_nodes.iter().any(|o| o.id == id) {
+            break;
+        }
         // What drives the arm is the linkage, which the netlist's transmissions do not describe: nothing reads these.
         motor_nodes.push(MotorNode {
             id,
@@ -171,7 +317,7 @@ pub(crate) fn read(
             worm: None,
         });
     }
-    if motors.len() != 2 || motor_nodes[0].id == motor_nodes[1].id {
+    if motors.len() != arms.len() || motor_nodes.len() != arms.len() {
         return Err(ConfigError::Invalid(format!("{} (one motor per arm, each with its gearbox)", node.at("arms"))));
     }
     Ok(Netlist {
@@ -186,7 +332,13 @@ pub(crate) fn read(
         lean: None,
         refs,
         values: Vec::new(),
-        linkage: Some(LinkageNode { id: id_of(node), gearboxes: arms.map(|i| id_of(&gearboxes[i])), values }),
+        linkage: Some(LinkageNode {
+            id: id_of(node),
+            gearboxes: arms.iter().map(|&i| id_of(&gearboxes[i])).collect(),
+            path: node.path.clone(),
+            values,
+        }),
+        scissor: None,
     })
 }
 
@@ -203,31 +355,31 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
 ];
 
 /// A vector in the x-z plane, (x, z).
-type V2 = [f64; 2];
-type M2 = [[f64; 2]; 2];
+pub type V2 = [f64; 2];
+pub type M2 = [[f64; 2]; 2];
 
-fn dot(a: V2, b: V2) -> f64 {
+pub fn dot(a: V2, b: V2) -> f64 {
     a[0] * b[0] + a[1] * b[1]
 }
 
-fn sub(a: V2, b: V2) -> V2 {
+pub fn sub(a: V2, b: V2) -> V2 {
     [a[0] - b[0], a[1] - b[1]]
 }
 
-fn norm(a: V2) -> f64 {
+pub fn norm(a: V2) -> f64 {
     dot(a, a).sqrt()
 }
 
-fn mul(m: &M2, v: V2) -> V2 {
+pub fn mul(m: &M2, v: V2) -> V2 {
     [dot(m[0], v), dot(m[1], v)]
 }
 
-fn transpose(m: &M2) -> M2 {
+pub fn transpose(m: &M2) -> M2 {
     [[m[0][0], m[1][0]], [m[0][1], m[1][1]]]
 }
 
 /// The inverse of a 2 x 2 matrix; `None` where it is singular.
-fn inverse(m: &M2) -> Option<M2> {
+pub fn inverse(m: &M2) -> Option<M2> {
     let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
     if !(det.abs() > 1e-300) || !det.is_finite() {
         return None;
@@ -248,7 +400,7 @@ pub fn condition_number(j: &M2) -> f64 {
 }
 
 /// The side each arm points to along x.
-const SIDE: [f64; 2] = [1.0, -1.0];
+pub const SIDE: [f64; 2] = [1.0, -1.0];
 
 /// The legs' geometry and the kinematics, apart from masses and drives.
 #[derive(Debug, Clone)]
@@ -260,6 +412,10 @@ pub struct Legs {
 }
 
 impl Legs {
+    pub fn new(e: f64, la: f64, lb: f64) -> Self {
+        Self { e, la, lb }
+    }
+
     /// The elbow of leg i at arm angle t, and its first and second derivative by t, as (x, z).
     pub fn elbow(&self, i: usize, t: f64) -> [V2; 3] {
         let (s, c) = t.sin_cos();
@@ -394,14 +550,41 @@ impl LinkageMachine {
         parts
     }
 
-    pub fn new(cfg: &Config, net: &Netlist, node: &LinkageNode) -> Result<Self, ConfigError> {
-        let v = |name: &str| node.value(name);
-        let (base_radius, platform_radius) = (v("base_radius_m"), v("platform_radius_m"));
-        let (la, share) = (v("upper_arm_m"), v("forearm_elbow_share"));
-        let (m_arm, cg, i_arm) = (v("upper_arm_kg"), v("upper_arm_cg_m"), v("upper_arm_inertia_kgm2"));
-        let elbow = v("elbow_kg") + share * v("forearm_pair_kg");
-        let (half_width, top) = (v("half_width_m"), v("top_z_m"));
-        let (edge, centre) = (v("height_edge_m"), v("height_centre_m"));
+    /// The planar linkage of a crate's tables: `[geometry]`, `[mass]`, `[workspace]`, one `[joint]` for both arms, the
+    /// axes `x` and `z`.
+    pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
+        Self::build(cfg, cfg, Arms::shared(cfg, [("x", "axis-x"), ("z", "axis-z")])?)
+    }
+
+    /// The planar linkage of a machine file's node.
+    pub fn from_node(cfg: &Config, net: &Netlist, node: &LinkageNode) -> Result<Self, ConfigError> {
+        Self::build(cfg, node, Arms::of_file(cfg, net)?)
+    }
+
+    /// The machine from its numbers (`n`, by their paths in a crate's tables) and its drives; the effects from `cfg`.
+    pub fn build(cfg: &Config, n: &dyn Numbers, arms: Arms<2>) -> Result<Self, ConfigError> {
+        let base_radius = n.positive("geometry.base_radius_m")?;
+        let platform_radius = n.non_negative("geometry.platform_radius_m")?;
+        let (la, lb) = (n.positive("geometry.upper_arm_m")?, n.positive("geometry.forearm_m")?);
+        if lb <= la {
+            return Err(n.invalid("geometry.forearm_m"));
+        }
+        let share = n.non_negative("mass.forearm_elbow_share")?;
+        if share > 1.0 {
+            return Err(n.invalid("mass.forearm_elbow_share"));
+        }
+        let (m_arm, cg, i_arm) = (
+            n.positive("mass.upper_arm_kg")?,
+            n.non_negative("mass.upper_arm_cg_m")?,
+            n.positive("mass.upper_arm_inertia_kgm2")?,
+        );
+        let (m_elbow, m_fb) = (n.non_negative("mass.elbow_kg")?, n.non_negative("mass.forearm_pair_kg")?);
+        let elbow = m_elbow + share * m_fb;
+        let (half_width, top) = (n.positive("workspace.half_width_m")?, n.number("workspace.top_z_m")?);
+        let (edge, centre) = (n.positive("workspace.height_edge_m")?, n.positive("workspace.height_centre_m")?);
+        if centre < edge {
+            return Err(n.invalid("workspace.height_centre_m"));
+        }
         // The bottom: a circle through the centre's depth and both edges; flat where both heights are the same.
         let sag = centre - edge;
         let circle = if sag > 0.0 {
@@ -410,43 +593,28 @@ impl LinkageMachine {
         } else {
             (f64::INFINITY, f64::INFINITY)
         };
-        let joint = |k: usize| RotaryJoint::from_config(&motor_config(cfg, &net.motors[k].id)?);
-        let axis = |k: usize, min: f64, max: f64| -> Result<AxisInfo, ConfigError> {
-            let id = &net.axes[k].id;
-            Ok(AxisInfo {
-                id: intern(id),
-                key: intern(&net.axes[k].key),
-                unit: "m",
-                min,
-                max,
-                max_vel: cfg.positive(&format!("axis.{id}.max_velocity_m_s"))?,
-                max_acc: cfg.positive(&format!("axis.{id}.max_acceleration_m_s2"))?,
-                max_jerk: cfg.positive(&format!("axis.{id}.max_jerk_m_s3"))?,
-            })
-        };
-        let motor = |k: usize| MotorInfo { id: intern(&net.motors[k].id), key: intern(&net.motors[k].key) };
         let mut machine = Self {
-            legs: Legs { e: base_radius - platform_radius, la, lb: v("forearm_m") },
+            legs: Legs::new(base_radius - platform_radius, la, lb),
             base_radius,
             platform_radius,
-            rod_spacing: v("forearm_spacing_m"),
+            rod_spacing: n.non_negative("geometry.forearm_spacing_m")?,
             elastic: cfg.bool("effects.joint_elasticity")?,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             arm_inertia: i_arm + la * la * elbow,
             arm_moment: m_arm * cg + la * elbow,
-            m_platform: v("platform_kg") + 2.0 * (1.0 - share) * v("forearm_pair_kg"),
-            m_payload: if cfg.bool("effects.payload")? { v("payload_kg") } else { 0.0 },
+            m_platform: n.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb,
+            m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
-            joints: [joint(0)?, joint(1)?],
             thermal: ThermalFeedback::from_config(cfg)?,
             half_width,
             top,
             circle,
-            max_condition: v("max_condition_number"),
-            axes: [axis(0, -half_width, half_width)?, axis(1, top - centre, top)?],
-            motors: [motor(0), motor(1)],
-            gearbox_ids: [intern(&node.gearboxes[0]), intern(&node.gearboxes[1])],
+            max_condition: n.positive("workspace.max_condition_number")?,
+            axes: [arms.axis(cfg, 0, -half_width, half_width)?, arms.axis(cfg, 1, top - centre, top)?],
+            motors: arms.motors,
+            gearbox_ids: arms.gearboxes,
+            joints: arms.joints,
             rest_slack: 0.0,
         };
         machine.rest_slack = machine.rest_sag();
@@ -493,9 +661,23 @@ impl LinkageMachine {
         (1.1 * most).max(1e-4)
     }
 
+    pub fn legs(&self) -> &Legs {
+        &self.legs
+    }
+
     /// The point mass at the plate.
-    fn m_nt(&self) -> f64 {
+    pub fn m_nt(&self) -> f64 {
         self.m_platform + if self.payload_attached { self.m_payload } else { 0.0 }
+    }
+
+    /// The arm's inertia about its joint, elbow share of the forearms included, rotor not.
+    pub fn arm_inertia(&self) -> f64 {
+        self.arm_inertia
+    }
+
+    /// m_LG: the arm's gravity torque is g m_LG cos(theta).
+    pub fn arm_moment(&self) -> f64 {
+        self.arm_moment
     }
 
     /// Arm angles and speeds of a state.
@@ -519,7 +701,7 @@ impl LinkageMachine {
     }
 
     /// Where the plate is and the Jacobian there, for arm angles; NaN where the legs cannot be assembled.
-    fn pose(&self, t: V2) -> (V2, M2) {
+    pub fn pose(&self, t: V2) -> (V2, M2) {
         self.legs
             .forward(t)
             .and_then(|p| Some((p, self.legs.jacobian(t, p)?)))
@@ -590,7 +772,7 @@ impl LinkageMachine {
         }
     }
 
-    fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
+    pub fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
         let (t, w) = self.arms(s);
         let (mass, ..) = self.load(t, w);
         let mut kinetic = 0.5 * dot(w, mul(&mass, w));
