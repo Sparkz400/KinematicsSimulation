@@ -206,7 +206,7 @@ pub trait Machine: Send {
     /// Coriolis part of the torque): from a kinematics that is not linear, and from a mass matrix that changes with the
     /// pose (an arm in joint space, whose motor angles are linear in its joints, has them too). The controller uses
     /// this one; the default leaves the speed out, which is exact only where the motor angles are linear in the tool
-    /// pose and the inertia the motors see does not change with it (a gantry, a single axis).
+    /// pose and the inertia the motors see does not change with it (a gantry, one linear axis).
     fn feedforward_torque_moving(&self, tool_pos: &[f64], _tool_vel: &[f64], tool_acc: &[f64], out: &mut [f64]) {
         self.feedforward_torque(tool_pos, tool_acc, out);
     }
@@ -277,6 +277,14 @@ pub trait Machine: Send {
     /// the machine may change `state` and must report what that took out of its energy among its loss powers
     /// over this step of `dt` seconds, so that the energy budget closes.
     fn after_step(&mut self, _state: &mut [f64], _dt: f64) {}
+    /// What the machine carries from one step to the next outside `state` (the gearboxes' hysteresis anchors that
+    /// `after_step` moves on, a numerical inverse's last solution), as a fixed count of numbers: a snapshot of the
+    /// simulation keeps them and sets them back with `set_memory`. None by default.
+    fn memory(&self) -> Vec<f64> {
+        Vec::new()
+    }
+    /// Sets back what `memory` gave.
+    fn set_memory(&mut self, _memory: &[f64]) {}
     /// With effects.thermal_feedback: the temperature rise (K) of each part of `thermal_parts`, in that order, for
     /// the friction and losses that change with it.
     fn set_part_temperatures(&mut self, _rises: &[f64]) {}

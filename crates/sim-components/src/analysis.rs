@@ -54,7 +54,7 @@ pub struct MotorLoad {
     pub peak_resistor_power: f64,
     pub peak_dc_link_voltage: f64,
     /// With the regenerative supply (effects.regenerative_supply): the energy fed back into the mains (what arrives
-    /// there), and the line module's load: the energy through it either way (drawn from the line, and fed back as
+    /// there), and the line module's load: the energy through it either way (drawn into the DC link, and fed back as
     /// the DC link gives it) and its highest power either way.
     pub mains_energy: f64,
     pub line_module_energy: f64,
@@ -867,8 +867,10 @@ impl Tally {
             load.resistor_energy += drive.resistor_power * sim.dt;
             load.peak_resistor_power = load.peak_resistor_power.max(drive.resistor_power);
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(drive.dc_voltage);
-            // The line module's load either way: drawn, or fed back as the DC link gives it (before its losses).
-            let through = drive.rectifier_power + drive.mains_power + drive.line_loss;
+            // The line module's load either way, on the DC link's side: drawn into it (the line gives 1 / efficiency of
+            // that, `rectifier_power`), or fed back as the DC link gives it (before its losses).
+            let efficiency = sim.control.drive_params_of(k).line_efficiency;
+            let through = efficiency * drive.rectifier_power + drive.mains_power / efficiency;
             load.mains_energy += drive.mains_power * sim.dt;
             load.line_module_energy += through * sim.dt;
             load.peak_line_module_power = load.peak_line_module_power.max(through);
@@ -1031,6 +1033,9 @@ impl Tally {
         }
         if p.regenerative {
             rows.push(row("mains", "group-drive", "budget-mains", self.mains));
+        }
+        // The line module (or an S210's rectifier) loses its share of what it draws whether or not it feeds back.
+        if p.dc_link {
             rows.push(row("line_module", "group-drive", "budget-line-module", self.line_loss));
         }
         rows.extend(
@@ -1071,10 +1076,12 @@ fn stored_electrically(sim: &Sim) -> (f64, f64) {
         .enumerate()
         .map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current)
         .sum();
-    (
-        windings,
-        if p.dc_link { drives.iter().map(|d| 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage).sum() } else { 0.0 },
-    )
+    // A link of its own has its drive's capacitance (a drive named per motor brings its own); a shared one each drive's
+    // share of the shared `[drive]`'s, as `drive::shared_dc_link` steps it.
+    let capacitance =
+        |k: usize| if p.shared_dc_link { p.dc_capacitance } else { sim.control.drive_params_of(k).dc_capacitance };
+    let capacitors = drives.iter().enumerate().map(|(k, d)| 0.5 * capacitance(k) * d.dc_voltage * d.dc_voltage).sum();
+    (windings, if p.dc_link { capacitors } else { 0.0 })
 }
 
 /// Runs the configured cycle and measures its second pass, when the machine has settled into it. If a
@@ -1901,17 +1908,21 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
     Ok(out)
 }
 
-/// `bounds` as the resolved config `cfg` has them: a part by name has re-centred those of the values it set (see
-/// `bounds`). A path the resolved config has no bound for keeps the one given.
-fn followed(cfg: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
-    let at = |path: &String, given: (f64, f64)| match cfg.f64s(&format!("bounds.{path}")).as_deref() {
-        Ok([low, high]) => (*low, *high),
-        _ => given,
+/// `bounds` as the config resolved from `cfg` has them, where they are `cfg`'s own `[bounds]`: a part by name has
+/// re-centred those of the values it set (see `bounds`). A bound given otherwise (the caller's own range), or one the
+/// resolved config has none for, is kept.
+fn followed(cfg: &Config, resolved: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
+    let own = |c: &Config, path: &str| match c.f64s(&format!("bounds.{path}")).as_deref() {
+        Ok([low, high]) => Some((*low, *high)),
+        _ => None,
     };
     bounds
         .iter()
         .map(|(path, low, high)| {
-            let (low, high) = at(path, (*low, *high));
+            let (low, high) = match (own(cfg, path), own(resolved, path)) {
+                (Some(given), Some(now)) if given == (*low, *high) => now,
+                _ => (*low, *high),
+            };
             (path.clone(), low, high)
         })
         .collect()
@@ -2091,8 +2102,8 @@ pub fn verdict_bands(
     cfg: &Config,
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<Band>, ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     envelope(entry, cfg, 2 * bounds.len(), |run| {
         let ((path, low, high), mut changed) = (&bounds[run / 2], cfg.clone());
         set_bounded(&mut changed, path, if run % 2 == 0 { *low } else { *high })?;
@@ -2123,8 +2134,8 @@ pub fn verdict_bands_sampled(
     if samples == 0 {
         return Err(ConfigError::Invalid("samples".into()));
     }
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let mut random = sim_core::testkit::Noise(seed);
     let columns: Vec<Vec<f64>> = bounds
         .iter()
@@ -2226,8 +2237,8 @@ fn worst_search(
     from: &[Worst],
     stop: &(dyn Fn(&Verdict) -> bool + Sync),
 ) -> Result<(Vec<Worst>, Vec<Band>, usize), ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let n = bounds.len();
     let set = |cfg: &mut Config, i: usize, high: bool| {
         set_bounded(cfg, &bounds[i].0, if high { bounds[i].2 } else { bounds[i].1 })
@@ -3887,8 +3898,8 @@ pub fn velocity_loop_margins(
     cfg: &Config,
     bounds: &[(String, f64, f64)],
 ) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
-    let cfg = &crate::catalog::resolve(entry, cfg)?;
-    let bounds = &followed(cfg, bounds);
+    let resolved = &crate::catalog::resolve(entry, cfg)?;
+    let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let (frequencies, amplitude, motors) =
         (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
     let mut runs = vec![(String::new(), cfg.clone())];

@@ -43,6 +43,12 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+# The tests, run locally: optimised as release (the physics tests integrate millions of steps), but incremental, so a
+# change to one crate rebuilds what changed instead of the crate whole; `cargo nextest run --cargo-profile quick ...`.
+[profile.quick]
+inherits = "release"
+incremental = true
+
 # The browser module (crates/sim-wasm): one codegen unit and link-time optimisation make it some 5 % faster and 10 %
 # smaller than the release build (14 November 2026); `cargo build -p sim-wasm --profile wasm`.
 [profile.wasm]

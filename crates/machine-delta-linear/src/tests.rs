@@ -311,7 +311,7 @@ fn the_inclined_tripod_at_0_degrees_is_the_vertical_linear_delta() {
 /// rod, lambda u = (-4.115405, -7.600154) N, and its weight m_c g = 1.475 * 9.80665 = 14.464809 N down. Along the
 /// column the belt holds -(lambda u - m_c g e_z) . d = 13.592474 (the weight's cos 20 share) + 5.734256 (the rod's) =
 /// 19.326730 N; across it the guide carries |(lambda u - m_c g e_z) . (cos 20, sin 20)| = |-3.867199 - 7.546684| =
-/// 11.413880 N, of which the weight's sin 20 share is 4.947302 N.
+/// 11.413880 N, of which the weight's sin 20 share is 4.947256 N.
 #[test]
 fn an_inclined_column_holds_its_carriage_partly_on_the_belt_and_partly_on_the_guide() {
     let incline = "geometry.column_incline_deg = 20.0";
@@ -329,7 +329,7 @@ fn an_inclined_column_holds_its_carriage_partly_on_the_belt_and_partly_on_the_gu
     assert!((h + 0.215717).abs() < 1e-6 && (lambda - 7.857140).abs() < 1e-6, "{h} m, {lambda} N/m");
     assert!((belt - 19.326730).abs() < 1e-6 && (guide - 11.413880).abs() < 1e-6, "{belt} N, {guide} N");
     close(m_c * G * c, 13.592474, 1e-7, "the weight along the column");
-    close(m_c * G * s, 4.947302, 1e-6, "the weight across it");
+    close(m_c * G * s, 4.947256, 1e-7, "the weight across it");
     let p = [0.0, 0.0, z];
     let hs = rigid.legs.inverse(p).unwrap();
     assert!(hs.iter().all(|x| (x - h).abs() < 1e-12), "{hs:?}");

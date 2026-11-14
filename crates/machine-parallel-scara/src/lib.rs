@@ -58,8 +58,15 @@ const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off. The stops stay, without their
 /// damping.
-pub const LOSSY_EFFECTS: [&str; 5] =
-    ["joint_friction", "motor_friction", "gearbox_efficiency", "torque_ripple", "holding_brake"];
+pub const LOSSY_EFFECTS: [&str; 7] = [
+    "joint_friction",
+    "motor_friction",
+    "gearbox_drag",
+    "gearbox_lost_motion",
+    "gearbox_efficiency",
+    "torque_ripple",
+    "holding_brake",
+];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     Ok(Box::new(ParallelScara::new(cfg)?))
@@ -1021,6 +1028,15 @@ impl Machine for ParallelScara {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+
+    /// The arms' gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        if self.elastic {
+            for k in 0..2 {
+                self.joints[k].gearbox.commit(s[4 + k], s[k]);
+            }
+        }
     }
 
     /// The gearboxes, in the order of `thermal_parts`.

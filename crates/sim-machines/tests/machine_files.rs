@@ -252,9 +252,12 @@ fn cycle_numbers(entry: &'static MachineEntry, cfg: &Config) -> (Vec<String>, Ve
             values.push(v);
         }
     }
+    // The limit is a number too: the S1 check's is the S1 curve at the cycle's mean speed, which rounds apart.
     for v in verdicts(cfg, &load).unwrap() {
-        names.push(format!("verdict {} {:?} (limit {}, ok {})", v.check, v.motor, v.limit, v.ok));
+        names.push(format!("verdict {} {:?} (ok {})", v.check, v.motor, v.ok));
         values.push(v.value);
+        names.push(format!("limit {} {:?}", v.check, v.motor));
+        values.push(v.limit);
     }
     (names, values)
 }

@@ -6,10 +6,36 @@ use sim_components::{Command, Sim};
 use sim_core::Config;
 use sim_machines::MACHINES;
 
+/// The config with no motor named per motor (`parts.<k>.motor`): each motor takes the tables' values.
+fn unnamed(cfg: &Config) -> Config {
+    let named: Vec<String> =
+        cfg.get("parts").ok().and_then(|t| t.as_table()).map_or(Vec::new(), |t| {
+            t.iter().filter(|(_, v)| v.get("motor").is_some()).map(|(id, _)| id.clone()).collect()
+        });
+    let mut cfg = cfg.clone();
+    for id in named {
+        cfg.set_text(&format!("parts.{id}.motor = \"\"")).unwrap();
+    }
+    cfg
+}
+
+/// `edits` on the shared tables, and on every motor's own table that sets the same key (`motor.3.thermal_time_constant_s`
+/// over `motor.thermal_time_constant_s`), so that they reach every motor.
 fn with(cfg: &Config, edits: &[&str]) -> Config {
     let mut cfg = cfg.clone();
     for edit in edits {
         cfg.set_text(edit).unwrap();
+        let (path, value) = edit.split_once('=').unwrap();
+        let Some((table, key)) = path.trim().split_once('.') else { continue };
+        let own: Vec<String> = cfg.get(table).ok().and_then(|t| t.as_table()).map_or(Vec::new(), |t| {
+            t.iter()
+                .filter(|(_, v)| v.as_table().is_some_and(|m| m.contains_key(key)))
+                .map(|(id, _)| id.clone())
+                .collect()
+        });
+        for id in own {
+            cfg.set_text(&format!("{table}.{id}.{key} ={value}")).unwrap();
+        }
     }
     cfg
 }
@@ -21,8 +47,11 @@ fn with(cfg: &Config, edits: &[&str]) -> Config {
 #[test]
 fn a_disabled_winding_cools_by_the_exponential() {
     for entry in MACHINES {
-        let cfg =
-            with(&entry.config(), &["motor.thermal_time_constant_s = 0.5", "motor.start_temperature_rise_k = 40.0"]);
+        // A motor named per motor (`[parts.<k>]`) brings the catalogue's time constant over any table: none is named.
+        let cfg = with(
+            &unnamed(&entry.config()),
+            &["motor.thermal_time_constant_s = 0.5", "motor.start_temperature_rise_k = 40.0"],
+        );
         let mut sim = Sim::new(entry, &cfg).unwrap();
         sim.command(Command::Disable).unwrap();
         for (seconds, by_hand) in [(0.5, 14.715), (1.0, 5.413)] {
@@ -133,19 +162,31 @@ fn disable_and_enable_conserve_the_electrical_energy() {
             let bus = cfg.f64("drive.bus_voltage_v").unwrap();
             sim.command(Command::StartCycle).unwrap();
             sim.run(0.05, |_| {});
+            // On into the move until the windings hold some energy (the parallel SCARA's 7.6 uJ at 0.05 s were not).
+            let energy = |sim: &Sim| {
+                (0..sim.control.drives.len())
+                    .map(|k| 0.5 * sim.control.drive_params_of(k).inductance * sim.control.drives[k].current.powi(2))
+                    .sum::<f64>()
+            };
+            while energy(&sim) <= 1e-5 && sim.time() < 2.0 {
+                sim.step();
+            }
             sim.control.drives.iter_mut().for_each(|d| d.dc_voltage = bus + 20.0);
-            let p = sim.control.drive_params().clone();
+            // Each motor's own inductance and capacitance (a motor of its own table has its own).
+            let p: Vec<_> = (0..sim.control.drives.len()).map(|k| sim.control.drive_params_of(k).clone()).collect();
             let stored = |sim: &Sim| {
                 sim.control
                     .drives
                     .iter()
-                    .map(|d| {
+                    .zip(&p)
+                    .map(|(d, p)| {
                         0.5 * p.inductance * d.current * d.current
                             + 0.5 * p.dc_capacitance * d.dc_voltage * d.dc_voltage
                     })
                     .sum::<f64>()
             };
-            let windings: f64 = sim.control.drives.iter().map(|d| 0.5 * p.inductance * d.current * d.current).sum();
+            let windings: f64 =
+                sim.control.drives.iter().zip(&p).map(|(d, p)| 0.5 * p.inductance * d.current * d.current).sum();
             let before = stored(&sim);
             sim.command(Command::Disable).unwrap();
             sim.step();

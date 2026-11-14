@@ -227,6 +227,10 @@ drive_max_current_a = 19.0
 # (0.85 of the rated current, as the S120 Motor Modules up to 30 A have it; a drive by name sets it), the time constant
 # of the image, and how long the drive gives its maximum current from the rated load.
 drive_base_load_current_a = 4.25
+# With effects.drive_overload [estimate]: the chips' share of the power unit's rise and their time constant, the fast
+# node of the two-node image (the slow one is the heat sink's above). Siemens publishes neither.
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
 # With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
@@ -255,6 +259,9 @@ payload = true
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+# The winch gearbox's thermal resistance and time constant, as the other machines' planetary gearboxes.
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]

@@ -84,6 +84,12 @@ fn suite_configs(entry: &MachineEntry) -> Vec<Config> {
             let mut cfg = lossless_config(entry);
             cfg.set_text(&format!("effects.joint_elasticity = {elastic}")).unwrap();
             cfg.set_text(&format!("effects.payload = {payload}")).unwrap();
+            // The hanging ram makes the suite's middle of the stroke (265 degrees) unstable under a constant torque:
+            // -g m_x x'' = -4.50 N m/rad against J = 0.171 kg m^2, growing at 5.1 per second, so the crank fell over and
+            // rang in its stops. The drive's loop holds it; the default config, with gravity, takes the suite's short runs.
+            if entry.id == SLIDER_CRANK.id {
+                cfg.set_text("effects.gravity = false").unwrap();
+            }
             cfg
         })
         .collect()

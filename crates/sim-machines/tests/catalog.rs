@@ -130,20 +130,23 @@ fn a_gearbox_by_name_sets_ratio_stiffness_backlash_and_ratings() {
 }
 
 /// The search on the EXCT-30: the smallest motors cannot run the cycle, the motor the config was written
-/// for can, and among the passing ones the lightest comes first.
+/// for can, and among the passing ones the lightest comes first. The 1FK2203-4AK (1.27 N m at standstill) runs it at
+/// its limit (about 1.2 N m RMS at a low mean speed: 99 % of its S1 curve, 95 K of 100 K): it used to be ruled out by
+/// the axis limits without a simulation, and its winding was judged against the rated current of 6000 r/min.
 #[test]
 fn the_motor_search_ranks_passing_motors_by_weight_and_fails_the_small_ones() {
     let cfg = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
-    let wanted =
-        |article: &str| ["1FK2102-1AG", "1FK2203-4AK", "1FK2205-2AF", "1FK2205-4AF", "1FK2206-2AF"].contains(&article);
+    let wanted = |article: &str| {
+        ["1FK2102-1AG", "1FK2203-2AK", "1FK2203-4AK", "1FK2205-2AF", "1FK2205-4AF", "1FK2206-2AF"].contains(&article)
+    };
     let found = sim_components::catalog::search_motors(&machine_t_gantry::ENTRY, &cfg, "400v", &wanted, None);
     let place = |article: &str| found.iter().position(|c| c.article == article);
     let by_hand = &found[place("1FK2205-4AF").unwrap()];
     assert!(by_hand.passes(), "{:?}", by_hand.tightest());
     // The 1FK2102 is offered at 230 V only, so it is not among the 400 V candidates at all.
     assert!(place("1FK2102-1AG").is_none());
-    let small = &found[place("1FK2203-4AK").unwrap()];
-    assert!(!small.passes(), "a 1.27 N m motor passes: {:?}", small.tightest());
+    let small = &found[place("1FK2203-2AK").unwrap()];
+    assert!(!small.passes(), "a 0.64 N m motor passes: {:?}", small.tightest());
     let passing: Vec<&sim_components::catalog::Candidate> = found.iter().take_while(|c| c.passes()).collect();
     assert!(!passing.is_empty() && passing.windows(2).all(|w| w[0].mass <= w[1].mass));
     assert!(found.iter().skip(passing.len()).all(|c| !c.passes()));
@@ -165,13 +168,18 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         apply_gearbox(&mut numbers, "NRK070-04-5").unwrap();
         apply_motor(&mut numbers, "1FK2104-4AK", "400v").unwrap();
         let resolved = resolve(entry, &named).unwrap();
-        // The rotor is a little heavier than the config's and the gearbox adds its own inertia: more gain.
         let (gain, own) =
             (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
         // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
-        // gain with it (a screw on a coupling: far less).
+        // gain with it (a screw on a coupling: far less). The gain follows the rotor and gearbox inertia: a little
+        // heavier than the gantry's and the single axis's own, more gain; far lighter than the 1.7e-4 kg m2 rotor of
+        // the flying saw and the cable robots, less.
         if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
-            assert!(gain > own && gain < 2.0 * own, "{}: gain {gain}", entry.id);
+            let turned = |c: &sim_core::Config| {
+                c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap()
+            };
+            let heavier = turned(&numbers) > turned(&entry.config());
+            assert!(if heavier { gain > own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
         }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
@@ -288,9 +296,11 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
         own.rms_torque
     );
     assert!(calm.winding_rise < 50.0, "{} K", calm.winding_rise);
-    // The search does the same, and this machine has no gearbox to exchange (ratio 1), so none is tried.
+    // The search does the same. This machine has no gearbox (ratio 1): the motor is tried as it is, and with the
+    // gearboxes around its optimum ratio, which the search offers on a direct drive.
     let found = search_motors(entry, &cfg, "400v", &|article| article == "1FK2204-6AF", Some("NRK"));
-    assert!(found.len() == 1 && found[0].passes() && found[0].gearbox.is_empty(), "{:?}", found[0].tightest());
+    let direct = found.iter().find(|c| c.gearbox.is_empty()).unwrap();
+    assert!(direct.passes() && found.len() > 1, "{:?}", direct.tightest());
 }
 
 /// The gearbox search on the single axis (ratio 5, 1 m/s over a 20 mm pulley radius: 50 rad/s at the pulley).
@@ -440,8 +450,15 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
                 m["part_number"],
                 p.max_voltage
             );
-            // The torque-speed curve agrees: full torque at the rated speed, and none where the voltage is used up.
-            assert!(p.torque_curve(p.rated_speed).1 == p.peak_torque && p.no_load_speed >= 1.1 * p.rated_speed);
+            // The torque-speed curve agrees: at least the rated torque at the rated speed, and none where the voltage is
+            // used up. (With the config's field weakening the d-q curve falls below the peak torque before the rated
+            // speed for most rows, the linear fade does not.)
+            assert!(
+                p.torque_curve(p.rated_speed).1 >= p.rated_torque && p.no_load_speed >= 1.1 * p.rated_speed,
+                "{} at {supply}: {} N m at the rated speed",
+                m["part_number"],
+                p.torque_curve(p.rated_speed).1
+            );
             rows += 1;
             beyond_the_dc_link += (back_emf > bus) as usize;
         }

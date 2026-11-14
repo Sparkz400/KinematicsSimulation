@@ -736,7 +736,7 @@ fn arc3(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo
 /// a SCARA's or a delta's turn, an arm's orientation in tool space.
 ///
 /// shortcut: an arm's orientation (rx, ry, rz) goes along as its rotation vector, evenly per component, which is a
-/// rotation at an even rate only about a fixed axis; take the arm's quaternion slerp (machine-joint-kit tool.rs) here
+/// rotation at an even rate only about a fixed axis; take the arm's quaternion slerp (the arms' tool space) here
 /// if tool-space arcs that turn the tool about two axes at once have to keep its rate of turning even.
 fn arc_on(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo> {
     let arc = arc3(&from[..3], &to[..3], centre, clockwise)?;
@@ -2775,6 +2775,10 @@ fn piece_timing(
 fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, step: f64) -> Option<Vec<[f64; 4]>> {
     let rise = follow(limits, v0, f64::INFINITY, [hold * v0, length - hold * v1], false, step)?;
     let fall = follow(limits, v1, f64::INFINITY, [hold * v1, length - hold * v0], true, step)?;
+    // A fall of its start knot alone has no span to meet the rise on: the cruise join (`piece_timing`) times the piece.
+    if fall.len() < 2 {
+        return None;
+    }
     // The fall's state at the distance `s` from the start, by straight lines between its knots: its time, speed and
     // acceleration forwards (its own acceleration the other way round).
     let fall_at = |s: f64| {
@@ -2790,6 +2794,15 @@ fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, 
     let [t_meet, s_meet, v_meet, a_meet] = rise[meet];
     let [took, v_fall, a_fall] = fall_at(s_meet);
     if (v_meet - v_fall).abs() > KEPT_BACK * v_meet.max(1e-9) || (a_meet - a_fall).abs() > 4.0 * limits.jerk * step {
+        return None;
+    }
+    // The switch keeps the jerk limit over the profile cycle up to it: from the rise's acceleration a cycle before the meet
+    // to the fall's at its first knot after it. (A rise still ramping at the full jerk met a fall a cycle's jerk further
+    // on, 4 steps' worth, and the plan stepped its acceleration on the same way: 1.23 times the jerk over that cycle.)
+    let after = fall.iter().rev().find(|knot| knot[1] < length - s_meet);
+    let [t_back, _, _, a_back] = rise[meet.saturating_sub(STEPS_PER_CYCLE as usize)];
+    if after.is_some_and(|&[t, _, _, a]| (a + a_back).abs() > limits.jerk * (t_meet - t_back + took - t) * (1.0 + 1e-9))
+    {
         return None;
     }
     let mut knots = vec![[0.0, 0.0, v0, 0.0]];

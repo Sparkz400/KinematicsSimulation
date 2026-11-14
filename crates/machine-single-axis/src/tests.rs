@@ -341,7 +341,9 @@ fn a_cycle_beyond_the_torque_speed_curve_shows_as_utilisation_above_one() {
     let mut cfg = ideal_rigid();
     // A weak drive: 0.25 N m up to 100 rad/s, falling to nothing at 260 rad/s. The cycle needs
     // 0.245 N m at half speed (125 rad/s), where only 0.25 * 135 / 160 = 0.21 N m is left, and is
-    // still accelerating close to its top speed of 250 rad/s, where almost nothing is left.
+    // still accelerating close to its top speed of 250 rad/s, where almost nothing is left. That is the linear fade's
+    // curve: field weakening (on by default) would follow R, L and kE, not the two speeds.
+    cfg.set_text("effects.field_weakening = false").unwrap();
     cfg.set_text("drive.rated_speed_rad_s = 100.0").unwrap();
     cfg.set_text("drive.no_load_speed_rad_s = 260.0").unwrap();
     cfg.set_text("drive.peak_torque_nm = 0.25").unwrap();
@@ -587,14 +589,15 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
     ]);
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["gearbox-peak", "braking-resistor-continuous"]);
-    // So do a gearbox that may not turn that fast, a shaft and a guide that are too weak.
+    // So do a gearbox that may not turn that fast, a shaft and a guide that are too weak (the shaft is judged per motor,
+    // among the motor's checks before the gearbox's speed).
     let (_, all) = judged(&[
         "ratings.gearbox_max_input_speed_rpm = 2000.0",
         "ratings.shaft_max_radial_load_n = 500.0",
         "ratings.guide_max_load_n = 30.0",
     ]);
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
-    assert_eq!(failed, ["gearbox-input-speed", "gearbox-radial-load", "guide-load"]);
+    assert_eq!(failed, ["gearbox-radial-load", "gearbox-input-speed", "guide-load"]);
 
     // Guide life. With the payload the guide carries 6 kg on the way out and through the dwell that follows
     // the way back, and 4 kg for the other half of the cycle: 58.84 N and 39.23 N for the same time each.
@@ -678,9 +681,12 @@ fn the_dc_link_takes_braking_energy_the_resistor_the_rest_and_too_small_a_resist
     let failed: Vec<&str> = all.iter().filter(|v| !v.ok).map(|v| v.check).collect();
     assert_eq!(failed, ["dc-link-overvoltage"]);
     // Tripped drives refuse commands like disabled ones. Enabling them keeps the DC link's charge (the horizontal axis
-    // holds no current, so none of it goes to the winding), still above the trip level; in the next step the chopper's
-    // 5 W take it below (0.26 V of 4.7 uF at 257.8 V), and the drive runs.
+    // holds no current, so none of it goes to the winding), also above the trip level; in the next step the chopper's
+    // 5 W take it below (0.26 V of 4.7 uF at 257.7 V), and the drive runs. The voltage rises by about 0.39 V a step
+    // when it trips, and the chopper took about 0.2 V in the step off, so whether it is still above the trip level here
+    // depends on where the last step landed (0.003 V above it, since 14 November): it is put 0.1 V above.
     assert_eq!(sim.command(sim_components::Command::StartCycle).unwrap_err().key, "error-disabled");
+    sim.control.drives[0].dc_voltage = 257.7;
     let charged = sim.control.drives[0].dc_voltage;
     sim.command(sim_components::Command::Enable).unwrap();
     assert!(
@@ -974,9 +980,12 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
 }
 
 /// The robust optimiser steps back to the fastest setting that passes in the error bands. With one bound, the payload
-/// between 2 and 20 kg, each setting judged in the bands costs 2 * 1 + 1 = 3 cycles. The fastest setting of the 14
-/// cycles of search on the config as written leaves the belt slack with 20 kg on, the cycle as configured does not (so
-/// nothing is excused), and the step before the last passes: three settings judged, 9 cycles. The nominal search has no
+/// between 2 and 20 kg, each setting judged in the bands costs 2 * 1 + 1 = 3 cycles. The 14 cycles of search on the
+/// config as written accept velocity x1.5 (375 rad/s at the motor: above its rated 314 rad/s, within its maximum 420
+/// rad/s, which the search may use since 14 November), then acceleration x1.5, then jerk x1.5. The fastest leaves the
+/// belt slack with 20 kg on (24 kg at 15 m/s^2 pull 360 N against the 300 N pretension), the cycle as configured does
+/// not (so nothing is excused), the step before the last (acceleration x1.5) leaves it slack too, and the one before that
+/// (velocity x1.5 alone, 10 m/s^2) passes: four settings judged, 12 cycles, two steps back. The nominal search has no
 /// robust part, and its result fails in the bands where the robust one passes.
 #[test]
 fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_bands() {
@@ -992,7 +1001,7 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
     let robust = found.robust.clone().unwrap();
     assert_eq!(
         (robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs),
-        (["belt-slack"].as_slice(), 0, 1, 9),
+        (["belt-slack"].as_slice(), 0, 2, 12),
         "{robust:?}"
     );
     assert!(
@@ -1018,20 +1027,22 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
 }
 
 /// The optimiser judged at the worst corner steps back to a setting that passes there, where the bands pass the fastest.
-/// Two bounds, the belt's pretension 270 to 300 N and the payload 2 to 18 kg: each alone keeps the belt taut at the
-/// fastest setting of the 14 cycles of search (the bands pass it), both at once, low pretension and heavy payload, do
-/// not. With two bounds a worst-corner search runs the cycle as configured and each bound alone at its low and high
-/// bound (2 * 2 + 1 = 5) and then corners, of which there are 2^2 = 4: 9 cycles at most. The search took three steps
-/// (velocity x1.2, acceleration x1.5, jerk x1.5); judged are the fastest (5 + 3: its verdicts' sign corners are three of
-/// the four, one of them leaves the belt slack and the search stops there), the cycle as configured (5 + 4, whole, to
-/// find what it fails itself: nothing), then by bisection step 1 of 0 to 3 (5 + 4, passes) and step 2 of 1 to 3 (5 + 4,
-/// fails): 8 + 9 + 9 + 9 = 35 cycles, the result step 1, two steps back. The bands' result fails `verdict_worst`, this
+/// Two bounds, the belt's pretension 270 to 300 N and the payload 2 to 14 kg: each alone keeps the belt taut at the
+/// fastest setting of the 14 cycles of search (the bands pass it; 4.3 N left with 14 kg), both at once, low pretension
+/// and heavy payload, do not. With two bounds a worst-corner search runs the cycle as configured and each bound alone at
+/// its low and high bound (2 * 2 + 1 = 5) and then corners, of which there are 2^2 = 4: 9 cycles at most. The search
+/// took three steps (velocity x1.5, above the motor's rated speed since 14 November, acceleration x1.5, jerk x1.5);
+/// judged are the fastest (5 + 3: its verdicts' sign corners are three of the four, one of them leaves the belt slack
+/// and the search stops there), the cycle as configured (5 + 4, whole, to find what it fails itself: nothing), then by
+/// bisection step 1 of 0 to 3 (5 + 4, passes) and step 2 of 1 to 3 (5 + 4, passes: 35.8 N left at the corner): 8 + 9 +
+/// 9 + 9 = 35 cycles, the result step 2, one step back. (Before 14 November the search took velocity x1.2 and the
+/// payload's bound was 18 kg, which leaves the belt slack alone at x1.5.) The bands' result fails `verdict_worst`, this
 /// one passes it.
 #[test]
 fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there() {
     use sim_components::analysis::{OptimiseOptions, Optimised, bounds, optimise_cycle_with, verdict_worst};
     let mut cfg = ENTRY.config();
-    cfg.set_text("bounds = { belt = { pretension_n = [270.0, 300.0] }, mass = { payload_kg = [2.0, 18.0] } }").unwrap();
+    cfg.set_text("bounds = { belt = { pretension_n = [270.0, 300.0] }, mass = { payload_kg = [2.0, 14.0] } }").unwrap();
     let options = OptimiseOptions { max_runs: 14, robust: true, pareto: false, worst: false };
     let bands = optimise_cycle_with(&ENTRY, &cfg, &options).unwrap();
     let worst = optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { worst: true, ..options }).unwrap();
@@ -1039,7 +1050,7 @@ fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there()
     assert!(in_bands.nominal_fails.is_empty() && in_bands.steps_back == 0 && !in_bands.worst, "{in_bands:?}");
     assert_eq!(
         (at_worst.nominal_fails.as_slice(), at_worst.excused.len(), at_worst.steps_back, at_worst.runs, at_worst.worst),
-        (["belt-slack"].as_slice(), 0, 2, 35, true),
+        (["belt-slack"].as_slice(), 0, 1, 35, true),
         "{at_worst:?}"
     );
     assert!(
@@ -1268,6 +1279,8 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
 fn a_time_optimal_line_takes_the_hand_calculated_time() {
     let mut cfg = ideal_rigid();
     cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    // The motor's maximum speed at its rated speed: above it the plan would follow the torque-speed curve (limits.rs).
+    cfg.set_text("drive.max_speed_rad_s = 314.0").unwrap();
     cfg.set_text("axis.x.max_jerk_m_s3 = 1.0e5").unwrap();
     // Carriage plus pulley and rotor inertia, through radius and gear ratio (as in the reference cycle).
     let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
@@ -1309,12 +1322,16 @@ fn a_time_optimal_line_takes_the_hand_calculated_time() {
 }
 
 /// The rigid single axis at 1e5 m/s^3 with the belt's ratings out of the way (at a hundred m/s^2 the carriage's pull
-/// would take the slack side's room).
+/// would take the slack side's room), and the motor's maximum speed at its rated 314 rad/s, so that the plan cruises
+/// there (above it, it would follow the torque-speed curve; limits.rs tests that).
 fn ideal_rigid_quick() -> Config {
     let mut cfg = ideal_rigid();
-    for e in
-        ["axis.x.max_jerk_m_s3 = 1.0e5", "ratings.belt_min_tension_n = -1.0e6", "ratings.belt_max_tension_n = 1.0e6"]
-    {
+    for e in [
+        "axis.x.max_jerk_m_s3 = 1.0e5",
+        "ratings.belt_min_tension_n = -1.0e6",
+        "ratings.belt_max_tension_n = 1.0e6",
+        "drive.max_speed_rad_s = 314.0",
+    ] {
         cfg.set_text(e).unwrap();
     }
     cfg
@@ -2047,7 +2064,9 @@ fn a_move_on_a_soft_base_leaves_the_tool_ringing_at_the_base_s_natural_frequency
 /// A force held at rest moves the base, and the tool on it, by force over stiffness: the rigid axis on a base of
 /// 2.5e6 N/m along x holds a process force of 50 N while it dwells; its motor's stator takes the 50 N, the base gives
 /// way 50 / 2.5e6 = 20 um once its sway has died down (damping ratio 0.3 at 25 Hz: 2 s take it down by
-/// exp(-0.3 x 157 x 2), nothing), and the tool, which the motor holds on the base, moves with it.
+/// exp(-0.3 x 157 x 2), nothing), and the tool, which the motor holds on the base, moves with it. The holding torque is
+/// the equilibrium's for the tool at 0.3 m, with the carriage 20 um short of it on the moved base; cogging and the tooth
+/// mesh, which change over those 20 um, are off, else the guide's bristles take the difference (0.25 um).
 #[test]
 fn a_held_force_moves_the_base_and_the_tool_by_force_over_stiffness() {
     let mut cfg = ENTRY.config();
@@ -2057,6 +2076,8 @@ fn a_held_force_moves_the_base_and_the_tool_by_force_over_stiffness() {
         "effects.belt_stretch = false",
         "effects.process_force = true",
         "process.force_x_n = 50.0",
+        "effects.torque_ripple = false",
+        "effects.tooth_meshing = false",
     ] {
         cfg.set_text(edit).unwrap();
     }

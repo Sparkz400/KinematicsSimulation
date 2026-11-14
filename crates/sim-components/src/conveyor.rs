@@ -467,8 +467,8 @@ impl Conveyor {
 
     /// The part in the gripper's grip at time `t` of `pass` (from the grip's start to its end): its pose.
     pub fn gripping(&self, pass: &Pass, t: f64) -> Option<Vec<f64>> {
-        let into = t - pass.start;
-        (into >= pass.grip.0 && into <= pass.grip.1).then(|| self.part_pose(pass.part, t))
+        // In absolute time: `t - start` of a time `start + grip.0` can round to below `grip.0`.
+        (t >= pass.start + pass.grip.0 && t <= pass.start + pass.grip.1).then(|| self.part_pose(pass.part, t))
     }
 }
 

@@ -615,14 +615,16 @@ impl Mechanism for Hexapod {
                 top[i],
                 [0.85, 0.86, 0.9],
             ));
+            out.parts.push(Part::new(
+                sim_core::scene::MOTOR_PART,
+                Shape::Box { size: [0.07, 0.07, 0.09] },
+                add(b, [0.0, 0.0, -0.06]),
+                [0.9, 0.45, 0.1],
+            ));
+            // The shaft's bar below the motor turns with the rotor, as on every machine.
             out.parts.push(
-                Part::new(
-                    sim_core::scene::MOTOR_PART,
-                    Shape::Box { size: [0.07, 0.07, 0.09] },
-                    add(b, [0.0, 0.0, -0.06]),
-                    [0.9, 0.45, 0.1],
-                )
-                .turned(rotors[i]),
+                Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, add(b, [0.0, 0.0, -0.11]), [0.1; 3])
+                    .turned(rotors[i]),
             );
             out.labels.push(Label {
                 pos: add(b, [0.0, 0.0, -0.14]),

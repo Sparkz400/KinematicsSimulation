@@ -789,8 +789,14 @@ async fn simulate(mut s: SimLoop) {
         let now = Instant::now();
         if next > now {
             tokio::time::sleep(next - now).await;
-        } else if now - next > s.cycle {
-            next = now;
+        } else {
+            // Behind (a machine the simulator runs slower than real time, such as the hexapod, or a loaded host): no
+            // sleep, but the runtime's other tasks get their turn. Without an await the loop held its worker for good
+            // and starved the tasks queued on it, the server's answers among them: no client got one, and tests hung.
+            tokio::task::yield_now().await;
+            if now - next > s.cycle {
+                next = now;
+            }
         }
         // In the order they arrived; `None` is a path to run, planned when its turn comes.
         let mut commands = Vec::new();

@@ -995,6 +995,18 @@ impl Gearbox {
         (z, self.dahl_stiffness * (1.0 - s * z / th))
     }
 
+    /// The hysteresis anchors of `gears`, two numbers each: what `commit` carries between steps (`Machine::memory`).
+    pub fn anchors<'a>(gears: impl IntoIterator<Item = &'a Gearbox>) -> Vec<f64> {
+        gears.into_iter().flat_map(|g| g.anchor).collect()
+    }
+
+    /// Sets back what `anchors` gave (`Machine::set_memory`).
+    pub fn set_anchors<'a>(gears: impl IntoIterator<Item = &'a mut Gearbox>, memory: &[f64]) {
+        for (g, a) in gears.into_iter().zip(memory.as_chunks::<2>().0) {
+            g.anchor = *a;
+        }
+    }
+
     /// Ends a step: the hysteresis's state moves on to the twist the step ended at (`Machine::after_step`).
     pub fn commit(&mut self, rotor_angle: f64, out_angle: f64) {
         if self.hysteresis == 0.0 {

@@ -528,19 +528,27 @@ async fn unsigned_and_byte_integers_are_taken_as_numbers() {
 }
 
 /// `--config FILE` and `--set` (`sim_opcua::configured`) give the config the server serves: the start pose set on top of
-/// the machine's config file is where the move targets read before any move, [0.2, 0.3] m instead of [0.1, 0.35] m.
+/// the machine's config file is where the move targets read before any move, [0.2, 0.3] m instead of [0.1, 0.35] m. They
+/// read the controller's setpoint there: where the motors stand that hold the tool at the start pose, under the belts'
+/// stretch some 10 um off it, so not the start pose to the digit.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_config_file_with_set_on_top_is_served() {
-    let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/default.toml"));
+    // The machine's config as a file of its own.
+    let dir = scratch("config-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config.toml");
+    std::fs::write(&file, MACHINES[0].default_config).unwrap();
+    let file = file.as_path();
     let sets = ["start.pose = [0.2, 0.3]".to_string()];
     let (cfg, trajectory) = sim_opcua::configured(MACHINES[0], Some(file), &sets, None).unwrap();
     assert!(trajectory.is_none());
     let (link, url) = start_config(&cfg, &scratch("config-server")).await;
     let session = plain(&url, "config-client").await;
     let sim = sim_components::Sim::new(MACHINES[0], &cfg).unwrap();
-    for (axis, at) in sim.machine.axes().iter().zip([0.2, 0.3]) {
+    for ((axis, at), set) in sim.machine.axes().iter().zip([0.2, 0.3]).zip(&sim.control.set_pos) {
         let target = read(&session, link.namespace, &format!("command.target.{}", axis.id)).await;
-        assert_eq!(target, Variant::Double(at), "{}", axis.id);
+        assert!((set - at).abs() < 1e-4, "{}: set to {set} m at the start pose {at} m", axis.id);
+        assert_eq!(target, Variant::Double(*set), "{}", axis.id);
     }
 }
 

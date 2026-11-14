@@ -161,7 +161,7 @@ fn refused(seconds: f64) -> Option<String> {
 /// before the fix an infinite time ran the step count to `u64::MAX` and hung the page.
 #[test]
 fn frame_refuses_times_that_are_not_finite_or_too_long() {
-    handle(3, "single-axis\nen\n").unwrap();
+    handle(3, &format!("{}\nen\n", sim_machines::MACHINES[1].id)).unwrap();
     for seconds in [f64::INFINITY, f64::NAN, -1.0, sim_wasm::MAX_FRAME_S + 1.0, 1e300] {
         let error = refused(seconds).unwrap_or_else(|| panic!("{seconds} was run"));
         assert!(error.starts_with("{\"error\":\"frame: "), "{error}");
@@ -177,13 +177,18 @@ fn frame_refuses_times_that_are_not_finite_or_too_long() {
 #[test]
 fn machine_files_are_listed_handed_in_and_run() {
     let list = handle(0, "en").unwrap();
-    let names =
-        ["corexy", "h-bot", "planar-delta", "rack-gantry", "screw-portal", "single-axis", "t-gantry", "xyz-portal"];
+    let names = [
+        "corexy.toml",
+        "h-bot.toml",
+        "planar-delta.toml",
+        "rack-gantry.toml",
+        "screw-portal.toml",
+        "single-axis.toml",
+        "t-gantry.toml",
+        "xyz-portal.toml",
+    ];
     for name in names {
-        assert!(
-            list.contains(&format!("\"id\":\"file:{name}.toml\",\"name\":\"{name}.toml\",\"file\":true")),
-            "{list}"
-        );
+        assert!(list.contains(&format!("\"id\":\"file:{name}\",\"name\":\"{name}\",\"file\":true")), "{list}");
     }
     let text = include_str!("../../../machines/single-axis.toml");
     assert!(handle(1, "file:single-axis.toml").unwrap().contains("[machine]"));
@@ -202,14 +207,14 @@ fn machine_files_are_listed_handed_in_and_run() {
     assert!(error.contains(&format!("broken.toml:{line}")) && error.contains("no_such_key"), "{error}");
 }
 
-/// The single axis's path from 0.1 m (its start pose) to 0.5 m and back to 0.2 m: the sizing check of the path is
+/// The second machine's path from 0.1 m (its start pose) to 0.5 m and back to 0.2 m: the sizing check of the path is
 /// `analyse_trajectory` of the same planned poses, and the 3D view runs it to its end and stands where a native run
 /// of it stands.
 #[test]
 fn a_path_runs_in_the_sizing_check_and_the_view() {
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = sim_machines::MACHINES[1];
     let path = "line,0.5\n# back\nline,0.2\n";
-    let json = handle(2, &format!("single-axis\nen path\n\n---\n{path}")).unwrap();
+    let json = handle(2, &format!("{}\nen path\n\n---\n{path}", entry.id)).unwrap();
     let cfg = entry.config();
     let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
     let pieces = sim_components::path::parse(path).unwrap();
@@ -218,24 +223,24 @@ fn a_path_runs_in_the_sizing_check_and_the_view() {
     let load = sim_components::analysis::analyse_trajectory_with(&mut sim, points, false).unwrap();
     assert!(json.contains(&format!("\"cycle_s\":{:?}", load.duration)), "{json}");
     assert!(json.contains(&format!("\"peak_torque_nm\":{:?}", load.motors[0].peak_torque)), "{json}");
-    assert!(handle(2, &format!("single-axis\nen path time-optimal\n\n---\n{path}")).unwrap().contains("\"verdicts\""));
-    handle(3, &format!("single-axis\nen path\n\n---\n{path}")).unwrap();
+    assert!(handle(2, &format!("{}\nen path time-optimal\n\n---\n{path}", entry.id)).unwrap().contains("\"verdicts\""));
+    handle(3, &format!("{}\nen path\n\n---\n{path}", entry.id)).unwrap();
     let x = unsafe { *sim_wasm::frame(end + 1.0).add(2) };
     let mut native = sim_components::Sim::new(entry, &cfg).unwrap();
     native.command(sim_components::Command::Trajectory(native.plan_path(&pieces, false).unwrap())).unwrap();
     native.run(end + 1.0, |_| {});
     assert_eq!(x, native.tool_point().unwrap()[0] as f32);
-    assert!(handle(2, "single-axis\nen path\n\n---\nline,oops\n").unwrap_err().contains("oops"));
-    assert!(handle(2, "single-axis\nen path\n\n---\n# nothing\n").is_err());
+    assert!(handle(2, &format!("{}\nen path\n\n---\nline,oops\n", entry.id)).unwrap_err().contains("oops"));
+    assert!(handle(2, &format!("{}\nen path\n\n---\n# nothing\n", entry.id)).is_err());
 }
 
-/// The samples of 0.5 s of the T-gantry's cycle: 62.5 µs a step and 1 ms a sample make 16 steps a sample and 500
+/// The samples of 0.5 s of the first machine's cycle: 62.5 µs a step and 1 ms a sample make 16 steps a sample and 500
 /// samples, the first at 1 ms and the last at 0.5 s; and the highest torque and the lowest following error of motor 0
 /// over the samples are those of a native run, step by step.
 #[test]
 fn samples_keep_every_peak_of_the_steps() {
-    let entry = sim_machines::find("t-gantry").unwrap();
-    let view = handle(3, "t-gantry\nen\n").unwrap();
+    let entry = sim_machines::MACHINES[0];
+    let view = handle(3, &format!("{}\nen\n", entry.id)).unwrap();
     let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     let size = sim_wasm::sample_len(sim.machine.motors().len());
     assert!(view.contains(&format!("\"sample\":{size}")), "{view}");
@@ -261,7 +266,7 @@ fn samples_keep_every_peak_of_the_steps() {
 }
 
 /// By hand: an obstacle with its centre at (0.5, 0.2, 0.06) and 0.1 m on each side is the cube stretched by 0.1 along
-/// each axis, moved to its centre, grey; touched, red. The single axis's config with it draws it in its frame.
+/// each axis, moved to its centre, grey; touched, red. The second machine's config with it draws it in its frame.
 #[test]
 fn obstacles_are_drawn() {
     let mut obstacle = sim_core::scene::Obstacle {
@@ -279,13 +284,13 @@ fn obstacles_are_drawn() {
     assert!(out[..17].iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-7), "{out:?}");
     assert_eq!(&out[17..20], &[0.55, 0.57, 0.62]);
     assert_eq!(&out[37..40], &[0.9, 0.15, 0.1]);
-    let entry = sim_machines::find("single-axis").unwrap();
+    let entry = sim_machines::MACHINES[1];
     let cfg = entry.default_config.replacen(
         "\nobstacles = []",
         "\nobstacles = [{ name = \"fixture\", centre_m = [0.5, 0.2, 0.06], size_m = [0.1, 0.1, 0.1] }]",
         1,
     );
-    handle(3, &format!("single-axis\nen\n{cfg}")).unwrap();
+    handle(3, &format!("{}\nen\n{cfg}", entry.id)).unwrap();
     let frame = unsafe { std::slice::from_raw_parts(sim_wasm::frame(0.0), sim_wasm::frame_len()) };
     assert_eq!(frame[6], 1.0);
     let at = sim_wasm::HEAD + sim_wasm::RECORD * frame[5] as usize;
@@ -297,8 +302,8 @@ fn obstacles_are_drawn() {
 /// them, the values of the native analysis; and per motor the operating points and the torque-speed curve.
 #[test]
 fn sizing_has_the_columns_of_analyze() {
-    let entry = sim_machines::find("t-gantry").unwrap();
-    let json = handle(2, "t-gantry\nen\n").unwrap();
+    let entry = sim_machines::MACHINES[0];
+    let json = handle(2, &format!("{}\nen\n", entry.id)).unwrap();
     let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     let load = sim_components::analysis::analyse_cycle_with(&mut sim, false).unwrap();
     let m = &load.motors[0];
@@ -319,12 +324,12 @@ fn sizing_has_the_columns_of_analyze() {
     }
 }
 
-/// By hand from the T-gantry's motor 0 drive: the curve starts and ends at the no-load speed backwards, passes 0 rad/s
+/// By hand from the first machine's motor 0 drive: the curve starts and ends at the no-load speed backwards, passes 0 rad/s
 /// at the peak torque both ways, has the rated speed both ways as corners, and the S1 box has the rated torque at
 /// ± the rated speed.
 #[test]
 fn torque_speed_curve_by_hand() {
-    let entry = sim_machines::find("t-gantry").unwrap();
+    let entry = sim_machines::MACHINES[0];
     let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     let drive = sim.control.drive_params_of(0);
     let (curve, s1) = sim_wasm::torque_speed_curve(drive);
@@ -342,8 +347,8 @@ fn torque_speed_curve_by_hand() {
 /// The page's sweep is `frequency_sweep` at the same frequencies: 3 from 10 Hz to 1000 Hz are 10, 100 and 1000 Hz.
 #[test]
 fn sweep_is_the_command_lines() {
-    let entry = sim_machines::find("single-axis").unwrap();
-    let json = handle(5, "single-axis\nen motor=0 from=10 to=1000 count=3\n").unwrap();
+    let entry = sim_machines::MACHINES[1];
+    let json = handle(5, &format!("{}\nen motor=0 from=10 to=1000 count=3\n", entry.id)).unwrap();
     let cfg = entry.config();
     let amplitude = sim_components::analysis::default_sweep_amplitude(entry, &cfg).unwrap();
     let points = sim_components::analysis::frequency_sweep(entry, &cfg, 0, &[10.0, 100.0, 1000.0], amplitude).unwrap();
@@ -351,14 +356,14 @@ fn sweep_is_the_command_lines() {
     for p in points {
         assert!(json.contains(&format!("[{:?},{:?},{:?}]", p.frequency, p.gain, p.phase_deg)), "{json}");
     }
-    assert!(handle(5, "single-axis\nen motor=0.5\n").is_err());
-    assert!(handle(5, "single-axis\nen count=nope\n").unwrap_err().contains("count=nope"));
+    assert!(handle(5, &format!("{}\nen motor=0.5\n", entry.id)).is_err());
+    assert!(handle(5, &format!("{}\nen count=nope\n", entry.id)).unwrap_err().contains("count=nope"));
 }
 
 /// A trace that lacks the simulator's columns is refused with the trace's error, translated.
 #[test]
 fn fit_refuses_a_trace_without_its_columns() {
-    let error = handle(6, "single-axis\nen\n\n---\ntime,something\n0,1\n").unwrap_err();
+    let error = handle(6, &format!("{}\nen\n\n---\ntime,something\n0,1\n", sim_machines::MACHINES[1].id)).unwrap_err();
     assert!(error.contains("motor."), "{error}");
 }
 

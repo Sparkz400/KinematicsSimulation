@@ -22,10 +22,11 @@ fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
     });
 }
 
-/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload or the
-/// rotary table's payload inertia (the slides have one; the arms and the table have none).
+/// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, the
+/// rotary table's payload inertia or the cable robots' platform payload (the slides have one; the arms, the table and
+/// the cable robots have none).
 fn payload_key(cfg: &sim_core::Config) -> &'static str {
-    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2"]
+    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2", "platform.payload_kg"]
         .into_iter()
         .find(|k| cfg.get(k).is_ok())
         .unwrap()
@@ -35,6 +36,18 @@ fn payload_key(cfg: &sim_core::Config) -> &'static str {
 /// of ratio 1 is not rated).
 fn has_gearbox_ratings(cfg: &sim_core::Config) -> bool {
     cfg.get("ratings.gearbox_max_torque_nm").is_ok()
+}
+
+/// The machine whose bands and worst-corner search take the least: of the machines with one motor, the one with the
+/// fewest bounded values. The cable robots have fewer (17 against 19), but their cycle takes ten times as long, and the
+/// search on the planar one ran past the 15 minutes a test may take.
+fn fewest_bounds() -> &'static sim_core::MachineEntry {
+    MACHINES
+        .iter()
+        .copied()
+        .filter(|e| (e.build)(&e.config()).unwrap().motors().len() == 1)
+        .min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len())
+        .unwrap()
 }
 
 /// The machine of one axis on a belt, found by its config: the tests name no machine.
@@ -204,8 +217,10 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
                 sim_components::analysis::gearbox_gearing_life_h(&cfg, m),
                 sim_components::analysis::motor_bearing_life_h(&cfg, m),
             ];
-            // Empty where the machine has no such part (the delta: no guide, pulley or belt).
-            for (cell, life) in row[28..].iter().zip(lives) {
+            // Empty where the machine has no such part (the delta: no guide, pulley or belt). From `guide_life_h` on,
+            // found by name: the angle errors' four columns moved it from 28 to 32.
+            let first = table.lines().next().unwrap().split(',').position(|c| c == "guide_life_h").unwrap();
+            for (cell, life) in row[first..].iter().zip(lives) {
                 assert_eq!(*cell, life.map_or(String::new(), |l| format!("{l:.4e}")), "{}: {row:?}", entry.id);
             }
         }
@@ -345,9 +360,12 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
 /// allow: the run ends at the end of the path, and the faster plan takes less time and more torque, or where the belts
 /// bind before the motors keeps them tauter than the axis limits do, or where a gearbox's rating binds is quicker or
 /// gentler.
+///
+/// The machines each on a thread of their own (`on_every_machine`): one after the other, with the ten machines of 14
+/// November (arms, hexapod and cable robots that take seconds per analysis), the test ran past its 15 minutes.
 #[test]
 fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let file = |name: &str| {
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -441,7 +459,7 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
                 && text(&de.stderr).contains("circle,1,2")
                 && text(&en.stderr) != text(&de.stderr)
         );
-    }
+    });
 }
 
 /// The sensitivity run varies the parameters of the named config tables for every machine and prints
@@ -449,13 +467,13 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
 #[test]
 fn sensitivity_writes_one_ranked_row_per_parameter() {
     for entry in MACHINES {
-        // The table that holds the payload: [mass], or the rotary table's [table]. An arm's [arm] has one number beside
-        // its lists and its URDF, so there its joints' [joint] comes along.
+        // The table that holds the payload: [mass], the rotary table's [table] or a cable robot's [platform]. An arm's
+        // [arm] has one number beside its lists and its URDF (the palletiser's two more of its payload's swing, an effect
+        // that is off), and the crank and cam machines' [mass] the payload alone: there the joints' [joint] comes along.
         let cfg = entry.config();
-        let groups: &[&str] = match payload_key(&cfg).split('.').next().unwrap() {
-            "arm" => &["arm", "joint"],
-            group => &[group],
-        };
+        let group = payload_key(&cfg).split('.').next().unwrap();
+        let numbers = cfg.leaves().iter().filter(|(p, v)| p.starts_with(&format!("{group}.")) && v.is_float()).count();
+        let groups: &[&str] = if group == "arm" || numbers < 2 { &[group, "joint"] } else { &[group] };
         // From cold: the ranking and the bounds are judged here, nothing thermal, and the warm start runs every cycle once more.
         let cold = ["--set", "effects.thermal_warm_start=false"];
         let run = cli(&[
@@ -510,9 +528,8 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
 /// Every machine's default cycle passes every check its config has ratings for.
 #[test]
 fn verdicts_judge_the_default_cycle_of_every_machine() {
-    let fewest =
-        MACHINES.iter().copied().min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len()).unwrap();
-    for entry in MACHINES {
+    let fewest = fewest_bounds();
+    on_every_machine(|entry| {
         let run = cli(&["verdicts", entry.id]);
         assert!(run.status.success(), "{}", text(&run.stderr));
         let out = text(&run.stdout);
@@ -552,7 +569,8 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         } else {
             ("settling-angle", "ratings.settling_tolerance_rad")
         };
-        let settling = rows.iter().find(|r| r[0] == check).unwrap();
+        let settling =
+            rows.iter().find(|r| r[0] == check).unwrap_or_else(|| panic!("{}: no {check} in {out}", entry.id));
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
         assert!(
             value > 1e-6
@@ -562,11 +580,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
             "{}: {settling:?}",
             entry.id
         );
-        // The bands as the command line prints them, on the machine with the fewest bounded values: it prints them alike
-        // for every machine, and every machine's bands are computed in the app's test of them
+        // The bands as the command line prints them, on the machine with the fewest bounded values (`fewest_bounds`):
+        // it prints them alike for every machine, and every machine's bands are computed in the app's test of them
         // (`the_checks_get_error_bands_in_the_app`, with the width of the peak torque's band and its worst case).
         if entry.id != fewest.id {
-            continue;
+            return;
         }
 
         // With bands: the same checks and values, each with the lowest and highest value over the config's
@@ -631,18 +649,18 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
                 entry.id
             );
         }
-    }
+    });
 }
 
 /// `verdicts --bands --worst` prints per check what `verdict_worst` finds: the worst value, its limit, the result and
 /// the bounded values at their high and at their low bound, each named once; the number of cycles goes to the error
 /// stream, in German with `--lang de`. Without `--bands`, or with `--samples` or `--seed`, it is refused. On the
-/// machine with the fewest bounded values (some 300 cycles).
+/// machine of one motor with the fewest bounded values (`fewest_bounds`, some 300 cycles).
 #[test]
 fn verdicts_search_the_worst_corner_of_the_bounds() {
     use sim_components::analysis::{bounds, verdict_worst};
-    // The machine with the fewest bounded values, so that the search stays short.
-    let entry = MACHINES.iter().copied().min_by_key(|e| bounds(&e.config()).unwrap().len()).unwrap();
+    // The machine with the fewest bounded values of those with one motor, so that the search stays short.
+    let entry = fewest_bounds();
     // From cold, here and below: what the search prints is judged, nothing thermal, and the warm start runs each of its
     // cycles once more.
     let cold = ["--set", "effects.thermal_warm_start=false"];
@@ -782,17 +800,26 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
 
         // Stage 2 on a sweep of the config itself: the dip is where the config has it. Where the first motor has no dip in
         // this range (a belt's is there; the screw's, the table's gear's and a linear motor without transmission are not),
-        // stage 2 has nothing to fit.
+        // stage 2 has nothing to fit. Without the gearboxes' lost motion, as without the payload above: its flanks' band and
+        // hysteresis make the stiffness depend on the amplitude, which the fitted resonance does not describe (with it,
+        // switched on for the planar delta's SP100 on 14 November, the dip lay 2 % below the config's resonance).
+        let mut cfg = entry.config();
+        let linear: &[&str] = if cfg.bool("effects.gearbox_lost_motion").is_ok() {
+            cfg.set_text("effects.gearbox_lost_motion = false").unwrap();
+            &["--set", "effects.gearbox_lost_motion=false"]
+        } else {
+            &[]
+        };
         let frequencies = sim_components::analysis::log_spaced(50.0, 130.0, 30);
         if sim_components::identify::resonance(
-            &sim_components::analysis::frequency_sweep(entry, &entry.config(), 0, &frequencies, 1.5).unwrap(),
+            &sim_components::analysis::frequency_sweep(entry, &cfg, 0, &frequencies, 1.5).unwrap(),
         )
         .is_none()
         {
             return;
         }
         let sweep = file("sweep");
-        let large = ["--amplitude", "1.5"];
+        let large = [&["--amplitude", "1.5"][..], linear].concat();
         table(
             &[&["sweep", entry.id, "--from", "50", "--to", "130", "--count", "30", "--out", &sweep], &large[..]]
                 .concat(),
@@ -808,7 +835,7 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         assert!(config > 50.0 && config < 130.0 && (fitted / config - 1.0).abs() < 1e-3, "{}: {fit:?}", entry.id);
         // The numbers of `fit_sweep`, which the app shows too.
         let measured = sim_components::identify::parse_sweep(&std::fs::read_to_string(&sweep).unwrap()).unwrap();
-        let shared = sim_components::identify::fit_sweep(entry, &entry.config(), 0, &measured, 1.5).unwrap().unwrap();
+        let shared = sim_components::identify::fit_sweep(entry, &cfg, 0, &measured, 1.5).unwrap().unwrap();
         assert_eq!(
             fit[0][2..],
             [
@@ -1334,9 +1361,11 @@ fn compare_writes_the_cycle_with_an_effect_on_and_off() {
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
         let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
-        // The friction the machine has: of its guides, or of its arms' joints.
-        let effect =
-            if entry.config().bool("effects.guide_friction").is_ok() { "guide_friction" } else { "joint_friction" };
+        // The friction the machine has: of its guides, of its arms' joints, or of a cable robot's winches.
+        let effect = ["guide_friction", "joint_friction", "winch_friction"]
+            .into_iter()
+            .find(|e| entry.config().bool(&format!("effects.{e}")).is_ok())
+            .unwrap();
         let out = cli(&[
             "compare",
             entry.id,
@@ -1653,7 +1682,7 @@ fn a_machine_file_is_run_judged_and_checked() {
 #[test]
 fn report_lists_every_verdict_and_the_source_of_each_input() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
-    for entry in MACHINES {
+    on_every_machine(|entry| {
         let html = dir.join(format!("{}-report.html", entry.id));
         let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
@@ -1669,9 +1698,17 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
         }
         let failed = rows.iter().filter(|r| r[4] == "FAIL").count();
         assert_eq!(html.matches("<tr class=\"fail\">").count(), failed, "{}", entry.id);
-        assert_eq!(html.matches("<svg").count(), 3);
+        // The plots as the library draws them: torque and speed over the cycle, and since 14 November per motor its
+        // operating points over its torque-speed chart, its torque split and its utilisation, and the tool's error with
+        // its histogram where the machine has one (three plots before).
+        let cfg = entry.config();
+        let tr = sim_machines::translations("en", entry);
+        let made = sim_components::report::make(entry, entry.default_config, "", &cfg, &cfg, false, &tr).unwrap();
+        let plots = made.blocks.iter().filter(|b| matches!(b, sim_components::report::Block::Plot(_))).count();
+        let motors = sim_components::Sim::new(entry, &cfg).unwrap().machine.motors().len();
+        assert!(plots >= 2 + motors && html.matches("<svg").count() == plots, "{}: {plots} plots", entry.id);
         assert!(!html.contains("<td>check-"), "{}: a check without its label", entry.id);
-    }
+    });
     // A PDF, in German, with a value set on top.
     let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
     let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
@@ -1716,7 +1753,7 @@ fn modes_write_the_resonances_over_the_stroke() {
 /// search fell back to 400 V and found nothing.
 #[test]
 fn search_takes_the_configs_own_supply() {
-    let out = cli(&["search", "single-axis", "--series", "1FK7040-2AK7", "--set", "parts.motor_supply=\"s120\""]);
+    let out = cli(&["search", MACHINES[1].id, "--series", "1FK7040-2AK7", "--set", "parts.motor_supply=\"s120\""]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let table = text(&out.stdout);
     assert_eq!(table.lines().count(), 2, "{table}");

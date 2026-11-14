@@ -29,13 +29,28 @@ fn viscosity(rise: f64) -> f64 {
 /// (1.5) is not used; at 0 K they are as configured. A gearbox's loss in a cruise falls with the share of it that is
 /// viscous: (1 - 0.967956) / (1 - 0.95) = 0.64088 of what it was (the same share whatever the efficiency at 20 °C).
 /// The guides are the friction contacts with a `[friction_<axis>]` table; a machine without effects.temperature (it has
-/// no hand-set factors) is run without it.
+/// no hand-set factors) is run without it. The gearbox's no-load drag (effects.gearbox_drag, on in the deltas' configs)
+/// is off: with it the teeth are loss-free and the drag follows the oil by its own law (`mech::GearDrag`, tested there).
 #[test]
 fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
     for entry in MACHINES.iter().copied() {
         let mut cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true"]);
-        if cfg.bool("effects.temperature").is_ok() {
-            cfg.set_text("effects.temperature = true").unwrap();
+        for switch in ["effects.temperature = true", "effects.gearbox_drag = false"] {
+            if cfg.bool(switch.split(' ').next().unwrap()).is_ok() {
+                cfg.set_text(switch).unwrap();
+            }
+        }
+        // A speed limit at which the move below cruises: its S-curve ramps take v^2 / a + v a / j, here at most 0.8 of
+        // the move (the knife roll's 6.8 rad do not hold its 20 rad/s: 17.2 rad/s).
+        let axis = (entry.build)(&cfg).unwrap().axes()[0].clone();
+        let (d, a, lead) = (
+            axis.max - 0.05 * axis.max - axis.min - 0.05 * (axis.max - axis.min),
+            axis.max_acc,
+            axis.max_acc / axis.max_jerk,
+        );
+        let v = 0.5 * a * ((lead * lead + 3.2 * d / a).sqrt() - lead);
+        if v < axis.max_vel {
+            cfg.set_text(&format!("axis.{}.max_velocity_{}_s = {v:?}", axis.id, axis.unit)).unwrap();
         }
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let guide = |id: &str| cfg.get(&format!("friction_{}", id.trim_start_matches("axis."))).is_ok();
@@ -107,8 +122,9 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             // out of it set, eta = g e; the ratio warm to cold lies between the two (by hand 0.6409 and 0.6338 for a
             // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
             let g = cfg.f64("gearbox.efficiency").unwrap();
-            // An arm's heated gearboxes are those of its turning joints, with nothing behind them.
-            let e = if cfg.get("arm.gear_ratios").is_ok() {
+            // An arm's heated gearboxes are those of its turning joints, with nothing behind them, as the parallel
+            // SCARA's first (its screw is the quill's).
+            let e = if cfg.get("arm.gear_ratios").is_ok() || entry.id == "parallel-scara" {
                 1.0
             } else {
                 ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)
@@ -168,14 +184,22 @@ fn a_guide_settles_where_its_loss_and_heat_flow_balance() {
 
 /// effects.thermal_warm_start with a winding whose resistance rises with its temperature (effects.winding_heating,
 /// copper 0.39 %/K). Single axis, its shipped cycle, the motor's rated current set to 0.5 A so that the winding warms
-/// well: the cycle's RMS current 0.4463 A settles it at q / (1 - 0.0039 q), q = 100 K / (1 + 0.0039 * 100) *
-/// (0.4463 / 0.5)^2 = 57.32 K: at 73.82 K. Started warm, the measured pass's copper loss is R (1 + 0.0039 * 73.82) I^2 =
+/// well, and its stall current with it (the shipped motor has the two equal: no iron loss, effects.iron_loss, and the
+/// copper loss referred to the rated current): the cycle's RMS current 0.4463 A settles it at q / (1 - 0.0039 q),
+/// q = 100 K / (1 + 0.0039 * 100) * (0.4463 / 0.5)^2 = 57.32 K: at 73.82 K. Started warm, the measured pass's copper loss is R (1 + 0.0039 * 73.82) I^2 =
 /// 4 ohm * 1.28790 * 0.4463^2 A^2 = 1.0261 W; from cold 4 * 0.4463^2 = 0.7967 W, as if the winding stayed at ambient.
 #[test]
 fn a_winding_started_warm_loses_the_hand_calculated_copper_power_at_its_settled_rise() {
     let entry = &machine_single_axis::ENTRY;
     let run = |warm: bool| {
-        let cfg = edited(entry, &["motor.rated_current_a = 0.5", &format!("effects.thermal_warm_start = {warm}")]);
+        let cfg = edited(
+            entry,
+            &[
+                "motor.rated_current_a = 0.5",
+                "motor.stall_current_a = 0.5",
+                &format!("effects.thermal_warm_start = {warm}"),
+            ],
+        );
         let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
         let copper =
             load.budget.as_ref().unwrap().rows.iter().find(|r| r.id == "copper.m").unwrap().energy / load.duration;

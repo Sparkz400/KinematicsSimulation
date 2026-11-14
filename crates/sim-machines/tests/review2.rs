@@ -71,10 +71,12 @@ fn tensions(sim: &Sim) -> Vec<f64> {
 #[test]
 fn bad_config_values_are_refused_with_their_key() {
     for entry in MACHINES.iter().copied() {
-        let axes = Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
+        let first = Sim::new(entry, &entry.config()).unwrap().machine.axes().to_vec();
+        let axes = first.len();
         let pose =
             |first: &str| format!("start.pose = [{}]", [&[first][..], &vec!["0.2"; axes - 1]].concat().join(", "));
-        let (not_a_number, beyond) = (pose("nan"), pose("5.0"));
+        // A unit beyond the first axis's range (5.0 was, until a crank turned a whole 2 pi).
+        let (not_a_number, beyond) = (pose("nan"), pose(&format!("{:?}", first[0].max + 1.0)));
         // A no-load speed below the rated speed (rad/s of a motor, m/s of a linear motor).
         let slow = format!(
             "drive.no_load_speed_rad_s = {:?}",
@@ -297,13 +299,11 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
             );
             // At rest the change was taken: without the shaper the setpoint is the plan again, also on the way.
             if change.ends_with("false") {
-                let back = sim
-                    .control
-                    .planned_pos()
-                    .iter()
-                    .zip(sim.machine.axes())
-                    .map(|(p, a)| p - 0.2 * (a.max - a.min))
-                    .collect();
+                // The first axis back by a fifth of its range, the others where they are: an axis that starts at the
+                // low end of its range (the hexapod's, the cable robots') has no fifth below it.
+                let mut back = sim.control.planned_pos().to_vec();
+                let first = &sim.machine.axes()[0];
+                back[0] -= 0.2 * (first.max - first.min);
                 sim.command(Command::MoveTo(back)).unwrap();
                 // On the way and to its end (the gantries' moves take longer than 0.2 s, the delta's not).
                 sim.step();
@@ -451,8 +451,11 @@ fn an_external_setpoint_beyond_the_speed_limit_is_refused() {
         // there was refused as out of range, not as too far.
         let side = if axis.max - start[0] >= start[0] - axis.min { 1.0 } else { -1.0 };
         let at = |offset: f64| [&[start[0] + side * offset][..], &start[1..]].concat();
+        // 0.25 m, or nine tenths of the room there where that is less (the hexapod's 0.1 m of x): within the range.
+        let far = f64::min(0.25, 0.9 * f64::max(axis.max - start[0], start[0] - axis.min));
+        assert!(far > 1.01 * axis.max_vel * interval, "{}: {far} is within one interval's travel", entry.id);
         assert_eq!(
-            sim.command(Command::Setpoint(at(0.25))).err().map(|e| e.key),
+            sim.command(Command::Setpoint(at(far))).err().map(|e| e.key),
             Some("error-setpoint-too-far"),
             "{}",
             entry.id
@@ -468,9 +471,11 @@ fn an_external_setpoint_beyond_the_speed_limit_is_refused() {
         sim.run(0.05, |_| {});
         // Once followed, the plan stands at the value sent, to the last bit: a link shows it as its setpoint.
         // Near zero, where one setpoint is several times the last: there from + (to - from) is not always to.
+        // Jumps of 5 mm, or what an interval allows where that is less (the hexapod's).
+        let jump = f64::min(5e-3, 0.5 * axis.max_vel * interval);
         for step in 1..=50 {
             let sent =
-                [&[axis.min + 1e-3 + 0.137e-3 * step as f64 + 5e-3 * (step % 2) as f64][..], &start[1..]].concat();
+                [&[axis.min + 1e-3 + 0.137e-3 * step as f64 + jump * (step % 2) as f64][..], &start[1..]].concat();
             if step == 1 {
                 sim.command(Command::MoveTo(sent.clone())).unwrap();
                 sim.run(3.0, |_| {});

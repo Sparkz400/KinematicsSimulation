@@ -65,11 +65,10 @@ tables = [
     "siemens/motors_s120.csv",
     "siemens/motors_s120_electrical.csv",
     "siemens/motors_s210.csv",
+    "siemens/motors_s210_oi.csv",
     "wittenstein/gearbox_sp.csv",
     "wittenstein/gearbox_tp.csv",
     "yaskawa/drives_sigma7.csv",
     "yaskawa/motor_shafts.csv",
     "yaskawa/motors_sigma7.csv",
-
-    "siemens/motors_s210_oi.csv",
 ]

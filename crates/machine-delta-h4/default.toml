@@ -3,7 +3,7 @@
 # arms 3 and 4 part B; the two parts slide against each other along one horizontal direction, and a pinion between a
 # rack on each part, with a gear stage behind it, turns the tool by that slide. Tool: x, y, z and the turn c.
 # Sized near the Omron Quattro s650H class: 1300 mm working diameter, 6 kg payload. Omron publishes no geometry, masses
-# or drives, so this config follows the three-arm delta D3's section by section with its own estimates.
+# or drives, so this config follows the three-arm delta's section by section with its own estimates.
 # Every value says where it comes from:
 #   [catalogue]  read from a maker's document: Siemens catalogue D 32 and the planetary gearbox manual
 #                (catalog/siemens/*.csv).
@@ -321,8 +321,8 @@ no_load_speed_rpm = 3000.0
 # come out loss-free and the gearbox passes 93.3 % at T2N and 20 degC; its efficiency falls at part load and in the
 # cold through this drag (mech::GearDrag), and rises as it warms.
 no_load_torque_nm = 0.93
-stiffness_k2_nm_rad = 106570.15
-stiffness_k3_nm_rad = 106570.15
+stiffness_k2_nm_rad = 75630.4
+stiffness_k3_nm_rad = 75630.4
 # With effects.gearbox_stiffness_curve: a planetary gearbox has one stiffness, the knees at T2B and K2 = K3 = K1.
 stiffness_t1_nm = 347.0
 stiffness_t2_nm = 347.0

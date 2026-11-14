@@ -448,7 +448,7 @@ fn scissor_file() -> &'static MachineEntry {
 ///   F c = 27.79254 N m, the motor behind ratio 20 1.389627 N m;
 /// - at h = 1.4 m: u = 0.714143, cot = 1.020204, F = 5602.68 N, 8.916941 N m, the motor 0.445847 N m.
 ///
-/// The force ratio between the two, 3.11679, is cot over cot: the lift needs three times the force low down.
+/// The force ratio between the two, 3.116825, is cot over cot: the lift needs three times the force low down.
 #[test]
 fn the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_heights() {
     let mut cfg = scissor_file().config();
@@ -468,7 +468,7 @@ fn the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_hei
         machine.tool_state(&state, &mut pos, &mut vel);
         assert!((pos[0] - h).abs() < 1e-12, "{pos:?}");
     }
-    assert!((3.179_797 / 1.020_204f64 - 3.11679).abs() < 1e-5);
+    assert!((3.179_797 / 1.020_204f64 - 3.116_825).abs() < 1e-5);
 }
 
 /// The scissor lift passes the standard suite (round trip, static hold, determinism, energy without losses, the loss

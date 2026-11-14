@@ -487,6 +487,12 @@ impl Machine for ScissorMachine {
             self.joint.gearbox.commit(s[2], s[0]);
         }
     }
+    fn memory(&self) -> Vec<f64> {
+        self.joint.gearbox.anchor.to_vec()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        sim_components::mech::Gearbox::set_anchors([&mut self.joint.gearbox], memory)
+    }
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         if let (Some(law), Some(rise), false) = (&self.thermal, rises.first(), self.joint.gearbox.is_coupling()) {

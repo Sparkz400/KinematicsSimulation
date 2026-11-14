@@ -98,19 +98,23 @@ fn the_scene_shows_pulleys_turning_teeth_travelling_and_motor_speeds() {
                 entry.id
             );
         }
-        // The labels show what the signals say, in rpm.
+        // The labels show what the signals say, in rpm, and the motors turn. Not every one: the four-arm delta's arms
+        // share a move along x, and one of them turned at 9.6 rpm there; the palletiser's flange stands still.
         let mut sample = Vec::new();
         sim.sample(&mut sample);
+        let mut fastest = 0f64;
         for (motor, label) in sim.machine.motors().iter().zip(after.labels.iter().filter(|l| l.unit_key == "unit-rpm"))
         {
             let speed = sample[sim.signal_index(&format!("motor.{}.speed", motor.id)).unwrap()];
             assert!(
-                (label.value - speed * 60.0 / std::f64::consts::TAU).abs() < 1e-9 && label.value.abs() > 10.0,
+                (label.value - speed * 60.0 / std::f64::consts::TAU).abs() < 1e-9,
                 "{}: {} rpm",
                 entry.id,
                 label.value
             );
             assert_eq!(label.owner_key, motor.key);
+            fastest = fastest.max(label.value.abs());
         }
+        assert!(!rotary || fastest > 10.0, "{}: {fastest} rpm at most", entry.id);
     }
 }

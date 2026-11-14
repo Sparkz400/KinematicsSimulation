@@ -60,8 +60,12 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
     // Not the SCARA's loss-free elastic configs (2 and 3): with no damping at all its quill on the screw is a 570 Hz mode
     // that the velocity loop's delays drive unstable, a real property of a loop around an undamped mode and not of the
     // integration (0.05 N m s/rad of damping or a quarter of the gain holds it; the default config has 1 N m s/rad).
-    // The standard suite checks those configs' energy without the controller.
-    out.retain(|(name, _)| !(entry.id == "scara" && (name == "loss-free 2" || name == "loss-free 3")));
+    // The standard suite checks those configs' energy without the controller. The same for the hexapod's: with its
+    // gearboxes' damping at zero the elastic legs' mode runs away under the velocity loops (utilisation 31.6 and 2.8e11
+    // on 14 November 2026, 0.076 on the default config with its damping).
+    out.retain(|(name, _)| {
+        !(["scara", "hexapod"].contains(&entry.id) && (name == "loss-free 2" || name == "loss-free 3"))
+    });
     if entry.id == machine_t_gantry::ENTRY.id {
         out.push(("EXCT-30".into(), sim_components::load_config(entry, machine_t_gantry::EXCT_30_CONFIG).unwrap()));
     }
@@ -153,9 +157,10 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
             electrical.abs() < ELECTRICAL_TOLERANCE * supply,
             "{name}: the electrical side is off by {electrical} J of {supply} J"
         );
+        // The line module (or rectifier) loses its share of what it draws either way, but feeds nothing back.
         assert!(
-            !budget.rows.iter().any(|r| r.id == "mains" || r.id == "line_module"),
-            "{name}: no line module without the regenerative supply"
+            !budget.rows.iter().any(|r| r.id == "mains"),
+            "{name}: nothing fed back without the regenerative supply"
         );
     }
 }
@@ -163,9 +168,10 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
 /// The regenerative supply against a hand calculation on every config. A DC link of its own is held at the bus level
 /// from both sides: below it the rectifier draws, above it the line module feeds back. So in every step the line module
 /// takes what the motor feeds back and the rectifier gives what it draws: fed back to the mains is the efficiency times
-/// the energy the motor regenerated (`MotorLoad::energy_regenerated`), lost in the line module the rest, drawn from the
-/// line the energy the motor drew (`energy_in`), and the braking resistor burns nothing. A shared link nets the drives
-/// first, so it feeds back no more than that. The budget closes, its electrical side to `ELECTRICAL_TOLERANCE`; the
+/// the energy the motor regenerated (`MotorLoad::energy_regenerated`), drawn from the line the energy the motor drew
+/// (`energy_in`) over the efficiency, lost in the line module the rest of both, and the braking resistor burns nothing.
+/// With the efficiency of 0.98: 2 % of what is fed back and 1 / 0.98 - 1 = 2.04 % of what is drawn. A shared link nets
+/// the drives first, so it feeds back no more than that. The budget closes, its electrical side to `ELECTRICAL_TOLERANCE`; the
 /// two line module checks judge the mean and the highest power through it.
 #[test]
 fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
@@ -194,11 +200,11 @@ fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
             );
             assert!(
                 (mains - efficiency * regenerated).abs() < step
-                    && (line - (1.0 - efficiency) * regenerated).abs() < step,
-                "{name}: {mains} J and {line} J of {regenerated} J"
+                    && (line - (1.0 - efficiency) * regenerated - (1.0 / efficiency - 1.0) * drawn).abs() < step,
+                "{name}: {mains} J and {line} J of {regenerated} J regenerated and {drawn} J drawn"
             );
             assert!(
-                (budget.supply - drawn).abs() < step,
+                (budget.supply - drawn / efficiency).abs() < step,
                 "{name}: {} J drawn, the motors drew {drawn} J",
                 budget.supply
             );
@@ -321,10 +327,15 @@ fn with(cfg: &Config, edits: &[&str]) -> Config {
 /// gearboxes among the parts that warm, with the gearbox loss.
 #[test]
 fn a_direct_drive_has_no_gearbox_that_warms() {
-    // Every gearbox of a config by its ratio: `gearbox.ratio`, and a gearbox of one axis in a table of its own (a
-    // `<axis>_gearbox` table such as a turning tool's). Direct is all of them at ratio 1.
+    // Every gearbox of a config by its ratio: `gearbox.ratio`, a gearbox of one axis in a table of its own (a
+    // `<axis>_gearbox` table such as a turning tool's), and one motor's own (`gearbox.<motor>.ratio`). Direct is all of
+    // them at ratio 1.
     let ratios = |cfg: &Config| {
-        cfg.leaves().into_iter().map(|(key, _)| key).filter(|key| key.ends_with("gearbox.ratio")).collect::<Vec<_>>()
+        cfg.leaves()
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| key.ends_with("gearbox.ratio") || key.starts_with("gearbox.") && key.ends_with(".ratio"))
+            .collect::<Vec<_>>()
     };
     for entry in MACHINES {
         let direct_drive = ratios(&entry.config()).iter().map(|key| format!("{key} = 1.0")).collect::<Vec<_>>();
@@ -517,12 +528,14 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
         assert_eq!(thermal(&with(&cfg, &["effects.part_heating = true"])), 2 * kinds, "{}", entry.id);
         let (_, rows) = sensitivity(entry, &cfg, &["thermal.gearbox_resistance_k_w".to_string()], 0.2).unwrap();
         assert!(rows.is_empty(), "{}", entry.id);
-        // The line module's efficiency only with the regenerative supply; the DC link's discharge, which acts only
-        // while the drives are disabled, never.
+        // The line module's efficiency wherever the DC link is simulated (it loses its share of what it draws too, not
+        // only of what it feeds back); the DC link's discharge, which acts only while the drives are disabled, never.
         let named = |cfg: &Config, path: &str| bounds(cfg).unwrap().iter().any(|(p, ..)| p == path);
         let regenerative = with(&cfg, &["effects.regenerative_supply = true"]);
+        let linked = with(&cfg, &["effects.dc_link = true"]);
         assert!(
-            !named(&cfg, "ratings.line_module_efficiency") && named(&regenerative, "ratings.line_module_efficiency"),
+            !named(&with(&cfg, &["effects.dc_link = false"]), "ratings.line_module_efficiency")
+                && named(&linked, "ratings.line_module_efficiency"),
             "{}",
             entry.id
         );

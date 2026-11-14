@@ -81,6 +81,13 @@ pub trait Mechanism: Send {
         q.copy_from_slice(tool);
         true
     }
+    /// What `inverse` carries from one call to the next (a numerical inverse's last solution, which the next starts
+    /// from), as a fixed count of numbers, for `Machine::memory`. None by default.
+    fn memory(&self) -> Vec<f64> {
+        Vec::new()
+    }
+    /// Sets back what `memory` gave.
+    fn set_memory(&mut self, _memory: &[f64]) {}
     fn unreachable(&self, _tool: &[f64], _slack: f64) -> Option<&'static str> {
         None
     }
@@ -840,6 +847,16 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             }
         }
     }
+    /// The mechanism's, then the gearboxes' hysteresis anchors.
+    fn memory(&self) -> Vec<f64> {
+        let gears = crate::mech::Gearbox::anchors(self.joints.iter().map(|j| &j.drive.gearbox));
+        [self.mechanism.memory(), gears].concat()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        let (own, gears) = memory.split_at(self.mechanism.memory().len().min(memory.len()));
+        self.mechanism.set_memory(own);
+        crate::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.drive.gearbox), gears)
+    }
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };
@@ -1079,6 +1096,11 @@ impl<M: Mechanism> JointMachine<M> {
     /// where the tool is the joints.
     pub fn jacobian(&self, q: &[f64]) -> Vec<f64> {
         let (n, rows) = (self.n(), self.axes.len());
+        // Where the tool is the joints, the identity to the bit: the difference quotient of the copy is off by up to
+        // 1e-10, and a model switch that rebuilt the joints changed the tool's speed by that.
+        if self.mechanism.tool_is_joints() {
+            return (0..rows * n).map(|i| if i / n == i % n { 1.0 } else { 0.0 }).collect();
+        }
         let (mut jac, mut a, mut b) = (vec![0.0; rows * n], vec![0.0; rows], vec![0.0; rows]);
         let mut p = q.to_vec();
         for c in 0..n {

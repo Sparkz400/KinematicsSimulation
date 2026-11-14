@@ -565,7 +565,8 @@ impl Machine for SingleAxis {
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
         let (x, r, ratio) = (tool[0], self.r, self.gearbox.ratio);
-        let weight = (self.m() + self.chain.mass(x).0) * self.g_along;
+        // The weight along the axis less what pushes the carriage at rest (the process force while dwelling).
+        let weight = (self.m() + self.chain.mass(x).0) * self.g_along - self.extra_force(x, 0.0);
         if !self.elastic {
             *state = vec![x, 0.0, 0.0, 0.0];
             let shaft = (weight - self.mesh.force(x)) * r / ratio;
@@ -675,6 +676,13 @@ impl Machine for SingleAxis {
         }
         let (r, end) = (self.r, 2.0 * self.span_min + self.axes[0].max);
         vec![wrap_angle(r, [self.span_min + tool_pose[0], r, 0.0], [end, 0.0, -r])]
+    }
+
+    fn memory(&self) -> Vec<f64> {
+        self.gearbox.anchor.to_vec()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        Gearbox::set_anchors([&mut self.gearbox], memory)
     }
 
     /// Belt tooth jump at the motor pulley (`ToothJump`); section 1 is the one a positive slip feeds.

@@ -89,6 +89,8 @@ fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
         let (mut expected, mut found) = (Vec::new(), get_reals(c, &signals));
         sim.sample(&mut expected);
         assert_eq!(found, expected, "{}: at the start", entry.id);
+        let position = sim.signal_index(&format!("axis.{}.position", sim.machine.axes()[0].id)).unwrap();
+        let (start_position, start_setpoint) = (found[position], sim.control.set_pos[0]);
 
         // A ramp on the first axis at a fifth of its speed limit, one setpoint per setpoint interval, then a hold.
         let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
@@ -115,9 +117,11 @@ fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
             found = get_reals(c, &signals);
             assert_eq!(found, expected, "{} at {time}", entry.id);
         }
-        // It moved by the ramp, and the setpoint input reads back as set.
-        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
-        assert!((found[position] - target[0]).abs() < 1e-3, "{}: {} / {}", entry.id, found[position], target[0]);
+        // It moved by the ramp, to 1 mm, and the setpoint input reads back as set. The tool by what its setpoint moved: it
+        // stands off its setpoint by what the gears give under the load, at the start as at the end (the palletiser's
+        // arm some 1 mm below it with its 20 kg).
+        let (moved, ramp) = (found[position] - start_position, target[0] - start_setpoint);
+        assert!((moved - ramp).abs() < 1e-3, "{}: moved {moved} for a ramp of {ramp}", entry.id);
         assert_eq!(get_reals(c, &[setpoint])[0], target[0]);
         unsafe {
             assert_eq!(fmi2Terminate(c), fmi2OK);

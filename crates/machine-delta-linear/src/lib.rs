@@ -1149,6 +1149,14 @@ impl Machine for LinearDelta {
             }
         }
     }
+    fn memory(&self) -> Vec<f64> {
+        self.anchors.concat()
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        for (anchor, a) in self.anchors.iter_mut().zip(memory.as_chunks::<2>().0) {
+            *anchor = *a;
+        }
+    }
 
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;

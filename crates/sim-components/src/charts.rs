@@ -341,9 +341,6 @@ mod tests {
     /// A drive without field weakening: kt = kE = 1 N m/A, R = 2 Ohm, 10 A at most, peak 10 N m, rated 4 N m at
     /// 100 rad/s, no-load 200 rad/s, on a DC link of 300 V.
     fn drive() -> DriveParams {
-        let mut cfg = sim_core::Config::parse(include_str!("../../machine-single-axis/default.toml")).unwrap();
-        cfg.set_text("effects.field_weakening = false").unwrap();
-        let p = DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap();
         DriveParams {
             kt: 1.0,
             ke: 1.0,
@@ -358,7 +355,7 @@ mod tests {
             bus_voltage: 300.0,
             drive_max_current: f64::INFINITY,
             field_weakening: None,
-            ..p
+            ..crate::drive::tests::params()
         }
     }
 
