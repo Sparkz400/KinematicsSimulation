@@ -1357,7 +1357,12 @@ impl Model {
                         optimise_cycle_with(
                             entry,
                             &config,
-                            &OptimiseOptions { max_runs: 40, robust: inputs.bands, pareto: true },
+                            &OptimiseOptions {
+                                max_runs: 40,
+                                robust: inputs.bands,
+                                pareto: true,
+                                worst: inputs.bands && inputs.worst,
+                            },
                         )
                         .map_err(refused)?,
                     ),
@@ -2346,7 +2351,10 @@ impl Model {
                 table.push(vec![
                     self.tr.tr_arg("optimised-via", &segments),
                     String::new(),
-                    via.iter().map(|x| short(*x)).collect::<Vec<_>>().join(", "),
+                    via.iter()
+                        .map(|point| point.iter().map(|x| short(*x)).collect::<Vec<_>>().join(", "))
+                        .collect::<Vec<_>>()
+                        .join("; "),
                 ]);
             }
         }
@@ -2362,11 +2370,14 @@ impl Model {
                 short(robust.nominal_duration),
             ]);
             table.push(vec![
-                self.tr.tr("optimised-fastest-fails").to_string(),
+                self.tr
+                    .tr(if robust.worst { "optimised-fastest-fails-worst" } else { "optimised-fastest-fails" })
+                    .to_string(),
                 String::new(),
                 checks(&robust.nominal_fails),
             ]);
-            table.push(vec![self.tr.tr("optimised-excused").to_string(), String::new(), checks(&robust.excused)]);
+            let excused = if robust.worst { "optimised-excused-worst" } else { "optimised-excused" };
+            table.push(vec![self.tr.tr(excused).to_string(), String::new(), checks(&robust.excused)]);
         }
         Some(table)
     }

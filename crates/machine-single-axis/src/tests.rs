@@ -985,7 +985,8 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
     cfg.set_text("bounds = { mass = { payload_kg = [2.0, 20.0] } }").unwrap();
     let nominal = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
     let found =
-        optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { max_runs: 14, robust: true, pareto: false }).unwrap();
+        optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { max_runs: 14, robust: true, pareto: false, worst: false })
+            .unwrap();
     let robust = found.robust.clone().unwrap();
     assert_eq!(
         (robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs),
@@ -1012,6 +1013,49 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
     };
     let passes = |cfg: &Config| verdict_bands(&ENTRY, cfg, &bounds(cfg).unwrap()).unwrap().iter().all(|b| b.ok);
     assert!(passes(&applied(&found)) && !passes(&applied(&nominal)));
+}
+
+/// The optimiser judged at the worst corner steps back to a setting that passes there, where the bands pass the fastest.
+/// Two bounds, the belt's pretension 270 to 300 N and the payload 2 to 18 kg: each alone keeps the belt taut at the
+/// fastest setting of the 14 cycles of search (the bands pass it), both at once, low pretension and heavy payload, do
+/// not. With two bounds a worst-corner search runs the cycle as configured and each bound alone at its low and high
+/// bound (2 * 2 + 1 = 5) and then corners, of which there are 2^2 = 4: 9 cycles at most. The search took three steps
+/// (velocity x1.2, acceleration x1.5, jerk x1.5); judged are the fastest (5 + 3: its verdicts' sign corners are three of
+/// the four, one of them leaves the belt slack and the search stops there), the cycle as configured (5 + 4, whole, to
+/// find what it fails itself: nothing), then by bisection step 1 of 0 to 3 (5 + 4, passes) and step 2 of 1 to 3 (5 + 4,
+/// fails): 8 + 9 + 9 + 9 = 35 cycles, the result step 1, two steps back. The bands' result fails `verdict_worst`, this
+/// one passes it.
+#[test]
+fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there() {
+    use sim_components::analysis::{OptimiseOptions, Optimised, bounds, optimise_cycle_with, verdict_worst};
+    let mut cfg = ENTRY.config();
+    cfg.set_text("bounds = { belt = { pretension_n = [270.0, 300.0] }, mass = { payload_kg = [2.0, 18.0] } }").unwrap();
+    let options = OptimiseOptions { max_runs: 14, robust: true, pareto: false, worst: false };
+    let bands = optimise_cycle_with(&ENTRY, &cfg, &options).unwrap();
+    let worst = optimise_cycle_with(&ENTRY, &cfg, &OptimiseOptions { worst: true, ..options }).unwrap();
+    let (in_bands, at_worst) = (bands.robust.clone().unwrap(), worst.robust.clone().unwrap());
+    assert!(in_bands.nominal_fails.is_empty() && in_bands.steps_back == 0 && !in_bands.worst, "{in_bands:?}");
+    assert_eq!(
+        (at_worst.nominal_fails.as_slice(), at_worst.excused.len(), at_worst.steps_back, at_worst.runs, at_worst.worst),
+        (["belt-slack"].as_slice(), 0, 2, 35, true),
+        "{at_worst:?}"
+    );
+    assert!(
+        worst.after.duration > bands.after.duration && worst.after.duration < worst.before.duration,
+        "{} s, {} s in the bands",
+        worst.after.duration,
+        bands.after.duration
+    );
+    let applied = |found: &Optimised| {
+        let mut out = cfg.clone();
+        for (path, _, after) in &found.changes {
+            out.set_text(&format!("{path} = {after}")).unwrap();
+        }
+        out
+    };
+    let passes =
+        |cfg: &Config| verdict_worst(&ENTRY, cfg, &bounds(cfg).unwrap()).unwrap().0.iter().all(|w| w.verdict.ok);
+    assert!(passes(&applied(&worst)) && !passes(&applied(&bands)));
 }
 
 /// Energy against cycle time (`sim-cli optimise --pareto`). The 0.8 m moves cannot reach 1 m/s at these accelerations:
@@ -1071,9 +1115,12 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
 #[test]
 fn every_row_of_the_energy_front_is_beaten_by_no_other() {
     use sim_components::analysis::{OptimiseOptions, optimise_cycle_with};
-    let found =
-        optimise_cycle_with(&ENTRY, &ENTRY.config(), &OptimiseOptions { max_runs: 14, robust: false, pareto: true })
-            .unwrap();
+    let found = optimise_cycle_with(
+        &ENTRY,
+        &ENTRY.config(),
+        &OptimiseOptions { max_runs: 14, robust: false, pareto: true, worst: false },
+    )
+    .unwrap();
     assert!(found.runs <= 14 + 6 && found.front.len() >= 3, "{} runs, {:?}", found.runs, found.front);
     let figures = |p: &sim_components::analysis::FrontPoint| [p.duration, p.energy, p.utilisation];
     for p in &found.front {

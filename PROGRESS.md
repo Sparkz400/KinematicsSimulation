@@ -1898,3 +1898,29 @@ Left open:
   about 0.26 mm on the planar delta, within the slack.
 - Building in one target directory from several worktrees can run another worktree's binaries (cargo gives workspace
   crates the same artifact names); agents built in cargo profiles of their own.
+
+## Optimiser at the worst corner, lift height profiles (14 November)
+
+Goal 3. Tests not run here (the coordinating session runs them); `cargo check --workspace --tests`, clippy of the
+crates touched and `cargo fmt --check` pass. The numbers are from `sim-cli` (release) on this branch, 16 threads. No
+new config key, no new effect switch.
+
+| Item | What was built | Tests (hand-calculated numbers) |
+| --- | --- | --- |
+| Robust at the worst corner | `OptimiseOptions::worst` (with `robust`): the result judged with the worst-corner search in place of the bands. `worst_search` (behind `verdict_worst_and_bands`, unchanged for it) takes the previous step's worst corners as a warm start (per verdict its corner is run beside the sign corner, the worse starts the passes) and a `stop`: the search ends after the first batch of runs in which a check judged on fails. The fastest is judged first, stopping at any failure; where it fails, the configured cycle is searched whole (the excused checks), the fastest judged again on the rest where it failed only excused checks or `collision` (the lift-raising retry as in the bands), then the accepted steps bisected, each search started from the one before. `Robust::worst`; CLI rows `worst_*`, `cli-optimise-runs-worst`; app: the existing "worst corner" checkbox applies to the optimiser too (hint EN/DE), rows `optimised-fastest-fails-worst`, `optimised-excused-worst`. **EXCT-30: 2.048 -> 2.048 s**: the fastest (1.492 s) fails `belt-slack` and `settling` at the corner, `pulley-bearing-life` excused (the config fails it there), steps 3 and 1 of the seven fail: no step of the search holds; 3001 corner cycles, 2 min 54 s. **Default T-gantry: 6.080 -> 5.442 s** (bands 5.364 s; 5.340 s fails `settling`), three steps back, 4964 corner cycles, 16 min 28 s. One whole search costs 2553 cycles (2 min 43 s) on the default T-gantry, 1619 (5 min 51 s) on the EXCT-30. **Not the default**: a quarter of an hour on the default T-gantry is not a time a user waits on each try (the bands take 30 s); it is the check to run on a result before building it | `the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there` (single axis, bounds pretension 270 to 300 N and payload 2 to 18 kg: the bands pass the fastest of 14 search cycles; per search at most 2 * 2 + 1 = 5 runs alone and 2^2 = 4 corners; fastest 5 + 3 (stops at the slack corner), configured 5 + 4, bisection step 1 of 0..3 5 + 4 passes, step 2 5 + 4 fails: 35 cycles, two steps back; `verdict_worst` fails the bands' result and passes this one) |
+| Lift height profile | `profile`: per obstacle, `over_obstacles` with it alone; those it raises are in the way, with the stretch of the traverse at the lowest height (every mm, at rest) nearer to it than the clearance; overlapping stretches merged at the higher height; with two or more, two via points per stretch at its height. `smoothed_profile`: the planner's spline through them sags (11.6 mm on the two boxes below), so the points are raised by what the planned path lacks and 1 um, up to three times; dropped if it still does not clear. A candidate beside the via over the nearest pose, kept or dropped, not moved. `LiftChange::via` and the optimiser's via of a lift are lists of points now (CLI `via_m` row: points apart by `; `, app row likewise). `lift_profiles(entry, cfg)` gives each lift's profile and its raise. Two boxes under the default T-gantry's traverse (the test's): profile 0.152 m from 0.151 to 0.449 m, 0.252 m from 0.551 to 0.849 m, raised 11.6 mm; the cycle through it keeps 51.05 mm with the crash on (CLI `verdicts`). The optimiser does not take it there: 4.72 s against 3.87 s flat with corner blending (200 runs) | `the_lift_passes_two_boxes_each_at_its_own_height` (collision.rs; boxes 0.1 m at 0.3 and 0.7 m of the axis, tops -0.7 and -0.6, clearance 0.05: via heights -0.7 + 0.05 + 0.802 = 0.152 and -0.6 + 0.05 + 0.802 = 0.252 m, two each, in order around the boxes, to 1 um; on the way back the flange keeps 0.1 - 0.702 + 0.7 = 0.098 m from the low box, so one box is in the way: no profile; the low box alone: none; the raised profile as a cycle with `effects.crash`: no contact, clearance above 0.049 m; the optimised cycle passes every verdict with the crash on) |
+
+Docs: user guide EN/DE ("At the worst corner", "A height profile", limits), model reference (optimiser row), validation
+(two rows).
+
+Left open:
+
+- `--worst` costs one whole search of the configured cycle wherever the fastest fails (for the excused checks), and a
+  whole one per passing step; bisection takes pass and fail to follow the steps (`// shortcut:` in the code). On the
+  EXCT-30 nothing the search found holds at the worst corner: a search that judges its candidates at the corner (or
+  with a margin learnt from it) would find slower settings that do; not built.
+- The profile's spline is checked and raised as a whole; points per stretch at its ends only, so the spline sags
+  between them (11.6 mm here). A third point per stretch, or straight lines with transition curves, would sag less.
+  The profile goes down between the obstacles only as far as the spline does, not to the lowest height. On the
+  T-gantry it never won against flat lifts with corner blending.
+- Ceilings, and obstacles beside the traverse that reach above it: no profile (as for the lift).
