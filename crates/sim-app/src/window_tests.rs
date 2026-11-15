@@ -50,6 +50,10 @@ impl Driver {
                 .set(WindowPlugin { primary_window: Some(window), ..default() }),
         );
         add_app(&mut app, model);
+        // A frame is 16 ms of the clock egui goes by, however long it took: a click, a drag, a tooltip's delay and an
+        // animation take the same frames on a busy machine as on an idle one. (By the wall clock a press and its
+        // release a frame apart could be over 0.8 s apart there, and egui then saw no click.)
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(16)));
         app.finish();
         app.cleanup();
         let window = app.world_mut().query_filtered::<Entity, With<PrimaryWindow>>().single(app.world()).unwrap();
@@ -59,8 +63,8 @@ impl Driver {
             context.get_mut().enable_accesskit();
         }
         driver.frames(2);
-        // Until the machine's first scene is drawn and the camera framed it.
-        driver.until(200, |d| d.state().bounds.is_some() && !d.state().fit);
+        driver.wait("the machine's first scene, framed", |d| d.state().bounds.is_some() && !d.state().fit);
+        driver.settle();
         driver
     }
 
@@ -70,16 +74,89 @@ impl Driver {
         }
     }
 
-    /// Runs frames until `done`, at most `most`; fails if it never is.
-    fn until(&mut self, most: usize, done: impl Fn(&Self) -> bool) {
-        for _ in 0..most {
-            if done(self) {
-                return;
+    /// The one way to wait for the app: frames until `look` finds what it looks for, for up to `PATIENCE` of wall-clock
+    /// time; failing with `what` and what it last saw. The session, the jobs and a tab's first layout run at their own
+    /// pace, which on a loaded machine is many frames.
+    fn eventually<T>(&mut self, what: &str, look: impl FnMut(&mut Self) -> Result<T, String>) -> T {
+        self.eventually_within(PATIENCE, what, look)
+    }
+
+    /// `eventually` with another bound: an analysis's result, computed while others run, takes minutes on a loaded
+    /// machine.
+    fn eventually_within<T>(
+        &mut self,
+        patience: std::time::Duration,
+        what: &str,
+        mut look: impl FnMut(&mut Self) -> Result<T, String>,
+    ) -> T {
+        let start = std::time::Instant::now();
+        loop {
+            match look(self) {
+                Ok(found) => return found,
+                Err(seen) if start.elapsed() > patience => panic!("{what}: not within {patience:?}; last seen: {seen}"),
+                Err(_) => {
+                    self.app.update();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
             }
-            self.app.update();
-            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(done(self), "not reached in {most} frames");
+    }
+
+    /// `eventually` for a condition on the app.
+    fn wait(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
+        self.eventually(what, |d| if done(d) { Ok(()) } else { Err(String::new()) });
+    }
+
+    /// `wait` for an analysis's result, up to `RESULT_PATIENCE`.
+    fn wait_result(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
+        let analyses = |d: &Self| format!("analyses running: {}", d.state().model.analysis_running());
+        self.eventually_within(RESULT_PATIENCE, what, |d| if done(d) { Ok(()) } else { Err(analyses(d)) });
+    }
+
+    /// Until the panels' controls stand still: the same controls at the same places two frames running (a tab's rows
+    /// that wrap are laid out from the frame before, a group opens with an animation).
+    fn settle(&mut self) {
+        let controls = |d: &mut Self| -> Vec<(Role, String, [i32; 4])> {
+            let interactive = |r: Role| {
+                matches!(
+                    r,
+                    Role::Button
+                        | Role::CheckBox
+                        | Role::RadioButton
+                        | Role::ComboBox
+                        | Role::SpinButton
+                        | Role::TextInput
+                        | Role::Slider
+                )
+            };
+            let mut found: Vec<_> = d
+                .widgets()
+                .into_iter()
+                .filter(|w| interactive(w.role))
+                .map(|w| (w.role, w.label, [w.rect.min.x, w.rect.min.y, w.rect.max.x, w.rect.max.y].map(|v| v as i32)))
+                .collect();
+            found.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            found
+        };
+        let mut last = controls(self);
+        self.eventually("the panels standing still", |d| {
+            let now = controls(d);
+            let still = now == last && !now.is_empty();
+            last = now;
+            if still { Ok(()) } else { Err(format!("{} controls moving", last.len())) }
+        });
+    }
+
+    /// Until the 3D camera stands still, framed.
+    fn camera_still(&mut self) {
+        let mut last = camera(self);
+        self.eventually("the camera standing still", |d| {
+            d.frames(1);
+            let now = camera(d);
+            let still = now == last && !d.state().fit;
+            last = now;
+            if still { Ok(()) } else { Err(format!("{now:?}")) }
+        });
     }
 
     fn state(&self) -> &State {
@@ -182,7 +259,7 @@ impl Driver {
         let resized = WindowResized { window, width, height };
         self.send(WindowEvent::WindowResized(resized.clone()));
         self.send(resized);
-        self.frames(3);
+        self.frames(1);
     }
 
     /// The widgets egui drew last frame.
@@ -207,12 +284,27 @@ impl Driver {
         update.nodes.iter().map(|(id, node)| widget(node, within(*id))).collect()
     }
 
-    /// The widget of role `role` labelled `label`, in the panels as last drawn; fails naming what there is.
+    /// The widget of role `role` labelled `label`, once the panels show it; fails naming what there was.
     fn find(&mut self, role: Role, label: &str) -> Widget {
-        let widgets = self.widgets();
-        widgets.iter().find(|w| w.role == role && w.label == label).cloned().unwrap_or_else(|| {
-            let named: Vec<_> = widgets.iter().filter(|w| !w.label.is_empty()).map(|w| (w.role, &w.label)).collect();
-            panic!("no {role:?} \"{label}\" among {named:?}")
+        self.find_where(&format!("{role:?} \"{label}\""), |w| w.role == role && w.label == label)
+    }
+
+    /// The first widget for which `pick` holds, once the panels show one.
+    fn find_where(&mut self, what: &str, pick: impl Fn(&Widget) -> bool) -> Widget {
+        self.eventually(what, |d| {
+            let widgets = d.widgets();
+            widgets.iter().find(|w| pick(w)).cloned().ok_or_else(|| {
+                let named: Vec<_> =
+                    widgets.iter().filter(|w| !w.label.is_empty()).map(|w| (w.role, &w.label)).collect();
+                format!("{named:?}")
+            })
+        })
+    }
+
+    /// The first widget of `role` in `region`, top to bottom, left to right, once there is one.
+    fn first_in(&mut self, region: usize, role: Role) -> Widget {
+        self.eventually(&format!("a {role:?} in region {region}"), |d| {
+            d.in_region(region, role).into_iter().next().ok_or_else(|| "none".to_string())
         })
     }
 
@@ -294,31 +386,30 @@ impl Driver {
         found
     }
 
-    /// Runs frames for up to `seconds` of wall-clock time until `done`; fails if it never is.
-    fn wait(&mut self, seconds: f64, what: &str, done: impl Fn(&Self) -> bool) {
-        let start = std::time::Instant::now();
-        while !done(self) {
-            assert!(start.elapsed().as_secs_f64() < seconds, "{what}: not within {seconds} s");
-            self.app.update();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-
-    /// Opens a tab of the setup or tools panel by its label's key.
+    /// Opens a tab of the setup or tools panel by its label's key: until it shows as open, and its controls stand
+    /// still.
     fn tab(&mut self, key: &str) {
         let label = self.tr(key);
-        let tab =
-            self.widgets().into_iter().find(|w| w.role == Role::Button && w.label == label && w.toggled.is_some());
-        let at = tab.unwrap_or_else(|| panic!("no tab {label}")).rect.center();
-        self.click_at(Vec2::new(at.x, at.y));
-        // A tab's rows that wrap are laid out from the frame before: settled the frame after.
-        self.frames(2);
+        let is_tab = |w: &Widget| w.role == Role::Button && w.label == label && w.toggled.is_some();
+        let tab = self.find_where(&format!("the tab {label}"), is_tab);
+        if tab.toggled != Some(true) {
+            let at = tab.rect.center();
+            self.click_at(Vec2::new(at.x, at.y));
+            self.find_where(&format!("the tab {label} open"), |w| is_tab(w) && w.toggled == Some(true));
+        }
+        self.settle();
     }
 
     fn messages(&self) -> Vec<&'static str> {
         self.state().model.messages.iter().map(|(key, _)| *key).collect()
     }
 }
+
+/// How long a wait for the app may take: generous, for a loaded CI runner.
+const PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long an analysis's result may take: the cycle's, while the sensitivity, the optimiser, the sweep, the tuning
+/// and the search run beside it, took over 60 s with the machine loaded.
+const RESULT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(600);
 
 const SETUP: usize = 1;
 const TOOLS: usize = 2;
@@ -368,7 +459,8 @@ fn a_drag_in_the_view_turns_the_camera_about_its_target() {
         let o = &d.state().orbit;
         (o.yaw, o.pitch, o.distance, o.target)
     };
-    // 0.005 rad per pixel: 200 pixels left is 1 rad of yaw, 60 pixels down 0.3 rad of pitch.
+    // 0.005 rad per pixel: 200 pixels left is 1 rad of yaw, 60 pixels down 0.3 rad of pitch. The input is taken in the
+    // frame it is sent in, so the drag has turned the camera when it returns.
     let from = d.in_view();
     d.drag(MouseButton::Left, from, Vec2::new(-200.0, 60.0), 10);
     let o = &d.state().orbit;
@@ -387,20 +479,38 @@ fn a_drag_in_the_view_turns_the_camera_about_its_target() {
     assert!((d.state().orbit.pitch - 1.55).abs() < 1e-6, "{}", d.state().orbit.pitch);
 }
 
+/// Where egui saw the pointer last, and whether a button was down: the sign that a move or a release was taken.
+fn pointer(d: &mut Driver) -> (Option<egui::Pos2>, bool) {
+    let mut contexts = d.app.world_mut().query::<&mut EguiContext>();
+    let ctx = contexts.iter_mut(d.app.world_mut()).next().unwrap().get_mut().clone();
+    ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_down()))
+}
+
 #[test]
 fn a_drag_that_starts_on_a_panel_does_not_turn_the_camera() {
     let mut d = Driver::new();
     let (yaw, pitch) = (d.state().orbit.yaw, d.state().orbit.pitch);
-    // From the empty lower part of the setup panel into the view, and from the top bar's empty right end.
+    // From the empty lower part of the setup panel into the view, and from the top bar's empty right end. Each drag is
+    // taken when the pointer stands where it ended, released: only then does "the camera did not turn" mean anything.
     let [left, top, _, bottom] = d.state().view_rect;
-    d.drag(MouseButton::Left, Vec2::new(left - 120.0, bottom - 40.0), Vec2::new(400.0, -100.0), 10);
-    d.drag(MouseButton::Left, Vec2::new(1590.0, top - 5.0), Vec2::new(-600.0, 200.0), 10);
-    assert_eq!((d.state().orbit.yaw, d.state().orbit.pitch), (yaw, pitch));
-    // Nor does one on the view's own controls (the speed of the deflections' slider sits there).
-    let view = egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(d.state().view_rect[2], bottom));
-    let slider = d.widgets().into_iter().find(|w| w.role == Role::Slider && view.contains_rect(w.rect));
-    let exaggerate = slider.expect("the deflections' slider over the view").rect.center();
+    for (from, by) in [
+        (Vec2::new(left - 120.0, bottom - 40.0), Vec2::new(400.0, -100.0)),
+        (Vec2::new(1590.0, top - 5.0), Vec2::new(-600.0, 200.0)),
+    ] {
+        d.drag(MouseButton::Left, from, by, 10);
+        let end = from + by;
+        d.wait("the drag taken", |d| d.app.world().resource::<ButtonInput<MouseButton>>().get_pressed().len() == 0);
+        assert_eq!(pointer(&mut d), (Some(egui::pos2(end.x, end.y)), false));
+        assert_eq!((d.state().orbit.yaw, d.state().orbit.pitch), (yaw, pitch));
+    }
+    // Nor does one on the view's own controls (the deflections' slider sits there): the slider moves instead, the
+    // sign that the drag was taken.
+    let view = d.regions()[4];
+    let slider =
+        d.find_where("the deflections' slider over the view", |w| w.role == Role::Slider && view.contains_rect(w.rect));
+    let exaggerate = slider.rect.center();
     d.drag(MouseButton::Left, Vec2::new(exaggerate.x, exaggerate.y), Vec2::new(300.0, 100.0), 10);
+    d.wait("the slider moved", |d| d.state().model.exaggeration > 1.0);
     assert_eq!((d.state().orbit.yaw, d.state().orbit.pitch), (yaw, pitch));
 }
 
@@ -410,7 +520,7 @@ fn the_wheel_zooms_within_its_limits_and_only_over_the_view() {
     let at = d.in_view();
     d.move_to(at);
     let distance = d.state().orbit.distance;
-    // A notch is a tenth nearer; two back out again are a ninth further each.
+    // A notch is a tenth nearer; one back out again is a ninth further. The wheel is taken in the frame it is sent in.
     d.wheel(1.0, MouseScrollUnit::Line);
     assert!((d.state().orbit.distance - distance * 0.9).abs() < 1e-5);
     d.wheel(-1.0, MouseScrollUnit::Line);
@@ -426,11 +536,17 @@ fn the_wheel_zooms_within_its_limits_and_only_over_the_view() {
         d.wheel(-3.0, MouseScrollUnit::Line);
     }
     assert_eq!(d.state().orbit.distance, 20.0);
-    // Over a panel the wheel scrolls the panel.
+    // Over a panel the wheel scrolls the panel: the pointer is seen there first, then the wheel leaves the camera.
     let [left, _, _, bottom] = d.state().view_rect;
-    d.move_to(Vec2::new(left - 100.0, bottom - 100.0));
+    let panel = Vec2::new(left - 100.0, bottom - 100.0);
+    d.move_to(panel);
+    assert_eq!(pointer(&mut d).0, Some(egui::pos2(panel.x, panel.y)));
     d.wheel(5.0, MouseScrollUnit::Line);
     assert_eq!(d.state().orbit.distance, 20.0);
+    // The same wheel back over the view zooms: the wheel was not lost.
+    d.move_to(at);
+    d.wheel(5.0, MouseScrollUnit::Line);
+    assert!(d.state().orbit.distance < 20.0);
 }
 
 #[test]
@@ -459,19 +575,16 @@ fn a_drag_with_the_right_or_middle_button_pans_the_target() {
 fn the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view() {
     let mut d = Driver::new();
     // (button, where the camera looks from, seen from the target)
-    for (key, from) in [
-        ("ui-view-front", Vec3::Z),
-        ("ui-view-side", Vec3::X),
-        ("ui-view-top", Vec3::Y),
-        ("ui-view-iso", Vec3::new(30f32.to_radians().sin(), 0.0, 30f32.to_radians().cos())),
+    for (key, from, yaw, pitch) in [
+        ("ui-view-front", Vec3::Z, 0f32, 0f32),
+        ("ui-view-side", Vec3::X, 90.0, 0.0),
+        ("ui-view-top", Vec3::Y, 0.0, 89.0),
+        ("ui-view-iso", Vec3::new(30f32.to_radians().sin(), 0.0, 30f32.to_radians().cos()), 30.0, 20.0),
     ] {
         // Turned away first, so that each preset has to move the camera.
         let at = d.in_view();
         d.drag(MouseButton::Left, at, Vec2::new(77.0, -40.0), 4);
         d.button_of(key);
-        d.frames(2);
-        let camera = camera(&mut d);
-        let seen_from = (camera.translation - d.state().orbit.target).normalize();
         let expected = match key {
             "ui-view-top" => Vec3::new(0.0, 89f32.to_radians().sin(), 89f32.to_radians().cos()),
             "ui-view-iso" => {
@@ -480,11 +593,17 @@ fn the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view() {
             }
             _ => from,
         };
+        // Until the preset is taken and the camera stands still, framed.
+        let angles = (yaw.to_radians(), pitch.to_radians());
+        d.wait(&format!("{key} taken"), |d| (d.state().orbit.yaw, d.state().orbit.pitch) == angles);
+        d.camera_still();
+        let camera = camera(&mut d);
+        let seen_from = (camera.translation - d.state().orbit.target).normalize();
         assert!(seen_from.distance(expected) < 1e-4, "{key}: from {seen_from}, expected {expected}");
         assert_eq!(corners_out_of_sight(&mut d), Vec::<Vec3>::new(), "{key}");
         // Framed: zoomed in a little, a corner leaves the view.
         d.state_mut().orbit.distance *= 0.8;
-        d.frames(1);
+        d.camera_still();
         assert!(!corners_out_of_sight(&mut d).is_empty(), "{key}: not framed but far off");
     }
 }
@@ -495,9 +614,13 @@ fn a_window_resize_keeps_the_machine_in_view() {
     assert!(corners_out_of_sight(&mut d).is_empty());
     for (width, height) in [(1280.0, 720.0), (1000.0, 800.0), (1920.0, 1080.0), (1280.0, 720.0)] {
         d.resize(width, height);
-        let [left, top, right, bottom] = d.state().view_rect;
         // The panels keep their widths and the scopes their height: the view takes what the window gained or lost.
-        assert_eq!((right - left, bottom - top), (width - 700.0, height - 302.0), "{width} x {height}");
+        let size = |d: &Driver| {
+            let [left, top, right, bottom] = d.state().view_rect;
+            (right - left, bottom - top)
+        };
+        d.wait(&format!("the view at {width} x {height}"), |d| size(d) == (width - 700.0, height - 302.0));
+        d.camera_still();
         assert_eq!(corners_out_of_sight(&mut d), Vec::<Vec3>::new(), "{width} x {height}");
     }
 }
@@ -506,18 +629,19 @@ fn a_window_resize_keeps_the_machine_in_view() {
 fn pause_speed_units_and_theme_from_the_top_bar() {
     let mut d = Driver::new();
     d.button_of("ui-pause");
-    assert!(d.state().model.paused);
+    d.wait("paused", |d| d.state().model.paused);
     d.button_of("ui-resume");
-    assert!(!d.state().model.paused);
+    d.wait("running", |d| !d.state().model.paused);
     // The speed slider is logarithmic from 0.01 to 2: a click at a fifth of it is 0.01 * 200^0.2 = 0.029.
-    let slider = d.in_region(TOP, Role::Slider).remove(0).rect;
+    let slider = d.first_in(TOP, Role::Slider).rect;
     d.click_at(Vec2::new(slider.left() + slider.width() * 0.2, slider.center().y));
+    d.wait("the speed set", |d| d.state().model.speed != 1.0);
     let speed = d.state().model.speed;
     assert!((speed - 0.029).abs() < 0.01, "{speed}");
     for key in ["ui-units-rpm", "ui-units-mm", "ui-theme-light"] {
         let label = d.tr(key);
         d.click(Role::CheckBox, &label);
-        assert_eq!(d.find(Role::CheckBox, &label).toggled, Some(true), "{key}");
+        d.find_where(key, |w| w.role == Role::CheckBox && w.label == label && w.toggled == Some(true));
     }
     let (units, panels) = (d.state().model.units, d.state().panels);
     assert!(units.rpm && units.mm && panels.light);
@@ -529,7 +653,7 @@ fn the_motion_tab_drives_the_machine() {
     let tool = |d: &Driver| d.state().model.scene.tool.expect("a tool");
     let still = tool(&d);
     d.button_of("ui-start-cycle");
-    d.wait(60.0, "the cycle moves the tool", |d| {
+    d.wait("the cycle moves the tool", |d| {
         let now = tool(d);
         (0..3).map(|i| (now[i] - still[i]).abs()).sum::<f64>() > 1e-3
     });
@@ -537,13 +661,13 @@ fn the_motion_tab_drives_the_machine() {
     d.button_of("ui-disable");
     d.button_of("ui-enable");
     // The first axis's target typed into its field: a click opens it for typing, Enter takes it.
-    let field = d.in_region(SETUP, Role::SpinButton).remove(0).rect;
+    let field = d.first_in(SETUP, Role::SpinButton).rect;
     d.type_into(field, "0.05");
     d.enter();
-    assert_eq!(d.state().model.target[0], 0.05);
+    d.wait("the target taken", |d| d.state().model.target[0] == 0.05);
     d.button_of("ui-move");
     let before = d.state().model.scene.clone();
-    d.wait(60.0, "the move moves the parts", |d| d.state().model.scene.parts != before.parts);
+    d.wait("the move moves the parts", |d| d.state().model.scene.parts != before.parts);
 }
 
 /// A number of the config's parameter panel, and its path.
@@ -561,39 +685,37 @@ fn a_value_typed_in_the_parameter_panel_reaches_the_simulation_and_a_bad_one_is_
     let mut d = Driver::new();
     d.tab("ui-parameters");
     let (path, old) = some_parameter(&d);
-    let field = d.in_region(SETUP, Role::TextInput).remove(0).rect;
+    let field = d.first_in(SETUP, Role::TextInput).rect;
     let new = old * 1.1;
     d.type_into(field, &format!("{path} = {new}"));
     d.enter();
-    assert_eq!(d.state().model.config.f64(&path).unwrap(), new);
-    // The simulation took it: a refused value would come back with a message and be undone.
-    d.frames(60);
-    assert_eq!(d.state().model.config.f64(&path).unwrap(), new);
-    assert_eq!(d.messages(), Vec::<&str>::new());
+    d.wait("the value set", |d| d.state().model.config.f64(&path).ok() == Some(new));
     // A word for a number, by the button: refused with its message, shown under the field, and the value kept.
     d.type_into(field, &format!("{path} = \"fast\""));
     d.button_of("ui-set-value-apply");
+    d.wait("the word refused", |d| d.messages().len() == 1);
     assert_eq!(d.state().model.config.f64(&path).unwrap(), new);
     let (key, detail) = d.state().model.messages.last().cloned().expect("a message");
     let shown = d.state().model.tr.tr_arg(key, &detail);
-    assert!(d.widgets().iter().any(|w| w.role == Role::Label && w.value == shown), "{shown} not shown");
+    d.find_where(&format!("{shown} shown"), |w| w.role == Role::Label && w.value == shown);
     // A key the config does not have.
-    let count = d.messages().len();
     d.type_into(field, "no.such.key = 1");
     d.enter();
-    assert_eq!(d.messages().len(), count + 1);
-    // A value outside what the simulation takes comes back from it, refused, and the value before stays.
+    d.wait("the key refused", |d| d.messages().len() == 2);
+    // A value outside what the simulation takes comes back from it, refused, and the value before stays. Its answer is
+    // also the sign that the simulation has answered the value before it, which it took: that one brought no message.
     d.type_into(field, &format!("{path} = -1.0"));
     d.enter();
-    d.frames(60);
-    assert_eq!(d.state().model.config.f64(&path).unwrap(), new, "{:?}", d.messages());
+    d.wait("the simulation's refusal", |d| d.messages().len() == 3);
+    d.wait("the value before back", |d| d.state().model.config.f64(&path).ok() == Some(new));
+    assert_eq!(d.messages().len(), 3, "{:?}", d.messages());
 }
 
 #[test]
 fn a_drag_on_a_parameter_changes_it() {
     let mut d = Driver::new();
     d.tab("ui-parameters");
-    // The first group opened, its first number dragged 10 pixels right: one percent a pixel.
+    // The first group opened (it opens with an animation: until its controls stand still), its first number dragged.
     let groups = d.state().model.param_groups();
     let group = d.tr(&groups[0].key);
     d.click(Role::Button, &group);
@@ -602,24 +724,13 @@ fn a_drag_on_a_parameter_changes_it() {
         .iter()
         .find_map(|(path, _, value)| value.as_float().map(|v| (path.clone(), v)))
         .expect("a number in the first group");
-    // The group opens with an animation: the field is found once it stands still.
-    let field = |d: &mut Driver| {
-        let found = d.in_region(SETUP, Role::SpinButton).into_iter().find(|w| w.value.parse::<f64>().ok() == Some(old));
-        found.map(|w| w.rect)
-    };
-    let mut last = None;
-    for _ in 0..100 {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let now = field(&mut d);
-        if now.is_some() && now == last {
-            break;
-        }
-        last = now;
-    }
-    let at = last.expect("its field").center();
-    // egui counts a drag from a few pixels on: 40 pixels make some 30 percent.
+    let is_field = |w: &Widget| w.role == Role::SpinButton && w.value.parse::<f64>().ok() == Some(old);
+    d.find_where("the group's first number", is_field);
+    d.settle();
+    let at = d.find_where("the group's first number", is_field).rect.center();
+    // One percent a pixel; egui counts a drag from a few pixels on: 40 pixels make some 30 percent.
     d.drag(MouseButton::Left, Vec2::new(at.x, at.y), Vec2::new(40.0, 0.0), 10);
-    d.frames(30);
+    d.wait("the value dragged", |d| d.state().model.config.f64(&path).ok() != Some(old));
     let now = d.state().model.config.f64(&path).unwrap();
     assert!(now / old > 1.2 && now / old < 1.45, "{path}: {old} to {now}");
 }
@@ -629,21 +740,23 @@ fn an_effect_switch_reaches_the_config_and_stays() {
     let mut d = Driver::new();
     d.tab("ui-effects");
     let (path, _, on) = d.state().model.effects().remove(0);
-    let switch = d.in_region(SETUP, Role::CheckBox).remove(0);
+    let switch = d.first_in(SETUP, Role::CheckBox);
     assert_eq!(switch.toggled, Some(on));
     let at = switch.rect.center();
     d.click_at(Vec2::new(at.x, at.y));
-    // Until the session has taken the switch, not for a fixed count of frames: on a busy machine 60 frames went by
-    // before it had (15 November 2026).
-    for _ in 0..300 {
-        d.frames(10);
-        if d.state().model.config.bool(&path).unwrap() != on {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    // Until the session has taken the switch (on a busy machine 60 frames went by before it had), and the box shows it.
+    d.wait("the switch in the config", |d| d.state().model.config.bool(&path).ok() == Some(!on));
+    d.eventually("the switch shown", |d| {
+        let shown = d.first_in(SETUP, Role::CheckBox).toggled;
+        if shown == Some(!on) { Ok(()) } else { Err(format!("{shown:?}")) }
+    });
+    // And stays: the simulation's answer to the edit (were it a refusal, the old value would be back) is seen by
+    // a later edit's answer. The refusal of a negative number is that later answer.
+    let (number, value) = some_parameter(&d);
+    d.state_mut().model.set_value(&format!("{number} = -1.0"));
+    d.wait("the simulation's answer", |d| !d.messages().is_empty());
+    assert_eq!(d.state().model.config.f64(&number).unwrap(), value);
     assert_eq!(d.state().model.config.bool(&path).unwrap(), !on, "{:?}", d.messages());
-    assert_eq!(d.in_region(SETUP, Role::CheckBox).remove(0).toggled, Some(!on));
 }
 
 #[test]
@@ -651,41 +764,48 @@ fn a_config_file_that_does_not_exist_is_said_and_changes_nothing() {
     let mut d = Driver::new();
     d.tab("ui-config");
     let config = d.state().model.config.clone();
-    let field = d.in_region(SETUP, Role::TextInput).remove(0).rect;
+    let field = d.first_in(SETUP, Role::TextInput).rect;
     d.type_into(field, "no-such-file.toml");
-    assert_eq!(d.state().model.inputs.config_file, "no-such-file.toml");
+    d.wait("the file typed", |d| d.state().model.inputs.config_file == "no-such-file.toml");
     d.button_of("ui-config-open");
+    d.wait("the file refused", |d| !d.messages().is_empty());
     assert_eq!(d.state().model.config, config);
     assert_eq!(d.messages().len(), 1, "{:?}", d.messages());
     // Tab moves on to the next field: the part names, typed in turn.
     d.tab("ui-config");
-    let fields = d.in_region(SETUP, Role::TextInput);
+    let fields = d.eventually("the part fields", |d| {
+        let fields = d.in_region(SETUP, Role::TextInput);
+        if fields.len() > 2 { Ok(fields) } else { Err(format!("{} fields", fields.len())) }
+    });
     let supply = d.state().model.inputs.parts[1].clone();
     d.type_into(fields[1].rect, "M1");
     d.key(KeyCode::Tab, Key::Tab);
     d.type_text("x");
-    let parts = &d.state().model.inputs.parts;
-    assert_eq!((parts[0].clone(), parts[1].clone()), ("M1".to_string(), format!("{supply}x")), "{parts:?}");
+    let expected = ("M1".to_string(), format!("{supply}x"));
+    let typed = |d: &Driver| (d.state().model.inputs.parts[0].clone(), d.state().model.inputs.parts[1].clone());
+    d.wait("both typed", |d| typed(d) == expected);
+}
+
+/// Picks `entry` in the list whose shown value is `shown`.
+fn pick(d: &mut Driver, shown: &str, entry: &str) {
+    let combo = d.find_where(&format!("the list showing {shown}"), |w| w.role == Role::ComboBox && w.value == shown);
+    d.click_at(Vec2::new(combo.rect.center().x, combo.rect.center().y));
+    d.click(Role::Button, entry);
 }
 
 #[test]
 fn the_machine_and_the_language_are_picked_from_their_lists() {
     let mut d = Driver::new();
     let (bounds, title) = (d.state().bounds, d.app.world().get::<Window>(d.window).unwrap().title.clone());
-    let machine = d.tr(MACHINES[0].key);
-    let combo = d.widgets().into_iter().find(|w| w.role == Role::ComboBox && w.value == machine).unwrap().rect;
-    d.click_at(Vec2::new(combo.center().x, combo.center().y));
-    let other = d.tr(MACHINES[1].key);
-    d.click(Role::Button, &other);
-    assert_eq!(d.state().model.entry.id, MACHINES[1].id);
-    d.wait(60.0, "the new machine is framed", |d| d.state().bounds != bounds && !d.state().fit);
+    let (machine, other) = (d.tr(MACHINES[0].key), d.tr(MACHINES[1].key));
+    pick(&mut d, &machine, &other);
+    d.wait("the other machine", |d| d.state().model.entry.id == MACHINES[1].id);
+    d.wait("the new machine is framed", |d| d.state().bounds != bounds && !d.state().fit);
+    d.camera_still();
     assert!(corners_out_of_sight(&mut d).is_empty());
-    let english = d.tr("lang-en");
-    let combo = d.widgets().into_iter().find(|w| w.role == Role::ComboBox && w.value == english).unwrap().rect;
-    d.click_at(Vec2::new(combo.center().x, combo.center().y));
-    let german = d.tr("lang-de");
-    d.click(Role::Button, &german);
-    assert_eq!(d.state().model.lang, "de");
+    let (english, german) = (d.tr("lang-en"), d.tr("lang-de"));
+    pick(&mut d, &english, &german);
+    d.wait("German", |d| d.state().model.lang == "de");
     assert_ne!(d.app.world().get::<Window>(d.window).unwrap().title, title);
 }
 
@@ -696,7 +816,6 @@ fn every_label(d: &mut Driver) -> std::collections::BTreeSet<String> {
     let tools = ["ui-analysis", "ui-effect-views", "ui-search", "ui-path", "ui-trace", "ui-sweep-tab", "ui-tuning"];
     for key in setup.iter().chain(&tools) {
         d.tab(key);
-        d.frames(2);
         for w in d.widgets() {
             let text = if w.label.is_empty() { w.value } else { w.label };
             if text.chars().any(char::is_alphabetic) {
@@ -802,7 +921,6 @@ fn nothing_is_cut_off_or_overlaps_in_either_language() {
         for (s, t) in setup.iter().cycle().zip(&tools) {
             d.tab(s);
             d.tab(t);
-            d.frames(2);
             problems.extend(layout_problems(&mut d).into_iter().map(|p| format!("{lang} {s} {t}: {p}")));
         }
         problems.dedup();
@@ -825,9 +943,10 @@ fn nothing_is_cut_off_or_overlaps_in_either_language() {
 fn space_and_the_arrows_over_the_view_replay_and_step_but_not_while_typing() {
     let mut d = Driver::new();
     d.button_of("ui-start-cycle");
-    d.wait(60.0, "scenes recorded", |d| d.state().recorded.len() > 20);
+    d.wait("scenes recorded", |d| d.state().recorded.len() > 20);
     let view = d.in_view();
     d.move_to(view);
+    // Keys are taken in the frame they are sent in.
     d.key(KeyCode::Space, Key::Space);
     assert!(d.state().timeline.playing && d.state().timeline.time.is_some(), "{:?}", d.state().timeline);
     d.key(KeyCode::Space, Key::Space);
@@ -841,21 +960,25 @@ fn space_and_the_arrows_over_the_view_replay_and_step_but_not_while_typing() {
     assert!(next >= at);
     d.key(KeyCode::ArrowRight, Key::ArrowRight);
     assert_eq!(d.state().timeline.time.unwrap(), next);
-    // Typing into a field: a space is a space there, and the timeline stays, even with the pointer over the view.
+    // Typing into a field: a space is a space there, and the timeline stays, even with the pointer over the view. The
+    // text arriving in the field is the sign that the keys were taken.
     d.tab("ui-parameters");
-    let field = d.in_region(SETUP, Role::TextInput).remove(0).rect;
+    let field = d.first_in(SETUP, Role::TextInput).rect;
     d.type_into(field, "a");
     d.move_to(view);
     let timeline = d.state().timeline;
     d.type_text(" b");
     d.key(KeyCode::ArrowLeft, Key::ArrowLeft);
+    d.wait("the text typed", |d| d.state().model.inputs.assignment == "a b");
     assert_eq!(d.state().timeline, timeline);
-    assert_eq!(d.state().model.inputs.assignment, "a b");
-    // Away from the view the keys do nothing either.
+    // Away from the view the keys do nothing either; back over it, the same key replays, the sign that it is taken.
     d.key(KeyCode::Escape, Key::Escape);
     d.move_to(Vec2::new(5.0, 400.0));
     d.key(KeyCode::Space, Key::Space);
     assert_eq!(d.state().timeline, timeline);
+    d.move_to(view);
+    d.key(KeyCode::Space, Key::Space);
+    d.wait("the replay over the view", |d| d.state().timeline.playing);
 }
 
 #[test]
@@ -864,51 +987,54 @@ fn every_tool_tab_starts_its_computation() {
     // Analysis: the cycle with its error bands, the sensitivity, the optimiser.
     let bands = d.tr("ui-analysis-bands");
     d.click(Role::CheckBox, &bands);
-    assert!(d.state().model.inputs.bands);
+    d.wait("bands on", |d| d.state().model.inputs.bands);
     for (key, kind) in [
         ("ui-analysis-run-cycle", Analysis::Cycle),
         ("ui-analysis-run-sensitivity", Analysis::Sensitivity),
         ("ui-analysis-run-optimise", Analysis::Optimise),
     ] {
         let label = d.tr(key);
-        let button = d.in_region(TOOLS, Role::Button).into_iter().find(|w| w.label == label).unwrap().rect;
-        d.click_at(Vec2::new(button.center().x, button.center().y));
-        assert!(d.state().model.running(kind), "{key}");
+        let tools = d.regions()[TOOLS];
+        let button = d.find_where(key, |w| w.role == Role::Button && w.label == label && tools.contains_rect(w.rect));
+        d.click_at(Vec2::new(button.rect.center().x, button.rect.center().y));
+        d.wait(key, |d| d.state().model.running(kind));
     }
     // The frequency response and the tuning measure; the motor search searches.
     d.tab("ui-sweep-tab");
     d.button_of("ui-sweep-run");
-    assert!(d.state().model.running(Analysis::Sweep));
+    d.wait("the sweep", |d| d.state().model.running(Analysis::Sweep));
     d.tab("ui-tuning");
     d.button_of("ui-tuning-run");
-    assert!(d.state().model.tuning_running());
+    d.wait("the tuning", |d| d.state().model.tuning_running());
     d.tab("ui-search");
     d.button_of("ui-search-run");
-    assert!(d.state().model.running(Analysis::Search) || d.state().model.has_result(Analysis::Search));
+    d.wait("the search", |d| d.state().model.running(Analysis::Search) || d.state().model.has_result(Analysis::Search));
     // A trace from a file that does not exist: said, nothing replayed.
     d.tab("ui-trace");
-    let field = d.in_region(TOOLS, Role::TextInput).remove(0).rect;
+    let field = d.first_in(TOOLS, Role::TextInput).rect;
     d.type_into(field, "no-such-trace.csv");
+    d.wait("the file typed", |d| d.state().model.inputs.trace_file == "no-such-trace.csv");
     d.button_of("ui-trace-run");
-    d.wait(60.0, "the trace's answer", |d| !d.state().model.running(Analysis::Trace));
-    assert!(d.messages().contains(&"ui-file-unreadable"), "{:?}", d.messages());
+    d.wait("the trace's answer", |d| d.messages().contains(&"ui-file-unreadable"));
+    assert!(!d.state().model.running(Analysis::Trace));
     // The cycle's result arrives in its tab.
     d.tab("ui-analysis");
-    d.wait(300.0, "the cycle's result", |d| d.state().model.cycle_report.is_some());
+    d.wait_result("the cycle's result", |d| d.state().model.cycle_report.is_some());
 }
 
 #[test]
 fn a_path_from_a_file_is_planned_run_and_drawn_as_two_lines() {
     let mut d = Driver::new();
     d.tab("ui-path");
-    let field = d.in_region(TOOLS, Role::TextInput).remove(0).rect;
+    let field = d.first_in(TOOLS, Role::TextInput).rect;
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/corner.path");
     d.type_into(field, file);
+    d.wait("the file typed", |d| d.state().model.inputs.path_file == file);
     d.button_of("ui-path-run");
-    d.wait(300.0, "the path's analysis", |d| d.state().model.path_run.is_some());
+    d.wait_result("the path's analysis", |d| d.state().model.path_run.is_some());
     // The planned line, and the travelled one as the machine runs it.
     assert!(d.state().model.path_run.as_ref().unwrap().scene_line.len() > 10);
-    d.wait(60.0, "the travelled path", |d| d.state().model.trail.as_ref().is_some_and(|t| t.len() > 10));
+    d.wait("the travelled path", |d| d.state().model.trail.as_ref().is_some_and(|t| t.len() > 10));
     // The plan is drawn wider and a little behind, so that the travelled line over it shows: drawn alike, at the same
     // depth, the second line lost the depth test to the first and only the plan was seen.
     // (Checked by eye in the pictures; here that the plan's line is configured so.)
@@ -922,15 +1048,22 @@ fn a_path_from_a_file_is_planned_run_and_drawn_as_two_lines() {
 fn repeated_clicks_on_an_analysis_start_it_once() {
     let mut d = Driver::new();
     let label = d.tr("ui-analysis-run-cycle");
-    let button = d.in_region(TOOLS, Role::Button).into_iter().find(|w| w.label == label).unwrap().rect;
-    let at = Vec2::new(button.center().x, button.center().y);
+    let tools = d.regions()[TOOLS];
+    let button = d.find_where("the cycle's button", |w| {
+        w.role == Role::Button && w.label == label && tools.contains_rect(w.rect)
+    });
+    let at = Vec2::new(button.rect.center().x, button.rect.center().y);
+    // Five clicks, each taken (egui saw it pressed and let go there) before the next.
     for _ in 0..5 {
         d.move_to(at);
         d.button(MouseButton::Left, ButtonState::Pressed);
+        assert_eq!(pointer(&mut d), (Some(egui::pos2(at.x, at.y)), true));
         d.button(MouseButton::Left, ButtonState::Released);
+        assert_eq!(pointer(&mut d), (Some(egui::pos2(at.x, at.y)), false));
     }
-    assert!(d.state().model.running(Analysis::Cycle));
-    // From the first click on, a spinner stands where the button was, and in the top bar none.
+    d.wait("the analysis", |d| d.state().model.running(Analysis::Cycle));
+    // From the first click on, a spinner stands where the button was, and in the top bar none: the later clicks
+    // found no button to start another.
     assert!(!d.has(Role::Button, &label));
 }
 
@@ -939,18 +1072,16 @@ fn switching_the_machine_during_an_analysis_leaves_no_stale_result() {
     let mut d = Driver::new();
     let label = d.tr("ui-analysis-run-cycle");
     d.click(Role::Button, &label);
-    assert!(d.state().model.running(Analysis::Cycle));
-    let machine = d.tr(MACHINES[0].key);
-    let combo = d.widgets().into_iter().find(|w| w.role == Role::ComboBox && w.value == machine).unwrap().rect;
-    d.click_at(Vec2::new(combo.center().x, combo.center().y));
-    let other = d.tr(MACHINES[1].key);
-    d.click(Role::Button, &other);
+    d.wait("the analysis", |d| d.state().model.running(Analysis::Cycle));
+    let (machine, other) = (d.tr(MACHINES[0].key), d.tr(MACHINES[1].key));
+    pick(&mut d, &machine, &other);
+    d.wait("the other machine", |d| d.state().model.entry.id == MACHINES[1].id);
     assert!(!d.state().model.running(Analysis::Cycle));
     // As long as the first machine's analysis takes, and then some: nothing of it arrives.
     let mut first = Driver::new();
     let start = std::time::Instant::now();
     first.click(Role::Button, &label);
-    first.wait(300.0, "the first machine's analysis", |d| d.state().model.cycle_report.is_some());
+    first.wait_result("the first machine's analysis", |d| d.state().model.cycle_report.is_some());
     drop(first);
     let deadline = start.elapsed() + std::time::Duration::from_secs(2);
     let begun = std::time::Instant::now();
@@ -964,11 +1095,11 @@ fn switching_the_machine_during_an_analysis_leaves_no_stale_result() {
 fn closing_the_window_during_an_analysis_does_not_hang() {
     let mut d = Driver::new();
     d.button_of("ui-analysis-run-optimise");
-    assert!(d.state().model.running(Analysis::Optimise));
+    d.wait("the optimiser", |d| d.state().model.running(Analysis::Optimise));
     let window = d.window;
     d.send(bevy::window::WindowCloseRequested { window });
     let start = std::time::Instant::now();
-    d.wait(5.0, "the app exits", |d| d.app.should_exit().is_some());
+    d.wait("the app exits", |d| d.app.should_exit().is_some());
     drop(d);
     assert!(start.elapsed().as_secs_f64() < 10.0, "{:?}", start.elapsed());
 }
@@ -993,19 +1124,22 @@ fn the_bottom_panel_keeps_its_height_with_the_kept_runs() {
     // 250 pixels high by default, and so it stays.
     let bottom = d.state().view_rect[3];
     assert_eq!(bottom, 900.0 - 250.0);
+    // It grew by a gap a frame when it was made to keep its height wrongly: a count of frames tells, whatever the load.
     d.frames(30);
     assert_eq!(d.state().view_rect[3], bottom, "live");
     let runs = d.tr("ui-scopes-runs");
-    let toggle = d.in_region(3, Role::Button).into_iter().find(|w| w.label == runs).expect("the runs toggle").rect;
-    d.click_at(Vec2::new(toggle.center().x, toggle.center().y));
-    d.frames(3);
-    assert!(d.state().panels.runs_view);
+    let scopes = d.regions()[3];
+    let toggle =
+        d.find_where("the runs toggle", |w| w.role == Role::Button && w.label == runs && scopes.contains_rect(w.rect));
+    d.click_at(Vec2::new(toggle.rect.center().x, toggle.rect.center().y));
+    d.wait("the runs view", |d| d.state().panels.runs_view);
+    d.settle();
     assert_eq!(d.state().view_rect[3], bottom, "with no run kept");
     d.tab("ui-runs");
     d.button_of("ui-runs-keep-live");
-    d.frames(5);
-    assert_eq!(d.state().model.runs.iter().count(), 1);
-    d.frames(30);
+    d.wait("a run kept", |d| d.state().model.runs.iter().count() == 1);
+    // Until its plots are drawn (the panel's controls standing still), then the panel is as high as before.
+    d.settle();
     assert_eq!(d.state().view_rect[3], bottom, "with a run kept");
 }
 
