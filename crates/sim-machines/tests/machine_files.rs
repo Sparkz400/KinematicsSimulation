@@ -167,6 +167,17 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
         a.feedforward_torque(pose, &acc, &mut fa);
         b.feedforward_torque(pose, &acc, &mut fb);
         assert_close(&format!("{what}: feedforward"), &fa, &fb, 1e-9);
+        // The friction feedforward from the machine's model, at the speed above and slowly (within the guides' fade).
+        for scale in [1.0, 1e-3] {
+            let slow: Vec<f64> = speed.iter().map(|v| v * scale).collect();
+            a.steady_friction(pose, &slow, &mut fa);
+            b.steady_friction(pose, &slow, &mut fb);
+            assert_close(&format!("{what}: steady friction at {scale} of the speed"), &fa, &fb, 1e-9);
+            assert!(
+                fa.iter().any(|f| *f != 0.0) || changes.contains(&"effects.guide_friction = false"),
+                "{what}: {fa:?}"
+            );
+        }
         let (mut ra, mut rb) = (Vec::new(), Vec::new());
         a.rigid_tensions(pose, &acc, &mut ra);
         b.rigid_tensions(pose, &acc, &mut rb);
@@ -290,20 +301,21 @@ fn the_netlist_machines_run_their_crates_cycle() {
 
 /// The same with the encoder's counts, as the machines are shipped. There the bits in which the two differ (sums taken
 /// in another order) flip one count a little earlier or later (on the T-gantry 0.2 s into the cycle), and stick-slip
-/// in the guides and the braking chopper switching a step earlier grow that. So the crate is run three times, with
-/// its carriage 1e-12 and 1e-9 heavier, and the file has to give the same verdicts and lie within three times the
-/// crate's own spread of it, or within 1e-4 of it. Found on 2026-11-13: the T-gantry's peak braking power spreads by
-/// 0.5 % that way, and the file lies within that.
+/// in the guides and the braking chopper switching a step earlier grow that. So the crate is run again with its
+/// carriage 1e-12 and 1e-9 heavier and, since the friction feedforward (15 November), with its X guide's Coulomb level
+/// 1e-12 and 1e-9 higher, which reach the drives' torque directly; the file has to give the same verdicts and lie within
+/// three times the crate's own spread of it, or within 1e-4 of it. Found on 2026-11-13: the T-gantry's peak braking
+/// power spreads by 0.5 % that way, and the file lies within that.
 #[test]
 fn the_netlist_machines_give_their_crates_verdicts() {
     for (id, name) in PAIRS {
         let [(ea, ca), (eb, cb)] = pair(id, name, &[]);
         let (names, nominal) = cycle_numbers(ea, &ca);
-        let carriage = ca.f64("mass.carriage_kg").unwrap();
         let mut spread = vec![0.0f64; nominal.len()];
-        for factor in [1e-12, 1e-9] {
+        for (key, factor) in ["mass.carriage_kg", "friction_x.coulomb_n"].iter().flat_map(|k| [(*k, 1e-12), (*k, 1e-9)])
+        {
             let mut c = ca.clone();
-            c.set_text(&format!("mass.carriage_kg = {:e}", carriage * (1.0 + factor))).unwrap();
+            c.set_text(&format!("{key} = {:e}", ca.f64(key).unwrap() * (1.0 + factor))).unwrap();
             let (_, values) = cycle_numbers(ea, &c);
             for (s, (a, b)) in spread.iter_mut().zip(nominal.iter().zip(&values)) {
                 *s = s.max((a - b).abs());

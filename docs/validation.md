@@ -703,6 +703,24 @@ Pythagoras and central differences for the rates, not from the closed-form chain
 | Planar cable robot | 707.0 → 666.7 | 153.5 → 137.9 | yes |
 | Spatial cable robot | 355.2 → 283.1; 2.161 → 1.594 mrad | 105.1 → 67.0; 0.836 → 0.624 mrad | yes |
 
+The machine files (`machines/*.toml`, `sim-cli analyze --machine-file`) by the same rule. The T-gantry, D3 and planar delta files are their crates' machines and follow their configs (on); the single axis's stays off as its crate's. The netlist machine tells the same steady friction as the crate it mirrors, to 1e-9 (`the_netlist_machines_are_their_crates`).
+
+| Machine file | Following off → on | Settling off → on | On |
+| --- | --- | --- | --- |
+| `t-gantry.toml` (no frame, no leaning Z) | 113.3 → 104.3 | 46.4 → 41.1 | yes |
+| `delta-d3.toml`, `planar-delta.toml` | as the D3 and D2 above | | yes |
+| `screw-portal.toml` | 143.4 → 98.9 | 31.4 → 20.9 | yes |
+| `xyz-portal.toml` | 141.8 → 103.6 | 30.0 → 22.3 | yes |
+| `corexy.toml` | 77.0 → 49.1 | 15.6 → 22.0 | no |
+| `h-bot.toml` | 119.4 → 108.8 | 13.1 → 18.7 | no |
+| `dual-gantry.toml` | 124.3 → 82.8 | 14.0 → 26.4 | no |
+| `rack-gantry.toml` | 81.5 → 56.7 | 14.7 → 22.3 | no |
+| `portal-c.toml` | 177.0 → 144.0; 0.576 → 0.587 mrad | 34.2 → 22.2; 7.3e-5 → 8.0e-5 mrad | no |
+| `five-axis.toml` | 201.2 → 131.5; 0.150 → 0.155 mrad | 34.1 → 32.4; 0.055 → 0.057 mrad | no |
+| `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.4 → 34.3; 0.022 → 0.010 mrad | no |
+| `induction-lift.toml` | 284.6 → 291.3 | 217.9 → 206.8 | no |
+| `stepper-axis.toml`, `pneumatic-axis.toml`, `scissor-lift.toml` | unchanged (15.2 to 206.2) | unchanged | no |
+
 Where it settles worse (the single axis, the linear delta: belt axes whose guides have a LuGre contact), the cause is not worked out; the single axis does the same with its shipped characteristic, so it is not the machine model's value. The guides' feedforward fades in over their Stribeck speed (`Lugre::feedforward`), so that a stop puts no torque step on the axis (the plain steady value changed the figures above by under 10 %). The arm's joints, the slider crank and the palletiser change by under 3 %.
 
 ## Vendor formulas and vendor documents

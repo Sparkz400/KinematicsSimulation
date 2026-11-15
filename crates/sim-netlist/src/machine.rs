@@ -2723,6 +2723,27 @@ impl Machine for ConfigMachine {
         out.extend(self.to_motors(&coulomb).into_iter().zip(self.to_motors(&viscous)).map(|(c, b)| [c, b]));
     }
 
+    /// `rigid_solve` at a steady speed: the guides (`Lugre::feedforward`, at their load at rest), idlers and cable chains
+    /// as forces on the axes, taken to the motors as the rigid forces are (`to_motors`), over each gearbox's loss factor
+    /// for what it passes at rest (that friction less the weight), plus each shaft's friction at its rotor's speed.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let (q, v, _) = self.joint_motion(pos, vel, &vec![0.0; pos.len()]);
+        let n = self.n();
+        let mut force = vec![0.0; n];
+        for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; self.m()])) {
+            force[g.axis] += g.friction.feedforward(v[g.axis], scale);
+        }
+        let ((idlers, _), drag, gravity) = (self.idler_friction(&v), self.chain_drag(&v), self.gravity(&q));
+        let friction: Vec<f64> = (0..n).map(|i| force[i] - idlers[i] + drag[i]).collect();
+        let held: Vec<f64> = (0..n).map(|i| friction[i] - gravity[i]).collect();
+        let (at_motors, passed) = (self.to_motors(&friction), self.to_motors(&held));
+        for (kk, out) in out.iter_mut().enumerate() {
+            let pulley = self.pulley_angle(kk, &v);
+            let (output, rotor) = self.rigid_factors(kk, self.ratio[kk] * passed[kk], pulley);
+            *out = self.shafts[kk].torque(self.ratio[kk] * pulley) + at_motors[kk] * rotor / output;
+        }
+    }
+
     fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
         let still = vec![0.0; self.n()];
         for g in &self.guides {
