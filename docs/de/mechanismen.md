@@ -285,6 +285,12 @@ dahinter von seiner Spitze brauchen (ihr m (a - g), ihr Moment über die Neigung
 Gewicht und seiner Trägheit längs des Glieds. Das Werkzeug schwingt im Werkzeugraum mit; die Gelenke spüren es nicht
 (einseitig). Ein Stahlrohr 60 x 4 mm, 0,8 m lang und 4,5 kg schwer, schwingt allein mit den 88,96 Hz nach
 Euler-Bernoulli und hängt unter seinem Gewicht 49,2 um durch, 1,3 % über dem exakten q L^4 / (8 E I).
+`link_bending.directions` fügt die Biegung quer zu dieser Ebene (`out_of_plane`) und die Verdrehung um die Länge des
+Glieds hinzu (`torsion`, Schubmodul `link_bending.shear_modulus_pa`), je eine erste Eigenform, die Körper dahinter als
+Masse und Trägheit an der Spitze. Mit `effects.link_bending_reaction` wirkt die Biegung zurück: Gelenke, Getriebe und
+Glieder sind ein gekoppeltes System, die Motoren spüren das Schwingen der Glieder und regen es über ihre Regelkreise an,
+Energie und Dämpfung der Biegung gehören zur Maschine, und `modes` gibt die gekoppelten Eigenformen bei festgehaltenen
+Motoren (ein Glied auf einem Getriebe schwingt wie die zwei Federn in Reihe).
 
 Mit `effects.base_compliance` (jede Maschine und jede Maschinendatei, ausgeliefert aus) steht die Maschine auf einem
 Gestell mit bis zu sechs Feder-Masse-Richtungen (`[base]`): Es nimmt die Änderung des Impulses alles dessen auf, was sich

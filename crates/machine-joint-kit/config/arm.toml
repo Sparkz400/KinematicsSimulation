@@ -418,6 +418,10 @@ payload = true
 outer_diameter_m = [0.0, 0.14, 0.12, 0.1, 0.08, 0.0]
 wall_m = [0.0, 0.008, 0.008, 0.006, 0.005, 0.0]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10
 damping_ratio = 0.02
 
 # With effects.base_compliance [estimate]: the pedestal the arm stands on tilts about x and y at 25 Hz with the arm
@@ -448,6 +452,7 @@ damping_ratio_rz = 0.02
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 link_bending.damping_ratio = [0.01, 0.05]
 base.mass_kg = [150.0, 400.0]
 base.tilt_stiffness_x_nm_rad = [6.0e5, 3.75e6]

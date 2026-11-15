@@ -367,7 +367,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
-            "effects.link_bending" => base.get("link_bending").is_err(),
+            "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             "effects.base_compliance" => {
                 let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
@@ -414,7 +414,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
         "drive.friction_feedforward_torque_nm = {:?}",
         vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
     )];
-    let through: [(&str, &[String]); 8] = [
+    let through: [(&str, &[String]); 9] = [
         ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
         ("effects.drive_current_limit", &capped),
         ("effects.drive_overload", &overload),
@@ -423,6 +423,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
         ("effects.arm_tube_inertia", &["effects.link_elasticity = true".into()]),
         ("effects.iron_loss", &stall),
         ("effects.friction_feedforward", &characteristic),
+        ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
     ];
     // The 0.5 s before the switch run once per config, as two runs that must agree; each switch starts both of its runs
     // from a snapshot of them (`Sim::restore`, bit for bit). Run anew for every switch they took most of the six-axis

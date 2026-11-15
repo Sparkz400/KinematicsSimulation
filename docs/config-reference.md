@@ -919,7 +919,10 @@ have theirs).
 `effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
 arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
 first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
-its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast aluminium.
+its tip. Signals `link.<n>.bend` (m, its tip's deflection), `link.<n>.bend_across` (m) and `link.<n>.twist` (rad)
+for the other directions. Estimates: cast aluminium. `effects.link_bending_reaction` (in the same configs, off as shipped;
+acts only with `effects.link_bending`): the bending acts back on the joints, joints, gearboxes and links one coupled
+system, the bending's energy and its damping (`power.link_bending`) in the machine's; off, the bending is one-way.
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
@@ -927,6 +930,8 @@ its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast alum
 | `wall_m` | m | Per joint, the tube's wall | arm 0, 0.008, 0.008, 0.006, 0.005, 0; SCARA 0.008, 0.006, 0, 0; estimates |
 | `youngs_modulus_pa` | Pa | E of all links: cast aluminium 7e10; bounds 6.5e10 to 7.2e10 | 7.0e10, estimate |
 | `damping_ratio` | – | Of every link's mode; bounds 0.01 to 0.05 | 0.02, estimate |
+| `directions` | – | The directions each link deflects in, each its first mode: `in_plane` (bending in the plane its joint turns it in), `out_of_plane` (bending across that plane), `torsion` (twisted about its length) | `["in_plane"]` |
+| `shear_modulus_pa` | Pa | G of all links, read with `torsion`: cast aluminium 2.6e10; bounds 2.4e10 to 2.7e10 | 2.6e10, estimate |
 
 ## Slider-crank, rotary knife, flying saw, disc cam (`machine-crank-cam`)
 
