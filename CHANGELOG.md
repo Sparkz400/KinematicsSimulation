@@ -7,7 +7,130 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-11-14
+## [1.0.0] - RELEASE-DATE
+
+<!-- RELEASE-DATE: placeholder, the coordinator writes the date of the v1.0.0 tag here (YYYY-MM-DD). -->
+
+**Release date to be filled in.** The release was cut on 14 November 2026 at 19c2ad1 but not tagged; the three
+blocks below (Added, Changed, Fixed) are the work merged on 15 November 2026 after the cut, in three waves: failing
+tests fixed and independent cross-checks, then new models, actuators and app views, then new machines. The sections
+after them are the release as cut.
+
+### Added
+
+- Machines `tripod` (crate `machine-tripod`): a 3-RPS platform on three electric cylinders (ball screw 20 x 10 on a
+  1FK2104-4AF each), z and two tilts, its dependent shift and turn judged as `tripod-parasitic`; checks
+  `tripod-leg-force`, `tripod-leg-stroke`, `tripod-revolute-angle`, `tripod-cone-angle`.
+- Machine `wafer-handler` (crate `machine-wafer-handler`): an R-theta-Z arm of two links coupled by steel bands
+  (`effects.band_elasticity`), dynamics by Kane's method; checks `wafer-slip` (pads, vacuum pads or an edge grip),
+  `effector-direction`, `elbow-band-slack`, `wrist-band-slack`.
+- Machine `toggle-press` (in `machine-crank-cam`): a crank-driven knuckle-joint press with a process force over the ram's
+  height and the frame as a spring in series (`effects.frame_stretch`); checks `press-capacity`, `upper-link-force`,
+  `lower-link-force`, `rod-force`, `frame-deflection`; `config/toggle-press-cam.toml` runs it by a cam.
+- Machine `arm-on-track` (joint kit): the six-axis arm on an 80 kg carriage on a 4 m rack-and-pinion track, a seventh
+  joint of the Newton-Euler chain; the carriage's four guide blocks loaded by the arm's reaction (`[track]`,
+  `guide-load`, `guide-life`), a prismatic joint on a `[rack]`; tool space with the track as an axis of its own
+  (`config/arm-on-track-tool.toml`).
+- Motor kinds (`motor.kind`): `"stepper"`, a two-phase hybrid stepper behind an open-loop step and direction drive
+  (microsteps, detent torque with `effects.detent_torque`, lost steps kept; check `stepper-synchronism`, `motor-peak`
+  against the pull-out curve), and `"induction"`, a d-q induction motor on a frequency converter with V/f or
+  field-oriented control. `machines/stepper-axis.toml` and `machines/induction-lift.toml`. Torque mode is refused for
+  the open-loop kinds (`error-open-loop`); Siemens' S1 check is made for servo motors only.
+- A double-acting pneumatic cylinder beside servo axes (`[[machine.cylinder]]` in a machine file,
+  `sim_components::pneumatic`): two chambers as gas volumes, ISO 6358 flow elements, a 5/2 or 5/3 valve, throttles,
+  end cushions, seal friction; a cycle segment's `valves` and `wait` keys; checks `cushion-energy` and `load-factor`;
+  `machines/pneumatic-axis.toml`; `catalog/festo/cylinders_dsbc.csv` (Festo DSBC, 32 to 125 mm).
+- Stops (`Command::Halt`): categories 0, 1 and 2 of IEC 60204-1, holding brake delays (`effects.brake_delay`),
+  `sim-cli stop` (the stop at the fastest moment of each axis, at the largest energy and on a grid; checks
+  `stopping-distance` with `ratings.max_stopping_distance_m` and `stop-dc-link`), `sim-cli run --stop-at`, and stop
+  inputs in the FMU (`command.stop_category`), Python (`Sim.stop`, `Sim.enable`) and OPC UA.
+- Drive modes for an outside controller: torque and velocity mode per motor (`Sim::set_drive_mode`, bumpless), in the
+  FMU (`command.mode.<motor>`, `command.torque.<motor>`, `command.velocity.<motor>`) and in Python
+  (`kinematics_sim.Sim` with `step(torque=... | velocity=... | setpoint=...)`, `analyze()`, `verdicts()`): a run under
+  your own controller gets the same analysis and verdicts as the built-in drive's. Example
+  `crates/sim-py/examples/own_controller.py`.
+- Compliant base two-way (`effects.base_reaction`, off): the machine feels the base's acceleration and tilt, base and
+  machine solved together, the base's energy in the budget. The four-arm delta, the parallel SCARA, the crank-cam
+  machines, the hexapod and the cable robots are mounted on the base as the others are.
+- Link bending two-way and in every direction (`effects.link_bending_reaction`, off; `link_bending.directions` with
+  `"out_of_plane"` and `"torsion"`, `link_bending.shear_modulus_pa`): the arms' link modes as coordinates of their own;
+  coupled modes of joints and links.
+- Arms report their joints' modes with the motors held (`JointMachine::held_modes`); `resonance_hz` is the lowest.
+- Gearbox mesh friction (`effects.gearbox_mesh_friction`): the efficiency's loss as a friction that depends on the load
+  and sticks at rest; on in the joint kit's and the cable robots' configs.
+- Gripper time (`effects.gripper_time`, `[gripper]`, mechanical or vacuum) and the check `gripper-hold`
+  (`ratings.gripper_safety_factor`).
+- Friction feedforward from the machine's own model (`drive.friction_feedforward_model = "machine"`,
+  `Machine::steady_friction` on every machine and in machine files), switched on where it helps (the table in
+  docs/validation.md).
+- Presliding friction of the slides (`effects.slide_presliding`, off): a Dahl state that holds a load at rest; the fit
+  reports `held_force_n`, `breakaway_force_n` and `presliding_stiffness_n_m` where the trace tells them.
+- The first measured data: `datasets/isw-ball-screw-axis`, three recordings and three velocity sweeps of the ball screw
+  bench of ISW, University of Stuttgart (DaRUS, CC BY 4.0), with `tools/darus_ball_screw_to_csv.py`; compared in
+  docs/validation.md, "Against measured data". Datasets may keep a machine config (`machine.config`).
+- Independent references: the arms' rigid-body dynamics and flange pose against MuJoCo 4.0.1 (six URDF files, 60 states
+  each); the D3's dynamics against a Lagrangian in SymPy and its mass split against a MuJoCo multibody model; the D2's
+  and the linear delta's inverse dynamics against Lagrangians; the drive's closed loop on the single axis against a
+  Python implementation written from the model reference, in four stages.
+- Property tests (proptest) of configs, `--set`, machine files, programs, trajectories, cam tables, drive traces,
+  mappings, vendor layouts, URDF and the FMI 2 and 3 C functions; a test that sets every number of every shipped config
+  to bad values (`bad_numbers.rs`); fuzz targets (`fuzz/`, cargo-fuzz) with a weekly workflow; criterion benchmarks per
+  machine (`crates/sim-machines/benches/simulate.rs`, not run in CI).
+- The time-optimal plan keeps every limit a verdict judges at a point of the path: the drive's maximum current, the
+  gearbox's input speed, the braking resistor's peak power, the machine's own parts (`Machine::rigid_checks`: screw
+  speed, d n and axial force, rack feed force) and the joints' friction; `profile.time_optimal_margin`.
+- App: mode shapes swung in the 3D view, the travelled path coloured by error, speed or utilisation, the workspace map
+  by condition number or tool acceleration, error bands drawn over the cycle's traces; `sim-cli modes --shapes` and
+  `sim-cli workspace`. The window tested by synthetic mouse, keyboard and resize input, without a screen
+  (`sim-app/src/window_tests.rs`).
+- Examples that run (`examples/`, `examples/README.md`), each command tested from the README.
+- The documents as a searchable site (mdBook) under https://sparkz400.github.io/KinematicsSimulation/docs/, links checked
+  by lychee.
+- The Python package prepared for PyPI: metadata, `crates/sim-py/README.md`, a trusted-publishing workflow
+  (`publish-python.yml`); the sdist carries the catalogue. Not published yet.
+- `analysis::set_max_threads`; the optimiser's candidates of one step run side by side, with the same result on any
+  number of threads.
+
+### Changed
+
+- CI: lint first, the tests built once and run in partitions, each check a job of its own; push runs only on main.
+- Replay (`sim-cli replay`, `fit`, `identify`) starts from the trace's own state: a run-up to the first row's position
+  and speed, none for a trace that starts at the config's own rest.
+- The fit smooths over a shorter window where a trace's moves are too short for 40 ms, down to one period of the
+  machine's lowest mode; on a run at one speed each way viscous and Coulomb friction are reported as one Coulomb value.
+- The stiffness fit from a move refuses a trace whose ringing power is below 1.25 times what the fitted replay leaves.
+- A machine built at rest is held where its tool stands, not where its motors' angles put it (`Controller::new`).
+- Joint machines work out their setpoint slack when first asked (the seven-axis arm builds in 56 ms instead of 1.8 s);
+  faster steps of the hexapod, the cable robots, the four-arm delta and the rigid chain, results bit for bit as before.
+- The flying saw: friction feedforward from its carriage's friction and velocity loop Tn 0.03 s; it comes to rest
+  within 14 µm instead of creeping 58 µm.
+- Cable robots: the elastic forward kinematics is the platform's static equilibrium on the cables; the inverse asks the
+  tension distribution's tensions.
+- `kinematics_sim.optimise()` returns `dwell_angle_error_peak_rad` (before, after), as `sim-cli optimise` prints it.
+- The app's delta and 3D-view pictures in docs/images are taken anew.
+
+### Fixed
+
+- A config number larger than 1e15 or (zero aside) smaller than 1e-15 in size is refused naming the key (below 1e-15 it
+  is read as 0); `sim.substeps` above 1000 is refused; a format version that the reader refuses is refused when set.
+- A drive started or enabled with a warm winding held its current with the cold resistance's voltage.
+- G-code with a multi-byte letter, trajectory files with `inf` or `NaN`, cam tables with infinite values or overflowing
+  slopes, KRL positions of `1e999`, a CODESYS export with an empty line above the numbers, mappings that overflow,
+  URDF files with loops, huge or tiny axes or overflowing links: each refused instead of a panic, a hang or NaN.
+- A program with a very slow feed is refused beyond ten million poses (`error-path-long`) instead of filling memory.
+- The time-optimal search for a piece's top speed looped for ever where nothing above 0 fits (the planar delta's
+  time-optimal cycle hung).
+- Cable robots: no NaN motor angles, speed setpoints or following errors where a cable sat at the edge of its tension
+  band or no pose fits the motor angles.
+- The app: a drag from a panel turned the camera; no pan; a touchpad's wheel jumped the zoom; a resize left the machine
+  out of view; the timeline's buttons and German texts ran out of the view; the travelled path was hidden behind the
+  planned one; the app did not start after the merge of two branches.
+- `check-dataset .` refused every dataset; the fit advised scaling viscous friction by -8.6 on a run at one speed.
+- The tests that failed at the cut: the parallel SCARA's creep at rest and its state after a ratio change, the four-arm
+  delta's tool turn after a ratio change and over OPC UA (its config keeps the tool on its spring), the CLI's energy
+  budget read by column name; the cross-machine tests now judge turning axes in rad, allow the gears' twist under load
+  (the palletiser in the model switch, tuning and ratio-change tests) and tell a ring-down from hunting; the app's tests
+  wait for the app, not for a count of frames or the wall clock.
 
 ### Added
 

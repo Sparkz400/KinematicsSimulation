@@ -4338,3 +4338,22 @@ Left open:
 - The real error's setpoint is the one sampled with the position, held over the profile cycle: at speed the
   tangential part can carry up to a cycle's way of setpoint lag (shortcut in `charts::tool_error`).
 - The spectrum takes the reference run (the scopes' window once kept), not the live window directly.
+
+## After the release cut: three waves of work (15 November)
+
+Merged on main between the cut (19c2ad1, 14 November) and 27544b4; the entries are in the 1.0.0 section of
+[CHANGELOG.md](CHANGELOG.md), what stays open in [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
+
+- Wave 1, fixes and checks: the tests failing at the cut fixed (parallel SCARA, four-arm delta, crank-cam, cross-machine
+  and app tests); independent references for the arms (MuJoCo), the D3, D2 and linear delta (Lagrangians, a MuJoCo
+  multibody model) and the drive's closed loop (Python); bad numbers refused in every config; property tests, fuzz
+  targets and benchmarks; torque and velocity mode for an outside controller (FMU, Python `ks.Sim`); CI as a gate in
+  partitions; the docs site; the Python package prepared for PyPI; the first measured data (ISW ball screw).
+- Wave 2, models and views: stops and brake delays (`sim-cli stop`), coupled link bending, the two-way base,
+  stepper and induction motors, the pneumatic cylinder, gripper time, friction feedforward from the machine's model,
+  gearbox mesh friction, the time-optimal plan inside every pointwise limit, the measured ball screw fitted, four
+  app views and the window tested by synthetic input, faster steps.
+- Wave 3, machines: tripod, wafer handler, toggle press, arm on a track (26 registered machines); the arms' modes with
+  the motors held; machine files that follow their crates' friction feedforward.
+- Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
+  in docs/validation.md.

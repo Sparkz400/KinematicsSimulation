@@ -922,13 +922,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
 
 ## Grenzen
 
-- Ein Glied biegt sich in einer Eigenform in der Ebene, in der sein Gelenk es dreht; aus dieser Ebene heraus und in
-  Torsion ist es starr, und Biegung und Gestell wirken nicht auf die Gelenke zurück (einseitig).
-
-- Die Roboter werden im Gelenkraum ausgelegt: keine kartesischen Bahnen und keine inverse Kinematik des Werkzeugs.
-- Jedes Gelenk eines Roboters hat denselben Motor, Antrieb und dasselbe Getriebe (nur die Übersetzung unterscheidet sich je
-  Gelenk), da der Antrieb ein `[motor]` und ein `[drive]` je Maschine liest; keine Getriebelebensdauer für Roboter mit
-  verschiedenen Übersetzungen der Gelenke.
+- Ein Glied biegt sich in einer Eigenform je Richtung (in der Ebene seines Gelenks; quer dazu und in Torsion mit
+  `link_bending.directions`); mit `effects.link_bending_reaction` wirkt die Biegung auf die Gelenke zurück, ohne
+  Lagranges Glieder zweiter Ordnung in der kleinen Biegung.
 - Die Steifigkeit einer Spindel wird für den ganzen Hub an der weichsten Stellung der Mutter genommen.
 - Der Roboter auf seiner Schiene: Der Schub der Zahnstange wird durch den Ursprung des Schlittens genommen (kein eigenes
   Moment auf die Wagen), die Kreiselmomente der Motorläufer des Arms fehlen in der Führungslast, und die Wagen sind
@@ -952,7 +948,6 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   `geometry.column_incline_deg`) ist eine Parallelkinematik und keine dieser Maschinen; siehe die
   [Modellreferenz](../model-reference.md#linear-delta).
 
-- Noch nicht gebaut: mechanische Kurvenscheiben, elektronische Kurvenscheiben und Profile für die fliegende Säge.
 - Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
   (an der weichsten Stellung der Mutter); noch keine Eigenfrequenzen (`resonance_hz`).
 - Tripod: Das Schwenken der Beine um ihre Basisgelenke fehlt wie am Hexapod; keine Reibung und kein Spiel in Dreh- und

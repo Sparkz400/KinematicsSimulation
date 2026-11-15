@@ -27,7 +27,8 @@ One abi3 wheel per platform serves every CPython from 3.10 on; type stubs are in
 - Documentation: https://sparkz400.github.io/KinematicsSimulation/docs/python.html
 - Source, issues and the other front ends (desktop app, CLI, OPC UA, FMI, browser): https://github.com/Sparkz400/KinematicsSimulation
 
-No real machine has been measured: friction, damping and stiffness are estimates with stated bounds, so trends and
-comparisons hold, absolute numbers are as good as the estimates (see the validation page of the documentation).
+One real machine has been measured, by others: a public ball screw test bench, replayed and fitted, with what matched
+and what did not on the validation page of the documentation. For everything else friction, damping and stiffness
+are estimates with stated bounds, so trends and comparisons hold, absolute numbers are as good as the estimates.
 
 Licensed under either of MIT or Apache-2.0, at your option.

@@ -2,30 +2,34 @@
 
 What the simulator has been compared with, and what it has not.
 
-**The short version.** Every check below proves one of two things: that the equations are solved correctly, or that the catalogue data was read correctly. None proves that the parameters describe a real machine. The project has measured no machine; one public measurement of a ball screw axis is compared [below](#against-measured-data).
+**The short version.** Every check below proves one of two things: that the equations are solved as documented, or that the catalogue data was read correctly. The independent implementations by other people (MuJoCo for the arms and the D3's mass split) can also catch a wrong equation for the model as documented. None proves that the parameters describe a real machine. The project has measured no machine of its own; one public measurement of a ball screw axis, made by ISW Stuttgart, is compared [below](#against-measured-data), and it is the only measured machine.
 
-All checks are automated tests. Run them with `cargo test --workspace`. The workspace has 417 tests. All of them passed on 13 November 2026 (`cargo nextest run --workspace --release --exclude sim-py`, with the delta picker, obstacles and the twelfth review fixes).
+All checks are automated tests. Run them with `cargo test --workspace`, or as [CONTRIBUTING.md](../CONTRIBUTING.md) does with cargo-nextest (the Python tests with pytest, see the CI workflow). The workspace has **TEST-COUNT** tests (placeholder: the coordinator fills in the count and the date of the final full run, `cargo nextest run --workspace --cargo-profile quick --exclude sim-py --profile full`, with the number that passed). Beside them: property tests (proptest) of every reader of untrusted input, fuzz targets in [`fuzz/`](../fuzz) run weekly by a workflow, and benchmarks per machine (`crates/sim-machines/benches/simulate.rs`, not run in CI).
 
 Test files, abbreviated in the tables:
 
 | Short | File |
 | --- | --- |
-| core | [`crates/sim-core/src/`](../crates/sim-core/src) (`integrate.rs`, `testkit.rs`) |
-| mech, drive, profile, path, identify, analysis | [`crates/sim-components/src/`](../crates/sim-components/src) `mech.rs`, `drive.rs`, `profile.rs`, `path.rs`, `identify.rs`, `analysis.rs` |
-| axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
+| core, sim-core | [`crates/sim-core/src/`](../crates/sim-core/src) (`integrate.rs`, `testkit.rs`, `config.rs`), [`crates/sim-core/tests/config_props.rs`](../crates/sim-core/tests/config_props.rs) |
+| mech, drive, profile, path, identify, analysis, joint, base, fault, gripper, ... | [`crates/sim-components/src/`](../crates/sim-components/src) `mech.rs`, `drive.rs`, `profile.rs`, `path.rs`, `identify.rs`, `analysis.rs`, `joint.rs`, `base.rs`, `fault.rs`, `gripper.rs`, `stepper.rs`, `induction.rs`, `pneumatic.rs`, `stop.rs` and the other modules' own tests; [`crates/sim-components/tests/`](../crates/sim-components/tests) |
+| axis, single axis | [`crates/machine-single-axis/src/tests.rs`](../crates/machine-single-axis/src/tests.rs) |
 | gantry | [`crates/machine-t-gantry/src/tests.rs`](../crates/machine-t-gantry/src/tests.rs) |
 | delta | [`crates/machine-delta-d3/src/tests.rs`](../crates/machine-delta-d3/src/tests.rs) |
 | delta2 | [`crates/machine-delta-d2/src/tests.rs`](../crates/machine-delta-d2/src/tests.rs) |
-
 | linear delta | [`crates/machine-delta-linear/src/tests.rs`](../crates/machine-delta-linear/src/tests.rs) |
-
 | delta4 | [`crates/machine-delta-d4/src/tests.rs`](../crates/machine-delta-d4/src/tests.rs) |
-| joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
-| suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
-| cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
+| H4, parallel SCARA, hexapod, tripod, cable robot, wafer handler | `src/tests.rs` of [`machine-delta-h4`](../crates/machine-delta-h4/src/tests.rs), [`machine-parallel-scara`](../crates/machine-parallel-scara/src/tests.rs), [`machine-hexapod`](../crates/machine-hexapod/src/tests.rs), [`machine-tripod`](../crates/machine-tripod/src/tests.rs), [`machine-cable-robot`](../crates/machine-cable-robot/src/tests.rs), [`machine-wafer-handler`](../crates/machine-wafer-handler/src/tests.rs) |
+| joint kit | [`crates/machine-joint-kit/src/tests.rs`](../crates/machine-joint-kit/src/tests.rs) |
+| crank, toggle | [`crates/machine-crank-cam/src/tests.rs`](../crates/machine-crank-cam/src/tests.rs), [`toggle_tests.rs`](../crates/machine-crank-cam/src/toggle_tests.rs) |
 | winder | [`crates/machine-winder/src/tests.rs`](../crates/machine-winder/src/tests.rs) |
-| plc | [`crates/sim-opcua/tests/plc.rs`](../crates/sim-opcua/tests/plc.rs) |
-| fmi | [`crates/sim-fmi/tests/fmi.rs`](../crates/sim-fmi/tests/fmi.rs), and `crates/sim-fmi/src/lib.rs` |
+| reference (per crate) | `tests/reference.rs` of [`machine-single-axis`](../crates/machine-single-axis/tests/reference.rs), [`machine-delta-d3`](../crates/machine-delta-d3/tests/reference.rs), [`machine-delta-d2`](../crates/machine-delta-d2/tests/reference.rs), [`machine-delta-linear`](../crates/machine-delta-linear/tests/reference.rs), [`machine-joint-kit`](../crates/machine-joint-kit/tests/reference.rs) |
+| sim-netlist | [`crates/sim-netlist/src/`](../crates/sim-netlist/src) |
+| suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat, life, conveyor, collision, fit_joints, machine_files, motor_kinds, pneumatic, stop, time_optimal, bad_numbers, ... | [`crates/sim-machines/tests/`](../crates/sim-machines/tests): one file per name (`suite.rs`, `control.rs`, ...), the catalogue checks in `catalog*.rs`, the machine files' in `machine_file*.rs`, the property tests in `*_props.rs` |
+| cli | [`crates/sim-cli/tests/`](../crates/sim-cli/tests) `cli.rs`, `identify.rs`, `examples.rs` |
+| app, window | [`crates/sim-app/tests/app.rs`](../crates/sim-app/tests/app.rs), [`crates/sim-app/src/window_tests.rs`](../crates/sim-app/src/window_tests.rs) |
+| plc | [`crates/sim-opcua/tests/`](../crates/sim-opcua/tests) `plc.rs`, `plcopen.rs`, `interop.rs`, `args.rs`, `soak.rs` |
+| fmi, sim-fmi lib | [`crates/sim-fmi/tests/`](../crates/sim-fmi/tests) `fmi.rs`, `fmi3.rs`, `fmi_props.rs`, and `crates/sim-fmi/src/lib.rs` |
+| Python | [`crates/sim-py/tests/`](../crates/sim-py/tests) (pytest) |
 
 - [The standard suite](#the-standard-suite-every-machine)
 - [Independent reference](#independent-reference)
@@ -35,17 +39,20 @@ Test files, abbreviated in the tables:
 - [Hand calculations: analysis and verdicts](#hand-calculations-analysis-and-verdicts)
 - [Hand calculations: delta picker D3](#hand-calculations-delta-picker-d3)
 - [Hand calculations: planar delta picker D2](#hand-calculations-planar-delta-picker-d2)
-
 - [Hand calculations: linear delta](#hand-calculations-linear-delta)
-
 - [Hand calculations: four-axis delta picker D4](#hand-calculations-four-axis-delta-picker-d4)
+- [Hand calculations: wafer handler](#hand-calculations-wafer-handler)
+- [Hand calculations: arms in tool space](#hand-calculations-arms-in-tool-space)
 - [Hand calculations: tripod](#hand-calculations-tripod)
-
+- [Hand calculations: arm on a track](#hand-calculations-arm-on-a-track)
+- [Hand calculations: picking from a conveyor](#hand-calculations-picking-from-a-conveyor)
+- [Hand calculations: pneumatic cylinder](#hand-calculations-pneumatic-cylinder)
 - [Hand calculations: toggle press](#hand-calculations-toggle-press)
-
 - [Hand calculations: winder with dancer](#hand-calculations-winder-with-dancer)
+- [Friction feedforward in the shipped configs](#friction-feedforward-in-the-shipped-configs)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
+- [Against measured data](#against-measured-data)
 - [What is not validated](#what-is-not-validated)
 
 ## The standard suite, every machine
@@ -1046,8 +1053,8 @@ The default configs of both machines are placeholders throughout.
 
 **Front ends:**
 
-- OPC UA: tested against a client written with the same library. Not against a Siemens, Beckhoff or CODESYS controller; no security profiles; no check of timing jitter.
-- FMI: checked once (13 November) with an independent tool, fmpy 0.3.32 (in the project's `.venv`), on the win64 FMUs of the T-gantry, the single axis and the EXCT-30 config (English and German): `fmpy.validation.validate_fmu` (FMI 2.0 XSD, variable names, model structure, start values, causality and variability, units) found no problem in any; `simulate_fmu` in co-simulation ran each with no log message. At rest, every output agreed with `sim-cli run` to the 9 digits the CLI prints (relative 5e-10). A setpoint ramp (X 0.1 m in 0.5 s; on the EXCT-30 also Z) ends where `sim-cli run --trajectory` with the same points ends, within 16 µm of position; on the way, the FMU's setpoint arrives one setpoint interval (10 ms) later and is interpolated linearly, the trajectory's with cubic Hermite, so the setpoints differ by up to 0.2 mm shifted by that interval and peak torques by up to 0.9 N m (single axis 2.6 N m of 2.8): a difference of the input path, not of the model. fmpy's error paths: a communication step of 0.1 ms (not a multiple of 62.5 µs) refused with `fmi2Error` and its message logged; a setpoint out of range logged as a warning per step. This is not part of `cargo test`. Not imported into Simulink, OpenModelica or Dymola; no linux64 binary tried.
+- OPC UA: tested against a client written with the same library, the secured endpoints (`interop.rs`) and the pacing and client jitter figures (`plc.rs`, `soak.rs`, [PLC](plc.md#real-time-pacing-and-jitter)) included. Not against a Siemens, Beckhoff or CODESYS controller; the jitter a real PLC brings is not measured.
+- FMI: checked once (13 November) with an independent tool, fmpy 0.3.32 (in the project's `.venv`), on the win64 FMUs of the T-gantry, the single axis and the EXCT-30 config (English and German): `fmpy.validation.validate_fmu` (FMI 2.0 XSD, variable names, model structure, start values, causality and variability, units) found no problem in any; `simulate_fmu` in co-simulation ran each with no log message. At rest, every output agreed with `sim-cli run` to the 9 digits the CLI prints (relative 5e-10). A setpoint ramp (X 0.1 m in 0.5 s; on the EXCT-30 also Z) ends where `sim-cli run --trajectory` with the same points ends, within 16 µm of position; on the way, the FMU's setpoint arrives one setpoint interval (10 ms) later and is interpolated linearly, the trajectory's with cubic Hermite, so the setpoints differ by up to 0.2 mm shifted by that interval and peak torques by up to 0.9 N m (single axis 2.6 N m of 2.8): a difference of the input path, not of the model. fmpy's error paths: a communication step of 0.1 ms (not a multiple of 62.5 µs) refused with `fmi2Error` and its message logged; a setpoint out of range logged as a warning per step. The same check is now `tools/check_fmu.py`, a step of CI on Windows and Linux (linux64 binary). Run in OpenModelica 1.27.1 through OMSimulator ([FMI export](fmi.md#openmodelica)); not imported into Simulink or Dymola.
 - App: what the app computes is tested without its window, against the library functions the command line uses (`sim-app/tests/app.rs`). The window itself is driven by synthetic input (`sim-app/src/window_tests.rs`, run with `cargo nextest run -p sim-app -E 'binary(sim-app)'`): the app as `main` builds it, Bevy without winit and without a renderer (so the tests need no screen or graphics card and run in CI as anywhere), fed the messages winit sends for cursor moves, mouse buttons, the wheel, keys, typed text and window resizes, its widgets found by their labels in egui's accessibility tree. They cover the orbit camera (a drag turns the view by 0.005 rad a pixel about its target; the wheel zooms by 0.9 a notch within 0.2 to 20 m, a touchpad's pixels 50 to a notch; the right or middle button pans with the point under the pointer staying there; a drag that starts on a panel or a control turns nothing; the presets front, side, top and angled put the camera on the stated side with the machine's box in view; a resize keeps it in view), the top bar (pause, speed, units, theme, machine and language lists), the motion tab (start cycle, stop, drives off and on, a target typed, move), the parameter panel (a value typed reaches the running simulation and stays; a word for a number, a key the config does not have and a value the simulation refuses are each refused with their message and the old value kept; a drag on a number changes it), an effect switch, the config file field (a file that does not exist is said and changes nothing), every tool tab's run button (cycle with error bands, sensitivity, optimiser, motor search, path from `examples/corner.path`, trace from a missing file, frequency response, tuning), the keys (Space replays and the arrows step the timeline over the view, but not while a field has the keys, where a space is typed; Tab moves to the next field), five clicks on a long analysis start it once, switching the machine during an analysis leaves no result of the old one, and closing the window during the optimiser exits within seconds. Every label of the panels changes with the language but a listed few that German shares (units, "Motor", "Pause", "Plan", "Live", "Position"); no widget overlaps another or sticks out of its panel in English or German at 1600 × 900 and 1280 × 720 (as far as the accessibility tree tells: a wrapped label's box is not its text, and plots and the 3D view's own labels are painted, not widgets). Not covered by the tests: the file dialogs (Open…, Save as…, Export, the sizing report and a plot's picture), which the tests cannot close; dragging a panel's edge; the right-click menu of a plot. How it looks was checked by eye (15 November) on pictures saved by the app's screenshot hook (`SIM_APP_SCREENSHOT`, with `SIM_APP_SIZE` and `SIM_APP_SETUP` added for this) of the T-gantry in every tools tab and setup tab, English and German, 1600 × 900 and 1280 × 720, with the motion, a planned path and the overlays: the defects found were fixed (texts and controls running out of the view or the window in German, the timeline's buttons, the scopes panel shrinking with the kept runs, plots with 0 alone on their axis across, the part labels' -0, the config tab's part names wrapped to the end of the line before their fields, the motor search's list names after their lists where the fields' names come before). Not fixed: at 1280 × 720 the view's controls cover much of the machine, and some tools tabs (motor search, path, tuning) widen the tools panel by up to 160 pixels. Since then the planned path is drawn as a wide amber line with the travelled path as a cyan line over it; before, the travelled line lay at the same depth, lost the depth test to the plan and was never seen. Only the T-gantry was looked at; the other 21 machines' 3D views were not. How the motion looks over time was seen in single pictures, not watched.
 
 **Catalogue data.** Cross-checks find values in the wrong row or column. They cannot find a number misread into another plausible number where nothing ties it to a second value. The misprints found are listed in the [catalogue](catalogue.md#misprints-and-inconsistencies-found-in-the-vendor-documents) document; there may be more.

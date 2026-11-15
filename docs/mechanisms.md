@@ -858,9 +858,6 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 ## Limits
 
-- The arms are sized in joint space: no Cartesian paths and no inverse kinematics of the tool.
-- Every joint of an arm has the same motor, drive and gearbox (only the ratio differs per joint), as the drive reads
-  one `[motor]` and `[drive]` per machine; no gearbox life for arms whose joints have different ratios.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
 - The arm on its track: the rack's push is taken through the carriage's origin (no moment of its own on the blocks),
   the arm's motor rotors' gyroscopic moments are left out of the guide load, and the blocks are rigid supports (no
@@ -869,8 +866,9 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 - A pneumatic cylinder is no tool axis and does not act back on the axis that carries it; its valve switches on/off
   (no proportional valve, no servo-pneumatic position loop); a tube is a flow element whose volume goes into the dead
   volumes; Festo prints no ISO 6358 C and b for the VUVG valves, so the shipped valve's are estimates.
-- A link bends in one mode in the plane its joint turns it in; out of that plane and in torsion it is rigid, and the
-  bending and the base do not act back on the joints (one-way).
+- A link bends in one mode per direction (in its joint's plane; across it and in torsion with
+  `link_bending.directions`); with `effects.link_bending_reaction` the bending acts back on the joints, without
+  Lagrange's terms of second order in the small bending.
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
 - A cam's master cannot yet be the conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's
@@ -881,7 +879,6 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 - The linear delta (`delta-linear`, three belt axes on columns that may lean, `geometry.column_incline_deg`) is a
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).
 
-- Not built yet: mechanical cams, electronic cams and flying saw profiles.
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
   (the screw's softest nut position); no modes reported (`resonance_hz`) for it yet.
 - Tripod: the legs' swing about their base joints is left out, as on the hexapod; no friction or play in the revolute

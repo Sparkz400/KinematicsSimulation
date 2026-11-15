@@ -320,7 +320,7 @@ E_cu  = ∫ R · i² dt,   W = ∫ τ · ω dt         copper loss and shaft wor
 
 With the back-EMF on, u · i = R i² + d(½ L i²)/dt + τ · ω at every moment (also under saturation, see below), so the electrical energy, the copper loss, the winding's stored energy and the work on the shaft close to the integration's error (the [energy budget](#energy-budget) checks it). Before 12 November the current was stepped exactly over a base step with the speed of its start, its power taken by the trapezoid rule, and the mechanics turned under the torque of the current at the end of the step. That held torque was a numerical phase lead of half a step: on undamped elastic configs it put 3 to 5 % of the supply into the mechanics, and on damped ones it hid part of the ringing (peak motor torque 3 % lower on the default T-gantry, 8 % on the single axis; see [PROGRESS](../PROGRESS.md)).
 
-Assumptions: no three phases, no d/q axes, no PWM, no inverter dead time, no field weakening, no iron loss. Below the current loop there is nothing.
+Assumptions: no three phases, no PWM, no inverter dead time. Field weakening (the winding as the q axis of a d-q model) and iron loss are effects of their own, below ([field weakening](#field-weakening)). Below the current loop there is nothing.
 
 ### Torque saturation
 
@@ -2209,7 +2209,7 @@ Not marked as shortcuts in the code, but worth knowing. Most are stated in the s
 
 | Area | Simplification |
 | --- | --- |
-| Motor | One equivalent winding. No phases, PWM, field weakening or iron loss |
+| Motor | One equivalent winding; with `effects.field_weakening` (on in the shipped configs) the q axis of a d-q model. No phases, PWM or inverter dead time; the iron loss (`effects.iron_loss`) heats the motor but is no drag on the shaft. The stepper and the induction motor are models of their own |
 | Drive | Delays are whole cycles; the fieldbus jitter is whole profile cycles, evenly spread, frame by frame independent. The same settings for every drive. The filters are generic, not a vendor's |
 | Thermal | One thermal mass per winding, gearbox and guide (`effects.part_heating`); no belt temperature (the belt is at ambient). With `effects.thermal_feedback` guide friction and gearbox losses follow the temperatures (one viscosity law for all lubricants); without it `effects.temperature` is two factors set by hand |
 | DC link | One per drive, or one for all with the sum of their capacitances; feedback into the line only through an ideal line module of one efficiency (`effects.regenerative_supply`); no resistor heating, no Line Module capacitance or busbar resistance; the bleeder draws only while the drives are disabled |
@@ -2221,4 +2221,4 @@ Not marked as shortcuts in the code, but worth knowing. Most are stated in the s
 | Stop | Categories 0, 1 and 2 ([Stops](#stops)); category 2 brakes along the direction of motion, not along a curved path, and without a jerk limit; the OFF3 ramp is a time from the rated speed; no safe torque monitoring beyond the SS1 timer |
 | Brakes | A spring up to the brake torque, then slipping with it; no wear. Engagement and release delays one for all brakes of a machine (`effects.brake_delay`); during the release delay the drive holds against the brake (a drive's brake control would wait for it). In the rigid model the spring holds the whole machine with the damping meant for the rotor |
 | Cycle | The payload's mass switches as a step, on arrival or, with `effects.gripper_time`, when the gripper is done; the gripper's times are fixed or a first-order vacuum build-up, no gripper dynamics or compliance. The vacuum cup's hold is judged with its axis vertical and its vacuum at the switch level. A swinging payload only on the joint machines (`effects.payload_swing`) |
-| Feedforward | Rigid model with inertia and gravity, loss-free: the gearbox's efficiency on them stays in the integrator. The friction feedforward (a recorded characteristic, or the machine's own steady friction) is off in most shipped configs |
+| Feedforward | Rigid model with inertia and gravity, loss-free: the gearbox's efficiency on them stays in the integrator. The friction feedforward (a recorded characteristic, or the machine's own steady friction) is on where it improves following and settling, off elsewhere ([validation](validation.md#friction-feedforward-in-the-shipped-configs)) |
