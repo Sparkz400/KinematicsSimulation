@@ -305,3 +305,30 @@ fn the_disc_cam_s_pressure_angle_and_contact_force_at_mid_rise_match_the_hand_ca
     // On the base circle the follower stands: no pressure angle but what the offset leaves, atan(-e / s0).
     assert!((disc.pressure_angle(5.5) + (0.01f64 / 0.0743303).atan()).abs() < 1e-6);
 }
+
+/// The flying saw's friction characteristic (drive.friction_feedforward_*) is its friction at the motor, by hand: pinion
+/// radius r = m z / (2 cos(beta)) = 0.002 * 30 / (2 cos(19.5283 deg)) = 0.0318310 m (200 mm a turn), ratio 5, rack and
+/// gearbox 0.97 each (eta = 0.9409, the motor drives). Coulomb: 80 N * r / (5 eta) + the motor's 0.05 N m =
+/// 0.541287 + 0.05 = 0.591287 N m, from the guides' smoothing speed 2 mm/s = 0.002 * 5 / r = 0.314159 rad/s on.
+/// Viscous: 100 N s/m * r^2 / (25 eta) + the motor's 2e-4 = 0.00450743 N m s/rad, so at 1.2 m/s (188.495 rad/s)
+/// 0.591287 + 0.849649 = 1.440936 N m.
+#[test]
+fn the_flying_saw_s_friction_characteristic_is_its_friction_at_the_motor() {
+    let cfg = FLYING_SAW.config();
+    assert!(cfg.bool("effects.friction_feedforward").unwrap());
+    let speed = cfg.f64s("drive.friction_feedforward_speed_rad_s").unwrap();
+    let torque = cfg.f64s("drive.friction_feedforward_torque_nm").unwrap();
+    assert_eq!(speed.len(), 2);
+    assert!((speed[0] - 0.314159).abs() < 1e-3 && (speed[1] - 188.495).abs() < 0.01, "{speed:?}");
+    assert!((torque[0] - 0.591287).abs() < 1e-3 && (torque[1] - 1.440936).abs() < 1e-3, "{torque:?}");
+    // The hand calculation's inputs are the config's.
+    let get = |k: &str| cfg.f64(k).unwrap();
+    assert_eq!(
+        [get("slide.friction_coulomb_n"), get("slide.friction_viscous_n_s_m"), get("slide.friction_smoothing_m_s")],
+        [80.0, 100.0, 0.002]
+    );
+    assert_eq!([get("rack.module_m"), get("rack.teeth"), get("rack.helix_angle_deg")], [0.002, 30.0, 19.5283]);
+    assert_eq!([get("gearbox.ratio"), get("gearbox.efficiency"), get("rack.efficiency")], [5.0, 0.97, 0.97]);
+    assert_eq!([get("motor.friction_coulomb_nm"), get("motor.friction_viscous_nm_s_rad")], [0.05, 2.0e-4]);
+    assert_eq!(get("axis.x.max_velocity_m_s"), 1.2);
+}

@@ -45,9 +45,9 @@ torque_feedforward = true
 # as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
 # cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
 fine_interpolation = true
-# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
-# config has a recorded characteristic.
-friction_feedforward = false
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). On: the flying saw's
+# characteristic is its carriage's friction; the others have none recorded (0 N m), so it changes nothing there.
+friction_feedforward = true
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false

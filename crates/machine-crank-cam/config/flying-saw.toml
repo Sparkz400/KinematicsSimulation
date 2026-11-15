@@ -123,11 +123,13 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# Found with `velocity_loop_margins` over the [bounds], friction on and off (14 November 2026, the merged model): at
-# least 38.2 degrees and 7.5 dB. Kp 0.15 and Tn 0.01 s kept 10 degrees without friction (crossover 14 Hz); Tn 0.03 s at
-# Kp 0.2 left 33.9 degrees at the bounds' worst, 0.05 s 41.0.
+# Found with `velocity_loop_margins` over the [bounds], friction on and off (15 November 2026): at least 33.9 degrees
+# and 7.46 dB (friction off, carriage 45 kg), 55.8 degrees with it. Kp is held by the rack and gearbox's resonance near
+# 520 Hz (Kp 0.3: 4.75 dB). Tn 0.03 s, not 0.04, with the friction characteristic below: the carriage came to rest
+# creeping on its friction's 2 mm/s smoothing under the integrator's charge, 58 um in 0.2 s after a move, now 13.5 um
+# (Tn 0.01 s alone: 13.3 um, but 16.1 degrees without friction; the characteristic alone: 26 um).
 velocity_kp_nm_s_rad = 0.2
-velocity_tn_s = 0.04
+velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
@@ -135,9 +137,12 @@ torque_feedforward_factor = 1.0
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
 torque_feedforward_model = "rigid"
 # With effects.friction_feedforward: the friction characteristic, torque over speed at rising speeds, linear between
-# the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
-friction_feedforward_speed_rad_s = [10.0]
-friction_feedforward_torque_nm = [0.0]
+# the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] the carriage's and the motor's friction
+# above at the motor, through the rack and gearbox's efficiencies (pinion radius 31.831 mm, ratio 5): Coulomb from
+# the guides' smoothing speed 2 mm/s (0.314 rad/s) on, the viscous part up to 1.2 m/s (188.5 rad/s); the test
+# `the_flying_saw_s_friction_characteristic_is_its_friction_at_the_motor` has the hand calculation.
+friction_feedforward_speed_rad_s = [0.314, 188.5]
+friction_feedforward_torque_nm = [0.591, 1.441]
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
