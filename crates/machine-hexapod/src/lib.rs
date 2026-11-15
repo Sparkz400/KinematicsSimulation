@@ -28,7 +28,7 @@
 //! shortcut: the payload is a point mass at the platform centre (no inertia of its own); give it an inertia where a
 //! large workpiece turns with the platform.
 
-use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, solve};
+use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, Lu, MOTOR_IDS, MOTOR_KEYS, Mechanism, solve};
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::rigid::{M3, V3, about, add, cross, dot, matmul, mul};
@@ -172,17 +172,9 @@ pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
     if !(least > 1e-24 * most) { f64::INFINITY } else { (most / least).sqrt() }
 }
 
-/// The inverse of an n x n matrix (row by row), column by column; `None` where it is singular.
-fn inverse(m: &[f64], n: usize) -> Option<Vec<f64>> {
-    let mut inv = vec![0.0; n * n];
-    for c in 0..n {
-        let e: Vec<f64> = (0..n).map(|r| if r == c { 1.0 } else { 0.0 }).collect();
-        let x = solve(m, &e)?;
-        for r in 0..n {
-            inv[r * n + c] = x[r];
-        }
-    }
-    Some(inv)
+/// The inverse of J (rows), column by column; `None` where it is singular.
+fn inverse(j: &[[f64; 6]; 6]) -> Option<[[f64; 6]; 6]> {
+    Lu::new(j)?.inverse()
 }
 
 /// The legs at a platform pose: unit vectors u_i from base to platform joint, lengths L_i, and the platform joints'
@@ -259,12 +251,15 @@ impl Geometry {
 
     /// The Jacobian J (6 x 6, row by row) of the legs' extension rates over the platform's twist (v, w).
     pub fn jacobian(legs: &Legs) -> Vec<f64> {
-        let mut j = vec![0.0; 36];
-        for i in 0..6 {
+        Self::jacobian_rows(legs).concat()
+    }
+
+    /// `jacobian` by rows.
+    fn jacobian_rows(legs: &Legs) -> [[f64; 6]; 6] {
+        std::array::from_fn(|i| {
             let m = cross(legs.b[i], legs.u[i]);
-            j[i * 6..i * 6 + 6].copy_from_slice(&[legs.u[i][0], legs.u[i][1], legs.u[i][2], m[0], m[1], m[2]]);
-        }
-        j
+            [legs.u[i][0], legs.u[i][1], legs.u[i][2], m[0], m[1], m[2]]
+        })
     }
 
     /// Leg extensions for a tool pose (closed form); `false` where a leg would be of no length.
@@ -282,7 +277,7 @@ impl Geometry {
         let mut converged = false;
         for _ in 0..40 {
             let legs = self.legs_at(p, &r);
-            let miss: Vec<f64> = (0..6).map(|i| q[i] + self.closed - legs.length[i]).collect();
+            let miss: [f64; 6] = std::array::from_fn(|i| q[i] + self.closed - legs.length[i]);
             let worst = miss.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             if !worst.is_finite() {
                 break;
@@ -291,7 +286,7 @@ impl Geometry {
                 converged = true;
                 break;
             }
-            let Some(step) = solve(&Self::jacobian(&legs), &miss) else { break };
+            let Some(step) = Lu::new(&Self::jacobian_rows(&legs)).and_then(|lu| lu.solve(miss)) else { break };
             p = add(p, [step[0], step[1], step[2]]);
             r = matmul(&exp([step[3], step[4], step[5]]), &r);
         }
@@ -469,13 +464,13 @@ impl Hexapod {
     }
 
     /// The platform's mass matrix over its twist (6 x 6).
-    fn twist_mass(&self, r: &M3) -> Vec<f64> {
+    fn twist_mass(&self, r: &M3) -> [[f64; 6]; 6] {
         let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
-        let mut m = vec![0.0; 36];
+        let mut m = [[0.0; 6]; 6];
         for k in 0..3 {
-            m[k * 6 + k] = self.moving();
+            m[k][k] = self.moving();
             for c in 0..3 {
-                m[(3 + k) * 6 + 3 + c] = iw[k][c];
+                m[3 + k][3 + c] = iw[k][c];
             }
         }
         m
@@ -499,36 +494,33 @@ impl Mechanism for Hexapod {
             bias.fill(f64::NAN);
             return;
         };
-        let Some(jinv) = inverse(&Geometry::jacobian(&legs), 6) else {
+        let Some(jinv) = inverse(&Geometry::jacobian_rows(&legs)) else {
             mass.fill(f64::NAN);
             bias.fill(f64::NAN);
             return;
         };
-        let xi: Vec<f64> = (0..6).map(|r| (0..6).map(|c| jinv[r * 6 + c] * qd[c]).sum()).collect();
+        let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * qd[c]).sum());
         let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
-        let a0: Vec<f64> = (0..6)
-            .map(|i| {
-                let wi = add(v, cross(w, legs.b[i]));
-                let along = dot(legs.u[i], wi);
-                (dot(wi, wi) - along * along) / legs.length[i] + dot(legs.u[i], cross(w, cross(w, legs.b[i])))
-            })
-            .collect();
+        let a0: [f64; 6] = std::array::from_fn(|i| {
+            let wi = add(v, cross(w, legs.b[i]));
+            let along = dot(legs.u[i], wi);
+            (dot(wi, wi) - along * along) / legs.length[i] + dot(legs.u[i], cross(w, cross(w, legs.b[i])))
+        });
         let mx = self.twist_mass(&r);
-        let iw = [[mx[21], mx[22], mx[23]], [mx[27], mx[28], mx[29]], [mx[33], mx[34], mx[35]]];
+        let iw = [[mx[3][3], mx[3][4], mx[3][5]], [mx[4][3], mx[4][4], mx[4][5]], [mx[5][3], mx[5][4], mx[5][5]]];
         let gyro = cross(w, mul(&iw, w));
-        let jinv_a0: Vec<f64> = (0..6).map(|r| (0..6).map(|c| jinv[r * 6 + c] * a0[c]).sum()).collect();
-        let wrench: Vec<f64> = (0..6)
-            .map(|k| {
-                let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k];
-                held - (0..6).map(|c| mx[k * 6 + c] * jinv_a0[c]).sum::<f64>()
-            })
-            .collect();
+        let jinv_a0: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * a0[c]).sum());
+        let wrench: [f64; 6] = std::array::from_fn(|k| {
+            let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k];
+            held - (0..6).map(|c| mx[k][c] * jinv_a0[c]).sum::<f64>()
+        });
+        // M_xi J^-1, once for every column of M_q.
+        let mx_jinv: [[f64; 6]; 6] =
+            std::array::from_fn(|k| std::array::from_fn(|j| (0..6).map(|l| mx[k][l] * jinv[l][j]).sum::<f64>()));
         for i in 0..6 {
-            bias[i] = (0..6).map(|k| jinv[k * 6 + i] * wrench[k]).sum();
+            bias[i] = (0..6).map(|k| jinv[k][i] * wrench[k]).sum();
             for j in 0..6 {
-                mass[i * 6 + j] = (0..6)
-                    .map(|k| jinv[k * 6 + i] * (0..6).map(|l| mx[k * 6 + l] * jinv[l * 6 + j]).sum::<f64>())
-                    .sum();
+                mass[i * 6 + j] = (0..6).map(|k| jinv[k][i] * mx_jinv[k][j]).sum();
             }
         }
     }
@@ -537,8 +529,8 @@ impl Mechanism for Hexapod {
     /// rotor spins along the leg's u_i. The legs' shares at the base joints do not move.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
         let (tool, legs, r) = self.pose(q)?;
-        let jinv = inverse(&Geometry::jacobian(&legs), 6)?;
-        let xi: Vec<f64> = (0..6).map(|r| (0..6).map(|c| jinv[r * 6 + c] * qd[c]).sum()).collect();
+        let jinv = inverse(&Geometry::jacobian_rows(&legs))?;
+        let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * qd[c]).sum());
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         sim_components::base::add_point(&mut f, self.moving(), [tool[0], tool[1], tool[2]], [xi[0], xi[1], xi[2]]);
         let iw = matmul(&matmul(&r, &self.inertia), &transpose(&r));

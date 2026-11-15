@@ -22,13 +22,18 @@ use sim_core::{
 /// Solves the n x n system `m` (row by row) x = b by Gaussian elimination with partial pivoting; `None` where `m` is
 /// singular.
 pub fn solve(m: &[f64], b: &[f64]) -> Option<Vec<f64>> {
-    let n = b.len();
-    let mut a = m.to_vec();
-    let mut x = b.to_vec();
+    let (mut a, mut x) = (m.to_vec(), b.to_vec());
+    solve_in_place(&mut a, &mut x).then_some(x)
+}
+
+/// `solve` without its copies: eliminates `a` in place and leaves the solution in `x`; `false` where `a` is singular or
+/// the solution not finite (`a` and `x` are then of no use).
+pub fn solve_in_place(a: &mut [f64], x: &mut [f64]) -> bool {
+    let n = x.len();
     for c in 0..n {
-        let p = (c..n).max_by(|&i, &j| a[i * n + c].abs().total_cmp(&a[j * n + c].abs()))?;
+        let Some(p) = (c..n).max_by(|&i, &j| a[i * n + c].abs().total_cmp(&a[j * n + c].abs())) else { return false };
         if !(a[p * n + c].abs() > 1e-300) {
-            return None;
+            return false;
         }
         if p != c {
             for k in 0..n {
@@ -48,7 +53,65 @@ pub fn solve(m: &[f64], b: &[f64]) -> Option<Vec<f64>> {
         let s: f64 = (c + 1..n).map(|k| a[c * n + k] * x[k]).sum();
         x[c] = (x[c] - s) / a[c * n + c];
     }
-    x.iter().all(|v| v.is_finite()).then_some(x)
+    x.iter().all(|v| v.is_finite())
+}
+
+/// `solve`'s elimination of a fixed-size matrix, kept for several right-hand sides: each solve does the very operations
+/// `solve` does, so the results are the same to the bit, without a heap allocation and with the matrix eliminated once.
+pub struct Lu<const N: usize> {
+    a: [[f64; N]; N],
+    factor: [[f64; N]; N],
+    pivot: [usize; N],
+}
+
+impl<const N: usize> Lu<N> {
+    /// `None` where `m` is singular (as `solve`).
+    pub fn new(m: &[[f64; N]; N]) -> Option<Self> {
+        let (mut a, mut factor, mut pivot) = (*m, [[0.0; N]; N], [0; N]);
+        for c in 0..N {
+            let p = (c..N).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
+            if !(a[p][c].abs() > 1e-300) {
+                return None;
+            }
+            a.swap(p, c);
+            pivot[c] = p;
+            for r in c + 1..N {
+                let f = a[r][c] / a[c][c];
+                for k in c..N {
+                    a[r][k] -= f * a[c][k];
+                }
+                factor[r][c] = f;
+            }
+        }
+        Some(Self { a, factor, pivot })
+    }
+
+    /// x with m x = b; `None` where it is not finite (as `solve`).
+    pub fn solve(&self, mut x: [f64; N]) -> Option<[f64; N]> {
+        for c in 0..N {
+            x.swap(self.pivot[c], c);
+            for r in c + 1..N {
+                x[r] -= self.factor[r][c] * x[c];
+            }
+        }
+        for c in (0..N).rev() {
+            let s: f64 = (c + 1..N).map(|k| self.a[c][k] * x[k]).sum();
+            x[c] = (x[c] - s) / self.a[c][c];
+        }
+        x.iter().all(|v| v.is_finite()).then_some(x)
+    }
+
+    /// m^-1 (rows), column by column as `solve` would find each; `None` where a column is not finite.
+    pub fn inverse(&self) -> Option<[[f64; N]; N]> {
+        let mut inv = [[0.0; N]; N];
+        for c in 0..N {
+            let x = self.solve(std::array::from_fn(|r| if r == c { 1.0 } else { 0.0 }))?;
+            for r in 0..N {
+                inv[r][c] = x[r];
+            }
+        }
+        Some(inv)
+    }
 }
 
 /// What a mechanism tells the joint machine.
@@ -397,8 +460,14 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let (qa, qda) = self.all_joints(s);
-        let (mass, bias) = self.load_all(&qa, &qda);
+        let joints;
+        let (qa, qda) = if p == 0 {
+            (q, qd)
+        } else {
+            joints = self.all_joints(s);
+            (&joints.0[..], &joints.1[..])
+        };
+        let (mass, bias) = self.load_all(qa, qda);
         let springs = self.passive_torque(&qa[n..], &qda[n..]);
         let drive: Vec<f64> = (0..n)
             .map(|k| {
@@ -415,8 +484,11 @@ impl<M: Mechanism> JointMachine<M> {
             for k in 0..n {
                 m[k * all + k] += loss[k] * self.joints[k].drive.reflected_inertia();
             }
-            let rhs: Vec<f64> = (0..all).map(|k| if k < n { loss[k] * drive[k] } else { 0.0 } + rest[k]).collect();
-            solve(&m, &rhs).unwrap_or_else(|| vec![f64::NAN; all])
+            let mut x: Vec<f64> = (0..all).map(|k| if k < n { loss[k] * drive[k] } else { 0.0 } + rest[k]).collect();
+            if !solve_in_place(&mut m, &mut x) {
+                x.fill(f64::NAN);
+            }
+            x
         };
         let first = solve_with(&vec![1.0; n]);
         let loss: Vec<f64> = (0..n)
@@ -728,11 +800,21 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             }
             return self.flex_rates(s, &acc, out);
         }
-        let (qa, qda) = self.all_joints(s);
-        let (mass, bias) = self.load_all(&qa, &qda);
+        // Without passive joints the driven ones are all, as they stand in the state.
+        let joints;
+        let (qa, qda) = if p == 0 {
+            (q, qd)
+        } else {
+            joints = self.all_joints(s);
+            (&joints.0[..], &joints.1[..])
+        };
+        let (mut mass, bias) = self.load_all(qa, qda);
         let springs = self.passive_torque(&qa[n..], &qda[n..]);
         let process = self.process(q, qd);
-        let mut rhs: Vec<f64> = vec![0.0; n].into_iter().chain((0..p).map(|i| springs[i] - bias[n + i])).collect();
+        let mut rhs = vec![0.0; n + p];
+        for i in 0..p {
+            rhs[n + i] = springs[i] - bias[n + i];
+        }
         for k in 0..n {
             let j = &self.joints[k].drive;
             let (gear, rotor_acc, brake_rate) =
@@ -742,7 +824,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             out[3 * n + k] = rotor_acc;
             out[4 * n + k] = brake_rate;
         }
-        let acc = solve(&mass, &rhs).unwrap_or_else(|| vec![f64::NAN; n + p]);
+        if !solve_in_place(&mut mass, &mut rhs) {
+            rhs.fill(f64::NAN);
+        }
+        let acc = rhs;
         out[n..2 * n].copy_from_slice(&acc[..n]);
         out[at + p..at + 2 * p].copy_from_slice(&acc[n..]);
         self.flex_rates(s, &acc, out);
@@ -775,10 +860,17 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             }
         }
     }
+    /// `rotors`, written in place (called at every stage of the integration).
     fn motor_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
-        let (rotor, speed) = self.rotors(s);
-        pos[..self.n()].copy_from_slice(&rotor);
-        vel[..self.n()].copy_from_slice(&speed);
+        let n = self.n();
+        if self.elastic {
+            pos[..n].copy_from_slice(&s[2 * n..3 * n]);
+            vel[..n].copy_from_slice(&s[3 * n..4 * n]);
+        } else {
+            for k in 0..n {
+                (pos[k], vel[k]) = (s[k] * self.joints[k].drive.ratio(), s[n + k] * self.joints[k].drive.ratio());
+            }
+        }
     }
 
     /// Rigid, loss-free, at rest: (M q'' + g) at the joint over the ratio, plus the rotor's own J i q'', with q'' what

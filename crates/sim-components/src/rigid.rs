@@ -224,6 +224,15 @@ pub struct Chain {
 /// Each joint's frame in the base frame: rotation and position.
 pub type Frames = Vec<(M3, V3)>;
 
+/// Bodies a chain's dynamics keep their working values for on the stack; a longer chain takes the heap.
+const ON_STACK: usize = 12;
+
+/// `f` with room for `n` values: the dynamics run four times a step, and the heap's allocations were a tenth of the
+/// work on a six-joint arm.
+fn scratch<T: Copy + Default, R>(n: usize, f: impl FnOnce(&mut [T]) -> R) -> R {
+    if n <= ON_STACK { f(&mut [T::default(); ON_STACK][..n]) } else { f(&mut vec![T::default(); n]) }
+}
+
 impl Chain {
     pub fn len(&self) -> usize {
         self.bodies.len()
@@ -290,8 +299,21 @@ impl Chain {
         extra: Option<Inertial>,
         tau: &mut [f64],
     ) {
+        scratch(self.len(), |forces| self.newton_euler_into(links, qd, qdd, g, extra, tau, forces));
+    }
+
+    /// `newton_euler` with room for each body's force and moment.
+    fn newton_euler_into(
+        &self,
+        links: &[(M3, V3)],
+        qd: &[f64],
+        qdd: &[f64],
+        g: f64,
+        extra: Option<Inertial>,
+        tau: &mut [f64],
+        forces: &mut [(V3, V3)],
+    ) {
         let n = self.len();
-        let mut forces: Vec<(V3, V3)> = Vec::with_capacity(n);
         // The base accelerates up by g instead of gravity pulling down.
         let (mut w, mut dw, mut a) = ([0.0; 3], [0.0; 3], [0.0, 0.0, g]);
         for i in 0..n {
@@ -315,7 +337,7 @@ impl Chain {
             let ac = add(a, add(cross(dw, body.com), cross(w, cross(w, body.com))));
             let force = scale(ac, body.mass);
             let moment = add(mul(&body.inertia, dw), cross(w, mul(&body.inertia, w)));
-            forces.push((force, add(moment, cross(body.com, force))));
+            forces[i] = (force, add(moment, cross(body.com, force)));
         }
         // Back from the tip: what each body passes to the one before it, about its own origin.
         let (mut f, mut m) = ([0.0; 3], [0.0; 3]);
@@ -348,31 +370,45 @@ impl Chain {
     /// each, at a fraction of the work.
     fn mass_matrix_at(&self, links: &[(M3, V3)], extra: Option<Inertial>, out: &mut [f64]) {
         let n = self.len();
+        scratch(n, |axes| {
+            scratch(n, |origins| scratch(n, |columns| self.mass_matrix_into(links, extra, out, axes, origins, columns)))
+        });
+    }
+
+    /// `mass_matrix_at` with room for the joints' axes and origins and a body's Jacobian columns.
+    fn mass_matrix_into(
+        &self,
+        links: &[(M3, V3)],
+        extra: Option<Inertial>,
+        out: &mut [f64],
+        axes: &mut [V3],
+        origins: &mut [V3],
+        columns: &mut [(V3, V3)],
+    ) {
+        let n = self.len();
         out[..n * n].fill(0.0);
         let (mut rot, mut pos) = (IDENTITY, [0.0; 3]);
-        let (mut axes, mut origins) = (Vec::with_capacity(n), Vec::with_capacity(n));
-        let mut columns: Vec<(V3, V3)> = Vec::with_capacity(n);
         for k in 0..n {
             let (r, p) = links[k];
             pos = add(pos, mul(&rot, p));
             rot = matmul(&rot, &r);
             let b = &self.bodies[k];
-            axes.push(mul(&rot, b.axis));
-            origins.push(pos);
+            axes[k] = mul(&rot, b.axis);
+            origins[k] = pos;
             let mut body = b.inertial;
             if let (true, Some(payload)) = (k + 1 == n, extra) {
                 body = body.merged(&payload, &IDENTITY, [0.0; 3]);
             }
             let c = add(pos, mul(&rot, body.com));
             let turned = matmul(&matmul(&rot, &body.inertia), &transpose(&rot));
-            columns.clear();
-            columns.extend((0..=k).map(|j| {
-                if self.bodies[j].prismatic {
+            for j in 0..=k {
+                columns[j] = if self.bodies[j].prismatic {
                     (axes[j], [0.0; 3])
                 } else {
                     (cross(axes[j], sub(c, origins[j])), axes[j])
-                }
-            }));
+                };
+            }
+            let columns = &columns[..=k];
             for (i, (vi, wi)) in columns.iter().enumerate() {
                 let iw = mul(&turned, *wi);
                 for (j, (vj, wj)) in columns.iter().enumerate() {
@@ -385,9 +421,14 @@ impl Chain {
     /// The mass matrix (`mass_matrix`) and the torques at zero acceleration (velocity terms and gravity,
     /// `inverse_dynamics` with q'' = 0) at once, the links worked out once for both.
     pub fn dynamics(&self, q: &[f64], qd: &[f64], g: f64, extra: Option<Inertial>, mass: &mut [f64], bias: &mut [f64]) {
-        let links: Vec<(M3, V3)> = (0..self.len()).map(|i| self.link(i, q[i])).collect();
-        self.mass_matrix_at(&links, extra, mass);
-        self.newton_euler(&links, qd, &vec![0.0; q.len()], g, extra, bias);
+        let n = self.len();
+        scratch(n, |links: &mut [(M3, V3)]| {
+            for (i, link) in links.iter_mut().enumerate() {
+                *link = self.link(i, q[i]);
+            }
+            self.mass_matrix_at(links, extra, mass);
+            scratch(q.len(), |rest: &mut [f64]| self.newton_euler(links, qd, rest, g, extra, bias));
+        });
     }
 
     /// Potential energy in gravity g: the sum of m g z of every centre of mass.
