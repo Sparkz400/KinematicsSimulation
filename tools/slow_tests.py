@@ -1,9 +1,11 @@
 """Writes the slow tests into .config/nextest.toml: those that took longer than THRESHOLD seconds in a full run's JUnit
 report (`cargo nextest run --workspace --cargo-profile quick --exclude sim-py --profile full` writes target/nextest/full/junit.xml).
 The default profile leaves them out (`cargo nextest run` takes a few minutes); the profiles `full` and `ci-full` (CI on
-a push to main) run them.
+a push to main) run them. The filter names each test exactly, so that a test it does not name (a new one, or one renamed
+or split into one test per machine) is run until the next rewrite, not left out. Several reports (CI's partitions,
+artifacts junit-*) are read together.
 
-    python tools/slow_tests.py [target/nextest/full/junit.xml]
+    python tools/slow_tests.py [target/nextest/full/junit.xml ...]
 """
 import re
 import sys
@@ -20,11 +22,12 @@ SWEEPS = (
 )
 
 
-def slow_tests(junit: Path) -> list[tuple[str, str]]:
+def slow_tests(junits: list[Path]) -> list[tuple[str, str]]:
     out = set()
-    for case in ET.parse(junit).getroot().iter("testcase"):
-        if float(case.get("time", "0")) > THRESHOLD:
-            out.add((case.get("classname", ""), case.get("name", "")))
+    for junit in junits:
+        for case in ET.parse(junit).getroot().iter("testcase"):
+            if float(case.get("time", "0")) > THRESHOLD:
+                out.add((case.get("classname", ""), case.get("name", "")))
     return sorted(out)
 
 
@@ -33,8 +36,8 @@ def filterset(tests: list[tuple[str, str]]) -> str:
 
 
 def main() -> None:
-    junit = Path(sys.argv[1] if len(sys.argv) > 1 else "target/nextest/full/junit.xml")
-    tests = slow_tests(junit)
+    junits = [Path(a) for a in sys.argv[1:]] or [Path("target/nextest/full/junit.xml")]
+    tests = slow_tests(junits)
     text = CONFIG.read_text(encoding="utf-8")
     block = f'{BEGIN}\ndefault-filter = """\nnot ({SWEEPS})\n& not (\n{filterset(tests)}\n)\n"""\n{END}'
     new, n = re.subn(re.escape(BEGIN) + r".*?" + re.escape(END), lambda _: block, text, flags=re.S)

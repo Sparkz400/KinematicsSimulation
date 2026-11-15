@@ -48,7 +48,8 @@ Its default profile runs the fast tests: it leaves out every test that takes ove
 `tools/slow_tests.py` from the timings of a full run. A pull request runs those. A push to main runs all of them (the
 profile `full` locally, `ci-full` in CI) and then the long sweeps: the velocity loops' margins across the bounds
 (`across_the_bounds::*` in the control tests of sim-machines) and the EXCT-30's search for the worst corner of its
-bounds, which no profile runs by itself.
+bounds, which no profile runs by itself. The filter names each slow test exactly, so a new or renamed test (or a check
+split into one test per machine, `<check>::machine_06`) runs in the default profile until the list is written again.
 
 ```
 cargo nextest run --workspace --cargo-profile quick --exclude sim-py --profile full
@@ -60,6 +61,24 @@ The first runs every test and writes their times to `target/nextest/full/junit.x
 20 s into the default filter again; the third runs the sweeps. One test:
 `cargo nextest run --cargo-profile quick -p sim-machines -E 'test(=every_effect_switch_changes_the_traces)'`. sim-py
 is built and tested with maturin (see the CI workflow).
+
+### CI
+
+`.github/workflows/ci.yml` runs on every pull request and every push to main, each check a job of its own, so that a
+red one hides none of the others; Windows and Linux each:
+
+- `lint`: `cargo fmt --check` and clippy, without waiting for any test; red in the first minutes.
+- `build`: every test binary, built once and packed with `cargo nextest archive`.
+- `test`: the archive run in partitions, each on a runner of its own (`--partition count:k/n`, n = 2 on a pull request,
+  6 on main), with the profile `ci` (fast tests) on a pull request and `ci-full` (all) on main. On main every partition
+  keeps its `junit.xml` as an artifact `junit-<os>-<k>`; `python tools/slow_tests.py junit-*/junit.xml` writes the slow
+  list from them as from a local full run (CI's runners have 4 cores, so the times are longer than on 16 threads).
+- `plc`: the OPC UA tests that run against the wall clock, one at a time.
+- `sweeps` (main only): the long sweeps in four groups, the last taking every sweep the others do not name.
+- `doctests`, `fmu` (the FMU check with fmpy), `python` (wheel, clippy of sim-py, pytest with one worker per core,
+  CAD mass tests), `deny`, `wasm`.
+
+The jobs that run the archive wait for `build`, but run even when the other platform's build failed.
 
 ## Licence
 

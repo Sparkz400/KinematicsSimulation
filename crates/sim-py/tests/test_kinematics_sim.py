@@ -457,9 +457,13 @@ def test_fmu_matches_the_cli(tmp_path):
 
 
 def test_verdicts_at_the_worst_corner_match_the_cli():
-    cfg = ks.Config(FIRST)
+    # As the CLI's own test: the first machine with one motor, from cold, so that the search stays short (the first
+    # machine's took half an hour on CI, twice).
+    machine = next(m["id"] for m in ks.machines() if len(set(ks.verdicts(ks.Config(m["id"]))["motor"]) - {None}) == 1)
+    cfg = ks.Config(machine)
+    cfg["effects.thermal_warm_start"] = False
     result = ks.verdicts(cfg, bands=True, worst=True)
-    rows = cli("verdicts", FIRST, "--bands", "--worst")
+    rows = cli("verdicts", machine, "--bands", "--worst", "--set", "effects.thermal_warm_start=false")
     assert result["check"] == [r["check"] for r in rows] and result["runs"] >= 1
     assert [("ok" if ok else "FAIL") for ok in result["worst_ok"]] == [r["worst_case"] for r in rows]
     assert [";".join(b) for b in result["at_high_bound"]] == [r["at_high_bound"] for r in rows]
