@@ -170,7 +170,7 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
             .zip(&start)
             .map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum())
             .collect();
-        let twist = twist_in_move(entry, &cfg, &target);
+        let (twist, off) = twist_in_move(entry, &cfg, &target);
         let position: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect();
         let error: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.following_error", a.id)).collect();
 
@@ -197,12 +197,14 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         plc.simulated(0.3).await;
         let reached = plc.numbers(&position).await;
         // The setpoint is the target; the tool is off it by what the gearboxes and belts give way under the weight
-        // they hold (`at_rest_within`).
+        // they hold (`at_rest_within`), or where the move left them in their friction and play: as far as the same move
+        // without the server leaves it, times the same 1.2 (`twist_in_move`).
         let setpoint = plc
             .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
             .await;
-        let rest = at_rest_within(entry, &target);
+        let at_rest = at_rest_within(entry, &target);
         for i in 0..axes.len() {
+            let rest = at_rest.max(1.2 * off[i]);
             assert!(
                 (setpoint[i] - target[i]).abs() < 1e-6,
                 "{}: axis {i} set to {} m, target {} m",
@@ -929,28 +931,39 @@ fn at_rest_within(entry: &'static MachineEntry, pose: &[f64]) -> f64 {
 
 /// Per axis, how far the tool gets from its motors' pose (the forward kinematics of the motor angles, the gears taken
 /// as rigid) in a move from the start pose to `target` and 0.3 s on, run without the server: the twist of the gears and
-/// belts beyond the motors, which the drives' loops do not see.
-fn twist_in_move(entry: &'static MachineEntry, cfg: &sim_core::Config, target: &[f64]) -> Vec<f64> {
+/// belts beyond the motors, which the drives' loops do not see. And, second, how far the tool is from `target` at most
+/// from 0.3 s to 1 s after that move (when the test reads it): where the move leaves the gears. Their friction and play
+/// hold them anywhere in a band, so the tool rests elsewhere than when it starts at `target`: the four-arm delta's tool
+/// turn 0.31 to 0.82 mrad off, 0.75 with every loss and play off (its gravity sag through the springs), 0 started there.
+fn twist_in_move(entry: &'static MachineEntry, cfg: &sim_core::Config, target: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut sim = Sim::new(entry, cfg).unwrap();
     let (n, m) = (sim.machine.axes().len(), sim.machine.motors().len());
-    let mut twist = vec![0f64; n];
+    let (mut twist, mut off) = (vec![0f64; n], vec![0f64; n]);
     sim.command(sim_components::Command::MoveTo(target.to_vec())).unwrap();
     let (mut pos, mut vel, mut angle, mut speed, mut at_motors) =
         (vec![0.0; n], vec![0.0; n], vec![0.0; m], vec![0.0; m], vec![0.0; n]);
-    let mut rest = 0;
-    while rest < (0.3 / sim.dt) as usize {
+    let (mut rest, settled) = (0, (0.3 / sim.dt) as usize);
+    while rest < (1.0 / sim.dt) as usize {
         sim.step();
         if !sim.control.busy() {
             rest += 1;
         }
         sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+        if rest >= settled {
+            for k in 0..n {
+                off[k] = off[k].max((pos[k] - target[k]).abs());
+            }
+        }
+        if rest > settled {
+            continue;
+        }
         sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
         sim.machine.forward(&angle, &mut at_motors);
         for k in 0..n {
             twist[k] = twist[k].max((pos[k] - at_motors[k]).abs());
         }
     }
-    twist
+    (twist, off)
 }
 
 /// 0.2 of the axis range from `from` towards the middle.
@@ -974,15 +987,23 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             let id = axis.id;
             tokio::time::sleep(Duration::from_millis(50)).await;
             assert_eq!(plc.axis_read(id, "State").await, Variant::from("Disabled"), "{}", entry.id);
-            assert_eq!(plc.axis_read(id, "StateID").await, Variant::Int32(1));
+            assert_eq!(plc.axis_read(id, "StateID").await, Variant::Int32(1), "{}.{id}", entry.id);
             plc.axis_write(id, &[("Power.Enable", Variant::Boolean(true))]).await;
             plc.until(id, "Power.Status", 1.0).await;
-            assert!(plc.axis_flag(id, "Power.Valid").await && !plc.axis_flag(id, "IsHomed").await);
-            assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
+            assert!(
+                plc.axis_flag(id, "Power.Valid").await && !plc.axis_flag(id, "IsHomed").await,
+                "{}.{id}: powered, not valid or already homed",
+                entry.id
+            );
+            assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "{}.{id}", entry.id);
 
             plc.execute(id, "Home", &[]).await;
             plc.until(id, "Home.Done", 5.0).await;
-            assert!(plc.axis_flag(id, "IsHomed").await && !plc.axis_flag(id, "Home.Busy").await);
+            assert!(
+                plc.axis_flag(id, "IsHomed").await && !plc.axis_flag(id, "Home.Busy").await,
+                "{}.{id}: Home done, not homed or still busy",
+                entry.id
+            );
 
             let target = towards_middle(axis, *home);
             // Busy and Active, and the state, from the edge on until the move is done: polled, as a loaded machine answers
@@ -1025,7 +1046,27 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
             );
             let rest = at_rest_within(entry, &set);
             assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m, within {rest} m", entry.id);
-            assert!(plc.axis_number(id, "ActualVelocity").await.abs() < 1e-2);
+            // At rest: below 0.01 m/s or rad/s, or a mode that rings out, as in the move test of sim-machines: inside the
+            // machine's settling tolerance at the frequency it reports (`resonance_hz`), so below 2 pi f times the
+            // tolerance, and gone 1 s later. The arms' shoulder and elbow ring so after their move here: at 7 to 10 Hz
+            // (7.2 reported), 0.4 mrad, 14 to 25 mrad/s 0.3 s after Done, a factor of about 0.45 less every 0.2 s, below
+            // 0.1 mrad/s 1 s later (run without the server); a 3 mrad tolerance allows 135 mrad/s at 7.2 Hz.
+            let v = plc.axis_number(id, "ActualVelocity").await;
+            if v.abs() >= 1e-2 {
+                let key =
+                    if axis.unit == "rad" { "ratings.settling_tolerance_rad" } else { "ratings.settling_tolerance_m" };
+                let tolerance = entry.config().f64(key).unwrap_or(0.0);
+                let frequency = sim.machine.resonance_hz(&set).unwrap_or(0.0);
+                let ring = std::f64::consts::TAU * frequency * tolerance;
+                plc.simulated(1.0).await;
+                let later = plc.axis_number(id, "ActualVelocity").await;
+                assert!(
+                    v.abs() < ring && later.abs() < 1e-2,
+                    "{}.{id}: at {v} {unit}/s 0.3 s after MoveAbsolute.Done (a ring of {frequency} Hz inside the settling tolerance of {tolerance} {unit}: below {ring}), at {later} {unit}/s 1 s later",
+                    entry.id,
+                    unit = axis.unit
+                );
+            }
 
             // 0.05 m back, or a quarter of the range on a shorter axis: the linear delta's z has 100 mm with its home 10 mm
             // below the top, and 0.05 m back from 20 mm below home would end 30 mm above home, beyond the range.
@@ -1047,8 +1088,8 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m",
                 entry.id
             );
-            assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
-            assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""));
+            assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "{}.{id}", entry.id);
+            assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""), "{}.{id}", entry.id);
         }
     }
 }
