@@ -573,6 +573,21 @@ impl<M: Mechanism> JointMachine<M> {
         generalized_modes(&m, &k, &damping, size)
     }
 
+    /// An arm's joints on their gearboxes' springs with the motors held, at joints q (`Machine::modes`): K x = w^2 M x
+    /// with M the load's mass matrix there (passive joints held, the rotors left out: a velocity loop far stiffer than
+    /// the mode holds them) and K, C the gearboxes' stiffnesses and dampings. Empty for one joint (`two_mass_frequency`
+    /// tells its mode) and in the rigid model. With the links' bending two-way these are among `coupled_modes`.
+    fn held_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+        let n = self.n();
+        if n < 2 || !self.elastic {
+            return Vec::new();
+        }
+        let (load, _) = self.load(q, &vec![0.0; n]);
+        let gear = |k: usize| &self.joints[k].drive.gearbox;
+        let (k, c): (Vec<f64>, Vec<f64>) = (0..n).map(|j| (gear(j).stiffness, gear(j).damping)).unzip();
+        generalized_modes(&load[..n * n], &k, &c, n)
+    }
+
     /// The tool's move by the bending modes at joints q, deflections d: `Mechanism::flex_shift`.
     fn flex_shift(&self, q: &[f64], d: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.axes.len()];
@@ -1305,16 +1320,32 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
     }
 
+    /// One joint: its two-mass mode. An arm: the lowest of its joints' modes with the motors held (`held_modes`, or with
+    /// the links' bending two-way `coupled_modes`): each turns the joints and so moves the tool.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         let mut q = vec![0.0; self.n()];
-        self.mechanism.inverse(tool_pose, &mut q).then(|| self.two_mass_frequency(&q)).flatten()
+        if !self.mechanism.inverse(tool_pose, &mut q) {
+            return None;
+        }
+        if self.n() == 1 {
+            return self.two_mass_frequency(&q);
+        }
+        let held = if self.two_way { self.coupled_modes(&q) } else { self.held_modes(&q) };
+        held.iter().map(|m| m.hz).reduce(f64::min)
     }
 
-    /// The two-mass mode of `resonance_hz` and the links' bending modes (`Mechanism::flex_modes`), lowest first; two-way,
-    /// the modes of joints and links together with the motors held (`coupled_modes`).
+    /// The two-mass mode of `resonance_hz` (one joint), or an arm's joints with the motors held (`held_modes`), and the
+    /// links' bending modes (`Mechanism::flex_modes`), lowest first; two-way, the modes of joints and links together with
+    /// the motors held (`coupled_modes`).
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
-        let mut out: Vec<sim_core::Mode> =
-            self.resonance_hz(tool_pose).map(|hz| sim_core::Mode { hz, damping: 0.0 }).into_iter().collect();
+        let mut q = vec![0.0; self.n()];
+        let mut out: Vec<sim_core::Mode> = if self.n() == 1 {
+            self.resonance_hz(tool_pose).map(|hz| sim_core::Mode { hz, damping: 0.0 }).into_iter().collect()
+        } else if !self.two_way && self.mechanism.inverse(tool_pose, &mut q) {
+            self.held_modes(&q)
+        } else {
+            Vec::new()
+        };
         if self.two_way {
             let mut q = vec![0.0; self.n()];
             if self.mechanism.inverse(tool_pose, &mut q) {
@@ -1592,6 +1623,27 @@ impl JointSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two joints on springs of 100 and 50 N m/rad with the mass matrix [[2, 0.5], [0.5, 1]] kg m^2: det(K - l M) =
+    /// (100 - 2 l)(50 - l) - (0.5 l)^2 = 1.75 l^2 - 200 l + 5000 = 0, l = (200 -+ sqrt(5000)) / 3.5 = 36.939805 and
+    /// 77.345910 (rad/s)^2, 0.967314 and 1.399712 Hz. Uncoupled (no 0.5), each joint alone: sqrt(k / J) / 2 pi, 1.125395
+    /// Hz for both. A damper of 2 N m s/rad on the first joint alone damps the uncoupled first mode by c / (2 sqrt(k J))
+    /// = 2 / (2 sqrt(200)) = 0.070711.
+    #[test]
+    fn held_joint_modes_are_the_hand_solved_eigenvalues() {
+        let tau = std::f64::consts::TAU;
+        let coupled = generalized_modes(&[2.0, 0.5, 0.5, 1.0], &[100.0, 50.0], &[0.0, 0.0], 2);
+        let mut hz: Vec<f64> = coupled.iter().map(|m| m.hz).collect();
+        hz.sort_by(f64::total_cmp);
+        let by_hand = [(200.0 - 5000f64.sqrt()) / 3.5, (200.0 + 5000f64.sqrt()) / 3.5].map(|l: f64| l.sqrt() / tau);
+        assert!((hz[0] - 0.967314).abs() < 1e-6 && (hz[1] - 1.399712).abs() < 1e-6, "{hz:?}");
+        assert!((hz[0] - by_hand[0]).abs() < 1e-12 && (hz[1] - by_hand[1]).abs() < 1e-12);
+        let alone = generalized_modes(&[2.0, 0.0, 0.0, 1.0], &[100.0, 50.0], &[2.0, 0.0], 2);
+        for m in &alone {
+            assert!((m.hz - 1.125395).abs() < 1e-6, "{alone:?}");
+        }
+        assert!(alone.iter().any(|m| (m.damping - 0.070711).abs() < 1e-6), "{alone:?}");
+    }
 
     #[test]
     fn gaussian_elimination_solves_and_refuses_singular() {
