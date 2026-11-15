@@ -39,7 +39,7 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 - Values that may be zero must not be negative: the payload, dampings, viscous and shaft friction, backlash, belt pretension and belt mass, the gearbox's inertia, idler and cable chain values, feedforward factors, the blend time, the path tolerance, the start temperature rise.
 - `gearbox.efficiency`, `profile.torque_reserve` and `profile.tension_reserve` are above 0 and at most 1; `motor.ripple_fraction` and `profile.shaper_damping` are from 0 to below 1; `drive.no_load_speed_rad_s` is above `drive.rated_speed_rad_s`.
 - Free in sign: forces (`process.*`, `belt.tooth_force_n`, `motor.cogging_nm`), `geometry.incline_deg`, the two drops of the Z axis, the ripple and cogging orders.
-- NaN and infinity are refused for every number. `start.pose` has one position per axis within its range, and a cycle segment's `dwell_s` is finite and not negative.
+- NaN and infinity are refused for every number, and so is a number larger than 1e15 or (zero aside) smaller than 1e-15 in size, in its SI unit: a slip of the exponent. `start.pose` has one position per axis within its range, and a cycle segment's `dwell_s` is finite and not negative.
 - Every refusal names the key (`Configuration value is out of range: gearbox.backlash_rad`). Most values are checked whether or not their effect is switched on.
 - Loop cycle times must be whole multiples of `sim.dt_s`, and `drive.current_cycle_s` must equal it. `drive.position_cycle_s` may equal `velocity_cycle_s` (DSC) and `profile.cycle_s` may be longer than it: with `effects.fine_interpolation` the drive interpolates between profile cycles.
 - A changed config can be applied to a running simulation (the app does), except `sim.dt_s`. That includes `profile.cycle_s` while a motion is under way: the controller counts its own profile cycles and converts what it has stored in them, so the setpoint goes on from where it is. Switching `effects.belt_stretch` while an axis moves carries the tool's position and speed over into the other model. So does a changed `gearbox.ratio` or `geometry.pulley_radius_m`: the state is rebuilt at the tool's pose and speed, with belts and gears as they are at rest there. A changed input shaper (switch, frequency, damping, following the pose) is taken when the plan next stands still. A cycle that loses segments while it runs goes on within those it has, and ends if none is left.
@@ -56,7 +56,7 @@ For the EXCT-30 config the file itself is the authority: its `[catalogue]` and `
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
 | `dt_s` | T E S | s | Base time step. Also the current-loop cycle. 62.5 µs in all configs | choice |
-| `substeps` | T E S | – | RK4 sub-steps per base step. A whole number. 4 in all configs | choice |
+| `substeps` | T E S | – | RK4 sub-steps per base step. A whole number, at most 1000. 2 to 4 in the shipped configs | choice |
 
 ## `[parts]`
 

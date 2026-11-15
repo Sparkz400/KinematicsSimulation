@@ -66,9 +66,10 @@ impl Config {
         value.ok_or_else(|| ConfigError::Missing(path.into()))
     }
 
-    /// A number. NaN and infinity are valid TOML and a value of no quantity, so they never pass.
+    /// A number. NaN and infinity are valid TOML and a value of no quantity, so they never pass; nor does a number beyond
+    /// 1e15 or, but for zero, below 1e-15 in size (`number`).
     pub fn f64(&self, path: &str) -> Result<f64> {
-        finite(as_f64(self.get(path)?).ok_or_else(|| ConfigError::Type(path.into()))?, path)
+        number(as_f64(self.get(path)?).ok_or_else(|| ConfigError::Type(path.into()))?, path)
     }
 
     /// A value that may be zero but not negative (dampings, frictions, a payload).
@@ -89,7 +90,7 @@ impl Config {
 
     pub fn f64s(&self, path: &str) -> Result<Vec<f64>> {
         let err = || ConfigError::Type(path.into());
-        self.get(path)?.as_array().ok_or_else(err)?.iter().map(|v| finite(as_f64(v).ok_or_else(err)?, path)).collect()
+        self.get(path)?.as_array().ok_or_else(err)?.iter().map(|v| number(as_f64(v).ok_or_else(err)?, path)).collect()
     }
 
     /// Refuses a key that neither `schema` (a machine's default config) nor `optional` has, so that a
@@ -167,8 +168,19 @@ impl Config {
     }
 }
 
-fn finite(value: f64, path: &str) -> Result<f64> {
-    if value.is_finite() { Ok(value) } else { Err(ConfigError::Invalid(path.into())) }
+/// The largest and the smallest non-zero size of a number a config may hold, in its SI unit. The shipped configs and the
+/// catalogue lie between 1e-6 (an encoder step, m) and 2.1e11 (steel's Young's modulus, Pa); a value beyond is a slip
+/// of the exponent, and 1e30 or 1e-30 in a stiffness, damping, inductance or ratio overflowed the integration to NaN.
+const LARGEST: f64 = 1e15;
+const SMALLEST: f64 = 1e-15;
+
+/// `value` as a config's number at `path`, for a reader that takes it from TOML itself: refused out of range.
+pub fn number(value: f64, path: &str) -> Result<f64> {
+    if value == 0.0 || (SMALLEST..=LARGEST).contains(&value.abs()) {
+        Ok(value)
+    } else {
+        Err(ConfigError::Invalid(path.into()))
+    }
 }
 
 fn as_f64(value: &Value) -> Option<f64> {

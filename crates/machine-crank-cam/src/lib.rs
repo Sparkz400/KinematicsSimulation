@@ -171,7 +171,8 @@ impl Table {
         let read = |key: &str| -> Result<Vec<f64>, ConfigError> {
             cfg.array(key)?
                 .iter()
-                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|f| f.is_finite()))
+                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+                .map(|f| f.filter(|f| sim_core::config::number(*f, key).is_ok()))
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| ConfigError::Type(key.into()))
         };
