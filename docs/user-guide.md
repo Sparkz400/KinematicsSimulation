@@ -863,31 +863,33 @@ targets and `start.pose` with as many values, e.g.
 shoulder by steel bands at 2:1 and 1:2, so that motor 2 runs the wafer straight in and out along the radial line while
 the effector keeps pointing outwards (motors 1 and 2: 1FK2103-2AH behind strain wave gears of ratio 50). The tool pose
 is (r, θ, z): the wafer centre's distance from the column's axis, the effector's direction (rad), the lift. The cycle
-swaps a 300 mm wafer between two stations 180° apart at r = 0.75 m: extend under it at A, lift it 10 mm, draw it back to
-r = 0.05 m, turn, extend to B and settle, lower it, draw back and turn back: 8.9 s.
+swaps a 300 mm wafer between a load port and a chamber 90° apart at r = 0.55 m and 0.2 m apart in height: turn to the
+chamber while rising, extend and settle, lower the wafer onto it, draw back, turn back while lowering, extend under the
+next wafer and settle, lift it, draw it back to r = 0.05 m: 7.76 s.
 
     $ sim-cli verdicts wafer-handler
-    motor-peak,1,0.1256,1.000,ok
+    motor-peak,1,0.06734,1.000,ok
     ...
-    settling,,0.00002389,0.0001500,ok
-    settling-angle,,0.000002402,0.0002000,ok
-    wafer-slip,,1.933,2.452,ok
-    effector-direction,,0.0000004643,0.0005000,ok
-    elbow-band-slack,,0.07654,0.5000,ok
-    wrist-band-slack,,0.02184,0.5000,ok
-    singularity,,2.199,4.000,ok
+    settling,,0.00003237,0.0001500,ok
+    settling-angle,,0.0001081,0.0002000,ok
+    wafer-slip,,1.831,2.452,ok
+    effector-direction,,0.00001265,0.0005000,ok
+    elbow-band-slack,,0.06468,0.5000,ok
+    wrist-band-slack,,0.01171,0.5000,ok
+    singularity,,1.226,4.000,ok
 
 The motors are lightly loaded: what limits the cycle is the wafer on its friction pads (`wafer.hold = "pads"`, μ 0.3),
 `wafer-slip`, its in-plane acceleration against μ g over the safety factor 1.2. Turning fast pushes the wafer outwards
 (r θ̇²) and motor 2 holds the arm against it; extending during a turn adds the Coriolis acceleration 2 ṙ θ̇. So the turn
 happens with the wafer drawn back near the column's axis, and faster limits fail: `--set
-axis.theta.max_acceleration_rad_s2=60 --set axis.theta.max_jerk_rad_s3=1200` slips the wafer (3 m/s² along). Vacuum
+axis.r.max_acceleration_m_s2=3 --set axis.r.max_jerk_m_s3=30` slips the wafer (3 m/s² along its line). Vacuum
 pads (`wafer.hold = "vacuum"`) or an edge grip (`"edge"`) hold more. The bands stretch under the arm's acceleration
 (`effects.band_elasticity`): the forearm and the effector lag and ring on them near 20 Hz, the effector turns out of its
 radial line (`effector.direction_error`, judged at the stations by `effector-direction`), and each span's swing is
 judged against half its pretension. `sim-cli optimise wafer-handler` keeps every verdict, `wafer-slip` among them. See
 the [mechanisms](mechanisms.md#banded-r-theta-z-arm-wafer-handler) and the
 [model reference](model-reference.md#wafer-handler).
+
 ### The four-axis delta D4
 
 `delta-d4` is the D3 with a fourth axis that turns the tool about the vertical, as ABB's IRB 360 with its fourth axis: a fourth, smaller motor in the centre of the base (a 1FK2104-4AF on its own S210 converter), behind a planetary gearbox of ratio 8 (Siemens NRB060-04-8), drives a telescopic shaft with a cardan joint at each end down to the tool's shaft in the platform. The tool pose is (x, y, z, c), c in rad; `start.pose` and the cycle's targets have four values. Its cycle is the D3's Adept cycle with the tool turned by 90° on each traverse (+90° to the pick, back to 0° to the place): still 0.720 s, the turn fits into the traverse. The two cardan joints are bent alike (both shafts vertical), so the tool turns exactly with the motor; only the shaft between them turns unevenly (`shaft.speed`). The shaft's weight share and the telescope's friction load the arms ([the config](../crates/machine-delta-d4/default.toml), [model reference](model-reference.md#delta-picker-d4)).

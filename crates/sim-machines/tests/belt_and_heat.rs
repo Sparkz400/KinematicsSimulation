@@ -95,10 +95,13 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             axis.unit
         );
         sim.run(0.1, |_| {});
+        // The first gearbox that warms, which the move of axis 0 drives; the wafer handler's first is its column's,
+        // which stands while the arm reaches out along r (its axis 0): there the upper arm's, motor 2's.
+        let first = if entry.id == "wafer-handler" { "gearbox_2" } else { "" };
         let gearbox = sim
             .heated
             .iter()
-            .position(|h| h.part.kind == "gearbox")
+            .position(|h| h.part.kind == "gearbox" && (first.is_empty() || h.part.id == first))
             .map(|i| format!("power.{}", sim.heated[i].part.id));
         let cold = gearbox.as_ref().map(|id| signal(&sim, id));
         for part in &mut sim.heated {
@@ -123,8 +126,8 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
             let g = cfg.f64("gearbox.efficiency").unwrap();
             // An arm's heated gearboxes are those of its turning joints, with nothing behind them, as the parallel
-            // SCARA's first (its screw is the quill's).
-            let e = if cfg.get("arm.gear_ratios").is_ok() || entry.id == "parallel-scara" {
+            // SCARA's first (its screw is the quill's) and the wafer handler's arm (its screw is the lift's).
+            let e = if cfg.get("arm.gear_ratios").is_ok() || ["parallel-scara", "wafer-handler"].contains(&entry.id) {
                 1.0
             } else {
                 ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)

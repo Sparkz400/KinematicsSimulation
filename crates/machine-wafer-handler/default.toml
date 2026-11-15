@@ -3,8 +3,9 @@
 # bands inside the links turn the forearm at 2:1 and the end effector at 1:2 against it, so that the wafer runs along a
 # straight radial line (r) while the effector keeps pointing outwards. Gravity acts along -z, out of the plane: the
 # joints' bearings carry the arm's weight, the arm's motors only accelerate it; the Z motor holds everything it lifts.
-# Sized as an atmospheric handler for 300 mm wafers between two stations 180 degrees apart (the class of the Brooks,
-# Kawasaki NT or Rorze RR arms): reach 750 mm to the wafer centre, the wafer of 128 g held on friction pads.
+# Sized as an atmospheric handler for 300 mm wafers between two stations 90 degrees apart (the class of the Brooks,
+# Kawasaki NT or Rorze RR arms): reach up to 780 mm to the wafer centre (550 mm at the stations), the wafer of 128 g
+# held on friction pads.
 # Every value says where it comes from:
 #   [catalogue]  read from a maker's document: Siemens catalogue D 32 (catalog/siemens/*.csv) for the motors and
 #                drives, SEMI M1 for the wafer (300 mm, 775 um of silicon at 2329 kg/m3).
@@ -120,7 +121,7 @@ motor_stiction = true
 drive_monitoring = false
 
 # The arm's kinematics. [estimate] both: links of 320 mm reach the wafer centre 750 mm out with the upper arm 27
-# degrees from the radial line (the condition number 2.2), the stations' hand-off radius, and draw it back to 50 mm,
+# degrees from the radial line (the condition number 2.2), 550 mm at the stations (1.23), and draw it back to 50 mm,
 # the wrist 130 mm behind the column's axis.
 [geometry]
 # Both links' length, shoulder to elbow and elbow to wrist: the 2:1 and 1:2 bands keep the wrist on the radial line
@@ -312,11 +313,11 @@ max_velocity_rad_s = 4.0
 max_acceleration_rad_s2 = 36.0
 max_jerk_rad_s3 = 360.0
 
-# The lift: [estimate] 0.1 m/s, 1 m/s2 (the wafer on its pads keeps 0.9 g down), 20 m/s3.
+# The lift: [estimate] 0.25 m/s (1500 r/min on the 10 mm lead), 2 m/s2 (the wafer on its pads keeps 0.8 g down), 40 m/s3.
 [axis.z]
-max_velocity_m_s = 0.1
-max_acceleration_m_s2 = 1.0
-max_jerk_m_s3 = 20.0
+max_velocity_m_s = 0.25
+max_acceleration_m_s2 = 2.0
+max_jerk_m_s3 = 40.0
 
 # The Z stroke (axis z, motor 3): the column on a ball screw behind a coupling ([slide], [screw], [gearbox.3],
 # [drive.3]).
@@ -414,7 +415,7 @@ velocity_kp_nm_s_rad = 0.0443
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]
 # How far the wafer may be from its target in the second half of a dwell, when it is handed off: r and z, m, and the
-# turn, rad (0.15 mm at the 0.75 m station). [estimate] a handler's hand-off of +-0.15 mm.
+# turn, rad (0.11 mm at the 0.55 m stations). [estimate] a handler's hand-off of +-0.15 mm.
 settling_tolerance_m = 1.5e-4
 settling_tolerance_rad = 2.0e-4
 # How far the effector may turn out of the radial line through its wafer while it dwells at a station
@@ -451,7 +452,7 @@ drive_max_current_a = 4.2
 drive_base_load_current_a = 1.02
 drive_overload_time_constant_s = 10.0
 drive_max_current_time_s = 0.25
-# The highest condition number the cycle may reach ("singularity"). [estimate] a design rule: 2.2 at the stations.
+# The highest condition number the cycle may reach ("singularity"). [estimate] a design rule: 1.23 at the stations.
 max_condition_number = 4.0
 # With effects.braking_resistor_heating [estimate].
 braking_resistor_rated_rise_k = 200.0
@@ -581,50 +582,53 @@ base.stiffness_x_n_m = [1.08e6, 6.75e6]
 base.stiffness_y_n_m = [1.08e6, 6.75e6]
 base.stiffness_z_n_m = [7.6e6, 4.75e7]
 
-# Retracted at station A (theta 0), the effector 10 mm below the wafer's hand-off height.
+# Retracted in front of station A (theta 0), holding a wafer picked there.
 [start]
-pose = [0.05, 0.0, 0.1]
+pose = [0.05, 0.0, 0.06]
 
-# Between two stations 180 degrees apart, each at r = 0.75 m: extend under the wafer at A and settle, lift 10 mm (the
-# wafer on the pads), retract to r = 0.05 m, turn, extend to B and settle (the hand-off), lower 10 mm (the wafer on B),
-# retract and turn back. Each leg is a move of its own along one axis, stopping at its end. "payload" is whether the
+# Between two stations 90 degrees apart at r = 0.55 m, a load port A whose wafer lies at z = 0.05 m and a chamber B at
+# 0.25 m: turn to B while rising, extend to B and settle (the hand-off), lower 10 mm (the wafer on B), retract, turn
+# back to A while lowering, extend under the next wafer and settle, lift 10 mm (the wafer on the pads), retract. Each leg
+# is a move of its own, its axes starting and stopping together (a rest of 0.1 s after the first); the column turns and
+# the lift travels in the same legs, as a handler does, so that within the first 6 s every motor has run both ways for
+# over 0.8 s. "payload" is whether the
 # effector holds the wafer once the segment has arrived.
 [[cycle.segment]]
-target = [0.75, 0.0, 0.1]
-dwell_s = 0.1
-payload = false
-
-[[cycle.segment]]
-target = [0.75, 0.0, 0.11]
-dwell_s = 0.05
-payload = true
-
-[[cycle.segment]]
-target = [0.05, 0.0, 0.11]
-dwell_s = 0.0
-payload = true
-
-[[cycle.segment]]
-target = [0.05, 3.141592653589793, 0.11]
-dwell_s = 0.0
-payload = true
-
-[[cycle.segment]]
-target = [0.75, 3.141592653589793, 0.11]
+target = [0.05, 1.5707963267948966, 0.26]
 dwell_s = 0.1
 payload = true
 
 [[cycle.segment]]
-target = [0.75, 3.141592653589793, 0.1]
+target = [0.55, 1.5707963267948966, 0.26]
+dwell_s = 0.08
+payload = true
+
+[[cycle.segment]]
+target = [0.55, 1.5707963267948966, 0.25]
 dwell_s = 0.05
 payload = false
 
 [[cycle.segment]]
-target = [0.05, 3.141592653589793, 0.1]
+target = [0.05, 1.5707963267948966, 0.25]
 dwell_s = 0.0
 payload = false
 
 [[cycle.segment]]
-target = [0.05, 0.0, 0.1]
+target = [0.05, 0.0, 0.05]
 dwell_s = 0.0
 payload = false
+
+[[cycle.segment]]
+target = [0.55, 0.0, 0.05]
+dwell_s = 0.08
+payload = false
+
+[[cycle.segment]]
+target = [0.55, 0.0, 0.06]
+dwell_s = 0.05
+payload = true
+
+[[cycle.segment]]
+target = [0.05, 0.0, 0.06]
+dwell_s = 0.0
+payload = true

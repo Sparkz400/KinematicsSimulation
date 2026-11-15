@@ -1233,7 +1233,7 @@ the lift (m). Its own keys:
 | `[joint.2]` | | The upper arm's stops over `[joint]`: `min_angle_deg`, `max_angle_deg` from the radial line; between 0 and 180 degrees | 10, 110, estimates |
 | `z_axis.carriage_kg` | kg | What the screw lifts besides the links, the effector and the wafer (the column, motors 1 and 2) | 8, estimate |
 | `slide.*`, `screw.*` | | The lift's guides (0.3 m stroke) and ball screw (16 x 10), as for the screw axis | estimates |
-| `axis.r.*`, `axis.theta.*`, `axis.z.*` | | The axes' limits; `axis.theta.min_angle_deg`, `max_angle_deg` the turn's range | 0.8 m/s, 1.5 m/s², 15 m/s³; ±190°, 4 rad/s, 36 rad/s², 360 rad/s³ (the turn at r = 0.05 m); 0.1 m/s, 1 m/s², 20 m/s³; sized against `wafer-slip` |
+| `axis.r.*`, `axis.theta.*`, `axis.z.*` | | The axes' limits; `axis.theta.min_angle_deg`, `max_angle_deg` the turn's range | 0.8 m/s, 1.5 m/s², 15 m/s³; ±190°, 4 rad/s, 36 rad/s², 360 rad/s³ (the turn at r = 0.05 m); 0.25 m/s, 2 m/s², 40 m/s³; sized against `wafer-slip` |
 | `ratings.wafer_slip_safety_factor` | | The hold at rest over this is the limit of `wafer-slip` | 1.2, estimate |
 | `ratings.direction_tolerance_rad` | rad | `effector-direction`: how far the effector may turn out of its radial line while it dwells | 5e-4, estimate |
 | `ratings.band_max_pretension_share` | | `elbow-band-slack`, `wrist-band-slack`: the most a span may lose or gain of its pretension | 0.5, estimate |

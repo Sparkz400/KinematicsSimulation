@@ -506,23 +506,25 @@ the effector of twice its radius turns the effector against the forearm by φ. S
 dr/dφ = −2 L sin φ is largest with the wrist over the column (φ = 90°) and vanishes at full extension (φ = 0), the
 singular pose: the condition number 1 / sin φ is refused above `workspace.max_condition_number` (5: φ above 11.5°, r up
 to 0.807 m), and the upper arm's stops are at 10° and 110°. The R motor's inertia changes strongly with the reach: the
-links' 0.55 kg m² retracted is 1.35 kg along r, their 0.19 kg m² at the stations 2.22 kg (and without bound towards the
-full extension), while the θ motor feels the whole arm, 0.15 kg m² retracted and 0.60 kg m² at the stations, growing with
+links' 0.55 kg m² at r = 0.12 m is 1.35 kg along r, their 0.19 kg m² at r = 0.75 m 2.22 kg (and without bound towards the
+full extension), while the θ motor feels the whole arm, 0.15 kg m² at r = 0.12 m and 0.60 kg m² at r = 0.75 m, growing with
 r². The two motors are coupled through the arm's motion: turning pulls the arm outwards (motor 2 holds it, the wafer is
 accelerated towards the axis at r θ̇²), extending during a turn drags on motor 1 (the wafer's Coriolis acceleration
 2 ṙ θ̇).
 
 The wafer lies on the effector's friction pads (or vacuum pads, or an edge grip, `wafer.hold`). Its in-plane
 acceleration over the cycle is the verdict `wafer-slip`, against μ g (μ (g + A p / m) on vacuum pads, the grip's
-acceleration at the edge) over a safety factor: what limits a handler's cycle time. The shipped cycle (extend under the
-wafer at station A, lift it 10 mm, retract to r = 0.05 m, turn 180°, extend to station B and settle, lower it, retract,
-turn back) is sized for it: 0.3 g over 1.2 allows 2.45 m/s², the reach's limit is 1.5 m/s² and the turn's 4 rad/s and
-36 rad/s² (0.8 m/s² outwards and 1.8 m/s² along at r = 0.05 m, the wafer drawn back near the column's axis). The bands are springs with pretension (each span
+acceleration at the edge) over a safety factor: what limits a handler's cycle time. The shipped cycle between a load port and a chamber 90° apart at r = 0.55 m and 0.2 m apart in height (turn to the chamber
+while rising, extend and settle, lower the wafer onto it, retract, turn back while lowering, extend under the next
+wafer and settle, lift it, retract: 7.76 s) is sized for it: 0.3 g over 1.2 allows 2.45 m/s² (2.04 at the low bound of
+μ), the reach's limit is 1.5 m/s² and the turn's 4 rad/s and 36 rad/s² with the wafer drawn back to r = 0.05 m, near the
+column's axis (0.8 m/s² outwards and 1.8 m/s² along); the wafer reaches 1.83 m/s². The bands are springs with pretension (each span
 k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behind the column and the upper arm, the
 wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
 station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
 judge the swing against half of it). See the [model reference](model-reference.md#wafer-handler) and the
 [config reference](config-reference.md#wafer-handler).
+
 ## Parallel kinematics: hexapod and cable robots
 
 Three parallel kinematics have crates of their own, `machine-hexapod`, `machine-tripod` and `machine-cable-robot`, run
@@ -826,15 +828,16 @@ hand, and the joints' limits refuse the level pose 0.1° below its 10.49°.
 Machine tests (`machine-wafer-handler`): the standard suite with every combination of rigid and elastic gearboxes and
 bands; at φ = 60°, θ = 30° the wrist at (0.277128, 0.16) on the radial line and the wafer centre at (0.433013, 0.25),
 dr/dφ = −0.554256 m/rad; the R motor's inertia by hand M_φφ = m₁ c₁² + I₁ + m₂ (L² + c₂² − 2 L c₂ cos 2φ) + I₂ + (m₃ + m_w)
-4 L² sin² φ, 0.5499656 kg m² retracted (2.485862e-4 kg m² at the motor) and 0.1876677 at the stations (1.036671e-4); the
-θ motor's 0.153033 and 0.604751 kg m²; turning at the stations at sqrt(μ g / r) = 1.980571 rad/s the wafer accelerates at
+4 L² sin² φ, 0.5499656 kg m² at r = 0.12 m (2.485862e-4 kg m² at the motor) and 0.1876677 at r = 0.75 m (1.036671e-4); the
+θ motor's 0.153033 and 0.604751 kg m²; turning at r = 0.75 m at sqrt(μ g / r) = 1.980571 rad/s the wafer accelerates at
 μ g = 2.941995 m/s², 1.2 times the limit, and motor 2 holds the arm with 0.0162955 N m; extending at 0.5 m/s during a
 turn at 1 rad/s at r = 0.5 m the wafer's acceleration is (−0.5, 1.0) m/s²; a torque of 1 N m on the effector stretches
 the bands by β = 2.955083e-4 and γ = 5.819704e-4 rad (K₁ = 1692, K₂ = 2303 N m/rad) and turns it out of its radial line by
 3.300103e-4 rad; the rigid bands carry dT₁ = −4.271710 N and dT₂ = 4.379926 N at θ̈ = 10 rad/s² with the wrist over the
 column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz); the hold on
-pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and a turn
-speeding up at 60 rad/s² slips the wafer.
+pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and the reach
+speeding up at 3 m/s² slips the wafer.
+
 Pneumatic cylinder tests (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A at 6 bar on both
 sides (482.5 and 414.7 N, Festo's 483 and 415); the ISO 6358 choked flow C p ρ0 and the elliptic law; the meter-out
 throttled speed C ρ0 R T0 / A2 (0.1443 m/s within 1 %, the shipped Z's 0.2156 m/s within 3 %); the air springs' natural

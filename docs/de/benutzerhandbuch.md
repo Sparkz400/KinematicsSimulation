@@ -873,33 +873,35 @@ Kugelgewindetrieb 16 x 10) und dreht (Motor 1), und ein Arm aus zwei Gliedern vo
 über Stahlbänder 2:1 und 1:2 an die Schulter gekoppelt sind, so dass Motor 2 den Wafer gerade entlang der radialen Linie
 hinein- und herausfährt, während der Effektor weiter nach außen zeigt (Motoren 1 und 2: 1FK2103-2AH hinter Wellgetrieben
 i = 50). Die Werkzeuglage ist (r, θ, z): der Abstand der Wafermitte von der Säulenachse, die Richtung des Effektors (rad),
-der Hub. Der Zyklus tauscht einen 300-mm-Wafer zwischen zwei Stationen, 180° auseinander bei r = 0,75 m: unter ihm an A
-ausfahren, ihn 10 mm anheben, auf r = 0,05 m zurückziehen, drehen, an B ausfahren und einschwingen, absetzen, zurückziehen
-und zurückdrehen: 8,9 s.
+der Hub. Der Zyklus tauscht einen 300-mm-Wafer zwischen einem Load Port und einer Kammer, 90° auseinander bei r = 0,55 m und
+0,2 m übereinander: zur Kammer drehen und dabei heben, ausfahren und einschwingen, den Wafer absetzen, zurückziehen,
+beim Zurückdrehen senken, unter den nächsten Wafer ausfahren und einschwingen, ihn anheben, auf r = 0,05 m
+zurückziehen: 7,76 s.
 
     $ sim-cli verdicts wafer-handler
-    motor-peak,1,0.1256,1.000,ok
+    motor-peak,1,0.06734,1.000,ok
     ...
-    settling,,0.00002389,0.0001500,ok
-    settling-angle,,0.000002402,0.0002000,ok
-    wafer-slip,,1.933,2.452,ok
-    effector-direction,,0.0000004643,0.0005000,ok
-    elbow-band-slack,,0.07654,0.5000,ok
-    wrist-band-slack,,0.02184,0.5000,ok
-    singularity,,2.199,4.000,ok
+    settling,,0.00003237,0.0001500,ok
+    settling-angle,,0.0001081,0.0002000,ok
+    wafer-slip,,1.831,2.452,ok
+    effector-direction,,0.00001265,0.0005000,ok
+    elbow-band-slack,,0.06468,0.5000,ok
+    wrist-band-slack,,0.01171,0.5000,ok
+    singularity,,1.226,4.000,ok
 
 Die Motoren sind wenig belastet: Was den Zyklus begrenzt, ist der Wafer auf seinen Reibpads (`wafer.hold = "pads"`,
 μ 0,3), `wafer-slip`, seine Beschleunigung in der Ebene gegen μ g über den Sicherheitsfaktor 1,2. Schnelles Drehen drückt
 den Wafer nach außen (r θ̇²), und Motor 2 hält den Arm dagegen; Ausfahren während einer Drehung fügt die
 Coriolis-Beschleunigung 2 ṙ θ̇ hinzu. Darum dreht der Arm mit dem Wafer nahe an der Säulenachse, und schnellere Grenzen
-scheitern: `--set axis.theta.max_acceleration_rad_s2=60 --set axis.theta.max_jerk_rad_s3=1200` lässt den Wafer rutschen
-(3 m/s² entlang). Vakuumpads (`wafer.hold = "vacuum"`) oder ein Kantengreifer (`"edge"`) halten mehr. Die Bänder dehnen
+scheitern: `--set axis.r.max_acceleration_m_s2=3 --set axis.r.max_jerk_m_s3=30` lässt den Wafer rutschen (3 m/s²
+entlang seiner Linie). Vakuumpads (`wafer.hold = "vacuum"`) oder ein Kantengreifer (`"edge"`) halten mehr. Die Bänder dehnen
 sich unter der Beschleunigung des Arms (`effects.band_elasticity`): Unterarm und Effektor bleiben zurück und schwingen auf
 ihnen bei etwa 20 Hz, der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`, an den Stationen von
 `effector-direction` geprüft), und der Ausschlag jedes Trums wird gegen die Hälfte seiner Vorspannung geprüft.
 `sim-cli optimise wafer-handler` hält jedes Prüfurteil ein, `wafer-slip` darunter. Siehe die
 [Mechanismen](mechanismen.md#r-theta-z-arm-mit-bändern-wafer-handler) und die
 [Modellreferenz](../model-reference.md#wafer-handler).
+
 ### Der Vierachs-Delta D4
 
 `delta-d4` ist der D3 mit einer vierten Achse, die das Werkzeug um die Senkrechte dreht, wie ABBs IRB 360 mit seiner vierten Achse: Ein vierter, kleinerer Motor in der Mitte der Basis (ein 1FK2104-4AF an einem eigenen S210-Umrichter) treibt hinter einem Planetengetriebe mit Übersetzung 8 (Siemens NRB060-04-8) eine Teleskopwelle mit je einem Kardangelenk an beiden Enden hinab zur Werkzeugwelle in der Plattform. Die Werkzeugpose ist (x, y, z, c), c in rad; `start.pose` und die Ziele des Zyklus haben vier Werte. Sein Zyklus ist der Adept-Zyklus des D3, bei dem sich das Werkzeug auf jeder Querfahrt um 90° dreht (+90° zum Aufnehmen, zurück auf 0° zum Ablegen): weiter 0,720 s, die Drehung passt in die Querfahrt. Beide Kardangelenke sind gleich gebeugt (beide Wellen senkrecht), also dreht das Werkzeug genau mit dem Motor; nur die Welle zwischen ihnen dreht ungleichförmig (`shaft.speed`). Der Gewichtsanteil der Welle und die Reibung des Teleskops belasten die Arme ([die Konfiguration](../../crates/machine-delta-d4/default.toml), Modellreferenz).
