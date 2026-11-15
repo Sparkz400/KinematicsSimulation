@@ -176,7 +176,11 @@ const SMALLEST: f64 = 1e-15;
 
 /// `value` as a config's number at `path`, for a reader that takes it from TOML itself: refused out of range.
 pub fn number(value: f64, path: &str) -> Result<f64> {
-    if value == 0.0 || (SMALLEST..=LARGEST).contains(&value.abs()) {
+    if value.abs() < SMALLEST {
+        // What is left of a sum in floating point (a pose of 5e-17 m) is zero, not a slip of the exponent; as zero, a
+        // key that must be positive still refuses it.
+        Ok(0.0)
+    } else if value.abs() <= LARGEST {
         Ok(value)
     } else {
         Err(ConfigError::Invalid(path.into()))

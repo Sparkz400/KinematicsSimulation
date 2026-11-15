@@ -63,8 +63,9 @@ fn dependencies_point_downwards() {
                 assert!(layer(&dep) < layer(name) || built_on, "{name} must not depend on {dep}");
             } else if layer(name) < 3 {
                 // Core, components and machines are plain Rust: no graphics, interface or network libraries. serde
-                // derives the running simulation's snapshot (sim-fmi's FMU state, sim-py's snapshots).
-                assert!(["toml", "serde"].contains(&dep.as_str()), "{name} must not depend on {dep}");
+                // derives the running simulation's snapshot (sim-fmi's FMU state, sim-py's snapshots); proptest is
+                // a dev-dependency of the property tests.
+                assert!(["toml", "serde", "proptest"].contains(&dep.as_str()), "{name} must not depend on {dep}");
             }
         }
     }

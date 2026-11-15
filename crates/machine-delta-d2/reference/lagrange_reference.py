@@ -1,6 +1,6 @@
 """Independent reference for the D2's rigid, loss-free inverse dynamics: the model of docs/model-reference.md
 ("Delta picker D2": the D3's lumped dynamics with two legs in the x-z plane) written again as the D3's reference is
-(crates/machine-delta-d3/reference/lagrange_reference.py): the arm angles and the plate's position (x, z) are the
+(the script of the same name beside the three-arm delta's crate): the arm angles and the plate's position (x, z) are the
 coordinates, SymPy differentiates the Lagrangian, the legs' constraints |P_i - E_i|^2 = L_b^2 enter with Lagrange
 multipliers. The crate eliminates the plate through its Jacobian instead.
 
@@ -10,7 +10,7 @@ working range (seed 2026), read by the Rust test `d2_inverse_dynamics_matches_th
 Effects: the Rust test runs the crate's `lossless_config` with `effects.joint_elasticity = false` (no losses, rigid
 gearboxes, no base); gravity and the payload (attached) are on. Every state keeps the arms inside their stops.
 
-    .venv/Scripts/python -m pip install -r crates/machine-delta-d3/reference/requirements.txt
+    .venv/Scripts/python -m pip install -r crates/machine-delta-d2/reference/requirements.txt
     .venv/Scripts/python crates/machine-delta-d2/reference/lagrange_reference.py
 """
 

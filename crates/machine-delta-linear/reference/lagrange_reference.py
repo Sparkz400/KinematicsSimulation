@@ -1,6 +1,6 @@
 """Independent reference for the linear delta's rigid, loss-free inverse dynamics: the model of
 docs/model-reference.md ("Linear delta", lumped rods) written again as the D3's reference is
-(crates/machine-delta-d3/reference/lagrange_reference.py): the carriages' travels and the plate's position are the
+(the script of the same name beside the three-arm delta's crate): the carriages' travels and the plate's position are the
 coordinates, SymPy differentiates the Lagrangian, the legs' constraints |P_i - C_i|^2 = L^2 enter with Lagrange
 multipliers. The crate eliminates the plate through its Jacobian instead.
 
@@ -12,7 +12,7 @@ Effects: the Rust test runs the crate's `lossless_config` with `effects.belt_str
 losses, no guide friction, no base); gravity, the payload (attached) and the belt's mass (on the pulley) are on.
 Every state keeps the carriages inside their stroke, so the stops take no part.
 
-    .venv/Scripts/python -m pip install -r crates/machine-delta-d3/reference/requirements.txt
+    .venv/Scripts/python -m pip install -r crates/machine-delta-linear/reference/requirements.txt
     .venv/Scripts/python crates/machine-delta-linear/reference/lagrange_reference.py
 """
 

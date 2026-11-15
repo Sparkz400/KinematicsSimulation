@@ -1,7 +1,7 @@
 # kinematics-sim
 
-`kinematics_sim` runs a physics simulator of motion machines from Python: gantries, delta pickers, arms, a hexapod,
-cable robots, crank and cam machines, with a servo drive model. Torque, speed and following error come out of a
+`kinematics_sim` runs a physics simulator of motion machines from Python: gantries, delta pickers, arms, parallel
+kinematics on cylinders and on cables, crank and cam machines, with a servo drive model. Torque, speed and following error come out of a
 physical model (belt sections as springs, LuGre friction, gearbox backlash, motor winding, cascaded drive), and the
 module gives runs, the cycle analysis, sizing verdicts with error bands and a catalogue motor search as NumPy arrays and
 pandas-ready tables. Every command of the command-line tool `sim-cli` is a function and gives the same numbers.

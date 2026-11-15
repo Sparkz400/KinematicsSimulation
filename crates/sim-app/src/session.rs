@@ -547,7 +547,7 @@ mod tests {
     fn dropping_a_session_does_not_wait_for_its_thread() {
         let entry = sim_machines::MACHINES[0];
         let mut slow = entry.config();
-        slow.set_text("sim.substeps = 2000").unwrap();
+        slow.set_text("sim.substeps = 1000").unwrap();
         let session = Session::start(entry, &slow).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         let start = Instant::now();
