@@ -525,7 +525,7 @@ fn every_effect_switch_changes_the_traces() {
             let mut record = |s: &Sim| {
                 reached.set(reached.get() || s.control.cycle_segment() == Some(via));
                 passed.set(passed.get() || reached.get() && s.control.cycle_segment() == Some(0));
-                if s.step % 16 == 0 {
+                if s.step.is_multiple_of(16) {
                     s.sample(&mut sample);
                     all.extend(sample.iter().map(|v| v.to_bits()));
                 }
