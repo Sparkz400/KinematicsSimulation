@@ -178,7 +178,15 @@ async function loadMachines(select) {
 
 async function loadConfig() {
   $("config").value = (await analyst.call(1, $("machine").value)).config;
+  clearResults();
+}
+
+// A result belongs to the machine and config it was run on: with another machine it goes, also from what a change of
+// language draws again (the last sizing check stayed on screen under the next machine, 15 November 2026).
+function clearResults() {
+  lastSizing = null;
   $("result").innerHTML = $("fitresult").innerHTML = "";
+  $("runstatus").textContent = "";
 }
 
 // A machine file (TOML) read by both workers; it then is a machine of the list.
@@ -188,6 +196,7 @@ async function useFile(name, text) {
     const [loaded] = await Promise.all([analyst.call(4, `${name}\n${lang()}\n${text}`), viewer.call(4, `${name}\n${lang()}\n${text}`)]);
     await loadMachines(loaded.id);
     $("config").value = loaded.config;
+    clearResults();
     $("status").textContent = tr("web-file-read", loaded.name);
     startView();
   } catch (e) { $("error").textContent = e.message; }
