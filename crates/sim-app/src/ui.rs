@@ -2012,11 +2012,11 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
         let series = || vec![(tr("ui-path-planned"), points.clone(), false)];
         save_menu(&drawn.response, model, &tr("ui-path-planned"), &across, series, actions);
     }
+    crate::views::path_colouring(ui, model, inputs);
     for (rows, key) in tables.iter().zip(["ui-path-result", "ui-analysis-motors", "ui-analysis-verdicts"]) {
         heading(ui, model, key, Analysis::Path);
         table(ui, &format!("path-{key}"), rows, None);
     }
-    crate::views::path_colouring(ui, model, inputs);
     torque_speed(ui, model, Analysis::Path, actions);
     workspace(ui, model, inputs);
     search_views::move_maps(ui, model, inputs, actions);

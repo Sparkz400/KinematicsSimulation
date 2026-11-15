@@ -3128,12 +3128,14 @@ impl Model {
         ]];
         for quantity in self.path_quantities() {
             let value = quantity.values(run, &belts).and_then(|v| v.get(i).copied());
-            let unit = match quantity.unit() {
-                "" => "%".to_string(),
-                unit => unit.to_string(),
+            // As the path tab's scale shows them: errors in mm, the utilisation in %.
+            let (factor, unit) = match quantity.unit() {
+                "" => (100.0, "%"),
+                "m" => (1e3, "mm"),
+                unit => (1.0, unit),
             };
-            let shown = value.map(|v| if quantity.unit().is_empty() { 100.0 * v } else { v });
-            table.push(vec![self.path_quantity_label(quantity), shown.map_or(String::new(), short), unit]);
+            let shown = value.map(|v| v * factor);
+            table.push(vec![self.path_quantity_label(quantity), shown.map_or(String::new(), short), unit.to_string()]);
         }
         table
     }

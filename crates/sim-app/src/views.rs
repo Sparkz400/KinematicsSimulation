@@ -30,7 +30,7 @@ const TORQUE: &str = sim_app::runs::Quantity::Torque.unit();
 
 /// The bounds runs' envelope and operating points: a light neutral, none of the meaning colours, under the nominal
 /// trace and the runs' own points.
-const BOUNDS: Color32 = Color32::from_rgba_premultiplied(120, 128, 140, 150);
+const BOUNDS: Color32 = Color32::from_rgba_premultiplied(84, 90, 98, 140);
 
 /// How many colours the time scale of the operating points has.
 const TIME_STEPS: usize = 8;
@@ -138,7 +138,7 @@ pub fn torque_speed_grid(
                         if let Some(points) = cloud.get(k).filter(|p| !p.is_empty()) {
                             let every = points.len().div_ceil(MOST_POINTS).max(1);
                             let points: Vec<[f64; 2]> = points.iter().step_by(every).copied().collect();
-                            plot.points(Points::new(tr("ui-bands-cloud"), points).color(BOUNDS).radius(1.0));
+                            plot.points(Points::new(tr("ui-bands-cloud"), points).color(BOUNDS).radius(2.5));
                         }
                         for run in runs {
                             let shape = MARKERS[run.run % MARKERS.len()];

@@ -148,6 +148,10 @@ struct Shapes {
 #[derive(Component)]
 struct WorldCamera;
 
+/// The coloured path's lines (`Model::path_colours`): wider than the other lines, so that their colour reads.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct PathGizmos;
+
 fn main() {
     let lang = std::env::var("SIM_APP_LANG")
         .ok()
@@ -207,6 +211,7 @@ fn main() {
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
+        .init_gizmo_group::<PathGizmos>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -231,11 +236,13 @@ fn main() {
 
 fn setup(
     mut commands: Commands,
+    mut gizmo_configs: ResMut<GizmoConfigStore>,
     mut egui_settings: ResMut<EguiGlobalSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut egui_textures: ResMut<EguiUserTextures>,
 ) {
+    gizmo_configs.config_mut::<PathGizmos>().0.line.width = 5.0;
     // The panels get their own camera on top, so the 3D camera can be confined to the free area.
     egui_settings.auto_create_primary_context = false;
     commands.insert_resource(Shapes {
@@ -501,7 +508,7 @@ fn arrow_length(force: f32) -> f32 {
 /// The planned path as a line in the 3D view, and over it the path the tool has really travelled since; a grid on
 /// the floor; where they are switched on, the force arrows and where the plan has the tool; a box around the part
 /// picked by a click; and the obstacles of the config with the clearance to the nearest.
-fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
+fn draw_paths(state: Res<State>, mut gizmos: Gizmos, mut wide: Gizmos<PathGizmos>) {
     if let Some((_, middle, width)) = state.floor {
         let flat = Isometry3d::new(middle, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
         gizmos.grid(flat, UVec2::splat((width / 0.1) as u32), Vec2::splat(0.1), Color::srgba(1.0, 1.0, 1.0, 0.05));
@@ -552,7 +559,7 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     // with its worst point red and the point read out there cyan.
     if let Some(colours) = state.model.path_colours() {
         let (low, high) = (colours.values.iter().copied().fold(f64::INFINITY, f64::min), colours.values[colours.worst]);
-        gizmos.linestrip_gradient(colours.points.iter().zip(&colours.values).map(|(p, v)| {
+        wide.linestrip_gradient(colours.points.iter().zip(&colours.values).map(|(p, v)| {
             let [r, g, b] = ui::trail_color(((v - low) / (high - low).max(1e-12)) as f32);
             (to_bevy(*p), Color::srgb(r, g, b))
         }));
@@ -560,6 +567,8 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
         if let Some(at) = state.model.inputs.path_probe.and_then(|i| colours.points.get(i)) {
             gizmos.sphere(Isometry3d::from_translation(to_bevy(*at)), 0.012, palette(ui::ACTUAL));
         }
+        // The coloured path is the travelled one, as its analysis ran it: the live trail would only cover it.
+        return;
     }
     // The travelled path up to the time the timeline shows: scrubbed back, the tool had not been further yet. The
     // points with their times are the window's (`trail_points`); the plain path has none, so scrubbed it is drawn

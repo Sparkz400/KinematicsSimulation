@@ -170,8 +170,9 @@ pub struct ModeView {
     pub from_machine: bool,
     pub shape: ShownMode,
     /// The share of the mode's strain energy in each kind of stiffness (`STIFFNESS_KINDS`), largest first: twice the
-    /// change of ln f over that of ln k when the kind's stiffnesses in the config grow by 10 % (Rayleigh: d(w^2) / dk_i
-    /// is the energy in k_i over the modal mass). Empty where the linearised model has no mode near it.
+    /// change of ln f of the reported mode over that of ln k when the kind's stiffnesses in the config grow by 10 %
+    /// (Rayleigh: d(w^2) / dk_i is the energy in k_i over the modal mass). The shares add up to 1 where every
+    /// stiffness the mode lives in is one of the kinds.
     pub stiffness: Vec<(&'static str, f64)>,
 }
 
@@ -192,7 +193,7 @@ pub fn mode_views(entry: &MachineEntry, config: &Config, pose: &[f64]) -> Result
     let n = machine.state_len();
     let (rest, a) = linearised(machine.as_ref(), pose);
     let own = machine.mode_shape(pose);
-    let kinds = stiffness_leaves(config);
+    let mut shares = shares(entry, config, pose, &stiffness_leaves(config), &modes).into_iter();
     let views = modes.iter().map(|mode| {
         let found = eigen_near(&a, n, shift_of(mode.hz, mode.damping));
         let own = own.as_ref().filter(|(hz, _)| (hz - mode.hz).abs() <= 1e-9 * mode.hz);
@@ -203,7 +204,7 @@ pub fn mode_views(entry: &MachineEntry, config: &Config, pose: &[f64]) -> Result
             (None, Some((lambda, x))) => scaled(machine.as_ref(), pose, &rest, x, as_mode(*lambda).hz),
             (None, None) => ShownMode { pose: pose.to_vec(), hz: mode.hz, re: vec![0.0; n], im: vec![0.0; n] },
         };
-        let stiffness = found.as_ref().map_or(Vec::new(), |(lambda, _)| shares(entry, config, pose, &kinds, *lambda));
+        let stiffness = shares.next().unwrap_or_default();
         ModeView {
             hz: mode.hz,
             damping: mode.damping,
@@ -257,29 +258,30 @@ fn stiffness_leaves(config: &Config) -> Vec<(&'static str, Vec<(String, f64)>)> 
     kinds
 }
 
-/// The share of the strain energy of the linearised mode `lambda` in each kind of stiffness (see `ModeView`).
+/// Per mode the machine reports at `pose` (`reported`, lowest first) the share of its strain energy in each kind of
+/// stiffness, largest first (see `ModeView`): each kind's stiffnesses grow by 10 % in a machine of its own, and the
+/// mode of the same place in its list moves.
 fn shares(
     entry: &MachineEntry,
     config: &Config,
     pose: &[f64],
     kinds: &[(&'static str, Vec<(String, f64)>)],
-    lambda: C,
-) -> Vec<(&'static str, f64)> {
+    reported: &[sim_core::Mode],
+) -> Vec<Vec<(&'static str, f64)>> {
     const STEP: f64 = 1.1;
-    let mut out: Vec<(&'static str, f64)> = kinds
-        .iter()
-        .filter_map(|(kind, leaves)| {
-            let mut stiffer = config.clone();
-            for (path, k) in leaves {
-                crate::analysis::set_bounded(&mut stiffer, path, k * STEP).ok()?;
-            }
-            let machine = build(entry, &stiffer).ok()?;
-            let (_, a) = linearised(machine.as_ref(), pose);
-            let (moved, _) = eigen_near(&a, machine.state_len(), lambda)?;
-            Some((*kind, 2.0 * (abs(moved) / abs(lambda)).ln() / STEP.ln()))
-        })
-        .collect();
-    out.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut out = vec![Vec::new(); reported.len()];
+    for (kind, leaves) in kinds {
+        let mut stiffer = config.clone();
+        if leaves.iter().any(|(path, k)| crate::analysis::set_bounded(&mut stiffer, path, k * STEP).is_err()) {
+            continue;
+        }
+        let Ok(machine) = build(entry, &stiffer) else { continue };
+        let moved = machine.modes(pose);
+        for ((shares, mode), stiffer) in out.iter_mut().zip(reported).zip(&moved) {
+            shares.push((*kind, 2.0 * (stiffer.hz / mode.hz).ln() / STEP.ln()));
+        }
+    }
+    out.iter_mut().for_each(|shares| shares.sort_by(|a, b| b.1.total_cmp(&a.1)));
     out
 }
 
