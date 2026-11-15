@@ -21,7 +21,7 @@
 
 # Deutsch
 
-- [Portal-Physiksimulator](de/README.md)
+- [Kinematics Simulation (Einstieg)](de/README.md)
 - [Benutzerhandbuch](de/benutzerhandbuch.md)
 - [Maschinendateien](de/maschinendateien.md)
 - [Mechanismen und Übertragungen](de/mechanismen.md)
