@@ -855,7 +855,8 @@ impl Node<'_> {
         let Some(value) = self.get(name) else { return Ok(None) };
         let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| {
             p.iter()
-                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).filter(|f| f.is_finite()))
+                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+                .map(|f| f.filter(|f| sim_core::config::number(*f, name).is_ok()))
                 .collect()
         });
         match numbers.as_deref() {
@@ -873,9 +874,8 @@ impl Node<'_> {
 /// A number field: a number, or the path of one. NaN and infinity are refused, as everywhere in a config.
 pub(crate) fn number(cfg: &Config, value: &Value, at: &str, refs: &mut Vec<String>) -> Result<f64> {
     match value {
-        Value::Float(f) if f.is_finite() => Ok(*f),
-        Value::Float(_) => Err(ConfigError::Invalid(at.into())),
-        Value::Integer(i) => Ok(*i as f64),
+        Value::Float(f) => sim_core::config::number(*f, at),
+        Value::Integer(i) => sim_core::config::number(*i as f64, at),
         Value::String(path) => {
             let v = cfg.f64(path).map_err(|e| match e {
                 ConfigError::Missing(_) => ConfigError::Missing(format!("{at} = \"{path}\"")),

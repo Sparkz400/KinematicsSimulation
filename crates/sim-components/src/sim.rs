@@ -259,7 +259,8 @@ fn warm_start(cfg: &Config) -> Result<bool, ConfigError> {
 
 fn timing(cfg: &Config) -> Result<(f64, u32), ConfigError> {
     let substeps = cfg.positive("sim.substeps")?;
-    if substeps.fract() != 0.0 {
+    // The configs ship 2 to 4; a huge count (1e30 saturated to 4e9 a step) made every step hang.
+    if substeps.fract() != 0.0 || substeps > 1000.0 {
         return Err(ConfigError::Invalid("sim.substeps".into()));
     }
     Ok((cfg.positive("sim.dt_s")?, substeps as u32))
