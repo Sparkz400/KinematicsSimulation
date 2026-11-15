@@ -128,11 +128,14 @@ velocity_delay_cycles = 1
 # Found with `velocity_loop_margins` over the [bounds], friction on and off (15 November 2026). The weakest case is the
 # friction-free carriage of 45 kg: the 70 kg on the pinion are 14 times the rotor at the motor, so the loop crosses low
 # (13 to 15 Hz), where Tn and the position loop take their phase; Kp is held by the rack and gearbox's resonance, at
-# 360 to 480 Hz across the bounds (without a notch Kp 0.25 gave 5.5 dB there, 0.3 3.9 dB). With the notch below
-# (effects.notch_filter, 400 Hz, 250 Hz wide) Kp 0.25: at least 40.5 degrees and 11.98 dB, and a long move comes to rest
-# moving 11.8 um in 0.2 s (sim-machines a_move_arrives_and_comes_to_rest allows 20). Without it (Kp 0.2): 35.8 degrees,
-# 7.48 dB and 18.7 um; Tn 0.03 s, kv 50 (until 15 November): 33.9 degrees, 13.5 um. A notch above the resonance (470 Hz)
-# took phase where the loop crosses at the softest gearbox damping: 2.8 dB. The friction characteristic below stays: the
+# 330 to 480 Hz across the bounds (without a notch Kp 0.25 gave 5.5 dB there, 0.3 3.9 dB). With the notch below
+# (effects.notch_filter, 360 Hz, 250 Hz wide) Kp 0.25: at least 40.2 degrees and 11.51 dB, at rest 12.3 um in
+# 0.2 s after a long move (sim-machines a_move_arrives_and_comes_to_rest allows 20). The notch sits at the
+# undamped gearbox mode (367 Hz, `sim-cli modes`), not above it: at 400 Hz its phase lag below the centre drove that mode
+# unstable once the gearbox's damping is under 1 N m s/rad (the standard suite's loss-free configs: utilisation 11);
+# at 360 Hz they run at 0.33 as without a notch. Without it (Kp 0.2): 35.8 degrees, 7.48 dB and 18.7 um at rest;
+# Tn 0.03 s, kv 50 (until 15 November): 33.9 degrees, 13.5 um. A notch at 470 Hz took phase where the loop crosses at
+# the softest gearbox damping of the bounds: 2.8 dB. The friction characteristic below stays: the
 # machine's own model (drive.friction_feedforward_model = "machine") left the same creep.
 kv_1_s = 57.0
 velocity_kp_nm_s_rad = 0.25
@@ -173,7 +176,7 @@ encoder_counts_per_rev = 4194304.0
 velocity_filter_s = 0.1e-3
 torque_filter_s = 0.1e-3
 # With effects.notch_filter (on here): the gearbox and rack's resonance, see the velocity loop above.
-notch_frequency_hz = 400.0
+notch_frequency_hz = 360.0
 notch_bandwidth_hz = 250.0
 encoder_noise_counts = 4.0
 current_noise_a = 0.01

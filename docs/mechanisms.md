@@ -712,9 +712,10 @@ every run across the bounds (`sim-cli margins <id> --bands`); the settling toler
 0.5 mrad. Retuned on 15 November so that the margins hold with friction off too (the sweep `across_the_bounds`): the
 knife's Kp 0.18 (at the softest gearbox damping of its bounds 0.25 left 29.7°; now at least 37.8° and 9.9 dB; its
 cycle's following error 8.86 → 12.1 mrad, the cam's 4.72 → 5.70 mrad, settling 0.042 → 0.072 mrad), the saw's Tn
-0.04 s, position loop kv 57 1/s, Kp 0.25 with a notch at its gearbox and rack's resonance (400 Hz, 250 Hz wide;
-the friction-free 45 kg carriage left 33.9° with Tn 0.03 s and no notch; now 40.5° and 11.98 dB; it comes to rest
-moving 11.8 µm in 0.2 s after a long move, 13.5 before, under the test's 20). The notch's switch is each crank and cam
+0.04 s, position loop kv 57 1/s, Kp 0.25 with a notch at its gearbox and rack's resonance (360 Hz, 250 Hz wide;
+the friction-free 45 kg carriage left 33.9° with Tn 0.03 s and no notch; now 40.2° and 11.51 dB; it comes to rest
+moving 12.3 µm in 0.2 s after a long move, 13.5 before, under the test's 20; at 400 Hz the notch's phase lag
+below its centre drove the undamped gearbox mode at 367 Hz unstable in the loss-free configs). The notch's switch is each crank and cam
 machine's own (`effects.notch_filter`, the first key of its file, which follows the `[effects]` table that ends
 `config/common.toml`); the other four keep it off.
 
