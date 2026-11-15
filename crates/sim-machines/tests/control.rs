@@ -549,8 +549,8 @@ fn every_effect_switch_changes_the_traces() {
         };
         let effects: Vec<String> =
             base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
-        // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
-        // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
+        // Hard stops act only beyond the stroke and holding brakes (and their delays) only while the drives are disabled.
+        // A cycle meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
         // A crash needs an obstacle, and the configs have none; drive monitoring acts only on a trip, which a cycle never
         // has. The thermal warm start acts on the cycle analysis, not on a run. A swinging payload is the arms' alone (the
         // joint kit's other machines read the switch but have no payload to hang, the SCARA's sits at its flange with no
@@ -558,6 +558,7 @@ fn every_effect_switch_changes_the_traces() {
         let skipped = [
             "effects.hard_stops",
             "effects.holding_brake",
+            "effects.brake_delay",
             "effects.shaper_follows_pose",
             "effects.crash",
             "effects.drive_monitoring",
@@ -607,13 +608,15 @@ fn every_effect_switch_changes_the_traces() {
                 base.f64("motor.friction_breakaway_nm").unwrap() <= base.f64("motor.friction_coulomb_nm").unwrap()
             }
             "effects.gearbox_lost_motion" => zero(&["gearbox.lost_motion_band_rad", "gearbox.hysteresis_rad"]),
+            // The joint kit's common switch, read by its slides: the table and the arms have no slide.
+            "effects.slide_presliding" => zero(&["slide.presliding_stiffness_n_m"]),
             "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
                 .iter()
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             // The links' bending on a machine without links (the joint kit's slides and table).
-            "effects.link_bending" => base.get("link_bending").is_err(),
+            "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
             // The braking resistor's temperature where there is no DC link and so no resistor.
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             // A machine that cannot tell the momentum of what moves on its base cannot stand on a compliant one
@@ -625,6 +628,8 @@ fn every_effect_switch_changes_the_traces() {
                     m.frame_momentum(&state).is_none()
                 })
                 .unwrap(),
+            // Two-way only on a compliant base.
+            "effects.base_reaction" => !base.bool("effects.base_compliance").unwrap(),
             _ => false,
         } || UNREAD.contains(&(entry.id, e))
             || CANNOT_ACT.contains(&(entry.id, e));
@@ -656,7 +661,7 @@ fn every_effect_switch_changes_the_traces() {
         // The braking resistor warms only where it burns, so its chopper switches in just above the (low) bus. Fine
         // interpolation acts between profile cycles, which here are as long as the position loop's (1 ms), so it is
         // flipped at a profile cycle of 2 ms. The arm tube's inertia goes into the bending of the arms (with
-        // effects.link_elasticity). The iron loss is what the stall current's copper loss has more than the rated
+        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall current's copper loss has more than the rated
         // current's (the shipped motors have the two equal, so none), so the stall current is a fifth above the rated
         // one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
         let resistor =
@@ -666,7 +671,7 @@ fn every_effect_switch_changes_the_traces() {
             "drive.friction_feedforward_torque_nm = {:?}",
             vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
         )];
-        let through: [(&str, &[String]); 8] = [
+        let through: [(&str, &[String]); 9] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &limit),
             ("effects.drive_overload", &overload),
@@ -675,6 +680,7 @@ fn every_effect_switch_changes_the_traces() {
             ("effects.arm_tube_inertia", &["effects.link_elasticity = true".into()]),
             ("effects.iron_loss", &stall),
             ("effects.friction_feedforward", &characteristic),
+            ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
         ];
         for effect in effects {
             let (from, own);

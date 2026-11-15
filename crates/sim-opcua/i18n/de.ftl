@@ -10,6 +10,7 @@ opcua-error-argument = Dieses Argument ist nicht lesbar: { $arg }
 opcua-error-start = Der OPC-UA-Server konnte nicht starten: { $arg }
 opcua-listening = OPC-UA-Server erreichbar unter { $arg }
 opcua-disable = Antriebe sperren
+opcua-stop-category = Stoppkategorie: 0, 1 oder 2 schreiben hält die Maschine an (0 sofort momentfrei, 1 Schnellhalterampe, dann aus, 2 bremsen und halten)
 opcua-enable = Antriebe freigeben
 opcua-path = Bahn, wie in einer Bahndatei
 opcua-path-time-optimal = Bahn so schnell auslegen, wie die Motoren erlauben

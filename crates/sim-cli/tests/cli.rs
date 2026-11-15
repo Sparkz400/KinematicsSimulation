@@ -1004,6 +1004,44 @@ fn a_run_can_disable_the_drives_on_the_way() {
     }
 }
 
+/// `run --stop-at` stops the machine in the category of `--stop-category`: in category 0 the torque is off from then on,
+/// in category 2 it holds with torque on, at rest; a category beyond 2 is refused. `stop` writes one row per stop and
+/// the worst again, the worst having the longest tool distance, and says the verdicts on it.
+#[test]
+fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
+    // The list's second machine: one motor `m` on one axis `x`.
+    let entry = MACHINES[1];
+    let rows = |args: &[&str]| -> Vec<Vec<f64>> {
+        let out = cli(&[&["run", entry.id, "--cycle", "--time", "1.0"], args].concat());
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect()
+    };
+    let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+    let (torque, x) = (sim.signal_index("motor.m.torque").unwrap(), sim.signal_index("axis.x.position").unwrap());
+    let off = rows(&["--stop-at", "0.3", "--stop-category", "0"]);
+    assert!(off[301..].iter().all(|row| row[torque] == 0.0));
+    let held = rows(&["--stop-at", "0.3", "--stop-category", "2"]);
+    assert!(held[320][torque] != 0.0 && (held[1000][x] - held[600][x]).abs() < 1e-5, "{:?}", held[1000]);
+    let refused = cli(&["run", entry.id, "--cycle", "--stop-at", "0.3", "--stop-category", "3"]);
+    assert!(!refused.status.success() && text(&refused.stderr).contains("--stop-category 3"));
+
+    // A rating no default config has: added in a config file.
+    let file = std::env::temp_dir().join(format!("sim-cli-stop-{}.toml", std::process::id()));
+    let rated = entry.default_config.replacen("[ratings]\n", "[ratings]\nmax_stopping_distance_m = 0.01\n", 1);
+    std::fs::write(&file, rated).unwrap();
+    let out = cli(&["stop", entry.id, "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
+    std::fs::remove_file(&file).unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let lines: Vec<Vec<String>> =
+        text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
+    let (worst, all) = lines.split_last().unwrap();
+    assert_eq!(worst[0], "worst");
+    let longest = all.iter().map(|r| r[2].parse::<f64>().unwrap()).fold(0.0, f64::max);
+    assert!(worst[2].parse::<f64>().unwrap() == longest && longest > 0.01, "{worst:?}");
+    let said = text(&out.stderr);
+    assert!(said.contains("stopping-distance") && said.contains("FAIL") && said.contains("stop-dc-link"), "{said}");
+}
+
 /// Runs the command line and gives up after a minute: for mistakes that used to make it run for ever.
 fn cli_returns(args: &[&str]) -> Output {
     use std::process::Stdio;
@@ -1831,4 +1869,50 @@ fn search_takes_the_configs_own_supply() {
     assert_eq!(table.lines().count(), 2, "{table}");
     assert!(table.lines().nth(1).unwrap().starts_with(",1FK7040-2AK7,,6SL3120-1TE13-0AD0,"), "{table}");
     assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
+}
+
+/// `modes --shapes` writes the app's mode list (`shapes::mode_views` at the start pose), and `workspace` its workspace
+/// map (`shapes::workspace_slice` at the middle of the third axis's range, with each motor's peak torque), on the first
+/// machine that has each; a machine whose motors move its tool as its axes has no map.
+#[test]
+fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
+    use sim_components::shapes::{mode_views, workspace_slice};
+    let built = |e: &sim_core::MachineEntry| sim_components::Sim::new(e, &e.config()).unwrap();
+    let start = |e: &sim_core::MachineEntry| e.config().f64s("start.pose").unwrap();
+    let entry = MACHINES.iter().copied().find(|e| !built(e).machine.modes(&start(e)).is_empty()).unwrap();
+    let out = cli(&["modes", entry.id, "--shapes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let views = mode_views(entry, &entry.config(), &start(entry)).unwrap();
+    let lines: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert!(
+        lines[0].starts_with("mode,hz,damping,linear_hz,linear_damping,shape,stiffness,s0_re,s0_im"),
+        "{}",
+        lines[0]
+    );
+    assert_eq!(lines.len(), 1 + views.len());
+    let first: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(first[1], format!("{:.4}", views[0].hz));
+    assert_eq!(first.len(), 7 + 2 * views[0].shape.re.len());
+
+    let middle = |sim: &sim_components::Sim| {
+        let axes = sim.machine.axes();
+        (axes.len() >= 3).then(|| (axes[2].min + axes[2].max) / 2.0)
+    };
+    let (entry, sim) = MACHINES
+        .iter()
+        .copied()
+        .map(|e| (e, built(e)))
+        .find(|(_, sim)| middle(sim).is_some_and(|z| sim.machine.condition(&[0.0, 0.0, z]).is_some()))
+        .unwrap();
+    let out = cli(&["workspace", entry.id, "--points", "5"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let peak: Vec<f64> = (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).peak_torque).collect();
+    let slice = workspace_slice(sim.machine.as_ref(), middle(&sim).unwrap(), 5, &peak).unwrap();
+    let lines: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert_eq!((lines[0].as_str(), lines.len()), ("x,y,condition,goes,acceleration_m_s2", 26));
+    let centre: Vec<&str> = lines[1 + 12].split(',').collect();
+    assert_eq!(centre[2], format!("{:.6}", slice.condition[12]));
+    assert_eq!(centre[4], format!("{:.4}", slice.acceleration[12]));
+    let flat = MACHINES.iter().copied().find(|e| built(e).machine.condition(&start(e)).is_none()).unwrap();
+    assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
 }

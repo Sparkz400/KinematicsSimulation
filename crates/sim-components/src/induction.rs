@@ -1,0 +1,518 @@
+//! Induction motor on a frequency converter (motor.kind = "induction"): the standard d-q model, V/f control (open loop)
+//! or field-oriented control (rotor flux, under the drive's speed and position loops).
+//!
+//! The motor in a frame turning at the electrical speed w_k the converter sets (amplitude-invariant space vectors: a
+//! vector's length is a phase's amplitude), with stator and rotor flux as states, p pole pairs and the rotor's
+//! electrical speed w_r = p w:
+//!   dpsi_s/dt = u_s - R_s i_s - j w_k psi_s,   dpsi_r/dt = -R_r i_r - j (w_k - w_r) psi_r,
+//!   psi_s = L_s i_s + L_m i_r,   psi_r = L_m i_s + L_r i_r,   L_s = L_m + L_ss,  L_r = L_m + L_sr,
+//!   torque = 3/2 p (psi_s x i_s),   power 3/2 u_s . i_s,   copper loss 3/2 (R_s |i_s|^2 + R_r |i_r|^2).
+//! R_s is `motor.resistance_ohm` (a phase's, warming with effects.winding_heating), the rest the motor's own keys. The
+//! drive's `current` is the RMS phase current |i_s| / sqrt 2. The phase voltage's amplitude is at most U_dc / sqrt 3.
+//!
+//! V/f (`drive.induction_control = "vf"`): the frequency follows the speed setpoint, w_k = p w_set (plus the rated slip
+//! times the estimated torque over the rated torque with `drive.vf_slip_compensation`), the voltage rises with it from
+//! the boost `drive.vf_boost_v` at 0 Hz to the rated voltage at the rated frequency and stays there above (field
+//! weakening by itself). The rotor slips behind: the torque-slip curve of the equivalent circuit (Kloss).
+//!
+//! Field-oriented (`"foc"`): the drive models the rotor flux, dpsi/dt = (R_r / L_r) (L_m i_sd - psi), and turns its
+//! frame with it, w_k = w_r + R_r L_m i_sq / (L_r psi) (indirect: slip from the model). The flux setpoint is the rated
+//! one up to the rated frequency and falls with 1 / speed above (field weakening); torque = 3/2 p (L_m / L_r) psi i_sq.
+//! PI current controllers on i_sd and i_sq with the decoupling the model gives: sigma L_s di/dt = u - R_sigma i + ...,
+//! sigma = 1 - L_m^2 / (L_s L_r), R_sigma = R_s + (L_m / L_r)^2 R_r; tuned with Kp = sigma L_s / T and
+//! Tn = sigma L_s / R_sigma the current follows its setpoint with T. The speed and position loops above are the servo's.
+
+use crate::drive::{Drive, DriveParams, Phases};
+use sim_core::{Config, ConfigError};
+use std::f64::consts::{SQRT_2, TAU};
+
+type Result<T> = std::result::Result<T, ConfigError>;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Induction {
+    pub pole_pairs: f64,
+    pub rotor_resistance: f64,
+    pub magnetizing: f64,
+    /// L_s and L_r, magnetizing plus leakage.
+    pub stator: f64,
+    pub rotor: f64,
+    /// Rated phase voltage's amplitude, rated electrical speed (2 pi f_N), rated slip's electrical speed.
+    pub rated_voltage: f64,
+    pub rated_frequency: f64,
+    pub rated_slip: f64,
+    /// Field-oriented control (`"foc"`), else V/f.
+    pub field_oriented: bool,
+    /// V/f: the boost's phase amplitude at 0 Hz, and whether the slip is compensated.
+    pub boost: f64,
+    pub slip_compensation: bool,
+    /// The rotor flux at the rated voltage and frequency, unloaded: the field-oriented drive's setpoint.
+    pub rated_flux: f64,
+}
+
+/// Phase amplitude per line-to-line RMS voltage: sqrt 2 / sqrt 3.
+const PHASE_PER_LINE: f64 = 0.816_496_580_927_726;
+
+impl Induction {
+    pub fn from_config(cfg: &Config) -> Result<Self> {
+        let pole_pairs = cfg.positive("motor.pole_pairs")?;
+        let magnetizing = cfg.positive("motor.magnetizing_inductance_h")?;
+        let rated_frequency = TAU * cfg.positive("motor.rated_frequency_hz")?;
+        let field_oriented = match cfg.get("drive.induction_control").ok().and_then(|v| v.as_str()) {
+            Some("foc") => true,
+            Some("vf") => false,
+            _ => return Err(ConfigError::Invalid("drive.induction_control".into())),
+        };
+        // The name-plate speed against the synchronous one: the rated slip.
+        let rated_slip = rated_frequency - pole_pairs * cfg.positive("drive.rated_speed_rad_s")?;
+        if !(rated_slip > 0.0) {
+            return Err(ConfigError::Invalid("drive.rated_speed_rad_s".into()));
+        }
+        let mut m = Self {
+            pole_pairs,
+            rotor_resistance: cfg.positive("motor.rotor_resistance_ohm")?,
+            magnetizing,
+            stator: magnetizing + cfg.positive("motor.stator_leakage_inductance_h")?,
+            rotor: magnetizing + cfg.positive("motor.rotor_leakage_inductance_h")?,
+            rated_voltage: PHASE_PER_LINE * cfg.positive("motor.rated_voltage_v")?,
+            rated_frequency,
+            rated_slip,
+            field_oriented,
+            boost: PHASE_PER_LINE * cfg.non_negative("drive.vf_boost_v")?,
+            slip_compensation: cfg.bool("drive.vf_slip_compensation")?,
+            rated_flux: 0.0,
+        };
+        let rs = cfg.positive("motor.resistance_ohm")?;
+        m.rated_flux = magnetizing * m.rated_voltage / rs.hypot(rated_frequency * m.stator);
+        Ok(m)
+    }
+
+    /// The model's currents from its fluxes [psi_sd, psi_sq, psi_rd, psi_rq]: (i_s, i_r) as [d, q].
+    pub fn currents(&self, x: &[f64; 4]) -> ([f64; 2], [f64; 2]) {
+        let (ls, lr, lm) = (self.stator, self.rotor, self.magnetizing);
+        let det = ls * lr - lm * lm;
+        let is = [(lr * x[0] - lm * x[2]) / det, (lr * x[1] - lm * x[3]) / det];
+        let ir = [(ls * x[2] - lm * x[0]) / det, (ls * x[3] - lm * x[1]) / det];
+        (is, ir)
+    }
+
+    /// The torque of the fluxes: 3/2 p (psi_s x i_s).
+    pub fn torque(&self, x: &[f64; 4]) -> f64 {
+        let (is, _) = self.currents(x);
+        1.5 * self.pole_pairs * (x[0] * is[1] - x[1] * is[0])
+    }
+
+    /// The magnetic energy, 3/4 (psi_s . i_s + psi_r . i_r).
+    pub fn stored_energy(&self, x: &[f64; 4]) -> f64 {
+        let (is, ir) = self.currents(x);
+        0.75 * (x[0] * is[0] + x[1] * is[1] + x[2] * ir[0] + x[3] * ir[1])
+    }
+
+    fn sigma_ls(&self) -> f64 {
+        self.stator - self.magnetizing * self.magnetizing / self.rotor
+    }
+
+    /// The highest phase amplitude the converter gives: U_dc / sqrt 3 (`Drive::max_voltage` is sqrt(3/2) U_dc).
+    fn supply(d: &Drive, p: &DriveParams) -> f64 {
+        d.max_voltage(p) / crate::drive::WINDING_PER_DC_LINK / 3f64.sqrt()
+    }
+
+    /// The flux setpoint at a shaft speed: rated up to the rated frequency, then falling with 1 / speed.
+    fn flux_setpoint(&self, speed: f64) -> f64 {
+        self.rated_flux * (self.rated_frequency / (self.pole_pairs * speed.abs())).min(1.0)
+    }
+
+    /// The fluxes of a steady state in a frame turning at `w_k` with the rotor at the electrical speed `w_r`, under the
+    /// voltage `u` [d, q]: the equivalent circuit.
+    pub fn steady(&self, rs: f64, u: [f64; 2], w_k: f64, w_r: f64) -> [f64; 4] {
+        // In complex numbers: u = R_s i_s + j w_k psi_s, 0 = R_r i_r + j (w_k - w_r) psi_r.
+        // With psi = L i: u = (R_s + j w_k L_s) i_s + j w_k L_m i_r, 0 = j s L_m i_s + (R_r + j s L_r) i_r, s = w_k - w_r.
+        type C = (f64, f64);
+        let mul = |a: C, b: C| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+        let div = |a: C, b: C| {
+            let n = b.0 * b.0 + b.1 * b.1;
+            ((a.0 * b.0 + a.1 * b.1) / n, (a.1 * b.0 - a.0 * b.1) / n)
+        };
+        let s = w_k - w_r;
+        let (lm, ls, lr) = (self.magnetizing, self.stator, self.rotor);
+        // i_r = -j s L_m i_s / (R_r + j s L_r) = k i_s.
+        let k = div((0.0, -s * lm), (self.rotor_resistance, s * lr));
+        let z = mul((0.0, w_k * lm), k);
+        let z = (rs + z.0, w_k * ls + z.1);
+        let is = div((u[0], u[1]), z);
+        let ir = mul(k, is);
+        [ls * is.0 + lm * ir.0, ls * is.1 + lm * ir.1, lm * is.0 + lr * ir.0, lm * is.1 + lr * ir.1]
+    }
+
+    /// The breakdown torque at the electrical speed `w_e` with the phase amplitude `u`, from the equivalent circuit's
+    /// Thevenin form (R_s kept): 3/2 p / w_e U_th^2 / (2 (R_th + sqrt(R_th^2 + (X_th + X_sr)^2))).
+    pub fn breakdown(&self, rs: f64, u: f64, w_e: f64) -> f64 {
+        let (xm, xss, xsr) =
+            (w_e * self.magnetizing, w_e * (self.stator - self.magnetizing), w_e * (self.rotor - self.magnetizing));
+        let den = rs * rs + (xm + xss).powi(2);
+        let u_th2 = u * u * xm * xm / den;
+        // Z_th = j X_m (R_s + j X_ss) / (R_s + j (X_m + X_ss)).
+        let (r_th, x_th) = (rs * xm * xm / den, xm * (rs * rs + xss * (xm + xss)) / den);
+        1.5 * self.pole_pairs / w_e * u_th2 / (2.0 * (r_th + r_th.hypot(x_th + xsr)))
+    }
+
+    /// The V/f law: the phase amplitude at the electrical speed `w_k`.
+    fn vf_voltage(&self, w_k: f64) -> f64 {
+        self.boost + (self.rated_voltage - self.boost) * (w_k.abs() / self.rated_frequency).min(1.0)
+    }
+
+    /// (lowest, highest) torque at a speed with the DC link `dc_voltage`, as `DriveParams::torque_curve`: the breakdown
+    /// curve. Field-oriented also the current limit at the flux setpoint, 3/2 p (L_m / L_r) psi sqrt(I^2 - (psi / L_m)^2)
+    /// for the amplitude I of the smaller of the motor's and the drive's maximum current; and the peak torque.
+    pub fn torque_curve(&self, p: &DriveParams, speed: f64, dc_voltage: f64) -> (f64, f64) {
+        let w_e = (self.pole_pairs * speed.abs()).max(0.02 * self.rated_frequency);
+        let supply = dc_voltage / 3f64.sqrt();
+        let mut most = if self.field_oriented {
+            let flux = self.flux_setpoint(speed);
+            let amplitude = SQRT_2 * p.max_current.min(p.drive_max_current);
+            let iq = (amplitude * amplitude - (flux / self.magnetizing).powi(2)).max(0.0).sqrt();
+            let by_current = 1.5 * self.pole_pairs * self.magnetizing / self.rotor * flux * iq;
+            by_current.min(self.breakdown(p.resistance, supply, w_e))
+        } else {
+            self.breakdown(p.resistance, self.vf_voltage(w_e).min(supply), w_e)
+        };
+        most = most.min(p.peak_torque);
+        (-most, most)
+    }
+
+    /// The drive enabled: field-oriented, magnetized at the rated flux and giving `torque`, in the steady state at rest;
+    /// V/f unmagnetized (nothing flows until the converter puts out a voltage).
+    pub(crate) fn at_rest(&self, d: &mut Drive, p: &DriveParams, pos: f64, torque: f64) {
+        d.phases = Phases { angle: pos, ..Default::default() };
+        if !self.field_oriented {
+            (d.current, d.torque, d.torque_demand, d.torque_command) = (0.0, 0.0, 0.0, 0.0);
+            return;
+        }
+        let flux = self.rated_flux;
+        let (id, iq) =
+            (flux / self.magnetizing, torque / (1.5 * self.pole_pairs * self.magnetizing / self.rotor * flux));
+        let slip = self.rotor_resistance * self.magnetizing / self.rotor * iq / flux;
+        // The fluxes of that state: psi_r = flux on d, psi_s = sigma L_s i_s + (L_m / L_r) psi_r.
+        let k = self.magnetizing / self.rotor;
+        let x = [self.sigma_ls() * id + k * flux, self.sigma_ls() * iq, flux, 0.0];
+        let u = [p.resistance * id - slip * x[1], p.resistance * iq + slip * x[0]];
+        let ff = self.feedforward(slip, 0.0, [id, iq], flux);
+        d.phases.x = x;
+        d.phases.u = u;
+        d.phases.integral = [u[0] - ff[0], u[1] - ff[1]];
+        (d.phases.frame_speed, d.phases.estimate) = (slip, flux);
+        d.current = id.hypot(iq) / SQRT_2;
+    }
+
+    /// The decoupling the field-oriented current controllers add (see the module comment).
+    fn feedforward(&self, w_k: f64, w_r: f64, [id, iq]: [f64; 2], flux: f64) -> [f64; 2] {
+        let (sl, k) = (self.sigma_ls(), self.magnetizing / self.rotor);
+        [-w_k * sl * iq - k * self.rotor_resistance / self.rotor * flux, w_k * sl * id + k * w_r * flux]
+    }
+
+    /// The rates of the fluxes (`DriveParams::motor_rates`), [psi_sd, psi_sq, psi_rd, psi_rq] in slots 0, 4, 5, 6.
+    pub(crate) fn rates(&self, p: &DriveParams, d: &Drive, w: &[f64], speed: f64, out: &mut [f64]) -> f64 {
+        let x = [w[0], w[4], w[5], w[6]];
+        let (is, ir) = self.currents(&x);
+        let (u, w_k, rs, rr) = (d.phases.u, d.phases.frame_speed, d.winding_resistance(p), self.rotor_resistance);
+        let slip = w_k - self.pole_pairs * speed;
+        out[0] = u[0] - rs * is[0] + w_k * x[1];
+        out[4] = u[1] - rs * is[1] - w_k * x[0];
+        out[5] = -rr * ir[0] + slip * x[3];
+        out[6] = -rr * ir[1] - slip * x[2];
+        let torque = 1.5 * self.pole_pairs * (x[0] * is[1] - x[1] * is[0]);
+        out[1] = 1.5 * (u[0] * is[0] + u[1] * is[1]);
+        out[2] = 1.5 * (rs * (is[0] * is[0] + is[1] * is[1]) + rr * (ir[0] * ir[0] + ir[1] * ir[1]));
+        out[3] = torque * speed;
+        torque
+    }
+
+    /// One base step of the converter, with the speed the drive measured.
+    pub(crate) fn control(&self, d: &mut Drive, p: &DriveParams, speed: f64) {
+        let dt = p.current_cycle;
+        let supply = Self::supply(d, p);
+        let (is, _) = self.currents(&d.phases.x);
+        d.iron_loss = 0.0;
+        if !self.field_oriented {
+            // Slip compensation from the torque the converter estimates from its own power: the air gap's, (3/2 u . i
+            // less the stator's copper loss) over the frequency's synchronous speed.
+            let ph = &mut d.phases;
+            let synchronous = self.pole_pairs * d.speed_command;
+            let compensation =
+                if self.slip_compensation { self.rated_slip * ph.estimate / p.rated_torque } else { 0.0 };
+            let w_k = synchronous + compensation.copysign(synchronous);
+            let u = self.vf_voltage(w_k).min(supply);
+            ph.u = [0.0, u];
+            ph.frame_speed = w_k;
+            d.voltage = u;
+            return;
+        }
+        let ph = &mut d.phases;
+        let k = self.magnetizing / self.rotor;
+        // The drive's flux model, exact over the step for the d current held.
+        let tau = self.rotor / self.rotor_resistance;
+        let target = self.magnetizing * is[0];
+        ph.estimate = target + (ph.estimate - target) * (-dt / tau).exp();
+        let flux = ph.estimate.max(1e-3 * self.rated_flux);
+        let w_r = self.pole_pairs * speed;
+        ph.frame_speed = w_r + self.rotor_resistance * k * is[1] / flux;
+        // Setpoints: the flux's d current, the torque's q current, within the current limit.
+        let amplitude = SQRT_2 * p.max_current.min(p.drive_max_current);
+        let id_set = (self.flux_setpoint(speed) / self.magnetizing).min(amplitude);
+        let iq_most = (amplitude * amplitude - id_set * id_set).max(0.0).sqrt();
+        let iq_set = (d.torque_command / (1.5 * self.pole_pairs * k * flux)).clamp(-iq_most, iq_most);
+        let ff = self.feedforward(ph.frame_speed, w_r, is, flux);
+        let error = [id_set - is[0], iq_set - is[1]];
+        let wanted = [0, 1].map(|n| p.current_kp * error[n] + ph.integral[n] + ff[n]);
+        // Within the voltage circle, the d axis first.
+        let ud = wanted[0].clamp(-supply, supply);
+        let room = (supply * supply - ud * ud).max(0.0).sqrt();
+        let uq = wanted[1].clamp(-room, room);
+        for (n, u) in [ud, uq].into_iter().enumerate() {
+            if u == wanted[n] {
+                ph.integral[n] += p.current_ki * error[n] * dt;
+            }
+        }
+        ph.u = [ud, uq];
+        d.voltage = ud.hypot(uq);
+    }
+
+    /// The step done: the RMS phase current and the torque. V/f: the torque is what the drive gave, and its estimate for
+    /// the slip compensation.
+    pub(crate) fn stepped(&self, d: &mut Drive, p: &DriveParams) {
+        let x = d.phases.x;
+        let (is, _) = self.currents(&x);
+        d.current = is[0].hypot(is[1]) / SQRT_2;
+        d.torque = self.torque(&x);
+        if !self.field_oriented {
+            (d.torque_demand, d.torque_command) = (d.torque, d.torque);
+            let (u, w_k) = (d.phases.u, d.phases.frame_speed);
+            let air_gap =
+                1.5 * (u[0] * is[0] + u[1] * is[1]) - 1.5 * d.winding_resistance(p) * (is[0] * is[0] + is[1] * is[1]);
+            let raw = if w_k.abs() > 1e-6 { self.pole_pairs * air_gap / w_k } else { 0.0 };
+            // shortcut: filtered with the rotor's time constant, so that the compensation does not swing with the
+            // rotor (unfiltered it rang at a few hertz); a converter's own filter time is a parameter of its own.
+            let share = 1.0 - (-p.current_cycle * self.rotor_resistance / self.rotor).exp();
+            d.phases.estimate += share * (raw - d.phases.estimate);
+        }
+    }
+
+    /// The copper loss at the rated point of the name plate, from the equivalent circuit at the rated voltage, frequency
+    /// and slip, with the stator at `resistance` (warm): what brings the motor to its rated rise.
+    pub fn rated_copper_loss(&self, resistance: f64) -> f64 {
+        let w = self.rated_frequency;
+        let x = self.steady(resistance, [0.0, self.rated_voltage], w, w - self.rated_slip);
+        let (is, ir) = self.currents(&x);
+        1.5 * (resistance * (is[0] * is[0] + is[1] * is[1]) + self.rotor_resistance * (ir[0] * ir[0] + ir[1] * ir[1]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drive::{Motor, WINDING_PER_DC_LINK, WINDING_STATES};
+    use sim_core::Rk4;
+
+    /// A four-pole 1.5 kW motor of round numbers on 400 V, 50 Hz, 1440 rpm: R_s = 4.5 Ohm, R_r = 3.5 Ohm, L_m = 0.45 H,
+    /// both leakages 0.02 H; on a 600 V DC link (the 400 V line's peak, 565.7 V, and some). Field-oriented with T = 0.5 ms: sigma L_s = 0.47 - 0.45^2 / 0.47 =
+    /// 0.039149 H, Kp = 78.30 V/A, R_sigma = 4.5 + (0.45 / 0.47)^2 3.5 = 7.7085 Ohm, Tn = 5.0787 ms.
+    fn params(field_oriented: bool, rs: f64) -> DriveParams {
+        let mut m = Induction {
+            pole_pairs: 2.0,
+            rotor_resistance: 3.5,
+            magnetizing: 0.45,
+            stator: 0.47,
+            rotor: 0.47,
+            rated_voltage: PHASE_PER_LINE * 400.0,
+            rated_frequency: TAU * 50.0,
+            rated_slip: TAU * 50.0 - 2.0 * 1440.0 * TAU / 60.0,
+            field_oriented,
+            boost: 0.0,
+            slip_compensation: false,
+            rated_flux: 0.0,
+        };
+        m.rated_flux = m.magnetizing * m.rated_voltage / rs.hypot(m.rated_frequency * m.stator);
+        let kp = 0.039149 / 0.5e-3;
+        DriveParams {
+            resistance: rs,
+            heating: false,
+            dc_link: false,
+            bus_voltage: 600.0,
+            max_voltage: WINDING_PER_DC_LINK * 600.0,
+            current_kp: kp,
+            current_ki: kp / 5.0787e-3,
+            current_cycle: 62.5e-6,
+            max_current: 10.0,
+            drive_max_current: f64::INFINITY,
+            rated_torque: 10.0,
+            peak_torque: 30.0,
+            motor: Motor::Induction(m),
+            ..crate::drive::tests::params()
+        }
+    }
+
+    fn motor(p: &DriveParams) -> &Induction {
+        let Motor::Induction(m) = &p.motor else { unreachable!() };
+        m
+    }
+
+    /// The motor on an inertia `j` (infinite: the rotor held at `speed`) against `load(t)`, its converter stepped every
+    /// base step with `command(t, drive)` setting what it follows; integrated as `Sim::step` does. Returns per base
+    /// step (time, speed, torque, |rotor flux|).
+    fn run(
+        p: &DriveParams,
+        d: &mut Drive,
+        j: f64,
+        mut speed: f64,
+        load: impl Fn(f64) -> f64,
+        command: impl Fn(f64, &mut Drive),
+        seconds: f64,
+    ) -> Vec<[f64; 4]> {
+        let m = motor(p);
+        let dt = p.current_cycle;
+        let mut rk = Rk4::new(2 + WINDING_STATES);
+        let mut angle = 0.0;
+        let mut out = Vec::new();
+        for n in 0..(seconds / dt).round() as usize {
+            let t = n as f64 * dt;
+            command(t, d);
+            m.control(d, p, speed);
+            let mut y = vec![angle, speed];
+            y.extend(d.winding_states(p));
+            let tl = load(t);
+            rk.step(
+                |y, dy| {
+                    let torque = p.motor_rates(d, &y[2..], y[0], y[1], &mut dy[2..]);
+                    dy[0] = y[1];
+                    dy[1] = if j.is_finite() { (torque - tl) / j } else { 0.0 };
+                },
+                &mut y,
+                dt,
+            );
+            (angle, speed) = (y[0], y[1]);
+            let w = &y[2..];
+            (d.phases.x, d.phases.angle, d.phases.speed) = ([w[0], w[4], w[5], w[6]], angle, speed);
+            d.winding_stepped(p, w[0], [w[1], w[2], w[3]]);
+            out.push([t + dt, speed, d.torque, d.phases.x[2].hypot(d.phases.x[3])]);
+        }
+        out
+    }
+
+    /// Steady torque under V/f at rated voltage and frequency with the rotor held at `speed`: from the equivalent circuit's
+    /// fluxes (`steady`), which the integration then keeps (without R_s nothing damps the stator flux's transient).
+    fn steady_torque(p: &DriveParams, speed: f64) -> f64 {
+        let m = motor(p);
+        let mut d = Drive::at_rest(p, 0.0, 0.0, 0.0);
+        d.phases.x = m.steady(p.resistance, [0.0, m.rated_voltage], m.rated_frequency, m.pole_pairs * speed);
+        d.phases.frame_speed = m.rated_frequency;
+        let trace = run(p, &mut d, f64::INFINITY, speed, |_| 0.0, |_, d| d.speed_command = 50.0 * TAU / 2.0, 0.5);
+        trace.last().unwrap()[2]
+    }
+
+    /// The name plate by hand: 50 Hz on two pole pairs turn the field at 50 * 60 / 2 = 1500 rpm (157.08 rad/s); 1440 rpm
+    /// is a slip of (1500 - 1440) / 1500 = 4 %.
+    #[test]
+    fn synchronous_speed_and_rated_slip_come_from_the_name_plate() {
+        let p = params(false, 4.5);
+        let m = motor(&p);
+        assert!((m.rated_frequency / m.pole_pairs - 157.0796).abs() < 1e-4);
+        assert!((m.rated_slip / m.rated_frequency - 0.04).abs() < 1e-12);
+        // The model at the rated slip gives about the rated torque, 1.5 kW / 150.80 rad/s = 9.95 N m: within 10 % (the
+        // equivalent circuit is round numbers, not fitted to it).
+        let torque = steady_torque(&p, 1440.0 * TAU / 60.0);
+        assert!((torque - 9.95).abs() < 1.0, "{torque} N m");
+    }
+
+    /// Kloss by hand, with R_s = 0, where it is exact: the Thevenin source U_th = U X_m / (X_m + X_ss) = 326.60 * 141.37 /
+    /// 147.65 = 312.71 V, X_th = X_ss X_m / (X_m + X_ss) = 6.2832 * 141.37 / 147.65 = 6.0159 Ohm; breakdown slip
+    /// s_b = R_r / (X_th + X_sr) = 3.5 / 12.299 = 0.28457 and torque T_b = 3/2 p U_th^2 / (2 w (X_th + X_sr)) = 3 *
+    /// 312.71^2 / (2 * 314.16 * 12.299) = 37.97 N m; T = 2 T_b / (s / s_b + s_b / s). The model's steady torque at three
+    /// slips meets it. With R_s = 4.5 Ohm the Thevenin source has R_th = R_s X_m^2 / (R_s^2 + X_s^2) = 4.121 Ohm,
+    /// X_th = 6.141 Ohm and U_th = 312.55 V, and the breakdown torque 3/2 p / w U_th^2 / (2 (R_th + |R_th + j (X_th + X_sr)|))
+    /// = 0.0095493 * 97690.6 / (2 * (4.121 + 13.090)) = 27.10 N m (`breakdown`): Kloss's formula without R_s overstates it
+    /// by 40 %. The simplification holds for large motors, whose R_s is small against their reactances.
+    #[test]
+    fn the_torque_slip_curve_is_kloss_and_the_breakdown_is_the_equivalent_circuits() {
+        let p = params(false, 0.0);
+        let (tb, sb) = (37.97, 0.28457);
+        let w_sync = 157.0796;
+        for s in [0.02, sb, 0.6] {
+            let kloss = 2.0 * tb / (s / sb + sb / s);
+            let torque = steady_torque(&p, (1.0 - s) * w_sync);
+            assert!((torque / kloss - 1.0).abs() < 2e-3, "at s = {s}: {torque} N m against {kloss}");
+        }
+        let m = motor(&p);
+        assert!((m.breakdown(0.0, m.rated_voltage, TAU * 50.0) / tb - 1.0).abs() < 1e-3);
+        // With the stator's resistance: the curve's top, found by slips, is the Thevenin form's.
+        let p = params(false, 4.5);
+        let m = motor(&p);
+        let by_formula = m.breakdown(4.5, m.rated_voltage, TAU * 50.0);
+        assert!((by_formula - 27.10).abs() < 0.01, "{by_formula}");
+        let top = [0.2, 0.22, 0.24, 0.26, 0.28]
+            .map(|s| steady_torque(&p, (1.0 - s) * w_sync))
+            .into_iter()
+            .fold(0.0, f64::max);
+        assert!(top <= by_formula * 1.002 && top > 0.995 * by_formula, "{top} against {by_formula}");
+    }
+
+    /// Starting current by hand: rotor held, rated voltage and frequency. Z = R_s + j X_ss + j X_m || (R_r + j X_sr) with
+    /// X_m || (3.5 + j 6.2832) = (3.2071 + j 6.1047) Ohm, so Z = (7.7071 + j 12.388) Ohm, |Z| = 14.590 Ohm, and the
+    /// amplitude 326.60 / 14.590 = 22.385 A, 15.83 A RMS: 4.8 times the 3.3 A of the name plate.
+    #[test]
+    fn the_starting_current_is_the_equivalent_circuits() {
+        let p = params(false, 4.5);
+        let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+        run(&p, &mut d, f64::INFINITY, 0.0, |_| 0.0, |_, d| d.speed_command = 157.0796, 1.0);
+        assert!((d.current / (22.385 / SQRT_2) - 1.0).abs() < 2e-3, "{} A", d.current);
+    }
+
+    /// Under V/f a load step of 5 N m at 50 Hz slows the rotor by the slip it needs: T = 3/2 p psi_r^2 w_slip / R_r
+    /// (steady, exact), so w_slip = 2 * 3.5 * 5 / (3 * 2 * 0.9950^2) = 5.894 rad/s electrical, 2.947 rad/s at the shaft,
+    /// with the rated flux psi_r = L_m U / |R_s + j w L_s| = 0.45 * 326.60 / 147.72 = 0.9950 Wb (unloaded; the load lowers
+    /// it by a few per cent, hence 6 %). With slip compensation the converter raises the frequency by the rated slip times
+    /// the torque over the rated one, 12.566 * 5 / 10 = 6.283 rad/s, and the shaft keeps its speed within 0.4 rad/s.
+    #[test]
+    fn under_v_f_a_load_step_costs_the_hand_calculated_slip() {
+        let drop = |compensated: bool| {
+            let mut p = params(false, 4.5);
+            if let Motor::Induction(m) = &mut p.motor {
+                m.slip_compensation = compensated;
+            }
+            let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+            let load = |t: f64| if t > 1.5 { 5.0 } else { 0.0 };
+            let trace = run(&p, &mut d, 0.05, 157.0796, load, |_, d| d.speed_command = 157.0796, 3.0);
+            let at = |t: f64| trace[(t / p.current_cycle) as usize - 1][1];
+            at(1.5) - at(3.0)
+        };
+        let plain = drop(false);
+        assert!((plain / 2.947 - 1.0).abs() < 0.06, "{plain} rad/s");
+        let compensated = drop(true);
+        assert!(compensated.abs() < 0.4, "{compensated} rad/s");
+    }
+
+    /// Field-oriented from no flux: the d current steps to psi* / L_m within the current loop's 0.5 ms, and the rotor flux
+    /// follows with L_r / R_r = 0.47 / 3.5 = 134.3 ms: 63.2 % of it at one time constant, 95.0 % at three.
+    #[test]
+    fn the_rotor_flux_builds_with_l_r_over_r_r() {
+        let p = params(true, 4.5);
+        let m = motor(&p);
+        let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+        d.phases = Phases::default();
+        let trace = run(&p, &mut d, f64::INFINITY, 0.0, |_| 0.0, |_, d| d.torque_command = 0.0, 0.45);
+        let tau = 0.47 / 3.5;
+        let at = |t: f64| trace[(t / p.current_cycle) as usize - 1][3] / m.rated_flux;
+        assert!((at(tau) - 0.632).abs() < 0.01, "{}", at(tau));
+        assert!((at(3.0 * tau) - 0.950).abs() < 0.01, "{}", at(3.0 * tau));
+    }
+
+    /// Field-oriented, magnetized, rotor held: a torque step of 5 N m answers as the current loop does, 63.2 % within its
+    /// T = sigma L_s / Kp = 0.5 ms, and holds it (the flux stays, the slip frequency keeps the frame on it).
+    #[test]
+    fn under_field_orientation_a_torque_step_answers_with_the_current_loops_time_constant() {
+        let p = params(true, 4.5);
+        let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+        let trace = run(&p, &mut d, f64::INFINITY, 0.0, |_| 0.0, |_, d| d.torque_command = 5.0, 0.05);
+        let at = |t: f64| trace[(t / p.current_cycle).round() as usize - 1][2];
+        assert!((at(0.5e-3) / 5.0 - 0.632).abs() < 0.05, "{}", at(0.5e-3));
+        assert!((at(0.05) / 5.0 - 1.0).abs() < 2e-3, "{}", at(0.05));
+    }
+}

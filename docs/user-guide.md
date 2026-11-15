@@ -165,6 +165,7 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | `dc-link-overvoltage` | highest DC link voltage (only with `effects.dc_link`) | `ratings.dc_link_overvoltage_v` | V |
 | `settling` | `dwell_error_peak_m` | `ratings.settling_tolerance_m` | m |
 | `settling-angle` | `dwell_angle_error_peak_rad` | `ratings.settling_tolerance_rad` | rad |
+| `gripper-hold` | the most the held part asks of a vacuum cup, m (a_z + g) + m |a_xy| / μ (with `effects.gripper_time`) | its hold A p_hold over `ratings.gripper_safety_factor` | N |
 | `belt-tension` | highest belt tension | `ratings.belt_max_tension_n` | N |
 | `belt-slack` | lowest belt tension | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |
@@ -194,6 +195,8 @@ Limits for this task:
 - With input shaping, a dwell and the gripper wait until the shaped setpoint has arrived, one period of the shaper after the plan. `settling` is then judged from that moment.
 - Gearbox and pulley torques are the torque at the gearbox output, the signal `gearbox.<motor id>.output_torque`. In the elastic model that is what the gear's spring passes on to the pulley, with the efficiency applied (with `effects.gearbox_mesh_friction`, on in the joint kit and the cable robots, the efficiency's loss is a friction in the mesh: it holds a load at rest anywhere between the torques that lower and lift it, and a gear driven back passes 1 / (2 − η) of the power instead of η); in the rigid model it is the value the solver works out. The torque that accelerates the rotor itself does not count against the gearbox, and a load that drives the gearbox back (braking, lowering) counts with what it puts on the output. `cubic_mean_torque_nm` of `analyze` is still the motor's.
 - The motor, friction and drive values of the default configs are placeholders. See the README on what the absolute numbers rest on.
+
+**The gripper's time, and whether a vacuum cup holds.** By default the gripper grips and lets go at once on arrival. With `effects.gripper_time` and a `[gripper]` table (see the [config reference](config-reference.md#gripper)) jaws take `close_s` and `open_s`, and a vacuum cup the time its generator needs to evacuate it to the switch level and its vent to let go (a first-order build-up from cup volume and flow). The dwell at pick and place lasts at least that long and the payload comes or goes when the gripper is done, so a short dwell makes the cycle longer: on the single axis jaws of 0.3 s and 0.25 s against dwells of 0.1 s add 0.35 s. With a vacuum gripper and `ratings.gripper_safety_factor` the verdict `gripper-hold` judges the most the held part asks of the cup, m (a_z + g) + m |a_xy| / μ from the tool's acceleration, against the cup's hold A p_hold over the factor: on the rigid single axis (10 m/s², 2 kg, μ 0.5) 61.86 N, which a 70 N cup holds and a 55 N one does not. A faster cycle raises it, and `optimise` stops where the cup still holds. None of the shipped configs has the gripper's time on.
 
 **One DC link for all drives.** `effects.shared_dc_link` (off by default, needs `effects.dc_link`) gives the drives of a machine one DC link, as with one Line Module on a SINAMICS S120. What a braking motor feeds back, a motoring one draws; only the net power charges the capacitors. The link has the capacitance of all drives together (each brings `ratings.dc_link_capacitance_uf`), one chopper with one braking resistor of the `[ratings]` powers, and one trip. Every motor then shows the same DC link voltage and resistor power, and the braking checks appear once per motor with the same shared values. On a machine with one drive the switch changes nothing.
 
@@ -992,6 +995,83 @@ the modes change over the workspace (`sim-cli modes`): 24.6 Hz at the planar rob
 run from corner to corner and hold little moment: turns of 0.05 rad already take some near the band's top, and its
 platform rings at up to 0.85 mrad in the dwells (settling 0.84 mm against the 1 mm the config asks).
 
+## Size a stepper or an induction motor
+
+`motor.kind` puts another motor behind the drive (see [model reference](model-reference.md#stepper-motor) and
+[config reference](config-reference.md#motor-kinds)); without it every machine keeps its servo motor. Two machine files
+show them, both with [estimate] values:
+
+```text
+$ sim-cli verdicts --machine-file machines/stepper-axis.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml --set geometry.incline_deg=0 --set 'drive.induction_control="vf"'
+```
+
+**A stepper belt axis.** A NEMA 23 stepper (1.26 N m holding torque at 2.8 A per phase, 0.9 Ω, 2.5 mH, 50 rotor teeth)
+straight on a 16 mm pulley, 48 V, 16 microsteps, the drive set to 3.5 A (`drive.stepper_current_a`, 88 % of the rating:
+holding torque 1.11 N m). The drive runs open loop: it counts the setpoint in microsteps and puts the current vector there,
+and the rotor follows on the "magnetic spring" of the holding torque. Three checks size it:
+
+- `stepper-synchronism`: the highest load angle over the cycle against the pull-out angle, 90° electrical. The shipped
+  cycle reaches 0.42 rad (24°). A rotor that falls out of step has lost position for good (the drive does not know): the
+  value then is above π. With `--set mass.payload_kg=25` the 5 m/s² alone ask for 2.08 N m of the 1.11 N m, and it fails.
+- `motor-peak`: the torque against the pull-out curve, the holding torque up to the corner speed, here 85 rad/s
+  ((R I + k_E ω)² + (N ω L I)² = U²), falling above: 44 % on the shipped cycle. The torque-speed chart shows the curve.
+- `motor-thermal`: a stepper carries its current at standstill too; the winding settles at 59 K of its 80 K. At the full
+  3.96 A it would sit at its rated rise.
+
+Siemens' S1 check (`motor-s1`) is a servo motor's and is not made. In the scope the motor speed shows the rotor ringing
+on its spring after each move (about 60 Hz here, sqrt(N T_hold / J) / 2π with the load's inertia), and the following
+error the load angle at the motor: the true position against the counted one.
+
+**An induction motor lift.** A four-pole 1.5 kW, 400 V, 50 Hz motor (1440 rpm, 10 N m) through a gearbox 10 onto a
+vertical belt lift with 50 kg, field-oriented (`drive.induction_control = "foc"`) under the drive's speed and position
+loops. Its torque-speed curve is the breakdown curve of its equivalent circuit (27.1 N m at the rated voltage) and the
+converter's current limit; the copper loss of stator and rotor heats it. It passes every check: 24 % of the curve,
+17.5 K, 0.2 mm off its target in the dwells against the 0.5 mm allowed. Laid flat and run on V/f (the third command) the
+converter follows the plan's speed open loop with the slip compensated, and the carriage stops about 9 mm off its targets:
+V/f has no position. The motor's data are the name plate (`rated_voltage_v`, `rated_frequency_hz`,
+`drive.rated_speed_rad_s` for the rated slip) and the equivalent circuit (`resistance_ohm`, `rotor_resistance_ohm`,
+`magnetizing_inductance_h`, the two leakages); makers publish the circuit for some series, else it has to be estimated
+(the files say which and bound them).
+
+## Size a pneumatic axis beside a servo axis
+
+Pick-and-place machines often lift with a pneumatic cylinder while servo axes travel. A machine file adds one with a
+`[[machine.cylinder]]` node and a table of its values (bore, rod, stroke, moved mass, dead volumes, supply pressure,
+the valve's and tube's ISO 6358 C and b, the meter-out throttles, the cushions, the seals; keys in
+[config-reference.md](config-reference.md#a-machine-files-pneumatic-cylinders)). The cycle commands it by its valve and
+waits for its end-position sensors:
+
+```toml
+[[cycle.segment]]
+target = [0.1]          # X to the pick
+dwell_s = 0.05          # counted once the sensor reports
+payload = false
+valves = { z = "extend" }
+wait = ["z.extended"]
+```
+
+`machines/pneumatic-axis.toml` is a servo X with a Festo DSBC-32-100 Z hanging down from its carriage:
+
+```text
+$ sim-cli verdicts --machine-file machines/pneumatic-axis.toml
+$ sim-cli run --machine-file machines/pneumatic-axis.toml --cycle --time 5 --out z.csv
+```
+
+The verdicts judge the cylinder beside the motor: `cushion-energy` (the kinetic energy entering the cushion, 0.012 to
+0.029 J here, against the cylinder's rated 0.4 J) and `load-factor` (what it works against over its theoretical force
+at supply pressure, 0.024 against the usual 0.7). The traces `cylinder.z.*` have the piston's position and speed, both
+chambers' pressures and temperatures, the spool and the end sensors, the last stroke times (0.55 s out, 0.65 s back),
+the speed entering the cushion and at the stop, bounce and settling, the air per double stroke (1.10 normal litres)
+and its energy at the compressor (474 J at 0.12 kWh/m³). The extend speed is set by the rod side's meter-out throttle:
+choked, the piston runs at C p0 / A2 (0.216 m/s here), whatever the load. Within the cushion the bleed screw sets the
+speed the same way (0.05 l/(s bar): 0.072 m/s). A cylinder whose dead volume is too small for the step is refused with
+`error-cylinder-unstable`, which names the rate and the sub-step it needs (`sim.substeps`).
+
+Festo prints C and b for no VUVG valve; the shipped valve's are estimated from its nominal flow. The cylinder does not
+act back on the axis carrying it (its mass belongs in the carriage's), and there is no proportional valve yet.
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).
@@ -1035,7 +1115,7 @@ Two planners time the path:
 
 | | Default | `--time-optimal` |
 | --- | --- | --- |
-| Speed and acceleration | The limits of every axis (`[axis.*]`) | What each motor allows by its own drive and motor: up to its maximum speed (`drive.max_speed_rad_s`), its torque-speed curve at the speed it turns (above the rated speed falling) or the torque of the drive's maximum current (`effects.drive_current_limit`), less (1 − `profile.torque_reserve`) of its torque at a standstill at every speed, and the same share of the gearbox's and the pulley's torque rating at the output; the guides' and the belt's ratings |
+| Speed and acceleration | The limits of every axis (`[axis.*]`) | What each motor allows by its own drive and motor: up to its maximum speed (`drive.max_speed_rad_s`, or the gearbox's input speed rating where lower, less 1 %), its torque-speed curve at the speed it turns (above the rated speed falling) or the torque of the drive's maximum current (`ratings.drive_max_current_a`) and as it brakes no more than the braking resistor takes, less (1 − `profile.torque_reserve`) of its torque at a standstill at every speed, and the same share of the gearbox's and the pulley's torque rating at the output; the guides', the belt's and the machine's own parts' ratings (screw, rack) |
 | Jerk | The limit of every axis | The same |
 | At a corner (direction turns by more than 1 mrad) | Stops; with `profile.corner_tolerance_m` a corner between two lines is rounded within that tolerance and passed without a stop | The same |
 | Where a line meets an arc | Slows down so far that the step in acceleration stays within half the jerk limit; with `profile.path_tolerance_m` a transition curve takes the path into the arc at speed (below) | The same |
@@ -1050,6 +1130,7 @@ Reading the result:
 - `path_error_peak_m` is the distance of the tool tip from the line its setpoint has drawn, wherever along it. Lagging behind along the path does not count. This is the number for contour accuracy.
 - `tracking_error_peak_m` is the distance from where the setpoint is at the same moment. It includes the lag.
 - On the T-gantry the tool tip is the tip of the leaning Z axis (`effects.tool_flex`) on a frame that sways (`effects.frame_compliance`), seen from the floor where the workpiece stands. It is not the carriage's position along the beam and not what the motor encoders say.
+- With `effects.base_compliance` (every machine, off as shipped) the whole machine stands on a base on springs (`[base]`), and the tool tip moves with it too. By default one-way: the base sways under the machine's reactions, but the motors do not feel it. With `effects.base_reaction` it is two-way: the base's acceleration pushes on everything that moves on it, so the sway shows in the following error and the drives hold against it, and the base's energy and damping loss are in the energy budget (`power.base`). It costs computing time: every step works the machine's mass out from its energy at each of its speeds and each pair of them (model reference, "Compliant base").
 
 **Arcs entered at speed.** Where a line runs into an arc the acceleration towards the centre steps from 0 to v²/r, so the default planner passes that place at a crawl: 0.07 m/s for a radius of 0.1 m at 100 m/s³. With `profile.path_tolerance_m` above 0, both planners first put transition curves (clothoids) there, and where two arcs meet: curves whose curvature changes evenly with the distance. To fit one in, the arc keeps its centre and gets a slightly smaller radius, so the planned path is off the lines and arcs of the file by a small amount, and the error stream says by how much:
 
@@ -1104,7 +1185,7 @@ Limits for this task:
 - Without a path tolerance a rounded corner is slow with the default planner: 0.07 m/s into an arc of 0.1 m radius at 100 m/s³.
 - Splines: without a path tolerance, where one joins a line or an arc the curvature steps, so the path passes that junction slowly, like a line into an arc. With one, the eased junction is passed at speed, but more slowly than a clothoid would allow for the same deviation. A span has one limit, from its tightest place, so a span with one tight bend is slow along its whole length.
 - Transition curves between lines and arcs: none where two arcs meet in their direction in different planes (three axes), which the path passes slowly; a piece too short for its curves halves the curves of the whole path, not only its own. Their length follows the speeds the plan allows: the axis limits, or for `--time-optimal` the motors (the example takes 1.397 s with a tolerance of 0.1 mm, 1.695 s without).
-- The time-optimal plan knows the belt's tension ratings (`ratings.belt_max_tension_n`, `belt_min_tension_n`): it takes `profile.tension_margin_n` (31 N on the default T-gantry, the guide friction the belt pulls) off both and keeps every section's tension in the rigid model within `profile.tension_reserve` (0.5) of the room to what is left, because the belt's vibration can add as much again as the rigid model's change of tension (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). It also keeps the drive's maximum current (with `effects.drive_current_limit`), `profile.torque_reserve` of the gearbox's and the pulley's torque rating at the output (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`, where the machine reports the gearbox's output torque) and the guides' load rating (`ratings.guide_max_load_n`, on the T-gantry and the single axis). It knows the gearbox's losses (`gearbox.efficiency` with `effects.gearbox_efficiency`: the motor gives them on top) and keeps `profile.torque_reserve` of the guides' rating, as of the motors' torques; it does not know the DC link. Run `analyze` or `verdicts` on it. On the shipped delta the gearboxes' M2max binds: a line across its range takes 0.434 s, 0.411 s before the plan knew it.
+- The time-optimal plan knows the belt's tension ratings (`ratings.belt_max_tension_n`, `belt_min_tension_n`): it takes `profile.tension_margin_n` (31 N on the default T-gantry, the guide friction the belt pulls) off both and keeps every section's tension in the rigid model within `profile.tension_reserve` (0.5) of the room to what is left, because the belt's vibration can add as much again as the rigid model's change of tension (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). It also keeps every other rating whose verdict depends on the motion at a point of the path: the drive's maximum current (`ratings.drive_max_current_a`, with `effects.drive_current_limit` or without, as "drive-peak-current" judges it either way), `profile.torque_reserve` of the gearbox's and the pulley's torque rating at the output (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`, where the machine reports the gearbox's output torque), the gearbox's maximum input speed (`ratings.gearbox_max_input_speed_rpm`), the guides' load rating (`ratings.guide_max_load_n`), the braking resistor's peak power (`ratings.braking_resistor_peak_w`: a braking that would feed back more is not available), and the machine's own parts: a screw's speed, d n and axial force, a rack's feed force. Speed ratings keep 1 % back for the loops' following. It knows the gearbox's losses (`gearbox.efficiency` with `effects.gearbox_efficiency`: the motor gives them on top), the motors', guides' and joints' friction, and keeps `profile.torque_reserve` of the guides' rating, as of the motors' torques. `profile.time_optimal_margin` (1 in the shipped configs) plans at that share of every limit: 0.9 for 90 %. What is judged over the whole cycle is not in the plan: the winding's warming ("motor-thermal", "motor-s1"), the drive's RMS current, the lives and the braking resistor's mean power. So a time-optimal cycle, run, passes the plan's own checks on every shipped machine (a test per machine, `crates/sim-machines/tests/time_optimal.rs`), but can still overheat a motor: the linear motor axis's, the flying saw's, the parallel SCARA's and the four-arm delta's do. Run `analyze` or `verdicts` on it. On the shipped delta the gearboxes' M2max binds: a line across its range takes 0.434 s, 0.411 s before the plan knew it.
 - The time-optimal plan reads the motors' limits point by point (every 2 mm) and follows the highest speed they allow within a piece, up and down, but it is not proven the fastest one possible: the runs from both ends of a piece meet on a short cruise or on the speed curve, whichever is quicker, and on a curve the ramps get 0.4 of the jerk limit (see the [model reference](model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Planning takes some milliseconds (2 to 21 ms on the shipped machines). On the full model the motors pass the rated speed by what the control loops add (0.1 % in the example).
 - A machine that stands on an end of a stroke has its setpoint some hundredths of a millimetre beyond it: the setpoint is where the motors stand, under belt stretch and gear twist. A path from there starts that far outside the travel range and is run. Only near its start may a path leave the range: a pose within the machine's setpoint slack of the start (0.1 mm on the gantries, 2.3 mm on the delta) may lie that far outside it; any other pose has to lie within the range (on an axis whose start lies beyond an end, no further beyond than the start; rounding of 1e-9 m aside). Other poses are refused (`The path leaves the travel range. ...` for a path of pieces, `The trajectory needs at least two points inside the travel range, at rising times from 0.` for poses at times).
 - The payload is as the machine has it when planning (attached, at the start).
@@ -1135,6 +1216,32 @@ Run: stopping distance per axis from the trip (the machine stood at) 0.0070 (0.4
 - `--time-optimal` refuses a path that comes nearer than the clearance; `optimise` takes no setting whose run does.
 - The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline. When the drives trip, Messages says at once which motor tripped when, on which monitor, and how each drive stops, while the 3D view and the scopes show the axes ramping down or coasting; once the machine stands, how far each axis went from the trip.
 - The clearance is between the boxes of the tool, carriage, Z axis, platform and payload as the 3D view draws them (not their CAD shapes) and the capsules of the slanted parts: the delta's forearm rods and upper arms and the D4's telescope, each the points within half its drawn width of its drawn segment, exact however it slants.
+
+## How far does it travel after an emergency stop?
+
+Stop the cycle (or a path, `--path FILE`) at many moments and see how far the machine goes before it stands:
+
+```text
+$ sim-cli stop t-gantry --category 1 --points 3
+moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],braking_resistor_energy[J],tripped,x_distance[m],z_distance[m]
+grid,0.0000,0.000001,0.0000,0.218,false,155.14,0.0000,false,0.000000,0.000001
+grid,2.0263,0.025537,0.5630,37.150,false,183.27,0.0000,false,0.025536,0.000101
+energy,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+grid,4.0527,0.000261,0.0173,17.919,false,224.04,0.0000,false,0.000029,0.000261
+fastest_z,4.3240,0.006484,0.0488,17.285,false,177.13,0.0000,false,0.000041,0.006484
+fastest_x,5.0760,0.026016,0.5921,41.406,false,178.96,0.0000,false,0.026016,0.000056
+worst,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+Worst stop: triggered at 2.0800 s (energy)
+Stop verdict: stop-dc-link: 224.0 / 257.6 ok
+```
+
+- The stop categories are those of IEC 60204-1 as a servo drive makes them (`--category`, 0 without it): **0** takes the torque off at once (STO, as `--disable-at`): the axes coast until the holding brakes hold. **1** brakes every drive on its quick-stop ramp (`drive.off3_ramp_s`, the time from the rated speed), with its torque and current limits and the DC link and braking chopper acting as in any move; once all stand the brakes engage and the torque goes off, or when `drive.ss1_time_s` (0.5 s) runs out first. **2** brakes the planned motion at the axes' acceleration limits along the direction it moves and holds there with the torque on.
+- The moments: where each axis is fastest (`fastest_x`), where the kinetic plus potential energy is largest (`energy`), and `--points` moments evenly over the pass (`grid`, 20 by default). The last row repeats the worst, the stop that took the tool farthest.
+- Per stop: how far the tool got from where it was at the trigger (the farthest, over the axes in metres) and each axis, the time until every axis is below a hundredth of its speed limit, the peak deceleration over 1 ms, whether an axis went into its hard stop, the DC link's peak voltage, the energy the braking resistor took, and whether a drive tripped on overvoltage (it then coasts, as in category 0).
+- `stopping-distance` judges the worst against `ratings.max_stopping_distance_m`, which you add to `[ratings]` in a config file (`--config`); `stop-dc-link` (with `effects.dc_link`) fails when a stop trips a drive.
+- A hanging axis falls while its brake engages: switch on `effects.brake_delay` (off by default) and the brakes take `brake.engage_delay_s` (0.03 s, an estimate) to hold and `brake.release_delay_s` (0.06 s) to let go. On the T-gantry in category 0 (`sim-cli stop t-gantry --points 3 --set effects.brake_delay=true`) the worst stop then takes the tool 30.7 mm instead of 9.3 mm, and stopped where Z is fastest it goes 8.7 mm instead of 1.4 mm.
+- One stop at a time: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` writes every signal around it. From Python `ks.Sim(config).stop(1)` stops a stepped simulation, `enable()` switches it on again; the FMU's input `command.stop_category` says how `command.enable` turning false stops the drives; over OPC UA writing 0, 1 or 2 to `command.stop_category` stops the machine.
+- What it does not know: category 2 brakes along the direction of motion, not along a curved path; no jerk limit in a stop; the brakes have one delay for all; nothing has been compared with a measured stop yet (see [validation](validation.md#stops-and-brake-delays)).
 
 ## Programs: G-code and robot programs
 
@@ -1216,6 +1323,8 @@ Trajectories (`--trajectory`, planned paths, a segment's via points) run a cubic
 ## Tune gains and use input shaping
 
 The gains are in `[drive]`: `kv_1_s` (position), `velocity_kp_nm_s_rad` and `velocity_tn_s` (velocity), `current_kp_v_a` and `current_tn_s` (current). The three commands below put a test signal on the position setpoint only, without feedforward, so they show the feedback loops.
+
+**Friction feedforward.** `effects.friction_feedforward` adds friction to the torque feedforward, so that the velocity loop's integrator need not build it up while the axis moves. `drive.friction_feedforward_model` says which: `"characteristic"`, the points `drive.friction_feedforward_*` a drive records at constant speeds, or `"machine"`, the friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints, idlers, cable chain), which every machine tells. It is on with `"machine"` in the shipped configs where it cuts the following error while moving and the settling at the pick (the T-gantry's 194.9 um to 178.2 um and 47.4 um to 42.9 um; the screw axis 82.3 to 30.8 um and 46.2 to 6.9 um); the [validation](validation.md#friction-feedforward-in-the-shipped-configs) has the table for every config and why the single axis and the linear delta keep it off. A feedforward does not change the loop's margins. Try it on any config with `--set effects.friction_feedforward=true --set 'drive.friction_feedforward_model="machine"'`.
 
 **One line per axis:**
 
@@ -1386,8 +1495,10 @@ Limits for this task:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.262867e-2,6.527515e-2,6.255957e-4,4.218134e-3
+m,2.262654e-2,6.523016e-2,6.230175e-4,4.241306e-3
 ```
+
+The replay starts from the trace's own state, whatever the config's start pose: at rest at a pose before the first row, it runs up to the first row's position setpoint at the first row's measured speed (a smooth run-up of 0.25 s or more, within a quarter of each axis's acceleration limit), so a trace cut out of a longer motion replays without the jolt of a start from rest; behind the last row the motion carries on, it is not forced to rest. The pose the run-up starts at has to be within the axes' ranges. Where the source records its setpoint in the same cycle as the position it is compared with (the simulator's trace holds the setpoint the drive worked with up to the row, the one of the cycle before), give the setpoint `time_offset_s` = one position cycle in the mapping, so that the following errors compare.
 
 Here the "measured" machine is the simulator with a carriage 1.5 kg heavier than the config. The table gives, per motor, the RMS and the peak of the difference between measured and simulated torque and following error. `--out` writes both side by side, one line per row of the trace:
 
@@ -1400,17 +1511,20 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.549800e0,8.067588e0,1.618e-2
-viscous_friction_n_s_m,x,2.681385e1,2.621072e1,2.192e-1
-coulomb_friction_n,x,2.132336e1,2.196390e1,1.953e-1
-constant_force_n,x,-7.757048e-4,2.050984e-3,6.293e-2
+moved_mass_kg,x,6.550978e0,8.068848e0,1.597e-2
+viscous_friction_n_s_m,x,2.681013e1,2.621257e1,2.163e-1
+coulomb_friction_n,x,2.132618e1,2.196308e1,1.928e-1
+constant_force_n,x,-9.314134e-4,1.573428e-3,6.211e-2
+presliding_stiffness_n_m,x,6.950099e5,7.307120e5,2.571e5
 Moved mass, axis x: +1.518 kg ± 0.016. Add this to the masses that move with the axis. The trace cannot tell load mass from rotor and pulley inertia.
 Viscous friction, axis x: × 0.978 ± 0.008. Scale the viscous friction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
 Coulomb friction, axis x: × 1.030 ± 0.009. Scale the Coulomb friction and stiction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
-Constant force, axis x: +0.003 N ± 0.063. The measured axis needs this much more than the config gives: a weight, an incline or a cable pull the config lacks.
+Constant force, axis x: +0.003 N ± 0.062. The measured axis needs this much more than the config gives: a weight, an incline or a cable pull the config lacks.
 ```
 
 Per axis, a least-squares fit of force = mass × acceleration + viscous × speed + Coulomb × sign(speed) + constant. The same estimate is run on the trace (`fitted`) and on the config's own simulation of the same setpoints (`config`). The difference between the two is what the config is off by: here +1.518 kg, for a true 1.5 kg. The advice lines go to the error stream. No config is edited.
+
+Where the trace shows them, three rows of what the friction does beyond its sliding level follow, each estimated alike on the trace and on the replay: `held_force_n`, the force the axis holds at rest after its last motion (a friction smoothed through zero holds none, one that sticks holds what the loops wound up at the stop); `breakaway_force_n`, the friction at 1 to 5 % of the top speed while the speed falls towards a stop or a reversal, against the Coulomb value (above it where the friction rises towards rest); `presliding_stiffness_n_m`, from the travel over which the friction turns through zero at each reversal (Dahl's law: level · ln 2 / σ). They are compared, not advised: the guides' presliding state is `effects.slide_presliding` on the joint kit's slides, the LuGre bristles on the single axis and the gantries. The trace cannot tell the guides' friction from the motor's or a screw nut's: both act as a sign of the speed, so the fit gives their sum. A rigid fit needs the axis to move both ways (above); the details need a stop (held), slow stretches towards a stop or reversal (breakaway) and reversals that the trace resolves (presliding).
 
 **Fit, stage 1 in the motors' coordinates: the delta, the SCARA, the arm.** Where the motors do not turn in proportion to the axes (the delta's arms), or the inertia a motor turns changes with the pose (a SCARA's or an arm's elbow; `trace::per_axis_fit` decides), `fit --trace` regresses the motor torques on the machine's own rigid model in regressor form, τ = Y(q, q̇, q̈) θ: per motor k, τ_k − τ_k,rigid = (θ_payload − 1) × (the payload's share of τ_k,rigid) + ΔJ_k q̈_k + b_k q̇_k + c_k sign(q̇_k) + τ0_k, the rigid torques from `Machine::rigid_motor_torque` at the trace's angles, speeds and accelerations (the acceleration from the angle, which an encoder measures far more precisely than the speed it differentiates). A trace that swings every axis at several frequencies (here a file of poses at times: the delta 0.2 m across at 0.6 and 0.9 Hz, 0.06 m up and down at 1.1 Hz, 8 s), of a delta with 4 kg of payload for the config's 3 and twice the joints' friction:
 
@@ -1768,7 +1882,7 @@ cargo run --release -p sim-app
 
 The window has a bar on top (machine, language, run controls, units, theme and the tightest checks), the 3D view in the middle, the setup on the left (motion, effects, parameters, config file), the tools on the right (analysis, effect views, search, path, trace, frequency response, tuning, runs) and the scopes at the bottom. The tables below go through the controls by what they do; the panel each is in follows from that layout.
 
-**3D view.** Built from simple shapes. Pulleys, motor shafts and idlers turn; belt teeth travel (drawn every 40 mm, not at the tooth pitch); belt sections shift to red above pretension and to blue below. Labels show each motor's speed in rpm and each axis position. Drag with the left mouse button to orbit, use the wheel to zoom. When a path is planned (the Path part of the right panel), the view draws the planned path as a yellow line where the tool will go, and over it in light blue the path the tool tip really travels once the machine runs it. The view's controls colour that travelled path by the tool's speed or by its path error: its distance from the path the plan drew (the setpoints the drives follow), the same distance whose peak the path's analysis gives as its path error. Until 14 November it was measured from the plan's newest setpoint, which moves once per profile cycle (1 ms) while the tool moves on, and read up to the speed times the cycle too high (1.09 mm where the analysis gave 0.76 mm, on a square of the T-gantry). "Fixed scale" sets the scale's top by hand, so that two runs read alike; with the path error, "Tolerance" draws points further off red. The timeline under the view scrubs the recorded scenes: the travelled path ends at the time shown, and the compared run (the ghost) is shown at that time too.
+**3D view.** Built from simple shapes. Pulleys, motor shafts and idlers turn; belt teeth travel (drawn every 40 mm, not at the tooth pitch); belt sections shift to red above pretension and to blue below. Labels show each motor's speed in rpm and each axis position. Drag with the left mouse button to orbit, with the right or middle button to pan, use the wheel to zoom; a drag that starts on a panel leaves the camera alone, and a smaller window or a wider panel moves the camera back as far as the machine needs. When a path is planned (the Path part of the right panel), the view draws the planned path as a wide yellow line where the tool will go, and over it in a thinner light blue line the path the tool tip really travels once the machine runs it. The view's controls colour that travelled path by the tool's speed or by its path error: its distance from the path the plan drew (the setpoints the drives follow), the same distance whose peak the path's analysis gives as its path error. Until 14 November it was measured from the plan's newest setpoint, which moves once per profile cycle (1 ms) while the tool moves on, and read up to the speed times the cycle too high (1.09 mm where the analysis gave 0.76 mm, on a square of the T-gantry). "Fixed scale" sets the scale's top by hand, so that two runs read alike; with the path error, "Tolerance" draws points further off red. The timeline under the view scrubs the recorded scenes: the travelled path ends at the time shown, and the compared run (the ghost) is shown at that time too.
 
 **Left panel, top to bottom:**
 
@@ -1819,6 +1933,24 @@ The window has a bar on top (machine, language, run controls, units, theme and t
 | Frequency response: Measured response, taken on, Fit the belt stiffness | A file as `sim-cli sweep` writes it (the columns `frequency_hz` and `gain_rad_s_per_nm`), measured on the motor ticked with the torque amplitude above. "Fit the belt stiffness" runs the config's own response at the file's frequencies and shows resonance and damping ratio of both, and what to change in the config: the factor on the belt stiffness. The same as `sim-cli fit --sweep FILE --sweep-motor N --amplitude A` |
 | Tuning: Measure step and frequency response | Step response and closed-loop response of one axis, with rise time, overshoot, settling time and bandwidth; below them the modes the machine reports over that axis's stroke, with the shaper frequencies dashed |
 | Scope plots | One plot per quantity, one line per axis or motor; a motor has one colour in every plot of the app (the scopes, the operating points, the sweep, the runs). Setpoints are dashed in the colour of their actual value. Shared time axis and cursor; min, max, span and RMS per trace, the names in their colours below the plot (no legend over the lines); units switch to mm and µm by themselves unless rpm or mm is picked in the top bar. A long window is drawn with the lowest and highest sample of each of 3000 stretches, so a peak one sample wide still shows |
+
+### Modes, the coloured path, the workspace's quality and the error bands
+
+**Modes at the pose** (top of the Tuning tab). "Find the modes" asks the machine for its modes at the pose its setpoint stands at and lists them: the frequency and damping the machine reports (the ones the input shaper takes; most machines take the drive as holding the motor, so these are the modes with the pulley held), the mode of the linearised model the shape is of, where the shape comes from, and the kinds of stiffness that hold at least 5 % of its strain energy (belt, gearbox, guide, frame, base, link). Where the machine gives a shape of its own (`Machine::mode_shape`, the lowest mode on most), that one is shown; for every other mode the shape is the eigenvector of the small-motion problem of the elastic model at that pose: the machine's equations are differentiated by central differences at rest, the motors free and their torques held, and the eigenvector nearest the reported mode is found by inverse iteration. Its own frequency and damping are in the column "Linearised"; they differ from the reported ones where the motors' being free matters. The stiffness shares come from the reported frequency: each kind's stiffnesses in the config are made 10 % stiffer and the share is twice the change of ln f over ln 1.1 (Rayleigh), so they add up to 1 where every stiffness the mode lives in is one of these kinds. "Show" swings that mode in the 3D view, at one swing a second and as large as the exaggeration slider says, with its frequency by the tool; "Show" again goes back to the machine's own mode. On the single belt axis the two-mass mode (carriage against pulley and rotor) comes out with the frequency and the motor-to-carriage amplitude of the hand calculation of three masses on two springs (`the_belt_axis_two_mass_mode_has_the_hand_calculated_shape`). The same as CSV: `sim-cli modes MACHINE --shapes` writes per mode the reported and linearised frequency and damping, the shape's source, the stiffness shares and the shape, per state its real and imaginary part.
+
+![The mode list on the T-gantry, its second mode swinging](images/app-modes.png)
+
+**The path coloured by what happened on it** (Path tab, under the planned path's plot). After "Plan, run and analyse", "Path coloured by" colours the path the analysis ran in the 3D view along its length, once per millisecond at the tool's place: by the path error (the distance to the path the analysis measured, the values of `path_error_series`), the tracking error (to where the setpoint is at that moment), the speed, each motor's utilisation (its torque over what its drive gives at that speed, 100 % on the torque-speed curve) or the highest belt tension. The scale shows the lowest and the highest value along the path, the worst point is marked red in the view, and its button reads out every quantity there; the slider "Along the path", or a click on the path in the 3D view, reads them out at any other point, marked cyan. "nothing" draws the planned and the travelled path as two plain lines as before.
+
+![The corner path on the T-gantry coloured by its path error, the worst point read out](images/app-coloured-path.png)
+
+**Workspace map by acceleration** (Path tab). The map, for every machine that tells the condition number of its kinematics (the deltas, the parallel SCARA, the arms in tool space, the hexapod, the cable robots; the linear delta since 15 November 2026), is coloured by the condition number or by the largest acceleration the motors can give the tool there in its worst direction: with T = A a + g the rigid model's motor torques, motor k holds |g_k| + |A_k . d| a up to its peak torque, so the acceleration in every direction is the smallest (T_peak,k - |g_k|) / |A_k| (the weight is held). Dark where the machine does best, light where it does worst, for both. The pointer shows both numbers. `sim-cli workspace MACHINE [--z Z] [--points N]` writes the map as CSV: x, y, condition number, whether the machine goes there, acceleration in m/s². At the linear delta's centre both numbers are those of the hand calculation (`the_workspace_map_has_the_hand_calculated_condition_and_acceleration_at_the_linear_deltas_centre`).
+
+![The linear delta's workspace map by the acceleration in the worst direction](images/app-workspace-acceleration.png)
+
+**Error bands drawn on the traces** (Analysis tab, under the bands' table). "Run the bounds" runs the cycle with each bounded value at its low and at its high bound, one at a time (as `verdicts --bands` does; a bound whose low is its high runs nothing), keeps each motor's torque and following error and each belt section's tension, and draws per signal the envelope of those runs, from the lowest to the highest value at each millisecond, as a grey band under the nominal trace. Their operating points are drawn as a grey cloud under the cycle's own on the torque-speed charts. The bands are of the bounds one at a time, not of the samples (`--samples`).
+
+![Torque, following error and belt tension of the single axis with the envelope of its bounds runs](images/app-bands.png)
 
 The right panel scrolls as a whole, and each of its parts (Scopes, Config file, Analysis, Effect views, Motor search, Path, Trace, Frequency response of the mechanics, Tuning) folds away under its heading. A part opens by itself when its result arrives. The tables are laid out for the panel's default width: long names wrap, and numbers have four digits.
 

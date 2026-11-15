@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveMode, DriveParams, quantise, shared_dc_link};
+use crate::drive::{Drive, DriveMode, DriveParams, WINDING_STATES, quantise, shared_dc_link};
 use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
@@ -30,6 +30,37 @@ pub enum Command {
     Disable,
     /// Switch the drives on again, holding where the motors stand.
     Enable,
+    /// A stop as a servo drive makes it, by its stop category (`StopCategory`); a move or cycle under way is dropped.
+    /// (`Stop` above ends the cycle after its segment.)
+    Halt(StopCategory),
+}
+
+/// The stop categories of IEC 60204-1 as servo drives make them (SINAMICS: STO / OFF2, OFF3, and a stop that holds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StopCategory {
+    /// 0: the torque off at once, as `Command::Disable`; the holding brakes engage after `brake.engage_delay_s`.
+    Zero,
+    /// 1: every drive brakes on its OFF3 ramp (`drive.off3_ramp_s`) within its torque and current limits; once all stand,
+    /// the brakes engage with the torque on, and after their engagement delay the torque goes off. When
+    /// `drive.ss1_time_s` runs out first, the torque goes off then (as SS1's timer).
+    One,
+    /// 2: the plan brakes along the direction it moves at the axes' acceleration limits and holds there, torque on.
+    Two,
+}
+
+impl StopCategory {
+    /// 0, 1 or 2.
+    pub fn from_number(n: u8) -> Option<Self> {
+        [Self::Zero, Self::One, Self::Two].get(n as usize).copied()
+    }
+}
+
+/// A category 1 stop under way (`StopCategory::One`): the time left on the SS1 timer, s, and how long all drives have
+/// stood with their brakes engaging, s (`None` while one still moves).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Halt {
+    left: f64,
+    closing: Option<f64>,
 }
 
 /// A command the controller refuses; `key` is a translation key.
@@ -44,6 +75,9 @@ struct Segment {
     dwell_ticks: u64,
     /// Whether the payload is attached once this segment has arrived.
     payload: bool,
+    /// With effects.gripper_time: how long the gripper takes to come to `payload` (`Gripper`), ticks; 0 without.
+    #[serde(default)]
+    grip_ticks: u64,
     /// With `via`: the path to the target, planned where the segment starts (see `via_pieces`): by `path::plan`, or
     /// with `profile.cycle_timing = "time_optimal"` by `path::plan_time_optimal`.
     path: Option<Vec<Piece>>,
@@ -53,6 +87,12 @@ struct Segment {
     corner: Option<f64>,
     /// The motion law of its move: `profile.shape`, or the segment's own `shape`.
     law: MotionLaw,
+    /// `valves`: the commands it gives valves (`Machine::valves`, by index) once it has arrived, as the gripper acts.
+    #[serde(default)]
+    valves: Vec<(usize, f64)>,
+    /// `wait`: the end-position sensors ([valve, 0 retracted or 1 extended]) its dwell waits for before it counts.
+    #[serde(default)]
+    wait: Vec<(usize, usize)>,
 }
 
 /// One mode an input shaper cancels: its impulses (`shaper::impulses`, times in half damped periods), half its damped
@@ -130,6 +170,14 @@ enum Motion {
         speeds: Vec<Vec<f64>>,
         start_tick: u64,
     },
+    /// A category 2 stop (`StopCategory::Two`): from `from` at the speeds `vel`, every axis decelerating evenly to rest in
+    /// `time` seconds, so that the tool keeps the direction it moved in.
+    Halting {
+        from: Vec<f64>,
+        vel: Vec<f64>,
+        time: f64,
+        start_tick: u64,
+    },
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -165,6 +213,16 @@ pub struct Controller {
     stopping: bool,
     enabled: bool,
     pub payload_attached: bool,
+    /// The command of each valve of `Machine::valves` (+1 extend, -1 retract, 0 centre), set by the cycle's segments;
+    /// the simulation hands them to the machine every step.
+    #[serde(default)]
+    pub valves: Vec<f64>,
+    /// effects.gripper_time: the tick at which the gripper under way is done, and whether it then holds the payload.
+    #[serde(default)]
+    gripping: Option<(u64, bool)>,
+    /// The ticks of the dwell under way (`dwell_progress`): its segment's `dwell_s`, or the gripper's time if longer.
+    #[serde(default)]
+    dwell_ticks: u64,
     pub drives: Vec<Drive>,
     /// Tool-side setpoints and following error.
     pub set_pos: Vec<f64>,
@@ -199,9 +257,9 @@ pub struct Controller {
     spline_c2: bool,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
     /// setpoints on their way, oldest first, each with the cycles it takes: per motor position, speed,
-    /// acceleration and torque feedforward.
+    /// acceleration, torque feedforward and friction feedforward from the machine's model (`Drive::friction_ff`).
     fieldbus_delay: usize,
-    fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 4]>)>,
+    fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
     /// Fieldbus jitter: a frame takes up to this many cycles more than the delay, drawn evenly from 0 to it per frame
     /// from its own pseudo-random stream; 0 with the jitter off.
     fieldbus_jitter: usize,
@@ -239,6 +297,20 @@ pub struct Controller {
     /// A dual-drive gantry's synchronisation (`gantry.sync`, `Machine::gantry_motors`); `None` for the plain scheme,
     /// in which each drive follows its own setpoint.
     gantry_sync: Option<GantrySync>,
+    /// effects.brake_delay: the holding brakes' engagement and release delays, s (`brake.engage_delay_s`,
+    /// `release_delay_s`); both 0 with the effect off. Whether the brakes are engaged now, and how long they have been
+    /// asked to change (`step_brake`).
+    #[serde(default)]
+    brake_delays: [f64; 2],
+    #[serde(default)]
+    brake_on: bool,
+    #[serde(default)]
+    brake_timer: f64,
+    /// The SS1 timer of a category 1 stop, s (`drive.ss1_time_s`; infinite without the key), and such a stop under way.
+    #[serde(default)]
+    ss1_time: f64,
+    #[serde(default)]
+    halt: Option<Halt>,
 }
 
 /// How the two drives of a dual-drive gantry are kept in step, beyond each following the common setpoint.
@@ -329,6 +401,9 @@ impl Controller {
             stopping: false,
             enabled: true,
             payload_attached: true,
+            valves: machine.valves().into_iter().map(|(_, command)| command).collect(),
+            gripping: None,
+            dwell_ticks: 0,
             drives: Vec::new(),
             set_pos: vec![0.0; axes],
             set_vel: vec![0.0; axes],
@@ -365,6 +440,11 @@ impl Controller {
             reacting: None,
             fault: None,
             gantry_sync: None,
+            brake_delays: [0.0; 2],
+            brake_on: false,
+            brake_timer: 0.0,
+            ss1_time: f64::INFINITY,
+            halt: None,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -465,6 +545,14 @@ impl Controller {
             .collect::<Result<Vec<_>>>()?;
         // A config written before 14 November 2026 has no drive monitoring.
         let monitoring = cfg.get("effects.drive_monitoring").is_ok() && cfg.bool("effects.drive_monitoring")?;
+        // A config written before 15 November 2026 has neither brake delays nor an SS1 timer.
+        let brake_delays = if cfg.get("effects.brake_delay").is_ok() && cfg.bool("effects.brake_delay")? {
+            [cfg.non_negative("brake.engage_delay_s")?, cfg.non_negative("brake.release_delay_s")?]
+        } else {
+            [0.0; 2]
+        };
+        let ss1_time =
+            if cfg.get("drive.ss1_time_s").is_ok() { cfg.positive("drive.ss1_time_s")? } else { f64::INFINITY };
         let inertias = if motor_params.iter().any(|p| p.precontrol.constant_inertia) {
             rigid_inertias(machine, &cfg.f64s("start.pose")?)
         } else {
@@ -547,6 +635,7 @@ impl Controller {
         let guides = reported.iter().any(|s| s.id.ends_with(".guide_load"));
         let guide = if guides { cfg.f64("ratings.guide_max_load_n").unwrap_or(f64::INFINITY) } else { f64::INFINITY };
         let mut segments = Vec::new();
+        let gripper = crate::gripper::Gripper::from_config(cfg)?;
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
             let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
@@ -587,8 +676,41 @@ impl Controller {
                     .and_then(Shape::from_name)
                     .ok_or_else(|| ConfigError::Invalid(format!("cycle.segment[{i}].shape")))?,
             };
+            // Valves by the id `Machine::valves` gives them: `valves = { z = "extend" }`, `wait = ["z.extended"]`.
+            let ids: Vec<String> = machine.valves().into_iter().map(|(id, _)| id).collect();
+            let valve = |id: &str| ids.iter().position(|v| v == id);
+            let mut valves = Vec::new();
+            if let Some(table) = segment.get("valves") {
+                let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].valves"));
+                for (id, command) in table.as_table().ok_or_else(bad)? {
+                    let command = match command.as_str() {
+                        Some("extend") => 1.0,
+                        Some("retract") => -1.0,
+                        Some("centre") => 0.0,
+                        _ => return Err(bad()),
+                    };
+                    valves.push((valve(id).ok_or_else(bad)?, command));
+                }
+            }
+            let mut wait = Vec::new();
+            if let Some(list) = segment.get("wait") {
+                let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].wait"));
+                for sensor in list.as_array().ok_or_else(bad)? {
+                    let (id, end) = sensor.as_str().and_then(|s| s.rsplit_once('.')).ok_or_else(bad)?;
+                    let end = ["retracted", "extended"].iter().position(|e| *e == end).ok_or_else(bad)?;
+                    wait.push((valve(id).ok_or_else(bad)?, end));
+                }
+            }
+            let payload = segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?;
+            // Whole profile cycles, at least the gripper's time.
+            let grip_ticks = gripper
+                .map_or(0.0, |g| ((if payload { g.close_s } else { g.open_s }) / profile_cycle - 1e-9).ceil())
+                as u64;
             segments.push(Segment {
+                valves,
+                wait,
                 target,
+                grip_ticks,
                 dwell_ticks: (segment
                     .get("dwell_s")
                     .and_then(number)
@@ -596,7 +718,7 @@ impl Controller {
                     .ok_or_else(bad)?
                     / profile_cycle)
                     .round() as u64,
-                payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
+                payload,
                 path: via,
                 corner,
                 law: MotionLaw { shape, ..law.clone() },
@@ -620,7 +742,36 @@ impl Controller {
                     .map_or([0.0; 5], |f| [f.coulomb, f.viscous, f.smoothing, f.drag.torque, f.drag.speed]))
             })
             .collect::<Result<Vec<_>>>()?;
-        let plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction };
+        // 1 where a config (an older machine file) leaves it out.
+        let margin = if cfg.get("profile.time_optimal_margin").is_ok() {
+            cfg.positive("profile.time_optimal_margin")?
+        } else {
+            1.0
+        };
+        if margin > 1.0 {
+            return Err(ConfigError::Invalid("profile.time_optimal_margin".into()));
+        }
+        // Each motor's drive current, gearbox input speed and braking power as the verdicts judge them
+        // (`path::PlanLimits::ratings`); a line-up's one Braking Module shared out evenly over its motors.
+        let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
+        let ratings = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<[f64; 3]> {
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                let rating = |key: &str| own.f64(&format!("ratings.{key}")).unwrap_or(f64::INFINITY);
+                let dc_link = own.get("ratings.dc_link_capacitance_uf").is_ok();
+                let braking = if dc_link { rating("braking_resistor_peak_w") } else { f64::INFINITY };
+                let share = if line_up { machine.motors().len() as f64 } else { 1.0 };
+                Ok([
+                    rating("drive_max_current_a"),
+                    rating("gearbox_max_input_speed_rpm") * std::f64::consts::PI / 30.0,
+                    braking / share,
+                ])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let plan_limits =
+            path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction, ratings, margin };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {
@@ -687,12 +838,18 @@ impl Controller {
             (*speed, *ramp) = (new.speed, new.ramp_s);
         }
         self.cam = machine.cam();
+        // The valves keep their commands; a machine with other valves starts them as it says.
+        let valves = machine.valves();
+        if valves.len() != self.valves.len() {
+            self.valves = valves.into_iter().map(|(_, command)| command).collect();
+        }
         self.gantry_sync = sync;
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
             (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
         (self.fault_settings, self.monitoring) = (fault_settings, monitoring);
+        (self.brake_delays, self.ss1_time) = (brake_delays, ss1_time);
         self.watch.resize(self.motor_params.len(), Watch::default());
         (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
@@ -739,8 +896,13 @@ impl Controller {
             Motion::Dwell { until_tick } => scale(until_tick),
             Motion::Following { start_tick, .. }
             | Motion::Trajectory { start_tick, .. }
-            | Motion::Cam { start_tick, .. } => scale(start_tick),
+            | Motion::Cam { start_tick, .. }
+            | Motion::Halting { start_tick, .. } => scale(start_tick),
         }
+        if let Some((at, _)) = &mut self.gripping {
+            scale(at);
+        }
+        self.dwell_ticks = (self.dwell_ticks as f64 * ratio).round() as u64;
         if let Some(newest) = self.history.len().checked_sub(1) {
             let old = std::mem::take(&mut self.history);
             // From the oldest stored moment to now, in steps of the new cycle; between two stored cycles, in proportion.
@@ -758,24 +920,59 @@ impl Controller {
     }
 
     pub fn command(&mut self, command: Command, machine: &dyn Machine) -> std::result::Result<(), CommandError> {
-        if !self.enabled && !matches!(command, Command::Enable | Command::Disable) {
+        let off = matches!(command, Command::Enable | Command::Disable | Command::Halt(StopCategory::Zero));
+        if !self.enabled && !off {
             return Err(CommandError { key: "error-disabled" });
         }
-        if self.reacting.is_some() && !matches!(command, Command::Enable | Command::Disable) {
+        if self.reacting.is_some() && !off {
             return Err(CommandError { key: "error-fault" });
         }
         // A plan would act on the drives in position mode only, and be dropped when the others come back to it.
-        let planning = !matches!(command, Command::Enable | Command::Disable | Command::Stop);
+        let planning = !off && !matches!(command, Command::Stop | Command::Halt(_));
         if planning && self.drives.iter().any(|d| d.mode() != DriveMode::Position) {
             return Err(CommandError { key: "error-outside-mode" });
         }
         match command {
-            Command::Disable => self.disable(),
+            Command::Disable | Command::Halt(StopCategory::Zero) => self.disable(),
+            Command::Halt(StopCategory::One) => {
+                (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
+                let ramps = self.drives.iter_mut().map(|d| {
+                    d.pulses_off = false;
+                    Some(d.measured_speed())
+                });
+                self.reacting = Some(ramps.collect());
+                self.halt = Some(Halt { left: self.ss1_time, closing: None });
+            }
+            Command::Halt(StopCategory::Two) => {
+                (self.cycle, self.stopping) = (None, false);
+                let axes = machine.axes();
+                // The axis that needs longest to stop at its limit sets the time; the others decelerate in proportion.
+                let mut time = self.raw_vel.iter().zip(axes).map(|(v, a)| v.abs() / a.max_acc).fold(0.0, f64::max);
+                // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter.
+                for _ in 0..8 {
+                    let end: Vec<f64> =
+                        self.raw_pos.iter().zip(&self.raw_vel).map(|(x, v)| x + 0.5 * v * time).collect();
+                    if in_range(machine, &end) {
+                        break;
+                    }
+                    time *= 0.5;
+                }
+                self.motion = if time > 0.0 {
+                    Motion::Halting {
+                        from: self.raw_pos.clone(),
+                        vel: self.raw_vel.clone(),
+                        time,
+                        start_tick: u64::MAX,
+                    }
+                } else {
+                    Motion::Idle
+                };
+            }
             Command::Enable => {
                 // Enabling acknowledges a trip; drives still stopping are taken off and on again, holding where
                 // they stand.
                 if !self.enabled || self.reacting.is_some() {
-                    (self.enabled, self.reacting, self.fault) = (true, None, None);
+                    (self.enabled, self.reacting, self.fault, self.halt) = (true, None, None, None);
                     self.hold_here(machine, None);
                 }
             }
@@ -869,6 +1066,10 @@ impl Controller {
         if self.reacting.is_some() {
             return Err(CommandError { key: "error-fault" });
         }
+        // A stepper's step generator and a V/f converter take no torque setpoint.
+        if matches!(mode, DriveMode::Torque(_)) && self.motor_params[k].motor.open_loop() {
+            return Err(CommandError { key: "error-open-loop" });
+        }
         let was = self.drives[k].mode();
         if mode != DriveMode::Position && was == DriveMode::Position && self.busy() {
             return Err(CommandError { key: "error-busy" });
@@ -897,12 +1098,43 @@ impl Controller {
     /// Drives off: a move or cycle under way is dropped.
     fn disable(&mut self) {
         (self.motion, self.cycle, self.stopping, self.enabled) = (Motion::Idle, None, false, false);
-        self.reacting = None;
+        (self.reacting, self.halt) = (None, None);
+    }
+
+    /// Whether the holding brakes are asked to hold: with the drives off, and at the end of a category 1 stop once all
+    /// drives stand (`StopCategory::One`).
+    fn brake_wanted(&self) -> bool {
+        !self.enabled || self.halt.is_some_and(|h| h.closing.is_some())
+    }
+
+    /// One base step of `dt` of the holding brakes' command: they engage `brake.engage_delay_s` after they are asked to
+    /// hold and release `release_delay_s` after they are asked to let go (effects.brake_delay; at once without it).
+    pub fn step_brake(&mut self, dt: f64) {
+        let wanted = self.brake_wanted();
+        if wanted == self.brake_on {
+            self.brake_timer = 0.0;
+            return;
+        }
+        self.brake_timer += dt;
+        // To the nearest step: the summed steps come a rounding short of a delay of whole steps.
+        if self.brake_timer >= self.brake_delays[usize::from(!wanted)] - 0.5 * dt {
+            (self.brake_on, self.brake_timer) = (wanted, 0.0);
+        }
+    }
+
+    /// Whether the holding brakes hold (`step_brake`).
+    pub fn brake_engaged(&self) -> bool {
+        self.brake_on
     }
 
     /// Whether the drives are stopping after a trip (`react`).
     pub fn reacting(&self) -> bool {
         self.reacting.is_some()
+    }
+
+    /// Whether a category 2 stop (`StopCategory::Two`) is braking the plan.
+    pub fn halting(&self) -> bool {
+        matches!(self.motion, Motion::Halting { .. })
     }
 
     /// Each drive's fault reaction (effects.drive_monitoring).
@@ -937,11 +1169,37 @@ impl Controller {
         let Some(mut ramps) = self.reacting.take() else { return };
         let dt = self.profile_cycle / self.n_profile as f64;
         let velocity_due = step.is_multiple_of(self.n_velocity);
+        // A category 1 stop: every drive on its OFF3 ramp, its pulses off only together, once all stand and their brakes
+        // have had their engagement delay, or when the SS1 timer runs out.
+        if let Some(halt) = &mut self.halt {
+            halt.left -= dt;
+            let standing = self
+                .drives
+                .iter()
+                .zip(&ramps)
+                .zip(&self.fault_settings)
+                .all(|((d, r), s)| r.is_none_or(|v| v == 0.0) && d.measured_speed().abs() < s.pulse_off_speed);
+            if standing {
+                halt.closing = Some(halt.closing.unwrap_or(0.0) + dt);
+            }
+            let done = halt.closing.is_some_and(|t| t >= self.brake_delays[0] - 0.5 * dt);
+            if halt.left <= 0.0 || done {
+                ramps.iter_mut().for_each(|r| *r = None);
+                self.drives.iter_mut().for_each(|d| d.pulses_off = true);
+            }
+        }
         for (k, drive) in self.drives.iter_mut().enumerate() {
             let p = &self.motor_params[k];
             if let Some(speed) = ramps[k] {
-                let ramped = fault::ramp(speed, self.fault_settings[k].deceleration().unwrap_or(f64::INFINITY), dt);
-                if ramped == 0.0 && drive.measured_speed().abs() < self.fault_settings[k].pulse_off_speed {
+                let deceleration = match self.halt {
+                    Some(_) => self.fault_settings[k].off3_deceleration,
+                    None => self.fault_settings[k].deceleration().unwrap_or(f64::INFINITY),
+                };
+                let ramped = fault::ramp(speed, deceleration, dt);
+                if self.halt.is_none()
+                    && ramped == 0.0
+                    && drive.measured_speed().abs() < self.fault_settings[k].pulse_off_speed
+                {
                     (ramps[k], drive.pulses_off) = (None, true);
                 } else {
                     (ramps[k], drive.fault_speed) = (Some(ramped), Some(ramped));
@@ -1114,6 +1372,7 @@ impl Controller {
                     | Motion::Trajectory { .. }
                     | Motion::Conveyor
                     | Motion::Cam { .. }
+                    | Motion::Halting { .. }
             )
     }
 
@@ -1154,9 +1413,29 @@ impl Controller {
 
     /// How far a dwell of the cycle has run, from 0 to 1; `None` outside a dwell.
     pub fn dwell_progress(&self) -> Option<f64> {
-        let (Motion::Dwell { until_tick }, Some(i)) = (&self.motion, self.cycle) else { return None };
-        let total = self.segments[i].dwell_ticks;
+        let (Motion::Dwell { until_tick }, Some(_)) = (&self.motion, self.cycle) else { return None };
+        let total = self.dwell_ticks;
         (total > 0).then(|| 1.0 - until_tick.saturating_sub(self.tick) as f64 / total as f64)
+    }
+
+    /// Segment `i` has arrived at `tick`: the dwell starts. Where the gripper changes its state, with
+    /// effects.gripper_time it closes or opens for its time (`Segment::grip_ticks`), the dwell lasts at least that long
+    /// and the payload comes or goes when the gripper is done; without, at once.
+    fn arrive(&mut self, i: usize, tick: u64) -> Motion {
+        let s = &self.segments[i];
+        let grip = if s.payload != self.payload_attached { s.grip_ticks } else { 0 };
+        if grip == 0 {
+            self.payload_attached = s.payload;
+        } else {
+            self.gripping = Some((tick + grip, s.payload));
+        }
+        self.dwell_ticks = s.dwell_ticks.max(grip);
+        self.arrived(i, tick)
+    }
+
+    /// Whether the gripper is closing or opening (effects.gripper_time).
+    pub fn gripper_acting(&self) -> bool {
+        self.gripping.is_some()
     }
 
     /// The setpoint as planned, before input shaping: during a dwell, the target.
@@ -1323,11 +1602,14 @@ impl Controller {
     }
 
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
-    /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
-    pub fn winding_stepped(&mut self, windings: &[f64]) {
-        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<4>().0).enumerate() {
+    /// work on the shaft over it, `WINDING_STATES` numbers per drive in their order, and the rotors' angles and speeds at
+    /// its end. Then the shared DC link, and the trip.
+    pub fn winding_stepped(&mut self, windings: &[f64], angle: &[f64], speed: &[f64]) {
+        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<WINDING_STATES>().0).enumerate() {
             // A drive whose pulses are off after a trip has had its disabled step (`react`).
             if !drive.pulses_off {
+                (drive.phases.x, drive.phases.angle, drive.phases.speed) =
+                    ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
             }
         }
@@ -1350,6 +1632,12 @@ impl Controller {
         self.set_pos.clone_from(&self.raw_pos);
         self.set_vel.clone_from(&self.raw_vel);
         self.set_acc.clone_from(&self.raw_acc);
+        // effects.gripper_time: the grip is made or lost once the gripper has had its time (`arrive`).
+        if let Some((at, holds)) = self.gripping
+            && tick >= at
+        {
+            (self.payload_attached, self.gripping) = (holds, None);
+        }
         if matches!(self.motion, Motion::Idle) {
             self.next_cycle_segment(machine);
         }
@@ -1388,10 +1676,7 @@ impl Controller {
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
-                        Some(i) => {
-                            self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
-                        }
+                        Some(i) => self.arrive(i, tick),
                         None => Motion::Idle,
                     }
                 } else {
@@ -1463,7 +1748,14 @@ impl Controller {
                     (self.cycle, self.stopping) = (None, false);
                 }
             }
-            Motion::Dwell { until_tick } => {
+            Motion::Dwell { mut until_tick } => {
+                // Waiting for end-position sensors (`arrived`): the dwell counts from when they all report.
+                if until_tick == u64::MAX
+                    && let Some(i) = self.cycle
+                    && self.segments[i].wait.iter().all(|&(valve, end)| machine.end_sensors(valve)[end])
+                {
+                    until_tick = tick + self.segments[i].dwell_ticks;
+                }
                 if tick >= until_tick {
                     self.next_cycle_segment(machine);
                 } else {
@@ -1485,8 +1777,7 @@ impl Controller {
                             self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
                         let lag = if waits { self.shaper_span(machine, &self.set_pos).ceil() } else { 0.0 };
                         self.motion = if t >= points[last].0 + lag * dt {
-                            self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
+                            self.arrive(i, tick)
                         } else {
                             Motion::Trajectory { points, speeds, start_tick }
                         };
@@ -1518,6 +1809,19 @@ impl Controller {
                 self.set_acc.fill(0.0);
                 if done < 1.0 {
                     self.motion = Motion::Following { from, to, start_tick };
+                }
+            }
+            Motion::Halting { from, vel, time, start_tick } => {
+                // From the cycle the stop came in, as a setpoint from outside is (`Following`).
+                let start_tick = if start_tick == u64::MAX { tick - 1 } else { start_tick };
+                let t = ((tick - start_tick) as f64 * dt).min(time);
+                for i in 0..from.len() {
+                    self.set_pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
+                    self.set_vel[i] = vel[i] * (1.0 - t / time);
+                    self.set_acc[i] = if t < time { -vel[i] / time } else { 0.0 };
+                }
+                if t < time {
+                    self.motion = Motion::Halting { from, vel, time, start_tick };
                 }
             }
         }
@@ -1555,8 +1859,17 @@ impl Controller {
         machine.inverse(&self.set_pos, &mut here);
         let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
-        let setpoints =
-            (0..motors).map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), motor_acc[k], ff[k]]).collect();
+        // The friction of the machine's own model at the planned speed, for the drives that take it.
+        let mut friction = vec![0.0; motors];
+        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) {
+            machine.steady_friction(&self.set_pos, &self.set_vel, &mut friction);
+            for (f, p) in friction.iter_mut().zip(&self.motor_params) {
+                *f = if p.precontrol.machine_friction { *f } else { 0.0 };
+            }
+        }
+        let setpoints = (0..motors)
+            .map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), motor_acc[k], ff[k], friction[k]])
+            .collect();
         // Fieldbus: the drives get the newest frame that has arrived, one the controller computed some cycles ago. With
         // jitter each frame takes its own number of cycles, and a late one leaves the drives the frame before. Frames
         // older than the longest delay have arrived and are dropped; before any has arrived, the oldest.
@@ -1571,8 +1884,9 @@ impl Controller {
         }
         let newest = self.fieldbus.len() - 1;
         let arrived = (0..=newest).find(|&age| self.fieldbus[newest - age].0 <= age).map_or(0, |age| newest - age);
-        for (drive, &[pos, vel, acc, ff]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
+        for (drive, &[pos, vel, acc, ff, friction]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
+            drive.friction_ff = friction;
             drive.since_setpoint = 0.0;
         }
     }
@@ -1755,6 +2069,19 @@ impl Controller {
         self.cycle = Some(next_index);
         self.passes += (next_index == 0) as u64;
         Some(next)
+    }
+
+    /// Cycle segment `i` has arrived at tick `tick`: its valve commands go out, and its dwell starts, or waits for its
+    /// end-position sensors first (a dwell until `u64::MAX`, see `Motion::Dwell`).
+    fn arrived(&mut self, i: usize, tick: u64) -> Motion {
+        for &(valve, command) in &self.segments[i].valves {
+            if let Some(v) = self.valves.get_mut(valve) {
+                *v = command;
+            }
+        }
+        // The dwell as `arrive` set it: the segment's, or the gripper's time if longer.
+        let until_tick = if self.segments[i].wait.is_empty() { tick + self.dwell_ticks } else { u64::MAX };
+        Motion::Dwell { until_tick }
     }
 
     fn next_cycle_segment(&mut self, machine: &dyn Machine) {

@@ -131,6 +131,17 @@ impl DiscCam {
 }
 
 impl Mechanism for DiscCam {
+    /// In the scene's frame: the follower (with the tool on it) lifting on its axis, the disc and the rotor turning
+    /// about -y. Its spring pushes on the frame on the base: nothing from outside.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let [s, s1, ..] = self.lift.at(q[0]);
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let at = [self.offset, 0.0, self.s0() + s];
+        sim_components::base::add_point(&mut f, self.m(), at, [0.0, 0.0, s1 * qd[0]]);
+        sim_components::base::add_spin(&mut f, [0.0, -1.0, 0.0], self.j_disc, qd[0]);
+        f.angular[1] -= rotor_spin[0];
+        Some(f)
+    }
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let [s, s1, s2, _] = self.lift.at(q[0]);
         mass[0] = self.j_disc + self.m() * s1 * s1;

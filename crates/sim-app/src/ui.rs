@@ -327,6 +327,12 @@ pub enum Action {
     CloseAnalysis,
     Clear(Analysis),
     ClearMessages,
+    /// The mode list is found at the pose the machine stands at (`Model::find_modes`), and one of its modes shown
+    /// swinging in the 3D view, or the machine's own again.
+    FindModes,
+    PickMode(Option<usize>),
+    /// The cycle is run with each bounded value at its bounds, for the bands over its traces (`Model::trace_bands`).
+    TraceBands,
 }
 
 /// How much of its limit a check uses (`analysis::utilisation`): 1 is at the limit, above 1 over it. `None` where
@@ -493,7 +499,8 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                 actions.push(Action::RunAnalysis(Analysis::Cycle));
                 actions.push(Action::Panels(PanelState { tools: ToolTab::Cycle, ..panels }));
             }
-            ui.label(RichText::new(tr("ui-verdicts-none")).color(dim()));
+            // Cut to the bar with the whole of it on hover: in German at 1280 pixels it ran out of the window.
+            ui.add(Label::new(RichText::new(tr("ui-verdicts-none")).color(dim())).truncate());
             return;
         }
         let failed = checks.iter().filter(|c| !c.2).count();
@@ -559,7 +566,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
 pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewInfo, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (key, yaw, pitch) in [
                 ("ui-view-front", 0.0, 0.0),
                 ("ui-view-side", 90.0, 0.0),
@@ -579,7 +586,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Record(!view.recording));
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));
             ui.checkbox(&mut shown.forces, tr("ui-view-forces")).on_hover_text(tr("ui-view-forces-hint"));
@@ -589,7 +596,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Overlays(shown));
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             let mode = ui.add_enabled(view.has_mode, Checkbox::new(&mut shown.mode, tr("ui-view-mode")));
             mode.on_hover_text(tr("ui-view-mode-hint")).on_disabled_hover_text(tr("ui-view-mode-none"));
@@ -602,6 +609,10 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Compare(on, effect.to_string()));
             }
             let name = |path: &str| tr(&format!("effect-{}", path.strip_prefix("effects.").unwrap_or(path)));
+            // A wrapped row does not wrap a combo box (it is a row of its own inside): it goes on the next row here.
+            if ui.available_size_before_wrap().x < 160.0 {
+                ui.end_row();
+            }
             ComboBox::from_id_salt("view-compare").selected_text(name(effect)).width(150.0).show_ui(ui, |ui| {
                 for (path, key, _) in model.effects() {
                     if ui.selectable_label(path == effect, tr(&key)).clicked() && path != effect {
@@ -610,7 +621,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 }
             });
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.label(tr("ui-view-trail"));
             for (color, key) in [
@@ -632,7 +643,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 if overlays.trail == TrailColor::Speed { (1.0, tr("unit-m-per-s")) } else { (1e3, tr("unit-mm")) };
             let (low, high) = trail_scale(overlays, (low, high));
             scale_bar(ui, &format!("{:.3} {unit}", low * factor), &format!("{:.3} {unit}", high * factor), trail_color);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let mut shown = overlays;
                 let mut fixed = shown.scale.is_some();
                 if ui
@@ -892,7 +903,10 @@ fn verdict_cells(ui: &mut Ui, model: &Model, v: &Verdict) {
 
 /// "Motor A  1250 1/min"
 pub fn label_text(model: &Model, label: &sim_core::Label) -> String {
-    format!("{}  {:.*} {}", model.tr.tr(label.owner_key), label.decimals, label.value, model.tr.tr(label.unit_key))
+    // Rounded first and `+ 0.0`, so that a motor at rest reads 0 rpm and not -0.
+    let scale = 10f64.powi(label.decimals as i32);
+    let value = (label.value * scale).round() / scale + 0.0;
+    format!("{}  {:.*} {}", model.tr.tr(label.owner_key), label.decimals, value, model.tr.tr(label.unit_key))
 }
 
 /// The part clicked in the 3D view, in the `scene` it is drawn from: its name, the live values written next to it,
@@ -964,7 +978,8 @@ pub fn timeline(
     let tr = |key: &str| model.tr.tr(key).to_string();
     Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::symmetric(8, 5)).show(ui, |ui| {
         ui.set_width(width);
-        ui.horizontal(|ui| {
+        // Wrapped: in a narrow view the time and the speed buttons go to a second row rather than out of the view.
+        ui.horizontal_wrapped(|ui| {
             let live = timeline.time.is_none();
             if ui.selectable_label(live, tr("ui-timeline-live")).on_hover_text(tr("ui-timeline-live-hint")).clicked()
                 && !live
@@ -982,7 +997,17 @@ pub fn timeline(
                 actions.push(Action::Step(true));
             }
             let mut time = timeline.time.unwrap_or(span.1);
-            ui.spacing_mut().slider_width = (ui.available_width() - 250.0).max(60.0);
+            // The slider takes what the time and the speed buttons after it leave: a fixed 250 pixels for them let the
+            // last button stick out of the view once the time had two digits.
+            let shown = |time: f64| format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s");
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            let width = |text: String| ui.painter().layout_no_wrap(text, font.clone(), chalk()).size().x;
+            let (gap, padding) = (ui.spacing().item_spacing.x, 2.0 * ui.spacing().button_padding.x);
+            let after = gap
+                + width(shown(time))
+                + [0.1, 0.25, 1.0].map(|s| gap + padding + width(format!("{s}×"))).iter().sum::<f32>();
+            // What is left of this row (a wrapped row's `available_width` is that of a whole row).
+            ui.spacing_mut().slider_width = (ui.available_size_before_wrap().x - after - 2.0).max(60.0);
             let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
             if slider.changed() {
                 actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
@@ -998,11 +1023,8 @@ pub fn timeline(
                     .on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
             }
             // The time shown, and how far back from the newest scene: the scopes' right edge.
-            ui.label(RichText::new(format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s")).color(if live {
-                chalk()
-            } else {
-                ACTUAL
-            }));
+            let text = RichText::new(shown(time)).color(if live { chalk() } else { ACTUAL });
+            ui.add(Label::new(text).wrap_mode(TextWrapMode::Extend));
             for speed in [0.1, 0.25, 1.0] {
                 if ui
                     .selectable_label(timeline.speed == speed, format!("{speed}×"))
@@ -1063,7 +1085,10 @@ pub fn tools(
             ToolTab::Path => path(ui, model, &mut inputs, actions),
             ToolTab::Trace => trace(ui, model, &mut inputs, actions),
             ToolTab::Sweep => sweep(ui, model, &mut inputs, actions),
-            ToolTab::Tuning => tuning(ui, model, actions),
+            ToolTab::Tuning => {
+                crate::views::mode_list(ui, model, actions);
+                tuning(ui, model, actions)
+            }
             ToolTab::Runs => runs(ui, model, &mut inputs, ghost, actions),
             ToolTab::Views => crate::views::views(ui, model, tolerance, actions),
         }
@@ -1093,9 +1118,22 @@ const TICK_PIXELS: f32 = 20.0;
 /// apart, between two and five on a scope: egui_plot's own steps of powers of ten, labelled only from 20 pixels
 /// apart, left a plot 150 pixels high (some 100 of them for the values) often with 0 alone.
 fn ticks(input: GridInput) -> Vec<GridMark> {
+    ticks_apart(input, TICK_PIXELS)
+}
+
+/// Labelled ticks on the time or speed axis, as `ticks` with room for a number across: egui_plot's own steps of powers of
+/// ten, labelled only from 60 pixels apart, left a planned path 0.7 m across 340 pixels with 0 alone.
+pub fn x_ticks(input: GridInput) -> Vec<GridMark> {
+    ticks_apart(input, X_TICK_PIXELS)
+}
+
+/// The fewest pixels between two labelled ticks across: a number and a gap.
+const X_TICK_PIXELS: f32 = 60.0;
+
+fn ticks_apart(input: GridInput, pixels: f32) -> Vec<GridMark> {
     let (low, high) = input.bounds;
     // At most some twenty: a plot not laid out yet has no size to go by.
-    let raw = (TICK_PIXELS as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
+    let raw = (pixels as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
     if !(raw.is_finite() && raw > 0.0) {
         return Vec::new();
     }
@@ -1116,7 +1154,13 @@ fn tick_label(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
 pub fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
     // Labels at full strength from `TICK_PIXELS` apart; egui_plot fades them in from 20 to 30.
     let axis = AxisHints::new_y().label_spacing(TICK_PIXELS - 4.0..=TICK_PIXELS).formatter(tick_label);
-    Plot::new(id).grid_spacing(GRID_PIXELS..=300.0).y_grid_spacer(ticks).custom_y_axes(vec![axis])
+    let across = AxisHints::new_x().label_spacing(X_TICK_PIXELS - 20.0..=X_TICK_PIXELS - 10.0).formatter(tick_label);
+    Plot::new(id)
+        .grid_spacing(GRID_PIXELS..=300.0)
+        .y_grid_spacer(ticks)
+        .custom_y_axes(vec![axis])
+        .x_grid_spacer(x_ticks)
+        .custom_x_axes(vec![across])
 }
 
 /// A right click on a plot offers to save it: as SVG, drawn as the sizing report draws its plots, or as PNG, a picture
@@ -1492,6 +1536,9 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
     if let Some(rows) = model.worst_table() {
         heading(ui, model, "ui-analysis-worst-corners", Analysis::Cycle);
         table(ui, "ui-analysis-worst-corners", &rows, None);
+    }
+    if model.bands.is_some() || model.insight.band_runs.is_some() || model.bands_tracing() {
+        crate::views::band_plots(ui, model, actions);
     }
     points(ui, model, actions);
     if let Some(rows) = &ranking {
@@ -1954,24 +2001,23 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
             actions.push(Action::ExportReport);
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        let [motor, supply, gearbox, drive, belt, axis] = &mut inputs.parts;
-        ui.label(tr("ui-parts-motor"));
-        ui.add(TextEdit::singleline(motor).desired_width(110.0));
-        ui.label(tr("ui-search-supply"));
-        ui.add(TextEdit::singleline(supply).desired_width(40.0));
-        ui.label(tr("ui-search-gearbox"));
-        ui.add(TextEdit::singleline(gearbox).desired_width(100.0));
-        ui.label(tr("ui-parts-drive"));
-        ui.add(TextEdit::singleline(drive).desired_width(130.0));
-        ui.label(tr("ui-parts-belt"));
-        ui.add(TextEdit::singleline(belt).desired_width(70.0));
-        ui.label(tr("ui-search-axis"));
-        ui.add(TextEdit::singleline(axis).desired_width(80.0));
-        if ui.button(tr("ui-parts-apply")).clicked() {
-            actions.push(Action::ApplyParts);
-        }
-    });
+    // Each name over its field: flowed in a row, a label wrapped to the end of the line before its field and read as
+    // the name of the field before it.
+    let [motor, supply, gearbox, drive, belt, axis] = &mut inputs.parts;
+    for (key, field) in [
+        ("ui-parts-motor", motor),
+        ("ui-search-supply", supply),
+        ("ui-search-gearbox", gearbox),
+        ("ui-parts-drive", drive),
+        ("ui-parts-belt", belt),
+        ("ui-search-axis", axis),
+    ] {
+        ui.label(tr(key));
+        ui.add(TextEdit::singleline(field).desired_width(f32::INFINITY));
+    }
+    if ui.button(tr("ui-parts-apply")).clicked() {
+        actions.push(Action::ApplyParts);
+    }
 }
 
 /// A path from a file: planned, run by the machine and analysed, with the planned path drawn.
@@ -2000,6 +2046,7 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
         let series = || vec![(tr("ui-path-planned"), points.clone(), false)];
         save_menu(&drawn.response, model, &tr("ui-path-planned"), &across, series, actions);
     }
+    crate::views::path_colouring(ui, model, inputs);
     for (rows, key) in tables.iter().zip(["ui-path-result", "ui-analysis-motors", "ui-analysis-verdicts"]) {
         heading(ui, model, key, Analysis::Path);
         table(ui, &format!("path-{key}"), rows, None);
@@ -2034,13 +2081,28 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
     {
         inputs.workspace_z = Some(z);
     }
+    // By the condition number, or by the largest acceleration in the worst direction: dark where the machine does
+    // best, light where it does worst, the same way round for both.
+    use sim_app::insight::WorkspaceColour;
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut inputs.workspace_by, WorkspaceColour::Condition, tr("quantity-condition-number"));
+        ui.radio_value(&mut inputs.workspace_by, WorkspaceColour::Acceleration, tr("ui-workspace-acceleration"))
+            .on_hover_text(tr("ui-workspace-acceleration-hint"));
+    });
+    let by_acceleration = inputs.workspace_by == WorkspaceColour::Acceleration;
+    let gone = |k: &usize| slice.nodes[*k].1;
+    let top = (0..slice.nodes.len()).filter(gone).map(|k| slice.acceleration[k]).fold(0.0, f64::max);
     let side = ui.available_width().min(360.0);
     let map = search_views::GridMap::draw(ui, side, (slice.x, slice.y), slice.n, |k| {
         let (condition, goes) = slice.nodes[k];
         if !condition.is_finite() {
             return None;
         }
-        let color = if condition > slice.limit {
+        let color = if by_acceleration {
+            let [r, g, b] = trail_color((1.0 - slice.acceleration[k] / top.max(1e-12)) as f32)
+                .map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
+            Color32::from_rgb(r, g, b)
+        } else if condition > slice.limit {
             LIMIT
         } else {
             let [r, g, b] = trail_color((condition.ln() / slice.limit.ln()) as f32).map(|c| (c * 255.0) as u8);
@@ -2055,8 +2117,14 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
     if let Some((i, j)) = map.hovered() {
         let condition = slice.nodes[j * slice.n + i].0;
         let shown = if condition.is_finite() { short(condition) } else { tr("ui-workspace-out-of-reach") };
+        let acceleration = slice.acceleration[j * slice.n + i];
+        let reached = if acceleration.is_finite() {
+            format!(", {} {} {}", tr("ui-workspace-acceleration"), short(acceleration), tr("unit-m-per-s2"))
+        } else {
+            String::new()
+        };
         map.response.clone().on_hover_text(format!(
-            "{} {}, {} {}: {} {shown}",
+            "{} {}, {} {}: {} {shown}{reached}",
             tr(axes[0].key),
             short(map.at(slice.x, i)),
             tr(axes[1].key),
@@ -2065,8 +2133,13 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
         ));
     }
     ui.horizontal(|ui| {
-        scale_bar(ui, "1", &short(slice.limit), trail_color);
-        ui.colored_label(LIMIT, format!("■ {}", tr("ui-workspace-above")));
+        if by_acceleration {
+            let unit = tr("unit-m-per-s2");
+            scale_bar(ui, &format!("{} {unit}", short(top)), &format!("0 {unit}"), trail_color);
+        } else {
+            scale_bar(ui, "1", &short(slice.limit), trail_color);
+            ui.colored_label(LIMIT, format!("■ {}", tr("ui-workspace-above")));
+        }
     });
     ui.weak(tr("ui-workspace-faint"));
 }

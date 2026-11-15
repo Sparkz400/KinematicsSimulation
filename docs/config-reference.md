@@ -18,6 +18,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 
+| ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
+
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
 The **Source** column says where a value of this kind normally comes from:
@@ -87,6 +89,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | --- | --- | --- | --- |
 | `gravity` | T E S | on | Gravity on the Z axis and payload (T-gantry) or along an inclined axis (single axis) |
 | `payload` | T E S | on | The payload mass, attached and released by the cycle. Off: no payload at all |
+| `gripper_time` | none | off | The gripper takes its time to grip and let go (`[gripper]`): the dwell lasts at least that long, and the payload comes or goes when the gripper is done, not on arrival. In no shipped config; a config may add it with the table |
 | `payload_swing` | arms | off | The payload hangs on a pivot at the flange and swings (`arm.payload_swing_*`): two joints no motor drives, their damper's loss `power.payload_swing`, their angles `swing.1.angle`, `swing.2.angle` |
 | `belt_stretch` | T E S | on | The elastic model: belt sections as springs, pulleys and motor shafts as separate states. **Off selects the rigid reference model**, in which belt damping, slack, tooth stiffness, backlash, gear stiffness, the frame mode, the leaning Z axis and the holding brakes have no effect |
 | `belt_damping` | T E S | on | Damping on the stretch rate of each belt section |
@@ -102,12 +105,14 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `gearbox_mesh_friction` | T | on in the joint kit and the cable robots; off (absent) elsewhere: a config without it has it off. Off on the T-gantry, whose light pulleys the friction sticks to the housing faster than the base step resolves | The efficiency's loss as a friction in the mesh, in proportion to the torque the gear passes, against the motion at any speed and sticking at rest inside its band (see the [model reference](model-reference.md#gearbox)); the back-driving efficiency follows as 1 / (2 − η). Off: the faded factor. Elastic models only |
 | `gearbox_drag` | T E S D | off; on in the delta pickers D2 and D3 (and the planar delta file) | The gearbox's no-load running torque at its input over speed and temperature (`gearbox.no_load_*`, Palmgren's (ν n)^(2/3)); `gearbox.efficiency` then holds at `gearbox.efficiency_torque_nm`, and the efficiency falls at part load, slow and cold (see the [model reference](model-reference.md#gearbox)). Never on a coupling (ratio 1) |
 | `motor_stiction` | T E S D | off; on in D2 and D3 | The motor shaft breaks away at `motor.friction_breakaway_nm` and falls to its Coulomb level along a Stribeck curve. Needs `motor_friction` |
+| `slide_presliding` | the joint kit's slides (screw, rack, linear motor, the SCARA's quill) | off; on in the measured ball screw's `datasets/isw-ball-screw-axis/machine.toml` | The guides' friction (with a screw nut's preload drag and a linear motor's attraction friction) is a presliding state (Dahl's law, `slide.presliding_stiffness_n_m`) in place of the smoothed Coulomb step: it holds a load within its level at rest without creeping and turns over within a presliding travel at a reversal; its level the breakaway force `slide.friction_breakaway_n` at rest, falling to the Coulomb level over `friction_stribeck_m_s` (see the [model reference](model-reference.md#slide-presliding-friction)). Needs `joint_friction`. A config without the key has it off |
 | `gearbox_lost_motion` | T E S D | off; on in D2 and D3 | The flanks take the load over `gearbox.lost_motion_band_rad` beyond the backlash, the stiffness rising from 0, and a hysteresis `gearbox.hysteresis_rad` (a Dahl friction state per gearbox: see the model reference) |
 | `gearbox_stiffness_curve` | T E S D | off | A strain wave gear's three-segment stiffness, K1 (`stiffness_nm_rad`) to T1, K2 to T2, K3 beyond (`gearbox.stiffness_*`), as Harmonic Drive gives it |
 | `torque_ripple` | T E S | on | Torque ripple (proportional to torque) and cogging (independent of it) |
 | `tooth_meshing` | T E S | on | A small periodic force at the tooth-pass frequency |
 | `frame_compliance` | T E | on | One spring-mass mode of the frame in X: the portal's posts swaying under its beam, coupled to the belt both ways |
 | `base_compliance` | every machine and machine file | off | The base the whole machine stands on gives way ([`[base]`](#base)): up to six spring-mass directions under the motors' reactions and the moving masses, the tool moving with it. In series with `frame_compliance` |
+| `base_reaction` | every machine and machine file | off | With `base_compliance`: two-way. The machine feels the base's acceleration (its motors see the sway and hold against it), base and machine solved together; the base's energy is in `energy.*` and its damping in `power.*` (`power.base`). Off: one-way, the base sways under the machine |
 | `z_axis_bending` | T E | off | The Z axis bends as a cantilever from the carriage (`tool_flex.z_axis_bending_stiffness_nm2`), in series with its guide's give; with `tool_flex` off it only bends. Elastic model |
 | `beam_sag` | T E | off | The X beam sags under the carriage and the Z axis as a simple span ([`[beam]`](#beam)), quasi-static, lowering the tool. Elastic model |
 | `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
@@ -117,6 +122,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
 | `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled, in the elastic and in the rigid model |
+| `brake_delay` | T E S | off | The holding brakes engage `brake.engage_delay_s` after they are asked to hold (the torque off, or the end of a category 1 stop) and release `brake.release_delay_s` after they are asked to let go; a hanging axis sags while its brake engages. Off: at once, as before. Optional in a config file (off) |
 | `temperature` | T E S | off | Scale factors on friction and belt stiffness, set by hand in `[temperature]`; not used while `thermal_feedback` is on |
 
 **Drive and control**
@@ -126,7 +132,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `velocity_feedforward` | T E S | on | Speed setpoint added to the position loop's output |
 | `torque_feedforward` | T E S | on | Rigid-model torque (inertia and gravity, no friction) added to the velocity loop's output |
 | `fine_interpolation` | T E S D | on | Between profile cycles the drive runs the position setpoint on from the last setpoints as pos + v t + a t²/2, as it runs the speed feedforward on as v + a t: a SINAMICS drive's fine interpolation, which the position loop needs when it runs faster than the profile (DSC: `drive.position_cycle_s` down to `velocity_cycle_s`, `profile.cycle_s` the controller's IPO cycle of 2 to 8 ms). Off, the setpoint is held for the profile cycle as a position loop closed in the controller sees it, and its steps reach the torque (4 ms IPO: single axis 2.1x the peak torque). On in the shipped configs, where it changes nothing: their position and profile cycles are equal. A config without the switch has it off. See the [model reference](model-reference.md#fine-interpolation-and-precontrol) |
-| `friction_feedforward` | T E S D | off | The drive adds the friction characteristic `drive.friction_feedforward_*` at the speed setpoint to the torque feedforward (S120 p3820-p3839, recorded by the drive at constant speeds, p3845). Off in the shipped configs but the crank-and-cam crate's, where the flying saw's characteristic is its carriage's friction at the motor (the others' are 0 N m) |
+| `friction_feedforward` | T E S D | see text | The drive adds friction to the torque feedforward: with `drive.friction_feedforward_model = "characteristic"` the characteristic `drive.friction_feedforward_*` at the speed setpoint (S120 p3820-p3839, recorded by the drive at constant speeds, p3845), with `"machine"` the friction of the machine's own model at the planned speed. On with `"machine"` where it cuts the following error and the settling (the table in [validation](validation.md#friction-feedforward-in-the-shipped-configs)): the T-gantry (default, conveyor, EXCT-30), the D3, D2 and D4 (default and conveyor), the linear delta's conveyor config, the screw, rack and linear motor axes, the rotary table, the SCARA (joints and tool space), the hexapod, both cable robots, the rotary knife and the disc cam (with their cam configs). On with the characteristic in the rest of the crank-and-cam and joint configs (the flying saw's is its carriage's friction at the motor; the others' are 0 N m, so it changes nothing). Off elsewhere: the single axis and the linear delta settle worse with it (21 to 42 um, 74 to 113 um), the parallel SCARA, the H4, the palletiser and the arms in tool space follow worse in some axis |
 | `load_encoder` | T E S D | off | The position loop closes on a load-side scale (S120 direct measuring system), the tool axes measured in steps of `drive.load_encoder_step` and turned into motor angles by the rigid kinematics; the speed loop stays on the motor encoder. The following error is then the load's: belt stretch and gear twist are inside the loop. Off in the shipped configs |
 | `encoder_resolution` | T E S | on | The position is measured in whole encoder counts; speed is the difference of positions |
 | `velocity_filter` | T E S | on | First-order low-pass on the measured speed |
@@ -159,6 +165,8 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `sensor_noise` | T E S | off | Gaussian noise on the measured position and current, repeatable from a seed |
 | `crash` | T E S D | off | The obstacles of `obstacles` push back on a part that goes into them, with their contact stiffness and damping, with the drives on or off: the axes in contact are blocked, the others go on until the drives' monitoring (`drive_monitoring`) trips them (see the [model reference](model-reference.md#obstacles-and-crash)). Contacts are found and reported whether it is on or not; off, the machine moves through the obstacle. Changes nothing without obstacles. Off by default, so that earlier results stay as they were |
 | `drive_monitoring` | T E S D | off | Each drive watches its following error, its following error at standstill, whether it is held at its torque limit at low speed, and optionally its torque against the model's (the `[drive]` keys from `fault_reaction` on); the first that trips stops all drives, each by its fault reaction. Changes nothing until a drive trips, which no shipped cycle does. Optional in a config file (off: a config written before 14 November 2026). Off by default, so that earlier results stay as they were |
+| `cylinder_friction` | files with cylinders | on | The pneumatic cylinders' seal friction, a Stribeck curve rising with the chambers' pressure (`friction_*` of the cylinder's table, see "A machine file's pneumatic cylinders") |
+| `cylinder_cushion` | files with cylinders | on | The cylinders' end-position cushions: within `cushion_length_m` of an end the chamber exhausts through the bleed screw alone. Off, the piston runs into its elastic end stops at the throttled speed |
 
 **Motion planning**
 
@@ -251,6 +259,15 @@ Festo gives the friction of the EXCT only as a graph of torque over speed, so al
 | `torque_constant_at_max_current_nm_a` | T E S | N m/A | Torque constant at the maximum current. Must not exceed `torque_constant_nm_a`. E: 18 N m at 15.1 A | datasheet | `torque_saturation` |
 | `brake_torque_nm` | T E S | N m | Torque each motor's holding brake holds while the drives are disabled; it slips beyond. The most the brake ever gives, also when it engages at speed | datasheet (estimate in E) | `holding_brake` |
 
+## `[brake]`
+
+The holding brakes' timing, one for all brakes of a machine. In every shipped config and machine file that has a holding brake; optional in a config file (0).
+
+| Key | In | Unit | Meaning | Source | Effect switch |
+| --- | --- | --- | --- | --- | --- |
+| `engage_delay_s` | T E S | s | From the moment the brakes are asked to hold until they hold (a spring-applied brake's closing time). 0.03 in all files, bounds 0.01 to 0.06 | estimate: the Siemens motor data in `catalog/` gives no brake times | `brake_delay` |
+| `release_delay_s` | T E S | s | From the moment the drives come on until the brakes let go (opening time); meanwhile the drive holds against the brake. 0.06 in all files, bounds 0.03 to 0.15 | estimate, as above | `brake_delay` |
+
 ## `[gearbox]`
 
 Between motor shaft and pulley. Stiffness, damping and backlash are given at the output side. In E this is the coupling: ratio 1, no backlash, no loss.
@@ -310,7 +327,7 @@ T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts
 
 ## `[base]`
 
-Every machine and machine file. With `effects.base_compliance` the frame or stand under the whole machine is a rigid body on springs: each direction with a stiffness above 0 is a state of its own (`sim_components::base`, model reference "Compliant base"). Directions in the frame of the tool pose's x, y, z (the slides' x along their axis); a tilt turns about `pivot_m`. Off in every shipped config: the values are typical, not measured. Signals `base.<x|y|z|rx|ry|rz>` (m, rad).
+Every machine and machine file. With `effects.base_compliance` the frame or stand under the whole machine is a rigid body on springs: each direction with a stiffness above 0 is a state of its own (`sim_components::base`, model reference "Compliant base"). Directions in the frame of the tool pose's x, y, z (the slides' x along their axis); a tilt turns about `pivot_m`. Off in every shipped config: the values are typical, not measured. Signals `base.<x|y|z|rx|ry|rz>` (m, rad). With `effects.base_reaction` the coupling is two-way (model reference "Compliant base"), with the signal `power.base` (W), and `mass_kg` (`inertia_*_kgm2`) has to be more than what the machine moves on the base along that direction.
 
 | Key | Unit | Meaning |
 | --- | --- | --- |
@@ -325,10 +342,10 @@ The shipped values, all estimates with `[bounds]` (stiffness ÷ 2.5 to × 2.5, m
 
 | Machines | Base | Values |
 | --- | --- | --- |
-| D2, D3 (and its conveyor config), D4, linear delta, `planar-delta.toml` | A welded steel picker frame with the robot, 300 kg | x, y 2.7e6 N/m (15 Hz), z 1.9e7 N/m (40 Hz); tilts rigid |
-| T-gantry, EXCT-30, the gantry machine files | The stand under the gantry with it, 150 kg | x, y 2.4e6 N/m (20 Hz), z 1.5e7 N/m (50 Hz); tilts rigid |
+| D2, D3 (and its conveyor config), D4, H4, linear delta, parallel SCARA, `planar-delta.toml` | A welded steel picker frame with the robot, 300 kg | x, y 2.7e6 N/m (15 Hz), z 1.9e7 N/m (40 Hz); tilts rigid |
+| T-gantry, EXCT-30, the gantry machine files, hexapod | The stand under the gantry with it, 150 kg | x, y 2.4e6 N/m (20 Hz), z 1.5e7 N/m (50 Hz); tilts rigid |
 | Single axis, screw, rack and linear motor axes, `single-axis.toml` | The machine bed, 100 kg | along the axis 2.5e6 N/m (25 Hz); the rest rigid |
-| Rotary table | The table's stand, 20 kg m² about z | twist 7.1e5 N m/rad (30 Hz) |
+| Rotary table; the cable robots and the crank and cam machines (the same values) | The table's stand, 20 kg m² about z | twist 7.1e5 N m/rad (30 Hz) |
 | Six-axis arm | The pedestal, 60 kg m² about the floor in tilt, 10 about z | tilts 1.5e6 N m/rad (25 Hz), twist 6.3e5 N m/rad (40 Hz) |
 | SCARA | The column and its table, 30 kg m² in tilt, 5 about z | tilts 1.1e6 N m/rad (30 Hz), twist 3.2e5 N m/rad (40 Hz) |
 
@@ -376,6 +393,24 @@ With `effects.process_force`: a force on the tool tip (single axis: on the carri
 | `force_z_n` | T E | N | Force on the tool in Z (positive is upwards) | choice |
 | `force_<axis>_n` | machine files | N | Force on the tool along each axis of a machine file (`force_y_n` on the H-bot, the CoreXY and the portal). Read only with the effect on | choice |
 
+## Motor kinds
+
+`motor.kind` chooses the motor each drive turns (see [model reference](model-reference.md#stepper-motor)). Without it, or with `"servo"`, the permanent-magnet servo motor of the rest of this page, bit for bit as before. The keys below are read only for their kind, and any config may have them (`analysis::RATINGS_BEYOND_DEFAULT`). The servo's keys stay required for every kind (the stepper and the induction motor read `resistance_ohm`, `inductance_h`, `torque_constant_nm_a`, `rated_current_a`, `max_current_a`, the thermal and the drive's keys as said below; the rest is read and not used).
+
+| Key | In | Unit | Meaning | Source |
+| --- | --- | --- | --- | --- |
+| `motor.kind` | ST IL | – | `"servo"` (default), `"stepper"` or `"induction"` | choice |
+| `motor.rotor_teeth` | ST | – | Stepper: rotor teeth N, 50 for a 1.8° motor (4 N full steps a turn) | datasheet |
+| `motor.detent_torque_nm` | ST | N m | Stepper, with `effects.detent_torque`: the detent torque's amplitude, 4 N periods a turn | estimate (a few % of the holding torque), bounds |
+| `effects.detent_torque` | ST | – | Stepper: the detent torque on (`false` or absent: off) | choice |
+| `drive.microsteps` | ST | – | Stepper: microsteps per full step, a whole number up to 4096 | choice |
+| `drive.stepper_current_a` | ST | A | Stepper: the current vector's amplitude the drive sets, sqrt 2 times a phase's current in a full step. The holding torque is `torque_constant_nm_a` times it; `rated_current_a` (the same kind of amplitude) is where the winding settles at its rated rise. For a stepper `resistance_ohm`, `inductance_h` and `torque_constant_nm_a` are a phase's, the supply is `drive.bus_voltage_v` | datasheet's A/phase, choice |
+| `motor.rated_voltage_v`, `motor.rated_frequency_hz` | IL | V, Hz | Induction: the name plate's line-to-line voltage and frequency. Its rated speed is `drive.rated_speed_rad_s` (rated slip against the synchronous speed), its rated torque `drive.rated_torque_nm`, its pole pairs `motor.pole_pairs` | datasheet |
+| `motor.rotor_resistance_ohm`, `magnetizing_inductance_h`, `stator_leakage_inductance_h`, `rotor_leakage_inductance_h` | IL | Ω, H | Induction: the equivalent circuit per phase (star); the stator resistance is `resistance_ohm` | datasheet where the maker gives it, else estimate, bounds |
+| `drive.induction_control` | IL | – | Induction: `"foc"` (field-oriented, under the speed and position loops; `current_kp_v_a` = sigma L_s / T, `current_tn_s` = sigma L_s / R_sigma) or `"vf"` (open loop) | choice |
+| `drive.vf_boost_v` | IL | V | Induction, V/f: the line-to-line voltage at 0 Hz | choice |
+| `drive.vf_slip_compensation` | IL | – | Induction, V/f: raise the frequency by the rated slip times the estimated torque over the rated torque | choice |
+
 ## A motor's own tables
 
 In a machine file and on the arms, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]`, `[strain_wave.<id>]`, `[joint.<id>]` and `[parts.<id>]` give the motor
@@ -395,6 +430,46 @@ catalogue lists for the article ([catalogue] where one is named, placeholders in
 stiffness, preload and the load ratings of an unnamed size are [estimate] and have `[bounds]` entries, as
 `screw_z.efficiency = [0.85, 0.95]` and `rack_x.stiffness_n_m = [6.0e7, 1.5e8]`. A rotary node's axis takes its limits
 in rad (`[axis.<id>]` below).
+
+## A machine file's pneumatic cylinders
+
+Each `[[machine.cylinder]]` node names the table of its values by `values` (`[cylinder_z]` in
+`machines/pneumatic-axis.toml`); every key is required, and a file with cylinders has the effect switches
+`effects.cylinder_friction` (the seals' friction) and `effects.cylinder_cushion` (the end-position cushions). The model
+is "Pneumatic cylinder" in [model-reference.md](model-reference.md). Shipped values: a Festo DSBC-32-100 PPV
+([catalogue] from `catalog/festo/cylinders_dsbc.csv`), a VUVG-L10 valve whose C and b Festo does not print ([estimate]
+from its nominal flow), the rest [estimate] with `[bounds]`.
+
+| Key | Unit | Meaning | pneumatic-axis |
+| --- | --- | --- | --- |
+| `piston_diameter_m`, `rod_diameter_m` | m | Bore and rod; A1 = π D²/4, A2 = A1 − π d²/4 | 0.032, 0.012 |
+| `stroke_m` | m | Stroke, 0 retracted | 0.1 |
+| `moved_mass_kg` | kg | Piston, rod and what is fixed to the rod | 0.5 |
+| `payload_kg` | kg | On the rod while the gripper holds it (effects.payload) | 0.5 |
+| `incline_deg` | deg | Extending direction above the horizontal; −90 extends downwards | −90 |
+| `dead_volume_cap_m3`, `dead_volume_rod_m3` | m³ | Each chamber's volume at its own end of the stroke, the tube to the valve included | 8e-6, 8e-6 |
+| `supply_pressure_bar` | bar | Supply, gauge | 6 |
+| `ambient_pressure_pa`, `ambient_temperature_k` | Pa, K | The atmosphere; the supply and the walls are at this temperature | 101325, 293.15 |
+| `heat_transfer_w_k` | W/K | α A between each chamber's air and its wall; 0 adiabatic, large isothermal | 0.3 |
+| `valve` | – | `"5/2"` or `"5/3"` (closed centre) | "5/2" |
+| `valve_c_dm3_s_bar`, `valve_b` | l/(s bar), – | The valve's ISO 6358 sonic conductance and critical pressure ratio (b below 0.95) | 0.87, 0.3 |
+| `valve_switch_time_s` | s | From a command to the spool's switch | 0.007 |
+| `tube_c_dm3_s_bar`, `tube_b` | l/(s bar), – | The tube and fittings between valve and cylinder | 1.0, 0.4 |
+| `throttle_extend_c_dm3_s_bar`, `throttle_retract_c_dm3_s_bar`, `throttle_b` | l/(s bar), – | Meter-out flow controls: the rod side's (sets the extend speed) and the cap side's (retract) | 0.15, 0.2, 0.3 |
+| `cushion_length_m` | m | Length of the end-position cushion at each end; at most half the stroke | 0.017 |
+| `cushion_bleed_c_dm3_s_bar`, `cushion_bleed_b` | l/(s bar), – | The cushion's bleed screw | 0.05, 0.3 |
+| `stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The elastic end stops behind the cushions | 1e6, 500 |
+| `friction_coulomb_n`, `friction_coulomb_n_bar` | N, N/bar | The seals' sliding friction and its rise with the chambers' mean gauge pressure | 10, 2 |
+| `friction_stiction_ratio`, `friction_stribeck_m_s`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | –, m/s, N s/m, m/s | Breakaway over sliding (at least 1), the Stribeck speed, viscous friction, the smoothing through zero speed | 1.5, 0.01, 20, 0.002 |
+| `load_force_n` | N | A process force on the rod against extending | 0 |
+| `sensor_band_m`, `sensor_delay_s` | m, s | The end sensors switch this near the end, after this delay | 0.002, 0.005 |
+| `start` | – | `"retracted"` or `"extended"`: where it rests at the start, its valve driving it there | "retracted" |
+| `rated_cushion_energy_j` | J | The cylinder's maximum impact energy (check `cushion-energy`) | 0.4 |
+| `load_factor_limit` | – | Check `load-factor` | 0.7 |
+| `compressor_energy_kwh_m3` | kWh/m³ | The compressor's electrical energy per m³ of air (ANR) | 0.12 |
+
+`sim.dt_s / sim.substeps` must be small enough for the cylinder's stiffest rate (`error-cylinder-unstable` says which
+and how small): a dead volume below about 1 cm³ with these flows, or very stiff stops, ask for more sub-steps.
 
 ## `[hard_stop]`
 
@@ -473,6 +548,7 @@ One drive per motor, all with the same settings.
 | `torque_feedforward_factor` | T E S | factor | Weight of the torque feedforward | choice | `torque_feedforward` |
 | `torque_feedforward_model` | T E S D | `"rigid"` or `"inertia"` | What the torque feedforward is. `rigid`: the rigid model's inverse dynamics, inertia, gravity and the speed terms of a kinematics that is not linear, coupled between the motors: what a controller with a dynamic model (SIMOTION, a robot controller) sends. `inertia`: one moment of inertia per motor, the rigid model's at `start.pose` (its own acceleration, the others standing), times the motor's acceleration setpoint: what a drive does with speed/torque precontrol and the load's inertia set (S120 p1498), as most commissionings of a single axis or a gantry leave it; gravity is left to the speed loop's integrator. `rigid` in the shipped configs; a config without the key has it | choice | `torque_feedforward` |
 | `friction_feedforward_speed_rad_s`, `friction_feedforward_torque_nm` | T E S D | rad/s, N m | The friction characteristic: torques at rising speeds above 0, linear between the points, from (0, 0) to the first, held beyond the last, with the sign of the speed setpoint. `[10.0]`, `[0.0]` in the shipped configs (none recorded), but the flying saw's `[0.314, 188.5]`, `[0.591, 1.441]`: its guides' and motor's friction through rack and gearbox, by hand | measurement | `friction_feedforward` |
+| `friction_feedforward_model` | T E S D | | Which friction `effects.friction_feedforward` adds: `"characteristic"`, the points above; `"machine"`, in their place the friction of the machine's own model at the planned pose and speed (guides, motor shaft, gearbox drag, joints, idlers, cable chain; see the [model reference](model-reference.md#fine-interpolation-and-precontrol)). A config without the key takes the characteristic | choice | `friction_feedforward` |
 | `precontrol_balance_s` | T E S D | s | The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that it arrives with the motor that the speed feedforward moves through the closed speed loop (S120 p1429; the dead time p1428 is not modelled). Typically the speed loop's equivalent time constant, a few ms, with 100 % speed feedforward. The following error is then the one against the balanced setpoint. 0 (off) in the shipped configs and where a config lacks the key | choice | always |
 | `load_encoder_step` | T E S D | m, rad | The step of the load-side scales, in each tool axis's unit; 0 is an ideal scale. 1e-6 in the shipped configs | datasheet | `load_encoder` |
 | `current_kp_v_a` | T E S | V/A | Current controller gain. Kp = L / T gives the current loop the time constant T | choice | always |
@@ -493,7 +569,8 @@ One drive per motor, all with the same settings.
 | `noise_seed` | T E S | – | Seed of the noise and of the fieldbus jitter. A whole number, not negative. Each motor has a stream of its own, and the jitter one more | choice | `sensor_noise`, `fieldbus_jitter` |
 | `fault_reaction` | T E S D | – | With `effects.drive_monitoring`: how the drive stops when the drives trip. `"off1"` ramps the speed setpoint down on `off1_ramp_s` (S120 OFF1, p1121), `"off3"` on `off3_ramp_s` (OFF3, p1135), `"sto"` takes the torque off at once (the motor coasts), `"current_limit"` brakes at the torque limit (OFF3 with no ramp). Per motor as `[drive.<id>]`. `"off3"` in all files | choice | `drive_monitoring` |
 | `off1_ramp_s` | T E S D | s | OFF1 ramp: the time from the rated speed to standstill; 0 brakes at the torque limit. 1.0 in all files | estimate | `drive_monitoring` |
-| `off3_ramp_s` | T E S D | s | OFF3 ramp, the same. 0.1 in all files, a fast stop as commissioned | estimate | `drive_monitoring` |
+| `off3_ramp_s` | T E S D | s | OFF3 ramp, the same. 0.1 in all files, a fast stop as commissioned. Also the ramp of a category 1 stop (`sim-cli run --stop-category 1`, `sim-cli stop`), whatever `fault_reaction` is | estimate | `drive_monitoring`, stops |
+| `ss1_time_s` | T E S D | s | A category 1 stop takes the torque off after this long at the latest, also when a motor still turns, as SS1's timer (p9652). 0.5 in all files. Optional in a config file (no limit). A setting: no `[bounds]` | estimate | stops |
 | `pulse_off_speed_rad_s` | T E S D | rad/s | Once its ramp is down, the drive takes its pulses off below this speed (p1226). 2.09 (20 r/min); 0.02 m/s on a linear motor | estimate | `drive_monitoring` |
 | `following_error_window_rad` | T E S D | rad | The drive trips when its following error (at the motor) is beyond this (p2546). 1.0; 0.005 m on a linear motor. A setting, not a physical value: no `[bounds]` | estimate | `drive_monitoring` |
 | `standstill_window_rad` | T E S D | rad | Once the setpoint has stood still `standstill_time_s`, the drive trips when its following error is beyond this (p2542). 0.1; 0.0005 m on a linear motor | estimate | `drive_monitoring` |
@@ -512,7 +589,9 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `belt_max_tension_n` | T E S | N | Allowable belt tension. E: 2140 N. Festo publishes no allowable belt tension for the EXCT. It states the 5 mm pitch, the steel cords, the 30 mm width and the stretch of the belt: 0.045 % at 300 N, which is 667 kN per unit strain. Megadyne's Megalinear handbook lists for 5 mm pitch steel-cord polyurethane belts, at 4 mm/m stretch: T5 840 N at 25 mm and 1060 N at 32 mm (about 250 kN per unit strain at 30 mm), AT5 1805 N at 25 mm and 2275 N at 32 mm (about 535 kN). Festo's belt is somewhat stiffer than AT5 with standard steel cords and far stiffer than T5, so the limit is the AT5 figure between the two widths: 2140 N at 30 mm. The figures were read from the handbook itself (average values for open-ended belts, a quarter of the breaking strength); that Festo's belt has cords of that class is concluded from the stretch, not stated by Festo. The teeth give way before the cords do: that is judged by `pulley_max_torque_nm`. | `belt-tension` | placeholder (T S), estimate (E) |
 | `belt_min_tension_n` | T E S | N | Lowest tension allowed. Below it the teeth can jump | `belt-slack` | choice (0) |
 | `settling_tolerance_m` | T E S | m | How far the tool's place (its axes in m) may be from its target in the second half of a dwell | `settling` | choice |
+| `max_stopping_distance_m` | none | m | How far the tool may travel after a stop at the worst moment of the cycle or path (`sim-cli stop`: the farthest it gets from where it was at the trigger, over the axes in m). Any config may add it | `stopping-distance` (in `sim-cli stop`, not in `verdicts`) | – |
 | `settling_tolerance_rad` | arms, table, D4 | rad | How far the tool's turn (its axes in rad: an arm's joints or orientation, the SCARA's and the D4's c, the table) may be from its target then, apart from the place: metres and radians are not added. Any config may add it | `settling-angle` | arm 3 mrad in joints, 5 mrad in tool space; SCARA 1 mrad (2 in tool space); table 0.2 mrad; palletiser and D4 5 mrad; estimates |
+| `gripper_safety_factor` | any | 1 | With `effects.gripper_time` and a vacuum gripper: the cup's hold A p_hold is divided by this before the most the held part asks is judged against it. Any config may add it; without it the hold is not judged | `gripper-hold` | none shipped; vacuum makers ask 2 for vertical lifts and 4 for sideways moves, estimate |
 | `pulley_max_torque_nm` | E | N m | Allowable torque at the pulley. Also caps the peak torque of a motor by name, and the time-optimal plan keeps `profile.torque_reserve` of it at the gearbox output | `pulley-torque` | datasheet (Festo: 12.5 N m) |
 | `gearbox_rated_torque_nm` | T S | N m | Gearbox rated (continuous) torque at the output. A gearbox by name sets it | `gearbox-continuous` | datasheet (as Siemens NRB060, ratio 5) |
 | `gearbox_max_torque_nm` | T S | N m | Gearbox maximum torque at the output. A gearbox by name sets it. The time-optimal plan keeps `profile.torque_reserve` of it at the output (where the machine reports `gearbox.<motor>.output_torque`) | `gearbox-peak` | datasheet (as Siemens NRB060, ratio 5) |
@@ -578,9 +657,10 @@ The DC link ratings of T and S are placeholders for the drive those configs were
 | `vertical_axis` | all | – | The axis that lifts against gravity, by id (`"z"`), with `-` before it where up is its minus direction (`"-z"`); `""` (in every file) for none | the machine | always |
 | `up_acceleration_ratio` | all | fraction | The share of the vertical axis's acceleration limit it has for an acceleration upwards (the motor lifts the weight as well); downwards the full limit. Above 0, at most 1; 1 in every file | estimate: (F / m − g) / (F / m + g) of the axis's force and moved mass | always, with `vertical_axis` |
 | `trajectory_spline` | all | – | The curve `Command::Trajectory` runs through its poses (an imported trajectory, a planned path, a segment's via points): `"c2"` (in every file), the cubic spline whose acceleration is continuous at every pose, or `"hermite"`, the cubic with the slopes of the neighbours as before 14 November 2026, whose acceleration steps at each pose | choice | always |
-| `torque_reserve` | T E S | fraction | Share of the torque-speed curve a time-optimal path may use, and of the torque of the drive's maximum current (with `effects.drive_current_limit`) and of the gearbox's and pulley's torque rating at the output (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`). Beside it the plan takes each motor's friction at the speed it turns off its room: the shaft's (`motor.friction_coulomb_nm`, `friction_viscous_nm_s_rad` with `effects.motor_friction`), the gearbox's drag (`gearbox.no_load_torque_nm` with `effects.gearbox_drag`) and, on machine files, the guides' (`[friction_*]` with `effects.guide_friction`). Above 0, at most 1 | choice | `--time-optimal` |
+| `torque_reserve` | T E S | fraction | Share of the torque-speed curve a time-optimal path may use, and of the torque of the drive's maximum current (`ratings.drive_max_current_a`, with `effects.drive_current_limit` or without since 15 November 2026), of the gearbox's and pulley's torque rating at the output (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`) and of a machine part's force rating (a screw's axial force, a rack's feed force). Beside it the plan takes each motor's friction at the speed it turns off its room: the shaft's (`motor.friction_coulomb_nm`, `friction_viscous_nm_s_rad` with `effects.motor_friction`), the gearbox's drag (`gearbox.no_load_torque_nm` with `effects.gearbox_drag`), on machine files the guides' (`[friction_*]` with `effects.guide_friction`) and on the joint machines the joints' (`joint.friction_*`, `slide.friction_*` with `effects.joint_friction`). The plan also keeps the gearbox's input speed, the braking resistor's peak power and a screw's speed rating, less 1 % of each speed rating (see the model reference). Above 0, at most 1 | choice | `--time-optimal` |
 | `tension_reserve` | T E S | fraction | Share of the room between the belt tension that holds the tool and `ratings.belt_max_tension_n` / `belt_min_tension_n` (each less `tension_margin_n`) that a time-optimal path may use in the plan's rigid model. 0.5 in all three files: a change of acceleration quick against the belt's period makes a lightly damped belt overshoot by up to the change itself, so the full model swings up to twice the rigid model's dynamic tension (0.8 let the default T-gantry pass a 330 N rating by 1.4 N at 100 m/s³ and go slack at 1000 m/s³). Above 0, at most 1. Without a tension rating the belt is no limit of the plan | choice (E: estimate) | `--time-optimal` |
 | `tension_margin_n` | T E S D | N | Taken off both belt tension ratings before `tension_reserve`, for the guide friction the belt pulls, which the loss-free rigid model leaves out: the X guide's coulomb friction plus its viscous friction at the axis' top speed (T 15 + 20 · 0.8 = 31 N, E 20 + 20 · 2.5 = 70 N, S 15 + 20 · 1.0 = 35 N; D 0, no belt). At least 0. A path whose holding tension alone is beyond a rating less the margin is refused | estimate | `--time-optimal` |
+| `time_optimal_margin` | all | – | 1.0. The share of every limit the time-optimal plan may use, on top of the reserves: it multiplies `torque_reserve`, `tension_reserve`'s room, the speed ratings (motor, gearbox input, screw) and the braking resistor's peak power; 0.9 plans at 90 % of them. Above 0 and at most 1. Left out (an older machine file): 1 | choice | `--time-optimal` |
 | `min_clearance_m` | T E S D | m | The least clearance the machine keeps from every obstacle of `obstacles` (surface to surface, between the obstacle and the parts that can hit one): the check `collision` judges the run's least clearance against it, and a time-optimal path that comes nearer is refused (`error-path-collision`). Also, for `sim-cli optimise` and the app's optimiser: how far the tool has to stay beyond the farther of pick and place (along the last axis, the side the lift goes to) while it traverses between them. The optimiser lowers each lift, traverse and lower of the cycle to this, and rounds its corners through a via point only where the planned path keeps it (less the path tolerance). Not negative. T 0.3 and E 0.17: the lifts as configured (no obstacle is known); S 0 (no lift); D 0.025, its 25 mm lift | choice, or the height of an obstacle | `optimise` |
 | `path_tolerance_m` | T E S | m | How far a planned path may leave the lines, arcs and splines of its file, so that transition curves can take it from a line into an arc at speed, and a spline's end can be eased to the curvature of the line or arc it meets. The deviation is L² / (24 r) for curves of length L at an arc of radius r, 0.01728 dk l² for a spline eased over l against a step dk of the curvature, and is reported. Not negative; 0 (in all three files) plans the path as given | choice | `--path`, and the app's Path |
 | `corner_tolerance_m` | T E S D | m | How far a planned path may leave a corner between two lines (the direction turns by more than 1 mrad) to round it instead of stopping there, as a CNC's G642 or a robot's zone: a curve from d before the corner to d after it that leaves and arrives in the lines' directions with no curvature at either end (no step in any axis's acceleration), d such that the curve is nowhere further than this from the two lines (d = 16/3 of it at a right angle, where the curve's tightest radius is sqrt(2) d / 3 = 2.51 times it), at most half of either line. Applies to paths (`--path`, the app, OPC UA) and to cycle segments with via points. A corner next to an arc or a spline is rounded too, by a quintic from d back along the piece before to d on along the one after that keeps both pieces' directions and curvatures there (G2), d found so that its deviation is the tolerance (for a right angle next to a wide arc again about 16/3 of it). A turn of nearly half a circle and a corner on more than six axes stay stops. Whether it is quicker depends on the jerk limit: at the shipped 100 m/s³ a 20 mm rounding of a right angle on the T-gantry is slower than the stop (1.365 s against 1.306 s time-optimal), at 2000 m/s³ quicker (0.920 s against 0.978 s). At least 0; 0 in every shipped file: corners are stopped at | choice | none |
@@ -605,6 +685,8 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | D4 | 50 | As D, with the arms' backlash, and the estimates of `[gearbox.4]` (backlash, damping), `[motor.4]` (winding, friction), `[ratings.4]`, `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
 | H4 | 43 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms have no bending (no `[upper_arm]`) |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
+
+Since 15 November 2026 every config with a holding brake also bounds `brake.engage_delay_s` and `brake.release_delay_s`, two more than the counts above. No cycle uses them (the brakes act only while the drives stop or start), so `verdicts --bands` runs nothing for them; `sim-cli stop` with the bounds set by hand shows what they do.
 
 Keys with bounds in one config only:
 
@@ -920,7 +1002,10 @@ have theirs).
 `effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
 arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
 first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
-its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast aluminium.
+its tip. Signals `link.<n>.bend` (m, its tip's deflection), `link.<n>.bend_across` (m) and `link.<n>.twist` (rad)
+for the other directions. Estimates: cast aluminium. `effects.link_bending_reaction` (in the same configs, off as shipped;
+acts only with `effects.link_bending`): the bending acts back on the joints, joints, gearboxes and links one coupled
+system, the bending's energy and its damping (`power.link_bending`) in the machine's; off, the bending is one-way.
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
@@ -928,6 +1013,8 @@ its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast alum
 | `wall_m` | m | Per joint, the tube's wall | arm 0, 0.008, 0.008, 0.006, 0.005, 0; SCARA 0.008, 0.006, 0, 0; estimates |
 | `youngs_modulus_pa` | Pa | E of all links: cast aluminium 7e10; bounds 6.5e10 to 7.2e10 | 7.0e10, estimate |
 | `damping_ratio` | – | Of every link's mode; bounds 0.01 to 0.05 | 0.02, estimate |
+| `directions` | – | The directions each link deflects in, each its first mode: `in_plane` (bending in the plane its joint turns it in), `out_of_plane` (bending across that plane), `torsion` (twisted about its length) | `["in_plane"]` |
+| `shear_modulus_pa` | Pa | G of all links, read with `torsion`: cast aluminium 2.6e10; bounds 2.4e10 to 2.7e10 | 2.6e10, estimate |
 
 ## Slider-crank, rotary knife, flying saw, disc cam (`machine-crank-cam`)
 
@@ -1067,11 +1154,13 @@ The cycle is a list of segments, run in order and repeated. All three configs ha
 | --- | --- | --- |
 | `target` | m | Tool pose to move to, one position per axis, inside the strokes |
 | `dwell_s` | s | Time to stay there. Rounded to whole profile cycles. With input shaping the dwell starts when the shaped setpoint has arrived |
-| `payload` | true/false | State of the gripper once the segment has arrived (with input shaping: once the shaped setpoint has): `true` picks up or keeps the payload, `false` releases it |
+| `payload` | true/false | State of the gripper once the segment has arrived (with input shaping: once the shaped setpoint has): `true` picks up or keeps the payload, `false` releases it. With `effects.gripper_time` the state is reached when the gripper is done (`[gripper]`) |
 | `shape` | – | Optional, in no shipped file. The shape of this segment's move, as `profile.shape`, which it replaces for this segment |
 | `via` | m | Optional, in no shipped file. Via points, each one position per axis inside the strokes: the segment then runs a path planned within the axis limits (`path::plan`, with the transition curves of `profile.path_tolerance_m` and the rounded corners of `profile.corner_tolerance_m`; with `profile.cycle_timing = "time_optimal"` as fast as the motors allow) instead of the straight move: a line to the first via point, a smooth curve (spline) through the others, and a line from the last to `target`. With via points straight above pick and place and one between, a lift, traverse and lower without a stop; the optimiser writes such segments. One via point is two lines with a stop between. The path is planned from the segment before's target when the config is read, and refused (`cycle.segment[i].via`) where it cannot be planned or leaves the strokes. A segment with via points does not blend (`corner_blending`) with the one before. The first segment of a run starts from the start pose; were its path refused from there, it runs the straight move |
 
 | `corners_m` | m | Optional, in no shipped file; with `via`. The via points are then joined by lines (to the first, between them and from the last to `target`), and their corners rounded within this tolerance in place of `profile.corner_tolerance_m`: the optimiser writes it for a lift whose two corners it rounds (via points the two corners at the lift's height, the tolerance 3/16 of the height above the lowest the clearance allows, so that the curves start there). At least 0 |
+| `valves` | – | Optional; a machine with pneumatic cylinders (`machines/pneumatic-axis.toml`). Commands to cylinders' valves by the cylinder's id, given once the segment has arrived, as the gripper acts: `{ z = "extend" }`, `"retract"` or `"centre"` (the closed centre of a 5/3 valve; a 5/2 valve stays where it is). The valve switches after its own delay. An unknown id or command is refused (`cycle.segment[i].valves`) |
+| `wait` | – | Optional, with cylinders. End-position sensors the segment's dwell waits for, `["z.extended"]` or `"z.retracted"`: the dwell counts from when all of them report (each after its sensor delay), so the next segment, an X move say, starts only with the cylinder there. A sensor that never reports holds the cycle there |
 
 T and E: lower, dwell (grip), lift, traverse, lower, dwell (release), lift, traverse back; six segments. S: a shuttle between x = 0.9 and x = 0.1 with a dwell of 0.1 s at each end; two segments.
 
@@ -1107,3 +1196,22 @@ Picking from a moving belt conveyor (goal 3), for every machine whose tool axes 
 | `tracking_tolerance_m` | m | The verdict `pick-tracking`: the most the tool may be from the part along the belt during a grip, above 0 | 0.001 |
 
 The results: `analyze` says the picks a minute (60 / the measured pass's time, one part per pass), the tracking error and the parts missed a minute on its error stream; `verdicts` judges `pick-tracking` against `tracking_tolerance_m` and `parts-missed` (parts a minute that pass the window unpicked) against 0.
+
+## `[gripper]`
+
+The gripper of the `[[cycle.segment]]` cycle, with `effects.gripper_time` (in no shipped file; any config may add the switch and the table, and a config without them grips and lets go at once on arrival, as before). Where a segment changes the gripper's state, its dwell lasts at least the gripper's time (rounded up to whole profile cycles) and the payload comes or goes when the gripper is done. A conveyor's pass keeps its own `grip_s` and `release_s`. The model is in the [model reference](model-reference.md); the verdict `gripper-hold` needs `ratings.gripper_safety_factor` as well.
+
+| Key | Unit | Meaning | Example (estimate) |
+| --- | --- | --- | --- |
+| `kind` | – | `"mechanical"` (jaws) or `"vacuum"` (a cup and a vacuum generator) | `"vacuum"` |
+| `close_s`, `open_s` | s | Jaws: the time to close and to open, from the gripper's data sheet (a pneumatic parallel gripper of 16 to 25 mm stroke: 30 to 80 ms) | 0.05, 0.04 |
+| `cup_volume_m3` | m³ | Vacuum: the volume evacuated, the cup and its hose to the generator (a 30 mm bellows cup and 0.5 m of 4 mm hose: about 2e-5, bounds 1e-5 to 4e-5) | 2.0e-5 |
+| `generator_flow_m3_s` | m³/s | The generator's suction flow (a small ejector: 10 to 20 l/min, 1.7e-4 to 3.3e-4) | 1.67e-4 |
+| `vacuum_pa` | Pa | The vacuum it reaches, as a pressure difference to the air (ejectors: 60 to 90 kPa) | 80000 |
+| `holding_pressure_pa` | Pa | The vacuum switch's level at which the grip counts as made and the move starts, below `vacuum_pa` | 60000 |
+| `vent_flow_m3_s` | m³/s | The flow that vents the cup (an ejector pulse: about four times the suction flow) | 6.67e-4 |
+| `release_pressure_pa` | Pa | The vacuum at which the part is let go, below `vacuum_pa` | 10000 |
+| `cup_area_m2` | m² | The cup's effective area (30 mm: 7.07e-4) | 7.07e-4 |
+| `friction_coefficient` | – | The cup's friction on the part sideways (rubber on dry sheet metal 0.5, on oily 0.1 to 0.2) | 0.5 |
+
+With the example the cup grips in 0.12 ln(80/20) = 0.166 s, lets go in 0.03 ln 8 = 0.062 s and holds 42.4 N. No vendor table of cups and generators is in `catalog/` yet: the example values are typical of vendors' catalogues (Festo, Schmalz, Piab) but not taken from one.

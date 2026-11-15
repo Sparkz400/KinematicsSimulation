@@ -46,6 +46,9 @@ axis = ""
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 gravity = true
 payload = true
 # The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
@@ -96,15 +99,20 @@ torque_ripple = true
 # Stops at both ends of each arm's angle range ([joint]).
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
 # as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
 # cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
 fine_interpolation = true
-# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
-# config has a recorded characteristic.
-friction_feedforward = false
+# Friction feedforward (S120 p3820-p3839): with drive.friction_feedforward_model = "machine" the friction of the
+# machine's own model at the planned speed, else the characteristic drive.friction_feedforward_*. On: it cuts the
+# following error while moving and the settling at the pick (docs/validation.md).
+friction_feedforward = true
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -476,6 +484,9 @@ torque_feedforward_model = "rigid"
 # the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
 friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
@@ -511,6 +522,9 @@ noise_seed = 1
 fault_reaction = "off3"
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 # What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
 # standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
@@ -652,6 +666,8 @@ torque_reserve = 0.8
 # Read but not used: the delta has no belt.
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 # Not used on three axes (see docs/user-guide.md): paths run as given.
 path_tolerance_m = 0.0
 # How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
@@ -689,8 +705,17 @@ damping_ratio_rx = 0.02
 damping_ratio_ry = 0.02
 damping_ratio_rz = 0.02
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see the other machines' configs).
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 base.mass_kg = [180.0, 480.0]
 base.stiffness_x_n_m = [1.08e6, 6.75e6]
 base.damping_ratio_x = [0.01, 0.05]

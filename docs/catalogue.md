@@ -356,6 +356,19 @@ What the checks hold them to (`catalog/tools/cataloglib/checks_mech.py`): per ma
 
 Kept as printed (each named in its table's notes): WITTENSTEIN TP+110 MF 2-stage ratio 16 T012 7.0 N m beside an in.lb value of 5.9 N m; SP+100 MF ratio 64, 19 mm hub J1 0.38 kg cm² against 0.54 of its neighbours. Harmonic Drive size 17: ratio 120 has a lower momentary peak than ratio 100; CSF32 ratio 30 has T2 above its repeated peak. Apex AF180 axial load above its radial load, and the AFR table's axial loads of sizes 100 and 220 differ from the AF table's (the AF's kept). 1FN3450-2NB80 prints its losses in W for kW (read as kW, Table 3-17 confirms); Table 3-15 gives 3910 N for the 1FN3600-3WB50's 3920 N. Gates HTD8 25 mm and 100 mm breaking forces (4.57 and 3.47 times the pull, against 4.06 for the other widths). Rexroth CKR-280 Lmax printed "5, 500" (read 5500), the CKR-110 carriage length 60 mm in one table and 110 mm in another. HIWIN FDC 32-20K4 with 6.35 mm balls: K 71 kgf/µm, below the 96 of the 32-16K4.
 
+### `festo/cylinders_dsbc.csv` (pneumatic cylinders)
+
+Festo's standards-based cylinders DSBC to ISO 15552 with adjustable pneumatic cushioning PPV, one row per piston
+diameter (32 to 125 mm), from the catalogue "Standards-based cylinders DSBC, to ISO 15552", edition 2026/09
+(retrieved 15 November 2026): rod diameter, cushioning length, maximum impact energy in the end positions, the
+theoretical forces at 6 bar, the moving mass at 0 mm and per metre of stroke, the stroke range. A new part class,
+`pneumatic_cylinder` (`catalog/schema/v1/pneumatic_cylinder.schema.json`). The check
+`pneumatic_cylinder_forces_are_p_times_a` holds every row's forces to 6 bar times the piston's area and the piston's
+less the rod's (within the printed rounding), and a bigger size to more impact energy. The simulator does not read the
+table by name yet: `machines/pneumatic-axis.toml` takes the DSBC-32's values from it by hand, marked [catalogue].
+Kept as printed and named in the notes: the impact energy row "DSBC-..." does not say which cushioning it is for, and
+the rod diameter is read from the KE variant's dimension table.
+
 ## Life and tooth load data in the configs
 
 The life estimates and the belt's tooth load take their figures from the configs' `[ratings]`, not from a file in `catalog/`. Where they come from a maker's document, that is listed here. No vendor document or page is in the repository; the numbers were read from the makers' own servers on 12 November 2026.
@@ -447,6 +460,8 @@ Other notes from the headers that are not misprints: three 1FK2 data sheets (1FK
 | DC link and braking resistor data of the S210 converters | Not in D 32 | The DC link ratings of `exct-30.toml` are estimates by the S120 data |
 | The data sheet of the 1FK7022-5AK7 | The data sheet service has none under any article number tried | 166 of 167 rows in `motors_s120_electrical.csv` |
 | A complete D 21.4 newer than 2017 | Siemens does not seem to have issued one | The 1FK7 and 1FT7 selection data is from 2017 |
+| ISO 6358 sonic conductance C and critical pressure ratio b of Festo's VUVG valves | Festo's only public VUVG catalogue (edition 2010/02) and the single-part data sheets print the standard nominal flow and switching times, not C and b; festo.com's product pages refuse automated reading | `machines/pneumatic-axis.toml` estimates its valve's C from the 220 l/min nominal flow of a VUVG-L10 (C 0.87 l/(s bar) at b 0.3, bounded 0.6 to 1.2 and 0.2 to 0.45); its switching time, 7 ms, is the catalogue's changeover time |
+| Air consumption of the DSBC | Not printed | Worked out by the model from swept and dead volumes (`cylinder.<id>.air_cycle`) |
 | Gearbox input speed limits, radial and axial forces | Not extracted from the gearbox manual (the mass is, from the 01/2023 edition) | `ratings.gearbox_max_input_speed_rpm` and `ratings.shaft_max_radial_load_n` are placeholders in the configs |
 | Backlash of 24 NRB rows, inertia of 3 NRK rows | The manual leaves them open | A gearbox by name keeps the config's value there |
 | The angled gearboxes (NRBW, NRKW, NLCW); Siemens' SP+ but the SP100 with two stages, and its TP+ | Not extracted (WITTENSTEIN's own SP+ and TP+ tables are in `wittenstein/`) | |

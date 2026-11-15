@@ -256,6 +256,21 @@ pub trait Machine: Send {
     /// (its rate per unit of path): [c, b] for c + b v at the speed v along the path, positive where the motor has to
     /// give positive torque against it. For the time-optimal plan. Appends nothing where the machine does not tell.
     fn rigid_friction(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
+    /// The friction torque at each motor (N m, in the order of `motors`, into `out`) while the tool at `tool_pos` moves
+    /// steadily at `tool_vel`: every friction of the machine's own model at that speed (guides at their steady sliding
+    /// level, the motor shaft, the gearbox's drag, the joints, idlers, screws, the cable chain), carried to the motor as
+    /// the rigid model carries a load (through the ratios, and the efficiencies where the motor drives). Positive where
+    /// the motor has to give positive torque against it. For the friction feedforward from the machine's model
+    /// (`drive.friction_feedforward_model = "machine"`). Zero by default: a machine that tells no friction.
+    fn steady_friction(&self, _tool_pos: &[f64], _tool_vel: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+    }
+
+    /// What limits the time-optimal plan among the machine's own parts: per check of `rating_checks` (in its order) the
+    /// value of its signal in the loss-free rigid model at a tool pose, speed and acceleration (a screw's speed, its
+    /// force, a rack's feed force), or NaN where the rigid model does not give it (a life, a sync error). The plan keeps
+    /// each value within its check's limit. Appends nothing where the machine does not tell (no row is planned).
+    fn rigid_checks(&self, _tool_pos: &[f64], _tool_vel: &[f64], _tool_acc: &[f64], _out: &mut Vec<f64>) {}
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);
@@ -273,6 +288,18 @@ pub trait Machine: Send {
     fn set_dwelling(&mut self, _dwelling: bool) {}
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
+    /// Actuators that a valve moves and no drive (pneumatic cylinders): each one's id and the valve command it starts
+    /// with (+1 extend, -1 retract, 0 the closed centre of a 5/3 valve), for a cycle segment's `valves` and `wait`. None
+    /// by default.
+    fn valves(&self) -> Vec<(String, f64)> {
+        Vec::new()
+    }
+    /// Told every step the command of valve `valve` (of `valves`); the valve switches after its own delay.
+    fn set_valve(&mut self, _valve: usize, _command: f64) {}
+    /// Valve `valve`'s end-position sensors, [retracted, extended], each after its delay.
+    fn end_sensors(&self, _valve: usize) -> [bool; 2] {
+        [false; 2]
+    }
     /// Called after every base step, for what happens at once and not by integration (a belt tooth that jumps):
     /// the machine may change `state` and must report what that took out of its energy among its loss powers
     /// over this step of `dt` seconds, so that the energy budget closes.

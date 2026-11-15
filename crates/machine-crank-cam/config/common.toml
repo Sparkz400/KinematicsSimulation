@@ -33,6 +33,10 @@ gearbox_efficiency = true
 torque_ripple = true
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 # The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
 # file). On in the shipped configs.
 process_force = true
@@ -91,6 +95,9 @@ crash = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 braking_resistor_heating = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
@@ -111,6 +118,9 @@ iron_loss = true
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
@@ -150,6 +160,8 @@ torque_reserve = 0.8
 # Read but not used: no belt.
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
 # How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's

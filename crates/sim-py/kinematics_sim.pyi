@@ -61,6 +61,11 @@ class Sim:
         """One controller cycle (`cycle`), or `time` seconds in whole base steps, with at most one of: `torque` (N m
         per motor, torque mode), `velocity` (rad/s per motor, velocity mode), `setpoint` (per tool axis, position
         mode). Every signal at its end. A refused mode or setpoint raises ValueError."""
+    def stop(self, category: Literal[0, 1, 2]) -> None:
+        """Stop category 0 (torque off), 1 (quick-stop ramp, then off) or 2 (brake the plan, hold with torque on);
+        it runs in the steps that follow. A refused stop raises ValueError."""
+    def enable(self) -> None:
+        """The drives on again after a stop, holding where the motors stand."""
     def signals(self) -> dict[str, float]: ...
     @property
     def time(self) -> float: ...

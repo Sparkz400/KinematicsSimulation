@@ -29,6 +29,9 @@ pub struct AxisFit {
     /// in s, then the change of the payload's factor there (+1 for the config's payload picked, −1 for it dropped) and
     /// its standard error. With steps, `fitted` holds the values before the first.
     pub payload_steps: Vec<(f64, f64, f64, f64)>,
+    /// What the friction does beyond its sliding level (`friction_details`), those the trace shows; the config's NaN
+    /// where its replay does not show it.
+    pub details: Vec<FrictionDetail>,
 }
 
 impl AxisFit {
@@ -119,6 +122,134 @@ fn rigid_values(time: &[f64], force: &[f64], speed: &[f64], extra: &[Vec<f64>]) 
     Some((solved.values, solved.errors))
 }
 
+/// What the friction of an axis does beyond the rigid values' sliding level (`friction_details`): its name as the CLI
+/// writes it, and as in `AxisFit` the estimate on the config's replay, on the trace, and its standard error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrictionDetail {
+    pub quantity: &'static str,
+    pub config: f64,
+    pub fitted: f64,
+    pub error: f64,
+}
+
+/// The quantities of `friction_details`, in its order.
+pub const FRICTION_DETAILS: [&str; 3] = ["held_force_n", "breakaway_force_n", "presliding_stiffness_n_m"];
+
+/// The mean of `x` and its standard error, the variance of a mean of n rows widened by (1 + ρ) / (1 − ρ) for the lag-one
+/// correlation ρ of the rows about it (neighbouring rows of a trace are not independent), as `fit_move_stiffness` does.
+fn mean_and_error(x: &[f64]) -> (f64, f64) {
+    let n = x.len() as f64;
+    let mean = x.iter().sum::<f64>() / n;
+    let squares: f64 = x.iter().map(|v| (v - mean).powi(2)).sum();
+    let rho = (x.windows(2).map(|w| (w[0] - mean) * (w[1] - mean)).sum::<f64>() / squares.max(f64::MIN_POSITIVE))
+        .clamp(0.0, 0.98);
+    (mean, (squares / (n - 1.0) / n * (1.0 + rho) / (1.0 - rho)).sqrt())
+}
+
+/// Friction beyond the sliding level, from one axis's force, speed and travel along the trace's rows and its rigid values
+/// (`rigid_values`: mass, viscous, Coulomb, constant; NaN viscous counts 0): each `None` where the trace does not show it.
+///
+/// - `held_force_n`: what the axis holds at rest after its last motion, the force less the constant one on the rows of
+///   the last stretch at rest (the speed within 1 % of the top speed, averaged over the window) after its first 0.1 s,
+///   at least 0.1 s of them. A friction smoothed through zero holds nothing; one that sticks holds what the loops
+///   wound up when the axis stopped.
+/// - `breakaway_force_n`: the friction at the lowest speeds, sign(v) (F − m a − b v − constant) on the rows whose speed
+///   is between 1 % and 5 % of the top speed and falls in size towards a stop or a reversal, keeping its sign across the
+///   window; at least ten windows of them. Above the Coulomb value where the friction rises towards rest (stiction and
+///   a Stribeck curve), at it where it does not.
+/// - `presliding_stiffness_n_m`: at each reversal of the averaged speed, the travel from the turning point (the row of
+///   least speed) at which the friction, the force less inertia and constant, has turned from one sliding level through
+///   zero; in Dahl's law (`ShaftFriction::presliding_force`) z = g (1 − 2 exp(−σ x / g)) passes zero at x = g ln 2 / σ, so
+///   σ = Coulomb ln 2 / x. The median over the reversals, its error 1.25 their spread over the root of their count
+///   (none for one), as `motor_fit` does for its LuGre bristles. A reversal whose friction does not pass zero within
+///   0.5 s or that crosses in its first row (faster than the trace resolves) is left out.
+///
+/// Each mean's standard error from `mean_and_error`.
+pub fn friction_details(
+    time: &[f64],
+    force: &[f64],
+    speed: &[f64],
+    travel: &[f64],
+    rigid: &[f64],
+) -> [Option<(f64, f64)>; 3] {
+    let (w, rows) = (WINDOW, time.len());
+    if rows < 2 * w + 3 {
+        return [None; 3];
+    }
+    let [mass, viscous, coulomb, constant] =
+        [rigid[0], rigid[1], rigid[2], rigid[3]].map(|v| if v.is_nan() { 0.0 } else { v });
+    let top = speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
+    let mean = |x: &[f64], i: usize| x[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64;
+    let inner = w..rows - w;
+    let v: Vec<f64> = inner.clone().map(|i| mean(speed, i)).collect();
+    let at = |i: usize| v[i - w];
+    let acc = |i: usize| (speed[i + w] - speed[i - w]) / (time[i + w] - time[i - w]);
+    let step = (time[rows - 1] - time[0]) / (rows - 1) as f64;
+    let tenth = (0.1 / step).round() as usize;
+    // The last stretch at rest after a motion.
+    let held = {
+        let still = |i: usize| at(i).abs() <= 0.01 * top;
+        let end = inner.clone().rev().find(|&i| still(i));
+        end.and_then(|end| {
+            let start = (inner.start..=end).rev().take_while(|&i| still(i)).last()?;
+            let moved = (inner.start..start).any(|i| !still(i));
+            let rest: Vec<f64> = (start + tenth..=end).map(|i| force[i] - constant).collect();
+            (moved && rest.len() >= tenth).then(|| mean_and_error(&rest))
+        })
+    };
+    let breakaway = {
+        let slow: Vec<f64> = inner
+            .clone()
+            .filter(|&i| {
+                let s = at(i);
+                (0.01 * top..0.05 * top).contains(&s.abs())
+                    && acc(i) * s < 0.0
+                    && speed[i - w..=i + w].iter().all(|x| x.signum() == s.signum())
+            })
+            .map(|i| at(i).signum() * (mean(force, i) - mass * acc(i) - viscous * at(i) - constant))
+            .collect();
+        (slow.len() >= 10 * (2 * w + 1)).then(|| mean_and_error(&slow))
+    };
+    let presliding = {
+        let mut stiffness = Vec::new();
+        for i in inner.start + w + 1..inner.end.saturating_sub(w) {
+            let (before, after) = (at(i - 1), at(i));
+            if before == 0.0 || after == 0.0 || before.signum() == after.signum() {
+                continue;
+            }
+            let sign = after.signum();
+            let turn = (i - w..i + w).min_by(|&a, &b| speed[a].abs().total_cmp(&speed[b].abs())).unwrap_or(i);
+            let friction = |k: usize| sign * (force[k] - mass * acc(k) - constant);
+            if friction(turn) >= 0.0 {
+                continue;
+            }
+            let crossing = (turn..(turn + 5 * tenth).min(inner.end)).find(|&k| friction(k) >= 0.0);
+            if let Some(k) = crossing.filter(|&k| k > turn + 1) {
+                // Linear between the rows on either side of the crossing.
+                let (f0, f1) = (friction(k - 1), friction(k));
+                let x = |r: usize| (travel[r] - travel[turn]).abs();
+                let distance = x(k - 1) + (x(k) - x(k - 1)) * (-f0) / (f1 - f0);
+                if distance > 0.0 {
+                    stiffness.push(coulomb * std::f64::consts::LN_2 / distance);
+                }
+            }
+        }
+        stiffness.sort_by(f64::total_cmp);
+        let n = stiffness.len();
+        (n > 0).then(|| {
+            let median = stiffness[n / 2];
+            let spread = if n > 1 {
+                (stiffness.iter().map(|s| (s - median).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt() * 1.25
+                    / (n as f64).sqrt()
+            } else {
+                f64::NAN
+            };
+            (median, spread)
+        })
+    };
+    [held, breakaway, presliding]
+}
+
 /// 1 / (1 − R²) of column `j` on the other columns of `basis`, uncentred and at unit length as `solve` takes them.
 fn inflation(samples: &[Sample], basis: &[usize], j: usize) -> Option<f64> {
     let dot = |a: usize, b: usize| samples.iter().map(|(_, x, _)| x[a] * x[b]).sum::<f64>();
@@ -177,10 +308,22 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
         }
     }
     let carried = axis_view(machine.as_ref(), &payload);
+    // Each axis's travel along the rows, for the presliding (`friction_details`).
+    let travels = |t: &Trace| -> Vec<Vec<f64>> {
+        let mut pose = vec![0.0; machine.axes().len()];
+        let mut out = vec![Vec::new(); pose.len()];
+        for row in 0..t.time.len() {
+            machine.forward(&t.motors.iter().map(|m| m.angle[row]).collect::<Vec<f64>>(), &mut pose);
+            out.iter_mut().zip(&pose).for_each(|(o, p)| o.push(*p));
+        }
+        out
+    };
+    let (measured_travel, config_travel) = (travels(trace), travels(&simulated));
     let views = axis_view(machine.as_ref(), trace).into_iter().zip(axis_view(machine.as_ref(), &simulated));
     Ok(views
         .zip(&carried)
-        .map(|((measured, config), (force, _))| {
+        .enumerate()
+        .map(|(axis, ((measured, config), (force, _)))| {
             // From each step on, the payload's force on the axis.
             let columns: Vec<Vec<f64>> = steps
                 .iter()
@@ -188,10 +331,22 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
                 .collect();
             let (values, errors) = rigid_values(&trace.time, &measured.0, &measured.1, &columns)?;
             let four = |v: &[f64]| -> [f64; 4] { std::array::from_fn(|q| v[q]) };
+            let own = four(&rigid_values(&trace.time, &config.0, &config.1, &[])?.0);
+            let fitted = friction_details(&trace.time, &measured.0, &measured.1, &measured_travel[axis], &values);
+            let replayed = friction_details(&trace.time, &config.0, &config.1, &config_travel[axis], &own);
+            let details = FRICTION_DETAILS
+                .iter()
+                .zip(fitted.iter().zip(&replayed))
+                .filter_map(|(quantity, (fitted, replayed))| {
+                    let (value, error) = (*fitted)?;
+                    Some(FrictionDetail { quantity, config: replayed.map_or(f64::NAN, |r| r.0), fitted: value, error })
+                })
+                .collect();
             Some(AxisFit {
-                config: four(&rigid_values(&trace.time, &config.0, &config.1, &[])?.0),
+                config: own,
                 fitted: four(&values),
                 error: four(&errors),
+                details,
                 payload_steps: steps
                     .iter()
                     .enumerate()
@@ -1107,6 +1262,42 @@ mod tests {
         assert!((found.frequency - 22.0).abs() < 0.5 && (found.damping - 0.05).abs() < 0.01, "{found:?}");
     }
 
+    /// Measured, the ISW ball screw bench (datasets/isw-ball-screw-axis, CC BY 4.0), at the motor (rad through the lead
+    /// of 0.04 m), against the same estimates worked out by hand from the CSV (numpy, rows as stated):
+    /// - held: the S-profile's rows 5000 to 6219; its top speed there 33.58 rad/s, at rest (the 11-row mean within 1 %)
+    ///   from 5.214 s to the end; its torque after the first 0.1 s of that, 901 rows, averages -1.44440 N m.
+    /// - presliding: the sine's rows 2300 to 2800 with mass 0.0199 kg m², Coulomb 2.0 N m, no constant: the reversal at
+    ///   2.503 s (turning row 203), the friction through zero 1.0797e-3 rad on (between rows 233 and 234), so
+    ///   sigma = 2.0 ln 2 / 1.0797e-3 = 1284.0 N m/rad (3.17e7 N/m at the table).
+    /// - breakaway: the sine's rows 1000 to 19000, the same values: 262 rows between 1 % and 5 % of the top speed
+    ///   (9.962 rad/s) slowing down average 1.63760 N m, below the Coulomb level: the linear drive's force at the ends of
+    ///   the sine (-75 N at 350 mm, +67 N at 150 mm; docs/validation.md) is not in the torque's model.
+    #[test]
+    fn held_force_breakaway_and_presliding_of_the_measured_ball_screw() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../datasets/isw-ball-screw-axis/");
+        let read = |name: &str| std::fs::read_to_string(format!("{dir}{name}")).unwrap();
+        let mapping = crate::import::Mapping::parse(&read("map.toml")).unwrap();
+        let rows_of = |name: &str, rows: std::ops::Range<usize>, rigid: [f64; 4]| {
+            let trace = crate::import::import(&read(name), &mapping).unwrap().trace;
+            let m = &trace.motors[0];
+            let r = rows.clone();
+            friction_details(&trace.time[r.clone()], &m.torque[r.clone()], &m.speed[r.clone()], &m.angle[r], &rigid)
+        };
+        // The map shifts the setpoint by a row (time_offset_s), the import then starts 1 ms in: row i of the file is row
+        // i - 1 here.
+        let [held, ..] = rows_of("s-profile-v300.csv", 4999..6219, [0.0; 4]);
+        let (value, error) = held.unwrap();
+        // Its standard error, 0.037 N m, is mostly the integrator unwinding slowly (-1.70 to -1.53 N m) against the friction.
+        assert!((value + 1.44440).abs() < 1e-4 && error > 0.0 && error < 0.05, "{value} {error}");
+        let [_, _, presliding] = rows_of("sine-a100-v100.csv", 2299..2799, [0.0199, 0.0, 2.0, 0.0]);
+        let (value, error) = presliding.unwrap();
+        assert!((value - 1284.0).abs() < 1.3 && error.is_nan(), "{value} {error}");
+        let [_, breakaway, _] = rows_of("sine-a100-v100.csv", 999..18999, [0.0199, 0.0, 2.0, 0.0]);
+        let (value, error) = breakaway.unwrap();
+        // The import resamples onto its own grid (from + i step), a little off the file's times: 1e-3 here, 1.3 above.
+        assert!((value - 1.63760).abs() < 1e-3 && error < 0.05, "{value} {error}");
+    }
+
     /// Measured: the ISW ball screw bench (datasets/isw-ball-screw-axis, CC BY 4.0) at 0.1 m/s out and back, 5 s each
     /// side of the reversal. At one speed each way viscous and Coulomb friction are one value: the viscous column's
     /// inflation is 279 here (223 on the whole file, 16 on the S-profile), so viscous is left out and Coulomb holds
@@ -1132,6 +1323,7 @@ mod tests {
             fitted: values.try_into().unwrap(),
             error: [0.0; 4],
             payload_steps: Vec::new(),
+            details: Vec::new(),
         };
         assert!(fit.advice("x").iter().all(|(key, _)| *key != "fit-viscous"));
     }

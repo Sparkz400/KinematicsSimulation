@@ -93,6 +93,7 @@ Every variable is a scalar (ValueRank −1) in the namespace `urn:kinematics-sim
 | `command.target.*`, `command.setpoint.*` | Double | LREAL | read, write |
 | `command.move`, `command.cycle`, `command.disable`, `command.enable`, `command.path_time_optimal`, `command.run_path`, `command.reset_pacing` | Boolean | BOOL | read, write |
 | `command.path` | String | STRING | read, write |
+| `command.stop_category` | Int32 | DINT | read, write |
 | `status.busy` | Boolean | BOOL | read |
 | `status.refused` | String | STRING | read |
 | `status.overruns`, `status.cycles`, `status.steps`, `status.client_writes`, `status.client_reads` | UInt64 | ULINT | read |

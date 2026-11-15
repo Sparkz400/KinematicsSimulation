@@ -1428,6 +1428,24 @@ impl Machine for CableRobot {
         self.feedforward_torque_moving(pos, &vec![0.0; n], acc, out);
     }
 
+    /// The rigid model at a steady twist: per winch, at the cable's speed L' = -A^T xi, the motor shaft's friction (with
+    /// the gearbox's drag) at i L' and the drum's bearings f(L') through the gearbox as `rigid_solve` takes it,
+    /// f / (i loss). The loss factor at the power of the whole load on the gearbox (the cable's steady tension of
+    /// `torques_for` and f), as there: a cable paying out drives its gearbox back, which then takes eta off f, not on.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let n = self.n();
+        let xi = self.twist(pos, &vel[..n]);
+        let Some(spans) = self.spans(&pos[..n]) else { return out.fill(0.0) };
+        let rates = self.length_rates(&spans, &xi);
+        let mut held = vec![0.0; self.m()];
+        self.torques_for(pos, &xi, &vec![0.0; n], &mut held);
+        for (k, w) in self.winches.iter().enumerate() {
+            let (i, v) = (w.ratio(), rates[k]);
+            let friction = w.friction.torque(v);
+            out[k] = w.shaft.torque(i * v) + friction / (i * w.gearbox.loss_factor(i * held[k] + friction, v));
+        }
+    }
+
     /// The twist and its rate from the pose's speed and acceleration (w' = J_l r'' + (d/dt J_l) r', the latter by
     /// central differences along r'), then `torques_for`.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {

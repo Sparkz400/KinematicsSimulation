@@ -53,15 +53,20 @@ gearbox_stiffness_curve = false
 torque_ripple = true
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
 # as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
 # cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
 fine_interpolation = true
-# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
-# config has a recorded characteristic.
-friction_feedforward = false
+# Friction feedforward (S120 p3820-p3839): with drive.friction_feedforward_model = "machine" the friction of the
+# machine's own model at the planned speed, else the characteristic drive.friction_feedforward_* (0 N m where none
+# is recorded). On: each machine's file says which; "machine" where it cuts the following error and the settling.
+friction_feedforward = true
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -107,6 +112,9 @@ crash = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 braking_resistor_heating = true
 # The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
 # keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
@@ -167,6 +175,8 @@ torque_reserve = 0.8
 # Read but not used: no belt (the cables' band is cable.min_tension_n to the rating).
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
 # How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's

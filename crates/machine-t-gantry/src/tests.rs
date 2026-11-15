@@ -383,9 +383,12 @@ fn leaning_resonance(z: f64) -> f64 {
 /// `edit` sets it up.
 fn swing_after_a_traverse(z: f64, edit: &[String]) -> f64 {
     let mut cfg = ENTRY.config();
-    // A sharp profile, so that the plain move does start the swing.
+    // A sharp profile, so that the plain move does start the swing. Without the friction feedforward, as these hand
+    // calculations were made: with it the shaped moves leave about twice the swing (17 um at z = 0.15 m), the
+    // guides' friction no longer taking the carriage's last motion off before the plan stops.
     for e in [
         "effects.frame_compliance = false".to_string(),
+        "effects.friction_feedforward = false".to_string(),
         format!("start.pose = [0.1, {z:?}]"),
         "axis.x.max_jerk_m_s3 = 2000.0".to_string(),
     ]
@@ -868,7 +871,8 @@ line,0.6,0.05",
         (sim, points, most)
     };
     let (mut sim, points, most) = plan(&[]);
-    assert!(most[1] > 0.999 && most[2] > 0.999, "speed and jerk used to {most:?}");
+    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    assert!(most[1] > 0.989 && most[2] > 0.999, "speed and jerk used to {most:?}");
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
     assert!(duration < 0.8 * slow, "{duration} s as fast as the motors allow, {slow} s within the axis limits");
@@ -883,7 +887,11 @@ line,0.6,0.05",
         "effects.gearbox_efficiency = false",
     ])
     .2;
-    assert!(most.iter().all(|m| *m > 0.999), "a small motor: torque, speed and jerk used to {most:?}");
+    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    assert!(
+        most[0] > 0.999 && most[1] > 0.989 && most[2] > 0.999,
+        "a small motor: torque, speed and jerk used to {most:?}"
+    );
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     for m in &load.motors {
@@ -1063,7 +1071,8 @@ fn belt_bound(x: f64) -> f64 {
 /// Limits that change within a piece: a line along X from (0.1, 0.35) to (0.9, 0.35) at 300 m/s^3, the belt rated
 /// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
 /// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
-/// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that). The plan point by
+/// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that; since 15 November the
+/// rated speed less 1 %, 1.2433 m/s, 0.8576 s, and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
 /// point accelerates as the bound rises along its ramp, 6.455 m/s^2 at x = 0.1 to 6.73 m/s^2 at x = 0.23 where the ramp
 /// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
 /// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
@@ -1087,16 +1096,15 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    let by_hand = 0.8 / 1.2559 + 1.2559 / belt_bound(0.9) + belt_bound(0.9) / 300.0;
+    // The top speed: the rated 1.2559 m/s less the 1 % the plan keeps back of a speed rating (15 November).
+    let v = 0.99 * 1.2559;
+    let by_hand = 0.8 / v + v / belt_bound(0.9) + belt_bound(0.9) / 300.0;
     assert!(
-        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8531).abs() < 1e-4,
+        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8576).abs() < 1e-4,
         "{} m/s^2, {by_hand} s",
         belt_bound(0.9)
     );
-    assert!(
-        duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3,
-        "{duration} s, with one limit per piece {by_hand} s"
-    );
+    assert!(duration < by_hand && duration > by_hand - 2.5e-3, "{duration} s, with one limit per piece {by_hand} s");
     let (c, mut of_bound, mut hardest, mut most_change) = (1e-3, 0f64, 0f64, 0f64);
     for w in points.windows(3) {
         let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
@@ -1124,7 +1132,9 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let fine = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = fine.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    assert!(duration < 0.851693 && duration > 0.8515, "{duration} s, on 13 November 0.85175 s");
+    // Before 15 November (top speed 1.2559 m/s) 0.851565 s against the 0.851693 s of 13 November; since then 0.8561 s
+    // at 1.2434 m/s, quicker than one limit per piece.
+    assert!(duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3, "{duration} s, one limit per piece {by_hand} s");
 }
 
 /// The guides' load rating limits the time-optimal plan (`Machine::rigid_guide_loads`): along X at z = 0.35 m the Z axis
@@ -1950,4 +1960,104 @@ fn the_z_axis_bends_as_a_cantilever_from_the_carriage() {
     let (h, dk) = (1e-6, both.flex_at(0.1).1);
     let numeric = (both.flex_at(0.1 + h).0 - both.flex_at(0.1 - h).0) / (2.0 * h);
     assert!((dk - numeric).abs() < 1e-6 * numeric.abs(), "{dk} against {numeric}");
+}
+
+/// effects.frame_compliance is a two-way base along X: the beam (frame.mass_kg, 30 kg) on its spring (7.4e5 N/m,
+/// 190 N s/m) with the carriage and the Z axis riding on it. The frame mode off and a coupled base along X instead
+/// (effects.base_reaction), of everything that sways along X, M = 30 + 4 + 5 + 2 = 41 kg (beam, carriage, Z axis,
+/// payload), with the frame's stiffness and damping ratio 190 / (2 sqrt(7.4e5 x 41)) = 0.01725, are the same equations:
+/// the base's momentum balance is the beam's, its acceleration on carriage and Z axis the beam's. A move from the start
+/// (0.1, 0.35) to (0.9, 0.05) under the controller gives the same tool position and sway over 1.5 s: measured 6.3e-15 m
+/// apart against the sway's 0.154 mm (the order of the floating-point sums), asked within 1e-9 of it. One-way the base
+/// is 0.123 mm off the frame's sway.
+#[test]
+fn a_coupled_base_along_x_moves_as_the_frame_mode() {
+    let cfg = ENTRY.config();
+    let (k, c) = (cfg.f64("frame.stiffness_n_m").unwrap(), cfg.f64("frame.damping_n_s_m").unwrap());
+    let parts = ["frame.mass_kg", "mass.carriage_kg", "mass.z_axis_kg", "mass.payload_kg"];
+    let mass: f64 = parts.iter().map(|key| cfg.f64(key).unwrap()).sum();
+    assert_eq!(mass, 41.0);
+    let mut based = cfg.clone();
+    for e in [
+        "effects.frame_compliance = false".to_string(),
+        "effects.base_compliance = true".into(),
+        "effects.base_reaction = true".into(),
+        format!("base.mass_kg = {mass:?}"),
+        format!("base.stiffness_x_n_m = {k:?}"),
+        "base.stiffness_y_n_m = 0.0".into(),
+        "base.stiffness_z_n_m = 0.0".into(),
+        format!("base.damping_ratio_x = {:?}", c / (2.0 * (k * mass).sqrt())),
+    ] {
+        based.set_text(&e).unwrap();
+    }
+    let run = |cfg: &Config, sway: &str| {
+        let mut sim = sim_components::Sim::new(&ENTRY, cfg).unwrap();
+        let (x, sway) = (sim.signal_index("axis.x.position").unwrap(), sim.signal_index(sway).unwrap());
+        sim.command(sim_components::Command::MoveTo(vec![0.9, 0.05])).unwrap();
+        let (mut sample, mut out) = (Vec::new(), Vec::new());
+        sim.run(1.5, |s| {
+            s.sample(&mut sample);
+            out.push([sample[x], sample[sway]]);
+        });
+        out
+    };
+    let (frame, base) = (run(&cfg, "frame.deflection"), run(&based, "base.x"));
+    let peak = frame.iter().map(|s| s[1].abs()).fold(0.0, f64::max);
+    let off = frame.iter().zip(&base).map(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs())).fold(0.0, f64::max);
+    println!("sway peak {peak:.4e} m, the base off it by {off:.3e} m");
+    assert!(peak > 1e-5 && off < 1e-9 * peak, "sway peak {peak} m, the base off it by {off} m");
+}
+
+/// Friction feedforward from the machine's own model (`steady_friction`), by hand, in an X traverse at 0.8 m/s with the
+/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale
+/// (200 + 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the
+/// Stribeck part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through
+/// r / i = 0.02 / 5; motor a lifts the Z axis (m_z g / 2 = 34.32 N with it) and drives its gearbox (/ 0.95), motor b
+/// holds it back and is driven back (x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s: 0.02 tanh(400) + 1e-4 x 200 =
+/// 0.04 N m. So a: 0.04 + 16.0103 x 0.02 / (5 x 0.95) = 0.107412 N m, b: 0.04 + 16.0103 x 0.02 x 0.95 / 5 = 0.100839
+/// N m. In the cruise the feedforward takes exactly that off the velocity loop's integrator (to 2 %, shipped elastic
+/// machine and rigid one). In the rigid one what stays is the gearboxes' loss on the weight, which the rigid torque
+/// feedforward leaves out by design: a 34.32 x 0.004 (1 / 0.95 - 1) = 0.007226 N m, b 34.32 x 0.004 x 0.05 = 0.006865
+/// N m, and a little more X guide friction from the tilt the guide loads take from the torques' acceleration (under
+/// 3 % of the friction).
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool, elastic: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        cfg.set_text(&format!("effects.belt_stretch = {elastic}")).unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+        // At the height the setpoint stands at: it starts 46 um above the start pose, and a move to 0.35 would slide the
+        // Z guide at 4e-5 m/s, which the steady model takes at its full breakaway level.
+        let z = sim.control.set_pos[1];
+        sim.command(sim_components::Command::MoveTo(vec![0.95, z])).unwrap();
+        let (mut ff, mut integrator, mut n) = ([0.0; 2], [0.0; 2], 0);
+        sim.run(1.2, |s| {
+            if s.time() > 0.5 && s.control.set_acc[0] == 0.0 && (s.control.set_vel[0] - 0.8).abs() < 1e-12 {
+                assert!(s.control.set_vel[1] == 0.0, "the Z axis moves at {} m/s", s.control.set_vel[1]);
+                n += 1;
+                for k in 0..2 {
+                    ff[k] = s.control.drives[k].friction_ff;
+                    integrator[k] += s.control.drives[k].controller_torque;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator.map(|i| i / n as f64))
+    };
+    let expected = [0.04 + 16.0103 * 0.02 / (5.0 * 0.95), 0.04 + 16.0103 * 0.02 * 0.95 / 5.0];
+    let weight = [34.3233 * 0.004 * (1.0 / 0.95 - 1.0), 34.3233 * 0.004 * 0.05];
+    for elastic in [true, false] {
+        let ((ff, with), (_, without)) = (cruise(true, elastic), cruise(false, elastic));
+        for k in 0..2 {
+            let e = expected[k];
+            assert!((ff[k] - e).abs() < 1e-4 * e, "motor {k}: feedforward {ff:?}, by hand {expected:?}");
+            assert!((without[k] - with[k] - e).abs() < 0.02 * e, "motor {k}: with {with:?}, without {without:?}");
+            if !elastic {
+                assert!((0.0..0.03 * e).contains(&(with[k] - weight[k])), "motor {k}: the integrator carries {with:?}");
+            }
+        }
+    }
 }

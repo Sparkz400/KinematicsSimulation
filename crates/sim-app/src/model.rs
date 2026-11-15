@@ -155,6 +155,12 @@ pub struct Inputs {
     pub compare_quantity: String,
     /// The height of the workspace map's slice, in the unit of the third axis; `None`: the middle of its range.
     pub workspace_z: Option<f64>,
+    /// What the workspace map is coloured by, and what the path in the 3D view is (`None`: planned and travelled
+    /// path as two plain lines).
+    pub workspace_by: crate::insight::WorkspaceColour,
+    pub path_colour: Option<crate::insight::PathQuantity>,
+    /// The sample of the coloured path whose values are read out (a click on the path, or its worst point).
+    pub path_probe: Option<usize>,
     /// The parameter panel's "path = value" field, applied by `set_value`.
     pub assignment: String,
     /// For a run of another config (`record_run`): assignments as `--set` takes them, separated by `;`, and a config
@@ -178,6 +184,9 @@ pub struct PathRun {
     pub deviation: f64,
     /// The motors' torque-speed curves, for its operating points (`torque_speed_curves`).
     pub curves: Curves,
+    /// The path as it was run, every signal once per millisecond, with the analysis's distance to the path
+    /// (`Run::off_path`): what the 3D view colours the path by (`Model::path_colours`).
+    pub run: Run,
 }
 
 /// Per motor its torque-speed chart (`charts::TorqueSpeed`), from its own drive (`Run::torque_speed`).
@@ -369,6 +378,8 @@ struct Cache {
     machine: Option<(Config, Option<Box<dyn Machine>>)>,
     /// The workspace map, for the config, the height asked for and the grid.
     workspace: Option<((Config, Option<u64>, usize), Option<Arc<WorkspaceSlice>>)>,
+    /// The coloured path, for the quantity and the path run (the address and length of its time column).
+    path: Option<((crate::insight::PathQuantity, usize, usize), Option<Arc<crate::insight::PathColours>>)>,
 }
 
 /// The overlay of a replayed trace (`Overlay`).
@@ -513,9 +524,10 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 49] = [
+const CHECKS: [&str; 52] = [
     "motor-peak",
     "motor-thermal",
+    "stepper-synchronism",
     "motor-s1",
     "motor-speed",
     "pulley-torque",
@@ -563,6 +575,8 @@ const CHECKS: [&str; 49] = [
     "thermal-warm-start",
     "pick-tracking",
     "parts-missed",
+    "cushion-energy",
+    "load-factor",
 ];
 /// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
 const BREAKDOWN_KEYS: [&str; 5] = [
@@ -691,6 +705,9 @@ pub struct WorkspaceSlice {
     pub limit: f64,
     /// The range the height can be chosen in: the third axis's.
     pub heights: (f64, f64),
+    /// Per node as `nodes`, the largest tool acceleration the motors can give there in the worst direction, m/s^2
+    /// (`insight::worst_acceleration`, with each motor's peak torque); NaN out of reach.
+    pub acceleration: Vec<f64>,
 }
 
 /// One friction contact in the effect view.
@@ -705,6 +722,9 @@ pub struct FrictionView {
     /// The newest sample as a table: speed, the three parts, the friction force and the load factor.
     pub table: Table,
 }
+
+/// The most stretches a band over a trace is drawn in (`Model::band_plots`): each is a filled shape of its own.
+pub const BAND_BUCKETS: usize = 600;
 
 /// Rows of the sensitivity ranking that are shown: the parameters that matter most.
 const TOP_ROWS: usize = 8;
@@ -804,6 +824,8 @@ pub struct Model {
     computed_for: [Option<Config>; 9],
     /// The jobs under way, each with the config it was started with.
     analysis_jobs: Vec<(Analysis, Config, Job<Report>)>,
+    /// The mode list, the band runs over the cycle's traces and their job (`insight`).
+    pub insight: crate::insight::Insight,
 }
 
 /// A config without the names of its motor, gearbox and drive: what a motor search does not depend on, because it puts its
@@ -974,6 +996,9 @@ impl Model {
                 compare_effect: String::new(),
                 compare_quantity: "quantity-torque".into(),
                 workspace_z: None,
+                workspace_by: Default::default(),
+                path_colour: None,
+                path_probe: None,
                 assignment: String::new(),
                 run_set: String::new(),
                 run_file: String::new(),
@@ -994,6 +1019,7 @@ impl Model {
             computed_for: Default::default(),
             analysis_jobs: Vec::new(),
             views: Default::default(),
+            insight: Default::default(),
         };
         model.target = model.config.f64s("start.pose").unwrap_or_default();
         model.show_parts();
@@ -1296,6 +1322,13 @@ impl Model {
         }
         for message in self.views.poll() {
             self.say(message);
+        }
+        if let Some(result) = self.insight.band_job.as_ref().and_then(answer) {
+            self.insight.band_job = None;
+            match result {
+                Ok(runs) => self.insight.band_runs = Some(runs),
+                Err(message) => self.say(message),
+            }
         }
         // A job stays until it has answered.
         let mut reports = Vec::new();
@@ -1736,7 +1769,7 @@ impl Model {
     // Analysis
 
     pub fn analysis_running(&self) -> bool {
-        !self.analysis_jobs.is_empty() || self.views.any_running()
+        !self.analysis_jobs.is_empty() || self.views.any_running() || self.insight.band_job.is_some()
     }
 
     pub fn running(&self, kind: Analysis) -> bool {
@@ -1910,7 +1943,15 @@ impl Model {
                         let recorded = judged_run(RunKind::Path, &label, &again, entry, &rows, &verdicts, &tr);
                         let recorded = Run { off_path: load.path_error_series.clone(), ..recorded };
                         Report::Path(
-                            PathRun { points, scene_line, load, verdicts, deviation, curves: recorded.torque_speed() },
+                            PathRun {
+                                points,
+                                scene_line,
+                                load,
+                                verdicts,
+                                deviation,
+                                curves: recorded.torque_speed(),
+                                run: recorded.clone(),
+                            },
                             recorded,
                         )
                     }
@@ -2570,22 +2611,14 @@ impl Model {
         let heights = (axes.get(2)?.min, axes[2].max);
         let z = self.inputs.workspace_z.unwrap_or((heights.0 + heights.1) / 2.0).clamp(heights.0, heights.1);
         machine.condition(&[0.0, 0.0, z])?;
-        let span = |a: &sim_core::AxisInfo| (a.min - (a.max - a.min) / 2.0, a.max + (a.max - a.min) / 2.0);
-        let (x, y) = (span(&axes[0]), span(&axes[1]));
-        let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (n - 1) as f64;
-        let mut pose = vec![0.0; axes.len()];
-        let mut nodes = Vec::with_capacity(n * n);
-        for j in 0..n {
-            for i in 0..n {
-                (pose[0], pose[1], pose[2]) = (at(x, i), at(y, j), z);
-                nodes.push((
-                    machine.condition(&pose).unwrap_or(f64::INFINITY),
-                    machine.unreachable(&pose, 0.0).is_none(),
-                ));
-            }
-        }
+        // Each motor's peak torque, from its own drive (`Run::rated` takes it so too).
+        let sim = Sim::new(self.entry, &self.config).ok()?;
+        let peak: Vec<f64> = (0..machine.motors().len()).map(|k| sim.control.drive_params_of(k).peak_torque).collect();
+        let slice = crate::insight::workspace_slice(machine, z, n, &peak)?;
+        let nodes = slice.condition.iter().copied().zip(slice.goes.iter().copied()).collect();
+        let (x, y, acceleration) = (slice.x, slice.y, slice.acceleration);
         let limit = self.config.f64("ratings.max_condition_number").unwrap_or(10.0);
-        Some(WorkspaceSlice { x, y, z, n, nodes, limit, heights })
+        Some(WorkspaceSlice { x, y, z, n, nodes, limit, heights, acceleration })
     }
 
     /// Per friction contact of the machine its curve of steady sliding and where it is now (see `FrictionView`). The
@@ -2961,6 +2994,211 @@ impl Model {
         groups
     }
 
+    // ---------------------------------------------------------------------------------------
+    // The mode list, the coloured path and the bands over the cycle's traces (`insight`)
+
+    /// The machine's modes at the pose its setpoint stands at (where it starts, before any sample), each with its shape
+    /// and the stiffness it lives in (`insight::mode_views`), for the mode list. The 3D view goes back to the machine's
+    /// own mode.
+    pub fn find_modes(&mut self) {
+        let pose = self.standing().or_else(|| self.config.f64s("start.pose").ok()).unwrap_or_default();
+        match crate::insight::mode_views(self.entry, &self.config, &pose) {
+            Ok(views) => self.insight.modes = Some((self.config.clone(), views)),
+            Err(e) => self.say((e.key(), e.detail().to_string())),
+        }
+        self.pick_mode(None);
+    }
+
+    /// Shows mode `i` of the mode list swinging in the 3D view; `None`, the machine's own (`Machine::mode_shape`).
+    pub fn pick_mode(&mut self, i: Option<usize>) {
+        let shape = i.and_then(|i| Some(self.insight.modes.as_ref()?.1.get(i)?.shape.clone()));
+        self.insight.picked = i.filter(|_| shape.is_some());
+        self.session.send(Request::ModeShape(shape));
+    }
+
+    /// The mode list was found for a config that has changed since.
+    pub fn modes_outdated(&self) -> bool {
+        self.insight.modes.as_ref().is_some_and(|(config, _)| *config != self.config)
+    }
+
+    /// The mode list as a table: per mode its frequency and damping (in %) as the machine reports them, the mode of the
+    /// linearised model its shape is of where it is that one's, where the shape comes from, and the kinds of stiffness
+    /// that hold at least 5 % of its strain energy, largest first. `None` before the modes were asked for.
+    pub fn modes_table(&self) -> Option<Table> {
+        let (_, modes) = self.insight.modes.as_ref()?;
+        let tr = |key: &str| self.tr.tr(key).to_string();
+        let mut table = vec![self.header(&[
+            "ui-modes-mode",
+            "ui-modes-hz",
+            "ui-modes-damping",
+            "ui-modes-linear",
+            "ui-modes-shape",
+            "ui-modes-stiffness",
+        ])];
+        for (i, m) in modes.iter().enumerate() {
+            let linear = m.linear.map_or(String::new(), |l| format!("{} · {}", short(l.hz), short(100.0 * l.damping)));
+            let source = tr(if m.from_machine { "ui-modes-from-machine" } else { "ui-modes-from-linear" });
+            let stiffness: Vec<String> = m
+                .stiffness
+                .iter()
+                .filter(|(_, share)| *share >= 0.05)
+                .map(|(kind, share)| format!("{} {:.0} %", tr(&format!("ui-modes-stiffness-{kind}")), 100.0 * share))
+                .collect();
+            table.push(vec![
+                (i + 1).to_string(),
+                short(m.hz),
+                short(100.0 * m.damping),
+                linear,
+                source,
+                stiffness.join(", "),
+            ]);
+        }
+        Some(table)
+    }
+
+    /// What the path that was run can be coloured by: the quantities its run has (`PathQuantity::values`).
+    pub fn path_quantities(&self) -> Vec<crate::insight::PathQuantity> {
+        use crate::insight::PathQuantity::*;
+        let Some(run) = self.path_run.as_ref().map(|p| &p.run) else { return Vec::new() };
+        let belts =
+            self.with_machine(|m| m.belt_sections().iter().map(|b| b.id).collect::<Vec<_>>()).unwrap_or_default();
+        let all = [PathError, TrackingError, Speed].into_iter().chain((0..run.motors.len()).map(Utilisation));
+        all.chain([BeltTension]).filter(|q| q.values(run, &belts).is_some()).collect()
+    }
+
+    /// A quantity's label: motor k's utilisation with the motor's name.
+    pub fn path_quantity_label(&self, quantity: crate::insight::PathQuantity) -> String {
+        let label = self.tr.tr(quantity.key()).to_string();
+        match quantity {
+            crate::insight::PathQuantity::Utilisation(k) => match self.session.motors.get(k) {
+                Some(motor) => format!("{label} · {}", self.tr.tr(motor.key)),
+                None => label,
+            },
+            _ => label,
+        }
+    }
+
+    /// The path that was run, coloured by `inputs.path_colour` (`insight::PathColours`): per millisecond of the run the
+    /// tool's place in the scene (`Machine::scene_point` of the axes' positions) and the quantity's value there, and the
+    /// sample of its highest value. `None` without a path, a quantity, or a place in the scene for the tool.
+    pub fn path_colours(&self) -> Option<Arc<crate::insight::PathColours>> {
+        let quantity = self.inputs.path_colour?;
+        let run = &self.path_run.as_ref()?.run;
+        let key = (quantity, run.time().as_ptr() as usize, run.time().len());
+        if let Some((kept, colours)) = &self.cache.lock().unwrap_or_else(|e| e.into_inner()).path
+            && *kept == key
+        {
+            return colours.clone();
+        }
+        let colours = self
+            .with_machine(|machine| {
+                let belts: Vec<&str> = machine.belt_sections().iter().map(|b| b.id).collect();
+                let values = quantity.values(run, &belts)?;
+                let axes = machine.axes();
+                let columns: Vec<&[f64]> =
+                    axes.iter().map(|a| run.column(&format!("axis.{}.position", a.id))).collect::<Option<_>>()?;
+                let mut pose = vec![0.0; axes.len()];
+                let points = (0..values.len())
+                    .map(|i| {
+                        pose.iter_mut().zip(&columns).for_each(|(p, c)| *p = c[i]);
+                        machine.scene_point(&pose)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let worst = (0..values.len()).max_by(|&a, &b| values[a].total_cmp(&values[b]))?;
+                Some(Arc::new(crate::insight::PathColours {
+                    quantity,
+                    points,
+                    time: run.time().to_vec(),
+                    values,
+                    worst,
+                }))
+            })
+            .flatten();
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).path = Some((key, colours.clone()));
+        colours
+    }
+
+    /// Every quantity of `path_quantities` at sample `i` of the path that was run, with the time, as a table of label,
+    /// value and unit.
+    pub fn path_values_at(&self, i: usize) -> Table {
+        let Some(run) = self.path_run.as_ref().map(|p| &p.run) else { return Vec::new() };
+        let belts =
+            self.with_machine(|m| m.belt_sections().iter().map(|b| b.id).collect::<Vec<_>>()).unwrap_or_default();
+        let mut table = vec![vec![
+            self.tr.tr("ui-time").to_string(),
+            run.time().get(i).map_or(String::new(), |t| short(*t)),
+            "s".into(),
+        ]];
+        for quantity in self.path_quantities() {
+            let value = quantity.values(run, &belts).and_then(|v| v.get(i).copied());
+            // As the path tab's scale shows them: errors in mm, the utilisation in %.
+            let (factor, unit) = match quantity.unit() {
+                "" => (100.0, "%"),
+                "m" => (1e3, "mm"),
+                unit => (1.0, unit),
+            };
+            let shown = value.map(|v| v * factor);
+            table.push(vec![self.path_quantity_label(quantity), shown.map_or(String::new(), short), unit.to_string()]);
+        }
+        table
+    }
+
+    /// Runs the cycle with each bounded value at its bounds in the background and keeps their traces' envelope
+    /// (`insight::band_runs`); the answer comes with `poll`.
+    pub fn trace_bands(&mut self) {
+        let (entry, config) = (self.entry, self.config.clone());
+        let (result, job) = channel();
+        std::thread::spawn(move || {
+            let runs = crate::insight::band_runs(entry, &config).map_err(|e| (e.key(), e.detail().to_string()));
+            let _ = result.send(runs.map(|runs| (config, runs)));
+        });
+        self.insight.band_job = Some(Mutex::new(job));
+    }
+
+    /// The bounds runs are being run.
+    pub fn bands_tracing(&self) -> bool {
+        self.insight.band_job.is_some()
+    }
+
+    /// The bounds runs are of a config that has changed since.
+    pub fn bands_outdated(&self) -> bool {
+        self.insight.band_runs.as_ref().is_some_and(|(config, _)| *config != self.config)
+    }
+
+    /// The traces of the bounds runs for the plots: per traced signal its title with the unit, the nominal trace
+    /// (time, value) with its peaks kept (`plot_line`), and the envelope in at most `BAND_BUCKETS` stretches, each from
+    /// its first time to the next one's with the lowest and highest value of the stretch: [t0, t1, low, high].
+    pub fn band_plots(&self) -> Vec<(String, Vec<[f64; 2]>, Vec<[f64; 4]>)> {
+        let Some((_, runs)) = &self.insight.band_runs else { return Vec::new() };
+        runs.traces
+            .iter()
+            .map(|trace| {
+                let title = self.signal_label(&trace.signal);
+                let n = trace.low.len().min(trace.time.len());
+                let nominal = plot_line(trace.nominal.len(), |i| [trace.time[i], trace.nominal[i]]);
+                let every = n.div_ceil(BAND_BUCKETS).max(1);
+                let stretches = (0..n)
+                    .step_by(every)
+                    .map(|from| {
+                        let to = (from + every).min(n);
+                        let low = trace.low[from..to].iter().copied().fold(f64::INFINITY, f64::min);
+                        let high = trace.high[from..to].iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        [trace.time[from], trace.time[to.min(n - 1)], low, high]
+                    })
+                    .collect();
+                (title, nominal, stretches)
+            })
+            .collect()
+    }
+
+    /// Per motor the operating points of the bounds runs (speed in the unit chosen, torque), for the cloud on the
+    /// torque-speed view; empty before the bounds were run.
+    pub fn band_points(&self) -> Vec<Vec<[f64; 2]>> {
+        let Some((_, runs)) = &self.insight.band_runs else { return Vec::new() };
+        let rpm = self.units.scale("rad/s").0;
+        runs.points.iter().map(|points| points.iter().map(|[w, t]| [w * rpm, *t]).collect()).collect()
+    }
+
     /// Every translation key the panels and the 3D view can show for the current machine.
     pub fn keys_in_use(&self) -> Vec<String> {
         let mut keys = vec![self.entry.key.to_string()];
@@ -2996,6 +3234,7 @@ impl Model {
             &EFFECT_KEYS,
             &VIEW_KEYS,
             &RUN_KEYS,
+            &crate::insight::KEYS,
         ];
         keys.extend(headers.concat().into_iter().map(String::from));
         keys.extend(

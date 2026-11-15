@@ -15,6 +15,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 - [Rotary table: strain wave and worm gear](#rotary-table-strain-wave-and-worm-gear)
 - [Arms from URDF files](#arms-from-urdf-files)
 - [Parallel kinematics: hexapod and cable robots](#parallel-kinematics-hexapod-and-cable-robots)
+- [Pneumatic cylinder beside servo axes](#pneumatic-cylinder-beside-servo-axes-machinecylinder)
 - [What is checked by hand](#what-is-checked-by-hand)
 - [Limits](#limits)
 
@@ -72,6 +73,17 @@ output, before the screw or pinion. The converter's efficiency is kept apart fro
 (`RotaryJoint::extra_efficiency`): with `effects.thermal_feedback` the gearbox's temperature changes only its own
 share. A sliding joint reads its guides' friction, stroke and stops from
 `[slide]` (`RotaryJoint::linear_from_config`).
+
+With `effects.slide_presliding` (in the joint kit's `common.toml`, off as shipped; a config without the key has it off)
+the guides' friction, with a screw nut's preload drag and a linear motor's attraction friction, is a presliding state
+(model reference, "Slide: presliding friction") in place of the smoothed Coulomb step. Its keys in `[slide]`, in every
+slide config of the kit (screw, rack, linear motor, the SCARA's quill):
+
+| Key | Unit | What | Shipped |
+| --- | --- | --- | --- |
+| `friction_breakaway_n` | N | The guides' breakaway force at rest; the nut's drag and the attraction friction are added to it as to the Coulomb level; below the Coulomb level it counts as that level | 1.5 times `friction_coulomb_n`, estimate, bounds the Coulomb level to twice it |
+| `friction_stribeck_m_s` | m/s | The speed over which the level falls from breakaway to Coulomb, exp(−(v / v_st)²) | 0.001, estimate, bounds 2e-4 to 5e-3 |
+| `presliding_stiffness_n_m` | N/m | Dahl's σ: the friction's slope over the travel where it turns at a reversal; from one sliding level it passes zero after level · ln 2 / σ | 1e7, estimate, bounds 2e6 to 5e7 |
 
 ## Ball screw
 
@@ -262,7 +274,12 @@ Euler-Bernoulli mode, in the plane its joint turns it in: modal mass a quarter o
 it, stiffness 1.875104^4 / 4 E I / L^3, driven by what the bodies beyond need from its tip (their m (a - g), its moment
 through the tip's slope) and its own weight and inertia spread along it. The tool rings with it in tool space; the
 joints do not feel it (one-way). A 60 x 4 mm steel tube of 0.8 m and 4.5 kg alone rings at the Euler-Bernoulli 88.96 Hz
-and sags under its weight by 49.2 um, 1.3 % above the exact q L^4 / (8 E I).
+and sags under its weight by 49.2 um, 1.3 % above the exact q L^4 / (8 E I). `link_bending.directions` adds the bend
+across that plane (`out_of_plane`) and the twist about the link's length (`torsion`, shear modulus
+`link_bending.shear_modulus_pa`), a first mode each, with the bodies beyond as a tip mass and a tip inertia. With
+`effects.link_bending_reaction` the bending acts back: joints, gearboxes and links are one coupled system, the motors
+feel the links ring and excite them through their loops, the bending's energy and damping are in the machine's, and
+`modes` gives the coupled modes with the motors held (a link on a gearbox rings as the two springs in series).
 
 With `effects.base_compliance` (every machine and machine file, off as shipped) the machine stands on a base of up to
 six spring-mass directions (`[base]`): it takes the rate of change of the momentum of everything that moves on it,
@@ -488,6 +505,29 @@ to 0.13 mrad (crank), 0.16 mrad (knife), 0.14 mm (saw) and 0.23 mrad (disc), wit
 every run across the bounds (`sim-cli margins <id> --bands`); the settling tolerances are 0.3 mrad, 0.3 mrad, 0.25 mm and
 0.5 mrad.
 
+## Pneumatic cylinder beside servo axes (`[[machine.cylinder]]`)
+
+Most pick-and-place machines carry a pneumatic actuator beside their servo axes: a Z stroke, a gripper slide, a
+stopper. A machine file adds one with a `[[machine.cylinder]]` node whose `values` table holds the cylinder, its valve,
+tube, throttles and cushions (`sim_components::pneumatic`, keys in [config-reference.md](config-reference.md), model
+in [model-reference.md](model-reference.md)). It is no tool axis: no drive moves it and the controller plans nothing
+for it. The cycle commands its valve once a segment has arrived (`valves = { z = "extend" }`) and waits for its
+end-position sensors (`wait = ["z.extended"]`) before the dwell counts and the next segment starts.
+
+`machines/pneumatic-axis.toml`: the belt-driven servo X of `single-axis.toml` carrying a Festo DSBC-32-100-PPVA-N3
+(32 mm bore, 12 mm rod, 100 mm stroke, PPV cushions 17 mm, 0.4 J) hanging downwards on a 5/2 valve with meter-out
+throttles; 0.5 kg moved, 0.5 kg picked. The cycle: X to the pick, Z down, wait, grip, Z up, wait, X to the place, Z
+down, release, Z up. With the shipped settings Z extends in 0.55 s and retracts in 0.65 s (valve 7 ms, the rod side
+exhausting from supply, 0.216 m/s throttled, the cushion's bleed at the end), enters the cushion at 0.22 to 0.24 m/s
+with 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`), stops at 0.06 to 0.07 m/s on the bumper without
+bouncing out of the sensor band, and has a load factor of 0.024 (`load-factor`, the 1 kg weight against 415 N
+retracting). A double stroke draws 1.10 normal litres, 474 J at the compressor (0.12 kWh/m³); by hand at the supply
+pressure and the wall's temperature 1.15 l, the 4 % less because the dwells are too short for the hot air to cool.
+
+What the cylinder gives for sizing: stroke times out and back, the speed profile, the speed and kinetic energy
+entering the cushion against its rating, the speed at the end stop, bounce and settling, the load factor, the air per
+double stroke and its energy at the compressor, the pressure and temperature traces of both chambers.
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -546,12 +586,23 @@ weight. Cable robots: at the planar centre each cable is 1.283539 m long (arc an
 takes below its band is held at the bound and the others carry the rest (8.485 N each by hand); the spatial robot's
 forward of inverse returns its poses within 1e-10.
 
+Pneumatic cylinder tests (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A at 6 bar on both
+sides (482.5 and 414.7 N, Festo's 483 and 415); the ISO 6358 choked flow C p ρ0 and the elliptic law; the meter-out
+throttled speed C ρ0 R T0 / A2 (0.1443 m/s within 1 %, the shipped Z's 0.2156 m/s within 3 %); the air springs' natural
+frequency adiabatic (29.64 Hz) and isothermal (25.05 Hz); the air of a double stroke (1.1119 normal litres); the
+closed-form filling time while choked (2.555 ms); energy kept in a closed cylinder and the enthalpy balance of an open
+one; the stroke time within 1 % at half the step; the checks `cushion-energy` and `load-factor` on the shipped cycle;
+a cylinder too stiff for the step refused. The file passes the standard suite with the cylinder at rest.
+
 ## Limits
 
 - The arms are sized in joint space: no Cartesian paths and no inverse kinematics of the tool.
 - Every joint of an arm has the same motor, drive and gearbox (only the ratio differs per joint), as the drive reads
   one `[motor]` and `[drive]` per machine; no gearbox life for arms whose joints have different ratios.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
+- A pneumatic cylinder is no tool axis and does not act back on the axis that carries it; its valve switches on/off
+  (no proportional valve, no servo-pneumatic position loop); a tube is a flow element whose volume goes into the dead
+  volumes; Festo prints no ISO 6358 C and b for the VUVG valves, so the shipped valve's are estimates.
 - A link bends in one mode in the plane its joint turns it in; out of that plane and in torsion it is rigid, and the
   bending and the base do not act back on the joints (one-way).
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.

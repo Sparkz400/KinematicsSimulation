@@ -89,7 +89,9 @@ fn fit_through_a_mapping_gives_what_the_simulators_own_columns_give() {
         table(&text(&out.stdout), 3)
     };
     let (own, mapped) = (fit(&[]), fit(&["--map", map.to_str().unwrap()]));
-    assert_eq!(own.len(), 4);
+    // The four rigid values, then the friction beyond its sliding level that the run shows (it ends at rest: the held
+    // force).
+    assert_eq!((own.len(), mapped.len()), (5, 5));
     for (a, b) in own.iter().zip(&mapped) {
         assert!((a.1 - b.1).abs() <= 1e-6 * a.1.abs().max(1e-3), "{a:?} {b:?}");
     }
@@ -154,6 +156,68 @@ fn the_measured_ball_screw_has_the_inertia_its_masses_give() {
     assert!((451.0..546.0).contains(&mass.1), "{rows:?}");
     let out = cli(&[&["replay"][..], &machine, &trace].concat());
     assert!(out.status.success(), "{}", text(&out.stderr));
+}
+
+/// Rows `from..to` of a recording of the measured ball screw bench as a file of its own, its time from 0: a recording cut
+/// out of a longer motion.
+fn excerpt(name: &str, from: usize, to: usize) -> PathBuf {
+    let text = std::fs::read_to_string(datasets().join("isw-ball-screw-axis").join(name)).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let t0: f64 = lines[1 + from].split(',').next().unwrap().parse().unwrap();
+    let mut out = format!("{}\n", lines[0]);
+    for line in &lines[1 + from..1 + to] {
+        let (time, rest) = line.split_once(',').unwrap();
+        out += &format!("{:.6},{rest}\n", time.parse::<f64>().unwrap() - t0);
+    }
+    let path = tmp(&format!("excerpt-{from}-{to}-{name}"));
+    std::fs::write(&path, out).unwrap();
+    path
+}
+
+/// One column of `replay --out` by its name.
+fn overlay_column(csv: &str, name: &str) -> Vec<f64> {
+    let mut lines = csv.lines();
+    let at = lines.next().unwrap().split(',').position(|h| h == name).unwrap();
+    lines.map(|l| l.split(',').nth(at).unwrap().parse().unwrap()).collect()
+}
+
+/// A replay starts from the trace's own state: rows 3 s to 8 s of the measured sine (±100 mm at 0.1 Hz) begin at
+/// -19.4 mm/s, and the replay runs up to that speed before the first row. The measured torque of the excerpt stays within
+/// ±3.42 N m; the simulated one may not jolt beyond it in the first 100 ms (by hand: running at -19.4 mm/s takes
+/// friction and inertia of about 2 N m, the acceleration of the sine's 0.039 m/s² at 0.0199 kg m² and 157 rad/m only
+/// 0.12 N m). Started from rest at the first row's position, as replays did before 15 November 2026, the setpoint ran
+/// off at speed and the drive jolted with 86 N m.
+#[test]
+fn a_replay_starts_from_the_traces_own_speed() {
+    let dir = datasets().join("isw-ball-screw-axis");
+    let path = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    let cut = excerpt("sine-a100-v100.csv", 3000, 8000);
+    let overlay = tmp("replay-excerpt-overlay.csv");
+    let start = std::fs::read_to_string(&cut).unwrap().lines().nth(1).unwrap().split(',').nth(1).unwrap().to_string();
+    let out = cli(&[
+        "replay",
+        "screw-axis",
+        "--config",
+        &path("machine.toml"),
+        "--set",
+        &format!("start.pose=[{start}]"),
+        "--trace",
+        cut.to_str().unwrap(),
+        "--map",
+        &path("map.toml"),
+        "--out",
+        overlay.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let csv = std::fs::read_to_string(&overlay).unwrap();
+    let peak = |v: &[f64]| v.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    let measured = peak(&overlay_column(&csv, "motor.1.torque_measured"));
+    let simulated = overlay_column(&csv, "motor.1.torque_simulated");
+    assert!((measured - 3.42).abs() < 0.01, "{measured}");
+    assert!(peak(&simulated[..100]) < measured, "{} against {measured}", peak(&simulated[..100]));
+    // At the first row the simulated speed is the measured one (-19.4 mm/s, -3.047 rad/s at the motor) within 2 %.
+    let speed = overlay_column(&csv, "motor.1.speed_simulated")[0];
+    assert!((speed + 3.047).abs() < 0.02 * 3.047, "{speed}");
 }
 
 /// Run from inside the folder, `check-dataset .` checks the id against the folder's own name. It checked it against "",

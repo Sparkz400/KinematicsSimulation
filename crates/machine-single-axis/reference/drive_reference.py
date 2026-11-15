@@ -286,11 +286,9 @@ def run(spec):
 
     hold = 0.0
     if elastic:
-        a_start, phi0, _ = at_rest(START)
-        # FINDING (open): the drive starts with the torque that holds the pose its motor encoder reads, x = r phi / i,
-        # not the pose the carriage is at; with the gear twisted the two are (twist) r apart (control.rs, hold_here).
-        hold = at_rest(phi0 / to_motor)[2]
-        y = np.array([START, a_start, phi0, 0.0, 0.0, 0.0, 0.0, current_for(hold), 0.0, 0.0])
+        # The drive starts with the torque that holds the load where the carriage stands (a machine built at rest).
+        a_start, phi0, hold = at_rest(START)
+        y =np.array([START, a_start, phi0, 0.0, 0.0, 0.0, 0.0, current_for(hold), 0.0, 0.0])
     else:
         phi0 = START * to_motor
         y = np.array([START, 0.0, 0.0, 0.0, 0.0])

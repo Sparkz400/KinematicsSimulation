@@ -440,9 +440,9 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     assert_eq!(line, Some(text.lines().position(|l| l == "[machine]").unwrap() + 2));
 }
 
-/// Every shipped machine file, the H-bot of docs/machine-files.md among them, passes the standard suite of every
-/// machine (round trip, static hold, determinism, energy conservation without losses, the loss budget with them), on
-/// its file without losses, elastic and rigid.
+/// Every shipped machine file, the H-bot of docs/machine-files.md among them and the stepper's and the induction motor's
+/// axes, passes the standard suite of every machine (round trip, static hold, determinism, energy conservation without
+/// losses, the loss budget with them), on its file without losses, elastic and rigid.
 #[test]
 fn every_machine_file_passes_the_standard_suite() {
     use std::sync::Mutex;
@@ -450,7 +450,19 @@ fn every_machine_file_passes_the_standard_suite() {
     fn lossless() -> Vec<Config> {
         LOSSLESS.lock().unwrap().clone()
     }
-    for name in ["single-axis.toml", "t-gantry.toml", "h-bot.toml", "corexy.toml", "xyz-portal.toml"] {
+    // The pneumatic axis's cylinder rests in its end stop through the suite (it has no motor; the suite's pulse is on the
+    // servo X): its own energy and step checks are in tests/pneumatic.rs and sim_components::pneumatic.
+    let files = [
+        "single-axis.toml",
+        "t-gantry.toml",
+        "h-bot.toml",
+        "corexy.toml",
+        "xyz-portal.toml",
+        "stepper-axis.toml",
+        "induction-lift.toml",
+        "pneumatic-axis.toml",
+    ];
+    for name in files {
         let shipped = file(name);
         let mut configs = Vec::new();
         for elastic in [true, false] {

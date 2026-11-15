@@ -30,6 +30,7 @@ Die Variablen sind in beiden Versionen dieselben; nur die Typnamen unterscheiden
 | jedes andere Signal (`axis.x.position`, `motor.a.torque`, ...) | Real | Float64 | output | continuous |
 | `command.setpoint.<Achs-ID>` | Real | Float64 | input | continuous |
 | `command.enable` | Boolean | Boolean | input | discrete |
+| `command.stop_category` | String | String | input | discrete |
 | `command.cycle` | Boolean | Boolean | input | discrete |
 | `command.target.<Achs-ID>` | Real | Float64 | input | continuous |
 | `command.move` | Boolean | Boolean | input | discrete |
@@ -66,6 +67,7 @@ Der eigene Regler des Importeurs schließt den Kreis über die Betriebsarten ein
 - Die Betriebsart wechselt an dem Kommunikationszeitpunkt, an dem der Eingang von der des Antriebs abweicht. Ein Wechsel lässt das Moment nicht springen, wo die Regler des Antriebs übernehmen: Der Integrator des PI-Drehzahlreglers wird so gesetzt, dass er das zuletzt verlangte Moment verlangt (stoßfreie Umschaltung); in Momentenregelung wird er gehalten. In die Momentenregelung wirkt das Moment des Importeurs sofort.
 - Außerhalb der Lageregelung folgt der Lagesollwert des Antriebs der gemessenen Lage (Schleppfehler 0, wie im Nachführbetrieb eines Antriebs). Solange ein Antrieb nicht in Lageregelung ist, lehnt die Steuerung Zyklus, Fahrt, Bahn und Sollwerte ab (`error-outside-mode`); aus der Lageregelung heraus geht es nicht, während eine Fahrt, ein Zyklus oder eine Bahn läuft (`error-busy`). Ein Antrieb, der in die Lageregelung zurückkehrt, nimmt den Plan mit: Der Plan steht in Ruhe dort, wo die Motoren stehen, und bei Drehzahl bringt der Lageregler den Motor dorthin zurück.
 - `command.enable` auf false und wieder auf true setzt jeden Antrieb in Lageregelung; die Betriebsarteingänge holen sie im nächsten Schritt wieder heraus.
+- `command.stop_category` sagt, wie `command.enable` auf false die Antriebe anhält: `"0"` (Startwert) nimmt das Moment sofort weg, wie bisher; `"1"` bremst jeden Antrieb an seiner Schnellhalterampe und schaltet ihn dann ab; `"2"` bremst die geplante Bewegung ab und hält mit Moment (siehe [Stops](../model-reference.md#stops)). Es ist die letzte Variable, die Wertreferenzen der anderen bleiben, wie sie waren.
 - Ein Lauf in Momenten- und Drehzahlregelung ergibt Bit für Bit die Signale einer einfachen Simulation in denselben Betriebsarten mit denselben Sollwerten (`crates/sim-fmi/tests/fmi.rs`, jede Maschine). Die Lageregelung ist unverändert: Die Bit-für-Bit-Prüfungen für Sollwerte, Fahrten und Bahnen bestehen wie zuvor.
 
 Die Modellbeschreibung von FMI 3.0 hat `instantiationToken`, wo FMI 2.0 `guid` hat; beide sind ein Hash der Modellbeschreibung. Die FMU für FMI 2.0 und die für FMI 3.0 derselben Maschine und Konfiguration haben also verschiedene Kennungen und lehnen die Instanziierung und die FMU-Zustände der jeweils anderen ab.

@@ -68,6 +68,8 @@ In `machines/` liegen vierzehn Dateien:
 | `machines/planar-delta.toml` | der ebene Delta aus `crates/machine-delta-d2` als Koppelgetriebe mit zwei Armen ([unten](#koppelgetriebe-der-ebene-und-der-räumliche-delta)) |
 | `machines/delta-d3.toml` | der räumliche Delta aus `crates/machine-delta-d3` als Koppelgetriebe mit drei Armen |
 | `machines/scissor-lift.toml` | ein zweistufiger Scherenhubtisch an einem Kugelgewindetrieb ([unten](#ein-scherenhubtisch)) |
+| `machines/stepper-axis.toml` | die Netzliste der Einzelachse mit einem Schrittmotor an einem Antrieb ohne Rückführung (`motor.kind = "stepper"`, [Benutzerhandbuch](benutzerhandbuch.md#einen-schrittmotor-oder-einen-asynchronmotor-auslegen)) |
+| `machines/induction-lift.toml` | die Netzliste der Einzelachse als senkrechtes Hubwerk mit Asynchronmotor, feldorientiert (`motor.kind = "induction"`) |
 | `machines/dual-gantry.toml` | ein Portal mit zwei Antrieben: eine gierende Brücke auf zwei Zahnstangen, ihre Antriebe einfach, als Master/Slave oder kreuzgekoppelt im Gleichlauf |
 | `machines/portal-c.toml` | das Spindelportal mit einer C-Achse, die einen Greifer dreht, dessen Spitze der Werkzeugmittelpunkt ist |
 | `machines/five-axis.toml` | das Spindelportal mit einem Gabelkopf (C und A), die Werkzeugspitze der Werkzeugmittelpunkt |
@@ -313,6 +315,20 @@ Es gibt so viele Motoren wie Achsen und einen mehr für jeden Antrieb eines Port
 fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_compliance` ohne `frame`,
 `belt_span_vibration` ohne `span`, `tool_flex` ohne `lean`), lehnt die Datei mit `machine.<Liste>` ab; `belt_wrap` ohne
 die Lagen, aus denen er gerechnet wird, wird mit dem abgelehnt, was fehlt.
+
+Eine Datei kann auch Pneumatikzylinder haben, die weder Achsen noch Motoren sind:
+
+| Liste | Feld | | Bedeutung |
+| ----- | ---- | - | --------- |
+| `cylinder` | `values` | Pflicht | die Tabelle seiner Werte: Kolben, Stange, Hub, Massen, Totvolumen, Versorgung, Ventil, Schlauch, Drosseln, Dämpfung, Dichtungen, Sensoren und Nennwerte ([config-reference.md](../config-reference.md#a-machine-files-pneumatic-cylinders)); Signale `cylinder.<id>.*`, Prüfurteile `cushion-energy` und `load-factor` |
+| | `key` | | Übersetzungsschlüssel seines Namens; Vorgabe `cylinder` |
+
+Ein Zylinder sitzt am Werkzeug (sein Gewicht gehört in den Körper der Achse, die ihn trägt), und der Zyklus schaltet
+sein Ventil: ein `[[cycle.segment]]` mit `valves = { <id> = "extend" }` (oder `"retract"`, `"centre"`) schaltet es, sobald
+das Segment angekommen ist, und `wait = ["<id>.extended"]` hält die Verweilzeit des Segments an, bis der Endlagensensor
+meldet. Er geht neben jedem Mechanismus einer Datei. `machines/pneumatic-axis.toml` ist eine Servo-X mit einem
+pneumatischen Z; das Modell steht unter „Pneumatic cylinder“ in [model-reference.md](../model-reference.md), das
+Beispiel in [mechanismen.md](mechanismen.md).
 
 ## Motoren, die sich unterscheiden
 

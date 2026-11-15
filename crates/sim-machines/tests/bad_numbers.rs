@@ -280,12 +280,14 @@ machine_file! {
     file_five_axis_table: "five-axis-table.toml";
     file_five_axis: "five-axis.toml";
     file_h_bot: "h-bot.toml";
+    file_induction_lift: "induction-lift.toml";
     file_planar_delta: "planar-delta.toml";
     file_portal_c: "portal-c.toml";
     file_rack_gantry: "rack-gantry.toml";
     file_scissor_lift: "scissor-lift.toml";
     file_screw_portal: "screw-portal.toml";
     file_single_axis: "single-axis.toml";
+    file_stepper_axis: "stepper-axis.toml";
     file_t_gantry: "t-gantry.toml";
     file_xyz_portal: "xyz-portal.toml";
 }

@@ -466,3 +466,46 @@ fn the_guides_warm_with_their_loss() {
         assert!((curve[1] - 2.81749).abs() < 1e-5, "{curve:?}");
     }
 }
+
+/// Friction feedforward from the machine's own model (`steady_friction`), by hand: the plate on the axis going down at
+/// 0.1 m/s (axis.z's speed limit set to it). There each carriage is e = 0.52 - 0.07 = 0.45 m beside the plate and
+/// sqrt(1.1^2 - 0.45^2) = 1.003743 m above it, so it moves with the plate, h' = -0.1 m/s. Its guide carries what the
+/// rod pair's pull has across the column: the plate's m_nt g = (0.8 + 1.0 + 3 x 0.5 x 0.35) 9.80665 = 22.80046 N shared
+/// by three, times 0.45 / 1.003743: 3.40728 N, load scale (200 + 3.40728) / 200 = 1.017036, so it slides at 15 N x
+/// 1.017036 + 20 N s/m x 0.1 m/s = 17.25555 N (Stribeck part exp(-100) nothing), times r = 0.014324 m through the
+/// coupling (ratio and efficiency 1): 0.247168 N m. The shaft at 0.1 / 0.014324 = 6.98129 rad/s: 0.02 tanh(13.96) +
+/// 1e-4 x 6.98129 = 0.020698 N m. Each motor: -0.267867 N m. In the cruise the velocity loop's integrator then carries
+/// nothing (the coupling loses nothing on the weight); without the feedforward, the friction.
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        cfg.set_text("start.pose = [0.0, 0.0, -1.125]").unwrap();
+        cfg.set_text("axis.z.max_velocity_m_s = 0.1").unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let at = sim.control.set_pos.clone();
+        sim.command(sim_components::Command::MoveTo(vec![at[0], at[1], -1.215])).unwrap();
+        let (mut ff, mut integrator, mut n) = ([0.0; 3], [0.0; 3], 0);
+        sim.run(1.0, |s| {
+            if s.time() > 0.3 && s.control.set_acc[2] == 0.0 && (s.control.set_vel[2] + 0.1).abs() < 1e-12 {
+                n += 1;
+                for k in 0..3 {
+                    ff[k] = s.control.drives[k].friction_ff;
+                    integrator[k] += s.control.drives[k].controller_torque;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator.map(|i| i / n as f64))
+    };
+    let expected = -(0.247168 + 0.020698);
+    let ((ff, with), (_, without)) = (cruise(true), cruise(false));
+    for k in 0..3 {
+        assert!((ff[k] - expected).abs() < 1e-4 * expected.abs(), "motor {k}: feedforward {ff:?}, by hand {expected}");
+        assert!(with[k].abs() < 0.02 * expected.abs(), "motor {k}: the integrator carries {with:?}");
+        assert!((without[k] - expected).abs() < 0.02 * expected.abs(), "motor {k}: without {without:?}");
+    }
+}

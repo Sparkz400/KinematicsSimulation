@@ -148,14 +148,17 @@ fn machine<M: Mechanism + 'static>(
         drive.range = (-1e12, 1e12);
     }
     let spec = JointSpec { drive, id: MOTOR_IDS[0], key: JOINT_KEYS[0], gear_lever, unit };
-    Ok(Box::new(JointMachine::new(
-        mechanism,
-        vec![spec],
-        cfg.bool("effects.joint_elasticity")?,
-        ThermalFeedback::from_config(cfg)?,
-        vec![axis],
-        vec![MotorInfo { id: MOTOR_IDS[0], key: MOTOR_KEYS[0] }],
-    )))
+    sim_components::base::mount(
+        cfg,
+        Box::new(JointMachine::new(
+            mechanism,
+            vec![spec],
+            cfg.bool("effects.joint_elasticity")?,
+            ThermalFeedback::from_config(cfg)?,
+            vec![axis],
+            vec![MotorInfo { id: MOTOR_IDS[0], key: MOTOR_KEYS[0] }],
+        )),
+    )
 }
 
 /// A table of `<prefix>.<at>` against `<prefix>.<value>`, two arrays of the same length with `at` rising: linear between

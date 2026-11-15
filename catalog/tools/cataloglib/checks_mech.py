@@ -708,7 +708,36 @@ def wittenstein_gearboxes_are_plausible(tables):
     return errors
 
 
+# --- pneumatic cylinders
+def pneumatic_cylinder_forces_are_p_times_a(tables):
+    """Festo DSBC: the theoretical forces are the gauge pressure times the piston's area (extending) and times the
+    piston's less the rod's (retracting), to within the printed rounding (0.5 N or 0.2 %); the rod is thinner than
+    the piston, and a bigger piston takes more impact energy and has a cushion at least as long."""
+    path, errors, before = "festo/cylinders_dsbc.csv", [], None
+    if not have(tables, path):
+        return errors
+    for r in tables[path]:
+        name = f"{path} {r['series']} {r['size']}"
+        try:
+            d, rod, p = need(r, "piston_diameter_m"), need(r, "rod_diameter_m"), need(r, "force_gauge_pressure_pa")
+            out, back = need(r, "theoretical_force_extend_n"), need(r, "theoretical_force_retract_n")
+            energy, cushion = need(r, "max_impact_energy_j"), need(r, "cushion_length_m")
+        except ValueError as err:
+            errors.append(f"{name}: {err}"); continue
+        a1, a_rod = math.pi * d * d / 4, math.pi * rod * rod / 4
+        for what, printed, worked in [("extending", out, p * a1), ("retracting", back, p * (a1 - a_rod))]:
+            if abs(printed - worked) > max(0.5, 2e-3 * worked):
+                errors.append(f"{name}: {what} force {printed} N, p A = {worked:.1f} N")
+        if not rod < d:
+            errors.append(f"{name}: rod {rod} not thinner than the piston {d}")
+        if before and not (energy > before[0] and cushion >= before[1]):
+            errors.append(f"{name}: impact energy or cushion length below the size before")
+        before = (energy, cushion)
+    return errors
+
+
 MECH_CHECKS = [
+    pneumatic_cylinder_forces_are_p_times_a,
     wittenstein_gearboxes_are_plausible,
     neugart_planetary_gearboxes_are_plausible,
     apex_gearboxes_agree_with_their_own_physics,

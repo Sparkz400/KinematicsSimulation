@@ -32,6 +32,12 @@ pub struct MotorLoad {
     pub peak_current: f64,
     /// Temperature rise the winding settles at when the cycle repeats for long.
     pub winding_rise: f64,
+    /// RMS of the current that heats the winding (Drive::thermal_current): the phase current's, an induction motor's
+    /// with its rotor's copper loss.
+    pub thermal_current: f64,
+    /// A stepper's highest |load angle| over the pass, electrical rad (drive::Phases::load_angle): beyond pi / 2 it
+    /// is past its pull-out angle, beyond pi it has lost steps. None for the other motors.
+    pub load_angle: Option<f64>,
     /// With effects.iron_loss: the stator's mean iron loss over the pass, W (`DriveParams::iron_loss_at`); 0 without.
     pub iron_loss: f64,
     /// With effects.motor_thermal_nodes: the rise the stator and housing settle at, K, the winding's times the housing's
@@ -216,6 +222,10 @@ pub struct CycleLoad {
     pub warm_start: Option<WarmStart>,
     /// With `[conveyor]`: what the measured pass, one pick, did on the belt.
     pub conveyor: Option<ConveyorLoad>,
+    /// While the gripper held the payload (and was not closing or opening): the tool's acceleration upwards (along z)
+    /// and sideways (|a_x, a_y|), m/s^2, once per millisecond from its speed a millisecond apart, for the verdict
+    /// "gripper-hold" (`gripper::demand`). Empty on a machine without tool axes x, y or z in m.
+    pub held_accelerations: Vec<[f64; 2]>,
 }
 
 /// With an electronic cam (`Machine::cam`): per slave axis what its cam asks at the master's steady speed against the
@@ -489,6 +499,11 @@ pub struct Tally {
     /// With `[conveyor]`: the most the tool was from the gripped part along the belt, and the parts missed before.
     pick_tracking: f64,
     missed_before: u64,
+    /// The tool axes x, y, z in m (by index; `None` where the machine lacks one), the tool's speed along them at the
+    /// last sample, and `CycleLoad::held_accelerations`.
+    cartesian: [Option<usize>; 3],
+    last_speed: Option<[f64; 3]>,
+    held: Vec<[f64; 2]>,
 }
 
 /// Distance from `p` to the piece of line between `a` and `b`, in the axes `axes` alone.
@@ -659,6 +674,9 @@ impl Tally {
             }),
             pick_tracking: 0.0,
             missed_before: sim.control.conveyor().map_or(0, |(c, _)| c.missed),
+            cartesian: ["x", "y", "z"].map(|id| sim.machine.axes().iter().position(|a| a.id == id && a.unit == "m")),
+            last_speed: None,
+            held: Vec::new(),
         }
     }
 
@@ -730,6 +748,15 @@ impl Tally {
             sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
             for (axis, sum) in self.guide_axes.iter().zip(&mut self.guide_speeds) {
                 *sum += axis.map_or(0.0, |a| rate[a].abs());
+            }
+            if self.cartesian.iter().any(Option::is_some) {
+                let speed = self.cartesian.map(|i| i.map_or(0.0, |i| rate[i]));
+                let held = sim.control.payload_attached && !sim.control.gripper_acting();
+                if let (true, Some(last)) = (held, self.last_speed) {
+                    let a: [f64; 3] = std::array::from_fn(|k| (speed[k] - last[k]) / (self.every as f64 * sim.dt));
+                    self.held.push([a[2], a[0].hypot(a[1])]);
+                }
+                self.last_speed = Some(speed);
             }
             for (k, (signal, (cubed, weight))) in self.pulley_radial.iter().zip(&mut self.radial_sums).enumerate() {
                 if let Some(i) = *signal {
@@ -847,6 +874,12 @@ impl Tally {
             // The RMS phase current: with field weakening the d current flows too.
             let (current, power) = (sim.control.drives[k].phase_current(), sim.control.drives[k].power);
             load.rms_current += current * current;
+            let heating = sim.control.drives[k].thermal_current(sim.control.drive_params_of(k));
+            load.thermal_current += heating * heating;
+            if let crate::drive::Motor::Stepper(_) = sim.control.drive_params_of(k).motor {
+                let angle = sim.control.drives[k].phases.load_angle.abs();
+                load.load_angle = Some(load.load_angle.unwrap_or(0.0).max(angle));
+            }
             load.peak_current = load.peak_current.max(current.abs());
             // Each motor's own drive and motor (`[drive.<id>]`, `[motor.<id>]`, `[parts.<id>]`).
             let own = sim.control.drive_params_of(k);
@@ -906,6 +939,7 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
+            load.thermal_current = (load.thermal_current / steps).sqrt();
             load.iron_loss /= steps;
             load.cubic_mean_torque =
                 if self.cubic[k].1 > 0.0 { (self.cubic[k].0 / self.cubic[k].1).cbrt() } else { 0.0 };
@@ -922,7 +956,7 @@ impl Tally {
                 self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
             load.radial_load_peak = self.pulley_radial[k].map(|_| self.radial_peaks[k]);
             let p = sim.control.drive_params_of(k);
-            load.winding_rise = p.settled_rise(load.rms_current, load.iron_loss);
+            load.winding_rise = p.settled_rise(load.thermal_current, load.iron_loss);
             // The housing carries all of the loss through its share of the resistance: the winding's rise less what the
             // winding's own share adds to it of the copper loss, which is the winding's rise less the iron's part.
             if let (true, Some(n)) = (p.heating, &p.thermal_nodes) {
@@ -1004,6 +1038,7 @@ impl Tally {
                         .max(0.0),
                 }
             }),
+            held_accelerations: self.held,
         }
     }
 
@@ -1074,11 +1109,7 @@ impl Tally {
 fn stored_electrically(sim: &Sim) -> (f64, f64) {
     let p = sim.control.drive_params();
     let drives = &sim.control.drives;
-    let windings = drives
-        .iter()
-        .enumerate()
-        .map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current)
-        .sum();
+    let windings = drives.iter().enumerate().map(|(k, d)| d.magnetic_energy(sim.control.drive_params_of(k))).sum();
     // A link of its own has its drive's capacitance (a drive named per motor brings its own); a shared one each drive's
     // share of the shared `[drive]`'s, as `drive::shared_dc_link` steps it.
     let capacitance =
@@ -1247,9 +1278,27 @@ pub struct Verdict {
     pub ok: bool,
 }
 
-/// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
-/// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
-pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
+/// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
+/// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
+/// own keys (`drive::Motor`: a stepper's and an induction motor's).
+pub const RATINGS_BEYOND_DEFAULT: [&str; 54] = [
+    // What `stop::study` judges the worst stop against.
+    "ratings.max_stopping_distance_m",
+    // The gripper's time and hold (`gripper::Gripper`), and the hold's safety factor.
+    "effects.gripper_time",
+    "gripper",
+    "gripper.kind",
+    "gripper.close_s",
+    "gripper.open_s",
+    "gripper.cup_volume_m3",
+    "gripper.generator_flow_m3_s",
+    "gripper.vacuum_pa",
+    "gripper.holding_pressure_pa",
+    "gripper.vent_flow_m3_s",
+    "gripper.release_pressure_pa",
+    "gripper.cup_area_m2",
+    "gripper.friction_coefficient",
+    "ratings.gripper_safety_factor",
     // A path in place of the cycle (`sim::with_path`).
     "path",
     "path.file",
@@ -1275,6 +1324,21 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
     "conveyor.place_direction",
     "conveyor.place_speed_m_s",
     "conveyor.tracking_tolerance_m",
+    "motor.kind",
+    "motor.rotor_teeth",
+    "motor.detent_torque_nm",
+    "effects.detent_torque",
+    "drive.microsteps",
+    "drive.stepper_current_a",
+    "motor.rotor_resistance_ohm",
+    "motor.magnetizing_inductance_h",
+    "motor.stator_leakage_inductance_h",
+    "motor.rotor_leakage_inductance_h",
+    "motor.rated_voltage_v",
+    "motor.rated_frequency_hz",
+    "drive.induction_control",
+    "drive.vf_boost_v",
+    "drive.vf_slip_compensation",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
@@ -1376,8 +1440,14 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         // Peak torque against the torque-speed curve, and the settled winding temperature against the rated rise.
         out.push(at_most("motor-peak", Some(k), m.utilisation, 1.0));
         out.push(at_most("motor-thermal", Some(k), m.winding_rise, rated_rise));
-        // Siemens' S1 check: the RMS torque at the mean speed against the S1 curve (`s1_torque`).
-        if let Some(limit) = s1_torque(cfg, m.mean_speed)? {
+        // A stepper's load angle against its pull-out angle, pi / 2 electrical: beyond it the rotor falls out of step.
+        if let Some(angle) = m.load_angle {
+            out.push(at_most("stepper-synchronism", Some(k), angle, std::f64::consts::FRAC_PI_2));
+        }
+        // Siemens' S1 check: the RMS torque at the mean speed against the S1 curve (`s1_torque`), for a servo motor; a
+        // stepper's and an induction motor's heat is judged by "motor-thermal" alone.
+        let servo = cfg.get("motor.kind").ok().and_then(|v| v.as_str()).is_none_or(|kind| kind == "servo");
+        if let (true, Some(limit)) = (servo, s1_torque(cfg, m.mean_speed)?) {
             out.push(at_most("motor-s1", Some(k), m.rms_torque, limit));
         }
         // The peak speed against the motor's maximum speed, where the config gives it (a catalogue motor does).
@@ -1511,6 +1581,19 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // The turn's (an arm's orientation, a turning tool or table), on its own: no metres and radians added.
     if let Some(limit) = rating("settling_tolerance_rad") {
         out.push(at_most("settling-angle", None, load.dwell_angle_error_peak, limit));
+    }
+    // A vacuum gripper (effects.gripper_time): the most the held part asked of the cup against its hold over the
+    // safety factor (`gripper`).
+    if let (Some(crate::gripper::Gripper { hold: Some((hold, mu)), .. }), Some(factor)) =
+        (crate::gripper::Gripper::from_config(cfg)?, rating("gripper_safety_factor"))
+    {
+        let (mass, g) = (crate::gripper::payload_mass(cfg)?, crate::gripper::gravity(cfg)?);
+        let asked = load
+            .held_accelerations
+            .iter()
+            .map(|&[up, side]| crate::gripper::demand(mass, [side, 0.0, up], g, mu))
+            .fold(0.0, f64::max);
+        out.push(at_most("gripper-hold", None, asked, hold / factor));
     }
     if let Some((slackest, tightest)) = load.belt_tension {
         if let Some(limit) = rating("belt_max_tension_n") {
@@ -1946,7 +2029,7 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 29] = [
+const PATH_EFFECTS: [(&str, &[&str]); 33] = [
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),
@@ -1964,8 +2047,13 @@ const PATH_EFFECTS: [(&str, &[&str]); 29] = [
     ("belt.tooth_jump_factor", &["belt_tooth_jump"]),
     ("ratings.line_module_efficiency", &["dc_link"]),
     ("ratings.dc_link_discharge_", &[]),
+    // The brakes' delays act only while the drives stop or start, which a cycle never does.
+    ("brake.", &[]),
     ("motor.friction_breakaway_nm", &["motor_stiction"]),
     ("motor.friction_stribeck_rad_s", &["motor_stiction"]),
+    ("slide.friction_breakaway_n", &["slide_presliding"]),
+    ("slide.friction_stribeck_m_s", &["slide_presliding"]),
+    ("slide.presliding_stiffness_n_m", &["slide_presliding"]),
     ("gearbox.no_load_", &["gearbox_drag"]),
     ("gearbox.lost_motion_band_rad", &["gearbox_lost_motion"]),
     ("gearbox.hysteresis_rad", &["gearbox_lost_motion"]),
@@ -4122,6 +4210,7 @@ mod tests {
             braking_power_peak: 0.0,
             warm_start: None,
             conveyor: None,
+            held_accelerations: Vec::new(),
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

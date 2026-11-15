@@ -30,6 +30,7 @@ The variables are the same in both versions; only the type names differ. The val
 | every other signal (`axis.x.position`, `motor.a.torque`, ...) | Real | Float64 | output | continuous |
 | `command.setpoint.<axis id>` | Real | Float64 | input | continuous |
 | `command.enable` | Boolean | Boolean | input | discrete |
+| `command.stop_category` | String | String | input | discrete |
 | `command.cycle` | Boolean | Boolean | input | discrete |
 | `command.target.<axis id>` | Real | Float64 | input | continuous |
 | `command.move` | Boolean | Boolean | input | discrete |
@@ -66,6 +67,7 @@ An importer's own controller closes the loop through a drive's operating modes, 
 - A mode changes at the communication point where the input differs from the drive's. A change does not make the torque jump where the drive's own loops take over: the velocity loop's PI integrator is set so that it asks for the torque last asked for (bumpless transfer); in torque mode it is held. Into torque mode the importer's torque acts at once.
 - Outside position mode the drive's position setpoint tracks the measured position (following error 0, as a drive's tracking mode). While any drive is out of position mode, the cycle, move, path and setpoint commands are refused (`error-outside-mode`); out of position mode is refused while a move, cycle or path runs (`error-busy`). A drive coming back to position mode takes the plan with it: the plan stands, at rest, where the motors stand, and at speed the position loop brings the motor back there.
 - `command.enable` set to false and back to true puts every drive in position mode; the mode inputs take them out again at the next step.
+- `command.stop_category` says how `command.enable` turning false stops the drives: `"0"` (the start value) takes the torque off at once, as before; `"1"` brakes every drive on its quick-stop ramp and then takes it off; `"2"` brakes the planned motion and holds with the torque on (see [Stops](model-reference.md#stops)). It is the last variable, so the value references of the others are as they were.
 - A run in torque and velocity mode gives bit for bit the signals of a plain simulation put in the same modes with the same setpoints (`crates/sim-fmi/tests/fmi.rs`, every machine). Position mode is unchanged: the bit-for-bit tests of setpoints, moves and paths pass as before.
 
 The model description of FMI 3.0 has `instantiationToken` where FMI 2.0 has `guid`; both are a hash of the model description, so the FMI 2.0 and the FMI 3.0 FMU of one machine and config have different tokens and refuse each other's instantiation and FMU states.

@@ -285,3 +285,62 @@ fn the_planar_carriage_has_the_hand_calculated_momentum() {
     }
     assert!((f.mass - 5.0).abs() < 1e-12 && (f.gravity[2] + 9.80665).abs() < 1e-12);
 }
+
+/// The planar winches' steady friction at the centre, moving across at 1 m/s, by hand: each cable runs at |L'| =
+/// |u_x| x 1 m/s = 0.785495 m/s (`centre_cable`), the left ones (1 and 4) paying out, the right ones hauling in; the
+/// winch's ratio 5 / 0.025 m = 200 rad/m turns the rotor at 157.0990 rad/s. Shaft: 0.05 tanh(314.2) + 2e-4 x 157.0990 =
+/// 0.0814198 N m; the drum's bearings 2 N + 1 N s/m x 0.785495 m/s = 2.785495 N at the cable. The cable's tension
+/// (100 N to 140 N) loads every gearbox the same way, against the drum: hauling in, the motor drives, f / (200 x 0.95)
+/// = 0.0146605 N m, so -(0.0814198 + 0.0146605) = -0.0960803 N m; paying out, the cable drives the gearbox back, which
+/// takes eta off the friction, f x 0.95 / 200 = 0.0132311 N m, so 0.0946509 N m.
+#[test]
+fn the_planar_winches_steady_friction_at_the_centre_is_the_hand_calculated_one() {
+    let mut out = [0.0; 4];
+    planar().steady_friction(&CENTRE, &[1.0, 0.0], &mut out);
+    for (got, want) in out.iter().zip([0.0946509, -0.0960803, -0.0960803, 0.0946509]) {
+        assert!((got - want).abs() < 1e-6, "{out:?}");
+    }
+}
+
+/// Friction feedforward from the machine's own model in a sim of the planar robot, the gearboxes' efficiency off (which
+/// the integrators keep on the cables' tensions by design, some per cent of them): in the cruise at 1.5 m/s across
+/// (0, 0.8) -> (0.6, 0.8) the drives get the winches' friction (0.10 N m to 0.12 N m), and the velocity loops'
+/// integrators carry under 3 % of it; without it, they carry the whole friction. Both besides a part common to the four
+/// winches (0.009 N m each): the cables' internal tension, which A t = 0 leaves to the position loops, not friction.
+#[test]
+fn the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrators() {
+    let cruise = |model: bool| {
+        let mut cfg = PLANAR.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        cfg.set_text("effects.gearbox_efficiency = false").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = sim_components::Sim::new(&PLANAR, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.6, 0.8])).unwrap();
+        let (mut ff, mut integrator, mut n, mut start) = ([0.0; 4], [0.0; 4], 0, f64::NAN);
+        sim.run(0.6, |s| {
+            let c = &s.control;
+            if c.set_acc.iter().all(|a| *a == 0.0) && (c.set_vel[0] - 1.5).abs() < 1e-12 {
+                // The integrators settle for 0.1 s after the speed-up.
+                start = start.min(s.time());
+                if s.time() > start + 0.1 {
+                    for k in 0..4 {
+                        ff[k] += c.drives[k].friction_ff;
+                        integrator[k] += c.drives[k].controller_torque;
+                    }
+                    n += 1;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff.map(|x| x / n as f64), integrator.map(|x| x / n as f64))
+    };
+    let ((ff, with), (none, without)) = (cruise(true), cruise(false));
+    for k in 0..4 {
+        let common = with.iter().sum::<f64>() / 4.0;
+        let (carried, friction) = (with[k] - common, without[k] - common);
+        assert!(none[k] == 0.0 && friction.abs() > 0.09, "winch {k}: without, {friction} N m");
+        assert!(carried.abs() < 0.03 * friction.abs(), "winch {k}: the integrator carries {carried} N m of {friction}");
+        assert!((ff[k] - friction).abs() < 0.03 * friction.abs(), "winch {k}: feedforward {} N m of {friction}", ff[k]);
+    }
+}

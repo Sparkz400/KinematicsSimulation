@@ -19,6 +19,7 @@
 //! | every other signal id       | Real    | output      | every signal of the simulation, with its unit         |
 //! | `command.setpoint.<axis>`   | Real    | input       | position setpoint, interpolated as from a PLC         |
 //! | `command.enable`            | Boolean | input       | false switches the drives off (brakes on)             |
+//! | `command.stop_category`     | String  | input       | how false stops them: "0" (off), "1" or "2"           |
 //! | `command.cycle`             | Boolean | input       | true starts the configured cycle, false stops it      |
 //! | `command.target.<axis>`     | Real    | input       | the target of a move                                  |
 //! | `command.move`              | Boolean | input       | turning true moves to the targets                     |
@@ -103,6 +104,9 @@ pub enum Kind {
     DriveMode(usize),
     Torque(usize),
     Velocity(usize),
+    /// The stop category ("0", "1" or "2", `sim_components::StopCategory`) by which `Enable` turning false stops the
+    /// drives; "0" switches them off at once, as before.
+    StopCategory,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +135,8 @@ impl Variable {
             | Kind::RunPath
             | Kind::DriveMode(_)
             | Kind::Torque(_)
-            | Kind::Velocity(_) => "input",
+            | Kind::Velocity(_)
+            | Kind::StopCategory => "input",
             Kind::Machine | Kind::ConfigFile | Kind::TimeOptimal | Kind::Effect(_) => "parameter",
         }
     }
@@ -144,7 +149,8 @@ impl Variable {
             | Kind::PathText
             | Kind::PathFile
             | Kind::TrajectoryFile
-            | Kind::DriveMode(_) => "String",
+            | Kind::DriveMode(_)
+            | Kind::StopCategory => "String",
         }
     }
 }
@@ -295,6 +301,8 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
             out.push(flag(&path, Kind::Effect(name.into()), &format!("effect-{name}"), on));
         }
     }
+    // Last, so that the value references of the variables before it stay as they were.
+    out.push(text("command.stop_category", Kind::StopCategory, "fmi-stop-category", "0"));
     out
 }
 

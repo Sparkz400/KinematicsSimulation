@@ -168,6 +168,7 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | `dc-link-overvoltage` | Höchste Zwischenkreisspannung | höchste Zwischenkreisspannung (nur mit `effects.dc_link`) | `ratings.dc_link_overvoltage_v` | V |
 | `settling` | Abstand vom Ziel beim Verweilen | `dwell_error_peak_m` | `ratings.settling_tolerance_m` | m |
 | `settling-angle` | Verdrehung gegen das Ziel beim Verweilen | `dwell_angle_error_peak_rad` | `ratings.settling_tolerance_rad` | rad |
+| `gripper-hold` | Kraft, die das gehaltene Teil vom Sauggreifer verlangt | das Meiste von m (a_z + g) + m |a_xy| / μ (mit `effects.gripper_time`) | seine Haltekraft A p_hold durch `ratings.gripper_safety_factor` | N |
 | `belt-tension` | Größte Riemenkraft | größte Riemenkraft | `ratings.belt_max_tension_n` | N |
 | `belt-slack` | Kleinste Riemenkraft | kleinste Riemenkraft | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | Radialkraft auf eine Scheibenwelle, Spitze | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |
@@ -197,6 +198,8 @@ Grenzen bei dieser Aufgabe:
 - Mit Input Shaping warten eine Verweilzeit und der Greifer, bis der geformte Sollwert angekommen ist, also eine Periode des Shapers nach dem Plan. `settling` wird dann ab diesem Zeitpunkt beurteilt.
 - Die Momente an Getriebe und Riemenscheibe sind das Getriebe-Abtriebsmoment, das Signal `gearbox.<motor id>.output_torque`. Im elastischen Modell ist das, was die Feder des Getriebes an die Riemenscheibe weitergibt, mit dem Wirkungsgrad (mit `effects.gearbox_mesh_friction`, eingeschaltet im Gelenkbaukasten und an den Seilrobotern, ist der Verlust des Wirkungsgrads eine Reibung im Zahneingriff: Sie hält eine Last im Stillstand überall zwischen den Momenten, die sie absenken und heben, und ein rückwärts getriebenes Getriebe gibt 1 / (2 − η) der Leistung weiter statt η); im Starrkörpermodell ist es der Wert, den der Löser dafür ermittelt. Das Moment, das den Rotor selbst beschleunigt, zählt also nicht gegen das Getriebe, und eine Last, die das Getriebe rückwärts treibt (Bremsen, Absenken), zählt mit dem, was sie auf den Abtrieb bringt. `cubic_mean_torque_nm` aus `analyze` ist weiterhin das des Motors.
 - Die Motor-, Reibungs- und Antriebswerte der Standardkonfigurationen sind Platzhalter. Worauf die absoluten Zahlen beruhen, steht im README.
+
+**Die Zeit des Greifers, und ob ein Sauggreifer hält.** Ohne Weiteres greift der Greifer bei Ankunft sofort und lässt sofort los. Mit `effects.gripper_time` und einer Tabelle `[gripper]` (siehe die [Konfigurationsreferenz](../config-reference.md#gripper)) brauchen Backen `close_s` und `open_s`, ein Sauggreifer die Zeit, in der sein Vakuumerzeuger den Sauger bis zur Schaltschwelle evakuiert, und die Zeit des Belüftens (ein Aufbau erster Ordnung aus Saugervolumen und Saugleistung). Das Verweilen an Aufnahme und Ablage dauert mindestens so lange, und die Last kommt oder geht, wenn der Greifer fertig ist; ein kurzes Verweilen verlängert also den Zyklus: an der Linearachse verlängern Backen von 0,3 s und 0,25 s gegen Verweilzeiten von 0,1 s ihn um 0,35 s. Mit einem Sauggreifer und `ratings.gripper_safety_factor` beurteilt das Urteil `gripper-hold` das Meiste, was das gehaltene Teil vom Sauger verlangt, m (a_z + g) + m |a_xy| / μ aus der Beschleunigung des Werkzeugs, gegen die Haltekraft A p_hold durch den Faktor: an der starren Linearachse (10 m/s², 2 kg, μ 0,5) 61,86 N, die ein Sauger von 70 N hält und einer von 55 N nicht. Ein schnellerer Zyklus erhöht den Wert, und `optimise` hört auf, wo der Sauger noch hält. Keine mitgelieferte Konfiguration hat die Greiferzeit eingeschaltet.
 
 **Ein Zwischenkreis für alle Antriebe.** `effects.shared_dc_link` (Gemeinsamer Zwischenkreis aller Antriebe; abgeschaltet, braucht `effects.dc_link`) gibt den Antrieben einer Maschine einen gemeinsamen Zwischenkreis, wie an einem Line Module eines SINAMICS S120. Was ein bremsender Motor zurückspeist, nimmt ein treibender auf; nur die Summe der Leistungen lädt die Kondensatoren. Der Zwischenkreis hat die Kapazität aller Antriebe zusammen (jeder bringt `ratings.dc_link_capacitance_uf` mit), einen Bremschopper mit einem Bremswiderstand der Leistungen aus `[ratings]` und eine Abschaltung. Jeder Motor zeigt dann dieselbe Zwischenkreisspannung und dieselbe Leistung am Bremswiderstand, und die Prüfungen zum Bremsen erscheinen einmal je Motor mit denselben gemeinsamen Werten. An einer Maschine mit einem Antrieb ändert der Schalter nichts.
 
@@ -1010,6 +1013,90 @@ Seile dehnen sich mit EA / l, daher ändern sich Steifigkeit und Eigenfrequenzen
 schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform schwingt in den
 Verweilzeiten mit bis zu 0,85 mrad (Beruhigung 0,84 mm gegen die 1 mm, die die Konfiguration verlangt).
 
+## Einen Schrittmotor oder einen Asynchronmotor auslegen
+
+`motor.kind` setzt einen anderen Motor hinter den Antrieb (siehe [Modellreferenz](../model-reference.md#stepper-motor) und
+[Konfigurationsreferenz](../config-reference.md#motor-kinds)); ohne den Schlüssel behält jede Maschine ihren Servomotor.
+Zwei Maschinendateien zeigen sie, beide mit [estimate]-Werten:
+
+```text
+$ sim-cli verdicts --machine-file machines/stepper-axis.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml --set geometry.incline_deg=0 --set 'drive.induction_control="vf"'
+```
+
+**Eine Riemenachse mit Schrittmotor.** Ein NEMA-23-Schrittmotor (1,26 N m Haltemoment bei 2,8 A je Phase, 0,9 Ω, 2,5 mH,
+50 Rotorzähne) direkt auf einer Riemenscheibe von 16 mm, 48 V, 16 Mikroschritte, der Antrieb auf 3,5 A eingestellt
+(`drive.stepper_current_a`, 88 % des Nennstroms: Haltemoment 1,11 N m). Der Antrieb arbeitet ohne Rückführung: Er zählt den
+Sollwert in Mikroschritten und stellt den Stromzeiger dorthin, und der Läufer folgt an der „magnetischen Feder“ des
+Haltemoments. Drei Prüfungen legen ihn aus:
+
+- `stepper-synchronism`: der größte Lastwinkel im Zyklus gegen den Kippwinkel, 90° elektrisch. Der mitgelieferte Zyklus
+  erreicht 0,42 rad (24°). Ein Läufer, der außer Tritt fällt, hat seine Lage endgültig verloren (der Antrieb weiß es nicht):
+  Der Wert liegt dann über π. Mit `--set mass.payload_kg=25` verlangen die 5 m/s² allein 2,08 N m von den 1,11 N m, und
+  die Prüfung schlägt fehl.
+- `motor-peak`: das Moment gegen die Kippmomentkennlinie, das Haltemoment bis zur Eckdrehzahl, hier 85 rad/s
+  ((R I + k_E ω)² + (N ω L I)² = U²), darüber fallend: 44 % im mitgelieferten Zyklus. Das Drehmoment-Drehzahl-Diagramm
+  zeigt die Kennlinie.
+- `motor-thermal`: Ein Schrittmotor führt seinen Strom auch im Stillstand; die Wicklung erreicht 59 K von ihren 80 K. Mit
+  den vollen 3,96 A läge sie bei ihrer Bemessungserwärmung.
+
+Die S1-Prüfung von Siemens (`motor-s1`) gilt für Servomotoren und entfällt. Im Oszilloskop zeigt die Motordrehzahl das
+Nachschwingen des Läufers an seiner Feder nach jeder Bewegung (hier etwa 60 Hz, sqrt(N T_halt / J) / 2π mit der
+Trägheit der Last) und der Schleppfehler den Lastwinkel am Motor: die wahre Lage gegen die gezählte.
+
+**Ein Hubwerk mit Asynchronmotor.** Ein vierpoliger Motor mit 1,5 kW, 400 V, 50 Hz (1440 min⁻¹, 10 N m) über ein Getriebe
+10 an einem senkrechten Riemenhubwerk mit 50 kg, feldorientiert (`drive.induction_control = "foc"`) unter dem Drehzahl-
+und Lageregler des Antriebs. Seine Drehmoment-Drehzahl-Kennlinie ist die Kippmomentkennlinie seines Ersatzschaltbilds
+(27,1 N m bei Bemessungsspannung) und die Stromgrenze des Umrichters; die Kupferverluste von Ständer und Läufer erwärmen
+ihn. Er besteht jede Prüfung: 24 % der Kennlinie, 17,5 K, 0,2 mm neben dem Ziel in den Verweilzeiten gegen erlaubte
+0,5 mm. Flach gelegt und mit U/f betrieben (dritter Befehl) folgt der Umrichter der Plandrehzahl ohne Rückführung, mit
+Schlupfkompensation, und der Schlitten hält etwa 9 mm neben seinen Zielen: U/f kennt keine Lage. Die Daten des Motors
+sind das Typenschild (`rated_voltage_v`, `rated_frequency_hz`, `drive.rated_speed_rad_s` für den Bemessungsschlupf) und
+das Ersatzschaltbild (`resistance_ohm`, `rotor_resistance_ohm`, `magnetizing_inductance_h`, die beiden Streuungen);
+manche Hersteller veröffentlichen es für eine Baureihe, sonst muss es geschätzt werden (die Dateien sagen, welche Werte,
+und begrenzen sie).
+
+## Eine pneumatische Achse neben einer Servoachse auslegen
+
+Bestückautomaten heben oft mit einem Pneumatikzylinder, während Servoachsen verfahren. Eine Maschinendatei fügt ihn mit
+einem Knoten `[[machine.cylinder]]` und einer Tabelle seiner Werte hinzu (Kolben, Stange, Hub, bewegte Masse,
+Totvolumen, Versorgungsdruck, C und b nach ISO 6358 von Ventil und Schlauch, die Abluftdrosseln, die Dämpfung, die
+Dichtungen; Schlüssel in [config-reference.md](../config-reference.md#a-machine-files-pneumatic-cylinders)). Der Zyklus
+schaltet sein Ventil und wartet auf seine Endlagensensoren:
+
+```toml
+[[cycle.segment]]
+target = [0.1]          # X zum Aufnehmen
+dwell_s = 0.05          # gezählt, sobald der Sensor meldet
+payload = false
+valves = { z = "extend" }
+wait = ["z.extended"]
+```
+
+`machines/pneumatic-axis.toml` ist eine Servo-X mit einem Festo DSBC-32-100 als Z, der vom Schlitten nach unten hängt:
+
+```text
+$ sim-cli verdicts --machine-file machines/pneumatic-axis.toml
+$ sim-cli run --machine-file machines/pneumatic-axis.toml --cycle --time 5 --out z.csv
+```
+
+Die Prüfurteile bewerten den Zylinder neben dem Motor: `cushion-energy` (die Bewegungsenergie beim Eintritt in die
+Dämpfung, hier 0,012 bis 0,029 J, gegen die zulässigen 0,4 J des Zylinders) und `load-factor` (wogegen er arbeitet,
+geteilt durch seine theoretische Kraft beim Versorgungsdruck, 0,024 gegen die übliche Grenze 0,7). Die Signale
+`cylinder.z.*` enthalten Stellung und Geschwindigkeit des Kolbens, Drücke und Temperaturen beider Kammern, den
+Ventilschieber und die Endlagensensoren, die letzten Hubzeiten (0,55 s aus, 0,65 s ein), die Geschwindigkeit beim
+Eintritt in die Dämpfung und am Anschlag, Rückprall und Einschwingen, die Luft je Doppelhub (1,10 Normliter) und ihre
+Energie am Kompressor (474 J bei 0,12 kWh/m³). Die Ausfahrgeschwindigkeit stellt die Abluftdrossel der Stangenseite
+ein: gesperrt läuft der Kolben mit C p0 / A2 (hier 0,216 m/s), wie groß die Last auch ist. In der Dämpfung stellt die
+Dämpfungsschraube die Geschwindigkeit ebenso ein (0,05 l/(s bar): 0,072 m/s). Ein Zylinder, dessen Totvolumen für den
+Schritt zu klein ist, wird mit `error-cylinder-unstable` abgelehnt; die Meldung nennt die Rate und den Teilschritt, den
+er braucht (`sim.substeps`).
+
+Festo druckt für kein VUVG-Ventil C und b; die des ausgelieferten Ventils sind aus seinem Normalnenndurchfluss
+geschätzt. Der Zylinder wirkt nicht auf die Achse zurück, die ihn trägt (seine Masse gehört in die des Schlittens), und
+ein Proportionalventil gibt es noch nicht.
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).
@@ -1052,7 +1139,7 @@ Zwei Planer legen den Zeitverlauf der Bahn fest:
 
 | | Standard | `--time-optimal` |
 | --- | --- | --- |
-| Geschwindigkeit und Beschleunigung | Die Grenzwerte jeder Achse (`[axis.*]`) | Was die Motoren erlauben: ihre Bemessungsdrehzahl und `profile.torque_reserve` mal ihre Drehmoment-Drehzahl-Kennlinie |
+| Geschwindigkeit und Beschleunigung | Die Grenzwerte jeder Achse (`[axis.*]`) | Was die Motoren erlauben: ihre Höchstdrehzahl (oder die Eintriebsdrehzahl des Getriebes, wo niedriger, abzüglich 1 %) und `profile.torque_reserve` mal ihre Drehmoment-Drehzahl-Kennlinie oder das Moment des Maximalstroms des Antriebs, beim Bremsen nicht mehr, als der Bremswiderstand aufnimmt; die Grenzen von Getriebe, Riemenscheibe, Führungen, Riemen und den eigenen Teilen der Maschine (Spindel, Zahnstange) |
 | Ruck | Der Grenzwert jeder Achse | Ebenso |
 | An einer Ecke (Richtungsänderung über 1 mrad) | Hält an; mit `profile.corner_tolerance_m` wird eine Ecke zwischen zwei Geraden innerhalb dieser Toleranz verschliffen und ohne Halt durchfahren | Ebenso |
 | Wo eine Gerade auf einen Kreisbogen trifft | Bremst so weit ab, dass der Beschleunigungssprung innerhalb des halben Ruckgrenzwerts bleibt; mit `profile.path_tolerance_m` führt ein Übergangsbogen die Bahn mit Geschwindigkeit in den Kreisbogen (siehe unten) | Ebenso |
@@ -1067,6 +1154,7 @@ So lesen Sie das Ergebnis:
 - `path_error_peak_m` ist der Abstand der Werkzeugspitze von der Linie, die ihr Sollwert gezeichnet hat, gleich an welcher Stelle. Ein Zurückbleiben längs der Bahn zählt nicht. Das ist die Zahl für die Konturgenauigkeit.
 - `tracking_error_peak_m` ist der Abstand von der Stelle, an der der Sollwert im selben Augenblick ist. Er enthält das Zurückbleiben.
 - Am T-Portal ist die Werkzeugspitze die Spitze der sich neigenden Z-Achse (`effects.tool_flex`) auf einem Gestell, das schwankt (`effects.frame_compliance`), gesehen vom Boden, auf dem das Werkstück steht. Sie ist nicht die Position des Schlittens auf dem Träger und nicht das, was die Motorgeber melden.
+- Mit `effects.base_compliance` (jede Maschine, ausgeliefert aus) steht die ganze Maschine auf einem Bett auf Federn (`[base]`), und die Werkzeugspitze bewegt sich mit ihm. Standardmäßig in eine Richtung: das Bett schwingt unter den Reaktionen der Maschine, aber die Motoren spüren es nicht. Mit `effects.base_reaction` wirkt es in beide Richtungen: die Beschleunigung des Betts drückt auf alles, was sich auf ihm bewegt, so dass das Schwingen im Schleppfehler erscheint und die Antriebe dagegen halten, und die Energie des Betts und sein Dämpfungsverlust stehen in der Energiebilanz (`power.base`). Das kostet Rechenzeit: jeder Schritt bestimmt die Masse der Maschine aus ihrer Energie bei jeder ihrer Geschwindigkeiten und jedem Paar davon (Modellreferenz, „Compliant base“).
 
 **Kreisbögen mit Geschwindigkeit anfahren.** Wo eine Gerade in einen Kreisbogen übergeht, springt die Beschleunigung zum Mittelpunkt von 0 auf v²/r. Der Standardplaner fährt diese Stelle deshalb im Kriechgang an: 0,07 m/s bei 0,1 m Radius und 100 m/s³. Mit `profile.path_tolerance_m` über 0 setzen beide Planer dort, und wo zwei Kreisbögen aufeinandertreffen, zuerst Übergangsbögen (Klothoiden) ein: Kurven, deren Krümmung sich gleichmäßig mit dem Weg ändert. Damit einer hineinpasst, behält der Kreisbogen seinen Mittelpunkt und bekommt einen etwas kleineren Radius. Die geplante Bahn liegt also ein wenig neben den Geraden und Kreisbögen der Datei, und die Fehlerausgabe sagt, wie weit:
 
@@ -1121,7 +1209,7 @@ Grenzen bei dieser Aufgabe:
 - Ohne zulässige Abweichung ist eine verrundete Ecke mit dem Standardplaner langsam: 0,07 m/s in einen Kreisbogen mit 0,1 m Radius bei 100 m/s³.
 - Splines: Ohne zulässige Abweichung springt die Krümmung, wo einer an eine Gerade oder einen Kreisbogen anschließt; die Bahn durchfährt diesen Übergang deshalb langsam, wie von einer Geraden in einen Kreisbogen. Mit einer zulässigen Abweichung wird der ausgeglichene Übergang zügig durchfahren, aber langsamer, als eine Klothoide bei gleicher Abweichung erlaubte. Ein Abschnitt hat einen Grenzwert, nach seiner engsten Stelle; ein Abschnitt mit einer engen Biegung ist also auf ganzer Länge langsam.
 - Übergangsbögen zwischen Geraden und Kreisbögen: keiner, wo zwei Kreisbögen in verschiedenen Ebenen in ihrer Richtung aufeinandertreffen (drei Achsen); dort fährt die Bahn langsam. Ein Stück, das zu kurz für seine Übergangsbögen ist, halbiert die Übergangsbögen der ganzen Bahn, nicht nur seine eigenen. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,397 s, ohne 1,695 s).
-- Der zeitoptimale Plan kennt die Zuggrenzen des Riemens (`ratings.belt_max_tension_n`, `belt_min_tension_n`): Er zieht von beiden `profile.tension_margin_n` ab (31 N am voreingestellten T-Portal, die Führungsreibung, die der Riemen zieht) und hält die Zugkraft jedes Abschnitts im starren Modell innerhalb von `profile.tension_reserve` (0,5) des verbleibenden Spielraums, weil die Riemenschwingung noch einmal so viel aufschlagen kann wie die Zugänderung des starren Modells (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Er hält außerdem den Maximalstrom des Antriebs ein (mit `effects.drive_current_limit`), `profile.torque_reserve` der Momentgrenzen von Getriebe und Riemenscheibe am Abtrieb (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`, wo die Maschine das Abtriebsmoment des Getriebes meldet) und die Tragzahl der Führungen (`ratings.guide_max_load_n`, am T-Portal und an der Einzelachse). Er kennt die Verluste des Getriebes (`gearbox.efficiency` mit `effects.gearbox_efficiency`: der Motor bringt sie zusätzlich auf) und hält von der Tragzahl der Führungen `profile.torque_reserve` ein, wie von den Momenten der Motoren; den Zwischenkreis kennt er nicht. Lassen Sie `analyze` oder `verdicts` darüber laufen. Am mitgelieferten Delta begrenzt das M2max der Getriebe: Eine Gerade quer durch seinen Bereich dauert 0,434 s, 0,411 s, bevor der Plan es kannte.
+- Der zeitoptimale Plan kennt die Zuggrenzen des Riemens (`ratings.belt_max_tension_n`, `belt_min_tension_n`): Er zieht von beiden `profile.tension_margin_n` ab (31 N am voreingestellten T-Portal, die Führungsreibung, die der Riemen zieht) und hält die Zugkraft jedes Abschnitts im starren Modell innerhalb von `profile.tension_reserve` (0,5) des verbleibenden Spielraums, weil die Riemenschwingung noch einmal so viel aufschlagen kann wie die Zugänderung des starren Modells (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Er hält außerdem jede andere Grenze ein, deren Urteil von der Bewegung an einer Stelle der Bahn abhängt: den Maximalstrom des Antriebs (`ratings.drive_max_current_a`, mit `effects.drive_current_limit` oder ohne, wie "drive-peak-current" ihn in beiden Fällen beurteilt), `profile.torque_reserve` der Momentgrenzen von Getriebe und Riemenscheibe am Abtrieb (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`, wo die Maschine das Abtriebsmoment des Getriebes meldet), die höchste Eintriebsdrehzahl des Getriebes (`ratings.gearbox_max_input_speed_rpm`), die Tragzahl der Führungen (`ratings.guide_max_load_n`), die Spitzenleistung des Bremswiderstands (`ratings.braking_resistor_peak_w`: ein Bremsen, das mehr zurückspeisen würde, steht nicht zur Verfügung) und die eigenen Teile der Maschine: Drehzahl, d n und Axialkraft einer Spindel, Vorschubkraft einer Zahnstange. Von Drehzahlgrenzen hält er 1 % für das Nachlaufen der Regelkreise zurück. Er kennt die Verluste des Getriebes (`gearbox.efficiency` mit `effects.gearbox_efficiency`: der Motor bringt sie zusätzlich auf), die Reibung von Motoren, Führungen und Gelenken und hält von der Tragzahl der Führungen `profile.torque_reserve` ein, wie von den Momenten der Motoren. `profile.time_optimal_margin` (1 in den mitgelieferten Konfigurationen) plant mit diesem Anteil jeder Grenze: 0,9 für 90 %. Was über den ganzen Zyklus beurteilt wird, kennt der Plan nicht: die Erwärmung der Wicklung ("motor-thermal", "motor-s1"), den Effektivstrom des Antriebs, die Lebensdauern und die mittlere Leistung des Bremswiderstands. Ein zeitoptimaler Zyklus besteht im Lauf also die eigenen Prüfungen des Plans an jeder mitgelieferten Maschine (ein Test je Maschine, `crates/sim-machines/tests/time_optimal.rs`), kann aber einen Motor überhitzen: die der Linearmotorachse, der fliegenden Säge, des parallelen SCARA und des Vierarm-Deltas tun es. Lassen Sie `analyze` oder `verdicts` darüber laufen. Am mitgelieferten Delta begrenzt das M2max der Getriebe: Eine Gerade quer durch seinen Bereich dauert 0,434 s, 0,411 s, bevor der Plan es kannte.
 - Der zeitoptimale Plan liest die Grenzen der Motoren Punkt für Punkt (alle 2 mm) und folgt innerhalb eines Bahnstücks der höchsten Geschwindigkeit, die sie erlauben, auf und ab, ist aber nicht nachweislich der schnellste mögliche: Die Läufe von beiden Enden eines Bahnstücks treffen sich auf einer kurzen Konstantfahrt oder auf der Geschwindigkeitskurve, je nachdem, was schneller ist, und auf einer Kurve bekommen die Rampen 0,4 des Ruckgrenzwerts (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Die Auslegung dauert einige Millisekunden (2 bis 21 ms an den mitgelieferten Maschinen). Im vollständigen Modell überschreiten die Motoren die Bemessungsdrehzahl um das, was die Regelkreise hinzufügen (0,1 % im Beispiel).
 - Eine Maschine, die am Ende eines Hubs steht, hat ihren Sollwert einige hundertstel Millimeter dahinter: Der Sollwert liegt dort, wo die Motoren stehen, unter Riemendehnung und Getriebeverdrehung. Eine Bahn von dort beginnt so weit außerhalb des Verfahrbereichs und wird gefahren. Nur nahe ihrem Anfang darf eine Bahn den Bereich verlassen: Eine Pose, die innerhalb des Spielraums der Maschine vom Anfang liegt (0,1 mm bei den Portalen, 2,3 mm beim Delta), darf so weit außerhalb liegen; jede andere Pose muss im Bereich liegen (auf einer Achse, deren Anfang jenseits eines Endes liegt, nicht weiter jenseits als der Anfang; Rundung um 1e-9 m ausgenommen). Andere Posen werden abgelehnt (`Die Bahn verlässt den Verfahrbereich. ...` bei einer Bahn aus Stücken, `Die zeitlich vorgegebene Bahn braucht mindestens zwei Punkte im Verfahrbereich, mit steigenden Zeiten ab 0.` bei Posen mit Zeiten).
 - Die Nutzlast ist so, wie die Maschine sie beim Planen hat (angehängt, am Start).
@@ -1152,6 +1240,32 @@ Lauf: Anhalteweg je Achse ab der Abschaltung (die Maschine stand um) 0.0070 (0.4
 - `--time-optimal` weist eine Bahn zurück, die näher kommt als der Abstand; `optimise` nimmt keine Einstellung, deren Lauf das tut.
 - Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste. Schalten die Antriebe ab, sagen die Meldungen sofort, welcher Motor wann über welche Überwachung abgeschaltet hat und wie jeder Antrieb anhält, während 3D-Ansicht und Scopes die Achsen die Rampe herunterfahren oder austrudeln zeigen; steht die Maschine, wie weit jede Achse ab der Abschaltung fuhr.
 - Der Abstand gilt zwischen den Quadern von Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet (nicht ihren CAD-Formen), und den Kapseln der schrägen Teile: Unterarmstäbe und Oberarme des Delta-Pickers und das Teleskop des D4, jedes die Punkte innerhalb der halben gezeichneten Breite um seine gezeichnete Strecke, genau, wie schräg es auch steht.
+
+## Wie weit fährt sie nach einem Not-Halt?
+
+Den Zyklus (oder eine Bahn, `--path DATEI`) an vielen Zeitpunkten anhalten und sehen, wie weit die Maschine noch fährt, bis sie steht:
+
+```text
+$ sim-cli stop t-gantry --category 1 --points 3
+moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],braking_resistor_energy[J],tripped,x_distance[m],z_distance[m]
+grid,0.0000,0.000001,0.0000,0.218,false,155.14,0.0000,false,0.000000,0.000001
+grid,2.0263,0.025537,0.5630,37.150,false,183.27,0.0000,false,0.025536,0.000101
+energy,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+grid,4.0527,0.000261,0.0173,17.919,false,224.04,0.0000,false,0.000029,0.000261
+fastest_z,4.3240,0.006484,0.0488,17.285,false,177.13,0.0000,false,0.000041,0.006484
+fastest_x,5.0760,0.026016,0.5921,41.406,false,178.96,0.0000,false,0.026016,0.000056
+worst,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+Ungünstigster Stopp: ausgelöst bei 2.0800 s (energy)
+Bewertung des Stopps: stop-dc-link: 224.0 / 257.6 ok
+```
+
+- Die Stoppkategorien sind die der IEC 60204-1, wie ein Servoantrieb sie ausführt (`--category`, ohne Angabe 0): **0** nimmt das Moment sofort weg (STO, wie `--disable-at`): die Achsen trudeln aus, bis die Haltebremsen halten. **1** bremst jeden Antrieb an seiner Schnellhalterampe (`drive.off3_ramp_s`, die Zeit ab Nenndrehzahl) mit seinen Moment- und Stromgrenzen, Zwischenkreis und Bremschopper wirken wie bei jeder Fahrt; stehen alle, fallen die Bremsen ein und das Moment geht weg, oder wenn `drive.ss1_time_s` (0,5 s) vorher abläuft. **2** bremst die geplante Bewegung mit den Beschleunigungsgrenzen der Achsen in ihrer Fahrtrichtung ab und hält dort mit Moment.
+- Die Zeitpunkte: wo jede Achse am schnellsten ist (`fastest_x`), wo die kinetische plus potentielle Energie am größten ist (`energy`), und `--points` Zeitpunkte gleichmäßig über den Durchlauf (`grid`, ohne Angabe 20). Die letzte Zeile wiederholt den ungünstigsten, den Stopp, nach dem das Werkzeug am weitesten kam.
+- Je Stopp: wie weit das Werkzeug von dort kam, wo es beim Auslösen war (das Weiteste, über die Achsen in Metern), und jede Achse, die Zeit, bis jede Achse unter einem Hundertstel ihrer Höchstgeschwindigkeit bleibt, die größte Verzögerung über 1 ms, ob eine Achse in ihren Endanschlag fuhr, die höchste Zwischenkreisspannung, die Energie im Bremswiderstand und ob ein Antrieb auf Überspannung abschaltete (er trudelt dann aus wie in Kategorie 0).
+- `stopping-distance` beurteilt den ungünstigsten gegen `ratings.max_stopping_distance_m`, das man in einer Konfigurationsdatei unter `[ratings]` ergänzt (`--config`); `stop-dc-link` (mit `effects.dc_link`) fällt durch, wenn ein Stopp einen Antrieb abschaltet.
+- Eine hängende Achse fällt, solange ihre Bremse einfällt: mit `effects.brake_delay` (voreingestellt aus) brauchen die Bremsen `brake.engage_delay_s` (0,03 s, geschätzt) zum Halten und `brake.release_delay_s` (0,06 s) zum Lüften. Am T-Portal in Kategorie 0 (`sim-cli stop t-gantry --points 3 --set effects.brake_delay=true`) kommt das Werkzeug beim ungünstigsten Stopp dann 30,7 mm statt 9,3 mm weit, angehalten dort, wo Z am schnellsten ist, 8,7 mm statt 1,4 mm.
+- Ein einzelner Stopp: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` schreibt alle Signale um ihn herum. Aus Python hält `ks.Sim(config).stop(1)` eine schrittweise Simulation an, `enable()` schaltet sie wieder ein; der FMU-Eingang `command.stop_category` sagt, wie `command.enable` auf false die Antriebe anhält; über OPC UA hält 0, 1 oder 2 in `command.stop_category` die Maschine an.
+- Was es nicht kennt: Kategorie 2 bremst in Fahrtrichtung, nicht entlang einer gekrümmten Bahn; keine Ruckbegrenzung im Stopp; eine Verzögerung für alle Bremsen; noch nichts ist mit einem gemessenen Stopp verglichen (siehe [Validierung](../validation.md#stops-and-brake-delays)).
 
 ## Programme: G-Code und Roboterprogramme
 
@@ -1231,6 +1345,8 @@ Trajektorien (`--trajectory`, geplante Bahnen, die Stützpunkte eines Abschnitts
 ## Regler einstellen und Input Shaping nutzen
 
 Die Verstärkungen stehen in `[drive]`: `kv_1_s` (Lageverstärkung Kv), `velocity_kp_nm_s_rad` und `velocity_tn_s` (Drehzahlregler: Verstärkung Kp und Nachstellzeit Tn), `current_kp_v_a` und `current_tn_s` (Stromregler). Die drei folgenden Befehle geben ein Testsignal nur auf den Lagesollwert, ohne Vorsteuerung. Sie zeigen also die Regelkreise selbst.
+
+**Reibungsvorsteuerung.** `effects.friction_feedforward` gibt Reibung auf die Momentenvorsteuerung, damit der Integrator des Drehzahlreglers sie nicht aufbauen muss, während die Achse fährt. `drive.friction_feedforward_model` sagt, welche: `"characteristic"`, die Punkte `drive.friction_feedforward_*`, die ein Antrieb bei konstanten Drehzahlen aufnimmt, oder `"machine"`, die Reibung des eigenen Modells der Maschine bei der geplanten Geschwindigkeit (Führungen, Motorwelle, Leerlaufmoment des Getriebes, Gelenke, Umlenkrollen, Energiekette), die jede Maschine angibt. Mit `"machine"` ist sie in den mitgelieferten Konfigurationen dort eingeschaltet, wo sie den Schleppfehler beim Fahren und das Einschwingen an der Aufnahme verkleinert (Portal: 194,9 µm auf 178,2 µm und 47,4 µm auf 42,9 µm; Kugelgewindeachse: 82,3 auf 30,8 µm und 46,2 auf 6,9 µm); die [Validierung](../validation.md#friction-feedforward-in-the-shipped-configs) hat die Tabelle für jede Konfiguration und warum Linearachse und Linear-Delta sie aus lassen. Eine Vorsteuerung ändert die Reserven des Regelkreises nicht. Ausprobieren an jeder Konfiguration mit `--set effects.friction_feedforward=true --set 'drive.friction_feedforward_model="machine"'`.
 
 **Eine Zeile je Achse:**
 
@@ -1401,8 +1517,10 @@ Grenzen bei dieser Aufgabe:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.262867e-2,6.527515e-2,6.255957e-4,4.218134e-3
+m,2.262654e-2,6.523016e-2,6.230175e-4,4.241306e-3
 ```
+
+Das Nachfahren beginnt im Zustand der Aufzeichnung, gleich, welche Startpose die Konfiguration nennt: in Ruhe an einer Pose vor der ersten Zeile fährt es auf deren Lagesollwert mit deren gemessener Geschwindigkeit hoch (glatt, 0,25 s oder länger, mit höchstens einem Viertel der Beschleunigungsgrenze jeder Achse), so dass eine Aufzeichnung, die aus einer längeren Bewegung geschnitten ist, ohne den Ruck eines Starts aus der Ruhe nachgefahren wird; hinter der letzten Zeile läuft die Bewegung weiter, sie wird nicht in die Ruhe gezwungen. Die Pose, an der das Hochfahren beginnt, muss in den Bereichen der Achsen liegen. Wo die Quelle ihren Sollwert im selben Takt aufzeichnet wie die Lage, mit der er verglichen wird (die Aufzeichnung des Simulators hält den Sollwert, mit dem der Antrieb bis zur Zeile gearbeitet hat, den des Takts davor), bekommt der Sollwert in der Zuordnung `time_offset_s` = ein Lagereglertakt, damit die Schleppfehler vergleichbar werden.
 
 Die „gemessene“ Maschine ist hier der Simulator mit einem Schlitten, der 1,5 kg schwerer ist als in der Konfiguration. Die Tabelle nennt je Motor den Effektivwert und die Spitze der Differenz zwischen gemessenem und simuliertem Drehmoment und Schleppfehler. `--out` schreibt beides nebeneinander, eine Zeile je Zeile der Aufzeichnung:
 
@@ -1415,17 +1533,20 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.549800e0,8.067588e0,1.618e-2
-viscous_friction_n_s_m,x,2.681385e1,2.621072e1,2.192e-1
-coulomb_friction_n,x,2.132336e1,2.196390e1,1.953e-1
-constant_force_n,x,-7.757048e-4,2.050984e-3,6.293e-2
+moved_mass_kg,x,6.550978e0,8.068848e0,1.597e-2
+viscous_friction_n_s_m,x,2.681013e1,2.621257e1,2.163e-1
+coulomb_friction_n,x,2.132618e1,2.196308e1,1.928e-1
+constant_force_n,x,-9.314134e-4,1.573428e-3,6.211e-2
+presliding_stiffness_n_m,x,6.950099e5,7.307120e5,2.571e5
 Bewegte Masse, Achse x: +1.518 kg ± 0.016. Um diesen Betrag sind die mit der Achse bewegten Massen zu ändern. Lastmasse und die Trägheit von Rotor und Scheibe kann die Aufzeichnung nicht trennen.
 Viskose Reibung, Achse x: × 0.978 ± 0.008. Die viskose Reibung der Führung der Achse und der Motorwellen ist mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
 Coulomb-Reibung, Achse x: × 1.030 ± 0.009. Coulomb- und Haftreibung der Führung der Achse und der Motorwellen sind mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
-Konstante Kraft, Achse x: +0.003 N ± 0.063. So viel mehr braucht die gemessene Achse als die Konfiguration: ein Gewicht, eine Neigung oder ein Kabelzug, die der Konfiguration fehlen.
+Konstante Kraft, Achse x: +0.003 N ± 0.062. So viel mehr braucht die gemessene Achse als die Konfiguration: ein Gewicht, eine Neigung oder ein Kabelzug, die der Konfiguration fehlen.
 ```
 
 Je Achse wird nach der Methode der kleinsten Quadrate angepasst: Kraft = Masse × Beschleunigung + viskose Reibung × Geschwindigkeit + Coulomb-Reibung × Vorzeichen(Geschwindigkeit) + Konstante. Dieselbe Schätzung läuft über die Aufzeichnung (`fitted`) und über die Simulation derselben Sollwerte mit der Konfiguration (`config`). Die Differenz der beiden ist das, worum die Konfiguration danebenliegt: hier +1,518 kg bei wahren 1,5 kg. Die Hinweiszeilen gehen auf die Fehlerausgabe. Es wird keine Konfiguration geändert.
+
+Wo die Aufzeichnung sie zeigt, folgen drei Zeilen dazu, was die Reibung über ihren Gleitwert hinaus tut, jede gleich geschätzt auf der Aufzeichnung und auf dem Nachfahren: `held_force_n`, die Kraft, die die Achse nach ihrer letzten Bewegung im Stillstand hält (eine durch null geglättete Reibung hält keine, eine haftende hält, was die Regler beim Halt aufgezogen hatten); `breakaway_force_n`, die Reibung bei 1 bis 5 % der Höchstgeschwindigkeit, während die Geschwindigkeit zu einem Halt oder einer Umkehr fällt, gegen den Coulomb-Wert (darüber, wo die Reibung zur Ruhe hin steigt); `presliding_stiffness_n_m`, aus dem Weg, auf dem die Reibung an jeder Umkehr durch null dreht (Dahls Gesetz: Niveau · ln 2 / σ). Sie werden verglichen, nicht empfohlen: den Vorgleitzustand der Führungen gibt `effects.slide_presliding` an den Schlitten des Gelenkbaukastens, die LuGre-Borsten an der Einzelachse und den Portalen. Die Reibung der Führungen von der des Motors oder einer Spindelmutter trennen kann die Aufzeichnung nicht: beide wirken als Vorzeichen der Geschwindigkeit, die Anpassung gibt ihre Summe.
 
 **Anpassung, Stufe 1 in den Koordinaten der Motoren: Delta, SCARA, Arm.** Wo die Motoren nicht im Verhältnis zu den Achsen drehen (die Arme des Delta) oder sich die Trägheit, die ein Motor dreht, mit der Stellung ändert (der Ellbogen eines SCARA oder Arms; `trace::per_axis_fit` entscheidet), regressiert `fit --trace` die Motormomente auf das eigene Starrkörpermodell der Maschine in Regressorform, τ = Y(q, q̇, q̈) θ: je Motor k τ_k − τ_k,starr = (θ_Nutzlast − 1) × (Anteil der Nutzlast an τ_k,starr) + ΔJ_k q̈_k + b_k q̇_k + c_k sign(q̇_k) + τ0_k, die starren Momente aus `Machine::rigid_motor_torque` bei den Winkeln, Drehzahlen und Beschleunigungen der Aufzeichnung (die Beschleunigung aus dem Winkel, den ein Geber viel genauer misst als die Drehzahl, die er ableitet). Eine Aufzeichnung, die jede Achse mit mehreren Frequenzen schwingt (hier eine Datei von Posen zu Zeiten: der Delta 0,2 m quer bei 0,6 und 0,9 Hz, 0,06 m auf und ab bei 1,1 Hz, 8 s), eines Delta mit 4 kg Nutzlast statt der 3 der Konfiguration und doppelter Gelenkreibung:
 
@@ -1810,7 +1931,7 @@ cargo run --release -p sim-app
 
 Das Fenster hat oben eine Leiste (Maschine, Sprache, Ablauf, Einheiten, Farbschema und die knappsten Prüfungen), in der Mitte die 3D-Ansicht, links die Einrichtung (Bewegung, Effekte, Parameter, Konfigurationsdatei), rechts die Werkzeuge (Analyse, Effekt-Ansichten, Suche, Bahn, Aufzeichnung, Frequenzgang, Reglereinstellung, Läufe) und unten die Oszilloskope. Die Tabellen unten gehen die Bedienelemente nach ihrer Wirkung durch; in welchem Feld eines steht, folgt aus dieser Aufteilung.
 
-**3D-Ansicht.** Aus einfachen Körpern aufgebaut. Riemenscheiben, Motorwellen und Umlenkrollen drehen sich; die Riemenzähne laufen mit (alle 40 mm gezeichnet, nicht in der Zahnteilung); Riementrume färben sich oberhalb der Vorspannung rot und unterhalb blau. Beschriftungen zeigen die Drehzahl jedes Motors in 1/min und die Position jeder Achse. Ziehen mit der linken Maustaste dreht die Ansicht, das Mausrad zoomt. Ist eine Bahn geplant (der Teil „Bahn“ im rechten Bedienfeld), zeichnet die Ansicht die geplante Bahn als gelbe Linie dort, wo das Werkzeug fahren wird, und darüber in Hellblau die Bahn, die die Werkzeugspitze wirklich fährt, sobald die Maschine sie abfährt. Die Bedienelemente der Ansicht färben diese gefahrene Bahn nach der Geschwindigkeit des Werkzeugs oder nach seinem Bahnfehler: seinem Abstand von der Bahn, die der Plan gezeichnet hat (die Sollwerte, denen die Antriebe folgen), derselbe Abstand, dessen Spitze die Analyse der Bahn als Bahnfehler angibt. Bis zum 14. November wurde er vom neuesten Sollwert des Plans gemessen, der sich einmal je Profilzyklus (1 ms) bewegt, während das Werkzeug weiterfährt, und las bis zu Geschwindigkeit mal Zyklus zu hoch (1,09 mm, wo die Analyse 0,76 mm angab, auf einem Quadrat des T-Portals). „Feste Skala“ setzt das obere Ende der Skala von Hand, damit zwei Läufe gleich zu lesen sind; beim Bahnfehler zeichnet „Toleranz“ weiter abliegende Punkte rot. Die Zeitleiste unter der Ansicht fährt durch die aufgezeichneten Szenen: Die gefahrene Bahn endet zur gezeigten Zeit, und der Vergleichslauf (der Geist) wird zur selben Zeit gezeigt.
+**3D-Ansicht.** Aus einfachen Körpern aufgebaut. Riemenscheiben, Motorwellen und Umlenkrollen drehen sich; die Riemenzähne laufen mit (alle 40 mm gezeichnet, nicht in der Zahnteilung); Riementrume färben sich oberhalb der Vorspannung rot und unterhalb blau. Beschriftungen zeigen die Drehzahl jedes Motors in 1/min und die Position jeder Achse. Ziehen mit der linken Maustaste dreht die Ansicht, mit der rechten oder mittleren verschiebt sie, das Mausrad zoomt; ein Ziehen, das auf einem Bedienfeld beginnt, lässt die Kamera in Ruhe, und ein kleineres Fenster oder ein breiteres Bedienfeld rückt die Kamera so weit zurück, wie die Maschine braucht. Ist eine Bahn geplant (der Teil „Bahn“ im rechten Bedienfeld), zeichnet die Ansicht die geplante Bahn als breite gelbe Linie dort, wo das Werkzeug fahren wird, und darüber als schmalere hellblaue Linie die Bahn, die die Werkzeugspitze wirklich fährt, sobald die Maschine sie abfährt. Die Bedienelemente der Ansicht färben diese gefahrene Bahn nach der Geschwindigkeit des Werkzeugs oder nach seinem Bahnfehler: seinem Abstand von der Bahn, die der Plan gezeichnet hat (die Sollwerte, denen die Antriebe folgen), derselbe Abstand, dessen Spitze die Analyse der Bahn als Bahnfehler angibt. Bis zum 14. November wurde er vom neuesten Sollwert des Plans gemessen, der sich einmal je Profilzyklus (1 ms) bewegt, während das Werkzeug weiterfährt, und las bis zu Geschwindigkeit mal Zyklus zu hoch (1,09 mm, wo die Analyse 0,76 mm angab, auf einem Quadrat des T-Portals). „Feste Skala“ setzt das obere Ende der Skala von Hand, damit zwei Läufe gleich zu lesen sind; beim Bahnfehler zeichnet „Toleranz“ weiter abliegende Punkte rot. Die Zeitleiste unter der Ansicht fährt durch die aufgezeichneten Szenen: Die gefahrene Bahn endet zur gezeigten Zeit, und der Vergleichslauf (der Geist) wird zur selben Zeit gezeigt.
 
 **Linkes Bedienfeld, von oben nach unten:**
 
@@ -1863,6 +1984,24 @@ Das Fenster hat oben eine Leiste (Maschine, Sprache, Ablauf, Einheiten, Farbsche
 | Diagramme der Oszilloskope | Ein Diagramm je Größe, eine Linie je Achse oder Motor; ein Motor hat in jedem Diagramm der App dieselbe Farbe (Oszilloskope, Betriebspunkte, Frequenzgang, Läufe). Sollwerte sind gestrichelt in der Farbe ihres Istwerts gezeichnet. Gemeinsame Zeitachse und gemeinsamer Cursor; Min, Max, Spanne und Effektivwert je Kurve, die Namen in ihren Farben unter dem Diagramm (keine Legende über den Linien); die Einheiten wechseln von selbst auf mm und µm, außer 1/min oder mm ist in der oberen Leiste gewählt. Ein langes Fenster wird mit dem kleinsten und größten Wert jedes von 3000 Abschnitten gezeichnet, so dass eine Spitze von einem Abtastwert Breite sichtbar bleibt |
 
 In den Ergebnistabellen der Analyse steht „in Ordnung“ für `ok` und „NICHT BESTANDEN“ für `FAIL`.
+
+### Eigenformen, der gefärbte Pfad, die Güte des Arbeitsraums und die Fehlerbänder
+
+**Eigenformen in der Lage** (oben im Reiter Reglereinstellung). „Eigenformen bestimmen“ fragt die Maschine nach ihren Eigenformen in der Lage, in der ihr Sollwert steht, und listet sie auf: Frequenz und Dämpfung, wie die Maschine sie meldet (die der Eingangsformer nimmt; die meisten Maschinen nehmen an, dass der Antrieb den Motor hält, es sind also die Eigenformen bei gehaltener Riemenscheibe), die Eigenform des linearisierten Modells, deren Form gezeigt wird, woher die Form kommt, und die Arten von Steifigkeit, die mindestens 5 % ihrer Formänderungsenergie tragen (Riemen, Getriebe, Führung, Gestell, Fundament, Glied). Wo die Maschine selbst eine Form gibt (`Machine::mode_shape`, bei den meisten die der niedrigsten Eigenform), wird diese gezeigt; für jede andere ist die Form der Eigenvektor des Problems kleiner Bewegungen des elastischen Modells in dieser Lage: Die Gleichungen der Maschine werden in Ruhe durch zentrale Differenzen abgeleitet, die Motoren frei und ihre Momente gehalten, und der Eigenvektor, der der gemeldeten Eigenform am nächsten liegt, wird durch inverse Iteration bestimmt. Seine eigene Frequenz und Dämpfung stehen in der Spalte „Linearisiert“; sie weichen von den gemeldeten ab, wo es darauf ankommt, dass die Motoren frei sind. Die Anteile der Steifigkeiten kommen aus der gemeldeten Frequenz: Die Steifigkeiten einer Art in der Konfiguration werden um 10 % steifer gemacht, und der Anteil ist das Doppelte der Änderung von ln f über ln 1,1 (Rayleigh); sie ergeben zusammen 1, wo jede Steifigkeit, in der die Eigenform lebt, eine dieser Arten ist. „Zeigen“ lässt diese Eigenform in der 3D-Ansicht schwingen, mit einer Schwingung je Sekunde und so groß, wie der Überhöhungsregler sagt, die Frequenz am Werkzeug; nochmals „Zeigen“ geht zur eigenen Eigenform der Maschine zurück. An der einzelnen Riemenachse kommt die Zwei-Massen-Eigenform (Schlitten gegen Riemenscheibe und Rotor) mit der Frequenz und dem Verhältnis der Ausschläge von Motor und Schlitten der Handrechnung dreier Massen an zwei Federn heraus (`the_belt_axis_two_mass_mode_has_the_hand_calculated_shape`). Dasselbe als CSV: `sim-cli modes MASCHINE --shapes` schreibt je Eigenform gemeldete und linearisierte Frequenz und Dämpfung, die Herkunft der Form, die Anteile der Steifigkeiten und die Form, je Zustand Real- und Imaginärteil.
+
+![Die Liste der Eigenformen am T-Portal, die zweite schwingend](../images/app-modes.png)
+
+**Der Pfad, gefärbt nach dem, was auf ihm geschah** (Reiter Bahn, unter der Darstellung des geplanten Pfads). Nach „Planen, fahren und analysieren“ färbt „Pfad gefärbt nach“ den Pfad, den die Analyse gefahren hat, in der 3D-Ansicht entlang seiner Länge, einmal je Millisekunde an der Stelle des Werkzeugs: nach dem Bahnfehler (dem Abstand zur Bahn, den die Analyse gemessen hat, den Werten von `path_error_series`), dem Nachlauffehler (zu dort, wo der Sollwert in diesem Augenblick steht), der Geschwindigkeit, der Auslastung jedes Motors (sein Moment über dem, was sein Antrieb bei dieser Drehzahl gibt, 100 % auf der Kennlinie) oder der höchsten Riemenzugkraft. Die Skala zeigt den kleinsten und den größten Wert entlang des Pfads, der schlechteste Punkt ist in der Ansicht rot markiert, und sein Knopf liest dort jede Größe aus; der Regler „Entlang des Pfads“ oder ein Klick auf den Pfad in der 3D-Ansicht liest sie an jedem anderen Punkt aus, cyan markiert. „nichts“ zeichnet geplanten und gefahrenen Pfad wie bisher als zwei einfache Linien.
+
+![Der Eckpfad am T-Portal, gefärbt nach seinem Bahnfehler, der schlechteste Punkt ausgelesen](../images/app-coloured-path.png)
+
+**Arbeitsraumkarte nach Beschleunigung** (Reiter Bahn). Die Karte, für jede Maschine, die die Konditionszahl ihrer Kinematik angibt (die Deltas, der parallele SCARA, die Arme im Werkzeugraum, der Hexapod, die Seilroboter; das Linear-Delta seit dem 15. November 2026), wird nach der Konditionszahl oder nach der größten Beschleunigung gefärbt, die die Motoren dem Werkzeug dort in der ungünstigsten Richtung geben können: Mit T = A a + g den Motormomenten des starren Modells hält Motor k |g_k| + |A_k . d| a bis zu seinem Spitzenmoment, die Beschleunigung in jeder Richtung ist also das kleinste (T_Spitze,k - |g_k|) / |A_k| (das Gewicht wird gehalten). Dunkel, wo die Maschine am besten ist, hell, wo am schlechtesten, für beide. Der Zeiger zeigt beide Zahlen. `sim-cli workspace MASCHINE [--z Z] [--points N]` schreibt die Karte als CSV: x, y, Konditionszahl, ob die Maschine dorthin fährt, Beschleunigung in m/s². In der Mitte des Linear-Deltas sind beide Zahlen die der Handrechnung (`the_workspace_map_has_the_hand_calculated_condition_and_acceleration_at_the_linear_deltas_centre`).
+
+![Die Arbeitsraumkarte des Linear-Deltas nach der Beschleunigung in der ungünstigsten Richtung](../images/app-workspace-acceleration.png)
+
+**Fehlerbänder in den Verläufen** (Reiter Analyse, unter der Tabelle der Bänder). „Grenzen rechnen“ rechnet den Zyklus mit jedem begrenzten Wert an seiner unteren und an seiner oberen Grenze, einen nach dem anderen (wie `verdicts --bands`; eine Grenze, deren unterer Wert ihr oberer ist, rechnet nichts), behält Moment und Schleppfehler jedes Motors und die Zugkraft jedes Riemenabschnitts und zeichnet je Signal die Hülle dieser Läufe, vom kleinsten zum größten Wert in jeder Millisekunde, als graues Band unter dem nominalen Verlauf. Ihre Arbeitspunkte erscheinen als graue Wolke unter denen des Zyklus in den Kennlinien. Die Bänder sind die der Grenzen einzeln, nicht die der Stichproben (`--samples`).
+
+![Moment, Schleppfehler und Riemenzugkraft der Einzelachse mit der Hülle ihrer Grenzläufe](../images/app-bands.png)
 
 Das rechte Bedienfeld rollt als Ganzes, und jeder seiner Teile (Oszilloskope, Konfigurationsdatei, Analyse, Effekt-Ansichten, Motorsuche, Bahn, Aufzeichnung, Frequenzgang der Mechanik, Reglereinstellung) lässt sich unter seiner Überschrift einklappen. Ein Teil klappt von selbst auf, wenn sein Ergebnis eintrifft. Die Tabellen sind für die Standardbreite des Bedienfelds ausgelegt: Lange Namen brechen um, und Zahlen haben vier Stellen.
 

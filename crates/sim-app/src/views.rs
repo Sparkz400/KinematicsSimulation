@@ -7,8 +7,9 @@
 
 use crate::ui::{ACTUAL, Action, LIMIT, PALETTE, PLAN, chalk, dim, key_row, plot, save_menu, scale_bar, trail_color};
 use bevy_egui::egui::{self, Color32, ComboBox, RichText, Ui};
-use egui_plot::{Bar, BarChart, HLine, Heatmap, Line, LineStyle, MarkerShape, PlotPoint, Points, VLine};
-use sim_app::model::{Model, display_scale};
+use egui_plot::{Bar, BarChart, HLine, Heatmap, Line, LineStyle, MarkerShape, PlotPoint, Points, Polygon, VLine};
+use sim_app::insight::PathQuantity;
+use sim_app::model::{Inputs, Model, display_scale};
 use sim_app::runs::{Run, plot_line, scaled_speeds};
 use sim_components::charts::{self, TorqueSpeed};
 
@@ -26,6 +27,10 @@ const MARKERS: [MarkerShape; 8] = [
 
 /// The unit of torque, as the runs give it.
 const TORQUE: &str = sim_app::runs::Quantity::Torque.unit();
+
+/// The bounds runs' envelope and operating points: a light neutral, none of the meaning colours, under the nominal
+/// trace and the runs' own points.
+const BOUNDS: Color32 = Color32::from_rgba_premultiplied(84, 90, 98, 140);
 
 /// How many colours the time scale of the operating points has.
 const TIME_STEPS: usize = 8;
@@ -64,9 +69,13 @@ pub fn torque_speed_grid(
     names: &[String],
     charts: &[TorqueSpeed],
     operating: &[Vec<Operating>],
+    cloud: &[Vec<[f64; 2]>],
     actions: &mut Vec<Action>,
 ) {
     let tr = |key: &str| model.tr.tr(key).to_string();
+    if !cloud.is_empty() {
+        key_row(ui, &[(tr("ui-bands-cloud"), BOUNDS, false)]);
+    }
     key_row(
         ui,
         &[
@@ -124,6 +133,12 @@ pub fn torque_speed_grid(
                                         .style(LineStyle::dashed_loose()),
                                 );
                             }
+                        }
+                        // Under the runs' own points: the bounds runs' operating points (`Model::band_points`).
+                        if let Some(points) = cloud.get(k).filter(|p| !p.is_empty()) {
+                            let every = points.len().div_ceil(MOST_POINTS).max(1);
+                            let points: Vec<[f64; 2]> = points.iter().step_by(every).copied().collect();
+                            plot.points(Points::new(tr("ui-bands-cloud"), points).color(BOUNDS).radius(2.5));
                         }
                         for run in runs {
                             let shape = MARKERS[run.run % MARKERS.len()];
@@ -214,7 +229,8 @@ pub fn analysis_torque_speed(
             }]
         })
         .collect();
-    torque_speed_grid(ui, model, id, &names, &curves, &operating, actions);
+    let cloud = if kind == sim_app::model::Analysis::Cycle { model.band_points() } else { Vec::new() };
+    torque_speed_grid(ui, model, id, &names, &curves, &operating, &cloud, actions);
 }
 
 /// The views tab: the run they show (the reference run of the store), and each view in a section of its own.
@@ -272,7 +288,7 @@ pub fn views(ui: &mut Ui, model: &Model, tolerance: Option<f64>, actions: &mut V
                 operating[k].push(points);
             }
         }
-        torque_speed_grid(ui, model, "views-ts", &names, &curves, &operating, actions);
+        torque_speed_grid(ui, model, "views-ts", &names, &curves, &operating, &[], actions);
     });
     section("charts-tool-error", true).show(ui, |ui| tool_error(ui, model, run, tolerance, actions));
     section("charts-torque-split", false).show(ui, |ui| torque_split(ui, model, run, &names, actions));
@@ -634,6 +650,159 @@ pub fn trace_residual(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             &title,
             &tr("ui-time"),
             || lines.iter().map(|(n, _, _, p)| (n.clone(), p.clone(), false)).collect(),
+            actions,
+        );
+    }
+}
+
+/// The mode list (`Model::modes_table`): per mode its frequency and damping as the machine reports them, the linearised
+/// model's mode its shape is of, where the shape comes from and the stiffness it lives in; a button per row shows that
+/// mode swinging in the 3D view, slowed down and exaggerated.
+pub fn mode_list(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-modes"));
+        if model.modes_outdated() {
+            ui.colored_label(PLAN, tr("ui-analysis-outdated"));
+        }
+        if ui.button(tr("ui-modes-find")).on_hover_text(tr("ui-modes-hint")).clicked() {
+            actions.push(Action::FindModes);
+        }
+    });
+    let Some(table) = model.modes_table() else { return };
+    if table.len() == 1 {
+        ui.label(RichText::new(tr("ui-modes-none")).color(dim()));
+        return;
+    }
+    egui::Grid::new("modes").striped(true).show(ui, |ui| {
+        ui.label("");
+        for cell in &table[0] {
+            ui.weak(cell);
+        }
+        ui.end_row();
+        for (i, row) in table[1..].iter().enumerate() {
+            let picked = model.insight.picked == Some(i);
+            if ui.selectable_label(picked, tr("ui-modes-show")).clicked() {
+                actions.push(Action::PickMode(if picked { None } else { Some(i) }));
+            }
+            for cell in row {
+                ui.label(cell);
+            }
+            ui.end_row();
+        }
+    });
+    ui.label(RichText::new(tr("ui-modes-note")).small().color(dim()));
+    ui.separator();
+}
+
+/// The factor and the unit a path quantity's values are shown in: errors in mm, the utilisation in %.
+fn shown_in(model: &Model, quantity: PathQuantity) -> (f64, String) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    match quantity {
+        PathQuantity::PathError | PathQuantity::TrackingError => (1e3, tr("unit-mm")),
+        PathQuantity::Speed => (1.0, tr("unit-m-per-s")),
+        PathQuantity::Utilisation(_) => (100.0, tr("unit-percent")),
+        PathQuantity::BeltTension => (1.0, "N".into()),
+    }
+}
+
+/// What the path that was run is coloured by in the 3D view (`Model::path_colours`), with its colour scale; its worst
+/// point, a button that reads out the values there; and a slider along the path, or a click on it in the 3D view, for
+/// the values at any other point.
+pub fn path_colouring(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
+    let quantities = model.path_quantities();
+    if quantities.is_empty() {
+        return;
+    }
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-colour"));
+        let name = |q: Option<PathQuantity>| q.map_or(tr("ui-colour-plain"), |q| model.path_quantity_label(q));
+        ComboBox::from_id_salt("path-colour").selected_text(name(inputs.path_colour)).width(220.0).show_ui(ui, |ui| {
+            for q in std::iter::once(None).chain(quantities.iter().copied().map(Some)) {
+                ui.selectable_value(&mut inputs.path_colour, q, name(q));
+            }
+        });
+    });
+    let Some(colours) = model.path_colours() else { return };
+    let (factor, unit) = shown_in(model, colours.quantity);
+    let low = colours.values.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = colours.values[colours.worst];
+    let shown = |v: f64| format!("{} {unit}", sim_app::model::short(v * factor));
+    scale_bar(ui, &shown(low), &shown(high), trail_color);
+    let worst = colours.worst;
+    let label = format!(
+        "■ {} {} · {} {}",
+        tr("ui-colour-worst"),
+        shown(high),
+        tr("ui-time"),
+        sim_app::model::short(colours.time[worst])
+    );
+    if ui.button(RichText::new(label).color(LIMIT)).on_hover_text(tr("ui-colour-worst-hint")).clicked() {
+        inputs.path_probe = Some(worst);
+    }
+    let last = colours.values.len().saturating_sub(1);
+    let mut at = inputs.path_probe.unwrap_or(worst).min(last);
+    let slider = egui::Slider::new(&mut at, 0..=last).show_value(false).text(tr("ui-colour-probe"));
+    if ui.add(slider).on_hover_text(tr("ui-colour-probe-hint")).changed() {
+        inputs.path_probe = Some(at);
+    }
+    egui::Grid::new("path-values").striped(true).show(ui, |ui| {
+        for row in model.path_values_at(at) {
+            for cell in row {
+                ui.label(cell);
+            }
+            ui.end_row();
+        }
+    });
+}
+
+/// The bounds runs drawn where their numbers are plotted (`Model::band_plots`): per traced signal of the cycle the
+/// envelope of the runs with each bounded value at its bounds as a shaded band, the nominal trace over it.
+pub fn band_plots(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(tr("ui-bands-traces"));
+        if model.bands_outdated() {
+            ui.colored_label(PLAN, tr("ui-analysis-outdated"));
+        }
+        if model.bands_tracing() {
+            ui.spinner();
+        } else if ui.button(tr("ui-bands-run")).on_hover_text(tr("ui-bands-run-hint")).clicked() {
+            actions.push(Action::TraceBands);
+        }
+    });
+    let Some((_, runs)) = &model.insight.band_runs else { return };
+    ui.label(RichText::new(format!("{} {}", runs.runs, tr("ui-bands-runs"))).small().color(dim()));
+    key_row(ui, &[(tr("ui-bands-nominal"), chalk(), false), (tr("ui-bands-envelope"), BOUNDS, false)]);
+    for (k, (title, nominal, stretches)) in model.band_plots().iter().enumerate() {
+        ui.label(RichText::new(title).strong());
+        let drawn = plot(("bands", k))
+            .height(130.0)
+            .link_axis("bands", [true, false])
+            .link_cursor("bands", [true, false])
+            .x_axis_label(tr("ui-time"))
+            .show(ui, |plot| {
+                for &[t0, t1, low, high] in stretches {
+                    let corners = vec![[t0, low], [t1, low], [t1, high], [t0, high]];
+                    plot.polygon(Polygon::new("", corners).fill_color(BOUNDS).stroke(egui::Stroke::NONE));
+                }
+                plot.line(Line::new(title, nominal.clone()).color(chalk()).width(1.4));
+            });
+        save_menu(
+            &drawn.response,
+            model,
+            title,
+            &tr("ui-time"),
+            || {
+                let edge = |i: usize| stretches.iter().map(|s| [s[0], s[i]]).collect::<Vec<_>>();
+                vec![
+                    (tr("ui-bands-nominal"), nominal.clone(), false),
+                    (tr("ui-bands-low"), edge(2), false),
+                    (tr("ui-bands-high"), edge(3), false),
+                ]
+            },
             actions,
         );
     }

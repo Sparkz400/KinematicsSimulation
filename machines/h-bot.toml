@@ -36,6 +36,9 @@ axis = ""
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 gravity = true
 payload = true
 belt_stretch = true
@@ -68,6 +71,10 @@ cable_chain = false
 process_force = false
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 temperature = false
 velocity_feedforward = true
 torque_feedforward = true
@@ -399,6 +406,9 @@ torque_feedforward_model = "rigid"
 # the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
 friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
@@ -438,6 +448,9 @@ noise_seed = 1
 fault_reaction = "off3"
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 # What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
 # standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
@@ -618,6 +631,8 @@ tension_reserve = 0.5
 # rigid model leaves out whatever the room: the guides' friction, which the loss-free rigid model does not carry:
 # the x guide's 15 N coulomb plus 20 N s/m at the axis' 0.8 m/s.
 tension_margin_n = 31.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 # For a path of lines and arcs: how far the planned path may leave them, so that transition curves
 # (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
 path_tolerance_m = 0.0
@@ -657,6 +672,13 @@ damping_ratio_rx = 0.02
 damping_ratio_ry = 0.02
 damping_ratio_rz = 0.02
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates, in the tables and units they have above.
 # `sim-cli verdicts --bands` runs the cycle with each at its low and at its high bound, one at a time,
 # and `sim-cli sensitivity` uses the bounds in place of its flat percentage.
@@ -665,6 +687,8 @@ damping_ratio_rz = 0.02
 # without runs while they change nothing: [thermal] and the line module's efficiency with their effects off, and
 # the DC link's discharge, which acts only while the drives are disabled.
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 base.mass_kg = [90.0, 240.0]
 base.stiffness_x_n_m = [9.6e5, 6.0e6]
 base.damping_ratio_x = [0.01, 0.05]

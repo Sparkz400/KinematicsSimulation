@@ -114,3 +114,20 @@ fn the_platform_has_the_hand_calculated_momentum() {
     }
     assert!((f.mass - 62.2).abs() < 1e-12 && (f.first_moment[2] - 62.2 * 0.48).abs() < 1e-9 && f.gravity[2] < 0.0);
 }
+
+/// Friction feedforward from the machine's own model, by hand: the platform at home rising at 0.1 m/s. Each leg (L =
+/// 0.5471158 m, 0.48 m of it upwards) runs out at q' = 0.48 / 0.5471158 x 0.1 = 0.0877328 m/s. Its guide 20 N plus the
+/// nut's preload, 0.05 / sqrt(tan b) Fpr l / 2 pi with tan b = 0.01 / (pi 0.025): 0.133809 N m at the screw, times
+/// 2 pi / 0.01 = 628.3185: 84.0749 N; plus 60 N s/m x 0.0877328: 109.3388 N. Through the screw's ratio and its 0.9 (the
+/// power, 9.6 W, far above the 0.5 W the efficiency fades in): 109.3388 / (628.3185 x 0.9) = 0.193354 N m. The motor
+/// shaft at 628.3185 x 0.0877328 = 55.1241 rad/s: 0.05 tanh(110.2) + 2e-4 x 55.1241 = 0.061025 N m. So 0.254378 N m at
+/// every motor.
+#[test]
+fn the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one() {
+    let machine = (ENTRY.build)(&ENTRY.config()).unwrap();
+    let mut out = [0.0; 6];
+    machine.steady_friction(&[0.0, 0.0, 0.48, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.1, 0.0, 0.0, 0.0], &mut out);
+    for (k, torque) in out.iter().enumerate() {
+        assert!((torque - 0.254378).abs() < 1e-5, "motor {k}: {torque} N m");
+    }
+}

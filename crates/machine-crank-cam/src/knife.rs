@@ -87,6 +87,15 @@ impl RotaryKnife {
 }
 
 impl Mechanism for RotaryKnife {
+    /// In the scene's frame: the roll with its knife bars spinning about -y (their centre stays put), the rotor with it;
+    /// the cut braking the blade at the cut point under the roll, along -x there.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let mut f =
+            sim_core::FrameMomentum { external: [-self.cut_force(q[0], qd[0]), 0.0, 0.0], ..Default::default() };
+        sim_components::base::add_spin(&mut f, [0.0, -1.0, 0.0], self.j(), qd[0]);
+        f.angular[1] -= rotor_spin[0];
+        Some(f)
+    }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         mass[0] = self.j();
         bias[0] = 0.0;

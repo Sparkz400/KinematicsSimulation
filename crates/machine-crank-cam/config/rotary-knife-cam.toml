@@ -36,6 +36,10 @@ gearbox_efficiency = true
 torque_ripple = true
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 # The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
 # file). On in the shipped configs.
 process_force = true
@@ -94,6 +98,9 @@ crash = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 braking_resistor_heating = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
@@ -114,6 +121,9 @@ iron_loss = true
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
@@ -153,6 +163,8 @@ torque_reserve = 0.8
 # Read but not used: no belt.
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
 # How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
@@ -325,6 +337,9 @@ torque_feedforward_model = "rigid"
 # the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
 friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
@@ -368,6 +383,9 @@ following_error_window_rad = 1.0
 max_speed_rad_s = 615.07
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 standstill_time_s = 1.0
 standstill_window_rad = 0.1
@@ -438,8 +456,17 @@ target = [0.0]
 dwell_s = 0.1
 payload = true
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]

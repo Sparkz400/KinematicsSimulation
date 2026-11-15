@@ -47,6 +47,10 @@ gearbox_mesh_friction = true
 torque_ripple = true
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 velocity_feedforward = true
 torque_feedforward = true
 encoder_resolution = true
@@ -92,14 +96,18 @@ crash = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
 braking_resistor_heating = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
 # as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
 # cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
 fine_interpolation = true
-# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). Off: no shipped
-# config has a recorded characteristic.
-friction_feedforward = false
+# Friction feedforward (S120 p3820-p3839): with drive.friction_feedforward_model = "machine" the friction of the
+# machine's own model at the planned speed, else the characteristic drive.friction_feedforward_* (0 N m here: none
+# recorded, so on as in the joint configs' common file, and changing nothing).
+friction_feedforward = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
 # pickers D2 and D3, whose sizing was redone with them.
@@ -119,6 +127,9 @@ iron_loss = true
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -126,6 +137,10 @@ magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
 motor_stiction = false
+# A slide's guides hold a load at rest within their breakaway force without creeping and turn over a presliding travel
+# at a reversal: a presliding friction state (slide.presliding_stiffness_n_m, friction_breakaway_n, friction_stribeck_m_s)
+# in place of the smoothed Coulomb step. Read by the slides only (screw, rack, linear motor, the SCARA's screw).
+slide_presliding = false
 # The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
 # keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
 # stay as they were.
@@ -161,6 +176,8 @@ torque_reserve = 0.8
 # Read but not used: no belt.
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
 
@@ -446,6 +463,9 @@ braking_module = false
 # the points from 0 and held beyond the last (S120 p3820-p3839). [estimate] none recorded: no feedforward.
 friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "characteristic"
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
@@ -473,6 +493,9 @@ fault_reaction = "off3"
 following_error_window_rad = 1.0
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 standstill_time_s = 1.0
 standstill_window_rad = 0.1
@@ -620,8 +643,17 @@ target = [0.9, -0.3, 0.7, 0.0, 1.5707963267948966, 0.0]
 dwell_s = 0.0
 payload = false
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
@@ -665,6 +697,7 @@ base.tilt_stiffness_z_nm_rad = [2.52e5, 1.575e6]
 gearbox.no_load_torque_nm = [0.4, 0.6]
 link_bending.damping_ratio = [0.01, 0.05]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
@@ -701,3 +734,7 @@ damping_ratio = 0.02
 outer_diameter_m = [0.0, 0.14, 0.12, 0.1, 0.08, 0.06, 0.0]  # [estimate] one per joint of this URDF
 wall_m = [0.0, 0.008, 0.008, 0.006, 0.005, 0.004, 0.0]  # [estimate]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10

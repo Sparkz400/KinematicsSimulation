@@ -1,6 +1,7 @@
 //! The app's logic without its window: the simulation session and the interface model.
 //! `main.rs` and `ui.rs` draw it with Bevy and egui.
 
+pub mod insight;
 pub mod model;
 pub mod runs;
 pub mod search_views;

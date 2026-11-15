@@ -1,11 +1,14 @@
 # Signals of the CSV files at the motor shaft. The source gives the motor's angle and speed already as table travel
 # (m, m/s, through the lead it used); per_rev = 0.04 m is the lead of machine.toml, an [estimate] (README.md).
+# The source records the position setpoint its loop compares with the position of the same cycle; the simulator's
+# trace holds the setpoint the drive worked with up to the row, the one of the cycle before. time_offset_s = 1 ms puts
+# the setpoint on the simulator's clock, so that the following errors compare (docs/measurement-procedure.md).
 format = "csv"
 time = "time"
 
 [[motor]]
 id = "x"
-setpoint = { signal = "position setpoint", per_rev = 0.04 }
+setpoint = { signal = "position setpoint", per_rev = 0.04, time_offset_s = 1e-3 }
 angle = { signal = "position actual", per_rev = 0.04 }
 speed = { signal = "speed actual", per_rev = 0.04 }
 torque = "torque actual"

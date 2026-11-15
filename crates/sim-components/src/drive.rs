@@ -119,6 +119,69 @@ pub struct DriveParams {
     pub resistor_heating: Option<ResistorHeating>,
     /// Fine interpolation, the torque feedforward's model, friction feedforward and balancing (`Precontrol`).
     pub precontrol: Precontrol,
+    /// motor.kind: the motor the drive turns (`Motor`); the servo motor this module models by default.
+    pub motor: Motor,
+}
+
+/// motor.kind: "servo" (the default, the permanent-magnet servo motor of this module), "stepper" (`stepper::Stepper`
+/// behind an open-loop step and direction drive) or "induction" (`induction::Induction` on a frequency converter).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Motor {
+    #[default]
+    Servo,
+    Stepper(crate::stepper::Stepper),
+    Induction(crate::induction::Induction),
+}
+
+impl Motor {
+    fn from_config(cfg: &Config) -> Result<Self> {
+        match cfg.get("motor.kind").ok().map(|v| v.as_str()) {
+            None | Some(Some("servo")) => Ok(Self::Servo),
+            Some(Some("stepper")) => Ok(Self::Stepper(crate::stepper::Stepper::from_config(cfg)?)),
+            Some(Some("induction")) => Ok(Self::Induction(crate::induction::Induction::from_config(cfg)?)),
+            _ => Err(ConfigError::Invalid("motor.kind".into())),
+        }
+    }
+
+    /// Whether the drive runs the motor without its speed loop: the stepper's step generator and the induction motor's
+    /// V/f control follow the speed setpoint open loop, and take no torque setpoint.
+    pub fn open_loop(&self) -> bool {
+        match self {
+            Self::Servo => false,
+            Self::Stepper(_) => true,
+            Self::Induction(m) => !m.field_oriented,
+        }
+    }
+}
+
+/// The electrical states of a winding in the integration of a base step (`Sim::step`), per drive: the first state, the
+/// electrical energy, the copper loss and the work on the shaft, then three more. The servo's one winding has its current
+/// first and the last three at rest; the other motors keep theirs in `Phases::x`.
+pub const WINDING_STATES: usize = 7;
+
+/// The state of a stepper's or an induction motor's windings and drive beside the servo's (`Motor`); unused for the servo.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Phases {
+    /// The electrical states (stepper: i_a, i_b; induction: stator and rotor flux in d and q), as integrated.
+    pub x: [f64; 4],
+    /// The voltages held over the base step (stepper: phases a and b; induction: d and q).
+    pub u: [f64; 2],
+    /// The current controllers' integrators (induction, field-oriented).
+    pub integral: [f64; 2],
+    /// The rotor at the end of the last step: its angle and speed at the motor, rad and rad/s.
+    pub angle: f64,
+    pub speed: f64,
+    /// Stepper: the angle the step generator commands, rad at the motor; the angle the windings count from (where the
+    /// drive was enabled, on a full step); the electrical angle of the current vector, in whole microsteps; and the
+    /// load angle, that less the rotor's electrical angle (beyond the pull-out angle the rotor falls out of step).
+    pub command: f64,
+    pub origin: f64,
+    pub electrical: f64,
+    pub load_angle: f64,
+    /// Induction: the electrical speed of the frame the voltages are set in, rad/s, and the drive's estimate of the rotor
+    /// flux (field-oriented) or its estimate of the torque (V/f, for the slip compensation).
+    pub frame_speed: f64,
+    pub estimate: f64,
 }
 
 /// What the drive does with the setpoints between and beside the gains, as a SINAMICS S120/S210 in DSC is set up.
@@ -137,6 +200,10 @@ pub struct Precontrol {
     /// effects.friction_feedforward: the friction characteristic, (speed rad/s, torque N m) points at rising speeds
     /// (S120 p3820-p3839); empty when off. See `friction_at`.
     pub friction: Vec<[f64; 2]>,
+    /// effects.friction_feedforward with drive.friction_feedforward_model = "machine": in place of the characteristic,
+    /// the friction of the machine's own model at the planned speed (`Machine::steady_friction`, `Drive::friction_ff`).
+    #[serde(default)]
+    pub machine_friction: bool,
     /// drive.precontrol_balance_s: the position setpoint passes a first-order lag of this time constant before the
     /// position loop compares it, so that it arrives with the motor that the speed precontrol moves through the
     /// closed speed loop (S120 p1429 balancing); 0 off.
@@ -395,7 +462,14 @@ impl DriveParams {
             Ok(Some("inertia")) => true,
             Ok(_) => return Err(ConfigError::Invalid("drive.torque_feedforward_model".into())),
         };
-        let friction = if switched("friction_feedforward")? {
+        // Which friction the feedforward adds: the drive's recorded characteristic (no key: as before 15 November 2026),
+        // or the machine's own model at the planned speed.
+        let machine_friction = match cfg.get("drive.friction_feedforward_model").map(|v| v.as_str()) {
+            Err(_) | Ok(Some("characteristic")) => false,
+            Ok(Some("machine")) => true,
+            Ok(_) => return Err(ConfigError::Invalid("drive.friction_feedforward_model".into())),
+        } && switched("friction_feedforward")?;
+        let friction = if switched("friction_feedforward")? && !machine_friction {
             let (speeds, torques) = (
                 cfg.f64s("drive.friction_feedforward_speed_rad_s")?,
                 cfg.f64s("drive.friction_feedforward_torque_nm")?,
@@ -414,6 +488,7 @@ impl DriveParams {
             fine_interpolation: switched("fine_interpolation")?,
             constant_inertia,
             friction,
+            machine_friction,
             balance_time: if cfg.get("drive.precontrol_balance_s").is_ok() {
                 cfg.non_negative("drive.precontrol_balance_s")?
             } else {
@@ -438,15 +513,26 @@ impl DriveParams {
         } else {
             None
         };
+        let motor = Motor::from_config(cfg)?;
         Ok(Self {
             // Copper at the rated rise; a rated current above the stall current (a misprint, see catalog) gives no iron loss.
             iron_loss_rated: resistance
                 * (1.0 + COPPER * rated_rise)
                 * (stall_current * stall_current - rated_current * rated_current).max(0.0),
-            stall_current: if stall_current > 0.0 { stall_current } else { rated_current },
+            // An induction motor's rotor heats it too: at the rated point the copper loss of both brings it to its rated
+            // rise, as the stall current's alone would (Drive::thermal_current).
+            stall_current: match &motor {
+                Motor::Induction(m) => {
+                    let warm = resistance * (1.0 + COPPER * rated_rise);
+                    (m.rated_copper_loss(warm) / warm).sqrt()
+                }
+                _ if stall_current > 0.0 => stall_current,
+                _ => rated_current,
+            },
             magnet_coefficient,
             resistor_heating,
             precontrol,
+            motor,
             field_weakening,
             overload: Overload::from_config(cfg)?,
             thermal_nodes,
@@ -728,6 +814,12 @@ impl DriveParams {
     /// `torque_curve` with the winding getting `max_voltage` at most. Without field weakening the fade's two speeds
     /// scale with it against `max_voltage` (the back-EMF the voltage leaves room for).
     pub fn torque_curve_at(&self, speed: f64, max_voltage: f64) -> (f64, f64) {
+        // A stepper's pull-out curve, an induction motor's breakdown curve.
+        match &self.motor {
+            Motor::Stepper(s) => return s.torque_curve(self, speed, max_voltage / WINDING_PER_DC_LINK),
+            Motor::Induction(m) => return m.torque_curve(self, speed, max_voltage / WINDING_PER_DC_LINK),
+            Motor::Servo => {}
+        }
         if let Some(fw) = &self.field_weakening {
             let (motoring, braking) = (
                 self.field_weakened_torque(fw, speed.abs(), max_voltage, true).min(self.peak_torque),
@@ -751,6 +843,11 @@ impl DriveParams {
     /// without it the winding has no d axis in this model, so its steady voltage is R i + kE w and the limit is
     /// i = (U - kE w) / R in the direction of motion (the inductance drops out of the steady state).
     pub fn voltage_limited_torque(&self, speed: f64, dc_voltage: f64) -> (f64, f64) {
+        match &self.motor {
+            Motor::Stepper(s) => return s.torque_curve(self, speed, dc_voltage),
+            Motor::Induction(m) => return m.torque_curve(self, speed, dc_voltage),
+            Motor::Servo => {}
+        }
         let umax = WINDING_PER_DC_LINK * dc_voltage;
         let (motoring, braking) = match &self.field_weakening {
             Some(fw) => (
@@ -764,6 +861,29 @@ impl DriveParams {
             }
         };
         if speed >= 0.0 { (-braking, motoring) } else { (-motoring, braking) }
+    }
+
+    /// The rates of drive `d`'s electrical states `w` (`WINDING_STATES`, as `Drive::winding_states` gives them) at a
+    /// moment of a base step, with the rotor at `angle` and `speed` at the motor, into `rates`; returns the motor torque.
+    /// The servo's are `winding_rates` and `torque_with`.
+    pub fn motor_rates(&self, d: &Drive, w: &[f64], angle: f64, speed: f64, rates: &mut [f64]) -> f64 {
+        match &self.motor {
+            Motor::Servo => {
+                let (i, flux) = (w[0], d.flux(self));
+                rates[..4].copy_from_slice(&self.winding_rates(
+                    d.voltage,
+                    d.winding_resistance(self),
+                    i,
+                    speed,
+                    d.d_current,
+                    flux,
+                ));
+                rates[4..].fill(0.0);
+                self.torque_with(i, d.d_current, flux)
+            }
+            Motor::Stepper(s) => s.rates(self, d, w, angle, speed, rates),
+            Motor::Induction(m) => m.rates(self, d, w, speed, rates),
+        }
     }
 }
 
@@ -799,6 +919,10 @@ pub struct Drive {
     /// Time since the profile generator last wrote the setpoints; the controller adds a base step after each.
     pub since_setpoint: f64,
     pub torque_ff: f64,
+    /// With `drive.friction_feedforward_model = "machine"` (`Precontrol::machine_friction`): the friction the machine's
+    /// own model has at the planned speed (`Machine::steady_friction`), written with the setpoints; 0 otherwise.
+    #[serde(default)]
+    pub friction_ff: f64,
     /// The setpoint the position loop compared with at its last cycle: `pos_set` run on between profile cycles
     /// (`Precontrol::fine_interpolation`) and balanced (`Precontrol::balance_time`). `following_error` is from it.
     pub position_setpoint: f64,
@@ -883,6 +1007,8 @@ pub struct Drive {
     /// Set when the mode changes between position, velocity and torque: the next velocity loop that runs its PI sets
     /// the integrator so that its output is the torque last asked for (bumpless transfer, `set_mode`).
     retune: bool,
+    /// A stepper's or an induction motor's windings and drive (`Phases`); unused for the servo.
+    pub phases: Phases,
 }
 
 /// `value` goes into the queue; what was computed `cycles` ago comes out.
@@ -925,8 +1051,33 @@ impl Drive {
             torque_queue: std::iter::repeat_n(torque, p.velocity_delay).collect(),
             ..Self::default()
         };
+        match &p.motor {
+            Motor::Stepper(s) => s.at_rest(&mut drive, p, pos),
+            Motor::Induction(m) => m.at_rest(&mut drive, p, pos, torque),
+            Motor::Servo => {}
+        }
         drive.hold_current(p);
         drive
+    }
+
+    /// The electrical states this drive's winding starts a base step with, in the order of `WINDING_STATES`.
+    pub fn winding_states(&self, p: &DriveParams) -> [f64; WINDING_STATES] {
+        match p.motor {
+            Motor::Servo => [self.current, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            _ => {
+                let x = self.phases.x;
+                [x[0], 0.0, 0.0, 0.0, x[1], x[2], x[3]]
+            }
+        }
+    }
+
+    /// The magnetic energy in the winding: L i^2 / 2 for the servo and the stepper (both phases), the induction motor's
+    /// own (`induction::Induction::stored_energy`).
+    pub fn magnetic_energy(&self, p: &DriveParams) -> f64 {
+        match &p.motor {
+            Motor::Induction(m) => m.stored_energy(&self.phases.x),
+            _ => 0.5 * p.inductance * self.current * self.current,
+        }
     }
 
     /// The current loop holding its current at rest: the voltage R i, with the winding's resistance at its temperature,
@@ -966,6 +1117,15 @@ impl Drive {
     /// The RMS phase current: of the q current `current` and the d current together.
     pub fn phase_current(&self) -> f64 {
         self.current.hypot(self.d_current)
+    }
+
+    /// The current that heats the winding as the step's copper loss does, against `DriveParams::stall_current`: the phase
+    /// current; for an induction motor, whose rotor is heated too, sqrt(copper loss / R_s).
+    pub fn thermal_current(&self, p: &DriveParams) -> f64 {
+        match p.motor {
+            Motor::Induction(_) => (self.copper_loss / self.winding_resistance(p)).sqrt(),
+            _ => self.phase_current(),
+        }
     }
 
     /// The speed the velocity loop measured at its last cycle, filtered.
@@ -1047,6 +1207,14 @@ impl Drive {
         // Velocity feedforward, interpolated between profile cycles. Holding it for a whole profile
         // cycle would make the speed command a staircase and the torque a sawtooth.
         let speed_set = self.vel_set + self.acc_set * self.since_setpoint;
+        // Open loop (a stepper, V/f): the speed setpoint goes to the step generator or the frequency, no PI.
+        if p.motor.open_loop() {
+            self.speed_command = match (self.fault_speed, self.mode) {
+                (Some(speed), _) | (None, DriveMode::Velocity(speed)) => speed,
+                _ => speed_set,
+            };
+            return;
+        }
         // A fault's stop ramp wins over every mode.
         let mode = if self.fault_speed.is_some() { DriveMode::Velocity(0.0) } else { self.mode };
         self.speed_command = match (self.fault_speed, mode) {
@@ -1060,7 +1228,9 @@ impl Drive {
             _ => None,
         };
         let feedforward = match mode {
-            DriveMode::Position => p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set),
+            DriveMode::Position => {
+                p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set) + self.friction_ff
+            }
             _ => 0.0,
         };
         if self.retune && outside_torque.is_none() {
@@ -1097,6 +1267,11 @@ impl Drive {
     /// Current loop: PI on the winding current. The voltage it sets is held over the next base step, in which the
     /// integrator takes the winding through it (`DriveParams::winding_rates`); then `winding_stepped`.
     pub fn current_control(&mut self, p: &DriveParams, speed: f64) {
+        match &p.motor {
+            Motor::Stepper(s) => return s.control(self, p),
+            Motor::Induction(m) => return m.control(self, p, speed),
+            Motor::Servo => {}
+        }
         let measured = self.current + if p.current_noise > 0.0 { p.current_noise * self.noise.next() } else { 0.0 };
         let setpoint = p.current_for(self.torque_command);
         let error = setpoint - measured;
@@ -1139,7 +1314,13 @@ impl Drive {
     /// DC link of its own and the winding's heating.
     pub fn winding_stepped(&mut self, p: &DriveParams, current: f64, [electrical, copper, work]: [f64; 3]) {
         let dt = p.current_cycle;
-        (self.current, self.torque) = (current, p.torque_with(current, self.d_current, self.flux(p)));
+        match &p.motor {
+            Motor::Servo => {
+                (self.current, self.torque) = (current, p.torque_with(current, self.d_current, self.flux(p)))
+            }
+            Motor::Stepper(s) => s.stepped(self, p),
+            Motor::Induction(m) => m.stepped(self, p),
+        }
         // A drive just enabled without the DC link simulated draws its winding's first L i^2 / 2 from the supply here.
         (self.power, self.copper_loss, self.shaft_power, self.discharge_power) =
             ((electrical + std::mem::take(&mut self.enable_energy)) / dt, copper / dt, work / dt, 0.0);
@@ -1172,7 +1353,8 @@ impl Drive {
     /// against its voltage: it is gone within microseconds, well inside the step, and its energy L i^2 / 2 goes to
     /// the DC link (as power fed back over this step; without the DC link simulated, back to the supply).
     pub fn disabled_step(&mut self, p: &DriveParams) {
-        let freewheeling = 0.5 * p.inductance * self.current * self.current;
+        let freewheeling = self.magnetic_energy(p);
+        (self.phases.x, self.phases.u, self.phases.integral) = ([0.0; 4], [0.0; 2], [0.0; 2]);
         (self.torque, self.torque_command, self.torque_demand, self.current, self.voltage) = (0.0, 0.0, 0.0, 0.0, 0.0);
         // shortcut: a disabled drive is not told the speed, so a rotor still turning loses no iron here; pass the speed
         // in if coasting with the drive off is ever sized thermally.
@@ -1359,6 +1541,7 @@ pub(crate) mod tests {
             overload: None,
             thermal_nodes: None,
             precontrol: Precontrol::default(),
+            motor: Motor::Servo,
             iron_loss_rated: 0.0,
             stall_current: 1.27 / 0.45,
             magnet_coefficient: 0.0,

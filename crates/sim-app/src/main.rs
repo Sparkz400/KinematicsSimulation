@@ -3,6 +3,8 @@
 
 mod ui;
 mod views;
+#[cfg(test)]
+mod window_tests;
 
 use bevy::anti_alias::smaa::Smaa;
 use bevy::asset::RenderAssetUsages;
@@ -10,7 +12,7 @@ use bevy::asset::io::file::FileAssetReader;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraOutputMode, Hdr, RenderTarget, Viewport};
 use bevy::gltf::GltfAssetLabel;
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
@@ -115,6 +117,15 @@ struct Ghost {
 /// The ghost's colour: a light neutral grey, see-through, none of the palette's meaning colours.
 const GHOST: Color = Color::srgba(0.86, 0.88, 0.92, 0.25);
 
+/// The planned path's line (`draw_paths`): wider than the travelled one and a little behind it, so that both show
+/// where the tool follows the plan. Drawn as the other lines, at the same depth the travelled line lost the depth
+/// test to the plan's drawn before it and was never seen.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct PlanLine;
+
+/// How far behind the plan's line is drawn: its depth times 1 less this, a hair, so that it hides nothing else.
+const PLAN_BEHIND: f32 = 1e-3;
+
 /// The gap between the tool and the plan, as the plan overlay and the deviation tube draw it.
 const GAP: Color = Color::srgb(0.9, 0.3, 0.9);
 
@@ -148,6 +159,10 @@ struct Shapes {
 #[derive(Component)]
 struct WorldCamera;
 
+/// The coloured path's lines (`Model::path_colours`): wider than the other lines, so that their colour reads.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct PathGizmos;
+
 fn main() {
     let lang = std::env::var("SIM_APP_LANG")
         .ok()
@@ -173,10 +188,25 @@ fn main() {
         eprintln!("{}", model.tr.tr_arg(key, &detail));
         std::process::exit(2);
     }
-    let window =
-        Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
-    App::new()
-        .insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
+    // SIM_APP_SIZE ("1280x720"): another window size, for the screenshot hook (`developer_hooks`).
+    let size = std::env::var("SIM_APP_SIZE").ok().and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    });
+    let window = Window {
+        title: model.tr.tr("ui-window-title").into(),
+        resolution: size.unwrap_or((1600u32, 900u32)).into(),
+        ..default()
+    };
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }));
+    add_app(&mut app, model);
+    app.run();
+}
+
+/// The app's state, panels and systems, on top of Bevy's plugins (`main`'s, or the window tests' without a screen).
+fn add_app(app: &mut App, model: Model) {
+    app.insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
         .insert_resource(State {
             model,
             orbit: Orbit { yaw: 0.35, pitch: 0.2, distance: 2.5, target: Vec3::ZERO },
@@ -205,8 +235,9 @@ fn main() {
             encodings: Vec::new(),
             notes: Default::default(),
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
+        .init_gizmo_group::<PathGizmos>()
+        .init_gizmo_group::<PlanLine>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -225,19 +256,22 @@ fn main() {
         )
         // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
         .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
-        .add_systems(EguiPrimaryContextPass, panels)
-        .run();
+        .add_systems(EguiPrimaryContextPass, panels);
 }
 
 fn setup(
     mut commands: Commands,
+    mut gizmo_configs: ResMut<GizmoConfigStore>,
     mut egui_settings: ResMut<EguiGlobalSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut egui_textures: ResMut<EguiUserTextures>,
 ) {
+    gizmo_configs.config_mut::<PathGizmos>().0.line.width = 5.0;
     // The panels get their own camera on top, so the 3D camera can be confined to the free area.
     egui_settings.auto_create_primary_context = false;
+    let (plan, _) = gizmo_configs.config_mut::<PlanLine>();
+    (plan.line.width, plan.depth_bias) = (5.0, PLAN_BEHIND);
     commands.insert_resource(Shapes {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         cylinder: meshes.add(Cylinder::new(0.5, 1.0)),
@@ -501,7 +535,7 @@ fn arrow_length(force: f32) -> f32 {
 /// The planned path as a line in the 3D view, and over it the path the tool has really travelled since; a grid on
 /// the floor; where they are switched on, the force arrows and where the plan has the tool; a box around the part
 /// picked by a click; and the obstacles of the config with the clearance to the nearest.
-fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
+fn draw_paths(state: Res<State>, mut gizmos: Gizmos, mut wide: Gizmos<PathGizmos>, mut plan: Gizmos<PlanLine>) {
     if let Some((_, middle, width)) = state.floor {
         let flat = Isometry3d::new(middle, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
         gizmos.grid(flat, UVec2::splat((width / 0.1) as u32), Vec2::splat(0.1), Color::srgba(1.0, 1.0, 1.0, 0.05));
@@ -546,7 +580,22 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
         gizmos.line(to_bevy(from), to_bevy(to), palette(ui::LIMIT));
     }
     if let Some(run) = &state.model.path_run {
-        gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
+        plan.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
+    }
+    // The path that was run, coloured by what happened on it (`Model::path_colours`) on the scale the path tab shows,
+    // with its worst point red and the point read out there cyan.
+    if let Some(colours) = state.model.path_colours() {
+        let (low, high) = (colours.values.iter().copied().fold(f64::INFINITY, f64::min), colours.values[colours.worst]);
+        wide.linestrip_gradient(colours.points.iter().zip(&colours.values).map(|(p, v)| {
+            let [r, g, b] = ui::trail_color(((v - low) / (high - low).max(1e-12)) as f32);
+            (to_bevy(*p), Color::srgb(r, g, b))
+        }));
+        gizmos.sphere(Isometry3d::from_translation(to_bevy(colours.points[colours.worst])), 0.015, palette(ui::LIMIT));
+        if let Some(at) = state.model.inputs.path_probe.and_then(|i| colours.points.get(i)) {
+            gizmos.sphere(Isometry3d::from_translation(to_bevy(*at)), 0.012, palette(ui::ACTUAL));
+        }
+        // The coloured path is the travelled one, as its analysis ran it: the live trail would only cover it.
+        return;
     }
     // The travelled path up to the time the timeline shows: scrubbed back, the tool had not been further yet. The
     // points with their times are the window's (`trail_points`); the plain path has none, so scrubbed it is drawn
@@ -1006,8 +1055,9 @@ fn occurrence(seen: &mut std::collections::HashMap<&'static str, usize>, id: &'s
     (id, *count - 1)
 }
 
-/// Orbit with the left mouse button, zoom with the wheel, while the pointer is over the 3D view. A click there
-/// without dragging picks the part under the pointer, or on empty space lets go of the one picked.
+/// Orbit with the left mouse button, pan with the right or middle one, zoom with the wheel, while the pointer is over
+/// the 3D view. A click there without dragging picks the part under the pointer, or on empty space lets go of the one
+/// picked. A resize keeps the machine in view.
 #[allow(clippy::too_many_arguments)]
 fn orbit_camera(
     mut state: ResMut<State>,
@@ -1022,6 +1072,8 @@ fn orbit_camera(
     cad: Query<(), With<CadPart>>,
     ghosts: Query<(), Or<(With<GhostPart>, With<ObstacleFace>)>>,
     mut pressed_at: Local<Option<Vec2>>,
+    mut panning: Local<bool>,
+    mut last_aspect: Local<f32>,
 ) {
     let (mut camera, lens, seen_from) = camera.into_inner();
     let [left, top, right, bottom] = state.view_rect;
@@ -1045,6 +1097,16 @@ fn orbit_camera(
         && let (Some(from), Some(at)) = (pressed_at.take(), window.cursor_position())
         && from.distance(at) < 4.0
     {
+        // On the coloured path (within 8 pixels of one of its points): that point is read out, nothing is picked.
+        let on_path = state.model.path_colours().and_then(|colours| {
+            let seen = |p: &[f64; 3]| lens.world_to_viewport(seen_from, to_bevy(*p)).ok().map(|s| s.distance(at));
+            let nearest = colours.points.iter().enumerate().filter_map(|(i, p)| Some((i, seen(p)?)));
+            nearest.min_by(|a, b| a.1.total_cmp(&b.1)).filter(|(_, d)| *d < 8.0).map(|(i, _)| i)
+        });
+        if let Some(i) = on_path {
+            state.model.inputs.path_probe = Some(i);
+            return;
+        }
         // In x-ray the CAD parts are see-through: a click goes through them to the belt and pulleys they hide.
         let xray = state.overlays.xray;
         // The compared run's ghost is never picked, nor an obstacle's faces: they are not the machine's parts.
@@ -1069,21 +1131,47 @@ fn orbit_camera(
     }
     let state = &mut *state;
     let orbit = &mut state.orbit;
-    if over_view {
-        if buttons.pressed(MouseButton::Left) {
-            orbit.yaw -= motion.delta.x * 0.005;
-            orbit.pitch = (orbit.pitch + motion.delta.y * 0.005).clamp(-1.55, 1.55);
-        }
-        orbit.distance = (orbit.distance * (1.0 - scroll.delta.y * 0.1)).clamp(0.2, 20.0);
+    // A drag turns or pans only where it started over the view: one from a panel or a control passing over the view
+    // turned the camera.
+    if buttons.any_just_pressed([MouseButton::Right, MouseButton::Middle]) {
+        *panning = over_view;
+    }
+    if !buttons.any_pressed([MouseButton::Right, MouseButton::Middle]) {
+        *panning = false;
+    }
+    if buttons.pressed(MouseButton::Left) && pressed_at.is_some() {
+        orbit.yaw -= motion.delta.x * 0.005;
+        orbit.pitch = (orbit.pitch + motion.delta.y * 0.005).clamp(-1.55, 1.55);
     }
     let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, -orbit.pitch, 0.0);
-    if state.fit
-        && let Some((low, high)) = state.bounds
+    // Panned so that the point under the pointer at the target's depth stays under it: the 45 degree field of view
+    // spans the view's height.
+    if *panning && bottom > top {
+        let per_pixel = 2.0 * orbit.distance * std::f32::consts::FRAC_PI_8.tan() / (bottom - top);
+        orbit.target += rotation * Vec3::new(-motion.delta.x, motion.delta.y, 0.0) * per_pixel;
+    }
+    if over_view {
+        // A notch of the wheel a tenth nearer; a touchpad's pixels (which come by the hundred) 50 to a notch.
+        let notches = match scroll.unit {
+            MouseScrollUnit::Line => scroll.delta.y,
+            MouseScrollUnit::Pixel => scroll.delta.y / 50.0,
+        };
+        orbit.distance = (orbit.distance * 0.9f32.powf(notches)).clamp(0.2, 20.0);
+    }
+    let aspect = (right - left) / (bottom - top);
+    if let Some((low, high)) = state.bounds
         && right > left
         && bottom > top
     {
-        orbit.distance = fit_distance(low, high, orbit.target, rotation, (right - left) / (bottom - top));
-        state.fit = false;
+        let fit = fit_distance(low, high, orbit.target, rotation, aspect);
+        if state.fit {
+            orbit.distance = fit;
+            state.fit = false;
+        } else if *last_aspect != aspect {
+            // The window or a panel was resized: back as far as the machine needs, never nearer than it was.
+            orbit.distance = orbit.distance.max(fit);
+        }
+        *last_aspect = aspect;
     }
     camera.translation = orbit.target + rotation * Vec3::new(0.0, 0.0, orbit.distance);
     camera.rotation = rotation;
@@ -1122,7 +1210,16 @@ fn panels(
         .resizable(true)
         .default_size(250.0)
         .frame(edge)
-        .show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, state.panels, &mut actions))
+        .show(&mut root, |ui| {
+            ui::scopes(ui, &state.model, state.timeline, state.panels, &mut actions);
+            // The panel keeps its height whatever it holds: with the kept runs (none yet, or plots that shrink to
+            // fit) it shrank to some 60 pixels and stayed so. Only where room is left: the scopes fill it, and an
+            // allocation past the end grew the panel by a gap each frame.
+            let room = ui.available_size();
+            if room.y > 1.0 {
+                ui.allocate_space(room);
+            }
+        })
         .response
         .rect;
     let side = egui::Frame::new().fill(ui::graphite()).inner_margin(egui::Margin::same(10));
@@ -1182,7 +1279,9 @@ fn panels(
                     compare: (state.ghost.is_some(), &state.compare_effect),
                     recording: state.recording.is_some(),
                 };
-                ui::view_controls(ui, &state.model, state.overlays, view, &mut actions)
+                // Within the view: in German in a narrow window its rows ran over the tools panel; now they wrap.
+                let room = egui::vec2((right.left() - left.right() - 36.0).max(100.0), ui.available_height());
+                ui.allocate_ui(room, |ui| ui::view_controls(ui, &state.model, state.overlays, view, &mut actions))
             })
             .response
             .rect
@@ -1434,6 +1533,13 @@ fn panels(
             Action::CloseAnalysis => model.clear_analysis(),
             Action::Clear(kind) => model.clear(kind),
             Action::ClearMessages => model.messages.clear(),
+            Action::FindModes => model.find_modes(),
+            Action::PickMode(i) => {
+                model.pick_mode(i);
+                // A mode picked is shown at once; letting go of it shows the machine's own, as the switch says.
+                state.overlays.mode |= i.is_some();
+            }
+            Action::TraceBands => model.trace_bands(),
         }
     }
     Ok(())
@@ -1590,6 +1696,8 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// the deflections larger, and SIM_APP_VIEW ("yaw,pitch" in degrees) turns the camera and frames the machine.
 /// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel; SIM_APP_TAB (cycle, effects,
 /// search, path, trace, sweep, tuning, runs (with the runs in the bottom panel) or views) opens that tab of it,
+/// SIM_APP_SETUP (motion, effects, parameters or config) that of the setup panel, SIM_APP_SIZE ("1280x720") sizes the
+/// window,
 /// SIM_APP_THEME=light shows the light theme, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
 /// the height of the workspace map in the path tab. SIM_APP_PART (a part's id,
 /// e.g. "motor", or "motor,1" for the second of them) picks that part as a click would. SIM_APP_SCRUB (seconds)
@@ -1674,10 +1782,45 @@ fn developer_hooks(
                 // The runs tab with the runs in the bottom panel.
                 (state.panels.tools, state.panels.runs_view) = (tab, tab == ui::ToolTab::Runs);
             }
+            let setups = [
+                ("motion", ui::SetupTab::Motion),
+                ("effects", ui::SetupTab::Effects),
+                ("parameters", ui::SetupTab::Parameters),
+                ("config", ui::SetupTab::Config),
+            ];
+            if let Some((_, tab)) =
+                asked("SIM_APP_SETUP").and_then(|name| setups.into_iter().find(|(word, _)| *word == name))
+            {
+                state.panels.setup = tab;
+            }
             state.panels.light = asked("SIM_APP_THEME").is_some_and(|theme| theme == "light");
             state.themed = false;
             if let Some(height) = asked("SIM_APP_WORKSPACE_Z").and_then(|z| z.parse().ok()) {
                 state.model.inputs.workspace_z = Some(height);
+            }
+            // The workspace map by acceleration; the path coloured by a quantity (path-error, tracking-error, speed,
+            // utilisation-<motor's place> or belt-tension) and read out at a sample; the mode list found and its mode
+            // shown (its place, from 0); the bands over the cycle's traces run.
+            if asked("SIM_APP_WORKSPACE_BY").is_some_and(|by| by == "acceleration") {
+                state.model.inputs.workspace_by = sim_app::insight::WorkspaceColour::Acceleration;
+            }
+            use sim_app::insight::PathQuantity;
+            state.model.inputs.path_colour = asked("SIM_APP_PATH_COLOUR").and_then(|word| match word.as_str() {
+                "path-error" => Some(PathQuantity::PathError),
+                "tracking-error" => Some(PathQuantity::TrackingError),
+                "speed" => Some(PathQuantity::Speed),
+                "belt-tension" => Some(PathQuantity::BeltTension),
+                other => other.strip_prefix("utilisation-")?.parse().ok().map(PathQuantity::Utilisation),
+            });
+            state.model.inputs.path_probe = asked("SIM_APP_PATH_PROBE").and_then(|i| i.parse().ok());
+            if let Some(mode) = asked("SIM_APP_MODE").and_then(|i| i.parse::<usize>().ok()) {
+                state.model.find_modes();
+                state.model.pick_mode(Some(mode));
+                state.overlays.mode = true;
+            }
+            if asked("SIM_APP_BANDS").is_some() {
+                state.model.inputs.bands = true;
+                state.model.trace_bands();
             }
             if let Some(part) = asked("SIM_APP_PART") {
                 let (id, nth) =

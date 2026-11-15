@@ -58,7 +58,8 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 7] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness"];
+const FLAGS: [&str; 8] =
+    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -136,9 +137,19 @@ fn main() {
 
 fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let known: &[&str] = match args.positional(0) {
-        Some("run") => {
-            &["--move", "--cycle", "--trajectory", "--path", "--time-optimal", "--time", "--disable-at", "--every"]
-        }
+        Some("run") => &[
+            "--move",
+            "--cycle",
+            "--trajectory",
+            "--path",
+            "--time-optimal",
+            "--time",
+            "--disable-at",
+            "--stop-at",
+            "--stop-category",
+            "--every",
+        ],
+        Some("stop") => &["--category", "--points", "--path", "--time-optimal"],
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst", "--path", "--time-optimal"],
@@ -163,7 +174,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
-        Some("modes") => &["--axis-index", "--points"],
+        Some("modes") => &["--axis-index", "--points", "--shapes"],
+        Some("workspace") => &["--z", "--points"],
         Some("replay") => &["--trace", "--map"],
         Some("fit") => {
             &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude", "--stiffness", "--stiffness-key"]
@@ -210,6 +222,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("tuning") => tuning(args),
         Some("margins") => margins(args),
         Some("modes") => modes(args),
+        Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
         Some("fit") => fit(args, tr),
         Some("identify") => identify(args, tr),
@@ -217,6 +230,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
         Some("report") => report(args, tr),
+        Some("stop") => stop(args, tr),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -476,6 +490,11 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"].iter().enumerate()
             {
                 writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q])
+                    .map_err(io)?;
+            }
+            // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
+            for d in &fit.details {
+                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", d.quantity, axis.id, d.config, d.fitted, d.error)
                     .map_err(io)?;
             }
             // A payload picked or dropped: its time, then the change of the payload's factor there.
@@ -1604,6 +1623,9 @@ fn margins(args: &Args) -> Result<(), Failure> {
 /// each mode, lowest first; a mode a place does not have is left empty.
 fn modes(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
+    if args.flag("--shapes") {
+        return mode_shapes(args, entry, &cfg);
+    }
     let (axis, points) = (axis_index(args, entry, &cfg)?, number(args, "--points", 21.0)?);
     if points < 2.0 || points.fract() != 0.0 {
         return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
@@ -1626,8 +1648,59 @@ fn modes(args: &Args) -> Result<(), Failure> {
     out.flush().map_err(io)
 }
 
+/// `modes <machine> --shapes`: the modes at the start pose as the app's mode list has them (`shapes::mode_views`): per
+/// mode its frequency and damping as the machine reports them, those of the linearised model's mode its shape is of,
+/// where the shape comes from (`machine` or `linearised`), the share of its strain energy per kind of stiffness, and
+/// the shape itself, per entry of the state its real and imaginary part.
+fn mode_shapes(args: &Args, entry: &'static MachineEntry, cfg: &Config) -> Result<(), Failure> {
+    let views = sim_components::shapes::mode_views(entry, cfg, &cfg.f64s("start.pose")?)?;
+    let n = views.first().map_or(0, |v| v.shape.re.len());
+    let mut out = output(args, "--out")?;
+    let states: String = (0..n).map(|i| format!(",s{i}_re,s{i}_im")).collect();
+    writeln!(out, "mode,hz,damping,linear_hz,linear_damping,shape,stiffness{states}").map_err(io)?;
+    for (i, v) in views.iter().enumerate() {
+        let linear = v.linear.map_or(",".into(), |l| format!("{:.4},{:.5}", l.hz, l.damping));
+        let stiffness: Vec<String> = v.stiffness.iter().map(|(kind, share)| format!("{kind}={share:.4}")).collect();
+        let shape: String = v.shape.re.iter().zip(&v.shape.im).map(|(re, im)| format!(",{re:.6e},{im:.6e}")).collect();
+        let source = if v.from_machine { "machine" } else { "linearised" };
+        writeln!(out, "{},{:.4},{:.5},{linear},{source},{}{shape}", i + 1, v.hz, v.damping, stiffness.join(";"))
+            .map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `workspace <machine>`: the app's workspace map as CSV (`shapes::workspace_slice`): a horizontal slice at `--z` (the
+/// middle of the third axis's range by default) with `--points` nodes a side (61): per node x, y, the condition number
+/// (inf out of reach), whether the machine goes there (1) and the largest tool acceleration in the worst direction in
+/// m/s^2, with each motor's peak torque.
+fn workspace(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let points = number(args, "--points", 61.0)?;
+    if points < 2.0 || points.fract() != 0.0 {
+        return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
+    }
+    let sim = Sim::new(entry, &cfg)?;
+    let axes = sim.machine.axes();
+    let none = || Failure("cli-error-no-workspace", entry.id.to_string());
+    let third = axes.get(2).ok_or_else(none)?;
+    let z = number(args, "--z", (third.min + third.max) / 2.0)?.clamp(third.min, third.max);
+    let peak: Vec<f64> = (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).peak_torque).collect();
+    let slice =
+        sim_components::shapes::workspace_slice(sim.machine.as_ref(), z, points as usize, &peak).ok_or_else(none)?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "x,y,condition,goes,acceleration_m_s2").map_err(io)?;
+    let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (slice.n - 1) as f64;
+    for k in 0..slice.n * slice.n {
+        let (x, y) = (at(slice.x, k % slice.n), at(slice.y, k / slice.n));
+        let (condition, acceleration) = (slice.condition[k], slice.acceleration[k]);
+        writeln!(out, "{x:.6},{y:.6},{condition:.6},{},{acceleration:.4}", u8::from(slice.goes[k])).map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
 /// `run <machine>`: simulate a move or the cycle and write every signal as CSV. `--disable-at SECONDS`
-/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling. Where the config has
+/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling; `--stop-at SECONDS`
+/// stops them in the category of `--stop-category` (`Command::Halt`). Where the config has
 /// obstacles, the error stream says what the motion keeps from them as planned before the run, and the least clearance
 /// and first contact of the run after it.
 fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
@@ -1635,6 +1708,8 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let seconds = args.number("--time")?.unwrap_or(2.0);
     let every = args.number("--every")?.unwrap_or(16.0).max(1.0) as u64;
     let disable_at = args.number("--disable-at")?.map(|seconds| (seconds / sim.dt).round() as u64);
+    let stop_at = args.number("--stop-at")?.map(|seconds| (seconds / sim.dt).round() as u64);
+    let category = stop_category(args, "--stop-category")?;
     let mut out = output(args, "--out")?;
     let header: Vec<String> = sim.signal_infos().iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
     writeln!(out, "{}", header.join(",")).map_err(io)?;
@@ -1650,9 +1725,83 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
         if Some(step) == disable_at {
             sim.command(Command::Disable).map_err(|e| Failure(e.key, String::new()))?;
         }
+        if Some(step) == stop_at {
+            sim.command(Command::Halt(category)).map_err(|e| Failure(e.key, String::new()))?;
+        }
         sim.step();
     }
     tell_run(tr, &sim);
+    out.flush().map_err(io)
+}
+
+/// The stop category of `option` (0, 1 or 2; 0 without it).
+fn stop_category(args: &Args, option: &str) -> Result<sim_components::StopCategory, Failure> {
+    let Some(text) = args.option(option) else { return Ok(sim_components::StopCategory::Zero) };
+    text.parse()
+        .ok()
+        .and_then(sim_components::StopCategory::from_number)
+        .ok_or_else(|| Failure("cli-error-bad-argument", format!("{option} {text}")))
+}
+
+/// `stop <machine> [--category N] [--points N]`: the stopping distance (`sim_components::stop::study`): the cycle, or the
+/// path of `--path FILE`, run once and stopped in category N (0 without it) at the moments each axis is fastest, the
+/// energy is largest, and at N moments evenly over the pass (20 without `--points`). One CSV line per stop, then the
+/// worst again; its moment and the verdicts on it to the error stream.
+fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::stop::{Moment, Stop};
+    let (entry, cfg) = machine_and_config(args)?;
+    let cfg = path_instead(args, entry, cfg)?;
+    let category = stop_category(args, "--category")?;
+    let points = match args.number("--points")? {
+        Some(n) if n.fract() != 0.0 || !(0.0..=10_000.0).contains(&n) => {
+            return Err(Failure("cli-error-bad-argument", format!("--points {n}")));
+        }
+        Some(n) => n as usize,
+        None => 20,
+    };
+    let study = sim_components::stop::study(entry, &cfg, category, points)?;
+    let axes = (entry.build)(&cfg)?.axes().to_vec();
+    let mut out = output(args, "--out")?;
+    let distances: Vec<String> = axes.iter().map(|a| format!("{}_distance[{}]", a.id, a.unit)).collect();
+    writeln!(
+        out,
+        "moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],\
+         braking_resistor_energy[J],tripped,{}",
+        distances.join(",")
+    )
+    .map_err(io)?;
+    let row = |s: &Stop, moment: String| {
+        let axes: Vec<String> = s.axis_distance.iter().map(|d| format!("{d:.6}")).collect();
+        format!(
+            "{moment},{:.4},{:.6},{:.4},{:.3},{},{:.2},{:.4},{},{}",
+            s.at,
+            s.tool_distance,
+            s.time,
+            s.peak_deceleration,
+            s.hard_stop,
+            s.peak_dc_voltage,
+            s.resistor_energy,
+            s.tripped,
+            axes.join(",")
+        )
+    };
+    let moment = |m: Moment| match m {
+        Moment::Grid => "grid".to_string(),
+        Moment::Fastest(k) => format!("fastest_{}", axes[k].id),
+        Moment::Energy => "energy".to_string(),
+    };
+    for s in &study.stops {
+        writeln!(out, "{}", row(s, moment(s.moment))).map_err(io)?;
+    }
+    if let Some(worst) = study.stops.get(study.worst) {
+        writeln!(out, "{}", row(worst, "worst".into())).map_err(io)?;
+        eprintln!("{}", tr.tr_arg("cli-stop-worst", &format!("{:.4} s ({})", worst.at, moment(worst.moment))));
+    }
+    for v in &study.verdicts {
+        let result = if v.ok { "ok" } else { "FAIL" };
+        let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
+        eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
+    }
     out.flush().map_err(io)
 }
 

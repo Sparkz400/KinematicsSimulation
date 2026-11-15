@@ -635,6 +635,16 @@ impl Machine for SingleAxis {
         out.push([self.m() * self.g_normal, 0.0]);
     }
 
+    /// The rigid model at a = 0: shaft friction (with the gearbox's drag) at the rotor's speed i v / r, and the guide's
+    /// steady sliding force and the cable chain's drag at v, through the pulley and the gearbox as `rigid_solve` takes
+    /// them: r / (i loss) (F_guide + F_chain).
+    fn steady_friction(&self, _pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let (r, ratio, v) = (self.r, self.gearbox.ratio, vel[0]);
+        let force = self.friction.feedforward(v, self.load_scale()) + self.chain.drag(v, self.friction.stribeck_v);
+        let loss = self.gearbox.loss_factor(force * r, v / r);
+        out[0] = self.shaft.torque(ratio * v / r) + r / (ratio * loss) * force;
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

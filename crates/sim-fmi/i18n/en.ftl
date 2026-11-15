@@ -38,3 +38,5 @@ fmi-drive-mode = Drive mode: "position" follows the controller's plan, "velocity
 fmi-torque = Torque setpoint in torque mode, at the motor
 fmi-velocity = Speed setpoint in velocity mode, at the motor
 fmi-error-drive-mode = No such drive mode (position, velocity, torque): { $arg }
+fmi-stop-category = Stop category: how command.enable turning false stops the drives, "0" torque off at once, "1" on the quick-stop ramp then off, "2" braking the plan and holding with torque on
+fmi-error-stop-category = Unknown stop category (0, 1 or 2): { $arg }

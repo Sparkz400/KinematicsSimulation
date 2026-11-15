@@ -1059,6 +1059,23 @@ impl Machine for LinkageMachine {
         }
     }
 
+    /// The rigid model at a steady speed, theta' = J^-1 p': per arm the joint's friction f(theta') through the gearbox
+    /// as `rigid_solve` takes it, f / (i loss), plus the motor shaft's friction (with the gearbox's drag) at i theta'.
+    /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight itself is
+    /// the rigid feedforward's. The brake is released and the stops are not touched in a move.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let t = self.legs.inverse([pos[0], pos[1]]).unwrap_or([f64::NAN; 2]);
+        let (_, j) = self.pose(t);
+        let w = inverse(&j).map_or([f64::NAN; 2], |inv| mul(&inv, [vel[0], vel[1]]));
+        let gravity = self.load(t, [0.0; 2]).2;
+        for k in 0..2 {
+            let joint = &self.joints[k];
+            let at_arm = joint.friction.torque(w[k]);
+            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

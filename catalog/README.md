@@ -31,7 +31,7 @@ tools/tests/                 tests of the tools
 
 ## Schema 1
 
-Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
+Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`, `pneumatic_cylinder`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
 
 The rules every table keeps:
 

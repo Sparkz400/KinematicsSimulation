@@ -132,11 +132,11 @@ Differences between the model reference and the code that it found (14 November 
 
 - The current loop's expected back-EMF is saturated, k_e ω_f (1 − s min(1, (i / i_max)²)) at the winding's current; the model reference said only "at its measured speed". The code is right (the winding's back-EMF falls with the torque constant); the reference is corrected.
 - A winding started or enabled warm began with the current loop's integrator, output and delay at the cold resistance's R i: a voltage step of (R(ϑ) − R) i. The code was wrong and is fixed (`Drive::hold_current`); stage 4 fails without the fix (6e-4 of the peak torque).
-- The drive starts with the torque that holds the pose its motor encoder reads, not the pose the carriage stands at; with the backlash the two are 8.7 µm apart and the torques 5.3e-4 N m and 0.8e-4 N m. Open: the Enable path has no machine state to take the true pose from. The model reference now says what the code does, and the Python reference does the same.
+- The drive started with the torque that holds the pose its motor encoder reads, not the pose the carriage stands at; with the backlash the two are 8.7 µm apart and the torques 5.3e-4 N m and 0.8e-4 N m. Resolved for a machine built at rest (15 November 2026, `Controller::new` holds at the tool's pose); the Python reference now starts with the torque that holds the carriage where it stands, and its stages 3 and 4 were made again (with the old reference they differed by up to 0.0054 of the peak, following error). Open: `Command::Enable` has no machine state and still holds at the setpoint, the pose the encoders read.
 - At the start the DC link is at the bus voltage; the holding current's ½ L i² is taken from it only at an Enable. Not stated before; the model reference now says so (whether the start's ½ L i² belongs in the energy budget is left to it).
 - With no torque at rest the gearbox's twist is 0 (`static_twist`), so at a pose where the tooth meshing is exactly zero the side its flanks rest on is left to rounding. The move therefore starts an eighth of a tooth pitch past a whole number of them.
 
-What it does not cover: field weakening, iron loss, the drive's overload, the motor's thermal nodes, magnet temperature, the notch filter, encoder resolution and noise (encoder resolution matches too, until at standstill a count the two integrations put 1e-9 apart rounds the other way), precontrol balancing, the friction feedforward, the fieldbus delay and jitter, the load encoder, a regenerative supply, the shared DC link, gravity and payload, the gearbox's lost motion, drag, mesh friction and stiffness curve, motor stiction, belt tooth stiffness and material damping, the hard stops and the brake. Profiles other than the S-curve, and an S-curve that does not reach its cruise speed. And, as for the T-gantry, it is one reading of one document written twice: it catches places where code and document disagree and integration errors, not a wrong equation in both.
+What it does not cover: field weakening, iron loss, the drive's overload, the motor's thermal nodes, magnet temperature, the notch filter, encoder resolution and noise (encoder resolution matches too, until at standstill a count the two integrations put 1e-9 apart rounds the other way), precontrol balancing, the friction feedforward, the fieldbus delay and jitter, the load encoder, a regenerative supply, the shared DC link, gravity and payload, the gearbox's lost motion, drag, mesh friction and stiffness curve, motor stiction, belt tooth stiffness and material damping, the hard stops and the brake, the stepper and the induction motor (`motor.kind`; the reference runs the servo, which they leave bit for bit as it was). Profiles other than the S-curve, and an S-curve that does not reach its cruise speed. And, as for the T-gantry, it is one reading of one document written twice: it catches places where code and document disagree and integration errors, not a wrong equation in both.
 
 ## Hand calculations: mechanics
 
@@ -145,6 +145,8 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | Acceleration under constant torque, rigid model | Force over effective mass | 1e-9 | `constant_torque_gives_force_over_effective_mass`, axis and gantry |
 | Holding torque of an inclined axis | m g sin · r / i | exact rigid; 0.1 % elastic | `inclined_axis_needs_holding_torque`, axis |
 | Holding torques on Z | ± m_z g r / (2i) | exact rigid; 0.1 % elastic | `static_hold_on_z_needs_opposite_torques`, gantry |
+| A slide's presliding friction (`effects.slide_presliding`): Dahl's force from its anchor, held at rest, turned back, the Stribeck level; off, the smoothed step to the bit | g (1 − e^−1) = 94.8181 N; −59.9364 N; 118.394 N | 1e-4 N | `a_presliding_friction_holds_at_rest_and_turns_over_its_travel`, mech |
+| The screw axis inclined by 5°, drive off: held by its presliding friction, crept with the smoothed step | −g / σ ln(1 − F / g) = 2.40 µm taken up, < 1 µm in the second half second (Dahl ratchets 10 µm more while the screw rings); 0.002 · atanh(21.37 / 89.47) = 0.487 mm/s | 1 µm; 0.03 mm | `a_presliding_slide_holds_its_load_without_creeping`, joint kit |
 | Belt tension from stretch; damping on the stretch rate | EA · strain; c · rate | 1e-6 N; 1e-9 N | `belt_tension_is_ea_strain_and_pretension_at_rest`, `belt_damping_acts_on_the_stretch_rate`, mech |
 | Belt forces | The gradient of the belt's energy | 1e-3 N | `belt_forces_are_the_gradient_of_its_energy`, mech |
 | Belt sections at rest and in a static hold (belt view) | Without gravity every section at the pretension 300 N, section 1 stretched by L · P / (EA + P) (0.4497 mm on 0.75 m, gantry; 0.1499 mm on 0.25 m, axis). Held: single axis at 30°, T₂ − T₁ = 6 kg · g · sin 30° = 29.42 N; T-gantry, 2 T₂ − T₁ − T₃ = 7 kg · g = 68.65 N and T₁ = T₃. The 3D view's strips carry (T − P) / P of exactly these tensions | 1e-6 N; 1e-12 m; exact | `belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_hold`, views |
@@ -166,6 +168,12 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | Lost motion on reversal | The configured backlash, 8.7e-4 rad | 1 % | `lost_motion_on_reversal_equals_the_backlash`, axis |
 | Gearbox: dead zone, flanks that never pull, efficiency both ways | τη driving, τ/η driven | 1e-9 N m | `gearbox_transmits_nothing_inside_the_backlash`, `gearbox_flanks_in_contact_never_pull`, `gearbox_efficiency_loses_torque_in_the_direction_of_power_flow`, mech |
 | Gearbox mesh friction (`effects.gearbox_mesh_friction`): each way, rated point and part load, holding and breaking away, ring-down, energy | Ratio 10, K1 1e4 N m/rad, η 0.8: 100 N m passed gives 80 N m driving and takes 120 N m driven back (1 / (2 − η) = 0.833); with T0 = 0.1 N m and η 0.9 at 50 N m the teeth's 0.916497, 0.9 at 50 N m and 0.774527 at 5 N m; a 100 N m weight held stands until 125 N m lifting and 83.33 N m lowering (within 3 N m, the bristle's give 2.5e-5 rad); a ring around zero load keeps (1 − μ) / (1 + μ) = 0.666667 a cycle with a stiff bristle (5 %), 7/9 = 0.777778 with the shipped one (1e-4), its loss power integrating to the energy gone (1 %); every machine with a gearbox closes its cycle's budget with it on (0.1 %), but the T-gantry (0.163 %, off in its config) | as stated | `the_mesh_friction_passes_the_teeth_efficiency_each_way`, `mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load`, `a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends`, `a_ring_around_zero_load_decays_by_the_hand_calculated_damping`, `the_shipped_bristle_rings_down_by_its_hand_calculated_ratio` (sim-components); `the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox` (sim-machines) |
+| Friction feedforward from the machine's model (`drive.friction_feedforward_model = "machine"`), single axis in its cruise at 1 m/s | Guide 15 N · 1.082012 (load scale with the 2 kg payload) + 20 N s/m · 1 m/s through 0.02 m / (5 · 0.95), shaft 0.02 + 1e-4 · 250: 0.197548 N m; the velocity integrator's mean carries under 1 % of it (without the feedforward, all of it) | 1e-4 relative; 1 %; 2 % | `the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing`, axis |
+| The same on every other machine crate | Screw axis 0.529807 N m at 0.8 m/s; parallel SCARA tool turn 0.878065 N m at 30 rad/s; flying saw 1.440917 N m at 1.2 m/s (its shipped characteristic 1.440936); T-gantry 0.107412 / 0.100839 N m at 0.8 m/s in X; linear delta −0.267866 N m; D3 0.233030, D2 0.223461, H4 0.225393 N m going down at 0.5 m/s; D4 arms 0.114165, tool 0.025778 N m; hexapod 0.254378 N m rising at 0.1 m/s; planar cable robot −0.0960803 / 0.0946509 N m hauling in and paying out; in the cruises the integrators carry under 1 to 3 % of it | 1e-4 relative (hand values), 1e-5 N m (hexapod), 1e-6 N m (cable); 1 to 3 % | `the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing` in each crate; `the_flying_saw_s_machine_friction_feedforward_is_its_characteristic_and_the_integrator_carries_nothing`; `the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one`; `the_planar_winches_steady_friction_at_the_centre_is_the_hand_calculated_one`, `the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrators` |
+| Gripper times | Vacuum: V/Q ln(p_v / (p_v − p_hold)) = 0.12 ln 4 = 0.166355 s to grip, V/Q_vent ln(p_v / p_release) = 0.03 ln 8 = 0.062383 s to let go, hold A p_hold = 42.4116 N; jaws as configured | 1e-12 s | `the_vacuum_gripper_takes_the_hand_calculated_times_and_holds_area_times_pressure`, gripper |
+| Vacuum cup's hold against a part accelerated sideways | Slips beyond a = μ (A Δp − m g) / m = 5.69958 m/s² (2 kg, μ 0.5): there the part asks exactly A Δp | 1e-9 N | `the_part_asks_the_hold_exactly_at_the_hand_calculated_slip_acceleration`, gripper |
+| Gripper time on the single axis's shuttle cycle | Jaws opening in 0.25 s and closing in 0.3 s against dwells of 0.1 s: the cycle 0.35 s longer, the payload let go 0.25 s after arrival; jaws of 0.05 s and the switch off change nothing | 1e-9 s; 1.5 ms; exact | `the_gripper_time_lengthens_the_dwells_and_moves_the_payload_switch_by_hand`, axis |
+| `gripper-hold` on the rigid single axis at 10 m/s² | m g + m a / μ = 59.6133 N (seen 61.86 N: the servo's overshoot); passes a 70 N cup, fails a 55 N one; the optimiser stops where a 63 N cup still holds, short of where it goes with the hold not judged | 5 % | `the_gripper_hold_judges_the_held_part_against_the_cup_and_the_optimiser_keeps_to_it`, axis |
 | Leaning Z axis at two heights: restoring acceleration and tool-tip offset | Two masses on k = 1 / (1/k_lat + h²/k_tilt) | 1e-6 relative; 1e-12 m | `leaning_z_axis_matches_the_two_mass_hand_calculation`, gantry |
 | Resonance the machine reports at two heights | 24.6 Hz and 35.6 Hz by hand | 0.05 Hz | `a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights`, gantry |
 | Both modes at two heights, with their damping | Roots of the two-mass equation: 24.6303 and 104.1875 Hz at z = 0.05 m, 35.6220 and 109.5573 Hz at 0.15 m; damping ratios of their shapes 0.029751, 0.055161, 0.017328, 0.053512 | 1e-3 Hz; 1e-5 | `both_modes_are_the_roots_of_the_two_mass_hand_calculation`, gantry |
@@ -197,6 +205,10 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | Tooth jump threshold with the wrap, single axis as above | c = 2.4 π: W = 289.44 N; no jump at 98 % (where the configured teeth let go at 280.24 N), a jump at 102 % | 2 % either side; exact | `with_the_wrap_the_belt_teeth_jump_at_the_pull_of_half_a_turn`, belt_and_heat |
 | Jumping teeth in a cycle (single axis, 90 N pretension) | `belt-tooth-jump` fails; the jumps' energy closes the budget | 0.5 % of the supply (measured 0.33 %, falling with the step) | `jumping_teeth_fail_the_check_and_close_the_energy_budget`, belt_and_heat |
 | Belt span as a string | f1 = sqrt(T/μ) / (2 L): 109.545, 21.066, 26.082 Hz at 300 N, 0.1 kg/m; T-gantry span 1 at its start pose; a cruise at 200 Hz of tooth mesh on a 200 Hz span fails `belt-span-resonance` | 1e-3 Hz | `a_span_vibrates_as_a_string_and_is_judged_against_the_excitations`, mech; `a_span_vibrates_at_its_string_frequency_and_a_cruise_on_resonance_fails`, belt_and_heat |
+| Two-way base (`effects.base_reaction`): a slider of 4 kg on a spring of 2e5 N/m to a base of 200 kg on 8e5 N/m, the drive off, started in either mode shape | The two-mass system's closed-form modes, 10.057 Hz and 35.981 Hz, the slider at 1.0868 and −45.09 times the base | 1e-6 of the amplitude over 0.2 s | `a_slider_on_a_spring_on_a_coupled_base_swings_in_the_two_mass_modes`, base |
+| Two-way base free along x, z and in tilt about y (springs at zero), an arm swung on it by a torque pulse, no outside force | Momentum M_B d' + p and I_B θ' + L stay zero | 1e-9 of the arm's own | `a_free_coupled_base_and_the_machine_on_it_keep_their_momentum`, base |
+| Two-way base under an arm in gravity (x, z and a soft tilt), and under the H4 (shipped base plus tilts about x and y): losses off, then the shipped damping | The energy is conserved (the suite's `energy_conservation`; one-way the H4 drifts by 4.5 %), the loss budget closes with `power.base` and the base in `energy.*` | 0.1 % of what the pulse put in; `LOSS_BUDGET_TOLERANCE` | `a_coupled_base_keeps_the_energy_and_closes_the_loss_budget`, base; `on_a_coupled_base_the_four_arm_delta_keeps_its_energy_and_budget`, H4 |
+| T-gantry: `frame_compliance` off and a two-way base along X of the frame's 30 kg plus carriage, Z axis and payload (41 kg), the frame's 7.4e5 N/m and damping ratio 0.01725 | The frame mode (`effects.frame_compliance`): the same equations; a move from (0.1, 0.35) to (0.9, 0.05) | 1e-9 of the sway's 0.154 mm (measured 6.3e-15 m; one-way 0.123 mm off) | `a_coupled_base_along_x_moves_as_the_frame_mode`, T-gantry |
 
 ## Hand calculations: drive
 
@@ -236,6 +248,28 @@ All in drive unless noted.
 | Constant-inertia feedforward, load-side encoder, one encoder sample, single axis | J = 9.8e-5 + 4.16e-6 (belt) + 3.2e-5 (payload) kg m², torque_ff = J · 250 · a; following error = setpoint − 250 · round(x / 0.1 mm) · 0.1 mm; position loop's measured position = the encoder's reading with noise | 1e-9 | `the_constant_inertia_feedforward_is_j_times_the_motor_acceleration`, `a_load_side_encoder_measures_the_following_error_at_the_load`, `both_loops_read_one_encoder_sample_per_step`, control |
 | 4 ms profile cycle on the single axis; D3 motor acceleration in a cruise | Peak torque within 5 % of the 1 ms one with fine interpolation, above 1.5x held; the motor acceleration setpoint equals the speed setpoints' central difference | 5 %, 1 % | `a_long_profile_cycle_with_fine_interpolation_keeps_the_peak_torque`, `the_motor_acceleration_setpoint_has_the_speed_term_of_the_kinematics`, control |
 
+Stepper (`motor.kind = "stepper"`), in stepper: N = 50, k_t = k_E = 0.5 N m/A, R = 1 Ω, L = 2.5 mH, 2 A on 24 V, integrated with a rigid inertia as `Sim::step` integrates.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Holding torque; a load of 0.99 of it, brought on slowly | k_t I = 1 N m at a load angle of 90°; the rotor at asin(0.99) electrical behind its setpoint, 0.02858 rad, the current at 2 A | 1e-12; 2e-3 rad electrical, 1e-4 rad | `the_holding_torque_is_kt_times_the_rated_current` |
+| Small-angle resonance, J = 1e-4 kg m², after one microstep | sqrt(N T_hold / J) / 2π = 112.54 Hz | 1 % | `the_rotor_rings_at_the_hand_calculated_resonance` |
+| Corner speeds | Unloaded current: sqrt(24² − 2²) / (50 · 2.5e-3 · 2 + 0.5) = 31.89 rad/s, the current at 0.9 of it ≥ 0.99 I, at 1.3 of it < 0.95 I; torque: (R I + k_E ω)² + (N ω L I)² = 24², 39.70 rad/s, the pull-out torque 1 N m below, < 0.98 N m at 1.1 times | 0.01 rad/s; 1e-12 N m | `the_current_falls_short_above_the_hand_calculated_corner_speed` |
+| A load of 1.3 T_hold for 30 ms, detent 0.05 N m | The rotor settles a whole number of electrical turns behind: lost full steps a multiple of four, at least four | 1 % of four steps | `a_load_above_the_holding_torque_slips_by_whole_multiples_of_four_full_steps` |
+| Jerk-limited ramps on 0.01 kg m² to 20 rad/s and to 55 rad/s | 80 % of the pull-out torque keeps in step, 110 % falls out (load angle past π); at 55 rad/s the pull-out torque 0.793 N m by hand (the voltage disc's centre (−0.570, 3.917) A, radius 3.454 A on the 2 A circle: Re I = 1.586 A) | 1e-3 N m | `a_ramp_beyond_the_pull_out_torque_stalls_and_one_at_80_percent_does_not` |
+| The stepper belt axis (`machines/stepper-axis.toml`), its cycle; with a 25 kg payload | Every check passes, load angle 0.42 rad, 44 % of the pull-out curve, no `motor-s1`; 26 kg · 5 m/s² · 0.016 m = 2.08 N m over the holding 1.11 N m: `stepper-synchronism` fails above π; the energy budget closes | 1e-6 (electrical), 1e-3 | `the_stepper_axis_runs_its_cycle_in_step_and_a_heavy_payload_makes_it_lose_steps`, motor_kinds |
+
+Induction motor (`motor.kind = "induction"`), in induction: four poles, 400 V, 50 Hz, 1440 rpm, R_s = 4.5 Ω, R_r = 3.5 Ω, L_m = 0.45 H, both leakages 0.02 H, 600 V DC link.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Synchronous speed, rated slip; torque at the rated slip | 1500 rpm, 4 %; about the rated 9.95 N m | 1e-12; 1 N m (round numbers, not fitted) | `synchronous_speed_and_rated_slip_come_from_the_name_plate` |
+| Torque-slip curve with R_s = 0 at s = 0.02, s_b and 0.6; breakdown with R_s | Kloss, T_b = 3/2 p U_th² / (2 ω (X_th + X_σr)) = 37.96 N m at s_b = R_r / (X_th + X_σr) = 0.2846; the Thevenin form with R_th = 4.121 Ω, X_th = 6.141 Ω, U_th = 312.55 V: 27.10 N m, the curve's top over slips 0.20 to 0.28 | 0.2 %; 0.01 N m, 0.5 % | `the_torque_slip_curve_is_kloss_and_the_breakdown_is_the_equivalent_circuits` |
+| Starting current, rotor held, rated voltage and frequency | Z = (7.7071 + j 12.388) Ω: 326.60 / 14.590 = 22.385 A amplitude, 15.83 A RMS | 0.2 % | `the_starting_current_is_the_equivalent_circuits` |
+| V/f, a 5 N m load step at 50 Hz, J = 0.05 kg m² | Slip T = 3/2 p ψ_r² ω_slip / R_r: 2.947 rad/s at the shaft (ψ_r = 0.995 Wb unloaded); compensated less than 0.4 rad/s | 6 %; 0.4 rad/s | `under_v_f_a_load_step_costs_the_hand_calculated_slip` |
+| Field-oriented flux build-up from no flux | L_r / R_r = 134.3 ms: 63.2 % at one, 95.0 % at three | 0.01 | `the_rotor_flux_builds_with_l_r_over_r_r` |
+| Field-oriented torque step of 5 N m, rotor held | 63.2 % after the current loop's T = σ L_s / Kp = 0.5 ms; 5 N m held | 0.05; 0.2 % | `under_field_orientation_a_torque_step_answers_with_the_current_loops_time_constant` |
+| The induction lift (`machines/induction-lift.toml`) field-oriented; flat on V/f | Every check passes, no `motor-s1`; on V/f the motor checks pass and the carriage stops 2 to 20 mm off its targets (open loop); the energy budgets close | 1e-6 (electrical), 1e-3 | `the_induction_lift_runs_its_cycle_field_oriented`, `the_induction_axis_runs_its_cycle_on_v_f`, motor_kinds |
 Thermal model of gearboxes and guides (`effects.part_heating`), in views:
 
 | What is compared | Against | Tolerance | Test |
@@ -245,6 +279,20 @@ Thermal model of gearboxes and guides (`effects.part_heating`), in views:
 | The 3D colour of a motor housing and a heated part | Rise over rated rise: 25 K of 100 K is 0.25, half the rated rise 0.5 | exact | `the_scene_colours_warm_parts_by_their_rise_over_the_rating`, views |
 
 The winding's own model (settles at the rated rise at the rated current, 51.3 K after one time constant from cold, 19.34 K at half the current) is `the_winding_warms_to_the_rated_rise_at_the_rated_current`, drive.
+
+### Stops and brake delays
+
+On the rigid, loss-free single axis (`ideal_rigid`: 6.125 kg reflected, 4 kg carriage, r = 0.02 m, i = 5), stopped from 1 m/s (machine-single-axis). Each was seen to fail with its piece taken out: the OFF3 ramp (braking at the torque limit instead), category 2's braking plan, the brake delay.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Category 1 on an OFF3 ramp of 0.2512 s from 314 rad/s (5 m/s² at the carriage) | v² / (2 a) = 0.1 m, v / a = 0.2 s; peak deceleration over 1 ms above 5 m/s² (the speed loop overshoots the ramp's start: 6.0) | 3 %; peak below 6.5 | `the_stops_travel_the_hand_calculated_distance_in_the_hand_calculated_time` |
+| Category 2 at the axis' 10 m/s² | 0.05 m; the plan in 0.1 s, the tool below 1 mm/s within 0.12 s (the position loop's lag) | 3 %; 20 % on the time; peak below 15 | same |
+| Category 0, 10 N guide friction (Coulomb = stiction), 0.2 N m brake (50 N), 0.03 s engagement delay | v t − F t² / (2 m) + m v₁² / (2 (F + F_b)) = 0.075435 m; without the delay 0.051042 m | 1 % | `a_category_0_stop_coasts_the_hand_calculated_distance_with_the_brake_delay` |
+| A hanging axis (upright) taken off in category 0, 0.03 s engagement delay, 10 N friction | (39.227 − 10) N / 6.125 kg · 0.03² / 2 = 2.1473 mm before the brake holds, after 480 steps; none without the delay | 2 % | `a_hanging_axis_sags_by_hand_while_its_brake_engages` |
+| The DC link in a category 1 stop | 3.0625 J less 0.0593 J copper loss: 470 µF from 155.13 to 191.95 V; with 4.7 µF the resistor takes 2.9412 J | 0.3 V; 2 % | `a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link` |
+
+The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with finite figures on every registered machine in categories 0, 1 and 2 (`the_stop_study_reports_the_worst_stop_on_every_machine`, sim-machines, category 1; the command line `a_run_can_stop_the_machine_and_stop_finds_the_worst_moment`). Nothing compares its distances with a real machine's stop: no measured stopping distance is in the repository.
 
 ## Hand calculations: control, profiles and paths
 
@@ -287,8 +335,8 @@ The winding's own model (settles at the rated rise at the rated current, 51.3 K 
 | A quarter arc of 0.1 m on four axes, the fourth carried 0 -> 1 | Length sqrt((0.05 pi)^2 + 1) = 1.01226; at a share w of it the arc at w pi / 2 and the fourth axis at w | 1e-12 | `a_four_axis_arc_keeps_its_fourth_axis_linear_in_the_arc_length`, path |
 | Two tangent arcs of 0.2 and 0.1 m radius, the second slow only at its far end, time-optimal | Junction at sqrt(0.5 j T / dk) = sqrt(0.5 * 100 * 0.001 / 5) = 0.1 m/s, not at the 0.05 m/s of the slowest place | 1e-12 | `the_junction_of_two_arcs_is_passed_at_the_hand_calculated_speed`, path |
 | A line into a line whose speed limit falls from 1 to 0.3 m/s, time-optimal | Joined on the speed curve: quicker than on a cruise at the slowest place | Comparison | `a_path_without_the_forced_cruise_is_quicker_than_with_it`, path |
-| Single axis, `profile.cycle_timing = "time_optimal"`, first segment 0.1 -> 0.9 m with 0.8 * 0.5 N m | 0.8 / v + v / a + a / j = 0.71404 s (a = 16.327 m/s^2, v = 1.256 m/s, j = 1e5 m/s^3), quicker than the S-curve within the axis limits | 2.5 ms | `a_time_optimal_cycle_segment_takes_the_hand_calculated_time`, single axis |
-| Single axis, time-optimal line, gearbox efficiency 0.9 | 0.0075 + 0.017 / 0.9 = 0.026389 N m per m/s^2: 15.158 m/s^2, 0.71996 s | 1e-3 relative; 1.5 ms | `a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss`, single axis |
+| Single axis, `profile.cycle_timing = "time_optimal"`, first segment 0.1 -> 0.9 m with 0.8 * 0.5 N m | 0.8 / v + v / a + a / j = 0.71970 s (a = 16.327 m/s^2, v = 0.99 · 1.256 = 1.2434 m/s, j = 1e5 m/s^3), quicker than the S-curve within the axis limits | 2.5 ms | `a_time_optimal_cycle_segment_takes_the_hand_calculated_time`, single axis |
+| Single axis, time-optimal line, gearbox efficiency 0.9 | 0.0075 + 0.017 / 0.9 = 0.026389 N m per m/s^2: 15.158 m/s^2, 0.72556 s | 1e-3 relative; 1.5 ms | `a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss`, single axis |
 | The same tilted path on the delta, both planners, `profile.path_tolerance_m` = 0.1 mm | Reported 0.1 mm = L² / (24 r) within the axis limits; every pose within it of the given path; 0.551 s against 0.616 s, time-optimal 0.516 s against 0.578 s | 1e-9 relative; 0.1 µm | `a_path_in_a_tilted_plane_gets_its_transition_curves`, delta-d3 |
 | A line, a quarter arc of 0.1 m, a line, a quarter arc of 20 mm, a line, tolerance 1 mm: one length per arc | Wide arc at 0.4 m/s: L = 0.4³ · 10 / (0.4 · 100) = 16 mm (15.99 fitted); tight arc at (0.4 j r²)^(1/3) = 0.252 m/s: L = 0.016 · 50 / 40 = 20 mm (19.67 fitted: e = L² / (24 r) is the first term, and the curve turns 0.5 rad); reported 0.02² / 0.48 = 0.833 mm (one length for the path made both 20 mm) | 5e-3 and 2e-2 relative; 2e-3 | `each_arc_gets_the_curve_its_own_junctions_need`, path |
 | An arc fixed at the path's start that hands over to an arc (an S and the same way) and a line, tolerance 0.1 mm | Both junctions blended, the first arc leaves the start along +x, no steps, every pose within the reported deviation (≤ 0.1 mm), faster | 1e-12 | `an_arc_fixed_at_one_end_gets_its_curve_towards_an_arc`, path |
@@ -298,7 +346,7 @@ The winding's own model (settles at the rated rise at the rated current, 51.3 K 
 | A line that ends on the end of a stroke | Every pose within the range, the last one the given point (it ended 2.8e-17 m beyond) | Exact | `a_path_onto_the_end_of_a_stroke_stays_within_the_range`, path |
 | Both planners on the path with transition curves | Every pose within the reported 0.1 mm of the given path, and reaching it | 10 µm (the start pose) | `both_planners_time_the_path_with_its_transition_curves`, gantry |
 | Path error and distance behind the setpoint on a circle at constant speed, no feedforward | R (1 − gain) and R (ω / Kv) gain, with gain = 1 / sqrt(1 + (ω / Kv)²) | 10 % | `path_error_on_a_circle_matches_the_hand_calculation`, `a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error`, gantry |
-| Time-optimal line, jerk limit 1e5 m/s³ and 100 m/s³ | Distance / v + v / a + a / j = 0.714 s; distance / v + 2 sqrt(v / j) = 0.861 s, with the acceleration peaking at sqrt(v j) = 11.2 m/s² | 1.5 ms; 0.5 % | `a_time_optimal_line_takes_the_hand_calculated_time`, axis |
+| Time-optimal line, jerk limit 1e5 m/s³ and 100 m/s³ | Distance / v + v / a + a / j = 0.720 s; distance / v + 2 sqrt(v / j) = 0.866 s (v = 1.2434 m/s, the rated speed less the 1 % kept back), with the acceleration peaking at sqrt(v j) = 11.2 m/s² | 1.5 ms; 0.5 % | `a_time_optimal_line_takes_the_hand_calculated_time`, axis |
 | Belt tension as a limit of the time-optimal plan: default T-gantry, line along X from x = 0.7 to 0.95 at 300 m/s³, 400 N allowed | Rigid tensions T = P + d_i with Σ (T_i − P) L_i = 0 (by hand at x = 0.9, 10 m/s²); acceleration 0.5 · (400 − 31 − 284.47) / 6.679 = 6.328 m/s² at the far end (share 0.5, margin 31 N), 7.02 m/s² at x = 0.7 where it accelerates: the plan takes the bound at each pose (none above it, one within 0.5 %); rigid tension within 1 % of the 326.7 N the plan allows; the full model passes `belt-tension`; without the limit 19.3 m/s² fails it | 1e-9 N; 0.2 % / 0.5 %; 1 % | `the_time_optimal_plan_keeps_the_belt_within_its_tension_limit`, gantry |
 | The belt's ratings on the full model, time-optimal at 40 m/s², 2000 m/s³, 2 m/s: three lines, rated 340 to 1500 N, and a five-line path at 400 N; 330 N at the default limits | Both ratings kept (highest ≤ rating, slackest > 0 N), or refused (`error-path-tension`) where the holding tension leaves no room (330 and 340 N); with share 0.8 and no margin 331.4 N on 330 N | exact | `the_full_model_keeps_the_belt_ratings_on_a_time_optimal_plan_at_high_jerk`, gantry |
 | A cycle segment with via points | Runs up, through the via point and down without a stop, arrives on its target before the dwell; a via point outside the stroke is refused by name | 1e-9 m | `a_cycle_segment_runs_its_path_through_via_points`, gantry |
@@ -306,8 +354,16 @@ The winding's own model (settles at the rated rise at the rated current, 51.3 K 
 | The same plan on the full model | Utilisation below 0.6 (0.18); speed below 1.03 × rated; path error below 1 mm | As stated | the same test |
 | Limits that change within a piece: default T-gantry, line along X from x = 0.1 to 0.9 at 300 m/s³, belt rated 400 N | The belt allows 16.137 / max(2.6 − x, 1.6 + x) m/s² at x (by hand); one limit per piece took 6.455 m/s² all along, 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s; point by point 6.455 to 6.73 m/s² along the ramp, 1.0 to 2.5 ms shorter (0.8517 s), no pose above its bound, one within 0.5 %, the sections' rigid change of tension within 1 % of the 42.26 N allowed, torque, speed and jerk within their limits; following the limit (14 November) faster than the plan of 13 November (0.851565 s against 0.851693 s; on a 125 µs profile cycle it ends before 0.851693 s) | 0.2 %; 0.1 % | `the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line`, gantry |
 | Limits that change within a piece on the delta: a line across the range, (0.5, 0, −0.85) to (−0.5, 0, −0.85) | The rated speed allows the tool 7.270 m/s where the motors turn fastest per tool speed (the line's end) and 13.31 m/s where slowest (inverse kinematics at 801 places); the plan goes above 1.1 times the slowest place's speed (8.1 m/s), keeps torque (with the speed's centripetal and Coriolis torque), motor speed and axis jerk within their limits, and takes under 0.419 s against 0.4290 s with one limit per piece (gearboxes' M2max lifted); with M2max 192 N m each gearbox's output torque, ratio · (motor torque − 2.106e-4 kg m² · the motor's angular acceleration), within 0.8 · 192 N m and up to it, and the line takes longer (0.434 s) | 1e-3 m/s; 0.1 % | `the_time_optimal_plan_takes_the_motor_limits_where_they_are_along_a_line`, delta |
-| The drive's maximum current as a limit of the time-optimal plan: rigid single axis, 30° incline, 2 A on a 0.45 N m/A motor (3.8 N m peak), 1e5 m/s³ | a = (0.8 · 0.9 N m · 5 / 0.02 m ∓ 19.613 N) / 6.125 kg = 26.186 m/s² up, 32.590 m/s² down; 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) / 2 = 0.68049 s; without `effects.drive_current_limit` the motor's (0.8 · 3.8 · 250 − 19.613) / 6.125 | 1.5 ms; 0.1 % | `the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated_one`, axis |
+| The drive's maximum current as a limit of the time-optimal plan: rigid single axis, 30° incline, 2 A on a 0.45 N m/A motor (3.8 N m peak), 1e5 m/s³ | a = (0.8 · 0.9 N m · 5 / 0.02 m ∓ 19.613 N) / 6.125 kg = 26.186 m/s² up, 32.590 m/s² down; 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) / 2 = 0.68649 s at v = 1.2434 m/s, with `effects.drive_current_limit` and without it (the verdict judges the rating either way); with the rating lifted the motor's (0.8 · 3.8 · 250 − 19.613) / 6.125 | 1.5 ms; 0.1 % | `the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated_one`, axis |
 | The gearbox's M2max and the pulley's torque rating as limits of the time-optimal plan: rigid single axis, 1e5 m/s³ | The output drives carriage and pulley, 0.085 N m per m/s² (the motor's 0.0245 less the rotor's 0.0075, times 5): a = 0.8 · 10 / 0.085 = 94.118 m/s² at M2max 10 N m, 0.8 · 8 / 0.085 = 75.294 m/s² with the pulley rated 8 N m, both ways; 0.8 / v + v / a + a / j | 1.5 ms; 0.1 % | `a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration`, axis |
+| A short time-optimal line, rest to rest: rigid single axis, 0.05 m, 0.8 · 0.5 N m, 1e5 m/s³ | T = τ + sqrt(τ² + 4 s / a), τ = a / j, a = 16.327 m/s² (the bang-bang 2 sqrt(s / a) = 0.11068 s with no jerk limit): 0.11084 s, peaking at 0.902 m/s | 1.5 ms; 1 % | `a_short_time_optimal_line_takes_the_hand_calculated_bang_bang_time`, axis |
+| A hanging axis, time-optimal up and down: the single axis upright, 0.8 · 0.5 N m | Speeding up at (100 − 39.227) / 6.125 = 9.922 m/s², braking at (100 + 39.227) / 6.125 = 22.731 m/s² on the way up (swapped on the way down): the speed follows min(sqrt(2 a d), 1.2434 m/s) at 0.05 m from the start, in the middle and 0.02 m before the end, both ways | 0.5 % | `on_a_hanging_axis_the_time_optimal_speed_follows_the_hand_calculated_limit_curve`, axis |
+| The braking resistor's peak power as a limit of the time-optimal plan: 50 W on the rigid single axis | Braking at no more than P / (m v) = 50 / (6.125 v): 6.565 m/s² at 1.2434 m/s; at 1.2, 1.0 and 0.8 m/s within 5 % below (the speed levels) and 1 % above; speeding up at the motor's 16.327 m/s² | 5 % / 1 %; 0.1 % | `the_braking_resistor_bounds_the_time_optimal_deceleration`, axis |
+| The gearbox's maximum input speed as a limit of the time-optimal plan: 2000 r/min on the single axis | Top speed 0.99 · 2000 · π / 30 · 0.02 / 5 = 0.82938 m/s | 0.1 % | `the_gearbox_input_speed_caps_the_time_optimal_top_speed`, axis |
+| `profile.time_optimal_margin` 0.9 on the single axis | Top speed and acceleration 0.9 of 1.2434 m/s and 16.327 m/s², 0.8 / v + v / a + a / j | 1.5 ms; 0.1 % | `the_time_optimal_margin_plans_at_its_share_of_the_limits`, axis |
+| A screw's speed rating as a limit of the time-optimal plan: the 1.6 m screw of the screw axis | Whirling at 1250 r/min on the 20 mm lead: top speed 0.99 · 1250 / 60 · 0.02 = 0.41250 m/s | 0.1 % | `the_time_optimal_plan_keeps_the_screws_speed_rating`, joint kit |
+| A rack's feed force as a limit of the time-optimal plan: rated 500 N, service factor 1.25 | 0.8 · 400 N / 80 kg = 4 m/s² | 0.2 % | `the_time_optimal_plan_keeps_the_racks_feed_force`, joint kit |
+| Every machine's cycle timed time-optimal, run with the shipped config | Every verdict the plan keeps passes ("motor-peak", "motor-speed", "drive-peak-current", "gearbox-peak", "pulley-torque", "gearbox-input-speed", "guide-load", "belt-tension", "belt-slack", "braking-resistor-peak", the machine's own checks with a rigid value); where "motor-thermal" fails (linear motor axis, flying saw, parallel SCARA, four-arm delta), with the winding at its starting temperature | exact | `time_optimal::machine_NN`, sim-machines |
 | The guides' load rating as a limit of the time-optimal plan: default T-gantry, line along X at z = 0.35 m, rated 150 N | X guide 11 kg · 9.80665 + 5.833 kg · a_x, Z guide 12.833 kg · a_x (`guide_loads`); a = (150 − 107.87) / 5.833 = 7.222 m/s², 0.8 / 1.2559 + 1.2559 / 7.222 + 7.222 / 100 = 0.8831 s; no pose's load above 150 N; torque, speed and jerk within their limits | 0.2 %; 1.5 ms; 0.05 % | `the_guide_load_rating_limits_the_time_optimal_acceleration`, gantry |
 | The speed curve a piece follows (`path::smoothed`): places at 1 m/s and one at 0.5 m/s, 10 m/s², 10 mm apart | x = v² rises 0.25, 0.43, 0.61, 0.79, 0.97, 1 m²/s² from the slow place (0.18 per place = 2 · 0.01 · 0.9 · 10); at 50 m/s³ also x'' within ± 2 · 0.5 · 50 · 0.01² / v, never above a top or below the slow place | 1e-12; 1e-4 | `the_speed_curve_comes_down_to_a_slow_place_within_its_acceleration_and_jerk`, path |
 | Time-optimal line, quarter turn of 5 mm radius, line, with a path tolerance of 0, 0.1 mm and 1 mm | The same three limits at every planned pose; ends on the end point; utilisation on the full model below 1 (0.18; it was 10.5) | 0.1 %; 1 nm | `a_time_optimal_plan_through_a_tight_arc_stays_within_torque_speed_and_jerk`, gantry |
@@ -473,6 +529,11 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | The stretched SCARA arm | At x = 0.598 the elbow acos((0.598² − L1² − L2²) / (2 L1 L2)) = 0.1639 rad, condition above 25: the move refused with `error-arm-singularity`; at 0.59 (0.3669 rad) it goes; at 0.61 `error-arm-out-of-reach`; a line ending at 0.6 refused with `error-path-range`, within the axis limits and time-optimal | – | `a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason` |
 | The time-optimal plan of a line of the tool | No motor faster than its rated 314.159 rad/s (from differences of the planned poses' joints); the fastest above 0.9 of it and faster than within the axis limits, the plan shorter | 0.1 % | `the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line` |
 | The tool-space configs | The defaults but for `kinematics.tool_space`, `start.pose`, the cycle and the arm's settling tolerance; both cycles of straight lines pass every verdict (SCARA 2.542 s, settling 0.04 mm; arm 3.774 s, settling 4.0 of 5 mm) | – | `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`, `the_tool_space_cycles_pass_their_verdicts` |
+| A link that twists and bends (`link_bending.directions` all three): a 60 × 4 mm steel tube, 0.8 m, 4.5 kg, with 10 kg and 0.5 kg m² about its axis at its tip | Twist sqrt(G I_p / (L (J + J_own / 3))) / 2π = sqrt(56146.0 / 0.501182) / 2π = 53.2699 Hz (the tube's share J_own / 3 = 1.182e-3 kg m²; the exact root of β tan β = J_own / J 53.26988 Hz); both bends sqrt(3.0906 E I / L³ / (m / 4 + M)) / 2π = 28.2887 Hz | 1e-5 | `a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes` |
+| Two-way bending (`effects.link_bending_reaction`): the tube of 0.45 kg with 20 kg at its tip on a gearbox of 2e5 N m/rad, the motor held | The two-coordinate mode det(diag(k_g, k_b) − ω² M) = 0, M_qq = 12.897 kg m², B = 16.07219 kg m, M_d = 20.11546 kg: 14.43363 Hz, the lowest in `modes` (the series spring on the modal mass 14.43276 Hz); static sag L τ / k_g + Q_g / k_b = 1.197642 mm (M g / k_s = 1.185666 mm with the tip mass alone); let go from straight it rings about the sag with that amplitude at that frequency | 1e-5 (modes), 1e-4 (sag), 0.2 % (ringing), 1 % (amplitude, middle) | `a_bending_link_on_an_elastic_joint_rings_as_the_two_springs_in_series` |
+| Two-way bending, energy at an instant | The six-axis arm under gravity, loss-free, no motor torque, all three directions, links bent by 1 mm (1 mrad) and moving, joints turning: dE/dt along the state's own rates by central differences is zero (1e-5 W left; without G 0.22 W, without ½ Ṁ_d ḋ 0.012 W), rigid and elastic | 1e-4 W | `two_way_bending_trades_energy_without_loss_at_every_instant` |
+| Two-way bending, energy over a run | The standard suite's energy conservation (0.1 % of the pulse's energy over 10 s): the tube hanging under gravity with all three directions, elastic and rigid; the six-axis arm's loss-free elastic config with the payload, gravity off, its links bending in their joints' planes | 0.1 % | `two_way_bending_keeps_the_energy_of_a_hanging_link`, `two_way_bending_keeps_the_six_axis_arms_energy` |
+| Two-way bending at rest and with losses | The shipped six-axis arm, all three directions: the standard suite's static hold (1e-7 m for 1 s, the gears holding the bent links' weight shift) and loss budget (the links' damping as `power.link_bending`) | suite's | `two_way_bending_holds_still_and_balances_the_losses` |
 
 ## Hand calculations: picking from a conveyor
 
@@ -487,6 +548,75 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | Parts missed a minute at a part every 0.5 s | At least 120 − picks a minute | – | `a_belt_faster_than_the_picks_misses_parts`, conveyor |
 | RMS torque of a belt pick at 0.3 m/s against a stationary pick, single axis with inertia alone | sqrt of the ratio of ∫a² dt of the bang-bang moves with the reduced acceleration plus 1.2 v² / T per blend: 0.8876 (measured 0.8877) | 0.02 | `a_belt_pick_changes_the_rms_torque_by_the_hand_estimated_share`, conveyor |
 | Belt, slats and parts in the scene; an obstacle at the place | 1 band, 10 slats, part 0 at 0.15 m at 0.5 s; `collision` fails | 1e-9 m | `the_scene_draws_the_belt_its_slats_and_its_parts`, `an_obstacle_at_the_place_fails_the_collision_check`, conveyor |
+
+## Hand calculations: pneumatic cylinder
+
+The cylinder of `sim_components::pneumatic` (unit tests there, a DSBC-32-like cylinder: A1 = 8.0425e-4 m², A2 =
+6.9115e-4 m², 0.5 kg, 6 bar gauge) and the pneumatic Z of `machines/pneumatic-axis.toml` (tests in
+`sim-machines/tests/pneumatic.rs`).
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Theoretical force at 6 bar, extending and retracting | p_g A1 = 482.55 N, p_g A2 = 414.69 N (Festo prints 483 and 415 N; the catalogue check holds every DSBC size to p A) | 1e-5 | `the_theoretical_force_is_p_a_on_both_sides` |
+| Choked and subsonic mass flow through C = 1 l/(s bar), b = 0.3; two elements in series | C p ρ0 = 8.3107e-3 kg/s from 7.013 bar; ψ(0.65) = 0.86603; C_s = 2^(−1/3) C, b_s = 1 − C_s²/C² (1.4) | 1e-5 | `the_flow_through_a_conductance_is_choked_below_b_and_elliptic_above` |
+| Steady speed of a meter-out throttled cylinder, C = 0.1 l/(s bar), 50 N load | v = C ρ0 R T0 / A2 = 0.14428 m/s, whatever p2 while choked (p2 = 7.27 bar) | 1 % | `a_meter_out_throttled_cylinder_runs_at_the_choked_flow_s_speed` |
+| The same in the machine file: Z extending downwards with its seals and the payload | C_s = 0.14943 l/(s bar) (throttle, valve, tube in series): 0.2156 m/s | 3 % | `the_servo_x_and_the_pneumatic_z_run_their_cycle` |
+| Natural frequency on the two air springs at mid-stroke, closed centre | sqrt(n (p1 A1²/V1 + p2 A2²/V2) / m) / 2π: adiabatic (n = 1.4) 29.64 Hz, isothermal limit (500 W/K, n = 1) 25.05 Hz | 2 % | `the_air_springs_ring_at_the_hand_frequency_adiabatic_and_isothermal` |
+| Air for a double stroke, long dwells | Σ (p_s (V0 + A s) − p_atm V0) / (R T) = 1.31757e-3 kg, 1.1119 normal litres (ANR) | 0.5 % | `a_double_stroke_draws_the_hand_air_consumption` |
+| Filling a closed 49 cm³ chamber, adiabatic, while choked | t = (b p_s − p_atm) V / (κ R T ṁ) = 2.555 ms (C 0.9615 l/(s bar), b 0.2142) | 0.5 % | `filling_a_closed_volume_takes_the_closed_form_time_while_choked` |
+| Energy of a closed cylinder (both chambers shut, adiabatic, no friction, stops undamped), vertical, 1 s | U1 + U2 + kinetic + gravity + the atmosphere's work on the rod + the stops' springs: constant | 1e-9 of U | `a_closed_cylinder_keeps_its_energy` |
+| Balance of the open cylinder over an extend and a retract stroke with seals, cushions and heat transfer | Δ(energy) = enthalpy from the supply − to the exhaust + heat from the wall − seal and damper work, each integrated as a state | 1e-6 of the enthalpy drawn | `the_enthalpy_flows_balance_the_energy_of_an_open_cylinder` |
+| Step convergence: stroke time at the sub-step 15.6 µs and half of it; the machine file's stroke times at 4 and 8 sub-steps | the same | 1 % | `the_stroke_time_converges_with_the_step`, `halving_the_step_leaves_the_stroke_time` |
+| Checks of the shipped cycle | Impact energy ½ · 1.0 kg · 0.2156² = 0.023 J (within 30 %: the piston still swings about its steady speed) against 0.4 J; load factor 9.807 N / 414.7 N = 0.0236 against 0.7; a rating of 0.01 J fails | as said | `the_cylinder_s_checks_are_judged` |
+| A cylinder too stiff for the step | refused with `error-cylinder-unstable` (1e-9 m³ dead volume) | – | `a_cylinder_too_stiff_for_the_step_is_refused`, `..._in_a_file` |
+
+Of the standard suite, round trip, static hold, determinism, energy conservation, the loss budget and step convergence
+run on `machines/pneumatic-axis.toml` as on every machine file (`every_machine_file_passes_the_standard_suite`); they
+pulse the servo X, and the cylinder rests in its end stop, so they check that it does rest there exactly
+(the equilibrium is the stop's deflection under the net pressure force). For the cylinder itself energy conservation
+does not apply (it is fed by the supply): the closed-cylinder check and the enthalpy balance above take its place, and
+the stroke-time convergence that of the travel.
+
+## Friction feedforward in the shipped configs
+
+`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives at least 35.8° and 8.0 dB (rotary knife; the T-gantry 48.9° and 8.63 dB, the D4 40.4° and 8.92 dB).
+
+| Config | Following off → on | Settling off → on | On |
+| --- | --- | --- | --- |
+| T-gantry | 194.9 → 178.2 | 47.4 → 42.9 | yes |
+| T-gantry conveyor | 671.1 → 659.2 | – | yes |
+| T-gantry EXCT-30 | 535.9 → 512.0 | 39.5 → 34.8 | yes |
+| Single axis | 201.1 → 126.3 (characteristic 118.5) | 20.8 → 42.5 (characteristic 38.8) | no |
+| D3 | 1461 → 1131 | 305.2 → 179.3 | yes |
+| D3 conveyor | 1428 → 1194 | – | yes |
+| D2 | 1062 → 1047 | 369.4 → 210.2 | yes |
+| D2 conveyor | 1120 → 1080 | – | yes |
+| D4 | 3656 → 3491; 5.833 → 5.373 mrad | 388.0 → 320.0; 0.192 → 0.187 mrad | yes |
+| D4 conveyor | 3156 → 3064; 3.321 → 2.860 mrad | – | yes |
+| H4 | 2485 → 2313; 24.48 → 26.51 mrad | 435.9 → 365.9; 3.655 → 3.052 mrad | no (turn follows worse) |
+| Linear delta | 609.3 → 312.2 | 74.2 → 112.7 | no |
+| Linear delta conveyor | 666.5 → 350.8 | – | yes |
+| Parallel SCARA | 1021 → 1040; 1.366 → 0.481 mrad | 303.0 → 163.9; 0.117 → 0.022 mrad | no (place follows worse) |
+| Screw axis | 82.3 → 30.8 | 46.2 → 6.9 | yes |
+| Rack axis | 117.5 → 49.4 | 62.9 → 8.1 | yes |
+| Linear motor axis | 43.5 → 39.7 | 24.5 → 6.6 | yes |
+| Rotary table | 2.621 → 2.541 mrad | 0.0364 → 0.0264 mrad | yes |
+| Six-axis arm (joints) | 4.164 → 4.150 mrad | 2.069 → 2.008 mrad | no (gain under 3 %; its tool-space configs follow worse) |
+| Arm, 5- and 7-axis arm in tool space | 5759 → 5734, 6467 → 6432, 5758 → 5732; 7.667 → 7.697, 8.827 → 8.850, 7.692 → 7.722 mrad | 2362 → 2348, 2368 → 2353, 2365 → 2351; 3.185 → 3.252, 3.150 → 3.183, 3.178 → 3.234 mrad | no |
+| SCARA | 156.6 → 20.5; 1.788 → 1.713 mrad | 73.6 → 9.8; 0.279 → 0.082 mrad | yes |
+| SCARA in tool space | 592.7 → 543.6; 1.508 → 1.369 mrad | 91.6 → 28.3; 0.0199 → 0.0011 mrad | yes |
+| Palletiser | 5906 → 5890; 2.770 → 2.720 mrad | 2537 → 2533; 0.0130 → 0.0153 mrad | no |
+| Slider crank (and cam) | 4.444 → 4.467 mrad (2.265 → 2.269) | 0.134 → 0.047 mrad | no |
+| Rotary knife | 9.059 → 8.855 mrad | 0.155 → 0.042 mrad | yes |
+| Rotary knife cam | 4.715 → 4.718 mrad | – | yes (as the rotary knife: the cam configs are the shipped one running its cam) |
+| Flying saw (and cam) | 457.6 → 455.4 (519.0 → 418.7) | 192.6 → 22.4 | characteristic, as before: 455.1 and 23.1 (418.5) |
+| Disc cam | 0.319 → 0.232 mrad | 0.228 → 0.024 mrad | yes |
+| Disc cam cam | 0.158 → 0.158 mrad | – | yes |
+| Hexapod | 27.2 → 10.9; 0.081 → 0.026 mrad | 15.7 → 1.5; 0.034 → 0.004 mrad | yes |
+| Planar cable robot | 707.0 → 666.7 | 153.5 → 137.9 | yes |
+| Spatial cable robot | 355.2 → 283.1; 2.161 → 1.594 mrad | 105.1 → 67.0; 0.836 → 0.624 mrad | yes |
+
+Where it settles worse (the single axis, the linear delta: belt axes whose guides have a LuGre contact), the cause is not worked out; the single axis does the same with its shipped characteristic, so it is not the machine model's value. The guides' feedforward fades in over their Stribeck speed (`Lugre::feedforward`), so that a stop puts no torque step on the axis (the plain steady value changed the figures above by under 10 %). The arm's joints, the slider crank and the palletiser change by under 3 %.
 
 ## Vendor formulas and vendor documents
 
@@ -565,83 +695,166 @@ These compare the simulator with itself. They prove repeatability and plumbing, 
 
 ## Against measured data
 
-One public measurement, not made by this project: the ball screw test bench of ISW, University of Stuttgart (C. Hinze,
-L. Zeh, DaRUS 2022, [doi:10.18419/darus-3003](https://doi.org/10.18419/darus-3003), CC BY 4.0), converted into
-[datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/). A 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball
-screw that moves a 400 kg table; speed and position loops on a dSPACE board. Three recordings at 1 ms: an S-profile
-(10 to 700 mm and back, 0.3 m/s, 1 m/s²), a sine (±100 mm at 0.1 Hz) and a run at 0.1 m/s out and back. The machine is
-the `screw-axis` of the joint kit with the dataset's `machine.toml`: table, stroke, screw diameter and length, motor and
-position gain from the source, the motor's data from Siemens D 21.4, the rest estimates; the lead (40 mm) is read from
-the screw's article number, the source does not state it.
+One public test bench, not built or measured by this project: the ball screw axis of ISW, University of Stuttgart, in
+three datasets on DaRUS, all CC BY 4.0 (licence checked on each dataset's page): C. Hinze, L. Zeh 2022,
+[doi:10.18419/darus-3003](https://doi.org/10.18419/darus-3003) (the three recordings below), C. Hinze et al. 2023,
+[doi:10.18419/darus-3252](https://doi.org/10.18419/darus-3252) (velocity sweeps, the speed loop's gains), and
+[doi:10.18419/darus-2563](https://doi.org/10.18419/darus-2563) (the linear direct drive's force compensation; read, not
+brought in: its constant-speed runs carry nothing the three recordings and their nut force do not, its README explains
+the drive's force column). Converted into [datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/). A 1FT7085
+motor on a SINAMICS S120 turns a 40 mm ball screw that moves a 400 kg table; speed and position loops on a dSPACE board.
+The machine is the `screw-axis` of the joint kit with the dataset's `machine.toml`.
 
-**Compared**: the measured motor torque (`M_KGT_act`, the S120's torque from its current) with the simulated one when the
-trace's position setpoints are replayed (`sim-cli replay`), before and after applying what `sim-cli fit` on the
-S-profile advises (literally: table −91.7 kg, guide and motor viscous friction × 1.432, Coulomb × 0.879, the constant
-+15.4 N as an incline of 0.29°). Differences as a share of the recording's peak measured torque:
+**The recordings and their roles.** The S-profile (10 to 700 mm and back, 0.3 m/s, 1 m/s², 6.2 s) is the one everything
+is fitted on. The sine (±100 mm at 0.1 Hz, 21 s) and the run at 0.1 m/s out and back (15 s, recorded two months
+earlier) are checks: nothing was set from them. The velocity sweeps (darus-3252, at 0, 350 and 700 mm) check the screw's
+stiffness and the lead, and are compared, not fitted.
 
-| Recording | Peak torque | RMS, config as written | RMS, after the fit | Peak difference, as written | after the fit |
-| --- | --- | --- | --- | --- | --- |
-| S-profile (fitted on) | 8.07 N m | 0.857 N m, 10.6 % | 0.820 N m, 10.2 % | 7.39 N m, 92 % | 5.78 N m, 72 % |
-| Sine, 0.1 to 19.9 s | 3.52 N m | 0.502 N m, 14.3 % | 0.494 N m, 14.0 % | 1.88 N m, 53 % | 1.95 N m, 56 % |
-| Constant speed 0.1 m/s | 14.63 N m | 0.746 N m, 5.1 % | 0.713 N m, 4.9 % | 6.17 N m, 42 % | 6.32 N m, 43 % |
+**Compared**: the measured motor torque (`M_KGT_act`) with the simulated one when the trace's position setpoints are
+replayed (`sim-cli replay`), as written for 1.0.0 and now. Differences as a share of the recording's peak measured
+torque; "as written" is the 1.0.0 table (the config before any fit, the replay from rest at the configured pose), "now"
+is `machine.toml` as committed:
 
-The fit hardly moves the RMS: what is left is not in the rigid values. A rigid model fitted to the S-profile alone
-(`identify`, no simulator) leaves 0.233 N m RMS (2.9 %), the floor for any choice of mass and friction. The rest:
+| Recording | Role | Peak torque | RMS, 1.0.0 | RMS, now | Peak difference, 1.0.0 | now |
+| --- | --- | --- | --- | --- | --- | --- |
+| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.430 N m, 5.3 % | 7.39 N m, 92 % | 2.27 N m, 28 % |
+| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.470 N m, 13.3 % | 1.88 N m, 53 % | 1.23 N m, 35 % |
+| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.786 N m, 2.3 % | 95 N m, 278 % | 30.0 N m, 88 % |
+| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.895 N m, 6.1 % | 6.17 N m, 42 % | 3.59 N m, 25 % |
 
-- At standstill (16 % of the S-profile's rows, after its last move) the bench holds about −1.5 N m, friction holding the
-  speed loop's integral torque; the simulation, its Coulomb friction smoothed through zero and without stiction, holds
-  0. That is 1.5 N m RMS on those rows.
-- The peak differences sit where the motion changes abruptly: at the start of braking (2.31 s) the simulated torque
-  swings ±4.5 N m for 5 ms where the measured one bends smoothly; at the sine's reversals (7.5 s, 17.5 s) the measured
-  torque jumps with the friction's sign, the simulated one follows the smoothed Coulomb curve. The simulated speed
-  loop's gains are estimates (the bench's loop ran on dSPACE, in units the source does not give).
-- Over the whole sine file the peak difference is 95 N m (278 %): its setpoint jumps to 0.063 m/s at the first row and
-  back to rest at the last; the bench jolts with 34 N m, the replay, which starts and ends at rest, with ±90 N m for
-  5 ms. Hence the table's 0.1 to 19.9 s; over the whole file the RMS is 1.62 N m (4.7 % of 34.2 N m).
+On the S-profile, step by step (RMS, peak): the setpoint on the simulator's clock (below) 0.842 N m, 7.23 N m; the
+torque feedforward off 0.711, 3.85; the speed loop's gains 0.686, 2.75; the guides' presliding friction 0.425, 2.24; the
+fitted friction and constant force 0.430, 2.27. Replaying from the trace's own state changes nothing here (the
+S-profile starts at rest) and the whole sine's jolt from 95 to 30 N m.
 
-**Found by the fit** (S-profile, the config's value → fitted ± standard error): moved mass at the table 583.6 → 491.9 ±
-3.4 kg (at the motor 0.0199 kg m²), viscous friction 544 → 779 ± 23 N s/m, Coulomb friction 366 → 322 ± 6 N, constant
-force 0 → +15.4 ± 1.6 N. Against the source: it gives the table's 400 kg and no friction. Table and the catalogue's
-rotor (20.7 kg cm²) make 451 kg; the 41 kg left (1.7e-3 kg m² at the motor) is what a steel screw 1.8 m long has at its
-root diameter (1.8e-3; at the full 40 mm 3.6e-3). With a lead of 25 mm the same torques fit a heavier rotor side, so
-this confirms the masses only together with the assumed lead.
+**Following error**, now on the source's clock: S-profile measured 0.0411 rad RMS, simulated 0.0399, their difference
+0.0022 rad (5 % of the measured); sine (0.1 to 19.9 s) 0.0078 against 0.0070, difference 0.0018 rad (23 %); constant
+speed 0.0165 against 0.0153, difference 0.0039 rad (24 %). With the bench's position gain (35 1/s) and speed feedforward,
+and the speed loop's gains read off the S-profile (below), not the dSPACE board's own law.
 
-The other recordings do not agree with it to within their standard errors, and say why: the constant-speed run gives
-529 ± 3 kg (only its ramps carry mass) and 426 ± 1 N of friction at 0.1 m/s (the S-profile's values give 322 + 78 =
-400 N there); the sine 575 ± 8 kg, all of it from the jolt at its start (its own acceleration is 0.04 m/s²). The
-constant force is the same on both runs out and back (+15.4 and +13.9 N); the source does not say what it is (an
-incline of 0.3°, or the linear motor's magnet pull left over by its compensation). Applied as advised and fitted again,
-the mass and the constant force land on the measured ones (487 kg, 17.2 N); Coulomb friction does not (337 against
-322 N), because the advice scales the guide's and the motor's friction (147 of the config's 366 N) and the rest is the
-nut's preload drag (THK's formula, 0.0887 · 2000 N · 0.04 m / 2π = 1.13 N m, 177 N at the table; `screw.preload_n` an
-estimate) and the screw's efficiency, which the advice does not name.
+**What was changed in machine.toml, and why** (each change marked in the file):
 
-**What was changed to get there, and what was not tuned.** Before any comparison the replay of the sine stopped after
-2 ms: `machine.toml` still had the 66 µF S210 DC link of the screw axis it was made from, and the jolt tripped it. It
-now names the S120 Motor Module that D 21.4 pairs with the motor (1230 µF) and a regenerative supply, both estimates.
-Nothing else was adjusted to the measurements; friction values and loop gains are the estimates written before the
-first replay, and the fit's advice was applied once, as printed.
+- `effects.torque_feedforward` off. The recordings' torque command holds no term of the acceleration setpoint: regressed
+  on the speed error, its integral and the acceleration setpoint, the S-profile gives −0.9 N m per m/s² where a torque
+  feedforward would give +3.1. Off, the S-profile's peak difference falls from 92 % to 48 %: the bench's speed loop lags
+  at the start of each ramp and overshoots, the simulated one did not.
+- The speed loop's gains: 3.9 N m s/rad and Tn 14.45 ms for the estimates 6.0 and 10 ms. The recordings name them "Gain"
+  166 and 69.2 without units; the S-profile's torque command regressed on the speed error and its integral, with Ki / Kp
+  = 69.2 1/s, gives Kp = 616 N m per m/s at the table, 3.9 at the motor (3.3 to 4.0 with Ki / Kp free). darus-3252,
+  recorded a year later, gives Kp = 175, Ki = 11 and a closed speed loop of 215 rad/s at a damping of 0.44, which on the
+  fitted 0.0199 kg m² is Kp = 2 · 0.44 · 215 · 0.0199 = 3.77 N m s/rad: the same within the regression's spread.
+- `effects.slide_presliding` on (new, shared physics behind its own switch, off in every shipped config): the guides'
+  and nut's friction as a Dahl state ([model reference](model-reference.md#slide-presliding-friction)), σ = 2e7 N/m, an
+  estimate. Without it the replay holds nothing at rest; on the S-profile 16 % of the rows are rest, and the bench holds
+  −1.44 N m there. With it the replay holds −0.99 N m.
+- Friction from `sim-cli fit` on the S-profile: guides' Coulomb 100 → 87.6 N and viscous 500 → 723 N s/m, the motor
+  shaft's 0.3 → 0.263 N m and 1e-3 → 1.446e-3 N m s/rad, and the nut's preload 2000 → 1752 N (its drag scaled with the
+  rest: the trace cannot tell the guides from the nut, both act as a sign of the speed). The constant force of +15.4 N
+  as an incline of 0.225° (`slide.incline_deg`).
+- The mapping (`map.toml`): the setpoint 1 ms later (`time_offset_s`), see below.
 
-**Found in the tools** by this data: on the constant-speed run the speed is its sign times 0.1 m/s, so viscous and
-Coulomb friction cannot be told apart (inflation 223, above the 100 the fit allows elsewhere), and the fit advised
-scaling the viscous friction by −8.6. It now leaves viscous friction out there and reports both as one Coulomb value
-(`at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value`, sim-components). `check-dataset .` run inside
-a dataset's folder refused every dataset (`the_checker_takes_the_name_of_the_folder_it_runs_in`, cli). The inertia
-`identify` reads off the S-profile lies between the bounds the source's masses give by hand
-(`the_measured_ball_screw_has_the_inertia_its_masses_give`, cli). Column names, units (m and m/s through the lead), the
-sampling and the time stamps (1 ms, jitter below 1 ns) imported as they were.
+Fitted again on the S-profile, the config lands on the measurement within its standard errors but for the mass and the
+held force: viscous 792 against 779 ± 23 N s/m, Coulomb 325 against 322 ± 6 N, constant 16.8 against 15.4 ± 1.6 N;
+moved mass 584 against 492 ± 3 kg, held force −155 against −242 ± 6 N.
+
+**Not changed, and why.** The moved mass: the fit says 92 kg less than the config's 584 kg. The table's 400 kg is the
+source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m² (427 to 528 kg at the table), so the table is not
+lighter; the excess is on the screw's side. Two parts of the model make it: `BallScrew::inertia` takes the shaft at its
+nominal diameter (0.00355 kg m², 88 kg at the table; at its root 0.00179, 44 kg), and the gearbox efficiency (0.9 for
+the screw) acts on the inertial force too (444 kg for 400). Both are model code: the gearbox's loss model is left to a
+later piece of work, and a carriage of 307.5 kg, which makes the torques fit (S-profile RMS 4.6 % instead of 5.3 %), would
+contradict the sweeps. The screw's stiffness: see the sweeps. The lead: see the sweeps.
+
+**The friction the data can tell** (`fit`, the rows after the rigid values; `friction_details`, tested on excerpts of
+these files against the same estimate worked out by hand, `held_force_breakaway_and_presliding_of_the_measured_ball_screw`
+in sim-components):
+
+| Value | S-profile (fit) | Sine (check) | Constant speed (check) | Replay of the config now (S-profile, sine, constant) |
+| --- | --- | --- | --- | --- |
+| Coulomb, guides, nut and motor together, at the table | 322 ± 6 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 325, 310, 395 N |
+| Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 792, 876 |
+| Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −155, +209, −178 N |
+| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 291 |
+| Presliding stiffness σ, from the turn at reversals | 7.0e6 N/m (one reversal at 1 m/s², crossed in 2 ms) | 3.1e7 ± 0.6e7 N/m (four) | 1.9e7 N/m (one) | 2.2e7, 2.0e7, 2.4e7 |
+
+- **Guides against nut.** The motor torque cannot tell them apart. The source's nut force sensors (`F_nut_sum`, now a
+  column of the CSV) can: regressed on the S-profile, the torque is 0.00829 N m per N of nut force plus 1.48 N m of
+  Coulomb friction that does not pass the nut's sensors (the nut's preload drag, the screw's bearings, the motor), and
+  the nut force carries 59 N of Coulomb friction from the table (the guides): 1.48 and 0.49 N m of the 1.99 N m that
+  `identify` finds, 74 and 26 %. The config as fitted has 1.36 and 0.62 N m (69 and 31 %). The sensors are not
+  referenced (the source says so): the nut force's acceleration term is 264 kg where the table has 400, and scaled by
+  400 / 264 the guides' share is 89 N, 0.63 N m.
+- **Stiction above Coulomb: none the data show.** On the sine, with the linear drive's force (below) and the inertia
+  taken off by hand, the friction while slowing is 1.97 to 2.25 N m between 0.5 and 8 mm/s and 2.02 to 2.50 N m from
+  8 to 65 mm/s; the breakaway row's 255 N is the drive's force at the sine's ends (−75 N at 350 mm, +67 N at 150 mm,
+  both against the motion there), which the fit does not know. The S-profile has too few slow rows. So
+  `slide.friction_breakaway_n` is the Coulomb level, and its Stribeck speed plays no part.
+- **The turn at a reversal.** At the sine's four reversals the friction (inertia and the drive's force off by hand)
+  turns from +2.0 to −1.5 N m over 80 ms and 125 µm, through zero after 13.5 to 15.6 µm: σ = 315 N ln 2 / x = 1.4e7 to
+  1.6e7 N/m. The fit's 3.1e7 does not take the drive's force off (it pushes against the motion at both ends of the sine and
+  moves the crossing to 7 µm); the config's 2e7 lies between, and its replay gives 2.0e7 by the same estimate. Dahl's law
+  with 1.5e7 would be within 1 % of the far level after 125 µm; the measured friction is at 68 %: it approaches the
+  level more slowly, a second, longer scale that one σ does not have.
+- **The held force.** It is the friction holding what the speed loop's integrator had when the axis stopped, so its sign
+  depends on the last deceleration: the S-profile and the constant-speed run both stop moving backwards and hold −242 and
+  +354 N. The model holds the right sign and two thirds on the S-profile, the right sign on the sine, the wrong one on
+  the constant-speed run (−178 N): its last stop is a ramp at 0.1 m/s whose loop dynamics the stand-in loops do not
+  reproduce. On that recording the rest rows (6 %) leave 3.29 N m RMS, the moving rows 0.347 N m (2.4 %); without the
+  presliding state it held nothing, and its whole RMS was 0.66 N m (4.5 %): that check is worse with the new friction.
+
+**The setpoint's clock.** The source records the setpoint its loop compares with the position of the same cycle; a
+simulated trace holds in each row the setpoint the drive worked with up to that row, the one of the cycle before. The
+mapping's existing `time_offset_s` on the setpoint (1 ms here) puts the source on the simulator's clock: the following
+errors then compare (above), where the simulated one was the speed times one cycle (0.047 rad at 0.3 m/s) against the
+bench's 0.001.
+
+**The velocity sweeps** (darus-3252, `velocity-sweep-s0.csv`, `-s350`, `-s700`; the frequency response from motor torque
+to motor speed, computed by `tools/darus_ball_screw_to_csv.py --sweep`). `sim-cli identify --sweep` fits the two-mass
+model: at 0, 350 and 700 mm a stiffness at the motor of 3240 ± 420, 2590 ± 300, 2830 ± 370 N m/rad, the first mode
+(resonance) at 134 ± 13, 123 ± 10, 126 ± 12 Hz, the dip (antiresonance) at 63, 62, 58 Hz. The model (`sim-cli modes`):
+137 Hz, its stiffness at the motor 3210 N m/rad (coupling 50000 N m/rad in series with the screw, nut and bearings,
+8.5e7 N/m at the softest nut position), its dip 70 Hz; `fit --sweep` puts the config's dip against the measured one at a
+stiffness factor of 0.80, 0.76, 0.66 if the table's mass is right. So the model's screw is as stiff as the bench near the
+motor and up to a third too stiff at the far end (one stiffness for the whole stroke, `BallScrew::converter`); not
+changed, as the closed speed loop under the sweep and the load side's mass (the sweeps' own 427 to 528 kg) each move
+the dip as much. **The lead**: the sweeps' ratio of load side to motor side, 3.0 to 3.7, is what a lead of 40 mm gives
+(table 0.0162 kg m² over a rotor side of 0.0039 to 0.0060: 2.7 to 4.2); a lead of 25 mm would give 1.0 to 1.6. This
+checks the lead read from the article number without the torque fit.
+
+**What still does not match.**
+
+- The sine: half of its remaining difference is the linear direct drive's force. Its setpoint (`F_des_LDD`, −113 to
+  +123 N, now a column of the CSV) shows in the nut force one for one (regression coefficient 1.00) and in the motor torque
+  at 0.0078 N m per N; added to the simulated torque by hand, the sine's RMS falls from 0.470 to 0.233 N m (6.6 %). The
+  simulator has no input for a force on the table from outside, so the replay leaves it out. (On the S-profile the same
+  column's coefficient is 0.0007 N m per N, 0.10 in the nut force: the drive's compensation there did what it should.)
+- The whole sine's start and end: its setpoint starts at 63 mm/s from rest and stops from it at 20 s; the bench jolts
+  with 34 N m, the replay with up to 46 N m.
+- The moved mass (above), and the S-profile's peak difference of 2.27 N m at the start of the return (2.62 s), where
+  the bench's speed loop overshoots more than the stand-in.
+- The torque per force at the table is 0.0078 to 0.0083 N m per N in both nut and drive regressions, 1.23 to 1.30 times
+  the lead's 0.04 / 2π = 0.00637: an efficiency of 0.77 to 0.81, or a torque reading, sensor or lead off by that factor.
+  The config's 0.9 is the makers' figure.
+- The held force on the constant-speed run, and the second length scale of the turn at a reversal (above).
+
+**Found in the tools** by this data: the replay forced a start from rest; it now runs up to the trace's own first
+position and speed (`a_replay_starts_from_the_traces_own_speed`, cli: the sine from 3 s on, measured within ±3.42 N m,
+jolted the replay with 86 N m before). From 1.0.0: on the constant-speed run the speed is its sign times 0.1 m/s, so
+viscous and Coulomb friction cannot be told apart, and the fit reports both as one Coulomb value
+(`at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value`); `check-dataset .` inside a dataset's folder
+(`the_checker_takes_the_name_of_the_folder_it_runs_in`); the inertia `identify` reads off the S-profile lies between the
+bounds the source's masses give by hand (`the_measured_ball_screw_has_the_inertia_its_masses_give`).
 
 **What this does not show.**
 
 - One machine, a horizontal ball screw axis. Nothing about belts, gearboxes, deltas, arms or gravity loads.
-- Not the drive model: the bench's speed and position loops ran on a dSPACE board, not in the S120, so the simulated
-  S120 loops are stand-ins with estimated gains. The following error is not compared: the simulated one at constant
-  speed is the speed times one position cycle (0.047 rad at 0.3 m/s); the source records setpoint and position in the
-  same cycle (about 0.001 rad apart).
+- Not the drive model: the bench's speed and position loops ran on a dSPACE board, not in the S120; the simulated S120
+  loops have the bench's position gain and speed gains read off its signals, not its control law.
 - Not the current loop, the DC link, the motor's heating, the noise, or the screw's ratings and life.
-- The lead and the moved masses only together (above); friction only at the speeds of these recordings, not its
-  Stribeck shape and not at standstill.
-- A fit on one recording checked on two others, but all three from one bench, in June and August 2022.
+- Friction at the speeds of these recordings (0.5 mm/s to 0.3 m/s), its turn at slow reversals, and what it holds at rest
+  after a stop; not its dwell time, nor at the speeds of darus-3003's other constant-speed runs (1 to 750 mm/s, not
+  brought in).
+- A fit on one recording checked on two others and three sweeps, all from one bench, in 2022 and 2023.
 
 ## What is not validated
 
@@ -649,10 +862,10 @@ sampling and the time stamps (1 ms, jitter below 1 ns) imported as they were.
 
 **Against a real machine: one public measurement.**
 
-- One set of measured drive traces has been compared with the simulation: a ball screw axis of ISW Stuttgart ([above](#against-measured-data)). The "Real traces" check of the project plan (stage D4) on the project's own axes does not exist.
+- One measured machine has been compared with the simulation: a ball screw axis of ISW Stuttgart, three recordings and three velocity sweeps ([above](#against-measured-data)). The "Real traces" check of the project plan (stage D4) on the project's own axes does not exist.
 - The test runs on a real axis (stage D2) have not been made.
-- Trace import, replay and fit have seen one real recording, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
-- The following error in particular is harder to match than torque, because drive vendors do not document their internal filters.
+- Trace import, replay and fit have seen one real machine's recordings, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
+- The following error is compared on that one bench only, whose loops ran on a dSPACE board; drive vendors do not document their internal filters.
 
 **Parameters.** These are estimates in every config, and nothing checks them:
 
@@ -698,6 +911,6 @@ The default configs of both machines are placeholders throughout.
 
 - OPC UA: tested against a client written with the same library. Not against a Siemens, Beckhoff or CODESYS controller; no security profiles; no check of timing jitter.
 - FMI: checked once (13 November) with an independent tool, fmpy 0.3.32 (in the project's `.venv`), on the win64 FMUs of the T-gantry, the single axis and the EXCT-30 config (English and German): `fmpy.validation.validate_fmu` (FMI 2.0 XSD, variable names, model structure, start values, causality and variability, units) found no problem in any; `simulate_fmu` in co-simulation ran each with no log message. At rest, every output agreed with `sim-cli run` to the 9 digits the CLI prints (relative 5e-10). A setpoint ramp (X 0.1 m in 0.5 s; on the EXCT-30 also Z) ends where `sim-cli run --trajectory` with the same points ends, within 16 µm of position; on the way, the FMU's setpoint arrives one setpoint interval (10 ms) later and is interpolated linearly, the trajectory's with cubic Hermite, so the setpoints differ by up to 0.2 mm shifted by that interval and peak torques by up to 0.9 N m (single axis 2.6 N m of 2.8): a difference of the input path, not of the model. fmpy's error paths: a communication step of 0.1 ms (not a multiple of 62.5 µs) refused with `fmi2Error` and its message logged; a setpoint out of range logged as a warning per step. This is not part of `cargo test`. Not imported into Simulink, OpenModelica or Dymola; no linux64 binary tried.
-- App: orbit camera, view presets, panels and buttons by mouse, typing into the file and search fields, and how the motion looks, were not checked by a person. Neither were the two lines the 3D view draws for a planned path (planned, and travelled): their points are tested in the model, the drawing was not looked at. Screenshots in English and German of every part of the right panel were inspected. What the app computes is tested without its window, against the library functions the command line uses (`sim-app/tests/app.rs`).
+- App: what the app computes is tested without its window, against the library functions the command line uses (`sim-app/tests/app.rs`). The window itself is driven by synthetic input (`sim-app/src/window_tests.rs`, run with `cargo nextest run -p sim-app -E 'binary(sim-app)'`): the app as `main` builds it, Bevy without winit and without a renderer (so the tests need no screen or graphics card and run in CI as anywhere), fed the messages winit sends for cursor moves, mouse buttons, the wheel, keys, typed text and window resizes, its widgets found by their labels in egui's accessibility tree. They cover the orbit camera (a drag turns the view by 0.005 rad a pixel about its target; the wheel zooms by 0.9 a notch within 0.2 to 20 m, a touchpad's pixels 50 to a notch; the right or middle button pans with the point under the pointer staying there; a drag that starts on a panel or a control turns nothing; the presets front, side, top and angled put the camera on the stated side with the machine's box in view; a resize keeps it in view), the top bar (pause, speed, units, theme, machine and language lists), the motion tab (start cycle, stop, drives off and on, a target typed, move), the parameter panel (a value typed reaches the running simulation and stays; a word for a number, a key the config does not have and a value the simulation refuses are each refused with their message and the old value kept; a drag on a number changes it), an effect switch, the config file field (a file that does not exist is said and changes nothing), every tool tab's run button (cycle with error bands, sensitivity, optimiser, motor search, path from `examples/corner.path`, trace from a missing file, frequency response, tuning), the keys (Space replays and the arrows step the timeline over the view, but not while a field has the keys, where a space is typed; Tab moves to the next field), five clicks on a long analysis start it once, switching the machine during an analysis leaves no result of the old one, and closing the window during the optimiser exits within seconds. Every label of the panels changes with the language but a listed few that German shares (units, "Motor", "Pause", "Plan", "Live", "Position"); no widget overlaps another or sticks out of its panel in English or German at 1600 × 900 and 1280 × 720 (as far as the accessibility tree tells: a wrapped label's box is not its text, and plots and the 3D view's own labels are painted, not widgets). Not covered by the tests: the file dialogs (Open…, Save as…, Export, the sizing report and a plot's picture), which the tests cannot close; dragging a panel's edge; the right-click menu of a plot. How it looks was checked by eye (15 November) on pictures saved by the app's screenshot hook (`SIM_APP_SCREENSHOT`, with `SIM_APP_SIZE` and `SIM_APP_SETUP` added for this) of the T-gantry in every tools tab and setup tab, English and German, 1600 × 900 and 1280 × 720, with the motion, a planned path and the overlays: the defects found were fixed (texts and controls running out of the view or the window in German, the timeline's buttons, the scopes panel shrinking with the kept runs, plots with 0 alone on their axis across, the part labels' -0, the config tab's part names wrapped to the end of the line before their fields, the motor search's list names after their lists where the fields' names come before). Not fixed: at 1280 × 720 the view's controls cover much of the machine, and some tools tabs (motor search, path, tuning) widen the tools panel by up to 160 pixels. Since then the planned path is drawn as a wide amber line with the travelled path as a cyan line over it; before, the travelled line lay at the same depth, lost the depth test to the plan and was never seen. Only the T-gantry was looked at; the other 21 machines' 3D views were not. How the motion looks over time was seen in single pictures, not watched.
 
 **Catalogue data.** Cross-checks find values in the wrong row or column. They cannot find a number misread into another plausible number where nothing ties it to a second value. The misprints found are listed in the [catalogue](catalogue.md#misprints-and-inconsistencies-found-in-the-vendor-documents) document; there may be more.

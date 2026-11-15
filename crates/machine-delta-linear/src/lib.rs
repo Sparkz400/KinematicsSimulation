@@ -1061,6 +1061,23 @@ impl Machine for LinearDelta {
         }
     }
 
+    /// The rigid model at a steady speed, h' = J^-1 p': per column its guide at the steady level under the load at rest
+    /// (`load_scales`, as the model takes it) through its gearbox, r / (i loss), plus the motor shaft's friction (with
+    /// the gearbox's drag) at i h' / r. The loss factor is the one of what the gearbox passes at rest, F - Q_g, as in
+    /// `rigid_solve`; the weight itself is the rigid feedforward's. The brake is released and the stops are not touched
+    /// in a move.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let h = self.legs.inverse([pos[0], pos[1], pos[2]]).unwrap_or([f64::NAN; 3]);
+        let (_, j) = self.pose(h);
+        let v = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, [vel[0], vel[1], vel[2]]));
+        let (r, ratio, scales, gravity) = (self.r, self.gearbox.ratio, self.load_scales(h), self.load(h, [0.0; 3]).2);
+        for k in 0..3 {
+            let force = self.friction[k].feedforward(v[k], scales[k]);
+            let loss = self.gears[k].loss_factor((force - gravity[k]) * r, v[k] / r);
+            out[k] = self.shaft.torque(ratio * v[k] / r) + r / (ratio * loss) * force;
+        }
+    }
+
     /// Per column, F = m_c h'' + m_nt (J^T p'')_k - Q_g,k on the carriage (without pulley and rotor), T1 - T2 = F, and the
     /// belt keeps its length: (T1 - P) L1 + (T2 - P) L2 = 0. So T1 = P + F L2 / (L1 + L2), T2 = P - F L1 / (L1 + L2).
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
@@ -1187,6 +1204,15 @@ impl Machine for LinearDelta {
             Some(j) if condition_number(&j) <= self.max_condition => None,
             _ => Some("error-delta-singularity"),
         }
+    }
+
+    /// The condition number of the legs' Jacobian at the plate position, for the workspace map; infinite out of the
+    /// rods' reach or at a direct singularity.
+    fn condition(&self, tool: &[f64]) -> Option<f64> {
+        let p = [tool[0], tool[1], tool[2]];
+        Some(
+            self.legs.inverse(p).and_then(|h| self.legs.jacobian(h, p)).map_or(f64::INFINITY, |j| condition_number(&j)),
+        )
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
