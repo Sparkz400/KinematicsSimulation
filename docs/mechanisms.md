@@ -658,7 +658,12 @@ of jerk at its ends (Δv 1.468, Δm 0.5 rad, c −0.067 rad), at π rad/s of mas
 the integrator takes up the friction at the end of a move three times as fast as with 0.03 s, and the dwell errors fall
 to 0.13 mrad (crank), 0.16 mrad (knife), 0.14 mm (saw) and 0.23 mrad (disc), with at least 35.8° and 8 dB of margin in
 every run across the bounds (`sim-cli margins <id> --bands`); the settling tolerances are 0.3 mrad, 0.3 mrad, 0.25 mm and
-0.5 mrad.
+0.5 mrad. Retuned on 15 November so that the margins hold with friction off too (the sweep `across_the_bounds`): the
+knife's Kp 0.18 (at the softest gearbox damping of its bounds 0.25 left 29.7°; now at least 37.8° and 9.9 dB; its
+cycle's following error 8.86 → 12.1 mrad, the cam's 4.72 → 5.70 mrad, settling 0.042 → 0.072 mrad), the saw's Tn
+0.04 s and position loop kv 57 1/s (the friction-free 45 kg carriage left 33.9° with Tn 0.03 s; now 35.8° and
+7.48 dB; it comes to rest moving 18.7 µm in 0.2 s after a long move, 13.5 before, under the test's 20; following
+error 455 → 463 µm, settling 23 → 26 µm).
 
 ## Pneumatic cylinder beside servo axes (`[[machine.cylinder]]`)
 

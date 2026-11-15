@@ -698,7 +698,9 @@ Enden 6 Δv / Δm² + 60 c / Δm³ = 67,4 rad/rad³ Ruck (Δv 1,468, Δm 0,5 rad
 2090 rad/s³, mehr als die 2000 der Kurbel; das 4-5-6-7 hat dort keinen eigenen Ruck. Die Drehzahlregler der vier
 Maschinen haben Tn 0,01 s (das Messer Kp 0,25): der Integrator nimmt die Reibung am Ende einer Fahrt dreimal so schnell
 auf wie mit 0,03 s, und die Fehler beim Verweilen fallen auf 0,13 mrad (Kurbel), 0,16 mrad (Messer), 0,14 mm (Säge) und
-0,23 mrad (Scheibe), mit mindestens 35,8° und 8 dB Reserve in jedem Lauf über die Grenzen (`sim-cli margins <id>
+0,23 mrad (Scheibe), mit mindestens 35,8° und 8 dB Reserve (am 15. November neu eingestellt, damit die Reserven auch ohne Reibung halten:
+das Messer Kp 0,18, mindestens 37,8° und 9,9 dB, Schleppfehler im Zyklus 8,86 → 12,1 mrad; die Säge Tn 0,04 s und kv
+57 1/s, mindestens 35,8° und 7,48 dB, nach einer langen Fahrt 18,7 µm Bewegung in 0,2 s) in jedem Lauf über die Grenzen (`sim-cli margins <id>
 --bands`); die Toleranzen des Einschwingens sind 0,3 mrad, 0,3 mrad, 0,25 mm und 0,5 mrad.
 
 ## Pneumatikzylinder neben Servoachsen (`[[machine.cylinder]]`)
