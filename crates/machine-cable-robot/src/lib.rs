@@ -1457,6 +1457,22 @@ impl Machine for CableRobot {
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
     }
+    /// Elastic: the winches' gearboxes commit where the step ended (their mesh friction's and hysteresis's anchors).
+    fn after_step(&mut self, s: &mut [f64], _dt: f64) {
+        let (n, m) = (self.n(), self.m());
+        if self.elastic {
+            for k in 0..m {
+                self.winches[k].gearbox.commit(s[2 * n + 2 * m + k], s[2 * n + k]);
+            }
+        }
+    }
+    fn memory(&self) -> Vec<f64> {
+        sim_components::mech::Gearbox::anchors(self.winches.iter().map(|j| &j.gearbox))
+    }
+    fn set_memory(&mut self, memory: &[f64]) {
+        sim_components::mech::Gearbox::set_anchors(self.winches.iter_mut().map(|j| &mut j.gearbox), memory)
+    }
+
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }

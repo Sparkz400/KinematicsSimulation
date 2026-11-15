@@ -59,6 +59,7 @@ effect-motor_friction = Motor and bearing friction
 effect-gearbox_backlash = Gearbox backlash
 effect-gearbox_efficiency = Gearbox efficiency
 effect-gearbox_drag = Gearbox no-load torque
+effect-gearbox_mesh_friction = Gearbox mesh friction
 effect-motor_stiction = Motor breakaway (Stribeck)
 effect-gearbox_lost_motion = Gearbox lost motion and hysteresis
 effect-gearbox_stiffness_curve = Strain wave gear stiffness curve

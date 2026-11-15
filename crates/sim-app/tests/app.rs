@@ -357,6 +357,11 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
                                 / base.f64("gearbox.efficiency_torque_nm").unwrap()
                             <= 1.0
             }
+            // The mesh friction is the gearbox's efficiency loss (the teeth's): nothing where that is 1 or off.
+            "effects.gearbox_mesh_friction" => {
+                !base.bool("effects.gearbox_efficiency").unwrap_or(false)
+                    || base.f64("gearbox.efficiency").map_or(true, |v| v == 1.0)
+            }
             "effects.gearbox_drag" => zero(&["gearbox.no_load_torque_nm"]) || base.f64("gearbox.ratio").unwrap() == 1.0,
             "effects.motor_stiction" => {
                 base.f64("motor.friction_breakaway_nm").unwrap() <= base.f64("motor.friction_coulomb_nm").unwrap()

@@ -165,6 +165,38 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
     }
 }
 
+/// With the gearboxes' mesh friction (effects.gearbox_mesh_friction) on every machine that has a gearbox, also where
+/// its shipped config leaves it off: the friction's work and its bristle's store go into the gearbox's loss row and the
+/// energy, and the budget of a pass closes as without it. (The standard suite cannot tell: it drives the machine without
+/// `after_step`, so the friction's anchor never commits and the gearbox keeps its faded efficiency there.) But the
+/// T-gantry, whose light pulleys, stuck to the housing by the friction, chatter between sticking and sliding faster than
+/// the base step resolves: 0.163 % of its pass unaccounted, beyond the 0.1 % (the effect is off in its config for that).
+#[test]
+fn the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox() {
+    std::thread::scope(|scope| {
+        for entry in
+            MACHINES.iter().copied().filter(|e| e.config().get("gearbox.efficiency").is_ok() && e.id != "t-gantry")
+        {
+            std::thread::Builder::new()
+                .name(entry.id.into())
+                .spawn_scoped(scope, move || {
+                    let mut table: toml::Table = entry.default_config.parse().unwrap();
+                    let effects = table["effects"].as_table_mut().unwrap();
+                    effects.insert("gearbox_mesh_friction".into(), toml::Value::Boolean(true));
+                    let cfg = Config::parse(&toml::to_string(&table).unwrap()).unwrap();
+                    let budget = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap().budget.unwrap();
+                    let (supply, unaccounted) = (budget.supply, budget.unaccounted());
+                    assert!(
+                        supply > 0.0 && unaccounted.abs() < BUDGET_TOLERANCE * supply,
+                        "{}: {unaccounted} J of {supply} J not accounted for",
+                        entry.id
+                    );
+                })
+                .unwrap();
+        }
+    });
+}
+
 /// The regenerative supply against a hand calculation on every config. A DC link of its own is held at the bus level
 /// from both sides: below it the rectifier draws, above it the line module feeds back. So in every step the line module
 /// takes what the motor feeds back and the rectifier gives what it draws: fed back to the mains is the efficiency times
