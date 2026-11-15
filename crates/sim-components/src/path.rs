@@ -321,6 +321,21 @@ impl Geo {
             }
             Geo::Slerp { from, to, length } => {
                 let dir: Vec<f64> = from.iter().zip(to).map(|(f, t)| (t - f) / length).collect();
+                // Both orientations about one axis, on its same side: the turn goes along that axis, and its rotation
+                // vector along the straight line between them, with no bend. By the differences below its rounding
+                // (2e-8 rad/m^2 on a turn of 0.2 rad) marked it as bending, and the time-optimal plan gave its ramps
+                // 0.4 of those axes' jerk.
+                let (a, b) = ([from[3], from[4], from[5]], [to[3], to[4], to[5]]);
+                let size = |v: [f64; 3]| crate::rigid::dot(v, v).sqrt();
+                // To the rounding of the turns' sizes: a turn that ends a piece is the next one's start only to it (a
+                // level pose as 1e-17 rad about some axis), and the next turn bent by it.
+                let scale = (size(a) + size(b)).powi(2);
+                let one_axis = size(crate::rigid::cross(a, b)) <= 1e-12 * scale
+                    && crate::rigid::dot(a, b) >= -1e-12 * scale
+                    && size(a).max(size(b)) < std::f64::consts::PI;
+                if one_axis {
+                    return [from.iter().zip(&dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; 6]];
+                }
                 let pose = |s: f64| -> Vec<f64> {
                     let turned = crate::rigid::slerp([from[3], from[4], from[5]], [to[3], to[4], to[5]], s / length);
                     (0..6).map(|i| if i < 3 { from[i] + s * dir[i] } else { turned[i - 3] }).collect()
@@ -4246,6 +4261,30 @@ line,0.3,0.13",
         assert!((t - 0.861774).abs() < 2e-3 && s == 0.4 && v.abs() < 1e-9, "{t} s, {s} m, {v} m/s");
         let fastest = knots.iter().map(|k| k[2]).fold(0.0, f64::max);
         assert!((fastest - 0.928318).abs() < 5e-3, "{fastest} m/s");
+    }
+
+    /// A turn about one axis (from no turn to (0.075, 0.075, 0.1) rad, or on along that axis) does not bend its rotation
+    /// vector: turns about one axis add, so it runs along the straight line, at the line's rate, with no second
+    /// derivative. Its differences had a bend of rounding (2e-8 rad/m^2), and the time-optimal plan gave such a piece
+    /// 0.4 of its axes' jerk; a turn that changes its axis still bends.
+    #[test]
+    fn a_turn_about_one_axis_does_not_bend_its_rotation_vector() {
+        let to = [0.04, 0.04, 0.43, 0.075, 0.075, 0.1];
+        let length = to.iter().map(|v| v * v).sum::<f64>().sqrt();
+        // From no turn, from a level pose to the rounding (as a previous piece ends at it), and from along the axis.
+        for from in [vec![0.0; 6], vec![0.0, 0.0, 0.0, 1e-17, -2e-17, 0.0], vec![0.0, 0.0, 0.0, 0.03, 0.03, 0.04]] {
+            let piece = Geo::Slerp { from: from.clone(), to: to.to_vec(), length };
+            for s in [0.0, 0.3 * length, length] {
+                let [pose, d1, d2] = piece.at(s);
+                for i in 3..6 {
+                    let line = from[i] + (to[i] - from[i]) * s / length;
+                    assert!((pose[i] - line).abs() < 1e-15 && d2[i] == 0.0, "{s}: {pose:?} {d2:?}");
+                    assert!((d1[i] - (to[i] - from[i]) / length).abs() < 1e-15, "{d1:?}");
+                }
+            }
+        }
+        let turning = Geo::Slerp { from: vec![0.0, 0.0, 0.0, 0.3, 0.0, 0.0], to: to.to_vec(), length };
+        assert!(turning.at(0.5 * length)[2][3..].iter().any(|v| v.abs() > 1e-3));
     }
 
     /// The speed curve a piece follows around a slow place. With a jerk too high to matter, the squared speed may change
