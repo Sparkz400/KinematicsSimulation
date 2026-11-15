@@ -970,6 +970,37 @@ a target is refused where a leg would leave its stroke, stand steeper at a joint
 (`workspace.max_condition_number`; the workspace map shows the condition number). The velocity loop's gain is 0.4 N m
 s/rad: with 0.1 the legs' friction held the platform 0.17 mm off at the dwells.
 
+`hexapod-rotary` is the other build of a hexapod, a motion base on six cranks (6-RSS): six 1FT2104-5AF with planetary
+gearboxes SP100 50:1 on the base, each turning a crank of 200 mm, each crank joined to the platform by a rod of 550 mm
+with a ball joint at both ends; a platform of 35 kg carrying a seat with its occupant, 80 kg, 300 mm above the platform
+joints. Its cycle heaves the platform up and down, then surges, sways, rolls, pitches and yaws it, each from the pose before,
+and brings it back level.
+
+```text
+$ sim-cli verdicts hexapod-rotary
+settling,,0.0005041,0.001000,ok
+singularity,,3.589,15.00,ok
+gearbox-peak,3,182.8,278.0,ok
+crank-dead-centre,1,0.4452,1.222,ok
+rod-buckling,4,953.4,3530,ok
+platform-ball-joint,1,0.5734,0.6981,ok
+...
+```
+
+Every check passes. Beyond the motors' and the gearboxes' own, each leg is judged for its crank's distance from the
+dead centre (`crank-dead-centre`: the rod's angle from the crank's tangent against 90° less
+`ratings.crank_dead_centre_margin_deg`, where the motor's torque arm falls with its cosine), its rod's buckling
+(`rod-buckling`: the compression against the Euler load of the tube in `[rod]` over its safety) and both ball joints'
+angles. A target is refused where a rod cannot reach, a crank comes nearer its dead centre than
+`workspace.min_dead_centre_margin_deg`, a ball joint would leave its angle, two rods would come nearer than
+`workspace.min_rod_clearance_m`, or near a singularity. `crank.branch` picks the cranks' configuration (`"out"` or
+`"in"`) once for all legs.
+On its cycle the motors use at most 46 % of their torque curve, the gearboxes see at most 183 of their 278 N m, the
+cranks keep at least 64.5° from their dead centres, the rods carry at most 953 N against the 3530 N their buckling allows,
+and the platform settles within 0.50 mm: the gearboxes' twist under the seat's weight, which the motors' encoders do not
+see, is most of it (0.15 mm with rigid gearboxes). The velocity loops' gain is 0.12 N m s/rad (41.8° and 9.5 dB at the
+level pose).
+
 `cable-planar` hangs a carriage of 3 kg (up to 2 kg on it) in a vertical plane from 4 cables, `cable-spatial` a platform
 of 4 kg (up to 4 kg) with six degrees of freedom from 8; each cable runs over a swivelling pulley onto a winch behind a
 planetary gearbox 5:1. The tensions come from a small QP, those nearest the pretension (`cable.reference_tension_n`)

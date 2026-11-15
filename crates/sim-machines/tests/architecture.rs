@@ -114,22 +114,32 @@ fn no_machine_name_outside_its_crate() {
         .map(|e| e.unwrap().file_name().into_string().unwrap().to_lowercase())
         .filter(|name| name.ends_with(".toml"))
         .collect();
+    let variants = |crate_name: &str| {
+        let name = crate_name.trim_start_matches("machine-");
+        [name.to_string(), name.replace('-', "_"), name.replace('-', " "), name.replace('-', "")]
+    };
     // `sim-netlist` is no machine of its own to be named, but is scanned like the machines for the others' names.
     for machine in names.iter().filter(|n| n.starts_with("machine-")) {
         // A machine may not name another machine either, but the one it is built on.
-        let mut scanned = files.clone();
+        let mut scanned: Vec<(PathBuf, Option<&String>)> = files.iter().map(|f| (f.clone(), None)).collect();
         let built_on = |other: &String| BUILT_ON.contains(&(other.as_str(), machine.as_str()));
         for other in names.iter().filter(|n| layer(n) == 2 && *n != machine && !built_on(n)) {
-            text_files(&crates_dir().join(other), &mut scanned);
+            let mut own = Vec::new();
+            text_files(&crates_dir().join(other), &mut own);
+            scanned.extend(own.into_iter().map(|f| (f, Some(other))));
         }
-        let name = machine.trim_start_matches("machine-");
-        let variants = [name.to_string(), name.replace('-', "_"), name.replace('-', " "), name.replace('-', "")];
-        for file in &scanned {
+        for (file, owner) in &scanned {
             let mut text = fs::read_to_string(file).unwrap().to_lowercase();
             for name in &machine_files {
                 text = text.replace(name.as_str(), "");
             }
-            for variant in &variants {
+            // A crate's own name is not another machine's, though it contain one ("hexapod-rotary" holds "hexapod").
+            if let Some(owner) = owner.filter(|o| o.starts_with("machine-")) {
+                for own in variants(owner) {
+                    text = text.replace(own.as_str(), "");
+                }
+            }
+            for variant in &variants(machine) {
                 // As a word: "t gantry" is not in "struct gantry" nor "struct gantrysync".
                 let named = text
                     .match_indices(variant.as_str())

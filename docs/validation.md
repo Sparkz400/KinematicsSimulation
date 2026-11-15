@@ -534,6 +534,24 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | Two-way bending, energy over a run | The standard suite's energy conservation (0.1 % of the pulse's energy over 10 s): the tube hanging under gravity with all three directions, elastic and rigid; the six-axis arm's loss-free elastic config with the payload, gravity off, its links bending in their joints' planes | 0.1 % | `two_way_bending_keeps_the_energy_of_a_hanging_link`, `two_way_bending_keeps_the_six_axis_arms_energy` |
 | Two-way bending at rest and with losses | The shipped six-axis arm, all three directions: the standard suite's static hold (1e-7 m for 1 s, the gears holding the bent links' weight shift) and loss budget (the links' damping as `power.link_bending`) | suite's | `two_way_bending_holds_still_and_balances_the_losses` |
 
+## Hand calculations: hexapod with rotary actuators
+
+The six-axis platform on cranks (`hexapod-rotary`, [mechanisms](mechanisms.md#hexapod-with-rotary-actuators-6-rss)),
+on its default config; leg 1 at the level pose (0, 0, 0.4 m): B at 0.5 m and −5°, P at 0.3 m and −55°, d = (−0.573576,
+−0.819152, 0). All in `machine-hexapod-rotary`; the numbers also by an independent numpy script of the same formulas.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The crank angle at the level pose | e = P − B = (−0.326024, −0.202168, 0.4): a = 0.352606, b = 0.4, c = 0.111659, √(a² + b²) = 0.533227; θ = 0.848288 − 1.359832 = −0.5115438 rad for all six ("in": 2.208120 rad); the rod 0.55 m long | 1e-7 rad | `every_crank_has_the_hand_calculated_angle_at_the_level_pose` |
+| Forward of inverse | Three poses (level, shifted and tilted, a far corner with all three turns); a rod that cannot reach refused | 1e-12 | `the_forward_kinematics_undoes_the_inverse_at_three_poses` |
+| Holding torque, level, centred load | f = (115 + 6 · 0.2) g / (6 u_z) = 209.7935 N, u_z = 0.905281; τ = f m + cos θ g (m_c r_cg + m_rod r / 2) = 39.7772 + 1.7103 = 41.4875 N m, 0.829750 N m at the motor (ratio 50) | 1e-3 N, 1e-5 N m | `the_cranks_hold_the_level_platform_with_the_hand_calculated_torque` |
+| The torque arm at the dead centre | m = r √(a² + b²) sin δ / L: 0.185772 m at z = 0.5 m; zero at z = 0.6378641 m, the root of (w + K)² = 4 r² (a² + w), K = −0.115336; 2 mm lower the pose is refused (`error-rss-dead-centre`) | 1e-6 m, 1e-5 m | `the_torque_arm_goes_to_zero_at_the_dead_centre` |
+| The inverse Jacobian at the level pose | Row 1 (u, b × u) / m = (−2.167162, −0.568745, 4.774645, −1.173348, −0.821587, −0.630436); the closed form's slope along z 4.774645 rad/m | 2e-6 | `the_jacobian_at_the_level_pose_is_the_hand_calculated_one` |
+| A heave of 1 m/s² from rest | θ'' = 4.774645 rad/s²; the rods' compression + 21.3807 N; at the crank 0.095493 + 0.037088 + 4.053815 = 4.186396 N m; at the motor / 50 plus 1.1e-4 · 50 · θ'' = 0.109989 N m | 2e-5 N m | `a_heave_acceleration_takes_the_hand_calculated_torque` |
+| A rod's Euler load | π² E I / L², I = π (0.02⁴ − 0.016⁴) / 64 = 4.636991e-9 m⁴, E 70 GPa, L 0.55 m: 10590.31 N, over 3: 3530.10 N | 0.01 N | `the_rods_buckle_at_the_hand_calculated_euler_load` |
+| The new verdicts | At the level pose the rod 18.5567° from the crank's tangent, 15.9463° out of the crank's plane, 25.1388° from the platform's normal; `crank-dead-centre`, `rod-buckling`, `crank-ball-joint`, `platform-ball-joint` pass at their limits (70°, 3530.10 N, 35°, 40°) and fail 1e-9 beyond | 1e-4° | `the_new_verdicts_pass_at_their_limits_and_fail_beyond` |
+| Virtual work against Newton-Euler | Off centre, moving and accelerating: each crank's M θ'' + h equals J_c θ'' + its weight + the rod's lower node t · m (a − g) + f_i m_i with the rods' forces from the platform's side | 1e-9 | `the_virtual_work_agrees_with_the_forces_along_the_rods` |
+
 ## Hand calculations: picking from a conveyor
 
 | What is compared | Against | Tolerance | Test |

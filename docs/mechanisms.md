@@ -424,6 +424,7 @@ other machine (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, the a
 | Id | Mechanism | Drives | Tool pose | Own checks |
 | --- | --- | --- | --- | --- |
 | `hexapod` | Stewart-Gough platform, 25 kg plus up to 30 kg, on six electric cylinders (450 mm retracted, 200 mm stroke) | per leg a ball screw 25 x 10 behind a coupling on a 1FK2105-4AF | x, y, z (m), rx, ry, rz (rad, a rotation vector) | the screw's `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` per leg, under the leg's force |
+| `hexapod-rotary` | Stewart platform on six cranks (6-RSS), 35 kg plus a seat of 80 kg, cranks 200 mm, rods 550 mm | per crank a planetary gearbox SP100 50:1 on a 1FT2104-5AF | x, y, z (m), rx, ry, rz (rad, a rotation vector) | `crank-dead-centre`, `rod-buckling`, `crank-ball-joint`, `platform-ball-joint` per leg, the gearbox's torque |
 | `cable-planar` | a carriage of 3 kg plus up to 2 kg, a point in a vertical plane, on 4 cables from a frame 2 m x 1.6 m | per cable a winch: 25 mm drum behind a planetary gearbox 5:1 | x, z (m) | `cable-max-tension`, `cable-min-tension` per cable |
 | `cable-spatial` | a platform of 4 kg plus up to 4 kg, six degrees of freedom, on 8 cables from the corners of a frame 2 x 1.6 x 1.8 m | as the planar one, 30 mm drum | x, y, z (m), rx, ry, rz (rad) | as the planar one |
 
@@ -459,6 +460,53 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
 Under its weight the platform held by constant leg forces is unstable (d²/dz² of m g z − Σ f_i L_i < 0), a real
 property that the position loops hold; the standard suite's loss-free configs therefore run without gravity, as the
 six-axis arm's do, and gravity is checked by the hand-calculated leg forces and the default config.
+
+### Hexapod with rotary actuators (6-RSS)
+
+`hexapod-rotary` (crate `machine-hexapod-rotary`) is the build of motion simulators and fast six-axis positioners: six
+servo motors with planetary gearboxes on the base, each turning a crank of 200 mm, each crank's tip joined to the
+platform by a rod of 550 mm with a ball joint at both ends. The default is a small motion base: a platform of 35 kg
+carrying a seat with its occupant, 80 kg (its centre of mass 300 mm above the platform joints, with its own inertia), on
+six 1FT2104-5AF with SP100-04-50 gearboxes on S210 converters 6SL3210-5HE10-8UF0 (catalogue). Tool pose and axes as on the hexapod; the joints are the crank
+angles (rad, 0 horizontal, positive lifting the tip). Each crank is a joint of `chain::JointMachine` with a
+`joint::RotaryJoint` (gearbox stiffness, backlash, efficiency, the crank bearing's friction, stops), as on the delta
+pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuators-6-rss) and the
+[config reference](config-reference.md#hexapod-with-rotary-actuators).
+
+- Geometry: the crank axes' centres in pairs at 120 k ± `platform.base_half_angle_deg` on `platform.base_radius_m`,
+  the platform joints in pairs at 120 k ± (60 − `platform_half_angle_deg`) on `platform_radius_m`; each crank axis
+  horizontal, the base radius turned by ± `crank.axis_turn_deg` (mirrored in a pair) so that the rod leans little out
+  of the crank's plane.
+- Inverse kinematics per leg in closed form: with e = P_i − B_i, a cos θ + b sin θ = c, a = e · d_i, b = e_z,
+  c = (|e|² + r² − L²) / 2r; θ = atan2(b, a) ∓ acos(c / √(a² + b²)), the branch fixed once by `crank.branch` ("out":
+  the tip away from the pair's partner; "in" the other); no solution where |c| > √(a² + b²).
+- Forward kinematics by Newton's method on the platform's twist from the centre of the tool's box, as on the hexapod.
+- Jacobian: A ξ = diag(u_i · t_i) θ', A's rows (u_i, b_i × u_i), u_i the rod's direction and t_i the crank tip's
+  tangent; u_i · t_i is the motor's torque arm. The condition number of the inverse Jacobian (turns weighed by the
+  platform radius) is the workspace map's and the signal `kinematics.condition`; it is infinite at a dead centre.
+- Refused: a rod that cannot reach (`error-target-out-of-range`), a crank nearer its dead centre (the rod in the plane
+  of the crank and its axis, the torque arm zero) than `workspace.min_dead_centre_margin_deg` (`error-rss-dead-centre`),
+  a ball joint beyond `workspace.crank_joint_max_angle_deg` (the rod out of the crank's plane) or
+  `platform_joint_max_angle_deg` (against the platform's normal; `error-rss-ball-joint`), two rods nearer than
+  `workspace.min_rod_clearance_m` axis to axis (`error-rss-rods-cross`), a condition number above
+  `workspace.max_condition_number` (`error-rss-singularity`), a crank beyond its stops.
+- Dynamics by virtual work in the crank angles: the platform and payload as one rigid body with its centre of mass off
+  the platform centre, each rod as a slender rod (a sixth of its mass at each end and two thirds at its middle: exact
+  for a uniform rod's mass, centre and inertia across, which the lumped split of the delta crates is not), each crank
+  with its inertia and weight, the rotors through the ratio; gravity; energy and frame momentum for the standard
+  suite and the compliant base.
+- Verdicts beyond the motors': the gearboxes' torques (`gearbox-peak`, `gearbox-continuous`, `gearbox-input-speed`
+  against the SP100's ratings), per leg `crank-dead-centre` (the rod's angle from the crank's tangent against 90° less
+  `ratings.crank_dead_centre_margin_deg`, 20°), `rod-buckling` (the rod's compression against its Euler load π² E I /
+  L² of the tube in `[rod]`, over `ratings.rod_buckling_safety_factor`), `crank-ball-joint` and
+  `platform-ball-joint` (the joints' angles against their limits), and `singularity`.
+- The default cycle: heave up 50 mm and down to 50 mm below the level pose, then surge and sway 60 mm, roll and pitch
+  0.12 rad, yaw 0.15 rad, each from the pose before (one turns back while the next sets in), and back to the level pose,
+  with the seat on all the way.
+
+As on the hexapod, the platform held by constant crank torques runs away from its pose under its weight, so the standard
+suite's loss-free configs run without gravity (and without the gearboxes' backlash, which no load then holds against a
+flank); gravity is checked by the hand-calculated holding torques and the default config.
 
 ### Cable robots
 
@@ -580,7 +628,15 @@ Machine tests (`machine-hexapod`, `machine-cable-robot`): all three pass the sta
 pass all verdicts. Hexapod: every leg 0.5471158 m long at the home pose (0, 0, 0.48 m), 0.0971158 m out, from the
 joints' circles by hand; forward of inverse returns three poses within 1e-12; the legs hold 62.2 kg at home with
 115.8772 N each, m g / (6 u_z), and the motors with 0.184424 N m (f lead / 2 pi); off centre the forces still sum to the
-weight. Cable robots: at the planar centre each cable is 1.283539 m long (arc and tangent by hand), the tensions are
+weight. Hexapod with rotary actuators (`machine-hexapod-rotary`): at the level pose (0, 0, 0.4 m) every crank stands at
+−0.5115438 rad from the closed form by hand (2.208120 rad on the branch "in"); forward of inverse returns three poses
+within 1e-12; the rods carry (115 + 6 × 0.2) g / (6 u_z) = 209.7935 N of compression and the cranks hold the platform
+with 41.4875 N m, 0.829750 N m at each motor (the rod's force times the torque arm 0.189602 m, the crank's and the rod's
+weight); the torque arm r √(a² + b²) sin δ / L is 0.185772 m 100 mm up and zero at the dead centre 0.6378641 m up;
+the inverse Jacobian's row (u, b × u) / (u · t) by hand, 4.774645 rad/s of crank per m/s of heave; a heave of 1 m/s²
+takes 0.109989 N m more at each motor; the rods' Euler load 10590.31 N, 3530.10 N over the safety; the four new
+verdicts pass at their limits and fail beyond; the virtual work's torques equal the crank's Newton-Euler balance with
+the rods' forces to 1e-9. Cable robots: at the planar centre each cable is 1.283539 m long (arc and tangent by hand), the tensions are
 139.808 N and 100.192 N, the cables' stiffness is 192512 N/m across and 119500 N/m up, the lowest natural frequency
 24.605 Hz, the geometric stiffness 235 N/m more; 5 cm below the top pulleys the pose is refused; a cable the closed form
 takes below its band is held at the bound and the others carry the rest (8.485 N each by hand); the spatial robot's
@@ -618,6 +674,8 @@ a cylinder too stiff for the step refused. The file passes the standard suite wi
 - Not built yet: mechanical cams, electronic cams and flying saw profiles.
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
   (the screw's softest nut position); no modes reported (`resonance_hz`) for it yet.
+- Hexapod with rotary actuators: the rods' spin about their own axes and the ball joints' friction are left out; of the
+  parts that could cross only the rods are checked against each other; one crank branch for all legs.
 - Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
   accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.
