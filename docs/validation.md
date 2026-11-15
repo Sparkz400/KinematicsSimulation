@@ -553,7 +553,8 @@ inertias and centres of [its config](../crates/machine-wafer-handler/default.tom
 | The Z holding torque | 11.2276 kg · 9.80665 · 0.01 / 2π = 0.1752378 N m (0.1732462 without the wafer); the arm's motors hold nothing; nothing moves, rigid or elastic, friction on | 1e-9; rates 1e-7 | `the_z_motor_holds_what_it_lifts_and_the_arm_motors_nothing` |
 | The modes, motors held | numpy's eigenvalues of the same K and M (scratch script): 18.1952, 51.3514, 70.6454, 186.4465 Hz at r = 0.12, 16.7646, 42.3221, 83.6696, 175.3323 Hz at r = 0.75; the bands alone 21.0252, 62.4203 and 18.5831, 83.1553 Hz | 1e-5 | `the_modes_are_those_of_the_gearboxes_and_bands` |
 | The hold | Pads μ g = 2.941995 m/s², lowering at 1 m/s² 2 · 9.80665 / 8.80665 = 2.227100 asked for 2; vacuum 18 N / 0.1276 kg: μ (g + 141.065831) = 45.261744; the edge 9.81 whatever the lift | 1e-6 | `the_hold_asks_the_hand_calculated_share_on_pads_vacuum_and_edge` |
-| The default cycle | Every verdict passes (`wafer-slip` 1.93 of 2.45 m/s², settling 0.024 mm and 2.4 µrad, `effector-direction` 0.5 µrad, the bands' swings 7.7 % and 2.2 %); the turn speeding up at 60 rad/s² fails `wafer-slip` (0.05 · 60 = 3 m/s²) | – | `the_default_cycle_passes_its_verdicts_and_a_faster_turn_slips_the_wafer` |
+| The default cycle | Every verdict passes (`wafer-slip` 1.83 of 2.45 m/s², settling 0.032 mm and 0.108 mrad, `effector-direction` 12.7 µrad, the bands' swings 6.5 % and 1.2 %); the reach speeding up at 3 m/s² fails `wafer-slip` | – | `the_default_cycle_passes_its_verdicts_and_a_faster_reach_slips_the_wafer` |
+
 ## Hand calculations: arms in tool space
 
 The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mechanisms.md#tool-space)), on the configs `config/scara-tool.toml` and `config/arm-tool.toml`. All in `machine-joint-kit`.

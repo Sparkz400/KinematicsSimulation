@@ -370,13 +370,12 @@ fn the_hold_asks_the_hand_calculated_share_on_pads_vacuum_and_edge() {
     );
 }
 
-/// The default cycle passes every verdict (`sim-cli verdicts wafer-handler`: the wafer at 1.93 m/s^2 of the 2.45 its
-/// pads hold over 1.2, settling 0.024 mm of 0.15 and 2.4 urad of 0.2 mrad, the effector's direction at the stations 0.5
-/// urad of 0.5 mrad, the bands' swings 7.7 % and 2.2 % of their pretension); the turn speeding up at 60 rad/s^2 instead
-/// of 36 (and its jerk 1200 rad/s^3, or the 4 rad/s would be reached at sqrt(4 * 360) = 37.9 rad/s^2) slips the wafer:
-/// 0.05 * 60 = 3 m/s^2 along, more than the 2.45 allowed.
+/// The default cycle passes every verdict (`sim-cli verdicts wafer-handler`: the wafer at 1.83 m/s^2 of the 2.45 its
+/// pads hold over 1.2, settling 0.032 mm of 0.15 and 0.108 mrad of 0.2 (the column ringing after the first turn), the
+/// effector's direction 12.7 urad of 0.5 mrad, the bands' swings 6.5 % and 1.2 % of their pretension); the reach speeding up at 3 m/s^2 instead of
+/// 1.5 (its jerk 30 m/s^3) slips the wafer: 3 m/s^2 along the radial line, more than the 2.45 allowed.
 #[test]
-fn the_default_cycle_passes_its_verdicts_and_a_faster_turn_slips_the_wafer() {
+fn the_default_cycle_passes_its_verdicts_and_a_faster_reach_slips_the_wafer() {
     let judge = |edits: &[&str]| {
         let mut cfg = ENTRY.config();
         for e in edits {
@@ -392,7 +391,7 @@ fn the_default_cycle_passes_its_verdicts_and_a_faster_turn_slips_the_wafer() {
     {
         assert!(verdicts.iter().any(|v| v.check == check), "no {check}");
     }
-    let fast = judge(&["axis.theta.max_acceleration_rad_s2 = 60.0", "axis.theta.max_jerk_rad_s3 = 1200.0"]);
+    let fast = judge(&["axis.r.max_acceleration_m_s2 = 3.0", "axis.r.max_jerk_m_s3 = 30.0"]);
     let slip = fast.iter().find(|v| v.check == "wafer-slip").unwrap();
-    assert!(!slip.ok && slip.value > 3.0, "{slip:?}");
+    assert!(!slip.ok && slip.value > 2.9, "{slip:?}");
 }

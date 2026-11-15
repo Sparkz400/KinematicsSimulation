@@ -536,25 +536,28 @@ Wafermitte). Die Werkzeuglage ist (r, θ, z).
 dr/dφ = −2 L sin φ ist am größten, wenn das Handgelenk über der Säule steht (φ = 90°), und verschwindet bei voller
 Streckung (φ = 0), der singulären Lage: Über `workspace.max_condition_number` (5: φ über 11,5°, r bis 0,807 m) wird die
 Konditionszahl 1 / sin φ abgelehnt, die Anschläge des Oberarms liegen bei 10° und 110°. Das Trägheitsmoment am R-Motor
-ändert sich stark mit der Reichweite: Die 0,55 kg m² der Glieder eingefahren sind 1,35 kg entlang r, ihre 0,19 kg m² an
-den Stationen 2,22 kg (und gegen die volle Streckung ohne Grenze); der θ-Motor spürt den ganzen Arm, eingefahren
-0,15 kg m², an den Stationen 0,60 kg m², mit r² wachsend. Die beiden Motoren sind über die Bewegung des Arms gekoppelt:
+ändert sich stark mit der Reichweite: Die 0,55 kg m² der Glieder bei r = 0,12 m sind 1,35 kg entlang r, ihre 0,19 kg m² bei
+r = 0,75 m 2,22 kg (und gegen die volle Streckung ohne Grenze); der θ-Motor spürt den ganzen Arm, bei r = 0,12 m
+0,15 kg m², bei r = 0,75 m 0,60 kg m², mit r² wachsend. Die beiden Motoren sind über die Bewegung des Arms gekoppelt:
 Das Drehen zieht den Arm nach außen (Motor 2 hält ihn, der Wafer wird mit r θ̇² zur Achse beschleunigt), das Ausfahren
 während einer Drehung bremst Motor 1 (die Coriolis-Beschleunigung des Wafers 2 ṙ θ̇).
 
 Der Wafer liegt auf den Reibpads des Effektors (oder auf Vakuumpads, oder ein Kantengreifer hält ihn, `wafer.hold`).
 Seine Beschleunigung in der Ebene über den Zyklus ist das Prüfurteil `wafer-slip`, gegen μ g (μ (g + A p / m) auf
 Vakuumpads, die Beschleunigung des Greifers an der Kante) über einen Sicherheitsfaktor: Das begrenzt die Taktzeit eines
-Handlers. Der ausgelieferte Zyklus (unter den Wafer an Station A ausfahren, ihn 10 mm anheben, auf r = 0,05 m einfahren,
-um 180° drehen, an Station B ausfahren und einschwingen, absetzen, einfahren, zurückdrehen) ist darauf ausgelegt:
-0,3 g über 1,2 erlauben 2,45 m/s², die Reichweite ist auf 1,5 m/s² begrenzt, die Drehung auf 4 rad/s und 36 rad/s²
-(0,8 m/s² nach außen und 1,8 m/s² entlang bei r = 0,05 m, der Wafer nahe an die Säulenachse zurückgezogen). Die Bänder sind Federn mit Vorspannung (jedes Trum
+Handlers. Der ausgelieferte Zyklus zwischen einem Load Port und einer Kammer, 90° auseinander bei r = 0,55 m und 0,2 m
+übereinander (zur Kammer drehen und dabei heben, ausfahren und einschwingen, den Wafer absetzen, einfahren, beim
+Zurückdrehen senken, unter den nächsten Wafer ausfahren und einschwingen, ihn anheben, einfahren: 7,76 s) ist darauf
+ausgelegt: 0,3 g über 1,2 erlauben 2,45 m/s² (2,04 an der unteren Grenze von μ), die Reichweite ist auf 1,5 m/s²
+begrenzt, die Drehung auf 4 rad/s und 36 rad/s² mit dem Wafer auf r = 0,05 m nahe an die Säulenachse zurückgezogen
+(0,8 m/s² nach außen und 1,8 m/s² entlang); der Wafer erreicht 1,83 m/s². Die Bänder sind Federn mit Vorspannung (jedes Trum
 k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule und Oberarm zurückbleiben, der Wafer bleibt
 in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
 Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
 `wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Siehe die
 [Modellreferenz](../model-reference.md#wafer-handler) und die
 [Konfigurationsreferenz](../config-reference.md#wafer-handler).
+
 ## Parallelkinematiken: Hexapod und Seilroboter
 
 Drei Parallelkinematiken haben eigene Crates, `machine-hexapod`, `machine-tripod` und `machine-cable-robot`, und werden
@@ -935,16 +938,17 @@ unter ihren 10,49° ab.
 Maschinentests (`machine-wafer-handler`): die Standard-Testreihe mit jeder Mischung aus starren und elastischen Getrieben
 und Bändern; bei φ = 60°, θ = 30° liegt das Handgelenk bei (0,277128, 0,16) auf der radialen Linie und die Wafermitte bei
 (0,433013, 0,25), dr/dφ = −0,554256 m/rad; das Trägheitsmoment am R-Motor von Hand M_φφ = m₁ c₁² + I₁ + m₂ (L² + c₂² −
-2 L c₂ cos 2φ) + I₂ + (m₃ + m_w) 4 L² sin² φ, eingefahren 0,5499656 kg m² (2,485862e-4 kg m² am Motor), an den Stationen
-0,1876677 (1,036671e-4); am θ-Motor 0,153033 und 0,604751 kg m²; dreht der Arm an den Stationen mit sqrt(μ g / r) =
+2 L c₂ cos 2φ) + I₂ + (m₃ + m_w) 4 L² sin² φ, bei r = 0,12 m 0,5499656 kg m² (2,485862e-4 kg m² am Motor), bei r = 0,75 m
+0,1876677 (1,036671e-4); am θ-Motor 0,153033 und 0,604751 kg m²; dreht der Arm bei r = 0,75 m mit sqrt(μ g / r) =
 1,980571 rad/s, beschleunigt der Wafer mit μ g = 2,941995 m/s², dem 1,2-Fachen der Grenze, und Motor 2 hält den Arm mit
 0,0162955 N m; fährt er bei r = 0,5 m mit 0,5 m/s aus, während er sich mit 1 rad/s dreht, beschleunigt der Wafer mit
 (−0,5, 1,0) m/s²; ein Moment von 1 N m am Effektor dehnt die Bänder um β = 2,955083e-4 und γ = 5,819704e-4 rad
 (K₁ = 1692, K₂ = 2303 N m/rad) und dreht ihn um 3,300103e-4 rad aus seiner radialen Linie; die starren Bänder tragen
 dT₁ = −4,271710 N und dT₂ = 4,379926 N bei θ̈ = 10 rad/s² mit dem Handgelenk über der Säule; der Z-Motor hält 11,2276 kg
 mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz); der Halt auf Pads, Vakuum und Kante; ein
-Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Drehung, die mit
-60 rad/s² anläuft, lässt den Wafer rutschen.
+Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Reichweite, die mit
+3 m/s² anläuft, lässt den Wafer rutschen.
+
 Tests des Pneumatikzylinders (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A bei 6 bar auf
 beiden Seiten (482,5 und 414,7 N, Festo druckt 483 und 415); der gesperrte Durchfluss C p ρ0 nach ISO 6358 und das
 elliptische Gesetz; die Geschwindigkeit mit Abluftdrossel C ρ0 R T0 / A2 (0,1443 m/s auf 1 %, die des ausgelieferten Z

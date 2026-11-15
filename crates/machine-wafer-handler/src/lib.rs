@@ -1280,6 +1280,45 @@ impl Machine for WaferHandler {
         }
     }
 
+    /// As `Machine::adopt_state`, but where the model keeps its states (a changed ratio, not rigid against elastic) the
+    /// links, the bands' stretch and the stroke stay as they were, and each elastic gearbox keeps its twist and its
+    /// rotor's speed at the link (scaled by the new over the old dr/dmotor): rebuilt at rest, the bands' lag during a
+    /// move (0.14 mm at the wafer) was dropped and rang anew, 0.134 mm off a run left alone after a 1 % change of the
+    /// ratio.
+    fn adopt_state(&self, old: &dyn Machine, old_state: &[f64]) -> Vec<f64> {
+        let (m, n) = (self.axes.len(), self.motors.len());
+        let (mut pos, mut vel) = (vec![0.0; m], vec![0.0; m]);
+        old.tool_state(old_state, &mut pos, &mut vel);
+        if old_state.len() != self.state_len() {
+            let mut state = Vec::new();
+            self.equilibrium(&pos, &mut state, &mut vec![0.0; n]);
+            self.set_tool_velocity(&mut state, &vel);
+            return state;
+        }
+        let mut state = old_state.to_vec();
+        if self.elastic {
+            let (mut rotor, mut speed) = (vec![0.0; n], vec![0.0; n]);
+            old.motor_state(old_state, &mut rotor, &mut speed);
+            // Motor k against the tool axis it drives (motor 1 theta, axis 1; motor 2 r, axis 0), new and old.
+            let at = |machine: &dyn Machine, shift: f64, axis: usize| {
+                let mut p = pos.clone();
+                p[axis] += shift;
+                let mut out = vec![0.0; n];
+                machine.inverse(&p, &mut out);
+                out
+            };
+            let (h, nq) = (1e-6, self.nq());
+            for (k, axis) in [(0, 1), (1, 0)] {
+                let (before, after) = (at(old, 0.0, axis)[k], at(self, 0.0, axis)[k]);
+                let scale =
+                    (at(self, h, axis)[k] - at(self, -h, axis)[k]) / (at(old, h, axis)[k] - at(old, -h, axis)[k]);
+                state[2 * nq + k] = after + scale * (rotor[k] - before);
+                state[2 * nq + 2 + k] = scale * speed[k];
+            }
+        }
+        state
+    }
+
     /// The gearboxes, in the order of `thermal_parts`.
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let mut rises = rises.iter();

@@ -2064,12 +2064,15 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
     let [replayed, fitted, _identified] = &tables[..] else { panic!("{} tables", tables.len()) };
     // Per motor the difference between trace and replay: within 0.5 % (RMS) and 5 % (peak) of the largest torque.
     assert_eq!((replayed.len(), replayed[0][0].as_str(), replayed[0].len()), (5, "Figure", 1 + measured.motors.len()));
+    // The wafer handler's arm moves a wafer held by friction ("wafer-slip"): its reach motor, a 1FK2103 of 1.95 N m, peaks
+    // at 0.071 N m on this trace, which still lies far above the replay's error.
+    let floor = if entry.id == "wafer-handler" { 0.05 } else { 0.1 };
     for (k, motor) in measured.motors.iter().enumerate() {
         let largest = motor.torque.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
         let (rms, peak) =
             (number(&row(replayed, "Torque, RMS [N m]")[k]), number(&row(replayed, "Torque, peak [N m]")[k]));
         assert!(
-            largest > 0.1 && rms > 0.0 && rms < 0.005 * largest && peak < 0.05 * largest,
+            largest > floor && rms > 0.0 && rms < 0.005 * largest && peak < 0.05 * largest,
             "{}: RMS {rms}, peak {peak} of {largest} N m",
             entry.id
         );
