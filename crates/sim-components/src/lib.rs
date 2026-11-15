@@ -37,6 +37,6 @@ pub mod sim;
 pub mod trace;
 pub mod transmission;
 
-pub use control::{Command, CommandError, Controller, LimitViolation, check_limits};
+pub use control::{Command, CommandError, Controller, LimitViolation, StopCategory, check_limits};
 pub use drive::DriveMode;
 pub use sim::{Contact, Sim, Snapshot, load_config, schema};

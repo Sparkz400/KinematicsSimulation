@@ -1249,7 +1249,9 @@ pub struct Verdict {
 
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
 /// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
-pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 25] = [
+    // What `stop::study` judges the worst stop against.
+    "ratings.max_stopping_distance_m",
     // A path in place of the cycle (`sim::with_path`).
     "path",
     "path.file",
@@ -1946,7 +1948,7 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 29] = [
+const PATH_EFFECTS: [(&str, &[&str]); 30] = [
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),
@@ -1964,6 +1966,8 @@ const PATH_EFFECTS: [(&str, &[&str]); 29] = [
     ("belt.tooth_jump_factor", &["belt_tooth_jump"]),
     ("ratings.line_module_efficiency", &["dc_link"]),
     ("ratings.dc_link_discharge_", &[]),
+    // The brakes' delays act only while the drives stop or start, which a cycle never does.
+    ("brake.", &[]),
     ("motor.friction_breakaway_nm", &["motor_stiction"]),
     ("motor.friction_stribeck_rad_s", &["motor_stiction"]),
     ("gearbox.no_load_", &["gearbox_drag"]),
