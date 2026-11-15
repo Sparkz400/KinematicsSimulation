@@ -629,6 +629,9 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         let text = format!("# two lines\nline,{}\nline,{}\n", point(0.5), point(0.75));
         plc.simulated(0.2).await;
         let at_rest = plc.numbers(&position).await;
+        let rest_setpoint = plc
+            .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
+            .await;
 
         // Refused, with the reason, and the machine stays: a line that cannot be read, a path out of the
         // stroke, an arc on a machine with one axis.
@@ -749,10 +752,14 @@ async fn a_path_from_the_plc_is_planned_and_run() {
 
         // Busy: a path started while one runs is refused.
         // Back by the middle, a stop on the way, so that it still runs when the second start arrives on a loaded machine.
+        // Back to the setpoint the path was first planned from, not to the pose measured there: the time-optimal plan
+        // below is compared with one from that setpoint, and where the path's first point is next to it, a start that
+        // a sag of micrometres moves times that first short line anew (a tilting platform's: 12 ms from its setpoint,
+        // 4 urad and 2.6 um off the middle, 1 ms from where it stood; its plan of 0.264 s ran in 0.253).
         let back = format!(
             "line,{}\nline,{}",
             point(0.5),
-            at_rest.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(",")
+            rest_setpoint.iter().map(|p| format!("{p}")).collect::<Vec<_>>().join(",")
         );
         plc.write(vec![
             ("command.path".into(), Variant::from(back.as_str())),
