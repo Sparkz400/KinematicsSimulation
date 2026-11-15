@@ -5,7 +5,7 @@ The equations the simulator solves, taken from the code and its comments. Each s
 - [Structure of one time step](#structure-of-one-time-step)
 - [Integrator](#integrator)
 - Components: [belt](#belt-sections), [guide friction](#guide-friction-lugre), [motor shaft](#motor-shaft-friction-ripple-cogging), [slide presliding](#slide-presliding-friction), [tooth meshing](#tooth-meshing), [gearbox](#gearbox), [hard stops](#hard-stops), [drive and motor](#drive-and-motor)
-- Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3), [linear delta](#linear-delta)
+- Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3), [linear delta](#linear-delta), [toggle press](#toggle-press)
 - Motion: [controller](#motion-controller), [profile generator](#profile-generator), [corner blending](#corner-blending), [path planners](#path-planners), [input shaper](#input-shaper)
 - [Analysis quantities](#analysis-quantities), [verdicts](#verdicts), [other analyses](#other-analyses), [effect views](#effect-views), [fit](#fit)
 - [Known shortcuts](#known-shortcuts), [other simplifications](#other-simplifications)
@@ -1234,6 +1234,50 @@ Motors 1 and 2 drive θ and φ through `RotaryJoint`s (`[joint]`, and `[joint.2]
 **Modes**: with the motors held, the generalised eigenvalues of K and M over the coordinates that move (Cholesky, Jacobi rotations): the bands' K = [[K₁ + K₂/4, −K₂/2], [−K₂/2, K₂]] on β, γ (K = 2 k r²), the gearboxes' stiffness on θ and φ when they are elastic. Shipped: 18.2, 51.4, 70.6, 186.4 Hz retracted (r = 0.12 m), 16.8, 42.3, 83.7, 175.3 Hz at the stations (0.75 m).
 
 **Shortcuts**: motor 2's rotor counts at its speed against the column (its own spin with the column, J_rotor θ̈, 1.0e-3 N m at the turn's 36 rad/s², is left out); the stroke is rigid; the wafer is fixed to the effector (its slip is judged, not simulated); the links' centres lie on their lines; the bands' own mass is in the links'.
+
+## Toggle press
+
+Source: [`toggle.rs`](../crates/machine-crank-cam/src/toggle.rs); the mechanism in
+[mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). One motor-driven joint (`chain::JointMachine`,
+as every machine of the crate): the crank angle q from the links' dead centre is the joint and the tool axis, so the
+motor, gearbox (twist and backlash in the elastic model), drive and checks are the common ones, and the friction
+feedforward (`steady_friction`), the time-optimal plan's friction and checks (`rigid_friction`, `rigid_checks`), the
+two-mass mode (`resonance_hz`, `modes`) come from the joint machine. No condition number: the tool is the joint.
+
+**Kinematics.** Top pivot O at the origin, x across, z up. Pin P(q) = C + r (cos t, sin t), t = t0 + q; knee
+K = (a sin φ, −a cos φ) with φ = atan2(P_z, P_x) − acos((a² + |P|² − c²) / (2 a |P|)) + π/2 (the branch below O-P);
+ram x = a cos φ + √(b² − a² sin² φ) below O. Rates from |K − P| = c: φ' = D·P_q / D·K_φ,
+φ'' = −(E·E + D·(K_φφ φ'² − P_qq)) / D·K_φ, D = K − P, E = K_φ φ' − P_q; x' = x_φ φ', x'' = x_φφ φ'² + x_φ φ''. The
+build refuses a geometry whose four-bar does not close over the joint's range or comes near its own dead point
+(|φ'| ≥ 50). The inverse from the ram's distance d above the bottom dead centre: cos φ = (a² + x² − b²) / (2 a x),
+φ = ±acos (before, after the dead centre), then the crank on the circle of radius c about K, its assembly the one that
+puts it at t0 with the links stretched.
+
+**Dynamics.** Lumped masses: the rod's crank end m_pin at P, the upper link a uniform bar (J = m_up a² / 3 about O,
+first moment at a / 2), the knee m_knee (the rod's other end and `toggle.lower_link_knee_share` of the lower link), the
+ram m_x (ram, die, the rest of the lower link). M(q) = J_crank + m_pin r² + (m_up / 3 + m_knee) a² φ'² + m_x x'²,
+h = ((m_up / 3 + m_knee) a² φ' φ'' + m_x x' x'') q'² + g (m_pin r cos t + (m_knee + m_up / 2) a sin φ φ' − m_x x').
+`frame_momentum` gives the same bodies (pin, knee, the bar's centre and its spin about −y, ram, crank, rotor) and the
+press force on the ram, so the machine stands on the compliant base as the others of the crate.
+
+**Process force and frame.** d = a + b − x. Without `effects.frame_stretch` F = table(d); with it the frame (stiffness
+k) is a massless spring in series and F the root of F = table(d + F / k): on the table's segment i (from d_i, F_i, slope
+s_i), F = (F_i + s_i (d − d_i)) / (1 − s_i / k), the first segment on which d + F / k falls. The force acts while the
+ram moves down or stands, times clamp(1 + v / v_s, 0, 1) with v = x' q' the ram's speed down and v_s =
+`process.smoothing_m_s`: a dwell holds it, and it is gone once the ram rises at v_s (the part springs back). Its torque
+at the crank −F x' (`process_torque`, outside the feedforward); the frame's stretch F / k is the signal
+`frame.deflection`, and the ram's height above the bottom dead centre `ram.height` = d + F / k. The energy the frame
+takes on the way down is lost when the force fades on the way up (no rebound into the drive).
+
+**Loads.** Ram along z: C_b w / b = m_x (ẍ − g) + F, w = x − a cos φ, C_b the lower link's compression. Upper link about
+O: across it at the knee T = (−m_up g a sin φ / 2 − J φ̈) / a. Knee: m_knee K̈ = C_a u_a + T n_a − C_b u_b + C_rod u_rod +
+m_knee g, u_a = K / a, n_a = K_φ / a, u_b = (R − K) / b, u_rod = (K − P) / c, solved for C_a and C_rod. The links and the
+rod are two-force members, so their pins carry the same. Capacity at q: min(F_rated, τ_max / |x'|), τ_max = peak torque ·
+ratio · efficiency, at most the gearbox's maximum torque.
+
+**Limits.** The crank-driven form only (the screw-driven toggle is the same links with a linear joint at the knee, not
+built); the links, the pins and the crank are rigid (only the gearbox and the frame give); the frame's stretch is
+quasi-static (no frame mode); the part's springback is a fade over a speed, not a stiffness.
 
 ## Compliant base
 

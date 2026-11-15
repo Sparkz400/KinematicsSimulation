@@ -301,6 +301,7 @@ into a stroke, and two axes that work on a moving web or bar through an electron
 | `rotary-knife` | cross cutter: knife roll of 100 mm radius, one blade, cuts a web at 1 m/s into 0.5 m formats | planetary gearbox of ratio 10 | roll angle (rad), 0 with a blade at the cut | |
 | `flying-saw` | carriage 40 kg with a saw of 25 kg, material at 1 m/s cut into 1.5 m lengths in a window of 0.2 m | helical pinion on a rack behind a planetary gearbox of ratio 5 | x (m) | `rack-feed-force` |
 | `disc-cam` | disc cam: base circle 60 mm, a roller follower of 2 kg (and a 1 kg tool) lifted 30 mm against its return spring, 60 turns a minute | planetary gearbox of ratio 10 | disc angle (rad) | `disc-contact-force`, `disc-pressure-angle` |
+| `toggle-press` | knuckle-joint press: links of 150 mm in line between crown and ram, a crank of 50 mm pushing the knee through a rod of 250 mm, ram 20 kg and die 8 kg, stroke 57.7 mm, rated 20 kN, press force up to 12 kN | planetary gearbox of ratio 10 | crank angle (rad), 0 at the links' dead centre | `press-capacity`, `upper-link-force`, `lower-link-force`, `rod-force`, `frame-deflection` |
 
 **Slider-crank.** The slider's distance from the crank's centre is x(θ) = r cos θ + √(l² − r² sin² θ), its speed ratio
 x'(θ) = −r sin θ − r² sin θ cos θ / w with w = √(l² − r² sin² θ), and x''(θ) = −r cos θ − r² cos 2θ / w −
@@ -346,6 +347,39 @@ lift off, which the signal shows and the model does not part (a spring sized tha
 range lies on the first half of the rise, where s'' > 0 and spring and weight hold the disc where it is held against
 them; past the rise's middle they turn it away.
 
+**Toggle press.** A knuckle-joint press: two links in line between the crown's pivot O and the ram, the upper one a, the
+lower one b, their joint the knee; a crank of radius r pushes the knee across through a rod of length c. The crank and
+not a ball screw: the crank-driven knuckle joint is the classic form and keeps the crate's turning drive and cam; the
+screw-driven toggle (the knee on the nut) is not built. With the upper link at φ from straight down, the ram stands
+x = a cos φ + √(b² − a² sin² φ) below O (the slider-crank's formula, the upper link its crank), x = a + b where the
+links stand stretched (φ = 0, the dead centre). The joint is the crank angle q from that dead centre; the crank's
+centre lies where the rod is level at it, at crank.angle_at_dead_centre_deg from the rod (90: across it, the ratio falls
+linearly into the dead centre; towards 180 in line with it, a long flat dwell). The knee closes the four-bar O-knee-pin-
+crank centre: φ from the two circles in closed form, φ' = D·P_q / D·K_φ and φ'' = −(E·E + D·(K_φφ φ'² − P_qq)) / D·K_φ
+from the rod's constant length (D = K − P, E = K_φ φ' − P_q), so x' = x_φ φ' and x'' = x_φφ φ'² + x_φ φ''. The ratio
+x' (m/rad) is zero at the dead centre: a crank torque τ holds the ram force τ / x', which grows without bound into
+it. The inverse from the ram's height has two branches, before and after the dead centre
+(`TogglePress::crank_angle`); the stops (`joint.max_angle_deg`) say whether the crank may go through it. The masses:
+the crank and the rod's crank end at the pin, the upper link a uniform bar (m a² / 3 about O), the knee with the rod's
+other end and a share of the lower link, the ram with the die and the rest:
+J(q) = J_crank + m_pin r² + (m_up / 3 + m_knee) a² φ'² + m_x x'², with its speed term and the weights' torque. The
+process force (`[process]`, over the ram's height above the bottom dead centre) pushes the ram up while it moves down
+or stands, so that it holds through a dwell at the dead centre, and fades out over `process.smoothing_m_s` as the ram
+rises. The frame stretches under it (`effects.frame_stretch`, `frame.stretch_stiffness_n_m` = k), a spring in
+series: the ram stops F / k short of where the links put it, and the force is the root of F = table(d + F / k), solved
+segment by segment of the table. Signals: the ram's height above the bottom dead centre (with the stretch), speed and
+acceleration, the ratio x', the press force, the force capacity at the pose and its use, the frame's stretch, the
+forces of the two links (two-force members, so their pins carry the same) and of the rod, and J(q). Checks:
+`press-capacity`, the press force within min(`ratings.rated_press_force_n`, τ_max / |x'|) at every pose, τ_max the
+drive's peak torque through the gearbox's ratio and efficiency (at most `gearbox_max_torque_nm`): the rated force
+only over the last millimetres, falling with the distance from the dead centre, so that a forming force early in the
+stroke fails it (and the motor's `motor-peak`); `upper-link-force` and `lower-link-force` against
+`ratings.link_max_force_n`, `rod-force` against `rod_max_force_n`, `frame-deflection` against
+`frame_max_deflection_m`. The shipped cycle goes from the ram's top dead centre (the crank in line with the rod, where
+it holds the ram's weight without torque) into the dead centre in one move, the ratio slowing the ram over the last
+millimetres, dwells there under 11.5 kN while the motor gives almost nothing, and returns; `config/toggle-press-cam.toml` does the same by a cam at 30
+strokes a minute.
+
 **Electronic cam.** `sim_components::cam` holds a cam as the slave's position over a master's, periodic, the slave rising
 by its advance per master period (a crank or knife one turn, the saw 0). Segments take the motion laws of VDI 2143:
 `linear` (a synchronous run), `dwell`, `3-4-5` and `4-5-6-7` (the 5th and 7th order polynomials), `cycloid` and
@@ -366,7 +400,7 @@ zone, fast return) at `crank.strokes_per_min`.
 
 The shipped configs keep `cam.run = false`: the cycle swings the crank from the top dead centre down to the bottom and
 back (a servo press in pendulum mode), indexes the knife by half a turn and back, moves the saw's carriage over its
-stroke, turns the disc half a turn and back. Beside each lies `config/<id>-cam.toml`, the same config with
+stroke, turns the disc half a turn and back, takes the toggle press's ram from its top dead centre into the bottom one and back. Beside each lies `config/<id>-cam.toml`, the same config with
 `cam.run = true`, which passes every verdict (the cam's limits among them); or run the cams with `--set cam.run=true`
 (app: the cam group's switch):
 
@@ -655,7 +689,18 @@ verdict `cam-speed` there. A new web speed under the knife's running cam ramps t
 mid-ramp, 0.8 m/s after 0.5 s, 0.45 m on the way, no step in speed. The disc cam at 60° (mid-rise of a 3-4-5 of 30 mm
 over 120°, r_b 60 mm, r_r 15 mm, e 10 mm): s0 = 0.0743303 m, s' = 0.0268574 m/rad, tan φ = 0.188709, φ = 10.687°; at
 2π rad/s spring and weight push with 159.420 N, the contact force is 162.234 N, the guide's load 30.084 N and the disc's
-torque 4.28161 N m.
+torque 4.28161 N m. The toggle press (links 150 mm, crank 50 mm at 120° from the level rod at the dead centre, rod
+250 mm), against a circle intersection for the knee and central differences: at −90° of the crank the ram is
+35.655 mm above the bottom dead centre with x' = 0.0364766 m/rad, at −20° 1.792 mm and 0.0108256, at −2° 0.0156 mm and
+0.00090095, at the dead centre x' = 0, φ' = −0.2886751, x'' = −0.025 m/rad²; 1 mm above it the crank stands at
+−0.2646374 rad on one branch and as far past it on the other; 10 N m of the motor (100 N m at the crank) hold 2741.5 N
+at −90° and 42530 N at −5°; 10 kN take 79.387 N m at the crank 1 mm before the dead centre and 23.487 N m 0.1 mm
+before it; the frame (5e7 N/m) stretches 0.4 mm under the rated 20 kN, the table's 12 kN become 11538.46 N with
+0.2308 mm of stretch; J = 0.01859375 kg m² at the dead centre and 0.05605024 far from it; the force capacity at −90° is
+145.5 / 0.0364766 = 3988.85 N; a forming stroke from rest to rest takes 20.615 J from the motor in a loss-free run
+(19.284 J into the part, 1.331 J into the frame); in the dwell the motor gives under a tenth of the 9.44 N m the same
+force would take 1 mm before the dead centre; a forming force moved 20 mm up fails `press-capacity` and
+`motor-peak`.
 
 Machine tests (`machine-hexapod`, `machine-cable-robot`): all three pass the standard suite and their default cycles
 pass all verdicts. Hexapod: every leg 0.5471158 m long at the home pose (0, 0, 0.48 m), 0.0971158 m out, from the
@@ -714,7 +759,7 @@ a cylinder too stiff for the step refused. The file passes the standard suite wi
 - A cam's master cannot yet be the conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's
   speed-and-ramp model); a new master speed starts its ramp from the master's speed without its acceleration (a step in
   acceleration where it comes during a ramp); the crank's, the knife's and the disc's joint has no stops while the cam
-  turns it on; the disc cam's follower is a translating one (no swinging lever) and never lifts off the disc; the press force acts only on the way out (no springback) and the knife's and saw's cut force
+  turns it on; the disc cam's follower is a translating one (no swinging lever) and never lifts off the disc; the slider-crank's press force acts only on the way out (no springback), the toggle press's also at rest and fades as the ram rises (its frame's stretch is a massless spring, the links are rigid) and the knife's and saw's cut force
   only forwards.
 - The linear delta (`delta-linear`, three belt axes on columns that may lean, `geometry.column_incline_deg`) is a
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).

@@ -112,17 +112,22 @@ fn crank_cam(cfg: &Config) -> Result<Cam, ConfigError> {
     }
 }
 
+/// x, x' and x'' of a slider-crank of crank r and rod l at the crank angle theta (the module's formulas): also the toggle
+/// press's two links in line, the upper one the crank.
+pub fn slider_motion(r: f64, l: f64, theta: f64) -> [f64; 3] {
+    let (s, c) = theta.sin_cos();
+    let w = (l * l - r * r * s * s).sqrt();
+    [
+        r * c + w,
+        -r * s - r * r * s * c / w,
+        -r * c - r * r * (c * c - s * s) / w - r.powi(4) * s * s * c * c / w.powi(3),
+    ]
+}
+
 impl SliderCrank {
     /// x, x' and x'' at the crank angle theta (the module's formulas).
     pub fn slider(&self, theta: f64) -> [f64; 3] {
-        let (r, l) = (self.r, self.l);
-        let (s, c) = theta.sin_cos();
-        let w = (l * l - r * r * s * s).sqrt();
-        [
-            r * c + w,
-            -r * s - r * r * s * c / w,
-            -r * c - r * r * (c * c - s * s) / w - r.powi(4) * s * s * c * c / w.powi(3),
-        ]
+        slider_motion(self.r, self.l, theta)
     }
 
     fn m_x(&self) -> f64 {

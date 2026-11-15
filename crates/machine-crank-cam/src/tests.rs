@@ -6,7 +6,7 @@ use sim_components::analysis::{CycleLoad, Verdict};
 use sim_components::cam::Law;
 use sim_components::{Command, Sim};
 
-const ENTRIES: [&MachineEntry; 4] = [&SLIDER_CRANK, &ROTARY_KNIFE, &FLYING_SAW, &DISC_CAM];
+const ENTRIES: [&MachineEntry; 5] = [&SLIDER_CRANK, &ROTARY_KNIFE, &FLYING_SAW, &DISC_CAM, &TOGGLE_PRESS];
 
 #[test]
 fn slider_crank_passes_the_standard_suite() {

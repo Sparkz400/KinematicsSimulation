@@ -977,6 +977,16 @@ into `[[cam.segment]]`, or as a CSV of master and slave (and slopes) into `cam.t
 ram's position and force, the rod force and the inertia the crank feels over the stroke; the following error is that of
 the slave against the cam.
 
+The toggle press (`toggle-press`) is the knuckle-joint form: its crank pushes the knee of two links in line, and near
+their dead centre a small crank torque holds a large ram force. `sim-cli verdicts toggle-press` judges, besides the
+motor's checks, the press force against the force capacity at every pose (`press-capacity`: the rated 20 kN, or less
+where the crank's torque over the ratio dx/dq gives less: 3989 N half way down the stroke), the links' and the rod's
+forces and the frame's stretch (`frame-deflection`, 0.23 mm under the 11.5 kN of the shipped part against 0.4 mm). Move
+the forming force up the stroke (`--set 'process.distance_m=[0.02, 0.021, 0.022, 0.023]'`) and `press-capacity` and
+`motor-peak` fail: far from the dead centre the mechanism gives little force. In the scope the ram's height stops
+0.23 mm above the bottom dead centre (`ram.height`, the frame's stretch, `effects.frame_stretch`), and in the dwell at
+the dead centre the press force stays while the motor's torque falls to almost nothing.
+
 ## Size a hexapod or a cable robot
 
 Two parallel kinematics, generic proportions with Siemens 1FK2105-4AF motors on S210 drives (every other value an
