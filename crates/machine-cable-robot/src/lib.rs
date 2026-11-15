@@ -1217,9 +1217,10 @@ impl Machine for CableRobot {
     /// lengths have one pose, whatever tensions they were set up for (the closed form's of `inverse`, the
     /// distribution's of `equilibrium`, or neither, as the motors of a run with a following error stand). Newton on
     /// the residual A t - w from the pose of the lengths stretched at the reference tension, its Jacobian by central
-    /// differences (0.1 um, 0.1 urad), each step halved until the residual shrinks; no step longer than 50 mm or 50
-    /// mrad. Settled at a step below 1e-12 m (rad), or where no step helps any more (the residual at its rounding
-    /// floor). NaN where it does not settle within 50 steps or no cable holds.
+    /// differences (0.1 um, 0.1 urad), each step halved until it lowers the potential (weight and cable springs) whose
+    /// least the equilibrium is; where Newton's step is not downhill (every cable slack), one along the residual. No
+    /// step longer than 50 mm or 50 mrad. Settled at a step below 1e-12 m (rad), or where no step helps any more (at
+    /// the rounding floor). NaN where it does not settle within 50 steps.
     fn forward(&self, motors: &[f64], tool: &mut [f64]) {
         let (n, m) = (self.n(), self.m());
         let free: Vec<f64> = (0..m).map(|k| motors[k] / self.winches[k].ratio()).collect();
@@ -1240,6 +1241,12 @@ impl Machine for CableRobot {
             let (a, w) = (self.structure(&spans), self.platform_bias(pose, &vec![0.0; n]));
             Some((0..n).map(|r| (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r]).collect())
         };
+        // The potential the equilibrium is the least of: the platform's weight and the taut cables' springs.
+        let energy = |pose: &[f64]| -> Option<f64> {
+            let spans = self.spans(pose)?;
+            let springs = spans.iter().zip(&free).map(|(s, l)| self.ea * (s.length - l).max(0.0).powi(2) / (2.0 * l));
+            Some(springs.sum::<f64>() + self.moving() * self.g * self.place(pose).0[2])
+        };
         let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         for _ in 0..50 {
             let Some(miss) = residual(&pose) else { break };
@@ -1253,7 +1260,14 @@ impl Machine for CableRobot {
                 let (Some(up), Some(down)) = (up, down) else { break };
                 (0..n).for_each(|r| jacobian[r * n + c] = (up[r] - down[r]) / 2e-7);
             }
-            let Some(mut step) = solve(&jacobian, &miss.iter().map(|v| -v).collect::<Vec<_>>()) else { break };
+            // The residual is the potential's slope taken back, so a step downhill has a positive product with it. Where
+            // Newton's is not (every cable slack, the Jacobian zero), the longest step along the residual, halved below.
+            let downhill = |step: &Vec<f64>| (0..n).map(|r| step[r] * miss[r]).sum::<f64>() > 0.0;
+            let newton = solve(&jacobian, &miss.iter().map(|v| -v).collect::<Vec<_>>()).filter(downhill);
+            let mut step = newton.unwrap_or_else(|| {
+                let most = miss.iter().fold(0.0f64, |s, v| s.max(v.abs()));
+                miss.iter().map(|v| v * 0.05 / most).collect()
+            });
             let longest = step.iter().fold(0.0f64, |s, v| s.max(v.abs()));
             if longest > 0.05 {
                 step.iter_mut().for_each(|v| *v *= 0.05 / longest);
@@ -1262,10 +1276,17 @@ impl Machine for CableRobot {
                 tool[..n].copy_from_slice(&self.moved(&pose, &step));
                 return;
             }
+            // A step is taken where it lowers the potential, or, near the equilibrium where the potential changes by
+            // less than its rounding, where it shrinks the residual and does not raise the potential beyond that.
+            let Some(here) = energy(&pose) else { break };
             let mut next = None;
             for _ in 0..30 {
                 let trial = self.moved(&pose, &step);
-                if residual(&trial).is_some_and(|r| size(&r) < size(&miss)) {
+                let (lower, smaller) = (
+                    energy(&trial).map(|e| (e < here, e <= here + 1e-12 * (1.0 + here.abs()))),
+                    residual(&trial).is_some_and(|r| size(&r) < size(&miss)),
+                );
+                if lower.is_some_and(|(lower, level)| lower || level && smaller) {
                     next = Some(trial);
                     break;
                 }

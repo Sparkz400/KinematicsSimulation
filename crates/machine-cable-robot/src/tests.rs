@@ -128,64 +128,74 @@ fn a_cable_the_exact_solve_takes_out_of_the_band_goes_to_its_bound() {
 
 /// Motor angles that no pose fits, as a run with a following error has them: the spatial robot's motors 0.163 s and
 /// 1.703 s into its cycle on a weak drive (sim-app's `demanding` config, 14 November 2026), 2.5 rad behind on cable 1
-/// and 1.9 rad on cable 7, 12.7 and 9.6 mm of cable at 200 rad/m. The forward kinematics fitted the lengths by
-/// Gauss-Newton, which slowed to a ratio of 0.72 and then 0.97 a step there and ran out of steps: the following error
-/// was shown as NaN. Elastic, the platform hangs where its weight and the cables' tensions EA (L - l) / l balance,
-/// A t = w (to 1e-6 N and N m, every cable pulling or slack); rigid, it is where the lengths fit best: their misfit
-/// grows when the pose moves 1 um or 1 urad either way along any of its six axes.
+/// and 1.9 rad on cable 7, 12.7 and 9.6 mm of cable at 200 rad/m, and the planar robot's 0.148 s and 1.271 s in, its
+/// cable 2 26 mm and its cable 4 250 mm slack. The forward kinematics fitted the lengths by Gauss-Newton, which slowed
+/// to a ratio of 0.72 and then 0.97 a step there and ran out of steps, or (on the platform's equilibrium) stepped where
+/// every cable was slack: the following error was shown as NaN. Elastic, the platform hangs where its weight and the
+/// cables' tensions EA (L - l) / l balance, A t = w (to 1e-6 N and N m, every cable pulling or slack); rigid, it is
+/// where the lengths fit best: their misfit grows when the pose moves 1 um or 1 urad either way along any axis.
 #[test]
 fn motor_angles_no_pose_fits_give_the_pose_the_platform_takes() {
-    for elastic in [true, false] {
-        let mut cfg = SPATIAL.config();
-        cfg.set_text(&format!("effects.cable_stretch = {elastic}")).unwrap();
-        let robot = CableRobot::new(&cfg).unwrap();
-        for motors in [
-            [
-                218.1766718244078,
-                236.09204543034912,
-                246.82031457745563,
-                228.18806261401326,
-                230.0101951015795,
-                248.74408977052855,
-                257.55184642979265,
-                241.0469591701435,
-            ],
-            [
-                217.81652339558013,
-                236.09872513770574,
-                247.05701949764565,
-                228.0179794981002,
-                229.8651170709315,
-                249.02085196246475,
-                257.9467071660587,
-                241.16067748027044,
-            ],
-        ] {
-            let mut pose = vec![0.0; 6];
-            robot.forward(&motors, &mut pose);
-            assert!(pose.iter().all(|v| v.is_finite()), "elastic {elastic}: {pose:?}");
-            let free: Vec<f64> = (0..8).map(|k| motors[k] / robot.winches[k].ratio()).collect();
-            if elastic {
-                let spans = robot.spans(&pose).unwrap();
-                let t: Vec<f64> =
-                    spans.iter().zip(&free).map(|(s, l)| (robot.ea * (s.length - l) / l).max(0.0)).collect();
-                let (a, w) = (robot.structure(&spans), robot.platform_bias(&pose, &[0.0; 6]));
-                for r in 0..6 {
-                    let off = (0..8).map(|k| a[r * 8 + k] * t[k]).sum::<f64>() - w[r];
-                    assert!(off.abs() < 1e-6, "{pose:?}: {off} N or N m left on axis {r}, tensions {t:?}");
+    let spatial: [&[f64]; 2] = [
+        &[
+            218.1766718244078,
+            236.09204543034912,
+            246.82031457745563,
+            228.18806261401326,
+            230.0101951015795,
+            248.74408977052855,
+            257.55184642979265,
+            241.0469591701435,
+        ],
+        &[
+            217.81652339558013,
+            236.09872513770574,
+            247.05701949764565,
+            228.0179794981002,
+            229.8651170709315,
+            249.02085196246475,
+            257.9467071660587,
+            241.16067748027044,
+        ],
+    ];
+    let planar: [&[f64]; 2] = [
+        &[262.9357534764116, 237.12395011188107, 252.04079274904026, 280.0630114959582],
+        &[252.72452723453748, 351.53586672957255, 293.2643243221405, 211.62183409918603],
+    ];
+    for (entry, all) in [(&SPATIAL, spatial), (&PLANAR, planar)] {
+        for elastic in [true, false] {
+            let mut cfg = entry.config();
+            cfg.set_text(&format!("effects.cable_stretch = {elastic}")).unwrap();
+            let robot = CableRobot::new(&cfg).unwrap();
+            let (n, m) = (robot.n(), robot.m());
+            for motors in all {
+                let mut pose = vec![0.0; n];
+                robot.forward(motors, &mut pose);
+                assert!(pose.iter().all(|v| v.is_finite()), "{} elastic {elastic}: {pose:?}", entry.id);
+                let free: Vec<f64> = (0..m).map(|k| motors[k] / robot.winches[k].ratio()).collect();
+                if elastic {
+                    let spans = robot.spans(&pose).unwrap();
+                    let t: Vec<f64> =
+                        spans.iter().zip(&free).map(|(s, l)| (robot.ea * (s.length - l) / l).max(0.0)).collect();
+                    let (a, w) = (robot.structure(&spans), robot.platform_bias(&pose, &vec![0.0; n]));
+                    for r in 0..n {
+                        let off = (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r];
+                        assert!(off.abs() < 1e-6, "{} {pose:?}: {off} N or N m left on axis {r}, {t:?}", entry.id);
+                    }
+                    continue;
                 }
-                continue;
-            }
-            let misfit = |pose: &[f64]| -> f64 {
-                robot.rest_lengths(pose).unwrap().iter().zip(&free).map(|(l, f)| (l - f).powi(2)).sum::<f64>().sqrt()
-            };
-            let best = misfit(&pose);
-            for axis in 0..6 {
-                for by in [-1e-6, 1e-6] {
-                    let mut step = vec![0.0; 6];
-                    step[axis] = by;
-                    let moved = misfit(&robot.moved(&pose, &step));
-                    assert!(moved > best, "{pose:?} fits by {best} m, moved by {by} along {axis} {moved} m");
+                let misfit = |pose: &[f64]| -> f64 {
+                    let lengths = robot.rest_lengths(pose).unwrap();
+                    lengths.iter().zip(&free).map(|(l, f)| (l - f).powi(2)).sum::<f64>().sqrt()
+                };
+                let best = misfit(&pose);
+                for axis in 0..n {
+                    for by in [-1e-6, 1e-6] {
+                        let mut step = vec![0.0; n];
+                        step[axis] = by;
+                        let moved = misfit(&robot.moved(&pose, &step));
+                        assert!(moved > best, "{} {pose:?} fits by {best} m, {by} along {axis}: {moved} m", entry.id);
+                    }
                 }
             }
         }
