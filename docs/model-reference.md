@@ -4,7 +4,7 @@ The equations the simulator solves, taken from the code and its comments. Each s
 
 - [Structure of one time step](#structure-of-one-time-step)
 - [Integrator](#integrator)
-- Components: [belt](#belt-sections), [guide friction](#guide-friction-lugre), [motor shaft](#motor-shaft-friction-ripple-cogging), [tooth meshing](#tooth-meshing), [gearbox](#gearbox), [hard stops](#hard-stops), [drive and motor](#drive-and-motor)
+- Components: [belt](#belt-sections), [guide friction](#guide-friction-lugre), [motor shaft](#motor-shaft-friction-ripple-cogging), [slide presliding](#slide-presliding-friction), [tooth meshing](#tooth-meshing), [gearbox](#gearbox), [hard stops](#hard-stops), [drive and motor](#drive-and-motor)
 - Machines: [T-gantry](#t-gantry), [single axis](#single-axis), [delta picker D3](#delta-picker-d3), [linear delta](#linear-delta)
 - Motion: [controller](#motion-controller), [profile generator](#profile-generator), [corner blending](#corner-blending), [path planners](#path-planners), [input shaper](#input-shaper)
 - [Analysis quantities](#analysis-quantities), [verdicts](#verdicts), [other analyses](#other-analyses), [effect views](#effect-views), [fit](#fit)
@@ -193,6 +193,22 @@ T_c `friction_coulomb_nm`, b `friction_viscous_nm_s_rad`, ω_s `friction_smoothi
 - **Seals over temperature** (`effects.thermal_feedback`). On a geared motor the shaft's seal is the gearbox's input seal and runs in its lubricant: s_seal = (ν / ν_ref)^m with m `thermal_feedback.seal_viscosity_exponent` and ν the gearbox's lubricant at its temperature (see [temperature feedback](#temperature-feedback)); 1 without the feedback.
 
 Assumptions: the tanh smoothing stands for the bristles of a friction state (no presliding displacement, no dwell-time growth of the breakaway); the seal exponent is an estimate (0.33, bounds 0 to 0.5): no seal maker's curve of breakaway over temperature was read.
+
+## Slide: presliding friction
+
+Source: `ShaftFriction::presliding_force`, `torque_at`, `commit` in [`mech.rs`](../crates/sim-components/src/mech.rs); read by `RotaryJoint::linear_from_config` in [`joint.rs`](../crates/sim-components/src/joint.rs), committed by `JointMachine::after_step` in [`chain.rs`](../crates/sim-components/src/chain.rs).
+
+The joint kit's slides (screw, rack and linear motor axis, the SCARA's quill) smooth their guides' Coulomb step with tanh, as the motor shafts do. A load below the level then makes the carriage creep at v_s · atanh(F / g) (0.49 mm/s for a fifth of the level at v_s = 2 mm/s), and a drive at rest holds no force against it: its integrator unwinds as the carriage creeps. With `effects.slide_presliding` the level is a state of its own, Dahl's law over the travel x:
+
+```text
+g(v)   = F_c + (F_s − F_c) · exp(−(v / v_st)²)                      level, from breakaway to Coulomb
+z(x)   = s g − (s g − z0) · exp(−σ |x − x0| / g)                     from the anchor [x0, z0], s = sign(x − x0)
+F_f    = z(x) + b v                                                  friction opposing the motion
+```
+
+F_c is the Coulomb level of `[slide]` with the nut's preload drag (screw) or the attraction friction (linear motor), F_s `friction_breakaway_n` plus the same, v_st `friction_stribeck_m_s`, σ `presliding_stiffness_n_m`, b the viscous friction. After each base step the anchor moves to where the step ended, [x, z(x)] (`Machine::after_step`; `Machine::memory` carries it, so a snapshot restores it). Sliding one way the force goes to ±g within a few g / σ; at rest it stays where it is, however long, since the travel and not the time moves it; at a reversal it turns over a presliding travel, through zero after g ln 2 / σ from a sliding level. Before the first step it is 0. Off, the friction is the smoothed step as before, to the bit.
+
+Assumptions and shortcuts: Dahl's law closes no small loop, so a carriage that rings on its screw while a load pulls it moves on a little with each swing until the ringing has died (12 µm on the screw axis inclined by 5° with its drive disabled, `a_presliding_slide_holds_its_load_without_creeping`); no damping of the bristles (LuGre's σ₁), no dwell-time growth of the breakaway; the level is evaluated at the speed within the step; the motor shaft's own friction stays smoothed. A reload (`Sim::reconfigure`) starts the state again from 0.
 
 ## Tooth meshing
 
@@ -1780,7 +1796,9 @@ At constant speed the difference of a friction effect is the friction force thro
 
 Source: [`identify.rs`](../crates/sim-components/src/identify.rs), [`trace.rs`](../crates/sim-components/src/trace.rs).
 
-**Replay.** The motor position setpoints of the trace become tool poses through the forward transformation and run as a trajectory. Each row is commanded one row earlier, because a run writes a row before it computes the step at that time. The simulator's own controller makes the speed and torque feedforward from the poses.
+**Replay.** The motor position setpoints of the trace become tool poses through the forward transformation and run as a trajectory. Each row is commanded one row earlier, because a run writes a row before it computes the step at that time. The simulator's own controller makes the speed and torque feedforward from the poses. The simulation starts from the trace's own state: at rest at p0 − v0 T / 2 (p0 the first row's setpoint pose, v0 its measured speed in tool units), it runs up along p0 − v0 T / 2 + v0 T (2.5 u⁴ − 3 u⁵ + u⁶), u = t / T, a smootherstep of the speed with zero acceleration at both ends, over T = max(0.25 s, 1.875 |v0| / (a_max / 4)) per axis, and reaches p0 at v0 one row before the first row; the rows are recorded from there. Behind the last row two points carry the motion on with the last rows' speed and acceleration before it stops, unrecorded.
+
+**Friction beyond the sliding level** (`identify::friction_details`, rows of `fit`). From an axis's force F, speed v and travel, with its rigid values m, b, c (Coulomb), k (constant): the force held at rest after the last motion, the mean of F − k over the last stretch whose 11-row mean speed is within 1 % of the top speed, after its first 0.1 s; the breakaway level, the mean of sign(v) (F − m a − b v − k) on the rows between 1 and 5 % of the top speed whose speed falls in size and keeps its sign across the window; the presliding stiffness, σ = c ln 2 / x0 with x0 the travel from the turning point at which sign(v_after) (F − m a − k) passes zero, the median over the reversals (Dahl's law above). Means with the standard error of n rows widened by (1 + ρ) / (1 − ρ) for their lag-one correlation ρ; the median with 1.25 times the reversals' spread over the root of their count. The same on the replay, as for the rigid values.
 
 **Stage 1, rigid values.** Motor torques become axis forces through the machine's transformation (motor angle per axis travel; the same power on both sides), so the fit works per axis even where every motor moves every axis. Per axis, least squares of
 

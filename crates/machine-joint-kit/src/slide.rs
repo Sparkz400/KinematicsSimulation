@@ -58,6 +58,10 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
             // The nut's preload drags like friction in the guides, as a force at the nut.
             if cfg.bool("effects.joint_friction")? {
                 joint.friction.coulomb += screw.preload_torque() * screw.ratio();
+                // With a presliding state the guides' breakaway level is above it by the same drag.
+                if joint.friction.presliding > 0.0 {
+                    joint.friction.stiction += screw.preload_torque() * screw.ratio();
+                }
             }
             let lever = 1.0 / screw.ratio();
             (Drive::Screw(screw), Some(lever))
@@ -73,8 +77,11 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
             let motor = LinearMotor::from_config(cfg)?;
             joint.ripple.cogging_order = motor.cogging_order();
             if cfg.bool("effects.joint_friction")? {
-                joint.friction.coulomb +=
-                    cfg.non_negative("linear_motor.guide_friction_coefficient")? * motor.attraction;
+                let pressed = cfg.non_negative("linear_motor.guide_friction_coefficient")? * motor.attraction;
+                joint.friction.coulomb += pressed;
+                if joint.friction.presliding > 0.0 {
+                    joint.friction.stiction += pressed;
+                }
             }
             // The forcer moves with the carriage as a rotor turns with its shaft: its mass is `rotor_inertia_kgm2`.
             let forcer = joint.rotor_inertia;

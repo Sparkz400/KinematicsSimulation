@@ -135,7 +135,11 @@ its setpoint so closely that only a dead time is left; that is the expected resu
 
 The machine's real cycle without payload changes (on a delta, SCARA or arm one pick or drop is found: see the
 swing below), for `sim-cli replay` and `fit`, which compare the trace
-with the simulator's config of the machine. The config's start pose has to be where the trace starts.
+with the simulator's config of the machine. The replay starts from the trace's own first position and speed (a run-up
+before the first row), so a trace may start and end in motion. The simulator's trace holds in each row the setpoint the
+drive worked with up to that row, the one of the cycle before; a source that records the setpoint its loop compares
+with the position of the same cycle (the ISW bench's dSPACE recordings) is one cycle ahead: give its setpoint
+`time_offset_s` = one position cycle in the mapping, and the following errors compare.
 
 ### swing: a delta, a SCARA or an arm
 

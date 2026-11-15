@@ -121,6 +121,49 @@ fn the_screw_axis_reaches_the_hand_calculated_speed_and_force() {
     assert!(failed("screw-speed") && failed("screw-life") && !failed("screw-buckling"), "{v:?}");
 }
 
+/// effects.slide_presliding: the screw axis inclined by 5°, its drive disabled, holding brake and motor friction off, so
+/// that only the slide's friction holds the carriage. By hand: 25 kg (with the payload) pull along it with
+/// 25 * 9.80665 * sin 5° = 21.37 N; the guides' 30 N and the nut's preload drag (THK: K = 0.05 / sqrt(0.02 / (pi 0.025))
+/// = 0.0991, 0.0991 * 600 N * 0.02 m / 2 pi = 0.1893 N m, 59.47 N at the nut) slide at g = 89.47 N, break away at
+/// 45 + 59.47 = 104.47 N. With the presliding state (sigma 1e7 N/m) the carriage takes up the pull within
+/// -g / sigma ln(1 - F / g) = -1.0447e-5 ln(1 - 21.37 / 104.47) = 2.40 um, swings through it on the screw with the free
+/// rotor, and each swing moves the state on a little (Dahl's law closes no small loop): 12.1 um in the first half second,
+/// within 20 um, then it stops, less than 1 um in the second. With the smoothed Coulomb step it creeps at
+/// 0.002 m/s * atanh(21.37 / 89.47) = 0.487 mm/s, 0.24 mm in the second half second.
+#[test]
+fn a_presliding_slide_holds_its_load_without_creeping() {
+    let travel = |presliding: bool| {
+        let mut cfg = SCREW.config();
+        for set in [
+            "slide.incline_deg = 5.0",
+            "effects.holding_brake = false",
+            "effects.motor_friction = false",
+            "effects.base_compliance = false",
+        ] {
+            cfg.set_text(set).unwrap();
+        }
+        cfg.set_text(&format!("effects.slide_presliding = {presliding}")).unwrap();
+        let mut sim = Sim::new(&SCREW, &cfg).unwrap();
+        sim.command(Command::Disable).unwrap();
+        let at = sim.signal_index("axis.x.position").unwrap();
+        let mut sample = Vec::new();
+        let mut position = |sim: &mut Sim, seconds: f64| {
+            sim.run(seconds, |_| {});
+            sim.sample(&mut sample);
+            sample[at]
+        };
+        let start = position(&mut sim, 0.0);
+        let settled = position(&mut sim, 0.5);
+        let end = position(&mut sim, 0.5);
+        (settled - start, end - settled)
+    };
+    let (taken_up, crept) = travel(true);
+    assert!(taken_up < -2.40e-6 && taken_up > -20e-6, "{taken_up}");
+    assert!(crept.abs() < 1e-6, "{crept}");
+    let (_, crept) = travel(false);
+    assert!((crept + 0.2435e-3).abs() < 0.03e-3, "{crept}");
+}
+
 /// By hand: on the rack m a of 60 kg (80 with the payload), at the gearbox output that force times the pinion's
 /// 31.831 mm; 0.95 m/s is 0.95 / 0.031831 = 29.85 rad/s of the pinion, 2850 r/min at the motor behind ratio 10.
 #[test]

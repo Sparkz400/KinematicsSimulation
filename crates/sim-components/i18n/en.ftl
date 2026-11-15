@@ -60,6 +60,7 @@ effect-gearbox_backlash = Gearbox backlash
 effect-gearbox_efficiency = Gearbox efficiency
 effect-gearbox_drag = Gearbox no-load torque
 effect-motor_stiction = Motor breakaway (Stribeck)
+effect-slide_presliding = Slide presliding friction (holds at rest, Dahl)
 effect-gearbox_lost_motion = Gearbox lost motion and hysteresis
 effect-gearbox_stiffness_curve = Strain wave gear stiffness curve
 effect-torque_ripple = Torque ripple and cogging

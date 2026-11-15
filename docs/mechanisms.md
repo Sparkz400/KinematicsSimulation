@@ -74,6 +74,17 @@ output, before the screw or pinion. The converter's efficiency is kept apart fro
 share. A sliding joint reads its guides' friction, stroke and stops from
 `[slide]` (`RotaryJoint::linear_from_config`).
 
+With `effects.slide_presliding` (in the joint kit's `common.toml`, off as shipped; a config without the key has it off)
+the guides' friction, with a screw nut's preload drag and a linear motor's attraction friction, is a presliding state
+(model reference, "Slide: presliding friction") in place of the smoothed Coulomb step. Its keys in `[slide]`, in every
+slide config of the kit (screw, rack, linear motor, the SCARA's quill):
+
+| Key | Unit | What | Shipped |
+| --- | --- | --- | --- |
+| `friction_breakaway_n` | N | The guides' breakaway force at rest; the nut's drag and the attraction friction are added to it as to the Coulomb level; below the Coulomb level it counts as that level | 1.5 times `friction_coulomb_n`, estimate, bounds the Coulomb level to twice it |
+| `friction_stribeck_m_s` | m/s | The speed over which the level falls from breakaway to Coulomb, exp(−(v / v_st)²) | 0.001, estimate, bounds 2e-4 to 5e-3 |
+| `presliding_stiffness_n_m` | N/m | Dahl's σ: the friction's slope over the travel where it turns at a reversal; from one sliding level it passes zero after level · ln 2 / σ | 1e7, estimate, bounds 2e6 to 5e7 |
+
 ## Ball screw
 
 `transmission::BallScrew`, config `[screw]`. The formulas are those of ISO 3408-5 and of the screw makers' catalogues:

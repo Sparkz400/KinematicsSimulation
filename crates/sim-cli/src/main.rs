@@ -492,6 +492,11 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q])
                     .map_err(io)?;
             }
+            // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
+            for d in &fit.details {
+                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", d.quantity, axis.id, d.config, d.fitted, d.error)
+                    .map_err(io)?;
+            }
             // A payload picked or dropped: its time, then the change of the payload's factor there.
             for (time, time_error, change, error) in &fit.payload_steps {
                 writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e}", axis.id).map_err(io)?;

@@ -370,6 +370,9 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                 screw.converter(screw.softest_position()).apply(own, &mut joint)?;
                 if own.bool("effects.joint_friction")? {
                     joint.friction.coulomb += screw.preload_torque() * screw.ratio();
+                    if joint.friction.presliding > 0.0 {
+                        joint.friction.stiction += screw.preload_torque() * screw.ratio();
+                    }
                 }
                 (joint, Some(1.0 / screw.ratio()))
             }

@@ -129,6 +129,10 @@ magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
 motor_stiction = false
+# A slide's guides hold a load at rest within their breakaway force without creeping and turn over a presliding travel
+# at a reversal: a presliding friction state (slide.presliding_stiffness_n_m, friction_breakaway_n, friction_stribeck_m_s)
+# in place of the smoothed Coulomb step. Read by the slides only (screw, rack, linear motor, the SCARA's screw).
+slide_presliding = false
 # The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
 # keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
 # stay as they were.
