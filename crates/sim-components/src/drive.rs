@@ -137,6 +137,10 @@ pub struct Precontrol {
     /// effects.friction_feedforward: the friction characteristic, (speed rad/s, torque N m) points at rising speeds
     /// (S120 p3820-p3839); empty when off. See `friction_at`.
     pub friction: Vec<[f64; 2]>,
+    /// effects.friction_feedforward with drive.friction_feedforward_model = "machine": in place of the characteristic,
+    /// the friction of the machine's own model at the planned speed (`Machine::steady_friction`, `Drive::friction_ff`).
+    #[serde(default)]
+    pub machine_friction: bool,
     /// drive.precontrol_balance_s: the position setpoint passes a first-order lag of this time constant before the
     /// position loop compares it, so that it arrives with the motor that the speed precontrol moves through the
     /// closed speed loop (S120 p1429 balancing); 0 off.
@@ -395,7 +399,14 @@ impl DriveParams {
             Ok(Some("inertia")) => true,
             Ok(_) => return Err(ConfigError::Invalid("drive.torque_feedforward_model".into())),
         };
-        let friction = if switched("friction_feedforward")? {
+        // Which friction the feedforward adds: the drive's recorded characteristic (no key: as before 15 November 2026),
+        // or the machine's own model at the planned speed.
+        let machine_friction = match cfg.get("drive.friction_feedforward_model").map(|v| v.as_str()) {
+            Err(_) | Ok(Some("characteristic")) => false,
+            Ok(Some("machine")) => true,
+            Ok(_) => return Err(ConfigError::Invalid("drive.friction_feedforward_model".into())),
+        } && switched("friction_feedforward")?;
+        let friction = if switched("friction_feedforward")? && !machine_friction {
             let (speeds, torques) = (
                 cfg.f64s("drive.friction_feedforward_speed_rad_s")?,
                 cfg.f64s("drive.friction_feedforward_torque_nm")?,
@@ -414,6 +425,7 @@ impl DriveParams {
             fine_interpolation: switched("fine_interpolation")?,
             constant_inertia,
             friction,
+            machine_friction,
             balance_time: if cfg.get("drive.precontrol_balance_s").is_ok() {
                 cfg.non_negative("drive.precontrol_balance_s")?
             } else {
@@ -799,6 +811,10 @@ pub struct Drive {
     /// Time since the profile generator last wrote the setpoints; the controller adds a base step after each.
     pub since_setpoint: f64,
     pub torque_ff: f64,
+    /// With `drive.friction_feedforward_model = "machine"` (`Precontrol::machine_friction`): the friction the machine's
+    /// own model has at the planned speed (`Machine::steady_friction`), written with the setpoints; 0 otherwise.
+    #[serde(default)]
+    pub friction_ff: f64,
     /// The setpoint the position loop compared with at its last cycle: `pos_set` run on between profile cycles
     /// (`Precontrol::fine_interpolation`) and balanced (`Precontrol::balance_time`). `following_error` is from it.
     pub position_setpoint: f64,
@@ -1060,7 +1076,9 @@ impl Drive {
             _ => None,
         };
         let feedforward = match mode {
-            DriveMode::Position => p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set),
+            DriveMode::Position => {
+                p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set) + self.friction_ff
+            }
             _ => 0.0,
         };
         if self.retune && outside_torque.is_none() {

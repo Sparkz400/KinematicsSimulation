@@ -256,6 +256,15 @@ pub trait Machine: Send {
     /// (its rate per unit of path): [c, b] for c + b v at the speed v along the path, positive where the motor has to
     /// give positive torque against it. For the time-optimal plan. Appends nothing where the machine does not tell.
     fn rigid_friction(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
+    /// The friction torque at each motor (N m, in the order of `motors`, into `out`) while the tool at `tool_pos` moves
+    /// steadily at `tool_vel`: every friction of the machine's own model at that speed (guides at their steady sliding
+    /// level, the motor shaft, the gearbox's drag, the joints, idlers, screws, the cable chain), carried to the motor as
+    /// the rigid model carries a load (through the ratios, and the efficiencies where the motor drives). Positive where
+    /// the motor has to give positive torque against it. For the friction feedforward from the machine's model
+    /// (`drive.friction_feedforward_model = "machine"`). Zero by default: a machine that tells no friction.
+    fn steady_friction(&self, _tool_pos: &[f64], _tool_vel: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+    }
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);

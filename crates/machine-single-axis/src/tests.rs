@@ -2099,6 +2099,41 @@ fn a_held_force_moves_the_base_and_the_tool_by_force_over_stiffness() {
     assert!((pos[0] - 0.3 - 2.0e-5).abs() < 1e-8, "the tool moved {} m", pos[0] - 0.3);
 }
 
+/// Friction feedforward from the machine's own model, by hand. In the cruise at 1 m/s the guide slides at its Coulomb
+/// level times the load scale, (200 + 6 x 9.81) / (200 + 4 x 9.81) = 1.082012 with the 2 kg payload held, plus
+/// 20 N s/m x 1 m/s: 36.23018 N (the Stribeck part exp(-(1 / 0.01)^2) is nothing); through r / (i eta) =
+/// 0.02 / (5 x 0.95): 0.152548 N m. The shaft at 250 rad/s: 0.02 tanh(500) + 1e-4 x 250 = 0.045 N m. So 0.197548 N m,
+/// which the drive gets as its friction feedforward. With it the velocity loop's integrator carries nothing in the
+/// cruise (under 1 % of it, the belt ringing out of the speed-up); without it, it carries the whole friction.
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        cfg.set_text("drive.friction_feedforward_torque_nm = [0.0, 0.0]").unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.8, |s| {
+            // The last 0.3 s of the cruise, which ends at about 0.85 s.
+            if s.time() > 0.5 && s.control.set_acc[0] == 0.0 && (s.control.set_vel[0] - 1.0).abs() < 1e-12 {
+                (ff, integrator, n) =
+                    (s.control.drives[0].friction_ff, integrator + s.control.drives[0].controller_torque, n + 1);
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator / n as f64)
+    };
+    let expected = 0.02 * 500f64.tanh() + 1e-4 * 250.0 + (15.0 * 258.86 / 239.24 + 20.0) * 0.02 / (5.0 * 0.95);
+    let (ff, integrator) = cruise(true);
+    assert!((ff - expected).abs() < 1e-4 * expected, "feedforward {ff} N m, by hand {expected}");
+    assert!(integrator.abs() < 0.01 * expected, "the integrator carries {integrator} N m");
+    let (ff, integrator) = cruise(false);
+    assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}
+
 /// Drive modes from outside (`DriveMode`): torque and speed setpoints of an outside controller on the rigid axis.
 mod outside_control {
     use super::*;

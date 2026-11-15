@@ -199,9 +199,9 @@ pub struct Controller {
     spline_c2: bool,
     /// Fieldbus: profile cycles between computing the motor setpoints and the drives using them, and the
     /// setpoints on their way, oldest first, each with the cycles it takes: per motor position, speed,
-    /// acceleration and torque feedforward.
+    /// acceleration, torque feedforward and friction feedforward from the machine's model (`Drive::friction_ff`).
     fieldbus_delay: usize,
-    fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 4]>)>,
+    fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
     /// Fieldbus jitter: a frame takes up to this many cycles more than the delay, drawn evenly from 0 to it per frame
     /// from its own pseudo-random stream; 0 with the jitter off.
     fieldbus_jitter: usize,
@@ -1549,8 +1549,17 @@ impl Controller {
         machine.inverse(&self.set_pos, &mut here);
         let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
-        let setpoints =
-            (0..motors).map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), motor_acc[k], ff[k]]).collect();
+        // The friction of the machine's own model at the planned speed, for the drives that take it.
+        let mut friction = vec![0.0; motors];
+        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) {
+            machine.steady_friction(&self.set_pos, &self.set_vel, &mut friction);
+            for (f, p) in friction.iter_mut().zip(&self.motor_params) {
+                *f = if p.precontrol.machine_friction { *f } else { 0.0 };
+            }
+        }
+        let setpoints = (0..motors)
+            .map(|k| [pos[k], (ahead[k] - behind[k]) / (2.0 * h), motor_acc[k], ff[k], friction[k]])
+            .collect();
         // Fieldbus: the drives get the newest frame that has arrived, one the controller computed some cycles ago. With
         // jitter each frame takes its own number of cycles, and a late one leaves the drives the frame before. Frames
         // older than the longest delay have arrived and are dropped; before any has arrived, the oldest.
@@ -1565,8 +1574,9 @@ impl Controller {
         }
         let newest = self.fieldbus.len() - 1;
         let arrived = (0..=newest).find(|&age| self.fieldbus[newest - age].0 <= age).map_or(0, |age| newest - age);
-        for (drive, &[pos, vel, acc, ff]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
+        for (drive, &[pos, vel, acc, ff, friction]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
+            drive.friction_ff = friction;
             drive.since_setpoint = 0.0;
         }
     }
