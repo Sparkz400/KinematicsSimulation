@@ -3243,11 +3243,14 @@ pub fn optimise_cycle_with(
             }
             done
         };
-        // The candidates are taken in order, the first faster one accepted: as many at a time as there are processors,
-        // their tries then counted in order as if they had run one after the other, those after the accepted one (or
-        // beyond `max_runs`) dropped. The result is the same with any number of processors.
-        let batch = threads().min(candidates.len()).max(1);
-        'candidates: for chunk in candidates.chunks(batch) {
+        // The candidates are taken in order, the first faster one accepted: a batch at a time, their tries then counted
+        // in order as if they had run one after the other, those after the accepted one (or beyond `max_runs`)
+        // dropped. The first candidate runs alone (it is often taken, and runs beside it would only slow it down), then
+        // the batch doubles while candidates fail, up to one per processor. The result is the same with any batch.
+        let (mut from, mut batch) = (0, 1);
+        'candidates: while from < candidates.len() {
+            let chunk = &candidates[from..(from + batch).min(candidates.len())];
+            (from, batch) = (from + chunk.len(), (2 * batch).min(threads().max(1)));
             let budget = max_runs.saturating_sub(runs.get());
             let best_duration = best_load.duration;
             let tried = on_all_cores(chunk.len(), |i| tries_of(chunk[i].clone(), best_duration, budget));

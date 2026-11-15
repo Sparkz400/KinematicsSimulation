@@ -15,8 +15,8 @@ fn the_analyses_find_the_same_on_one_thread_as_on_many() {
     let paths: Vec<String> = bounded.iter().take(3).map(|b| b.0.clone()).collect();
     let run = |threads: usize| -> Vec<String> {
         set_max_threads(threads);
-        // The search's 40 runs end in a stretch of candidates that fail, where a batch of five runs past the budget
-        // (counting those runs failed this test).
+        // Over the search's 40 runs batches of several candidates run, some with a faster one inside (counting a batch's
+        // tries in another order failed this test).
         let options = OptimiseOptions { max_runs: 40, robust: false, pareto: true, worst: false };
         vec![
             format!("{:?}", verdict_bands(entry, &cfg, &bounded).unwrap()),
